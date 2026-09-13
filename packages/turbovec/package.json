@@ -1,0 +1,17 @@
+{
+  "name": "turbovec",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Local N-API binding for the turbovec quantized vector index.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build:native": "node build-turbovec.ts"
+  }
+}

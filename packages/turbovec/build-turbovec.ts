@@ -3,7 +3,7 @@ import { copyFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
-const root = fileURLToPath(new URL("../native/turbovec/", import.meta.url));
+const root = fileURLToPath(new URL("./", import.meta.url));
 const build = spawnSync(
   process.env.CARGO ?? "cargo",
   ["build", "--release", "--locked", "--manifest-path", join(root, "Cargo.toml")],

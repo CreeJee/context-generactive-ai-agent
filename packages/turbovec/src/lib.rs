@@ -65,11 +65,16 @@ impl VectorIndex {
         self.inner.add_with_ids(&vectors, &ids).map_err(js_error)
     }
     #[napi]
-    pub fn search(&self, query: Float32Array, k: u32, allowed_ids: Vec<String>) -> Result<SearchResult> {
+    /// `allowed_ids`: omitted searches the whole index; an empty list returns no results.
+    pub fn search(&self, query: Float32Array, k: u32, allowed_ids: Option<Vec<String>>) -> Result<SearchResult> {
         if Some(query.len()) != self.inner.dim_opt() { return Err(js_error("Expected one query vector")); }
-        if allowed_ids.is_empty() { return Ok(SearchResult { ids: vec![], scores: vec![] }); }
-        let ids = allowed_ids.iter().map(|id| parse_id(id)).collect::<Result<Vec<_>>>()?;
-        let result = self.inner.try_search_with_allowlist(&query, k as usize, Some(&ids)).map_err(js_error)?;
+        if self.inner.len() == 0 { return Ok(SearchResult { ids: vec![], scores: vec![] }); }
+        let ids = match allowed_ids {
+            Some(list) if list.is_empty() => return Ok(SearchResult { ids: vec![], scores: vec![] }),
+            Some(list) => Some(list.iter().map(|id| parse_id(id)).collect::<Result<Vec<_>>>()?),
+            None => None,
+        };
+        let result = self.inner.try_search_with_allowlist(&query, k as usize, ids.as_deref()).map_err(js_error)?;
         Ok(SearchResult {
             ids: result.ids.iter().map(|id| id.to_string()).collect(),
             scores: result.scores.iter().map(|score| *score as f64).collect(),
