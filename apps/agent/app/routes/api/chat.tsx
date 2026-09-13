@@ -1,27 +1,17 @@
-import type { Route } from "../+types/_index";
-import { chat, chatParamsFromRequest, toServerSentEventsResponse } from "@tanstack/ai";
-import { openaiText } from "@tanstack/ai-openai";
+import { AgentChat } from "memory-agent";
+import { Effect } from "effect";
+import { agent } from "~/.server/agent";
+import { rejectCrossSite } from "~/.server/http";
+import type { Route } from "./+types/chat";
 
-export function meta({}: Route.MetaArgs) {
-  return [
-    { title: "New React Router App" },
-    { name: "description", content: "Welcome to React Router!" },
-  ];
-}
-// https://reactrouter.com/start/framework/actions
+/**
+ * POST /api/chat?session=<sessionId> with an AG-UI RunAgentInput body (what TanStack's
+ * `fetchServerSentEvents` sends). Streams the run as Server-Sent Events.
+ */
 export async function action({ request }: Route.ActionArgs) {
-  const { messages, threadId, runId } = await chatParamsFromRequest(request);
-
-  const stream = chat({
-    adapter: openaiText("gpt-6-astra"),
-    messages,
-    threadId,
-    runId,
-  });
-
-  return toServerSentEventsResponse(stream);
-}
-
-export default function Agent() {
-  return "";
+  const rejected = rejectCrossSite(request);
+  if (rejected) return rejected;
+  const sessionId = new URL(request.url).searchParams.get("session");
+  if (!sessionId) return Response.json({ error: "session_required" }, { status: 400 });
+  return agent.runPromise(Effect.flatMap(AgentChat, (chat) => chat.handle(request, sessionId)));
 }

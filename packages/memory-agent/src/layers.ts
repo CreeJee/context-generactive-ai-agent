@@ -1,5 +1,11 @@
 import { join } from "node:path";
 import { Layer } from "effect";
+import { AgentChat } from "./agent/chat.ts";
+import { CodexAccount } from "./codex/account.ts";
+import { CodexAppServer } from "./codex/app-server.ts";
+import { CodexChat } from "./codex/chat.ts";
+import { CodexModels } from "./codex/models.ts";
+import { GlobalConfig } from "./config/global-config.ts";
 import { StorageRoot } from "./config/storage-root.ts";
 import { Database } from "./db/database.ts";
 import { Embedder } from "./memory/embedding/embedder.ts";
@@ -16,6 +22,8 @@ import { MemoryTools } from "./tools/memory.ts";
 export interface MemoryAgentLayerOptions {
   /** Defaults to the local embedding model; tests pass a deterministic one. */
   readonly embedder?: Layer.Layer<Embedder, never, StorageRoot>;
+  /** Defaults to `codex` from PATH; tests pass a fake app server. Starts only when first used. */
+  readonly codex?: Layer.Layer<CodexAppServer, never, StorageRoot>;
 }
 
 /** Composition root: every memory-agent service backed by one storage directory. */
@@ -25,10 +33,25 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     StorageRoot.layer(storageRoot),
     Database.layer(join(storageRoot, "agent.db")),
   );
-  const stores = Layer.mergeAll(Projects.layer, Nodes.layer, options.embedder ?? Embedder.local);
-  const memory = Layer.mergeAll(Sessions.layer, Recorder.layer, Graph.layer, VectorIndex.layer);
+  const stores = Layer.mergeAll(
+    Projects.layer,
+    Nodes.layer,
+    GlobalConfig.layer,
+    options.embedder ?? Embedder.local,
+    options.codex ?? CodexAppServer.layer,
+  );
+  const memory = Layer.mergeAll(
+    Sessions.layer,
+    Recorder.layer,
+    Graph.layer,
+    VectorIndex.layer,
+    CodexAccount.layer,
+    CodexModels.layer,
+    CodexChat.layer,
+  );
   const retrieval = Layer.merge(Indexer.layer, MemorySearch.layer);
-  return MemoryTools.layer.pipe(
+  return AgentChat.layer.pipe(
+    Layer.provideMerge(MemoryTools.layer),
     Layer.provideMerge(retrieval),
     Layer.provideMerge(memory),
     Layer.provideMerge(stores),

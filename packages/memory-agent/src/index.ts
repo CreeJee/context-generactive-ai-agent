@@ -1,6 +1,22 @@
 export { memoryAgentLayer, type MemoryAgentLayerOptions } from "./layers.ts";
+export { AgentChat, memoryInstructions } from "./agent/chat.ts";
 
 export { StorageRoot, defaultStorageRoot } from "./config/storage-root.ts";
+export { GlobalConfig, Settings } from "./config/global-config.ts";
+export { CodexAccount, isChatgptAuthUrl, type AuthState } from "./codex/account.ts";
+export { CodexChat, CodexTextAdapter, type CodexTurns } from "./codex/chat.ts";
+export { messageText, toCodexTurnInput } from "./codex/history.ts";
+export {
+  CodexAppServer,
+  CodexRequestFailed,
+  CodexUnavailable,
+  findCodex,
+  testedCodexVersions,
+  type CodexCommand,
+  type CodexInfo,
+  type Json,
+} from "./codex/app-server.ts";
+export { CodexModel, CodexModels, ModelUnavailable, type ModelSelection } from "./codex/models.ts";
 export { Database, DatabaseOpenError } from "./db/database.ts";
 export {
   Project,
