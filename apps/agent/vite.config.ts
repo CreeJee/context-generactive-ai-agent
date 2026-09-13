@@ -1,5 +1,5 @@
 import { reactRouter } from "@react-router/dev/vite";
-import react, { reactCompilerPreset } from "@vitejs/plugin-react";
+import { reactCompilerPreset } from "@vitejs/plugin-react";
 import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
 import { lazyPlugins, defineConfig } from "vite-plus";
@@ -30,8 +30,9 @@ export default defineConfig({
   },
   plugins: lazyPlugins(() => [
     tailwindcss(),
+    // reactRouter() already sets up React and Fast Refresh; adding @vitejs/plugin-react's react()
+    // injects the refresh runtime twice ("RefreshRuntime has already been declared").
     reactRouter(),
-    react(),
     babel({ presets: [reactCompilerPreset()] }),
   ]),
   resolve: {
