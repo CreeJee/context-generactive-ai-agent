@@ -1,5 +1,6 @@
 export { memoryAgentLayer, type MemoryAgentLayerOptions } from "./layers.ts";
 export { AgentChat, memoryInstructions } from "./agent/chat.ts";
+export { sessionMessages } from "./agent/history.ts";
 
 export { StorageRoot, defaultStorageRoot } from "./config/storage-root.ts";
 export { GlobalConfig, Settings } from "./config/global-config.ts";
