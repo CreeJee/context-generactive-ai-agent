@@ -8,6 +8,7 @@ catalogMode: prefer
 catalog:
   "@base-ui/react": ^1.8.0
   "@fontsource-variable/inter": ^5.3.0
+  "@huggingface/transformers": 4.2.0
   "@oxlint/plugins": 1.79.0
   "@react-router/fs-routes": ^8.3.1
   "@standard-schema/spec": ^1.1.0
@@ -20,6 +21,9 @@ catalog:
   class-variance-authority: ^0.7.1
   cn: ^0.3.0
   effect: 3.22.2
+  json-rpc-2.0: 1.8.0
+  p-defer: 4.0.1
+  p-event: 7.1.0
   lucide-react: ^1.45.0
   react: ^19.3.0
   react-dom: ^19.3.0
@@ -35,3 +39,10 @@ peerDependencyRules:
     - vite
   allowedVersions:
     vite: "*"
+allowBuilds:
+  # macOS/arm64 binaries ship in the package; the script only fetches extras such as Linux CUDA.
+  onnxruntime-node: false
+  # Only prints a version-scheme warning.
+  protobufjs: false
+  # Image support is unused by text embeddings; prebuilt binaries come from optional deps.
+  sharp: false

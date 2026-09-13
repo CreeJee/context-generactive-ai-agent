@@ -1,6 +1,7 @@
 {
   "name": "memory-agent",
   "version": "0.0.0",
+  "private": true,
   "description": "A starter for creating a TypeScript package.",
   "homepage": "https://github.com/author/library#readme",
   "bugs": {
@@ -17,7 +18,8 @@
   ],
   "type": "module",
   "exports": {
-    ".": "./dist/index.mjs",
+    ".": "./src/index.ts",
+    "./testing": "./src/testing/index.ts",
     "./package.json": "./package.json"
   },
   "publishConfig": {
@@ -30,8 +32,18 @@
     "check": "vp check",
     "prepublishOnly": "vp run build"
   },
+  "dependencies": {
+    "@huggingface/transformers": "catalog:",
+    "@standard-schema/spec": "catalog:",
+    "@tanstack/ai": "catalog:",
+    "effect": "catalog:",
+    "json-rpc-2.0": "catalog:",
+    "p-defer": "catalog:",
+    "p-event": "catalog:",
+    "turbovec": "workspace:*"
+  },
   "devDependencies": {
-    "@types/node": "^26.1.1",
+    "@types/node": "catalog:",
     "bumpp": "^11.1.0",
     "typescript": "^7.0.2",
     "vite": "catalog:",

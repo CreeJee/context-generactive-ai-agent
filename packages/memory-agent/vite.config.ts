@@ -5,7 +5,8 @@ export default defineConfig({
     dts: {
       tsgo: true,
     },
-    exports: true,
+    // Workspace-internal: apps import the TypeScript source, so package.json exports stay on src.
+    exports: false,
   },
   lint: {
     options: {
