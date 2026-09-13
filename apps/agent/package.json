@@ -1,0 +1,46 @@
+{
+  "name": "agent",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "react-router build",
+    "dev": "react-router dev",
+    "start": "react-router-serve ./build/server/index.js",
+    "typecheck": "react-router typegen && tsc"
+  },
+  "dependencies": {
+    "@base-ui/react": "catalog:",
+    "@fontsource-variable/inter": "catalog:",
+    "@react-router/fs-routes": "catalog:",
+    "@react-router/node": "^8",
+    "@react-router/serve": "^8",
+    "@tanstack/ai": "catalog:",
+    "@tanstack/ai-openai": "catalog:",
+    "@tanstack/ai-react": "catalog:",
+    "class-variance-authority": "catalog:",
+    "cn": "catalog:",
+    "isbot": "^5.1.36",
+    "lucide-react": "catalog:",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-router": "^8",
+    "shadcn": "^4.21.0",
+    "tw-animate-css": "catalog:"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.29.7",
+    "@react-router/dev": "^8",
+    "@rolldown/plugin-babel": "^0.2.3",
+    "@tailwindcss/vite": "^4.2.2",
+    "@types/babel__core": "^7.20.5",
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "babel-plugin-react-compiler": "^1.0.0",
+    "tailwindcss": "^4.2.2",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

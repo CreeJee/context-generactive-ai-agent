@@ -1,0 +1,9 @@
+[package]
+name = "memory-turbovec-wasm-check"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+turbovec = { git = "https://github.com/RyanCodrai/turbovec.git", rev = "ccab9f325e6ce2a270a87daf01ae4e443bcf2d49" }
+getrandom = { version = "0.2", features = ["js"] }

@@ -1,0 +1,16 @@
+[package]
+name = "memory-turbovec"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "3", default-features = false, features = ["napi8"] }
+napi-derive = "3"
+turbovec = { git = "https://github.com/RyanCodrai/turbovec.git", rev = "ccab9f325e6ce2a270a87daf01ae4e443bcf2d49" }
+
+[build-dependencies]
+napi-build = "2"
