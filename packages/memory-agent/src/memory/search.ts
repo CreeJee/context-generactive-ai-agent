@@ -26,7 +26,15 @@ export interface Match {
   /** vector/text: matched the query directly. graph: reached by following edges from a match. */
   readonly foundBy: "vector" | "text" | "graph";
   readonly path: readonly Hop[];
+  readonly projectName: string;
   readonly fromOtherProject: boolean;
+  /** Later user statements that clearly correct or retract this one; the newest is current. */
+  readonly supersededBy: readonly {
+    readonly id: string;
+    readonly relation: "corrects" | "retracts";
+  }[];
+  /** Later statements that may correct or retract this one but could not be tied to it for sure. */
+  readonly unconfirmedChallenges: number;
 }
 
 export interface FindResult {
@@ -37,6 +45,11 @@ export interface FindResult {
   readonly degraded: readonly "vector"[];
   /** Nodes not embedded yet; they are only reachable by text match or graph edges. */
   readonly unindexed: number;
+  /**
+   * Statements not interpreted yet (or whose interpretation failed): they have no topics and no
+   * correction links, so a missing correction there proves nothing.
+   */
+  readonly uninterpreted: number;
 }
 
 const snippetLength = 300;
@@ -61,6 +74,11 @@ const decodeIdProject = Schema.decodeUnknownSync(IdProject);
 const Id = Schema.Struct({ id: Schema.String });
 const decodeId = Schema.decodeUnknownSync(Id);
 const Count = Schema.Struct({ count: Schema.Number });
+const decodeCount = Schema.decodeUnknownSync(Count);
+const decodeName = Schema.decodeUnknownSync(Schema.Struct({ name: Schema.String }));
+const decodeChallenge = Schema.decodeUnknownSync(
+  Schema.Struct({ from_id: Schema.String, kind: Schema.Literal("corrects", "retracts") }),
+);
 
 /** Splits a question into search terms; trigram FTS needs 3+ characters, shorter terms use LIKE. */
 export function searchTerms(query: string) {
@@ -78,6 +96,17 @@ const make = Effect.gen(function* () {
   const embedder = yield* Embedder;
   const vectors = yield* VectorIndex;
   const graph = yield* Graph;
+  const supersededBy = sqlite.prepare(`
+    SELECT e.from_id, e.kind FROM edges e JOIN nodes n ON n.id = e.from_id
+    WHERE e.to_id = ? AND e.kind IN ('corrects', 'retracts') ORDER BY n.seq`);
+  const unconfirmedOf = sqlite.prepare(
+    "SELECT count(*) AS count FROM interpretations WHERE target_id = ? AND status = 'unconfirmed'",
+  );
+  const nameOf = sqlite.prepare("SELECT name FROM projects WHERE id = ?");
+  const projectName = (projectId: string) => {
+    const row = nameOf.get(projectId);
+    return row ? decodeName(row).name : projectId;
+  };
 
   const allowedProjects = (projectId: string, crossProject: boolean) =>
     crossProject
@@ -165,6 +194,14 @@ const make = Effect.gen(function* () {
           .get(embedder.identity),
       ).count;
 
+      const uninterpreted = Schema.decodeUnknownSync(Count)(
+        sqlite
+          .prepare(`
+            SELECT count(*) AS count FROM interpret_jobs j JOIN nodes n ON n.id = j.node_id
+            WHERE j.status != 'done' AND n.project_id IN (${allowed.map(() => "?").join(", ")})`)
+          .get(...allowed),
+      ).count;
+
       const matches = walk.visits.slice(0, limit).map((visit): Match => {
         let foundBy: Match["foundBy"] = "graph";
         if (visit.path.length === 0) foundBy = vectorIds.has(visit.node.id) ? "vector" : "text";
@@ -178,7 +215,13 @@ const make = Effect.gen(function* () {
           utility: Math.round(visit.utility * 1000) / 1000,
           foundBy,
           path: visit.path,
+          projectName: projectName(visit.node.projectId),
           fromOtherProject: visit.node.projectId !== input.projectId,
+          supersededBy: supersededBy
+            .all(visit.node.id)
+            .map((row) => decodeChallenge(row))
+            .map((challenge) => ({ id: challenge.from_id, relation: challenge.kind })),
+          unconfirmedChallenges: decodeCount(unconfirmedOf.get(visit.node.id)).count,
         };
       });
       return {
@@ -186,6 +229,7 @@ const make = Effect.gen(function* () {
         complete: walk.complete && walk.visits.length <= limit,
         degraded,
         unindexed,
+        uninterpreted,
       } satisfies FindResult;
     });
 

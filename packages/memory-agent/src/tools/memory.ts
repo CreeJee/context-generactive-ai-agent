@@ -1,6 +1,7 @@
 import { toolDefinition } from "@tanstack/ai";
 import { Context, Effect, Layer, Runtime, Schema } from "effect";
 import { Graph } from "../memory/graph.ts";
+import { Interpretations } from "../memory/interpretations.ts";
 import { Nodes } from "../memory/nodes.ts";
 import { MemorySearch } from "../memory/search.ts";
 import { toToolSchema } from "./schema.ts";
@@ -28,7 +29,7 @@ const traceEvidenceInput = Schema.Struct({
 const notFound = (id: string) => ({ error: "not_found", id });
 
 const make = Effect.gen(function* () {
-  const runtime = yield* Effect.runtime<MemorySearch | Nodes | Graph>();
+  const runtime = yield* Effect.runtime<MemorySearch | Nodes | Graph | Interpretations>();
   const run = Runtime.runPromise(runtime);
 
   return {
@@ -40,7 +41,7 @@ const make = Effect.gen(function* () {
       const findMemory = toolDefinition({
         name: "find_memory",
         description:
-          "Search every earlier message, tool call and tool result across sessions, including other projects unless they opted out. Results are leads, not facts: read the original with read_evidence before relying on one, and use trace_evidence to see who said it and whether it was corrected. A missing result does not mean something never happened or was approved.",
+          "Search every earlier message, tool call, tool result and topic across sessions, including other projects unless they opted out (projectName, fromOtherProject). Results are leads, not facts: read the original with read_evidence before relying on one, and use trace_evidence to see who said it and whether it was corrected. supersededBy lists later user statements that correct or retract a match; unconfirmedChallenges counts possible corrections that need the user's confirmation. uninterpreted counts statements with no topics or correction links yet. A missing result or missing correction does not mean something never happened or was approved.",
         inputSchema: toToolSchema(findMemoryInput),
       }).server(({ query }) =>
         run(Effect.flatMap(MemorySearch, (search) => search.find({ query, projectId }))),
@@ -67,10 +68,15 @@ const make = Effect.gen(function* () {
       const traceEvidence = toolDefinition({
         name: "trace_evidence",
         description:
-          "Follow a memory node back to its cause: tool result -> tool call -> assistant message -> the user turn it answered. Also lists later statements that correct or retract anything on that chain.",
+          "Follow a memory node back to its cause: tool result -> tool call -> assistant message -> the user turn it answered. Also lists later user statements that correct or retract anything on that chain (challengedBy, with the interpreter's reason), and possible corrections it could not tie to a statement for sure (unconfirmed): ask the user about those.",
         inputSchema: toToolSchema(traceEvidenceInput),
       }).server(async ({ id }) => {
-        const [graph, allowed] = await Promise.all([run(Graph), visible()]);
+        const [graph, interpretations, nodes, allowed] = await Promise.all([
+          run(Graph),
+          run(Interpretations),
+          run(Nodes),
+          visible(),
+        ]);
         const provenance = graph.trace(id);
         if (!provenance || !allowed.has(provenance.chain[0]!.projectId)) return notFound(id);
         const summary = (node: (typeof provenance.chain)[number]) => ({
@@ -80,6 +86,12 @@ const make = Effect.gen(function* () {
           createdAt: node.createdAt,
           snippet: node.text.slice(0, 300),
         });
+        const chainIds = provenance.chain.map((node) => node.id);
+        const applied = interpretations.targeting(chainIds, "applied");
+        const reasonFor = (from: string, target: string, kind: string) =>
+          applied.find(
+            (entry) => entry.nodeId === from && entry.targetId === target && entry.kind === kind,
+          )?.reason ?? null;
         return {
           chain: provenance.chain.filter((node) => allowed.has(node.projectId)).map(summary),
           challengedBy: provenance.challengedBy
@@ -88,7 +100,20 @@ const make = Effect.gen(function* () {
               ...summary(entry.node),
               relation: entry.kind,
               target: entry.target,
+              reason: reasonFor(entry.node.id, entry.target, entry.kind),
             })),
+          unconfirmed: interpretations.targeting(chainIds, "unconfirmed").flatMap((entry) => {
+            const node = nodes.get(entry.nodeId);
+            if (!node || !allowed.has(node.projectId)) return [];
+            return [
+              {
+                ...summary(node),
+                possibleRelation: entry.kind,
+                target: entry.targetId,
+                reason: entry.reason,
+              },
+            ];
+          }),
         };
       });
 

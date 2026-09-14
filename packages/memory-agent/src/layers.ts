@@ -14,6 +14,8 @@ import { Embedder } from "./memory/embedding/embedder.ts";
 import { Indexer } from "./memory/embedding/indexer.ts";
 import { VectorIndex } from "./memory/embedding/vector-index.ts";
 import { Graph } from "./memory/graph.ts";
+import { Interpreter } from "./memory/interpret.ts";
+import { Interpretations } from "./memory/interpretations.ts";
 import { Nodes } from "./memory/nodes.ts";
 import { Recorder } from "./memory/record.ts";
 import { MemorySearch } from "./memory/search.ts";
@@ -37,6 +39,8 @@ export interface MemoryAgentLayerOptions {
   readonly codex?: Layer.Layer<CodexAppServer, never, StorageRoot>;
   /** How long a page keeps a session without renewing; tests shorten it. */
   readonly leaseTtlMs?: number;
+  /** Interpret statements in the background after each run. Default true; tests turn it off. */
+  readonly interpretAutomatically?: boolean;
 }
 
 /** Composition root: every memory-agent service backed by one storage directory. */
@@ -54,6 +58,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     Attachments.layer,
     SessionLeases.layer(options.leaseTtlMs),
     MessageQueue.layer,
+    Interpretations.layer,
     options.embedder ?? Embedder.local,
     options.codex ?? CodexAppServer.layer,
   );
@@ -81,6 +86,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
         OutsideTools.layer,
         ApprovedTools.layer,
         PermissionGate.layer,
+        Interpreter.layer(options.interpretAutomatically),
       ),
     ),
     Layer.provideMerge(retrieval),

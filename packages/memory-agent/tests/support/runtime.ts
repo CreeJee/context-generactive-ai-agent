@@ -22,7 +22,8 @@ function open(storage: string, options: MemoryAgentLayerOptions) {
  * Uses the deterministic embedder unless another one is passed.
  */
 export async function testRuntime(overrides: MemoryAgentLayerOptions = {}) {
-  const options = { embedder: fakeEmbedderLayer, ...overrides };
+  // Interpretation is a model call; tests that need it run it by hand.
+  const options = { embedder: fakeEmbedderLayer, interpretAutomatically: false, ...overrides };
   const base = realpathSync(mkdtempSync(join(tmpdir(), "memory-agent-")));
   const storage = join(base, "storage");
   const projectRoot = join(base, "project");

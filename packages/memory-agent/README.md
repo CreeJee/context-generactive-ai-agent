@@ -37,7 +37,9 @@ src/
 - 저장할 때 구조 edge를 만듭니다: `next`(세션 순서), `reply`, `calls`, `returns`, `touches`(같은 파일/URL).
 - 검색(`find_memory`)은 임베딩 벡터 순위와 FTS trigram 순위를 RRF로 합친 뒤 그래프를 따라 넓힙니다.
 - `read_evidence`는 원문을 페이지로 읽고, `trace_evidence`는 tool result → call → assistant → user 발언까지 거슬러 갑니다.
-- 교차 프로젝트 회상은 기본 포함이며, 프로젝트별로 제외할 수 있습니다.
+- 교차 프로젝트 회상은 기본 포함이며, 프로젝트별로 제외할 수 있습니다. 결과에는 출처 프로젝트 이름(`projectName`)이 붙습니다.
+- `Interpreter`(llm-interpret)가 답변이 끝난 뒤 사용자·assistant 발언을 해석해 주제(`topic` 노드 + `about`), `corrects`·`retracts`·`related` edge를 붙입니다. 후보는 코드가 고르고, 정정·취소는 사용자 발언에서만, 대상이 분명할 때만 edge가 됩니다. 모호하면 `interpretations`에 `unconfirmed`로 남아 확인 질문이 됩니다.
+- 검색 결과의 `supersededBy`는 그 발언을 정정·취소한 나중 발언, `unconfirmedChallenges`는 확인이 필요한 후보 수, `uninterpreted`는 아직 해석되지 않은 발언 수입니다. 테스트는 `tests/interpret.test.ts`(가짜 codex가 표식으로 해석 결과를 흉내 냄).
 
 ## 도구와 권한
 

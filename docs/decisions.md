@@ -24,6 +24,16 @@
 - 검색은 turbovec 벡터 순위 + SQLite FTS trigram 순위를 RRF(k=60)로 합친 뒤 그래프를 탐색한다.
 - 임베딩은 로컬 모델 `ibm-granite/granite-embedding-97m-multilingual-r2`(fp32, CLS pooling). 모델 파일은 `~/.context-generactive-agent/models`.
 
+## 기억 보강: llm-interpret (2026-09-14)
+
+- 사용자·assistant 발언만 해석한다. 도구 결과·문서는 증거일 뿐 주장이 아니다.
+- 해석은 답변이 끝난 뒤 백그라운드에서 한다(인덱싱 다음). 사용자가 고른 모델을 가장 낮은 추론 강도로, 도구 없는 일회용 스레드에서 부른다. 한 번에 세션 하나의 발언 최대 8개, 실행당 5묶음까지만 해서 밀린 작업이 모델을 오래 쓰지 않게 한다. 로그인·모델 선택 전에는 기다리고, 실패는 3번까지 다시 한 뒤 `failed`로 둔다. 검색은 해석과 무관하게 동작한다.
+- 결과: 주제(프로젝트마다 이름이 같은 `topic` 노드 하나, `about` edge), `corrects`·`retracts`·`related` edge. 모델은 코드가 건넨 후보 발언(같은 세션 최근 발언 + 같은 프로젝트 검색 결과, 해당 발언보다 앞선 것만) 안에서만 연결할 수 있다.
+- **권위**: 정정·취소는 사용자 발언에서만 만든다. assistant가 "사실은 이렇다"고 해도 사용자 결정을 바꾸지 않는다.
+- **모호한 대상은 확인**(R07): 대상이 분명하면 edge로 반영하고, 분명하지 않으면 edge를 만들지 않고 `interpretations`에 `unconfirmed`로 남긴다. `find_memory`(`unconfirmedChallenges`)와 `trace_evidence`(`unconfirmed`)가 보여주고, 모델은 사용자에게 묻는다.
+- 자동 해석과 확정을 구분한다: 모든 해석은 이유·모델과 함께 `interpretations`에 남고 edge의 origin은 `llm`이다. 원문만 증거이며, 아직 해석되지 않은 발언 수(`uninterpreted`)를 검색 결과에 함께 준다. 정정이 없다는 것이 정정 부재의 증거가 아니다.
+- PRD의 TopicModelRevision(주제 모델 개정 이력)은 두지 않는다. 주제는 이름으로만 합쳐지고, 잘못 붙은 주제는 원문 증거보다 약한 단서로만 쓰인다.
+
 ## 로컬 도구 (2026-09-14)
 
 - 파일·셸 도구는 codex 내장 도구(셸·apply_patch·샌드박스)가 아니라 **TanStack 도구로 직접 구현**한다(방식 A).

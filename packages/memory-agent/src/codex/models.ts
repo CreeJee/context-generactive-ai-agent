@@ -1,4 +1,4 @@
-import { Context, Data, Effect, Layer, Schema } from "effect";
+import { Context, Data, Effect, Layer, Option, Schema } from "effect";
 import { GlobalConfig } from "../config/global-config.ts";
 import { CodexAppServer } from "./app-server.ts";
 
@@ -34,10 +34,13 @@ export interface ModelSelection {
 }
 
 const maxPages = 20;
+/** Cheapest first, for background calls that run often (reviews, interpretation). */
+const effortOrder = ["minimal", "low", "medium", "high", "xhigh"];
 
 const make = Effect.gen(function* () {
   const codex = yield* CodexAppServer;
   const config = yield* GlobalConfig;
+  const cheapest = new Map<string, string>();
 
   /** Every model the signed-in account can use, hidden ones excluded. */
   const list = Effect.gen(function* () {
@@ -75,6 +78,25 @@ const make = Effect.gen(function* () {
             .find((candidate) => candidate.model === model)
             ?.inputModalities.includes("image") ?? false,
       ),
+
+    /**
+     * The selected model at its lowest reasoning effort, for short background calls. Falls back to
+     * the selection's own effort when the model list cannot be read.
+     */
+    cheapestEffort: (selection: ModelSelection) =>
+      Effect.gen(function* () {
+        const known = cheapest.get(selection.model);
+        if (known) return { model: selection.model, reasoningEffort: known };
+        const listed = yield* Effect.option(list);
+        const efforts = Option.getOrElse(listed, () => [])
+          .find((candidate) => candidate.model === selection.model)
+          ?.supportedReasoningEfforts.map((option) => option.reasoningEffort);
+        const effort =
+          effortOrder.find((candidate) => efforts?.includes(candidate)) ??
+          selection.reasoningEffort;
+        if (efforts) cheapest.set(selection.model, effort);
+        return { model: selection.model, reasoningEffort: effort } satisfies ModelSelection;
+      }),
 
     /** Saves a model only if the account offers it now. Never substitutes another model. */
     select: (model: string, reasoningEffort?: string) =>

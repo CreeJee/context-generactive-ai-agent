@@ -187,4 +187,21 @@ export const migrations: readonly string[] = [
   );
   CREATE INDEX queued_messages_session ON queued_messages(session_id, seq);
   `,
+  `
+  -- What llm-interpret concluded about a statement, and why. 'applied' rows also exist as llm
+  -- edges; 'unconfirmed' ones (an unclear correction target) never become edges and are shown as
+  -- questions for the user instead. Times are ISO strings like nodes.
+  CREATE TABLE interpretations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_id TEXT NOT NULL REFERENCES nodes(id),
+    kind TEXT NOT NULL CHECK (kind IN ('about', 'corrects', 'retracts', 'related')),
+    target_id TEXT NOT NULL REFERENCES nodes(id),
+    status TEXT NOT NULL CHECK (status IN ('applied', 'unconfirmed')),
+    reason TEXT NOT NULL,
+    model TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX interpretations_node ON interpretations(node_id);
+  CREATE INDEX interpretations_target ON interpretations(target_id, status);
+  `,
 ];

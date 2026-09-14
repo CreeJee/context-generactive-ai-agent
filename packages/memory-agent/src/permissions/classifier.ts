@@ -31,8 +31,6 @@ const decodeVerdict = Schema.decodeUnknownOption(Schema.parseJson(Verdict));
 const userTurns = 12;
 const turnCharacters = 1_500;
 const reviewTimeoutMs = 60_000;
-/** Cheapest first: the review runs on every gated call. */
-const effortOrder = ["minimal", "low", "medium", "high", "xhigh"];
 
 export interface ReviewRequest {
   readonly project: Project;
@@ -46,21 +44,6 @@ const make = Effect.gen(function* () {
   const codexChat = yield* CodexChat;
   const models = yield* CodexModels;
   const nodes = yield* Nodes;
-  const cheapestEffort = new Map<string, string>();
-
-  const effortFor = async (selection: ModelSelection) => {
-    const known = cheapestEffort.get(selection.model);
-    if (known) return known;
-    const listed = await Effect.runPromise(Effect.option(models.list));
-    const efforts =
-      Option.getOrUndefined(listed)
-        ?.find((model) => model.model === selection.model)
-        ?.supportedReasoningEfforts.map((option) => option.reasoningEffort) ?? [];
-    const effort =
-      effortOrder.find((candidate) => efforts.includes(candidate)) ?? selection.reasoningEffort;
-    cheapestEffort.set(selection.model, effort);
-    return effort;
-  };
 
   const prompt = (request: ReviewRequest) => {
     const turns = nodes
@@ -84,9 +67,10 @@ const make = Effect.gen(function* () {
       const abortController = new AbortController();
       const timer = setTimeout(() => abortController.abort(), reviewTimeoutMs);
       try {
-        const reasoningEffort = await effortFor(request.selection);
+        // The review runs on every gated call, so it uses the cheapest effort.
+        const cheap = await Effect.runPromise(models.cheapestEffort(request.selection));
         const answer = await chat({
-          adapter: codexChat.adapter({ model: request.selection.model, reasoningEffort }),
+          adapter: codexChat.adapter(cheap),
           messages: [{ role: "user", content: prompt(request) }],
           systemPrompts: [reviewInstructions],
           threadId: randomUUID(),

@@ -97,6 +97,42 @@ async function runTurn(threadId, turnId, input) {
     const reason = `검토 결과: ${decision}`;
     return streamAnswer(threadId, turnId, JSON.stringify({ decision, reason }));
   }
+  if (thread.instructions.includes("You label statements")) {
+    // Interpreter: topics from #hashtags, links from markers like [corrects:WORD], aimed at the
+    // first candidate (users first) whose text contains WORD. [maybe-...] is ambiguous.
+    const input = JSON.parse(text.match(/Input \(JSON\): (.*)$/s)?.[1] ?? "{}");
+    if (input.statements?.some((statement) => statement.text.includes("[broken-interpret]")))
+      return streamAnswer(threadId, turnId, "not json at all");
+    const statements = (input.statements ?? []).map((statement) => {
+      const topics = [...statement.text.matchAll(/#(\S+)/gu)].map((match) => match[1]);
+      const links = [
+        ...statement.text.matchAll(/\[(maybe-)?(corrects|retracts|related):([^\]]+)\]/gu),
+      ].flatMap(([, maybe, relation, word]) => {
+        const containing = statement.candidates.filter((candidate) =>
+          candidate.text.includes(word),
+        );
+        const target = containing.find((candidate) => candidate.role === "user") ?? containing[0];
+        if (!target) return [];
+        return [
+          {
+            target: target.id,
+            relation,
+            certainty: maybe ? "ambiguous" : "clear",
+            reason: `${word} 관련`,
+          },
+        ];
+      });
+      if (statement.text.includes("[bad-target]"))
+        links.push({
+          target: "not-offered",
+          relation: "corrects",
+          certainty: "clear",
+          reason: "x",
+        });
+      return { id: statement.id, topics, links };
+    });
+    return streamAnswer(threadId, turnId, JSON.stringify({ statements }));
+  }
   if (text.includes("look at")) {
     const local = input.filter((part) => part.type === "localImage");
     const replayed = thread.history
