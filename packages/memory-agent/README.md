@@ -69,6 +69,15 @@ src/
 - 이 저장소는 화면 복원용이고 기억의 원본은 여전히 `nodes`입니다. chat state가 없는 예전 세션은 노드에서 대화를 다시 만들어 엽니다.
 - 저장소 계약은 `@tanstack/ai-persistence/testkit`의 conformance 테스트로 확인합니다.
 
+## 실행 중 새로고침·취소·재시작
+
+- run은 요청과 떨어져 돕니다. 답변 chunk는 delivery durability 로그(`memoryStream`)에 먼저 쓰이고, 새로고침한 페이지는 `GET /api/chat?runId=&offset=-1`로 처음부터 다시 읽으며 따라갑니다. codex를 다시 부르지 않습니다.
+- `LiveRuns`가 세션마다 진행 중인 run 하나를 들고 있습니다. 같은 세션의 두 번째 run은 409이고, 취소(`AgentChat.cancel`)는 여기서 run을 찾아 `requestRunCancel` 후 `RUN_CANCEL_REASON`으로 abort합니다. codex 어댑터는 abort 신호에 `turn/interrupt`로 답합니다.
+- `AgentChat.status`는 진행 중인 run과 마지막 run의 상태·오류를 돌려줍니다(`SessionRunState`).
+- `ChatState`가 만들어질 때 `running`으로 남은 run은 `failed`/`server_restarted`로 바뀝니다. 다시 실행하지 않습니다.
+- 쓰던 답변은 1초마다 스냅샷되고, 취소·실패 때 바로 저장됩니다.
+- 테스트(`tests/runs.test.ts`)는 실제 `ChatClient`로 중간 새로고침 후 이어 읽기, 취소, 동시 run 거절, 재시작 후 실패 기록, 재시작을 넘긴 승인을 확인합니다.
+
 ## 이미지
 
 - 앱이 올린 이미지는 `Attachments`가 `<storage>/attachments/<sha256>`에 저장하고, 사용자 노드에 순서대로 연결합니다(`node_attachments`).

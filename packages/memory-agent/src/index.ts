@@ -6,6 +6,8 @@ export {
   workspaceInstructions,
 } from "./agent/chat.ts";
 export { sessionMessages } from "./agent/history.ts";
+export { LiveRuns, type LiveRun } from "./agent/live-runs.ts";
+export { serverRestartedCode, type CancelResult, type SessionRunState } from "./agent/run-state.ts";
 export { ChatState } from "./chat-state/chat-state.ts";
 export { sqliteChatPersistence } from "./chat-state/persistence.ts";
 

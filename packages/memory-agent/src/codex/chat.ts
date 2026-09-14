@@ -121,7 +121,8 @@ export class CodexTextAdapter extends BaseTextAdapter<
   }
 
   async *chatStream(options: TextOptions<Record<string, never>>): AsyncIterable<AdapterYieldChunk> {
-    const signal = options.abortController?.signal;
+    // chat() hands its abort signal over on `request`; `abortController` is for direct callers.
+    const signal = options.abortController?.signal ?? options.request?.signal ?? undefined;
     const runId = options.runId ?? randomUUID();
     const threadId = options.threadId ?? this.#fallbackThreadId;
     const model = this.selection.model;
@@ -203,6 +204,8 @@ export class CodexTextAdapter extends BaseTextAdapter<
         }
       }
     } catch (failure) {
+      // Interrupting the turn on abort ends it with an error; the run was cancelled, not failed.
+      if (signal?.aborted) return;
       throw new Error(Schema.is(Schema.String)(failure) ? failure : "Codex turn failed.");
     } finally {
       signal?.removeEventListener("abort", abort);

@@ -67,6 +67,18 @@
 - chat state는 화면 복원용이다. 기억·근거의 원본은 `nodes`이고, chat state가 없는 세션은 노드에서 대화를 만든다.
 - UI가 따로 쓰던 `GET /api/sessions/:session/messages`는 `GET /api/chat` 복원으로 대체해 없앴다.
 
+## 실행 재연결·취소·재시작 (2026-09-14)
+
+- run은 HTTP 요청에 묶지 않는다. 새로고침·탭 닫기는 run을 멈추지 않고(R10: 재연결은 재실행이 아님), 멈추는 길은 명시적 취소(`POST /api/sessions/:session/cancel`)뿐이다.
+  - 모든 chunk를 TanStack delivery durability 로그(`memoryStream`, batch 1)에 먼저 쓰고 보낸다. 새로고침한 페이지는 hydrate가 알려준 진행 중 run에 `joinRun`으로 붙어 처음부터 다시 읽는다.
+  - 로그는 프로세스 메모리에 둔다. 앱은 로컬 단일 프로세스이고, 프로세스가 죽으면 codex 턴도 함께 끝나 이어 읽을 대상이 없다.
+- 취소는 run 기록에 요청을 남기고(`requestRunCancel`) 같은 프로세스의 run을 `RUN_CANCEL_REASON`으로 abort한다. codex 턴도 `turn/interrupt`한다. 응답은 최대 5초 기다려 실제로 멈췄는지(`stopped`)와 기록 상태를 따로 알려준다(취소 요청과 실제 종료 구분).
+  - 승인 대기 중인 run의 취소는 두지 않는다. 그때는 거부로 답한다.
+- 한 세션에는 동시에 run 하나만 둔다. 진행 중에 새 요청은 409 `run_in_progress`.
+- 서버가 시작할 때 `running`으로 남은 run은 `failed`(`server_restarted`)로 기록한다. 자동으로 다시 실행하지 않고 화면에 알린다. 다시 보낼지는 사용자가 정한다.
+- 승인 대기는 재시작 뒤에도 답할 수 있다. 대기 중인 codex 턴은 사라졌으므로 승인 후에는 대화 기록을 넣은 새 codex 스레드로 이어간다.
+- 쓰던 답변도 대화에 남긴다: 1초마다 스냅샷, 취소·실패 시 즉시 저장. 새로고침·재시작 뒤 화면이 사용자가 이미 본 내용과 같게.
+
 ## 개발 규칙 (2026-09-14)
 
 - 앱 개발 서버 인자는 `vp run dev --host 127.0.0.1 --port 5174`처럼 `--` 없이 넘긴다.

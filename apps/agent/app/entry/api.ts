@@ -7,8 +7,19 @@ import type {
   Project,
   Session,
 } from "memory-agent";
+import type { CancelResult, SessionRunState } from "memory-agent/definitions";
 
-export type { Attachment, AuthState, CodexModel, ModelSelection, PermissionMode, Project, Session };
+export type {
+  Attachment,
+  AuthState,
+  CancelResult,
+  CodexModel,
+  ModelSelection,
+  PermissionMode,
+  Project,
+  Session,
+  SessionRunState,
+};
 
 export class ApiError extends Error {
   constructor(
@@ -62,6 +73,10 @@ export const api = {
   sessions: (projectId: string) =>
     call<Session[]>("GET", `/api/sessions?project=${encodeURIComponent(projectId)}`),
   createSession: (projectId: string) => call<Session>("POST", "/api/sessions", { projectId }),
+  sessionRunState: (sessionId: string) =>
+    call<SessionRunState>("GET", `/api/sessions/${encodeURIComponent(sessionId)}`),
+  cancelRun: (sessionId: string) =>
+    call<CancelResult>("POST", `/api/sessions/${encodeURIComponent(sessionId)}/cancel`),
 
   /** Uploads one image as raw bytes; the server checks what it really is. */
   uploadAttachment: async (file: File) => {

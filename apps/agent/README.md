@@ -29,7 +29,8 @@ vp run dev --host 127.0.0.1 --port 5174
 - 사이드바: ChatGPT 로그인 상태, 모델·추론 강도, 프로젝트 선택·추가, 권한 모드(`매번 묻기`/`자동 판단`), 대화 목록.
 - 대화: 답변 스트리밍 마크다운([streamdown](https://streamdown.ai), 코드 하이라이트·한글 강조), 도구 호출 카드(인자·결과·상태 배지).
 - 이미지 첨부: 붙여넣기·끌어놓기·첨부 버튼. 입력창 위 카드의 `#N`을 누르면 본문에 참조가 들어가고, 보낸 메시지에서는 `#N` 칩에 마우스를 올려 미리보거나 눌러서 크게 봅니다. 이미지를 못 읽는 모델을 고르면 첨부가 막힙니다.
-- Esc: 입력 중인 글·이미지를 비우고, 비어 있으면 실행 중인 답변을 멈춥니다.
+- Esc: 입력 중인 글·이미지를 비우고, 비어 있으면 실행 중인 답변을 멈춥니다. 중지는 서버에 취소를 요청하고, 실제로 멈췄는지 확인해 알려줍니다.
+- 답변 중 새로고침·탭 닫기는 답변을 멈추지 않습니다. 다시 열면 진행 중인 답변에 이어 붙습니다. 서버가 답변 중에 다시 시작되면 그 답변은 자동으로 다시 실행하지 않고, 끝나지 않았다고 알립니다.
 - 승인 카드: 셸 실행과 프로젝트 밖 쓰기·삭제를 승인/거부합니다. 자동 판단 모드에서는 분류 모델이 확인을 요청한 경우에만 뜨고, 그 이유를 함께 보여줍니다. 대기 중에 새로고침해도 서버에 저장된 승인 요청으로 카드가 다시 뜹니다.
 
 UI 컴포넌트는 shadcn으로 추가합니다(`AGENT.md`).
@@ -38,18 +39,21 @@ UI 컴포넌트는 shadcn으로 추가합니다(`AGENT.md`).
 
 `app/routes/api/*`는 React Router flat routes이며 `/api` 접두사로 마운트됩니다. 상태를 바꾸는 요청은 교차 사이트 요청을 거부합니다.
 
-| 라우트                             | 동작                                                       |
-| ---------------------------------- | ---------------------------------------------------------- |
-| `GET/POST /api/auth`               | 로그인 상태 조회, `login`·`cancel`·`logout`                |
-| `GET /api/models`                  | 계정에서 쓸 수 있는 모델 목록과 현재 선택                  |
-| `POST /api/models/:model`          | 모델·추론 강도 선택(없는 모델은 자동 대체 없이 오류)       |
-| `GET/POST /api/projects`           | 프로젝트 목록, 경로로 추가                                 |
-| `POST /api/projects/:project`      | `crossRecallExcluded`, `permissionMode`(`ask`/`auto`) 변경 |
-| `GET/POST /api/sessions`           | 프로젝트별 대화 목록, 새 대화                              |
-| `GET /api/chat?session=&threadId=` | 새로고침 복원: 대화, 진행 중인 run, 대기 중인 승인         |
-| `POST /api/chat?session=`          | 채팅 실행(SSE), 승인 재개 포함                             |
-| `POST /api/attachments`            | 이미지 원본 바이트 업로드(png/jpeg/gif/webp, 20 MiB 이하)  |
-| `GET /api/attachments/:attachment` | 저장된 이미지(다른 사이트 삽입 차단)                       |
+| 라우트                                  | 동작                                                       |
+| --------------------------------------- | ---------------------------------------------------------- |
+| `GET/POST /api/auth`                    | 로그인 상태 조회, `login`·`cancel`·`logout`                |
+| `GET /api/models`                       | 계정에서 쓸 수 있는 모델 목록과 현재 선택                  |
+| `POST /api/models/:model`               | 모델·추론 강도 선택(없는 모델은 자동 대체 없이 오류)       |
+| `GET/POST /api/projects`                | 프로젝트 목록, 경로로 추가                                 |
+| `POST /api/projects/:project`           | `crossRecallExcluded`, `permissionMode`(`ask`/`auto`) 변경 |
+| `GET/POST /api/sessions`                | 프로젝트별 대화 목록, 새 대화                              |
+| `GET /api/sessions/:session`            | 진행 중인 run, 마지막 run의 끝난 방식(완료·취소·재시작 등) |
+| `POST /api/sessions/:session/cancel`    | 진행 중인 run 취소, 실제로 멈췄는지 응답                   |
+| `GET /api/chat?session=&threadId=`      | 새로고침 복원: 대화, 진행 중인 run, 대기 중인 승인         |
+| `GET /api/chat?session=&runId=&offset=` | 진행 중이거나 끝난 run의 답변을 로그에서 다시 읽기         |
+| `POST /api/chat?session=`               | 채팅 실행(SSE), 승인 재개 포함                             |
+| `POST /api/attachments`                 | 이미지 원본 바이트 업로드(png/jpeg/gif/webp, 20 MiB 이하)  |
+| `GET /api/attachments/:attachment`      | 저장된 이미지(다른 사이트 삽입 차단)                       |
 
 ## 구조
 

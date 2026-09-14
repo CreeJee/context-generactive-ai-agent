@@ -28,6 +28,7 @@ import {
 import { acceptedImageTypes, renumberReferences, useDraftImages } from "./draft-images";
 import { DraftImageTray } from "./images";
 import { MessageView } from "./message";
+import { RunNoticeView, useRunState } from "./run-state";
 
 // Stable references: useChat treats a new array as changed options on every render.
 const approvalInterrupts: ApprovalInterrupts = [permissionReviewInterrupt];
@@ -54,23 +55,27 @@ export function ChatPanel({
   const caretAfterRender = useRef<number | null>(null);
   const filePicker = useRef<HTMLInputElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
-  const { messages, sendMessage, stop, isLoading, error, status, interrupts } = useChat<
-    ApprovalTools,
-    undefined,
-    unknown,
-    ApprovalInterrupts
-  >({
-    connection: fetchServerSentEvents(`/api/chat?session=${encodeURIComponent(sessionId)}`),
-    threadId: sessionId,
-    persistence: true,
-    // The same definitions the server uses, so approval requests can be matched and answered:
-    // tool approvals in `ask` mode, permission reviews in `auto` mode.
-    tools: approvalToolDefinitions,
-    interrupts: approvalInterrupts,
-  });
+  const { messages, sendMessage, stop, isLoading, sessionGenerating, error, status, interrupts } =
+    useChat<ApprovalTools, undefined, unknown, ApprovalInterrupts>({
+      connection: fetchServerSentEvents(`/api/chat?session=${encodeURIComponent(sessionId)}`),
+      threadId: sessionId,
+      persistence: true,
+      // The same definitions the server uses, so approval requests can be matched and answered:
+      // tool approvals in `ask` mode, permission reviews in `auto` mode.
+      tools: approvalToolDefinitions,
+      interrupts: approvalInterrupts,
+    });
   const approvals = interrupts.flatMap((interrupt) => toPendingApproval(interrupt) ?? []);
   const waitingForApproval = interrupts.length > 0;
   const awaitingApproval = new Set(approvals.map((approval) => approval.toolCallId));
+  // A run rejoined after a reload streams without a local request, so both count as busy.
+  const generating = isLoading || sessionGenerating;
+  const run = useRunState(sessionId, generating);
+
+  const cancel = async () => {
+    // Stopping only the local stream would leave the run going on the server, so ask it first.
+    if (await run.cancel()) stop();
+  };
 
   const ready = draftImages.images.flatMap((image) => (image.status === "ready" ? [image] : []));
   const uploading = draftImages.images.some((image) => image.status === "uploading");
@@ -79,7 +84,7 @@ export function ChatPanel({
     (draft.trim().length > 0 || ready.length > 0) &&
     !uploading &&
     !failed &&
-    !isLoading &&
+    !generating &&
     !waitingForApproval;
 
   useEffect(() => {
@@ -184,7 +189,7 @@ export function ChatPanel({
             <MessageView
               key={message.id}
               message={message}
-              streaming={isLoading && index === messages.length - 1}
+              streaming={generating && index === messages.length - 1}
               awaitingApproval={awaitingApproval}
             />
           ))}
@@ -196,11 +201,14 @@ export function ChatPanel({
               <Spinner /> 생각하는 중…
             </div>
           )}
-          {error && (
+          {error && run.notice === null && (
             <Alert variant="destructive">
               <AlertTitle>응답을 받지 못했어요</AlertTitle>
               <AlertDescription>{error.message}</AlertDescription>
             </Alert>
+          )}
+          {!generating && !waitingForApproval && run.notice && (
+            <RunNoticeView notice={run.notice} />
           )}
           <div ref={bottom} />
         </div>
@@ -268,7 +276,7 @@ export function ChatPanel({
                   setDraft("");
                   draftImages.clear();
                   setNotice(null);
-                } else if (isLoading) stop();
+                } else if (generating) void cancel();
               }
             }}
             placeholder={
@@ -279,9 +287,17 @@ export function ChatPanel({
             className={cn("max-h-48 min-h-10 resize-none")}
             rows={1}
           />
-          {isLoading ? (
-            <Button type="button" variant="outline" size="icon-lg" onClick={stop} aria-label="중지">
-              <SquareIcon />
+          {generating ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="icon-lg"
+              disabled={run.cancelling}
+              onClick={() => void cancel()}
+              aria-label={run.cancelling ? "멈추는 중" : "중지"}
+              title={run.cancelling ? "멈추는 중" : "중지 (입력창이 비었을 때 Esc)"}
+            >
+              {run.cancelling ? <Spinner /> : <SquareIcon />}
             </Button>
           ) : (
             <Button type="submit" size="icon-lg" disabled={!canSend} aria-label="전송">

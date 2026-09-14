@@ -136,6 +136,15 @@ async function runTurn(threadId, turnId, input) {
     if (thread.interrupted) return;
     return streamAnswer(threadId, turnId, `Shell said ${toolText(answer)}`);
   }
+  if (text.includes("slow")) {
+    // A long answer, one piece every 40ms, that stops when the turn is interrupted.
+    for (let piece = 1; piece <= 50; piece++) {
+      if (thread.interrupted) return;
+      notify("item/agentMessage/delta", { threadId, turnId, itemId: "msg-1", delta: `${piece} ` });
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    return streamAnswer(threadId, turnId, "done");
+  }
   if (text.includes("fail"))
     return notify("error", { threadId, turnId, willRetry: false, error: { message: "boom" } });
   if (text.includes("parallel")) {

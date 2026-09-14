@@ -10,6 +10,11 @@ import { Schema } from "effect";
 import { toToolSchema } from "./schema.ts";
 
 export { attachmentIdOf, attachmentUrl } from "../attachments/urls.ts";
+export {
+  serverRestartedCode,
+  type CancelResult,
+  type SessionRunState,
+} from "../agent/run-state.ts";
 
 export const RunShellInput = Schema.Struct({
   command: Schema.NonEmptyString.annotations({
