@@ -14,6 +14,7 @@ import {
 } from "~/components/ui/select";
 import { Separator } from "~/components/ui/separator";
 import { Spinner } from "~/components/ui/spinner";
+import { Switch } from "~/components/ui/switch";
 import { cn } from "~/lib/utils";
 import type {
   AuthState,
@@ -188,12 +189,15 @@ export function ProjectSection({
   onSelect,
   onAdd,
   onPermissionMode,
+  onCrossRecall,
 }: {
   projects: Project[];
   projectId: string | null;
   onSelect: (projectId: string) => void;
   onAdd: (root: string) => Promise<string | null>;
   onPermissionMode: (mode: PermissionMode) => void;
+  /** Whether conversations in other projects may recall this project's memory (R08). */
+  onCrossRecall: (allowed: boolean) => void;
 }) {
   const [root, setRoot] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -244,6 +248,21 @@ export function ProjectSection({
           <p className="text-xs text-muted-foreground">
             {permissionHints.get(current.permissionMode)}
           </p>
+          <label className="mt-1.5 flex cursor-pointer items-start justify-between gap-3">
+            <span className="flex flex-col gap-0.5">
+              <span className="text-xs font-medium">다른 프로젝트에서 이 기억 찾기</span>
+              <span className="text-xs text-muted-foreground">
+                {current.crossRecallExcluded
+                  ? "다른 프로젝트 대화에서는 이 프로젝트의 기억을 찾지 않아요."
+                  : "다른 프로젝트 대화에서도 찾아서 출처 프로젝트와 함께 보여줘요."}
+              </span>
+            </span>
+            <Switch
+              className="mt-0.5"
+              checked={!current.crossRecallExcluded}
+              onCheckedChange={(checked) => onCrossRecall(checked)}
+            />
+          </label>
         </div>
       )}
       <form

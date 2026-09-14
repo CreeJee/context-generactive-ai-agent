@@ -77,9 +77,11 @@ const make = Effect.gen(function* () {
   // A process that stopped mid-batch left jobs running; nothing is working on them now.
   sqlite.prepare("UPDATE interpret_jobs SET status = 'pending' WHERE status = 'running'").run();
 
-  const oldestPending = sqlite.prepare(`
+  // The newest pending statement picks the session, so the conversation just held is interpreted
+  // before an old backlog; inside that session statements still go oldest first.
+  const newestPending = sqlite.prepare(`
     SELECT j.node_id, n.session_id FROM interpret_jobs j JOIN nodes n ON n.id = j.node_id
-    WHERE j.status = 'pending' ORDER BY n.seq LIMIT 1`);
+    WHERE j.status = 'pending' ORDER BY n.seq DESC LIMIT 1`);
   const pendingInSession = sqlite.prepare(`
     SELECT n.* FROM interpret_jobs j JOIN nodes n ON n.id = j.node_id
     WHERE j.status = 'pending' AND n.session_id = ? ORDER BY n.seq LIMIT ?`);
@@ -102,9 +104,9 @@ const make = Effect.gen(function* () {
     "SELECT id FROM nodes WHERE project_id = ? AND kind = 'topic' AND lower(text) = lower(?) LIMIT 1",
   );
 
-  /** The next batch: the oldest pending statement and the pending ones after it in its session. */
+  /** The next batch: the oldest pending statements of the session with the newest pending one. */
   const nextBatch = (): Node[] => {
-    const first = oldestPending.get();
+    const first = newestPending.get();
     if (!first) return [];
     const job = decodeJob(first);
     if (!job.session_id) return [nodes.get(job.node_id)].filter((node) => node !== null);

@@ -102,6 +102,9 @@ export function App() {
     }
   };
 
+  const replaceProject = (updated: Project) =>
+    setProjects((list) => list.map((project) => (project.id === updated.id ? updated : project)));
+
   const createSession = async () => {
     if (!projectId) return;
     const session = await api.createSession(projectId);
@@ -176,13 +179,11 @@ export function App() {
           onAdd={addProject}
           onPermissionMode={(mode) => {
             if (!projectId) return;
-            void api
-              .setPermissionMode(projectId, mode)
-              .then((updated) =>
-                setProjects((list) =>
-                  list.map((project) => (project.id === updated.id ? updated : project)),
-                ),
-              );
+            void api.setPermissionMode(projectId, mode).then(replaceProject);
+          }}
+          onCrossRecall={(allowed) => {
+            if (!projectId) return;
+            void api.setCrossRecallExcluded(projectId, !allowed).then(replaceProject);
           }}
         />
         <Separator />

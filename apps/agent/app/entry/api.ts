@@ -47,7 +47,7 @@ interface ErrorBody {
   reason?: string;
 }
 
-type JsonBody = Readonly<Record<string, string | readonly string[] | undefined>>;
+type JsonBody = Readonly<Record<string, string | boolean | readonly string[] | undefined>>;
 
 async function call<T>(
   method: "GET" | "POST",
@@ -83,6 +83,10 @@ export const api = {
 
   projects: () => call<Project[]>("GET", "/api/projects"),
   addProject: (root: string) => call<Project>("POST", "/api/projects", { root }),
+  setCrossRecallExcluded: (projectId: string, crossRecallExcluded: boolean) =>
+    call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}`, {
+      crossRecallExcluded,
+    }),
   setPermissionMode: (projectId: string, permissionMode: PermissionMode) =>
     call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}`, { permissionMode }),
 
