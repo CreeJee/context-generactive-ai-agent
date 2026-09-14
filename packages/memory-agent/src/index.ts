@@ -20,6 +20,15 @@ export {
 export { CodexModel, CodexModels, ModelUnavailable, type ModelSelection } from "./codex/models.ts";
 export { Database, DatabaseOpenError } from "./db/database.ts";
 export {
+  Attachment,
+  AttachmentMimeType,
+  AttachmentRejected,
+  Attachments,
+  isAttachmentId,
+  maxAttachmentBytes,
+  sniffImageType,
+} from "./attachments/attachments.ts";
+export {
   PathRejected,
   canonicalPath,
   isCredentialPath,

@@ -10,6 +10,10 @@ export const CodexModel = Schema.Struct({
   isDefault: Schema.Boolean,
   defaultReasoningEffort: Schema.String,
   supportedReasoningEfforts: Schema.Array(Schema.Struct({ reasoningEffort: Schema.String })),
+  /** What the model accepts in user turns. Codex treats a missing list as text and image. */
+  inputModalities: Schema.optionalWith(Schema.Array(Schema.String), {
+    default: () => ["text", "image"],
+  }),
 });
 export type CodexModel = typeof CodexModel.Type;
 
@@ -61,6 +65,16 @@ const make = Effect.gen(function* () {
         ? { model: settings.model, reasoningEffort: settings.reasoningEffort }
         : null,
     ),
+
+    /** Whether the account's copy of a model accepts images (R06: never pretend it read one). */
+    acceptsImages: (model: string) =>
+      Effect.map(
+        list,
+        (models) =>
+          models
+            .find((candidate) => candidate.model === model)
+            ?.inputModalities.includes("image") ?? false,
+      ),
 
     /** Saves a model only if the account offers it now. Never substitutes another model. */
     select: (model: string, reasoningEffort?: string) =>

@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { Layer } from "effect";
 import { AgentChat } from "./agent/chat.ts";
+import { Attachments } from "./attachments/attachments.ts";
 import { CodexAccount } from "./codex/account.ts";
 import { CodexAppServer } from "./codex/app-server.ts";
 import { CodexChat } from "./codex/chat.ts";
@@ -44,6 +45,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     Nodes.layer,
     GlobalConfig.layer,
     PermissionReviews.layer,
+    Attachments.layer,
     options.embedder ?? Embedder.local,
     options.codex ?? CodexAppServer.layer,
   );

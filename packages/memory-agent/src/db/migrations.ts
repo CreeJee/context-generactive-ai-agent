@@ -97,4 +97,21 @@ export const migrations: readonly string[] = [
   );
   CREATE INDEX permission_reviews_call ON permission_reviews(session_id, tool_call_id, id);
   `,
+  `
+  -- Uploaded images, stored once by content hash under <storage>/attachments.
+  CREATE TABLE attachments (
+    id TEXT PRIMARY KEY CHECK (length(id) = 64),
+    mime_type TEXT NOT NULL CHECK (mime_type IN ('image/png', 'image/jpeg', 'image/gif', 'image/webp')),
+    bytes INTEGER NOT NULL CHECK (bytes > 0),
+    created_at TEXT NOT NULL
+  );
+
+  -- Which images a message carried, in the order they were attached.
+  CREATE TABLE node_attachments (
+    node_id TEXT NOT NULL REFERENCES nodes(id),
+    position INTEGER NOT NULL CHECK (position >= 0),
+    attachment_id TEXT NOT NULL REFERENCES attachments(id),
+    PRIMARY KEY (node_id, position)
+  );
+  `,
 ];
