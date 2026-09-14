@@ -44,6 +44,49 @@ export interface CodexTurns {
   interrupt(turn: CodexTurn): Promise<void>;
 }
 
+type EventRead = Promise<IteratorResult<TurnEvent>>;
+
+interface ParkedTurn {
+  readonly turn: CodexTurn;
+  /** A read already in flight when the turn was parked; the next reader must reuse it. */
+  readonly nextEvent: EventRead | null;
+  readonly idle: NodeJS.Timeout;
+}
+
+/**
+ * Codex turns waiting on tool results, keyed by conversation thread. A run that pauses for the
+ * user's approval ends its HTTP request; the continuation arrives as a new request with a new
+ * adapter, and finds the waiting turn here so codex keeps its context instead of starting over.
+ */
+export class TurnParking {
+  readonly #parked = new Map<string, ParkedTurn>();
+
+  constructor(
+    private readonly interrupt: (turn: CodexTurn) => void,
+    private readonly idleMs = idleTurnMs,
+  ) {}
+
+  park(threadId: string, turn: CodexTurn, nextEvent: EventRead | null) {
+    const previous = this.take(threadId);
+    if (previous && previous.turn !== turn) this.interrupt(previous.turn);
+    const idle = setTimeout(() => {
+      if (this.#parked.get(threadId)?.turn !== turn) return;
+      this.#parked.delete(threadId);
+      this.interrupt(turn);
+    }, this.idleMs);
+    idle.unref();
+    this.#parked.set(threadId, { turn, nextEvent, idle });
+  }
+
+  take(threadId: string): ParkedTurn | null {
+    const parked = this.#parked.get(threadId);
+    if (!parked) return null;
+    clearTimeout(parked.idle);
+    this.#parked.delete(threadId);
+    return parked;
+  }
+}
+
 /**
  * TanStack text adapter backed by the ChatGPT account through codex app-server.
  *
@@ -59,17 +102,18 @@ export class CodexTextAdapter extends BaseTextAdapter<
   DefaultMessageMetadataByModality
 > {
   readonly name = "codex";
-  #live: CodexTurn | null = null;
-  #idle: NodeJS.Timeout | null = null;
   /**
    * A read that lost a race against the settle timer. It still resolves with the next event, so
    * the following read must reuse it; calling events.next() again would skip that event.
    */
-  #nextEvent: Promise<IteratorResult<TurnEvent>> | null = null;
+  #nextEvent: EventRead | null = null;
+  /** Parking key when the caller gave no thread id: still shared by this request's iterations. */
+  readonly #fallbackThreadId = randomUUID();
 
   constructor(
     private readonly turns: CodexTurns,
     private readonly selection: ModelSelection,
+    private readonly parking: TurnParking,
   ) {
     super({}, selection.model);
   }
@@ -77,12 +121,13 @@ export class CodexTextAdapter extends BaseTextAdapter<
   async *chatStream(options: TextOptions<Record<string, never>>): AsyncIterable<AdapterYieldChunk> {
     const signal = options.abortController?.signal;
     const runId = options.runId ?? randomUUID();
-    const threadId = options.threadId ?? randomUUID();
+    const threadId = options.threadId ?? this.#fallbackThreadId;
     const model = this.selection.model;
     const stamp = () => ({ model, timestamp: Date.now() });
 
     const turn =
-      this.#continue(options.messages) ?? (await this.turns.start(options, this.selection));
+      this.#continue(threadId, options.messages) ??
+      (await this.turns.start(options, this.selection));
     const abort = () => void this.turns.interrupt(turn);
     signal?.addEventListener("abort", abort, { once: true });
 
@@ -98,7 +143,6 @@ export class CodexTextAdapter extends BaseTextAdapter<
 
         if (step.done) {
           if (textOpen) yield { ...stamp(), type: EventType.TEXT_MESSAGE_END, messageId };
-          this.#live = null;
           const finished: AdapterYieldChunk = {
             ...stamp(),
             type: EventType.RUN_FINISHED,
@@ -144,7 +188,8 @@ export class CodexTextAdapter extends BaseTextAdapter<
               toolCallName: call.name,
             };
           }
-          this.#park(turn);
+          this.parking.park(threadId, turn, this.#nextEvent);
+          this.#nextEvent = null;
           yield {
             ...stamp(),
             type: EventType.RUN_FINISHED,
@@ -156,7 +201,6 @@ export class CodexTextAdapter extends BaseTextAdapter<
         }
       }
     } catch (failure) {
-      this.#live = null;
       throw new Error(Schema.is(Schema.String)(failure) ? failure : "Codex turn failed.");
     } finally {
       signal?.removeEventListener("abort", abort);
@@ -195,24 +239,12 @@ export class CodexTextAdapter extends BaseTextAdapter<
     }
   }
 
-  /** Keeps a turn waiting for tool results until the next iteration of this chat() request. */
-  #park(turn: CodexTurn) {
-    this.#live = turn;
-    if (this.#idle) clearTimeout(this.#idle);
-    this.#idle = setTimeout(() => {
-      if (this.#live !== turn) return;
-      this.#live = null;
-      void this.turns.interrupt(turn);
-    }, idleTurnMs);
-    this.#idle.unref();
-  }
-
   /** Hands tool results to the parked turn. Returns null when a fresh thread is needed instead. */
-  #continue(messages: readonly ModelMessage[]): CodexTurn | null {
-    const turn = this.#live;
-    this.#live = null;
-    if (this.#idle) clearTimeout(this.#idle);
-    if (!turn || turn.finished) return null;
+  #continue(threadId: string, messages: readonly ModelMessage[]): CodexTurn | null {
+    const parked = this.parking.take(threadId);
+    if (!parked || parked.turn.finished) return null;
+    const { turn } = parked;
+    this.#nextEvent = parked.nextEvent;
 
     const results = new Map(
       messages.flatMap((message) =>
@@ -381,9 +413,11 @@ const make = Effect.gen(function* () {
     },
   };
 
+  const parking = new TurnParking((turn) => void bridge.interrupt(turn));
+
   return {
     /** A TanStack adapter for one chat() request using the saved model selection. */
-    adapter: (selection: ModelSelection) => new CodexTextAdapter(bridge, selection),
+    adapter: (selection: ModelSelection) => new CodexTextAdapter(bridge, selection, parking),
   };
 });
 

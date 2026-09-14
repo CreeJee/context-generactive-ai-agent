@@ -44,6 +44,14 @@ interface ToolOutcome {
 }
 
 const isString = Schema.is(Schema.String);
+const decodeJson = Schema.decodeUnknownOption(Schema.parseJson());
+/** A thrown tool (`{ error }`) or a declined approval (`{ approved: false }` from the client). */
+const isErrorResult = Schema.is(
+  Schema.Union(
+    Schema.Struct({ error: Schema.String }),
+    Schema.Struct({ approved: Schema.Literal(false) }),
+  ),
+);
 
 /** Tool results are stored as the text the model saw: strings as-is, everything else as JSON. */
 function resultText(entry: ToolPhaseCompleteInfo["results"][number]): string {
@@ -84,6 +92,34 @@ const make = Effect.gen(function* () {
       return {
         name: "memory-agent/record",
 
+        onIteration(ctx) {
+          // Results the client wrote itself (a declined approval) never pass a server tool phase.
+          for (const message of ctx.messages) {
+            if (message.role !== "tool" || !message.toolCallId) continue;
+            const call = nodes.toolNode(binding.sessionId, "tool_call", message.toolCallId);
+            if (!call || nodes.toolNode(binding.sessionId, "tool_result", message.toolCallId))
+              continue;
+            const text = Array.isArray(message.content)
+              ? message.content
+                  .flatMap((part) => (part.type === "text" ? [part.content] : []))
+                  .join("")
+              : (message.content ?? "");
+            const parsed = Option.getOrUndefined(decodeJson(text));
+            nodes.append({
+              ...base,
+              runId: call.runId ?? binding.runId,
+              kind: "tool_result",
+              text,
+              detail: {
+                toolName: call.detail.toolName,
+                toolCallId: message.toolCallId,
+                ok: !isErrorResult(parsed),
+              },
+              links: [{ kind: "returns", nodeId: call.id }],
+            });
+          }
+        },
+
         onAfterToolCall(_ctx, info) {
           const outcome: ToolOutcome = { ok: info.ok };
           if (!info.ok) outcome.error = failureText(info);
@@ -91,21 +127,37 @@ const make = Effect.gen(function* () {
         },
 
         onToolPhaseComplete(ctx, info) {
-          const assistant = appendAssistant(ctx.accumulatedContent);
+          // A run resumed after an approval replays calls recorded by the interrupted run.
+          const recorded = new Map(
+            info.toolCalls.flatMap((call) => {
+              const node = nodes.toolNode(binding.sessionId, "tool_call", call.id);
+              return node ? [[call.id, node] as const] : [];
+            }),
+          );
+          const needsAssistant =
+            ctx.accumulatedContent.length > 0 || recorded.size < info.toolCalls.length;
+          const assistant = needsAssistant ? appendAssistant(ctx.accumulatedContent) : null;
+
           for (const call of info.toolCalls) {
-            const callNode = nodes.append({
-              ...base,
-              kind: "tool_call",
-              text: `${call.function.name} ${call.function.arguments}`,
-              detail: { toolName: call.function.name, toolCallId: call.id },
-              links: [{ kind: "calls", nodeId: assistant.id }],
-              refs: refsOf(call),
-            });
+            const callNode =
+              recorded.get(call.id) ??
+              nodes.append({
+                ...base,
+                kind: "tool_call",
+                text: `${call.function.name} ${call.function.arguments}`,
+                detail: { toolName: call.function.name, toolCallId: call.id },
+                links: assistant ? [{ kind: "calls", nodeId: assistant.id }] : [],
+                refs: refsOf(call),
+              });
             const result = info.results.find((entry) => entry.toolCallId === call.id);
             if (!result) continue; // awaiting approval or client execution
-            const outcome = outcomes.get(call.id) ?? { ok: true };
+            if (nodes.toolNode(binding.sessionId, "tool_result", call.id)) continue;
+            // No after-call hook fires for a declined approval, so judge by the result itself.
+            const outcome = outcomes.get(call.id) ?? { ok: !isErrorResult(result.result) };
             nodes.append({
               ...base,
+              // Keep the result in the run that made the call, so history shows them together.
+              runId: callNode.runId ?? binding.runId,
               kind: "tool_result",
               text: outcome.ok ? resultText(result) : (outcome.error ?? resultText(result)),
               detail: { toolName: call.function.name, toolCallId: call.id, ok: outcome.ok },

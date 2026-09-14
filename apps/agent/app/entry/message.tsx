@@ -21,6 +21,9 @@ const toolLabels = new Map([
   ["list_outside_files", "밖 파일 목록"],
   ["read_outside_file", "밖 파일 읽기"],
   ["search_outside_file", "밖 파일 검색"],
+  ["run_shell", "셸 실행"],
+  ["write_outside_file", "밖 파일 쓰기"],
+  ["delete_outside_file", "밖 파일 삭제"],
 ]);
 
 function pretty(text: string) {
@@ -40,7 +43,14 @@ function resultText(result: ToolResult) {
 }
 
 function ToolCallView({ call, result }: { call: ToolCall; result: ToolResult | undefined }) {
-  const failed = result?.state === "error";
+  const failed = result?.state === "error" || call.approval?.approved === false;
+  const status = failed
+    ? "실패"
+    : result
+      ? "완료"
+      : call.state === "approval-requested"
+        ? "승인 대기"
+        : "실행 중";
   return (
     <Collapsible className="rounded-md border bg-muted/30 text-xs">
       <CollapsibleTrigger className="group flex w-full items-center gap-2 px-2.5 py-1.5 text-left">
@@ -52,7 +62,7 @@ function ToolCallView({ call, result }: { call: ToolCall; result: ToolResult | u
           variant={failed ? "destructive" : result ? "secondary" : "outline"}
           className="ml-auto"
         >
-          {failed ? "실패" : result ? "완료" : "실행 중"}
+          {call.approval?.approved === false ? "거부됨" : status}
         </Badge>
       </CollapsibleTrigger>
       <CollapsibleContent className="space-y-2 border-t px-2.5 py-2">

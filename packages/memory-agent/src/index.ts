@@ -5,7 +5,7 @@ export { sessionMessages } from "./agent/history.ts";
 export { StorageRoot, defaultStorageRoot } from "./config/storage-root.ts";
 export { GlobalConfig, Settings } from "./config/global-config.ts";
 export { CodexAccount, isChatgptAuthUrl, type AuthState } from "./codex/account.ts";
-export { CodexChat, CodexTextAdapter, type CodexTurns } from "./codex/chat.ts";
+export { CodexChat, CodexTextAdapter, TurnParking, type CodexTurns } from "./codex/chat.ts";
 export { messageText, toCodexTurnInput } from "./codex/history.ts";
 export {
   CodexAppServer,
@@ -63,6 +63,22 @@ export { VectorIndex, VectorIndexError, type VectorHit } from "./memory/embeddin
 
 export { FileTools, fileToolNames } from "./tools/files.ts";
 export { OutsideTools, outsideReadToolNames } from "./tools/outside.ts";
+export { ApprovedTools } from "./tools/approved.ts";
+export {
+  approvalToolDefinitions,
+  deleteOutsideFileDefinition,
+  runShellDefinition,
+  writeOutsideFileDefinition,
+} from "./tools/definitions.ts";
+export {
+  commandEnvironment,
+  defaultTimeoutSeconds,
+  hostShell,
+  maxTimeoutSeconds,
+  runCommand,
+  type CommandOptions,
+  type CommandResult,
+} from "./shell/run.ts";
 export { guarded, orThrow, toolFailure } from "./tools/failure.ts";
 export {
   decodeSearchCursor,

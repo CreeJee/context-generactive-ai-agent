@@ -97,6 +97,17 @@ async function runTurn(threadId, turnId, input) {
     const found = JSON.parse(toolText(answer));
     return streamAnswer(threadId, turnId, `Found: ${found.matches?.[0]?.snippet ?? "nothing"}`);
   }
+  if (text.includes("shell")) {
+    const answer = await callClient("item/tool/call", {
+      threadId,
+      turnId,
+      callId: "call-shell",
+      tool: "run_shell",
+      arguments: { command: "printf approved-output", reason: "check the shell" },
+    });
+    if (thread.interrupted) return;
+    return streamAnswer(threadId, turnId, `Shell said ${toolText(answer)}`);
+  }
   if (text.includes("fail"))
     return notify("error", { threadId, turnId, willRetry: false, error: { message: "boom" } });
   if (text.includes("parallel")) {

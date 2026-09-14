@@ -185,6 +185,9 @@ catalogs:
     '@tanstack/ai':
       specifier: ^0.54.0
       version: 0.54.0
+    '@tanstack/ai-client':
+      specifier: ^0.31.1
+      version: 0.31.1
     '@tanstack/ai-openai':
       specifier: ^0.22.6
       version: 0.22.6
@@ -375,6 +378,9 @@ importers:
         specifier: workspace:*
         version: link:../turbovec
     devDependencies:
+      '@tanstack/ai-client':
+        specifier: 'catalog:'
+        version: 0.31.1(zod@3.25.76)
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.4

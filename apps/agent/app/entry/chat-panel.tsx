@@ -1,5 +1,6 @@
 import { fetchServerSentEvents, useChat, type UIMessage } from "@tanstack/ai-react";
 import { ArrowUpIcon, MessageSquareIcon, SquareIcon } from "lucide-react";
+import { approvalToolDefinitions } from "memory-agent/definitions";
 import { useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
@@ -14,15 +15,21 @@ import { ScrollArea } from "~/components/ui/scroll-area";
 import { Spinner } from "~/components/ui/spinner";
 import { Textarea } from "~/components/ui/textarea";
 import { api } from "./api";
+import { ApprovalCard, isApproval, type ApprovalTools } from "./approval";
 import { MessageView } from "./message";
 
 function Conversation({ sessionId, history }: { sessionId: string; history: UIMessage[] }) {
   const [draft, setDraft] = useState("");
   const bottom = useRef<HTMLDivElement>(null);
-  const { messages, sendMessage, stop, isLoading, error, status } = useChat({
-    connection: fetchServerSentEvents(`/api/chat?session=${encodeURIComponent(sessionId)}`),
-    initialMessages: history,
-  });
+  const { messages, sendMessage, stop, isLoading, error, status, interrupts } =
+    useChat<ApprovalTools>({
+      connection: fetchServerSentEvents(`/api/chat?session=${encodeURIComponent(sessionId)}`),
+      initialMessages: history,
+      // The same definitions the server uses, so approval requests can be matched and answered.
+      tools: approvalToolDefinitions,
+    });
+  const approvals = interrupts.filter(isApproval);
+  const waitingForApproval = approvals.length > 0;
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: "end" });
@@ -30,7 +37,7 @@ function Conversation({ sessionId, history }: { sessionId: string; history: UIMe
 
   const submit = () => {
     const text = draft.trim();
-    if (!text || isLoading) return;
+    if (!text || isLoading || waitingForApproval) return;
     setDraft("");
     void sendMessage(text);
   };
@@ -54,6 +61,9 @@ function Conversation({ sessionId, history }: { sessionId: string; history: UIMe
           )}
           {messages.map((message) => (
             <MessageView key={message.id} message={message} />
+          ))}
+          {approvals.map((interrupt) => (
+            <ApprovalCard key={interrupt.id} interrupt={interrupt} />
           ))}
           {status === "submitted" && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -88,7 +98,11 @@ function Conversation({ sessionId, history }: { sessionId: string; history: UIMe
                 submit();
               }
             }}
-            placeholder="메시지를 입력하세요 (Enter 전송 · Shift+Enter 줄바꿈)"
+            placeholder={
+              waitingForApproval
+                ? "위의 승인 요청에 먼저 답해 주세요"
+                : "메시지를 입력하세요 (Enter 전송 · Shift+Enter 줄바꿈)"
+            }
             className="max-h-48 min-h-10 resize-none"
             rows={1}
           />
@@ -97,7 +111,12 @@ function Conversation({ sessionId, history }: { sessionId: string; history: UIMe
               <SquareIcon />
             </Button>
           ) : (
-            <Button type="submit" size="icon-lg" disabled={!draft.trim()} aria-label="전송">
+            <Button
+              type="submit"
+              size="icon-lg"
+              disabled={!draft.trim() || waitingForApproval}
+              aria-label="전송"
+            >
               <ArrowUpIcon />
             </Button>
           )}

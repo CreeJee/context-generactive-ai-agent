@@ -194,6 +194,19 @@ const make = Effect.gen(function* () {
       return row ? toNode(row) : null;
     },
 
+    /**
+     * The tool_call or tool_result node for a tool call id in a session. A run resumed after an
+     * approval sees the same call again, and must attach to the node recorded the first time.
+     */
+    toolNode: (sessionId: string, kind: "tool_call" | "tool_result", toolCallId: string) => {
+      const row = sqlite
+        .prepare(
+          "SELECT * FROM nodes WHERE session_id = ? AND kind = ? AND json_extract(detail, '$.toolCallId') = ? ORDER BY seq LIMIT 1",
+        )
+        .get(sessionId, kind, toolCallId);
+      return row ? toNode(row) : null;
+    },
+
     session: (sessionId: string): Node[] =>
       sqlite
         .prepare("SELECT * FROM nodes WHERE session_id = ? ORDER BY seq")
