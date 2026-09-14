@@ -18,6 +18,9 @@ const toolLabels = new Map([
   ["write_file", "파일 쓰기"],
   ["edit_file", "파일 편집"],
   ["delete_file", "파일 삭제"],
+  ["list_outside_files", "밖 파일 목록"],
+  ["read_outside_file", "밖 파일 읽기"],
+  ["search_outside_file", "밖 파일 검색"],
 ]);
 
 function pretty(text: string) {

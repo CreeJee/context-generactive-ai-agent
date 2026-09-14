@@ -61,7 +61,19 @@ export {
 export { Indexer } from "./memory/embedding/indexer.ts";
 export { VectorIndex, VectorIndexError, type VectorHit } from "./memory/embedding/vector-index.ts";
 
-export { FileTools, fileToolNames, toolFailure } from "./tools/files.ts";
+export { FileTools, fileToolNames } from "./tools/files.ts";
+export { OutsideTools, outsideReadToolNames } from "./tools/outside.ts";
+export { guarded, orThrow, toolFailure } from "./tools/failure.ts";
+export {
+  decodeSearchCursor,
+  encodeSearchCursor,
+  searchTextFiles,
+  type SearchCursor,
+  type SearchMatch,
+  type SearchPage,
+  type SearchPosition,
+  type SearchSkip,
+} from "./files/search.ts";
 export {
   TextFileRejected,
   linePage,
@@ -70,6 +82,11 @@ export {
   type LinePage,
   type TextFile,
 } from "./files/text.ts";
-export { listProjectFiles, type FileListing } from "./files/listing.ts";
+export {
+  listOutsideFiles,
+  listProjectFiles,
+  walkLimit,
+  type FileListing,
+} from "./files/listing.ts";
 export { MemoryTools, memoryToolNames } from "./tools/memory.ts";
 export { toToolSchema, type ToolSchema } from "./tools/schema.ts";

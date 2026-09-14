@@ -10,13 +10,18 @@ const run = promisify(execFile);
 /** Directories skipped when walking a project that is not a Git work tree. */
 const walkSkips = new Set([".git", "node_modules"]);
 
+/** Files a walk collects before it stops and reports itself truncated. */
+export const walkLimit = 50_000;
+
 export interface FileListing {
-  /** Project-relative file paths, sorted. */
+  /** Sorted file paths: project-relative for project listings, absolute for outside listings. */
   readonly paths: readonly string[];
   /** `git` when Git decided (tracked plus untracked, honouring ignore rules), else `walk`. */
   readonly source: "git" | "walk";
-  /** Files left out because they look like credentials. */
+  /** Files and directories left out because they look like credentials. */
   readonly excluded: number;
+  /** True when a walk stopped at {@link walkLimit} files. */
+  readonly truncated: boolean;
 }
 
 async function gitFiles(root: string, directory: string): Promise<string[] | null> {
@@ -32,18 +37,33 @@ async function gitFiles(root: string, directory: string): Promise<string[] | nul
   }
 }
 
-async function walkFiles(root: string, directory: string): Promise<string[]> {
-  const found: string[] = [];
+/**
+ * Regular files below `directory` (relative to `base`), not following links and not descending
+ * into `.git`, `node_modules` or credential-looking directories. Directory names are judged as
+ * `credentialPrefix` joined with the relative path: empty for a project, whose root may itself sit
+ * under an unusual name, and the absolute base outside, where `~/.config` + `gh` must still match.
+ */
+async function walkFiles(base: string, directory: string, credentialPrefix: string) {
+  const files: string[] = [];
+  let excluded = 0;
+  let truncated = false;
   const visit = async (relative: string) => {
-    const entries = await readdir(join(root, relative), { withFileTypes: true }).catch(() => []);
+    const entries = await readdir(join(base, relative), { withFileTypes: true }).catch(() => []);
     for (const entry of entries) {
+      if (files.length >= walkLimit) {
+        truncated = true;
+        return;
+      }
       const path = relative === "." ? entry.name : `${relative}/${entry.name}`;
-      if (entry.isDirectory() && !walkSkips.has(entry.name)) await visit(path);
-      else if (entry.isFile()) found.push(path);
+      if (entry.isDirectory()) {
+        if (walkSkips.has(entry.name)) continue;
+        if (isCredentialPath(join(credentialPrefix, path))) excluded++;
+        else await visit(path);
+      } else if (entry.isFile()) files.push(path);
     }
   };
   await visit(directory);
-  return found;
+  return { files, excluded, truncated };
 }
 
 /**
@@ -57,11 +77,11 @@ export async function listProjectFiles(
   glob: string | undefined,
 ): Promise<FileListing> {
   const fromGit = await gitFiles(root, directory);
-  const candidates = fromGit ?? (await walkFiles(root, directory));
+  const walked = fromGit ? undefined : await walkFiles(root, directory, "");
   const prefix = directory === "." ? "" : `${directory}/`;
-  let excluded = 0;
+  let excluded = walked?.excluded ?? 0;
   const paths: string[] = [];
-  for (const path of new Set(candidates)) {
+  for (const path of new Set(fromGit ?? walked?.files)) {
     if (!path.startsWith(prefix)) continue;
     if (glob !== undefined && !posix.matchesGlob(path.slice(prefix.length), glob)) continue;
     if (path.split("/").some((segment) => segment.toLowerCase() === ".git")) continue;
@@ -73,7 +93,34 @@ export async function listProjectFiles(
     if (stats?.isFile()) paths.push(path);
   }
   paths.sort();
-  return { paths, source: fromGit ? "git" : "walk", excluded };
+  return {
+    paths,
+    source: fromGit ? "git" : "walk",
+    excluded,
+    truncated: walked?.truncated ?? false,
+  };
+}
+
+/**
+ * Every regular file below an outside `directory` (canonical, already validated), as absolute
+ * paths, optionally filtered by a glob relative to it. Never uses Git ignore rules: outside
+ * listings show what is on disk, minus links, `.git`, `node_modules` and credentials.
+ */
+export async function listOutsideFiles(
+  directory: string,
+  glob: string | undefined,
+): Promise<FileListing> {
+  const walked = await walkFiles(directory, ".", directory);
+  let excluded = walked.excluded;
+  const paths: string[] = [];
+  for (const relative of walked.files) {
+    if (glob !== undefined && !posix.matchesGlob(relative, glob)) continue;
+    const absolute = join(directory, relative);
+    if (isCredentialPath(absolute)) excluded++;
+    else paths.push(absolute);
+  }
+  paths.sort();
+  return { paths, source: "walk", excluded, truncated: walked.truncated };
 }
 
 export interface Snapshot extends FileListing {

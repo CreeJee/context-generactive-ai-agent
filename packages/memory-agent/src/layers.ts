@@ -19,6 +19,7 @@ import { Projects } from "./projects/projects.ts";
 import { Sessions } from "./sessions/sessions.ts";
 import { FileTools } from "./tools/files.ts";
 import { MemoryTools } from "./tools/memory.ts";
+import { OutsideTools } from "./tools/outside.ts";
 
 export interface MemoryAgentLayerOptions {
   /** Defaults to the local embedding model; tests pass a deterministic one. */
@@ -52,7 +53,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
   );
   const retrieval = Layer.merge(Indexer.layer, MemorySearch.layer);
   return AgentChat.layer.pipe(
-    Layer.provideMerge(Layer.merge(MemoryTools.layer, FileTools.layer)),
+    Layer.provideMerge(Layer.mergeAll(MemoryTools.layer, FileTools.layer, OutsideTools.layer)),
     Layer.provideMerge(retrieval),
     Layer.provideMerge(memory),
     Layer.provideMerge(stores),

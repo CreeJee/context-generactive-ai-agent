@@ -1,7 +1,8 @@
 import { toolDefinition } from "@tanstack/ai";
-import { Context, Effect, Either, Layer, Option, Schema } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
 import { listProjectFiles, Snapshots } from "../files/listing.ts";
 import { PathRejected, resolveProjectPath } from "../files/paths.ts";
+import { decodeSearchCursor, encodeSearchCursor, searchTextFiles } from "../files/search.ts";
 import {
   createTextFile,
   deleteTextFile,
@@ -11,6 +12,7 @@ import {
   TextFileRejected,
 } from "../files/text.ts";
 import type { Project } from "../projects/projects.ts";
+import { guarded, orThrow } from "./failure.ts";
 import { toToolSchema } from "./schema.ts";
 
 export const fileToolNames = [
@@ -21,61 +23,6 @@ export const fileToolNames = [
   "edit_file",
   "delete_file",
 ] as const;
-
-const refusalHints = new Map<string, string>([
-  ["invalid_path", "Use a project-relative path with / separators and no . or .. segments."],
-  ["credential", "Credential files are never read or changed, even with approval."],
-  ["git_internal", "Files inside .git are not changed directly; run git through the shell."],
-  ["inside_project", "The path is inside the project; use the project file tools instead."],
-  ["symlink", "Links are not followed; use the real path."],
-  ["hard_link", "Hard-linked files are not read or changed."],
-  ["not_found", "Nothing exists at that path."],
-  ["not_file", "The path is not a regular file."],
-  ["not_directory", "The path is not a directory."],
-  ["too_large", "Files over 2 MiB are not read by the file tools."],
-  ["binary", "The file contains NUL bytes and is not text."],
-  ["invalid_utf8", "The file is not valid UTF-8 text."],
-  ["changed", "The file changed since it was read. Read it again before changing it."],
-  ["exists", "A file already exists there. Read it and pass its sha256 to replace it."],
-]);
-
-/** Turns a refusal into the error message the model sees. Host errors lose their absolute paths. */
-export function toolFailure(error: Error, path: string): Error {
-  if (error instanceof PathRejected || error instanceof TextFileRejected)
-    return new Error(`${error.reason}: ${path}. ${refusalHints.get(error.reason) ?? ""}`.trim());
-  // Tool-authored messages already follow the `reason: path. hint` form.
-  if (/^[a-z_]+: /.test(error.message) && !("code" in error)) return error;
-  const code = "code" in error && Schema.is(Schema.String)(error.code) ? error.code : "unknown";
-  return new Error(`io_error: ${path} (${code})`);
-}
-
-/** Runs one file operation, rethrowing any failure as a model-facing message. */
-async function guarded<A>(path: string, operation: () => Promise<A>): Promise<A> {
-  try {
-    return await operation();
-  } catch (error) {
-    throw toolFailure(error instanceof Error ? error : new Error(String(error)), path);
-  }
-}
-
-const orThrow = <A>(result: Either.Either<A, PathRejected>) =>
-  Either.getOrElse(result, (rejection) => {
-    throw rejection;
-  });
-
-const Cursor = Schema.parseJson(
-  Schema.Struct({
-    snapshot: Schema.String,
-    query: Schema.String,
-    caseSensitive: Schema.Boolean,
-    file: Schema.Number,
-    line: Schema.Number,
-  }),
-);
-const encodeCursor = (cursor: typeof Cursor.Type) =>
-  Buffer.from(Schema.encodeSync(Cursor)(cursor)).toString("base64url");
-const decodeCursor = (text: string) =>
-  Schema.decodeUnknownOption(Cursor)(Buffer.from(text, "base64url").toString("utf8"));
 
 const directoryField = Schema.optional(
   Schema.String.annotations({
@@ -149,16 +96,7 @@ const deleteFileInput = Schema.Struct({
   expectedSha256: sha256Field,
 });
 
-const listPageSize = 500;
-const searchMatchLimit = 100;
-const searchPageCharacters = 12_000;
-const snippetCharacters = 300;
-
-function snippet(line: string, index: number) {
-  if (line.length <= snippetCharacters) return line;
-  const start = Math.max(0, index - 100);
-  return `${start > 0 ? "…" : ""}${line.slice(start, start + snippetCharacters)}…`;
-}
+export const listPageSize = 500;
 
 const make = Effect.sync(() => {
   const snapshots = new Snapshots();
@@ -207,6 +145,7 @@ const make = Effect.sync(() => {
             source: view.source,
             total: view.paths.length,
             excludedCredentialFiles: view.excluded,
+            truncated: view.truncated,
             paths,
             nextOffset: next < view.paths.length ? next : null,
           };
@@ -220,71 +159,36 @@ const make = Effect.sync(() => {
         inputSchema: toToolSchema(searchFilesInput),
       }).server(({ query, directory, glob, caseSensitive = true, cursor }) =>
         guarded(directory ?? ".", async () => {
-          let view;
-          let fileIndex = 0;
-          let lineIndex = 0;
-          if (cursor === undefined) view = await snapshotFor(root, directory, glob);
-          else {
-            const position = Option.getOrUndefined(decodeCursor(cursor));
-            if (!position || position.query !== query || position.caseSensitive !== caseSensitive)
-              throw new Error(
-                "invalid_cursor: pass the same query and caseSensitive as the first page.",
-              );
-            view = snapshots.get(position.snapshot, root);
-            fileIndex = position.file;
-            lineIndex = position.line;
-          }
+          const position = cursor === undefined ? undefined : decodeSearchCursor(cursor);
+          if (
+            cursor !== undefined &&
+            (position?.query !== query || position.caseSensitive !== caseSensitive)
+          )
+            throw new Error(
+              "invalid_cursor: pass the same query and caseSensitive as the first page.",
+            );
+          const view = position
+            ? snapshots.get(position.snapshot, root)
+            : await snapshotFor(root, directory, glob);
           if (!view) throw new Error("snapshot_expired: start the search again without cursor.");
 
-          const needle = caseSensitive ? query : query.toLowerCase();
-          const matches: Array<{ path: string; line: number; text: string }> = [];
-          const skipped: Array<{ path: string; reason: string }> = [];
-          let characters = 0;
-          let nextCursor: string | null = null;
-
-          files: for (; fileIndex < view.paths.length; fileIndex++, lineIndex = 0) {
-            const path = view.paths[fileIndex]!;
-            let text: string;
-            try {
-              const resolved = orThrow(resolveProjectPath(root, path, "file"));
-              text = (await readTextFile(resolved.absolute, path)).text;
-            } catch (error) {
-              const reason =
-                error instanceof PathRejected || error instanceof TextFileRejected
-                  ? error.reason
-                  : "unreadable";
-              if (reason !== "not_found") skipped.push({ path, reason });
-              continue;
-            }
-            const lines = text.split(/\r?\n/);
-            for (; lineIndex < lines.length; lineIndex++) {
-              const line = lines[lineIndex]!;
-              const index = (caseSensitive ? line : line.toLowerCase()).indexOf(needle);
-              if (index < 0) continue;
-              const match = { path, line: lineIndex + 1, text: snippet(line, index) };
-              matches.push(match);
-              characters += match.path.length + match.text.length + 32;
-              if (matches.length >= searchMatchLimit || characters >= searchPageCharacters) {
-                const atEnd = lineIndex + 1 >= lines.length && fileIndex + 1 >= view.paths.length;
-                if (!atEnd)
-                  nextCursor = encodeCursor({
-                    snapshot: view.id,
-                    query,
-                    caseSensitive,
-                    file: lineIndex + 1 >= lines.length ? fileIndex + 1 : fileIndex,
-                    line: lineIndex + 1 >= lines.length ? 0 : lineIndex + 1,
-                  });
-                break files;
-              }
-            }
-          }
-
+          const page = await searchTextFiles(
+            view.paths,
+            async (path) =>
+              (await readTextFile(orThrow(resolveProjectPath(root, path, "file")).absolute, path))
+                .text,
+            query,
+            caseSensitive,
+            position ?? { file: 0, line: 0 },
+          );
           return {
             filesInView: view.paths.length,
-            matches,
-            skipped,
-            nextCursor,
-            complete: nextCursor === null && skipped.length === 0,
+            matches: page.matches,
+            skipped: page.skipped,
+            nextCursor: page.next
+              ? encodeSearchCursor({ snapshot: view.id, query, caseSensitive, ...page.next })
+              : null,
+            complete: page.next === null && page.skipped.length === 0,
           };
         }),
       );
