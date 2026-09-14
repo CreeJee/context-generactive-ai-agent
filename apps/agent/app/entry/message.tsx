@@ -3,6 +3,7 @@ import { ChevronRightIcon, WrenchIcon } from "lucide-react";
 import { Badge } from "~/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
 import { cn } from "~/lib/utils";
+import { Markdown } from "./markdown";
 
 type Part = UIMessage["parts"][number];
 type ToolCall = Extract<Part, { type: "tool-call" }>;
@@ -85,8 +86,11 @@ function ToolCallView({ call, result }: { call: ToolCall; result: ToolResult | u
   );
 }
 
-/** One chat message. Tool calls show what the model looked up and exactly what came back. */
-export function MessageView({ message }: { message: UIMessage }) {
+/**
+ * One chat message. Assistant text renders as Markdown (`streaming` while it is still arriving);
+ * user text stays exactly as typed. Tool calls show what was looked up and what came back.
+ */
+export function MessageView({ message, streaming }: { message: UIMessage; streaming: boolean }) {
   const results = new Map(
     message.parts.flatMap((part) =>
       part.type === "tool-result" ? [[part.toolCallId, part] as const] : [],
@@ -104,10 +108,12 @@ export function MessageView({ message }: { message: UIMessage }) {
       >
         {message.parts.map((part, index) => {
           if (part.type === "text")
-            return (
+            return isUser ? (
               <p key={index} className="whitespace-pre-wrap">
                 {part.content}
               </p>
+            ) : (
+              <Markdown key={index} text={part.content} streaming={streaming} />
             );
           if (part.type === "tool-call")
             return <ToolCallView key={part.id} call={part} result={results.get(part.id)} />;

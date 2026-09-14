@@ -59,8 +59,12 @@ function Conversation({ sessionId, history }: { sessionId: string; history: UIMe
               </EmptyHeader>
             </Empty>
           )}
-          {messages.map((message) => (
-            <MessageView key={message.id} message={message} />
+          {messages.map((message, index) => (
+            <MessageView
+              key={message.id}
+              message={message}
+              streaming={isLoading && index === messages.length - 1}
+            />
           ))}
           {approvals.map((interrupt) => (
             <ApprovalCard key={interrupt.id} interrupt={interrupt} />
