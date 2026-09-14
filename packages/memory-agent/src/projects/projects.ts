@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
 import type { SQLOutputValue } from "node:sqlite";
-import { basename, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, resolve } from "node:path";
 import { Context, Data, Effect, Layer, Schema } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
+import { canonicalPath, pathsOverlap } from "../files/paths.ts";
 
 export const Project = Schema.Struct({
   id: Schema.String,
@@ -44,26 +45,6 @@ export class ProjectNotFound extends Data.TaggedError("ProjectNotFound")<{
   readonly id: string;
 }> {}
 
-/** True when one path equals or contains the other. */
-export function pathsOverlap(left: string, right: string): boolean {
-  const contains = (root: string, candidate: string) => {
-    const path = relative(root, candidate);
-    return path === "" || (path !== ".." && !path.startsWith(".." + sep) && !isAbsolute(path));
-  };
-  return contains(left, right) || contains(right, left);
-}
-
-/** Resolves missing leaves through their existing parents so a symlinked parent cannot hide. */
-function canonicalPath(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch {
-    const parent = resolve(path, "..");
-    if (parent === path) return path;
-    return resolve(canonicalPath(parent), basename(path));
-  }
-}
-
 const make = Effect.gen(function* () {
   const db = yield* Database;
   const storage = yield* StorageRoot;
@@ -88,7 +69,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const absolute = resolve(requestedRoot);
         const root = yield* Effect.try({
-          try: () => realpathSync(absolute),
+          try: () => realpathSync.native(absolute),
           catch: () => new ProjectRootRejected({ root: absolute, reason: "not_found" }),
         });
         if (!statSync(root).isDirectory())

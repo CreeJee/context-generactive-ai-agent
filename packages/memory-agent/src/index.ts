@@ -20,12 +20,16 @@ export {
 export { CodexModel, CodexModels, ModelUnavailable, type ModelSelection } from "./codex/models.ts";
 export { Database, DatabaseOpenError } from "./db/database.ts";
 export {
-  Project,
-  ProjectNotFound,
-  ProjectRootRejected,
-  Projects,
+  PathRejected,
+  canonicalPath,
+  isCredentialPath,
   pathsOverlap,
-} from "./projects/projects.ts";
+  resolveOutsidePath,
+  resolveProjectPath,
+  type OutsidePath,
+  type ProjectPath,
+} from "./files/paths.ts";
+export { Project, ProjectNotFound, ProjectRootRejected, Projects } from "./projects/projects.ts";
 export { Session, Sessions } from "./sessions/sessions.ts";
 
 export { Edge, EdgeKind, edgeWeights, type NodeLink } from "./memory/edges.ts";
