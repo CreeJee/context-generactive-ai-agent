@@ -1,6 +1,7 @@
 export { memoryAgentLayer, type MemoryAgentLayerOptions } from "./layers.ts";
 export {
   AgentChat,
+  QueueRequest,
   attachmentInstructions,
   memoryInstructions,
   workspaceInstructions,

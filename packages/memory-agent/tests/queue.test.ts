@@ -175,7 +175,8 @@ describe("message queue", () => {
 
     await until(() => tab.answer().includes("done"), "the answer to finish");
     await until(() => !tab.client.getIsLoading(), "the run to finish");
-    expect(tab.answer()).toContain("steered: shorter please");
+    // The reply to the steered message is a new paragraph, not glued onto the last sentence.
+    expect(tab.answer()).toContain("done\n\nsteered: shorter please");
     tab.client.dispose();
 
     const reloaded = openTab(context.runtime, context.session.id);

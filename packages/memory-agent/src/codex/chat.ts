@@ -158,6 +158,7 @@ export class CodexTextAdapter extends BaseTextAdapter<
 
     const messageId = randomUUID();
     let textOpen = false;
+    let textItem: string | null = null;
     let usage: (TurnEvent & { kind: "usage" }) | null = null;
     yield { ...stamp(), type: EventType.RUN_STARTED, runId, threadId };
 
@@ -183,11 +184,16 @@ export class CodexTextAdapter extends BaseTextAdapter<
         const event = step.value;
         if (event.kind === "usage") usage = event;
         else if (event.kind === "delta") {
+          // A second codex message in the same answer (e.g. after a steered message) starts a new
+          // paragraph instead of running on from the last sentence.
+          const newItem = textOpen && event.itemId !== null && event.itemId !== textItem;
+          if (event.itemId !== null) textItem = event.itemId;
           if (!textOpen) {
             textOpen = true;
             yield { ...stamp(), type: EventType.TEXT_MESSAGE_START, messageId, role: "assistant" };
           }
-          yield { ...stamp(), type: EventType.TEXT_MESSAGE_CONTENT, messageId, delta: event.text };
+          const delta = newItem ? `\n\n${event.text}` : event.text;
+          yield { ...stamp(), type: EventType.TEXT_MESSAGE_CONTENT, messageId, delta };
         } else {
           const calls = await this.#settleToolCalls(turn, event.call);
           if (textOpen) yield { ...stamp(), type: EventType.TEXT_MESSAGE_END, messageId };
@@ -322,7 +328,7 @@ const make = Effect.gen(function* () {
 
   codex.onNotification("item/agentMessage/delta", (params) =>
     Option.map(Schema.decodeUnknownOption(DeltaNotification)(params), (delta) =>
-      forThread(delta)?.push({ kind: "delta", text: delta.delta }),
+      forThread(delta)?.push({ kind: "delta", text: delta.delta, itemId: delta.itemId }),
     ),
   );
   codex.onNotification("thread/tokenUsage/updated", (params) =>

@@ -143,8 +143,12 @@ async function runTurn(threadId, turnId, input) {
       notify("item/agentMessage/delta", { threadId, turnId, itemId: "msg-1", delta: `${piece} ` });
       await new Promise((resolve) => setTimeout(resolve, 40));
     }
-    const steered = thread.steered.length > 0 ? ` steered: ${thread.steered.join(" / ")}` : "";
-    return streamAnswer(threadId, turnId, `done${steered}`);
+    if (thread.steered.length === 0) return streamAnswer(threadId, turnId, "done");
+    // Like codex, a steered message is answered in a second message item of the same turn.
+    notify("item/agentMessage/delta", { threadId, turnId, itemId: "msg-1", delta: "done" });
+    for (const piece of `steered: ${thread.steered.join(" / ")}`.match(/.{1,6}/gsu) ?? [])
+      notify("item/agentMessage/delta", { threadId, turnId, itemId: "msg-2", delta: piece });
+    return streamAnswer(threadId, turnId, "");
   }
   if (text.includes("check files")) {
     // Waits a moment before its tool call, so a test can queue a message for that boundary.

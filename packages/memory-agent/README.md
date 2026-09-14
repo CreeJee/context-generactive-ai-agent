@@ -77,6 +77,9 @@ src/
 - `ChatState`가 만들어질 때 `running`으로 남은 run은 `failed`/`server_restarted`로 바뀝니다. 다시 실행하지 않습니다.
 - 쓰던 답변은 1초마다 스냅샷되고, 취소·실패 때 바로 저장됩니다.
 - `SessionLeases`는 세션마다 쓰기 가능한 페이지(holder) 하나를 메모리에 둡니다(`claim`·`release`·`permits`·`view`). `AgentChat.handle`·`cancel`은 `X-Session-Holder`가 소유자가 아니면 423을 돌려주고, `AgentChat.lease`가 claim/release를, `status`가 요청한 페이지 기준 `LeaseView`(`mine`·`other`·`free`)를 돌려줍니다. 테스트는 `tests/leases.test.ts`.
+- `MessageQueue`는 답변 중에 보낸 메시지를 순서대로 둡니다(`waiting`·`editing`·`held`·`delivered`·`failed`). `deliverable`은 앞에서부터 `waiting`만 돌려주고 편집 중이거나 확인이 필요한 메시지에서 멈춥니다. 새 프로세스는 남은 `waiting`/`editing`을 `held`로 바꿉니다.
+- `QueueDelivery.forRun` middleware는 도구 결과 뒤(`beforeModel`) 대기 메시지를 codex `turn/steer`와 대화에 함께 넣고 사용자 노드로 기록합니다. `steer`는 답변 중인 턴에 바로 넣습니다(`CodexChat.steer`, `ActiveTurns`).
+- `AgentChat.enqueue`·`editQueued`·`queued`가 대기열 API이고, 소유 페이지가 `forwardedProps.queuedMessageId`로 다음 턴을 보내면 `handle`이 그 메시지를 전달됨으로 표시합니다. run이 끝날 때(`LiveRuns` onEnded) 취소·실패·소유 페이지 없음이면 `held`로 둡니다. 테스트는 `tests/queue.test.ts`.
 - 테스트(`tests/runs.test.ts`)는 실제 `ChatClient`로 중간 새로고침 후 이어 읽기, 취소, 동시 run 거절, 재시작 후 실패 기록, 재시작을 넘긴 승인을 확인합니다.
 
 ## 이미지

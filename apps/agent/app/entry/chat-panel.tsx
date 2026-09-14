@@ -1,5 +1,5 @@
 import { fetchServerSentEvents, useChat } from "@tanstack/ai-react";
-import { ArrowUpIcon, ImagePlusIcon, MessageSquareIcon, SquareIcon } from "lucide-react";
+import { ArrowUpIcon, CheckIcon, ImagePlusIcon, MessageSquareIcon, SquareIcon } from "lucide-react";
 import {
   approvalToolDefinitions,
   attachmentUrl,
@@ -28,7 +28,10 @@ import {
 } from "./approval";
 import { acceptedImageTypes, renumberReferences, useDraftImages } from "./draft-images";
 import { DraftImageTray } from "./images";
+import { api, type QueuedMessage } from "./api";
 import { MessageView } from "./message";
+import { isPending, useMessageQueue } from "./message-queue";
+import { QueuePanel } from "./queue-panel";
 import { ReadOnlyBar } from "./read-only-bar";
 import { RunNoticeView, useRunState } from "./run-state";
 import { useSessionLease, type PageLease } from "./session-lease";
@@ -38,6 +41,44 @@ const approvalInterrupts: ApprovalInterrupts = [permissionReviewInterrupt];
 
 const imageFiles = (files: FileList | null) =>
   Array.from(files ?? []).filter((file) => file.type.startsWith("image/"));
+
+/** The input box either writes a new message or edits one that is waiting in the queue. */
+type Composer =
+  | { readonly kind: "compose" }
+  /** `stash` is the new message the user was writing before picking the queued one. */
+  | { readonly kind: "editing"; readonly id: string; readonly stash: string };
+
+/** Unsaved edit text is stored after typing pauses this long. */
+const editDraftSaveMs = 400;
+
+/** A user turn from text and uploaded images, as the chat endpoint expects it. */
+const contentOf = (text: string, attachmentIds: readonly string[]) => ({
+  content: [
+    ...(text.length > 0 ? [{ type: "text" as const, content: text }] : []),
+    ...attachmentIds.map((id) => ({
+      type: "image" as const,
+      source: { type: "url" as const, value: attachmentUrl(id) },
+    })),
+  ],
+});
+
+/** The queued message that goes next, if the one at the front is simply waiting. */
+const nextInLine = (items: readonly QueuedMessage[]) => {
+  const front = items.find((message) => isPending(message) && message.state.kind !== "failed");
+  return front?.state.kind === "waiting" ? front : undefined;
+};
+
+const isEditable = (message: QueuedMessage) => {
+  switch (message.state.kind) {
+    case "waiting":
+    case "editing":
+    case "held":
+      return true;
+    case "delivered":
+    case "failed":
+      return false;
+  }
+};
 
 /**
  * One session: follows who may change it, and remounts the conversation of a read-only page when
@@ -93,25 +134,37 @@ function ChatPanel({
   const caretAfterRender = useRef<number | null>(null);
   const filePicker = useRef<HTMLInputElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
-  const { messages, sendMessage, stop, isLoading, sessionGenerating, error, status, interrupts } =
-    useChat<ApprovalTools, undefined, unknown, ApprovalInterrupts>({
-      connection: fetchServerSentEvents(`/api/chat?session=${encodeURIComponent(sessionId)}`, {
-        // The server refuses sends and approval answers from a page that does not hold the session.
-        headers: { [sessionHolderHeader]: holder },
-      }),
-      threadId: sessionId,
-      persistence: true,
-      // The same definitions the server uses, so approval requests can be matched and answered:
-      // tool approvals in `ask` mode, permission reviews in `auto` mode.
-      tools: approvalToolDefinitions,
-      interrupts: approvalInterrupts,
-    });
+  const {
+    messages,
+    setMessages,
+    sendMessage,
+    stop,
+    isLoading,
+    sessionGenerating,
+    error,
+    status,
+    interrupts,
+  } = useChat<ApprovalTools, undefined, unknown, ApprovalInterrupts>({
+    connection: fetchServerSentEvents(`/api/chat?session=${encodeURIComponent(sessionId)}`, {
+      // The server refuses sends and approval answers from a page that does not hold the session.
+      headers: { [sessionHolderHeader]: holder },
+    }),
+    threadId: sessionId,
+    persistence: true,
+    // The same definitions the server uses, so approval requests can be matched and answered:
+    // tool approvals in `ask` mode, permission reviews in `auto` mode.
+    tools: approvalToolDefinitions,
+    interrupts: approvalInterrupts,
+  });
   const approvals = interrupts.flatMap((interrupt) => toPendingApproval(interrupt) ?? []);
   const waitingForApproval = interrupts.length > 0;
   const awaitingApproval = new Set(approvals.map((approval) => approval.toolCallId));
   // A run rejoined after a reload streams without a local request, so both count as busy.
   const generating = isLoading || sessionGenerating;
   const run = useRunState(sessionId, holder, generating);
+  const queue = useMessageQueue(sessionId, holder, generating);
+  const [composer, setComposer] = useState<Composer>({ kind: "compose" });
+  const [submitting, setSubmitting] = useState(false);
 
   const cancel = async () => {
     // Stopping only the local stream would leave the run going on the server, so ask it first.
@@ -121,13 +174,107 @@ function ChatPanel({
   const ready = draftImages.images.flatMap((image) => (image.status === "ready" ? [image] : []));
   const uploading = draftImages.images.some((image) => image.status === "uploading");
   const failed = draftImages.images.some((image) => image.status === "failed");
+  const editing = composer.kind === "editing" ? composer : null;
   const canSend =
     (draft.trim().length > 0 || ready.length > 0) &&
     !uploading &&
     !failed &&
-    !generating &&
+    !submitting &&
     !waitingForApproval &&
     !readOnly;
+
+  /** Sends the first waiting message as a new turn, if it is next in line. */
+  const sendNextQueued = (items: readonly QueuedMessage[]) => {
+    const next = nextInLine(items);
+    if (!next) return;
+    // The id tells the server which queued message this turn delivers.
+    void sendMessage(contentOf(next.text, next.attachmentIds), {
+      body: { queuedMessageId: next.id },
+    });
+  };
+
+  // When this page's run stops: catch up with messages the run took in along the way, then, after
+  // a normal finish, send what is waiting as the next turn (R03). Not after a cancel or failure.
+  const wasGenerating = useRef(generating);
+  useEffect(() => {
+    const settled = wasGenerating.current && !generating;
+    wasGenerating.current = generating;
+    if (!settled || readOnly) return;
+    void (async () => {
+      const [items, state] = await Promise.all([
+        queue.refresh(),
+        api.sessionRunState(sessionId, holder).catch(() => null),
+      ]);
+      if (!items || !state || state.running || state.lastRun?.status === "interrupted") return;
+      const tookInQueued = items.some(
+        (message) => message.state.kind === "delivered" && message.state.via !== "next_turn",
+      );
+      if (tookInQueued) setMessages((await api.transcript(sessionId)).messages);
+      if (state.lastRun?.status === "completed") sendNextQueued(items);
+    })();
+    // Runs only on the generating → idle edge.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [generating]);
+
+  // Unsaved edit text is stored as it is typed, so a restart restores it as a draft.
+  useEffect(() => {
+    if (!editing) return;
+    const timer = setTimeout(
+      () => void queue.change(editing.id, { action: "edit", draft }),
+      editDraftSaveMs,
+    );
+    return () => clearTimeout(timer);
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft, editing?.id]);
+
+  const startEdit = (message: QueuedMessage) => {
+    if (editing || readOnly) return;
+    const text =
+      message.state.kind === "editing"
+        ? message.state.draft
+        : message.state.kind === "held" && message.state.draft !== null
+          ? message.state.draft
+          : message.text;
+    setComposer({ kind: "editing", id: message.id, stash: draft });
+    caretAfterRender.current = text.length;
+    setDraft(text);
+    setNotice(null);
+    void queue.change(message.id, { action: "edit", draft: text });
+  };
+
+  const finishEdit = async (outcome: "save" | "remove") => {
+    if (!editing) return;
+    setComposer({ kind: "compose" });
+    setDraft(editing.stash);
+    const text = draft.trim();
+    const items = await queue.change(
+      editing.id,
+      outcome === "save" && text.length > 0 ? { action: "save", text } : { action: "remove" },
+    );
+    // Saved while nothing runs: the queue may be free to go now.
+    if (items && !generating && !waitingForApproval) sendNextQueued(items);
+  };
+
+  const confirmQueued = async (message: QueuedMessage) => {
+    const items = await queue.change(message.id, { action: "confirm" });
+    if (items && !generating && !waitingForApproval) sendNextQueued(items);
+  };
+
+  const removeQueued = async (message: QueuedMessage) => {
+    if (editing?.id === message.id) return finishEdit("remove");
+    await queue.change(message.id, { action: "remove" });
+  };
+
+  /** Alt+↑ picks the last message still waiting, Alt+↓ the first. */
+  const pickQueued = (direction: "up" | "down") => {
+    if (editing) {
+      setNotice("Enter로 저장하거나 Esc로 지운 뒤 다른 메시지를 고를 수 있어요.");
+      return;
+    }
+    const editable = queue.items.filter(isEditable);
+    const message = direction === "up" ? editable.at(-1) : editable[0];
+    if (message) startEdit(message);
+  };
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: "end" });
@@ -164,27 +311,47 @@ function ChatPanel({
     textarea.current?.setSelectionRange(caret, caret);
   }, [draft]);
 
-  const submit = () => {
+  /**
+   * Enter. While nothing runs it sends a turn. While a run answers it queues the message for the
+   * next tool-call boundary, or with `steer` (Ctrl/⌘+Shift+Enter) sends it into the answer now.
+   */
+  const submit = async (mode: "queue" | "steer") => {
+    if (editing) {
+      if (mode === "steer") setNotice("편집을 끝낸 뒤 스티어링할 수 있어요.");
+      else await finishEdit("save");
+      return;
+    }
     if (!canSend) return;
     const text = renumberReferences(
       draft.trim(),
       ready.map((image) => image.number),
     );
-    setDraft("");
-    draftImages.clear();
-    void sendMessage({
-      content: [
-        ...(text.length > 0 ? [{ type: "text" as const, content: text }] : []),
-        ...ready.map((image) => ({
-          type: "image" as const,
-          source: {
-            type: "url" as const,
-            value: attachmentUrl(image.attachment.id),
-            mimeType: image.attachment.mimeType,
-          },
-        })),
-      ],
-    });
+    const attachmentIds = ready.map((image) => image.attachment.id);
+    const clearDraft = () => {
+      setDraft("");
+      draftImages.clear();
+      setNotice(null);
+    };
+    const sendTurn = () => {
+      clearDraft();
+      void sendMessage(contentOf(text, attachmentIds));
+    };
+    if (!generating) return sendTurn();
+
+    setSubmitting(true);
+    const outcome = await queue.add(text, attachmentIds, mode);
+    setSubmitting(false);
+    switch (outcome.kind) {
+      case "queued":
+      case "steered":
+        return clearDraft();
+      case "not-running":
+        return sendTurn();
+      case "steer-unavailable":
+        return setNotice("지금은 바로 전달할 수 없어요. Enter로 대기열에 넣을 수 있어요.");
+      case "failed":
+        return setNotice("메시지를 넣지 못했어요. 다시 시도해 주세요.");
+    }
   };
 
   return (
@@ -258,21 +425,40 @@ function ChatPanel({
 
       <div className="border-t bg-background px-6 py-4">
         <ReadOnlyBar lease={lease} refused={refused} onContinue={onContinue} />
-        <DraftImageTray
-          images={draftImages.images}
-          onReference={insertReference}
-          onRemove={draftImages.remove}
+        <QueuePanel
+          items={queue.items}
+          editingId={editing?.id ?? null}
+          readOnly={readOnly}
+          onEdit={startEdit}
+          onRemove={(message) => void removeQueued(message)}
+          onConfirm={(message) => void confirmQueued(message)}
         />
+        {!editing && (
+          <DraftImageTray
+            images={draftImages.images}
+            onReference={insertReference}
+            onRemove={draftImages.remove}
+          />
+        )}
         {(notice ?? failed) && (
           <p className="mx-auto max-w-3xl pb-2 text-xs text-destructive">
             {notice ?? "올리지 못한 이미지가 있어요. 빼고 보내 주세요."}
+          </p>
+        )}
+        {!readOnly && (
+          <p className="mx-auto max-w-3xl pb-1.5 text-xs text-muted-foreground">
+            {editing
+              ? "대기 메시지 편집 중 · Enter 저장 · Esc 제거 (편집을 끝낸 뒤 스티어링할 수 있어요)"
+              : generating
+                ? "답변 중 · Enter 대기열에 넣기(다음 도구 호출 때 전달) · Ctrl+Shift+Enter 바로 전달(스티어링)"
+                : null}
           </p>
         )}
         <form
           className="mx-auto flex max-w-3xl items-end gap-2"
           onSubmit={(event) => {
             event.preventDefault();
-            submit();
+            void submit("queue");
           }}
         >
           <input
@@ -290,7 +476,7 @@ function ChatPanel({
             type="button"
             variant="ghost"
             size="icon-lg"
-            disabled={!imagesSupported || readOnly}
+            disabled={!imagesSupported || readOnly || editing !== null}
             title={imagesSupported ? "이미지 첨부" : "선택한 모델은 이미지를 읽지 못해요"}
             aria-label="이미지 첨부"
             onClick={() => filePicker.current?.click()}
@@ -311,12 +497,22 @@ function ChatPanel({
             onKeyDown={(event) => {
               // Enter that confirms Korean IME input, and Esc that cancels it, belong to the IME.
               if (event.nativeEvent.isComposing) return;
-              if (event.key === "Enter" && !event.shiftKey) {
+              const steerKeys = event.shiftKey && (event.ctrlKey || event.metaKey);
+              if (event.key === "Enter" && steerKeys) {
                 event.preventDefault();
-                submit();
+                void submit("steer");
+              } else if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                void submit("queue");
+              } else if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+                // Ctrl+↑/↓ belong to macOS Mission Control, so the web uses Alt(⌥).
+                event.preventDefault();
+                pickQueued(event.key === "ArrowUp" ? "up" : "down");
               } else if (event.key === "Escape") {
+                // In edit mode Esc removes the queued message and never reaches the run.
+                if (editing) void finishEdit("remove");
                 // Esc clears a draft (text and images); with nothing drafted it stops the run.
-                if (draft.length > 0 || draftImages.images.length > 0) {
+                else if (draft.length > 0 || draftImages.images.length > 0) {
                   setDraft("");
                   draftImages.clear();
                   setNotice(null);
@@ -330,10 +526,10 @@ function ChatPanel({
                   ? "위의 승인 요청에 먼저 답해 주세요"
                   : "메시지를 입력하세요 (Enter 전송 · Shift+Enter 줄바꿈 · 이미지 붙여넣기/끌어놓기)"
             }
-            className={cn("max-h-48 min-h-10 resize-none")}
+            className={cn("max-h-48 min-h-10 resize-none", editing && "ring-2 ring-primary/40")}
             rows={1}
           />
-          {generating ? (
+          {generating && (
             <Button
               type="button"
               variant="outline"
@@ -345,11 +541,15 @@ function ChatPanel({
             >
               {run.cancelling ? <Spinner /> : <SquareIcon />}
             </Button>
-          ) : (
-            <Button type="submit" size="icon-lg" disabled={!canSend} aria-label="전송">
-              <ArrowUpIcon />
-            </Button>
           )}
+          <Button
+            type="submit"
+            size="icon-lg"
+            disabled={editing ? readOnly : !canSend}
+            aria-label={editing ? "저장" : generating ? "대기열에 넣기" : "전송"}
+          >
+            {editing ? <CheckIcon /> : <ArrowUpIcon />}
+          </Button>
         </form>
       </div>
     </div>

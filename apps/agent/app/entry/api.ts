@@ -7,10 +7,13 @@ import type {
   Project,
   Session,
 } from "memory-agent";
+import type { UIMessage } from "@tanstack/ai-react";
 import {
   sessionHolderHeader,
   type CancelResult,
   type LeaseView,
+  type QueueEdit,
+  type QueuedMessage,
   type SessionRunState,
 } from "memory-agent/definitions";
 
@@ -23,6 +26,8 @@ export type {
   ModelSelection,
   PermissionMode,
   Project,
+  QueueEdit,
+  QueuedMessage,
   Session,
   SessionRunState,
 };
@@ -42,7 +47,7 @@ interface ErrorBody {
   reason?: string;
 }
 
-type JsonBody = Readonly<Record<string, string | undefined>>;
+type JsonBody = Readonly<Record<string, string | readonly string[] | undefined>>;
 
 async function call<T>(
   method: "GET" | "POST",
@@ -101,6 +106,30 @@ export const api = {
       holder,
       action,
     }),
+
+  queue: (sessionId: string) =>
+    call<QueuedMessage[]>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/queue`),
+  enqueue: (
+    sessionId: string,
+    holder: string,
+    message: { text: string; attachmentIds: readonly string[]; mode: "queue" | "steer" },
+  ) =>
+    call<QueuedMessage>("POST", `/api/sessions/${encodeURIComponent(sessionId)}/queue`, message, {
+      [sessionHolderHeader]: holder,
+    }),
+  editQueued: (sessionId: string, holder: string, id: string, edit: QueueEdit) =>
+    call<QueuedMessage | null>(
+      "POST",
+      `/api/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(id)}`,
+      edit,
+      { [sessionHolderHeader]: holder },
+    ),
+  /** The saved conversation, as the page hydrates it (used to catch up after queued deliveries). */
+  transcript: (sessionId: string) =>
+    call<{ messages: UIMessage[] }>(
+      "GET",
+      `/api/chat?session=${encodeURIComponent(sessionId)}&threadId=${encodeURIComponent(sessionId)}`,
+    ),
 
   /** Uploads one image as raw bytes; the server checks what it really is. */
   uploadAttachment: async (file: File) => {

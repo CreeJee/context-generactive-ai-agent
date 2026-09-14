@@ -25,7 +25,8 @@ export interface PendingToolCall {
 }
 
 export type TurnEvent =
-  | { readonly kind: "delta"; readonly text: string }
+  /** `itemId` is the codex message the text belongs to; a turn can write several. */
+  | { readonly kind: "delta"; readonly text: string; readonly itemId: string | null }
   | { readonly kind: "toolCall"; readonly call: PendingToolCall }
   | { readonly kind: "usage"; readonly usage: TurnUsage };
 
@@ -38,6 +39,7 @@ type TurnEvents = {
 
 export const DeltaNotification = Schema.Struct({
   threadId: Schema.String,
+  itemId: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
   delta: Schema.String,
 });
 export const TurnCompletedNotification = Schema.Struct({
