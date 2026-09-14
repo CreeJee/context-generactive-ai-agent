@@ -163,6 +163,16 @@ export function App() {
           projectId={projectId}
           onSelect={setProjectId}
           onAdd={addProject}
+          onPermissionMode={(mode) => {
+            if (!projectId) return;
+            void api
+              .setPermissionMode(projectId, mode)
+              .then((updated) =>
+                setProjects((list) =>
+                  list.map((project) => (project.id === updated.id ? updated : project)),
+                ),
+              );
+          }}
         />
         <Separator />
         {projectId && (

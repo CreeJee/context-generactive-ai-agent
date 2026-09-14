@@ -104,4 +104,23 @@ describe("Projects", () => {
     expect(result.excluded.crossRecallExcluded).toBe(true);
     expect(result.missing).toMatchObject({ _tag: "ProjectNotFound", id: "nope" });
   });
+
+  test("starts in ask mode and switches the permission mode", async () => {
+    const { storage, app } = workspace();
+    const modes = await run(
+      storage,
+      Effect.gen(function* () {
+        const projects = yield* Projects;
+        const project = yield* projects.add(app);
+        const auto = yield* projects.setPermissionMode(project.id, "auto");
+        const missing = yield* rejection(projects.setPermissionMode("nope", "auto"));
+        return { initial: project.permissionMode, auto: auto.permissionMode, missing };
+      }),
+    );
+    expect(modes).toMatchObject({
+      initial: "ask",
+      auto: "auto",
+      missing: { _tag: "ProjectNotFound" },
+    });
+  });
 });

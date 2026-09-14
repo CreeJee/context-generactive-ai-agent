@@ -15,7 +15,14 @@ import {
 import { Separator } from "~/components/ui/separator";
 import { Spinner } from "~/components/ui/spinner";
 import { cn } from "~/lib/utils";
-import type { AuthState, CodexModel, ModelSelection, Project, Session } from "./api";
+import type {
+  AuthState,
+  CodexModel,
+  ModelSelection,
+  PermissionMode,
+  Project,
+  Session,
+} from "./api";
 
 const unavailableReasons = {
   not_installed: "codex CLI를 찾을 수 없어요. codex를 설치한 뒤 다시 시도하세요.",
@@ -162,20 +169,36 @@ export function ModelSection({
   );
 }
 
+const permissionModes = [
+  { value: "ask", label: "매번 묻기" },
+  { value: "auto", label: "자동 판단 (auto)" },
+] satisfies ReadonlyArray<{ value: PermissionMode; label: string }>;
+
+const permissionHints = new Map<PermissionMode, string>([
+  ["ask", "셸 실행과 프로젝트 밖 쓰기는 호출마다 승인을 받아요."],
+  [
+    "auto",
+    "분류 모델이 호출마다 판단해서 안전하면 바로 실행하고, 애매하면 묻고, 위험하면 막아요. 판단할 때마다 모델 호출이 추가돼요.",
+  ],
+]);
+
 export function ProjectSection({
   projects,
   projectId,
   onSelect,
   onAdd,
+  onPermissionMode,
 }: {
   projects: Project[];
   projectId: string | null;
   onSelect: (projectId: string) => void;
   onAdd: (root: string) => Promise<string | null>;
+  onPermissionMode: (mode: PermissionMode) => void;
 }) {
   const [root, setRoot] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const current = projects.find((project) => project.id === projectId);
 
   return (
     <Section title="프로젝트">
@@ -196,6 +219,32 @@ export function ProjectSection({
             ))}
           </SelectContent>
         </Select>
+      )}
+      {current && (
+        <div className="flex flex-col gap-1.5">
+          <Select
+            value={current.permissionMode}
+            items={permissionModes}
+            onValueChange={(value) => {
+              const mode = permissionModes.find((option) => option.value === value);
+              if (mode) onPermissionMode(mode.value);
+            }}
+          >
+            <SelectTrigger className="w-full" size="sm" aria-label="권한 모드">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {permissionModes.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            {permissionHints.get(current.permissionMode)}
+          </p>
+        </div>
       )}
       <form
         className="flex gap-2"

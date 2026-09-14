@@ -79,4 +79,22 @@ export const migrations: readonly string[] = [
   );
   CREATE INDEX interpret_jobs_status ON interpret_jobs(status, updated_at);
   `,
+  `
+  -- ask: every approval-gated tool call asks the user. auto: a classifier decides first.
+  ALTER TABLE projects ADD COLUMN permission_mode TEXT NOT NULL DEFAULT 'ask' CHECK (permission_mode IN ('ask', 'auto'));
+
+  -- Who allowed or refused an approval-gated tool call, and why. Append-only; the latest row wins.
+  CREATE TABLE permission_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    tool_call_id TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    input TEXT NOT NULL CHECK (json_valid(input)),
+    decision TEXT NOT NULL CHECK (decision IN ('allow', 'ask', 'block', 'approved', 'denied')),
+    decided_by TEXT NOT NULL CHECK (decided_by IN ('classifier', 'fallback', 'user')),
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX permission_reviews_call ON permission_reviews(session_id, tool_call_id, id);
+  `,
 ];

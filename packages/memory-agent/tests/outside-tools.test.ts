@@ -41,6 +41,7 @@ async function outsideTools(project: string, storage: string) {
     root: project,
     name: "project",
     crossRecallExcluded: false,
+    permissionMode: "ask",
     createdAt: "2026-09-14T00:00:00.000Z",
   });
   return { listOutside, readOutside, searchOutside };

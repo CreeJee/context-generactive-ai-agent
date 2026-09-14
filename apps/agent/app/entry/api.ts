@@ -1,7 +1,14 @@
 import type { UIMessage } from "@tanstack/ai-react";
-import type { AuthState, CodexModel, ModelSelection, Project, Session } from "memory-agent";
+import type {
+  AuthState,
+  CodexModel,
+  ModelSelection,
+  PermissionMode,
+  Project,
+  Session,
+} from "memory-agent";
 
-export type { AuthState, CodexModel, ModelSelection, Project, Session };
+export type { AuthState, CodexModel, ModelSelection, PermissionMode, Project, Session };
 
 export class ApiError extends Error {
   constructor(
@@ -49,6 +56,8 @@ export const api = {
 
   projects: () => call<Project[]>("GET", "/api/projects"),
   addProject: (root: string) => call<Project>("POST", "/api/projects", { root }),
+  setPermissionMode: (projectId: string, permissionMode: PermissionMode) =>
+    call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}`, { permissionMode }),
 
   sessions: (projectId: string) =>
     call<Session[]>("GET", `/api/sessions?project=${encodeURIComponent(projectId)}`),

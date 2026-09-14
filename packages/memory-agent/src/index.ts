@@ -29,7 +29,13 @@ export {
   type OutsidePath,
   type ProjectPath,
 } from "./files/paths.ts";
-export { Project, ProjectNotFound, ProjectRootRejected, Projects } from "./projects/projects.ts";
+export {
+  PermissionMode,
+  Project,
+  ProjectNotFound,
+  ProjectRootRejected,
+  Projects,
+} from "./projects/projects.ts";
 export { Session, Sessions } from "./sessions/sessions.ts";
 
 export { Edge, EdgeKind, edgeWeights, type NodeLink } from "./memory/edges.ts";

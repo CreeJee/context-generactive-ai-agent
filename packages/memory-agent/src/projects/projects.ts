@@ -7,11 +7,19 @@ import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
 import { canonicalPath, pathsOverlap } from "../files/paths.ts";
 
+/**
+ * How approval-gated tools (shell, writes outside the project) are allowed.
+ * `ask`: the user answers every call. `auto`: a classifier allows, asks or blocks each call first.
+ */
+export const PermissionMode = Schema.Literal("ask", "auto");
+export type PermissionMode = typeof PermissionMode.Type;
+
 export const Project = Schema.Struct({
   id: Schema.String,
   root: Schema.String,
   name: Schema.String,
   crossRecallExcluded: Schema.Boolean,
+  permissionMode: PermissionMode,
   createdAt: Schema.String,
 });
 export type Project = typeof Project.Type;
@@ -21,6 +29,7 @@ const ProjectRow = Schema.Struct({
   root: Schema.String,
   name: Schema.String,
   cross_recall_excluded: Schema.Literal(0, 1),
+  permission_mode: PermissionMode,
   created_at: Schema.String,
 });
 const decodeProjectRow = Schema.decodeUnknownSync(ProjectRow);
@@ -32,6 +41,7 @@ function toProject(row: Record<string, SQLOutputValue>): Project {
     root: decoded.root,
     name: decoded.name,
     crossRecallExcluded: decoded.cross_recall_excluded === 1,
+    permissionMode: decoded.permission_mode,
     createdAt: decoded.created_at,
   };
 }
@@ -82,10 +92,13 @@ const make = Effect.gen(function* () {
           root,
           name: basename(root) || root,
           crossRecallExcluded: false,
+          permissionMode: "ask",
           createdAt: new Date().toISOString(),
         };
         const inserted = db.sqlite
-          .prepare("INSERT INTO projects VALUES (?, ?, ?, 0, ?) ON CONFLICT(root) DO NOTHING")
+          .prepare(
+            "INSERT INTO projects (id, root, name, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(root) DO NOTHING",
+          )
           .run(project.id, project.root, project.name, project.createdAt);
         if (inserted.changes === 0)
           return yield* new ProjectRootRejected({ root, reason: "already_registered" });
@@ -98,6 +111,16 @@ const make = Effect.gen(function* () {
         db.sqlite
           .prepare("UPDATE projects SET cross_recall_excluded = ? WHERE id = ?")
           .run(excluded ? 1 : 0, id),
+      ).pipe(
+        Effect.flatMap((result) =>
+          result.changes === 0 ? Effect.fail(new ProjectNotFound({ id })) : find(id),
+        ),
+      ),
+
+    /** Choosing `auto` is the user's standing consent to let the classifier allow calls. */
+    setPermissionMode: (id: string, mode: PermissionMode) =>
+      Effect.sync(() =>
+        db.sqlite.prepare("UPDATE projects SET permission_mode = ? WHERE id = ?").run(mode, id),
       ).pipe(
         Effect.flatMap((result) =>
           result.changes === 0 ? Effect.fail(new ProjectNotFound({ id })) : find(id),

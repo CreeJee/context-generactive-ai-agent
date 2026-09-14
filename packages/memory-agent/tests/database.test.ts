@@ -24,7 +24,11 @@ const withDatabase = <A>(file: string, use: (db: Database["Type"]) => A) =>
 
 function seed(db: Database["Type"]) {
   const now = new Date().toISOString();
-  db.sqlite.prepare("INSERT INTO projects VALUES ('p1', '/work/app', 'app', 0, ?)").run(now);
+  db.sqlite
+    .prepare(
+      "INSERT INTO projects (id, root, name, created_at) VALUES ('p1', '/work/app', 'app', ?)",
+    )
+    .run(now);
   db.sqlite.prepare("INSERT INTO sessions VALUES ('s1', 'p1', NULL, ?)").run(now);
   const insert = db.sqlite.prepare(
     "INSERT INTO nodes (id, project_id, session_id, kind, text, created_at) VALUES (?, 'p1', 's1', ?, ?, ?)",
