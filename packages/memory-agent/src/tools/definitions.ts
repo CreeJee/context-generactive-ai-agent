@@ -115,7 +115,7 @@ export const reviewedToolDefinitions = [
   toolDefinition({ ...deleteOutsideFile, needsApproval: false }),
 ] as const;
 
-const PermissionReviewPayload = Schema.Struct({
+export const PermissionReviewPayload = Schema.Struct({
   toolCallId: Schema.String,
   toolName: Schema.String,
   /** The call's arguments as JSON, exactly as the model sent them. */

@@ -176,11 +176,12 @@ describe("CodexTextAdapter", () => {
   });
 
   test("surfaces a failed model request as a run error", async () => {
-    const result = await run(chatRuntime(), [{ role: "user", content: "please fail" }]).catch(
-      (error: Error) => ({ error }),
+    const result = await run(chatRuntime(), [{ role: "user", content: "please fail" }]).then(
+      (finished) => ({ kind: "finished" as const, chunks: finished.chunks }),
+      (error: Error) => ({ kind: "threw" as const, error }),
     );
-    const chunks = "chunks" in result ? result.chunks : [];
-    const failed = "error" in result || chunks.some((chunk) => chunk.type === "RUN_ERROR");
+    const failed =
+      result.kind === "threw" || result.chunks.some((chunk) => chunk.type === "RUN_ERROR");
     expect(failed).toBe(true);
   });
 });

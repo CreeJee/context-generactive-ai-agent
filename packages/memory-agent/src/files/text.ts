@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { mkdir, open, rename, rm } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { Data } from "effect";
+import { Data, Schema } from "effect";
 
 /** Largest text file the file tools read, search or rewrite. */
 export const maxTextBytes = 2 * 1024 * 1024;
@@ -28,6 +28,7 @@ export const sha256 = (bytes: Uint8Array | string) =>
   createHash("sha256").update(bytes).digest("hex");
 
 const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+const isAlreadyExists = Schema.is(Schema.Struct({ code: Schema.Literal("EEXIST") }));
 
 /**
  * Reads a UTF-8 text file without following a symlink at the leaf. `path` is only used in errors.
@@ -65,8 +66,7 @@ export async function createTextFile(absolute: string, path: string, text: strin
       0o644,
     );
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "EEXIST")
-      throw new TextFileRejected({ path, reason: "exists" });
+    if (isAlreadyExists(error)) throw new TextFileRejected({ path, reason: "exists" });
     throw error;
   }
   try {

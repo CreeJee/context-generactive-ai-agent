@@ -1,6 +1,6 @@
 import { fetchServerSentEvents, useChat, type UIMessage } from "@tanstack/ai-react";
 import { ArrowUpIcon, MessageSquareIcon, SquareIcon } from "lucide-react";
-import { approvalToolDefinitions } from "memory-agent/definitions";
+import { approvalToolDefinitions, permissionReviewInterrupt } from "memory-agent/definitions";
 import { useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
@@ -15,21 +15,36 @@ import { ScrollArea } from "~/components/ui/scroll-area";
 import { Spinner } from "~/components/ui/spinner";
 import { Textarea } from "~/components/ui/textarea";
 import { api } from "./api";
-import { ApprovalCard, isApproval, type ApprovalTools } from "./approval";
+import {
+  ApprovalCard,
+  toPendingApproval,
+  type ApprovalInterrupts,
+  type ApprovalTools,
+} from "./approval";
 import { MessageView } from "./message";
+
+// Stable references: useChat treats a new array as changed options on every render.
+const approvalInterrupts: ApprovalInterrupts = [permissionReviewInterrupt];
 
 function Conversation({ sessionId, history }: { sessionId: string; history: UIMessage[] }) {
   const [draft, setDraft] = useState("");
   const bottom = useRef<HTMLDivElement>(null);
-  const { messages, sendMessage, stop, isLoading, error, status, interrupts } =
-    useChat<ApprovalTools>({
-      connection: fetchServerSentEvents(`/api/chat?session=${encodeURIComponent(sessionId)}`),
-      initialMessages: history,
-      // The same definitions the server uses, so approval requests can be matched and answered.
-      tools: approvalToolDefinitions,
-    });
-  const approvals = interrupts.filter(isApproval);
-  const waitingForApproval = approvals.length > 0;
+  const { messages, sendMessage, stop, isLoading, error, status, interrupts } = useChat<
+    ApprovalTools,
+    undefined,
+    unknown,
+    ApprovalInterrupts
+  >({
+    connection: fetchServerSentEvents(`/api/chat?session=${encodeURIComponent(sessionId)}`),
+    initialMessages: history,
+    // The same definitions the server uses, so approval requests can be matched and answered:
+    // tool approvals in `ask` mode, permission reviews in `auto` mode.
+    tools: approvalToolDefinitions,
+    interrupts: approvalInterrupts,
+  });
+  const approvals = interrupts.flatMap((interrupt) => toPendingApproval(interrupt) ?? []);
+  const waitingForApproval = interrupts.length > 0;
+  const awaitingApproval = new Set(approvals.map((approval) => approval.toolCallId));
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: "end" });
@@ -64,10 +79,11 @@ function Conversation({ sessionId, history }: { sessionId: string; history: UIMe
               key={message.id}
               message={message}
               streaming={isLoading && index === messages.length - 1}
+              awaitingApproval={awaitingApproval}
             />
           ))}
-          {approvals.map((interrupt) => (
-            <ApprovalCard key={interrupt.id} interrupt={interrupt} />
+          {approvals.map((approval) => (
+            <ApprovalCard key={approval.id} approval={approval} />
           ))}
           {status === "submitted" && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">

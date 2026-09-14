@@ -44,29 +44,68 @@ export function workspaceInstructions(project: Project) {
 - Report what you actually changed and verified. Do not claim a change or check that did not happen.`;
 }
 
-const UserContent = Schema.Union(
-  Schema.String,
-  Schema.Array(
-    Schema.Union(
-      Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }),
-      Schema.Struct({ type: Schema.Literal("text"), content: Schema.String }),
-      Schema.Struct({ type: Schema.String }),
-    ),
+/**
+ * One content part reduced to its text. Each union member is a complete shape — AG-UI `text`,
+ * TanStack `content`, or any other part (image, file) contributing nothing — so decoding picks the
+ * member and no field probing is needed.
+ */
+const PartText = Schema.Union(
+  Schema.transform(
+    Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }),
+    Schema.String,
+    {
+      strict: true,
+      decode: (part) => part.text,
+      encode: (text) => ({ type: "text" as const, text }),
+    },
   ),
+  Schema.transform(
+    Schema.Struct({ type: Schema.Literal("text"), content: Schema.String }),
+    Schema.String,
+    {
+      strict: true,
+      decode: (part) => part.content,
+      encode: (content) => ({ type: "text" as const, content }),
+    },
+  ),
+  Schema.transform(Schema.Struct({ type: Schema.String }), Schema.String, {
+    strict: true,
+    decode: () => "",
+    encode: () => ({ type: "text" }),
+  }),
 );
 
-/** Text of an incoming user message in either AG-UI (`text`) or TanStack (`content`) part form. */
-const UserText = Schema.transform(UserContent, Schema.String, {
-  strict: false,
-  decode: (value) =>
-    Schema.is(Schema.String)(value)
-      ? value
-      : value
-          .map((part) => ("text" in part ? part.text : "content" in part ? part.content : ""))
-          .join(""),
-  encode: (text) => text,
-});
-const decodeUserText = Schema.decodeUnknownOption(UserText);
+const ContentText = Schema.Union(
+  Schema.String,
+  Schema.transform(Schema.Array(PartText), Schema.String, {
+    strict: true,
+    decode: (texts) => texts.join(""),
+    encode: (text) => [text],
+  }),
+);
+
+/** Text of an incoming user message: a ModelMessage carries `content`, a UIMessage `parts`. */
+const UserMessageText = Schema.Union(
+  Schema.transform(
+    Schema.Struct({ role: Schema.Literal("user"), content: ContentText }),
+    Schema.String,
+    {
+      strict: true,
+      decode: (message) => message.content,
+      encode: (content) => ({ role: "user" as const, content }),
+    },
+  ),
+  Schema.transform(
+    Schema.Struct({ role: Schema.Literal("user"), parts: ContentText }),
+    Schema.String,
+    {
+      strict: true,
+      decode: (message) => message.parts,
+      encode: (parts) => ({ role: "user" as const, parts }),
+    },
+  ),
+);
+const decodeUserMessageText = Schema.decodeUnknownOption(UserMessageText);
 
 const json = (status: number, body: Readonly<Record<string, string | null>>) =>
   Response.json(body, { status });
@@ -115,11 +154,8 @@ const make = Effect.gen(function* () {
         if (Option.isNone(params)) return json(400, { error: "invalid_chat_request" });
         const { messages, threadId, runId, parentRunId, resume } = params.value;
 
-        const last = messages.at(-1);
-        const text =
-          last?.role === "user"
-            ? Option.getOrNull(decodeUserText("content" in last ? last.content : last.parts))
-            : null;
+        // A new user turn ends the list; a continuation (tool result, approval) does not.
+        const text = Option.getOrNull(decodeUserMessageText(messages.at(-1)));
         const userNode =
           text !== null
             ? nodes.append({ projectId, sessionId, kind: "user", text })

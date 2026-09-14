@@ -1,4 +1,4 @@
-import { Either, Schema } from "effect";
+import { Either, Option, Schema } from "effect";
 import { PathRejected } from "../files/paths.ts";
 import { TextFileRejected } from "../files/text.ts";
 
@@ -22,6 +22,10 @@ const refusalHints = new Map<string, string>([
   ["exists", "A file already exists there. Read it and pass its sha256 to replace it."],
 ]);
 
+/** A Node.js system error (`ENOENT`, `EACCES`, …). Only its code is kept for the model. */
+export const SystemError = Schema.Struct({ code: Schema.String });
+const decodeSystemError = Schema.decodeUnknownOption(SystemError);
+
 /**
  * Turns a failure into the message the model sees, `reason: path. hint`. Host errors keep only
  * their code, so absolute paths and system messages do not leak into the conversation.
@@ -29,10 +33,11 @@ const refusalHints = new Map<string, string>([
 export function toolFailure(error: Error, path: string): Error {
   if (error instanceof PathRejected || error instanceof TextFileRejected)
     return new Error(`${error.reason}: ${path}. ${refusalHints.get(error.reason) ?? ""}`.trim());
+  const systemError = Option.getOrUndefined(decodeSystemError(error));
+  if (systemError) return new Error(`io_error: ${path} (${systemError.code})`);
   // Tool-authored messages already follow the `reason: detail` form.
-  if (/^[a-z_]+: /.test(error.message) && !("code" in error)) return error;
-  const code = "code" in error && Schema.is(Schema.String)(error.code) ? error.code : "unknown";
-  return new Error(`io_error: ${path} (${code})`);
+  if (/^[a-z_]+: /.test(error.message)) return error;
+  return new Error(`io_error: ${path} (unknown)`);
 }
 
 /** Runs one tool operation, rethrowing any failure as a model-facing message. */

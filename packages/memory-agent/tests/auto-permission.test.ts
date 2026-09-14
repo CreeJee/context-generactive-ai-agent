@@ -115,7 +115,7 @@ describe("auto permission mode", () => {
     expect(shellResult()).toBeUndefined();
 
     client.resolveInterrupts((item) => {
-      if ("definitionId" in item && item.definitionId === "permission-review")
+      if (item.kind === "generic" && item.binding.definitionId === permissionReviewInterrupt.id)
         item.resolveInterrupt({ approved: true });
     });
     await finished();

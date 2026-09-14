@@ -83,7 +83,7 @@ describe("Projects", () => {
           yield* rejection(projects.add(file)),
           yield* rejection(projects.add(storage)),
           yield* rejection(projects.add(base)),
-        ].map((error) => error && "reason" in error && error.reason);
+        ].map((error) => (error?._tag === "ProjectRootRejected" ? error.reason : null));
       }),
     );
     expect(reasons).toEqual(["not_found", "not_directory", "overlaps_storage", "overlaps_storage"]);
