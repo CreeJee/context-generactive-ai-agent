@@ -3,7 +3,8 @@ import { Option, Schema } from "effect";
 import { ChevronRightIcon, WrenchIcon } from "lucide-react";
 import { Badge } from "~/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
-import { cn } from "~/lib/utils";
+import { attachmentIdOf } from "memory-agent/definitions";
+import { UserMessageBody } from "./images";
 import { Markdown } from "./markdown";
 
 type Part = UIMessage["parts"][number];
@@ -169,23 +170,27 @@ export function MessageView({
   );
   const isUser = message.role === "user";
 
+  if (isUser) {
+    const text = message.parts
+      .flatMap((part) => (part.type === "text" ? [part.content] : []))
+      .join("");
+    // Only our own attachments are shown; an image part pointing elsewhere is not loaded.
+    const images = message.parts
+      .flatMap((part) =>
+        part.type === "image" && part.source.type === "url" && attachmentIdOf(part.source.value)
+          ? [part.source.value]
+          : [],
+      )
+      .map((url, index) => ({ number: index + 1, url }));
+    return <UserMessageBody text={text} images={images} />;
+  }
+
   return (
-    <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
-      <div
-        className={cn(
-          "flex max-w-[85%] flex-col gap-2 text-sm/relaxed",
-          isUser && "rounded-2xl bg-primary px-3.5 py-2 text-primary-foreground",
-        )}
-      >
+    <div className="flex justify-start">
+      <div className="flex max-w-[85%] flex-col gap-2 text-sm/relaxed">
         {message.parts.map((part, index) => {
           if (part.type === "text")
-            return isUser ? (
-              <p key={index} className="whitespace-pre-wrap">
-                {part.content}
-              </p>
-            ) : (
-              <Markdown key={index} text={part.content} streaming={streaming} />
-            );
+            return <Markdown key={index} text={part.content} streaming={streaming} />;
           if (part.type === "tool-call")
             return (
               <ToolCallView

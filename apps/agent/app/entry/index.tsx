@@ -142,7 +142,18 @@ export function App() {
         description="왼쪽의 새 대화 버튼을 누르세요."
       />
     );
-  else main = <ChatPanel key={sessionId} sessionId={sessionId} />;
+  else
+    main = (
+      <ChatPanel
+        key={sessionId}
+        sessionId={sessionId}
+        imagesSupported={
+          models
+            .find((model) => model.model === selection.model)
+            ?.inputModalities.includes("image") ?? false
+        }
+      />
+    );
 
   return (
     <div className="flex h-dvh bg-background text-foreground">

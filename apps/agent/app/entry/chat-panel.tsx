@@ -1,7 +1,11 @@
 import { fetchServerSentEvents, useChat, type UIMessage } from "@tanstack/ai-react";
-import { ArrowUpIcon, MessageSquareIcon, SquareIcon } from "lucide-react";
-import { approvalToolDefinitions, permissionReviewInterrupt } from "memory-agent/definitions";
-import { useEffect, useRef, useState } from "react";
+import { ArrowUpIcon, ImagePlusIcon, MessageSquareIcon, SquareIcon } from "lucide-react";
+import {
+  approvalToolDefinitions,
+  attachmentUrl,
+  permissionReviewInterrupt,
+} from "memory-agent/definitions";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
 import {
@@ -14,6 +18,7 @@ import {
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { Spinner } from "~/components/ui/spinner";
 import { Textarea } from "~/components/ui/textarea";
+import { cn } from "~/lib/utils";
 import { api } from "./api";
 import {
   ApprovalCard,
@@ -21,13 +26,32 @@ import {
   type ApprovalInterrupts,
   type ApprovalTools,
 } from "./approval";
+import { acceptedImageTypes, renumberReferences, useDraftImages } from "./draft-images";
+import { DraftImageTray } from "./images";
 import { MessageView } from "./message";
 
 // Stable references: useChat treats a new array as changed options on every render.
 const approvalInterrupts: ApprovalInterrupts = [permissionReviewInterrupt];
 
-function Conversation({ sessionId, history }: { sessionId: string; history: UIMessage[] }) {
+const imageFiles = (files: FileList | null) =>
+  Array.from(files ?? []).filter((file) => file.type.startsWith("image/"));
+
+function Conversation({
+  sessionId,
+  history,
+  imagesSupported,
+}: {
+  sessionId: string;
+  history: UIMessage[];
+  imagesSupported: boolean;
+}) {
   const [draft, setDraft] = useState("");
+  const [dragging, setDragging] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const draftImages = useDraftImages();
+  const textarea = useRef<HTMLTextAreaElement>(null);
+  const caretAfterRender = useRef<number | null>(null);
+  const filePicker = useRef<HTMLInputElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
   const { messages, sendMessage, stop, isLoading, error, status, interrupts } = useChat<
     ApprovalTools,
@@ -46,19 +70,99 @@ function Conversation({ sessionId, history }: { sessionId: string; history: UIMe
   const waitingForApproval = interrupts.length > 0;
   const awaitingApproval = new Set(approvals.map((approval) => approval.toolCallId));
 
+  const ready = draftImages.images.flatMap((image) => (image.status === "ready" ? [image] : []));
+  const uploading = draftImages.images.some((image) => image.status === "uploading");
+  const failed = draftImages.images.some((image) => image.status === "failed");
+  const canSend =
+    (draft.trim().length > 0 || ready.length > 0) &&
+    !uploading &&
+    !failed &&
+    !isLoading &&
+    !waitingForApproval;
+
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: "end" });
   }, [messages]);
 
+  const attach = (files: readonly File[]) => {
+    if (files.length === 0) return;
+    if (!imagesSupported) {
+      setNotice("선택한 모델은 이미지를 읽지 못해요. 이미지를 지원하는 모델을 고르세요.");
+      return;
+    }
+    setNotice(null);
+    draftImages.add(files);
+  };
+
+  /** Puts `#N` at the cursor so the text can point at a specific image. */
+  const insertReference = (number: number) => {
+    const element = textarea.current;
+    const start = element?.selectionStart ?? draft.length;
+    const end = element?.selectionEnd ?? draft.length;
+    const before = draft.slice(0, start);
+    const after = draft.slice(end);
+    const token = `${before.length > 0 && !/\s$/.test(before) ? " " : ""}#${number}${/^\s/.test(after) ? "" : " "}`;
+    caretAfterRender.current = start + token.length;
+    setDraft(before + token + after);
+  };
+
+  // Writing a new value moves the caret to the end, so place it once React has committed.
+  useLayoutEffect(() => {
+    const caret = caretAfterRender.current;
+    if (caret === null) return;
+    caretAfterRender.current = null;
+    textarea.current?.focus();
+    textarea.current?.setSelectionRange(caret, caret);
+  }, [draft]);
+
   const submit = () => {
-    const text = draft.trim();
-    if (!text || isLoading || waitingForApproval) return;
+    if (!canSend) return;
+    const text = renumberReferences(
+      draft.trim(),
+      ready.map((image) => image.number),
+    );
     setDraft("");
-    void sendMessage(text);
+    draftImages.clear();
+    void sendMessage({
+      content: [
+        ...(text.length > 0 ? [{ type: "text" as const, content: text }] : []),
+        ...ready.map((image) => ({
+          type: "image" as const,
+          source: {
+            type: "url" as const,
+            value: attachmentUrl(image.attachment.id),
+            mimeType: image.attachment.mimeType,
+          },
+        })),
+      ],
+    });
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div
+      className="relative flex h-full min-h-0 flex-col"
+      onDragOver={(event) => {
+        if (!event.dataTransfer.types.includes("Files")) return;
+        event.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={(event) => {
+        // Moving onto a child also fires dragleave; only leaving the panel ends the drag.
+        const next = event.relatedTarget;
+        if (next instanceof Node && event.currentTarget.contains(next)) return;
+        setDragging(false);
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        setDragging(false);
+        attach(imageFiles(event.dataTransfer.files));
+      }}
+    >
+      {dragging && (
+        <div className="pointer-events-none absolute inset-2 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-primary bg-background/80 text-sm font-medium">
+          {imagesSupported ? "이미지를 놓으면 첨부돼요" : "선택한 모델은 이미지를 읽지 못해요"}
+        </div>
+      )}
       <ScrollArea className="min-h-0 flex-1">
         <div className="mx-auto flex max-w-3xl flex-col gap-5 px-6 py-6">
           {messages.length === 0 && (
@@ -101,6 +205,16 @@ function Conversation({ sessionId, history }: { sessionId: string; history: UIMe
       </ScrollArea>
 
       <div className="border-t bg-background px-6 py-4">
+        <DraftImageTray
+          images={draftImages.images}
+          onReference={insertReference}
+          onRemove={draftImages.remove}
+        />
+        {(notice ?? failed) && (
+          <p className="mx-auto max-w-3xl pb-2 text-xs text-destructive">
+            {notice ?? "올리지 못한 이미지가 있어요. 빼고 보내 주세요."}
+          </p>
+        )}
         <form
           className="mx-auto flex max-w-3xl items-end gap-2"
           onSubmit={(event) => {
@@ -108,22 +222,59 @@ function Conversation({ sessionId, history }: { sessionId: string; history: UIMe
             submit();
           }}
         >
+          <input
+            ref={filePicker}
+            type="file"
+            accept={acceptedImageTypes}
+            multiple
+            hidden
+            onChange={(event) => {
+              attach(imageFiles(event.target.files));
+              event.target.value = "";
+            }}
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-lg"
+            disabled={!imagesSupported}
+            title={imagesSupported ? "이미지 첨부" : "선택한 모델은 이미지를 읽지 못해요"}
+            aria-label="이미지 첨부"
+            onClick={() => filePicker.current?.click()}
+          >
+            <ImagePlusIcon />
+          </Button>
           <Textarea
+            ref={textarea}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
+            onPaste={(event) => {
+              const files = imageFiles(event.clipboardData.files);
+              if (files.length === 0) return;
+              event.preventDefault();
+              attach(files);
+            }}
             onKeyDown={(event) => {
-              // Enter sends; Shift+Enter adds a line; Enter that confirms Korean IME input does nothing.
-              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+              // Enter that confirms Korean IME input, and Esc that cancels it, belong to the IME.
+              if (event.nativeEvent.isComposing) return;
+              if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
                 submit();
+              } else if (event.key === "Escape") {
+                // Esc clears a draft (text and images); with nothing drafted it stops the run.
+                if (draft.length > 0 || draftImages.images.length > 0) {
+                  setDraft("");
+                  draftImages.clear();
+                  setNotice(null);
+                } else if (isLoading) stop();
               }
             }}
             placeholder={
               waitingForApproval
                 ? "위의 승인 요청에 먼저 답해 주세요"
-                : "메시지를 입력하세요 (Enter 전송 · Shift+Enter 줄바꿈)"
+                : "메시지를 입력하세요 (Enter 전송 · Shift+Enter 줄바꿈 · 이미지 붙여넣기/끌어놓기)"
             }
-            className="max-h-48 min-h-10 resize-none"
+            className={cn("max-h-48 min-h-10 resize-none")}
             rows={1}
           />
           {isLoading ? (
@@ -131,12 +282,7 @@ function Conversation({ sessionId, history }: { sessionId: string; history: UIMe
               <SquareIcon />
             </Button>
           ) : (
-            <Button
-              type="submit"
-              size="icon-lg"
-              disabled={!draft.trim() || waitingForApproval}
-              aria-label="전송"
-            >
+            <Button type="submit" size="icon-lg" disabled={!canSend} aria-label="전송">
               <ArrowUpIcon />
             </Button>
           )}
@@ -147,7 +293,13 @@ function Conversation({ sessionId, history }: { sessionId: string; history: UIMe
 }
 
 /** Loads a session's stored transcript, then hands it to the live conversation. */
-export function ChatPanel({ sessionId }: { sessionId: string }) {
+export function ChatPanel({
+  sessionId,
+  imagesSupported,
+}: {
+  sessionId: string;
+  imagesSupported: boolean;
+}) {
   const [history, setHistory] = useState<UIMessage[] | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -176,5 +328,12 @@ export function ChatPanel({ sessionId }: { sessionId: string }) {
         <Spinner />
       </div>
     );
-  return <Conversation key={sessionId} sessionId={sessionId} history={history} />;
+  return (
+    <Conversation
+      key={sessionId}
+      sessionId={sessionId}
+      history={history}
+      imagesSupported={imagesSupported}
+    />
+  );
 }

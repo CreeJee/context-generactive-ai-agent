@@ -1,5 +1,6 @@
 import type { UIMessage } from "@tanstack/ai-react";
 import type {
+  Attachment,
   AuthState,
   CodexModel,
   ModelSelection,
@@ -8,7 +9,7 @@ import type {
   Session,
 } from "memory-agent";
 
-export type { AuthState, CodexModel, ModelSelection, PermissionMode, Project, Session };
+export type { Attachment, AuthState, CodexModel, ModelSelection, PermissionMode, Project, Session };
 
 export class ApiError extends Error {
   constructor(
@@ -64,7 +65,32 @@ export const api = {
   createSession: (projectId: string) => call<Session>("POST", "/api/sessions", { projectId }),
   messages: (sessionId: string) =>
     call<UIMessage[]>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/messages`),
+
+  /** Uploads one image as raw bytes; the server checks what it really is. */
+  uploadAttachment: async (file: File) => {
+    const response = await fetch("/api/attachments", {
+      method: "POST",
+      headers: { "Content-Type": file.type || "application/octet-stream" },
+      body: file,
+    });
+    const json: Attachment & ErrorBody = await response.json();
+    if (!response.ok)
+      throw new ApiError(response.status, json.error ?? "upload_failed", json.reason ?? null);
+    return json;
+  },
 };
+
+const attachmentRejections = new Map([
+  ["too_large", "20MB보다 큰 이미지는 올릴 수 없어요."],
+  ["unsupported_type", "PNG, JPEG, GIF, WebP 이미지만 올릴 수 있어요."],
+  ["empty", "빈 파일이에요."],
+]);
+
+export function attachmentErrorMessage(error: Error) {
+  if (error instanceof ApiError && error.reason)
+    return attachmentRejections.get(error.reason) ?? error.reason;
+  return "이미지를 올리지 못했어요.";
+}
 
 const projectRejections = new Map([
   ["not_found", "경로를 찾을 수 없어요."],
