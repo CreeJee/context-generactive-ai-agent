@@ -526,7 +526,10 @@ function ChatPanel({
                   ? "위의 승인 요청에 먼저 답해 주세요"
                   : "메시지를 입력하세요 (Enter 전송 · Shift+Enter 줄바꿈 · 이미지 붙여넣기/끌어놓기)"
             }
-            className={cn("max-h-48 min-h-10 resize-none", editing && "ring-2 ring-primary/40")}
+            className={cn(
+              "max-h-48 min-h-8 resize-none px-2 py-1",
+              editing && "ring-2 ring-primary/40",
+            )}
             rows={1}
           />
           {generating && (
