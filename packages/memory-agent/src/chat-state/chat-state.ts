@@ -38,7 +38,7 @@ const make = Effect.gen(function* () {
   const keepPartialAnswer = async (ctx: ChatMiddlewareContext) => {
     const answer = ctx.accumulatedContent;
     if (answer.length === 0) return;
-    const turnStart = ctx.messages.findLastIndex((message) => message.role === "user");
+    const turnStart = ctx.messages.map((message) => message.role).lastIndexOf("user");
     const inMessages = ctx.messages
       .slice(turnStart + 1)
       .some((message) => message.role === "assistant" && messageText(message) === answer);

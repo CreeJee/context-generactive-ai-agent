@@ -1,4 +1,5 @@
 import type { RunStatus } from "@tanstack/ai-persistence";
+import type { LeaseView } from "../sessions/lease-state.ts";
 
 /** Browser-safe shapes of the session run endpoints. */
 
@@ -13,6 +14,8 @@ export interface SessionRunState {
     readonly status: RunStatus;
     readonly error: { readonly message: string; readonly code?: string } | null;
   } | null;
+  /** Whether the asking page may change the session. */
+  readonly lease: LeaseView;
 }
 
 /** Answer to a cancel: `stopped` is false when the run had not ended by the time we answered. */

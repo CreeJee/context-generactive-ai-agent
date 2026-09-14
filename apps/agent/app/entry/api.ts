@@ -7,13 +7,19 @@ import type {
   Project,
   Session,
 } from "memory-agent";
-import type { CancelResult, SessionRunState } from "memory-agent/definitions";
+import {
+  sessionHolderHeader,
+  type CancelResult,
+  type LeaseView,
+  type SessionRunState,
+} from "memory-agent/definitions";
 
 export type {
   Attachment,
   AuthState,
   CancelResult,
   CodexModel,
+  LeaseView,
   ModelSelection,
   PermissionMode,
   Project,
@@ -38,16 +44,21 @@ interface ErrorBody {
 
 type JsonBody = Readonly<Record<string, string | undefined>>;
 
-async function call<T>(method: "GET" | "POST", path: string, body?: JsonBody): Promise<T> {
+async function call<T>(
+  method: "GET" | "POST",
+  path: string,
+  body?: JsonBody,
+  headers: Readonly<Record<string, string>> = {},
+): Promise<T> {
   const response = await fetch(
     path,
     method === "POST"
       ? {
           method,
-          headers: { "Content-Type": "application/json" },
+          headers: { ...headers, "Content-Type": "application/json" },
           body: JSON.stringify(body ?? {}),
         }
-      : { method },
+      : { method, headers },
   );
   const json: T & ErrorBody = await response.json();
   if (!response.ok)
@@ -73,10 +84,23 @@ export const api = {
   sessions: (projectId: string) =>
     call<Session[]>("GET", `/api/sessions?project=${encodeURIComponent(projectId)}`),
   createSession: (projectId: string) => call<Session>("POST", "/api/sessions", { projectId }),
-  sessionRunState: (sessionId: string) =>
-    call<SessionRunState>("GET", `/api/sessions/${encodeURIComponent(sessionId)}`),
-  cancelRun: (sessionId: string) =>
-    call<CancelResult>("POST", `/api/sessions/${encodeURIComponent(sessionId)}/cancel`),
+  sessionRunState: (sessionId: string, holder: string) =>
+    call<SessionRunState>(
+      "GET",
+      `/api/sessions/${encodeURIComponent(sessionId)}?holder=${encodeURIComponent(holder)}`,
+    ),
+  cancelRun: (sessionId: string, holder: string) =>
+    call<CancelResult>(
+      "POST",
+      `/api/sessions/${encodeURIComponent(sessionId)}/cancel`,
+      {},
+      { [sessionHolderHeader]: holder },
+    ),
+  leaseAction: (sessionId: string, holder: string, action: "claim" | "release") =>
+    call<LeaseView>("POST", `/api/sessions/${encodeURIComponent(sessionId)}/lease`, {
+      holder,
+      action,
+    }),
 
   /** Uploads one image as raw bytes; the server checks what it really is. */
   uploadAttachment: async (file: File) => {

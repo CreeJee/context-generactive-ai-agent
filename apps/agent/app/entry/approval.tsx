@@ -188,7 +188,14 @@ function describe(call: GatedCall): CallView {
 }
 
 /** One pending approval for a shell run or outside write. Approving runs exactly this call once. */
-export function ApprovalCard({ approval }: { approval: PendingApproval }) {
+export function ApprovalCard({
+  approval,
+  disabled,
+}: {
+  approval: PendingApproval;
+  /** A read-only page shows the request but cannot answer it. */
+  disabled: boolean;
+}) {
   const view = describe(decodeCall(approval.toolName, approval.argumentsJson));
   const reviewReason = approval.kind === "permission-review" ? approval.reviewReason : null;
   const Icon = reviewReason ? ShieldQuestionIcon : view.shell ? TerminalIcon : FileWarningIcon;
@@ -211,10 +218,15 @@ export function ApprovalCard({ approval }: { approval: PendingApproval }) {
       </CardHeader>
       <CardContent>{view.body}</CardContent>
       <CardFooter className="gap-2">
-        <Button size="sm" onClick={() => approval.answer(true)}>
+        <Button size="sm" disabled={disabled} onClick={() => approval.answer(true)}>
           승인
         </Button>
-        <Button size="sm" variant="outline" onClick={() => approval.answer(false)}>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={disabled}
+          onClick={() => approval.answer(false)}
+        >
           거부
         </Button>
       </CardFooter>

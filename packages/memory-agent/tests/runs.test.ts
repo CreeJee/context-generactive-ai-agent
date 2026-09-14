@@ -83,7 +83,7 @@ async function setup() {
 
 const statusOf = async (runtime: Runtime, sessionId: string) => {
   const response = await runtime.runPromise(
-    Effect.flatMap(AgentChat, (agent) => agent.status(sessionId)),
+    Effect.flatMap(AgentChat, (agent) => agent.status(sessionId, null)),
   );
   return Schema.decodeUnknownSync(Status)(await response.json());
 };
@@ -121,7 +121,7 @@ describe("runs across reloads, cancels and restarts", () => {
     expect((await statusOf(runtime, session.id)).running).not.toBeNull();
 
     const response = await runtime.runPromise(
-      Effect.flatMap(AgentChat, (agent) => agent.cancel(session.id)),
+      Effect.flatMap(AgentChat, (agent) => agent.cancel(session.id, null)),
     );
     const cancelled = Schema.decodeUnknownSync(Cancelled)(await response.json());
     expect(cancelled).toMatchObject({ stopped: true, status: "aborted" });
@@ -134,7 +134,7 @@ describe("runs across reloads, cancels and restarts", () => {
 
     // Nothing is running any more, so a second cancel has nothing to stop.
     const again = await runtime.runPromise(
-      Effect.flatMap(AgentChat, (agent) => agent.cancel(session.id)),
+      Effect.flatMap(AgentChat, (agent) => agent.cancel(session.id, null)),
     );
     expect(again.status).toBe(409);
     const seen = tab.text();
@@ -176,7 +176,7 @@ describe("runs across reloads, cancels and restarts", () => {
       ),
     );
     expect(response.status).toBe(409);
-    await runtime.runPromise(Effect.flatMap(AgentChat, (agent) => agent.cancel(session.id)));
+    await runtime.runPromise(Effect.flatMap(AgentChat, (agent) => agent.cancel(session.id, null)));
     tab.client.dispose();
   });
 

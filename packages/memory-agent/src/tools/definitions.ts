@@ -15,6 +15,7 @@ export {
   type CancelResult,
   type SessionRunState,
 } from "../agent/run-state.ts";
+export { sessionHolderHeader, type LeaseView } from "../sessions/lease-state.ts";
 
 export const RunShellInput = Schema.Struct({
   command: Schema.NonEmptyString.annotations({

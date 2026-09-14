@@ -32,6 +32,7 @@ vp run dev --host 127.0.0.1 --port 5174
 - Esc: 입력 중인 글·이미지를 비우고, 비어 있으면 실행 중인 답변을 멈춥니다. 중지는 서버에 취소를 요청하고, 실제로 멈췄는지 확인해 알려줍니다.
 - 답변 중 새로고침·탭 닫기는 답변을 멈추지 않습니다. 다시 열면 진행 중인 답변에 이어 붙습니다. 서버가 답변 중에 다시 시작되면 그 답변은 자동으로 다시 실행하지 않고, 끝나지 않았다고 알립니다.
 - 승인 카드: 셸 실행과 프로젝트 밖 쓰기·삭제를 승인/거부합니다. 자동 판단 모드에서는 분류 모델이 확인을 요청한 경우에만 뜨고, 그 이유를 함께 보여줍니다. 대기 중에 새로고침해도 서버에 저장된 승인 요청으로 카드가 다시 뜹니다.
+- 여러 탭: 한 대화는 한 탭에서만 쓸 수 있습니다. 다른 탭이 쓰고 있는 대화는 읽기 전용으로 열리고 진행 상황을 따라 보여줍니다. 그 탭이 떠나도 자동으로 넘겨받지 않으며, "이어서 작업"을 누르면 다시 확인해 쓸 수 있게 됩니다.
 
 UI 컴포넌트는 shadcn으로 추가합니다(`AGENT.md`).
 
@@ -47,11 +48,12 @@ UI 컴포넌트는 shadcn으로 추가합니다(`AGENT.md`).
 | `GET/POST /api/projects`                | 프로젝트 목록, 경로로 추가                                 |
 | `POST /api/projects/:project`           | `crossRecallExcluded`, `permissionMode`(`ask`/`auto`) 변경 |
 | `GET/POST /api/sessions`                | 프로젝트별 대화 목록, 새 대화                              |
-| `GET /api/sessions/:session`            | 진행 중인 run, 마지막 run의 끝난 방식(완료·취소·재시작 등) |
-| `POST /api/sessions/:session/cancel`    | 진행 중인 run 취소, 실제로 멈췄는지 응답                   |
+| `GET /api/sessions/:session?holder=`    | 진행 중인 run, 마지막 run의 끝난 방식, 이 탭의 소유 여부   |
+| `POST /api/sessions/:session/lease`     | 탭의 소유권 얻기·갱신(`claim`)·놓기(`release`)             |
+| `POST /api/sessions/:session/cancel`    | 진행 중인 run 취소(소유 탭만), 실제로 멈췄는지 응답        |
 | `GET /api/chat?session=&threadId=`      | 새로고침 복원: 대화, 진행 중인 run, 대기 중인 승인         |
 | `GET /api/chat?session=&runId=&offset=` | 진행 중이거나 끝난 run의 답변을 로그에서 다시 읽기         |
-| `POST /api/chat?session=`               | 채팅 실행(SSE), 승인 재개 포함                             |
+| `POST /api/chat?session=`               | 채팅 실행(SSE), 승인 재개 포함(소유 탭만)                  |
 | `POST /api/attachments`                 | 이미지 원본 바이트 업로드(png/jpeg/gif/webp, 20 MiB 이하)  |
 | `GET /api/attachments/:attachment`      | 저장된 이미지(다른 사이트 삽입 차단)                       |
 

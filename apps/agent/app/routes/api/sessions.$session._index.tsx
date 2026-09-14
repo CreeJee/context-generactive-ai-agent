@@ -4,9 +4,11 @@ import { agent } from "~/.server/agent";
 import type { Route } from "./+types/sessions.$session._index";
 
 /**
- * GET /api/sessions/:session — run state the transcript does not carry: whether a run is still
- * producing, and how the last run ended (completed, cancelled, cut off by a server restart).
+ * GET /api/sessions/:session?holder= — run state the transcript does not carry: whether a run is
+ * still producing, how the last run ended (completed, cancelled, cut off by a server restart), and
+ * whether the asking page holds the session.
  */
-export async function loader({ params }: Route.LoaderArgs) {
-  return agent.runPromise(Effect.flatMap(AgentChat, (chat) => chat.status(params.session)));
+export async function loader({ request, params }: Route.LoaderArgs) {
+  const holder = new URL(request.url).searchParams.get("holder");
+  return agent.runPromise(Effect.flatMap(AgentChat, (chat) => chat.status(params.session, holder)));
 }

@@ -62,6 +62,8 @@ export {
   Projects,
 } from "./projects/projects.ts";
 export { Session, Sessions } from "./sessions/sessions.ts";
+export { SessionLeases, defaultLeaseTtlMs, makeLeases } from "./sessions/leases.ts";
+export { sessionHolderHeader, type ClaimResult, type LeaseView } from "./sessions/lease-state.ts";
 
 export { Edge, EdgeKind, edgeWeights, type NodeLink } from "./memory/edges.ts";
 export {

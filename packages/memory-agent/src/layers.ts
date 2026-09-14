@@ -21,6 +21,7 @@ import { PermissionClassifier } from "./permissions/classifier.ts";
 import { PermissionGate } from "./permissions/gate.ts";
 import { PermissionReviews } from "./permissions/reviews.ts";
 import { Projects } from "./projects/projects.ts";
+import { SessionLeases } from "./sessions/leases.ts";
 import { Sessions } from "./sessions/sessions.ts";
 import { ApprovedTools } from "./tools/approved.ts";
 import { FileTools } from "./tools/files.ts";
@@ -32,6 +33,8 @@ export interface MemoryAgentLayerOptions {
   readonly embedder?: Layer.Layer<Embedder, never, StorageRoot>;
   /** Defaults to `codex` from PATH; tests pass a fake app server. Starts only when first used. */
   readonly codex?: Layer.Layer<CodexAppServer, never, StorageRoot>;
+  /** How long a page keeps a session without renewing; tests shorten it. */
+  readonly leaseTtlMs?: number;
 }
 
 /** Composition root: every memory-agent service backed by one storage directory. */
@@ -47,6 +50,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     GlobalConfig.layer,
     PermissionReviews.layer,
     Attachments.layer,
+    SessionLeases.layer(options.leaseTtlMs),
     options.embedder ?? Embedder.local,
     options.codex ?? CodexAppServer.layer,
   );

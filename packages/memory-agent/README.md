@@ -76,6 +76,7 @@ src/
 - `AgentChat.status`는 진행 중인 run과 마지막 run의 상태·오류를 돌려줍니다(`SessionRunState`).
 - `ChatState`가 만들어질 때 `running`으로 남은 run은 `failed`/`server_restarted`로 바뀝니다. 다시 실행하지 않습니다.
 - 쓰던 답변은 1초마다 스냅샷되고, 취소·실패 때 바로 저장됩니다.
+- `SessionLeases`는 세션마다 쓰기 가능한 페이지(holder) 하나를 메모리에 둡니다(`claim`·`release`·`permits`·`view`). `AgentChat.handle`·`cancel`은 `X-Session-Holder`가 소유자가 아니면 423을 돌려주고, `AgentChat.lease`가 claim/release를, `status`가 요청한 페이지 기준 `LeaseView`(`mine`·`other`·`free`)를 돌려줍니다. 테스트는 `tests/leases.test.ts`.
 - 테스트(`tests/runs.test.ts`)는 실제 `ChatClient`로 중간 새로고침 후 이어 읽기, 취소, 동시 run 거절, 재시작 후 실패 기록, 재시작을 넘긴 승인을 확인합니다.
 
 ## 이미지

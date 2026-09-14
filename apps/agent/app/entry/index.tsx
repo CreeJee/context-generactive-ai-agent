@@ -17,7 +17,7 @@ import {
   type Project,
   type Session,
 } from "./api";
-import { ChatPanel } from "./chat-panel";
+import { SessionView } from "./chat-panel";
 import { AccountSection, ModelSection, ProjectSection, SessionSection } from "./sidebar";
 
 const loginPollMs = 2000;
@@ -144,7 +144,7 @@ export function App() {
     );
   else
     main = (
-      <ChatPanel
+      <SessionView
         key={sessionId}
         sessionId={sessionId}
         imagesSupported={

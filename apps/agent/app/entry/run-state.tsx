@@ -32,7 +32,7 @@ function noticeOf(lastRun: SessionRunState["lastRun"]): RunNotice | null {
  * The server's view of a session's runs: refreshed whenever the page stops generating, so a run
  * that was cancelled, or cut off by a restart, is reported from the record rather than guessed.
  */
-export function useRunState(sessionId: string, generating: boolean) {
+export function useRunState(sessionId: string, holder: string, generating: boolean) {
   const [state, setState] = useState<SessionRunState | null>(null);
   const [cancelling, setCancelling] = useState(false);
   // Asked to stop, but the server had not confirmed it by the time it answered.
@@ -42,7 +42,7 @@ export function useRunState(sessionId: string, generating: boolean) {
     if (generating) return;
     let current = true;
     const refresh = () =>
-      api.sessionRunState(sessionId).then(
+      api.sessionRunState(sessionId, holder).then(
         (next) => {
           if (!current) return;
           setState(next);
@@ -56,13 +56,13 @@ export function useRunState(sessionId: string, generating: boolean) {
       current = false;
       if (poll) clearInterval(poll);
     };
-  }, [sessionId, generating, cancelPending]);
+  }, [sessionId, holder, generating, cancelPending]);
 
   /** Asks the server to stop the run. Resolves false when nothing could be asked (network error). */
   const cancel = async () => {
     setCancelling(true);
     try {
-      const result = await api.cancelRun(sessionId);
+      const result = await api.cancelRun(sessionId, holder);
       setCancelPending(!result.stopped);
       return true;
     } catch (failure) {

@@ -4,6 +4,7 @@ import {
   approvalToolDefinitions,
   attachmentUrl,
   permissionReviewInterrupt,
+  sessionHolderHeader,
 } from "memory-agent/definitions";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
@@ -28,7 +29,9 @@ import {
 import { acceptedImageTypes, renumberReferences, useDraftImages } from "./draft-images";
 import { DraftImageTray } from "./images";
 import { MessageView } from "./message";
+import { ReadOnlyBar } from "./read-only-bar";
 import { RunNoticeView, useRunState } from "./run-state";
+import { useSessionLease, type PageLease } from "./session-lease";
 
 // Stable references: useChat treats a new array as changed options on every render.
 const approvalInterrupts: ApprovalInterrupts = [permissionReviewInterrupt];
@@ -37,16 +40,51 @@ const imageFiles = (files: FileList | null) =>
   Array.from(files ?? []).filter((file) => file.type.startsWith("image/"));
 
 /**
- * One session's live conversation. The server owns the transcript: on mount the chat hydrates it by
- * session id, together with any approval still waiting, so a reload shows the same card again.
+ * One session: follows who may change it, and remounts the conversation of a read-only page when
+ * the owning page starts or finishes a run, so the reader sees it live.
  */
-export function ChatPanel({
+export function SessionView({
   sessionId,
   imagesSupported,
 }: {
   sessionId: string;
   imagesSupported: boolean;
 }) {
+  const { holder, lease, revision, refused, continueHere } = useSessionLease(sessionId);
+  const reading = lease.state === "other" || lease.state === "free";
+  return (
+    <ChatPanel
+      key={reading ? `read:${revision}` : "write"}
+      sessionId={sessionId}
+      holder={holder}
+      lease={lease}
+      refused={refused}
+      onContinue={() => void continueHere()}
+      imagesSupported={imagesSupported}
+    />
+  );
+}
+
+/**
+ * One session's live conversation. The server owns the transcript: on mount the chat hydrates it by
+ * session id, together with any approval still waiting, so a reload shows the same card again.
+ */
+function ChatPanel({
+  sessionId,
+  holder,
+  lease,
+  refused,
+  onContinue,
+  imagesSupported,
+}: {
+  sessionId: string;
+  holder: string;
+  lease: PageLease;
+  refused: boolean;
+  onContinue: () => void;
+  imagesSupported: boolean;
+}) {
+  const readOnly = lease.state !== "mine";
   const [draft, setDraft] = useState("");
   const [dragging, setDragging] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -57,7 +95,10 @@ export function ChatPanel({
   const bottom = useRef<HTMLDivElement>(null);
   const { messages, sendMessage, stop, isLoading, sessionGenerating, error, status, interrupts } =
     useChat<ApprovalTools, undefined, unknown, ApprovalInterrupts>({
-      connection: fetchServerSentEvents(`/api/chat?session=${encodeURIComponent(sessionId)}`),
+      connection: fetchServerSentEvents(`/api/chat?session=${encodeURIComponent(sessionId)}`, {
+        // The server refuses sends and approval answers from a page that does not hold the session.
+        headers: { [sessionHolderHeader]: holder },
+      }),
       threadId: sessionId,
       persistence: true,
       // The same definitions the server uses, so approval requests can be matched and answered:
@@ -70,7 +111,7 @@ export function ChatPanel({
   const awaitingApproval = new Set(approvals.map((approval) => approval.toolCallId));
   // A run rejoined after a reload streams without a local request, so both count as busy.
   const generating = isLoading || sessionGenerating;
-  const run = useRunState(sessionId, generating);
+  const run = useRunState(sessionId, holder, generating);
 
   const cancel = async () => {
     // Stopping only the local stream would leave the run going on the server, so ask it first.
@@ -85,7 +126,8 @@ export function ChatPanel({
     !uploading &&
     !failed &&
     !generating &&
-    !waitingForApproval;
+    !waitingForApproval &&
+    !readOnly;
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: "end" });
@@ -194,7 +236,7 @@ export function ChatPanel({
             />
           ))}
           {approvals.map((approval) => (
-            <ApprovalCard key={approval.id} approval={approval} />
+            <ApprovalCard key={approval.id} approval={approval} disabled={readOnly} />
           ))}
           {status === "submitted" && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -215,6 +257,7 @@ export function ChatPanel({
       </ScrollArea>
 
       <div className="border-t bg-background px-6 py-4">
+        <ReadOnlyBar lease={lease} refused={refused} onContinue={onContinue} />
         <DraftImageTray
           images={draftImages.images}
           onReference={insertReference}
@@ -247,7 +290,7 @@ export function ChatPanel({
             type="button"
             variant="ghost"
             size="icon-lg"
-            disabled={!imagesSupported}
+            disabled={!imagesSupported || readOnly}
             title={imagesSupported ? "이미지 첨부" : "선택한 모델은 이미지를 읽지 못해요"}
             aria-label="이미지 첨부"
             onClick={() => filePicker.current?.click()}
@@ -257,6 +300,7 @@ export function ChatPanel({
           <Textarea
             ref={textarea}
             value={draft}
+            disabled={readOnly}
             onChange={(event) => setDraft(event.target.value)}
             onPaste={(event) => {
               const files = imageFiles(event.clipboardData.files);
@@ -280,9 +324,11 @@ export function ChatPanel({
               }
             }}
             placeholder={
-              waitingForApproval
-                ? "위의 승인 요청에 먼저 답해 주세요"
-                : "메시지를 입력하세요 (Enter 전송 · Shift+Enter 줄바꿈 · 이미지 붙여넣기/끌어놓기)"
+              readOnly
+                ? "읽기 전용이에요"
+                : waitingForApproval
+                  ? "위의 승인 요청에 먼저 답해 주세요"
+                  : "메시지를 입력하세요 (Enter 전송 · Shift+Enter 줄바꿈 · 이미지 붙여넣기/끌어놓기)"
             }
             className={cn("max-h-48 min-h-10 resize-none")}
             rows={1}
@@ -292,7 +338,7 @@ export function ChatPanel({
               type="button"
               variant="outline"
               size="icon-lg"
-              disabled={run.cancelling}
+              disabled={run.cancelling || readOnly}
               onClick={() => void cancel()}
               aria-label={run.cancelling ? "멈추는 중" : "중지"}
               title={run.cancelling ? "멈추는 중" : "중지 (입력창이 비었을 때 Esc)"}
