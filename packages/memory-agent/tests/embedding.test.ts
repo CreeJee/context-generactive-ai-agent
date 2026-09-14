@@ -1,14 +1,15 @@
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { Effect, Layer, ManagedRuntime } from "effect";
+import { Cause, Effect, Exit, Layer, ManagedRuntime } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { Embedder, localModel } from "../src/memory/embedding/embedder.ts";
 import { Indexer } from "../src/memory/embedding/indexer.ts";
 import { VectorIndex } from "../src/memory/embedding/vector-index.ts";
 import { Nodes } from "../src/memory/nodes.ts";
-import { fakeVector } from "../src/testing/fake-embedder.ts";
+import { memoryAgentLayer } from "../src/layers.ts";
+import { fakeEmbedderLayer, fakeVector } from "../src/testing/fake-embedder.ts";
 import { testRuntime } from "./support/runtime.ts";
 
 const texts = [
@@ -75,6 +76,18 @@ describe("Indexer + VectorIndex", () => {
     expect(
       await restarted.runPromise(Effect.flatMap(Indexer, (indexer) => indexer.indexAll())),
     ).toBe(3);
+  });
+
+  test("a second app server on the same storage is told why it cannot open the index", async () => {
+    const { runtime, storage } = await seeded();
+    await runtime.runPromise(Effect.map(VectorIndex, (index) => index.size()));
+
+    const second = ManagedRuntime.make(memoryAgentLayer(storage, { embedder: fakeEmbedderLayer }));
+    const exit = await second.runPromiseExit(Effect.map(VectorIndex, (index) => index.size()));
+    await second.dispose().catch(() => {});
+    expect(Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "opened").toContain(
+      "held by another process using the same storage root",
+    );
   });
 });
 

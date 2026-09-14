@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
-import { Context, Data, Effect, Layer, Schema } from "effect";
+import { Context, Data, Effect, Layer, Option, Schema } from "effect";
 import { loadTurbovec } from "turbovec";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { Database } from "../../db/database.ts";
@@ -10,7 +10,22 @@ import { Embedder } from "./embedder.ts";
 export class VectorIndexError extends Data.TaggedError("VectorIndexError")<{
   readonly operation: "open" | "add" | "search" | "save";
   readonly cause: unknown;
-}> {}
+}> {
+  override get message() {
+    const cause = Schema.decodeUnknownOption(Schema.Struct({ message: Schema.String }))(this.cause);
+    // turbovec's writer lease: only one process may hold an index, so a second app server on the
+    // same storage root cannot start.
+    if (
+      this.operation === "open" &&
+      Option.exists(cause, ({ message }) => message.includes("locked"))
+    )
+      return "The vector index is held by another process using the same storage root (is another app server running?). Stop it, then start this one again.";
+    return Option.match(cause, {
+      onNone: () => `Vector index ${this.operation} failed.`,
+      onSome: ({ message }) => `Vector index ${this.operation} failed: ${message}`,
+    });
+  }
+}
 
 export interface VectorHit {
   /** `nodes.seq` of the matched node. */
