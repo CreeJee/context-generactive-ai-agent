@@ -16,6 +16,12 @@ export {
   type SessionRunState,
 } from "../agent/run-state.ts";
 export { sessionHolderHeader, type LeaseView } from "../sessions/lease-state.ts";
+export type {
+  DeliveryVia,
+  QueueEdit,
+  QueueItemState,
+  QueuedMessage,
+} from "../queue/queue-state.ts";
 
 export const RunShellInput = Schema.Struct({
   command: Schema.NonEmptyString.annotations({

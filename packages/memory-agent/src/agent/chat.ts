@@ -26,6 +26,9 @@ import { permissionReviewInterrupt } from "../tools/definitions.ts";
 import { FileTools } from "../tools/files.ts";
 import { MemoryTools } from "../tools/memory.ts";
 import { OutsideTools } from "../tools/outside.ts";
+import { QueueDelivery } from "../queue/delivery.ts";
+import { MessageQueue, type QueueChangeRefused } from "../queue/queue.ts";
+import type { QueueEdit, QueuedMessage } from "../queue/queue-state.ts";
 import { LiveRuns } from "./live-runs.ts";
 import type { CancelResult, SessionRunState } from "./run-state.ts";
 import { sessionHolderHeader } from "../sessions/lease-state.ts";
@@ -153,6 +156,18 @@ const IncomingUserTurn = Schema.Union(
 );
 const decodeUserTurn = Schema.decodeUnknownOption(IncomingUserTurn);
 
+const decodeQueuedTurn = Schema.decodeUnknownOption(
+  Schema.Struct({ queuedMessageId: Schema.NonEmptyString }),
+);
+
+export const QueueRequest = Schema.Struct({
+  text: Schema.String,
+  attachmentIds: Schema.Array(Schema.String),
+  /** queue: deliver at the next tool-call boundary. steer: into the answering turn now. */
+  mode: Schema.Literal("queue", "steer"),
+});
+export type QueueRequest = typeof QueueRequest.Type;
+
 const json = (status: number, body: Readonly<Record<string, string | null>>) =>
   Response.json(body, { status });
 
@@ -180,8 +195,50 @@ const make = Effect.gen(function* () {
   const attachments = yield* Attachments;
   const chatState = yield* ChatState;
   const leases = yield* SessionLeases;
+  const queue = yield* MessageQueue;
+  const delivery = yield* QueueDelivery;
   const liveRuns = new LiveRuns();
   const inUse = () => json(423, { error: "session_in_use" });
+
+  /**
+   * What happens to queued messages when a run ends. After a normal finish the page holding the
+   * session sends the next one as a new turn; with no such page, or after a cancel or failure, they
+   * wait for the user to confirm them (R03: never sent on their own after a stop or restart).
+   * A run paused for approval keeps them for its next tool-call boundary.
+   */
+  const applyEdit = (
+    sessionId: string,
+    id: string,
+    edit: QueueEdit,
+  ): Effect.Effect<QueuedMessage | null, QueueChangeRefused> => {
+    switch (edit.action) {
+      case "edit":
+        return queue.edit(sessionId, id, edit.draft);
+      case "save":
+        return queue.save(sessionId, id, edit.text);
+      case "remove":
+        return queue.remove(sessionId, id);
+      case "confirm":
+        return queue.confirm(sessionId, id);
+    }
+  };
+
+  const settleQueue = async (sessionId: string, runId: string) => {
+    const run = await chatState.run(sessionId, runId);
+    switch (run?.status) {
+      case "completed":
+        if (leases.view(sessionId, null).state === "free") queue.holdWaiting(sessionId);
+        return;
+      case "failed":
+      case "aborted":
+      case undefined:
+        queue.holdWaiting(sessionId);
+        return;
+      case "interrupted":
+      case "running":
+        return;
+    }
+  };
 
   const indexInBackground = (): ChatMiddleware => {
     // Embedding can take seconds (the model loads on first use); never hold the response for it.
@@ -216,8 +273,12 @@ const make = Effect.gen(function* () {
         ).pipe(Effect.option);
         if (Option.isNone(params)) return json(400, { error: "invalid_chat_request" });
         // The session is the thread: chat state, codex turn parking and hydration all key on it.
-        const { messages, runId, parentRunId, resume } = params.value;
+        const { messages, runId, parentRunId, resume, forwardedProps } = params.value;
         const threadId = sessionId;
+        // A page sending the next queued message as a new turn names it, so it is marked delivered.
+        const queued = Option.getOrNull(decodeQueuedTurn(forwardedProps));
+        if (queued && queue.deliverable(sessionId)[0]?.id !== queued.queuedMessageId)
+          return json(409, { error: "queued_message_not_next" });
 
         // A new user turn ends the list; a continuation (tool result, approval) does not.
         const turn = Option.getOrNull(Option.map(decodeUserTurn(messages.at(-1)), toTurn));
@@ -244,10 +305,18 @@ const make = Effect.gen(function* () {
         // Not tied to the request: a reload or a closed tab must not stop the run (R10). Only an
         // explicit cancel aborts it.
         const abortController = new AbortController();
-        const claim = liveRuns.claim(sessionId, runId, abortController);
+        const claim = liveRuns.claim(
+          sessionId,
+          runId,
+          abortController,
+          () => void settleQueue(sessionId, runId),
+        );
         if (!claim) return json(409, { error: "run_in_progress" });
+        if (queued) queue.markDelivered(queued.queuedMessageId, "next_turn", runId, true);
         const middleware: Array<ChatMiddleware<unknown, typeof permissionReviewInterrupt>> = [
           ...chatState.middleware(),
+          // After chat state, so steered messages are added to the transcript it has just saved.
+          delivery.forRun({ projectId, sessionId, runId }),
         ];
         // The gate runs right after chat state, so a refused call is skipped before tools run.
         if (project.permissionMode === "auto")
@@ -365,9 +434,70 @@ const make = Effect.gen(function* () {
             break;
           case "release":
             leases.release(sessionId, holder);
+            // The page is gone: nothing will send its waiting messages as a next turn.
+            if (!liveRuns.get(sessionId) && leases.view(sessionId, null).state === "free")
+              queue.holdWaiting(sessionId);
             break;
         }
         return Response.json(leases.view(sessionId, holder));
+      }),
+
+    /** The session's queue: messages still to deliver, and those the latest run delivered. */
+    queued: (sessionId: string) =>
+      Effect.gen(function* () {
+        const session = yield* Effect.either(sessions.get(sessionId));
+        if (session._tag === "Left") return json(404, { error: "session_not_found" });
+        const last = yield* Effect.promise(() => chatState.lastRun(sessionId));
+        return Response.json(queue.list(sessionId, last?.runId ?? null));
+      }),
+
+    /**
+     * A message written while a run answers. `queue` keeps it for the next tool-call boundary (or
+     * the next turn); `steer` sends it into the answering turn now, or refuses without falling
+     * back to another way of delivering it. With no run answering there is nothing to queue for:
+     * the page sends it as a normal turn instead.
+     */
+    enqueue: (sessionId: string, holder: string | null, request: QueueRequest) =>
+      Effect.gen(function* () {
+        const session = yield* Effect.either(sessions.get(sessionId));
+        if (session._tag === "Left") return json(404, { error: "session_not_found" });
+        if (!leases.permits(sessionId, holder)) return inUse();
+        const { text, attachmentIds, mode } = request;
+        if (text.trim().length === 0 && attachmentIds.length === 0)
+          return json(400, { error: "empty_message" });
+        if (attachmentIds.some((id) => !attachments.get(id)))
+          return json(400, { error: "unknown_attachment" });
+        const live = liveRuns.get(sessionId);
+        if (!live) return json(409, { error: "not_running" });
+
+        const message = queue.add(sessionId, text, attachmentIds);
+        switch (mode) {
+          case "queue":
+            return Response.json(message, { status: 201 });
+          case "steer": {
+            const binding = { projectId: session.right.projectId, sessionId, runId: live.runId };
+            const outcome = yield* Effect.either(delivery.steer(binding, message));
+            if (outcome._tag === "Right" && outcome.right === "steered")
+              return Response.json(queue.get(sessionId, message.id), { status: 201 });
+            // Not delivered: the message is not kept, so the page still has it as a draft.
+            yield* Effect.ignore(queue.remove(sessionId, message.id));
+            return outcome._tag === "Right"
+              ? json(409, { error: "steer_unavailable" })
+              : json(502, { error: "steer_failed" });
+          }
+        }
+      }),
+
+    /** Edits, removes or confirms one queued message. */
+    editQueued: (sessionId: string, holder: string | null, id: string, edit: QueueEdit) =>
+      Effect.gen(function* () {
+        if (!leases.permits(sessionId, holder)) return inUse();
+        return yield* applyEdit(sessionId, id, edit).pipe(
+          Effect.map((message) => Response.json(message)),
+          Effect.catchTag("QueueChangeRefused", (refused) =>
+            Effect.succeed(json(409, { error: `queue_${refused.reason}` })),
+          ),
+        );
       }),
   };
 });

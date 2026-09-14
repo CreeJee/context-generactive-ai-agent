@@ -63,6 +63,9 @@ export {
 } from "./projects/projects.ts";
 export { Session, Sessions } from "./sessions/sessions.ts";
 export { SessionLeases, defaultLeaseTtlMs, makeLeases } from "./sessions/leases.ts";
+export { MessageQueue, QueueChangeRefused } from "./queue/queue.ts";
+export { QueueDelivery, queueDeliveredEvent, type DeliveryBinding } from "./queue/delivery.ts";
+export type { DeliveryVia, QueueEdit, QueueItemState, QueuedMessage } from "./queue/queue-state.ts";
 export { sessionHolderHeader, type ClaimResult, type LeaseView } from "./sessions/lease-state.ts";
 
 export { Edge, EdgeKind, edgeWeights, type NodeLink } from "./memory/edges.ts";

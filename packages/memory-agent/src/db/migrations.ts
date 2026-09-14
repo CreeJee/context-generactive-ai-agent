@@ -163,4 +163,28 @@ export const migrations: readonly string[] = [
     PRIMARY KEY (namespace, key)
   );
   `,
+  `
+  -- Messages the user sent while a run was answering, in order, until they reach the agent.
+  -- waiting: goes at the next tool-call boundary, or as the next turn when the run completes.
+  -- editing: being edited (draft holds unsaved text); it and everything after it wait.
+  -- held: restored after a restart, cancel or failure; sent only once the user confirms.
+  -- Times are epoch milliseconds.
+  CREATE TABLE queued_messages (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    seq INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    attachment_ids TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(attachment_ids)),
+    state TEXT NOT NULL CHECK (state IN ('waiting', 'editing', 'held', 'delivered', 'failed')),
+    draft TEXT,
+    delivered_via TEXT CHECK (delivered_via IN ('tool_boundary', 'steer', 'next_turn')),
+    run_id TEXT,
+    in_transcript INTEGER NOT NULL DEFAULT 0 CHECK (in_transcript IN (0, 1)),
+    failure TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    CHECK ((state = 'delivered') = (delivered_via IS NOT NULL))
+  );
+  CREATE INDEX queued_messages_session ON queued_messages(session_id, seq);
+  `,
 ];

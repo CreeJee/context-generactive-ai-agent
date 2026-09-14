@@ -143,7 +143,22 @@ async function runTurn(threadId, turnId, input) {
       notify("item/agentMessage/delta", { threadId, turnId, itemId: "msg-1", delta: `${piece} ` });
       await new Promise((resolve) => setTimeout(resolve, 40));
     }
-    return streamAnswer(threadId, turnId, "done");
+    const steered = thread.steered.length > 0 ? ` steered: ${thread.steered.join(" / ")}` : "";
+    return streamAnswer(threadId, turnId, `done${steered}`);
+  }
+  if (text.includes("check files")) {
+    // Waits a moment before its tool call, so a test can queue a message for that boundary.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await callClient("item/tool/call", {
+      threadId,
+      turnId,
+      callId: "call-files",
+      tool: "list_files",
+      arguments: {},
+    });
+    if (thread.interrupted) return;
+    const heard = thread.steered.length > 0 ? thread.steered.join(" / ") : "nothing";
+    return streamAnswer(threadId, turnId, `Files checked. Heard: ${heard}`);
   }
   if (text.includes("fail"))
     return notify("error", { threadId, turnId, willRetry: false, error: { message: "boom" } });
@@ -226,6 +241,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         model: params.model,
         instructions: params.baseInstructions ?? "",
         history: [],
+        steered: [],
         interrupted: false,
       });
       return reply(id, { thread: { id: threadId } });
@@ -238,6 +254,13 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       reply(id, { turn: { id: turnId } });
       setTimeout(() => void runTurn(params.threadId, turnId, params.input), 5);
       return;
+    }
+    case "turn/steer": {
+      const thread = threads.get(params.threadId);
+      if (!thread || params.expectedTurnId !== `turn-${params.threadId}`)
+        return fail(id, -32600, "no active turn");
+      thread.steered.push(params.input.map((part) => part.text ?? "").join(" "));
+      return reply(id, { turnId: params.expectedTurnId });
     }
     case "turn/interrupt":
       threads.get(params.threadId).interrupted = true;

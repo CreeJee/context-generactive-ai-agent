@@ -14,7 +14,7 @@ import {
   type StructuredOutputResult,
 } from "@tanstack/ai/adapters";
 import { Context, Effect, Layer, Option, Schema } from "effect";
-import { CodexAppServer } from "./app-server.ts";
+import { CodexAppServer, type Json } from "./app-server.ts";
 import { Attachments } from "../attachments/attachments.ts";
 import { attachmentIdOf } from "../attachments/urls.ts";
 import { imageSources, toCodexTurnInput, type ResolvedImage } from "./history.ts";
@@ -44,6 +44,26 @@ const idleTurnMs = 15 * 60_000;
 export interface CodexTurns {
   start(options: TextOptions<Record<string, never>>, selection: ModelSelection): Promise<CodexTurn>;
   interrupt(turn: CodexTurn): Promise<void>;
+  /** Adds user input to a turn that is still going (codex `turn/steer`). */
+  steer(turn: CodexTurn, input: readonly Json[]): Promise<void>;
+}
+
+/**
+ * The codex turn each conversation thread is running, answering or waiting on tools, so a message
+ * sent meanwhile can be steered into it.
+ */
+export class ActiveTurns {
+  readonly #byThread = new Map<string, CodexTurn>();
+
+  set(threadId: string, turn: CodexTurn) {
+    this.#byThread.set(threadId, turn);
+  }
+
+  get(threadId: string): CodexTurn | null {
+    const turn = this.#byThread.get(threadId);
+    if (!turn || turn.finished || !turn.turnId) return null;
+    return turn;
+  }
 }
 
 type EventRead = Promise<IteratorResult<TurnEvent>>;
@@ -116,6 +136,7 @@ export class CodexTextAdapter extends BaseTextAdapter<
     private readonly turns: CodexTurns,
     private readonly selection: ModelSelection,
     private readonly parking: TurnParking,
+    private readonly active = new ActiveTurns(),
   ) {
     super({}, selection.model);
   }
@@ -131,6 +152,7 @@ export class CodexTextAdapter extends BaseTextAdapter<
     const turn =
       this.#continue(threadId, options.messages) ??
       (await this.turns.start(options, this.selection));
+    this.active.set(threadId, turn);
     const abort = () => void this.turns.interrupt(turn);
     signal?.addEventListener("abort", abort, { once: true });
 
@@ -435,13 +457,39 @@ const make = Effect.gen(function* () {
       turns.delete(turn.threadId);
       turn.finish("Codex turn interrupted.");
     },
+
+    async steer(turn, input) {
+      if (!turn.turnId) throw new Error("The codex turn has not started.");
+      await run(
+        codex.request(
+          "turn/steer",
+          { threadId: turn.threadId, expectedTurnId: turn.turnId, input },
+          Ignored,
+        ),
+      );
+    },
   };
 
   const parking = new TurnParking((turn) => void bridge.interrupt(turn));
+  const active = new ActiveTurns();
 
   return {
     /** A TanStack adapter for one chat() request using the saved model selection. */
-    adapter: (selection: ModelSelection) => new CodexTextAdapter(bridge, selection, parking),
+    adapter: (selection: ModelSelection) =>
+      new CodexTextAdapter(bridge, selection, parking, active),
+
+    /**
+     * Sends a user message into the turn the thread is running. `no_turn` when nothing is running
+     * there (the message then has to reach the model with the conversation instead). Throws when
+     * codex refuses it.
+     */
+    steer: async (threadId: string, message: ModelMessage): Promise<"steered" | "no_turn"> => {
+      const turn = active.get(threadId);
+      if (!turn) return "no_turn";
+      const { input } = toCodexTurnInput([message], await resolveImages(imageSources([message])));
+      await bridge.steer(turn, input);
+      return "steered";
+    },
   };
 });
 

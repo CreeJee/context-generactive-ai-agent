@@ -28,12 +28,15 @@ export class LiveRuns {
     sessionId: string,
     runId: string,
     controller: AbortController,
+    /** Runs once the stream has ended and the session is free again. */
+    onEnded: () => void = () => {},
   ): { readonly track: (stream: AsyncIterable<StreamChunk>) => AsyncIterable<StreamChunk> } | null {
     if (this.#bySession.has(sessionId)) return null;
     let release = () => {};
     const ended = new Promise<void>((resolve) => {
       release = () => {
         if (this.#bySession.get(sessionId) === run) this.#bySession.delete(sessionId);
+        onEnded();
         resolve();
       };
     });

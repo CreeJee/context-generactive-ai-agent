@@ -21,6 +21,8 @@ import { PermissionClassifier } from "./permissions/classifier.ts";
 import { PermissionGate } from "./permissions/gate.ts";
 import { PermissionReviews } from "./permissions/reviews.ts";
 import { Projects } from "./projects/projects.ts";
+import { QueueDelivery } from "./queue/delivery.ts";
+import { MessageQueue } from "./queue/queue.ts";
 import { SessionLeases } from "./sessions/leases.ts";
 import { Sessions } from "./sessions/sessions.ts";
 import { ApprovedTools } from "./tools/approved.ts";
@@ -51,6 +53,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     PermissionReviews.layer,
     Attachments.layer,
     SessionLeases.layer(options.leaseTtlMs),
+    MessageQueue.layer,
     options.embedder ?? Embedder.local,
     options.codex ?? CodexAppServer.layer,
   );
@@ -64,7 +67,12 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     CodexChat.layer,
     ChatState.layer,
   );
-  const retrieval = Layer.mergeAll(Indexer.layer, MemorySearch.layer, PermissionClassifier.layer);
+  const retrieval = Layer.mergeAll(
+    Indexer.layer,
+    MemorySearch.layer,
+    PermissionClassifier.layer,
+    QueueDelivery.layer,
+  );
   return AgentChat.layer.pipe(
     Layer.provideMerge(
       Layer.mergeAll(
