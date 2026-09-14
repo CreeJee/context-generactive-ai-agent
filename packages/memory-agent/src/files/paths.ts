@@ -214,7 +214,7 @@ export function resolveProjectPath(
     stats = lstat(current);
     if (!stats) {
       if (kind === "new-or-file")
-        return Either.right({ absolute: current, relative: spelled, stats });
+        return Either.right({ absolute: join(root, ...segments), relative: spelled, stats });
       return reject(path, "not_found");
     }
     if (stats.isSymbolicLink()) return reject(path, "symlink");

@@ -17,6 +17,7 @@ import { Recorder } from "./memory/record.ts";
 import { MemorySearch } from "./memory/search.ts";
 import { Projects } from "./projects/projects.ts";
 import { Sessions } from "./sessions/sessions.ts";
+import { FileTools } from "./tools/files.ts";
 import { MemoryTools } from "./tools/memory.ts";
 
 export interface MemoryAgentLayerOptions {
@@ -51,7 +52,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
   );
   const retrieval = Layer.merge(Indexer.layer, MemorySearch.layer);
   return AgentChat.layer.pipe(
-    Layer.provideMerge(MemoryTools.layer),
+    Layer.provideMerge(Layer.merge(MemoryTools.layer, FileTools.layer)),
     Layer.provideMerge(retrieval),
     Layer.provideMerge(memory),
     Layer.provideMerge(stores),

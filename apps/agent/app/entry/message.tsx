@@ -12,6 +12,12 @@ const toolLabels = new Map([
   ["find_memory", "기억 검색"],
   ["read_evidence", "원문 읽기"],
   ["trace_evidence", "근거 추적"],
+  ["list_files", "파일 목록"],
+  ["search_files", "파일 내용 검색"],
+  ["read_file", "파일 읽기"],
+  ["write_file", "파일 쓰기"],
+  ["edit_file", "파일 편집"],
+  ["delete_file", "파일 삭제"],
 ]);
 
 function pretty(text: string) {

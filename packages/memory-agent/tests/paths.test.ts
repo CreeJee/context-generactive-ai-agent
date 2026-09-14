@@ -75,7 +75,10 @@ describe("resolveProjectPath", () => {
     const created = Either.getOrThrow(
       resolveProjectPath(project, "docs/new/plan.md", "new-or-file"),
     );
-    expect(created.stats).toBeUndefined();
+    expect(created).toMatchObject({
+      absolute: join(project, "docs", "new", "plan.md"),
+      stats: undefined,
+    });
   });
 
   test("refuses escapes, .git, credentials and malformed spellings", () => {

@@ -1,5 +1,5 @@
 export { memoryAgentLayer, type MemoryAgentLayerOptions } from "./layers.ts";
-export { AgentChat, memoryInstructions } from "./agent/chat.ts";
+export { AgentChat, memoryInstructions, workspaceInstructions } from "./agent/chat.ts";
 export { sessionMessages } from "./agent/history.ts";
 
 export { StorageRoot, defaultStorageRoot } from "./config/storage-root.ts";
@@ -61,5 +61,15 @@ export {
 export { Indexer } from "./memory/embedding/indexer.ts";
 export { VectorIndex, VectorIndexError, type VectorHit } from "./memory/embedding/vector-index.ts";
 
+export { FileTools, fileToolNames, toolFailure } from "./tools/files.ts";
+export {
+  TextFileRejected,
+  linePage,
+  maxTextBytes,
+  readTextFile,
+  type LinePage,
+  type TextFile,
+} from "./files/text.ts";
+export { listProjectFiles, type FileListing } from "./files/listing.ts";
 export { MemoryTools, memoryToolNames } from "./tools/memory.ts";
 export { toToolSchema, type ToolSchema } from "./tools/schema.ts";
