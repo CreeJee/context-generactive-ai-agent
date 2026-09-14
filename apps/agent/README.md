@@ -1,93 +1,58 @@
-# Context Generactive Agent
+# Context Generactive Agent (앱)
 
-A modern, generactive ai
+ChatGPT 계정으로 대화하고, 세션·프로젝트를 넘어 기억하는 로컬 에이전트의 웹 앱입니다.
+서버 로직은 [memory-agent](../../packages/memory-agent/README.md)에 있고, 이 앱은 API 라우트와 UI를 담당합니다.
 
-## Getting Started
+## 실행
 
-### Installation
-
-Install the dependencies:
-
-```bash
-npm install
-```
-
-### Development
-
-Start the development server with HMR:
+루트에서 의존성을 설치합니다.
 
 ```bash
-npm run dev
+vp install
 ```
 
-Your application will be available at `http://localhost:5173`.
-
-## Building for Production
-
-Create a production build:
+개발 서버(React Router dev):
 
 ```bash
-npm run build
+cd apps/agent
+vp run dev --host 127.0.0.1 --port 5174
 ```
 
-## Deployment
+- 스크립트 인자는 `--` 없이 넘깁니다. `vp run dev -- --host ...`로 쓰면 `--`까지 전달되어 서버가 뜨지 않습니다.
+- 의존성이 바뀐 뒤 처음 띄우면 Vite가 의존성을 다시 묶으며 페이지를 새로고침합니다. 그 전에 연 페이지가 로딩 중에 멈춰 보이면 새로고침하세요.
+- `codex` CLI가 설치되어 있어야 ChatGPT 로그인과 모델 호출이 됩니다.
 
-### Docker Deployment
+데이터는 `~/.context-generactive-agent`에 저장됩니다(SQLite, 벡터 인덱스, 임베딩 모델, codex 홈, 설정).
 
-To build and run using Docker:
+## 화면
 
-```bash
-docker build -t my-app .
+- 사이드바: ChatGPT 로그인 상태, 모델·추론 강도, 프로젝트 선택·추가, 권한 모드(`매번 묻기`/`자동 판단`), 대화 목록.
+- 대화: 답변 스트리밍 마크다운([streamdown](https://streamdown.ai), 코드 하이라이트·한글 강조), 도구 호출 카드(인자·결과·상태 배지).
+- 승인 카드: 셸 실행과 프로젝트 밖 쓰기·삭제를 승인/거부합니다. 자동 판단 모드에서는 분류 모델이 확인을 요청한 경우에만 뜨고, 그 이유를 함께 보여줍니다.
 
-# Run the container
-docker run -p 3000:3000 my-app
+UI 컴포넌트는 shadcn으로 추가합니다(`AGENT.md`).
+
+## API 라우트
+
+`app/routes/api/*`는 React Router flat routes이며 `/api` 접두사로 마운트됩니다. 상태를 바꾸는 요청은 교차 사이트 요청을 거부합니다.
+
+| 라우트                                | 동작                                                       |
+| ------------------------------------- | ---------------------------------------------------------- |
+| `GET/POST /api/auth`                  | 로그인 상태 조회, `login`·`cancel`·`logout`                |
+| `GET /api/models`                     | 계정에서 쓸 수 있는 모델 목록과 현재 선택                  |
+| `POST /api/models/:model`             | 모델·추론 강도 선택(없는 모델은 자동 대체 없이 오류)       |
+| `GET/POST /api/projects`              | 프로젝트 목록, 경로로 추가                                 |
+| `POST /api/projects/:project`         | `crossRecallExcluded`, `permissionMode`(`ask`/`auto`) 변경 |
+| `GET/POST /api/sessions`              | 프로젝트별 대화 목록, 새 대화                              |
+| `GET /api/sessions/:session/messages` | 저장된 대화를 UIMessage로                                  |
+| `POST /api/chat?session=`             | 채팅 실행(SSE), 승인 재개 포함                             |
+
+## 구조
+
 ```
-
-The containerized application can be deployed to any platform that supports Docker, including:
-
-- AWS ECS
-- Google Cloud Run
-- Azure Container Apps
-- Digital Ocean App Platform
-- Fly.io
-- Railway
-
-### DIY Deployment
-
-If you're familiar with deploying Node applications, the built-in app server is production-ready.
-
-Make sure to deploy the output of `npm run build`
-
+app/
+  .server/     ManagedRuntime(agent.ts), HTTP 헬퍼
+  entry/       화면: 사이드바, 대화, 메시지, 마크다운, 승인 카드, API 클라이언트
+  components/  shadcn UI
+  routes/      _index.tsx, api/*
 ```
-├── package.json
-├── package-lock.json (or pnpm-lock.yaml, or bun.lockb)
-├── build/
-│   ├── client/    # Static assets
-│   └── server/    # Server-side code
-```
-
-### Tech Info
-
-- 이 프로젝트는 [tanstack file routes](https://reactrouter.com/how-to/file-route-conventions)를 사용중임.
-
-### Structure
-
-- app
-  - ai / Tanstack AI 관련된 로직
-  - components
-    - ui / shadcn generactive 한 로직
-  - lib
-    - utils.ts (tailwind cn 유틸)
-  - routes (file route converntion을 준수해서 작성)
-    - api (server action 만을 작성하는 방식, 재작자가 미리설계함, 필요에따라 변경가능)
-      - auth.tsx: ([oauth 방식의 openByok](https://tanstack.com/ai/latest/docs/adapters/openrouter#sign-in-with-openrouter-byok) 로 openai또한 같은흐름으로 재공함)
-      - chat.tsx : 유저와 에이전트의 채팅 로직이 작성될 예정이며 이 과정에서 [memory-agent](../../packages/memory-agent/package.json) 의 AI 메모리 기능이 들어갈 예정
-      - models.$model.tsx: https://tanstack.com/ai/latest/docs/advanced/runtime-adapter-switching#runtime-adapter-switching-with-type-safety 를 이용하여 다이나믹하게 사용중인 모델을 변경하는 기능을 재공할예정
-
-사용자의 설정은 ~/.context-generactice-agent 에 저장하는것으로 작성 예정
-
-## Styling
-
-This project comes with [Tailwind CSS](https://tailwindcss.com/) & [Shadcn](https://ui.shadcn.com/)
-
----
