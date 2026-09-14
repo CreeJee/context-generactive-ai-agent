@@ -23,6 +23,10 @@ export const NodeDetail = Schema.Struct({
   /** assistant: the run ended (abort/error) before this text was complete. */
   partial: Schema.optional(Schema.Boolean),
   reason: Schema.optional(Schema.String),
+  /** tool_result of an approval-gated call: who allowed or refused it, and why. */
+  permission: Schema.optional(
+    Schema.Struct({ decision: Schema.String, decidedBy: Schema.String, reason: Schema.String }),
+  ),
 });
 export type NodeDetail = typeof NodeDetail.Type;
 
@@ -193,6 +197,14 @@ const make = Effect.gen(function* () {
         .get(sessionId, kind);
       return row ? toNode(row) : null;
     },
+
+    /** The latest `limit` nodes of a kind in a session, oldest first. */
+    recentOfKind: (sessionId: string, kind: NodeKind, limit: number): Node[] =>
+      sqlite
+        .prepare("SELECT * FROM nodes WHERE session_id = ? AND kind = ? ORDER BY seq DESC LIMIT ?")
+        .all(sessionId, kind, limit)
+        .map(toNode)
+        .reverse(),
 
     /**
      * The tool_call or tool_result node for a tool call id in a session. A run resumed after an

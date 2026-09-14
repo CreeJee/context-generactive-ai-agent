@@ -6,6 +6,7 @@ import type {
   ToolPhaseCompleteInfo,
 } from "@tanstack/ai";
 import { Context, Effect, Layer, Option, Schema } from "effect";
+import { PermissionReviews } from "../permissions/reviews.ts";
 import { Nodes } from "./nodes.ts";
 
 export interface RunBinding {
@@ -66,6 +67,15 @@ function failureText(info: AfterToolCallInfo | ErrorInfo): string {
 
 const make = Effect.gen(function* () {
   const nodes = yield* Nodes;
+  const reviews = yield* PermissionReviews;
+
+  /** The review behind a gated call's result, when the permission gate decided it. */
+  const permissionOf = (sessionId: string, toolCallId: string) => {
+    const review = reviews.latest(sessionId, toolCallId);
+    return review
+      ? { decision: review.decision, decidedBy: review.decidedBy, reason: review.reason }
+      : undefined;
+  };
 
   return {
     /**
@@ -114,6 +124,7 @@ const make = Effect.gen(function* () {
                 toolName: call.detail.toolName,
                 toolCallId: message.toolCallId,
                 ok: !isErrorResult(parsed),
+                permission: permissionOf(binding.sessionId, message.toolCallId),
               },
               links: [{ kind: "returns", nodeId: call.id }],
             });
@@ -152,15 +163,25 @@ const make = Effect.gen(function* () {
             const result = info.results.find((entry) => entry.toolCallId === call.id);
             if (!result) continue; // awaiting approval or client execution
             if (nodes.toolNode(binding.sessionId, "tool_result", call.id)) continue;
-            // No after-call hook fires for a declined approval, so judge by the result itself.
-            const outcome = outcomes.get(call.id) ?? { ok: !isErrorResult(result.result) };
+            // A declined approval fires no after-call hook, and a call skipped by middleware reports
+            // ok; the result itself says whether the tool really ran.
+            const reported = outcomes.get(call.id);
+            const outcome = {
+              ok: (reported?.ok ?? true) && !isErrorResult(result.result),
+              error: reported?.error,
+            };
             nodes.append({
               ...base,
               // Keep the result in the run that made the call, so history shows them together.
               runId: callNode.runId ?? binding.runId,
               kind: "tool_result",
               text: outcome.ok ? resultText(result) : (outcome.error ?? resultText(result)),
-              detail: { toolName: call.function.name, toolCallId: call.id, ok: outcome.ok },
+              detail: {
+                toolName: call.function.name,
+                toolCallId: call.id,
+                ok: outcome.ok,
+                permission: permissionOf(binding.sessionId, call.id),
+              },
               links: [{ kind: "returns", nodeId: callNode.id }],
             });
           }

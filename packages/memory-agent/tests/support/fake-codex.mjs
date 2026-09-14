@@ -83,6 +83,18 @@ async function runTurn(threadId, turnId, input) {
     answer.result?.contentItems?.map((item) => item.text).join(", ") ??
     `error ${answer.error?.code}`;
 
+  if (thread.instructions.includes("You review one tool call")) {
+    // Permission reviewer: the verdict depends on markers in the reviewed arguments.
+    const reviewed = text.match(/Arguments \(JSON\): (.*)$/s)?.[1] ?? "";
+    if (reviewed.includes("broken-review")) return streamAnswer(threadId, turnId, "not a verdict");
+    const decision = reviewed.includes("block-me")
+      ? "block"
+      : reviewed.includes("ask-me")
+        ? "ask"
+        : "allow";
+    const reason = `검토 결과: ${decision}`;
+    return streamAnswer(threadId, turnId, JSON.stringify({ decision, reason }));
+  }
   if (input.length === 0 && lastHistory?.type === "function_call_output")
     return streamAnswer(threadId, turnId, `Resumed with ${lastHistory.output}`);
   if (text.includes("remember")) {
@@ -98,12 +110,14 @@ async function runTurn(threadId, turnId, input) {
     return streamAnswer(threadId, turnId, `Found: ${found.matches?.[0]?.snippet ?? "nothing"}`);
   }
   if (text.includes("shell")) {
+    // "shell: <command>" runs that command; plain "shell" runs a fixed one.
+    const command = text.match(/shell: (.*)$/s)?.[1]?.trim() ?? "printf approved-output";
     const answer = await callClient("item/tool/call", {
       threadId,
       turnId,
       callId: "call-shell",
       tool: "run_shell",
-      arguments: { command: "printf approved-output", reason: "check the shell" },
+      arguments: { command, reason: "check the shell" },
     });
     if (thread.interrupted) return;
     return streamAnswer(threadId, turnId, `Shell said ${toolText(answer)}`);
@@ -185,7 +199,12 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         : reply(id, { data: models.slice(0, 2), nextCursor: "page-2" });
     case "thread/start": {
       const threadId = `thread-${nextThread++}`;
-      threads.set(threadId, { model: params.model, history: [], interrupted: false });
+      threads.set(threadId, {
+        model: params.model,
+        instructions: params.baseInstructions ?? "",
+        history: [],
+        interrupted: false,
+      });
       return reply(id, { thread: { id: threadId } });
     }
     case "thread/inject_items":

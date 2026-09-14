@@ -15,6 +15,9 @@ import { Graph } from "./memory/graph.ts";
 import { Nodes } from "./memory/nodes.ts";
 import { Recorder } from "./memory/record.ts";
 import { MemorySearch } from "./memory/search.ts";
+import { PermissionClassifier } from "./permissions/classifier.ts";
+import { PermissionGate } from "./permissions/gate.ts";
+import { PermissionReviews } from "./permissions/reviews.ts";
 import { Projects } from "./projects/projects.ts";
 import { Sessions } from "./sessions/sessions.ts";
 import { ApprovedTools } from "./tools/approved.ts";
@@ -40,6 +43,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     Projects.layer,
     Nodes.layer,
     GlobalConfig.layer,
+    PermissionReviews.layer,
     options.embedder ?? Embedder.local,
     options.codex ?? CodexAppServer.layer,
   );
@@ -52,10 +56,16 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     CodexModels.layer,
     CodexChat.layer,
   );
-  const retrieval = Layer.merge(Indexer.layer, MemorySearch.layer);
+  const retrieval = Layer.mergeAll(Indexer.layer, MemorySearch.layer, PermissionClassifier.layer);
   return AgentChat.layer.pipe(
     Layer.provideMerge(
-      Layer.mergeAll(MemoryTools.layer, FileTools.layer, OutsideTools.layer, ApprovedTools.layer),
+      Layer.mergeAll(
+        MemoryTools.layer,
+        FileTools.layer,
+        OutsideTools.layer,
+        ApprovedTools.layer,
+        PermissionGate.layer,
+      ),
     ),
     Layer.provideMerge(retrieval),
     Layer.provideMerge(memory),

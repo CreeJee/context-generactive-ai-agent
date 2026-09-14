@@ -71,11 +71,29 @@ export { FileTools, fileToolNames } from "./tools/files.ts";
 export { OutsideTools, outsideReadToolNames } from "./tools/outside.ts";
 export { ApprovedTools } from "./tools/approved.ts";
 export {
+  PermissionReviewResponse,
   approvalToolDefinitions,
   deleteOutsideFileDefinition,
+  gatedToolNames,
+  permissionReviewInterrupt,
+  reviewedToolDefinitions,
   runShellDefinition,
   writeOutsideFileDefinition,
 } from "./tools/definitions.ts";
+export {
+  PermissionClassifier,
+  reviewInstructions,
+  type ReviewRequest,
+  type Verdict,
+} from "./permissions/classifier.ts";
+export { PermissionGate, type GateBinding } from "./permissions/gate.ts";
+export {
+  PermissionReview,
+  PermissionReviews,
+  ReviewDecider,
+  ReviewDecision,
+  type NewPermissionReview,
+} from "./permissions/reviews.ts";
 export {
   commandEnvironment,
   defaultTimeoutSeconds,

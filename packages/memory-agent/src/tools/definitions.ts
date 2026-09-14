@@ -5,7 +5,7 @@
  * TanStack can match an approval interrupt to its tool by schema hash and let the user answer it.
  * The server implementations live in `approved.ts`.
  */
-import { toolDefinition } from "@tanstack/ai";
+import { defineInterrupt, toolDefinition } from "@tanstack/ai";
 import { Schema } from "effect";
 import { toToolSchema } from "./schema.ts";
 
@@ -57,33 +57,78 @@ export const DeleteOutsideFileInput = Schema.Struct({
   ),
 });
 
-export const runShellDefinition = toolDefinition({
+const runShell = {
   name: "run_shell",
   description:
-    "Run a shell command in the project on the host, for builds, tests, git and other programs. The user approves each run. Returns exit code, signal and output (long output keeps its start and end).",
+    "Run a shell command in the project on the host, for builds, tests, git and other programs. Each run is approved first, by the user or by the permission review. Returns exit code, signal and output (long output keeps its start and end).",
   inputSchema: toToolSchema(RunShellInput),
-  needsApproval: true,
-});
+} as const;
 
-export const writeOutsideFileDefinition = toolDefinition({
+const writeOutsideFile = {
   name: "write_outside_file",
   description:
-    "Create a text file outside the project, or replace one when expectedSha256 is given. The user approves each write. Credential files are refused even with approval.",
+    "Create a text file outside the project, or replace one when expectedSha256 is given. Each write is approved first. Credential files are refused even with approval.",
   inputSchema: toToolSchema(WriteOutsideFileInput),
-  needsApproval: true,
-});
+} as const;
 
-export const deleteOutsideFileDefinition = toolDefinition({
+const deleteOutsideFile = {
   name: "delete_outside_file",
   description:
-    "Delete one text file outside the project whose content still matches expectedSha256. The user approves each deletion.",
+    "Delete one text file outside the project whose content still matches expectedSha256. Each deletion is approved first.",
   inputSchema: toToolSchema(DeleteOutsideFileInput),
+} as const;
+
+/** Names of the tools that never run without an approval, in either permission mode. */
+export const gatedToolNames: ReadonlySet<string> = new Set([
+  runShell.name,
+  writeOutsideFile.name,
+  deleteOutsideFile.name,
+]);
+
+export const runShellDefinition = toolDefinition({ ...runShell, needsApproval: true });
+export const writeOutsideFileDefinition = toolDefinition({
+  ...writeOutsideFile,
+  needsApproval: true,
+});
+export const deleteOutsideFileDefinition = toolDefinition({
+  ...deleteOutsideFile,
   needsApproval: true,
 });
 
-/** Register these with `useChat({ tools })` so approval requests can be answered. */
+/**
+ * `ask` mode: TanStack pauses before each call until the user answers.
+ * Register these with `useChat({ tools })` so approval requests can be answered.
+ */
 export const approvalToolDefinitions = [
   runShellDefinition,
   writeOutsideFileDefinition,
   deleteOutsideFileDefinition,
 ] as const;
+
+/**
+ * `auto` mode: the same tools without TanStack's static approval. The permission review
+ * middleware decides each call instead, and asks the user through {@link permissionReviewInterrupt}.
+ */
+export const reviewedToolDefinitions = [
+  toolDefinition({ ...runShell, needsApproval: false }),
+  toolDefinition({ ...writeOutsideFile, needsApproval: false }),
+  toolDefinition({ ...deleteOutsideFile, needsApproval: false }),
+] as const;
+
+const PermissionReviewPayload = Schema.Struct({
+  toolCallId: Schema.String,
+  toolName: Schema.String,
+  /** The call's arguments as JSON, exactly as the model sent them. */
+  arguments: Schema.String,
+  /** Why the review wants the user to decide. */
+  reason: Schema.String,
+});
+
+export const PermissionReviewResponse = Schema.Struct({ approved: Schema.Boolean });
+
+/** `auto` mode: the review could not allow a call on its own and asks the user. */
+export const permissionReviewInterrupt = defineInterrupt({
+  id: "permission-review",
+  payloadSchema: toToolSchema(PermissionReviewPayload),
+  responseSchema: toToolSchema(PermissionReviewResponse),
+});
