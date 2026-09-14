@@ -1,44 +1,90 @@
-import { ImageIcon, PencilIcon, SendIcon, XIcon } from "lucide-react";
+import {
+  CheckIcon,
+  CircleAlertIcon,
+  CircleXIcon,
+  Clock3Icon,
+  ImageIcon,
+  PencilIcon,
+  PencilLineIcon,
+  SendIcon,
+  XIcon,
+} from "lucide-react";
 import type { DeliveryVia, QueuedMessage } from "memory-agent/definitions";
-import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
+import { Kbd, KbdGroup } from "~/components/ui/kbd";
+import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
 
 const deliveryLabel = (via: DeliveryVia) => {
   switch (via) {
     case "tool_boundary":
-      return "전달됨 · 도구 호출 뒤";
+      return "도구 호출 뒤 전달됨";
     case "steer":
-      return "전달됨 · 바로";
+      return "바로 전달됨";
     case "next_turn":
-      return "전달됨 · 다음 턴";
+      return "다음 턴으로 전달됨";
   }
 };
 
-function StateBadge({ message, editingHere }: { message: QueuedMessage; editingHere: boolean }) {
+/** Icon, colour and short label for each state; delivery says only "delivered", never "done". */
+function stateView(message: QueuedMessage, editingHere: boolean) {
   const { state } = message;
   switch (state.kind) {
     case "waiting":
-      return <Badge variant="outline">대기 중</Badge>;
+      return { icon: Clock3Icon, tone: "text-muted-foreground", label: null };
     case "editing":
-      return <Badge variant="secondary">{editingHere ? "편집 중" : "편집 중 · 저장 안 됨"}</Badge>;
+      return {
+        icon: PencilLineIcon,
+        tone: "text-primary",
+        label: editingHere ? "편집 중" : "편집 중 · 저장 안 됨",
+      };
     case "held":
-      return (
-        <Badge variant="outline" className="border-amber-500/60 text-amber-700 dark:text-amber-400">
-          확인 필요{state.draft !== null ? " · 저장 안 된 편집" : ""}
-        </Badge>
-      );
+      return {
+        icon: CircleAlertIcon,
+        tone: "text-amber-600 dark:text-amber-400",
+        label: state.draft === null ? "확인 필요" : "확인 필요 · 저장 안 된 편집",
+      };
     case "delivered":
-      // Delivery is not a promise that the agent followed it, so the label says only "delivered".
-      return <Badge variant="secondary">{deliveryLabel(state.via)}</Badge>;
+      return { icon: CheckIcon, tone: "text-muted-foreground", label: deliveryLabel(state.via) };
     case "failed":
-      return <Badge variant="destructive">전달 실패</Badge>;
+      return { icon: CircleXIcon, tone: "text-destructive", label: "전달 실패" };
   }
 }
 
+function RowAction({
+  label,
+  disabled,
+  onClick,
+  children,
+}: {
+  label: string;
+  disabled: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            disabled={disabled}
+            aria-label={label}
+            onClick={onClick}
+          />
+        }
+      >
+        {children}
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 /**
- * Messages written while a run answered, in the order they will reach the agent. A message being
- * edited, or one held for confirmation, stops everything after it.
+ * The top of the composer: messages written while a run answered, in the order they reach the
+ * agent. A message being edited, or one held for confirmation, stops everything after it.
  */
 export function QueuePanel({
   items,
@@ -60,71 +106,82 @@ export function QueuePanel({
     (message) => !(message.state.kind === "delivered" && message.state.via === "next_turn"),
   );
   if (shown.length === 0) return null;
+  const waiting = shown.filter((message) => message.state.kind !== "delivered").length;
   const busy = editingId !== null || readOnly;
+
   return (
-    <div className="mx-auto mb-3 flex max-w-3xl flex-col gap-1.5">
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>보낸 뒤 기다리는 메시지</span>
-        <span>Alt+↑ 편집 · 편집 중 Enter 저장 · Esc 제거</span>
+    <div className="flex w-full flex-col border-b">
+      <div className="flex items-center justify-between px-3 pt-2 pb-1 text-[0.6875rem] text-muted-foreground">
+        <span className="font-medium">
+          {waiting > 0 ? `보낼 메시지 ${waiting}` : "답변 중에 전달한 메시지"}
+        </span>
+        {waiting > 0 && !busy && (
+          <span className="flex items-center gap-1">
+            <KbdGroup>
+              <Kbd>⌥</Kbd>
+              <Kbd>↑</Kbd>
+            </KbdGroup>
+            편집
+          </span>
+        )}
       </div>
-      {shown.map((message) => {
-        const editingHere = message.id === editingId;
-        const kind = message.state.kind;
-        return (
-          <div
-            key={message.id}
-            className={cn(
-              "flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm",
-              editingHere && "border-primary ring-1 ring-primary/40",
-              kind === "delivered" && "opacity-60",
-            )}
-          >
-            <StateBadge message={message} editingHere={editingHere} />
-            <span className="min-w-0 flex-1 truncate">
-              {message.text || "(이미지만)"}
-              {message.attachmentIds.length > 0 && (
-                <span className="ml-1.5 inline-flex items-center gap-0.5 text-xs text-muted-foreground">
-                  <ImageIcon className="size-3" />
-                  {message.attachmentIds.length}
-                </span>
+      <ul className="flex max-h-40 flex-col overflow-y-auto px-1.5 pb-1.5">
+        {shown.map((message) => {
+          const editingHere = message.id === editingId;
+          const kind = message.state.kind;
+          const view = stateView(message, editingHere);
+          const Icon = view.icon;
+          return (
+            <li
+              key={message.id}
+              className={cn(
+                "group/row flex h-8 items-center gap-2 rounded-md px-1.5 text-sm transition-colors hover:bg-muted/60",
+                editingHere && "bg-primary/5 hover:bg-primary/10",
+                kind === "delivered" && "text-muted-foreground",
               )}
-            </span>
-            {(kind === "held" || kind === "failed") && (
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={busy}
-                onClick={() => onConfirm(message)}
-              >
-                <SendIcon />
-                보내기
-              </Button>
-            )}
-            {(kind === "waiting" || kind === "held" || kind === "editing") && !editingHere && (
-              <Button
-                size="icon-xs"
-                variant="ghost"
-                disabled={busy}
-                aria-label="편집"
-                onClick={() => onEdit(message)}
-              >
-                <PencilIcon />
-              </Button>
-            )}
-            {kind !== "delivered" && (
-              <Button
-                size="icon-xs"
-                variant="ghost"
-                disabled={readOnly}
-                aria-label="제거"
-                onClick={() => onRemove(message)}
-              >
-                <XIcon />
-              </Button>
-            )}
-          </div>
-        );
-      })}
+            >
+              <Icon className={cn("size-3.5 shrink-0", view.tone)} />
+              <span className="min-w-0 flex-1 truncate">
+                {message.text || "이미지"}
+                {message.attachmentIds.length > 0 && (
+                  <span className="ml-1.5 inline-flex translate-y-px items-center gap-0.5 text-xs text-muted-foreground">
+                    <ImageIcon className="size-3" />
+                    {message.attachmentIds.length}
+                  </span>
+                )}
+              </span>
+              {view.label && (
+                <span className={cn("shrink-0 text-xs", view.tone)}>{view.label}</span>
+              )}
+              {(kind === "held" || kind === "failed") && (
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => onConfirm(message)}
+                >
+                  <SendIcon />
+                  보내기
+                </Button>
+              )}
+              {kind !== "delivered" &&
+                !editingHere && (
+                  // Row actions stay out of the way until the row is hovered or focused.
+                  <div className="flex shrink-0 items-center opacity-0 transition-opacity group-focus-within/row:opacity-100 group-hover/row:opacity-100">
+                    {kind !== "failed" && (
+                      <RowAction label="편집" disabled={busy} onClick={() => onEdit(message)}>
+                        <PencilIcon />
+                      </RowAction>
+                    )}
+                    <RowAction label="지우기" disabled={readOnly} onClick={() => onRemove(message)}>
+                      <XIcon />
+                    </RowAction>
+                  </div>
+                )}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

@@ -8,7 +8,6 @@ import {
 } from "memory-agent/definitions";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
-import { Button } from "~/components/ui/button";
 import {
   Empty,
   EmptyDescription,
@@ -16,9 +15,15 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "~/components/ui/empty";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupTextarea,
+} from "~/components/ui/input-group";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { Spinner } from "~/components/ui/spinner";
-import { Textarea } from "~/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
 import {
   ApprovalCard,
@@ -29,6 +34,7 @@ import {
 import { acceptedImageTypes, renumberReferences, useDraftImages } from "./draft-images";
 import { DraftImageTray } from "./images";
 import { api, type QueuedMessage } from "./api";
+import { ComposerShortcuts, ComposerStatus, type ComposerMode } from "./composer-status";
 import { MessageView } from "./message";
 import { isPending, useMessageQueue } from "./message-queue";
 import { QueuePanel } from "./queue-panel";
@@ -175,6 +181,13 @@ function ChatPanel({
   const uploading = draftImages.images.some((image) => image.status === "uploading");
   const failed = draftImages.images.some((image) => image.status === "failed");
   const editing = composer.kind === "editing" ? composer : null;
+  const composerMode: ComposerMode = editing
+    ? { kind: "editing" }
+    : waitingForApproval
+      ? { kind: "approval" }
+      : generating
+        ? { kind: "generating" }
+        : { kind: "idle" };
   const canSend =
     (draft.trim().length > 0 || ready.length > 0) &&
     !uploading &&
@@ -423,137 +436,166 @@ function ChatPanel({
         </div>
       </ScrollArea>
 
-      <div className="border-t bg-background px-6 py-4">
-        <ReadOnlyBar lease={lease} refused={refused} onContinue={onContinue} />
-        <QueuePanel
-          items={queue.items}
-          editingId={editing?.id ?? null}
-          readOnly={readOnly}
-          onEdit={startEdit}
-          onRemove={(message) => void removeQueued(message)}
-          onConfirm={(message) => void confirmQueued(message)}
-        />
-        {!editing && (
-          <DraftImageTray
-            images={draftImages.images}
-            onReference={insertReference}
-            onRemove={draftImages.remove}
-          />
-        )}
-        {(notice ?? failed) && (
-          <p className="mx-auto max-w-3xl pb-2 text-xs text-destructive">
-            {notice ?? "올리지 못한 이미지가 있어요. 빼고 보내 주세요."}
-          </p>
-        )}
-        {!readOnly && (
-          <p className="mx-auto max-w-3xl pb-1.5 text-xs text-muted-foreground">
-            {editing
-              ? "대기 메시지 편집 중 · Enter 저장 · Esc 제거 (편집을 끝낸 뒤 스티어링할 수 있어요)"
-              : generating
-                ? "답변 중 · Enter 대기열에 넣기(다음 도구 호출 때 전달) · Ctrl+Shift+Enter 바로 전달(스티어링)"
-                : null}
-          </p>
-        )}
-        <form
-          className="mx-auto flex max-w-3xl items-end gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void submit("queue");
-          }}
-        >
-          <input
-            ref={filePicker}
-            type="file"
-            accept={acceptedImageTypes}
-            multiple
-            hidden
-            onChange={(event) => {
-              attach(imageFiles(event.target.files));
-              event.target.value = "";
-            }}
-          />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-lg"
-            disabled={!imagesSupported || readOnly || editing !== null}
-            title={imagesSupported ? "이미지 첨부" : "선택한 모델은 이미지를 읽지 못해요"}
-            aria-label="이미지 첨부"
-            onClick={() => filePicker.current?.click()}
-          >
-            <ImagePlusIcon />
-          </Button>
-          <Textarea
-            ref={textarea}
-            value={draft}
-            disabled={readOnly}
-            onChange={(event) => setDraft(event.target.value)}
-            onPaste={(event) => {
-              const files = imageFiles(event.clipboardData.files);
-              if (files.length === 0) return;
-              event.preventDefault();
-              attach(files);
-            }}
-            onKeyDown={(event) => {
-              // Enter that confirms Korean IME input, and Esc that cancels it, belong to the IME.
-              if (event.nativeEvent.isComposing) return;
-              const steerKeys = event.shiftKey && (event.ctrlKey || event.metaKey);
-              if (event.key === "Enter" && steerKeys) {
-                event.preventDefault();
-                void submit("steer");
-              } else if (event.key === "Enter" && !event.shiftKey) {
+      <div className="bg-background px-6 pt-2 pb-4">
+        <div className="mx-auto max-w-3xl">
+          {(notice ?? failed) && (
+            <p className="px-1 pb-1.5 text-xs text-destructive">
+              {notice ?? "올리지 못한 이미지가 있어요. 빼고 보내 주세요."}
+            </p>
+          )}
+          {lease.state === "other" || lease.state === "free" ? (
+            <ReadOnlyBar lease={lease} refused={refused} onContinue={onContinue} />
+          ) : (
+            <form
+              onSubmit={(event) => {
                 event.preventDefault();
                 void submit("queue");
-              } else if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
-                // Ctrl+↑/↓ belong to macOS Mission Control, so the web uses Alt(⌥).
-                event.preventDefault();
-                pickQueued(event.key === "ArrowUp" ? "up" : "down");
-              } else if (event.key === "Escape") {
-                // In edit mode Esc removes the queued message and never reaches the run.
-                if (editing) void finishEdit("remove");
-                // Esc clears a draft (text and images); with nothing drafted it stops the run.
-                else if (draft.length > 0 || draftImages.images.length > 0) {
-                  setDraft("");
-                  draftImages.clear();
-                  setNotice(null);
-                } else if (generating) void cancel();
-              }
-            }}
-            placeholder={
-              readOnly
-                ? "읽기 전용이에요"
-                : waitingForApproval
-                  ? "위의 승인 요청에 먼저 답해 주세요"
-                  : "메시지를 입력하세요 (Enter 전송 · Shift+Enter 줄바꿈 · 이미지 붙여넣기/끌어놓기)"
-            }
-            className={cn(
-              "max-h-48 min-h-8 resize-none px-2 py-1",
-              editing && "ring-2 ring-primary/40",
-            )}
-            rows={1}
-          />
-          {generating && (
-            <Button
-              type="button"
-              variant="outline"
-              size="icon-lg"
-              disabled={run.cancelling || readOnly}
-              onClick={() => void cancel()}
-              aria-label={run.cancelling ? "멈추는 중" : "중지"}
-              title={run.cancelling ? "멈추는 중" : "중지 (입력창이 비었을 때 Esc)"}
+              }}
             >
-              {run.cancelling ? <Spinner /> : <SquareIcon />}
-            </Button>
+              <input
+                ref={filePicker}
+                type="file"
+                accept={acceptedImageTypes}
+                multiple
+                hidden
+                onChange={(event) => {
+                  attach(imageFiles(event.target.files));
+                  event.target.value = "";
+                }}
+              />
+              <InputGroup
+                className={cn(
+                  "h-auto flex-col rounded-xl bg-card shadow-xs dark:bg-card",
+                  editing && "border-primary/60 ring-2 ring-primary/15",
+                )}
+              >
+                <QueuePanel
+                  items={queue.items}
+                  editingId={editing?.id ?? null}
+                  readOnly={readOnly}
+                  onEdit={startEdit}
+                  onRemove={(message) => void removeQueued(message)}
+                  onConfirm={(message) => void confirmQueued(message)}
+                />
+                {!editing && (
+                  <DraftImageTray
+                    className="w-full px-3 pt-3"
+                    images={draftImages.images}
+                    onReference={insertReference}
+                    onRemove={draftImages.remove}
+                  />
+                )}
+                <InputGroupTextarea
+                  ref={textarea}
+                  value={draft}
+                  disabled={readOnly}
+                  onChange={(event) => setDraft(event.target.value)}
+                  onPaste={(event) => {
+                    const files = imageFiles(event.clipboardData.files);
+                    if (files.length === 0) return;
+                    event.preventDefault();
+                    attach(files);
+                  }}
+                  onKeyDown={(event) => {
+                    // Enter that confirms Korean IME input, and Esc that cancels it, belong to the IME.
+                    if (event.nativeEvent.isComposing) return;
+                    const steerKeys = event.shiftKey && (event.ctrlKey || event.metaKey);
+                    if (event.key === "Enter" && steerKeys) {
+                      event.preventDefault();
+                      void submit("steer");
+                    } else if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      void submit("queue");
+                    } else if (
+                      event.altKey &&
+                      (event.key === "ArrowUp" || event.key === "ArrowDown")
+                    ) {
+                      // Ctrl+↑/↓ belong to macOS Mission Control, so the web uses Alt(⌥).
+                      event.preventDefault();
+                      pickQueued(event.key === "ArrowUp" ? "up" : "down");
+                    } else if (event.key === "Escape") {
+                      // In edit mode Esc removes the queued message and never reaches the run.
+                      if (editing) void finishEdit("remove");
+                      // Esc clears a draft (text and images); with nothing drafted it stops the run.
+                      else if (draft.length > 0 || draftImages.images.length > 0) {
+                        setDraft("");
+                        draftImages.clear();
+                        setNotice(null);
+                      } else if (generating) void cancel();
+                    }
+                  }}
+                  placeholder={
+                    waitingForApproval
+                      ? "위의 승인 요청에 먼저 답해 주세요"
+                      : editing
+                        ? "고친 내용을 저장하려면 Enter"
+                        : generating
+                          ? "답변 중에도 이어서 보낼 수 있어요"
+                          : "메시지를 입력하세요 · 이미지는 붙여넣거나 끌어다 놓기"
+                  }
+                  className="max-h-48 min-h-11 px-3.5 pt-3 pb-1 text-sm"
+                  rows={1}
+                />
+                <InputGroupAddon align="block-end" className="gap-2 px-2 pb-2">
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <InputGroupButton
+                          size="icon-sm"
+                          variant="ghost"
+                          className="rounded-full"
+                          disabled={!imagesSupported || readOnly || editing !== null}
+                          aria-label="이미지 첨부"
+                          onClick={() => filePicker.current?.click()}
+                        />
+                      }
+                    >
+                      <ImagePlusIcon />
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {imagesSupported ? "이미지 첨부" : "선택한 모델은 이미지를 읽지 못해요"}
+                    </TooltipContent>
+                  </Tooltip>
+                  <ComposerStatus mode={composerMode} />
+                  <div className="ml-auto flex items-center gap-3">
+                    <ComposerShortcuts mode={composerMode} />
+                    {generating && !editing && (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <InputGroupButton
+                              size="icon-sm"
+                              variant="outline"
+                              className="rounded-full"
+                              disabled={run.cancelling || readOnly}
+                              aria-label={run.cancelling ? "멈추는 중" : "중지"}
+                              onClick={() => void cancel()}
+                            />
+                          }
+                        >
+                          {run.cancelling ? <Spinner /> : <SquareIcon className="fill-current" />}
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          {run.cancelling ? "멈추는 중" : "중지 · 입력창이 비었을 때 Esc"}
+                        </TooltipContent>
+                      </Tooltip>
+                    )}
+                    <InputGroupButton
+                      type="submit"
+                      size="icon-sm"
+                      variant="default"
+                      className="rounded-full"
+                      disabled={editing ? readOnly : !canSend}
+                      aria-label={editing ? "저장" : generating ? "대기열에 넣기" : "전송"}
+                    >
+                      {editing ? <CheckIcon /> : <ArrowUpIcon />}
+                    </InputGroupButton>
+                  </div>
+                </InputGroupAddon>
+              </InputGroup>
+            </form>
           )}
-          <Button
-            type="submit"
-            size="icon-lg"
-            disabled={editing ? readOnly : !canSend}
-            aria-label={editing ? "저장" : generating ? "대기열에 넣기" : "전송"}
-          >
-            {editing ? <CheckIcon /> : <ArrowUpIcon />}
-          </Button>
-        </form>
+        </div>
       </div>
     </div>
   );

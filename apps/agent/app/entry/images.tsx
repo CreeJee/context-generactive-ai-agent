@@ -153,14 +153,16 @@ export function DraftImageTray({
   images,
   onReference,
   onRemove,
+  className,
 }: {
   images: readonly DraftImage[];
   onReference: (number: number) => void;
   onRemove: (key: string) => void;
+  className?: string;
 }) {
   if (images.length === 0) return null;
   return (
-    <AttachmentGroup className="mx-auto max-w-3xl pb-2">
+    <AttachmentGroup className={className}>
       {images.map((image) => {
         const card = draftCard(image);
         return (
