@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { Layer } from "effect";
 import { AgentChat } from "./agent/chat.ts";
+import { ChatState } from "./chat-state/chat-state.ts";
 import { Attachments } from "./attachments/attachments.ts";
 import { CodexAccount } from "./codex/account.ts";
 import { CodexAppServer } from "./codex/app-server.ts";
@@ -57,6 +58,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     CodexAccount.layer,
     CodexModels.layer,
     CodexChat.layer,
+    ChatState.layer,
   );
   const retrieval = Layer.mergeAll(Indexer.layer, MemorySearch.layer, PermissionClassifier.layer);
   return AgentChat.layer.pipe(

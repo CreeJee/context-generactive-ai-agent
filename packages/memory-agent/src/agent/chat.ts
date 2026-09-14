@@ -7,6 +7,7 @@ import {
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import { Attachments } from "../attachments/attachments.ts";
 import { attachmentIdOf } from "../attachments/urls.ts";
+import { ChatState } from "../chat-state/chat-state.ts";
 import { CodexAccount } from "../codex/account.ts";
 import { CodexChat } from "../codex/chat.ts";
 import { CodexModels } from "../codex/models.ts";
@@ -162,6 +163,7 @@ const make = Effect.gen(function* () {
   const projects = yield* Projects;
   const indexer = yield* Indexer;
   const attachments = yield* Attachments;
+  const chatState = yield* ChatState;
 
   const indexInBackground = (): ChatMiddleware => {
     // Embedding can take seconds (the model loads on first use); never hold the response for it.
@@ -190,7 +192,9 @@ const make = Effect.gen(function* () {
           chatParamsFromRequestBody(await request.json()),
         ).pipe(Effect.option);
         if (Option.isNone(params)) return json(400, { error: "invalid_chat_request" });
-        const { messages, threadId, runId, parentRunId, resume } = params.value;
+        // The session is the thread: chat state, codex turn parking and hydration all key on it.
+        const { messages, runId, parentRunId, resume } = params.value;
+        const threadId = sessionId;
 
         // A new user turn ends the list; a continuation (tool result, approval) does not.
         const turn = Option.getOrNull(Option.map(decodeUserTurn(messages.at(-1)), toTurn));
@@ -217,12 +221,13 @@ const make = Effect.gen(function* () {
         const abortController = new AbortController();
         request.signal.addEventListener("abort", () => abortController.abort(), { once: true });
         const middleware: Array<ChatMiddleware<unknown, typeof permissionReviewInterrupt>> = [
+          chatState.middleware(),
           recorder.forRun({ projectId, sessionId, runId, userNodeId: userNode.id }),
           indexInBackground(),
         ];
-        // The gate goes first so a refused call is skipped before anything else sees it run.
+        // The gate runs right after chat state, so a refused call is skipped before tools run.
         if (project.permissionMode === "auto")
-          middleware.unshift(permissionGate.forRun({ project, sessionId, selection }));
+          middleware.splice(1, 0, permissionGate.forRun({ project, sessionId, selection }));
         const stream = chat({
           adapter: codexChat.adapter(selection),
           messages,
@@ -247,6 +252,17 @@ const make = Effect.gen(function* () {
         });
         // Codex failures after this point surface in the stream as RUN_ERROR.
         return toServerSentEventsResponse(stream, { abortController });
+      }),
+
+    /**
+     * GET handler a reloaded page hydrates from (`?threadId=`): the stored transcript, a run still
+     * generating, and pending approvals, so an unanswered approval card comes back.
+     */
+    hydrate: (request: Request, sessionId: string) =>
+      Effect.gen(function* () {
+        const session = yield* Effect.either(sessions.get(sessionId));
+        if (session._tag === "Left") return json(404, { error: "session_not_found" });
+        return yield* Effect.promise(() => chatState.hydrate(request, sessionId));
       }),
   };
 });

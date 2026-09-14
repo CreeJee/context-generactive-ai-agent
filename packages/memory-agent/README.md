@@ -22,7 +22,8 @@ src/
   shell/        호스트 셸 실행(프로세스 그룹, timeout, 출력 앞뒤 보존)
   permissions/  auto 모드: 분류 모델, 판정 기록, 게이트 middleware
   tools/        모델이 쓰는 도구 정의와 구현
-  agent/        POST /api/chat 핸들러, 저장된 대화를 UIMessage로 변환
+  agent/        /api/chat 핸들러(POST 실행, GET 복원), 저장된 대화를 UIMessage로 변환
+  chat-state/   TanStack AI persistence의 SQLite 저장소(대화·run·interrupt·metadata)
   testing/      테스트용 어댑터·임베더
   layers.ts     모든 서비스를 저장 루트 하나로 조립하는 Effect Layer
 ```
@@ -59,6 +60,14 @@ src/
   - 판정과 사용자 답은 `permission_reviews`에 쌓이고, tool result 노드 `detail.permission`에 근거로 남습니다.
 
 승인 대기로 HTTP 요청이 끝나도 codex 턴은 `TurnParking`에 threadId로 보관되어, 재개 요청이 같은 턴을 이어갑니다.
+
+## 대화 상태와 새로고침
+
+- TanStack 대화 threadId는 항상 세션 id입니다(클라이언트가 보낸 값은 무시).
+- `ChatState`가 `@tanstack/ai-persistence`의 `withPersistence` middleware로 run마다 대화(ModelMessage)·run 상태·interrupt를 SQLite(`chat_threads`, `chat_runs`, `chat_interrupts`, `chat_metadata`)에 저장합니다.
+- 새로고침한 페이지는 `useChat({ persistence: true })`가 `GET /api/chat`으로 `reconstructChat` 결과를 받아 대화와 대기 중인 승인을 되살립니다. 다른 세션의 thread는 읽을 수 없습니다.
+- 이 저장소는 화면 복원용이고 기억의 원본은 여전히 `nodes`입니다. chat state가 없는 예전 세션은 노드에서 대화를 다시 만들어 엽니다.
+- 저장소 계약은 `@tanstack/ai-persistence/testkit`의 conformance 테스트로 확인합니다.
 
 ## 이미지
 

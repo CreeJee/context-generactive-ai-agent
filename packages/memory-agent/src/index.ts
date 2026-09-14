@@ -6,6 +6,8 @@ export {
   workspaceInstructions,
 } from "./agent/chat.ts";
 export { sessionMessages } from "./agent/history.ts";
+export { ChatState } from "./chat-state/chat-state.ts";
+export { sqliteChatPersistence } from "./chat-state/persistence.ts";
 
 export { StorageRoot, defaultStorageRoot } from "./config/storage-root.ts";
 export { GlobalConfig, Settings } from "./config/global-config.ts";

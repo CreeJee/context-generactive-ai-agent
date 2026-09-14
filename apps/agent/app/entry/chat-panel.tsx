@@ -1,4 +1,4 @@
-import { fetchServerSentEvents, useChat, type UIMessage } from "@tanstack/ai-react";
+import { fetchServerSentEvents, useChat } from "@tanstack/ai-react";
 import { ArrowUpIcon, ImagePlusIcon, MessageSquareIcon, SquareIcon } from "lucide-react";
 import {
   approvalToolDefinitions,
@@ -19,7 +19,6 @@ import { ScrollArea } from "~/components/ui/scroll-area";
 import { Spinner } from "~/components/ui/spinner";
 import { Textarea } from "~/components/ui/textarea";
 import { cn } from "~/lib/utils";
-import { api } from "./api";
 import {
   ApprovalCard,
   toPendingApproval,
@@ -36,13 +35,15 @@ const approvalInterrupts: ApprovalInterrupts = [permissionReviewInterrupt];
 const imageFiles = (files: FileList | null) =>
   Array.from(files ?? []).filter((file) => file.type.startsWith("image/"));
 
-function Conversation({
+/**
+ * One session's live conversation. The server owns the transcript: on mount the chat hydrates it by
+ * session id, together with any approval still waiting, so a reload shows the same card again.
+ */
+export function ChatPanel({
   sessionId,
-  history,
   imagesSupported,
 }: {
   sessionId: string;
-  history: UIMessage[];
   imagesSupported: boolean;
 }) {
   const [draft, setDraft] = useState("");
@@ -60,7 +61,8 @@ function Conversation({
     ApprovalInterrupts
   >({
     connection: fetchServerSentEvents(`/api/chat?session=${encodeURIComponent(sessionId)}`),
-    initialMessages: history,
+    threadId: sessionId,
+    persistence: true,
     // The same definitions the server uses, so approval requests can be matched and answered:
     // tool approvals in `ask` mode, permission reviews in `auto` mode.
     tools: approvalToolDefinitions,
@@ -289,51 +291,5 @@ function Conversation({
         </form>
       </div>
     </div>
-  );
-}
-
-/** Loads a session's stored transcript, then hands it to the live conversation. */
-export function ChatPanel({
-  sessionId,
-  imagesSupported,
-}: {
-  sessionId: string;
-  imagesSupported: boolean;
-}) {
-  const [history, setHistory] = useState<UIMessage[] | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    setHistory(null);
-    setFailed(false);
-    api.messages(sessionId).then(
-      (messages) => active && setHistory(messages),
-      () => active && setFailed(true),
-    );
-    return () => {
-      active = false;
-    };
-  }, [sessionId]);
-
-  if (failed)
-    return (
-      <Alert variant="destructive" className="m-6 w-auto">
-        <AlertTitle>대화 기록을 불러오지 못했어요</AlertTitle>
-      </Alert>
-    );
-  if (!history)
-    return (
-      <div className="flex h-full items-center justify-center text-muted-foreground">
-        <Spinner />
-      </div>
-    );
-  return (
-    <Conversation
-      key={sessionId}
-      sessionId={sessionId}
-      history={history}
-      imagesSupported={imagesSupported}
-    />
   );
 }

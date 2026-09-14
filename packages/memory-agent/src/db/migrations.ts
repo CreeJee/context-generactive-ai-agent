@@ -114,4 +114,53 @@ export const migrations: readonly string[] = [
     PRIMARY KEY (node_id, position)
   );
   `,
+  `
+  -- TanStack AI chat state (@tanstack/ai-persistence): the UI transcript, run lifecycle and
+  -- pending approvals of each thread. Thread ids are session ids. Nodes stay the evidence; these
+  -- rows are what a reloaded page and a resumed run continue from. Times are epoch milliseconds.
+  CREATE TABLE chat_threads (
+    thread_id TEXT PRIMARY KEY,
+    messages TEXT NOT NULL CHECK (json_valid(messages)),
+    updated_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE chat_runs (
+    run_id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('running', 'interrupted', 'completed', 'failed', 'aborted')),
+    started_at INTEGER NOT NULL,
+    finished_at INTEGER,
+    error TEXT,
+    error_code TEXT,
+    usage TEXT CHECK (usage IS NULL OR json_valid(usage)),
+    sandbox_key TEXT,
+    detached_since INTEGER,
+    cancel_requested INTEGER CHECK (cancel_requested IS NULL OR cancel_requested IN (0, 1)),
+    driver_epoch INTEGER
+  );
+  CREATE INDEX chat_runs_thread_status ON chat_runs(thread_id, status, started_at);
+  CREATE INDEX chat_runs_detached ON chat_runs(status, detached_since);
+
+  CREATE TABLE chat_interrupts (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    interrupt_id TEXT NOT NULL UNIQUE,
+    run_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'resolved', 'cancelled')),
+    requested_at INTEGER NOT NULL,
+    resolved_at INTEGER,
+    payload TEXT NOT NULL CHECK (json_valid(payload)),
+    -- NULL means no response; a JSON null response is stored as the text 'null'.
+    response TEXT CHECK (response IS NULL OR json_valid(response))
+  );
+  CREATE INDEX chat_interrupts_thread ON chat_interrupts(thread_id, requested_at, seq);
+  CREATE INDEX chat_interrupts_run ON chat_interrupts(run_id, requested_at, seq);
+
+  CREATE TABLE chat_metadata (
+    namespace TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL CHECK (json_valid(value)),
+    PRIMARY KEY (namespace, key)
+  );
+  `,
 ];

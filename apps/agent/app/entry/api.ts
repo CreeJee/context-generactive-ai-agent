@@ -1,4 +1,3 @@
-import type { UIMessage } from "@tanstack/ai-react";
 import type {
   Attachment,
   AuthState,
@@ -63,8 +62,6 @@ export const api = {
   sessions: (projectId: string) =>
     call<Session[]>("GET", `/api/sessions?project=${encodeURIComponent(projectId)}`),
   createSession: (projectId: string) => call<Session>("POST", "/api/sessions", { projectId }),
-  messages: (sessionId: string) =>
-    call<UIMessage[]>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/messages`),
 
   /** Uploads one image as raw bytes; the server checks what it really is. */
   uploadAttachment: async (file: File) => {

@@ -59,6 +59,14 @@
 - 선택한 모델의 `inputModalities`에 이미지가 없으면 첨부를 막고 서버도 거부한다(R06: 읽지 못한 이미지를 읽은 것처럼 보이지 않게).
 - 끌어놓기는 브라우저 기본 drop 이벤트로 받는다. dnd-kit은 페이지 안 요소 정렬용이라 OS 파일 drop에는 맞지 않고, 첨부 순서 바꾸기가 필요해지면 그때 쓴다.
 
+## 대화 상태 (2026-09-14)
+
+- 새로고침·탭 닫기 뒤 복원은 서버가 권위를 갖는다. TanStack AI의 `@tanstack/ai-persistence`(`withPersistence` + `reconstructChat`)를 쓰고, 저장소는 앱 SQLite에 직접 구현한다.
+  - 이유: 승인 대기처럼 클라이언트 메모리에만 있던 상태가 새로고침으로 사라졌다. 브라우저 저장소는 다른 탭·기기와 어긋나고, TanStack이 run·interrupt 계약과 conformance 테스트를 이미 제공한다.
+- TanStack threadId는 세션 id로 고정한다. 한 세션에 대화 하나.
+- chat state는 화면 복원용이다. 기억·근거의 원본은 `nodes`이고, chat state가 없는 세션은 노드에서 대화를 만든다.
+- UI가 따로 쓰던 `GET /api/sessions/:session/messages`는 `GET /api/chat` 복원으로 대체해 없앴다.
+
 ## 개발 규칙 (2026-09-14)
 
 - 앱 개발 서버 인자는 `vp run dev --host 127.0.0.1 --port 5174`처럼 `--` 없이 넘긴다.

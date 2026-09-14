@@ -37,6 +37,7 @@
     "@huggingface/transformers": "catalog:",
     "@standard-schema/spec": "catalog:",
     "@tanstack/ai": "catalog:",
+    "@tanstack/ai-persistence": "catalog:",
     "effect": "catalog:",
     "json-rpc-2.0": "catalog:",
     "p-defer": "catalog:",

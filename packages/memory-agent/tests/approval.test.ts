@@ -94,6 +94,54 @@ describe("approval-gated tools", () => {
     expect(log.filter((entry) => entry.method === "thread/start")).toHaveLength(1);
   });
 
+  test("a reloaded page gets the pending approval back from the server and can answer it", async () => {
+    const context = await approvalSetup();
+    const { runtime, session } = context;
+    await context.client.sendMessage("please use the shell");
+    await until(() => context.client.getInterrupts().length === 1, "the approval request");
+    // The tab closes; nothing of the first client survives.
+    context.client.dispose();
+
+    const connection = fetchServerSentEvents(`http://127.0.0.1/api/chat?session=${session.id}`, {
+      fetchClient: (input, init) =>
+        runtime.runPromise(
+          Effect.flatMap(AgentChat, (agent) =>
+            (init?.method ?? "GET") === "POST"
+              ? agent.handle(new Request(input, init), session.id)
+              : agent.hydrate(new Request(input, init), session.id),
+          ),
+        ),
+    });
+    const reloaded = new ChatClient({
+      threadId: session.id,
+      persistence: true,
+      tools: approvalToolDefinitions,
+      connection,
+    });
+    reloaded.attach();
+    await until(() => reloaded.getInterrupts().length === 1, "the restored approval");
+    expect(reloaded.getMessages().map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(reloaded.getInterrupts()[0]).toMatchObject({
+      kind: "tool-approval",
+      toolName: "run_shell",
+    });
+
+    reloaded.resolveInterrupts(true);
+    const text = () =>
+      reloaded
+        .getMessages()
+        .flatMap((message) =>
+          message.role === "assistant"
+            ? message.parts.flatMap((part) => (part.type === "text" ? [part.content] : []))
+            : [],
+        )
+        .join("");
+    await until(() => text().startsWith("Shell said"), "the answer after the reload");
+    await until(() => !reloaded.getIsLoading(), "the run to finish");
+    expect(text()).toContain("approved-output");
+    reloaded.dispose();
+  });
+
   test("a declined approval never runs the command and tells the model", async () => {
     const { client, runtime, session, lastText } = await approvalSetup();
 
