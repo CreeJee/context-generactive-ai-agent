@@ -4,13 +4,8 @@ import { Effect, Either } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { Attachments, sniffImageType } from "../src/attachments/attachments.ts";
 import { Nodes } from "../src/memory/nodes.ts";
+import { tinyPng } from "./support/images.ts";
 import { testRuntime } from "./support/runtime.ts";
-
-/** A 1×1 transparent PNG. */
-export const tinyPng = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
-  "base64",
-);
 
 describe("sniffImageType", () => {
   test("reads the type from the bytes", () => {

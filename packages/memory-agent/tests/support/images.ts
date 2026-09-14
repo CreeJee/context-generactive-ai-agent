@@ -1,0 +1,5 @@
+/** A 1×1 transparent PNG. */
+export const tinyPng = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
+  "base64",
+);

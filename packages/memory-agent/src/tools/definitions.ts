@@ -9,6 +9,8 @@ import { defineInterrupt, toolDefinition } from "@tanstack/ai";
 import { Schema } from "effect";
 import { toToolSchema } from "./schema.ts";
 
+export { attachmentIdOf, attachmentUrl } from "../attachments/urls.ts";
+
 export const RunShellInput = Schema.Struct({
   command: Schema.NonEmptyString.annotations({
     description: "Shell command line, run with the user's shell on the host (not sandboxed).",

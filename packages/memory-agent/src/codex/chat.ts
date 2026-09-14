@@ -15,7 +15,9 @@ import {
 } from "@tanstack/ai/adapters";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import { CodexAppServer } from "./app-server.ts";
-import { toCodexTurnInput } from "./history.ts";
+import { Attachments } from "../attachments/attachments.ts";
+import { attachmentIdOf } from "../attachments/urls.ts";
+import { imageSources, toCodexTurnInput, type ResolvedImage } from "./history.ts";
 import type { ModelSelection } from "./models.ts";
 import {
   CodexTurn,
@@ -98,7 +100,7 @@ export class TurnParking {
 export class CodexTextAdapter extends BaseTextAdapter<
   string,
   Record<string, never>,
-  ["text"],
+  ["text", "image"],
   DefaultMessageMetadataByModality
 > {
   readonly name = "codex";
@@ -272,6 +274,22 @@ export class CodexTextAdapter extends BaseTextAdapter<
 
 const make = Effect.gen(function* () {
   const codex = yield* CodexAppServer;
+  const attachments = yield* Attachments;
+
+  /** Stored images the messages point to. Sources that are not our attachments are left out. */
+  const resolveImages = async (sources: readonly string[]) => {
+    const resolved = new Map<string, ResolvedImage>();
+    for (const source of new Set(sources)) {
+      const id = attachmentIdOf(source);
+      const attachment = id ? attachments.get(id) : null;
+      if (attachment)
+        resolved.set(source, {
+          path: attachments.pathOf(attachment),
+          dataUrl: await attachments.dataUrl(attachment),
+        });
+    }
+    return resolved;
+  };
   const turns = new Map<string, CodexTurn>();
   const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);
   const forThread = <A extends { readonly threadId?: string }>(value: A) =>
@@ -343,7 +361,10 @@ const make = Effect.gen(function* () {
           properties: {},
         },
       }));
-      const { history, input } = toCodexTurnInput(options.messages);
+      const { history, input } = toCodexTurnInput(
+        options.messages,
+        await resolveImages(imageSources(options.messages)),
+      );
 
       const thread = await run(
         codex.request(

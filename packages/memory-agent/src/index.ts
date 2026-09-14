@@ -1,12 +1,24 @@
 export { memoryAgentLayer, type MemoryAgentLayerOptions } from "./layers.ts";
-export { AgentChat, memoryInstructions, workspaceInstructions } from "./agent/chat.ts";
+export {
+  AgentChat,
+  attachmentInstructions,
+  memoryInstructions,
+  workspaceInstructions,
+} from "./agent/chat.ts";
 export { sessionMessages } from "./agent/history.ts";
 
 export { StorageRoot, defaultStorageRoot } from "./config/storage-root.ts";
 export { GlobalConfig, Settings } from "./config/global-config.ts";
 export { CodexAccount, isChatgptAuthUrl, type AuthState } from "./codex/account.ts";
 export { CodexChat, CodexTextAdapter, TurnParking, type CodexTurns } from "./codex/chat.ts";
-export { messageText, toCodexTurnInput } from "./codex/history.ts";
+export {
+  imageSources,
+  messageText,
+  toCodexTurnInput,
+  type ImageLookup,
+  type ResolvedImage,
+} from "./codex/history.ts";
+export { attachmentIdOf, attachmentUrl } from "./attachments/urls.ts";
 export {
   CodexAppServer,
   CodexRequestFailed,

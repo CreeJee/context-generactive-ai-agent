@@ -1,5 +1,6 @@
 // Minimal stand-in for `codex app-server --listen stdio://`: newline-delimited JSON-RPC
 // without the "jsonrpc" field, like codex. Only what the tests exercise.
+import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 // Options arrive as arguments: the client passes codex only a fixed, minimal environment.
@@ -60,6 +61,7 @@ const models = [
       { reasoningEffort: "medium", description: "" },
       { reasoningEffort: "high", description: "" },
     ],
+    inputModalities: ["text"],
     description: "",
   },
 ];
@@ -94,6 +96,18 @@ async function runTurn(threadId, turnId, input) {
         : "allow";
     const reason = `검토 결과: ${decision}`;
     return streamAnswer(threadId, turnId, JSON.stringify({ decision, reason }));
+  }
+  if (text.includes("look at")) {
+    const local = input.filter((part) => part.type === "localImage");
+    const replayed = thread.history
+      .flatMap((item) => item.content ?? [])
+      .filter((part) => part.type === "input_image");
+    const readable = local.filter((part) => existsSync(part.path));
+    return streamAnswer(
+      threadId,
+      turnId,
+      `Saw ${readable.length} new image(s) and ${replayed.length} earlier image(s)`,
+    );
   }
   if (input.length === 0 && lastHistory?.type === "function_call_output")
     return streamAnswer(threadId, turnId, `Resumed with ${lastHistory.output}`);

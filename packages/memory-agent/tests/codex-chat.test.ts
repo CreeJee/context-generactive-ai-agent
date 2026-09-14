@@ -6,9 +6,11 @@ import { chat, toolDefinition, type ModelMessage, type StreamChunk } from "@tans
 import { Effect, Layer, ManagedRuntime, Schema } from "effect";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import { CodexAppServer } from "../src/codex/app-server.ts";
+import { Attachments } from "../src/attachments/attachments.ts";
 import { CodexChat } from "../src/codex/chat.ts";
 import { toCodexTurnInput } from "../src/codex/history.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
+import { Database } from "../src/db/database.ts";
 import { toToolSchema } from "../src/tools/schema.ts";
 
 const fakeServer = fileURLToPath(new URL("./support/fake-codex.mjs", import.meta.url));
@@ -24,6 +26,8 @@ function chatRuntime() {
       Layer.provideMerge(
         CodexAppServer.withCommand({ executable: process.execPath, args: [fakeServer] }),
       ),
+      Layer.provideMerge(Attachments.layer),
+      Layer.provideMerge(Database.layer(join(storage, "agent.db"))),
       Layer.provideMerge(StorageRoot.layer(storage)),
     ),
   );
@@ -70,22 +74,25 @@ async function run(runtime: ReturnType<typeof chatRuntime>, messages: ModelMessa
 describe("toCodexTurnInput", () => {
   test("injects prior messages as Responses items and keeps a trailing user message as input", () => {
     expect(
-      toCodexTurnInput([
-        { role: "user", content: "서울 날씨?" },
-        {
-          role: "assistant",
-          content: "확인할게요.",
-          toolCalls: [
-            {
-              id: "c1",
-              type: "function",
-              function: { name: "get_weather", arguments: '{"city":"Seoul"}' },
-            },
-          ],
-        },
-        { role: "tool", toolCallId: "c1", content: "Seoul: sunny" },
-        { role: "user", content: [{ type: "text", content: "부산은?" }] },
-      ]),
+      toCodexTurnInput(
+        [
+          { role: "user", content: "서울 날씨?" },
+          {
+            role: "assistant",
+            content: "확인할게요.",
+            toolCalls: [
+              {
+                id: "c1",
+                type: "function",
+                function: { name: "get_weather", arguments: '{"city":"Seoul"}' },
+              },
+            ],
+          },
+          { role: "tool", toolCallId: "c1", content: "Seoul: sunny" },
+          { role: "user", content: [{ type: "text", content: "부산은?" }] },
+        ],
+        new Map(),
+      ),
     ).toEqual({
       history: [
         { type: "message", role: "user", content: [{ type: "input_text", text: "서울 날씨?" }] },
@@ -103,6 +110,51 @@ describe("toCodexTurnInput", () => {
         { type: "function_call_output", call_id: "c1", output: "Seoul: sunny" },
       ],
       input: [{ type: "text", text: "부산은?", text_elements: [] }],
+    });
+  });
+
+  test("sends new images as local files, replays earlier ones as data URLs, drops unknown ones", () => {
+    const image = (value: string) =>
+      ({ type: "image", source: { type: "url", value, mimeType: "image/png" } }) as const;
+    const images = new Map([
+      ["/api/attachments/old", { path: "/store/old.png", dataUrl: "data:image/png;base64,T0xE" }],
+      ["/api/attachments/new", { path: "/store/new.png", dataUrl: "data:image/png;base64,TkVX" }],
+    ]);
+    expect(
+      toCodexTurnInput(
+        [
+          {
+            role: "user",
+            content: [{ type: "text", content: "#1 봐줘" }, image("/api/attachments/old")],
+          },
+          { role: "assistant", content: "봤어요." },
+          {
+            role: "user",
+            content: [
+              { type: "text", content: "#1 이랑 비교" },
+              image("/api/attachments/new"),
+              image("https://example.com/remote.png"),
+            ],
+          },
+        ],
+        images,
+      ),
+    ).toEqual({
+      history: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_text", text: "#1 봐줘" },
+            { type: "input_image", image_url: "data:image/png;base64,T0xE" },
+          ],
+        },
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "봤어요." }] },
+      ],
+      input: [
+        { type: "text", text: "#1 이랑 비교", text_elements: [] },
+        { type: "localImage", path: "/store/new.png" },
+      ],
     });
   });
 });

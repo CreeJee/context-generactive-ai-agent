@@ -27,7 +27,7 @@ describe("sessionMessages", () => {
     nodes.append({ ...at, runId: "r1", kind: "assistant", text: "SQLite로 했어요." });
     nodes.append({ ...at, kind: "user", text: "고마워" });
 
-    const messages = sessionMessages(nodes.session(session.id));
+    const messages = sessionMessages(nodes.session(session.id), () => []);
     expect(messages.map((message) => [message.role, message.parts])).toEqual([
       ["user", [{ type: "text", content: "DB 뭐로 했지?" }]],
       [
