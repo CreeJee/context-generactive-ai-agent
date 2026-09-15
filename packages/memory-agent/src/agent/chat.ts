@@ -629,6 +629,19 @@ const make = Effect.gen(function* () {
         return Response.json(leases.view(sessionId, holder));
       }),
 
+    /**
+     * Archives a conversation (out of the list, kept in memory) or brings it back. Not while it is
+     * answering or another page is using it, so nobody loses a conversation from under them.
+     */
+    archive: (sessionId: string, holder: string | null, archived: boolean) =>
+      Effect.gen(function* () {
+        if (!leases.permits(sessionId, holder)) return inUse();
+        if (liveRuns.get(sessionId)) return json(409, { error: "run_in_progress" });
+        const session = yield* Effect.either(sessions.setArchived(sessionId, archived));
+        if (session._tag === "Left") return json(404, { error: "session_not_found" });
+        return Response.json(session.right);
+      }),
+
     /** The session's queue: messages still to deliver, and those the latest run delivered. */
     queued: (sessionId: string) =>
       Effect.gen(function* () {

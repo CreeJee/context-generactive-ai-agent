@@ -16,6 +16,7 @@ import type {
 } from "memory-agent";
 import type { ModelMessage } from "@tanstack/ai";
 import type { UIMessage } from "@tanstack/ai-react";
+import { Schema } from "effect";
 import {
   sessionHolderHeader,
   type CancelResult,
@@ -113,6 +114,16 @@ export const api = {
 
   sessions: (projectId: string) =>
     call<Session[]>("GET", `/api/sessions?project=${encodeURIComponent(projectId)}`),
+  archivedSessions: (projectId: string) =>
+    call<Session[]>("GET", `/api/sessions?project=${encodeURIComponent(projectId)}&archived=1`),
+  /** Refused with 409 while it is answering and 423 while another page holds it. */
+  setArchived: (sessionId: string, holder: string, archived: boolean) =>
+    call<Session>(
+      "POST",
+      `/api/sessions/${encodeURIComponent(sessionId)}`,
+      { archived },
+      { [sessionHolderHeader]: holder },
+    ),
   /** `agent`: talk directly to that trusted external ACP agent instead of the app's model. */
   createSession: (projectId: string, agent?: string) =>
     call<Session>("POST", "/api/sessions", { projectId, agent }),
@@ -231,27 +242,47 @@ export const api = {
   },
 };
 
-const attachmentRejections = new Map([
-  ["too_large", "20MB보다 큰 이미지는 올릴 수 없어요."],
-  ["unsupported_type", "PNG, JPEG, GIF, WebP 이미지만 올릴 수 있어요."],
-  ["empty", "빈 파일이에요."],
-]);
+const AttachmentRejection = Schema.Literal("too_large", "unsupported_type", "empty");
+const attachmentRejections = {
+  too_large: "20MB보다 큰 이미지는 올릴 수 없어요.",
+  unsupported_type: "PNG, JPEG, GIF, WebP 이미지만 올릴 수 있어요.",
+  empty: "빈 파일이에요.",
+} satisfies Record<typeof AttachmentRejection.Type, string>;
 
 export function attachmentErrorMessage(error: Error) {
-  if (error instanceof ApiError && error.reason)
-    return attachmentRejections.get(error.reason) ?? error.reason;
-  return "이미지를 올리지 못했어요.";
+  if (!(error instanceof ApiError) || !error.reason) return "이미지를 올리지 못했어요.";
+  return Schema.is(AttachmentRejection)(error.reason)
+    ? attachmentRejections[error.reason]
+    : error.reason;
 }
 
-const projectRejections = new Map([
-  ["not_found", "경로를 찾을 수 없어요."],
-  ["not_directory", "폴더 경로가 아니에요."],
-  ["overlaps_storage", "앱 저장소 폴더와 겹치는 경로는 등록할 수 없어요."],
-  ["already_registered", "이미 등록된 프로젝트예요."],
-]);
+const ProjectRejection = Schema.Literal(
+  "not_found",
+  "not_directory",
+  "overlaps_storage",
+  "already_registered",
+);
+const projectRejections = {
+  not_found: "경로를 찾을 수 없어요.",
+  not_directory: "폴더 경로가 아니에요.",
+  overlaps_storage: "앱 저장소 폴더와 겹치는 경로는 등록할 수 없어요.",
+  already_registered: "이미 등록된 프로젝트예요.",
+} satisfies Record<typeof ProjectRejection.Type, string>;
 
 export function projectErrorMessage(error: Error) {
-  if (error instanceof ApiError && error.reason)
-    return projectRejections.get(error.reason) ?? error.reason;
-  return "프로젝트를 추가하지 못했어요.";
+  if (!(error instanceof ApiError) || !error.reason) return "프로젝트를 추가하지 못했어요.";
+  return Schema.is(ProjectRejection)(error.reason) ? projectRejections[error.reason] : error.reason;
+}
+
+const ArchiveRejection = Schema.Literal("run_in_progress", "session_in_use", "session_not_found");
+const archiveRejections = {
+  run_in_progress: "답변 중인 대화는 보관할 수 없어요. 끝나거나 멈춘 뒤 다시 시도하세요.",
+  session_in_use: "다른 탭에서 쓰고 있는 대화예요. 그 탭을 닫은 뒤 다시 시도하세요.",
+  session_not_found: "대화를 찾을 수 없어요.",
+} satisfies Record<typeof ArchiveRejection.Type, string>;
+
+export function archiveErrorMessage(error: Error) {
+  return error instanceof ApiError && Schema.is(ArchiveRejection)(error.code)
+    ? archiveRejections[error.code]
+    : "대화를 바꾸지 못했어요.";
 }

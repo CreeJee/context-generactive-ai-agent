@@ -140,21 +140,31 @@ function collectPackages() {
   }
 }
 
+/** Platforms `@openai/codex` publishes a binary for, and the Rust target triple inside each. */
+const CodexTarget = Schema.Literal(
+  "darwin-arm64",
+  "darwin-x64",
+  "linux-arm64",
+  "linux-x64",
+  "win32-arm64",
+  "win32-x64",
+);
+const codexTriples = {
+  "darwin-arm64": "aarch64-apple-darwin",
+  "darwin-x64": "x86_64-apple-darwin",
+  "linux-arm64": "aarch64-unknown-linux-musl",
+  "linux-x64": "x86_64-unknown-linux-musl",
+  "win32-arm64": "aarch64-pc-windows-msvc",
+  "win32-x64": "x86_64-pc-windows-msvc",
+} satisfies Record<typeof CodexTarget.Type, string>;
+
 /** The pinned codex platform package the executable downloads on first need. */
 function writeCodexManifest() {
   const codex = findPackage(memoryAgent, "@openai/codex");
   if (!codex) throw new Error("@openai/codex is not installed; run vp install");
   const { version } = readPackage(codex);
-  const triples = new Map([
-    ["darwin-arm64", "aarch64-apple-darwin"],
-    ["darwin-x64", "x86_64-apple-darwin"],
-    ["linux-arm64", "aarch64-unknown-linux-musl"],
-    ["linux-x64", "x86_64-unknown-linux-musl"],
-    ["win32-arm64", "aarch64-pc-windows-msvc"],
-    ["win32-x64", "x86_64-pc-windows-msvc"],
-  ]);
-  const triple = triples.get(target);
-  if (!triple) throw new Error(`codex has no binary for ${target}`);
+  if (!Schema.is(CodexTarget)(target)) throw new Error(`codex has no binary for ${target}`);
+  const triple = codexTriples[target];
   const lock = readFileSync(join(repo, "pnpm-lock.yaml"), "utf8");
   const entry = new RegExp(
     `'@openai/codex@${version.replaceAll(".", "\\.")}-${target}':\\s*\\n\\s*resolution: \\{integrity: (sha512-[A-Za-z0-9+/=]+)\\}`,

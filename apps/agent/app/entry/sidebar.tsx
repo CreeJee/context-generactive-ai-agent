@@ -1,8 +1,27 @@
-import { BotIcon, ChevronDownIcon, FolderPlusIcon, LogOutIcon, PlusIcon } from "lucide-react";
+import {
+  ArchiveIcon,
+  ArchiveRestoreIcon,
+  BotIcon,
+  ChevronDownIcon,
+  FolderPlusIcon,
+  LogOutIcon,
+  PlusIcon,
+} from "lucide-react";
 import { useState } from "react";
 import { Alert, AlertDescription } from "~/components/ui/alert";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "~/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -12,6 +31,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu";
+import { Field, FieldError, FieldLabel } from "~/components/ui/field";
 import { Input } from "~/components/ui/input";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import {
@@ -191,13 +211,10 @@ const permissionModes = [
   { value: "auto", label: "자동 판단 (auto)" },
 ] satisfies ReadonlyArray<{ value: PermissionMode; label: string }>;
 
-const permissionHints = new Map<PermissionMode, string>([
-  ["ask", "셸 실행과 프로젝트 밖 쓰기는 호출마다 승인을 받아요."],
-  [
-    "auto",
-    "분류 모델이 호출마다 판단해서 안전하면 바로 실행하고, 애매하면 묻고, 위험하면 막아요. 판단할 때마다 모델 호출이 추가돼요.",
-  ],
-]);
+const permissionHints = {
+  ask: "셸 실행과 프로젝트 밖 쓰기는 호출마다 승인을 받아요.",
+  auto: "분류 모델이 호출마다 판단해서 안전하면 바로 실행하고, 애매하면 묻고, 위험하면 막아요. 판단할 때마다 모델 호출이 추가돼요.",
+} satisfies Record<PermissionMode, string>;
 
 export function ProjectSection({
   projects,
@@ -215,33 +232,38 @@ export function ProjectSection({
   /** Whether conversations in other projects may recall this project's memory (R08). */
   onCrossRecall: (allowed: boolean) => void;
 }) {
-  const [root, setRoot] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [adding, setAdding] = useState(false);
   const current = projects.find((project) => project.id === projectId);
 
   return (
     <Section title="프로젝트">
-      {projects.length > 0 && (
-        <Select
-          value={projectId}
-          items={projects.map((project) => ({ value: project.id, label: project.name }))}
-          onValueChange={(value) => value && onSelect(value)}
-        >
-          <SelectTrigger className="w-full">
-            <SelectValue placeholder="프로젝트를 선택하세요" />
-          </SelectTrigger>
-          <SelectContent>
-            {projects.map((project) => (
-              <SelectItem key={project.id} value={project.id}>
-                {project.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      )}
+      <div className="flex items-center gap-2">
+        {projects.length > 0 ? (
+          <Select
+            value={projectId}
+            items={projects.map((project) => ({ value: project.id, label: project.name }))}
+            onValueChange={(value) => value && onSelect(value)}
+          >
+            <SelectTrigger className="min-w-0 flex-1">
+              <SelectValue placeholder="프로젝트를 선택하세요" />
+            </SelectTrigger>
+            <SelectContent>
+              {projects.map((project) => (
+                <SelectItem key={project.id} value={project.id}>
+                  {project.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : (
+          <p className="flex-1 text-xs text-muted-foreground">등록된 프로젝트가 없어요.</p>
+        )}
+        <AddProjectDialog onAdd={onAdd} />
+      </div>
       {current && (
-        <div className="flex flex-col gap-1.5">
+        <div className="mt-1 flex flex-col gap-1.5 border-l-2 pl-2.5">
+          <span className="text-[0.6875rem] font-medium text-muted-foreground">
+            {current.name} 설정
+          </span>
           <Select
             value={current.permissionMode}
             items={permissionModes}
@@ -261,9 +283,7 @@ export function ProjectSection({
               ))}
             </SelectContent>
           </Select>
-          <p className="text-xs text-muted-foreground">
-            {permissionHints.get(current.permissionMode)}
-          </p>
+          <p className="text-xs text-muted-foreground">{permissionHints[current.permissionMode]}</p>
           <label className="mt-1.5 flex cursor-pointer items-start justify-between gap-3">
             <span className="flex flex-col gap-0.5">
               <span className="text-xs font-medium">다른 프로젝트에서 이 기억 찾기</span>
@@ -281,36 +301,73 @@ export function ProjectSection({
           </label>
         </div>
       )}
-      <form
-        className="flex gap-2"
-        onSubmit={async (event) => {
-          event.preventDefault();
-          if (!root.trim()) return;
-          setAdding(true);
-          const failure = await onAdd(root.trim());
-          setAdding(false);
-          setError(failure);
-          if (!failure) setRoot("");
-        }}
-      >
-        <Input
-          value={root}
-          onChange={(event) => setRoot(event.target.value)}
-          placeholder="/절대/경로/프로젝트"
-          aria-label="프로젝트 경로"
-        />
-        <Button
-          type="submit"
-          variant="outline"
-          size="icon"
-          disabled={adding || !root.trim()}
-          aria-label="프로젝트 추가"
-        >
-          {adding ? <Spinner /> : <FolderPlusIcon />}
-        </Button>
-      </form>
-      {error && <p className="text-xs text-destructive">{error}</p>}
     </Section>
+  );
+}
+
+/** Registering a folder widens what the file tools may touch, so it lives in its own dialog. */
+function AddProjectDialog({ onAdd }: { onAdd: (root: string) => Promise<string | null> }) {
+  const [open, setOpen] = useState(false);
+  const [root, setRoot] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setError(null);
+      }}
+    >
+      <DialogTrigger
+        render={
+          <Button variant="outline" size="icon" aria-label="프로젝트 추가" title="프로젝트 추가" />
+        }
+      >
+        <FolderPlusIcon />
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>프로젝트 추가</DialogTitle>
+          <DialogDescription>
+            폴더의 절대 경로를 입력하세요. 등록한 폴더 안의 파일은 에이전트가 읽고 고칠 수 있어요.
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          className="flex flex-col gap-3"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            if (!root.trim()) return;
+            setAdding(true);
+            const failure = await onAdd(root.trim());
+            setAdding(false);
+            setError(failure);
+            if (failure) return;
+            setRoot("");
+            setOpen(false);
+          }}
+        >
+          <Field>
+            <FieldLabel htmlFor="project-root">폴더 경로</FieldLabel>
+            <Input
+              id="project-root"
+              value={root}
+              onChange={(event) => setRoot(event.target.value)}
+              placeholder="/Users/me/work/my-project"
+              autoFocus
+            />
+            {error && <FieldError>{error}</FieldError>}
+          </Field>
+          <DialogFooter>
+            <DialogClose render={<Button type="button" variant="ghost" />}>취소</DialogClose>
+            <Button type="submit" disabled={adding || !root.trim()}>
+              {adding && <Spinner />} 추가
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -321,18 +378,30 @@ const dateFormat = new Intl.DateTimeFormat("ko-KR", {
   minute: "2-digit",
 });
 
+const sessionLabel = (session: Session) =>
+  session.title ?? dateFormat.format(new Date(session.createdAt));
+
 export function SessionSection({
   sessions,
+  archived,
   sessionId,
+  archiveError,
   onSelect,
   onCreate,
+  onArchive,
+  onRestore,
   loadAgents,
 }: {
   sessions: Session[];
+  archived: Session[];
   sessionId: string | null;
+  /** Why the last archive or restore was refused, if it was. */
+  archiveError: string | null;
   onSelect: (sessionId: string) => void;
   /** Without an agent the conversation uses the app's model. */
   onCreate: (agent?: string) => void;
+  onArchive: (sessionId: string) => void;
+  onRestore: (sessionId: string) => void;
   /** Trusted external agents a conversation can talk to directly. */
   loadAgents: () => Promise<string[]>;
 }) {
@@ -379,30 +448,78 @@ export function SessionSection({
           </DropdownMenu>
         </div>
       </div>
+      {archiveError && (
+        <Alert variant="destructive" className="mx-2 mb-2 w-auto">
+          <AlertDescription>{archiveError}</AlertDescription>
+        </Alert>
+      )}
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col gap-0.5 px-2 pb-3">
           {sessions.map((session) => (
-            <button
+            <div
               key={session.id}
-              type="button"
-              onClick={() => onSelect(session.id)}
               className={cn(
-                "flex items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs hover:bg-muted",
+                "group flex items-center rounded-md hover:bg-muted",
                 session.id === sessionId && "bg-muted font-medium",
               )}
             >
-              <span className="min-w-0 flex-1 truncate">
-                {session.title ?? dateFormat.format(new Date(session.createdAt))}
-              </span>
-              {session.agent && (
-                <Badge variant="outline" className="shrink-0">
-                  <BotIcon /> {session.agent}
-                </Badge>
-              )}
-            </button>
+              <button
+                type="button"
+                onClick={() => onSelect(session.id)}
+                className="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1.5 text-left text-xs"
+              >
+                <span className="min-w-0 flex-1 truncate">{sessionLabel(session)}</span>
+                {session.agent && (
+                  <Badge variant="outline" className="shrink-0">
+                    <BotIcon /> {session.agent}
+                  </Badge>
+                )}
+              </button>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="mr-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                onClick={() => onArchive(session.id)}
+                aria-label="대화 보관"
+                title="보관(목록에서 빼고 기억은 유지)"
+              >
+                <ArchiveIcon />
+              </Button>
+            </div>
           ))}
           {sessions.length === 0 && (
             <p className="px-2 text-xs text-muted-foreground">아직 대화가 없어요.</p>
+          )}
+          {archived.length > 0 && (
+            <Collapsible className="mt-2">
+              <CollapsibleTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start text-xs text-muted-foreground"
+                  />
+                }
+              >
+                <ArchiveIcon /> 보관함 {archived.length}
+              </CollapsibleTrigger>
+              <CollapsibleContent className="flex flex-col gap-0.5">
+                <p className="px-2 py-1 text-xs text-muted-foreground">
+                  목록에서만 뺀 대화예요. 기억 검색에는 계속 나와요.
+                </p>
+                {archived.map((session) => (
+                  <div
+                    key={session.id}
+                    className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground"
+                  >
+                    <span className="min-w-0 flex-1 truncate">{sessionLabel(session)}</span>
+                    <Button variant="ghost" size="xs" onClick={() => onRestore(session.id)}>
+                      <ArchiveRestoreIcon /> 복원
+                    </Button>
+                  </div>
+                ))}
+              </CollapsibleContent>
+            </Collapsible>
           )}
         </div>
       </ScrollArea>

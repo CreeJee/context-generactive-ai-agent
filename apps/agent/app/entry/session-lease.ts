@@ -11,7 +11,7 @@ const watchMs = 3_000;
  * This page's identity for session ownership. Kept in sessionStorage, so a reload is still the same
  * page (and keeps its session), while every other tab or window is a different one.
  */
-function pageHolder() {
+export function pageHolder() {
   try {
     const existing = sessionStorage.getItem(holderKey);
     if (existing) return existing;

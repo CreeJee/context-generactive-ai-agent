@@ -11,12 +11,19 @@ const CreateSession = Schema.Struct({
   agent: Schema.optional(Schema.NullOr(Schema.NonEmptyString)),
 });
 
-/** GET /api/sessions?project=<projectId> — sessions of a project, newest first. */
+/**
+ * GET /api/sessions?project=<projectId>[&archived=1] — sessions of a project, newest first; with
+ * `archived=1`, only the archived ones.
+ */
 export async function loader({ request }: Route.LoaderArgs) {
-  const projectId = new URL(request.url).searchParams.get("project");
+  const params = new URL(request.url).searchParams;
+  const projectId = params.get("project");
   if (!projectId) return Response.json({ error: "project_required" }, { status: 400 });
+  const archived = params.get("archived") === "1";
   return Response.json(
-    await agent.runPromise(Effect.flatMap(Sessions, (sessions) => sessions.list(projectId))),
+    await agent.runPromise(
+      Effect.flatMap(Sessions, (sessions) => sessions.list(projectId, archived)),
+    ),
   );
 }
 

@@ -266,4 +266,8 @@ export const migrations: readonly string[] = [
     analyzer TEXT NOT NULL
   );
   `,
+  `
+  -- An archived conversation leaves the session list but keeps its messages and memory.
+  ALTER TABLE sessions ADD COLUMN archived_at TEXT;
+  `,
 ];

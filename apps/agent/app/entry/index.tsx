@@ -10,6 +10,7 @@ import {
 import { Separator } from "~/components/ui/separator";
 import {
   api,
+  archiveErrorMessage,
   projectErrorMessage,
   type AuthState,
   type CodexModel,
@@ -18,6 +19,7 @@ import {
   type Session,
 } from "./api";
 import { SessionView, type SlashSupport } from "./chat-panel";
+import { pageHolder } from "./session-lease";
 import type { SlashContext } from "./slash-commands";
 import { SettingsDialog } from "./settings-dialog";
 import { AccountSection, ModelSection, ProjectSection, SessionSection } from "./sidebar";
@@ -51,6 +53,8 @@ export function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [archived, setArchived] = useState<Session[]>([]);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [slashAgents, setSlashAgents] = useState<string[]>([]);
@@ -97,11 +101,43 @@ export function App() {
 
   useEffect(() => {
     if (!projectId) return;
+    setArchiveError(null);
     void api.sessions(projectId).then((list) => {
       setSessions(list);
       setSessionId(list[0]?.id ?? null);
     });
+    void api.archivedSessions(projectId).then(setArchived, () => setArchived([]));
   }, [projectId]);
+
+  const archiveSession = async (id: string) => {
+    try {
+      const session = await api.setArchived(id, pageHolder(), true);
+      setArchiveError(null);
+      const remaining = sessions.filter((item) => item.id !== id);
+      setSessions(remaining);
+      setArchived((list) => [session, ...list]);
+      if (sessionId === id) setSessionId(remaining[0]?.id ?? null);
+    } catch (error) {
+      setArchiveError(
+        archiveErrorMessage(error instanceof Error ? error : new Error(String(error))),
+      );
+    }
+  };
+
+  const restoreSession = async (id: string) => {
+    try {
+      const session = await api.setArchived(id, pageHolder(), false);
+      setArchiveError(null);
+      setArchived((list) => list.filter((item) => item.id !== id));
+      setSessions((list) =>
+        [session, ...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+      );
+    } catch (error) {
+      setArchiveError(
+        archiveErrorMessage(error instanceof Error ? error : new Error(String(error))),
+      );
+    }
+  };
 
   const authAction = async (intent: "login" | "cancel" | "logout") => {
     const state = await api.authAction(intent);
@@ -242,9 +278,13 @@ export function App() {
         {projectId && (
           <SessionSection
             sessions={sessions}
+            archived={archived}
             sessionId={sessionId}
+            archiveError={archiveError}
             onSelect={setSessionId}
             onCreate={(agent) => void createSession(agent)}
+            onArchive={(id) => void archiveSession(id)}
+            onRestore={(id) => void restoreSession(id)}
             loadAgents={() => api.usableExternalAgents(projectId)}
           />
         )}

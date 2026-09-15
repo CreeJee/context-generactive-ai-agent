@@ -11,6 +11,8 @@ export const Session = Schema.Struct({
   createdAt: Schema.String,
   /** The external ACP agent this conversation talks to directly; null for the app's own model. */
   agent: Schema.NullOr(Schema.String),
+  /** When the user archived it: out of the session list, still part of memory. */
+  archivedAt: Schema.NullOr(Schema.String),
 });
 export type Session = typeof Session.Type;
 
@@ -20,6 +22,7 @@ const SessionRow = Schema.Struct({
   title: Schema.NullOr(Schema.String),
   created_at: Schema.String,
   agent: Schema.NullOr(Schema.String),
+  archived_at: Schema.NullOr(Schema.String),
 });
 const decodeSessionRow = Schema.decodeUnknownSync(SessionRow);
 
@@ -31,6 +34,7 @@ function toSession(row: Record<string, SQLOutputValue>): Session {
     title: decoded.title,
     createdAt: decoded.created_at,
     agent: decoded.agent,
+    archivedAt: decoded.archived_at,
   };
 }
 
@@ -62,13 +66,26 @@ const make = Effect.gen(function* () {
         return toSession(row);
       }),
 
-    list: (projectId: string) =>
+    /** Newest first. Archived conversations are listed only when asked for, and then only they are. */
+    list: (projectId: string, archived = false) =>
       Effect.sync(() =>
         sqlite
-          .prepare("SELECT * FROM sessions WHERE project_id = ? ORDER BY created_at DESC, id")
+          .prepare(
+            `SELECT * FROM sessions WHERE project_id = ? AND archived_at IS ${archived ? "NOT NULL" : "NULL"}
+             ORDER BY created_at DESC, id`,
+          )
           .all(projectId)
           .map(toSession),
       ),
+
+    /** Moves a conversation out of the list or back. Messages, memory and search are untouched. */
+    setArchived: (id: string, archived: boolean) =>
+      Effect.suspend(() => {
+        const row = sqlite
+          .prepare("UPDATE sessions SET archived_at = ? WHERE id = ? RETURNING *")
+          .get(archived ? new Date().toISOString() : null, id);
+        return row ? Effect.succeed(toSession(row)) : Effect.fail(new SessionNotFound({ id }));
+      }),
   };
 });
 

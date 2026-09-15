@@ -3,6 +3,7 @@ import { createReadStream, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, resolve, sep } from "node:path";
 import { createRequestListener } from "@react-router/node";
+import { Schema } from "effect";
 import type { ServerBuild } from "react-router";
 
 export interface ServeOptions {
@@ -14,24 +15,42 @@ export interface ServeOptions {
 }
 
 /** Only the loopback names; any other Host means a rebinding page is talking to this server (R14). */
-const loopbackHosts = new Set(["127.0.0.1", "localhost", "[::1]"]);
+const LoopbackHost = Schema.Literal("127.0.0.1", "localhost", "[::1]");
 
-const contentTypes = new Map([
-  [".js", "text/javascript; charset=utf-8"],
-  [".css", "text/css; charset=utf-8"],
-  [".json", "application/json"],
-  [".svg", "image/svg+xml"],
-  [".png", "image/png"],
-  [".ico", "image/x-icon"],
-  [".woff2", "font/woff2"],
-  [".wasm", "application/wasm"],
-  [".map", "application/json"],
-]);
+const ClientExtension = Schema.Literal(
+  ".js",
+  ".css",
+  ".json",
+  ".svg",
+  ".png",
+  ".ico",
+  ".woff2",
+  ".wasm",
+  ".map",
+);
+const contentTypes = {
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".ico": "image/x-icon",
+  ".woff2": "font/woff2",
+  ".wasm": "application/wasm",
+  ".map": "application/json",
+} satisfies Record<typeof ClientExtension.Type, string>;
+
+function contentType(file: string) {
+  const extension = extname(file);
+  return Schema.is(ClientExtension)(extension)
+    ? contentTypes[extension]
+    : "application/octet-stream";
+}
 
 function isLoopbackHost(host: string | undefined) {
   if (!host) return false;
   try {
-    return loopbackHosts.has(new URL(`http://${host}`).hostname);
+    return Schema.is(LoopbackHost)(new URL(`http://${host}`).hostname);
   } catch {
     return false;
   }
@@ -86,7 +105,7 @@ export function serve(options: ServeOptions) {
         : null;
     if (!file) return handle(request, response);
     response.writeHead(200, {
-      "content-type": contentTypes.get(extname(file)) ?? "application/octet-stream",
+      "content-type": contentType(file),
       // Hashed build assets never change under the same name.
       "cache-control": pathname.startsWith("/assets/")
         ? "public, max-age=31536000, immutable"
