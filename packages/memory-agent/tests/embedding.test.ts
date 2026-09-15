@@ -6,6 +6,7 @@ import { describe, expect, test } from "vite-plus/test";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { Embedder, localModel } from "../src/memory/embedding/embedder.ts";
 import { Indexer } from "../src/memory/embedding/indexer.ts";
+import { MorphAnalyzer } from "../src/memory/morph/analyzer.ts";
 import { VectorIndex } from "../src/memory/embedding/vector-index.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
@@ -82,7 +83,12 @@ describe("Indexer + VectorIndex", () => {
     const { runtime, storage } = await seeded();
     await runtime.runPromise(Effect.map(VectorIndex, (index) => index.size()));
 
-    const second = ManagedRuntime.make(memoryAgentLayer(storage, { embedder: fakeEmbedderLayer }));
+    const second = ManagedRuntime.make(
+      memoryAgentLayer(storage, {
+        embedder: fakeEmbedderLayer,
+        morphAnalyzer: MorphAnalyzer.disabled,
+      }),
+    );
     const exit = await second.runPromiseExit(Effect.map(VectorIndex, (index) => index.size()));
     await second.dispose().catch(() => {});
     expect(Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "opened").toContain(

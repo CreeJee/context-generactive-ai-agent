@@ -9,6 +9,7 @@ import { Effect, ManagedRuntime } from "effect";
 import { bench, describe } from "vite-plus/test";
 import { SecretStore } from "../src/config/secrets.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
+import { MorphAnalyzer } from "../src/memory/morph/analyzer.ts";
 import { Projects } from "../src/projects/projects.ts";
 import { fakeEmbedderLayer } from "../src/testing/fake-embedder.ts";
 import { ApprovedTools } from "../src/tools/approved.ts";
@@ -54,6 +55,7 @@ makeRepository(join(base, "git"), true);
 const runtime = ManagedRuntime.make(
   memoryAgentLayer(join(base, "storage"), {
     embedder: fakeEmbedderLayer,
+    morphAnalyzer: MorphAnalyzer.disabled,
     interpretAutomatically: false,
     secrets: SecretStore.memory,
     skillsHome: join(base, "home"),

@@ -6,6 +6,7 @@ import { afterEach } from "vite-plus/test";
 import { memoryAgentLayer, type MemoryAgentLayerOptions, Projects, Sessions } from "memory-agent";
 import { SecretStore } from "../../src/config/secrets.ts";
 import { fakeEmbedderLayer } from "../../src/testing/fake-embedder.ts";
+import { fakeMorphLayer } from "../../src/testing/fake-morph.ts";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -30,6 +31,7 @@ export async function testRuntime(overrides: MemoryAgentLayerOptions = {}) {
   mkdirSync(home);
   const options = {
     embedder: fakeEmbedderLayer,
+    morphAnalyzer: fakeMorphLayer,
     interpretAutomatically: false,
     secrets: SecretStore.memory,
     // The user's real ~/.agents/skills stays out of tests.

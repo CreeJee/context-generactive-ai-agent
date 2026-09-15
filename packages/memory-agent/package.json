@@ -25,7 +25,8 @@
     "./testing": "./src/testing/index.ts",
     "./definitions": "./src/tools/definitions.ts",
     "./package.json": "./package.json",
-    "./acp": "./src/acp/index.ts"
+    "./acp": "./src/acp/index.ts",
+    "./kiwi-worker": "./src/memory/morph/kiwi-worker.mjs"
   },
   "publishConfig": {
     "access": "public"
@@ -35,6 +36,7 @@
     "dev": "vp pack --watch",
     "test": "vp test",
     "check": "vp check",
+    "eval:recall": "node --experimental-transform-types --no-warnings eval/recall.ts",
     "prepublishOnly": "vp run build"
   },
   "dependencies": {
@@ -49,6 +51,7 @@
     "@tanstack/ai-persistence": "catalog:",
     "effect": "catalog:",
     "json-rpc-2.0": "catalog:",
+    "kiwi-nlp": "catalog:",
     "p-defer": "catalog:",
     "p-event": "catalog:",
     "turbovec": "workspace:*"

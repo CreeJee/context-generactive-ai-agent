@@ -233,6 +233,9 @@ catalogs:
     json-rpc-2.0:
       specifier: 1.8.0
       version: 1.8.0
+    kiwi-nlp:
+      specifier: 0.24.0
+      version: 0.24.0
     lucide-react:
       specifier: ^1.45.0
       version: 1.45.0
@@ -425,6 +428,9 @@ importers:
       json-rpc-2.0:
         specifier: 'catalog:'
         version: 1.8.0
+      kiwi-nlp:
+        specifier: 'catalog:'
+        version: 0.24.0
       p-defer:
         specifier: 'catalog:'
         version: 4.0.1
@@ -3194,6 +3200,9 @@ packages:
 
   jsonfile@6.2.1:
     resolution: {integrity: sha512-zwOTdL3rFQ/lRdBnntKVOX6k5cKJwEc1HdilT71BWEu7J41gXIB2MRp+vxduPSwZJPWBxEzv4yH1wYLJGUHX4Q==}
+
+  kiwi-nlp@0.24.0:
+    resolution: {integrity: sha512-Tzp5prs75tlTZ72DberPnhNUfWPcHuzDGVOYmPxGzYA/AAwdg1TdQcdgmurgLNE/EB/2/ohYh6zHFBXq9fVF6A==}
 
   kleur@3.0.3:
     resolution: {integrity: sha512-eTIzlVOSUR+JxdDFepEYcBMtZ9Qqdef+rnzWdRZuMbOywu5tO2w2N7rqjoANZ5k9vywhL6Br1VRjUIgTQx4E8w==}
@@ -6999,6 +7008,8 @@ snapshots:
       universalify: 2.0.1
     optionalDependencies:
       graceful-fs: 4.2.11
+
+  kiwi-nlp@0.24.0: {}
 
   kleur@3.0.3: {}
 

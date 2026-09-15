@@ -18,6 +18,7 @@ import { McpServers } from "./mcp/servers.ts";
 import { Skills } from "./skills/skills.ts";
 import { Subagents } from "./subagents/subagents.ts";
 import { Embedder } from "./memory/embedding/embedder.ts";
+import { MorphAnalyzer } from "./memory/morph/analyzer.ts";
 import { Indexer } from "./memory/embedding/indexer.ts";
 import { VectorIndex } from "./memory/embedding/vector-index.ts";
 import { Graph } from "./memory/graph.ts";
@@ -45,6 +46,8 @@ import { OutsideTools } from "./tools/outside.ts";
 export interface MemoryAgentLayerOptions {
   /** Defaults to the local embedding model; tests pass a deterministic one. */
   readonly embedder?: Layer.Layer<Embedder, never, StorageRoot>;
+  /** Defaults to Kiwi (model downloaded on first use); tests pass a deterministic one. */
+  readonly morphAnalyzer?: Layer.Layer<MorphAnalyzer, never, StorageRoot>;
   /** Defaults to `codex` from PATH; tests pass a fake app server. Starts only when first used. */
   readonly codex?: Layer.Layer<CodexAppServer, never, StorageRoot>;
   /** How long a page keeps a session without renewing; tests shorten it. */
@@ -77,6 +80,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     Interpretations.layer,
     RelayedApprovals.layer,
     options.embedder ?? Embedder.local,
+    options.morphAnalyzer ?? MorphAnalyzer.kiwi,
     options.codex ?? CodexAppServer.layer,
     options.secrets ?? SecretStore.keychain,
   );

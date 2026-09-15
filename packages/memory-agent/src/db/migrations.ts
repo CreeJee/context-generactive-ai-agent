@@ -256,4 +256,14 @@ export const migrations: readonly string[] = [
   -- A conversation held directly with an external ACP agent instead of the app's own model.
   ALTER TABLE sessions ADD COLUMN agent TEXT;
   `,
+  `
+  -- Korean morpheme terms of each node (nouns, stems, roots, foreign words), space separated, so a
+  -- question matches statements that use the same words with different particles and endings.
+  -- rowid is the node seq. node_morphs records which analyzer produced a node's terms.
+  CREATE VIRTUAL TABLE nodes_morph USING fts5(terms, tokenize = 'unicode61');
+  CREATE TABLE node_morphs (
+    node_seq INTEGER PRIMARY KEY REFERENCES nodes(seq),
+    analyzer TEXT NOT NULL
+  );
+  `,
 ];

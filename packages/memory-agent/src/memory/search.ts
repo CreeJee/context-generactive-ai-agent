@@ -2,6 +2,7 @@ import { Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import { Embedder } from "./embedding/embedder.ts";
 import { VectorIndex } from "./embedding/vector-index.ts";
+import { MorphAnalysisFailed, MorphAnalyzer } from "./morph/analyzer.ts";
 import { Graph, type Hop } from "./graph.ts";
 import type { NodeKind } from "./nodes.ts";
 
@@ -42,7 +43,7 @@ export interface FindResult {
   /** False when more matches exist beyond `limit` or graph expansion stopped at its budget. */
   readonly complete: boolean;
   /** Search paths that failed and were skipped, e.g. vector search without the model. */
-  readonly degraded: readonly "vector"[];
+  readonly degraded: readonly ("vector" | "morph")[];
   /** Nodes not embedded yet; they are only reachable by text match or graph edges. */
   readonly unindexed: number;
   /**
@@ -96,6 +97,7 @@ const make = Effect.gen(function* () {
   const embedder = yield* Embedder;
   const vectors = yield* VectorIndex;
   const graph = yield* Graph;
+  const analyzer = yield* MorphAnalyzer;
   const supersededBy = sqlite.prepare(`
     SELECT e.from_id, e.kind FROM edges e JOIN nodes n ON n.id = e.from_id
     WHERE e.to_id = ? AND e.kind IN ('corrects', 'retracts') ORDER BY n.seq`);
@@ -134,6 +136,30 @@ const make = Effect.gen(function* () {
       });
     });
 
+  /**
+   * Node ids ranked by morpheme terms (BM25): "로그 형식을 정했었지" meets "로그 포맷은 … 하기로 했다"
+   * through 로그, and particles or endings no longer decide the match.
+   */
+  const morphRanking = (query: string, allowed: readonly string[], k: number) =>
+    Effect.gen(function* () {
+      if (!analyzer.ready()) {
+        analyzer.warm();
+        return yield* new MorphAnalysisFailed({ reason: "not_ready" });
+      }
+      const [terms = []] = yield* analyzer.terms([query]);
+      const unique = [...new Set(terms)].filter((term) => term.length > 0);
+      if (unique.length === 0) return [];
+      const match = unique.map((term) => `"${term.replaceAll('"', '""')}"`).join(" OR ");
+      const projects = allowed.map(() => "?").join(", ");
+      return sqlite
+        .prepare(`
+          SELECT n.id, n.project_id FROM nodes_morph f JOIN nodes n ON n.seq = f.rowid
+          WHERE nodes_morph MATCH ? AND n.project_id IN (${projects})
+          ORDER BY bm25(nodes_morph) LIMIT ?`)
+        .all(match, ...allowed, k)
+        .map((row) => decodeIdProject(row).id);
+    });
+
   /** Node ids ranked by text match: trigram BM25 first, then 2-character substring hits. */
   function textRanking(query: string, allowed: readonly string[], k: number) {
     const { trigram, short } = searchTerms(query);
@@ -168,7 +194,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const limit = input.limit ?? defaultLimit;
       const allowed = allowedProjects(input.projectId, input.crossProject ?? true);
-      const degraded: "vector"[] = [];
+      const degraded: ("vector" | "morph")[] = [];
 
       const byVector = yield* vectorRanking(input.query, new Set(allowed), limit * 4).pipe(
         Effect.catchAll(() => {
@@ -177,7 +203,15 @@ const make = Effect.gen(function* () {
         }),
       );
       const byText = textRanking(input.query, allowed, limit * 2);
-      const seeds = fuseRanks([byVector, byText]);
+      const byMorph = yield* morphRanking(input.query, allowed, limit * 2).pipe(
+        Effect.catchAll(() => {
+          if (analyzer.identity !== "none") degraded.push("morph");
+          return Effect.succeed([]);
+        }),
+      );
+      const seeds = fuseRanks(
+        byMorph.length > 0 ? [byVector, byText, byMorph] : [byVector, byText],
+      );
       const vectorIds = new Set(byVector);
 
       const walk = graph.traverse(seeds, {

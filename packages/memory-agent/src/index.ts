@@ -112,6 +112,12 @@ export {
   type EmbedderApi,
 } from "./memory/embedding/embedder.ts";
 export { Indexer } from "./memory/embedding/indexer.ts";
+export {
+  MorphAnalysisFailed,
+  MorphAnalyzer,
+  kiwiModel,
+  type MorphAnalyzerApi,
+} from "./memory/morph/analyzer.ts";
 export { VectorIndex, VectorIndexError, type VectorHit } from "./memory/embedding/vector-index.ts";
 
 export { FileTools, fileToolNames } from "./tools/files.ts";

@@ -300,6 +300,7 @@ const make = Effect.gen(function* () {
     const index = () =>
       void Effect.runPromise(
         quietly(indexer.indexAll()).pipe(
+          Effect.zipRight(quietly(indexer.analyzeAll())),
           Effect.zipRight(interpreter.automatic ? quietly(interpreter.runPending) : Effect.void),
         ),
       );

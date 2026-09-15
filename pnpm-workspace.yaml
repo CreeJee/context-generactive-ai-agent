@@ -42,6 +42,7 @@ catalog:
   "@napi-rs/keyring": 2.1.0
   "@tanstack/ai-mcp": 0.3.10
   cmdk: ^1.1.1
+  kiwi-nlp: 0.24.0
 overrides:
   vite@*: "catalog:"
 peerDependencyRules:

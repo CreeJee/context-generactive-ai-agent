@@ -24,7 +24,8 @@ bin/
   projects/     프로젝트 등록·경로 검사·교차 회상 제외·권한 모드(ask/auto)
   sessions/     프로젝트에 속한 대화
   memory/       기억: 노드·구조 edge·그래프 탐색·근거 추적·검색·기록 middleware
-    embedding/  로컬 임베딩 모델 + turbovec 벡터 인덱스 + 인덱서
+    embedding/  로컬 임베딩 모델 + turbovec 벡터 인덱스 + 인덱서(형태소 분석 포함)
+    morph/      Kiwi 한국어 형태소 분석(worker thread, 모델은 처음 쓸 때 내려받음)
   codex/        ChatGPT 계정(codex app-server): 로그인·모델·TanStack 어댑터
   files/        경로·자격 증명 검사, 텍스트 파일 읽기/쓰기, 목록, 줄 검색
   attachments/  업로드 이미지 저장(sha256, 바이트 서명 검사)과 메시지 연결, 첨부 URL 규칙
@@ -44,7 +45,7 @@ bin/
 
 - 사용자·assistant·tool call·tool result를 모두 원문 그대로 `nodes`에 저장합니다(수정 불가).
 - 저장할 때 구조 edge를 만듭니다: `next`(세션 순서), `reply`, `calls`, `returns`, `touches`(같은 파일/URL).
-- 검색(`find_memory`)은 임베딩 벡터 순위와 FTS trigram 순위를 RRF로 합친 뒤 그래프를 따라 넓힙니다.
+- 검색(`find_memory`)은 임베딩 벡터 순위, FTS trigram 순위, Kiwi 형태소(명사·어간) BM25 순위를 RRF로 합친 뒤 그래프를 따라 넓힙니다. Kiwi는 worker thread에서 돌고(RSS 약 850 MB, 10분 쉬면 종료), 적재 중에는 형태소 순위 없이 검색합니다. 품질 평가는 `vp run eval:recall`(두 모델이 `~/.context-generactive-agent/models`에 있어야 함).
 - `read_evidence`는 원문을 페이지로 읽고, `trace_evidence`는 tool result → call → assistant → user 발언까지 거슬러 갑니다.
 - 교차 프로젝트 회상은 기본 포함이며, 프로젝트별로 제외할 수 있습니다. 결과에는 출처 프로젝트 이름(`projectName`)이 붙습니다.
 - `Interpreter`(llm-interpret)가 답변이 끝난 뒤 사용자·assistant 발언을 해석해 주제(`topic` 노드 + `about`), `corrects`·`retracts`·`related` edge를 붙입니다. 후보는 코드가 고르고, 정정·취소는 사용자 발언에서만, 대상이 분명할 때만 edge가 됩니다. 모호하면 `interpretations`에 `unconfirmed`로 남아 확인 질문이 됩니다.
