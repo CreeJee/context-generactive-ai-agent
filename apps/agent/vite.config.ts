@@ -32,8 +32,6 @@ export default defineConfig(({ command }) => ({
   },
   plugins: lazyPlugins(() => [
     tailwindcss(),
-    // reactRouter() already sets up React and Fast Refresh; adding @vitejs/plugin-react's react()
-    // injects the refresh runtime twice ("RefreshRuntime has already been declared").
     reactRouter(),
     babel({ presets: [reactCompilerPreset()] }),
   ]),
