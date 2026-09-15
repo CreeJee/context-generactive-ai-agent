@@ -11,7 +11,6 @@ import {
   type ModelMessage,
   type TextOptions,
 } from "@tanstack/ai";
-import { toolRoundLimitCode } from "../agent/run-state.ts";
 import {
   BaseTextAdapter,
   type StructuredOutputOptions,
@@ -122,9 +121,6 @@ export class TurnParking {
   }
 }
 
-/** Rounds of tool calls one run may take before it is stopped with {@link toolRoundLimitCode}. */
-export const maxToolRounds = 100;
-
 /**
  * Codex decides when a turn is done, so every model step that ends in tool calls is followed by
  * another: that is where the results go back to the waiting codex turn. TanStack's default of five
@@ -134,30 +130,15 @@ export const maxToolRounds = 100;
 export const codexAgentLoop: AgentLoopStrategy = ({ iterationCount, finishReason }) =>
   iterationCount === 0 || finishReason === "tool_calls";
 
-class ToolRoundLimit extends Error {
-  readonly code = toolRoundLimitCode;
-}
-
 /**
- * What a run through codex needs besides {@link codexAgentLoop}: it fails, with
- * {@link toolRoundLimitCode}, instead of going on past `limit` rounds of tool calls, and whenever it
- * ends (finished, failed or cancelled) the codex turn it left waiting on tool results is ended too,
- * so codex does not keep waiting. A run paused for approval does not end, and keeps its turn.
+ * What a run through codex needs besides {@link codexAgentLoop}: whenever it ends (finished, failed
+ * or cancelled) the codex turn it left waiting on tool results is ended too, so codex does not keep
+ * waiting. A run paused for approval does not end, and keeps its turn. There is no cap on tool
+ * calls: a run ends when codex answers, the user cancels, or something fails.
  */
-export function codexRunMiddleware(parking: TurnParking, limit: number): ChatMiddleware {
+export function codexRunMiddleware(parking: TurnParking): ChatMiddleware {
   const release = (ctx: ChatMiddlewareContext) => parking.release(ctx.threadId);
-  return {
-    name: "memory-agent/codex-run",
-    onShouldContinue: (_ctx, state) => {
-      if (state.finishReason === "tool_calls" && state.iterationCount >= limit)
-        throw new ToolRoundLimit(
-          `Stopped after ${limit} rounds of tool calls without a final answer.`,
-        );
-    },
-    onFinish: release,
-    onError: release,
-    onAbort: release,
-  };
+  return { name: "memory-agent/codex-run", onFinish: release, onError: release, onAbort: release };
 }
 
 /**
@@ -547,8 +528,8 @@ const make = Effect.gen(function* () {
     /** Pass as `agentLoopStrategy` to every chat() with this adapter and tools. */
     agentLoop: codexAgentLoop,
 
-    /** Add to every chat() with this adapter and tools; `limit` is for tests. */
-    runMiddleware: (limit = maxToolRounds) => codexRunMiddleware(parking, limit),
+    /** Add to every chat() with this adapter and tools. */
+    runMiddleware: () => codexRunMiddleware(parking),
 
     /**
      * Sends a user message into the turn the thread is running. `no_turn` when nothing is running

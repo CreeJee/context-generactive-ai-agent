@@ -5,7 +5,6 @@ import { fileURLToPath } from "node:url";
 import { chat, toolDefinition, type ModelMessage, type StreamChunk } from "@tanstack/ai";
 import { Effect, Layer, ManagedRuntime, Schema } from "effect";
 import { afterEach, describe, expect, test } from "vite-plus/test";
-import { toolRoundLimitCode } from "../src/agent/run-state.ts";
 import { CodexAppServer } from "../src/codex/app-server.ts";
 import { Attachments } from "../src/attachments/attachments.ts";
 import { CodexChat } from "../src/codex/chat.ts";
@@ -53,11 +52,7 @@ const Log = Schema.Struct({
   log: Schema.Array(Schema.Struct({ method: Schema.String, params: Schema.Unknown })),
 });
 
-async function run(
-  runtime: ReturnType<typeof chatRuntime>,
-  messages: ModelMessage[],
-  toolRounds?: number,
-) {
+async function run(runtime: ReturnType<typeof chatRuntime>, messages: ModelMessage[]) {
   const codexChat = await runtime.runPromise(CodexChat);
   const chunks: StreamChunk[] = [];
   for await (const chunk of chat({
@@ -66,7 +61,7 @@ async function run(
     messages,
     tools: [getWeather],
     threadId: "session-1",
-    middleware: [codexChat.runMiddleware(toolRounds)],
+    middleware: [codexChat.runMiddleware()],
   }))
     chunks.push(chunk);
   const text = chunks
@@ -259,28 +254,40 @@ describe("CodexTextAdapter", () => {
     expect(result.methods.filter((method) => method === "thread/start")).toHaveLength(1);
   });
 
-  test("answers after many sequential tool calls, each result handed back to the same turn", async () => {
+  test("answers after any number of sequential tool calls, each result handed back to the same turn", async () => {
     executed.length = 0;
-    const result = await run(chatRuntime(), [{ role: "user", content: "sequential weather 6" }]);
-    // TanStack's default loop stopped after the fifth call: its result never reached codex.
-    expect(executed).toHaveLength(6);
+    // TanStack's default loop stopped after the fifth call; there is no cap at all now.
+    const result = await run(chatRuntime(), [{ role: "user", content: "sequential weather 120" }]);
+    expect(executed).toHaveLength(120);
     expect(result.text).toBe(
-      `Looked up 6: ${executed.map((city) => `${city}: sunny`).join(" | ")}`,
+      `Looked up 120: ${executed.map((city) => `${city}: sunny`).join(" | ")}`,
     );
     expect(result.chunks.at(-1)).toMatchObject({ type: "RUN_FINISHED" });
     expect(result.methods.filter((method) => method === "turn/start")).toHaveLength(1);
     expect(result.methods).not.toContain("turn/interrupt");
-  });
+  }, 30_000);
 
-  test("a run past the tool-round limit fails with its code and ends the waiting codex turn", async () => {
-    executed.length = 0;
+  test("a run cancelled between tool calls ends the codex turn waiting on the result", async () => {
     const runtime = chatRuntime();
-    const outcome = await run(runtime, [{ role: "user", content: "sequential weather 6" }], 3).then(
-      (finished) => ({ kind: "finished" as const, chunks: finished.chunks }),
-      (error: Error & { code?: string }) => ({ kind: "threw" as const, code: error.code }),
-    );
-    expect(outcome).toEqual({ kind: "threw", code: toolRoundLimitCode });
-    expect(executed).toHaveLength(3);
+    const codexChat = await runtime.runPromise(CodexChat);
+    const controller = new AbortController();
+    const stopper = toolDefinition({
+      name: "get_weather",
+      description: "Cancels the run when called.",
+      inputSchema: toToolSchema(Schema.Struct({ city: Schema.String })),
+    }).server(({ city }) => {
+      controller.abort();
+      return `${city}: cancelled`;
+    });
+    for await (const _chunk of chat({
+      adapter: codexChat.adapter({ model: "fast-1", reasoningEffort: "low" }),
+      agentLoopStrategy: codexChat.agentLoop,
+      messages: [{ role: "user", content: "sequential weather 3" }],
+      tools: [stopper],
+      threadId: "session-1",
+      abortController: controller,
+      middleware: [codexChat.runMiddleware()],
+    }));
     const log = await runtime.runPromise(
       Effect.flatMap(CodexAppServer, (codex) => codex.request("test/log", undefined, Log)),
     );

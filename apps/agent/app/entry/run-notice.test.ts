@@ -1,8 +1,4 @@
-import {
-  serverRestartedCode,
-  toolRoundLimitCode,
-  type SessionRunState,
-} from "memory-agent/definitions";
+import { serverRestartedCode, type SessionRunState } from "memory-agent/definitions";
 import { describe, expect, test } from "vite-plus/test";
 import { noticeOf } from "./run-notice";
 
@@ -38,10 +34,6 @@ describe("run notices", () => {
     expect(noticeOf(ended("aborted"), page)).toEqual({ kind: "cancelled" });
     expect(noticeOf(ended("failed"), page)).toEqual({ kind: "failed", message: "boom" });
     expect(noticeOf(ended("failed", serverRestartedCode), page)).toEqual({ kind: "restarted" });
-    expect(noticeOf(ended("failed", toolRoundLimitCode), page)).toEqual({
-      kind: "failed",
-      message: expect.stringContaining("도구를 너무 많이 쓰고도"),
-    });
     expect(noticeOf(ended("completed", serverRestartedCode), page)).toEqual({ kind: "restarted" });
   });
 });
