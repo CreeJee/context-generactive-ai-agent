@@ -11,6 +11,8 @@ import {
   type JSONRPCResponse,
 } from "json-rpc-2.0";
 import { StorageRoot } from "../config/storage-root.ts";
+import { runtimeRequire, runtimeRoot } from "../runtime/resources.ts";
+import { codexInstaller } from "./installer.ts";
 
 export type Json =
   | string
@@ -21,7 +23,8 @@ export type Json =
   | { readonly [key: string]: Json };
 
 export class CodexUnavailable extends Data.TaggedError("CodexUnavailable")<{
-  readonly reason: "not_installed" | "spawn_failed" | "exited";
+  /** `installing`/`install_failed`: the executable is still fetching, or failed to fetch, its codex. */
+  readonly reason: "not_installed" | "installing" | "install_failed" | "spawn_failed" | "exited";
 }> {}
 
 export class CodexRequestFailed extends Data.TaggedError("CodexRequestFailed")<{
@@ -81,7 +84,7 @@ const nativeConfig = [
 ];
 
 /** Rust target triples of the platform binaries that `@openai/codex` ships. */
-function targetTriple(platform: string, arch: string) {
+export function targetTriple(platform: string, arch: string) {
   switch (`${platform}-${arch}`) {
     case "darwin-arm64":
       return "aarch64-apple-darwin";
@@ -101,19 +104,15 @@ function targetTriple(platform: string, arch: string) {
 }
 
 /**
- * The native `codex` from this package's pinned `@openai/codex` dependency, so users need no
- * separate install and a global codex upgrade cannot change the protocol. Resolved from the
- * memory-agent package rather than this module because the app bundles this module into its
- * server build. The code-mode host ships next to it. Null when this platform's binary is missing.
+ * In a checkout, the native `codex` from this package's pinned `@openai/codex` dependency, so a
+ * global codex upgrade cannot change the protocol. The code-mode host ships next to it. Null when
+ * this platform's binary is missing. The executable uses {@link codexInstaller} instead.
  */
 export function bundledCodex(platform: string = process.platform, arch: string = process.arch) {
   const triple = targetTriple(platform, arch);
   if (!triple) return null;
   try {
-    const fromPackage = createRequire(
-      createRequire(import.meta.url).resolve("memory-agent/package.json"),
-    );
-    const fromCodex = createRequire(fromPackage.resolve("@openai/codex/package.json"));
+    const fromCodex = createRequire(runtimeRequire().resolve("@openai/codex/package.json"));
     const platformPackage = fromCodex.resolve(`@openai/codex-${platform}-${arch}/package.json`);
     const executable = join(
       dirname(platformPackage),
@@ -153,22 +152,32 @@ const make = (command: CodexCommand | null) =>
     let connection: Connection | null = null;
     let starting: Promise<Connection> | null = null;
 
-    const resolved =
-      command ??
-      (() => {
-        const executable = bundledCodex();
-        return executable
-          ? {
-              executable,
-              args: [
-                "app-server",
-                "--listen",
-                "stdio://",
-                ...nativeConfig.flatMap((line) => ["-c", line]),
-              ],
-            }
-          : null;
-      })();
+    const appServer = (executable: string): CodexCommand => ({
+      executable,
+      args: ["app-server", "--listen", "stdio://", ...nativeConfig.flatMap((line) => ["-c", line])],
+    });
+    const runtime = runtimeRoot();
+    const installer =
+      command === null && runtime !== null ? codexInstaller(storage.path, runtime) : null;
+    const checkout = command === null && installer === null ? bundledCodex() : null;
+
+    /** Which codex to start, or why there is none to start yet. */
+    const commandToStart = Effect.suspend((): Effect.Effect<CodexCommand, CodexUnavailable> => {
+      if (command) return Effect.succeed(command);
+      if (!installer)
+        return checkout
+          ? Effect.succeed(appServer(checkout))
+          : Effect.fail(new CodexUnavailable({ reason: "not_installed" }));
+      const state = installer.check();
+      switch (state.kind) {
+        case "ready":
+          return Effect.succeed(appServer(state.executable));
+        case "installing":
+          return Effect.fail(new CodexUnavailable({ reason: "installing" }));
+        case "failed":
+          return Effect.fail(new CodexUnavailable({ reason: "install_failed" }));
+      }
+    });
 
     function dispatch(conn: Connection, line: string) {
       const frame = decodeFrame(line);
@@ -271,23 +280,24 @@ const make = (command: CodexCommand | null) =>
 
     /** Starts codex on first use and again after it exits. A failed request is never retried here. */
     const connect = Effect.suspend(() => {
-      if (!resolved) return Effect.fail(new CodexUnavailable({ reason: "not_installed" }));
       if (connection) return Effect.succeed(connection);
-      starting ??= start(resolved).then(
-        (conn) => {
-          connection = conn;
-          starting = null;
-          return conn;
-        },
-        (error) => {
-          starting = null;
-          throw error;
-        },
-      );
-      const pending = starting;
-      return Effect.tryPromise({
-        try: () => pending,
-        catch: () => new CodexUnavailable({ reason: "spawn_failed" }),
+      return Effect.flatMap(commandToStart, (spec) => {
+        starting ??= start(spec).then(
+          (conn) => {
+            connection = conn;
+            starting = null;
+            return conn;
+          },
+          (error) => {
+            starting = null;
+            throw error;
+          },
+        );
+        const pending = starting;
+        return Effect.tryPromise({
+          try: () => pending,
+          catch: () => new CodexUnavailable({ reason: "spawn_failed" }),
+        });
       });
     });
 

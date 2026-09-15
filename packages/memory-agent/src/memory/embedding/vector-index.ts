@@ -2,9 +2,9 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { Context, Data, Effect, Layer, Option, Schema } from "effect";
-import { loadTurbovec } from "turbovec";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { Database } from "../../db/database.ts";
+import { requireRuntime } from "../../runtime/resources.ts";
 import { Embedder } from "./embedder.ts";
 
 export class VectorIndexError extends Data.TaggedError("VectorIndexError")<{
@@ -55,7 +55,7 @@ const make = Effect.gen(function* () {
     Effect.try({
       try: () => {
         mkdirSync(directory, { recursive: true, mode: 0o700 });
-        const { CacheLease, VectorIndex } = loadTurbovec();
+        const { CacheLease, VectorIndex } = requireRuntime("turbovec").loadTurbovec();
         const lease = new CacheLease(join(directory, "writer.lock"));
         try {
           const indexed = Schema.decodeUnknownSync(Count)(

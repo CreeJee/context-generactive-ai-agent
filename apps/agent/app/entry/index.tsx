@@ -66,9 +66,9 @@ export function App() {
     });
   }, [refreshAuth]);
 
-  // While the browser login is open, poll until codex reports the account.
+  // While the browser login is open or codex is still being fetched, poll until that changes.
   useEffect(() => {
-    if (auth?.status !== "pending") return;
+    if (auth?.status !== "pending" && auth?.status !== "installing") return;
     const timer = setInterval(() => void refreshAuth(), loginPollMs);
     return () => clearInterval(timer);
   }, [auth?.status, refreshAuth]);

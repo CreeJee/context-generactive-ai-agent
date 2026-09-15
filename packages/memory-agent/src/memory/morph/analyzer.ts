@@ -1,14 +1,10 @@
-import { execFile } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { join } from "node:path";
-import { promisify } from "node:util";
+import { existsSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { Context, Data, Effect, Layer, Schema } from "effect";
 import { StorageRoot } from "../../config/storage-root.ts";
-
-const run = promisify(execFile);
+import { installArchive } from "../../runtime/archive.ts";
+import { runtimeRequire, runtimeRoot } from "../../runtime/resources.ts";
 
 export class MorphAnalysisFailed extends Data.TaggedError("MorphAnalysisFailed")<{
   readonly reason: string;
@@ -58,39 +54,26 @@ async function ensureModel(storageRoot: string) {
   const root = join(storageRoot, "models", `kiwi-${kiwiModel.version}`);
   const modelDirectory = join(root, kiwiModel.directory);
   if (existsSync(join(modelDirectory, "cong.mdl"))) return modelDirectory;
-
-  const response = await fetch(kiwiModel.url, { redirect: "follow" });
-  if (!response.ok) throw new Error(`model download failed: ${response.status}`);
-  const archive = Buffer.from(await response.arrayBuffer());
-  const digest = createHash("sha256").update(archive).digest("hex");
-  if (digest !== kiwiModel.sha256) throw new Error("model archive checksum mismatch");
-
-  // Extract next to the final place, then rename, so a crash never leaves half a model in use.
-  const staging = join(storageRoot, "models", `.kiwi-${randomUUID()}`);
-  mkdirSync(staging, { recursive: true, mode: 0o700 });
-  try {
-    const file = join(staging, "model.tgz");
-    writeFileSync(file, archive, { mode: 0o600 });
-    const { stdout } = await run("tar", ["-tzf", file]);
-    const entries = stdout.trim().split("\n");
-    if (entries.some((entry) => entry.startsWith("/") || entry.split("/").includes("..")))
-      throw new Error("unsafe model archive");
-    await run("tar", ["-xzf", file, "-C", staging]);
-    rmSync(file);
-    rmSync(root, { recursive: true, force: true });
-    renameSync(staging, root);
-  } catch (error) {
-    rmSync(staging, { recursive: true, force: true });
-    throw error;
-  }
+  mkdirSync(dirname(root), { recursive: true, mode: 0o700 });
+  const failure = await installArchive(
+    { url: kiwiModel.url, algorithm: "sha256", digest: kiwiModel.sha256 },
+    root,
+  );
+  if (failure !== null) throw new Error(`Kiwi model install failed: ${failure}`);
   return modelDirectory;
 }
 
 /**
- * Found through the package exports rather than next to this module, because the app bundles
- * this module into its server build while the worker file stays in the package.
+ * In a checkout, found through the package exports rather than next to this module, because the
+ * app bundles this module into its server build while the worker file stays in the package. The
+ * executable unpacks it into its runtime folder, next to `node_modules/kiwi-nlp`.
  */
-const workerPath = () => createRequire(import.meta.url).resolve("memory-agent/kiwi-worker");
+const workerPath = () => {
+  const root = runtimeRoot();
+  return root === null
+    ? runtimeRequire().resolve("memory-agent/kiwi-worker")
+    : join(root, "kiwi-worker.mjs");
+};
 
 const makeKiwi = Effect.gen(function* () {
   const storage = yield* StorageRoot;

@@ -1,5 +1,5 @@
-import { AsyncEntry } from "@napi-rs/keyring";
 import { Context, Data, Effect, Layer } from "effect";
+import { requireRuntime } from "../runtime/resources.ts";
 
 /** Keychain service name every secret of this app is stored under. */
 export const keychainService = "context-generactive-agent";
@@ -19,20 +19,24 @@ export interface SecretStoreApi {
   readonly remove: (name: SecretName) => Effect.Effect<void, SecretStoreFailed>;
 }
 
+/** The native keyring addon loads on first use, so a failure to load is a failed operation. */
+const entry = (name: SecretName) =>
+  new (requireRuntime("@napi-rs/keyring").AsyncEntry)(keychainService, name);
+
 const keychain: SecretStoreApi = {
   get: (name) =>
     Effect.tryPromise({
-      try: () => new AsyncEntry(keychainService, name).getPassword(),
+      try: () => entry(name).getPassword(),
       catch: () => new SecretStoreFailed({ operation: "read" }),
     }).pipe(Effect.map((value) => value ?? null)),
   set: (name, value) =>
     Effect.tryPromise({
-      try: () => new AsyncEntry(keychainService, name).setPassword(value),
+      try: () => entry(name).setPassword(value),
       catch: () => new SecretStoreFailed({ operation: "write" }),
     }),
   remove: (name) =>
     Effect.tryPromise({
-      try: () => new AsyncEntry(keychainService, name).deletePassword(),
+      try: () => entry(name).deletePassword(),
       catch: () => new SecretStoreFailed({ operation: "delete" }),
     }).pipe(Effect.asVoid),
 };

@@ -6,7 +6,12 @@ export type AuthState =
   | { readonly status: "signed-out" }
   | { readonly status: "pending"; readonly authUrl: string }
   | { readonly status: "signed-in"; readonly planType: string | null }
-  | { readonly status: "unavailable"; readonly reason: "not_installed" | "spawn_failed" | "exited" }
+  /** The executable is fetching its codex for the first time; ask again shortly. */
+  | { readonly status: "installing" }
+  | {
+      readonly status: "unavailable";
+      readonly reason: Exclude<CodexUnavailable["reason"], "installing">;
+    }
   | { readonly status: "error"; readonly message: string };
 
 const AccountRead = Schema.Struct({
@@ -70,8 +75,17 @@ const make = Effect.gen(function* () {
   const toState = (effect: Effect.Effect<AuthState, CodexUnavailable | CodexRequestFailed>) =>
     effect.pipe(
       Effect.catchTags({
-        CodexUnavailable: (error) =>
-          Effect.succeed<AuthState>({ status: "unavailable", reason: error.reason }),
+        CodexUnavailable: ({ reason }) => {
+          switch (reason) {
+            case "installing":
+              return Effect.succeed<AuthState>({ status: "installing" });
+            case "not_installed":
+            case "install_failed":
+            case "spawn_failed":
+            case "exited":
+              return Effect.succeed<AuthState>({ status: "unavailable", reason });
+          }
+        },
         CodexRequestFailed: () =>
           Effect.succeed<AuthState>({ status: "error", message: "Codex account request failed." }),
       }),

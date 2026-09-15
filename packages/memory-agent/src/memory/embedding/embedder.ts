@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { Context, Data, Effect, Layer } from "effect";
 import { StorageRoot } from "../../config/storage-root.ts";
+import { requireRuntime } from "../../runtime/resources.ts";
 
 export class EmbeddingError extends Data.TaggedError("EmbeddingError")<{
   readonly cause: unknown;
@@ -40,7 +41,7 @@ const makeLocal = Effect.gen(function* () {
   const load = yield* Effect.cached(
     Effect.tryPromise({
       try: async () => {
-        const { AutoModel, AutoTokenizer, env } = await import("@huggingface/transformers");
+        const { AutoModel, AutoTokenizer, env } = requireRuntime("@huggingface/transformers");
         env.cacheDir = cacheDir;
         env.allowLocalModels = false;
         const [tokenizer, model] = await Promise.all([
