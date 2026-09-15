@@ -76,9 +76,15 @@ export default defineConfig(({ command }) => ({
   },
   run: {
     tasks: {
+      // Workspace dependencies build first, down to turbovec's native addon.
+      build: {
+        command: "react-router build",
+        dependsOn: [{ task: "build", from: "dependencies" }],
+      },
+      bundle: { command: "vp pack", dependsOn: ["build"] },
       // Never cached: each run builds or starts a fresh executable, and Vite Task's file tracking
       // around the started executable keeps it from serving.
-      package: { command: "react-router build && node scripts/package.ts", cache: false },
+      package: { command: "node scripts/package.ts", dependsOn: ["build"], cache: false },
       "smoke-package": { command: "node scripts/smoke-package.ts", cache: false },
     },
   },

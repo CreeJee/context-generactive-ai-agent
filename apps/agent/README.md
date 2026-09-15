@@ -28,15 +28,15 @@ vp run dev --host 127.0.0.1 --port 5174
 
 ```bash
 cd apps/agent
-vp run bundle                         # react-router build + vp pack → dist/context-agent.mjs
+vp run bundle                         # 의존 패키지 build + react-router build + vp pack → dist/context-agent.mjs
 vp run start --port 5175 --no-open    # 번들로 서버 실행(저장소의 네이티브 패키지 사용)
-vp run package                        # 이 기기용 실행 파일 → dist/context-agent-<플랫폼>-<아키텍처>/context-agent
+vp run package                        # 의존 패키지 build 뒤 이 기기용 실행 파일 → dist/context-agent-<플랫폼>-<아키텍처>/context-agent
 vp run smoke-package                  # 실행 파일을 저장소 밖에서 띄워 확인(codex 116 MB를 한 번 받음)
 ```
 
 - 실행 파일: `context-agent [폴더] [--port 5173] [--no-open] [--storage <폴더>]`. 폴더(없으면 실행한 위치)를 프로젝트로 추가·선택해 브라우저를 엽니다. 홈 폴더나 `/`(Finder 더블클릭)에서 실행하면 프로젝트 없이 엽니다. 앱이 이미 떠 있으면 새로 띄우지 않고 그 앱에서 폴더를 엽니다. `127.0.0.1`에만 열고, 루프백이 아닌 Host는 거부합니다. 에디터용 ACP는 `context-agent acp [--port 5173]`입니다.
 - 첫 실행에서 실행 파일 안의 파일을 `~/.context-generactive-agent/runtime/<해시>`에 풀고, 처음 로그인 상태를 볼 때 codex를 받습니다(받는 동안 사이드바에 "받는 중"이 보입니다).
-- 빌드는 그 플랫폼 기기에서 합니다(Node 26.8.2, turbovec은 `vp run build:native`로 미리 빌드). 서명은 ad-hoc만 합니다.
+- 빌드는 그 플랫폼 기기에서 합니다(Node 26.8.2, turbovec 빌드에 Rust 필요, 윈도우는 MSVC 빌드 도구도). 서명은 ad-hoc만 합니다.
 
 ## 화면
 

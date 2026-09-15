@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "vp run -r build",
     "ready": "vp check && vp run -r test && vp run -r build",
     "dev": "vp run agent#dev",
     "prepare": "vp config"

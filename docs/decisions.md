@@ -264,7 +264,7 @@
 - 넣는 패키지와 크기: turbovec, `@napi-rs/keyring`, transformers, onnxruntime(이 플랫폼 bin만), sharp, kiwi-nlp와 그 의존성. 런타임 74 MB, darwin-arm64 실행 파일 238 MB.
   - 뺀 것: `onnxruntime-web`(transformers Node 빌드가 쓰지 않음), onnxruntime-node의 설치 스크립트 의존성.
 - 플랫폼마다 그 플랫폼 기기에서 빌드한다. pnpm은 이 기기용 optional 패키지만 받고, turbovec은 이 기기에서만 빌드된다. 지금은 darwin-arm64만 만들었다. CI 매트릭스는 후속이다.
-  - turbovec 애드온(`memory-turbovec.node`)은 저장소에 없어서 새로 받은 기기에서는 `packages/turbovec`의 `vp run build:native`(Rust, 윈도우는 MSVC 빌드 도구)를 먼저 해야 한다. 패키징은 필요한 네이티브 파일(turbovec, onnxruntime, keyring, sharp, Kiwi WASM)이 하나라도 없으면 무엇을 해야 하는지 알리고 멈춘다. 빠진 채로 만든 실행 파일이 첫 검색에서야 실패했기 때문이다.
+  - turbovec 애드온(`memory-turbovec.node`)은 저장소에 없어서 새로 받은 기기에서는 Rust(윈도우는 MSVC 빌드 도구도)가 있어야 한다. `vp run package`가 turbovec `build`를 먼저 돌린다(아래 "개발 규칙"). 패키징은 필요한 네이티브 파일(turbovec, onnxruntime, keyring, sharp, Kiwi WASM)이 하나라도 없으면 무엇을 해야 하는지 알리고 멈춘다. 빠진 채로 만든 실행 파일이 첫 검색에서야 실패했기 때문이다.
 - 윈도우 차이는 `packages/memory-agent/src/runtime/host.ts` 한 곳에서 다룬다. 플랫폼을 인자로 받아 두 갈래를 모두 테스트한다. 윈도우 기기에서 실제로 실행해 보지는 않았다.
   - 앱이 직접 실행하는 도구(codex, git)는 PATH의 절대 경로 항목에서만 찾는다(윈도우는 PATHEXT 포함). 넘기는 환경 변수는 시스템 폴더와, 윈도우에서 프로그램 실행에 필요한 변수(`SystemRoot`, `ComSpec`, `TEMP` 등)뿐이다. codex에는 자격 증명 저장소를 위해 사용자 폴더 변수(`USERPROFILE`, `APPDATA` 등)도 넘긴다.
   - 셸 도구: POSIX는 `$SHELL -c`(없으면 `/bin/sh`)와 프로세스 그룹 종료, 윈도우는 `cmd.exe /d /s /c`와 `taskkill /T /F`(SIGTERM이 없음).
@@ -305,4 +305,8 @@
 
 - Node는 루트 `.node-version`(26.8.2)으로 고정한다. vite-plus와 fnm(`--use-on-cd`)이 모두 이 파일을 읽어 셸·테스트·패키징이 같은 버전을 쓴다. 실행 파일 빌드(`vp pack --exe`, Node SEA)에 25.7 이상이 필요하고, 배포 런타임과 개발 런타임을 같게 두기 위해서다.
 - 앱 개발 서버 인자는 `vp run dev --host 127.0.0.1 --port 5174`처럼 `--` 없이 넘긴다.
+- 모노레포 빌드 순서와 캐시는 turborepo를 두지 않고 Vite+의 Vite Task(`vp run`)로 한다. 이미 쓰는 도구에 `dependsOn`, 입력·출력 캐시가 있어서, 태스크 그래프와 캐시를 두 곳에 나누지 않기 위해서다.
+  - 루트 `build`(`pnpm build` 또는 `vp run build`)가 turbovec → memory-agent → agent 순서로 빌드한다. 각 패키지의 `build`와 memory-agent `test`, agent `package`는 workspace 의존성의 `build` 뒤에 돈다(`vite.config.ts`의 `run.tasks`).
+  - turbovec `build`(cargo)는 크레이트 파일(`src/`, `build.rs`, `Cargo.toml`, `Cargo.lock`, 빌드 스크립트)만 입력으로, `memory-turbovec.node`를 출력으로 둔다. 자동 추적은 cargo의 `target/`·`~/.cargo` 읽기까지 담아 맞지 않는다. 캐시가 맞으면 cargo 없이 애드온을 복원한다.
+  - memory-agent `vp pack`은 선언 파일을 만들지 않는다. 앱이 TypeScript 소스를 바로 쓰고, 선언 생성이 memory-agent 의존성이 아닌 undici-types의 전역 `Response`를 이름 붙이지 못해 빌드가 실패했다.
 - 변형은 리터럴 태그를 가진 서로소 유니온으로 표현하고 `switch`로 분기한다. `"key" in obj` 식 판별은 쓰지 않는다. 라이브러리 유니온이 깔끔하게 구분되지 않으면 경계에서 한 번 우리 유니온으로 바꾼다.

@@ -1,6 +1,6 @@
 // Builds the executable for this machine's platform:
 //   dist/context-agent-<platform>-<arch>/context-agent (+ .sha256)
-// Run with `vp run package`, which runs `react-router build` first. Other platforms are built on
+// Run with `vp run package`, which builds the app and its workspace dependencies first. Other platforms are built on
 // their own machines (turbovec and the optional platform packages exist only for the host).
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -198,7 +198,7 @@ function verifyNativeFiles() {
   const checks = [
     {
       ok: existsSync(underStage("turbovec/memory-turbovec.node")),
-      fix: "turbovec addon missing: run `vp run build:native` in packages/turbovec (needs Rust; on Windows also the MSVC build tools)",
+      fix: "turbovec addon missing: run `vp run build`, which builds packages/turbovec (needs Rust; on Windows also the MSVC build tools)",
     },
     {
       ok: existsSync(

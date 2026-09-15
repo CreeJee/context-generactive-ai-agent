@@ -22,10 +22,10 @@ vp run ready
 vp run -r test
 ```
 
-- Build the monorepo:
+- Build the monorepo in dependency order, turbovec's native addon included (needs Rust; cached by Vite Task):
 
 ```bash
-vp run -r build
+pnpm build   # or: vp run build
 ```
 
 - Run the development server (see [apps/agent](apps/agent/README.md) for host/port options):

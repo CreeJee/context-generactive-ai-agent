@@ -6,9 +6,7 @@
     "#server-build": "./build/server/index.js"
   },
   "scripts": {
-    "build": "react-router build",
     "dev": "react-router dev",
-    "bundle": "react-router build && vp pack",
     "start": "node dist/context-agent.mjs",
     "typecheck": "react-router typegen && tsc"
   },
