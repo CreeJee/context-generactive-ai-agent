@@ -1,42 +1,29 @@
-import { serverRestartedCode, type SessionRunState } from "memory-agent/definitions";
+import type { SessionRunState } from "memory-agent/definitions";
+import { RefreshCwIcon } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "~/components/ui/alert";
+import { Button } from "~/components/ui/button";
 import { api, ApiError } from "./api";
+import { noticeOf, type PageView, type RunNotice } from "./run-notice";
 
-/** How a session's last run ended, when that is worth telling the user. */
-export type RunNotice =
-  | { readonly kind: "cancelled" }
-  | { readonly kind: "cancel-pending" }
-  | { readonly kind: "restarted" }
-  | { readonly kind: "failed"; readonly message: string };
-
-const pollWhilePendingMs = 2_000;
-
-function noticeOf(lastRun: SessionRunState["lastRun"]): RunNotice | null {
-  if (!lastRun) return null;
-  switch (lastRun.status) {
-    case "aborted":
-      return { kind: "cancelled" };
-    case "failed":
-      return lastRun.error?.code === serverRestartedCode
-        ? { kind: "restarted" }
-        : { kind: "failed", message: lastRun.error?.message ?? "알 수 없는 오류" };
-    case "running":
-    case "interrupted":
-    case "completed":
-      return null;
-  }
-}
+const pollMs = 2_000;
 
 /**
  * The server's view of a session's runs: refreshed whenever the page stops generating, so a run
- * that was cancelled, or cut off by a restart, is reported from the record rather than guessed.
+ * that was cancelled, cut off by a restart, or is still going without this page is reported from
+ * the record rather than guessed. While such a run goes on, it is checked again until it ends.
  */
-export function useRunState(sessionId: string, holder: string, generating: boolean) {
+export function useRunState(
+  sessionId: string,
+  holder: string,
+  generating: boolean,
+  page: PageView,
+) {
   const [state, setState] = useState<SessionRunState | null>(null);
   const [cancelling, setCancelling] = useState(false);
   // Asked to stop, but the server had not confirmed it by the time it answered.
   const [cancelPending, setCancelPending] = useState(false);
+  const detached = !generating && state !== null && state.running !== null;
 
   useEffect(() => {
     if (generating) return;
@@ -51,12 +38,12 @@ export function useRunState(sessionId: string, holder: string, generating: boole
         () => {},
       );
     void refresh();
-    const poll = cancelPending ? setInterval(() => void refresh(), pollWhilePendingMs) : null;
+    const poll = cancelPending || detached ? setInterval(() => void refresh(), pollMs) : null;
     return () => {
       current = false;
       if (poll) clearInterval(poll);
     };
-  }, [sessionId, holder, generating, cancelPending]);
+  }, [sessionId, holder, generating, cancelPending, detached]);
 
   /** Asks the server to stop the run. Resolves false when nothing could be asked (network error). */
   const cancel = async () => {
@@ -76,9 +63,7 @@ export function useRunState(sessionId: string, holder: string, generating: boole
   return {
     cancelling,
     cancel,
-    notice: cancelPending
-      ? ({ kind: "cancel-pending" } as const)
-      : noticeOf(state?.lastRun ?? null),
+    notice: cancelPending ? ({ kind: "cancel-pending" } as const) : noticeOf(state, page),
   };
 }
 
@@ -110,6 +95,38 @@ export function RunNoticeView({ notice }: { notice: RunNotice }) {
         <Alert variant="destructive">
           <AlertTitle>마지막 답변이 실패했어요</AlertTitle>
           <AlertDescription>{notice.message}</AlertDescription>
+        </Alert>
+      );
+    case "detached":
+      return (
+        <Alert>
+          <AlertTitle>답변이 아직 진행 중이에요</AlertTitle>
+          <AlertDescription>
+            이 페이지와 연결이 끊겼지만 서버에서는 계속 답하고 있어요. 다시 연결하면 이어서 볼 수
+            있어요.
+          </AlertDescription>
+          <AlertAction>
+            <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
+              <RefreshCwIcon /> 다시 연결
+            </Button>
+          </AlertAction>
+        </Alert>
+      );
+    case "stopped":
+      return (
+        <Alert>
+          <AlertTitle>답변이 중간에 멈췄어요</AlertTitle>
+          <AlertDescription>끝까지 답하지 못했어요. 필요하면 다시 보내 주세요.</AlertDescription>
+        </Alert>
+      );
+    case "no-answer":
+      return (
+        <Alert>
+          <AlertTitle>답변 글 없이 끝났어요</AlertTitle>
+          <AlertDescription>
+            모델이 도구만 쓰고 답을 쓰지 않은 채 마쳤어요. &ldquo;이어서 답해 줘&rdquo;처럼 다시
+            보내 주세요.
+          </AlertDescription>
         </Alert>
       );
   }

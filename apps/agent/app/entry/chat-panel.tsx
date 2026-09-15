@@ -189,7 +189,19 @@ function ChatPanel({
   const awaitingApproval = new Set(approvals.map((approval) => approval.toolCallId));
   // A run rejoined after a reload streams without a local request, so both count as busy.
   const generating = isLoading || sessionGenerating;
-  const run = useRunState(sessionId, holder, generating);
+  // What the conversation ends with: text means an answer, a tool call means work in between.
+  const lastPart = messages
+    .at(-1)
+    ?.parts.filter((part) => part.type === "text" || part.type === "tool-call")
+    .at(-1);
+  const endsWithText =
+    messages.at(-1)?.role === "assistant" &&
+    lastPart?.type === "text" &&
+    lastPart.content.trim().length > 0;
+  const run = useRunState(sessionId, holder, generating, {
+    waitingForApproval,
+    answered: endsWithText,
+  });
   const queue = useMessageQueue(sessionId, holder, generating);
   const [composer, setComposer] = useState<Composer>({ kind: "compose" });
   const [submitting, setSubmitting] = useState(false);
@@ -484,6 +496,12 @@ function ChatPanel({
           {status === "submitted" && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Spinner /> 생각하는 중…
+            </div>
+          )}
+          {/* Between tool calls nothing streams, so the thread itself says the answer goes on. */}
+          {generating && status !== "submitted" && !waitingForApproval && !endsWithText && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Spinner /> 작업 중…
             </div>
           )}
           {error && run.notice === null && (
