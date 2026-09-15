@@ -16,6 +16,7 @@ import { PermissionClassifier } from "../permissions/classifier.ts";
 import { RelayedApprovals } from "../approvals/relayed.ts";
 import { PermissionReviews } from "../permissions/reviews.ts";
 import type { Project } from "../projects/projects.ts";
+import { parallelReads } from "../tools/parallel-reads.ts";
 import { toToolSchema } from "../tools/schema.ts";
 import type { SubagentStatus, SubagentView } from "./subagent-state.ts";
 
@@ -255,14 +256,16 @@ const make = Effect.gen(function* () {
     try {
       const history = await chatState.persistence.stores.messages.loadThread(threadId);
       const messages: ModelMessage[] = [...history, { role: "user", content: task }];
+      const reads = parallelReads(binding.tools, controller.signal);
       const middleware: ChatMiddleware[] = [
         ...chatState.middleware(),
         relayGate(binding, row, controller.signal),
+        reads.middleware,
       ];
       const stream = chat({
         adapter: codexChat.adapter(binding.selection),
         messages,
-        tools: [...binding.tools],
+        tools: reads.tools,
         systemPrompts: [...binding.systemPrompts, childInstructions(row.name, row.instructions)],
         threadId,
         runId: randomUUID(),

@@ -1,13 +1,18 @@
+import { lstat } from "node:fs/promises";
+import { join, posix } from "node:path";
 import { toolDefinition } from "@tanstack/ai";
-import { Context, Effect, Layer, Schema } from "effect";
-import { listProjectFiles, Snapshots } from "../files/listing.ts";
+import { Context, Effect, Either, Layer, Schema } from "effect";
+import { gitGrepFiles } from "../files/git-grep.ts";
+import { listProjectFiles, Snapshots, type Snapshot } from "../files/listing.ts";
 import { PathRejected, resolveProjectPath } from "../files/paths.ts";
 import { decodeSearchCursor, encodeSearchCursor, searchTextFiles } from "../files/search.ts";
 import {
   createTextFile,
   deleteTextFile,
-  linePage,
+  linePageOf,
+  readFileBytes,
   readTextFile,
+  splitLines,
   replaceTextFile,
   TextFileRejected,
 } from "../files/text.ts";
@@ -98,8 +103,65 @@ const deleteFileInput = Schema.Struct({
 
 export const listPageSize = 500;
 
+/** Search candidates kept per snapshot and query, so later pages do not ask Git again. */
+const candidateCacheSize = 32;
+/** Files whose read pages are kept between calls, checked against the file's current stat. */
+const readCacheSize = 8;
+
+interface CachedRead {
+  /** Size, change time and inode at the read; any difference means the file changed. */
+  readonly stamp: string;
+  readonly sha256: string;
+  readonly lines: readonly string[];
+}
+
 const make = Effect.sync(() => {
   const snapshots = new Snapshots();
+  const candidateCache = new Map<string, Promise<ReadonlySet<string> | null>>();
+  const readCache = new Map<string, CachedRead>();
+
+  /**
+   * In a Git work tree, the files that can match at all; null means search every file. The first
+   * page starts `git grep` together with the listing and hands it over as `started`.
+   */
+  const candidatesFor = (
+    view: Snapshot,
+    query: string,
+    caseSensitive: boolean,
+    started?: Promise<ReadonlySet<string> | null>,
+  ) => {
+    if (view.source !== "git") return Promise.resolve(null);
+    const key = `${view.id}\u0000${caseSensitive}\u0000${query}`;
+    const cached = candidateCache.get(key);
+    if (cached) return cached;
+    const pending = started ?? gitGrepFiles(view.root, view.directory, query, caseSensitive);
+    candidateCache.set(key, pending);
+    for (const old of candidateCache.keys()) {
+      if (candidateCache.size <= candidateCacheSize) break;
+      candidateCache.delete(old);
+    }
+    return pending;
+  };
+
+  /**
+   * A text file split into lines, reusing the last read while size, change time (ns) and inode are
+   * unchanged, so paging through a big file does not re-read and re-hash it on every page.
+   */
+  const readLines = async (absolute: string, path: string) => {
+    const stats = await lstat(absolute, { bigint: true });
+    const stamp = `${stats.size}:${stats.ctimeNs}:${stats.mtimeNs}:${stats.ino}`;
+    const cached = readCache.get(absolute);
+    if (cached?.stamp === stamp) return cached;
+    const file = await readTextFile(absolute, path);
+    const entry: CachedRead = { stamp, sha256: file.sha256, lines: splitLines(file.text) };
+    readCache.delete(absolute);
+    readCache.set(absolute, entry);
+    for (const old of readCache.keys()) {
+      if (readCache.size <= readCacheSize) break;
+      readCache.delete(old);
+    }
+    return entry;
+  };
 
   const snapshotFor = async (
     root: string,
@@ -167,19 +229,41 @@ const make = Effect.sync(() => {
             throw new Error(
               "invalid_cursor: pass the same query and caseSensitive as the first page.",
             );
+          // On the first page, ask Git for candidate files while the listing is being taken.
+          const started = position
+            ? undefined
+            : gitGrepFiles(
+                root,
+                orThrow(resolveProjectPath(root, directory ?? ".", "directory")).relative,
+                query,
+                caseSensitive,
+              );
           const view = position
             ? snapshots.get(position.snapshot, root)
             : await snapshotFor(root, directory, glob);
           if (!view) throw new Error("snapshot_expired: start the search again without cursor.");
 
+          // Each directory is checked once per page (no links, still inside the project); the file
+          // itself is checked on the opened handle, so thousands of files do not mean thousands of
+          // synchronous path walks.
+          const directories = new Map<string, Either.Either<unknown, PathRejected>>();
           const page = await searchTextFiles(
             view.paths,
-            async (path) =>
-              (await readTextFile(orThrow(resolveProjectPath(root, path, "file")).absolute, path))
-                .text,
+            async (path) => {
+              const directory = posix.dirname(path);
+              let checked = directories.get(directory);
+              if (!checked) {
+                checked = resolveProjectPath(root, directory, "directory");
+                directories.set(directory, checked);
+              }
+              if (Either.isLeft(checked))
+                throw new PathRejected({ path, reason: checked.left.reason });
+              return (await readFileBytes(join(root, path), path, true)).bytes;
+            },
             query,
             caseSensitive,
             position ?? { file: 0, line: 0 },
+            { candidates: await candidatesFor(view, query, caseSensitive, started) },
           );
           return {
             filesInView: view.paths.length,
@@ -201,9 +285,9 @@ const make = Effect.sync(() => {
       }).server(({ path, startLine, maxLines }) =>
         guarded(path, async () => {
           const resolved = orThrow(resolveProjectPath(root, path, "file"));
-          const file = await readTextFile(resolved.absolute, path);
+          const file = await readLines(resolved.absolute, path);
           const lines = Math.min(Math.max(1, maxLines ?? 400), 2000);
-          return { path, sha256: file.sha256, ...linePage(file.text, startLine ?? 1, lines) };
+          return { path, sha256: file.sha256, ...linePageOf(file.lines, startLine ?? 1, lines) };
         }),
       );
 

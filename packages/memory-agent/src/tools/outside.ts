@@ -4,7 +4,7 @@ import { StorageRoot } from "../config/storage-root.ts";
 import { listOutsideFiles, Snapshots } from "../files/listing.ts";
 import { resolveOutsidePath } from "../files/paths.ts";
 import { decodeSearchCursor, encodeSearchCursor, searchTextFiles } from "../files/search.ts";
-import { linePage, readTextFile } from "../files/text.ts";
+import { linePage, readFileBytes, readTextFile } from "../files/text.ts";
 import type { Project } from "../projects/projects.ts";
 import { guarded, orThrow } from "./failure.ts";
 import { listPageSize } from "./files.ts";
@@ -68,8 +68,8 @@ const make = Effect.gen(function* () {
       const snapshotKey = `outside:${project.id}`;
       const resolve = (path: string, kind: "file" | "directory") =>
         orThrow(resolveOutsidePath(project.root, storage.path, path, kind));
-      const readText = async (path: string) =>
-        (await readTextFile(resolve(path, "file").absolute, path)).text;
+      const readBytes = async (path: string) =>
+        (await readFileBytes(resolve(path, "file").absolute, path)).bytes;
 
       const listOutside = toolDefinition({
         name: "list_outside_files",
@@ -168,7 +168,7 @@ const make = Effect.gen(function* () {
 
           const page = await searchTextFiles(
             view.paths,
-            readText,
+            readBytes,
             query,
             caseSensitive,
             position ?? { file: 0, line: 0 },

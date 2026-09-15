@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { mkdir, open, rename, rm } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { Data, Schema } from "effect";
+import { PathRejected } from "./paths.ts";
 
 /** Largest text file the file tools read, search or rewrite. */
 export const maxTextBytes = 2 * 1024 * 1024;
@@ -30,28 +31,54 @@ export const sha256 = (bytes: Uint8Array | string) =>
 const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const isAlreadyExists = Schema.is(Schema.Struct({ code: Schema.Literal("EEXIST") }));
 
+/** A file's raw bytes, read without following a symlink at the leaf and at most {@link maxTextBytes}. */
+export interface FileBytes {
+  readonly bytes: Buffer;
+  readonly mode: number;
+}
+
+/**
+ * Reads raw bytes (no text checks). Throws {@link TextFileRejected} `too_large`. With `checkLeaf`,
+ * the opened file itself must be a regular file with one link, checked on the handle (for callers
+ * that validated the directories but not the file).
+ */
+export async function readFileBytes(
+  absolute: string,
+  path: string,
+  checkLeaf = false,
+): Promise<FileBytes> {
+  const handle = await open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const stats = await handle.stat();
+    if (checkLeaf && !stats.isFile()) throw new PathRejected({ path, reason: "not_file" });
+    if (checkLeaf && stats.nlink !== 1) throw new PathRejected({ path, reason: "hard_link" });
+    if (stats.size > maxTextBytes) throw new TextFileRejected({ path, reason: "too_large" });
+    const bytes = await handle.readFile();
+    if (bytes.length > maxTextBytes) throw new TextFileRejected({ path, reason: "too_large" });
+    return { bytes, mode: stats.mode & 0o7777 };
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Decodes bytes as UTF-8 text, throwing {@link TextFileRejected} for binary or invalid content. */
+export function decodeText(bytes: Uint8Array, path: string): string {
+  if (bytes.includes(0)) throw new TextFileRejected({ path, reason: "binary" });
+  try {
+    return decoder.decode(bytes);
+  } catch {
+    throw new TextFileRejected({ path, reason: "invalid_utf8" });
+  }
+}
+
 /**
  * Reads a UTF-8 text file without following a symlink at the leaf. `path` is only used in errors.
  * Throws {@link TextFileRejected} for binary, oversized or undecodable content.
  */
 export async function readTextFile(absolute: string, path: string): Promise<TextFile> {
-  const handle = await open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    const stats = await handle.stat();
-    if (stats.size > maxTextBytes) throw new TextFileRejected({ path, reason: "too_large" });
-    const bytes = await handle.readFile();
-    if (bytes.length > maxTextBytes) throw new TextFileRejected({ path, reason: "too_large" });
-    if (bytes.includes(0)) throw new TextFileRejected({ path, reason: "binary" });
-    let text: string;
-    try {
-      text = decoder.decode(bytes);
-    } catch {
-      throw new TextFileRejected({ path, reason: "invalid_utf8" });
-    }
-    return { text, sha256: sha256(bytes), bytes: bytes.length, mode: stats.mode & 0o7777 };
-  } finally {
-    await handle.close();
-  }
+  const { bytes, mode } = await readFileBytes(absolute, path);
+  const text = decodeText(bytes, path);
+  return { text, sha256: sha256(bytes), bytes: bytes.length, mode };
 }
 
 /** Creates a new file, failing if anything already exists at that name. Parents are created. */
@@ -140,7 +167,19 @@ export const readPageCharacters = 16_000;
  * can be edited with the text as read.
  */
 export function linePage(text: string, startLine: number, maxLines: number): LinePage {
-  const lines = text.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  return linePageOf(splitLines(text), startLine, maxLines);
+}
+
+/** Lines with their endings kept, so joining them gives the text back. */
+export const splitLines = (text: string): readonly string[] =>
+  text.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+
+/** {@link linePage} over lines already split with {@link splitLines}. */
+export function linePageOf(
+  lines: readonly string[],
+  startLine: number,
+  maxLines: number,
+): LinePage {
   const totalLines = lines.length;
   const first = Math.max(1, Math.min(startLine, totalLines + 1));
   let content = "";

@@ -123,15 +123,22 @@ describe("search_files", () => {
         ["src/a.ts", "// todo: first\nexport const a = 1;\r\n// TODO second\n"],
         ["src/many.ts", many],
         ["src/image.bin", Buffer.from([0x89, 0x00, 0x01])],
+        ["src/data.bin", Buffer.concat([Buffer.from([0x00]), Buffer.from("TODO second")])],
       ]),
     );
     const { searchFiles } = await fileTools(root);
 
+    // A binary file is reported only when its bytes contain the text, so it might have matched.
     expect(await run(searchFiles, { query: "TODO second" })).toMatchObject({
       matches: [{ path: "src/a.ts", line: 3, text: "// TODO second" }],
-      skipped: [{ path: "src/image.bin", reason: "binary" }],
+      skipped: [{ path: "src/data.bin", reason: "binary" }],
       nextCursor: null,
       complete: false,
+    });
+    expect(await run(searchFiles, { query: "first" })).toMatchObject({
+      matches: [{ path: "src/a.ts", line: 1 }],
+      skipped: [],
+      complete: true,
     });
 
     const first = Schema.decodeUnknownSync(SearchPage)(
@@ -149,7 +156,67 @@ describe("search_files", () => {
   });
 });
 
+describe("search_files in a Git work tree", () => {
+  test("narrows files with git grep but keeps untracked, ignore rules, credentials and case rules", async () => {
+    const { root } = project(
+      new Map<string, string | Buffer>([
+        ["src/tracked.ts", "const Needle = 1;\nconst other = 2;\n"],
+        ["src/untracked.ts", "// needle in a new file\n"],
+        ["dist/built.js", "needle in an ignored file\n"],
+        [".gitignore", "dist\n"],
+        [".env", "needle=secret\n"],
+        ["src/한글.md", "첫 줄\n바늘 needle 둘째 줄\n"],
+      ]),
+    );
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    execFileSync("git", ["add", "src/tracked.ts", ".gitignore"], { cwd: root });
+    const { searchFiles } = await fileTools(root);
+
+    expect(await run(searchFiles, { query: "needle" })).toMatchObject({
+      matches: [
+        { path: "src/untracked.ts", line: 1 },
+        { path: "src/한글.md", line: 2, text: "바늘 needle 둘째 줄" },
+      ],
+      skipped: [],
+      complete: true,
+    });
+    expect(await run(searchFiles, { query: "NEEDLE", caseSensitive: false })).toMatchObject({
+      matches: [
+        { path: "src/tracked.ts", line: 1 },
+        { path: "src/untracked.ts", line: 1 },
+        { path: "src/한글.md", line: 2 },
+      ],
+    });
+    // Non-ASCII case-insensitive queries are searched without git grep.
+    expect(await run(searchFiles, { query: "바늘", caseSensitive: false })).toMatchObject({
+      matches: [{ path: "src/한글.md", line: 2 }],
+    });
+    // Git reads the files as they are on disk now, not as committed.
+    writeFileSync(join(root, "src/tracked.ts"), "const needle = 3;\n");
+    expect(await run(searchFiles, { query: "needle" })).toMatchObject({
+      matches: [
+        { path: "src/tracked.ts", line: 1 },
+        { path: "src/untracked.ts", line: 1 },
+        { path: "src/한글.md", line: 2 },
+      ],
+    });
+  });
+});
+
 describe("read, write, edit and delete", () => {
+  test("paging a file reuses the read only while the file is unchanged", async () => {
+    const { root } = project(new Map([["log.txt", "a\nb\nc\n"]]));
+    const { readFile } = await fileTools(root);
+    const first = Schema.decodeUnknownSync(WithSha)(
+      await run(readFile, { path: "log.txt", maxLines: 1 }),
+    );
+    // Same size, different content: the second page must see the new file.
+    writeFileSync(join(root, "log.txt"), "x\ny\nz\n");
+    const second = await run(readFile, { path: "log.txt", startLine: 2, maxLines: 1 });
+    expect(second).toMatchObject({ content: "y\n" });
+    expect(Schema.decodeUnknownSync(WithSha)(second).sha256).not.toBe(first.sha256);
+  });
+
   test("reads line pages exactly, including CRLF, with a sha256", async () => {
     const { root } = project(new Map([["notes.txt", "one\r\ntwo\r\nthree\r\n"]]));
     const { readFile } = await fileTools(root);

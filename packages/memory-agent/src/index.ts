@@ -176,6 +176,8 @@ export {
   type FileListing,
 } from "./files/listing.ts";
 export { MemoryTools, memoryToolNames } from "./tools/memory.ts";
+export { parallelReads, readOnlyToolNames, type ParallelReads } from "./tools/parallel-reads.ts";
+export { gitGrepFiles } from "./files/git-grep.ts";
 export {
   McpScope,
   McpServerConfig,

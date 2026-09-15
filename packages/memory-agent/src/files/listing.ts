@@ -7,6 +7,27 @@ import { isCredentialPath } from "./paths.ts";
 
 const run = promisify(execFile);
 
+/** File checks run at once when listing a Git work tree. */
+const statConcurrency = 64;
+
+/** Maps items with at most `limit` running at once, keeping the input order. */
+async function mapLimit<A, B>(
+  items: readonly A[],
+  limit: number,
+  work: (item: A) => Promise<B>,
+): Promise<B[]> {
+  const results: B[] = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await work(items[index]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 /** Directories skipped when walking a project that is not a Git work tree. */
 const walkSkips = new Set([".git", "node_modules"]);
 
@@ -80,7 +101,7 @@ export async function listProjectFiles(
   const walked = fromGit ? undefined : await walkFiles(root, directory, "");
   const prefix = directory === "." ? "" : `${directory}/`;
   let excluded = walked?.excluded ?? 0;
-  const paths: string[] = [];
+  const kept: string[] = [];
   for (const path of new Set(fromGit ?? walked?.files)) {
     if (!path.startsWith(prefix)) continue;
     if (glob !== undefined && !posix.matchesGlob(path.slice(prefix.length), glob)) continue;
@@ -89,9 +110,17 @@ export async function listProjectFiles(
       excluded++;
       continue;
     }
-    const stats = await lstat(join(root, path)).catch(() => undefined);
-    if (stats?.isFile()) paths.push(path);
+    kept.push(path);
   }
+  // A walk already saw regular files only. Git lists links and deleted files too, so check those,
+  // many at a time.
+  const paths = fromGit
+    ? (
+        await mapLimit(kept, statConcurrency, async (path) =>
+          (await lstat(join(root, path)).catch(() => undefined))?.isFile() ? path : null,
+        )
+      ).filter((path) => path !== null)
+    : kept;
   paths.sort();
   return {
     paths,

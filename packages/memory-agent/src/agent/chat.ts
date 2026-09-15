@@ -30,6 +30,7 @@ import { FileTools } from "../tools/files.ts";
 import { KagiTools, kagiInstructions } from "../tools/kagi.ts";
 import { SkillTools } from "../tools/skills.ts";
 import { DelegateTools } from "../tools/delegate.ts";
+import { parallelReads } from "../tools/parallel-reads.ts";
 import { Subagents, subagentInstructions } from "../subagents/subagents.ts";
 import { RelayedApprovals } from "../approvals/relayed.ts";
 import { ExternalAgentAdapter } from "../external-agents/adapter.ts";
@@ -507,16 +508,18 @@ const make = Effect.gen(function* () {
           systemPrompts: sharedPrompts,
           gated: new Set([...gatedToolNames, ...askEveryCall]),
         });
+        // Read-only calls of one step run at once instead of one after another.
+        const reads = parallelReads(
+          [...sharedTools, ...approvedTools.forProject(project), ...children.tools],
+          abortController.signal,
+        );
         middleware.push(
           children.middleware,
+          reads.middleware,
           recorder.forRun({ projectId, sessionId, runId, userNodeId: userNode.id }),
           indexInBackground(),
         );
-        const tools: AnyServerTool[] = [
-          ...sharedTools,
-          ...approvedTools.forProject(project),
-          ...children.tools,
-        ];
+        const tools = reads.tools;
         const stream = chat({
           adapter: codexChat.adapter(selection),
           messages,

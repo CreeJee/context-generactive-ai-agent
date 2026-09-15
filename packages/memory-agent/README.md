@@ -159,6 +159,7 @@ Zed 예시(`settings.json`):
 
 ```bash
 vp test          # 이 패키지 테스트
+vp test bench --dir bench   # 도구 지연 측정(합성 저장소 3,000 파일)
 vp check         # 루트에서: 포맷·lint·타입 검사
 ```
 
