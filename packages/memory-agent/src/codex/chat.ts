@@ -83,10 +83,13 @@ interface ParkedTurn {
 export class TurnParking {
   readonly #parked = new Map<string, ParkedTurn>();
 
-  constructor(
-    private readonly interrupt: (turn: CodexTurn) => void,
-    private readonly idleMs = idleTurnMs,
-  ) {}
+  private readonly interrupt: (turn: CodexTurn) => void;
+  private readonly idleMs: number;
+
+  constructor(interrupt: (turn: CodexTurn) => void, idleMs = idleTurnMs) {
+    this.interrupt = interrupt;
+    this.idleMs = idleMs;
+  }
 
   park(threadId: string, turn: CodexTurn, nextEvent: EventRead | null) {
     const previous = this.take(threadId);
@@ -132,13 +135,22 @@ export class CodexTextAdapter extends BaseTextAdapter<
   /** Parking key when the caller gave no thread id: still shared by this request's iterations. */
   readonly #fallbackThreadId = randomUUID();
 
+  private readonly turns: CodexTurns;
+  private readonly selection: ModelSelection;
+  private readonly parking: TurnParking;
+  private readonly active: ActiveTurns;
+
   constructor(
-    private readonly turns: CodexTurns,
-    private readonly selection: ModelSelection,
-    private readonly parking: TurnParking,
-    private readonly active = new ActiveTurns(),
+    turns: CodexTurns,
+    selection: ModelSelection,
+    parking: TurnParking,
+    active = new ActiveTurns(),
   ) {
     super({}, selection.model);
+    this.turns = turns;
+    this.selection = selection;
+    this.parking = parking;
+    this.active = active;
   }
 
   async *chatStream(options: TextOptions<Record<string, never>>): AsyncIterable<AdapterYieldChunk> {

@@ -36,7 +36,7 @@
     "dev": "vp pack --watch",
     "test": "vp test",
     "check": "vp check",
-    "eval:recall": "node --experimental-transform-types --no-warnings eval/recall.ts",
+    "eval:recall": "node --no-warnings eval/recall.ts",
     "prepublishOnly": "vp run build"
   },
   "dependencies": {

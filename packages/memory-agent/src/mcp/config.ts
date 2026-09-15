@@ -127,8 +127,11 @@ export function readMcpFile(path: string, scope: McpScope): McpFileRead {
 }
 
 export class MissingVariable extends Error {
-  constructor(readonly variable: string) {
+  readonly variable: string;
+
+  constructor(variable: string) {
     super(`missing_env: ${variable}`);
+    this.variable = variable;
   }
 }
 

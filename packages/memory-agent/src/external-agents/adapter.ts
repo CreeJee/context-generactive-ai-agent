@@ -54,13 +54,14 @@ export class ExternalAgentAdapter extends BaseTextAdapter<
 > {
   readonly name = "external-acp";
 
-  constructor(
-    agent: string,
-    private readonly turn: ExternalTurn,
-    /** Leads the prompt: relevant memory and how to treat it. */
-    private readonly preamble: (text: string) => Promise<string>,
-  ) {
+  private readonly turn: ExternalTurn;
+  /** Leads the prompt: relevant memory and how to treat it. */
+  private readonly preamble: (text: string) => Promise<string>;
+
+  constructor(agent: string, turn: ExternalTurn, preamble: (text: string) => Promise<string>) {
     super({}, agent);
+    this.turn = turn;
+    this.preamble = preamble;
   }
 
   async *chatStream(options: TextOptions<Record<string, never>>): AsyncIterable<AdapterYieldChunk> {

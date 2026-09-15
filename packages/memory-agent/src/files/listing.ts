@@ -170,7 +170,11 @@ export interface Snapshot extends FileListing {
 export class Snapshots {
   readonly #entries = new Map<string, Snapshot>();
 
-  constructor(readonly capacity = 32) {}
+  readonly capacity: number;
+
+  constructor(capacity = 32) {
+    this.capacity = capacity;
+  }
 
   add(root: string, directory: string, glob: string | undefined, listing: FileListing) {
     const snapshot: Snapshot = { id: randomUUID(), root, directory, glob, ...listing };

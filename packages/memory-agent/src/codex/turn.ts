@@ -83,8 +83,11 @@ export class CodexTurn extends EventEmitter<TurnEvents> {
    */
   readonly events: AsyncIterator<TurnEvent>;
 
-  constructor(readonly threadId: string) {
+  readonly threadId: string;
+
+  constructor(threadId: string) {
     super();
+    this.threadId = threadId;
     this.events = pEventIterator<TurnEvents, "event">(this, "event", {
       resolutionEvents: ["completed"],
       rejectionEvents: ["failed"],
