@@ -523,9 +523,18 @@ function SkillSettings({ project }: { project: Project | null }) {
 }
 
 /** Settings that apply beyond one conversation: web search, MCP servers, skills and agents. */
-export function SettingsDialog({ project }: { project: Project | null }) {
+export function SettingsDialog({
+  project,
+  open,
+  onOpenChange,
+}: {
+  project: Project | null;
+  /** Controlled so `/settings` can open it. */
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   return (
-    <Dialog>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogTrigger render={<Button variant="ghost" size="icon-sm" aria-label="설정" />}>
         <SettingsIcon />
       </DialogTrigger>

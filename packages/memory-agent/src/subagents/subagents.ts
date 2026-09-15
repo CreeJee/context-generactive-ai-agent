@@ -428,11 +428,14 @@ const make = Effect.gen(function* () {
               message.role === "tool" && message.toolCallId ? [message.toolCallId] : [],
             ),
           );
-          const step = ctx.messages.findLast(
-            (message) =>
-              message.role === "assistant" &&
-              (message.toolCalls ?? []).some((call) => call.id === hook.toolCallId),
-          );
+          // Not findLast: the app's TypeScript lib predates it.
+          const step = [...ctx.messages]
+            .reverse()
+            .find(
+              (message) =>
+                message.role === "assistant" &&
+                (message.toolCalls ?? []).some((call) => call.id === hook.toolCallId),
+            );
           for (const call of step?.role === "assistant" ? (step.toolCalls ?? []) : [])
             if (isSubagentTool(call.function.name) && !answered.has(call.id))
               void start(call.id, call.function.name, call.function.arguments);

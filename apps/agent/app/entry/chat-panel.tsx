@@ -42,6 +42,22 @@ import { SubagentPanel } from "./subagent-panel";
 import { ReadOnlyBar } from "./read-only-bar";
 import { RunNoticeView, useRunState } from "./run-state";
 import { useSessionLease, type PageLease } from "./session-lease";
+import { SlashPalette } from "./slash-palette";
+import {
+  parseSlash,
+  promptOf,
+  suggest,
+  type SlashCommand,
+  type SlashContext,
+} from "./slash-commands";
+
+/** Slash commands: what they can offer, and how the app runs the ones outside this panel. */
+export interface SlashSupport {
+  readonly context: SlashContext;
+  readonly run: (
+    command: Extract<SlashCommand, { kind: "new" | "agent" | "mode" | "model" | "settings" }>,
+  ) => Promise<void>;
+}
 
 // Stable references: useChat treats a new array as changed options on every render.
 const approvalInterrupts: ApprovalInterrupts = [permissionReviewInterrupt];
@@ -94,9 +110,11 @@ const isEditable = (message: QueuedMessage) => {
 export function SessionView({
   sessionId,
   imagesSupported,
+  slash,
 }: {
   sessionId: string;
   imagesSupported: boolean;
+  slash: SlashSupport;
 }) {
   const { holder, lease, revision, refused, continueHere } = useSessionLease(sessionId);
   const reading = lease.state === "other" || lease.state === "free";
@@ -109,6 +127,7 @@ export function SessionView({
       refused={refused}
       onContinue={() => void continueHere()}
       imagesSupported={imagesSupported}
+      slash={slash}
     />
   );
 }
@@ -124,6 +143,7 @@ function ChatPanel({
   refused,
   onContinue,
   imagesSupported,
+  slash,
 }: {
   sessionId: string;
   holder: string;
@@ -131,6 +151,7 @@ function ChatPanel({
   refused: boolean;
   onContinue: () => void;
   imagesSupported: boolean;
+  slash: SlashSupport;
 }) {
   const readOnly = lease.state !== "mine";
   const [draft, setDraft] = useState("");
@@ -172,6 +193,10 @@ function ChatPanel({
   const queue = useMessageQueue(sessionId, holder, generating);
   const [composer, setComposer] = useState<Composer>({ kind: "compose" });
   const [submitting, setSubmitting] = useState(false);
+  // Slash command suggestions for what is typed, and which one the arrow keys point at.
+  const [highlight, setHighlight] = useState(0);
+  const suggestions = composer.kind === "compose" ? suggest(draft, slash.context) : [];
+  const highlighted = suggestions[Math.min(highlight, suggestions.length - 1)] ?? null;
 
   const cancel = async () => {
     // Stopping only the local stream would leave the run going on the server, so ask it first.
@@ -336,10 +361,41 @@ function ChatPanel({
       return;
     }
     if (!canSend) return;
-    const text = renumberReferences(
+    let text = renumberReferences(
       draft.trim(),
       ready.map((image) => image.number),
     );
+    // A slash command runs instead of being sent; `skill` and `recall` become a message.
+    const parsed =
+      ready.length === 0 ? parseSlash(text, slash.context) : { kind: "not_command" as const };
+    switch (parsed.kind) {
+      case "not_command":
+        break;
+      case "incomplete":
+        return setNotice(parsed.reason);
+      case "command": {
+        const command = parsed.command;
+        switch (command.kind) {
+          case "skill":
+          case "recall":
+            text = promptOf(command);
+            break;
+          case "cancel":
+            setDraft("");
+            setNotice(generating ? null : "멈출 답변이 없어요.");
+            if (generating) void cancel();
+            return;
+          case "new":
+          case "agent":
+          case "mode":
+          case "model":
+          case "settings":
+            setDraft("");
+            setNotice(null);
+            return slash.run(command).catch(() => setNotice("명령을 실행하지 못했어요."));
+        }
+      }
+    }
     const attachmentIds = ready.map((image) => image.attachment.id);
     const clearDraft = () => {
       setDraft("");
@@ -470,6 +526,17 @@ function ChatPanel({
                   event.target.value = "";
                 }}
               />
+              {suggestions.length > 0 && highlighted && (
+                <SlashPalette
+                  suggestions={suggestions}
+                  highlighted={highlighted}
+                  onPick={(suggestion) => {
+                    caretAfterRender.current = suggestion.text.length;
+                    setDraft(suggestion.text);
+                    setHighlight(0);
+                  }}
+                />
+              )}
               <InputGroup
                 className={cn(
                   "h-auto flex-col rounded-xl bg-card shadow-xs dark:bg-card",
@@ -496,7 +563,10 @@ function ChatPanel({
                   ref={textarea}
                   value={draft}
                   disabled={readOnly}
-                  onChange={(event) => setDraft(event.target.value)}
+                  onChange={(event) => {
+                    setDraft(event.target.value);
+                    setHighlight(0);
+                  }}
                   onPaste={(event) => {
                     const files = imageFiles(event.clipboardData.files);
                     if (files.length === 0) return;
@@ -506,6 +576,30 @@ function ChatPanel({
                   onKeyDown={(event) => {
                     // Enter that confirms Korean IME input, and Esc that cancels it, belong to the IME.
                     if (event.nativeEvent.isComposing) return;
+                    if (suggestions.length > 0 && highlighted) {
+                      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                        event.preventDefault();
+                        const step = event.key === "ArrowDown" ? 1 : -1;
+                        setHighlight(
+                          (Math.min(highlight, suggestions.length - 1) +
+                            step +
+                            suggestions.length) %
+                            suggestions.length,
+                        );
+                        return;
+                      }
+                      // Tab, or Enter on a suggestion that is not what is typed yet, completes it.
+                      const completes =
+                        event.key === "Tab" ||
+                        (event.key === "Enter" && !event.shiftKey && highlighted.text !== draft);
+                      if (completes) {
+                        event.preventDefault();
+                        caretAfterRender.current = highlighted.text.length;
+                        setDraft(highlighted.text);
+                        setHighlight(0);
+                        return;
+                      }
+                    }
                     const steerKeys = event.shiftKey && (event.ctrlKey || event.metaKey);
                     if (event.key === "Enter" && steerKeys) {
                       event.preventDefault();
@@ -538,7 +632,7 @@ function ChatPanel({
                         ? "고친 내용을 저장하려면 Enter"
                         : generating
                           ? "답변 중에도 이어서 보낼 수 있어요"
-                          : "메시지를 입력하세요 · 이미지는 붙여넣거나 끌어다 놓기"
+                          : "메시지를 입력하세요 · / 명령 · 이미지는 붙여넣거나 끌어다 놓기"
                   }
                   className="max-h-48 min-h-11 px-3.5 pt-3 pb-1 text-sm"
                   rows={1}

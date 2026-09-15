@@ -17,7 +17,8 @@ import {
   type Project,
   type Session,
 } from "./api";
-import { SessionView } from "./chat-panel";
+import { SessionView, type SlashSupport } from "./chat-panel";
+import type { SlashContext } from "./slash-commands";
 import { SettingsDialog } from "./settings-dialog";
 import { AccountSection, ModelSection, ProjectSection, SessionSection } from "./sidebar";
 
@@ -51,6 +52,9 @@ export function App() {
   const [projectId, setProjectId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [slashAgents, setSlashAgents] = useState<string[]>([]);
+  const [slashSkills, setSlashSkills] = useState<SlashContext["skills"]>([]);
 
   const refreshAuth = useCallback(() => api.auth().then(setAuth), []);
 
@@ -77,6 +81,19 @@ export function App() {
       setSelection(selected);
     });
   }, [signedIn]);
+
+  // What slash commands can offer in this project; settings may change it, so reload on close.
+  useEffect(() => {
+    if (!projectId || settingsOpen) return;
+    void api.usableExternalAgents(projectId).then(setSlashAgents, () => setSlashAgents([]));
+    void api.skills(projectId).then(
+      (catalog) =>
+        setSlashSkills(
+          catalog.skills.map((skill) => ({ name: skill.name, description: skill.description })),
+        ),
+      () => setSlashSkills([]),
+    );
+  }, [projectId, settingsOpen]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -111,6 +128,30 @@ export function App() {
     const session = await api.createSession(projectId, agent);
     setSessions((list) => [session, ...list]);
     setSessionId(session.id);
+  };
+
+  const slash: SlashSupport = {
+    context: {
+      agents: slashAgents,
+      models: models.map((model) => ({ id: model.model, label: model.displayName })),
+      skills: slashSkills,
+    },
+    run: async (command) => {
+      switch (command.kind) {
+        case "new":
+          return await createSession();
+        case "agent":
+          return await createSession(command.agent);
+        case "settings":
+          return setSettingsOpen(true);
+        case "mode":
+          if (projectId) replaceProject(await api.setPermissionMode(projectId, command.mode));
+          return;
+        case "model":
+          setSelection(await api.selectModel(command.model));
+          return;
+      }
+    },
   };
 
   let main: React.ReactNode;
@@ -151,6 +192,7 @@ export function App() {
       <SessionView
         key={sessionId}
         sessionId={sessionId}
+        slash={slash}
         imagesSupported={
           sessions.find((session) => session.id === sessionId)?.agent == null &&
           (models
@@ -166,7 +208,11 @@ export function App() {
       <aside className="flex w-72 shrink-0 flex-col border-r">
         <div className="flex items-center justify-between py-2 pr-2 pl-4">
           <span className="text-sm font-semibold">Context Agent</span>
-          <SettingsDialog project={projects.find((project) => project.id === projectId) ?? null} />
+          <SettingsDialog
+            project={projects.find((project) => project.id === projectId) ?? null}
+            open={settingsOpen}
+            onOpenChange={setSettingsOpen}
+          />
         </div>
         <Separator />
         <AccountSection auth={auth} onAction={(intent) => void authAction(intent)} />
