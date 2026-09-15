@@ -128,7 +128,13 @@ function collectPackages() {
       if (found) place(found, dependency, destination);
     }
   };
-  for (const root of ["turbovec", "@napi-rs/keyring", "@huggingface/transformers", "kiwi-nlp"]) {
+  for (const root of [
+    "turbovec",
+    "@napi-rs/keyring",
+    "@huggingface/transformers",
+    "sharp",
+    "kiwi-nlp",
+  ]) {
     const found = findPackage(memoryAgent, root);
     if (!found) throw new Error(`${root} is not installed; run vp install`);
     place(found, root, stage);

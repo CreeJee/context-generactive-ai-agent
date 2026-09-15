@@ -354,11 +354,10 @@ const make = Effect.gen(function* () {
     for (const source of new Set(sources)) {
       const id = attachmentIdOf(source);
       const attachment = id ? attachments.get(id) : null;
-      if (attachment)
-        resolved.set(source, {
-          path: attachments.pathOf(attachment),
-          dataUrl: await attachments.dataUrl(attachment),
-        });
+      if (attachment) {
+        const image = await attachments.forModel(attachment);
+        resolved.set(source, { path: image.path, dataUrl: await attachments.dataUrl(image) });
+      }
     }
     return resolved;
   };

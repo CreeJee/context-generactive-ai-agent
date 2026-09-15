@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { Context, Data, Effect, Layer, Schema } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
+import { requireRuntime } from "../runtime/resources.ts";
 
 /** Largest image accepted for upload. */
 export const maxAttachmentBytes = 20 * 1024 * 1024;
@@ -65,6 +66,18 @@ export function sniffImageType(bytes: Uint8Array): AttachmentMimeType | null {
 /** Attachment ids are sha256 hex digests; anything else never touches the filesystem. */
 export const isAttachmentId = (id: string) => /^[0-9a-f]{64}$/.test(id);
 
+/**
+ * Longest side of the copy of an image sent to the model. The API scales larger images down to
+ * fit within this anyway, so nothing it would have seen is lost.
+ */
+export const modelImageEdge = 2048;
+
+/** A stored image as it goes to the model: a smaller WebP copy, or the upload itself. */
+export interface ModelImage {
+  readonly path: string;
+  readonly mimeType: AttachmentMimeType;
+}
+
 const extensions = new Map<AttachmentMimeType, string>([
   ["image/png", "png"],
   ["image/jpeg", "jpg"],
@@ -97,6 +110,45 @@ const make = Effect.gen(function* () {
     const row = selectAttachment.get(id);
     return row ? toAttachment(row) : null;
   };
+
+  /**
+   * Fits the image within {@link modelImageEdge} as WebP: lossless for screenshots and other
+   * PNG/WebP images (text stays sharp, and it is usually smaller than lossy quality 100), quality 100
+   * for JPEG photos. GIFs (possibly animated) and copies that would not be smaller keep the upload.
+   * Any failure also keeps the upload, so an image is never held back.
+   */
+  const encodeForModel = async (attachment: Attachment): Promise<ModelImage> => {
+    const upload: ModelImage = { path: fileOf(attachment), mimeType: attachment.mimeType };
+    if (attachment.mimeType === "image/gif") return upload;
+    const copy = join(directory, `${attachment.id}.model.webp`);
+    if (await stat(copy).catch(() => undefined)) return { path: copy, mimeType: "image/webp" };
+    try {
+      const sharp = requireRuntime("sharp");
+      const encoded = await sharp(upload.path)
+        .rotate()
+        .resize({
+          width: modelImageEdge,
+          height: modelImageEdge,
+          fit: "inside",
+          withoutEnlargement: true,
+        })
+        .webp(attachment.mimeType === "image/jpeg" ? { quality: 100 } : { lossless: true })
+        .toBuffer();
+      if (encoded.length >= attachment.bytes) return upload;
+      const temporary = `${copy}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(temporary, encoded, { mode: 0o600, flag: "wx" });
+        await rename(temporary, copy);
+      } finally {
+        await rm(temporary, { force: true });
+      }
+      return { path: copy, mimeType: "image/webp" };
+    } catch {
+      return upload;
+    }
+  };
+  /** Per process, so an image whose copy is not smaller is not encoded again on every run. */
+  const forModel = new Map<string, Promise<ModelImage>>();
 
   return {
     /**
@@ -140,14 +192,26 @@ const make = Effect.gen(function* () {
 
     get,
 
-    /** Absolute path of a stored image, for codex `localImage` input. */
+    /** Absolute path of a stored image as uploaded. */
     pathOf: fileOf,
 
     read: (attachment: Attachment) => readFile(fileOf(attachment)),
 
-    /** `data:` URL of a stored image, for replaying earlier turns to the model. */
-    dataUrl: async (attachment: Attachment) =>
-      `data:${attachment.mimeType};base64,${(await readFile(fileOf(attachment))).toString("base64")}`,
+    /**
+     * The image to send to the model, made once: codex reads its path for a new turn, and earlier
+     * turns replay it as a `data:` URL, so a smaller file saves both.
+     */
+    forModel: (attachment: Attachment) => {
+      const known = forModel.get(attachment.id);
+      if (known) return known;
+      const made = encodeForModel(attachment);
+      forModel.set(attachment.id, made);
+      return made;
+    },
+
+    /** `data:` URL of an image file, for replaying earlier turns to the model. */
+    dataUrl: async (image: ModelImage) =>
+      `data:${image.mimeType};base64,${(await readFile(image.path)).toString("base64")}`,
 
     /** Records the images a message carried, in order. */
     link: (nodeId: string, attachments: readonly Attachment[]) => {

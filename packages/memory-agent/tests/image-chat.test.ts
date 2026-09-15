@@ -86,7 +86,7 @@ describe("images in chat", () => {
     expect(log.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
       input: [
         { type: "text", text: "look at #1 please" },
-        { type: "localImage", path: attachments.pathOf(attachment) },
+        { type: "localImage", path: (await attachments.forModel(attachment)).path },
       ],
     });
 

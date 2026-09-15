@@ -254,6 +254,9 @@ catalogs:
     p-event:
       specifier: 7.1.0
       version: 7.1.0
+    sharp:
+      specifier: 0.34.5
+      version: 0.34.5
     streamdown:
       specifier: ^2.6.0
       version: 2.6.0
@@ -452,6 +455,9 @@ importers:
       p-event:
         specifier: 'catalog:'
         version: 7.1.0
+      sharp:
+        specifier: 'catalog:'
+        version: 0.34.5
       turbovec:
         specifier: workspace:*
         version: link:../turbovec

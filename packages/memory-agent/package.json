@@ -54,6 +54,7 @@
     "kiwi-nlp": "catalog:",
     "p-defer": "catalog:",
     "p-event": "catalog:",
+    "sharp": "catalog:",
     "turbovec": "workspace:*"
   },
   "devDependencies": {

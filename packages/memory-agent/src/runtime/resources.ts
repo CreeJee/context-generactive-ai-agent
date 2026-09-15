@@ -2,14 +2,15 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 
 /**
- * Packages this app loads from disk at run time rather than bundling: native addons and the
- * embedding runtime. The app server build keeps them external, and the executable cannot hold them
+ * Packages this app loads from disk at run time rather than bundling: native addons (vector index,
+ * keychain, image encoding) and the embedding runtime. The app server build keeps them external, and the executable cannot hold them
  * (a Node SEA embeds only JS and cannot load a package from disk with `import`).
  */
 interface RuntimePackages {
   readonly turbovec: typeof import("turbovec");
   readonly "@napi-rs/keyring": typeof import("@napi-rs/keyring");
   readonly "@huggingface/transformers": typeof import("@huggingface/transformers");
+  readonly sharp: typeof import("sharp");
 }
 
 /**

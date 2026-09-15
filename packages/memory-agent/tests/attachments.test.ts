@@ -1,8 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { Effect, Either } from "effect";
 import { describe, expect, test } from "vite-plus/test";
-import { Attachments, sniffImageType } from "../src/attachments/attachments.ts";
+import { Attachments, modelImageEdge, sniffImageType } from "../src/attachments/attachments.ts";
+import { requireRuntime } from "../src/runtime/resources.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { tinyPng } from "./support/images.ts";
 import { testRuntime } from "./support/runtime.ts";
@@ -37,7 +38,9 @@ describe("Attachments", () => {
           first,
           again,
           linked: attachments.forNode(node.id).map((attachment) => attachment.mimeType),
-          dataUrl: yield* Effect.promise(() => attachments.dataUrl(first)),
+          dataUrl: yield* Effect.promise(() =>
+            attachments.dataUrl({ path: attachments.pathOf(first), mimeType: first.mimeType }),
+          ),
           path: attachments.pathOf(first),
         };
       }),
@@ -49,6 +52,72 @@ describe("Attachments", () => {
     expect(result.dataUrl).toBe(`data:image/png;base64,${tinyPng.toString("base64")}`);
     expect(result.path.startsWith(join(storage, "attachments"))).toBe(true);
     expect(readFileSync(result.path)).toEqual(tinyPng);
+  });
+
+  test("sends the model a smaller WebP within 2048px, made once, and GIFs as uploaded", async () => {
+    const { runtime } = await testRuntime();
+    const sharp = requireRuntime("sharp");
+    // A wide screenshot of text, where a lossless WebP is smaller than the PNG upload.
+    const lines = Array.from(
+      { length: 28 },
+      (_, line) =>
+        `<text x="40" y="${40 + line * 34}" font-size="28">const line${line} = await fetchSomething(${line});</text>`,
+    ).join("");
+    const screenshot = await sharp({
+      create: { width: 3000, height: 1000, channels: 3, background: "#f5f5f5" },
+    })
+      .composite([
+        { input: Buffer.from(`<svg width="3000" height="1000">${lines}</svg>`), top: 0, left: 0 },
+      ])
+      .png()
+      .toBuffer();
+    const result = await runtime.runPromise(
+      Effect.gen(function* () {
+        const attachments = yield* Attachments;
+        const png = yield* attachments.save(screenshot);
+        const gif = yield* attachments.save(Buffer.from("GIF89a-not-really-but-signed"));
+        const image = yield* Effect.promise(() => attachments.forModel(png));
+        return {
+          png,
+          image,
+          again: yield* Effect.promise(() => attachments.forModel(png)),
+          gif: yield* Effect.promise(() => attachments.forModel(gif)),
+          gifPath: attachments.pathOf(gif),
+          dataUrl: yield* Effect.promise(() => attachments.dataUrl(image)),
+        };
+      }),
+    );
+    expect(result.image.mimeType).toBe("image/webp");
+    expect(result.image.path.endsWith(`${result.png.id}.model.webp`)).toBe(true);
+    expect(result.again).toBe(result.image);
+    const size = await sharp(result.image.path).metadata();
+    expect([size.width, size.height]).toEqual([modelImageEdge, Math.round((1000 * 2048) / 3000)]);
+    expect(statSync(result.image.path).size).toBeLessThan(result.png.bytes);
+    expect(result.dataUrl.startsWith("data:image/webp;base64,")).toBe(true);
+    expect(result.gif).toEqual({ path: result.gifPath, mimeType: "image/gif" });
+  });
+
+  test("keeps the upload when a WebP copy would not be smaller", async () => {
+    const { runtime } = await testRuntime();
+    // A repeating pattern PNG compresses better than lossless WebP does.
+    const pixels = Buffer.alloc(3000 * 1000 * 3);
+    for (let index = 0; index < pixels.length; index++) pixels[index] = (index * 7919) % 251;
+    const pattern = await requireRuntime("sharp")(pixels, {
+      raw: { width: 3000, height: 1000, channels: 3 },
+    })
+      .png()
+      .toBuffer();
+    const result = await runtime.runPromise(
+      Effect.gen(function* () {
+        const attachments = yield* Attachments;
+        const png = yield* attachments.save(pattern);
+        return {
+          image: yield* Effect.promise(() => attachments.forModel(png)),
+          upload: attachments.pathOf(png),
+        };
+      }),
+    );
+    expect(result.image).toEqual({ path: result.upload, mimeType: "image/png" });
   });
 
   test("rejects empty, unknown and malformed ids without touching the filesystem", async () => {
