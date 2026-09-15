@@ -10,6 +10,8 @@
     "dev": "react-router dev",
     "bundle": "react-router build && vp pack",
     "start": "node dist/context-agent.mjs",
+    "package": "react-router build && node scripts/package.ts",
+    "smoke-package": "node scripts/smoke-package.ts",
     "typecheck": "react-router typegen && tsc"
   },
   "dependencies": {

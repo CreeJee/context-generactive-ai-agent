@@ -2,6 +2,8 @@ import { reactRouter } from "@react-router/dev/vite";
 import { reactCompilerPreset } from "@vitejs/plugin-react";
 import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
+import { readFileSync } from "node:fs";
+import { Schema } from "effect";
 import { lazyPlugins, defineConfig } from "vite-plus";
 
 export default defineConfig(({ command }) => ({
@@ -57,5 +59,18 @@ export default defineConfig(({ command }) => ({
     deps: { alwaysBundle: [/.*/], onlyBundle: false, onlyImport: [] },
     // A Node SEA holds one script, so dynamic imports are inlined too.
     outputOptions: { codeSplitting: false },
+    // `vp run package` (scripts/package.ts) sets these to also build the executable with the
+    // runtime files it has collected as SEA assets.
+    exe: process.env.CONTEXT_AGENT_EXE_ASSETS
+      ? {
+          fileName: "context-agent",
+          outDir: process.env.CONTEXT_AGENT_EXE_DIR,
+          seaConfig: {
+            assets: Schema.decodeUnknownSync(
+              Schema.parseJson(Schema.Record({ key: Schema.String, value: Schema.String })),
+            )(readFileSync(process.env.CONTEXT_AGENT_EXE_ASSETS, "utf8")),
+          },
+        }
+      : false,
   },
 }));
