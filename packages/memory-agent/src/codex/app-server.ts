@@ -54,6 +54,11 @@ const nativeConfig = [
   'model_provider = "openai"',
   'approval_policy = "never"',
   'sandbox_mode = "read-only"',
+  // Both describe codex's own sandbox (read-only, approvals rejected) and working folder. The
+  // model then believed it could not change files, though this app's tools run on the host under
+  // the project's permission mode; the app's instructions say what really applies.
+  "include_permissions_instructions = false",
+  "include_environment_context = false",
   'web_search = "disabled"',
   "project_doc_max_bytes = 0",
   "mcp_servers = {}",

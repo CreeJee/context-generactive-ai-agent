@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
 import { Effect } from "effect";
 import { describe, expect, test } from "vite-plus/test";
-import { AgentChat } from "../src/agent/chat.ts";
+import { AgentChat, workspaceInstructions } from "../src/agent/chat.ts";
 import { CodexAppServer } from "../src/codex/app-server.ts";
 import { CodexModels } from "../src/codex/models.ts";
 import { Nodes } from "../src/memory/nodes.ts";
@@ -67,6 +67,22 @@ async function autoSetup() {
     nodes.session(context.session.id).find((node) => node.kind === "tool_result");
   return { ...context, client, answer, finished, reviews, shellResult };
 }
+
+describe("workspace instructions", () => {
+  test("say what the permission mode allows, with the date and shell codex no longer describes", async () => {
+    const { project } = await testRuntime({ codex: fakeCodex });
+    const auto = workspaceInstructions(
+      { ...project, permissionMode: "auto" },
+      new Date("2026-09-15T12:00:00Z"),
+    );
+    expect(auto).toContain("reviewed before each call: routine requested work runs");
+    expect(auto).toMatch(/Today is 2026-09-1[56] \(.+\)\. run_shell runs commands with \S+ on /);
+    expect(auto).not.toContain("read-only");
+    expect(workspaceInstructions({ ...project, permissionMode: "ask" })).toContain(
+      "wait for the user's approval of each call",
+    );
+  });
+});
 
 describe("auto permission mode", () => {
   test("runs a call the review allows without asking, and records why", async () => {
