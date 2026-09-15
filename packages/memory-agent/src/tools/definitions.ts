@@ -12,6 +12,7 @@ import { toToolSchema } from "./schema.ts";
 export { attachmentIdOf, attachmentUrl } from "../attachments/urls.ts";
 export {
   serverRestartedCode,
+  toolRoundLimitCode,
   type CancelResult,
   type SessionRunState,
 } from "../agent/run-state.ts";

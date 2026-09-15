@@ -236,6 +236,28 @@ async function runTurn(threadId, turnId, input) {
   }
   if (text.includes("fail"))
     return notify("error", { threadId, turnId, willRetry: false, error: { message: "boom" } });
+  const sequential = text.match(/^sequential weather (\d+)$/);
+  if (sequential) {
+    // One call at a time, each after the previous result, like a model reading files one by one.
+    const answers = [];
+    for (let index = 0; index < Number(sequential[1]); index++) {
+      answers.push(
+        await callClient("item/tool/call", {
+          threadId,
+          turnId,
+          callId: `call-seq-${index}`,
+          tool: "get_weather",
+          arguments: { city: `City${index}` },
+        }),
+      );
+      if (thread.interrupted) return;
+    }
+    return streamAnswer(
+      threadId,
+      turnId,
+      `Looked up ${answers.length}: ${answers.map(toolText).join(" | ")}`,
+    );
+  }
   if (text.includes("parallel")) {
     const answers = await Promise.all(
       ["Seoul", "Busan"].map((city, index) =>

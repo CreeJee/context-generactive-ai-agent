@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { chat, toolDefinition, type ModelMessage, type StreamChunk } from "@tanstack/ai";
 import { Effect, Layer, ManagedRuntime, Schema } from "effect";
 import { afterEach, describe, expect, test } from "vite-plus/test";
+import { toolRoundLimitCode } from "../src/agent/run-state.ts";
 import { CodexAppServer } from "../src/codex/app-server.ts";
 import { Attachments } from "../src/attachments/attachments.ts";
 import { CodexChat } from "../src/codex/chat.ts";
@@ -52,13 +53,20 @@ const Log = Schema.Struct({
   log: Schema.Array(Schema.Struct({ method: Schema.String, params: Schema.Unknown })),
 });
 
-async function run(runtime: ReturnType<typeof chatRuntime>, messages: ModelMessage[]) {
+async function run(
+  runtime: ReturnType<typeof chatRuntime>,
+  messages: ModelMessage[],
+  toolRounds?: number,
+) {
   const codexChat = await runtime.runPromise(CodexChat);
   const chunks: StreamChunk[] = [];
   for await (const chunk of chat({
     adapter: codexChat.adapter({ model: "fast-1", reasoningEffort: "low" }),
+    agentLoopStrategy: codexChat.agentLoop,
     messages,
     tools: [getWeather],
+    threadId: "session-1",
+    middleware: [codexChat.runMiddleware(toolRounds)],
   }))
     chunks.push(chunk);
   const text = chunks
@@ -196,6 +204,35 @@ describe("CodexTextAdapter", () => {
     expect(executed.toSorted()).toEqual(["Busan", "Seoul"]);
     expect(result.text).toBe("Both: Seoul: sunny | Busan: sunny");
     expect(result.methods.filter((method) => method === "thread/start")).toHaveLength(1);
+  });
+
+  test("answers after many sequential tool calls, each result handed back to the same turn", async () => {
+    executed.length = 0;
+    const result = await run(chatRuntime(), [{ role: "user", content: "sequential weather 6" }]);
+    // TanStack's default loop stopped after the fifth call: its result never reached codex.
+    expect(executed).toHaveLength(6);
+    expect(result.text).toBe(
+      `Looked up 6: ${executed.map((city) => `${city}: sunny`).join(" | ")}`,
+    );
+    expect(result.chunks.at(-1)).toMatchObject({ type: "RUN_FINISHED" });
+    expect(result.methods.filter((method) => method === "turn/start")).toHaveLength(1);
+    expect(result.methods).not.toContain("turn/interrupt");
+  });
+
+  test("a run past the tool-round limit fails with its code and ends the waiting codex turn", async () => {
+    executed.length = 0;
+    const runtime = chatRuntime();
+    const outcome = await run(runtime, [{ role: "user", content: "sequential weather 6" }], 3).then(
+      (finished) => ({ kind: "finished" as const, chunks: finished.chunks }),
+      (error: Error & { code?: string }) => ({ kind: "threw" as const, code: error.code }),
+    );
+    expect(outcome).toEqual({ kind: "threw", code: toolRoundLimitCode });
+    expect(executed).toHaveLength(3);
+    const log = await runtime.runPromise(
+      Effect.flatMap(CodexAppServer, (codex) => codex.request("test/log", undefined, Log)),
+    );
+    // Codex is not left waiting on a tool result nobody will send.
+    expect(log.log.map((entry) => entry.method)).toContain("turn/interrupt");
   });
 
   test("continues from injected tool results when no codex turn is waiting", async () => {

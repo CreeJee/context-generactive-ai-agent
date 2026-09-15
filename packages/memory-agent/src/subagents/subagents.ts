@@ -261,9 +261,11 @@ const make = Effect.gen(function* () {
         ...chatState.middleware(),
         relayGate(binding, row, controller.signal),
         reads.middleware,
+        codexChat.runMiddleware(),
       ];
       const stream = chat({
         adapter: codexChat.adapter(binding.selection),
+        agentLoopStrategy: codexChat.agentLoop,
         messages,
         tools: reads.tools,
         systemPrompts: [...binding.systemPrompts, childInstructions(row.name, row.instructions)],

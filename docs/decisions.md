@@ -26,6 +26,10 @@
   - 검토한 대안: 앱이 직접 OAuth 로그인하고 ChatGPT Codex 백엔드 Responses API를 부르는 방식(jcode). 설치물과 프로세스는 줄지만 Codex CLI 요청을 흉내 내는 비공개 경로이고, gpt-5.6 code mode 도구 호출·스티어링·긴 대화 압축·토큰 갱신을 앱이 다시 만들어야 해서 택하지 않았다.
 - 모델은 로그인 후 계정에서 쓸 수 있는 목록에서 사용자가 고른다. 없는 모델은 자동 대체하지 않고 오류.
 - 모델 호출은 `CodexTextAdapter`(TanStack 어댑터)로 하고, 도구는 `dynamicTools`로 넘겨 `item/tool/call`을 TanStack 도구 실행으로 연결한다. code mode 전용 모델(gpt-5.6 계열)을 위해 `features.code_mode_host`를 끄지 않는다.
+- 도구를 쓰는 codex `chat()`(대화, 서브에이전트)은 반복을 codex가 정한다(2026-09-15). 모델 단계가 `tool_calls`로 끝나는 동안 계속 반복하고(`codexAgentLoop`), 도구 결과는 다음 단계에서 기다리던 codex 턴으로 넘어간다.
+  - TanStack 기본값(모델 단계 5번)에서는 순차 도구 호출 5번째 뒤에 run이 끝났다. 마지막 결과는 codex에 전달되지 않고 답변 없이 `completed`로 기록되었으며, codex 턴은 결과를 기다리며 남았다.
+  - 상한은 도구 라운드 100번이다. 넘으면 `tool_round_limit` 코드로 `failed` 기록하고 화면에 이유를 알린다.
+  - run이 끝나면(완료·실패·취소) 기다리던 codex 턴을 `turn/interrupt`한다(`codexRunMiddleware`). 승인 대기로 멈춘 run은 끝난 것이 아니므로 턴을 유지해 이어 간다.
 - codex 자체 샌드박스는 `read-only`, 승인은 `never`로 둔다. 그러나 codex가 모델에 넣는 권한 안내(`include_permissions_instructions`)와 환경 문맥(`include_environment_context`)은 끈다(2026-09-15). 두 문구가 "샌드박스는 읽기만 허용, 명령은 거절"과 codex 프로세스 폴더를 알려서, `auto` 모드에서도 모델이 파일을 바꿀 수 없다고 판단했기 때문이다. 앱 도구는 호스트에서 프로젝트의 권한 모드대로 실행되고, 그 규칙과 날짜·시간대·run_shell 셸은 앱 안내문(`workspaceInstructions`)이 알려 준다.
 
 ## 기억 (2026-09-15)

@@ -528,10 +528,12 @@ const make = Effect.gen(function* () {
           reads.middleware,
           recorder.forRun({ projectId, sessionId, runId, userNodeId: userNode.id }),
           indexInBackground(),
+          codexChat.runMiddleware(),
         );
         const tools = reads.tools;
         const stream = chat({
           adapter: codexChat.adapter(selection),
+          agentLoopStrategy: codexChat.agentLoop,
           messages,
           tools,
           systemPrompts: [...sharedPrompts, attachmentInstructions, subagentInstructions],

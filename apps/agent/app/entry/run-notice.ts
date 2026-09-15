@@ -1,4 +1,8 @@
-import { serverRestartedCode, type SessionRunState } from "memory-agent/definitions";
+import {
+  serverRestartedCode,
+  toolRoundLimitCode,
+  type SessionRunState,
+} from "memory-agent/definitions";
 
 /** How a session's last run ended, or that it is still going, when that is worth telling the user. */
 export type RunNotice =
@@ -32,7 +36,13 @@ export function noticeOf(state: SessionRunState | null, page: PageView): RunNoti
     case "aborted":
       return { kind: "cancelled" };
     case "failed":
-      return { kind: "failed", message: lastRun.error?.message ?? "알 수 없는 오류" };
+      return {
+        kind: "failed",
+        message:
+          lastRun.error?.code === toolRoundLimitCode
+            ? "도구를 너무 많이 쓰고도 답을 마치지 못해 멈췄어요. 이어서 하려면 다시 보내 주세요."
+            : (lastRun.error?.message ?? "알 수 없는 오류"),
+      };
     case "interrupted":
       return page.waitingForApproval ? null : { kind: "stopped" };
     case "completed":
