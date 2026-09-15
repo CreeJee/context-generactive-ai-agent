@@ -16,6 +16,9 @@ src/
   mcp/          MCP 설정 파일(공통·프로젝트) 읽기, 신뢰, 연결, 도구 변환
   skills/       ~/.agents/skills·<project>/.agents/skills의 SKILL.md 목록과 읽기
   subagents/    run_subagent·message_subagent: 자식 chat 실행, 병렬 시작, 승인 중계, 기록
+  acp/          ACP 에이전트 다리(에디터 ↔ 실행 중인 앱 HTTP API)
+bin/
+  context-agent-acp.ts   에디터가 stdio로 실행하는 ACP 에이전트
   projects/     프로젝트 등록·경로 검사·교차 회상 제외·권한 모드(ask/auto)
   sessions/     프로젝트에 속한 대화
   memory/       기억: 노드·구조 edge·그래프 탐색·근거 추적·검색·기록 middleware
@@ -111,6 +114,29 @@ MCP 도구는 실행 중에 생기므로 브라우저가 정의를 모릅니다.
 - 셸은 호스트에서 격리 없이 실행됩니다. `TOKEN`·`API_KEY`처럼 비밀로 보이는 환경 변수는 명령에 넘기지 않습니다.
 - ChatGPT 토큰은 codex가 관리하며 이 패키지는 읽지 않습니다.
 - Kagi API 키는 `SecretStore`(OS 키체인)에만 저장하고 요청 직전에 읽습니다. 키체인이 실패해도 다른 곳에 저장하지 않습니다. 테스트는 `SecretStore.memory`를 씁니다.
+
+## 에디터에서 쓰기 (ACP)
+
+앱을 실행한 채로, 에디터가 `bin/context-agent-acp.ts`를 ACP 에이전트로 실행하게 합니다. Node 24가 TypeScript를 바로 실행합니다.
+Zed 예시(`settings.json`):
+
+```json
+{
+  "agent_servers": {
+    "Context Agent": {
+      "command": "node",
+      "args": [
+        "/절대/경로/context-generactive-agent/packages/memory-agent/bin/context-agent-acp.ts"
+      ],
+      "env": { "CONTEXT_AGENT_URL": "http://127.0.0.1:5173" }
+    }
+  }
+}
+```
+
+- 에디터에서 연 폴더가 앱에 등록된 프로젝트여야 합니다.
+- 대화는 앱의 대화 목록에도 보이고, 기억·승인·취소가 앱과 같습니다. 승인은 에디터의 권한 질문으로 뜹니다.
+- 테스트는 `tests/acp-agent.test.ts`(SDK 클라이언트 ↔ 다리 ↔ 앱 핸들러를 한 프로세스에서 연결).
 
 ## 개발
 

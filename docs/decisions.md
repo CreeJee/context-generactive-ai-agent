@@ -152,6 +152,17 @@
 - 기록: 자식 대화 전체는 chat state(thread `subagent-<id>`)에, 상태·마지막 과제·답은 `subagents` 테이블에 남는다(일회 자식 포함). 부모 기억에는 서브에이전트 tool call(과제)과 tool result(자식 보고)가 남는다. 자식 내부의 도구 호출은 이번 버전에서 기억 노드로 만들지 않는다: 노드의 `user` 종류는 사용자 발언만 뜻하는데 자식의 과제는 부모 에이전트의 말이라 권위 규칙과 맞지 않기 때문이다. 자식 대화는 `GET /api/sessions/:session/subagents/:subagent`로 볼 수 있고, 화면에서 따로 펼쳐 보는 UI는 아직 없다.
 - 이름 있는 자식을 이어 쓰는 것은 사용자의 세션 resume과 다르다: 이름은 부모 세션 안에서만 뜻이 있고, 다른 세션에서는 새 자식이 된다.
 
+## ACP: 에디터가 이 에이전트를 부를 때 (2026-09-15)
+
+- `packages/memory-agent/bin/context-agent-acp.ts`가 ACP 에이전트다. 에디터(Zed 등)가 stdio로 실행하면, 이 프로세스는 **실행 중인 앱의 HTTP API에 붙는 다리**로만 일한다(`CONTEXT_AGENT_URL`, 기본 `http://127.0.0.1:5173`). 저장소를 직접 열지 않는 이유: turbovec 인덱스는 저장 루트마다 한 프로세스만 쓸 수 있고, 같은 대화·lease·승인·기억을 웹 화면과 함께 써야 해서다. 앱이 꺼져 있으면 "앱을 먼저 실행하세요"로 실패한다.
+- ACP 세션 = 앱 대화. `session/new`는 `cwd`가 **이미 등록된 프로젝트**일 때만 새 대화를 만든다. 프로젝트 등록은 파일 도구 범위를 넓히므로 앱 화면에서만 한다. `session/load`는 저장된 대화를 update로 다시 보낸다.
+- 에디터 연결마다 lease holder를 따로 가진다(탭 하나처럼). 다른 탭이 쓰고 있는 대화는 열지 않는다. 연결이 끊기면 lease를 놓는다.
+- 답변은 AG-UI 이벤트를 ACP `agent_message_chunk`·`tool_call`·`tool_call_update`로 바꿔 보낸다. 승인(ask 모드 도구 승인, auto 모드 확인 요청, 서브에이전트 요청)은 에디터의 `session/request_permission`으로 묻고, "이번 한 번 허용"만 승인으로 본다. 항상 허용 옵션은 주지 않는다.
+- `session/cancel`은 앱의 취소 API를 불러 run을 실제로 멈춘다.
+- 에디터가 `session/new`에 넘기는 MCP 서버는 쓰지 않는다. 앱에서 신뢰한 MCP 설정만 적용된다.
+- ChatGPT 로그인과 모델 선택은 앱에서 한다(`authMethods` 없음). 토큰은 다리에 오지 않는다.
+- 검증: SDK 클라이언트로 다리를 실제 프로세스로 띄워 실행 중인 앱과 실제 모델(gpt-5.6-luna)로 셸 승인→결과까지 확인했다. Zed 앱 자체에서의 연결은 사용자 Zed 설정을 바꿔야 해서 아직 확인하지 않았다.
+
 ## 개발 규칙 (2026-09-14)
 
 - 앱 개발 서버 인자는 `vp run dev --host 127.0.0.1 --port 5174`처럼 `--` 없이 넘긴다.

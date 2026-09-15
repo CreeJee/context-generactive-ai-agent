@@ -13,6 +13,9 @@
     "type": "git",
     "url": "git+https://github.com/author/library.git"
   },
+  "bin": {
+    "context-agent-acp": "./bin/context-agent-acp.ts"
+  },
   "files": [
     "dist"
   ],
@@ -21,7 +24,8 @@
     ".": "./src/index.ts",
     "./testing": "./src/testing/index.ts",
     "./definitions": "./src/tools/definitions.ts",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./acp": "./src/acp/index.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -40,6 +44,7 @@
     "@napi-rs/keyring": "catalog:",
     "@standard-schema/spec": "catalog:",
     "@tanstack/ai": "catalog:",
+    "@tanstack/ai-client": "catalog:",
     "@tanstack/ai-mcp": "catalog:",
     "@tanstack/ai-persistence": "catalog:",
     "effect": "catalog:",
@@ -49,7 +54,6 @@
     "turbovec": "workspace:*"
   },
   "devDependencies": {
-    "@tanstack/ai-client": "catalog:",
     "@types/node": "catalog:",
     "bumpp": "^11.1.0",
     "typescript": "^7.0.2",
