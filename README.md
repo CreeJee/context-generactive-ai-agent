@@ -7,6 +7,7 @@ ChatGPT 계정(버전을 고정한 codex app-server)으로 모델을 쓰고, 기
 - [apps/agent](apps/agent/README.md): 웹 앱(UI, API 라우트), 실행 방법
 - [packages/memory-agent](packages/memory-agent/README.md): 기억·도구·권한·codex 연결
 - [docs/decisions.md](docs/decisions.md): 확정한 제품·설계 결정
+- [docs/building.md](docs/building.md): 플랫폼별 빌드·릴리스 가이드 (macOS·Windows 릴리스, Linux 로컬 빌드)
 
 ## Development
 

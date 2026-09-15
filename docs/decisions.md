@@ -279,7 +279,8 @@
 - **SEA 제약**: SEA 본문은 디스크 파일을 `import()`하지 못한다. memory-agent는 네이티브·임베딩 패키지를 `require`로만 불러온다(transformers는 Node CommonJS 빌드). worker 안에서는 ESM import가 된다.
 - 넣는 패키지와 크기: turbovec, `@napi-rs/keyring`, transformers, onnxruntime(이 플랫폼 bin만), sharp, kiwi-nlp와 그 의존성. 런타임 74 MB, darwin-arm64 실행 파일 238 MB.
   - 뺀 것: `onnxruntime-web`(transformers Node 빌드가 쓰지 않음), onnxruntime-node의 설치 스크립트 의존성.
-- 플랫폼마다 그 플랫폼 기기에서 빌드한다. pnpm은 이 기기용 optional 패키지만 받고, turbovec은 이 기기에서만 빌드된다. 지금은 darwin-arm64만 만들었다. CI 매트릭스는 후속이다.
+- 플랫폼마다 그 플랫폼 기기에서 빌드한다. pnpm은 이 기기용 optional 패키지만 받고, turbovec은 이 기기에서만 빌드된다.
+- 릴리스는 macOS arm64와 Windows x64만 한다(2026-09-15). GitHub 릴리스를 발행하면 `.github/workflows/release.yml`이 각 러너에서 빌드·스모크 테스트 뒤 `.tar.gz`/`.zip`(실행 권한 보존)과 `.sha256`을 릴리스에 올린다. Linux는 로컬 빌드만 지원한다: 빌드한 기기의 glibc에 묶이고, 로그인 토큰을 둘 Secret Service가 헤드리스·WSL에 없어서다. 준비물과 절차는 `docs/building.md`.
   - turbovec 애드온(`memory-turbovec.node`)은 저장소에 없어서 새로 받은 기기에서는 Rust(윈도우는 MSVC 빌드 도구도)가 있어야 한다. `vp run package`가 turbovec `build`를 먼저 돌린다(아래 "개발 규칙"). 패키징은 필요한 네이티브 파일(turbovec, onnxruntime, keyring, sharp, Kiwi WASM)이 하나라도 없으면 무엇을 해야 하는지 알리고 멈춘다. 빠진 채로 만든 실행 파일이 첫 검색에서야 실패했기 때문이다.
 - 윈도우 차이는 `packages/memory-agent/src/runtime/host.ts` 한 곳에서 다룬다. 플랫폼을 인자로 받아 두 갈래를 모두 테스트한다. 윈도우 기기에서 실제로 실행해 보지는 않았다.
   - 앱이 직접 실행하는 도구(codex, git)는 PATH의 절대 경로 항목에서만 찾는다(윈도우는 PATHEXT 포함). 넘기는 환경 변수는 시스템 폴더와, 윈도우에서 프로그램 실행에 필요한 변수(`SystemRoot`, `ComSpec`, `TEMP` 등)뿐이다. codex에는 자격 증명 저장소를 위해 사용자 폴더 변수(`USERPROFILE`, `APPDATA` 등)도 넘긴다.

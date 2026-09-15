@@ -1,0 +1,94 @@
+# Builds the executable on each supported platform, checks it with the smoke test, and attaches
+# the archives to the GitHub release. Run by hand (Actions → Release binaries → Run workflow) to get
+# the archives as workflow artifacts without a release. See docs/building.md.
+name: Release binaries
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: darwin-arm64
+          - os: windows-latest
+            target: win32-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      # Only for attaching the archives to the release.
+      contents: write
+    env:
+      # The release tag, or the commit for a manual run.
+      LABEL: ${{ github.event_name == 'release' && github.event.release.tag_name || github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Node comes from .node-version (26.8.2), pnpm from package.json devEngines.
+      - uses: voidzero-dev/setup-vp@9fd26ff49f9b5e6276c2b493da4454ad4527f7f4 # v1.20.0
+        with:
+          node-version-file: .node-version
+          cache: true
+          run-install: true
+
+      # turbovec's native addon is built with cargo; the runner images ship rustup.
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+
+      - name: Build the executable
+        working-directory: apps/agent
+        run: vp run package
+
+      # Runs the executable outside the repository: first start, codex download, projects, acp, stop.
+      - name: Smoke test
+        working-directory: apps/agent
+        run: vp run smoke-package
+
+      # Archived so the executable keeps its permissions (a bare download loses the executable bit).
+      - name: Archive (macOS)
+        if: runner.os == 'macOS'
+        working-directory: apps/agent/dist
+        run: |
+          archive="context-agent-${LABEL}-${{ matrix.target }}.tar.gz"
+          tar -czf "$archive" -C "context-agent-${{ matrix.target }}" context-agent context-agent.sha256
+          shasum -a 256 "$archive" > "$archive.sha256"
+          echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
+
+      - name: Archive (Windows)
+        if: runner.os == 'Windows'
+        working-directory: apps/agent/dist
+        shell: pwsh
+        run: |
+          $archive = "context-agent-$env:LABEL-${{ matrix.target }}.zip"
+          Compress-Archive -Path "context-agent-${{ matrix.target }}/*" -DestinationPath $archive
+          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLower()
+          "$hash  $archive" | Out-File -Encoding ascii "$archive.sha256"
+          "ARCHIVE=$archive" | Out-File -Encoding utf8 -Append $env:GITHUB_ENV
+
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        working-directory: apps/agent/dist
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$LABEL" "$ARCHIVE" "$ARCHIVE.sha256" --clobber
+
+      - name: Keep as workflow artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: context-agent-${{ matrix.target }}
+          path: |
+            apps/agent/dist/${{ env.ARCHIVE }}
+            apps/agent/dist/${{ env.ARCHIVE }}.sha256
