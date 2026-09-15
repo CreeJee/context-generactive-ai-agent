@@ -45,6 +45,8 @@ export type PendingApproval =
       readonly toolName: string;
       readonly argumentsJson: string;
       readonly reviewReason: string;
+      /** Whether a review was unsure, or the tool asks on every call. */
+      readonly askedBy: "review" | "every_call";
       readonly answer: (approved: boolean) => void;
     };
 
@@ -79,6 +81,7 @@ export function toPendingApproval(interrupt: ChatInterrupt): PendingApproval | n
         toolName: review.payload.toolName,
         argumentsJson: review.payload.arguments,
         reviewReason: review.payload.reason,
+        askedBy: review.payload.askedBy ?? "review",
         answer: (approved) => interrupt.resolveInterrupt({ approved }),
       };
     }
@@ -92,6 +95,12 @@ type GatedCall =
   | { readonly tool: "run_shell"; readonly input: typeof RunShellInput.Type }
   | { readonly tool: "write_outside_file"; readonly input: typeof WriteOutsideFileInput.Type }
   | { readonly tool: "delete_outside_file"; readonly input: typeof DeleteOutsideFileInput.Type }
+  | {
+      readonly tool: "mcp";
+      readonly server: string;
+      readonly name: string;
+      readonly argumentsJson: string;
+    }
   | { readonly tool: "unrecognized"; readonly name: string; readonly argumentsJson: string };
 
 const decodeShell = Schema.decodeUnknownOption(Schema.parseJson(RunShellInput));
@@ -116,8 +125,13 @@ function decodeCall(toolName: string, argumentsJson: string): GatedCall {
         onNone: () => unrecognized,
         onSome: (input) => ({ tool: "delete_outside_file", input }),
       });
-    default:
-      return unrecognized;
+    default: {
+      // MCP tools are named mcp_<server>__<tool>.
+      const mcp = /^mcp_([A-Za-z0-9_-]+?)__(.+)$/.exec(toolName);
+      return mcp
+        ? { tool: "mcp", server: mcp[1] ?? "", name: mcp[2] ?? toolName, argumentsJson }
+        : unrecognized;
+    }
   }
 }
 
@@ -177,6 +191,20 @@ function describe(call: GatedCall): CallView {
         shell: false,
         body: <code className="break-all">{call.input.path}</code>,
       };
+    case "mcp":
+      return {
+        title: `MCP 도구 ${call.name}을(를) 실행할까요?`,
+        modelReason: undefined,
+        shell: false,
+        body: (
+          <div className="flex flex-col gap-2">
+            <div className="text-muted-foreground">
+              서버: <code>{call.server}</code>
+            </div>
+            <pre className={`max-h-60 ${codeBlock}`}>{preview(call.argumentsJson)}</pre>
+          </div>
+        ),
+      };
     case "unrecognized":
       return {
         title: `${call.name} 실행을 승인할까요?`,
@@ -197,7 +225,10 @@ export function ApprovalCard({
   disabled: boolean;
 }) {
   const view = describe(decodeCall(approval.toolName, approval.argumentsJson));
-  const reviewReason = approval.kind === "permission-review" ? approval.reviewReason : null;
+  const reviewReason =
+    approval.kind === "permission-review" && approval.askedBy === "review"
+      ? approval.reviewReason
+      : null;
   const Icon = reviewReason ? ShieldQuestionIcon : view.shell ? TerminalIcon : FileWarningIcon;
   return (
     <Card size="sm" className="ring-amber-500/40">

@@ -176,5 +176,28 @@ export {
   type FileListing,
 } from "./files/listing.ts";
 export { MemoryTools, memoryToolNames } from "./tools/memory.ts";
+export {
+  McpScope,
+  McpServerConfig,
+  McpServerName,
+  expandVariables,
+  fingerprintOf,
+  globalMcpFile,
+  projectMcpFile,
+  readMcpFile,
+  type ConfiguredServer,
+  type McpFileRead,
+} from "./mcp/config.ts";
+export {
+  McpServers,
+  isMcpToolName,
+  maxMcpResultCharacters,
+  mcpInstructions,
+  mcpToolName,
+  mcpToolPrefix,
+  type McpOverview,
+  type McpServerState,
+  type McpServerView,
+} from "./mcp/servers.ts";
 export { KagiTools, kagiInstructions, kagiToolNames, maxPageCharacters } from "./tools/kagi.ts";
 export { toToolSchema, type ToolSchema } from "./tools/schema.ts";

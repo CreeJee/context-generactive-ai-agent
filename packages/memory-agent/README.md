@@ -13,6 +13,7 @@ src/
   db/           node:sqlite 연결, 마이그레이션(PRAGMA user_version), atomic()
   config/       저장 루트(~/.context-generactive-agent), 전역 설정(config.json), OS 키체인(SecretStore)
   kagi/         선택 Kagi Search·Extract 클라이언트와 켜기/끄기·키 등록
+  mcp/          MCP 설정 파일(공통·프로젝트) 읽기, 신뢰, 연결, 도구 변환
   projects/     프로젝트 등록·경로 검사·교차 회상 제외·권한 모드(ask/auto)
   sessions/     프로젝트에 속한 대화
   memory/       기억: 노드·구조 edge·그래프 탐색·근거 추적·검색·기록 middleware
@@ -52,6 +53,7 @@ src/
 | `list_outside_files`, `read_outside_file`, `search_outside_file` | 없음 | 프로젝트 밖 절대 경로, 읽기 전용               |
 | `run_shell`, `write_outside_file`, `delete_outside_file`         | 필요 | 권한 모드에 따라 승인                          |
 | `kagi_search`, `kagi_extract`                                    | 없음 | Kagi 키 등록 후 켰을 때만 보임, 호출마다 과금  |
+| `mcp_<서버>__<도구>`                                             | 필요 | 신뢰한 MCP 서버의 도구, 호출마다 게이트        |
 
 권한 모드는 프로젝트마다 고릅니다.
 
@@ -62,6 +64,9 @@ src/
   - `ask`면 `permission-review` interrupt로 사용자에게 묻고, 답은 재개할 때 기록합니다.
   - 분류 실패·timeout·읽을 수 없는 답은 `ask`로 처리합니다.
   - 판정과 사용자 답은 `permission_reviews`에 쌓이고, tool result 노드 `detail.permission`에 근거로 남습니다.
+
+MCP 도구는 실행 중에 생기므로 브라우저가 정의를 모릅니다. 그래서 `ask` 모드에서도 `PermissionGate`(decider `user`)가 호출마다 `permission-review` interrupt로 묻고, `auto` 모드에서는 내장 승인 도구와 함께 분류 모델이 판정합니다.
+`McpServers`는 `<storage>/mcp.json`과 `<project>/.mcp.json`을 읽고, 사용자가 신뢰한 설정(fingerprint)만 시작합니다. 테스트는 `tests/mcp.test.ts`(가짜 stdio MCP 서버 `tests/support/fake-mcp-server.mjs`).
 
 승인 대기로 HTTP 요청이 끝나도 codex 턴은 `TurnParking`에 threadId로 보관되어, 재개 요청이 같은 턴을 이어갑니다.
 

@@ -2,7 +2,7 @@ import { Effect, Either, Schema } from "effect";
 import { PermissionMode, Projects } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
-import type { Route } from "./+types/projects.$project";
+import type { Route } from "./+types/projects.$project._index";
 
 const ProjectSettings = Schema.Struct({
   crossRecallExcluded: Schema.optional(Schema.Boolean),

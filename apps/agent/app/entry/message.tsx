@@ -27,7 +27,15 @@ const toolLabels = new Map([
   ["run_shell", "셸 실행"],
   ["write_outside_file", "밖 파일 쓰기"],
   ["delete_outside_file", "밖 파일 삭제"],
+  ["kagi_search", "웹 검색"],
+  ["kagi_extract", "웹 페이지 읽기"],
 ]);
+
+/** Built-in tools by their label; MCP tools (`mcp_<server>__<tool>`) as "MCP server · tool". */
+function toolLabel(name: string) {
+  const mcp = /^mcp_([A-Za-z0-9_-]+?)__(.+)$/.exec(name);
+  return toolLabels.get(name) ?? (mcp ? `MCP ${mcp[1]} · ${mcp[2]}` : name);
+}
 
 function pretty(text: string) {
   try {
@@ -123,7 +131,7 @@ function ToolCallView({
       <CollapsibleTrigger className="group flex w-full items-center gap-2 px-2.5 py-1.5 text-left">
         <ChevronRightIcon className="size-3.5 text-muted-foreground transition-transform group-data-[panel-open]:rotate-90" />
         <WrenchIcon className="size-3.5 text-muted-foreground" />
-        <span className="font-medium">{toolLabels.get(call.name) ?? call.name}</span>
+        <span className="font-medium">{toolLabel(call.name)}</span>
         <code className="text-muted-foreground">{call.name}</code>
         <span className="ml-auto">
           <StatusBadge status={callStatus(call, result, awaitingApproval)} />

@@ -2,7 +2,7 @@ import type { ChatMiddleware, ModelMessage, ToolCall } from "@tanstack/ai";
 import { Context, Effect, Layer } from "effect";
 import type { ModelSelection } from "../codex/models.ts";
 import type { Project } from "../projects/projects.ts";
-import { gatedToolNames, permissionReviewInterrupt } from "../tools/definitions.ts";
+import { permissionReviewInterrupt } from "../tools/definitions.ts";
 import { PermissionClassifier } from "./classifier.ts";
 import { PermissionReviews, type PermissionReview } from "./reviews.ts";
 
@@ -10,10 +10,24 @@ export interface GateBinding {
   readonly project: Project;
   readonly sessionId: string;
   readonly selection: ModelSelection;
+  /** Tools whose every call this gate decides. */
+  readonly gated: ReadonlySet<string>;
+  /**
+   * `classifier`: the permission review decides first and asks the user only when unsure (`auto`
+   * mode). `user`: every call asks the user (tools without a static TanStack approval in `ask`
+   * mode, such as MCP tools).
+   */
+  readonly decider: "classifier" | "user";
 }
 
+/** Asked of the user when no review ran: the tool needs a decision on every call. */
+const askEveryCallReason = "호출할 때마다 확인하는 도구예요.";
+
 /** Gated calls the model made that have no result yet: the batch about to execute. */
-function pendingGatedCalls(messages: ReadonlyArray<ModelMessage>): ToolCall[] {
+function pendingGatedCalls(
+  messages: ReadonlyArray<ModelMessage>,
+  gatedToolNames: ReadonlySet<string>,
+): ToolCall[] {
   const answered = new Set(
     messages.flatMap((message) =>
       message.role === "tool" && message.toolCallId ? [message.toolCallId] : [],
@@ -42,13 +56,14 @@ const make = Effect.gen(function* () {
 
   return {
     /**
-     * Middleware for `auto` mode. Before tools run, every gated call gets a verdict (kept in
-     * `permission_reviews`, so a resumed run does not review again). `ask` verdicts pause the run
-     * with a permission-review interrupt; the user's answer is recorded when the run resumes.
-     * Right before each gated call executes, only `allow` and `approved` let it through.
+     * Before tools run, every gated call gets a decision. With the classifier, each call gets a
+     * verdict (kept in `permission_reviews`, so a resumed run does not review again) and only `ask`
+     * verdicts pause the run; with the user as decider every call pauses. Pauses are
+     * permission-review interrupts; the user's answer is recorded when the run resumes. Right
+     * before each gated call executes, only `allow` and `approved` let it through.
      */
     forRun(binding: GateBinding): ChatMiddleware<unknown, typeof permissionReviewInterrupt> {
-      const { sessionId } = binding;
+      const { sessionId, gated } = binding;
 
       return {
         name: "memory-agent/permission-gate",
@@ -56,8 +71,25 @@ const make = Effect.gen(function* () {
         async onInterruptBoundary(ctx) {
           if (ctx.phase !== "beforeTools") return undefined;
           const asks = [];
-          for (const call of pendingGatedCalls(ctx.messages)) {
+          const ask = (call: ToolCall, reason: string, askedBy: "review" | "every_call") =>
+            permissionReviewInterrupt.interrupt({
+              key: call.id,
+              reason: "permission_review",
+              message: reason,
+              payload: {
+                toolCallId: call.id,
+                toolName: call.function.name,
+                arguments: call.function.arguments,
+                reason,
+                askedBy,
+              },
+            });
+          for (const call of pendingGatedCalls(ctx.messages, gated)) {
             let review = reviews.latest(sessionId, call.id);
+            if (!review && binding.decider === "user") {
+              asks.push(ask(call, askEveryCallReason, "every_call"));
+              continue;
+            }
             if (!review) {
               const verdict = await classifier.classify({
                 project: binding.project,
@@ -76,20 +108,7 @@ const make = Effect.gen(function* () {
                 reason: verdict.reason,
               });
             }
-            if (review.decision === "ask")
-              asks.push(
-                permissionReviewInterrupt.interrupt({
-                  key: call.id,
-                  reason: "permission_review",
-                  message: review.reason,
-                  payload: {
-                    toolCallId: call.id,
-                    toolName: call.function.name,
-                    arguments: call.function.arguments,
-                    reason: review.reason,
-                  },
-                }),
-              );
+            if (review.decision === "ask") asks.push(ask(call, review.reason, "review"));
           }
           return asks.length > 0 ? { interrupts: asks } : undefined;
         },
@@ -112,7 +131,7 @@ const make = Effect.gen(function* () {
         },
 
         onBeforeToolCall(_ctx, hook) {
-          if (!gatedToolNames.has(hook.toolName)) return undefined;
+          if (!gated.has(hook.toolName)) return undefined;
           const review = reviews.latest(sessionId, hook.toolCallId);
           if (review?.decision === "allow" || review?.decision === "approved") return undefined;
           return { type: "skip", result: refusal(review) };

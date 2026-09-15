@@ -136,6 +136,11 @@ export const PermissionReviewPayload = Schema.Struct({
   arguments: Schema.String,
   /** Why the review wants the user to decide. */
   reason: Schema.String,
+  /**
+   * `review`: the permission review was unsure. `every_call`: the tool asks on every call (MCP
+   * tools in `ask` mode). Absent on requests stored before this existed, which were all reviews.
+   */
+  askedBy: Schema.optional(Schema.Literal("review", "every_call")),
 });
 
 export const PermissionReviewResponse = Schema.Struct({ approved: Schema.Boolean });

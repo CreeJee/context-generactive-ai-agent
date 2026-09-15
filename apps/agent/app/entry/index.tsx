@@ -164,7 +164,7 @@ export function App() {
       <aside className="flex w-72 shrink-0 flex-col border-r">
         <div className="flex items-center justify-between py-2 pr-2 pl-4">
           <span className="text-sm font-semibold">Context Agent</span>
-          <SettingsDialog />
+          <SettingsDialog project={projects.find((project) => project.id === projectId) ?? null} />
         </div>
         <Separator />
         <AccountSection auth={auth} onAction={(intent) => void authAction(intent)} />

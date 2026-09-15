@@ -204,4 +204,18 @@ export const migrations: readonly string[] = [
   CREATE INDEX interpretations_node ON interpretations(node_id);
   CREATE INDEX interpretations_target ON interpretations(target_id, status);
   `,
+  `
+  -- MCP servers the user trusted enough to start. Trust covers one exact configuration
+  -- (fingerprint): a changed command, URL or environment needs trusting again. Global servers use
+  -- project_id ''. Starting a server never approves its tool calls. Times are ISO strings.
+  CREATE TABLE mcp_trust (
+    scope TEXT NOT NULL CHECK (scope IN ('global', 'project')),
+    project_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    trusted_at TEXT NOT NULL,
+    PRIMARY KEY (scope, project_id, name),
+    CHECK ((scope = 'global') = (project_id = ''))
+  );
+  `,
 ];

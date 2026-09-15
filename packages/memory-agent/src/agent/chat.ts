@@ -16,6 +16,7 @@ import { ChatState } from "../chat-state/chat-state.ts";
 import { CodexAccount } from "../codex/account.ts";
 import { CodexChat } from "../codex/chat.ts";
 import { CodexModels } from "../codex/models.ts";
+import { McpServers, mcpInstructions } from "../mcp/servers.ts";
 import { Indexer } from "../memory/embedding/indexer.ts";
 import { Interpreter } from "../memory/interpret.ts";
 import { Nodes } from "../memory/nodes.ts";
@@ -24,7 +25,7 @@ import { Projects, type Project } from "../projects/projects.ts";
 import { PermissionGate } from "../permissions/gate.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { ApprovedTools } from "../tools/approved.ts";
-import { permissionReviewInterrupt } from "../tools/definitions.ts";
+import { gatedToolNames, permissionReviewInterrupt } from "../tools/definitions.ts";
 import { FileTools } from "../tools/files.ts";
 import { KagiTools, kagiInstructions } from "../tools/kagi.ts";
 import { MemoryTools } from "../tools/memory.ts";
@@ -197,6 +198,7 @@ const make = Effect.gen(function* () {
   const outsideTools = yield* OutsideTools;
   const approvedTools = yield* ApprovedTools;
   const kagiTools = yield* KagiTools;
+  const mcpServers = yield* McpServers;
   const permissionGate = yield* PermissionGate;
   const projects = yield* Projects;
   const indexer = yield* Indexer;
@@ -324,6 +326,8 @@ const make = Effect.gen(function* () {
 
         // Present only while the user has Kagi turned on with a key (R19).
         const webTools = yield* kagiTools.tools;
+        // Trusted MCP servers of this project and the user (R18); every call is gated below.
+        const mcpTools = yield* mcpServers.tools(project);
 
         // Not tied to the request: a reload or a closed tab must not stop the run (R10). Only an
         // explicit cancel aborts it.
@@ -341,9 +345,30 @@ const make = Effect.gen(function* () {
           // After chat state, so steered messages are added to the transcript it has just saved.
           delivery.forRun({ projectId, sessionId, runId }),
         ];
-        // The gate runs right after chat state, so a refused call is skipped before tools run.
+        // The gate runs right after chat state, so a refused call is skipped before tools run. In
+        // `auto` mode it reviews every gated call; in `ask` mode the built-in tools use TanStack's
+        // own approval and the gate only asks about MCP calls.
+        const mcpNames = mcpTools.map((tool) => tool.name);
         if (project.permissionMode === "auto")
-          middleware.push(permissionGate.forRun({ project, sessionId, selection }));
+          middleware.push(
+            permissionGate.forRun({
+              project,
+              sessionId,
+              selection,
+              gated: new Set([...gatedToolNames, ...mcpNames]),
+              decider: "classifier",
+            }),
+          );
+        else if (mcpNames.length > 0)
+          middleware.push(
+            permissionGate.forRun({
+              project,
+              sessionId,
+              selection,
+              gated: new Set(mcpNames),
+              decider: "user",
+            }),
+          );
         middleware.push(
           recorder.forRun({ projectId, sessionId, runId, userNodeId: userNode.id }),
           indexInBackground(),
@@ -355,6 +380,7 @@ const make = Effect.gen(function* () {
           ...outsideTools.forProject(project),
           ...approvedTools.forProject(project),
           ...webTools,
+          ...mcpTools,
         ];
         const stream = chat({
           adapter: codexChat.adapter(selection),
@@ -365,6 +391,7 @@ const make = Effect.gen(function* () {
             workspaceInstructions(project),
             attachmentInstructions,
             ...(webTools.length > 0 ? [kagiInstructions] : []),
+            ...(mcpTools.length > 0 ? [mcpInstructions] : []),
           ],
           threadId,
           runId,

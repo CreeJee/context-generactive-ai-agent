@@ -3,6 +3,9 @@ import type {
   AuthState,
   CodexModel,
   KagiStatus,
+  McpOverview,
+  McpScope,
+  McpServerView,
   ModelSelection,
   PermissionMode,
   Project,
@@ -25,6 +28,9 @@ export type {
   CodexModel,
   KagiStatus,
   LeaseView,
+  McpOverview,
+  McpScope,
+  McpServerView,
   ModelSelection,
   PermissionMode,
   Project,
@@ -141,6 +147,15 @@ export const api = {
   kagiAction: (
     command: { action: "register"; key: string } | { action: "remove" | "enable" | "disable" },
   ) => call<KagiStatus>("POST", "/api/settings/kagi", command),
+
+  mcpServers: (projectId: string) =>
+    call<McpOverview>("GET", `/api/projects/${encodeURIComponent(projectId)}/mcp`),
+  setMcpTrusted: (projectId: string, scope: McpScope, name: string, trusted: boolean) =>
+    call<McpOverview>("POST", `/api/projects/${encodeURIComponent(projectId)}/mcp`, {
+      scope,
+      name,
+      trusted,
+    }),
 
   /** Uploads one image as raw bytes; the server checks what it really is. */
   uploadAttachment: async (file: File) => {

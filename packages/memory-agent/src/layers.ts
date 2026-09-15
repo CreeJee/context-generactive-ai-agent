@@ -12,6 +12,7 @@ import { SecretStore } from "./config/secrets.ts";
 import { StorageRoot } from "./config/storage-root.ts";
 import { Database } from "./db/database.ts";
 import { Kagi } from "./kagi/kagi.ts";
+import { McpServers } from "./mcp/servers.ts";
 import { Embedder } from "./memory/embedding/embedder.ts";
 import { Indexer } from "./memory/embedding/indexer.ts";
 import { VectorIndex } from "./memory/embedding/vector-index.ts";
@@ -80,6 +81,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     CodexChat.layer,
     ChatState.layer,
     Kagi.layer({ baseUrl: options.kagiBaseUrl }),
+    McpServers.layer,
   );
   const retrieval = Layer.mergeAll(
     Indexer.layer,
