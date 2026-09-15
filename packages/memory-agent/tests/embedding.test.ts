@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { Cause, Effect, Exit, Layer, ManagedRuntime } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { StorageRoot } from "../src/config/storage-root.ts";
-import { Embedder, localModel } from "../src/memory/embedding/embedder.ts";
+import { Embedder, localModel, modelFile, planBatches } from "../src/memory/embedding/embedder.ts";
 import { Indexer } from "../src/memory/embedding/indexer.ts";
 import { MorphAnalyzer } from "../src/memory/morph/analyzer.ts";
 import { VectorIndex } from "../src/memory/embedding/vector-index.ts";
@@ -98,8 +98,19 @@ describe("Indexer + VectorIndex", () => {
 });
 
 const modelCached = existsSync(
-  join(homedir(), ".context-generactive-agent", "models", localModel.id, "onnx", "model.onnx"),
+  join(homedir(), ".context-generactive-agent", "models", localModel.id, modelFile("quint8")),
 );
+
+describe("embedding batches", () => {
+  test("group texts by length so a long text is never padded together with many short ones", () => {
+    const limits = { size: 4, cost: 100 * 100 };
+    // Short texts fill a batch up to the size; a long one goes alone; order within is shortest first.
+    expect(planBatches([10, 90, 12, 11, 13, 14], limits)).toEqual([[0, 3, 2, 4], [5], [1]]);
+    expect(planBatches([100, 100], limits)).toEqual([[0], [1]]);
+    expect(planBatches([50, 50, 50, 50, 50], limits)).toEqual([[0, 1, 2, 3], [4]]);
+    expect(planBatches([], limits)).toEqual([]);
+  });
+});
 
 describe.skipIf(!modelCached)("Embedder.local (downloaded model)", () => {
   test("produces normalized 384-dim vectors that rank a paraphrase above an unrelated text", async () => {
@@ -109,20 +120,29 @@ describe.skipIf(!modelCached)("Embedder.local (downloaded model)", () => {
       ),
     );
     try {
-      const [question, match, unrelated] = await runtime.runPromise(
-        Effect.flatMap(Embedder, (embedder) =>
-          embedder.embed([
+      const long = "빌드 로그 ".repeat(2000);
+      const [question, match, unrelated, alone] = await runtime.runPromise(
+        Effect.gen(function* () {
+          const embedder = yield* Embedder;
+          // A long text between short ones lands in its own batch; vectors still come back in order.
+          const [question, , match, unrelated] = yield* embedder.embed([
             "데이터베이스는 뭘 쓰기로 했지?",
+            long,
             "저장소는 SQLite로 결정했다.",
             "cargo build failed because cargo was not on PATH",
-          ]),
-        ),
+          ]);
+          const [alone] = yield* embedder.embed(["저장소는 SQLite로 결정했다."]);
+          return [question, match, unrelated, alone];
+        }),
       );
       const dot = (a: Float32Array, b: Float32Array) =>
         a.reduce((sum, value, i) => sum + value * b[i]!, 0);
       expect(question).toHaveLength(localModel.dimensions);
       expect(dot(question!, question!)).toBeCloseTo(1, 4);
       expect(dot(question!, match!)).toBeGreaterThan(dot(question!, unrelated!));
+      // quint8 quantizes activations per batch, so batch company moves a vector slightly (~0.01).
+      expect(dot(match!, alone!)).toBeGreaterThan(0.95);
+      expect(dot(match!, alone!)).toBeGreaterThan(dot(question!, alone!));
     } finally {
       await runtime.dispose();
     }

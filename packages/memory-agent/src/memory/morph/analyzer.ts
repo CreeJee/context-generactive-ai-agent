@@ -32,8 +32,6 @@ export const kiwiModel = {
   directory: "models/cong/base",
 } as const;
 
-/** The worker adds ~850 MB of RSS; it is ended after this long without requests and restarted on demand. */
-const idleMs = 10 * 60_000;
 /** Texts sent to the worker per message. */
 const batchSize = 64;
 /** Longest text analyzed; the rest of a long tool output adds little to search terms. */
@@ -75,12 +73,16 @@ const workerPath = () => {
     : join(root, "kiwi-worker.mjs");
 };
 
+/**
+ * Kiwi in a worker, started on first use and kept. Building the model peaks at ~900 MB and settles
+ * near 240 MB (macOS physical footprint). Ending an idle worker was measured and dropped: the
+ * footprint did not go down, and every restart paid the build peak and ~2 s again.
+ */
 const makeKiwi = Effect.gen(function* () {
   const storage = yield* StorageRoot;
   let worker: Worker | null = null;
   let loaded = false;
   let starting: Promise<Worker> | null = null;
-  let idle: NodeJS.Timeout | null = null;
   let nextId = 1;
   const pending = new Map<number, (reply: typeof Reply.Type) => void>();
 
@@ -128,9 +130,6 @@ const makeKiwi = Effect.gen(function* () {
 
   const request = async (texts: readonly string[]) => {
     const current = await running();
-    if (idle) clearTimeout(idle);
-    idle = setTimeout(stop, idleMs);
-    idle.unref();
     const id = nextId++;
     const reply = await new Promise<typeof Reply.Type>((resolve) => {
       pending.set(id, resolve);

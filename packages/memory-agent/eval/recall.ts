@@ -10,7 +10,12 @@ import { Effect, Layer, ManagedRuntime } from "effect";
 import { SecretStore } from "../src/config/secrets.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
-import { Embedder, EmbeddingError, localModel } from "../src/memory/embedding/embedder.ts";
+import {
+  Embedder,
+  EmbeddingError,
+  localModel,
+  modelFile,
+} from "../src/memory/embedding/embedder.ts";
 import { Indexer } from "../src/memory/embedding/indexer.ts";
 import { MorphAnalyzer, kiwiModel } from "../src/memory/morph/analyzer.ts";
 import { Nodes } from "../src/memory/nodes.ts";
@@ -20,13 +25,14 @@ import { Sessions } from "../src/sessions/sessions.ts";
 import { recallQueries, recallSessions } from "./recall-corpus.ts";
 
 const home = join(homedir(), ".context-generactive-agent");
-const embeddingModel = join(home, "models", localModel.id, "onnx", "model.onnx");
+const embeddingModel = join(home, "models", localModel.id, modelFile("quint8"));
 const kiwiFile = join(home, "models", `kiwi-${kiwiModel.version}`, kiwiModel.directory, "cong.mdl");
 for (const file of [embeddingModel, kiwiFile])
   if (!existsSync(file)) throw new Error(`model missing: ${file}`);
 
 const sharedModels = StorageRoot.layer(home);
-const embedder = Embedder.local.pipe(Layer.provide(sharedModels));
+const embedder = Embedder.localVariant("fp32").pipe(Layer.provide(sharedModels));
+const quantized = Embedder.local.pipe(Layer.provide(sharedModels));
 const kiwi = MorphAnalyzer.kiwi.pipe(Layer.provide(sharedModels));
 const noEmbedder = Layer.succeed(Embedder, {
   identity: "none",
@@ -43,6 +49,8 @@ interface Configuration {
 const configurations: readonly Configuration[] = [
   { name: "vector + trigram", embedder, morph: MorphAnalyzer.disabled },
   { name: "vector + trigram + kiwi", embedder, morph: kiwi },
+  { name: "vector(quint8) + trigram", embedder: quantized, morph: MorphAnalyzer.disabled },
+  { name: "vector(quint8) + trigram + kiwi", embedder: quantized, morph: kiwi },
   { name: "trigram", embedder: noEmbedder, morph: MorphAnalyzer.disabled },
   { name: "trigram + kiwi", embedder: noEmbedder, morph: kiwi },
 ];

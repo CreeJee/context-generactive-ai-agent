@@ -27,12 +27,12 @@
 - 모델은 로그인 후 계정에서 쓸 수 있는 목록에서 사용자가 고른다. 없는 모델은 자동 대체하지 않고 오류.
 - 모델 호출은 `CodexTextAdapter`(TanStack 어댑터)로 하고, 도구는 `dynamicTools`로 넘겨 `item/tool/call`을 TanStack 도구 실행으로 연결한다. code mode 전용 모델(gpt-5.6 계열)을 위해 `features.code_mode_host`를 끄지 않는다.
 
-## 기억 (2026-09-13)
+## 기억 (2026-09-15)
 
 - 사용자·assistant·tool call·tool result를 모두 수정 불가 노드로 저장한다. 목적은 근거 추적.
 - 채팅은 그래프 구조를 가진다: 저장 시 구조 edge(`next`, `reply`, `calls`, `returns`, `touches`), 이후 LLM 해석(`llm-interpret`)으로 의미 edge(about, corrects, retracts, related)를 보강한다.
 - 검색은 turbovec 벡터 순위 + SQLite FTS trigram 순위 + Kiwi 형태소 순위(아래 "Kiwi 형태소 검색")를 RRF(k=60)로 합친 뒤 그래프를 탐색한다.
-- 임베딩은 로컬 모델 `ibm-granite/granite-embedding-97m-multilingual-r2`(fp32, CLS pooling). 모델 파일은 `~/.context-generactive-agent/models`.
+- 임베딩은 로컬 모델 `ibm-granite/granite-embedding-97m-multilingual-r2`의 quint8 파일(CLS pooling)이다. 한 노드는 앞 2048토큰까지 임베딩하고, 배치는 토큰 길이로 나눈다(아래 "메모리"). 모델 파일은 `~/.context-generactive-agent/models`.
 
 ## 기억 보강: llm-interpret (2026-09-14)
 
@@ -233,7 +233,7 @@
 - 기억 검색에 세 번째 순위를 더한다: Kiwi(kiwi-nlp 0.24.0 WASM, cong base 모델)로 뽑은 검색어를 `nodes_morph`(FTS5 unicode61)에 넣고 BM25로 순위를 매겨, 벡터·trigram 순위와 함께 RRF로 합친다. 조사·어미가 달라도("로그 형식을 정했었지" ↔ "로그 포맷은 … 정했습니다") 같은 명사·어간으로 만난다.
 - 검색어: 일반·고유명사, 수사, 동사·형용사 어간, 어근, 한자. `하`·`되`·`있`·`없`·`어떻` 같은 거의 모든 문장에 나오는 어간은 뺀다. 띄어 쓰지 않은 명사 연속은 합친 말도 넣는다("데이터 베이스" → "데이터베이스"). 라틴 문자·숫자는 Kiwi가 가끔 이상하게 자르므로("Grafana" → "Gr"+"afana") 원문에서 직접 뽑는다.
 - 모델(압축 해제 104 MB)은 처음 필요할 때 GitHub 릴리스에서 받아 sha256을 확인하고, 경로 검사 후 임시 디렉터리에 풀어 `<저장 루트>/models/kiwi-0.24.0`으로 옮긴다.
-- Kiwi는 worker thread에서 돌고 RSS를 약 850 MB 더 쓴다. 10분 동안 요청이 없으면 worker를 끝내고, 다음 요청에서 다시 띄운다(적재 약 2초). 요청이 없는 worker는 프로세스를 붙잡지 않는다.
+- Kiwi는 worker thread에서 돌고, 처음 쓸 때 띄운 뒤 계속 둔다. 모델을 만드는 순간 약 900 MB까지 오르고 약 240 MB로 내려앉는다(macOS physical footprint). 요청이 없는 worker는 프로세스를 붙잡지 않는다. 쉬는 worker를 끝내는 방식은 메모리가 줄지 않아 뺐다(아래 "메모리").
 - 검색은 Kiwi 적재를 기다리지 않는다. 아직 준비되지 않았으면 적재를 시작하고 형태소 순위 없이 검색하며 `degraded`에 `morph`를 넣는다. 분석은 답변이 끝난 뒤 임베딩 인덱싱 다음에 백그라운드로 하고, 노드마다 분석기 identity를 기록해 한 번만 한다.
 - 평가: `packages/memory-agent/eval/recall.ts`(`vp run eval:recall`). 한국어 발언 45개(9개 대화, 겹치는 낱말이 있는 방해 발언 포함)와 조사·어미·낱말을 바꾼 질문 32개. 실제 granite 임베딩 + 실제 Kiwi:
 
@@ -275,6 +275,30 @@
 - 서명: 로컬 ad-hoc 서명만 한다(Apple Silicon은 서명 없는 바이너리를 실행하지 않고, SEA 빌드가 붙여 준다). Developer ID 서명·공증, `.app`/dmg, 자동 업데이트는 미룬다.
 - 검증은 `vp run smoke-package`로 한다. 실행 파일을 저장소 밖에서 임시 저장 루트로 띄워 첫 실행 자원 풀기, Host·교차 사이트 차단, codex 받기·검증·실행, 프로젝트·세션, keyring, acp, 종료 정리, 두 번째 실행 재사용을 확인한다.
   - 측정: 첫 실행 3초, codex 받기 11초, 두 번째 실행 0.5초.
+
+## 메모리 (2026-09-15)
+
+- 측정은 `packages/memory-agent/eval/memory.ts`(`node --expose-gc --no-warnings eval/memory.ts`)로 한다. 시나리오마다 새 프로세스를 띄워 macOS physical footprint(`footprint`)를 잰다. RSS는 해제된 메모리가 남아 보이고, 메모리가 부족할 때 수백 MB씩 흔들려 쓰지 않는다.
+- **임베딩 순간 최대치를 막는다.** 배치는 가장 긴 텍스트 길이로 채워지고, 어텐션 메모리는 길이의 제곱으로 는다. 예전 설정(최대 8192토큰, 16개씩)에서는 긴 도구 결과 하나가 16 × 8192토큰 계산을 만들 수 있었다(4096토큰 하나가 이미 +650 MB).
+  - 한 노드는 앞 2048토큰까지만 임베딩한다. 원문 전체는 노드, trigram 검색, Kiwi 검색에 그대로 남는다.
+  - 텍스트를 길이순으로 정렬하고, 배치를 개수 16 이하, 개수 × 가장 긴 길이² ≤ 2048²로 나눈다. 짧은 글 16개는 한 배치, 긴 글은 혼자다. 결과는 원래 순서로 돌려준다.
+  - ONNX CPU 메모리 arena를 끈다. 한 배치의 최대 할당을 다음 배치까지 붙잡지 않게 하기 위해서다.
+  - 측정: 긴 글 1개 + 짧은 글 15개가 fp32 기준 최대 약 2.1 GB, quint8 기준 약 1.3 GB로 묶인다.
+- **quint8을 기본 임베딩 모델로 쓴다.** 같은 모델이 공개한 `onnx/model_quint8_avx2.onnx`다.
+
+  |                                   |    fp32 | quint8 |
+  | --------------------------------- | ------: | -----: |
+  | 짧은 글 16개 최대 footprint       | 1787 MB | 756 MB |
+  | 회상 평가 MRR (벡터+trigram+Kiwi) |   0.852 |  0.831 |
+  | 회상 평가 top-3                   |   29/32 |  29/32 |
+  | 인덱싱 시간(45문장)               |   3.5초 |  2.7초 |
+  - 받는 파일도 390 MB에서 98 MB로 준다. 임베더 identity가 바뀌어 기존 벡터는 다시 인덱싱된다.
+  - quint8은 활성값 양자화 범위를 배치마다 정한다. 그래서 같은 문장도 함께 묶인 문장에 따라 벡터가 조금 달라진다(코사인 약 0.986). 검색 순위에는 영향이 작다.
+
+- **쉬는 동안 모델을 내리는 방식은 쓰지 않는다.** 재 본 결과가 기대와 달랐다.
+  - 같은 프로세스에서 세션을 해제하면 quint8 기준 약 40 MB만 돌아왔다. 다시 로드할 때마다 약 12 MB씩 늘었다.
+  - worker thread에서 돌리고 끝내도 fp32 1726 → 1170 MB, quint8 702 → 621 MB였다. onnxruntime의 네이티브 메모리가 프로세스에 남는다. Kiwi worker는 끝내도 줄지 않았다(234 → 234 MB).
+  - 그래서 임베딩 모델과 Kiwi는 한 번 띄우면 계속 둔다. 쉬는 동안 메모리를 실제로 돌려받으려면 모델을 별도 프로세스로 띄워야 한다. 후속 과제로 둔다(시작 1–2초와 IPC가 늘어난다).
 
 ## 개발 규칙 (2026-09-15)
 
