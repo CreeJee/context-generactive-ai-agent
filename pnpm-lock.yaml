@@ -404,6 +404,9 @@ importers:
       '@tanstack/ai':
         specifier: 'catalog:'
         version: 0.54.0(zod@3.25.76)
+      '@tanstack/ai-client':
+        specifier: 'catalog:'
+        version: 0.31.1(zod@3.25.76)
       '@tanstack/ai-mcp':
         specifier: 'catalog:'
         version: 0.3.10(zod@3.25.76)
@@ -426,9 +429,6 @@ importers:
         specifier: workspace:*
         version: link:../turbovec
     devDependencies:
-      '@tanstack/ai-client':
-        specifier: 'catalog:'
-        version: 0.31.1(zod@3.25.76)
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.4
