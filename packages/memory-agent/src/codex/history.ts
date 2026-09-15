@@ -24,11 +24,39 @@ const partsOf = (message: ModelMessage): readonly ContentPart[] =>
     ? message.content
     : [{ type: "text", content: message.content ?? "" }];
 
-/** Every image source value in the messages, so the caller can resolve them before converting. */
+/**
+ * User turns, counting the one being answered, whose tool output and images go to codex whole.
+ * Older ones are shortened when injected: a run starts a fresh codex thread with the whole
+ * conversation, and tool output (file reads, shell, web pages) is most of it. The nodes keep
+ * everything, so the model can read it again with a tool.
+ */
+export const wholeTurns = 2;
+/** Characters kept from the start of an older tool output. */
+export const keptToolCharacters = 1_000;
+
+/** Index of the first message of the {@link wholeTurns} most recent user turns. */
+function recentFrom(messages: readonly ModelMessage[]) {
+  const userTurns = messages.flatMap((message, index) => (message.role === "user" ? [index] : []));
+  return userTurns.at(-wholeTurns) ?? 0;
+}
+
+/** Older tool output, cut to its start with a note saying how much is left out and how to see it. */
+function shortenedOutput(text: string) {
+  if (text.length <= keptToolCharacters) return text;
+  const omitted = text.length - keptToolCharacters;
+  return `${text.slice(0, keptToolCharacters)}\n… [older tool output shortened: ${omitted} more characters. Call the tool again if you need them.]`;
+}
+
+/**
+ * Image source values the conversion sends as images (those of recent turns), so the caller
+ * resolves only those before converting.
+ */
 export function imageSources(messages: readonly ModelMessage[]): string[] {
-  return messages.flatMap((message) =>
-    partsOf(message).flatMap((part) => (part.type === "image" ? [part.source.value] : [])),
-  );
+  return messages
+    .slice(recentFrom(messages))
+    .flatMap((message) =>
+      partsOf(message).flatMap((part) => (part.type === "image" ? [part.source.value] : [])),
+    );
 }
 
 export interface CodexTurnInput {
@@ -42,7 +70,8 @@ export interface CodexTurnInput {
  * Splits TanStack messages into injected history and the new turn input.
  * A trailing user message becomes the turn input; anything else (e.g. tool results) is history
  * and the turn starts with no new input, which codex answers from the injected items.
- * Images are forwarded only when `images` resolved them; unknown sources are dropped.
+ * Images are forwarded only when `images` resolved them; unknown sources are dropped. Tool output
+ * and images older than {@link wholeTurns} user turns are shortened (see there).
  */
 export function toCodexTurnInput(
   messages: readonly ModelMessage[],
@@ -51,9 +80,11 @@ export function toCodexTurnInput(
   const last = messages.at(-1);
   const trailingUser = last?.role === "user" ? last : null;
   const earlier = trailingUser ? messages.slice(0, -1) : messages;
+  const recent = recentFrom(messages);
 
-  const history = earlier.flatMap((message): Json[] => {
+  const history = earlier.flatMap((message, index): Json[] => {
     const text = messageText(message);
+    const old = index < recent;
     switch (message.role) {
       case "user":
         return [
@@ -65,6 +96,7 @@ export function toCodexTurnInput(
                 case "text":
                   return [{ type: "input_text", text: part.content }];
                 case "image": {
+                  if (old) return [{ type: "input_text", text: "[image from an earlier message]" }];
                   const image = images.get(part.source.value);
                   return image ? [{ type: "input_image", image_url: image.dataUrl }] : [];
                 }
@@ -88,7 +120,13 @@ export function toCodexTurnInput(
         ];
       case "tool":
         return message.toolCallId
-          ? [{ type: "function_call_output", call_id: message.toolCallId, output: text }]
+          ? [
+              {
+                type: "function_call_output",
+                call_id: message.toolCallId,
+                output: old ? shortenedOutput(text) : text,
+              },
+            ]
           : [];
     }
   });

@@ -9,7 +9,7 @@ import { toolRoundLimitCode } from "../src/agent/run-state.ts";
 import { CodexAppServer } from "../src/codex/app-server.ts";
 import { Attachments } from "../src/attachments/attachments.ts";
 import { CodexChat } from "../src/codex/chat.ts";
-import { toCodexTurnInput } from "../src/codex/history.ts";
+import { imageSources, keptToolCharacters, toCodexTurnInput } from "../src/codex/history.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { Database } from "../src/db/database.ts";
 import { toToolSchema } from "../src/tools/schema.ts";
@@ -119,6 +119,59 @@ describe("toCodexTurnInput", () => {
       ],
       input: [{ type: "text", text: "부산은?", text_elements: [] }],
     });
+  });
+
+  test("shortens tool output and images of older turns, keeping the recent turns whole", () => {
+    const long = "x".repeat(keptToolCharacters + 500);
+    const toolTurn = (id: string, question: string): ModelMessage[] => [
+      { role: "user", content: question },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [{ id, type: "function", function: { name: "read_file", arguments: "{}" } }],
+      },
+      { role: "tool", toolCallId: id, content: long },
+    ];
+    const messages: ModelMessage[] = [
+      {
+        role: "user",
+        content: [
+          { type: "text", content: "#1 봐줘" },
+          { type: "image", source: { type: "url", value: "/api/attachments/old" } },
+        ],
+      },
+      ...toolTurn("old", "첫 파일"),
+      ...toolTurn("recent", "둘째 파일"),
+      { role: "user", content: "요약해" },
+    ];
+    expect(imageSources(messages)).toEqual([]);
+    const { history } = toCodexTurnInput(
+      messages,
+      new Map([
+        ["/api/attachments/old", { path: "/old.png", dataUrl: "data:image/png;base64,T0xE" }],
+      ]),
+    );
+    const outputs = history.filter(
+      (item): item is { type: string; call_id: string; output: string } =>
+        Schema.is(Schema.Struct({ type: Schema.Literal("function_call_output") }))(item),
+    );
+    const byCall = new Map(outputs.map((item) => [item.call_id, item.output]));
+    expect(byCall.get("recent")).toBe(long);
+    expect(byCall.get("old")).toBe(
+      `${"x".repeat(keptToolCharacters)}\n… [older tool output shortened: 500 more characters. Call the tool again if you need them.]`,
+    );
+    expect(history[0]).toEqual({
+      type: "message",
+      role: "user",
+      content: [
+        { type: "input_text", text: "#1 봐줘" },
+        { type: "input_text", text: "[image from an earlier message]" },
+      ],
+    });
+    // A tool call and its arguments stay, so the model still sees what it did.
+    expect(history).toContainEqual(
+      expect.objectContaining({ type: "function_call", call_id: "old" }),
+    );
   });
 
   test("sends new images as local files, replays earlier ones as data URLs, drops unknown ones", () => {
