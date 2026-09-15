@@ -42,6 +42,6 @@ export default defineConfig({
     // memory-agent ships TypeScript source; compile it into the server bundle.
     noExternal: ["memory-agent"],
     // Native addons and their loaders must stay as runtime requires.
-    external: ["turbovec", "@huggingface/transformers", "onnxruntime-node"],
+    external: ["turbovec", "@huggingface/transformers", "onnxruntime-node", "@napi-rs/keyring"],
   },
 });
