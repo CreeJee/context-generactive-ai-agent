@@ -1,4 +1,4 @@
-import { KeyRoundIcon, PlugIcon, SettingsIcon, Trash2Icon } from "lucide-react";
+import { BookOpenIcon, KeyRoundIcon, PlugIcon, SettingsIcon, Trash2Icon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Alert, AlertDescription } from "~/components/ui/alert";
 import { Badge } from "~/components/ui/badge";
@@ -39,6 +39,7 @@ import {
   type McpOverview,
   type McpServerView,
   type Project,
+  type SkillCatalog,
 } from "./api";
 
 const kagiErrors = new Map([
@@ -304,7 +305,71 @@ function McpSettings({ project }: { project: Project | null }) {
   );
 }
 
-/** Settings that apply beyond one conversation: web search and MCP servers. */
+const skillProblems = {
+  no_description: "description이 없어 쓰지 않아요.",
+  too_large: "SKILL.md가 너무 커서 쓰지 않아요.",
+  unreadable: "읽지 못했어요.",
+} as const;
+
+/** Skills the model can read in this project (R18). They are instructions, not permissions. */
+function SkillSettings({ project }: { project: Project | null }) {
+  const [catalog, setCatalog] = useState<SkillCatalog | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!project) return;
+    void api
+      .skills(project.id)
+      .then(setCatalog)
+      .catch(() => setError("skill 목록을 읽지 못했어요."));
+  }, [project]);
+
+  if (!project) return <FieldDescription>프로젝트를 먼저 선택하세요.</FieldDescription>;
+  if (!catalog) return error ? <FieldDescription>{error}</FieldDescription> : <Spinner />;
+
+  return (
+    <FieldGroup>
+      <FieldDescription>
+        모델은 목록의 이름과 설명을 보고, 작업에 맞으면 내용을 읽어 따라요. skill 문구는 지침일
+        뿐이라 승인을 대신하지 않아요. 같은 이름이면 프로젝트 skill이 쓰여요.
+      </FieldDescription>
+      <div className="flex flex-col gap-1">
+        {catalog.directories.map((directory) => (
+          <div key={directory.scope} className="text-xs text-muted-foreground">
+            {scopeLabels[directory.scope]}: <code className="break-all">{directory.path}</code>
+          </div>
+        ))}
+      </div>
+      {catalog.skills.length === 0 ? (
+        <FieldDescription>쓸 수 있는 skill이 없어요.</FieldDescription>
+      ) : (
+        <ItemGroup className="gap-2">
+          {catalog.skills.map((skill) => (
+            <Item key={`${skill.scope}/${skill.name}`} variant="outline" size="sm">
+              <ItemMedia variant="icon">
+                <BookOpenIcon />
+              </ItemMedia>
+              <ItemContent className="min-w-0">
+                <ItemTitle className="flex items-center gap-1.5">
+                  {skill.name}
+                  <Badge variant="secondary">{scopeLabels[skill.scope]}</Badge>
+                </ItemTitle>
+                <ItemDescription className="line-clamp-3">{skill.description}</ItemDescription>
+              </ItemContent>
+            </Item>
+          ))}
+        </ItemGroup>
+      )}
+      {catalog.problems.map((problem) => (
+        <FieldDescription key={problem.directory} className="text-destructive">
+          <code className="break-all">{problem.directory}</code>: {skillProblems[problem.problem]}
+        </FieldDescription>
+      ))}
+    </FieldGroup>
+  );
+}
+
+/** Settings that apply beyond one conversation: web search, MCP servers and skills. */
 export function SettingsDialog({ project }: { project: Project | null }) {
   return (
     <Dialog>
@@ -320,12 +385,16 @@ export function SettingsDialog({ project }: { project: Project | null }) {
           <TabsList>
             <TabsTrigger value="web">웹 검색</TabsTrigger>
             <TabsTrigger value="mcp">MCP</TabsTrigger>
+            <TabsTrigger value="skills">Skills</TabsTrigger>
           </TabsList>
           <TabsContent value="web" className="pt-3">
             <KagiSettings />
           </TabsContent>
           <TabsContent value="mcp" className="max-h-[60vh] overflow-y-auto pt-3">
             <McpSettings project={project} />
+          </TabsContent>
+          <TabsContent value="skills" className="max-h-[60vh] overflow-y-auto pt-3">
+            <SkillSettings project={project} />
           </TabsContent>
         </Tabs>
       </DialogContent>

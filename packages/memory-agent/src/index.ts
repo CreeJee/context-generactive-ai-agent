@@ -199,5 +199,20 @@ export {
   type McpServerState,
   type McpServerView,
 } from "./mcp/servers.ts";
+export {
+  SkillScope,
+  Skills,
+  globalSkillsDirectory,
+  maxDescriptionCharacters,
+  maxListedSkills,
+  maxSkillBytes,
+  parseFrontMatter,
+  projectSkillsDirectory,
+  type Skill,
+  type SkillCatalog,
+  type SkillDocument,
+  type SkillProblem,
+} from "./skills/skills.ts";
+export { SkillTools, skillsInstructions } from "./tools/skills.ts";
 export { KagiTools, kagiInstructions, kagiToolNames, maxPageCharacters } from "./tools/kagi.ts";
 export { toToolSchema, type ToolSchema } from "./tools/schema.ts";

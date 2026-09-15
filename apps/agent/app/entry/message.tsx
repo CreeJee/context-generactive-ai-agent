@@ -29,6 +29,7 @@ const toolLabels = new Map([
   ["delete_outside_file", "밖 파일 삭제"],
   ["kagi_search", "웹 검색"],
   ["kagi_extract", "웹 페이지 읽기"],
+  ["read_skill", "skill 읽기"],
 ]);
 
 /** Built-in tools by their label; MCP tools (`mcp_<server>__<tool>`) as "MCP server · tool". */

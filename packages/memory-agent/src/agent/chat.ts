@@ -28,6 +28,7 @@ import { ApprovedTools } from "../tools/approved.ts";
 import { gatedToolNames, permissionReviewInterrupt } from "../tools/definitions.ts";
 import { FileTools } from "../tools/files.ts";
 import { KagiTools, kagiInstructions } from "../tools/kagi.ts";
+import { SkillTools } from "../tools/skills.ts";
 import { MemoryTools } from "../tools/memory.ts";
 import { OutsideTools } from "../tools/outside.ts";
 import { QueueDelivery } from "../queue/delivery.ts";
@@ -199,6 +200,7 @@ const make = Effect.gen(function* () {
   const approvedTools = yield* ApprovedTools;
   const kagiTools = yield* KagiTools;
   const mcpServers = yield* McpServers;
+  const skillTools = yield* SkillTools;
   const permissionGate = yield* PermissionGate;
   const projects = yield* Projects;
   const indexer = yield* Indexer;
@@ -328,6 +330,8 @@ const make = Effect.gen(function* () {
         const webTools = yield* kagiTools.tools;
         // Trusted MCP servers of this project and the user (R18); every call is gated below.
         const mcpTools = yield* mcpServers.tools(project);
+        // Skills from ~/.agents/skills and the project's .agents/skills: guidance, not permission.
+        const skills = skillTools.forProject(project);
 
         // Not tied to the request: a reload or a closed tab must not stop the run (R10). Only an
         // explicit cancel aborts it.
@@ -381,6 +385,7 @@ const make = Effect.gen(function* () {
           ...approvedTools.forProject(project),
           ...webTools,
           ...mcpTools,
+          ...skills.tools,
         ];
         const stream = chat({
           adapter: codexChat.adapter(selection),
@@ -392,6 +397,7 @@ const make = Effect.gen(function* () {
             attachmentInstructions,
             ...(webTools.length > 0 ? [kagiInstructions] : []),
             ...(mcpTools.length > 0 ? [mcpInstructions] : []),
+            ...(skills.instructions ? [skills.instructions] : []),
           ],
           threadId,
           runId,

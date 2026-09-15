@@ -25,13 +25,17 @@ function open(storage: string, options: MemoryAgentLayerOptions) {
 export async function testRuntime(overrides: MemoryAgentLayerOptions = {}) {
   // Interpretation is a model call; tests that need it run it by hand. Secrets never touch the
   // real keychain.
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "memory-agent-")));
+  const home = join(base, "home");
+  mkdirSync(home);
   const options = {
     embedder: fakeEmbedderLayer,
     interpretAutomatically: false,
     secrets: SecretStore.memory,
+    // The user's real ~/.agents/skills stays out of tests.
+    skillsHome: home,
     ...overrides,
   };
-  const base = realpathSync(mkdtempSync(join(tmpdir(), "memory-agent-")));
   const storage = join(base, "storage");
   const projectRoot = join(base, "project");
   mkdirSync(projectRoot);
@@ -50,6 +54,7 @@ export async function testRuntime(overrides: MemoryAgentLayerOptions = {}) {
     project,
     session,
     base,
+    home,
     storage,
     /** Closes this runtime and opens a new one on the same storage, like a process restart. */
     reopen: async () => {

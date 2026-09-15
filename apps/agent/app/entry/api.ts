@@ -10,6 +10,7 @@ import type {
   PermissionMode,
   Project,
   Session,
+  SkillCatalog,
 } from "memory-agent";
 import type { UIMessage } from "@tanstack/ai-react";
 import {
@@ -38,6 +39,7 @@ export type {
   QueuedMessage,
   Session,
   SessionRunState,
+  SkillCatalog,
 };
 
 export class ApiError extends Error {
@@ -156,6 +158,9 @@ export const api = {
       name,
       trusted,
     }),
+
+  skills: (projectId: string) =>
+    call<SkillCatalog>("GET", `/api/projects/${encodeURIComponent(projectId)}/skills`),
 
   /** Uploads one image as raw bytes; the server checks what it really is. */
   uploadAttachment: async (file: File) => {

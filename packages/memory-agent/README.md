@@ -14,6 +14,7 @@ src/
   config/       저장 루트(~/.context-generactive-agent), 전역 설정(config.json), OS 키체인(SecretStore)
   kagi/         선택 Kagi Search·Extract 클라이언트와 켜기/끄기·키 등록
   mcp/          MCP 설정 파일(공통·프로젝트) 읽기, 신뢰, 연결, 도구 변환
+  skills/       ~/.agents/skills·<project>/.agents/skills의 SKILL.md 목록과 읽기
   projects/     프로젝트 등록·경로 검사·교차 회상 제외·권한 모드(ask/auto)
   sessions/     프로젝트에 속한 대화
   memory/       기억: 노드·구조 edge·그래프 탐색·근거 추적·검색·기록 middleware
@@ -54,6 +55,7 @@ src/
 | `run_shell`, `write_outside_file`, `delete_outside_file`         | 필요 | 권한 모드에 따라 승인                          |
 | `kagi_search`, `kagi_extract`                                    | 없음 | Kagi 키 등록 후 켰을 때만 보임, 호출마다 과금  |
 | `mcp_<서버>__<도구>`                                             | 필요 | 신뢰한 MCP 서버의 도구, 호출마다 게이트        |
+| `read_skill`                                                     | 없음 | skill이 있을 때만, 본문은 지침이지 권한 아님   |
 
 권한 모드는 프로젝트마다 고릅니다.
 
