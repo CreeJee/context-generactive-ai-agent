@@ -264,6 +264,14 @@
 - 넣는 패키지와 크기: turbovec, `@napi-rs/keyring`, transformers, onnxruntime(이 플랫폼 bin만), sharp, kiwi-nlp와 그 의존성. 런타임 74 MB, darwin-arm64 실행 파일 238 MB.
   - 뺀 것: `onnxruntime-web`(transformers Node 빌드가 쓰지 않음), onnxruntime-node의 설치 스크립트 의존성.
 - 플랫폼마다 그 플랫폼 기기에서 빌드한다. pnpm은 이 기기용 optional 패키지만 받고, turbovec은 이 기기에서만 빌드된다. 지금은 darwin-arm64만 만들었다. CI 매트릭스는 후속이다.
+- 윈도우 차이는 `packages/memory-agent/src/runtime/host.ts` 한 곳에서 다룬다. 플랫폼을 인자로 받아 두 갈래를 모두 테스트한다. 윈도우 기기에서 실제로 실행해 보지는 않았다.
+  - 앱이 직접 실행하는 도구(codex, git)는 PATH의 절대 경로 항목에서만 찾는다(윈도우는 PATHEXT 포함). 넘기는 환경 변수는 시스템 폴더와, 윈도우에서 프로그램 실행에 필요한 변수(`SystemRoot`, `ComSpec`, `TEMP` 등)뿐이다. codex에는 자격 증명 저장소를 위해 사용자 폴더 변수(`USERPROFILE`, `APPDATA` 등)도 넘긴다.
+  - 셸 도구: POSIX는 `$SHELL -c`(없으면 `/bin/sh`)와 프로세스 그룹 종료, 윈도우는 `cmd.exe /d /s /c`와 `taskkill /T /F`(SIGTERM이 없음).
+  - 외부 에이전트는 `cross-spawn`으로 실행해 윈도우의 `npx.cmd` 같은 실행기도 인자를 따옴표 처리해 띄운다. 끝낼 때는 실행기뿐 아니라 프로세스 트리를 끝낸다.
+  - 실행 폴더를 프로젝트로 열 때 실행 파일 자신의 폴더도 제외한다(윈도우 탐색기 더블클릭은 거기서 시작).
+  - 서버는 SIGHUP(윈도우 콘솔 창 닫기 포함)에도 codex와 인덱스 잠금을 정리한다.
+- 실행 파일은 `NODE_OPTIONS`를 무시한다(SEA `execArgvExtension: "none"`). 개발 도구나 사용자의 Node 플래그가 배포된 앱을 바꾸거나 깨뜨리지 않게 하기 위해서다.
+- `vp run package`·`vp run smoke-package`는 캐시하지 않는 vite task다. Vite Task의 파일 추적 아래에서는 띄운 실행 파일이 응답하지 않아서, 스모크가 캐시 모드에서 실패했다.
 - 서명: 로컬 ad-hoc 서명만 한다(Apple Silicon은 서명 없는 바이너리를 실행하지 않고, SEA 빌드가 붙여 준다). Developer ID 서명·공증, `.app`/dmg, 자동 업데이트는 미룬다.
 - 검증은 `vp run smoke-package`로 한다. 실행 파일을 저장소 밖에서 임시 저장 루트로 띄워 첫 실행 자원 풀기, Host·교차 사이트 차단, codex 받기·검증·실행, 프로젝트·세션, keyring, acp, 종료 정리, 두 번째 실행 재사용을 확인한다.
   - 측정: 첫 실행 3초, codex 받기 11초, 두 번째 실행 0.5초.

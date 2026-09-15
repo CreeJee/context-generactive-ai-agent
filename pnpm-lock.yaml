@@ -218,6 +218,9 @@ catalogs:
     '@tanstack/ai-react':
       specifier: ^0.24.1
       version: 0.24.1
+    '@types/cross-spawn':
+      specifier: 6.0.6
+      version: 6.0.6
     '@types/node':
       specifier: ^24
       version: 24.13.4
@@ -230,6 +233,9 @@ catalogs:
     cn:
       specifier: ^0.3.0
       version: 0.3.0
+    cross-spawn:
+      specifier: 7.0.6
+      version: 7.0.6
     effect:
       specifier: 3.22.2
       version: 3.22.2
@@ -428,6 +434,9 @@ importers:
       '@tanstack/ai-persistence':
         specifier: 'catalog:'
         version: 0.5.7(@tanstack/ai@0.54.0(zod@3.25.76))(vitest@4.1.11)
+      cross-spawn:
+        specifier: 'catalog:'
+        version: 7.0.6
       effect:
         specifier: 'catalog:'
         version: 3.22.2
@@ -447,6 +456,9 @@ importers:
         specifier: workspace:*
         version: link:../turbovec
     devDependencies:
+      '@types/cross-spawn':
+        specifier: 'catalog:'
+        version: 6.0.6
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.4
@@ -1907,6 +1919,9 @@ packages:
 
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
+
+  '@types/cross-spawn@6.0.6':
+    resolution: {integrity: sha512-fXRhhUkG4H3TQk5dBhQ7m/JDdSNHKwR2BBia62lhwEIq9xGiQKLxd6LymNhn47SjXhsUEPmxi+PKw2OkW4LLjA==}
 
   '@types/debug@4.1.13':
     resolution: {integrity: sha512-KSVgmQmzMwPlmtljOomayoR89W4FynCAi3E8PPs7vmDVPe84hT+vGPKkJfThkmXs0x0jAaa9U8uW8bbfyS2fWw==}
@@ -5865,6 +5880,10 @@ snapshots:
     dependencies:
       '@types/deep-eql': 4.0.2
       assertion-error: 2.0.1
+
+  '@types/cross-spawn@6.0.6':
+    dependencies:
+      '@types/node': 26.5.1
 
   '@types/debug@4.1.13':
     dependencies:

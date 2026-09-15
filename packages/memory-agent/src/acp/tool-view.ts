@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import type { ToolKind } from "@agentclientprotocol/sdk";
 import { Option, Schema } from "effect";
 
@@ -63,9 +64,8 @@ export function toolDetail(argumentsJson: string): string | null {
 export function toolLocations(argumentsJson: string, projectRoot: string) {
   return Option.match(decodePathArguments(argumentsJson), {
     onNone: () => [],
-    onSome: (args) =>
-      args.path === undefined
-        ? []
-        : [{ path: args.path.startsWith("/") ? args.path : `${projectRoot}/${args.path}` }],
+    // resolve() keeps an absolute path (`/x`, `C:\x`) and joins a relative one to the project,
+    // normalizing separators and `..` for this platform.
+    onSome: (args) => (args.path === undefined ? [] : [{ path: resolve(projectRoot, args.path) }]),
   });
 }

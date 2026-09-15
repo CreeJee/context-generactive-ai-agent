@@ -50,6 +50,7 @@
     "@tanstack/ai-client": "catalog:",
     "@tanstack/ai-mcp": "catalog:",
     "@tanstack/ai-persistence": "catalog:",
+    "cross-spawn": "catalog:",
     "effect": "catalog:",
     "json-rpc-2.0": "catalog:",
     "kiwi-nlp": "catalog:",
@@ -58,6 +59,7 @@
     "turbovec": "workspace:*"
   },
   "devDependencies": {
+    "@types/cross-spawn": "catalog:",
     "@types/node": "catalog:",
     "bumpp": "^11.1.0",
     "typescript": "^7.0.2",

@@ -66,11 +66,22 @@ export default defineConfig(({ command }) => ({
           fileName: "context-agent",
           outDir: process.env.CONTEXT_AGENT_EXE_DIR,
           seaConfig: {
+            // The shipped app ignores NODE_OPTIONS, so a developer's or tool's Node flags (preloads,
+            // --conditions) cannot change or break it.
+            execArgvExtension: "none",
             assets: Schema.decodeUnknownSync(
               Schema.parseJson(Schema.Record({ key: Schema.String, value: Schema.String })),
             )(readFileSync(process.env.CONTEXT_AGENT_EXE_ASSETS, "utf8")),
           },
         }
       : false,
+  },
+  run: {
+    tasks: {
+      // Never cached: each run builds or starts a fresh executable, and Vite Task's file tracking
+      // around the started executable keeps it from serving.
+      package: { command: "react-router build && node scripts/package.ts", cache: false },
+      "smoke-package": { command: "node scripts/smoke-package.ts", cache: false },
+    },
   },
 }));

@@ -15,7 +15,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Schema } from "effect";
 
@@ -47,9 +47,13 @@ function run(command: string, args: readonly string[], env: Record<string, strin
     cwd: app,
     stdio: "inherit",
     env: { ...process.env, ...env },
+    // `vp` is a `.cmd` shim on Windows; the arguments here are fixed, never user input.
+    shell: process.platform === "win32",
   });
   if (result.status !== 0) throw new Error(`${command} ${args.join(" ")} failed`);
 }
+
+const toPosix = (path: string) => path.split(sep).join("/");
 
 /** Node's lookup from `fromDirectory` for an installed package, as its real directory. */
 function findPackage(fromDirectory: string, name: string) {
@@ -107,7 +111,7 @@ function collectPackages() {
       recursive: true,
       dereference: true,
       filter: (source) => {
-        const path = relative(realDirectory, source);
+        const path = toPosix(relative(realDirectory, source));
         if (path === "") return true;
         if (path.split("/").includes("node_modules")) return false;
         return kept === null || kept.has(path);
@@ -202,8 +206,9 @@ cpSync(
 collectPackages();
 writeCodexManifest();
 
+// Asset names and manifest entries use `/` on every platform; the executable joins them itself.
 const files = listFiles(stage)
-  .map((file) => relative(stage, file))
+  .map((file) => toPosix(relative(stage, file)))
   .sort();
 const hash = createHash("sha256");
 let bytes = 0;

@@ -24,13 +24,15 @@ const canonical = (path: string) => {
 
 /**
  * `context-agent <folder>` opens that folder; without one, the folder it was started from. A start
- * with no real working folder (a double-click starts in `/`, or the home folder) and the storage
- * root open no project: the app shows its project list as before.
+ * with no real working folder opens no project and the app shows its project list as before: a
+ * drive or filesystem root (a macOS double-click starts in `/`), the home folder, the storage root,
+ * and the executable's own folder (a Windows double-click starts there, e.g. Downloads).
  */
 export function launchFolder(
   argument: string | undefined,
   cwd: string,
   storageRoot: string,
+  executableFolder: string | null,
 ): LaunchFolder {
   const candidate = resolve(cwd, argument ?? ".");
   let root: string;
@@ -44,7 +46,8 @@ export function launchFolder(
   if (
     root === dirname(root) ||
     root === canonical(homedir()) ||
-    isInside(root, canonical(storageRoot))
+    isInside(root, canonical(storageRoot)) ||
+    (executableFolder !== null && root === canonical(executableFolder))
   )
     return { kind: "none" };
   return { kind: "folder", root };

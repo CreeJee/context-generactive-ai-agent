@@ -44,6 +44,8 @@ catalog:
   cmdk: ^1.1.1
   kiwi-nlp: 0.24.0
   "@openai/codex": 0.154.0
+  cross-spawn: 7.0.6
+  "@types/cross-spawn": 6.0.6
 overrides:
   vite@*: "catalog:"
 peerDependencyRules:

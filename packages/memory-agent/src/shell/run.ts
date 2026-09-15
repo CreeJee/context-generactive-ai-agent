@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { isAbsolute } from "node:path";
+import { shellInvocation, stopProcessTree } from "../runtime/host.ts";
 
 /** Output bytes kept from the start of each stream once it is too long. */
 const headBytes = 8 * 1024;
@@ -34,10 +33,9 @@ export function commandEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv
   };
 }
 
-/** The user's login shell when it is a real absolute path, else `/bin/sh`. */
+/** The shell a command runs in: the user's login shell or `/bin/sh`, `cmd.exe` on Windows. */
 export function hostShell(source: NodeJS.ProcessEnv): string {
-  const shell = source.SHELL;
-  return shell && isAbsolute(shell) && existsSync(shell) ? shell : "/bin/sh";
+  return shellInvocation("", source).file;
 }
 
 /** Keeps the first and last bytes of a stream and counts what was dropped in between. */
@@ -96,11 +94,14 @@ export interface CommandOptions {
 }
 
 /**
- * Runs one command line in its own process group on the host. Timeout and cancellation stop the
- * whole group (SIGTERM, then SIGKILL). This is host execution: path rules do not sandbox it.
+ * Runs one command line on the host, in its own process group on POSIX. Timeout and cancellation
+ * stop everything it started (SIGTERM, then SIGKILL; the whole tree at once on Windows). This is
+ * host execution: path rules do not sandbox it.
  */
 export function runCommand(command: string, options: CommandOptions): Promise<CommandResult> {
-  const shell = hostShell(options.env);
+  const invocation = shellInvocation(command, options.env);
+  const shell = invocation.file;
+  const windows = process.platform === "win32";
   const started = Date.now();
   const stdout = new Capture();
   const stderr = new Capture();
@@ -122,27 +123,24 @@ export function runCommand(command: string, options: CommandOptions): Promise<Co
       return;
     }
 
-    const child = spawn(shell, ["-c", command], {
+    const child = spawn(shell, [...invocation.args], {
       cwd: options.cwd,
       env: commandEnvironment(options.env),
       stdio: ["ignore", "pipe", "pipe"],
-      detached: true,
+      // A process group to stop on POSIX; on Windows `detached` would open a console window.
+      detached: !windows,
+      windowsHide: true,
+      windowsVerbatimArguments: invocation.verbatim,
     });
     let stopReason: "timed_out" | "cancelled" | null = null;
     let killTimer: NodeJS.Timeout | undefined;
 
     const stop = (reason: "timed_out" | "cancelled") => {
-      if (stopReason || child.exitCode !== null) return;
+      if (stopReason || child.exitCode !== null || child.pid === undefined) return;
       stopReason = reason;
-      const signalGroup = (signal: NodeJS.Signals) => {
-        try {
-          if (child.pid !== undefined) process.kill(-child.pid, signal);
-        } catch {
-          // The group already exited.
-        }
-      };
-      signalGroup("SIGTERM");
-      killTimer = setTimeout(() => signalGroup("SIGKILL"), killGraceMs);
+      const pid = child.pid;
+      stopProcessTree(pid, false);
+      if (!windows) killTimer = setTimeout(() => stopProcessTree(pid, true), killGraceMs);
     };
 
     const timeout = setTimeout(() => stop("timed_out"), options.timeoutSeconds * 1000);

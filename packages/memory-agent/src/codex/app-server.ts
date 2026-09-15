@@ -11,6 +11,7 @@ import {
   type JSONRPCResponse,
 } from "json-rpc-2.0";
 import { StorageRoot } from "../config/storage-root.ts";
+import { helperEnvironment, stopProcessTree } from "../runtime/host.ts";
 import { runtimeRequire, runtimeRoot } from "../runtime/resources.ts";
 import { codexInstaller } from "./installer.ts";
 
@@ -127,6 +128,29 @@ export function bundledCodex(platform: string = process.platform, arch: string =
   }
 }
 
+/**
+ * What codex is started with: its app-owned CODEX_HOME, a minimal search path, and what the OS
+ * credential store needs. macOS Keychain resolves through the real account HOME and the Windows
+ * credential manager through the user's profile folders; elsewhere HOME is CODEX_HOME too.
+ */
+export function codexEnvironment(
+  codexHome: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+  accountHome: () => string = () => userInfo().homedir,
+) {
+  const base = helperEnvironment([], { user: true }, env, platform);
+  const common = { ...base, CODEX_HOME: codexHome, LANG: "en_US.UTF-8" };
+  switch (platform) {
+    case "win32":
+      return common;
+    case "darwin":
+      return { ...common, HOME: accountHome() };
+    default:
+      return { ...common, HOME: codexHome };
+  }
+}
+
 const maxFrameBytes = 16 * 1024 * 1024;
 const requestTimeoutMs = 30_000;
 
@@ -220,13 +244,8 @@ const make = (command: CodexCommand | null) =>
       const child = spawn(spec.executable, [...spec.args], {
         cwd: codexHome,
         stdio: "pipe",
-        env: {
-          // macOS Keychain resolves through the real account HOME; CODEX_HOME keeps config separate.
-          HOME: process.platform === "darwin" ? userInfo().homedir : codexHome,
-          CODEX_HOME: codexHome,
-          PATH: "/usr/bin:/bin",
-          LANG: "en_US.UTF-8",
-        },
+        windowsHide: true,
+        env: codexEnvironment(codexHome),
       });
       const conn: Connection = {
         child,
@@ -306,7 +325,10 @@ const make = (command: CodexCommand | null) =>
         const conn = connection;
         if (!conn) return;
         conn.child.stdin.end();
-        conn.child.kill("SIGTERM");
+        // Windows has no SIGTERM; ending the tree also stops codex's code-mode host.
+        if (process.platform === "win32" && conn.child.pid !== undefined)
+          stopProcessTree(conn.child.pid, true);
+        else conn.child.kill("SIGTERM");
         const force = setTimeout(() => conn.child.kill("SIGKILL"), 1_000);
         await conn.exited;
         clearTimeout(force);

@@ -2,6 +2,8 @@
 // process and opens the folder (or the folder it was started from) as a project;
 // `context-agent acp` is the stdio ACP agent editors start, working through that server.
 // Runs as the packaged executable (Node SEA) or as the `vp pack` bundle (`vp run start`).
+import { dirname } from "node:path";
+import { isSea } from "node:sea";
 import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -71,7 +73,9 @@ if (positionals[0] === "acp") {
   await connection.closed;
 } else {
   const storageRoot = values.storage ?? defaultStorageRoot;
-  const folder = launchFolder(positionals[0], process.cwd(), storageRoot);
+  // Only the executable has a folder of its own; `node` running the bundle does not count.
+  const executableFolder = isSea() ? dirname(process.execPath) : null;
+  const folder = launchFolder(positionals[0], process.cwd(), storageRoot, executableFolder);
   if (folder.kind === "invalid") {
     console.error(`폴더를 찾을 수 없어요: ${folder.path}`);
     process.exit(2);

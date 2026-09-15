@@ -1,5 +1,10 @@
 import { execFile } from "node:child_process";
+import { dirname } from "node:path";
 import { Schema } from "effect";
+import { findExecutable, helperEnvironment } from "../runtime/host.ts";
+
+/** Git runs with its own folder and the system folders on its search path, and nothing else. */
+export const gitEnvironment = (git: string) => helperEnvironment([dirname(git)], { user: false });
 
 const noFileMatched = Schema.is(Schema.Struct({ code: Schema.Literal(1) }));
 
@@ -19,6 +24,8 @@ export function gitGrepFiles(
   caseSensitive: boolean,
 ): Promise<ReadonlySet<string> | null> {
   if (query.includes("\n") || (!caseSensitive && !isAscii(query))) return Promise.resolve(null);
+  const git = findExecutable("git");
+  if (!git) return Promise.resolve(null);
   const args = [
     "grep",
     "--untracked",
@@ -34,17 +41,14 @@ export function gitGrepFiles(
   ];
   return new Promise((resolve) => {
     execFile(
-      "git",
+      git,
       args,
       {
         cwd: root,
         maxBuffer: 64 * 1024 * 1024,
+        windowsHide: true,
         // A fixed environment: no user pager, config-driven external tools or locale surprises.
-        env: {
-          PATH: "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
-          LANG: "C",
-          GIT_PAGER: "cat",
-        },
+        env: { ...gitEnvironment(git), LANG: "C", GIT_PAGER: "cat" },
       },
       (error, stdout) => {
         if (!error) return resolve(new Set(stdout.split("\0").filter(Boolean)));

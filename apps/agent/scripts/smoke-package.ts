@@ -12,6 +12,7 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,16 +20,18 @@ import { fileURLToPath } from "node:url";
 import { Schema } from "effect";
 
 const app = fileURLToPath(new URL("..", import.meta.url));
+const windows = process.platform === "win32";
+const executableName = windows ? "context-agent.exe" : "context-agent";
 const built = join(
   app,
   "dist",
   `context-agent-${process.platform}-${process.arch}`,
-  "context-agent",
+  executableName,
 );
 if (!existsSync(built)) throw new Error("no executable; run `vp run package` first");
 
 const base = realpathSync(mkdtempSync(join(tmpdir(), "context-agent-smoke-")));
-const executable = join(base, "bin", "context-agent");
+const executable = join(base, "bin", executableName);
 const storage = join(base, "storage");
 const project = join(base, "project");
 mkdirSync(join(base, "bin"));
@@ -74,7 +77,10 @@ async function stop(child: ChildProcess) {
   const exited = new Promise<number | null>((resolve) =>
     child.once("exit", (code) => resolve(code)),
   );
-  child.kill("SIGTERM");
+  // Windows cannot deliver SIGTERM to another console process; end the whole tree there.
+  if (windows && child.pid !== undefined)
+    spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+  else child.kill("SIGTERM");
   return exited;
 }
 
@@ -87,8 +93,30 @@ const runtimeFolders = () =>
   existsSync(join(storage, "runtime"))
     ? readdirSync(join(storage, "runtime")).filter((name) => /^[0-9a-f]{16}$/.test(name))
     : [];
+/** Processes started from the storage root's runtime folder (codex and its code-mode host). */
 const codexProcesses = () =>
-  spawnSync("pgrep", ["-f", join(storage, "runtime")], { encoding: "utf8" }).stdout.trim();
+  windows
+    ? spawnSync(
+        "powershell",
+        [
+          "-NoProfile",
+          "-Command",
+          `(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like '${join(storage, "runtime")}\\*' }).ProcessId`,
+        ],
+        { encoding: "utf8" },
+      ).stdout.trim()
+    : spawnSync("pgrep", ["-f", join(storage, "runtime")], { encoding: "utf8" }).stdout.trim();
+
+/** A request with a Host header fetch() does not allow setting. */
+const statusWithHost = (url: string, host: string) =>
+  new Promise<number>((resolve, reject) => {
+    const request = httpRequest(url, { headers: { host } }, (response) => {
+      response.resume();
+      resolve(response.statusCode ?? 0);
+    });
+    request.on("error", reject);
+    request.end();
+  });
 
 try {
   const port = await freePort();
@@ -126,12 +154,8 @@ try {
       (assetResponse.headers.get("cache-control") ?? "").includes("immutable"),
   );
 
-  const badHost = spawnSync(
-    "curl",
-    ["-s", "-o", "/dev/null", "-w", "%{http_code}", "-H", "Host: evil.example", `${url}/api/auth`],
-    { encoding: "utf8" },
-  ).stdout;
-  check("non-loopback Host refused", badHost === "403", badHost);
+  const badHost = await statusWithHost(`${url}/api/auth`, "evil.example");
+  check("non-loopback Host refused", badHost === 403, String(badHost));
   const crossSite = await post(
     "/api/auth",
     { intent: "logout" },
@@ -182,11 +206,13 @@ try {
   check("codex child running before stop", codexProcesses() !== "");
   const code = await stop(server);
   await new Promise((resolve) => setTimeout(resolve, 1_500));
-  check(
-    "SIGTERM stops the server and its codex",
-    code === 0 && codexProcesses() === "",
-    `exit ${code}`,
-  );
+  if (windows) check("stopping the tree ends codex too", codexProcesses() === "");
+  else
+    check(
+      "SIGTERM stops the server and its codex",
+      code === 0 && codexProcesses() === "",
+      `exit ${code}`,
+    );
 
   const unpackedAt = folder ? statSync(join(storage, "runtime", folder, ".complete")).mtimeMs : 0;
   started = Date.now();

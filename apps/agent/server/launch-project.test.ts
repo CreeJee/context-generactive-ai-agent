@@ -26,21 +26,29 @@ describe("launch folder", () => {
     mkdirSync(join(storage, "runtime"), { recursive: true });
     writeFileSync(join(project, "README.md"), "");
 
-    expect(launchFolder(undefined, project, storage)).toEqual({ kind: "folder", root: project });
-    expect(launchFolder("src", project, storage)).toEqual({
+    expect(launchFolder(undefined, project, storage, null)).toEqual({
+      kind: "folder",
+      root: project,
+    });
+    expect(launchFolder("src", project, storage, null)).toEqual({
       kind: "folder",
       root: join(project, "src"),
     });
     // A double-click starts in "/", a plain terminal in the home folder: neither is a project.
-    expect(launchFolder(undefined, "/", storage)).toEqual({ kind: "none" });
-    expect(launchFolder(undefined, homedir(), storage)).toEqual({ kind: "none" });
-    expect(launchFolder(undefined, join(storage, "runtime"), storage)).toEqual({ kind: "none" });
+    expect(launchFolder(undefined, "/", storage, null)).toEqual({ kind: "none" });
+    expect(launchFolder(undefined, homedir(), storage, null)).toEqual({ kind: "none" });
+    expect(launchFolder(undefined, join(storage, "runtime"), storage, null)).toEqual({
+      kind: "none",
+    });
+    // A Windows double-click starts in the executable's folder; naming that folder still opens it.
+    expect(launchFolder(undefined, project, storage, project)).toEqual({ kind: "none" });
+    expect(launchFolder(".", project, storage, project)).toEqual({ kind: "folder", root: project });
     // A folder named on the command line must exist and be a folder.
-    expect(launchFolder("missing", project, storage)).toEqual({
+    expect(launchFolder("missing", project, storage, null)).toEqual({
       kind: "invalid",
       path: join(project, "missing"),
     });
-    expect(launchFolder("README.md", project, storage).kind).toBe("invalid");
+    expect(launchFolder("README.md", project, storage, null).kind).toBe("invalid");
   });
 });
 

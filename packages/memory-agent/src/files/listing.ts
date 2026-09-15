@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { lstat, readdir } from "node:fs/promises";
 import { join, posix } from "node:path";
 import { promisify } from "node:util";
+import { findExecutable } from "../runtime/host.ts";
+import { gitEnvironment } from "./git-grep.ts";
 import { isCredentialPath } from "./paths.ts";
 
 const run = promisify(execFile);
@@ -46,11 +48,13 @@ export interface FileListing {
 }
 
 async function gitFiles(root: string, directory: string): Promise<string[] | null> {
+  const git = findExecutable("git");
+  if (!git) return null;
   try {
     const { stdout } = await run(
-      "git",
+      git,
       ["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", directory],
-      { cwd: root, maxBuffer: 256 * 1024 * 1024, env: { PATH: "/usr/bin:/bin:/usr/local/bin" } },
+      { cwd: root, maxBuffer: 256 * 1024 * 1024, windowsHide: true, env: gitEnvironment(git) },
     );
     return stdout.split("\0").filter(Boolean);
   } catch {

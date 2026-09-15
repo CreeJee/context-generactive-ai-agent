@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import type {
@@ -8,11 +8,13 @@ import type {
   StopReason,
 } from "@agentclientprotocol/sdk";
 import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
+import spawn from "cross-spawn";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
 import { expandVariables } from "../mcp/config.ts";
 import type { Project } from "../projects/projects.ts";
+import { endChild } from "../runtime/host.ts";
 import {
   AgentScope,
   globalAgentsFile,
@@ -194,7 +196,7 @@ const make = Effect.gen(function* () {
     link.live = null;
     if (!live) return;
     live.connection.close();
-    live.child.kill();
+    endChild(live.child);
   };
 
   const startProcess = async (
@@ -212,10 +214,11 @@ const make = Effect.gen(function* () {
         ]),
       ),
     };
+    // cross-spawn runs `npx` and other `.cmd` launchers on Windows, with arguments quoted for cmd.exe.
     const child = spawn(
       expandVariables(agent.command.command, process.env),
       agent.command.args.map((arg) => expandVariables(arg, process.env)),
-      { cwd: project.root, env, stdio: ["pipe", "pipe", "ignore"] },
+      { cwd: project.root, env, stdio: ["pipe", "pipe", "ignore"], windowsHide: true },
     );
     const spawned = new Promise<void>((resolve, reject) => {
       child.once("spawn", resolve);
@@ -273,7 +276,7 @@ const make = Effect.gen(function* () {
       return live;
     } catch (error) {
       connection.close();
-      child.kill();
+      endChild(child);
       throw error;
     }
   };
@@ -312,7 +315,7 @@ const make = Effect.gen(function* () {
   const onLost = (project: Project, agent: ConfiguredAgent, link: Link, live: Live) => {
     if (link.live !== live) return;
     link.live = null;
-    live.child.kill();
+    endChild(live.child);
     const retry = (): void => {
       if (link.live || link.failures >= maxConsecutiveFailures) return;
       void attempt(project, agent, link).catch(() => {

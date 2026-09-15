@@ -1,0 +1,117 @@
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, test } from "vite-plus/test";
+import { toolLocations } from "../src/acp/tool-view.ts";
+import { codexEnvironment } from "../src/codex/app-server.ts";
+import { findExecutable, helperEnvironment, shellInvocation } from "../src/runtime/host.ts";
+
+const cleanups: Array<() => void> = [];
+afterEach(() => {
+  for (const cleanup of cleanups.splice(0).reverse()) cleanup();
+});
+
+const windowsEnv = {
+  SystemRoot: "C:\\Windows",
+  ComSpec: "C:\\Windows\\System32\\cmd.exe",
+  PATHEXT: ".COM;.EXE;.BAT;.CMD",
+  TEMP: "C:\\Users\\me\\AppData\\Local\\Temp",
+  USERPROFILE: "C:\\Users\\me",
+  APPDATA: "C:\\Users\\me\\AppData\\Roaming",
+  LOCALAPPDATA: "C:\\Users\\me\\AppData\\Local",
+  Path: "C:\\Program Files\\Git\\cmd;.\\node_modules\\.bin;C:\\Users\\me\\AppData\\Roaming\\npm",
+  GITHUB_TOKEN: "secret",
+};
+
+describe("host differences", () => {
+  test("finds executables on absolute PATH entries only, with PATHEXT on Windows", () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "memory-agent-host-")));
+    cleanups.push(() => rmSync(base, { recursive: true, force: true }));
+    mkdirSync(join(base, "bin"));
+    writeFileSync(join(base, "bin", "git"), "");
+    expect(findExecutable("git", { PATH: `relative:${join(base, "bin")}` }, "linux")).toBe(
+      join(base, "bin", "git"),
+    );
+    expect(findExecutable("git", { PATH: "relative" }, "linux")).toBeNull();
+
+    const existing = new Set([
+      "C:\\Program Files\\Git\\cmd\\git.exe",
+      "C:\\Users\\me\\AppData\\Roaming\\npm\\npx.cmd",
+    ]);
+    const onWindows = (name: string) =>
+      findExecutable(name, windowsEnv, "win32", (path) => existing.has(path));
+    expect(onWindows("git")).toBe("C:\\Program Files\\Git\\cmd\\git.exe");
+    expect(onWindows("npx")).toBe("C:\\Users\\me\\AppData\\Roaming\\npm\\npx.cmd");
+  });
+
+  test("helper programs get the system folders and what Windows needs, never the user's secrets", () => {
+    expect(
+      helperEnvironment(["/opt/homebrew/bin"], { user: false }, { HOME: "/Users/me" }, "darwin"),
+    ).toEqual({
+      PATH: "/opt/homebrew/bin:/usr/bin:/bin",
+    });
+    const windows = helperEnvironment(
+      ["C:\\Program Files\\Git\\cmd"],
+      { user: false },
+      windowsEnv,
+      "win32",
+    );
+    expect(windows).toMatchObject({
+      SystemRoot: "C:\\Windows",
+      ComSpec: "C:\\Windows\\System32\\cmd.exe",
+      Path: "C:\\Program Files\\Git\\cmd;C:\\Windows\\System32;C:\\Windows",
+    });
+    expect(windows).not.toHaveProperty("USERPROFILE");
+    expect(windows).not.toHaveProperty("GITHUB_TOKEN");
+    expect(helperEnvironment([], { user: true }, windowsEnv, "win32")).toHaveProperty(
+      "APPDATA",
+      "C:\\Users\\me\\AppData\\Roaming",
+    );
+  });
+
+  test("codex keeps its own CODEX_HOME and reaches the OS credential store on each platform", () => {
+    const home = "/storage/codex";
+    expect(codexEnvironment(home, {}, "darwin", () => "/Users/me")).toEqual({
+      PATH: "/usr/bin:/bin",
+      CODEX_HOME: home,
+      LANG: "en_US.UTF-8",
+      HOME: "/Users/me",
+    });
+    expect(codexEnvironment(home, {}, "linux")).toMatchObject({ HOME: home, CODEX_HOME: home });
+    const windows = codexEnvironment("C:\\storage\\codex", windowsEnv, "win32");
+    expect(windows).toMatchObject({
+      CODEX_HOME: "C:\\storage\\codex",
+      USERPROFILE: "C:\\Users\\me",
+      LOCALAPPDATA: "C:\\Users\\me\\AppData\\Local",
+      SystemRoot: "C:\\Windows",
+    });
+    expect(windows).not.toHaveProperty("HOME");
+    expect(windows).not.toHaveProperty("GITHUB_TOKEN");
+  });
+
+  test("commands run through sh -c, or cmd.exe /d /s /c on Windows", () => {
+    expect(shellInvocation("ls", { SHELL: "/bin/zsh" }, "darwin", () => true)).toEqual({
+      file: "/bin/zsh",
+      args: ["-c", "ls"],
+      verbatim: false,
+    });
+    expect(shellInvocation("ls", { SHELL: "zsh" }, "linux", () => true).file).toBe("/bin/sh");
+    expect(shellInvocation("dir /b", windowsEnv, "win32", () => true)).toEqual({
+      file: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", '"dir /b"'],
+      verbatim: true,
+    });
+    expect(shellInvocation("dir", { SystemRoot: "D:\\Win" }, "win32", () => false).file).toBe(
+      "D:\\Win\\System32\\cmd.exe",
+    );
+  });
+
+  test("ACP tool locations resolve project-relative paths and normalize them", () => {
+    const args = (path: string) => JSON.stringify({ path });
+    expect(toolLocations(args("src/../README.md"), "/work/app")).toEqual([
+      { path: "/work/app/README.md" },
+    ]);
+    expect(toolLocations(args("/etc/hosts"), "/work/app")).toEqual([{ path: "/etc/hosts" }]);
+    expect(toolLocations(JSON.stringify({ command: "ls" }), "/work/app")).toEqual([]);
+  });
+});
