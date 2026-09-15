@@ -38,6 +38,7 @@ import { ComposerShortcuts, ComposerStatus, type ComposerMode } from "./composer
 import { MessageView } from "./message";
 import { isPending, useMessageQueue } from "./message-queue";
 import { QueuePanel } from "./queue-panel";
+import { SubagentPanel } from "./subagent-panel";
 import { ReadOnlyBar } from "./read-only-bar";
 import { RunNoticeView, useRunState } from "./run-state";
 import { useSessionLease, type PageLease } from "./session-lease";
@@ -418,6 +419,12 @@ function ChatPanel({
           {approvals.map((approval) => (
             <ApprovalCard key={approval.id} approval={approval} disabled={readOnly} />
           ))}
+          <SubagentPanel
+            sessionId={sessionId}
+            holder={holder}
+            generating={generating}
+            readOnly={readOnly}
+          />
           {status === "submitted" && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Spinner /> 생각하는 중…

@@ -218,4 +218,25 @@ export const migrations: readonly string[] = [
     CHECK ((scope = 'global') = (project_id = ''))
   );
   `,
+  `
+  -- Child agents a session's runs delegated to. name is NULL for a one-off run; a named child keeps
+  -- its conversation (chat_threads, thread id 'subagent-<id>') for later messages in the session.
+  -- A child still running when the server stops becomes 'interrupted' and is never rerun on its
+  -- own. Times are epoch milliseconds.
+  CREATE TABLE subagents (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    name TEXT,
+    instructions TEXT,
+    status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed', 'cancelled', 'interrupted')),
+    parent_run_id TEXT NOT NULL,
+    last_task TEXT NOT NULL,
+    last_answer TEXT,
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX subagents_name ON subagents(session_id, name) WHERE name IS NOT NULL;
+  CREATE INDEX subagents_session ON subagents(session_id, created_at);
+  `,
 ];

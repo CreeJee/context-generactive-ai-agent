@@ -201,7 +201,7 @@ async function runTurn(threadId, turnId, input) {
   }
   if (text.includes("check files")) {
     // Waits a moment before its tool call, so a test can queue a message for that boundary.
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await new Promise((resolve) => setTimeout(resolve, 700));
     await callClient("item/tool/call", {
       threadId,
       turnId,
@@ -212,6 +212,27 @@ async function runTurn(threadId, turnId, input) {
     if (thread.interrupted) return;
     const heard = thread.steered.length > 0 ? thread.steered.join(" / ") : "nothing";
     return streamAnswer(threadId, turnId, `Files checked. Heard: ${heard}`);
+  }
+  if (text.includes("nap")) {
+    // Takes a moment, so tests can tell parallel subagents from sequential ones.
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    if (thread.interrupted) return;
+    return streamAnswer(threadId, turnId, `napped: ${text}`);
+  }
+  if (text.includes("delegate twice")) {
+    const answers = await Promise.all(
+      ["nap A", "nap B"].map((task, index) =>
+        callClient("item/tool/call", {
+          threadId,
+          turnId,
+          callId: `call-delegate-${index}`,
+          tool: "run_subagent",
+          arguments: { task },
+        }),
+      ),
+    );
+    if (thread.interrupted) return;
+    return streamAnswer(threadId, turnId, `Both: ${answers.map(toolText).join(" | ")}`);
   }
   if (text.includes("fail"))
     return notify("error", { threadId, turnId, willRetry: false, error: { message: "boom" } });
@@ -240,6 +261,14 @@ async function runTurn(threadId, turnId, input) {
     });
     if (thread.interrupted) return;
     return streamAnswer(threadId, turnId, `Weather says ${toolText(answer)}`);
+  }
+  if (thread.instructions.includes("You are a subagent")) {
+    const earlier = thread.history.filter((item) => item.role === "user").length;
+    return streamAnswer(
+      threadId,
+      turnId,
+      `child done: ${text} (earlier user messages: ${earlier})`,
+    );
   }
   return streamAnswer(threadId, turnId, `Hello from ${thread.model}`);
 }

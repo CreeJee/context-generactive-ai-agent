@@ -12,6 +12,7 @@ import type {
   Session,
   SkillCatalog,
 } from "memory-agent";
+import type { ModelMessage } from "@tanstack/ai";
 import type { UIMessage } from "@tanstack/ai-react";
 import {
   sessionHolderHeader,
@@ -20,6 +21,9 @@ import {
   type QueueEdit,
   type QueuedMessage,
   type SessionRunState,
+  type SubagentApprovalView,
+  type SubagentsState,
+  type SubagentView,
 } from "memory-agent/definitions";
 
 export type {
@@ -40,6 +44,9 @@ export type {
   Session,
   SessionRunState,
   SkillCatalog,
+  SubagentApprovalView,
+  SubagentsState,
+  SubagentView,
 };
 
 export class ApiError extends Error {
@@ -161,6 +168,21 @@ export const api = {
 
   skills: (projectId: string) =>
     call<SkillCatalog>("GET", `/api/projects/${encodeURIComponent(projectId)}/skills`),
+
+  subagents: (sessionId: string) =>
+    call<SubagentsState>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/subagents`),
+  subagentTranscript: (sessionId: string, subagentId: string) =>
+    call<{ subagent: SubagentView; messages: ModelMessage[] }>(
+      "GET",
+      `/api/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(subagentId)}`,
+    ),
+  answerSubagent: (sessionId: string, holder: string, approvalId: string, approved: boolean) =>
+    call<SubagentsState>(
+      "POST",
+      `/api/sessions/${encodeURIComponent(sessionId)}/subagents/approvals/${encodeURIComponent(approvalId)}`,
+      { approved },
+      { [sessionHolderHeader]: holder },
+    ),
 
   /** Uploads one image as raw bytes; the server checks what it really is. */
   uploadAttachment: async (file: File) => {

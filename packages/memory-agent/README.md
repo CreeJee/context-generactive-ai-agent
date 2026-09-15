@@ -15,6 +15,7 @@ src/
   kagi/         선택 Kagi Search·Extract 클라이언트와 켜기/끄기·키 등록
   mcp/          MCP 설정 파일(공통·프로젝트) 읽기, 신뢰, 연결, 도구 변환
   skills/       ~/.agents/skills·<project>/.agents/skills의 SKILL.md 목록과 읽기
+  subagents/    run_subagent·message_subagent: 자식 chat 실행, 병렬 시작, 승인 중계, 기록
   projects/     프로젝트 등록·경로 검사·교차 회상 제외·권한 모드(ask/auto)
   sessions/     프로젝트에 속한 대화
   memory/       기억: 노드·구조 edge·그래프 탐색·근거 추적·검색·기록 middleware
@@ -56,6 +57,7 @@ src/
 | `kagi_search`, `kagi_extract`                                    | 없음 | Kagi 키 등록 후 켰을 때만 보임, 호출마다 과금  |
 | `mcp_<서버>__<도구>`                                             | 필요 | 신뢰한 MCP 서버의 도구, 호출마다 게이트        |
 | `read_skill`                                                     | 없음 | skill이 있을 때만, 본문은 지침이지 권한 아님   |
+| `run_subagent`, `message_subagent`                               | 없음 | 자식의 승인 필요 호출은 페이지에서 따로 승인   |
 
 권한 모드는 프로젝트마다 고릅니다.
 
@@ -69,6 +71,8 @@ src/
 
 MCP 도구는 실행 중에 생기므로 브라우저가 정의를 모릅니다. 그래서 `ask` 모드에서도 `PermissionGate`(decider `user`)가 호출마다 `permission-review` interrupt로 묻고, `auto` 모드에서는 내장 승인 도구와 함께 분류 모델이 판정합니다.
 `McpServers`는 `<storage>/mcp.json`과 `<project>/.mcp.json`을 읽고, 사용자가 신뢰한 설정(fingerprint)만 시작합니다. 테스트는 `tests/mcp.test.ts`(가짜 stdio MCP 서버 `tests/support/fake-mcp-server.mjs`).
+
+`Subagents`는 자식을 부모와 같은 모델·도구(서브에이전트 도구 제외)로 실행합니다. 자식의 승인 필요 호출은 부모 run을 멈추지 않고 `onBeforeToolCall`에서 기다리며, 페이지가 `AgentChat.subagents`/`answerSubagent`로 보고 답합니다. 테스트는 `tests/subagents.test.ts`.
 
 승인 대기로 HTTP 요청이 끝나도 codex 턴은 `TurnParking`에 threadId로 보관되어, 재개 요청이 같은 턴을 이어갑니다.
 

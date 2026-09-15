@@ -17,6 +17,12 @@ export {
 } from "../agent/run-state.ts";
 export { sessionHolderHeader, type LeaseView } from "../sessions/lease-state.ts";
 export type {
+  SubagentApprovalView,
+  SubagentStatus,
+  SubagentView,
+  SubagentsState,
+} from "../subagents/subagent-state.ts";
+export type {
   DeliveryVia,
   QueueEdit,
   QueueItemState,

@@ -214,5 +214,20 @@ export {
   type SkillProblem,
 } from "./skills/skills.ts";
 export { SkillTools, skillsInstructions } from "./tools/skills.ts";
+export {
+  Subagents,
+  childInstructions,
+  subagentInstructions,
+  subagentThreadId,
+  subagentToolNames,
+  type SubagentBinding,
+  type SubagentReport,
+} from "./subagents/subagents.ts";
+export type {
+  SubagentApprovalView,
+  SubagentStatus,
+  SubagentView,
+  SubagentsState,
+} from "./subagents/subagent-state.ts";
 export { KagiTools, kagiInstructions, kagiToolNames, maxPageCharacters } from "./tools/kagi.ts";
 export { toToolSchema, type ToolSchema } from "./tools/schema.ts";

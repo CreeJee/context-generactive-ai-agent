@@ -29,6 +29,7 @@ import { gatedToolNames, permissionReviewInterrupt } from "../tools/definitions.
 import { FileTools } from "../tools/files.ts";
 import { KagiTools, kagiInstructions } from "../tools/kagi.ts";
 import { SkillTools } from "../tools/skills.ts";
+import { Subagents, subagentInstructions } from "../subagents/subagents.ts";
 import { MemoryTools } from "../tools/memory.ts";
 import { OutsideTools } from "../tools/outside.ts";
 import { QueueDelivery } from "../queue/delivery.ts";
@@ -201,6 +202,7 @@ const make = Effect.gen(function* () {
   const kagiTools = yield* KagiTools;
   const mcpServers = yield* McpServers;
   const skillTools = yield* SkillTools;
+  const subagents = yield* Subagents;
   const permissionGate = yield* PermissionGate;
   const projects = yield* Projects;
   const indexer = yield* Indexer;
@@ -373,32 +375,49 @@ const make = Effect.gen(function* () {
               decider: "user",
             }),
           );
-        middleware.push(
-          recorder.forRun({ projectId, sessionId, runId, userNodeId: userNode.id }),
-          indexInBackground(),
-        );
-        // Tools come from several sources (built-in, web search), so the list is kept untyped.
-        const tools: AnyServerTool[] = [
+        // Tools come from several sources (built-in, web search, MCP), so the list is kept untyped.
+        const sharedTools: AnyServerTool[] = [
           ...memoryTools.forProject(projectId),
           ...fileTools.forProject(project),
           ...outsideTools.forProject(project),
-          ...approvedTools.forProject(project),
           ...webTools,
           ...mcpTools,
           ...skills.tools,
+        ];
+        const sharedPrompts = [
+          memoryInstructions,
+          workspaceInstructions(project),
+          ...(webTools.length > 0 ? [kagiInstructions] : []),
+          ...(mcpTools.length > 0 ? [mcpInstructions] : []),
+          ...(skills.instructions ? [skills.instructions] : []),
+        ];
+        // Children get the same tools and rules, never more, and no subagent tools of their own.
+        // Their approval-gated calls wait on the page instead of pausing this run (R18).
+        const children = subagents.forRun({
+          project,
+          sessionId,
+          runId,
+          selection,
+          abortSignal: abortController.signal,
+          tools: [...sharedTools, ...approvedTools.forProject(project, "gate")],
+          systemPrompts: sharedPrompts,
+          gated: new Set([...gatedToolNames, ...mcpNames]),
+        });
+        middleware.push(
+          children.middleware,
+          recorder.forRun({ projectId, sessionId, runId, userNodeId: userNode.id }),
+          indexInBackground(),
+        );
+        const tools: AnyServerTool[] = [
+          ...sharedTools,
+          ...approvedTools.forProject(project),
+          ...children.tools,
         ];
         const stream = chat({
           adapter: codexChat.adapter(selection),
           messages,
           tools,
-          systemPrompts: [
-            memoryInstructions,
-            workspaceInstructions(project),
-            attachmentInstructions,
-            ...(webTools.length > 0 ? [kagiInstructions] : []),
-            ...(mcpTools.length > 0 ? [mcpInstructions] : []),
-            ...(skills.instructions ? [skills.instructions] : []),
-          ],
+          systemPrompts: [...sharedPrompts, attachmentInstructions, subagentInstructions],
           threadId,
           runId,
           parentRunId,
@@ -546,6 +565,35 @@ const make = Effect.gen(function* () {
               : json(502, { error: "steer_failed" });
           }
         }
+      }),
+
+    /** The session's subagents and their calls waiting for the user. */
+    subagents: (sessionId: string) =>
+      Effect.gen(function* () {
+        const session = yield* Effect.either(sessions.get(sessionId));
+        if (session._tag === "Left") return json(404, { error: "session_not_found" });
+        return Response.json(subagents.state(sessionId));
+      }),
+
+    /** One subagent's saved conversation. */
+    subagentTranscript: (sessionId: string, subagentId: string) =>
+      Effect.gen(function* () {
+        const transcript = yield* Effect.promise(() => subagents.transcript(sessionId, subagentId));
+        return transcript ? Response.json(transcript) : json(404, { error: "subagent_not_found" });
+      }),
+
+    /** The page's answer to a subagent's call waiting for approval. Only the owning page may answer. */
+    answerSubagent: (
+      sessionId: string,
+      holder: string | null,
+      approvalId: string,
+      approved: boolean,
+    ) =>
+      Effect.sync(() => {
+        if (!leases.permits(sessionId, holder)) return inUse();
+        return subagents.answer(sessionId, approvalId, approved)
+          ? Response.json(subagents.state(sessionId))
+          : json(404, { error: "approval_not_pending" });
       }),
 
     /** Edits, removes or confirms one queued message. */

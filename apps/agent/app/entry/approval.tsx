@@ -219,10 +219,13 @@ function describe(call: GatedCall): CallView {
 export function ApprovalCard({
   approval,
   disabled,
+  requester,
 }: {
   approval: PendingApproval;
   /** A read-only page shows the request but cannot answer it. */
   disabled: boolean;
+  /** Who asks, when it is not the conversation's own agent (a subagent). */
+  requester?: string;
 }) {
   const view = describe(decodeCall(approval.toolName, approval.argumentsJson));
   const reviewReason =
@@ -235,7 +238,7 @@ export function ApprovalCard({
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Icon className="size-4" />
-          {view.title}
+          {requester ? `${requester}: ${view.title}` : view.title}
         </CardTitle>
         <CardDescription className="flex flex-col gap-0.5">
           {reviewReason && <span>자동 검토: {reviewReason}</span>}

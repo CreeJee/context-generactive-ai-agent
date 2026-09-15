@@ -14,6 +14,7 @@ import { Database } from "./db/database.ts";
 import { Kagi } from "./kagi/kagi.ts";
 import { McpServers } from "./mcp/servers.ts";
 import { Skills } from "./skills/skills.ts";
+import { Subagents } from "./subagents/subagents.ts";
 import { Embedder } from "./memory/embedding/embedder.ts";
 import { Indexer } from "./memory/embedding/indexer.ts";
 import { VectorIndex } from "./memory/embedding/vector-index.ts";
@@ -103,6 +104,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
         ApprovedTools.layer,
         KagiTools.layer,
         SkillTools.layer,
+        Subagents.layer,
         PermissionGate.layer,
         Interpreter.layer(options.interpretAutomatically),
       ),
