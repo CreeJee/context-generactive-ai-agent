@@ -3,6 +3,7 @@ import {
   ArchiveRestoreIcon,
   BotIcon,
   ChevronDownIcon,
+  ChevronRightIcon,
   FolderPlusIcon,
   LogOutIcon,
   PlusIcon,
@@ -497,11 +498,15 @@ export function SessionSection({
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="w-full justify-start text-xs text-muted-foreground"
+                    className="group w-full justify-start text-xs text-muted-foreground"
                   />
                 }
               >
-                <ArchiveIcon /> 보관함 {archived.length}
+                <ChevronRightIcon className="transition-transform group-data-[panel-open]:rotate-90" />
+                <ArchiveIcon /> 보관함
+                <Badge variant="secondary" className="ml-auto" aria-label={`${archived.length}개`}>
+                  {archived.length}
+                </Badge>
               </CollapsibleTrigger>
               <CollapsibleContent className="flex flex-col gap-0.5">
                 <p className="px-2 py-1 text-xs text-muted-foreground">
