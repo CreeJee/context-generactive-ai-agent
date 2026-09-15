@@ -14,8 +14,10 @@
 ## 인증과 모델 (2026-09-15)
 
 - ChatGPT OAuth와 모델 호출은 codex app-server(JSON-RPC over stdio)로 한다. 토큰은 codex가 관리하고 앱은 읽지 않으며, API 키로 재사용하지 않는다. codex 설정·로그인은 앱 전용 `<저장 루트>/codex`(CODEX_HOME)에 두어 사용자의 `~/.codex`와 섞지 않는다.
-- codex는 사용자가 설치하지 않는다. npm `@openai/codex`를 버전 고정(0.154.0)으로 앱 의존성에 넣고, 이 기기용 실행 파일(`codex`와 code mode 호스트)을 쓴다. 사용자의 전역 codex가 바뀌어도 app-server 프로토콜이 바뀌지 않는다.
-  - 대가: 설치 크기가 이 기기용 패키지만큼 늘고(darwin-arm64 압축 해제 290 MB), codex 프로세스 하나가 뜬다(대기 중 RSS 약 65 MB, code mode 호스트 약 5 MB).
+- codex는 사용자가 설치하지 않고, 사용자가 설치한 codex는 버전이 같아도 쓰지 않는다. 앱이 codex app-server의 실험 API(`dynamicTools`, `thread/inject_items`, `turn/steer`, code mode)에 기대고 사용자 codex는 스스로 업데이트되기 때문이다. 버전은 npm `@openai/codex` 0.154.0으로 고정한다.
+  - 저장소 실행(개발·`vp run start`): 의존성으로 설치된 이 기기용 패키지의 `codex`와 code mode 호스트를 쓴다.
+  - 실행 파일: codex를 넣지 않고, 처음 필요할 때 npm 레지스트리에서 이 기기용 tarball(darwin-arm64 116 MB)을 받아 lockfile의 sha512와 대조한 뒤 `<저장 루트>/runtime/codex-<버전>-<플랫폼>`에 푼다. 받는 동안 로그인 상태는 `installing`이고, 실패하면 `install_failed`로 알린 뒤 5초 뒤부터 다시 시도한다. 넣으면 실행 파일이 약 420 MB가 되고 풀 때 디스크를 두 배로 써서다.
+  - 대가: codex 프로세스 하나가 뜬다(대화 중 RSS 약 65–73 MB, code mode 호스트 약 5–12 MB).
   - 검토한 대안: 앱이 직접 OAuth 로그인하고 ChatGPT Codex 백엔드 Responses API를 부르는 방식(jcode). 설치물과 프로세스는 줄지만 Codex CLI 요청을 흉내 내는 비공개 경로이고, gpt-5.6 code mode 도구 호출·스티어링·긴 대화 압축·토큰 갱신을 앱이 다시 만들어야 해서 택하지 않았다.
 - 모델은 로그인 후 계정에서 쓸 수 있는 목록에서 사용자가 고른다. 없는 모델은 자동 대체하지 않고 오류.
 - 모델 호출은 `CodexTextAdapter`(TanStack 어댑터)로 하고, 도구는 `dynamicTools`로 넘겨 `item/tool/call`을 TanStack 도구 실행으로 연결한다. code mode 전용 모델(gpt-5.6 계열)을 위해 `features.code_mode_host`를 끄지 않는다.
@@ -157,7 +159,7 @@
 
 ## ACP: 에디터가 이 에이전트를 부를 때 (2026-09-15)
 
-- `packages/memory-agent/bin/context-agent-acp.ts`가 ACP 에이전트다. 에디터(Zed 등)가 stdio로 실행하면, 이 프로세스는 **실행 중인 앱의 HTTP API에 붙는 다리**로만 일한다(`CONTEXT_AGENT_URL`, 기본 `http://127.0.0.1:5173`). 저장소를 직접 열지 않는 이유: turbovec 인덱스는 저장 루트마다 한 프로세스만 쓸 수 있고, 같은 대화·lease·승인·기억을 웹 화면과 함께 써야 해서다. 앱이 꺼져 있으면 "앱을 먼저 실행하세요"로 실패한다.
+- ACP 에이전트는 실행 파일의 `context-agent acp [--port 5173]`이다(저장소에서는 `packages/memory-agent/bin/context-agent-acp.ts`, `CONTEXT_AGENT_URL`, 기본 `http://127.0.0.1:5173`). 에디터(Zed 등)가 stdio로 실행하면, 이 프로세스는 **실행 중인 앱의 HTTP API에 붙는 다리**로만 일한다. 저장소를 직접 열지 않는 이유: turbovec 인덱스는 저장 루트마다 한 프로세스만 쓸 수 있고, 같은 대화·lease·승인·기억을 웹 화면과 함께 써야 해서다. 앱이 꺼져 있으면 "앱을 먼저 실행하세요"로 실패한다.
 - ACP 세션 = 앱 대화. `session/new`는 `cwd`가 **이미 등록된 프로젝트**일 때만 새 대화를 만든다. 프로젝트 등록은 파일 도구 범위를 넓히므로 앱 화면에서만 한다. `session/load`는 저장된 대화를 update로 다시 보낸다.
 - 에디터 연결마다 lease holder를 따로 가진다(탭 하나처럼). 다른 탭이 쓰고 있는 대화는 열지 않는다. 연결이 끊기면 lease를 놓는다.
 - 답변은 AG-UI 이벤트를 ACP `agent_message_chunk`·`tool_call`·`tool_call_update`로 바꿔 보낸다. 승인(ask 모드 도구 승인, auto 모드 확인 요청, 서브에이전트 요청)은 에디터의 `session/request_permission`으로 묻고, "이번 한 번 허용"만 승인으로 본다. 항상 허용 옵션은 주지 않는다.
@@ -231,6 +233,27 @@
 
 - 해석: 임베딩이 있으면 이 세트에서 이득은 작다(질문 1개 차이). 임베딩 모델을 아직 받지 못했거나 적재·실패한 동안에는 크게 좋아진다. 뜻이 같고 낱말이 다른 질문("주 DB" ↔ "메인 데이터베이스", "되돌리는 방법" ↔ "롤백")은 여전히 임베딩 몫이다.
 - 형태소 순위가 있을 때 trigram 순위를 빼는 안(MRR 0.857)도 쟀지만 차이가 질문 하나 수준이고, trigram은 코드 식별자·경로의 부분 문자열을 찾으므로 셋을 모두 쓴다.
+
+## 배포: 실행 파일 (2026-09-15)
+
+- 앱은 실행 파일 하나(`context-agent`)로 배포한다. 실행하면 웹 앱 서버와 에이전트가 한 프로세스에서 뜨고 브라우저를 연다. Node나 저장소가 필요 없다.
+- 실행에 필요한 파일은 사용자 공간인 저장 루트 아래에 둔다.
+  - 실행 파일 안의 파일(클라이언트 빌드, Kiwi worker, 네이티브·임베딩 패키지, codex 매니페스트)은 첫 실행 때 `runtime/<해시>`에 한 번 풀고, 다른 빌드의 폴더는 지운다.
+  - codex는 `runtime/codex-*`에 처음 필요할 때 받는다(위 "인증과 모델").
+  - 모델은 지금처럼 `models/`에 처음 쓸 때 받는다.
+- 서버는 Hono 없이 React Router 핸들러(`@react-router/node` `createRequestListener`)와 `node:http`로 만든다(`apps/agent/server/`).
+  - `127.0.0.1`에만 연다. 기본 포트는 5173(ACP 기본 주소와 같음)이고, 사용 중이면 이유를 알리고 끝낸다.
+  - 옵션: `--port`, `--no-open`, `--storage`.
+  - **Host 검사**: 루프백 이름(`127.0.0.1`, `localhost`, `[::1]`)이 아닌 Host는 403. DNS rebinding으로 다른 사이트가 이 서버에 붙는 것을 막는다(R14). 개발 서버는 Vite의 host 검사에 맡긴다.
+  - 기존 교차 사이트 검사(`rejectCrossSite`)는 그대로 둔다.
+- 번들: 서버 빌드가 JS 의존성을 모두 담고, `vp pack`이 `server/main.ts`와 함께 한 파일(`dist/context-agent.mjs`)로 묶는다. `vp pack --exe`(Node SEA)가 같은 번들에 런타임 파일을 asset으로 넣어 실행 파일을 만든다(`vp run package`).
+- **SEA 제약**: SEA 본문은 디스크 파일을 `import()`하지 못한다. memory-agent는 네이티브·임베딩 패키지를 `require`로만 불러온다(transformers는 Node CommonJS 빌드). worker 안에서는 ESM import가 된다.
+- 넣는 패키지와 크기: turbovec, `@napi-rs/keyring`, transformers, onnxruntime(이 플랫폼 bin만), sharp, kiwi-nlp와 그 의존성. 런타임 74 MB, darwin-arm64 실행 파일 238 MB.
+  - 뺀 것: `onnxruntime-web`(transformers Node 빌드가 쓰지 않음), onnxruntime-node의 설치 스크립트 의존성.
+- 플랫폼마다 그 플랫폼 기기에서 빌드한다. pnpm은 이 기기용 optional 패키지만 받고, turbovec은 이 기기에서만 빌드된다. 지금은 darwin-arm64만 만들었다. CI 매트릭스는 후속이다.
+- 서명: 로컬 ad-hoc 서명만 한다(Apple Silicon은 서명 없는 바이너리를 실행하지 않고, SEA 빌드가 붙여 준다). Developer ID 서명·공증, `.app`/dmg, 자동 업데이트는 미룬다.
+- 검증은 `vp run smoke-package`로 한다. 실행 파일을 저장소 밖에서 임시 저장 루트로 띄워 첫 실행 자원 풀기, Host·교차 사이트 차단, codex 받기·검증·실행, 프로젝트·세션, keyring, acp, 종료 정리, 두 번째 실행 재사용을 확인한다.
+  - 측정: 첫 실행 3초, codex 받기 11초, 두 번째 실행 0.5초.
 
 ## 개발 규칙 (2026-09-15)
 

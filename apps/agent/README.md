@@ -22,7 +22,21 @@ vp run dev --host 127.0.0.1 --port 5174
 - 의존성이 바뀐 뒤 처음 띄우면 Vite가 의존성을 다시 묶으며 페이지를 새로고침합니다. 그 전에 연 페이지가 로딩 중에 멈춰 보이면 새로고침하세요.
 - ChatGPT 로그인과 모델 호출은 의존성으로 설치되는 codex(`@openai/codex` 0.154.0 고정)를 씁니다. codex를 따로 설치할 필요가 없고, 전역에 설치된 codex는 쓰지 않습니다.
 
-데이터는 `~/.context-generactive-agent`에 저장됩니다(SQLite, 벡터 인덱스, 임베딩 모델, codex 홈, 설정).
+데이터는 `~/.context-generactive-agent`에 저장됩니다(SQLite, 벡터 인덱스, 임베딩·Kiwi 모델, codex 홈, 설정, 실행 파일이 푼 `runtime/`).
+
+### 프로덕션 서버와 실행 파일
+
+```bash
+cd apps/agent
+vp run bundle                         # react-router build + vp pack → dist/context-agent.mjs
+vp run start --port 5175 --no-open    # 번들로 서버 실행(저장소의 네이티브 패키지 사용)
+vp run package                        # 이 기기용 실행 파일 → dist/context-agent-<플랫폼>-<아키텍처>/context-agent
+vp run smoke-package                  # 실행 파일을 저장소 밖에서 띄워 확인(codex 116 MB를 한 번 받음)
+```
+
+- 실행 파일: `context-agent [--port 5173] [--no-open] [--storage <폴더>]`. `127.0.0.1`에만 열고, 루프백이 아닌 Host는 거부합니다. 에디터용 ACP는 `context-agent acp [--port 5173]`입니다.
+- 첫 실행에서 실행 파일 안의 파일을 `~/.context-generactive-agent/runtime/<해시>`에 풀고, 처음 로그인 상태를 볼 때 codex를 받습니다(받는 동안 사이드바에 "받는 중"이 보입니다).
+- 빌드는 그 플랫폼 기기에서 합니다(Node 26.8.2, turbovec은 `vp run build:native`로 미리 빌드). 서명은 ad-hoc만 합니다.
 
 ## 화면
 
@@ -87,4 +101,7 @@ app/
   entry/       화면: 사이드바, 대화, 메시지, 마크다운, 승인 카드, API 클라이언트
   components/  shadcn UI
   routes/      _index.tsx, api/*
+server/        프로덕션 진입점: main.ts(CLI·acp), serve.ts(node:http + React Router, Host 검사, 정적 파일),
+               runtime-assets.ts(실행 파일 자원 풀기)
+scripts/       package.ts(실행 파일 만들기), smoke-package.ts(배포물 확인)
 ```

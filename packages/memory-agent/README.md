@@ -19,14 +19,15 @@ src/
   acp/          ACP 에이전트 다리(에디터 ↔ 실행 중인 앱 HTTP API)
   external-agents/  외부 ACP 에이전트(Codex 등) 설정·신뢰·연결·재연결 정책
   approvals/    run을 멈추지 못하는 승인 요청 중계(서브에이전트·외부 에이전트)
-bin/
-  context-agent-acp.ts   에디터가 stdio로 실행하는 ACP 에이전트
+  runtime/      실행 시점 자원: 네이티브·임베딩 패키지를 require로 불러올 위치(실행 파일이 푼 폴더 또는 이 패키지),
+                고정 해시 tgz 설치(Kiwi 모델, 실행 파일의 codex)
   projects/     프로젝트 등록·경로 검사·교차 회상 제외·권한 모드(ask/auto)
   sessions/     프로젝트에 속한 대화
   memory/       기억: 노드·구조 edge·그래프 탐색·근거 추적·검색·기록 middleware
     embedding/  로컬 임베딩 모델 + turbovec 벡터 인덱스 + 인덱서(형태소 분석 포함)
     morph/      Kiwi 한국어 형태소 분석(worker thread, 모델은 처음 쓸 때 내려받음)
-  codex/        ChatGPT 계정(의존성 @openai/codex의 app-server): 로그인·모델·TanStack 어댑터
+  codex/        ChatGPT 계정(고정 @openai/codex의 app-server): 로그인·모델·TanStack 어댑터,
+                실행 파일에서는 처음 필요할 때 codex를 받는 installer
   files/        경로·자격 증명 검사, 텍스트 파일 읽기/쓰기, 목록, 줄 검색
   attachments/  업로드 이미지 저장(sha256, 바이트 서명 검사)과 메시지 연결, 첨부 URL 규칙
   shell/        호스트 셸 실행(프로세스 그룹, timeout, 출력 앞뒤 보존)
@@ -36,7 +37,11 @@ bin/
   chat-state/   TanStack AI persistence의 SQLite 저장소(대화·run·interrupt·metadata)
   testing/      테스트용 어댑터·임베더
   layers.ts     모든 서비스를 저장 루트 하나로 조립하는 Effect Layer
+bin/
+  context-agent-acp.ts   저장소에서 쓰는 ACP 에이전트(실행 파일에서는 `context-agent acp`)
 ```
+
+네이티브·임베딩 패키지(turbovec, `@napi-rs/keyring`, `@huggingface/transformers`)는 정적 import하지 않고 `runtime/resources.ts`의 `requireRuntime`으로 불러옵니다. 실행 파일(Node SEA)은 디스크 파일을 `import()`하지 못하고, 이 패키지들을 `CONTEXT_AGENT_RUNTIME` 폴더에 풀어 두기 때문입니다.
 
 서비스는 Effect `Context.Tag` + `Layer`로 만들고, 앱은 `ManagedRuntime` 하나로 씁니다.
 도구 입력 스키마는 Effect Schema이며 `toToolSchema`로 TanStack이 요구하는 Standard JSON Schema로 바꿉니다.
