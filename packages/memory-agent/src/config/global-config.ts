@@ -9,6 +9,8 @@ export const Settings = Schema.Struct({
   model: Schema.optional(Schema.String),
   /** One of the efforts that model advertises, e.g. "low" or "high". */
   reasoningEffort: Schema.optional(Schema.NonEmptyString),
+  /** The user turned Kagi Search and Extract on. The key itself is in the keychain. */
+  kagiEnabled: Schema.optional(Schema.Boolean),
 });
 export type Settings = typeof Settings.Type;
 

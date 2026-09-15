@@ -14,6 +14,22 @@ export { sqliteChatPersistence } from "./chat-state/persistence.ts";
 
 export { StorageRoot, defaultStorageRoot } from "./config/storage-root.ts";
 export { GlobalConfig, Settings } from "./config/global-config.ts";
+export {
+  SecretStore,
+  SecretStoreFailed,
+  keychainService,
+  type SecretName,
+  type SecretStoreApi,
+} from "./config/secrets.ts";
+export {
+  Kagi,
+  KagiFailed,
+  KagiKeyMissing,
+  kagiBaseUrl,
+  maxExtractUrls,
+  type KagiFailureReason,
+  type KagiStatus,
+} from "./kagi/kagi.ts";
 export { CodexAccount, isChatgptAuthUrl, type AuthState } from "./codex/account.ts";
 export { CodexChat, CodexTextAdapter, TurnParking, type CodexTurns } from "./codex/chat.ts";
 export {
@@ -160,4 +176,5 @@ export {
   type FileListing,
 } from "./files/listing.ts";
 export { MemoryTools, memoryToolNames } from "./tools/memory.ts";
+export { KagiTools, kagiInstructions, kagiToolNames, maxPageCharacters } from "./tools/kagi.ts";
 export { toToolSchema, type ToolSchema } from "./tools/schema.ts";

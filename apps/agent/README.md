@@ -26,6 +26,7 @@ vp run dev --host 127.0.0.1 --port 5174
 
 ## 화면
 
+- 설정(사이드바 위 톱니바퀴): 웹 검색(Kagi) 키 등록·켜기/끄기·키 삭제. 키는 OS 키체인에만 저장되고 다시 보여주지 않습니다. 켜면 모델이 필요할 때 검색·페이지 읽기를 하고 호출마다 Kagi에 과금됩니다.
 - 사이드바: ChatGPT 로그인 상태, 모델·추론 강도, 프로젝트 선택·추가, 권한 모드(`매번 묻기`/`자동 판단`), 다른 프로젝트에서 이 프로젝트 기억 찾기 허용, 대화 목록.
 - 기억: 답변이 끝나면 뒤에서 발언의 주제와 정정·취소 관계를 정리합니다(선택한 모델을 가장 낮은 추론 강도로 사용). 나중에 "무엇으로 하기로 했지?"를 물으면 바뀐 결정과 이전 결정을 함께 답하고, 무엇을 정정한 것인지 불분명하면 되묻습니다.
 - 대화: 답변 스트리밍 마크다운([streamdown](https://streamdown.ai), 코드 하이라이트·한글 강조), 도구 호출 카드(인자·결과·상태 배지).
@@ -59,6 +60,7 @@ UI 컴포넌트는 shadcn으로 추가합니다(`AGENT.md`).
 | `GET /api/chat?session=&threadId=`           | 새로고침 복원: 대화, 진행 중인 run, 대기 중인 승인         |
 | `GET /api/chat?session=&runId=&offset=`      | 진행 중이거나 끝난 run의 답변을 로그에서 다시 읽기         |
 | `POST /api/chat?session=`                    | 채팅 실행(SSE), 승인 재개 포함(소유 탭만)                  |
+| `GET/POST /api/settings/kagi`                | Kagi 상태, `register`·`enable`·`disable`·`remove`          |
 | `POST /api/attachments`                      | 이미지 원본 바이트 업로드(png/jpeg/gif/webp, 20 MiB 이하)  |
 | `GET /api/attachments/:attachment`           | 저장된 이미지(다른 사이트 삽입 차단)                       |
 

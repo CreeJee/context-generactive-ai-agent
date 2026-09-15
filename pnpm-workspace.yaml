@@ -37,6 +37,10 @@ catalog:
   typescript: ^7.0.2
   vite: npm:@voidzero-dev/vite-plus-core@0.3.0
   vite-plus: 0.3.0
+  "@agentclientprotocol/sdk": 1.4.0
+  "@modelcontextprotocol/sdk": 1.30.0
+  "@napi-rs/keyring": 2.1.0
+  "@tanstack/ai-mcp": 0.3.10
 overrides:
   vite@*: "catalog:"
 peerDependencyRules:

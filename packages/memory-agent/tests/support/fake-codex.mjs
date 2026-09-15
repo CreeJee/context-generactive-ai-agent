@@ -133,6 +133,19 @@ async function runTurn(threadId, turnId, input) {
     });
     return streamAnswer(threadId, turnId, JSON.stringify({ statements }));
   }
+  const toolCall = text.match(/^call (\S+) (\{.*\})$/s);
+  if (toolCall) {
+    // "call TOOL {json}" calls any tool with those arguments and repeats what it returned.
+    const answer = await callClient("item/tool/call", {
+      threadId,
+      turnId,
+      callId: `call-${toolCall[1]}`,
+      tool: toolCall[1],
+      arguments: JSON.parse(toolCall[2]),
+    });
+    if (thread.interrupted) return;
+    return streamAnswer(threadId, turnId, `${toolCall[1]} said ${toolText(answer)}`);
+  }
   if (text.includes("look at")) {
     const local = input.filter((part) => part.type === "localImage");
     const replayed = thread.history

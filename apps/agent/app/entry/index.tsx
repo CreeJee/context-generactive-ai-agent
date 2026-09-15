@@ -18,6 +18,7 @@ import {
   type Session,
 } from "./api";
 import { SessionView } from "./chat-panel";
+import { SettingsDialog } from "./settings-dialog";
 import { AccountSection, ModelSection, ProjectSection, SessionSection } from "./sidebar";
 
 const loginPollMs = 2000;
@@ -161,7 +162,10 @@ export function App() {
   return (
     <div className="flex h-dvh bg-background text-foreground">
       <aside className="flex w-72 shrink-0 flex-col border-r">
-        <div className="px-4 py-3 text-sm font-semibold">Context Agent</div>
+        <div className="flex items-center justify-between py-2 pr-2 pl-4">
+          <span className="text-sm font-semibold">Context Agent</span>
+          <SettingsDialog />
+        </div>
         <Separator />
         <AccountSection auth={auth} onAction={(intent) => void authAction(intent)} />
         {signedIn && (

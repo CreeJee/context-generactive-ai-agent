@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Effect, ManagedRuntime } from "effect";
 import { afterEach } from "vite-plus/test";
 import { memoryAgentLayer, type MemoryAgentLayerOptions, Projects, Sessions } from "memory-agent";
+import { SecretStore } from "../../src/config/secrets.ts";
 import { fakeEmbedderLayer } from "../../src/testing/fake-embedder.ts";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -22,8 +23,14 @@ function open(storage: string, options: MemoryAgentLayerOptions) {
  * Uses the deterministic embedder unless another one is passed.
  */
 export async function testRuntime(overrides: MemoryAgentLayerOptions = {}) {
-  // Interpretation is a model call; tests that need it run it by hand.
-  const options = { embedder: fakeEmbedderLayer, interpretAutomatically: false, ...overrides };
+  // Interpretation is a model call; tests that need it run it by hand. Secrets never touch the
+  // real keychain.
+  const options = {
+    embedder: fakeEmbedderLayer,
+    interpretAutomatically: false,
+    secrets: SecretStore.memory,
+    ...overrides,
+  };
   const base = realpathSync(mkdtempSync(join(tmpdir(), "memory-agent-")));
   const storage = join(base, "storage");
   const projectRoot = join(base, "project");

@@ -34,9 +34,13 @@
     "prepublishOnly": "vp run build"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "catalog:",
     "@huggingface/transformers": "catalog:",
+    "@modelcontextprotocol/sdk": "catalog:",
+    "@napi-rs/keyring": "catalog:",
     "@standard-schema/spec": "catalog:",
     "@tanstack/ai": "catalog:",
+    "@tanstack/ai-mcp": "catalog:",
     "@tanstack/ai-persistence": "catalog:",
     "effect": "catalog:",
     "json-rpc-2.0": "catalog:",

@@ -8,8 +8,10 @@ import { CodexAppServer } from "./codex/app-server.ts";
 import { CodexChat } from "./codex/chat.ts";
 import { CodexModels } from "./codex/models.ts";
 import { GlobalConfig } from "./config/global-config.ts";
+import { SecretStore } from "./config/secrets.ts";
 import { StorageRoot } from "./config/storage-root.ts";
 import { Database } from "./db/database.ts";
+import { Kagi } from "./kagi/kagi.ts";
 import { Embedder } from "./memory/embedding/embedder.ts";
 import { Indexer } from "./memory/embedding/indexer.ts";
 import { VectorIndex } from "./memory/embedding/vector-index.ts";
@@ -29,6 +31,7 @@ import { SessionLeases } from "./sessions/leases.ts";
 import { Sessions } from "./sessions/sessions.ts";
 import { ApprovedTools } from "./tools/approved.ts";
 import { FileTools } from "./tools/files.ts";
+import { KagiTools } from "./tools/kagi.ts";
 import { MemoryTools } from "./tools/memory.ts";
 import { OutsideTools } from "./tools/outside.ts";
 
@@ -41,6 +44,10 @@ export interface MemoryAgentLayerOptions {
   readonly leaseTtlMs?: number;
   /** Interpret statements in the background after each run. Default true; tests turn it off. */
   readonly interpretAutomatically?: boolean;
+  /** Defaults to the OS keychain; tests keep secrets in memory. */
+  readonly secrets?: Layer.Layer<SecretStore>;
+  /** Defaults to Kagi's API server; tests point it at a local one. */
+  readonly kagiBaseUrl?: string;
 }
 
 /** Composition root: every memory-agent service backed by one storage directory. */
@@ -61,6 +68,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     Interpretations.layer,
     options.embedder ?? Embedder.local,
     options.codex ?? CodexAppServer.layer,
+    options.secrets ?? SecretStore.keychain,
   );
   const memory = Layer.mergeAll(
     Sessions.layer,
@@ -71,6 +79,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     CodexModels.layer,
     CodexChat.layer,
     ChatState.layer,
+    Kagi.layer({ baseUrl: options.kagiBaseUrl }),
   );
   const retrieval = Layer.mergeAll(
     Indexer.layer,
@@ -85,6 +94,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
         FileTools.layer,
         OutsideTools.layer,
         ApprovedTools.layer,
+        KagiTools.layer,
         PermissionGate.layer,
         Interpreter.layer(options.interpretAutomatically),
       ),

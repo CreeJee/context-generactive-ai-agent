@@ -6,6 +6,7 @@ import {
   requestRunCancel,
   resumeServerSentEventsResponse,
   toServerSentEventsResponse,
+  type AnyServerTool,
   type ChatMiddleware,
 } from "@tanstack/ai";
 import { Context, Effect, Layer, Option, Schema } from "effect";
@@ -25,6 +26,7 @@ import { Sessions } from "../sessions/sessions.ts";
 import { ApprovedTools } from "../tools/approved.ts";
 import { permissionReviewInterrupt } from "../tools/definitions.ts";
 import { FileTools } from "../tools/files.ts";
+import { KagiTools, kagiInstructions } from "../tools/kagi.ts";
 import { MemoryTools } from "../tools/memory.ts";
 import { OutsideTools } from "../tools/outside.ts";
 import { QueueDelivery } from "../queue/delivery.ts";
@@ -194,6 +196,7 @@ const make = Effect.gen(function* () {
   const fileTools = yield* FileTools;
   const outsideTools = yield* OutsideTools;
   const approvedTools = yield* ApprovedTools;
+  const kagiTools = yield* KagiTools;
   const permissionGate = yield* PermissionGate;
   const projects = yield* Projects;
   const indexer = yield* Indexer;
@@ -319,6 +322,9 @@ const make = Effect.gen(function* () {
         }
         if (!userNode) return json(409, { error: "no_user_turn" });
 
+        // Present only while the user has Kagi turned on with a key (R19).
+        const webTools = yield* kagiTools.tools;
+
         // Not tied to the request: a reload or a closed tab must not stop the run (R10). Only an
         // explicit cancel aborts it.
         const abortController = new AbortController();
@@ -342,19 +348,23 @@ const make = Effect.gen(function* () {
           recorder.forRun({ projectId, sessionId, runId, userNodeId: userNode.id }),
           indexInBackground(),
         );
+        // Tools come from several sources (built-in, web search), so the list is kept untyped.
+        const tools: AnyServerTool[] = [
+          ...memoryTools.forProject(projectId),
+          ...fileTools.forProject(project),
+          ...outsideTools.forProject(project),
+          ...approvedTools.forProject(project),
+          ...webTools,
+        ];
         const stream = chat({
           adapter: codexChat.adapter(selection),
           messages,
-          tools: [
-            ...memoryTools.forProject(projectId),
-            ...fileTools.forProject(project),
-            ...outsideTools.forProject(project),
-            ...approvedTools.forProject(project),
-          ],
+          tools,
           systemPrompts: [
             memoryInstructions,
             workspaceInstructions(project),
             attachmentInstructions,
+            ...(webTools.length > 0 ? [kagiInstructions] : []),
           ],
           threadId,
           runId,

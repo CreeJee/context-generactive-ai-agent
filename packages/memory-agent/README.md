@@ -11,7 +11,8 @@ Node 전용이며 `apps/agent`의 `.server` 모듈과 API 라우트에서만 가
 ```
 src/
   db/           node:sqlite 연결, 마이그레이션(PRAGMA user_version), atomic()
-  config/       저장 루트(~/.context-generactive-agent), 전역 설정(config.json)
+  config/       저장 루트(~/.context-generactive-agent), 전역 설정(config.json), OS 키체인(SecretStore)
+  kagi/         선택 Kagi Search·Extract 클라이언트와 켜기/끄기·키 등록
   projects/     프로젝트 등록·경로 검사·교차 회상 제외·권한 모드(ask/auto)
   sessions/     프로젝트에 속한 대화
   memory/       기억: 노드·구조 edge·그래프 탐색·근거 추적·검색·기록 middleware
@@ -50,6 +51,7 @@ src/
 | `write_file`, `edit_file`, `delete_file`                         | 없음 | 읽을 때 받은 sha256이 같을 때만 변경           |
 | `list_outside_files`, `read_outside_file`, `search_outside_file` | 없음 | 프로젝트 밖 절대 경로, 읽기 전용               |
 | `run_shell`, `write_outside_file`, `delete_outside_file`         | 필요 | 권한 모드에 따라 승인                          |
+| `kagi_search`, `kagi_extract`                                    | 없음 | Kagi 키 등록 후 켰을 때만 보임, 호출마다 과금  |
 
 권한 모드는 프로젝트마다 고릅니다.
 
@@ -97,6 +99,7 @@ src/
 - 프로젝트 파일 도구는 경로를 한 칸씩 `lstat`해 symlink·hard link를 거부합니다. 밖 도구는 링크가 가리키는 실제 대상으로 판단합니다. OS 샌드박스는 아닙니다.
 - 셸은 호스트에서 격리 없이 실행됩니다. `TOKEN`·`API_KEY`처럼 비밀로 보이는 환경 변수는 명령에 넘기지 않습니다.
 - ChatGPT 토큰은 codex가 관리하며 이 패키지는 읽지 않습니다.
+- Kagi API 키는 `SecretStore`(OS 키체인)에만 저장하고 요청 직전에 읽습니다. 키체인이 실패해도 다른 곳에 저장하지 않습니다. 테스트는 `SecretStore.memory`를 씁니다.
 
 ## 개발
 

@@ -2,6 +2,7 @@ import type {
   Attachment,
   AuthState,
   CodexModel,
+  KagiStatus,
   ModelSelection,
   PermissionMode,
   Project,
@@ -22,6 +23,7 @@ export type {
   AuthState,
   CancelResult,
   CodexModel,
+  KagiStatus,
   LeaseView,
   ModelSelection,
   PermissionMode,
@@ -134,6 +136,11 @@ export const api = {
       "GET",
       `/api/chat?session=${encodeURIComponent(sessionId)}&threadId=${encodeURIComponent(sessionId)}`,
     ),
+
+  kagi: () => call<KagiStatus>("GET", "/api/settings/kagi"),
+  kagiAction: (
+    command: { action: "register"; key: string } | { action: "remove" | "enable" | "disable" },
+  ) => call<KagiStatus>("POST", "/api/settings/kagi", command),
 
   /** Uploads one image as raw bytes; the server checks what it really is. */
   uploadAttachment: async (file: File) => {
