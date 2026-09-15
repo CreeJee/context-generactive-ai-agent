@@ -23,8 +23,11 @@ export type CodexInstallState =
   | { readonly kind: "installing" }
   | { readonly kind: "failed"; readonly reason: ArchiveFailure };
 
-/** After a failure, the next check starts over only this long later, so status polling does not hammer the registry. */
-const retryAfterMs = 5_000;
+/**
+ * After a failure, the next check starts over only this long later: every attempt downloads the
+ * whole platform package again (142 MB on Windows), so status polling must not repeat it quickly.
+ */
+const retryAfterMs = 60_000;
 
 /**
  * The codex the executable runs: the pinned npm platform package, downloaded on first need into
@@ -57,6 +60,9 @@ export function codexInstaller(storageRoot: string, runtime: string) {
       (reason) => {
         installing = null;
         failure = reason === null ? null : { reason, at: Date.now() };
+        // The UI only says the install failed; the terminal running the app keeps why.
+        if (reason !== null)
+          console.error(`codex install failed (${reason.reason}): ${reason.detail}`);
       },
     );
   };

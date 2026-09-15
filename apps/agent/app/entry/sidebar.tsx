@@ -57,7 +57,7 @@ import type {
 const unavailableReasons = {
   not_installed: "앱에 이 기기용 codex가 들어 있지 않아요. 이 기기에 맞는 앱을 다시 설치하세요.",
   install_failed:
-    "ChatGPT 연결에 필요한 codex를 받지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도하세요.",
+    "ChatGPT 연결에 필요한 codex를 받거나 설치하지 못했어요. 잠시 뒤 다시 시도하세요. 계속되면 앱을 실행한 창에 나온 오류를 확인하세요.",
   spawn_failed: "codex를 시작하지 못했어요.",
   exited: "codex 프로세스가 종료됐어요. 다시 시도하세요.",
 } satisfies Record<Extract<AuthState, { status: "unavailable" }>["reason"], string>;

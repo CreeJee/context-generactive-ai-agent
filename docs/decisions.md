@@ -21,7 +21,7 @@
 - ChatGPT OAuth와 모델 호출은 codex app-server(JSON-RPC over stdio)로 한다. 토큰은 codex가 관리하고 앱은 읽지 않으며, API 키로 재사용하지 않는다. codex 설정·로그인은 앱 전용 `<저장 루트>/codex`(CODEX_HOME)에 두어 사용자의 `~/.codex`와 섞지 않는다.
 - codex는 사용자가 설치하지 않고, 사용자가 설치한 codex는 버전이 같아도 쓰지 않는다. 앱이 codex app-server의 실험 API(`dynamicTools`, `thread/inject_items`, `turn/steer`, code mode)에 기대고 사용자 codex는 스스로 업데이트되기 때문이다. 버전은 npm `@openai/codex` 0.154.0으로 고정한다.
   - 저장소 실행(개발·`vp run start`): 의존성으로 설치된 이 기기용 패키지의 `codex`와 code mode 호스트를 쓴다.
-  - 실행 파일: codex를 넣지 않고, 처음 필요할 때 npm 레지스트리에서 이 기기용 tarball(darwin-arm64 116 MB)을 받아 lockfile의 sha512와 대조한 뒤 `<저장 루트>/runtime/codex-<버전>-<플랫폼>`에 푼다. 받는 동안 로그인 상태는 `installing`이고, 실패하면 `install_failed`로 알린 뒤 5초 뒤부터 다시 시도한다. 넣으면 실행 파일이 약 420 MB가 되고 풀 때 디스크를 두 배로 써서다.
+  - 실행 파일: codex를 넣지 않고, 처음 필요할 때 npm 레지스트리에서 이 기기용 tarball(darwin-arm64 116 MB)을 받아 lockfile의 sha512와 대조한 뒤 `<저장 루트>/runtime/codex-<버전>-<플랫폼>`에 푼다. 받는 동안 로그인 상태는 `installing`이고, 실패하면 `install_failed`로 알린 뒤 60초 뒤부터 다시 시도한다(2026-09-15). 시도마다 패키지 전체(윈도우 142 MB)를 다시 받으므로, 상태 조회가 짧은 간격으로 다시 받게 두지 않는다. 실패 이유(받기·체크섬·경로·풀기와 그 오류)는 화면에 보이지 않고 앱을 실행한 창의 로그에만 남긴다. 넣으면 실행 파일이 약 420 MB가 되고 풀 때 디스크를 두 배로 써서다.
   - 대가: codex 프로세스 하나가 뜬다(대화 중 RSS 약 65–73 MB, code mode 호스트 약 5–12 MB).
   - 검토한 대안: 앱이 직접 OAuth 로그인하고 ChatGPT Codex 백엔드 Responses API를 부르는 방식(jcode). 설치물과 프로세스는 줄지만 Codex CLI 요청을 흉내 내는 비공개 경로이고, gpt-5.6 code mode 도구 호출·스티어링·긴 대화 압축·토큰 갱신을 앱이 다시 만들어야 해서 택하지 않았다.
 - 모델은 로그인 후 계정에서 쓸 수 있는 목록에서 사용자가 고른다. 없는 모델은 자동 대체하지 않고 오류.
@@ -271,6 +271,7 @@
   - 외부 에이전트는 `cross-spawn`으로 실행해 윈도우의 `npx.cmd` 같은 실행기도 인자를 따옴표 처리해 띄운다. 끝낼 때는 실행기뿐 아니라 프로세스 트리를 끝낸다.
   - 실행 폴더를 프로젝트로 열 때 실행 파일 자신의 폴더도 제외한다(윈도우 탐색기 더블클릭은 거기서 시작).
   - 서버는 SIGHUP(윈도우 콘솔 창 닫기 포함)에도 codex와 인덱스 잠금을 정리한다.
+  - 받은 압축(codex, Kiwi 모델)은 윈도우에서 `System32\tar.exe`(bsdtar)로 푼다. PATH 앞에 Git for Windows·MSYS의 GNU tar가 있으면 `C:\…`를 원격 `host:path`로 읽어 실패하기 때문이다. 풀린 폴더를 옮길 때는 백신이 방금 쓴 실행 파일을 검사하느라 잡고 있을 수 있어, `EPERM`·`EACCES`·`EBUSY`면 최대 약 10초 다시 시도한다.
 - 실행 파일은 `NODE_OPTIONS`를 무시한다(SEA `execArgvExtension: "none"`). 개발 도구나 사용자의 Node 플래그가 배포된 앱을 바꾸거나 깨뜨리지 않게 하기 위해서다.
 - `vp run package`·`vp run smoke-package`는 캐시하지 않는 vite task다. Vite Task의 파일 추적 아래에서는 띄운 실행 파일이 응답하지 않아서, 스모크가 캐시 모드에서 실패했다.
 - 서명: 로컬 ad-hoc 서명만 한다(Apple Silicon은 서명 없는 바이너리를 실행하지 않고, SEA 빌드가 붙여 준다). Developer ID 서명·공증, `.app`/dmg, 자동 업데이트는 미룬다.

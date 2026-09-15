@@ -106,11 +106,27 @@ describe("installArchive", () => {
     const target = join(dir, "tool");
 
     const wrongPin = { ...pinned(url("/tool.tgz"), good), digest: "0".repeat(64) };
-    expect(await installArchive(wrongPin, target)).toBe("checksum_mismatch");
-    expect(await installArchive(pinned(url("/missing.tgz"), good), target)).toBe("download_failed");
-    expect(await installArchive(pinned(url("/escaping.tgz"), escaping), target)).toBe(
-      "unsafe_archive",
-    );
+    expect(await installArchive(wrongPin, target)).toMatchObject({ reason: "checksum_mismatch" });
+    expect(await installArchive(pinned(url("/missing.tgz"), good), target)).toEqual({
+      reason: "download_failed",
+      detail: "HTTP 404",
+    });
+    expect(await installArchive(pinned(url("/escaping.tgz"), escaping), target)).toEqual({
+      reason: "unsafe_archive",
+      detail: "../outside",
+    });
+    // The log says why a download failed, not only that fetch did.
+    const closed = createServer();
+    await new Promise<void>((resolve) => closed.listen(0, "127.0.0.1", resolve));
+    // SAFETY: a server listening on a TCP port reports an AddressInfo, never a pipe name.
+    const { port } = closed.address() as AddressInfo;
+    await new Promise<void>((resolve) => closed.close(() => resolve()));
+    expect(
+      await installArchive(pinned(`http://127.0.0.1:${port}/x.tgz`, good), target),
+    ).toMatchObject({
+      reason: "download_failed",
+      detail: expect.stringContaining("ECONNREFUSED"),
+    });
     expect(readdirSync(dir)).toEqual([]);
     expect(existsSync(join(dir, "..", "outside"))).toBe(false);
   });

@@ -1,6 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { statSync } from "node:fs";
+import { renameSync, statSync } from "node:fs";
 import { posix, win32 } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+import { Schema } from "effect";
 
 /**
  * Host differences between POSIX systems and Windows, in one place. Every function takes the
@@ -41,6 +43,45 @@ function fileExists(path: string) {
     return statSync(path).isFile();
   } catch {
     return false;
+  }
+}
+
+/**
+ * The system `tar`. On Windows that is bsdtar in System32 (Windows 10 1803 and later), named by
+ * path: a GNU tar earlier on `PATH` (Git for Windows, MSYS) reads `C:\…` as a remote `host:path`.
+ */
+export function tarExecutable(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+) {
+  if (platform !== "win32") return "tar";
+  return win32.join(env.SystemRoot ?? env.SYSTEMROOT ?? "C:\\Windows", "System32", "tar.exe");
+}
+
+const ErrorCode = Schema.Struct({ code: Schema.String });
+/** What Windows returns while another process (antivirus, search indexer) still holds a file open. */
+const busyCodes = ["EPERM", "EACCES", "EBUSY"];
+
+/**
+ * `renameSync`, retried on Windows for up to ~10 s while the moved files are still held open:
+ * antivirus scans freshly written executables (codex is ~300 MB) before letting their folder move.
+ */
+export async function renameWhenReleased(
+  from: string,
+  to: string,
+  platform: NodeJS.Platform = process.platform,
+  rename: (from: string, to: string) => void = renameSync,
+) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      rename(from, to);
+      return;
+    } catch (error) {
+      const code = Schema.decodeUnknownOption(ErrorCode)(error);
+      const busy = code._tag === "Some" && busyCodes.includes(code.value.code);
+      if (platform !== "win32" || !busy || attempt === 20) throw error;
+      await sleep(500);
+    }
   }
 }
 

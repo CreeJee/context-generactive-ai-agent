@@ -4,7 +4,13 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import { toolLocations } from "../src/acp/tool-view.ts";
 import { codexEnvironment } from "../src/codex/app-server.ts";
-import { findExecutable, helperEnvironment, shellInvocation } from "../src/runtime/host.ts";
+import {
+  findExecutable,
+  helperEnvironment,
+  renameWhenReleased,
+  shellInvocation,
+  tarExecutable,
+} from "../src/runtime/host.ts";
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -104,6 +110,34 @@ describe("host differences", () => {
     expect(shellInvocation("dir", { SystemRoot: "D:\\Win" }, "win32", () => false).file).toBe(
       "D:\\Win\\System32\\cmd.exe",
     );
+  });
+
+  test("archives extract with System32 tar on Windows, whatever tar comes first on PATH", () => {
+    expect(tarExecutable({ PATH: "/usr/bin" }, "darwin")).toBe("tar");
+    expect(tarExecutable(windowsEnv, "win32")).toBe("C:\\Windows\\System32\\tar.exe");
+  });
+
+  test("a folder still held open by antivirus is renamed once released, on Windows only", async () => {
+    const busy = () => Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+    const renameAfter = (failures: number) => {
+      let calls = 0;
+      return {
+        rename: () => {
+          calls++;
+          if (calls <= failures) throw busy();
+        },
+        calls: () => calls,
+      };
+    };
+    const windows = renameAfter(2);
+    await renameWhenReleased("a", "b", "win32", windows.rename);
+    expect(windows.calls()).toBe(3);
+
+    const posix = renameAfter(1);
+    await expect(renameWhenReleased("a", "b", "linux", posix.rename)).rejects.toThrow(
+      "not permitted",
+    );
+    expect(posix.calls()).toBe(1);
   });
 
   test("ACP tool locations resolve project-relative paths and normalize them", () => {

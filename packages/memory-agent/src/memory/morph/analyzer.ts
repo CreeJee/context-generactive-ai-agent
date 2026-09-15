@@ -57,7 +57,8 @@ async function ensureModel(storageRoot: string) {
     { url: kiwiModel.url, algorithm: "sha256", digest: kiwiModel.sha256 },
     root,
   );
-  if (failure !== null) throw new Error(`Kiwi model install failed: ${failure}`);
+  if (failure !== null)
+    throw new Error(`Kiwi model install failed (${failure.reason}): ${failure.detail}`);
   return modelDirectory;
 }
 
