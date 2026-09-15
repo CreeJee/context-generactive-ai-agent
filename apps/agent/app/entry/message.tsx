@@ -32,6 +32,7 @@ const toolLabels = new Map([
   ["read_skill", "skill 읽기"],
   ["run_subagent", "서브에이전트 실행"],
   ["message_subagent", "서브에이전트에게 메시지"],
+  ["delegate_to_agent", "외부 에이전트에 맡기기"],
 ]);
 
 /** Built-in tools by their label; MCP tools (`mcp_<server>__<tool>`) as "MCP server · tool". */

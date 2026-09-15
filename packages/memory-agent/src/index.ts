@@ -215,6 +215,33 @@ export {
 } from "./skills/skills.ts";
 export { SkillTools, skillsInstructions } from "./tools/skills.ts";
 export {
+  DelegateTools,
+  delegateInstructions,
+  delegateToolName,
+  type DelegateToolset,
+} from "./tools/delegate.ts";
+export {
+  AgentCommand,
+  AgentScope,
+  agentFingerprint,
+  globalAgentsFile,
+  projectAgentsFile,
+  readAgentsFile,
+  type AgentsFileRead,
+  type ConfiguredAgent,
+} from "./external-agents/config.ts";
+export {
+  ExternalAgents,
+  maxConsecutiveFailures,
+  type AgentLinkState,
+  type AgentTrustState,
+  type ExternalAgentView,
+  type ExternalAgentsOverview,
+  type ExternalPromptOutcome,
+  type PromptHooks,
+  type ReportedToolCall,
+} from "./external-agents/agents.ts";
+export {
   Subagents,
   childInstructions,
   subagentInstructions,

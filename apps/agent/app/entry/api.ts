@@ -2,6 +2,8 @@ import type {
   Attachment,
   AuthState,
   CodexModel,
+  ExternalAgentsOverview,
+  ExternalAgentView,
   KagiStatus,
   McpOverview,
   McpScope,
@@ -31,6 +33,8 @@ export type {
   AuthState,
   CancelResult,
   CodexModel,
+  ExternalAgentsOverview,
+  ExternalAgentView,
   KagiStatus,
   LeaseView,
   McpOverview,
@@ -164,6 +168,26 @@ export const api = {
       scope,
       name,
       trusted,
+    }),
+
+  externalAgents: (projectId: string) =>
+    call<ExternalAgentsOverview>("GET", `/api/projects/${encodeURIComponent(projectId)}/agents`),
+  trustExternalAgent: (
+    projectId: string,
+    scope: ExternalAgentView["scope"],
+    name: string,
+    trusted: boolean,
+  ) =>
+    call<ExternalAgentsOverview>("POST", `/api/projects/${encodeURIComponent(projectId)}/agents`, {
+      action: "trust",
+      scope,
+      name,
+      trusted,
+    }),
+  reconnectExternalAgent: (projectId: string, name: string) =>
+    call<ExternalAgentsOverview>("POST", `/api/projects/${encodeURIComponent(projectId)}/agents`, {
+      action: "reconnect",
+      name,
     }),
 
   skills: (projectId: string) =>

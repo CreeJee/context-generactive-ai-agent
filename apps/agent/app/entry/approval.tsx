@@ -95,6 +95,7 @@ type GatedCall =
   | { readonly tool: "run_shell"; readonly input: typeof RunShellInput.Type }
   | { readonly tool: "write_outside_file"; readonly input: typeof WriteOutsideFileInput.Type }
   | { readonly tool: "delete_outside_file"; readonly input: typeof DeleteOutsideFileInput.Type }
+  | { readonly tool: "delegate_to_agent"; readonly agent: string; readonly task: string }
   | {
       readonly tool: "mcp";
       readonly server: string;
@@ -106,6 +107,9 @@ type GatedCall =
 const decodeShell = Schema.decodeUnknownOption(Schema.parseJson(RunShellInput));
 const decodeWrite = Schema.decodeUnknownOption(Schema.parseJson(WriteOutsideFileInput));
 const decodeDelete = Schema.decodeUnknownOption(Schema.parseJson(DeleteOutsideFileInput));
+const decodeDelegation = Schema.decodeUnknownOption(
+  Schema.parseJson(Schema.Struct({ agent: Schema.String, task: Schema.String })),
+);
 
 function decodeCall(toolName: string, argumentsJson: string): GatedCall {
   const unrecognized: GatedCall = { tool: "unrecognized", name: toolName, argumentsJson };
@@ -124,6 +128,11 @@ function decodeCall(toolName: string, argumentsJson: string): GatedCall {
       return Option.match(decodeDelete(argumentsJson), {
         onNone: () => unrecognized,
         onSome: (input) => ({ tool: "delete_outside_file", input }),
+      });
+    case "delegate_to_agent":
+      return Option.match(decodeDelegation(argumentsJson), {
+        onNone: () => unrecognized,
+        onSome: (input) => ({ tool: "delegate_to_agent", ...input }),
       });
     default: {
       // MCP tools are named mcp_<server>__<tool>.
@@ -190,6 +199,20 @@ function describe(call: GatedCall): CallView {
         modelReason: call.input.reason,
         shell: false,
         body: <code className="break-all">{call.input.path}</code>,
+      };
+    case "delegate_to_agent":
+      return {
+        title: `외부 에이전트 ${call.agent}에게 작업을 맡길까요?`,
+        modelReason: undefined,
+        shell: false,
+        body: (
+          <div className="flex flex-col gap-2">
+            <div className="text-muted-foreground">
+              에이전트는 이 프로젝트에서 자기 도구로 일하고, 필요한 권한은 따로 물어요.
+            </div>
+            <pre className={`max-h-60 ${codeBlock}`}>{preview(call.task)}</pre>
+          </div>
+        ),
       };
     case "mcp":
       return {

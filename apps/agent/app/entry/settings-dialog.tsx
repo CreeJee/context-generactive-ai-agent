@@ -1,4 +1,12 @@
-import { BookOpenIcon, KeyRoundIcon, PlugIcon, SettingsIcon, Trash2Icon } from "lucide-react";
+import {
+  BookOpenIcon,
+  BotIcon,
+  KeyRoundIcon,
+  PlugIcon,
+  RefreshCwIcon,
+  SettingsIcon,
+  Trash2Icon,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { Alert, AlertDescription } from "~/components/ui/alert";
 import { Badge } from "~/components/ui/badge";
@@ -35,6 +43,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
 import {
   ApiError,
   api,
+  type ExternalAgentView,
+  type ExternalAgentsOverview,
   type KagiStatus,
   type McpOverview,
   type McpServerView,
@@ -305,6 +315,149 @@ function McpSettings({ project }: { project: Project | null }) {
   );
 }
 
+function AgentStateBadge({ agent }: { agent: ExternalAgentView }) {
+  if (agent.shadowed) return <Badge variant="outline">프로젝트 설정이 대신함</Badge>;
+  switch (agent.state.status) {
+    case "untrusted":
+      return <Badge variant="outline">신뢰 필요</Badge>;
+    case "changed":
+      return <Badge variant="destructive">설정 바뀜 · 다시 신뢰 필요</Badge>;
+    case "trusted":
+      switch (agent.state.link.status) {
+        case "idle":
+          return <Badge variant="secondary">쓸 때 시작</Badge>;
+        case "connecting":
+          return <Badge variant="secondary">연결 중</Badge>;
+        case "connected":
+          return <Badge>연결됨</Badge>;
+        case "retrying":
+          return <Badge variant="outline">연결 실패 {agent.state.link.failures}회</Badge>;
+        case "stopped":
+          return <Badge variant="destructive">재연결 중단</Badge>;
+      }
+  }
+}
+
+/** External ACP agents (Codex and others) the conversation may delegate to (R17). */
+function AgentSettings({ project }: { project: Project | null }) {
+  const [overview, setOverview] = useState<ExternalAgentsOverview | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!project) return;
+    void api
+      .externalAgents(project.id)
+      .then(setOverview)
+      .catch(() => setError("에이전트 설정을 읽지 못했어요."));
+  }, [project]);
+
+  if (!project) return <FieldDescription>프로젝트를 먼저 선택하세요.</FieldDescription>;
+  if (!overview) return error ? <FieldDescription>{error}</FieldDescription> : <Spinner />;
+
+  const apply = async (change: () => Promise<ExternalAgentsOverview>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      setOverview(await change());
+    } catch {
+      setError("바꾸지 못했어요.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <FieldGroup>
+      <FieldDescription>
+        설정 파일에 적힌 ACP 에이전트를 신뢰하면, 모델이 작업 일부를 맡길 수 있어요. 에이전트는 자기
+        공식 로그인으로 동작하고 이 앱의 ChatGPT 토큰·키를 받지 않아요. 맡길 때마다 승인을 받고,
+        에이전트가 요청하는 권한도 따로 물어요. 연결이 끊기면 두 번까지 다시 연결하고, 그래도
+        실패하면 여기서 다시 연결해야 해요.
+      </FieldDescription>
+      <div className="flex flex-col gap-1">
+        {overview.files.map((file) => (
+          <div key={file.scope} className="text-xs text-muted-foreground">
+            {scopeLabels[file.scope]}: <code className="break-all">{file.path}</code>
+            {file.error && <div className="whitespace-pre-wrap text-destructive">{file.error}</div>}
+          </div>
+        ))}
+      </div>
+      {overview.agents.length === 0 ? (
+        <FieldDescription>설정된 에이전트가 없어요.</FieldDescription>
+      ) : (
+        <ItemGroup className="gap-2">
+          {overview.agents.map((agent) => {
+            const trusted = agent.state.status === "trusted";
+            const stopped =
+              trusted && agent.state.status === "trusted" && agent.state.link.status === "stopped";
+            return (
+              <Item key={`${agent.scope}/${agent.name}`} variant="outline" size="sm">
+                <ItemMedia variant="icon">
+                  <BotIcon />
+                </ItemMedia>
+                <ItemContent className="min-w-0">
+                  <ItemTitle className="flex flex-wrap items-center gap-1.5">
+                    {agent.name}
+                    <Badge variant="secondary">{scopeLabels[agent.scope]}</Badge>
+                    <AgentStateBadge agent={agent} />
+                  </ItemTitle>
+                  <ItemDescription className="font-mono break-all">{agent.target}</ItemDescription>
+                  {agent.envNames.length > 0 && (
+                    <ItemDescription>
+                      환경 변수: {agent.envNames.join(", ")} (값은 보여주지 않아요)
+                    </ItemDescription>
+                  )}
+                  {agent.state.status === "trusted" &&
+                    (agent.state.link.status === "retrying" ||
+                      agent.state.link.status === "stopped") && (
+                      <ItemDescription className="text-destructive">
+                        {agent.state.link.error}
+                      </ItemDescription>
+                    )}
+                </ItemContent>
+                {!agent.shadowed && (
+                  <ItemActions>
+                    {stopped && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={busy}
+                        onClick={() =>
+                          void apply(() => api.reconnectExternalAgent(project.id, agent.name))
+                        }
+                      >
+                        <RefreshCwIcon /> 다시 연결
+                      </Button>
+                    )}
+                    <Button
+                      size="sm"
+                      variant={trusted ? "ghost" : "outline"}
+                      disabled={busy}
+                      onClick={() =>
+                        void apply(() =>
+                          api.trustExternalAgent(project.id, agent.scope, agent.name, !trusted),
+                        )
+                      }
+                    >
+                      {trusted ? "사용 중지" : "신뢰"}
+                    </Button>
+                  </ItemActions>
+                )}
+              </Item>
+            );
+          })}
+        </ItemGroup>
+      )}
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+    </FieldGroup>
+  );
+}
+
 const skillProblems = {
   no_description: "description이 없어 쓰지 않아요.",
   too_large: "SKILL.md가 너무 커서 쓰지 않아요.",
@@ -369,7 +522,7 @@ function SkillSettings({ project }: { project: Project | null }) {
   );
 }
 
-/** Settings that apply beyond one conversation: web search, MCP servers and skills. */
+/** Settings that apply beyond one conversation: web search, MCP servers, skills and agents. */
 export function SettingsDialog({ project }: { project: Project | null }) {
   return (
     <Dialog>
@@ -386,6 +539,7 @@ export function SettingsDialog({ project }: { project: Project | null }) {
             <TabsTrigger value="web">웹 검색</TabsTrigger>
             <TabsTrigger value="mcp">MCP</TabsTrigger>
             <TabsTrigger value="skills">Skills</TabsTrigger>
+            <TabsTrigger value="agents">에이전트</TabsTrigger>
           </TabsList>
           <TabsContent value="web" className="pt-3">
             <KagiSettings />
@@ -395,6 +549,9 @@ export function SettingsDialog({ project }: { project: Project | null }) {
           </TabsContent>
           <TabsContent value="skills" className="max-h-[60vh] overflow-y-auto pt-3">
             <SkillSettings project={project} />
+          </TabsContent>
+          <TabsContent value="agents" className="max-h-[60vh] overflow-y-auto pt-3">
+            <AgentSettings project={project} />
           </TabsContent>
         </Tabs>
       </DialogContent>

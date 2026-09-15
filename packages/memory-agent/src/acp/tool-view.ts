@@ -28,6 +28,7 @@ const views = new Map<string, ToolView>([
   ["read_skill", { title: "skill 읽기", kind: "read" }],
   ["run_subagent", { title: "서브에이전트 실행", kind: "other" }],
   ["message_subagent", { title: "서브에이전트에게 메시지", kind: "other" }],
+  ["delegate_to_agent", { title: "외부 에이전트에 맡기기", kind: "other" }],
 ]);
 
 export function toolView(name: string): ToolView {

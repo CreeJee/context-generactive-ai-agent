@@ -29,6 +29,7 @@ import { gatedToolNames, permissionReviewInterrupt } from "../tools/definitions.
 import { FileTools } from "../tools/files.ts";
 import { KagiTools, kagiInstructions } from "../tools/kagi.ts";
 import { SkillTools } from "../tools/skills.ts";
+import { DelegateTools } from "../tools/delegate.ts";
 import { Subagents, subagentInstructions } from "../subagents/subagents.ts";
 import { RelayedApprovals } from "../approvals/relayed.ts";
 import { MemoryTools } from "../tools/memory.ts";
@@ -203,6 +204,7 @@ const make = Effect.gen(function* () {
   const kagiTools = yield* KagiTools;
   const mcpServers = yield* McpServers;
   const skillTools = yield* SkillTools;
+  const delegateTools = yield* DelegateTools;
   const subagents = yield* Subagents;
   const relayed = yield* RelayedApprovals;
   const permissionGate = yield* PermissionGate;
@@ -353,27 +355,31 @@ const make = Effect.gen(function* () {
           // After chat state, so steered messages are added to the transcript it has just saved.
           delivery.forRun({ projectId, sessionId, runId }),
         ];
+        // Trusted external ACP agents (R17); every delegation is gated below.
+        const delegation = delegateTools.forRun(project, sessionId, abortController.signal);
         // The gate runs right after chat state, so a refused call is skipped before tools run. In
         // `auto` mode it reviews every gated call; in `ask` mode the built-in tools use TanStack's
-        // own approval and the gate only asks about MCP calls.
+        // own approval and the gate asks about the calls the page has no definitions for (MCP tools,
+        // delegations).
         const mcpNames = mcpTools.map((tool) => tool.name);
+        const askEveryCall = [...mcpNames, ...delegation.tools.map((tool) => tool.name)];
         if (project.permissionMode === "auto")
           middleware.push(
             permissionGate.forRun({
               project,
               sessionId,
               selection,
-              gated: new Set([...gatedToolNames, ...mcpNames]),
+              gated: new Set([...gatedToolNames, ...askEveryCall]),
               decider: "classifier",
             }),
           );
-        else if (mcpNames.length > 0)
+        else if (askEveryCall.length > 0)
           middleware.push(
             permissionGate.forRun({
               project,
               sessionId,
               selection,
-              gated: new Set(mcpNames),
+              gated: new Set(askEveryCall),
               decider: "user",
             }),
           );
@@ -385,6 +391,7 @@ const make = Effect.gen(function* () {
           ...webTools,
           ...mcpTools,
           ...skills.tools,
+          ...delegation.tools,
         ];
         const sharedPrompts = [
           memoryInstructions,
@@ -392,6 +399,7 @@ const make = Effect.gen(function* () {
           ...(webTools.length > 0 ? [kagiInstructions] : []),
           ...(mcpTools.length > 0 ? [mcpInstructions] : []),
           ...(skills.instructions ? [skills.instructions] : []),
+          ...(delegation.instructions ? [delegation.instructions] : []),
         ];
         // Children get the same tools and rules, never more, and no subagent tools of their own.
         // Their approval-gated calls wait on the page instead of pausing this run (R18).
@@ -403,7 +411,7 @@ const make = Effect.gen(function* () {
           abortSignal: abortController.signal,
           tools: [...sharedTools, ...approvedTools.forProject(project, "gate")],
           systemPrompts: sharedPrompts,
-          gated: new Set([...gatedToolNames, ...mcpNames]),
+          gated: new Set([...gatedToolNames, ...askEveryCall]),
         });
         middleware.push(
           children.middleware,

@@ -13,6 +13,7 @@ import { SecretStore } from "./config/secrets.ts";
 import { StorageRoot } from "./config/storage-root.ts";
 import { Database } from "./db/database.ts";
 import { Kagi } from "./kagi/kagi.ts";
+import { ExternalAgents } from "./external-agents/agents.ts";
 import { McpServers } from "./mcp/servers.ts";
 import { Skills } from "./skills/skills.ts";
 import { Subagents } from "./subagents/subagents.ts";
@@ -35,6 +36,7 @@ import { SessionLeases } from "./sessions/leases.ts";
 import { Sessions } from "./sessions/sessions.ts";
 import { ApprovedTools } from "./tools/approved.ts";
 import { FileTools } from "./tools/files.ts";
+import { DelegateTools } from "./tools/delegate.ts";
 import { KagiTools } from "./tools/kagi.ts";
 import { SkillTools } from "./tools/skills.ts";
 import { MemoryTools } from "./tools/memory.ts";
@@ -89,6 +91,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     ChatState.layer,
     Kagi.layer({ baseUrl: options.kagiBaseUrl }),
     McpServers.layer,
+    ExternalAgents.layer,
     Skills.layer({ home: options.skillsHome }),
   );
   const retrieval = Layer.mergeAll(
@@ -106,6 +109,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
         ApprovedTools.layer,
         KagiTools.layer,
         SkillTools.layer,
+        DelegateTools.layer,
         Subagents.layer,
         PermissionGate.layer,
         Interpreter.layer(options.interpretAutomatically),

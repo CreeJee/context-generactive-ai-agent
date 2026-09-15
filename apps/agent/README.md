@@ -29,6 +29,7 @@ vp run dev --host 127.0.0.1 --port 5174
 - 설정(사이드바 위 톱니바퀴):
   - 웹 검색: Kagi 키 등록·켜기/끄기·키 삭제. 키는 OS 키체인에만 저장되고 다시 보여주지 않습니다. 켜면 모델이 필요할 때 검색·페이지 읽기를 하고 호출마다 Kagi에 과금됩니다.
   - MCP: `~/.context-generactive-agent/mcp.json`(공통)과 `<프로젝트>/.mcp.json`에 적힌 서버 목록. "신뢰하고 시작"을 눌러야 시작하고, 설정이 바뀌면 다시 신뢰해야 합니다. MCP 도구 호출은 매번 승인 카드(또는 auto 모드 판정)를 거칩니다.
+  - 에이전트: `agents.json`에 적힌 외부 ACP 에이전트(Codex 등). 신뢰하면 모델이 작업을 맡길 수 있고, 맡길 때마다 승인하며 에이전트의 권한 요청도 카드로 묻습니다. 연결이 연속 두 번 실패하면 멈추고 "다시 연결"로 재시도합니다.
   - Skills: `~/.agents/skills`(공통)와 `<프로젝트>/.agents/skills`의 skill 목록. 모델이 작업에 맞는 skill을 읽어 따르지만, skill 문구는 승인을 대신하지 않습니다.
 - 사이드바: ChatGPT 로그인 상태, 모델·추론 강도, 프로젝트 선택·추가, 권한 모드(`매번 묻기`/`자동 판단`), 다른 프로젝트에서 이 프로젝트 기억 찾기 허용, 대화 목록.
 - 기억: 답변이 끝나면 뒤에서 발언의 주제와 정정·취소 관계를 정리합니다(선택한 모델을 가장 낮은 추론 강도로 사용). 나중에 "무엇으로 하기로 했지?"를 물으면 바뀐 결정과 이전 결정을 함께 답하고, 무엇을 정정한 것인지 불분명하면 되묻습니다.
@@ -56,6 +57,7 @@ UI 컴포넌트는 shadcn으로 추가합니다(`AGENT.md`).
 | `GET /api/models`                            | 계정에서 쓸 수 있는 모델 목록과 현재 선택                  |
 | `POST /api/models/:model`                    | 모델·추론 강도 선택(없는 모델은 자동 대체 없이 오류)       |
 | `GET/POST /api/projects`                     | 프로젝트 목록, 경로로 추가                                 |
+| `GET/POST /api/projects/:project/agents`     | 외부 ACP 에이전트 목록·연결 상태, `trust`·`reconnect`      |
 | `GET /api/projects/:project/skills`          | 이 프로젝트에서 쓸 수 있는 skill과 읽지 못한 폴더          |
 | `GET/POST /api/projects/:project/mcp`        | MCP 서버 목록·상태, `{scope, name, trusted}`로 신뢰/중지   |
 | `POST /api/projects/:project`                | `crossRecallExcluded`, `permissionMode`(`ask`/`auto`) 변경 |

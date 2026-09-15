@@ -17,6 +17,8 @@ src/
   skills/       ~/.agents/skills·<project>/.agents/skills의 SKILL.md 목록과 읽기
   subagents/    run_subagent·message_subagent: 자식 chat 실행, 병렬 시작, 승인 중계, 기록
   acp/          ACP 에이전트 다리(에디터 ↔ 실행 중인 앱 HTTP API)
+  external-agents/  외부 ACP 에이전트(Codex 등) 설정·신뢰·연결·재연결 정책
+  approvals/    run을 멈추지 못하는 승인 요청 중계(서브에이전트·외부 에이전트)
 bin/
   context-agent-acp.ts   에디터가 stdio로 실행하는 ACP 에이전트
   projects/     프로젝트 등록·경로 검사·교차 회상 제외·권한 모드(ask/auto)
@@ -61,6 +63,7 @@ bin/
 | `mcp_<서버>__<도구>`                                             | 필요 | 신뢰한 MCP 서버의 도구, 호출마다 게이트        |
 | `read_skill`                                                     | 없음 | skill이 있을 때만, 본문은 지침이지 권한 아님   |
 | `run_subagent`, `message_subagent`                               | 없음 | 자식의 승인 필요 호출은 페이지에서 따로 승인   |
+| `delegate_to_agent`                                              | 필요 | 신뢰한 외부 ACP 에이전트에 작업 위임           |
 
 권한 모드는 프로젝트마다 고릅니다.
 
@@ -137,6 +140,20 @@ Zed 예시(`settings.json`):
 - 에디터에서 연 폴더가 앱에 등록된 프로젝트여야 합니다.
 - 대화는 앱의 대화 목록에도 보이고, 기억·승인·취소가 앱과 같습니다. 승인은 에디터의 권한 질문으로 뜹니다.
 - 테스트는 `tests/acp-agent.test.ts`(SDK 클라이언트 ↔ 다리 ↔ 앱 핸들러를 한 프로세스에서 연결).
+
+## 외부 에이전트 부르기 (ACP 클라이언트)
+
+`<프로젝트>/.agents/agents.json`(또는 `~/.context-generactive-agent/agents.json`):
+
+```json
+{
+  "agents": {
+    "codex": { "command": "npx", "args": ["-y", "@zed-industries/codex-acp@0.16.0"] }
+  }
+}
+```
+
+설정 화면 "에이전트" 탭에서 신뢰하면 모델이 `delegate_to_agent`로 작업을 맡길 수 있습니다. 에이전트는 자기 로그인(`codex login`)을 씁니다. 테스트는 `tests/external-agents.test.ts`(가짜 ACP 에이전트 `tests/support/fake-acp-agent.mjs`).
 
 ## 개발
 
