@@ -1,4 +1,5 @@
-// A small external ACP agent for tests. Each start is appended to $FAKE_ACP_LOG. While
+// A small external ACP agent for tests. Each start is appended to $FAKE_ACP_LOG, and each "slow"
+// prompt it receives to $FAKE_ACP_LOG.slow. While
 // $FAKE_ACP_REFUSE names an existing file, it exits at once, so connection attempts fail.
 import { appendFileSync, existsSync } from "node:fs";
 import { Readable, Writable } from "node:stream";
@@ -85,6 +86,9 @@ acp
       return { stopReason: "end_turn" };
     }
     if (text.includes("slow")) {
+      // Lets a test cancel only after the prompt has really arrived.
+      if (process.env.FAKE_ACP_LOG)
+        appendFileSync(`${process.env.FAKE_ACP_LOG}.slow`, `${sessionId}\n`);
       for (let step = 0; step < 50; step++) {
         if (cancelled.delete(sessionId)) return { stopReason: "cancelled" };
         await new Promise((resolve) => setTimeout(resolve, 40));

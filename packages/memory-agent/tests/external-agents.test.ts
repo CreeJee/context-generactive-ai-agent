@@ -65,7 +65,7 @@ async function agentSetup() {
       signal: options.signal ?? new AbortController().signal,
       askPermission: async () => options.approve ?? false,
     });
-  return { ...context, agents, run, starts, refuse, linkOf, prompt };
+  return { ...context, agents, run, starts, refuse, linkOf, prompt, log };
 }
 
 describe("external ACP agents", () => {
@@ -110,11 +110,11 @@ describe("external ACP agents", () => {
   });
 
   test("cancelling sends session/cancel", async () => {
-    const { agents, run, project, prompt } = await agentSetup();
+    const { agents, run, project, prompt, log } = await agentSetup();
     await run(agents.setTrusted(project, "project", "fake", true));
     const controller = new AbortController();
     const pending = prompt("slow", { signal: controller.signal });
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await until(() => existsSync(`${log}.slow`), "the slow prompt to reach the agent");
     controller.abort();
     expect(await pending).toMatchObject({ status: "cancelled", stopReason: "cancelled" });
   });
