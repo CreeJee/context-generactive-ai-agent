@@ -9,6 +9,8 @@ export const Session = Schema.Struct({
   projectId: Schema.String,
   title: Schema.NullOr(Schema.String),
   createdAt: Schema.String,
+  /** The external ACP agent this conversation talks to directly; null for the app's own model. */
+  agent: Schema.NullOr(Schema.String),
 });
 export type Session = typeof Session.Type;
 
@@ -17,6 +19,7 @@ const SessionRow = Schema.Struct({
   project_id: Schema.String,
   title: Schema.NullOr(Schema.String),
   created_at: Schema.String,
+  agent: Schema.NullOr(Schema.String),
 });
 const decodeSessionRow = Schema.decodeUnknownSync(SessionRow);
 
@@ -27,6 +30,7 @@ function toSession(row: Record<string, SQLOutputValue>): Session {
     projectId: decoded.project_id,
     title: decoded.title,
     createdAt: decoded.created_at,
+    agent: decoded.agent,
   };
 }
 
@@ -46,12 +50,14 @@ const make = Effect.gen(function* () {
       }),
 
     /** Fails with ProjectNotFound when the project is not registered. */
-    create: (projectId: string, title: string | null = null) =>
+    create: (projectId: string, title: string | null = null, agent: string | null = null) =>
       Effect.gen(function* () {
         yield* projects.get(projectId);
         const row = sqlite
-          .prepare("INSERT INTO sessions VALUES (?, ?, ?, ?) RETURNING *")
-          .get(randomUUID(), projectId, title, new Date().toISOString());
+          .prepare(
+            "INSERT INTO sessions (id, project_id, title, created_at, agent) VALUES (?, ?, ?, ?, ?) RETURNING *",
+          )
+          .get(randomUUID(), projectId, title, new Date().toISOString(), agent);
         if (!row) return yield* Effect.die(new Error("Session insert returned no row"));
         return toSession(row);
       }),

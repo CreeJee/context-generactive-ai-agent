@@ -1,8 +1,17 @@
-import { FolderPlusIcon, LogOutIcon, PlusIcon } from "lucide-react";
+import { BotIcon, ChevronDownIcon, FolderPlusIcon, LogOutIcon, PlusIcon } from "lucide-react";
 import { useState } from "react";
 import { Alert, AlertDescription } from "~/components/ui/alert";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "~/components/ui/dropdown-menu";
 import { Input } from "~/components/ui/input";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import {
@@ -310,21 +319,58 @@ export function SessionSection({
   sessionId,
   onSelect,
   onCreate,
+  loadAgents,
 }: {
   sessions: Session[];
   sessionId: string | null;
   onSelect: (sessionId: string) => void;
-  onCreate: () => void;
+  /** Without an agent the conversation uses the app's model. */
+  onCreate: (agent?: string) => void;
+  /** Trusted external agents a conversation can talk to directly. */
+  loadAgents: () => Promise<string[]>;
 }) {
+  const [agents, setAgents] = useState<string[]>([]);
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center justify-between px-4 pt-3 pb-2">
         <h2 className="text-[0.6875rem] font-medium tracking-wide text-muted-foreground uppercase">
           대화
         </h2>
-        <Button variant="ghost" size="sm" onClick={onCreate}>
-          <PlusIcon /> 새 대화
-        </Button>
+        <div className="flex items-center">
+          <Button variant="ghost" size="sm" onClick={() => onCreate()}>
+            <PlusIcon /> 새 대화
+          </Button>
+          <DropdownMenu
+            onOpenChange={(open) => {
+              if (open) void loadAgents().then(setAgents, () => setAgents([]));
+            }}
+          >
+            <DropdownMenuTrigger
+              render={<Button variant="ghost" size="icon-sm" aria-label="대화 상대 고르기" />}
+            >
+              <ChevronDownIcon />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>새 대화 상대</DropdownMenuLabel>
+                <DropdownMenuItem onClick={() => onCreate()}>이 앱의 모델</DropdownMenuItem>
+              </DropdownMenuGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>외부 에이전트와 직접</DropdownMenuLabel>
+                {agents.length === 0 ? (
+                  <DropdownMenuItem disabled>설정에서 신뢰한 에이전트가 없어요</DropdownMenuItem>
+                ) : (
+                  agents.map((agent) => (
+                    <DropdownMenuItem key={agent} onClick={() => onCreate(agent)}>
+                      <BotIcon /> {agent}
+                    </DropdownMenuItem>
+                  ))
+                )}
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col gap-0.5 px-2 pb-3">
@@ -334,11 +380,18 @@ export function SessionSection({
               type="button"
               onClick={() => onSelect(session.id)}
               className={cn(
-                "rounded-md px-2 py-1.5 text-left text-xs hover:bg-muted",
+                "flex items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs hover:bg-muted",
                 session.id === sessionId && "bg-muted font-medium",
               )}
             >
-              {session.title ?? dateFormat.format(new Date(session.createdAt))}
+              <span className="min-w-0 flex-1 truncate">
+                {session.title ?? dateFormat.format(new Date(session.createdAt))}
+              </span>
+              {session.agent && (
+                <Badge variant="outline" className="shrink-0">
+                  <BotIcon /> {session.agent}
+                </Badge>
+              )}
             </button>
           ))}
           {sessions.length === 0 && (

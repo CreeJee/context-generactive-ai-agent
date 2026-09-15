@@ -7,7 +7,7 @@ import type {
 } from "@tanstack/ai";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import { PermissionReviews } from "../permissions/reviews.ts";
-import { Nodes } from "./nodes.ts";
+import { Nodes, type NodeDetail } from "./nodes.ts";
 
 export interface RunBinding {
   readonly projectId: string;
@@ -15,6 +15,8 @@ export interface RunBinding {
   readonly runId: string;
   /** The user turn this run answers. Assistant nodes get a `reply` edge to it. */
   readonly userNodeId: string;
+  /** Set when an external ACP agent answers instead of the app's model. */
+  readonly externalAgent?: string;
 }
 
 /** Tool argument fields treated as references to a file or URL. */
@@ -90,12 +92,17 @@ const make = Effect.gen(function* () {
       };
       const outcomes = new Map<string, ToolOutcome>();
 
+      /** Who answered, when it was an external agent in a direct conversation. */
+      const source: NodeDetail = binding.externalAgent
+        ? { externalAgent: binding.externalAgent }
+        : {};
+
       const appendAssistant = (text: string, partial?: { reason: string }) =>
         nodes.append({
           ...base,
           kind: "assistant",
           text,
-          detail: partial ? { partial: true, reason: partial.reason } : {},
+          detail: partial ? { ...source, partial: true, reason: partial.reason } : source,
           links: [{ kind: "reply", nodeId: binding.userNodeId }],
         });
 

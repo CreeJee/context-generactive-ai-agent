@@ -29,7 +29,7 @@ vp run dev --host 127.0.0.1 --port 5174
 - 설정(사이드바 위 톱니바퀴):
   - 웹 검색: Kagi 키 등록·켜기/끄기·키 삭제. 키는 OS 키체인에만 저장되고 다시 보여주지 않습니다. 켜면 모델이 필요할 때 검색·페이지 읽기를 하고 호출마다 Kagi에 과금됩니다.
   - MCP: `~/.context-generactive-agent/mcp.json`(공통)과 `<프로젝트>/.mcp.json`에 적힌 서버 목록. "신뢰하고 시작"을 눌러야 시작하고, 설정이 바뀌면 다시 신뢰해야 합니다. MCP 도구 호출은 매번 승인 카드(또는 auto 모드 판정)를 거칩니다.
-  - 에이전트: `agents.json`에 적힌 외부 ACP 에이전트(Codex 등). 신뢰하면 모델이 작업을 맡길 수 있고, 맡길 때마다 승인하며 에이전트의 권한 요청도 카드로 묻습니다. 연결이 연속 두 번 실패하면 멈추고 "다시 연결"로 재시도합니다.
+  - 에이전트: `agents.json`에 적힌 외부 ACP 에이전트(Codex 등). 대화 목록의 "새 대화" 옆 화살표로 그 에이전트와 직접 대화를 시작할 수도 있습니다(대화에 에이전트 이름 배지, 관련 기억을 찾아 함께 보냄). 신뢰하면 모델이 작업을 맡길 수 있고, 맡길 때마다 승인하며 에이전트의 권한 요청도 카드로 묻습니다. 연결이 연속 두 번 실패하면 멈추고 "다시 연결"로 재시도합니다.
   - Skills: `~/.agents/skills`(공통)와 `<프로젝트>/.agents/skills`의 skill 목록. 모델이 작업에 맞는 skill을 읽어 따르지만, skill 문구는 승인을 대신하지 않습니다.
 - 사이드바: ChatGPT 로그인 상태, 모델·추론 강도, 프로젝트 선택·추가, 권한 모드(`매번 묻기`/`자동 판단`), 다른 프로젝트에서 이 프로젝트 기억 찾기 허용, 대화 목록.
 - 기억: 답변이 끝나면 뒤에서 발언의 주제와 정정·취소 관계를 정리합니다(선택한 모델을 가장 낮은 추론 강도로 사용). 나중에 "무엇으로 하기로 했지?"를 물으면 바뀐 결정과 이전 결정을 함께 답하고, 무엇을 정정한 것인지 불분명하면 되묻습니다.
@@ -51,32 +51,32 @@ UI 컴포넌트는 shadcn으로 추가합니다(`AGENT.md`).
 
 `app/routes/api/*`는 React Router flat routes이며 `/api` 접두사로 마운트됩니다. 상태를 바꾸는 요청은 교차 사이트 요청을 거부합니다.
 
-| 라우트                                       | 동작                                                       |
-| -------------------------------------------- | ---------------------------------------------------------- |
-| `GET/POST /api/auth`                         | 로그인 상태 조회, `login`·`cancel`·`logout`                |
-| `GET /api/models`                            | 계정에서 쓸 수 있는 모델 목록과 현재 선택                  |
-| `POST /api/models/:model`                    | 모델·추론 강도 선택(없는 모델은 자동 대체 없이 오류)       |
-| `GET/POST /api/projects`                     | 프로젝트 목록, 경로로 추가                                 |
-| `GET/POST /api/projects/:project/agents`     | 외부 ACP 에이전트 목록·연결 상태, `trust`·`reconnect`      |
-| `GET /api/projects/:project/skills`          | 이 프로젝트에서 쓸 수 있는 skill과 읽지 못한 폴더          |
-| `GET/POST /api/projects/:project/mcp`        | MCP 서버 목록·상태, `{scope, name, trusted}`로 신뢰/중지   |
-| `POST /api/projects/:project`                | `crossRecallExcluded`, `permissionMode`(`ask`/`auto`) 변경 |
-| `GET/POST /api/sessions`                     | 프로젝트별 대화 목록, 새 대화                              |
-| `GET /api/sessions/:session?holder=`         | 진행 중인 run, 마지막 run의 끝난 방식, 이 탭의 소유 여부   |
-| `POST /api/sessions/:session/lease`          | 탭의 소유권 얻기·갱신(`claim`)·놓기(`release`)             |
-| `POST /api/sessions/:session/cancel`         | 진행 중인 run 취소(소유 탭만), 실제로 멈췄는지 응답        |
-| `GET/POST /api/sessions/:session/queue`      | 대기열 목록, 답변 중 메시지 넣기(`queue`/`steer`)          |
-| `POST /api/sessions/:session/queue/:message` | 대기 메시지 편집 내용 저장·저장·제거·확인 후 보내기        |
-| `GET /api/sessions/:session/subagents`       | 서브에이전트 목록·상태                                     |
-| `GET /api/sessions/:session/approvals`       | run을 멈추지 못하는 승인 대기(서브에이전트·외부 에이전트)  |
-| `GET /api/sessions/:session/subagents/:id`   | 서브에이전트 대화 기록                                     |
-| `POST .../approvals/:approval`               | 그 호출 승인/거부 `{approved}`(소유 탭만)                  |
-| `GET /api/chat?session=&threadId=`           | 새로고침 복원: 대화, 진행 중인 run, 대기 중인 승인         |
-| `GET /api/chat?session=&runId=&offset=`      | 진행 중이거나 끝난 run의 답변을 로그에서 다시 읽기         |
-| `POST /api/chat?session=`                    | 채팅 실행(SSE), 승인 재개 포함(소유 탭만)                  |
-| `GET/POST /api/settings/kagi`                | Kagi 상태, `register`·`enable`·`disable`·`remove`          |
-| `POST /api/attachments`                      | 이미지 원본 바이트 업로드(png/jpeg/gif/webp, 20 MiB 이하)  |
-| `GET /api/attachments/:attachment`           | 저장된 이미지(다른 사이트 삽입 차단)                       |
+| 라우트                                       | 동작                                                        |
+| -------------------------------------------- | ----------------------------------------------------------- |
+| `GET/POST /api/auth`                         | 로그인 상태 조회, `login`·`cancel`·`logout`                 |
+| `GET /api/models`                            | 계정에서 쓸 수 있는 모델 목록과 현재 선택                   |
+| `POST /api/models/:model`                    | 모델·추론 강도 선택(없는 모델은 자동 대체 없이 오류)        |
+| `GET/POST /api/projects`                     | 프로젝트 목록, 경로로 추가                                  |
+| `GET/POST /api/projects/:project/agents`     | 외부 ACP 에이전트 목록·연결 상태, `trust`·`reconnect`       |
+| `GET /api/projects/:project/skills`          | 이 프로젝트에서 쓸 수 있는 skill과 읽지 못한 폴더           |
+| `GET/POST /api/projects/:project/mcp`        | MCP 서버 목록·상태, `{scope, name, trusted}`로 신뢰/중지    |
+| `POST /api/projects/:project`                | `crossRecallExcluded`, `permissionMode`(`ask`/`auto`) 변경  |
+| `GET/POST /api/sessions`                     | 프로젝트별 대화 목록, 새 대화(`agent`로 외부 에이전트 직접) |
+| `GET /api/sessions/:session?holder=`         | 진행 중인 run, 마지막 run의 끝난 방식, 이 탭의 소유 여부    |
+| `POST /api/sessions/:session/lease`          | 탭의 소유권 얻기·갱신(`claim`)·놓기(`release`)              |
+| `POST /api/sessions/:session/cancel`         | 진행 중인 run 취소(소유 탭만), 실제로 멈췄는지 응답         |
+| `GET/POST /api/sessions/:session/queue`      | 대기열 목록, 답변 중 메시지 넣기(`queue`/`steer`)           |
+| `POST /api/sessions/:session/queue/:message` | 대기 메시지 편집 내용 저장·저장·제거·확인 후 보내기         |
+| `GET /api/sessions/:session/subagents`       | 서브에이전트 목록·상태                                      |
+| `GET /api/sessions/:session/approvals`       | run을 멈추지 못하는 승인 대기(서브에이전트·외부 에이전트)   |
+| `GET /api/sessions/:session/subagents/:id`   | 서브에이전트 대화 기록                                      |
+| `POST .../approvals/:approval`               | 그 호출 승인/거부 `{approved}`(소유 탭만)                   |
+| `GET /api/chat?session=&threadId=`           | 새로고침 복원: 대화, 진행 중인 run, 대기 중인 승인          |
+| `GET /api/chat?session=&runId=&offset=`      | 진행 중이거나 끝난 run의 답변을 로그에서 다시 읽기          |
+| `POST /api/chat?session=`                    | 채팅 실행(SSE), 승인 재개 포함(소유 탭만)                   |
+| `GET/POST /api/settings/kagi`                | Kagi 상태, `register`·`enable`·`disable`·`remove`           |
+| `POST /api/attachments`                      | 이미지 원본 바이트 업로드(png/jpeg/gif/webp, 20 MiB 이하)   |
+| `GET /api/attachments/:attachment`           | 저장된 이미지(다른 사이트 삽입 차단)                        |
 
 ## 구조
 

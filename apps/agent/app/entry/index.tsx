@@ -106,9 +106,9 @@ export function App() {
   const replaceProject = (updated: Project) =>
     setProjects((list) => list.map((project) => (project.id === updated.id ? updated : project)));
 
-  const createSession = async () => {
+  const createSession = async (agent?: string) => {
     if (!projectId) return;
-    const session = await api.createSession(projectId);
+    const session = await api.createSession(projectId, agent);
     setSessions((list) => [session, ...list]);
     setSessionId(session.id);
   };
@@ -152,9 +152,11 @@ export function App() {
         key={sessionId}
         sessionId={sessionId}
         imagesSupported={
-          models
+          sessions.find((session) => session.id === sessionId)?.agent == null &&
+          (models
             .find((model) => model.model === selection.model)
-            ?.inputModalities.includes("image") ?? false
+            ?.inputModalities.includes("image") ??
+            false)
         }
       />
     );
@@ -196,7 +198,8 @@ export function App() {
             sessions={sessions}
             sessionId={sessionId}
             onSelect={setSessionId}
-            onCreate={() => void createSession()}
+            onCreate={(agent) => void createSession(agent)}
+            loadAgents={() => api.usableExternalAgents(projectId)}
           />
         )}
       </aside>

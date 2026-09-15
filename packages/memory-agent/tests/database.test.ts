@@ -29,7 +29,11 @@ function seed(db: Database["Type"]) {
       "INSERT INTO projects (id, root, name, created_at) VALUES ('p1', '/work/app', 'app', ?)",
     )
     .run(now);
-  db.sqlite.prepare("INSERT INTO sessions VALUES ('s1', 'p1', NULL, ?)").run(now);
+  db.sqlite
+    .prepare(
+      "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s1', 'p1', NULL, ?)",
+    )
+    .run(now);
   const insert = db.sqlite.prepare(
     "INSERT INTO nodes (id, project_id, session_id, kind, text, created_at) VALUES (?, 'p1', 's1', ?, ?, ?)",
   );
@@ -84,9 +88,17 @@ describe("Database", () => {
       const count = () => db.sqlite.prepare("SELECT count(*) AS n FROM sessions").get();
       expect(() =>
         db.atomic(() => {
-          db.sqlite.prepare("INSERT INTO sessions VALUES ('s2', 'p1', NULL, 'now')").run();
+          db.sqlite
+            .prepare(
+              "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s2', 'p1', NULL, 'now')",
+            )
+            .run();
           db.atomic(() => {
-            db.sqlite.prepare("INSERT INTO sessions VALUES ('s3', 'p1', NULL, 'now')").run();
+            db.sqlite
+              .prepare(
+                "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s3', 'p1', NULL, 'now')",
+              )
+              .run();
           });
           throw new Error("abort after nested commit");
         }),
@@ -94,10 +106,18 @@ describe("Database", () => {
       expect(count()).toEqual({ n: 1 });
 
       db.atomic(() => {
-        db.sqlite.prepare("INSERT INTO sessions VALUES ('s4', 'p1', NULL, 'now')").run();
+        db.sqlite
+          .prepare(
+            "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s4', 'p1', NULL, 'now')",
+          )
+          .run();
         expect(() =>
           db.atomic(() => {
-            db.sqlite.prepare("INSERT INTO sessions VALUES ('s5', 'p1', NULL, 'now')").run();
+            db.sqlite
+              .prepare(
+                "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s5', 'p1', NULL, 'now')",
+              )
+              .run();
             throw new Error("nested only");
           }),
         ).toThrow("nested only");

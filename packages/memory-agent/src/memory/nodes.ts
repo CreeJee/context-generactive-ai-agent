@@ -27,6 +27,8 @@ export const NodeDetail = Schema.Struct({
   permission: Schema.optional(
     Schema.Struct({ decision: Schema.String, decidedBy: Schema.String, reason: Schema.String }),
   ),
+  /** assistant: said by an external ACP agent in a direct conversation, not the app's model. */
+  externalAgent: Schema.optional(Schema.String),
 });
 export type NodeDetail = typeof NodeDetail.Type;
 

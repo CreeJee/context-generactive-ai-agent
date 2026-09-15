@@ -9,6 +9,9 @@ import { RelayedApprovals } from "../src/approvals/relayed.ts";
 import { CodexAppServer } from "../src/codex/app-server.ts";
 import { CodexModels } from "../src/codex/models.ts";
 import { ExternalAgents } from "../src/external-agents/agents.ts";
+import { Indexer } from "../src/memory/embedding/indexer.ts";
+import { Nodes } from "../src/memory/nodes.ts";
+import { Sessions } from "../src/sessions/sessions.ts";
 import { approvalToolDefinitions, permissionReviewInterrupt } from "../src/tools/definitions.ts";
 import { testRuntime } from "./support/runtime.ts";
 
@@ -206,5 +209,60 @@ describe("external ACP agents", () => {
     });
     relayed.answer(session.id, request!.id, true);
     await until(() => answer().includes("permission: once"), "the delegation result");
+  });
+
+  test("a direct conversation with an external agent gets matching memory and is remembered", async () => {
+    const { runtime, project, session: earlier, agents, run } = await agentSetup();
+    const { direct, untrusted } = await runtime.runPromise(
+      Effect.gen(function* () {
+        (yield* Nodes).append({
+          projectId: project.id,
+          sessionId: earlier.id,
+          kind: "user",
+          text: "로그 포맷은 logfmt로 하기로 했다.",
+        });
+        yield* (yield* Indexer).indexAll();
+        const sessions = yield* Sessions;
+        return {
+          direct: yield* sessions.create(project.id, null, "fake"),
+          untrusted: yield* sessions.create(project.id, null, "fake"),
+        };
+      }),
+    );
+    const send = (sessionId: string, text: string) =>
+      runtime.runPromise(
+        Effect.flatMap(AgentChat, (agent) =>
+          agent.handle(
+            new Request("http://127.0.0.1/api/chat", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                threadId: sessionId,
+                runId: `run-${Math.random().toString(36).slice(2)}`,
+                messages: [{ id: "m1", role: "user", content: text }],
+                tools: [],
+                context: [],
+              }),
+            }),
+            sessionId,
+          ),
+        ),
+      );
+
+    // Not trusted yet: the conversation cannot start the agent.
+    expect((await send(untrusted.id, "hello")).status).toBe(409);
+
+    await run(agents.setTrusted(project, "project", "fake", true));
+    const response = await send(direct.id, "로그 포맷 뭐였지?");
+    expect(response.status).toBe(200);
+    const events = await response.text();
+    expect(events).toContain("Memory from context-generactive-agent");
+    expect(events).toContain("logfmt");
+
+    const nodes = await runtime.runPromise(Nodes);
+    const recorded = nodes.session(direct.id);
+    expect(recorded.map((node) => node.kind)).toEqual(["user", "assistant"]);
+    expect(recorded[0]?.text).toBe("로그 포맷 뭐였지?");
+    expect(recorded[1]?.detail).toMatchObject({ externalAgent: "fake" });
   });
 });

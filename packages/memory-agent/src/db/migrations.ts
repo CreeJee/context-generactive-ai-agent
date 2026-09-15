@@ -252,4 +252,8 @@ export const migrations: readonly string[] = [
     CHECK ((scope = 'global') = (project_id = ''))
   );
   `,
+  `
+  -- A conversation held directly with an external ACP agent instead of the app's own model.
+  ALTER TABLE sessions ADD COLUMN agent TEXT;
+  `,
 ];

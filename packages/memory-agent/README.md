@@ -153,7 +153,7 @@ Zed 예시(`settings.json`):
 }
 ```
 
-설정 화면 "에이전트" 탭에서 신뢰하면 모델이 `delegate_to_agent`로 작업을 맡길 수 있습니다. 에이전트는 자기 로그인(`codex login`)을 씁니다. 테스트는 `tests/external-agents.test.ts`(가짜 ACP 에이전트 `tests/support/fake-acp-agent.mjs`).
+설정 화면 "에이전트" 탭에서 신뢰하면 모델이 `delegate_to_agent`로 작업을 맡길 수 있고, `agent`를 지정해 만든 대화는 `ExternalAgentAdapter`로 그 에이전트와 직접 나눕니다(관련 기억 머리말, 답 노드에 `detail.externalAgent`). 에이전트는 자기 로그인(`codex login`)을 씁니다. 테스트는 `tests/external-agents.test.ts`(가짜 ACP 에이전트 `tests/support/fake-acp-agent.mjs`).
 
 ## 개발
 

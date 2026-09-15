@@ -113,7 +113,9 @@ export const api = {
 
   sessions: (projectId: string) =>
     call<Session[]>("GET", `/api/sessions?project=${encodeURIComponent(projectId)}`),
-  createSession: (projectId: string) => call<Session>("POST", "/api/sessions", { projectId }),
+  /** `agent`: talk directly to that trusted external ACP agent instead of the app's model. */
+  createSession: (projectId: string, agent?: string) =>
+    call<Session>("POST", "/api/sessions", { projectId, agent }),
   sessionRunState: (sessionId: string, holder: string) =>
     call<SessionRunState>(
       "GET",
@@ -184,6 +186,11 @@ export const api = {
       name,
       trusted,
     }),
+  /** Names of external agents a new conversation in this project can talk to directly. */
+  usableExternalAgents: async (projectId: string) =>
+    (await api.externalAgents(projectId)).agents
+      .filter((agent) => !agent.shadowed && agent.state.status === "trusted")
+      .map((agent) => agent.name),
   reconnectExternalAgent: (projectId: string, name: string) =>
     call<ExternalAgentsOverview>("POST", `/api/projects/${encodeURIComponent(projectId)}/agents`, {
       action: "reconnect",
