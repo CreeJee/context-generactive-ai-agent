@@ -185,6 +185,46 @@ function writeCodexManifest() {
   );
 }
 
+/**
+ * Native files the executable cannot run without. Most come with this machine's optional
+ * packages; turbovec's addon is built locally and is not in the repository, so a fresh clone must
+ * build it first. A missing file stops packaging instead of shipping a broken executable.
+ */
+function verifyNativeFiles() {
+  const underStage = (path: string) => join(stage, "node_modules", path);
+  const hasNodeAddon = (directory: string) =>
+    existsSync(underStage(directory)) &&
+    listFiles(underStage(directory)).some((file) => file.endsWith(".node"));
+  const checks = [
+    {
+      ok: existsSync(underStage("turbovec/memory-turbovec.node")),
+      fix: "turbovec addon missing: run `vp run build:native` in packages/turbovec (needs Rust; on Windows also the MSVC build tools)",
+    },
+    {
+      ok: existsSync(
+        underStage(
+          `onnxruntime-node/bin/napi-v6/${process.platform}/${process.arch}/onnxruntime_binding.node`,
+        ),
+      ),
+      fix: `onnxruntime-node has no binary for ${target}: run vp install on this machine`,
+    },
+    {
+      ok: hasNodeAddon("@napi-rs"),
+      fix: `@napi-rs/keyring has no binary for ${target}: run vp install on this machine`,
+    },
+    {
+      ok: hasNodeAddon("@img"),
+      fix: `sharp has no binary for ${target}: run vp install on this machine`,
+    },
+    {
+      ok: existsSync(underStage("kiwi-nlp/dist/kiwi-wasm.wasm")),
+      fix: "kiwi-nlp wasm missing: run vp install",
+    },
+  ];
+  const missing = checks.filter((check) => !check.ok).map((check) => check.fix);
+  if (missing.length > 0) throw new Error(`cannot package:\n- ${missing.join("\n- ")}`);
+}
+
 function listFiles(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const full = join(directory, entry.name);
@@ -204,6 +244,7 @@ cpSync(
   join(stage, "kiwi-worker.mjs"),
 );
 collectPackages();
+verifyNativeFiles();
 writeCodexManifest();
 
 // Asset names and manifest entries use `/` on every platform; the executable joins them itself.
