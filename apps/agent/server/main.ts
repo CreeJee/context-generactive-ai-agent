@@ -1,6 +1,7 @@
-// The app's production entry: `context-agent` serves the web app and runs the agent in this
-// process; `context-agent acp` is the stdio ACP agent editors start, working through that server.
-// Runs as the packaged executable (Node SEA) or as `node server/main.ts` after `react-router build`.
+// The app's production entry: `context-agent [folder]` serves the web app, runs the agent in this
+// process and opens the folder (or the folder it was started from) as a project;
+// `context-agent acp` is the stdio ACP agent editors start, working through that server.
+// Runs as the packaged executable (Node SEA) or as the `vp pack` bundle (`vp run start`).
 import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -8,12 +9,15 @@ import { ndJsonStream } from "@agentclientprotocol/sdk";
 import { defaultStorageRoot } from "memory-agent";
 import { AppApi, startAcpAgent } from "memory-agent/acp";
 import * as build from "#server-build";
+import { isThisApp, launchFolder, openProject, type LaunchFolder } from "./launch-project.ts";
 import { unpackRuntime } from "./runtime-assets.ts";
-import { serve } from "./serve.ts";
+import { openInBrowser, serve } from "./serve.ts";
 
 const usage = `사용법:
-  context-agent [--port 5173] [--no-open] [--storage <폴더>]
-  context-agent acp [--port 5173]     에디터(Zed 등)용 ACP 에이전트(실행 중인 앱에 연결)`;
+  context-agent [폴더] [--port 5173] [--no-open] [--storage <폴더>]
+      폴더(없으면 실행한 위치)를 프로젝트로 열어요. 앱이 이미 실행 중이면 그 앱에서 열어요.
+  context-agent acp [--port 5173]
+      에디터(Zed 등)용 ACP 에이전트(실행 중인 앱에 연결)`;
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -31,42 +35,72 @@ if (values.help || !Number.isInteger(port) || port < 1 || port > 65_535 || posit
   console.error(usage);
   process.exit(values.help ? 0 : 2);
 }
+const baseUrl = `http://127.0.0.1:${port}`;
 
-switch (positionals[0]) {
-  case "acp": {
-    // stdout is the protocol channel: nothing else may be written to it.
-    const api = new AppApi(`http://127.0.0.1:${port}`);
-    // SAFETY: stdin without an encoding set emits Buffer chunks, which are Uint8Arrays.
-    const input = Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>;
-    const connection = startAcpAgent({
-      api,
-      stream: ndJsonStream(Writable.toWeb(process.stdout), input),
-    });
-    await connection.closed;
-    break;
+/** Opens the launch folder on the app at `baseUrl` and returns the page to show. */
+async function pageFor(folder: LaunchFolder) {
+  switch (folder.kind) {
+    case "none":
+    case "invalid":
+      return baseUrl;
+    case "folder": {
+      const opened = await openProject(baseUrl, folder.root);
+      switch (opened.kind) {
+        case "opened":
+          console.log(
+            `${opened.added ? "프로젝트로 추가했어요" : "등록된 프로젝트예요"}: ${folder.root}`,
+          );
+          return `${baseUrl}/?project=${encodeURIComponent(opened.projectId)}`;
+        case "rejected":
+          console.error(`이 폴더는 프로젝트로 열 수 없어요(${opened.reason}): ${folder.root}`);
+          return baseUrl;
+      }
+    }
   }
-  case undefined: {
-    const storageRoot = values.storage ?? defaultStorageRoot;
-    process.env.CONTEXT_AGENT_HOME = storageRoot;
-    const runtime = unpackRuntime(storageRoot);
-    if (runtime !== null) process.env.CONTEXT_AGENT_RUNTIME = runtime;
-    const clientDirectory =
-      runtime === null
-        ? fileURLToPath(new URL("../build/client", import.meta.url))
-        : `${runtime}/client`;
-    await serve({ build, port, clientDirectory, openBrowser: values.open }).catch(
-      (error: NodeJS.ErrnoException) => {
-        console.error(
-          error.code === "EADDRINUSE"
-            ? `포트 ${port}가 이미 사용 중이에요. 앱이 이미 실행 중이면 그 주소를 쓰고, 아니면 --port로 다른 포트를 지정하세요.`
-            : `서버를 시작하지 못했어요: ${error.message}`,
-        );
-        process.exit(1);
-      },
-    );
-    break;
-  }
-  default:
-    console.error(usage);
+}
+
+if (positionals[0] === "acp") {
+  // stdout is the protocol channel: nothing else may be written to it.
+  const api = new AppApi(baseUrl);
+  // SAFETY: stdin without an encoding set emits Buffer chunks, which are Uint8Arrays.
+  const input = Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>;
+  const connection = startAcpAgent({
+    api,
+    stream: ndJsonStream(Writable.toWeb(process.stdout), input),
+  });
+  await connection.closed;
+} else {
+  const storageRoot = values.storage ?? defaultStorageRoot;
+  const folder = launchFolder(positionals[0], process.cwd(), storageRoot);
+  if (folder.kind === "invalid") {
+    console.error(`폴더를 찾을 수 없어요: ${folder.path}`);
     process.exit(2);
+  }
+
+  if (await isThisApp(baseUrl)) {
+    // One server per storage root: a second start hands the folder to the running app.
+    const page = await pageFor(folder);
+    console.log(`이미 실행 중인 앱(${baseUrl})에서 열었어요.`);
+    if (values.open) openInBrowser(page);
+    process.exit(0);
+  }
+
+  process.env.CONTEXT_AGENT_HOME = storageRoot;
+  const runtime = unpackRuntime(storageRoot);
+  if (runtime !== null) process.env.CONTEXT_AGENT_RUNTIME = runtime;
+  const clientDirectory =
+    runtime === null
+      ? fileURLToPath(new URL("../build/client", import.meta.url))
+      : `${runtime}/client`;
+  await serve({ build, port, clientDirectory }).catch((error: NodeJS.ErrnoException) => {
+    console.error(
+      error.code === "EADDRINUSE"
+        ? `포트 ${port}를 다른 프로그램이 쓰고 있어요. --port로 다른 포트를 지정하세요.`
+        : `서버를 시작하지 못했어요: ${error.message}`,
+    );
+    process.exit(1);
+  });
+  console.log(`Context Agent가 ${baseUrl} 에서 실행 중이에요. 끝내려면 Ctrl+C.`);
+  const page = await pageFor(folder);
+  if (values.open) openInBrowser(page);
 }

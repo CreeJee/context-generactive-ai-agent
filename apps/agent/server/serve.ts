@@ -11,7 +11,6 @@ export interface ServeOptions {
   readonly port: number;
   /** React Router's client build (`build/client`). */
   readonly clientDirectory: string;
-  readonly openBrowser: boolean;
 }
 
 /** Only the loopback names; any other Host means a rebinding page is talking to this server (R14). */
@@ -74,7 +73,7 @@ function clientFile(clientDirectory: string, pathname: string) {
   }
 }
 
-function openInBrowser(url: string) {
+export function openInBrowser(url: string) {
   const [command, args] =
     process.platform === "darwin"
       ? ["open", [url]]
@@ -118,11 +117,6 @@ export function serve(options: ServeOptions) {
 
   return new Promise<void>((resolveListening, reject) => {
     server.once("error", reject);
-    server.listen(options.port, "127.0.0.1", () => {
-      const url = `http://127.0.0.1:${options.port}`;
-      console.log(`Context Agent가 ${url} 에서 실행 중이에요. 끝내려면 Ctrl+C.`);
-      if (options.openBrowser) openInBrowser(url);
-      resolveListening();
-    });
+    server.listen(options.port, "127.0.0.1", () => resolveListening());
   });
 }

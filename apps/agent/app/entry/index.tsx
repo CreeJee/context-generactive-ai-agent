@@ -66,7 +66,14 @@ export function App() {
     void refreshAuth();
     void api.projects().then((list) => {
       setProjects(list);
-      setProjectId((current) => current ?? list[0]?.id ?? null);
+      // `context-agent <folder>` opens the page with ?project=<id>; keep the URL clean afterwards.
+      const url = new URL(window.location.href);
+      const launched = list.find((project) => project.id === url.searchParams.get("project"));
+      if (url.searchParams.has("project")) {
+        url.searchParams.delete("project");
+        window.history.replaceState(null, "", url);
+      }
+      setProjectId((current) => launched?.id ?? current ?? list[0]?.id ?? null);
     });
   }, [refreshAuth]);
 
