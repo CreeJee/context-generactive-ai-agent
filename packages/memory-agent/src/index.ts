@@ -223,11 +223,8 @@ export {
   type SubagentBinding,
   type SubagentReport,
 } from "./subagents/subagents.ts";
-export type {
-  SubagentApprovalView,
-  SubagentStatus,
-  SubagentView,
-  SubagentsState,
-} from "./subagents/subagent-state.ts";
+export type { SubagentStatus, SubagentView } from "./subagents/subagent-state.ts";
+export { RelayedApprovals, type RelayedRequest } from "./approvals/relayed.ts";
+export type { ApprovalRequester, RelayedApprovalView } from "./approvals/relayed-state.ts";
 export { KagiTools, kagiInstructions, kagiToolNames, maxPageCharacters } from "./tools/kagi.ts";
 export { toToolSchema, type ToolSchema } from "./tools/schema.ts";

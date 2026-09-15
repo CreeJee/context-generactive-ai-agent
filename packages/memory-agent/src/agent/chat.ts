@@ -30,6 +30,7 @@ import { FileTools } from "../tools/files.ts";
 import { KagiTools, kagiInstructions } from "../tools/kagi.ts";
 import { SkillTools } from "../tools/skills.ts";
 import { Subagents, subagentInstructions } from "../subagents/subagents.ts";
+import { RelayedApprovals } from "../approvals/relayed.ts";
 import { MemoryTools } from "../tools/memory.ts";
 import { OutsideTools } from "../tools/outside.ts";
 import { QueueDelivery } from "../queue/delivery.ts";
@@ -203,6 +204,7 @@ const make = Effect.gen(function* () {
   const mcpServers = yield* McpServers;
   const skillTools = yield* SkillTools;
   const subagents = yield* Subagents;
+  const relayed = yield* RelayedApprovals;
   const permissionGate = yield* PermissionGate;
   const projects = yield* Projects;
   const indexer = yield* Indexer;
@@ -567,12 +569,12 @@ const make = Effect.gen(function* () {
         }
       }),
 
-    /** The session's subagents and their calls waiting for the user. */
+    /** The session's subagents. */
     subagents: (sessionId: string) =>
       Effect.gen(function* () {
         const session = yield* Effect.either(sessions.get(sessionId));
         if (session._tag === "Left") return json(404, { error: "session_not_found" });
-        return Response.json(subagents.state(sessionId));
+        return Response.json(subagents.list(sessionId));
       }),
 
     /** One subagent's saved conversation. */
@@ -582,8 +584,19 @@ const make = Effect.gen(function* () {
         return transcript ? Response.json(transcript) : json(404, { error: "subagent_not_found" });
       }),
 
-    /** The page's answer to a subagent's call waiting for approval. Only the owning page may answer. */
-    answerSubagent: (
+    /**
+     * Calls waiting for the user that could not pause the run: a subagent's, or an external
+     * agent's own permission requests.
+     */
+    approvals: (sessionId: string) =>
+      Effect.gen(function* () {
+        const session = yield* Effect.either(sessions.get(sessionId));
+        if (session._tag === "Left") return json(404, { error: "session_not_found" });
+        return Response.json(relayed.pending(sessionId));
+      }),
+
+    /** The page's answer to a relayed approval. Only the page holding the session may answer. */
+    answerApproval: (
       sessionId: string,
       holder: string | null,
       approvalId: string,
@@ -591,8 +604,8 @@ const make = Effect.gen(function* () {
     ) =>
       Effect.sync(() => {
         if (!leases.permits(sessionId, holder)) return inUse();
-        return subagents.answer(sessionId, approvalId, approved)
-          ? Response.json(subagents.state(sessionId))
+        return relayed.answer(sessionId, approvalId, approved)
+          ? Response.json(relayed.pending(sessionId))
           : json(404, { error: "approval_not_pending" });
       }),
 

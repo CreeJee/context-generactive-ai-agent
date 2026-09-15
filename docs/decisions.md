@@ -145,7 +145,7 @@
 - fx 방식을 따른다: `run_subagent {task, instructions?}`는 일회 자식, `message_subagent {agent, message, instructions?}`는 부모 세션 안에서 이름으로 이어지는 자식이다. codex dynamic tool 스키마가 최상위 union을 받지 않을 수 있어 fx의 한 도구·두 action 대신 두 도구로 나눈다. `instructions`를 생략하면 이전 지침을 유지한다.
 - 자식은 같은 프로세스에서 TanStack `chat()`으로 돈다. 모델·추론 강도는 부모 선택 그대로, workspace는 같은 프로젝트다. 부모 대화는 넘기지 않고 과제와 지침만 준다(필요하면 기억 도구로 찾는다).
 - 자식 도구는 부모 도구와 같거나 그 이하다. 서브에이전트 도구는 없어서 중첩이 안 된다. 권한 모드·MCP 신뢰도 부모 그대로다.
-- **자식의 승인 요청은 사용자에게 간다.** 자식은 부모 run을 interrupt로 멈출 수 없으므로, 셸·밖 쓰기·MCP 호출은 도구 실행 직전에 기다린다: `auto` 모드는 분류 모델이 먼저 판단하고, 남은 것은 페이지의 승인 카드("일회 서브에이전트: …")로 묻는다. 페이지는 run 중 1.5초마다 `GET /api/sessions/:session/subagents`로 확인하고, 답은 소유 탭만 보낸다. 판정·답은 부모 세션의 `permission_reviews`에 `subagent-<id>:<call id>`로 남는다.
+- **자식의 승인 요청은 사용자에게 간다.** 자식은 부모 run을 interrupt로 멈출 수 없으므로, 셸·밖 쓰기·MCP 호출은 도구 실행 직전에 기다린다: `auto` 모드는 분류 모델이 먼저 판단하고, 남은 것은 페이지의 승인 카드("일회 서브에이전트: …")로 묻는다. 페이지는 run 중 1.5초마다 `GET /api/sessions/:session/approvals`로 확인하고, 답은 소유 탭만 보낸다. 이 중계(`RelayedApprovals`)는 외부 에이전트의 권한 요청에도 쓴다. 판정·답은 부모 세션의 `permission_reviews`에 `subagent-<id>:<call id>`로 남는다.
 - 한 단계에서 부른 여러 서브에이전트는 동시에 시작하고 결과는 호출 순서로 돌려준다. TanStack은 한 단계의 도구 호출을 차례로 실행하므로, middleware가 첫 호출 직전에 그 단계의 서브에이전트 호출을 모두 시작하고 각 호출은 자기 결과를 기다린다.
 - 실행 중인 이름 있는 자식에게 온 메시지는 codex `turn/steer`로 그 턴에 넣고(`status: steered`), 넣을 턴이 없으면 앞 작업이 끝난 뒤 다음 메시지로 이어 실행한다.
 - 부모 run을 취소하면 자식 run과 승인 대기가 함께 멈춘다(대기는 거부로 끝남). 서버가 다시 시작하면 `running` 자식은 `interrupted`가 되고 자동으로 다시 실행하지 않는다.

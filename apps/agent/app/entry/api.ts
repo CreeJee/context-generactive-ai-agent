@@ -21,8 +21,8 @@ import {
   type QueueEdit,
   type QueuedMessage,
   type SessionRunState,
-  type SubagentApprovalView,
-  type SubagentsState,
+  type ApprovalRequester,
+  type RelayedApprovalView,
   type SubagentView,
 } from "memory-agent/definitions";
 
@@ -44,8 +44,8 @@ export type {
   Session,
   SessionRunState,
   SkillCatalog,
-  SubagentApprovalView,
-  SubagentsState,
+  ApprovalRequester,
+  RelayedApprovalView,
   SubagentView,
 };
 
@@ -170,16 +170,18 @@ export const api = {
     call<SkillCatalog>("GET", `/api/projects/${encodeURIComponent(projectId)}/skills`),
 
   subagents: (sessionId: string) =>
-    call<SubagentsState>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/subagents`),
+    call<SubagentView[]>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/subagents`),
+  relayedApprovals: (sessionId: string) =>
+    call<RelayedApprovalView[]>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/approvals`),
   subagentTranscript: (sessionId: string, subagentId: string) =>
     call<{ subagent: SubagentView; messages: ModelMessage[] }>(
       "GET",
       `/api/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(subagentId)}`,
     ),
-  answerSubagent: (sessionId: string, holder: string, approvalId: string, approved: boolean) =>
-    call<SubagentsState>(
+  answerApproval: (sessionId: string, holder: string, approvalId: string, approved: boolean) =>
+    call<RelayedApprovalView[]>(
       "POST",
-      `/api/sessions/${encodeURIComponent(sessionId)}/subagents/approvals/${encodeURIComponent(approvalId)}`,
+      `/api/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`,
       { approved },
       { [sessionHolderHeader]: holder },
     ),

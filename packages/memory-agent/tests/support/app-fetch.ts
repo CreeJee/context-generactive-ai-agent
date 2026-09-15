@@ -52,11 +52,11 @@ export function appFetch(runtime: Runtime): typeof fetch {
     }
     if ((match = /^\/api\/sessions\/([^/]+)\/cancel$/.exec(path)))
       return chat((agent) => agent.cancel(match![1]!, holder));
-    if ((match = /^\/api\/sessions\/([^/]+)\/subagents$/.exec(path)))
-      return chat((agent) => agent.subagents(match![1]!));
-    if ((match = /^\/api\/sessions\/([^/]+)\/subagents\/approvals\/([^/]+)$/.exec(path))) {
+    if ((match = /^\/api\/sessions\/([^/]+)\/approvals$/.exec(path)))
+      return chat((agent) => agent.approvals(match![1]!));
+    if ((match = /^\/api\/sessions\/([^/]+)\/approvals\/([^/]+)$/.exec(path))) {
       const { approved } = await body();
-      return chat((agent) => agent.answerSubagent(match![1]!, holder, match![2]!, approved));
+      return chat((agent) => agent.answerApproval(match![1]!, holder, match![2]!, approved));
     }
     return Response.json({ error: "not_found" }, { status: 404 });
   };

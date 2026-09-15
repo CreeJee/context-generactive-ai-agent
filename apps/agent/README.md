@@ -65,9 +65,10 @@ UI 컴포넌트는 shadcn으로 추가합니다(`AGENT.md`).
 | `POST /api/sessions/:session/cancel`         | 진행 중인 run 취소(소유 탭만), 실제로 멈췄는지 응답        |
 | `GET/POST /api/sessions/:session/queue`      | 대기열 목록, 답변 중 메시지 넣기(`queue`/`steer`)          |
 | `POST /api/sessions/:session/queue/:message` | 대기 메시지 편집 내용 저장·저장·제거·확인 후 보내기        |
-| `GET /api/sessions/:session/subagents`       | 서브에이전트 목록·상태, 승인 대기 중인 호출                |
+| `GET /api/sessions/:session/subagents`       | 서브에이전트 목록·상태                                     |
+| `GET /api/sessions/:session/approvals`       | run을 멈추지 못하는 승인 대기(서브에이전트·외부 에이전트)  |
 | `GET /api/sessions/:session/subagents/:id`   | 서브에이전트 대화 기록                                     |
-| `POST .../subagents/approvals/:approval`     | 서브에이전트 호출 승인/거부 `{approved}`(소유 탭만)        |
+| `POST .../approvals/:approval`               | 그 호출 승인/거부 `{approved}`(소유 탭만)                  |
 | `GET /api/chat?session=&threadId=`           | 새로고침 복원: 대화, 진행 중인 run, 대기 중인 승인         |
 | `GET /api/chat?session=&runId=&offset=`      | 진행 중이거나 끝난 run의 답변을 로그에서 다시 읽기         |
 | `POST /api/chat?session=`                    | 채팅 실행(SSE), 승인 재개 포함(소유 탭만)                  |

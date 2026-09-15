@@ -127,31 +127,32 @@ export class AppApi {
     return body.messages as UIMessage[];
   }
 
-  subagents(sessionId: string) {
+  /** Calls of subagents and external agents waiting for the user. */
+  approvals(sessionId: string) {
     return this.#call(
-      Schema.Struct({
-        subagents: Schema.Array(Schema.Unknown),
-        approvals: Schema.Array(
-          Schema.Struct({
-            id: Schema.String,
-            subagentId: Schema.String,
-            agent: Schema.NullOr(Schema.String),
-            toolName: Schema.String,
-            argumentsJson: Schema.String,
-            reason: Schema.String,
-            askedBy: Schema.Literal("review", "every_call"),
-            createdAt: Schema.Number,
-          }),
-        ),
-      }),
-      `/api/sessions/${encodeURIComponent(sessionId)}/subagents`,
+      Schema.Array(
+        Schema.Struct({
+          id: Schema.String,
+          requester: Schema.Union(
+            Schema.Struct({
+              kind: Schema.Literal("subagent"),
+              subagentId: Schema.String,
+              name: Schema.NullOr(Schema.String),
+            }),
+            Schema.Struct({ kind: Schema.Literal("external_agent"), agent: Schema.String }),
+          ),
+          toolName: Schema.String,
+          argumentsJson: Schema.String,
+        }),
+      ),
+      `/api/sessions/${encodeURIComponent(sessionId)}/approvals`,
     );
   }
 
-  answerSubagent(sessionId: string, holder: string, approvalId: string, approved: boolean) {
+  answerApproval(sessionId: string, holder: string, approvalId: string, approved: boolean) {
     return this.#call(
       Schema.Unknown,
-      `/api/sessions/${encodeURIComponent(sessionId)}/subagents/approvals/${encodeURIComponent(approvalId)}`,
+      `/api/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`,
       this.#post({ approved }, holder),
     );
   }

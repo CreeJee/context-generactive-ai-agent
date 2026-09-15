@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { Layer } from "effect";
 import { AgentChat } from "./agent/chat.ts";
 import { ChatState } from "./chat-state/chat-state.ts";
+import { RelayedApprovals } from "./approvals/relayed.ts";
 import { Attachments } from "./attachments/attachments.ts";
 import { CodexAccount } from "./codex/account.ts";
 import { CodexAppServer } from "./codex/app-server.ts";
@@ -72,6 +73,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     SessionLeases.layer(options.leaseTtlMs),
     MessageQueue.layer,
     Interpretations.layer,
+    RelayedApprovals.layer,
     options.embedder ?? Embedder.local,
     options.codex ?? CodexAppServer.layer,
     options.secrets ?? SecretStore.keychain,

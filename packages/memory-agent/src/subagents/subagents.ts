@@ -13,15 +13,11 @@ import { CodexChat } from "../codex/chat.ts";
 import type { ModelSelection } from "../codex/models.ts";
 import { Database } from "../db/database.ts";
 import { PermissionClassifier } from "../permissions/classifier.ts";
+import { RelayedApprovals } from "../approvals/relayed.ts";
 import { PermissionReviews } from "../permissions/reviews.ts";
 import type { Project } from "../projects/projects.ts";
 import { toToolSchema } from "../tools/schema.ts";
-import type {
-  SubagentApprovalView,
-  SubagentStatus,
-  SubagentView,
-  SubagentsState,
-} from "./subagent-state.ts";
+import type { SubagentStatus, SubagentView } from "./subagent-state.ts";
 
 export const subagentToolNames = ["run_subagent", "message_subagent"] as const;
 const isSubagentTool = (name: string) => name === "run_subagent" || name === "message_subagent";
@@ -131,12 +127,6 @@ export interface SubagentRunTools {
   readonly middleware: ChatMiddleware;
 }
 
-interface PendingApproval {
-  readonly sessionId: string;
-  readonly view: SubagentApprovalView;
-  readonly resolve: (approved: boolean) => void;
-}
-
 const everyCallReason = "호출할 때마다 확인하는 도구예요.";
 
 const make = Effect.gen(function* () {
@@ -145,6 +135,7 @@ const make = Effect.gen(function* () {
   const chatState = yield* ChatState;
   const classifier = yield* PermissionClassifier;
   const reviews = yield* PermissionReviews;
+  const relayed = yield* RelayedApprovals;
 
   // A child cut off by a restart is not rerun on its own (R18).
   sqlite
@@ -168,47 +159,8 @@ const make = Effect.gen(function* () {
     "SELECT * FROM subagents WHERE session_id = ? ORDER BY created_at, rowid",
   );
 
-  const approvals = new Map<string, PendingApproval>();
   /** Named children busy in this process: the next message waits for the one before it. */
   const busy = new Map<string, Promise<ChildOutcome>>();
-
-  /** Waits for the user's answer; a cancelled run answers no. */
-  const askUser = (
-    binding: SubagentBinding,
-    row: SubagentRow,
-    signal: AbortSignal,
-    call: {
-      toolName: string;
-      argumentsJson: string;
-      reason: string;
-      askedBy: "review" | "every_call";
-    },
-  ) =>
-    new Promise<boolean>((resolve) => {
-      if (signal.aborted) return resolve(false);
-      const id = randomUUID();
-      const done = (approved: boolean) => {
-        approvals.delete(id);
-        signal.removeEventListener("abort", cancel);
-        resolve(approved);
-      };
-      const cancel = () => done(false);
-      signal.addEventListener("abort", cancel, { once: true });
-      approvals.set(id, {
-        sessionId: binding.sessionId,
-        resolve: done,
-        view: {
-          id,
-          subagentId: row.id,
-          agent: row.name,
-          toolName: call.toolName,
-          argumentsJson: call.argumentsJson,
-          reason: call.reason,
-          askedBy: call.askedBy,
-          createdAt: Date.now(),
-        },
-      });
-    });
 
   /**
    * A child cannot pause its parent's run for a TanStack approval, so its gated calls wait here
@@ -264,12 +216,17 @@ const make = Effect.gen(function* () {
             askedBy = "review";
         }
       }
-      const approved = await askUser(binding, row, signal, {
-        toolName: hook.toolName,
-        argumentsJson,
-        reason,
-        askedBy,
-      });
+      const approved = await relayed.ask(
+        binding.sessionId,
+        {
+          requester: { kind: "subagent", subagentId: row.id, name: row.name },
+          toolName: hook.toolName,
+          argumentsJson,
+          reason,
+          askedBy,
+        },
+        signal,
+      );
       record(
         approved ? "approved" : "denied",
         "user",
@@ -486,22 +443,9 @@ const make = Effect.gen(function* () {
       return { tools: [runTool, messageTool], middleware };
     },
 
-    /** Children of a session and their calls waiting for the user. */
-    state(sessionId: string): SubagentsState {
-      return {
-        subagents: bySession.all(sessionId).map((row) => toView(decodeRow(row))),
-        approvals: [...approvals.values()]
-          .filter((pending) => pending.sessionId === sessionId)
-          .map((pending) => pending.view),
-      };
-    },
-
-    /** Answers a child's waiting call. False when there is no such request (answered or gone). */
-    answer(sessionId: string, approvalId: string, approved: boolean): boolean {
-      const pending = approvals.get(approvalId);
-      if (!pending || pending.sessionId !== sessionId) return false;
-      pending.resolve(approved);
-      return true;
+    /** Children of a session. Their calls waiting for the user are in `RelayedApprovals`. */
+    list(sessionId: string): SubagentView[] {
+      return bySession.all(sessionId).map((row) => toView(decodeRow(row)));
     },
 
     /** A child's saved conversation. */

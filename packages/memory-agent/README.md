@@ -75,7 +75,7 @@ bin/
 MCP 도구는 실행 중에 생기므로 브라우저가 정의를 모릅니다. 그래서 `ask` 모드에서도 `PermissionGate`(decider `user`)가 호출마다 `permission-review` interrupt로 묻고, `auto` 모드에서는 내장 승인 도구와 함께 분류 모델이 판정합니다.
 `McpServers`는 `<storage>/mcp.json`과 `<project>/.mcp.json`을 읽고, 사용자가 신뢰한 설정(fingerprint)만 시작합니다. 테스트는 `tests/mcp.test.ts`(가짜 stdio MCP 서버 `tests/support/fake-mcp-server.mjs`).
 
-`Subagents`는 자식을 부모와 같은 모델·도구(서브에이전트 도구 제외)로 실행합니다. 자식의 승인 필요 호출은 부모 run을 멈추지 않고 `onBeforeToolCall`에서 기다리며, 페이지가 `AgentChat.subagents`/`answerSubagent`로 보고 답합니다. 테스트는 `tests/subagents.test.ts`.
+`Subagents`는 자식을 부모와 같은 모델·도구(서브에이전트 도구 제외)로 실행합니다. 자식의 승인 필요 호출은 부모 run을 멈추지 않고 `onBeforeToolCall`에서 기다리며, 페이지가 `AgentChat.approvals`/`answerApproval`(`RelayedApprovals`)로 보고 답합니다. 테스트는 `tests/subagents.test.ts`.
 
 승인 대기로 HTTP 요청이 끝나도 codex 턴은 `TurnParking`에 threadId로 보관되어, 재개 요청이 같은 턴을 이어갑니다.
 

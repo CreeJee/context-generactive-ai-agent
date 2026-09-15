@@ -10,22 +10,30 @@ import {
   ItemTitle,
 } from "~/components/ui/item";
 import { Spinner } from "~/components/ui/spinner";
-import { api, type SubagentApprovalView, type SubagentsState } from "./api";
+import { api, type ApprovalRequester, type RelayedApprovalView, type SubagentView } from "./api";
 import { ApprovalCard, type PendingApproval } from "./approval";
 
-/** While a run answers, subagents are checked this often for progress and approval requests. */
+/** While a run answers, delegated work is checked this often for progress and approval requests. */
 const pollMs = 1_500;
 
-const empty: SubagentsState = { subagents: [], approvals: [] };
+interface DelegatedState {
+  readonly subagents: readonly SubagentView[];
+  readonly approvals: readonly RelayedApprovalView[];
+}
 
-/** The session's subagents (R18), refreshed when the run starts or stops and polled while it runs. */
-export function useSubagents(sessionId: string, generating: boolean) {
-  const [state, setState] = useState<SubagentsState>(empty);
+const empty: DelegatedState = { subagents: [], approvals: [] };
+
+/**
+ * Subagents of the session and calls waiting for the user from work that cannot pause the run
+ * (subagents, external agents). Refreshed when the run starts or stops and polled while it runs.
+ */
+export function useDelegatedWork(sessionId: string, generating: boolean) {
+  const [state, setState] = useState<DelegatedState>(empty);
 
   const refresh = useCallback(
     () =>
-      api.subagents(sessionId).then(
-        (next) => setState(next),
+      Promise.all([api.subagents(sessionId), api.relayedApprovals(sessionId)]).then(
+        ([subagents, approvals]) => setState({ subagents, approvals }),
         () => undefined,
       ),
     [sessionId],
@@ -38,13 +46,20 @@ export function useSubagents(sessionId: string, generating: boolean) {
     return () => clearInterval(timer);
   }, [refresh, generating]);
 
-  return { state, refresh, setState };
+  return { state, setState };
 }
 
-const agentLabel = (name: string | null) => (name ? `서브에이전트 ${name}` : "일회 서브에이전트");
+export function requesterLabel(requester: ApprovalRequester) {
+  switch (requester.kind) {
+    case "subagent":
+      return requester.name ? `서브에이전트 ${requester.name}` : "일회 서브에이전트";
+    case "external_agent":
+      return `외부 에이전트 ${requester.agent}`;
+  }
+}
 
 function toPending(
-  approval: SubagentApprovalView,
+  approval: RelayedApprovalView,
   answer: (approved: boolean) => void,
 ): PendingApproval {
   return {
@@ -54,14 +69,14 @@ function toPending(
     toolName: approval.toolName,
     argumentsJson: approval.argumentsJson,
     reviewReason: approval.reason,
-    askedBy: approval.askedBy,
+    askedBy: approval.askedBy === "review" ? "review" : "every_call",
     answer,
   };
 }
 
 /**
- * Subagents working right now, and their calls waiting for the user. A child cannot pause the
- * parent run, so its approval requests are answered here while the run keeps going.
+ * Subagents working right now, and calls waiting for the user that could not pause the run. They
+ * are answered here while the run keeps going.
  */
 export function SubagentPanel({
   sessionId,
@@ -74,14 +89,14 @@ export function SubagentPanel({
   generating: boolean;
   readOnly: boolean;
 }) {
-  const { state, setState } = useSubagents(sessionId, generating);
+  const { state, setState } = useDelegatedWork(sessionId, generating);
   const running = state.subagents.filter((child) => child.status === "running");
   if (running.length === 0 && state.approvals.length === 0) return null;
 
   const answer = (approvalId: string, approved: boolean) =>
     void api
-      .answerSubagent(sessionId, holder, approvalId, approved)
-      .then(setState)
+      .answerApproval(sessionId, holder, approvalId, approved)
+      .then((approvals) => setState((current) => ({ ...current, approvals })))
       .catch(() => undefined);
 
   return (
@@ -95,7 +110,7 @@ export function SubagentPanel({
               </ItemMedia>
               <ItemContent className="min-w-0">
                 <ItemTitle className="flex items-center gap-1.5">
-                  {agentLabel(child.name)}
+                  {requesterLabel({ kind: "subagent", subagentId: child.id, name: child.name })}
                   <Badge variant="secondary">
                     <Spinner /> 작업 중
                   </Badge>
@@ -109,7 +124,7 @@ export function SubagentPanel({
       {state.approvals.map((approval) => (
         <ApprovalCard
           key={approval.id}
-          requester={agentLabel(approval.agent)}
+          requester={requesterLabel(approval.requester)}
           approval={toPending(approval, (approved) => answer(approval.id, approved))}
           disabled={readOnly}
         />

@@ -23,8 +23,8 @@ import { toolDetail, toolLocations, toolView } from "./tool-view.ts";
 
 /** How often a bridged session renews its lease; the app drops a lease after 90 seconds. */
 const leaseRenewMs = 20_000;
-/** How often a prompt checks for subagent calls waiting for approval. */
-const subagentPollMs = 1_500;
+/** How often a prompt checks for subagent and external agent calls waiting for approval. */
+const relayPollMs = 1_500;
 /** Longest tool output passed to the editor. */
 const maxToolOutput = 4_000;
 
@@ -93,6 +93,19 @@ function promptText(blocks: readonly ContentBlock[]) {
     })
     .join("");
 }
+
+const requesterLabel = (
+  requester:
+    | { readonly kind: "subagent"; readonly name: string | null }
+    | { readonly kind: "external_agent"; readonly agent: string },
+) => {
+  switch (requester.kind) {
+    case "subagent":
+      return requester.name ? `서브에이전트 ${requester.name}` : "일회 서브에이전트";
+    case "external_agent":
+      return `외부 에이전트 ${requester.agent}`;
+  }
+};
 
 const cut = (text: string) =>
   text.length > maxToolOutput ? `${text.slice(0, maxToolOutput)}\n…` : text;
@@ -241,30 +254,30 @@ export function startAcpAgent(options: {
     return response.outcome.outcome === "selected" && response.outcome.optionId === "allow";
   };
 
-  /** Relays calls of this session's subagents that wait for approval, while the turn runs. */
-  const relaySubagentApprovals = (session: BridgeSession, turn: PromptTurn) => {
+  /** Relays calls of subagents and external agents that wait for approval, while the turn runs. */
+  const relayApprovals = (session: BridgeSession, turn: PromptTurn) => {
     const asked = new Set<string>();
     const timer = setInterval(() => {
       void api
-        .subagents(session.id)
-        .then((state) => {
-          for (const approval of state.approvals) {
+        .approvals(session.id)
+        .then((approvals) => {
+          for (const approval of approvals) {
             if (asked.has(approval.id)) continue;
             asked.add(approval.id);
             void askEditor(turn, session.id, {
               toolCallId: approval.id,
               toolName: approval.toolName,
               argumentsJson: approval.argumentsJson,
-              requester: approval.agent ? `서브에이전트 ${approval.agent}` : "일회 서브에이전트",
+              requester: requesterLabel(approval.requester),
             })
               .then((approved) =>
-                api.answerSubagent(session.id, session.holder, approval.id, approved),
+                api.answerApproval(session.id, session.holder, approval.id, approved),
               )
               .catch(() => undefined);
           }
         })
         .catch(() => undefined);
-    }, subagentPollMs);
+    }, relayPollMs);
     return () => clearInterval(timer);
   };
 
@@ -349,7 +362,7 @@ export function startAcpAgent(options: {
         failure: null,
       };
       session.turn = turn;
-      const stopRelay = relaySubagentApprovals(session, turn);
+      const stopRelay = relayApprovals(session, turn);
       try {
         await session.chat.sendMessage(promptText(ctx.params.prompt));
         await waitIdle(session.chat);
