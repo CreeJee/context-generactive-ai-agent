@@ -26,7 +26,7 @@ bin/
   memory/       기억: 노드·구조 edge·그래프 탐색·근거 추적·검색·기록 middleware
     embedding/  로컬 임베딩 모델 + turbovec 벡터 인덱스 + 인덱서(형태소 분석 포함)
     morph/      Kiwi 한국어 형태소 분석(worker thread, 모델은 처음 쓸 때 내려받음)
-  codex/        ChatGPT 계정(codex app-server): 로그인·모델·TanStack 어댑터
+  codex/        ChatGPT 계정(의존성 @openai/codex의 app-server): 로그인·모델·TanStack 어댑터
   files/        경로·자격 증명 검사, 텍스트 파일 읽기/쓰기, 목록, 줄 검색
   attachments/  업로드 이미지 저장(sha256, 바이트 서명 검사)과 메시지 연결, 첨부 URL 규칙
   shell/        호스트 셸 실행(프로세스 그룹, timeout, 출력 앞뒤 보존)

@@ -44,10 +44,8 @@ export {
   CodexAppServer,
   CodexRequestFailed,
   CodexUnavailable,
-  findCodex,
-  testedCodexVersions,
+  bundledCodex,
   type CodexCommand,
-  type CodexInfo,
   type Json,
 } from "./codex/app-server.ts";
 export { CodexModel, CodexModels, ModelUnavailable, type ModelSelection } from "./codex/models.ts";

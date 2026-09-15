@@ -44,6 +44,7 @@
     "@huggingface/transformers": "catalog:",
     "@modelcontextprotocol/sdk": "catalog:",
     "@napi-rs/keyring": "catalog:",
+    "@openai/codex": "catalog:",
     "@standard-schema/spec": "catalog:",
     "@tanstack/ai": "catalog:",
     "@tanstack/ai-client": "catalog:",

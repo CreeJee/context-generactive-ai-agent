@@ -1,11 +1,13 @@
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
 import { userInfo, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Effect, Either, Layer, ManagedRuntime, Schema } from "effect";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import { CodexAccount, isChatgptAuthUrl } from "../src/codex/account.ts";
-import { CodexAppServer, findCodex } from "../src/codex/app-server.ts";
+import { CodexAppServer, bundledCodex } from "../src/codex/app-server.ts";
 import { CodexModels } from "../src/codex/models.ts";
 import { GlobalConfig } from "../src/config/global-config.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
@@ -102,8 +104,17 @@ describe("CodexAppServer", () => {
     ).toBe(true);
   });
 
-  test("reports a missing codex binary instead of throwing", async () => {
-    expect(findCodex("relative/bin:/definitely/not/here")).toBeNull();
+  test("runs the codex pinned in package.json, and reports a platform without one as missing", () => {
+    const executable = bundledCodex();
+    expect(executable).not.toBeNull();
+    const pinned = Schema.decodeUnknownSync(Schema.Struct({ version: Schema.String }))(
+      JSON.parse(
+        readFileSync(createRequire(import.meta.url).resolve("@openai/codex/package.json"), "utf8"),
+      ),
+    ).version;
+    const printed = spawnSync(executable ?? "", ["--version"], { encoding: "utf8" }).stdout;
+    expect(printed).toContain(pinned);
+    expect(bundledCodex("plan9", "mips")).toBeNull();
   });
 });
 

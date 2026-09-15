@@ -1,7 +1,8 @@
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { accessSync, constants, mkdirSync, realpathSync, statSync } from "node:fs";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { mkdirSync, realpathSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import { userInfo } from "node:os";
-import { delimiter, isAbsolute, join } from "node:path";
+import { dirname, join } from "node:path";
 import { Context, Data, Effect, Layer, Schema } from "effect";
 import {
   JSONRPCClient,
@@ -30,24 +31,15 @@ export class CodexRequestFailed extends Data.TaggedError("CodexRequestFailed")<{
   readonly message: string;
 }> {}
 
-export interface CodexInfo {
-  readonly executable: string;
-  readonly version: string | null;
-  /** Whether this app was checked against this codex version. Other versions still run. */
-  readonly tested: boolean;
-}
-
 /** How to start the app server. Tests point this at a fake server script. */
 export interface CodexCommand {
   readonly executable: string;
   readonly args: readonly string[];
 }
 
-export const testedCodexVersions: readonly string[] = ["0.154.0"];
-
 /**
  * Codex runs only as the model backend. Its own shell, MCP, web search, skills and history are
- * off; tools come from this app. Keys follow codex-cli 0.154.0.
+ * off; tools come from this app. Keys follow the pinned `@openai/codex` (0.154.0).
  *
  * `code_mode_host` stays on (its default): code_mode_only models such as gpt-5.6 call this app's
  * tools from inside codex's V8 code-mode sandbox, and without the host they see no tools at all.
@@ -88,20 +80,52 @@ const nativeConfig = [
   ].map((feature) => `features.${feature} = false`),
 ];
 
-/** Finds `codex` on absolute PATH entries only, so a project directory can never shadow it. */
-export function findCodex(searchPath = process.env.PATH ?? ""): string | null {
-  for (const directory of searchPath.split(delimiter)) {
-    if (!isAbsolute(directory)) continue;
-    try {
-      const executable = realpathSync(join(directory, "codex"));
-      if (!statSync(executable).isFile()) continue;
-      accessSync(executable, constants.X_OK);
-      return executable;
-    } catch {
-      continue;
-    }
+/** Rust target triples of the platform binaries that `@openai/codex` ships. */
+function targetTriple(platform: string, arch: string) {
+  switch (`${platform}-${arch}`) {
+    case "darwin-arm64":
+      return "aarch64-apple-darwin";
+    case "darwin-x64":
+      return "x86_64-apple-darwin";
+    case "linux-arm64":
+      return "aarch64-unknown-linux-musl";
+    case "linux-x64":
+      return "x86_64-unknown-linux-musl";
+    case "win32-arm64":
+      return "aarch64-pc-windows-msvc";
+    case "win32-x64":
+      return "x86_64-pc-windows-msvc";
+    default:
+      return null;
   }
-  return null;
+}
+
+/**
+ * The native `codex` from this package's pinned `@openai/codex` dependency, so users need no
+ * separate install and a global codex upgrade cannot change the protocol. Resolved from the
+ * memory-agent package rather than this module because the app bundles this module into its
+ * server build. The code-mode host ships next to it. Null when this platform's binary is missing.
+ */
+export function bundledCodex(platform: string = process.platform, arch: string = process.arch) {
+  const triple = targetTriple(platform, arch);
+  if (!triple) return null;
+  try {
+    const fromPackage = createRequire(
+      createRequire(import.meta.url).resolve("memory-agent/package.json"),
+    );
+    const fromCodex = createRequire(fromPackage.resolve("@openai/codex/package.json"));
+    const platformPackage = fromCodex.resolve(`@openai/codex-${platform}-${arch}/package.json`);
+    const executable = join(
+      dirname(platformPackage),
+      "vendor",
+      triple,
+      "bin",
+      platform === "win32" ? "codex.exe" : "codex",
+    );
+    return statSync(executable).isFile() ? realpathSync(executable) : null;
+  } catch {
+    return null;
+  }
 }
 
 const maxFrameBytes = 16 * 1024 * 1024;
@@ -132,7 +156,7 @@ const make = (command: CodexCommand | null) =>
     const resolved =
       command ??
       (() => {
-        const executable = findCodex();
+        const executable = bundledCodex();
         return executable
           ? {
               executable,
@@ -145,11 +169,6 @@ const make = (command: CodexCommand | null) =>
             }
           : null;
       })();
-
-    function version(executable: string) {
-      const result = spawnSync(executable, ["--version"], { encoding: "utf8", timeout: 10_000 });
-      return /(\d+\.\d+\.\d+)/.exec(result.stdout ?? "")?.[1] ?? null;
-    }
 
     function dispatch(conn: Connection, line: string) {
       const frame = decodeFrame(line);
@@ -285,16 +304,6 @@ const make = (command: CodexCommand | null) =>
     );
 
     return {
-      info: Effect.sync((): CodexInfo | null => {
-        if (!resolved) return null;
-        const detected = command ? null : version(resolved.executable);
-        return {
-          executable: resolved.executable,
-          version: detected,
-          tested: detected !== null && testedCodexVersions.includes(detected),
-        };
-      }),
-
       request: <A, I>(method: string, params: Json | undefined, schema: Schema.Schema<A, I>) =>
         Effect.gen(function* () {
           const conn = yield* connect;
@@ -338,7 +347,7 @@ export class CodexAppServer extends Context.Tag("memory-agent/CodexAppServer")<
   CodexAppServer,
   Effect.Effect.Success<ReturnType<typeof make>>
 >() {
-  /** Uses `codex` from PATH. */
+  /** Uses the bundled `codex` ({@link bundledCodex}). */
   static readonly layer = Layer.scoped(CodexAppServer, make(null));
   static readonly withCommand = (command: CodexCommand) =>
     Layer.scoped(CodexAppServer, make(command));

@@ -1,6 +1,6 @@
 # 결정 기록
 
-이 저장소에서 확정한 제품·설계 결정입니다. 새 결정은 날짜와 함께 아래에 추가하고, 뒤집힌 결정은 지우지 말고 "변경"으로 남깁니다.
+이 저장소에서 확정한 제품·설계 결정입니다. 새 결정은 날짜와 함께 추가합니다. 결정이 뒤집히면 이전 내용에 덧붙이지 않고 지운 뒤 현재 결정으로 새로 쓰고 날짜를 바꿉니다(이전 결정은 git 기록에 남습니다).
 요구사항의 원본은 이전 프로젝트(`topic-generactive-ai-agent`)의 PRD R01–R19이며, 여기서는 그중 이 저장소에서 바꾸거나 구체화한 부분만 적습니다.
 
 ## 범위와 구조 (2026-09-13)
@@ -11,9 +11,12 @@
 - workspace는 `pwd`가 아니라 UI에서 추가·선택하는 프로젝트. 세션·기억·권한 설정은 프로젝트에 속한다.
 - 저장 루트는 `~/.context-generactive-agent`.
 
-## 인증과 모델 (2026-09-13)
+## 인증과 모델 (2026-09-15)
 
-- ChatGPT OAuth를 codex app-server(JSON-RPC over stdio)로 쓴다. 토큰은 codex가 관리하고 앱은 읽지 않으며, API 키로 재사용하지 않는다.
+- ChatGPT OAuth와 모델 호출은 codex app-server(JSON-RPC over stdio)로 한다. 토큰은 codex가 관리하고 앱은 읽지 않으며, API 키로 재사용하지 않는다. codex 설정·로그인은 앱 전용 `<저장 루트>/codex`(CODEX_HOME)에 두어 사용자의 `~/.codex`와 섞지 않는다.
+- codex는 사용자가 설치하지 않는다. npm `@openai/codex`를 버전 고정(0.154.0)으로 앱 의존성에 넣고, 이 기기용 실행 파일(`codex`와 code mode 호스트)을 쓴다. 사용자의 전역 codex가 바뀌어도 app-server 프로토콜이 바뀌지 않는다.
+  - 대가: 설치 크기가 이 기기용 패키지만큼 늘고(darwin-arm64 압축 해제 290 MB), codex 프로세스 하나가 뜬다(대기 중 RSS 약 65 MB, code mode 호스트 약 5 MB).
+  - 검토한 대안: 앱이 직접 OAuth 로그인하고 ChatGPT Codex 백엔드 Responses API를 부르는 방식(jcode). 설치물과 프로세스는 줄지만 Codex CLI 요청을 흉내 내는 비공개 경로이고, gpt-5.6 code mode 도구 호출·스티어링·긴 대화 압축·토큰 갱신을 앱이 다시 만들어야 해서 택하지 않았다.
 - 모델은 로그인 후 계정에서 쓸 수 있는 목록에서 사용자가 고른다. 없는 모델은 자동 대체하지 않고 오류.
 - 모델 호출은 `CodexTextAdapter`(TanStack 어댑터)로 하고, 도구는 `dynamicTools`로 넘겨 `item/tool/call`을 TanStack 도구 실행으로 연결한다. code mode 전용 모델(gpt-5.6 계열)을 위해 `features.code_mode_host`를 끄지 않는다.
 
@@ -21,7 +24,7 @@
 
 - 사용자·assistant·tool call·tool result를 모두 수정 불가 노드로 저장한다. 목적은 근거 추적.
 - 채팅은 그래프 구조를 가진다: 저장 시 구조 edge(`next`, `reply`, `calls`, `returns`, `touches`), 이후 LLM 해석(`llm-interpret`)으로 의미 edge(about, corrects, retracts, related)를 보강한다.
-- 검색은 turbovec 벡터 순위 + SQLite FTS trigram 순위를 RRF(k=60)로 합친 뒤 그래프를 탐색한다. (2026-09-15: Kiwi 형태소 순위 추가, 아래 "Kiwi 형태소 검색")
+- 검색은 turbovec 벡터 순위 + SQLite FTS trigram 순위 + Kiwi 형태소 순위(아래 "Kiwi 형태소 검색")를 RRF(k=60)로 합친 뒤 그래프를 탐색한다.
 - 임베딩은 로컬 모델 `ibm-granite/granite-embedding-97m-multilingual-r2`(fp32, CLS pooling). 모델 파일은 `~/.context-generactive-agent/models`.
 
 ## 기억 보강: llm-interpret (2026-09-14)

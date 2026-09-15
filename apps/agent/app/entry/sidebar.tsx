@@ -35,7 +35,7 @@ import type {
 } from "./api";
 
 const unavailableReasons = {
-  not_installed: "codex CLI를 찾을 수 없어요. codex를 설치한 뒤 다시 시도하세요.",
+  not_installed: "앱에 이 기기용 codex가 들어 있지 않아요. 이 기기에 맞는 앱을 다시 설치하세요.",
   spawn_failed: "codex를 시작하지 못했어요.",
   exited: "codex 프로세스가 종료됐어요. 다시 시도하세요.",
 } satisfies Record<Extract<AuthState, { status: "unavailable" }>["reason"], string>;
