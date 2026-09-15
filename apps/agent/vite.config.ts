@@ -4,7 +4,7 @@ import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
 import { lazyPlugins, defineConfig } from "vite-plus";
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   lint: {
     plugins: ["react", "typescript", "oxc"],
     rules: {
@@ -39,9 +39,23 @@ export default defineConfig({
     tsconfigPaths: true,
   },
   ssr: {
-    // memory-agent ships TypeScript source; compile it into the server bundle.
-    noExternal: ["memory-agent"],
-    // Native addons and their loaders must stay as runtime requires.
-    external: ["turbovec", "@huggingface/transformers", "onnxruntime-node", "@napi-rs/keyring"],
+    // memory-agent ships TypeScript source; the dev server compiles only it. The production server
+    // build carries every JS dependency, so `server/main.ts` and the executable need no node_modules.
+    // Native and embedding packages are not imported statically: memory-agent `require`s them from
+    // its runtime folder.
+    noExternal: command === "build" ? true : ["memory-agent"],
   },
-});
+  // `vp pack` after `react-router build`: the production server (`server/main.ts`) with the server
+  // build and every JS dependency in one file, `dist/context-agent.mjs`. `vp pack --exe` wraps the
+  // same bundle into the executable.
+  pack: {
+    entry: { "context-agent": "server/main.ts" },
+    format: "esm",
+    platform: "node",
+    outDir: "dist",
+    dts: false,
+    deps: { alwaysBundle: [/.*/], onlyBundle: false, onlyImport: [] },
+    // A Node SEA holds one script, so dynamic imports are inlined too.
+    outputOptions: { codeSplitting: false },
+  },
+}));

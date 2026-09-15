@@ -2,18 +2,22 @@
   "name": "agent",
   "private": true,
   "type": "module",
+  "imports": {
+    "#server-build": "./build/server/index.js"
+  },
   "scripts": {
     "build": "react-router build",
     "dev": "react-router dev",
-    "start": "react-router-serve ./build/server/index.js",
+    "bundle": "react-router build && vp pack",
+    "start": "node dist/context-agent.mjs",
     "typecheck": "react-router typegen && tsc"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "catalog:",
     "@base-ui/react": "catalog:",
     "@fontsource-variable/inter": "catalog:",
     "@react-router/fs-routes": "catalog:",
     "@react-router/node": "^8",
-    "@react-router/serve": "^8",
     "@streamdown/cjk": "catalog:",
     "@streamdown/code": "catalog:",
     "@tanstack/ai": "catalog:",
