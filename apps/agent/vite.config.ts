@@ -86,6 +86,8 @@ export default defineConfig(({ command }) => ({
       // around the started executable keeps it from serving.
       package: { command: "node scripts/package.ts", dependsOn: ["build"], cache: false },
       "smoke-package": { command: "node scripts/smoke-package.ts", cache: false },
+      // macOS only, and only on the machine holding the Developer ID identity.
+      notarize: { command: "node scripts/notarize-macos.ts", cache: false },
     },
   },
 }));

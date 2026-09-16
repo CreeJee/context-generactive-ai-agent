@@ -231,6 +231,36 @@ function verifyNativeFiles() {
   if (missing.length > 0) throw new Error(`cannot package:\n- ${missing.join("\n- ")}`);
 }
 
+/**
+ * Signs the executable on macOS.
+ *
+ * `postject` rewrites the Mach-O to add the SEA blob, which breaks whatever signature Node shipped
+ * with, so it is signed here afterwards. The hardened runtime and `entitlements.plist` are applied
+ * either way: notarization requires them, and using them locally too means a signed build behaves
+ * like the one that ships.
+ *
+ * With `CONTEXT_AGENT_SIGN_IDENTITY` (a "Developer ID Application: …" identity in the keychain) the
+ * result can be notarized by `scripts/notarize-macos.ts`. Without it the signature is ad-hoc, which
+ * runs on this machine but shows Gatekeeper's "cannot be verified" warning anywhere else.
+ */
+function signMacos(executable: string) {
+  const identity = process.env.CONTEXT_AGENT_SIGN_IDENTITY;
+  run("codesign", [
+    "--sign",
+    identity ?? "-",
+    "--force",
+    // Notarization requires a secure timestamp; an ad-hoc signature cannot carry one.
+    ...(identity ? ["--timestamp"] : []),
+    "--options",
+    "runtime",
+    "--entitlements",
+    join(app, "entitlements.plist"),
+    executable,
+  ]);
+  run("codesign", ["--verify", "--strict", "--verbose=2", executable]);
+  console.log(identity ? `signed with ${identity}` : "signed ad-hoc (not distributable)");
+}
+
 function listFiles(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const full = join(directory, entry.name);
@@ -279,10 +309,7 @@ const executable = join(
   output,
   process.platform === "win32" ? "context-agent.exe" : "context-agent",
 );
-if (process.platform === "darwin") {
-  const verified = spawnSync("codesign", ["--verify", executable]);
-  if (verified.status !== 0) run("codesign", ["--sign", "-", "--force", executable]);
-}
+if (process.platform === "darwin") signMacos(executable);
 const digest = createHash("sha256").update(readFileSync(executable)).digest("hex");
 writeFileSync(`${executable}.sha256`, `${digest}  ${basename(executable)}\n`);
 console.log(`${relative(app, executable)}: ${(statSync(executable).size / 1e6).toFixed(1)} MB`);

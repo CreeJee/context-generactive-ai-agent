@@ -307,7 +307,12 @@
   - 받은 압축(codex, Kiwi 모델)은 윈도우에서 `System32\tar.exe`(bsdtar)로 푼다. PATH 앞에 Git for Windows·MSYS의 GNU tar가 있으면 `C:\…`를 원격 `host:path`로 읽어 실패하기 때문이다. 풀린 폴더를 옮길 때는 백신이 방금 쓴 실행 파일을 검사하느라 잡고 있을 수 있어, `EPERM`·`EACCES`·`EBUSY`면 최대 약 10초 다시 시도한다.
 - 실행 파일은 `NODE_OPTIONS`를 무시한다(SEA `execArgvExtension: "none"`). 개발 도구나 사용자의 Node 플래그가 배포된 앱을 바꾸거나 깨뜨리지 않게 하기 위해서다.
 - `vp run package`·`vp run smoke-package`는 캐시하지 않는 vite task다. Vite Task의 파일 추적 아래에서는 띄운 실행 파일이 응답하지 않아서, 스모크가 캐시 모드에서 실패했다.
-- 서명: 로컬 ad-hoc 서명만 한다(Apple Silicon은 서명 없는 바이너리를 실행하지 않고, SEA 빌드가 붙여 준다). Developer ID 서명·공증, `.app`/dmg, 자동 업데이트는 미룬다.
+- **서명·공증은 로컬에서 한다**(2026-09-16). CI는 지금처럼 ad-hoc 서명한 실행 파일만 만들고, Developer ID 서명과 공증은 인증서를 가진 사람의 기기에서 `vp run notarize`로 한다. 인증서와 Apple 자격 증명을 GitHub secrets에 두면 그 저장소에 쓰기 권한이 있는 누구나, 어떤 워크플로 변경으로든 우리 이름으로 서명할 수 있게 된다. 릴리스가 잦지 않아서 수동 한 단계로 충분하다.
+  - 서명은 항상 `vp pack` 뒤에 한다. `postject`가 SEA 블롭을 넣으며 Mach-O를 고쳐서 Node가 달고 온 서명이 깨진다.
+  - 공증 조건이라 **하드닝 런타임**을 켜고, 인증서가 없을 때(ad-hoc)도 같은 설정으로 서명해 배포본과 같게 동작시킨다. `apps/agent/entitlements.plist`의 예외는 없으면 실행이 안 되는 것들뿐이다: V8 JIT 두 개, codex를 자식 프로세스로 띄우기 위한 dyld 환경 변수, 그리고 라이브러리 검증 해제.
+  - **라이브러리 검증 해제가 핵심이다.** 네이티브 애드온(turbovec·onnxruntime·sharp·keyring)은 첫 실행 때 저장 루트에 풀려서 로드되고, 우리 Team ID로 서명돼 있지 않다. ad-hoc 서명에서는 이 검증이 실제로 걸리지 않으므로 Developer ID로 처음 서명한 빌드는 스모크 테스트를 다시 돌려 확인한다.
+  - 배포물은 `.dmg`다. 맨 Mach-O 실행 파일에는 공증 티켓을 붙일 수 없고, 티켓이 없으면 인터넷이 없는 Mac에서 여전히 경고가 뜬다. `.tar.gz`는 CI가 만드는 서명 없는 빌드로 남는다.
+  - 미룬 것: `.app` 번들, 자동 업데이트, Windows 코드 서명(EV 인증서).
 - 검증은 `vp run smoke-package`로 한다. 실행 파일을 저장소 밖에서 임시 저장 루트로 띄워 첫 실행 자원 풀기, Host·교차 사이트 차단, codex 받기·검증·실행, 프로젝트·세션, keyring, acp, 종료 정리, 두 번째 실행 재사용을 확인한다.
   - 측정: 첫 실행 3초, codex 받기 11초, 두 번째 실행 0.5초.
 
