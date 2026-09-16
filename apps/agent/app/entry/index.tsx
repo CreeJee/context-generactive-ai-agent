@@ -163,6 +163,21 @@ export function App() {
     }
   };
 
+  // Imports register projects and add conversations in the background; show them once settings close.
+  const changeSettingsOpen = (open: boolean) => {
+    setSettingsOpen(open);
+    if (open) return;
+    void api.projects().then((list) => {
+      setProjects(list);
+      setProjectId((current) => current ?? list[0]?.id ?? null);
+    });
+    if (projectId)
+      void api.sessions(projectId).then((list) => {
+        setSessions(list);
+        setSessionId((current) => current ?? list[0]?.id ?? null);
+      });
+  };
+
   const replaceProject = (updated: Project) =>
     setProjects((list) => list.map((project) => (project.id === updated.id ? updated : project)));
 
@@ -254,7 +269,7 @@ export function App() {
           <SettingsDialog
             project={projects.find((project) => project.id === projectId) ?? null}
             open={settingsOpen}
-            onOpenChange={setSettingsOpen}
+            onOpenChange={changeSettingsOpen}
           />
         </div>
         <Separator />
