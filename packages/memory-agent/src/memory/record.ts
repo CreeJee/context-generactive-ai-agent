@@ -2,12 +2,12 @@ import type {
   AfterToolCallInfo,
   ChatMiddleware,
   ErrorInfo,
-  ToolCall,
   ToolPhaseCompleteInfo,
 } from "@tanstack/ai";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import { PermissionReviews } from "../permissions/reviews.ts";
 import { Nodes, type NodeDetail } from "./nodes.ts";
+import { refsInArguments } from "./refs.ts";
 
 export interface RunBinding {
   readonly projectId: string;
@@ -17,28 +17,6 @@ export interface RunBinding {
   readonly userNodeId: string;
   /** Set when an external ACP agent answers instead of the app's model. */
   readonly externalAgent?: string;
-}
-
-/** Tool argument fields treated as references to a file or URL. */
-const RefArguments = Schema.parseJson(
-  Schema.Struct({
-    path: Schema.optional(Schema.String),
-    file: Schema.optional(Schema.String),
-    filePath: Schema.optional(Schema.String),
-    url: Schema.optional(Schema.String),
-    uri: Schema.optional(Schema.String),
-  }),
-);
-const decodeRefArguments = Schema.decodeUnknownOption(RefArguments);
-
-function refsOf(call: ToolCall): string[] {
-  return Option.match(decodeRefArguments(call.function.arguments), {
-    onNone: () => [],
-    onSome: (args) =>
-      [args.path, args.file, args.filePath, args.url, args.uri].filter(
-        (ref): ref is string => ref !== undefined && ref.length > 0,
-      ),
-  });
 }
 
 interface ToolOutcome {
@@ -165,7 +143,7 @@ const make = Effect.gen(function* () {
                 text: `${call.function.name} ${call.function.arguments}`,
                 detail: { toolName: call.function.name, toolCallId: call.id },
                 links: assistant ? [{ kind: "calls", nodeId: assistant.id }] : [],
-                refs: refsOf(call),
+                refs: refsInArguments(call.function.arguments),
               });
             const result = info.results.find((entry) => entry.toolCallId === call.id);
             if (!result) continue; // awaiting approval or client execution
