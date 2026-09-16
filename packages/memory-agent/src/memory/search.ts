@@ -1,6 +1,7 @@
 import { Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import { Embedder } from "./embedding/embedder.ts";
+import { embeddedKindFilter } from "./embedding/indexer.ts";
 import { VectorIndex } from "./embedding/vector-index.ts";
 import { MorphAnalysisFailed, MorphAnalyzer } from "./morph/analyzer.ts";
 import { Graph, type Hop } from "./graph.ts";
@@ -44,7 +45,10 @@ export interface FindResult {
   readonly complete: boolean;
   /** Search paths that failed and were skipped, e.g. vector search without the model. */
   readonly degraded: readonly ("vector" | "morph")[];
-  /** Nodes not embedded yet; they are only reachable by text match or graph edges. */
+  /**
+   * Statements not embedded yet; they are only reachable by text match or graph edges, as tool calls
+   * and results always are.
+   */
   readonly unindexed: number;
   /**
    * Statements not interpreted yet (or whose interpretation failed): they have no topics and no
@@ -227,7 +231,7 @@ const make = (withText: boolean) =>
             .prepare(`
             SELECT count(*) AS count FROM nodes n
             LEFT JOIN node_vectors v ON v.node_seq = n.seq AND v.embedder = ?
-            WHERE v.node_seq IS NULL AND length(n.text) > 0`)
+            WHERE v.node_seq IS NULL AND length(n.text) > 0 AND ${embeddedKindFilter}`)
             .get(embedder.identity),
         ).count;
 

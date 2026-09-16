@@ -1,8 +1,19 @@
 import { Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../../db/database.ts";
 import { MorphAnalyzer } from "../morph/analyzer.ts";
+import type { NodeKind } from "../nodes.ts";
 import { Embedder } from "./embedder.ts";
 import { VectorIndex } from "./vector-index.ts";
+
+/**
+ * Kinds whose text is embedded: what people and the model said, and topics. Tool calls and results
+ * are found by text match and reached from the statements around them; embedding them took most of
+ * the indexing time and crowded statements out of the vector ranking (docs/decisions.md).
+ */
+export const embeddedKinds = ["user", "assistant", "topic"] as const satisfies readonly NodeKind[];
+
+/** `n.kind` limited to {@link embeddedKinds}, for queries over nodes aliased `n`. */
+export const embeddedKindFilter = `n.kind IN (${embeddedKinds.map((kind) => `'${kind}'`).join(", ")})`;
 
 const Pending = Schema.Struct({ seq: Schema.Number, text: Schema.String });
 const decodePending = Schema.decodeUnknownSync(Pending);
@@ -20,13 +31,13 @@ const make = Effect.gen(function* () {
   const selectPending = sqlite.prepare(`
     SELECT n.seq, n.text FROM nodes n
     LEFT JOIN node_vectors v ON v.node_seq = n.seq AND v.embedder = ?
-    WHERE v.node_seq IS NULL AND length(n.text) > 0
+    WHERE v.node_seq IS NULL AND length(n.text) > 0 AND ${embeddedKindFilter}
     ORDER BY n.created_at DESC, n.seq DESC LIMIT ?`);
   const markIndexed = sqlite.prepare("INSERT INTO node_vectors VALUES (?, ?)");
   const countPending = sqlite.prepare(`
     SELECT count(*) AS count FROM nodes n
     LEFT JOIN node_vectors v ON v.node_seq = n.seq AND v.embedder = ?
-    WHERE v.node_seq IS NULL AND length(n.text) > 0`);
+    WHERE v.node_seq IS NULL AND length(n.text) > 0 AND ${embeddedKindFilter}`);
   const selectUnanalyzed = sqlite.prepare(`
     SELECT n.seq, n.text FROM nodes n
     LEFT JOIN node_morphs m ON m.node_seq = n.seq AND m.analyzer = ?
@@ -94,7 +105,10 @@ const make = Effect.gen(function* () {
     ).pipe(Effect.map((state) => state.total));
 
   return {
-    /** Nodes this embedder has not embedded yet; vectors of other embedders do not count. */
+    /**
+     * Statements this embedder has not embedded yet; vectors of other embedders do not count, and
+     * tool calls and results are never embedded.
+     */
     pending: Effect.sync(() => decodeCount(countPending.get(embedder.identity)).count),
     indexBatch,
     analyzeBatch,

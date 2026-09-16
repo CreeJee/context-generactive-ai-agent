@@ -136,7 +136,8 @@ describe("MemorySearch.find", () => {
       ),
     );
     expect(result.degraded).toEqual(["vector"]);
-    expect(result.unindexed).toBe(4);
+    // The two statements; tool calls and results are never embedded.
+    expect(result.unindexed).toBe(2);
     expect(result.matches[0]).toMatchObject({ id: earlier.decision.id, foundBy: "text" });
   });
 

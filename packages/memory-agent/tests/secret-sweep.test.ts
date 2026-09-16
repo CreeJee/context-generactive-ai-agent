@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
-import { Indexer } from "../src/memory/embedding/indexer.ts";
+import { embeddedKindFilter, Indexer } from "../src/memory/embedding/indexer.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { SecretSweep } from "../src/secrets/sweep.ts";
 import { testRuntime } from "./support/runtime.ts";
@@ -21,11 +21,12 @@ describe("SecretSweep", () => {
         const nodes = yield* Nodes;
         const { sqlite } = yield* Database;
         const indexer = yield* Indexer;
-        // Written the way it was before redaction existed: straight in.
+        // Written the way it was before redaction existed: straight in. A statement, so it has a
+        // vector to drop and make again.
         const leaked = nodes.append({
           projectId: project.id,
           sessionId: session.id,
-          kind: "tool_result",
+          kind: "user",
           text: `GITHUB_TOKEN=${githubToken}\ndeploy ok`,
         });
         const clean = nodes.append({
@@ -64,7 +65,7 @@ describe("SecretSweep", () => {
           redactedHits: trigram("redacted:github"),
           terms: termHits(),
           pendingVectors: count(
-            "SELECT count(*) AS count FROM nodes n LEFT JOIN node_vectors v ON v.node_seq = n.seq WHERE v.node_seq IS NULL AND length(n.text) > 0",
+            `SELECT count(*) AS count FROM nodes n LEFT JOIN node_vectors v ON v.node_seq = n.seq WHERE v.node_seq IS NULL AND length(n.text) > 0 AND ${embeddedKindFilter}`,
           ),
         };
       }),

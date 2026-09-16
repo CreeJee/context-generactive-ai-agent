@@ -5,7 +5,7 @@ import { AgentChat } from "../src/agent/chat.ts";
 import { CodexAppServer } from "../src/codex/app-server.ts";
 import { CodexModels } from "../src/codex/models.ts";
 import { Database } from "../src/db/database.ts";
-import { Indexer } from "../src/memory/embedding/indexer.ts";
+import { embeddedKindFilter, Indexer } from "../src/memory/embedding/indexer.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
 import { testRuntime } from "./support/runtime.ts";
@@ -86,7 +86,7 @@ describe("AgentChat.handle", () => {
       Schema.decodeUnknownSync(Count)(
         db.sqlite
           .prepare(
-            "SELECT count(*) AS count FROM nodes n LEFT JOIN node_vectors v ON v.node_seq = n.seq WHERE v.node_seq IS NULL AND length(n.text) > 0",
+            `SELECT count(*) AS count FROM nodes n LEFT JOIN node_vectors v ON v.node_seq = n.seq WHERE v.node_seq IS NULL AND length(n.text) > 0 AND ${embeddedKindFilter}`,
           )
           .get(),
       ).count;

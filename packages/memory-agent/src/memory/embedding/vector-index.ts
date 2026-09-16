@@ -38,6 +38,14 @@ export interface VectorHit {
 const quantizationBits = 4;
 
 const Count = Schema.Struct({ count: Schema.Number });
+const decodeSeq = Schema.decodeUnknownSync(Schema.Struct({ seq: Schema.Number }));
+
+/** Writes a new file then swaps it in, so a crash never leaves a half-written index. */
+function write(index: { save(path: string): void }, file: string) {
+  const temporary = `${file}.tmp`;
+  index.save(temporary);
+  renameSync(temporary, file);
+}
 
 const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
@@ -64,9 +72,23 @@ const make = Effect.gen(function* () {
               .get(embedder.identity),
           ).count;
           const saved = existsSync(file) ? VectorIndex.load(file) : null;
-          if (saved && saved.size() === indexed && saved.dimensions() === embedder.dimensions)
-            return { index: saved, lease };
-          // Missing or out of step with the database (e.g. crash between save and commit): rebuild.
+          if (saved && saved.dimensions() === embedder.dimensions) {
+            // Ahead of the database: vectors whose record never landed (a crash between save and
+            // commit) or was dropped on purpose (tool nodes, since only statements are embedded).
+            // Dropping those is cheaper than embedding everything again.
+            if (saved.size() > indexed) {
+              const unrecorded = sqlite
+                .prepare(`
+                  SELECT n.seq FROM nodes n
+                  LEFT JOIN node_vectors v ON v.node_seq = n.seq AND v.embedder = ?
+                  WHERE v.node_seq IS NULL`)
+                .all(embedder.identity);
+              for (const row of unrecorded) saved.remove(String(decodeSeq(row).seq));
+              if (saved.size() === indexed) write(saved, file);
+            }
+            if (saved.size() === indexed) return { index: saved, lease };
+          }
+          // Missing, behind the database or otherwise out of step with it: rebuild.
           sqlite.prepare("DELETE FROM node_vectors WHERE embedder = ?").run(embedder.identity);
           return { index: new VectorIndex(embedder.dimensions, quantizationBits), lease };
         } catch (error) {
@@ -116,14 +138,9 @@ const make = Effect.gen(function* () {
         catch: (cause) => new VectorIndexError({ operation: "search", cause }),
       }),
 
-    /** Writes a new file then swaps it in, so a crash never leaves a half-written index. */
     save: () =>
       Effect.try({
-        try: () => {
-          const temporary = `${file}.tmp`;
-          index.save(temporary);
-          renameSync(temporary, file);
-        },
+        try: () => write(index, file),
         catch: (cause) => new VectorIndexError({ operation: "save", cause }),
       }),
   };

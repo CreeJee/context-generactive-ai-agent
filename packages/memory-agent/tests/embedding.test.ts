@@ -6,6 +6,7 @@ import { describe, expect, test } from "vite-plus/test";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { GlobalConfig, type Settings } from "../src/config/global-config.ts";
 import { Database } from "../src/db/database.ts";
+import { migrations } from "../src/db/migrations.ts";
 import {
   Embedder,
   embeddingModeFor,
@@ -87,6 +88,73 @@ describe("Indexer + VectorIndex", () => {
     expect(
       await restarted.runPromise(Effect.flatMap(Indexer, (indexer) => indexer.indexAll())),
     ).toBe(3);
+  });
+
+  test("embeds statements only; tool calls and results are left to text search", async () => {
+    const { runtime, project, session } = await testRuntime();
+    const state = await runtime.runPromise(
+      Effect.gen(function* () {
+        const nodes = yield* Nodes;
+        for (const kind of ["user", "assistant", "tool_call", "tool_result"] as const)
+          nodes.append({
+            projectId: project.id,
+            sessionId: session.id,
+            kind,
+            text: `${kind} 원문`,
+          });
+        const indexer = yield* Indexer;
+        const indexed = yield* indexer.indexAll();
+        return { indexed, pending: yield* indexer.pending, size: (yield* VectorIndex).size() };
+      }),
+    );
+    expect(state).toEqual({ indexed: 2, pending: 0, size: 2 });
+  });
+
+  test("an index an older build filled with tool nodes keeps only the statements", async () => {
+    const { runtime, project, session, reopen } = await testRuntime();
+    const seqs = await runtime.runPromise(
+      Effect.gen(function* () {
+        const nodes = yield* Nodes;
+        const statement = nodes.append({
+          projectId: project.id,
+          sessionId: session.id,
+          kind: "user",
+          text: "저장소는 SQLite로 결정했다",
+        });
+        const call = nodes.append({
+          projectId: project.id,
+          sessionId: session.id,
+          kind: "tool_call",
+          text: 'Read {"file_path":"src/db.ts"}',
+        });
+        // What an older build did: embed the tool call too.
+        const embedder = yield* Embedder;
+        const vectors = yield* VectorIndex;
+        const [first, second] = yield* embedder.embed([statement.text, call.text]);
+        yield* vectors.add([statement.seq, call.seq], [first!, second!]);
+        yield* vectors.save();
+        const { sqlite } = yield* Database;
+        const mark = sqlite.prepare("INSERT INTO node_vectors VALUES (?, ?)");
+        mark.run(statement.seq, embedder.identity);
+        mark.run(call.seq, embedder.identity);
+        // The migration that stopped embedding tool nodes, as an upgrade runs it.
+        sqlite.exec(migrations.at(-1)!);
+        return { statement: statement.seq };
+      }),
+    );
+
+    const restarted = await reopen();
+    const after = await restarted.runPromise(
+      Effect.gen(function* () {
+        const indexer = yield* Indexer;
+        // The tool call's vector is dropped on open; the statement keeps its own.
+        const pending = yield* indexer.pending;
+        const size = (yield* VectorIndex).size();
+        const nearest = yield* (yield* VectorIndex).search(fakeVector("SQLite 결정"), 1);
+        return { pending, size, nearest: nearest[0]?.seq };
+      }),
+    );
+    expect(after).toEqual({ pending: 0, size: 1, nearest: seqs.statement });
   });
 
   test("a second app server on the same storage is told why it cannot open the index", async () => {

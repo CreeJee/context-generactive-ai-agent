@@ -356,4 +356,11 @@ export const migrations: readonly string[] = [
   -- tried again on every pass: its size is stored as -1, so it never looks unchanged.
   ALTER TABLE import_cursors ADD COLUMN failure TEXT;
   `,
+  `
+  -- Only statements are embedded from now on (user, assistant, topic: embeddedKinds in the indexer).
+  -- Tool calls and results are found by text match and reached from the statements around them.
+  -- Their vector records go; opening the vector index then drops their vectors too.
+  DELETE FROM node_vectors
+  WHERE node_seq IN (SELECT seq FROM nodes WHERE kind NOT IN ('user', 'assistant', 'topic'));
+  `,
 ];

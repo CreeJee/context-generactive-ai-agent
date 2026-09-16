@@ -74,7 +74,7 @@ flowchart TB
 
 ### 대화 한 턴
 
-사용자 발언과 모델의 답, 도구 호출과 결과는 모두 원문 그대로 노드가 되고, 구조 edge(`next`, `reply`, `calls`, `returns`, `touches`)로 이어집니다. 검색·인덱싱·해석은 답변을 막지 않도록 뒤에서 돕니다.
+사용자 발언과 모델의 답, 도구 호출과 결과는 모두 원문 그대로 노드가 되고, 구조 edge(`next`, `reply`, `calls`, `returns`, `touches`)로 이어집니다. 벡터 색인에는 발언만 들어가고, 도구 노드는 글자 검색과 이 edge로 찾습니다. 검색·인덱싱·해석은 답변을 막지 않도록 뒤에서 돕니다.
 
 ```mermaid
 sequenceDiagram
@@ -113,7 +113,7 @@ flowchart LR
   Other["Claude Code · Codex CLI 기록"] -->|import-worker<br/>비밀 가리기 · 200개씩 쓰기| Nodes
   Old["예전에 저장된 텍스트"] -->|SecretSweep| Nodes
   Nodes[("nodes · edges")] -->|트리거| FTS[("FTS trigram")]
-  Nodes -->|Indexer · 최근 대화부터| Embed["embed-worker"] --> Vec[("turbovec")]
+  Nodes -->|Indexer · 발언만, 최근 대화부터| Embed["embed-worker"] --> Vec[("turbovec")]
   Nodes -->|Indexer| Kiwi["kiwi-worker"] --> Morph[("형태소 BM25")]
   Nodes -->|Interpreter| Topics["topic 노드<br/>corrects · retracts · related"]
 ```
@@ -122,7 +122,7 @@ flowchart LR
 
 데모용 프로젝트(`shop-api`)와 Claude Code 대화 두 개로 녹화했습니다.
 
-**다른 에이전트의 대화 가져오기.** 설정의 "가져오기"를 켜면 Claude Code 기록을 읽어 노드로 옮기고, 대화가 있던 폴더를 프로젝트로 등록합니다. 옮긴 노드는 뒤에서 임베딩됩니다("기억" 탭: 메모리 16GB 이상이고 WebGPU가 되면 GPU에서 돕니다). 가져온 대화는 도구 호출과 결과까지 그대로 열립니다.
+**다른 에이전트의 대화 가져오기.** 설정의 "가져오기"를 켜면 Claude Code 기록을 읽어 노드로 옮기고, 대화가 있던 폴더를 프로젝트로 등록합니다. 옮긴 발언은 뒤에서 임베딩됩니다("기억" 탭: 메모리 16GB 이상이고 WebGPU가 되면 GPU에서 돕니다). 도구 호출과 결과는 임베딩하지 않고 글자·형태소 검색과 발언에서 이어진 edge로 찾습니다. 가져온 대화는 도구 호출과 결과까지 그대로 열립니다.
 
 ![가져오기 데모](docs/media/demo-import.gif)
 
