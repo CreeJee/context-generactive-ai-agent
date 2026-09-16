@@ -32,6 +32,7 @@ export default defineConfig({
         name: "anti-slop-effect",
         specifier: "./tools/oxlint/anti-slop/effect/index.ts",
       },
+      { name: "shadcn", specifier: "@shadcn/lint" },
     ],
     rules: {
       "vite-plus/prefer-vite-plus-imports": "error",
