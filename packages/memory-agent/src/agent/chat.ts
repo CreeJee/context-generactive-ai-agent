@@ -27,6 +27,7 @@ import { Sessions } from "../sessions/sessions.ts";
 import { ApprovedTools } from "../tools/approved.ts";
 import { gatedToolNames, permissionReviewInterrupt } from "../tools/definitions.ts";
 import { FileTools } from "../tools/files.ts";
+import { DrawingPreviews } from "../attachments/previews.ts";
 import { KagiTools, kagiInstructions } from "../tools/kagi.ts";
 import { SkillTools } from "../tools/skills.ts";
 import { DelegateTools } from "../tools/delegate.ts";
@@ -224,6 +225,7 @@ const make = Effect.gen(function* () {
   const recorder = yield* Recorder;
   const memoryTools = yield* MemoryTools;
   const fileTools = yield* FileTools;
+  const drawingPreviews = yield* DrawingPreviews;
   const outsideTools = yield* OutsideTools;
   const approvedTools = yield* ApprovedTools;
   const kagiTools = yield* KagiTools;
@@ -503,7 +505,8 @@ const make = Effect.gen(function* () {
         // Tools come from several sources (built-in, web search, MCP), so the list is kept untyped.
         const sharedTools: AnyServerTool[] = [
           ...memoryTools.forProject(projectId),
-          ...fileTools.forProject(project),
+          // An SVG the model writes comes back with a picture of it, for the page to show.
+          ...drawingPreviews.withPreviews(project, fileTools.forProject(project)),
           ...outsideTools.forProject(project),
           ...webTools,
           ...mcpTools,

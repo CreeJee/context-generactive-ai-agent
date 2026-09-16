@@ -40,6 +40,37 @@ function ImageDialog({ image, onClose }: { image: MessageImage | null; onClose: 
   );
 }
 
+/**
+ * A picture of a drawing the model wrote, under its tool call. It is the snapshot taken when the
+ * file was written, so it still shows what was drawn after the file changes. Clicking opens it full
+ * size.
+ */
+export function DrawingPicture({ url, path }: { url: string; path: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="block w-fit max-w-full overflow-hidden rounded-md border bg-white"
+        title={`${path} 크게 보기`}
+      >
+        <img src={url} alt={`그린 그림: ${path}`} className="max-h-80 max-w-full object-contain" />
+      </button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-[min(90vw,64rem)] sm:max-w-[min(90vw,64rem)]">
+          <DialogTitle className="font-mono text-sm">{path}</DialogTitle>
+          <img
+            src={url}
+            alt={`그린 그림: ${path}`}
+            className="max-h-[75vh] w-full rounded bg-white object-contain"
+          />
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 /** Text of a user message split into plain runs and `#N` references to its images. */
 type TextRun =
   | { readonly kind: "text"; readonly text: string }

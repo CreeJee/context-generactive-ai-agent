@@ -3,8 +3,8 @@ import { Option, Schema } from "effect";
 import { ChevronRightIcon, WrenchIcon } from "lucide-react";
 import { Badge } from "~/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
-import { attachmentIdOf } from "memory-agent/definitions";
-import { UserMessageBody } from "./images";
+import { attachmentIdOf, attachmentUrl } from "memory-agent/definitions";
+import { DrawingPicture, UserMessageBody } from "./images";
 import { Markdown } from "./markdown";
 
 type Part = UIMessage["parts"][number];
@@ -92,6 +92,25 @@ const RefusedResult = Schema.Union(
 );
 const decodeRefusal = Schema.decodeUnknownOption(RefusedResult);
 
+/** A write_file / edit_file result that carries a picture of the SVG it wrote. */
+const decodeDrawing = Schema.decodeUnknownOption(
+  Schema.parseJson(
+    Schema.Struct({
+      path: Schema.String,
+      preview: Schema.Struct({ attachmentId: Schema.String }),
+    }),
+  ),
+);
+
+/** The picture to show for a result, when it is one of this app's stored images. */
+function drawingOf(result: ToolResult | undefined) {
+  if (!result) return null;
+  const drawing = Option.getOrUndefined(decodeDrawing(resultText(result)));
+  if (!drawing) return null;
+  const url = attachmentUrl(drawing.preview.attachmentId);
+  return attachmentIdOf(url) ? { url, path: drawing.path } : null;
+}
+
 function callStatus(call: ToolCall, result: ToolResult | undefined, awaitingApproval: boolean) {
   if (!result)
     return awaitingApproval || call.state === "approval-requested"
@@ -122,6 +141,25 @@ function StatusBadge({ status }: { status: CallStatus }) {
 }
 
 function ToolCallView({
+  call,
+  result,
+  awaitingApproval,
+}: {
+  call: ToolCall;
+  result: ToolResult | undefined;
+  awaitingApproval: boolean;
+}) {
+  const drawing = drawingOf(result);
+  return (
+    <div className="flex flex-col gap-1.5">
+      <ToolCallCard call={call} result={result} awaitingApproval={awaitingApproval} />
+      {/* Outside the collapsed card: the picture is the point of the call. */}
+      {drawing && <DrawingPicture url={drawing.url} path={drawing.path} />}
+    </div>
+  );
+}
+
+function ToolCallCard({
   call,
   result,
   awaitingApproval,

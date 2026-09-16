@@ -72,6 +72,9 @@ export const isAttachmentId = (id: string) => /^[0-9a-f]{64}$/.test(id);
  */
 export const modelImageEdge = 2048;
 
+/** Largest SVG turned into a picture; a figure is a few KB, anything near this is not a drawing. */
+export const maxDrawingBytes = 2 * 1024 * 1024;
+
 /** A stored image as it goes to the model: a smaller WebP copy, or the upload itself. */
 export interface ModelImage {
   readonly path: string;
@@ -150,46 +153,78 @@ const make = Effect.gen(function* () {
   /** Per process, so an image whose copy is not smaller is not encoded again on every run. */
   const forModel = new Map<string, Promise<ModelImage>>();
 
+  /**
+   * Stores an image by content hash (storing the same image twice keeps one copy). The type comes
+   * from the bytes, never from whoever supplied them.
+   */
+  const save = (bytes: Uint8Array) =>
+    Effect.gen(function* () {
+      if (bytes.length === 0) return yield* new AttachmentRejected({ reason: "empty" });
+      if (bytes.length > maxAttachmentBytes)
+        return yield* new AttachmentRejected({ reason: "too_large" });
+      const mimeType = sniffImageType(bytes);
+      if (!mimeType) return yield* new AttachmentRejected({ reason: "unsupported_type" });
+
+      const attachment: Attachment = {
+        id: createHash("sha256").update(bytes).digest("hex"),
+        mimeType,
+        bytes: bytes.length,
+        createdAt: new Date().toISOString(),
+      };
+      const path = fileOf(attachment);
+      yield* Effect.promise(async () => {
+        const existing = await stat(path).catch(() => undefined);
+        if (existing?.size === bytes.length) return;
+        const temporary = `${path}.${randomUUID()}.tmp`;
+        try {
+          await writeFile(temporary, bytes, { mode: 0o600, flag: "wx" });
+          await rename(temporary, path);
+        } finally {
+          await rm(temporary, { force: true });
+        }
+      });
+      insertAttachment.run(
+        attachment.id,
+        attachment.mimeType,
+        attachment.bytes,
+        attachment.createdAt,
+      );
+      return get(attachment.id) ?? attachment;
+    });
+
+  /**
+   * Renders an SVG to PNG and stores the picture: what a drawing looked like when it was written.
+   *
+   * The SVG is handed to the renderer as bytes, never as a path, and that is what keeps this safe.
+   * With no base location, librsvg refuses every external reference — `file://` URLs, absolute and
+   * relative paths, remote URLs — so an SVG that points at a local file cannot copy it into the
+   * picture. Given a path, it would resolve references next to it. Scripts in an SVG never run
+   * while rasterising, and the SVG itself is never served from this app's origin.
+   */
+  const saveDrawing = (svg: Uint8Array) =>
+    Effect.gen(function* () {
+      if (svg.length === 0) return yield* new AttachmentRejected({ reason: "empty" });
+      if (svg.length > maxDrawingBytes)
+        return yield* new AttachmentRejected({ reason: "too_large" });
+      const png = yield* Effect.tryPromise({
+        try: () =>
+          requireRuntime("sharp")(Buffer.from(svg), { density: 144 })
+            .resize({
+              width: modelImageEdge,
+              height: modelImageEdge,
+              fit: "inside",
+              withoutEnlargement: true,
+            })
+            .png()
+            .toBuffer(),
+        catch: () => new AttachmentRejected({ reason: "unsupported_type" }),
+      });
+      return yield* save(png);
+    });
+
   return {
-    /**
-     * Stores an uploaded image by content hash (uploading the same image twice keeps one copy).
-     * The type comes from the bytes, never from the client.
-     */
-    save: (bytes: Uint8Array) =>
-      Effect.gen(function* () {
-        if (bytes.length === 0) return yield* new AttachmentRejected({ reason: "empty" });
-        if (bytes.length > maxAttachmentBytes)
-          return yield* new AttachmentRejected({ reason: "too_large" });
-        const mimeType = sniffImageType(bytes);
-        if (!mimeType) return yield* new AttachmentRejected({ reason: "unsupported_type" });
-
-        const attachment: Attachment = {
-          id: createHash("sha256").update(bytes).digest("hex"),
-          mimeType,
-          bytes: bytes.length,
-          createdAt: new Date().toISOString(),
-        };
-        const path = fileOf(attachment);
-        yield* Effect.promise(async () => {
-          const existing = await stat(path).catch(() => undefined);
-          if (existing?.size === bytes.length) return;
-          const temporary = `${path}.${randomUUID()}.tmp`;
-          try {
-            await writeFile(temporary, bytes, { mode: 0o600, flag: "wx" });
-            await rename(temporary, path);
-          } finally {
-            await rm(temporary, { force: true });
-          }
-        });
-        insertAttachment.run(
-          attachment.id,
-          attachment.mimeType,
-          attachment.bytes,
-          attachment.createdAt,
-        );
-        return get(attachment.id) ?? attachment;
-      }),
-
+    save,
+    saveDrawing,
     get,
 
     /** Absolute path of a stored image as uploaded. */

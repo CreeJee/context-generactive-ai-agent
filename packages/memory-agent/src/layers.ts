@@ -4,6 +4,7 @@ import { AgentChat } from "./agent/chat.ts";
 import { ChatState } from "./chat-state/chat-state.ts";
 import { RelayedApprovals } from "./approvals/relayed.ts";
 import { Attachments } from "./attachments/attachments.ts";
+import { DrawingPreviews } from "./attachments/previews.ts";
 import { CodexAccount } from "./codex/account.ts";
 import { CodexAppServer } from "./codex/app-server.ts";
 import { CodexChat } from "./codex/chat.ts";
@@ -98,6 +99,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
   const memory = Layer.mergeAll(
     Sessions.layer,
     Recorder.layer,
+    DrawingPreviews.layer,
     Graph.layer,
     VectorIndex.layer,
     CodexAccount.layer,
