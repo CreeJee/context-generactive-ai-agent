@@ -34,6 +34,7 @@
   "scripts": {
     "dev": "vp pack --watch",
     "check": "vp check",
+    "typecheck": "tsc",
     "eval:recall": "node --no-warnings eval/recall.ts",
     "prepublishOnly": "vp run build"
   },
