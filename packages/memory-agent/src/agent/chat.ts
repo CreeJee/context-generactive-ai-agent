@@ -194,8 +194,12 @@ export const QueueRequest = Schema.Struct({
 });
 export type QueueRequest = typeof QueueRequest.Type;
 
-const json = (status: number, body: Readonly<Record<string, string | null>>) =>
-  Response.json(body, { status });
+/**
+ * Every answer goes through here. Without the DOM library, `Response.json` is typed with undici's
+ * own `Response`, which this package cannot name; the global `Response` keeps the service's
+ * inferred type portable.
+ */
+const json = <T>(status: number, body: T): Response => Response.json(body, { status });
 
 /** How long a cancel request waits for the run to actually stop before answering. */
 const cancelWaitMs = 5_000;
@@ -210,48 +214,6 @@ const afterRunBudget = 200;
 /** A reconnect names where to continue: `Last-Event-ID`, or `?offset=` for a join from the start. */
 const isStreamJoin = (request: Request) =>
   request.headers.has("Last-Event-ID") || new URL(request.url).searchParams.has("offset");
-
-/**
- * Written out rather than inferred: `Response.json` returns undici's own `Response` type, which
- * this package cannot name, so an inferred service type would not be portable.
- */
-interface AgentChatApi {
-  readonly handle: (request: Request, sessionId: string) => Effect.Effect<Response>;
-  readonly hydrate: (request: Request, sessionId: string) => Effect.Effect<Response>;
-  readonly cancel: (sessionId: string, holder: string | null) => Effect.Effect<Response>;
-  readonly status: (sessionId: string, holder: string | null) => Effect.Effect<Response>;
-  readonly lease: (
-    sessionId: string,
-    holder: string,
-    action: "claim" | "release",
-  ) => Effect.Effect<Response>;
-  readonly archive: (
-    sessionId: string,
-    holder: string | null,
-    archived: boolean,
-  ) => Effect.Effect<Response>;
-  readonly queued: (sessionId: string) => Effect.Effect<Response>;
-  readonly enqueue: (
-    sessionId: string,
-    holder: string | null,
-    request: QueueRequest,
-  ) => Effect.Effect<Response>;
-  readonly subagents: (sessionId: string) => Effect.Effect<Response>;
-  readonly subagentTranscript: (sessionId: string, subagentId: string) => Effect.Effect<Response>;
-  readonly approvals: (sessionId: string) => Effect.Effect<Response>;
-  readonly answerApproval: (
-    sessionId: string,
-    holder: string | null,
-    approvalId: string,
-    approved: boolean,
-  ) => Effect.Effect<Response>;
-  readonly editQueued: (
-    sessionId: string,
-    holder: string | null,
-    id: string,
-    edit: QueueEdit,
-  ) => Effect.Effect<Response>;
-}
 
 const make = Effect.gen(function* () {
   const account = yield* CodexAccount;
@@ -647,7 +609,7 @@ const make = Effect.gen(function* () {
         );
         const run = yield* Effect.promise(() => chatState.run(sessionId, live.runId));
         const result: CancelResult = { runId: live.runId, stopped, status: run?.status ?? null };
-        return Response.json(result);
+        return json(200, result);
       }),
 
     /**
@@ -665,7 +627,7 @@ const make = Effect.gen(function* () {
           lastRun: last && { runId: last.runId, status: last.status, error: last.error ?? null },
           lease: leases.view(sessionId, holder),
         };
-        return Response.json(state);
+        return json(200, state);
       }),
 
     /**
@@ -687,7 +649,7 @@ const make = Effect.gen(function* () {
               queue.holdWaiting(sessionId);
             break;
         }
-        return Response.json(leases.view(sessionId, holder));
+        return json(200, leases.view(sessionId, holder));
       }),
 
     /**
@@ -700,7 +662,7 @@ const make = Effect.gen(function* () {
         if (liveRuns.get(sessionId)) return json(409, { error: "run_in_progress" });
         const session = yield* Effect.either(sessions.setArchived(sessionId, archived));
         if (session._tag === "Left") return json(404, { error: "session_not_found" });
-        return Response.json(session.right);
+        return json(200, session.right);
       }),
 
     /** The session's queue: messages still to deliver, and those the latest run delivered. */
@@ -709,7 +671,7 @@ const make = Effect.gen(function* () {
         const session = yield* Effect.either(sessions.get(sessionId));
         if (session._tag === "Left") return json(404, { error: "session_not_found" });
         const last = yield* Effect.promise(() => chatState.lastRun(sessionId));
-        return Response.json(queue.list(sessionId, last?.runId ?? null));
+        return json(200, queue.list(sessionId, last?.runId ?? null));
       }),
 
     /**
@@ -734,12 +696,12 @@ const make = Effect.gen(function* () {
         const message = queue.add(sessionId, text, attachmentIds);
         switch (mode) {
           case "queue":
-            return Response.json(message, { status: 201 });
+            return json(201, message);
           case "steer": {
             const binding = { projectId: session.right.projectId, sessionId, runId: live.runId };
             const outcome = yield* Effect.either(delivery.steer(binding, message));
             if (outcome._tag === "Right" && outcome.right === "steered")
-              return Response.json(queue.get(sessionId, message.id), { status: 201 });
+              return json(201, queue.get(sessionId, message.id));
             // Not delivered: the message is not kept, so the page still has it as a draft.
             yield* Effect.ignore(queue.remove(sessionId, message.id));
             return outcome._tag === "Right"
@@ -754,14 +716,14 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const session = yield* Effect.either(sessions.get(sessionId));
         if (session._tag === "Left") return json(404, { error: "session_not_found" });
-        return Response.json(subagents.list(sessionId));
+        return json(200, subagents.list(sessionId));
       }),
 
     /** One subagent's saved conversation. */
     subagentTranscript: (sessionId: string, subagentId: string) =>
       Effect.gen(function* () {
         const transcript = yield* Effect.promise(() => subagents.transcript(sessionId, subagentId));
-        return transcript ? Response.json(transcript) : json(404, { error: "subagent_not_found" });
+        return transcript ? json(200, transcript) : json(404, { error: "subagent_not_found" });
       }),
 
     /**
@@ -772,7 +734,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const session = yield* Effect.either(sessions.get(sessionId));
         if (session._tag === "Left") return json(404, { error: "session_not_found" });
-        return Response.json(relayed.pending(sessionId));
+        return json(200, relayed.pending(sessionId));
       }),
 
     /** The page's answer to a relayed approval. Only the page holding the session may answer. */
@@ -785,7 +747,7 @@ const make = Effect.gen(function* () {
       Effect.sync(() => {
         if (!leases.permits(sessionId, holder)) return inUse();
         return relayed.answer(sessionId, approvalId, approved)
-          ? Response.json(relayed.pending(sessionId))
+          ? json(200, relayed.pending(sessionId))
           : json(404, { error: "approval_not_pending" });
       }),
 
@@ -794,7 +756,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         if (!leases.permits(sessionId, holder)) return inUse();
         return yield* applyEdit(sessionId, id, edit).pipe(
-          Effect.map((message) => Response.json(message)),
+          Effect.map((message) => json(200, message)),
           Effect.catchTag("QueueChangeRefused", (refused) =>
             Effect.succeed(json(409, { error: `queue_${refused.reason}` })),
           ),
@@ -804,6 +766,9 @@ const make = Effect.gen(function* () {
 });
 
 /** The chat endpoint behind `POST /api/chat`: memory, tools and the ChatGPT model together. */
-export class AgentChat extends Context.Tag("memory-agent/AgentChat")<AgentChat, AgentChatApi>() {
+export class AgentChat extends Context.Tag("memory-agent/AgentChat")<
+  AgentChat,
+  Effect.Effect.Success<typeof make>
+>() {
   static readonly layer = Layer.effect(AgentChat, make);
 }
