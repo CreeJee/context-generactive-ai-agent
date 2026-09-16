@@ -27,7 +27,8 @@
     "./package.json": "./package.json",
     "./acp": "./src/acp/index.ts",
     "./kiwi-worker": "./src/memory/morph/kiwi-worker.mjs",
-    "./embed-worker": "./src/memory/embedding/embed-worker.mjs"
+    "./embed-worker": "./src/memory/embedding/embed-worker.mjs",
+    "./import-worker": "./src/imports/worker.ts"
   },
   "publishConfig": {
     "access": "public"

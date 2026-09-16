@@ -51,9 +51,14 @@ const make = Effect.gen(function* () {
   const lastInSession = sqlite.prepare(
     "SELECT id FROM nodes WHERE session_id = ? ORDER BY seq DESC LIMIT 1",
   );
-  const lastOfKind = sqlite.prepare(
-    "SELECT id FROM nodes WHERE session_id = ? AND kind = ? ORDER BY seq DESC LIMIT 1",
+  const lastUser = sqlite.prepare(
+    "SELECT id FROM nodes WHERE session_id = ? AND kind = 'user' ORDER BY seq DESC LIMIT 1",
   );
+  // Only an answer in the turn still open: after a user message nothing has answered yet.
+  const answerInOpenTurn = sqlite.prepare(`
+    SELECT id FROM nodes WHERE session_id = ? AND kind = 'assistant'
+    AND seq > coalesce((SELECT max(seq) FROM nodes WHERE session_id = ? AND kind = 'user'), 0)
+    ORDER BY seq DESC LIMIT 1`);
   const callNode = sqlite.prepare(`
     SELECT id, json_extract(detail, '$.toolName') AS tool_name FROM nodes
     WHERE session_id = ? AND kind = 'tool_call'
@@ -73,11 +78,11 @@ const make = Effect.gen(function* () {
   const write = (migration: Migration): MigrationCount =>
     atomic(() => {
       const { source, projectId, sessionId } = migration;
-      // Resuming mid-transcript must continue the turn it stopped in, so the state comes from the
-      // session rather than from the start of this batch.
+      // Resuming mid-transcript (a later pass, or the next piece of a long one) must continue the
+      // turn it stopped in, so the state comes from the session rather than from this batch.
       let previousId = idOf(lastInSession.get(sessionId));
-      let userNodeId = idOf(lastOfKind.get(sessionId, "user"));
-      let assistantNodeId = idOf(lastOfKind.get(sessionId, "assistant"));
+      let userNodeId = idOf(lastUser.get(sessionId));
+      let assistantNodeId = idOf(answerInOpenTurn.get(sessionId, sessionId));
       let written = 0;
       let repeated = 0;
 

@@ -1,6 +1,6 @@
 import { appendFileSync, chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Effect, Schema } from "effect";
+import { Effect, Fiber, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import type { Json } from "../src/codex/app-server.ts";
 import { Database } from "../src/db/database.ts";
@@ -252,6 +252,82 @@ describe("migrating other agents' transcripts", () => {
       }),
     );
     expect(texts.at(-1)).toBe("좋아 그대로 가자");
+  });
+
+  test("a tool call read in a later pass belongs to the turn still open", async () => {
+    const { runtime, project, home } = await testRuntime();
+    const path = claudePath(home, "cc-1.jsonl");
+    const line = (uuid: string, role: "user" | "assistant", content: Json) => ({
+      type: role,
+      uuid,
+      timestamp: "2026-03-01T09:10:00.000Z",
+      cwd: project.root,
+      sessionId: "cc-1",
+      message: { role, content },
+    });
+    // The first turn is answered; the second turn's user message ends this pass.
+    writeFileSync(
+      path,
+      serialize([
+        line("u-1", "user", "첫 질문"),
+        line("a-1", "assistant", "첫 답"),
+        line("u-2", "user", "둘째 질문"),
+      ]),
+    );
+    const importer = await runtime.runPromise(Importer);
+    expect(await runtime.runPromise(importer.runOnce)).toBe(3);
+
+    appendFileSync(
+      path,
+      serialize([
+        line("a-2", "assistant", [
+          { type: "tool_use", id: "call-2", name: "Read", input: { file_path: "b.md" } },
+        ]),
+      ]),
+    );
+    const calledFrom = await runtime.runPromise(
+      Effect.gen(function* () {
+        expect(yield* importer.runOnce).toBe(2);
+        const { sqlite } = yield* Database;
+        return decodeNodes(
+          sqlite
+            .prepare(`
+              SELECT n.kind, n.text, n.created_at, n.run_id FROM edges e
+              JOIN nodes n ON n.id = e.from_id WHERE e.kind = 'calls'`)
+            .all(),
+        );
+      }),
+    );
+    // Not the first turn's answer: an empty stand-in in the second turn made the call.
+    expect(calledFrom.map((row) => [row.kind, row.text])).toEqual([["assistant", ""]]);
+  });
+
+  test("a pass started from settings is answered at once and reports how it went", async () => {
+    const { runtime, project, home } = await testRuntime();
+    writeFileSync(claudePath(home, "cc-1.jsonl"), serialize(claudeLines(project.root)));
+    const importer = await runtime.runPromise(Importer);
+
+    const { status, written } = await runtime.runPromise(
+      Effect.gen(function* () {
+        yield* importer.start;
+        // Joining the running pass waits for it rather than starting a second one.
+        const joined = yield* Effect.fork(importer.runOnce);
+        yield* Effect.yieldNow();
+        const started = yield* importer.overview;
+        return { status: started.activity?.status, written: yield* Fiber.join(joined) };
+      }),
+    );
+    expect(status).toBe("running");
+    expect(written).toBe(4);
+    const finished = await runtime.runPromise(importer.overview);
+    expect(finished.activity).toMatchObject({
+      status: "finished",
+      checked: 1,
+      total: 1,
+      written: 4,
+      failed: 0,
+    });
+    expect(finished.sources[0]).toMatchObject({ transcripts: 1, migrated: 1, nodes: 4 });
   });
 
   test("leaves a half-written last line for the next pass", async () => {

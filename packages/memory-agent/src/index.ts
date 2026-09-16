@@ -77,7 +77,14 @@ export {
   Projects,
 } from "./projects/projects.ts";
 export { Session, Sessions } from "./sessions/sessions.ts";
-export { Importer, type ImportOverview, type UnplacedFolder } from "./imports/importer.ts";
+export {
+  Importer,
+  ImportWorkerFailed,
+  type ImportActivity,
+  type ImportFailure,
+  type ImportOverview,
+  type UnplacedFolder,
+} from "./imports/importer.ts";
 export { ImportSourceName } from "./imports/items.ts";
 export { SessionLeases, defaultLeaseTtlMs, makeLeases } from "./sessions/leases.ts";
 export { MessageQueue, QueueChangeRefused } from "./queue/queue.ts";

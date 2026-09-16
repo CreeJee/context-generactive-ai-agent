@@ -18,6 +18,7 @@ import {
 import { basename, dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Schema } from "effect";
+import { build } from "vite-plus/pack";
 
 const app = fileURLToPath(new URL("..", import.meta.url));
 const repo = join(app, "..", "..");
@@ -282,6 +283,22 @@ const workerScripts = {
 } as const;
 for (const [file, folder] of Object.entries(workerScripts))
   cpSync(join(memoryAgent, "src", "memory", folder, file), join(stage, file));
+// The import worker is TypeScript with its own dependencies (Effect, secretlint), so it is bundled
+// into one file instead; a checkout runs the source.
+await build({
+  config: false,
+  entry: { "import-worker": join(memoryAgent, "src", "imports", "worker.ts") },
+  outDir: stage,
+  clean: false,
+  format: "esm",
+  platform: "node",
+  fixedExtension: true,
+  dts: false,
+  deps: { alwaysBundle: [/.*/], onlyBundle: false },
+  outputOptions: { codeSplitting: false },
+  report: false,
+  logLevel: "warn",
+});
 // The app's own skills; `builtinSkillsDirectory()` looks for them next to the runtime files.
 cpSync(join(memoryAgent, "skills"), join(stage, "skills"), { recursive: true });
 collectPackages();

@@ -25,8 +25,9 @@ export async function loader() {
 
 /**
  * POST /api/settings/imports
- * - `enable` / `disable`: keep following the transcripts. Enabling reads what is there now.
- * - `run`: read once, without changing the setting.
+ * - `enable` / `disable`: keep following the transcripts. Enabling starts reading what is there now.
+ * - `run`: start reading once, without changing the setting.
+ * Both answer before the pass ends; `activity` in the overview reports how far it got.
  * - `interpret` { interpret }: whether migrated statements are interpreted like statements said here.
  */
 export async function action({ request }: Route.ActionArgs) {
@@ -42,7 +43,8 @@ export async function action({ request }: Route.ActionArgs) {
       const command = body.right;
       switch (command.action) {
         case "run":
-          yield* importer.runAndIndex;
+          // Answered at once; the page follows the pass through `activity`.
+          yield* importer.start;
           break;
         case "enable":
         case "disable":

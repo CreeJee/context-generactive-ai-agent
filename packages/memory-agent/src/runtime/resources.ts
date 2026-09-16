@@ -38,8 +38,11 @@ export function requireRuntime<Name extends keyof RuntimePackages>(
   return runtimeRequire()(name) as RuntimePackages[Name];
 }
 
-/** Worker scripts this package ships as plain `.mjs` files, each loading its runtime package. */
-export type RuntimeWorker = "kiwi-worker" | "embed-worker";
+/**
+ * Worker scripts. Kiwi and the embedder are plain `.mjs` files that load their runtime package; the
+ * import worker is TypeScript in a checkout and bundled into one `.mjs` for the executable.
+ */
+export type RuntimeWorker = "kiwi-worker" | "embed-worker" | "import-worker";
 
 /**
  * A worker script's file. In a checkout it is found through the package exports rather than next to
