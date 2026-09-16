@@ -24,7 +24,7 @@ src/
   projects/     프로젝트 등록·경로 검사·교차 회상 제외·권한 모드(ask/auto)
   sessions/     프로젝트에 속한 대화
   imports/      Claude Code·Codex CLI 기록 이관: 줄 읽기 어댑터, 대량 노드 쓰기, 커서와 따라붙기
-  secrets/      비밀 가리기(secretlint)와 저장된 텍스트의 소급 정리
+  secrets/      비밀 가리기(secretlint)와 저장된 텍스트의 소급 정리(탐지는 worker thread)
   memory/       기억: 노드·구조 edge·그래프 탐색·근거 추적·검색·기록 middleware
     embedding/  로컬 임베딩 모델(worker thread) + turbovec 벡터 인덱스 + 인덱서(형태소 분석 포함)
     morph/      Kiwi 한국어 형태소 분석(worker thread, 모델은 처음 쓸 때 내려받음)
@@ -48,7 +48,7 @@ skills/
 
 앱 기본 skill은 `SKILL.md` 하나로 완결해야 합니다. 실행 파일에서는 저장 루트 아래에 풀리고 파일 도구가 저장 루트를 읽지 않아서, 옆에 둔 파일은 모델이 읽을 수 없습니다. 같은 이름의 공통·프로젝트 skill이 기본 skill을 덮어씁니다.
 
-네이티브 패키지(turbovec, `@napi-rs/keyring`, sharp)는 정적 import하지 않고 `runtime/resources.ts`의 `requireRuntime`으로 불러옵니다. 실행 파일(Node SEA)은 디스크 파일을 `import()`하지 못하고, 이 패키지들을 `CONTEXT_AGENT_RUNTIME` 폴더에 풀어 두기 때문입니다. 임베딩 모델(`@huggingface/transformers`)과 Kiwi는 worker thread에서 돌고, worker 스크립트(`embed-worker.mjs`, `kiwi-worker.mjs`)가 옆의 패키지를 직접 불러옵니다. 스크립트 위치는 `runtimeWorker`가 정합니다(저장소에서는 package exports, 실행 파일에서는 runtime 폴더).
+네이티브 패키지(turbovec, `@napi-rs/keyring`, sharp)는 정적 import하지 않고 `runtime/resources.ts`의 `requireRuntime`으로 불러옵니다. 실행 파일(Node SEA)은 디스크 파일을 `import()`하지 못하고, 이 패키지들을 `CONTEXT_AGENT_RUNTIME` 폴더에 풀어 두기 때문입니다. 임베딩 모델(`@huggingface/transformers`)과 Kiwi는 worker thread에서 돌고, worker 스크립트(`embed-worker.mjs`, `kiwi-worker.mjs`)가 옆의 패키지를 직접 불러옵니다. 가져오기(`imports/worker.ts`)와 비밀 소급 정리의 탐지(`secrets/redact-worker.ts`)도 worker thread에서 돕니다. 이 둘은 TypeScript라 저장소에서는 그대로 돌고, 실행 파일에는 한 파일로 묶여 들어갑니다. 스크립트 위치는 `runtimeWorker`가 정합니다(저장소에서는 package exports, 실행 파일에서는 runtime 폴더).
 
 서비스는 Effect `Context.Tag` + `Layer`로 만들고, 앱은 `ManagedRuntime` 하나로 씁니다.
 도구 입력 스키마는 Effect Schema이며 `toToolSchema`로 TanStack이 요구하는 Standard JSON Schema로 바꿉니다.
@@ -57,7 +57,7 @@ skills/
 
 - 사용자·assistant·tool call·tool result를 모두 원문 그대로 `nodes`에 저장합니다(수정 불가).
 - 저장할 때 구조 edge를 만듭니다: `next`(세션 순서), `reply`, `calls`, `returns`, `touches`(같은 파일/URL).
-- 검색(`find_memory`)은 임베딩 벡터 순위, FTS trigram 순위, Kiwi 형태소(명사·어간) BM25 순위를 RRF로 합친 뒤 그래프를 따라 넓힙니다. Kiwi는 worker thread에서 돌고(쓰기 시작하면 계속 둠, 약 240 MB), 적재 중에는 형태소 순위 없이 검색합니다. 임베딩도 worker thread에서 quint8 모델로 노드마다 앞 2048토큰까지, 토큰 길이로 나눈 배치로 합니다. onnxruntime-node는 추론을 동기로 돌려서, 메인 스레드에서 돌리면 밀린 노드를 임베딩하는 동안 서버의 모든 요청이 기다립니다. 메모리 측정은 `node --expose-gc --no-warnings eval/memory.ts`. 품질 평가는 `vp run eval:recall`(두 모델이 `~/.context-generactive-agent/models`에 있어야 함).
+- 검색(`find_memory`)은 임베딩 벡터 순위, FTS trigram 순위, Kiwi 형태소(명사·어간) BM25 순위를 RRF로 합친 뒤 그래프를 따라 넓힙니다. Kiwi는 worker thread에서 돌고(쓰기 시작하면 계속 둠, 약 240 MB), 적재 중에는 형태소 순위 없이 검색합니다. 임베딩도 worker thread에서 노드마다 앞 2048토큰까지, 토큰 길이로 나눈 배치로 합니다. CPU 모드는 quint8 모델을 CPU에서, GPU 모드는 fp32 모델을 WebGPU에서(안 되면 CPU에서) 돌리고, 자동이면 메모리 16GB 이상이고 WebGPU 확인에 성공했을 때 GPU 모드입니다(`EmbeddingSetup`, 설정의 "기억" 탭). onnxruntime-node는 추론을 동기로 돌려서, 메인 스레드에서 돌리면 밀린 노드를 임베딩하는 동안 서버의 모든 요청이 기다립니다. 메모리 측정은 `node --expose-gc --no-warnings eval/memory.ts`. 품질 평가는 `vp run eval:recall`(두 모델이 `~/.context-generactive-agent/models`에 있어야 함).
 - `read_evidence`는 원문을 페이지로 읽고, `trace_evidence`는 tool result → call → assistant → user 발언까지 거슬러 갑니다.
 - 교차 프로젝트 회상은 기본 포함이며, 프로젝트별로 제외할 수 있습니다. 결과에는 출처 프로젝트 이름(`projectName`)이 붙습니다.
 - `Interpreter`(llm-interpret)가 답변이 끝난 뒤 사용자·assistant 발언을 해석해 주제(`topic` 노드 + `about`), `corrects`·`retracts`·`related` edge를 붙입니다. 후보는 코드가 고르고, 정정·취소는 사용자 발언에서만, 대상이 분명할 때만 edge가 됩니다. 모호하면 `interpretations`에 `unconfirmed`로 남아 확인 질문이 됩니다.
@@ -139,7 +139,7 @@ MCP 도구는 실행 중에 생기므로 브라우저가 정의를 모릅니다.
 
 - 자격 증명으로 보이는 경로(`.ssh`, `.env`, `*.pem`, `~/.codex`, 앱 저장 루트 등)와 `.git` 내부는 어떤 승인으로도 파일 도구가 건드리지 않습니다. 이름 기반 판정이라 일반 파일 안의 비밀은 아래 탐지기가 맡습니다.
 - 출력에 찍힌 비밀은 `SecretRedactor`(`secrets/redactor.ts`, secretlint + 비밀처럼 보이는 이름 옆의 값)가 `[redacted:<종류>]`로 가립니다. 모든 도구 결과와 에러 메시지는 모델·페이지·노드에 닿기 전에, assistant 글·도구 인자·참조·사용자 발언·이관 기록은 기억에 남기 전에 가립니다. 모델은 사용자가 보낸 메시지를 그대로 읽습니다.
-- 이미 저장된 텍스트는 `SecretSweep`(`secrets/sweep.ts`)이 시작할 때마다 백그라운드에서 훑습니다. 노드는 `secret_sweep_permits` 허가가 있을 때만 `text`가 바뀌고(트리거가 나머지 변경은 계속 거부), FTS·형태소·벡터도 새 텍스트로 다시 만듭니다. 테스트는 `tests/secret-redactor.test.ts`, `tests/secret-redaction.test.ts`, `tests/secret-sweep.test.ts`.
+- 이미 저장된 텍스트는 `SecretSweep`(`secrets/sweep.ts`)이 시작할 때마다 백그라운드에서 훑습니다. 노드는 `secret_sweep_permits` 허가가 있을 때만 `text`가 바뀌고(트리거가 나머지 변경은 계속 거부), FTS·형태소·벡터도 새 텍스트로 다시 만듭니다. secretlint 검사는 사이사이 이벤트 루프에 차례를 주지 않아서, 탐지는 스윕마다 띄우는 redaction worker가 배치 단위로 하고 DB 읽기·쓰기와 벡터 정리는 메인에 남습니다. 테스트는 `tests/secret-redactor.test.ts`, `tests/secret-redaction.test.ts`, `tests/secret-sweep.test.ts`.
 - 프로젝트 파일 도구는 경로를 한 칸씩 `lstat`해 symlink·hard link를 거부합니다. 밖 도구는 링크가 가리키는 실제 대상으로 판단합니다. OS 샌드박스는 아닙니다.
 - 셸은 호스트에서 격리 없이 실행됩니다. `TOKEN`·`API_KEY`처럼 비밀로 보이는 환경 변수는 명령에 넘기지 않습니다.
 - ChatGPT 토큰은 codex가 관리하며 이 패키지는 읽지 않습니다.

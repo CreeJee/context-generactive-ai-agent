@@ -40,9 +40,10 @@ export function requireRuntime<Name extends keyof RuntimePackages>(
 
 /**
  * Worker scripts. Kiwi and the embedder are plain `.mjs` files that load their runtime package; the
- * import worker is TypeScript in a checkout and bundled into one `.mjs` for the executable.
+ * import and redaction workers are TypeScript in a checkout and bundled into one `.mjs` each for
+ * the executable.
  */
-export type RuntimeWorker = "kiwi-worker" | "embed-worker" | "import-worker";
+export type RuntimeWorker = "kiwi-worker" | "embed-worker" | "import-worker" | "redact-worker";
 
 /**
  * A worker script's file. In a checkout it is found through the package exports rather than next to

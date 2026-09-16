@@ -1,8 +1,11 @@
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Worker } from "node:worker_threads";
+import { Context, Data, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import { Indexer } from "../memory/embedding/indexer.ts";
 import { VectorIndex } from "../memory/embedding/vector-index.ts";
-import { SecretRedactor } from "./redactor.ts";
+import { runtimeWorker } from "../runtime/resources.ts";
+import { RedactReply, type RedactRequest } from "./redact-protocol.ts";
+import type { Redaction } from "./redactor.ts";
 
 /**
  * Which detector swept a table. Raise it when the rules start finding things they did not, and
@@ -89,13 +92,87 @@ const decodeRefRow = Schema.decodeUnknownSync(
 );
 const decodeRowKey = Schema.decodeUnknownSync(Schema.Struct({ row_key: Schema.Number }));
 const decodeCell = Schema.decodeUnknownSync(Schema.NullOr(Schema.String));
-const decodeJsonText = Schema.decodeUnknownOption(Schema.parseJson());
+const decodeReply = Schema.decodeUnknownSync(RedactReply);
 
 /** A column value after sweeping; `null` stays `null`. */
 interface SweptCell {
   readonly text: string | null;
   readonly hidden: number;
 }
+
+/** The redaction worker could not hide secrets in a batch; the sweep resumes there next time. */
+export class RedactionFailed extends Data.TaggedError("RedactionFailed")<{
+  readonly reason: string;
+}> {}
+
+/** Secrets hidden in a batch of texts, one redaction per text in order. */
+type Redact = (
+  kind: RedactRequest["kind"],
+  texts: readonly string[],
+) => Effect.Effect<readonly Redaction[], RedactionFailed>;
+
+/**
+ * A redaction worker for one sweep, stopped when the sweep ends: a sweep runs once per start, and
+ * the checks it needs stay loaded only while it runs.
+ */
+const redactionWorker = Effect.map(
+  Effect.acquireRelease(
+    Effect.sync(() => new Worker(runtimeWorker("redact-worker"))),
+    (worker) => Effect.promise(() => worker.terminate()),
+  ),
+  (worker): Redact => {
+    let nextId = 1;
+    const waiting = new Map<number, (reply: RedactReply) => void>();
+    const lost = (reason: string) => {
+      for (const [id, answer] of waiting) answer({ id, kind: "failed", reason });
+      waiting.clear();
+    };
+    worker.on("message", (message) => {
+      const reply = decodeReply(message);
+      const answer = waiting.get(reply.id);
+      waiting.delete(reply.id);
+      answer?.(reply);
+    });
+    worker.on("error", (error) => lost(error.message));
+    worker.on("exit", () => lost("the redaction worker stopped"));
+
+    return (kind, texts) =>
+      Effect.async((resume) => {
+        if (texts.length === 0) return resume(Effect.succeed([]));
+        const id = nextId++;
+        waiting.set(id, (reply) => {
+          switch (reply.kind) {
+            case "redacted":
+              return resume(Effect.succeed(reply.redactions));
+            case "failed":
+              return resume(Effect.fail(new RedactionFailed({ reason: reply.reason })));
+          }
+        });
+        worker.postMessage({ id, kind, texts } satisfies RedactRequest);
+      });
+  },
+);
+
+/** One column's cells after sweeping, in order; a `null` cell is not sent and stays `null`. */
+const redactCells = (
+  redact: Redact,
+  kind: RedactRequest["kind"],
+  cells: ReadonlyArray<string | null>,
+) =>
+  Effect.map(
+    redact(
+      kind,
+      cells.filter((cell) => cell !== null),
+    ),
+    (redactions) => {
+      const swept = redactions[Symbol.iterator]();
+      return cells.map((cell): SweptCell =>
+        cell === null
+          ? { text: null, hidden: 0 }
+          : (swept.next().value ?? { text: cell, hidden: 0 }),
+      );
+    },
+  );
 
 export interface SweepProgress {
   readonly target: string;
@@ -106,7 +183,6 @@ export interface SweepProgress {
 const make = (running: boolean) =>
   Effect.gen(function* () {
     const { sqlite, atomic } = yield* Database;
-    const redactor = yield* SecretRedactor;
     const indexer = yield* Indexer;
     const vectors = yield* VectorIndex;
     const onePassAtATime = yield* Effect.makeSemaphore(1);
@@ -126,8 +202,6 @@ const make = (running: boolean) =>
       return saved?.version === sweepVersion ? saved : { after: 0, done: 0, hidden: 0 };
     };
 
-    const hideText = (text: string) => redactor.redactText(text);
-
     // Nodes: the text changes under a permit, and what was derived from the old text goes with it.
     const nodeBatch = sqlite.prepare(
       "SELECT seq, text FROM nodes WHERE seq > ? ORDER BY seq LIMIT ?",
@@ -143,10 +217,13 @@ const make = (running: boolean) =>
     const forgetAnalysis = sqlite.prepare("DELETE FROM node_morphs WHERE node_seq = ?");
     const forgetVector = sqlite.prepare("DELETE FROM node_vectors WHERE node_seq = ?");
 
-    const sweepNodes = (after: number) =>
+    const sweepNodes = (redact: Redact, after: number) =>
       Effect.gen(function* () {
         const rows = nodeBatch.all(after, batchSize).map((row) => decodeNodeRow(row));
-        const redactions = yield* Effect.forEach(rows, (row) => hideText(row.text));
+        const redactions = yield* redact(
+          "text",
+          rows.map((row) => row.text),
+        );
         const changed = rows.flatMap((row, index) => {
           const redaction = redactions[index];
           return redaction && redaction.hidden > 0 ? [{ ...row, hidden: redaction.text }] : [];
@@ -185,10 +262,13 @@ const make = (running: boolean) =>
     );
     const updateRef = sqlite.prepare("UPDATE OR REPLACE node_refs SET ref = ? WHERE rowid = ?");
 
-    const sweepRefs = (after: number) =>
+    const sweepRefs = (redact: Redact, after: number) =>
       Effect.gen(function* () {
         const rows = refBatch.all(after, batchSize).map((row) => decodeRefRow(row));
-        const redactions = yield* Effect.forEach(rows, (row) => hideText(row.ref));
+        const redactions = yield* redact(
+          "text",
+          rows.map((row) => row.ref),
+        );
         let hidden = 0;
         atomic(() =>
           rows.forEach((row, index) => {
@@ -201,19 +281,7 @@ const make = (running: boolean) =>
         return { rows: rows.length, last: rows.at(-1)?.row_key ?? after, hidden };
       });
 
-    /** A JSON column's text with secrets hidden in its strings, or the text as it was. */
-    const hideJson = (text: string) =>
-      Option.match(decodeJsonText(text), {
-        // Not JSON after all: treat it as text rather than leave it unswept.
-        onNone: () => hideText(text),
-        onSome: (value) =>
-          Effect.flatMap(redactor.redactResult(value), (redacted) => {
-            const out = JSON.stringify(redacted);
-            return Effect.succeed({ text: out, hidden: out === text ? 0 : 1 });
-          }),
-      });
-
-    const sweepColumns = (table: ColumnTable, after: number) =>
+    const sweepColumns = (redact: Redact, table: ColumnTable, after: number) =>
       Effect.gen(function* () {
         const columns: readonly Column[] = columnTables[table];
         const names = columns.map((column) => column.name);
@@ -226,25 +294,26 @@ const make = (running: boolean) =>
         const update = sqlite.prepare(
           `UPDATE ${table} SET ${names.map((name) => `${name} = ?`).join(", ")} WHERE rowid = ?`,
         );
+        const cells = rows.map((row) => columns.map((column) => decodeCell(row[column.name])));
+        // One request per column rather than per cell: `swept[column][row]`.
+        const swept = yield* Effect.forEach(columns, (column, index) =>
+          redactCells(
+            redact,
+            column.json ? "json" : "text",
+            cells.map((row) => row[index] ?? null),
+          ),
+        );
         let hidden = 0;
         const updates: Array<{ rowid: number; values: Array<string | null> }> = [];
-        for (const row of rows) {
-          const cells = columns.map((column) => decodeCell(row[column.name]));
-          const swept = yield* Effect.forEach(
-            columns,
-            (column, index): Effect.Effect<SweptCell> => {
-              const cell = cells[index] ?? null;
-              if (cell === null) return Effect.succeed({ text: null, hidden: 0 });
-              return column.json ? hideJson(cell) : hideText(cell);
-            },
-          );
-          if (swept.every((cell) => cell.hidden === 0)) continue;
+        rows.forEach((row, rowIndex) => {
+          const values = swept.map((column) => column[rowIndex] ?? { text: null, hidden: 0 });
+          if (values.every((cell) => cell.hidden === 0)) return;
           hidden += 1;
           updates.push({
             rowid: decodeRowKey(row).row_key,
-            values: swept.map((cell) => cell.text),
+            values: values.map((cell) => cell.text),
           });
-        }
+        });
         atomic(() => {
           for (const { rowid, values } of updates) update.run(...values, rowid);
         });
@@ -252,14 +321,14 @@ const make = (running: boolean) =>
         return { rows: rows.length, last: last ? decodeRowKey(last).row_key : after, hidden };
       });
 
-    const batchOf = (target: Target, after: number) => {
+    const batchOf = (redact: Redact, target: Target, after: number) => {
       switch (target.kind) {
         case "nodes":
-          return sweepNodes(after);
+          return sweepNodes(redact, after);
         case "refs":
-          return sweepRefs(after);
+          return sweepRefs(redact, after);
         case "columns":
-          return sweepColumns(target.table, after);
+          return sweepColumns(redact, target.table, after);
       }
     };
 
@@ -285,14 +354,14 @@ const make = (running: boolean) =>
     };
 
     /** Sweeps one table to the end, recording where it got after every batch. */
-    const sweep = (target: Target) =>
+    const sweep = (redact: Redact, target: Target) =>
       Effect.gen(function* () {
         const start = progressOf(target);
         let after = resumesFrom(target, start.after);
         let hidden = start.hidden;
         let sweptNow = 0;
         for (;;) {
-          const batch = yield* batchOf(target, after);
+          const batch = yield* batchOf(redact, target, after);
           after = batch.last;
           hidden += batch.hidden;
           sweptNow += batch.hidden;
@@ -315,10 +384,15 @@ const make = (running: boolean) =>
      */
     const run = Effect.gen(function* () {
       let changedNodes = 0;
-      for (const target of targets) {
-        const hidden = yield* sweep(target);
-        if (target.kind === "nodes") changedNodes = hidden;
-      }
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const redact = yield* redactionWorker;
+          for (const target of targets) {
+            const hidden = yield* sweep(redact, target);
+            if (target.kind === "nodes") changedNodes = hidden;
+          }
+        }),
+      );
       if (changedNodes > 0)
         yield* Effect.zipRight(indexer.indexAll(), indexer.analyzeAll()).pipe(
           Effect.catchAllCause(() => Effect.void),

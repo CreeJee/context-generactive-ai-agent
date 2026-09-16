@@ -283,22 +283,27 @@ const workerScripts = {
 } as const;
 for (const [file, folder] of Object.entries(workerScripts))
   cpSync(join(memoryAgent, "src", "memory", folder, file), join(stage, file));
-// The import worker is TypeScript with its own dependencies (Effect, secretlint), so it is bundled
-// into one file instead; a checkout runs the source.
-await build({
-  config: false,
-  entry: { "import-worker": join(memoryAgent, "src", "imports", "worker.ts") },
-  outDir: stage,
-  clean: false,
-  format: "esm",
-  platform: "node",
-  fixedExtension: true,
-  dts: false,
-  deps: { alwaysBundle: [/.*/], onlyBundle: false },
-  outputOptions: { codeSplitting: false },
-  report: false,
-  logLevel: "warn",
-});
+// The import and redaction workers are TypeScript with their own dependencies (Effect, secretlint),
+// so each is bundled into one file instead; a checkout runs the source.
+const bundledWorkers = {
+  "import-worker": join(memoryAgent, "src", "imports", "worker.ts"),
+  "redact-worker": join(memoryAgent, "src", "secrets", "redact-worker.ts"),
+} as const;
+for (const [name, source] of Object.entries(bundledWorkers))
+  await build({
+    config: false,
+    entry: { [name]: source },
+    outDir: stage,
+    clean: false,
+    format: "esm",
+    platform: "node",
+    fixedExtension: true,
+    dts: false,
+    deps: { alwaysBundle: [/.*/], onlyBundle: false },
+    outputOptions: { codeSplitting: false },
+    report: false,
+    logLevel: "warn",
+  });
 // The app's own skills; `builtinSkillsDirectory()` looks for them next to the runtime files.
 cpSync(join(memoryAgent, "skills"), join(stage, "skills"), { recursive: true });
 collectPackages();
