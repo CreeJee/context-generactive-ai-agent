@@ -39,6 +39,7 @@ const itemVariants = cva(
         default: "border-transparent",
         outline: "border-border",
         muted: "border-transparent bg-muted/50",
+        card: "rounded-xl border-border bg-card shadow-xs",
       },
       size: {
         default: "gap-2.5 px-3 py-2.5",
@@ -135,14 +136,37 @@ function ItemTitle({ className, ...props }: React.ComponentProps<"div">) {
   );
 }
 
-function ItemDescription({ className, ...props }: React.ComponentProps<"p">) {
+const itemDescriptionVariants = cva(
+  "text-left text-xs/relaxed font-normal [&>a]:underline [&>a]:underline-offset-4 [&>a:hover]:text-primary",
+  {
+    variants: {
+      variant: {
+        default: "text-muted-foreground",
+        destructive: "text-destructive",
+      },
+      lines: {
+        2: "line-clamp-2",
+        3: "line-clamp-3",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      lines: 2,
+    },
+  },
+);
+
+function ItemDescription({
+  className,
+  variant = "default",
+  lines = 2,
+  ...props
+}: React.ComponentProps<"p"> & VariantProps<typeof itemDescriptionVariants>) {
   return (
     <p
       data-slot="item-description"
-      className={cn(
-        "line-clamp-2 text-left text-xs/relaxed font-normal text-muted-foreground [&>a]:underline [&>a]:underline-offset-4 [&>a:hover]:text-primary",
-        className,
-      )}
+      data-variant={variant}
+      className={cn(itemDescriptionVariants({ variant, lines }), className)}
       {...props}
     />
   );

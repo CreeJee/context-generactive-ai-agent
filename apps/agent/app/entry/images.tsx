@@ -59,7 +59,9 @@ export function DrawingPicture({ url, path }: { url: string; path: string }) {
       </button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-[min(90vw,64rem)] sm:max-w-[min(90vw,64rem)]">
-          <DialogTitle className="font-mono text-sm">{path}</DialogTitle>
+          <DialogTitle>
+            <code>{path}</code>
+          </DialogTitle>
           <img
             src={url}
             alt={`그린 그림: ${path}`}
@@ -125,7 +127,7 @@ export function UserMessageBody({
                     >
                       {run.token}
                     </HoverCardTrigger>
-                    <HoverCardContent className="w-56 p-1.5">
+                    <HoverCardContent className="w-56">
                       <img
                         src={run.image.url}
                         alt={`첨부 이미지 #${run.image.number}`}
@@ -152,7 +154,7 @@ export function UserMessageBody({
                 alt={`첨부 이미지 #${image.number}`}
                 className="h-28 max-w-48 object-cover"
               />
-              <span className="absolute top-1 left-1 rounded bg-black/60 px-1 text-[0.625rem] text-white">
+              <span className="absolute top-1 left-1 rounded bg-black/60 px-1 text-3xs text-white">
                 #{image.number}
               </span>
             </button>
@@ -184,16 +186,14 @@ export function DraftImageTray({
   images,
   onReference,
   onRemove,
-  className,
 }: {
   images: readonly DraftImage[];
   onReference: (number: number) => void;
   onRemove: (key: string) => void;
-  className?: string;
 }) {
   if (images.length === 0) return null;
   return (
-    <AttachmentGroup className={className}>
+    <AttachmentGroup>
       {images.map((image) => {
         const card = draftCard(image);
         return (

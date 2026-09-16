@@ -16,28 +16,27 @@ export function SlashPalette({
   onPick: (suggestion: Suggestion) => void;
 }) {
   return (
-    <Command
-      shouldFilter={false}
-      value={highlighted.text}
-      className="mb-2 h-auto rounded-xl border bg-popover shadow-md"
-    >
-      <CommandList>
-        <CommandGroup heading="명령 · ↑↓ 고르기 · Tab 채우기 · Enter 실행">
-          {suggestions.map((suggestion) => (
-            <CommandItem
-              key={suggestion.text}
-              value={suggestion.text}
-              // Keep the caret in the composer while clicking.
-              onMouseDown={(event) => event.preventDefault()}
-              onSelect={() => onPick(suggestion)}
-            >
-              <TerminalSquareIcon />
-              <span className="font-mono">{suggestion.label}</span>
-              <span className="truncate text-muted-foreground">{suggestion.description}</span>
-            </CommandItem>
-          ))}
-        </CommandGroup>
-      </CommandList>
-    </Command>
+    // The palette floats over the conversation, so its frame lifts it the way a popover would.
+    <div className="mb-2 overflow-hidden rounded-xl border bg-popover shadow-md">
+      <Command shouldFilter={false} value={highlighted.text} className="h-auto">
+        <CommandList>
+          <CommandGroup heading="명령 · ↑↓ 고르기 · Tab 채우기 · Enter 실행">
+            {suggestions.map((suggestion) => (
+              <CommandItem
+                key={suggestion.text}
+                value={suggestion.text}
+                // Keep the caret in the composer while clicking.
+                onMouseDown={(event) => event.preventDefault()}
+                onSelect={() => onPick(suggestion)}
+              >
+                <TerminalSquareIcon />
+                <span className="font-mono">{suggestion.label}</span>
+                <span className="truncate text-muted-foreground">{suggestion.description}</span>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        </CommandList>
+      </Command>
+    </div>
   );
 }

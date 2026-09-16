@@ -16,15 +16,15 @@ import {
   EmptyTitle,
 } from "~/components/ui/empty";
 import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupTextarea,
-} from "~/components/ui/input-group";
+  PromptInput,
+  PromptInputButton,
+  PromptInputFooter,
+  PromptInputHeader,
+  PromptInputTextarea,
+} from "~/components/ui/prompt-input";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { Spinner } from "~/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
-import { cn } from "~/lib/utils";
 import {
   ApprovalCard,
   toPendingApproval,
@@ -555,12 +555,7 @@ function ChatPanel({
                   }}
                 />
               )}
-              <InputGroup
-                className={cn(
-                  "h-auto flex-col rounded-xl bg-card shadow-xs dark:bg-card",
-                  editing && "border-primary/60 ring-2 ring-primary/15",
-                )}
-              >
+              <PromptInput editing={editing !== null}>
                 <QueuePanel
                   items={queue.items}
                   editingId={editing?.id ?? null}
@@ -569,15 +564,16 @@ function ChatPanel({
                   onRemove={(message) => void removeQueued(message)}
                   onConfirm={(message) => void confirmQueued(message)}
                 />
-                {!editing && (
-                  <DraftImageTray
-                    className="w-full px-3 pt-3"
-                    images={draftImages.images}
-                    onReference={insertReference}
-                    onRemove={draftImages.remove}
-                  />
+                {!editing && draftImages.images.length > 0 && (
+                  <PromptInputHeader>
+                    <DraftImageTray
+                      images={draftImages.images}
+                      onReference={insertReference}
+                      onRemove={draftImages.remove}
+                    />
+                  </PromptInputHeader>
                 )}
-                <InputGroupTextarea
+                <PromptInputTextarea
                   ref={textarea}
                   value={draft}
                   disabled={readOnly}
@@ -652,17 +648,14 @@ function ChatPanel({
                           ? "답변 중에도 이어서 보낼 수 있어요"
                           : "메시지를 입력하세요 · / 명령 · 이미지는 붙여넣거나 끌어다 놓기"
                   }
-                  className="max-h-48 min-h-11 px-3.5 pt-3 pb-1 text-sm"
                   rows={1}
                 />
-                <InputGroupAddon align="block-end" className="gap-2 px-2 pb-2">
+                <PromptInputFooter>
                   <Tooltip>
                     <TooltipTrigger
                       render={
-                        <InputGroupButton
-                          size="icon-sm"
+                        <PromptInputButton
                           variant="ghost"
-                          className="rounded-full"
                           disabled={!imagesSupported || readOnly || editing !== null}
                           aria-label="이미지 첨부"
                           onClick={() => filePicker.current?.click()}
@@ -682,10 +675,8 @@ function ChatPanel({
                       <Tooltip>
                         <TooltipTrigger
                           render={
-                            <InputGroupButton
-                              size="icon-sm"
+                            <PromptInputButton
                               variant="outline"
-                              className="rounded-full"
                               disabled={run.cancelling || readOnly}
                               aria-label={run.cancelling ? "멈추는 중" : "중지"}
                               onClick={() => void cancel()}
@@ -699,19 +690,17 @@ function ChatPanel({
                         </TooltipContent>
                       </Tooltip>
                     )}
-                    <InputGroupButton
+                    <PromptInputButton
                       type="submit"
-                      size="icon-sm"
                       variant="default"
-                      className="rounded-full"
                       disabled={editing ? readOnly : !canSend}
                       aria-label={editing ? "저장" : generating ? "대기열에 넣기" : "전송"}
                     >
                       {editing ? <CheckIcon /> : <ArrowUpIcon />}
-                    </InputGroupButton>
+                    </PromptInputButton>
                   </div>
-                </InputGroupAddon>
-              </InputGroup>
+                </PromptInputFooter>
+              </PromptInput>
             </form>
           )}
         </div>

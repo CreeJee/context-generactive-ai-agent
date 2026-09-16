@@ -52,7 +52,19 @@ export default defineConfig({
       "anti-slop/no-widen-then-assert": "error",
       "anti-slop/require-safety-comment-for-type-assertion": "error",
       "anti-slop-effect/no-service-constructor-imports": "error",
-      "shadcn/no-restyle": ["error", { allow: ["layout"] }],
+      "shadcn/no-restyle": [
+        "error",
+        {
+          allow: ["layout"],
+          contracts: [
+            // Headless Base UI wrappers with no styles of their own: callers give them their look.
+            {
+              pattern: "^Collapsible(Trigger|Content)?$",
+              allow: ["layout", "color", "typography", "spacing", "shape", "effects", "motion"],
+            },
+          ],
+        },
+      ],
       "shadcn/no-raw-colors": "error",
       "shadcn/no-arbitrary-values": ["error", { allow: ["layout"] }],
       "shadcn/no-inline-styles": "error",

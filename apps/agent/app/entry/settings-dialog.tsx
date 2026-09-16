@@ -24,6 +24,7 @@ import {
   Field,
   FieldContent,
   FieldDescription,
+  FieldError,
   FieldGroup,
   FieldLabel,
   FieldTitle,
@@ -269,7 +270,9 @@ function ImportSettings() {
                 기록 {source.transcripts}개 중 {source.migrated}개를 읽어 {source.nodes}개를 기억에
                 넣었어요.
               </ItemDescription>
-              <ItemDescription className="font-mono text-xs">{source.root}</ItemDescription>
+              <ItemDescription>
+                <code>{source.root}</code>
+              </ItemDescription>
             </ItemContent>
           </Item>
         ))}
@@ -373,12 +376,14 @@ function McpServerItem({
         <PlugIcon />
       </ItemMedia>
       <ItemContent className="min-w-0">
-        <ItemTitle className="flex flex-wrap items-center gap-1.5">
+        <ItemTitle className="flex-wrap">
           {server.name}
           <Badge variant="secondary">{scopeLabels[server.scope]}</Badge>
           <McpStateBadge server={server} />
         </ItemTitle>
-        <ItemDescription className="font-mono break-all">{server.target}</ItemDescription>
+        <ItemDescription className="break-all">
+          <code>{server.target}</code>
+        </ItemDescription>
         {names.length > 0 && (
           <ItemDescription>
             {server.transport === "stdio" ? "환경 변수" : "헤더"}: {names.join(", ")} (값은 보여주지
@@ -386,10 +391,12 @@ function McpServerItem({
           </ItemDescription>
         )}
         {server.state.status === "failed" && (
-          <ItemDescription className="text-destructive">{server.state.error}</ItemDescription>
+          <ItemDescription variant="destructive">{server.state.error}</ItemDescription>
         )}
         {server.state.status === "connected" && server.state.tools.length > 0 && (
-          <ItemDescription className="font-mono">{server.state.tools.join(", ")}</ItemDescription>
+          <ItemDescription>
+            <code>{server.state.tools.join(", ")}</code>
+          </ItemDescription>
         )}
       </ItemContent>
       {!server.shadowed && (
@@ -455,7 +462,7 @@ function McpSettings({ project }: { project: Project | null }) {
       {overview.servers.length === 0 ? (
         <FieldDescription>설정된 MCP 서버가 없어요.</FieldDescription>
       ) : (
-        <ItemGroup className="gap-2">
+        <ItemGroup>
           {overview.servers.map((server) => (
             <McpServerItem
               key={`${server.scope}/${server.name}`}
@@ -546,7 +553,7 @@ function AgentSettings({ project }: { project: Project | null }) {
       {overview.agents.length === 0 ? (
         <FieldDescription>설정된 에이전트가 없어요.</FieldDescription>
       ) : (
-        <ItemGroup className="gap-2">
+        <ItemGroup>
           {overview.agents.map((agent) => {
             const trusted = agent.state.status === "trusted";
             const stopped =
@@ -557,12 +564,14 @@ function AgentSettings({ project }: { project: Project | null }) {
                   <BotIcon />
                 </ItemMedia>
                 <ItemContent className="min-w-0">
-                  <ItemTitle className="flex flex-wrap items-center gap-1.5">
+                  <ItemTitle className="flex-wrap">
                     {agent.name}
                     <Badge variant="secondary">{scopeLabels[agent.scope]}</Badge>
                     <AgentStateBadge agent={agent} />
                   </ItemTitle>
-                  <ItemDescription className="font-mono break-all">{agent.target}</ItemDescription>
+                  <ItemDescription className="break-all">
+                    <code>{agent.target}</code>
+                  </ItemDescription>
                   {agent.envNames.length > 0 && (
                     <ItemDescription>
                       환경 변수: {agent.envNames.join(", ")} (값은 보여주지 않아요)
@@ -571,7 +580,7 @@ function AgentSettings({ project }: { project: Project | null }) {
                   {agent.state.status === "trusted" &&
                     (agent.state.link.status === "retrying" ||
                       agent.state.link.status === "stopped") && (
-                      <ItemDescription className="text-destructive">
+                      <ItemDescription variant="destructive">
                         {agent.state.link.error}
                       </ItemDescription>
                     )}
@@ -657,27 +666,27 @@ function SkillSettings({ project }: { project: Project | null }) {
       {catalog.skills.length === 0 ? (
         <FieldDescription>쓸 수 있는 skill이 없어요.</FieldDescription>
       ) : (
-        <ItemGroup className="gap-2">
+        <ItemGroup>
           {catalog.skills.map((skill) => (
             <Item key={`${skill.scope}/${skill.name}`} variant="outline" size="sm">
               <ItemMedia variant="icon">
                 <BookOpenIcon />
               </ItemMedia>
               <ItemContent className="min-w-0">
-                <ItemTitle className="flex items-center gap-1.5">
+                <ItemTitle>
                   {skill.name}
                   <Badge variant="secondary">{skillScopeLabels[skill.scope]}</Badge>
                 </ItemTitle>
-                <ItemDescription className="line-clamp-3">{skill.description}</ItemDescription>
+                <ItemDescription lines={3}>{skill.description}</ItemDescription>
               </ItemContent>
             </Item>
           ))}
         </ItemGroup>
       )}
       {catalog.problems.map((problem) => (
-        <FieldDescription key={problem.directory} className="text-destructive">
+        <FieldError key={problem.directory}>
           <code className="break-all">{problem.directory}</code>: {skillProblems[problem.problem]}
-        </FieldDescription>
+        </FieldError>
       ))}
     </FieldGroup>
   );
@@ -712,19 +721,19 @@ export function SettingsDialog({
             <TabsTrigger value="agents">에이전트</TabsTrigger>
             <TabsTrigger value="imports">가져오기</TabsTrigger>
           </TabsList>
-          <TabsContent value="web" className="pt-3">
+          <TabsContent value="web" className="mt-3">
             <KagiSettings />
           </TabsContent>
-          <TabsContent value="mcp" className="max-h-[60vh] overflow-y-auto pt-3">
+          <TabsContent value="mcp" className="max-h-[60vh] overflow-y-auto mt-3">
             <McpSettings project={project} />
           </TabsContent>
-          <TabsContent value="skills" className="max-h-[60vh] overflow-y-auto pt-3">
+          <TabsContent value="skills" className="max-h-[60vh] overflow-y-auto mt-3">
             <SkillSettings project={project} />
           </TabsContent>
-          <TabsContent value="agents" className="max-h-[60vh] overflow-y-auto pt-3">
+          <TabsContent value="agents" className="max-h-[60vh] overflow-y-auto mt-3">
             <AgentSettings project={project} />
           </TabsContent>
-          <TabsContent value="imports" className="max-h-[60vh] overflow-y-auto pt-3">
+          <TabsContent value="imports" className="max-h-[60vh] overflow-y-auto mt-3">
             <ImportSettings />
           </TabsContent>
         </Tabs>

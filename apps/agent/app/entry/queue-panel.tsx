@@ -111,7 +111,7 @@ export function QueuePanel({
 
   return (
     <div className="flex w-full flex-col border-b">
-      <div className="flex items-center justify-between px-3 pt-2 pb-1 text-[0.6875rem] text-muted-foreground">
+      <div className="flex items-center justify-between px-3 pt-2 pb-1 text-2xs text-muted-foreground">
         <span className="font-medium">
           {waiting > 0 ? `보낼 메시지 ${waiting}` : "답변 중에 전달한 메시지"}
         </span>

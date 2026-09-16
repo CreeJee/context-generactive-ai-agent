@@ -257,14 +257,14 @@ export function ApprovalCard({
       : null;
   const Icon = reviewReason ? ShieldQuestionIcon : view.shell ? TerminalIcon : FileWarningIcon;
   return (
-    <Card size="sm" className="ring-amber-500/40">
+    <Card size="sm" variant="warning">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Icon className="size-4" />
+        <CardTitle className="flex items-center">
+          <Icon className="mr-2 size-4" />
           {requester ? `${requester}: ${view.title}` : view.title}
         </CardTitle>
-        <CardDescription className="flex flex-col gap-0.5">
-          {reviewReason && <span>자동 검토: {reviewReason}</span>}
+        <CardDescription className="flex flex-col">
+          {reviewReason && <span className="mb-0.5">자동 검토: {reviewReason}</span>}
           <span>
             {view.modelReason
               ? `모델이 밝힌 이유: ${view.modelReason}`
@@ -274,7 +274,7 @@ export function ApprovalCard({
         </CardDescription>
       </CardHeader>
       <CardContent>{view.body}</CardContent>
-      <CardFooter className="gap-2">
+      <CardFooter>
         <Button size="sm" disabled={disabled} onClick={() => approval.answer(true)}>
           승인
         </Button>

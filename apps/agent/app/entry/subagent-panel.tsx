@@ -102,20 +102,20 @@ export function SubagentPanel({
   return (
     <div className="flex flex-col gap-3">
       {running.length > 0 && (
-        <ItemGroup className="gap-2">
+        <ItemGroup>
           {running.map((child) => (
             <Item key={child.id} variant="muted" size="sm">
               <ItemMedia variant="icon">
                 <BotIcon />
               </ItemMedia>
               <ItemContent className="min-w-0">
-                <ItemTitle className="flex items-center gap-1.5">
+                <ItemTitle>
                   {requesterLabel({ kind: "subagent", subagentId: child.id, name: child.name })}
                   <Badge variant="secondary">
                     <Spinner /> 작업 중
                   </Badge>
                 </ItemTitle>
-                <ItemDescription className="line-clamp-2">{child.lastTask}</ItemDescription>
+                <ItemDescription>{child.lastTask}</ItemDescription>
               </ItemContent>
             </Item>
           ))}

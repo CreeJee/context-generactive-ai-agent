@@ -49,7 +49,7 @@ export function ComposerStatus({ mode }: { mode: ComposerMode }) {
     case "editing":
       return <span className="text-xs font-medium text-primary">대기 메시지 편집 중</span>;
     case "approval":
-      return <span className="text-xs text-amber-600 dark:text-amber-400">승인을 기다리는 중</span>;
+      return <span className="text-xs text-warning">승인을 기다리는 중</span>;
   }
 }
 
@@ -79,10 +79,7 @@ export function ComposerShortcuts({ mode, className }: { mode: ComposerMode; cla
   if (shortcuts.length === 0) return null;
   return (
     <span
-      className={cn(
-        "hidden items-center gap-3 text-[0.6875rem] text-muted-foreground md:flex",
-        className,
-      )}
+      className={cn("hidden items-center gap-3 text-2xs text-muted-foreground md:flex", className)}
     >
       {shortcuts.map((shortcut) => (
         <Shortcut key={shortcut.label} keys={shortcut.keys} label={shortcut.label} />

@@ -67,7 +67,7 @@ const unavailableReasons = {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="flex flex-col gap-2 px-4 py-3">
-      <h2 className="text-[0.6875rem] font-medium tracking-wide text-muted-foreground uppercase">
+      <h2 className="text-2xs font-medium tracking-wide text-muted-foreground uppercase">
         {title}
       </h2>
       {children}
@@ -266,9 +266,7 @@ export function ProjectSection({
       </div>
       {current && (
         <div className="mt-1 flex flex-col gap-1.5 border-l-2 pl-2.5">
-          <span className="text-[0.6875rem] font-medium text-muted-foreground">
-            {current.name} 설정
-          </span>
+          <span className="text-2xs font-medium text-muted-foreground">{current.name} 설정</span>
           <Select
             value={current.permissionMode}
             items={permissionModes}
@@ -305,9 +303,9 @@ export function ProjectSection({
             />
           </label>
           <Button
-            variant="ghost"
+            variant="ghost-muted"
             size="sm"
-            className="mt-1 self-start text-muted-foreground"
+            className="mt-1 self-start"
             title="목록에서 빼기(대화와 기억은 그대로)"
             onClick={() => onHide(current.id)}
           >
@@ -426,9 +424,7 @@ export function SessionSection({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center justify-between px-4 pt-3 pb-2">
-        <h2 className="text-[0.6875rem] font-medium tracking-wide text-muted-foreground uppercase">
-          대화
-        </h2>
+        <h2 className="text-2xs font-medium tracking-wide text-muted-foreground uppercase">대화</h2>
         <div className="flex items-center">
           <Button variant="ghost" size="sm" onClick={() => onCreate()}>
             <PlusIcon /> 새 대화
@@ -492,16 +488,18 @@ export function SessionSection({
                   </Badge>
                 )}
               </button>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                className="mr-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-                onClick={() => onArchive(session.id)}
-                aria-label="대화 보관"
-                title="보관(목록에서 빼고 기억은 유지)"
-              >
-                <ArchiveIcon />
-              </Button>
+              {/* The row shows its action on hover, or while the action has keyboard focus. */}
+              <div className="mr-1 flex opacity-0 group-hover:opacity-100 has-focus-visible:opacity-100">
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={() => onArchive(session.id)}
+                  aria-label="대화 보관"
+                  title="보관(목록에서 빼고 기억은 유지)"
+                >
+                  <ArchiveIcon />
+                </Button>
+              </div>
             </div>
           ))}
           {sessions.length === 0 && (
@@ -511,11 +509,7 @@ export function SessionSection({
             <Collapsible className="mt-2">
               <CollapsibleTrigger
                 render={
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="group w-full justify-start text-xs text-muted-foreground"
-                  />
+                  <Button variant="ghost-muted" size="sm" className="group w-full justify-start" />
                 }
               >
                 <ChevronRightIcon className="transition-transform group-data-[panel-open]:rotate-90" />

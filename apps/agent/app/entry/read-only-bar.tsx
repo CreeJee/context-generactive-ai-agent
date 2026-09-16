@@ -31,9 +31,9 @@ export function ReadOnlyBar({
     case "other":
     case "free":
       return (
-        <Item variant="outline" className="rounded-xl bg-card shadow-xs">
-          <ItemMedia variant="icon" className="text-muted-foreground">
-            <EyeIcon />
+        <Item variant="card">
+          <ItemMedia variant="icon">
+            <EyeIcon className="text-muted-foreground" />
           </ItemMedia>
           <ItemContent>
             <ItemTitle>
