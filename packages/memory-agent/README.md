@@ -14,7 +14,7 @@ src/
   config/       저장 루트(~/.context-generactive-agent), 전역 설정(config.json), OS 키체인(SecretStore)
   kagi/         선택 Kagi Search·Extract 클라이언트와 켜기/끄기·키 등록
   mcp/          MCP 설정 파일(공통·프로젝트) 읽기, 신뢰, 연결, 도구 변환
-  skills/       ~/.agents/skills·<project>/.agents/skills의 SKILL.md 목록과 읽기
+  skills/       기본(이 패키지의 skills/)·~/.agents/skills·<project>/.agents/skills의 SKILL.md 목록과 읽기
   subagents/    run_subagent·message_subagent: 자식 chat 실행, 병렬 시작, 승인 중계, 기록
   acp/          ACP 에이전트 다리(에디터 ↔ 실행 중인 앱 HTTP API)
   external-agents/  외부 ACP 에이전트(Codex 등) 설정·신뢰·연결·재연결 정책
@@ -40,7 +40,11 @@ src/
   layers.ts     모든 서비스를 저장 루트 하나로 조립하는 Effect Layer
 bin/
   context-agent-acp.ts   저장소에서 쓰는 ACP 에이전트(실행 파일에서는 `context-agent acp`)
+skills/
+  draw/SKILL.md          앱 기본 skill: SVG로 다이어그램·차트·와이어프레임·아이콘 그리기
 ```
+
+앱 기본 skill은 `SKILL.md` 하나로 완결해야 합니다. 실행 파일에서는 저장 루트 아래에 풀리고 파일 도구가 저장 루트를 읽지 않아서, 옆에 둔 파일은 모델이 읽을 수 없습니다. 같은 이름의 공통·프로젝트 skill이 기본 skill을 덮어씁니다.
 
 네이티브·임베딩 패키지(turbovec, `@napi-rs/keyring`, `@huggingface/transformers`)는 정적 import하지 않고 `runtime/resources.ts`의 `requireRuntime`으로 불러옵니다. 실행 파일(Node SEA)은 디스크 파일을 `import()`하지 못하고, 이 패키지들을 `CONTEXT_AGENT_RUNTIME` 폴더에 풀어 두기 때문입니다.
 

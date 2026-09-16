@@ -1,11 +1,27 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Context, Effect, Layer, Schema } from "effect";
 import type { Project } from "../projects/projects.ts";
+import { runtimeRequire, runtimeRoot } from "../runtime/resources.ts";
 
-export const SkillScope = Schema.Literal("global", "project");
+/**
+ * Where a skill comes from. `builtin` ships with this app; the user's own (`global`) and the
+ * project's replace a built-in skill of the same name, so any of them can be overridden.
+ */
+export const SkillScope = Schema.Literal("builtin", "global", "project");
 export type SkillScope = typeof SkillScope.Type;
+
+/**
+ * The skills this app ships: `skills/` in this package, which the executable unpacks next to its
+ * other runtime files. Resolved from the package rather than this module, because the app bundles
+ * this module into its server build.
+ */
+export function builtinSkillsDirectory() {
+  const root = runtimeRoot();
+  if (root !== null) return join(root, "skills");
+  return join(dirname(runtimeRequire().resolve("memory-agent/package.json")), "skills");
+}
 
 /** Shared with other agents: `npx skills add -g` installs here. */
 export const globalSkillsDirectory = (home: string) => join(home, ".agents", "skills");
@@ -144,25 +160,49 @@ function scan(scope: SkillScope, root: string) {
   return { skills, problems };
 }
 
+/**
+ * Other files a skill may point the model at. A built-in skill has none by rule: the executable
+ * unpacks it under the storage root, which the file tools refuse to read, so anything it needs has
+ * to be in SKILL.md itself.
+ */
+function filesOf(skill: Skill): string[] {
+  switch (skill.scope) {
+    case "builtin":
+      return [];
+    case "global":
+    case "project":
+      return readdirSync(skill.directory)
+        .filter((file) => file !== "SKILL.md" && !file.startsWith("."))
+        .sort()
+        .slice(0, 100);
+  }
+}
+
 export interface SkillsOptions {
   /** Where global skills live; tests use a temporary home. */
   readonly home?: string;
+  /** Where the app's own skills live; tests point it elsewhere to control what is listed. */
+  readonly builtin?: string;
 }
 
 const make = (options: SkillsOptions) =>
   Effect.sync(() => {
     const home = options.home ?? homedir();
+    const builtinRoot = options.builtin ?? builtinSkillsDirectory();
 
     const load = (project: Project) => {
-      const global = scan("global", globalSkillsDirectory(home));
-      const local = scan("project", projectSkillsDirectory(project.root));
-      const localNames = new Set(local.skills.map((entry) => entry.skill.name));
+      // Later scopes win on a shared name: the app's defaults, then the user's, then the project's.
+      const layers = [
+        scan("builtin", builtinRoot),
+        scan("global", globalSkillsDirectory(home)),
+        scan("project", projectSkillsDirectory(project.root)),
+      ];
+      const byName = new Map<string, { skill: Skill; body: string }>();
+      for (const layer of layers)
+        for (const entry of layer.skills) byName.set(entry.skill.name, entry);
       return {
-        entries: [
-          ...global.skills.filter((entry) => !localNames.has(entry.skill.name)),
-          ...local.skills,
-        ],
-        problems: [...global.problems, ...local.problems],
+        entries: [...byName.values()],
+        problems: layers.flatMap((layer) => layer.problems),
       };
     };
 
@@ -182,11 +222,7 @@ const make = (options: SkillsOptions) =>
       read: (project: Project, name: string): SkillDocument | null => {
         const entry = load(project).entries.find((candidate) => candidate.skill.name === name);
         if (!entry) return null;
-        const files = readdirSync(entry.skill.directory)
-          .filter((file) => file !== "SKILL.md" && !file.startsWith("."))
-          .sort()
-          .slice(0, 100);
-        return { ...entry.skill, body: entry.body, files };
+        return { ...entry.skill, body: entry.body, files: filesOf(entry.skill) };
       },
     };
   });

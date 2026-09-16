@@ -279,6 +279,8 @@ cpSync(
   join(memoryAgent, "src", "memory", "morph", "kiwi-worker.mjs"),
   join(stage, "kiwi-worker.mjs"),
 );
+// The app's own skills; `builtinSkillsDirectory()` looks for them next to the runtime files.
+cpSync(join(memoryAgent, "skills"), join(stage, "skills"), { recursive: true });
 collectPackages();
 verifyNativeFiles();
 writeCodexManifest();

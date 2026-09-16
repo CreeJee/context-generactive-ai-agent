@@ -6,7 +6,12 @@ import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { CodexAppServer } from "../src/codex/app-server.ts";
 import { CodexModels } from "../src/codex/models.ts";
-import { Skills, parseFrontMatter } from "../src/skills/skills.ts";
+import {
+  Skills,
+  builtinSkillsDirectory,
+  maxDescriptionCharacters,
+  parseFrontMatter,
+} from "../src/skills/skills.ts";
 import { SkillTools } from "../src/tools/skills.ts";
 import { testRuntime } from "./support/runtime.ts";
 
@@ -74,6 +79,44 @@ describe("Skills", () => {
       instructions: "Project rules.",
     });
     expect(await read?.({ name: "linked" })).toEqual({ error: "skill_not_found", name: "linked" });
+  });
+
+  test("built-in skills are listed, and the user's or the project's replace them by name", async () => {
+    const { base, home } = await testRuntime();
+    const builtin = join(base, "builtin");
+    writeSkill(builtin, "draw", "name: draw\ndescription: App drawing.", "App rules.");
+    writeSkill(builtin, "tidy", "name: tidy\ndescription: App tidying.", "Tidy rules.");
+    writeFileSync(join(builtin, "tidy", "notes.md"), "not for the model");
+    writeSkill(join(home, ".agents", "skills"), "draw", "name: draw\ndescription: My drawing.");
+
+    const { runtime, project } = await testRuntime({ skillsBuiltin: builtin, skillsHome: home });
+    const skills = await runtime.runPromise(Skills);
+    expect(
+      skills.catalog(project).skills.map((skill) => [skill.name, skill.scope, skill.description]),
+    ).toEqual([
+      ["draw", "global", "My drawing."],
+      ["tidy", "builtin", "App tidying."],
+    ]);
+
+    // The executable unpacks built-in skills under the storage root, which the file tools refuse,
+    // so a built-in skill never points the model at files beside it.
+    expect(skills.read(project, "tidy")).toMatchObject({
+      scope: "builtin",
+      files: [],
+      body: "Tidy rules.",
+    });
+  });
+
+  test("the skills this app ships are readable and within limits", async () => {
+    const { runtime, project } = await testRuntime({ skillsBuiltin: builtinSkillsDirectory() });
+    const catalog = (await runtime.runPromise(Skills)).catalog(project);
+    expect(catalog.problems).toEqual([]);
+    const shipped = catalog.skills.filter((skill) => skill.scope === "builtin");
+    expect(shipped.map((skill) => skill.name)).toContain("draw");
+    for (const skill of shipped) {
+      expect(skill.description.length).toBeGreaterThan(0);
+      expect(skill.description.length).toBeLessThanOrEqual(maxDescriptionCharacters);
+    }
   });
 
   test("a chat run lists skills and offers read_skill only when there are skills", async () => {

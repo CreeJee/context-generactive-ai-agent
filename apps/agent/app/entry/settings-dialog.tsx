@@ -353,6 +353,8 @@ function McpStateBadge({ server }: { server: McpServerView }) {
 }
 
 const scopeLabels = { global: "공통", project: "프로젝트" } as const;
+/** Skills also come built into the app, which MCP servers and agents do not. */
+const skillScopeLabels = { builtin: "기본", ...scopeLabels } as const;
 
 function McpServerItem({
   server,
@@ -642,12 +644,13 @@ function SkillSettings({ project }: { project: Project | null }) {
     <FieldGroup>
       <FieldDescription>
         모델은 목록의 이름과 설명을 보고, 작업에 맞으면 내용을 읽어 따라요. skill 문구는 지침일
-        뿐이라 승인을 대신하지 않아요. 같은 이름이면 프로젝트 skill이 쓰여요.
+        뿐이라 승인을 대신하지 않아요. 이름이 같으면 프로젝트 → 공통 → 기본 순으로 앞의 것이 쓰이니,
+        기본 skill도 같은 이름으로 덮어쓸 수 있어요.
       </FieldDescription>
       <div className="flex flex-col gap-1">
         {catalog.directories.map((directory) => (
           <div key={directory.scope} className="text-xs text-muted-foreground">
-            {scopeLabels[directory.scope]}: <code className="break-all">{directory.path}</code>
+            {skillScopeLabels[directory.scope]}: <code className="break-all">{directory.path}</code>
           </div>
         ))}
       </div>
@@ -663,7 +666,7 @@ function SkillSettings({ project }: { project: Project | null }) {
               <ItemContent className="min-w-0">
                 <ItemTitle className="flex items-center gap-1.5">
                   {skill.name}
-                  <Badge variant="secondary">{scopeLabels[skill.scope]}</Badge>
+                  <Badge variant="secondary">{skillScopeLabels[skill.scope]}</Badge>
                 </ItemTitle>
                 <ItemDescription className="line-clamp-3">{skill.description}</ItemDescription>
               </ItemContent>

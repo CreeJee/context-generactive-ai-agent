@@ -34,8 +34,10 @@ export async function testRuntime(overrides: MemoryAgentLayerOptions = {}) {
     morphAnalyzer: fakeMorphLayer,
     interpretAutomatically: false,
     secrets: SecretStore.memory,
-    // The user's real ~/.agents/skills stays out of tests.
+    // The user's real ~/.agents/skills stays out of tests, and so do the app's own skills: a test
+    // lists exactly the skills it writes. `skills.test.ts` checks the built-in ones on their own.
     skillsHome: home,
+    skillsBuiltin: join(base, "builtin-skills"),
     // So does the user's real ~/.claude and ~/.codex; a test writes its own transcripts here.
     importsHome: home,
     importsWatching: false,

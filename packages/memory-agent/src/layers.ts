@@ -62,6 +62,8 @@ export interface MemoryAgentLayerOptions {
   readonly kagiBaseUrl?: string;
   /** Home directory whose `.agents/skills` holds global skills; tests use a temporary one. */
   readonly skillsHome?: string;
+  /** Directory of the app's own skills; tests use an empty one so only what they write is listed. */
+  readonly skillsBuiltin?: string;
   /**
    * Home directory holding other coding agents' transcripts (`.claude`, `.codex`), and whether to
    * keep following them in the background. Default: the real home, following. Tests set both.
@@ -105,7 +107,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     Kagi.layer({ baseUrl: options.kagiBaseUrl }),
     McpServers.layer,
     ExternalAgents.layer,
-    Skills.layer({ home: options.skillsHome }),
+    Skills.layer({ home: options.skillsHome, builtin: options.skillsBuiltin }),
   );
   const retrieval = Layer.mergeAll(
     Indexer.layer,

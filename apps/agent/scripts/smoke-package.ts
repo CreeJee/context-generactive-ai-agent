@@ -86,6 +86,9 @@ async function stop(child: ChildProcess) {
 
 const Auth = Schema.Struct({ status: Schema.String });
 const Created = Schema.Struct({ id: Schema.String });
+const Catalog = Schema.Struct({
+  skills: Schema.Array(Schema.Struct({ name: Schema.String, scope: Schema.String })),
+});
 const json = <A, I>(schema: Schema.Schema<A, I>, response: Response) =>
   response.json().then((body) => Schema.decodeUnknownSync(schema)(body));
 
@@ -191,6 +194,14 @@ try {
   check("session created", session.status === 201, String(session.status));
   const kagi = await fetch(`${url}/api/settings/kagi`);
   check("keychain addon loads (Kagi status)", kagi.status === 200, String(kagi.status));
+  // Built-in skills are found next to the unpacked runtime, a path only the executable takes.
+  const catalog = await json(Catalog, await fetch(`${url}/api/projects/${projectId}/skills`));
+  const builtin = catalog.skills.filter((skill) => skill.scope === "builtin");
+  check(
+    "built-in skills unpacked and listed",
+    builtin.some((skill) => skill.name === "draw"),
+    builtin.map((skill) => skill.name).join(", ") || "none",
+  );
 
   const acp = spawnSync(executable, ["acp", "--port", String(port)], {
     input: `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 1, clientCapabilities: {} } })}\n`,
