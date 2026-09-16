@@ -401,3 +401,11 @@
   - `typecheck`는 캐시하지 않는다(`cache: false`). Vite Task의 파일 추적은 TypeScript 7 `tsc`가 실행 파일을 찾는 경로만 기록하고, 네이티브 바이너리가 읽는 `tsconfig.json`과 소스는 기록하지 않는다. 캐시하면 소스가 바뀌어도 이전 통과를 재생한다. `package.json` 스크립트에는 태스크별 설정을 줄 수 없어서 각 `vite.config.ts`의 `run.tasks`에 둔다.
 - DOM 라이브러리가 없는 패키지에서 `Response.json()`과 `new Response()`는 전역 `Response`가 아니라 undici-types의 `Response`를 돌려준다. `@types/node`가 값 `Response`를 `typeof undici.Response`로 선언하기 때문이다. 이 타입이 추론된 export 타입에 들어가면, undici-types가 의존성이 아니어서 이름을 쓸 수 없다. 응답을 만드는 헬퍼의 반환 타입을 전역 `Response`로 적어 막는다(memory-agent `src/agent/chat.ts`의 `json`).
   - `undici-types`를 의존성으로 두거나 `lib`에 `dom`을 넣지는 않는다. 앞의 것은 `@types/node`가 쓰는 버전과 계속 맞춰야 하고, 뒤의 것은 서버 패키지에 브라우저 전역이 섞인다.
+
+## 디자인 시스템 린트 (2026-09-16)
+
+- `@shadcn/lint`를 Oxlint JS 플러그인(`shadcn`)으로 루트 `vite.config.ts`의 `lint.jsPlugins`에 등록한다. 패키지는 린트 설정을 가진 루트의 `devDependencies`에 둔다. 규칙은 아직 켜지 않았다. 어떤 규칙을 켜고 무엇을 허용할지는 따로 정한다.
+  - `vp lint`와 `vp check`는 어느 폴더에서 실행해도 루트 `vite.config.ts`를 `-c`로 넘긴다. Oxlint는 `-c`를 받으면 하위 설정을 찾지 않는다. 그래서 `apps/agent/vite.config.ts`의 `lint` 블록은 적용되지 않는다. 하위 설정으로 읽혔다면 그 안의 `options.typeAware`가 에러를 냈을 것이다. 앱에만 걸 규칙은 루트 `lint.overrides`에서 `apps/agent/**`로 범위를 정해야 한다.
+  - 컴포넌트와 테마는 `apps/agent/components.json`(`~/components/ui`, `app/app.css`)과 앱 `tsconfig.json`의 `paths`에서 찾는다. 루트에서 실행해도 찾으므로 `settings.shadcn`은 두지 않는다.
+  - 루트에 `typescript`(catalog, 7.0.2)를 둔다. `@shadcn/lint`가 쓰는 `@typescript-eslint/parser`는 peer로 `typescript <6.1.0`을 요구한다. 루트에 TypeScript가 없으면 pnpm이 TypeScript 6을 설치하고, 루트 `vite-plus`도 그 버전으로 묶인다. 이 파서는 `oxc-parser`가 없을 때만 쓰이므로, TypeScript 7과 peer 범위가 맞지 않아도 동작에는 영향이 없다.
+  - README는 Oxlint 1.80 이상을 요구하지만, Vite+ 0.3.0에 든 Oxlint는 1.79.0이다. 여섯 규칙을 임시 설정으로 모두 켜서 1.79.0에서 플러그인이 로드되고 진단을 내는지 확인했다. Oxlint 1.82.0은 Vite+ 0.3.2에 들어 있다.
