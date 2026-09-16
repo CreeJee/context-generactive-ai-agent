@@ -182,6 +182,22 @@
 - 보관한 대화는 목록에서 고를 수 없고, 복원한 뒤 연다. 외부에서 id로 여는 경로(ACP `session/load`)는 막지 않는다.
 - 사이드바: 대화 행에 마우스를 올리면 보관 버튼이 보이고, 목록 아래 "보관함 N"을 펼쳐 복원한다. 프로젝트 추가는 설정과 헷갈리지 않게 프로젝트 선택 옆 버튼 → 대화상자로 옮기고, 현재 프로젝트 설정(권한 모드, 다른 프로젝트에서 기억 찾기)은 "<프로젝트> 설정"으로 묶는다.
 
+## 다른 에이전트 대화 이관 (2026-09-16)
+
+- Claude Code(`~/.claude/projects/**/*.jsonl`)와 Codex CLI(`~/.codex/sessions/**/rollout-*.jsonl`)가 로컬에 남긴 대화를 노드로 옮긴다. 새 출처는 어댑터 파일 하나와 `ImportSourceName` 태그 하나로 붙는다.
+- **뽑아낼 수 있는 건 다 옮긴다.** 발언뿐 아니라 `tool_call`·`tool_result`까지 노드로 만들고, 구조 edge(`next`·`reply`·`calls`·`returns`·`touches`)를 라이브와 같은 규칙으로 세운다. 옛 대화도 `trace_evidence`로 근거를 따라갈 수 있게 하기 위해서다. 도구 인자의 파일 참조를 읽는 `RefArguments`에 Claude Code가 쓰는 `file_path`·`notebook_path`를 더했다(라이브 MCP 도구에도 같이 적용).
+- **`Nodes.append`는 건드리지 않고 `BulkNodes`를 따로 둔다.** `append`는 대화 한 건을 지금 시각으로 붙이고 노드마다 트랜잭션을 연다. 라이브 턴에는 맞지만 수천 줄 기록에는 맞지 않아서, 파일 하나를 한 트랜잭션에 넣고 **줄의 원래 `timestamp`를 `created_at`에 그대로** 쓰는 경로를 따로 만들었다. 노드는 여전히 수정 불가 증거다.
+- **CLI가 사용자 쪽에 써 넣은 글은 버린다.** 슬래시 명령 봉투(`<command-name>`), `<local-command-stdout>`, `[Request interrupted…]`, 압축 요약, Codex의 `<environment_context>`·`<codex_internal_context>`·`# AGENTS.md instructions`·에이전트 인계문. 정정·취소 권위가 사용자 발언에만 있어서, 이걸 사용자 말로 두면 기억이 틀린 근거를 갖는다. Claude의 `isSidechain`(서브에이전트 줄기)·`isMeta`, Codex의 `reasoning`도 버린다.
+- **`cwd`가 등록된 프로젝트 안일 때만 옮긴다.** 아니면 `import_cursors.skipped = 'no_project'`로 두고 폴더 이름과 대화 수만 설정 화면에 보여 준다. 프로젝트 등록은 파일·셸 도구가 닿는 범위를 넓히는 일이라 이관이 대신 결정하지 않는다.
+- **이어붙이기.** 파일마다 `import_cursors`에 byte offset을 두고 거기서부터 읽는다. 마지막 개행까지만 소비해서, 실행 중인 에이전트가 쓰는 중인 꼬리 줄을 반으로 읽지 않는다. `size`·`mtime`이 커서와 같으면 건너뛰고, 파일이 짧아졌으면 처음부터 다시 읽는다. 중복은 `imported_nodes`(출처 + 줄 id)가 막는다. `config.json`의 `importsEnabled`를 켜면 5분마다 따라붙는다(`fs.watch` 재귀는 Linux에서 안 돼서 폴링).
+- **저장 루트 아래는 읽지 않는다.** 앱 전용 `CODEX_HOME`이 거기 있어서, 앱 자기 대화를 노드로 두 번 넣게 된다.
+- 기록 하나 = 세션 하나이고, 세션의 `created_at`은 그 도구가 대화를 시작한 시각이다(목록이 `created_at DESC`라 제 날짜 자리에 꽂힌다). `run_id`는 사용자 턴마다 그 노드의 id로 잡는다. `history.ts`가 `run_id`로 답변을 묶으므로 이관한 대화가 화면에서 턴 단위로 그대로 재생된다.
+- **인덱싱·해석은 보낸 날짜 내림차순이다**(2026-09-16). 이관한 노드는 `seq`가 크고 시각이 옛날이라, `seq` 순으로는 방금 나눈 대화보다 먼저 처리된다. 세션 안에서는 그대로 시간순이다.
+  - run 뒤 뒷정리는 예산(`indexUpTo(200)`)만큼만 한다. 예전처럼 `indexAll()`이 남은 게 없을 때까지 돌면, 이관 뒤 첫 run이 backlog를 다 비울 때까지 `analyzeAll`·`runPending`이 시작도 못 한다.
+  - 남은 backlog는 `Importer`의 전용 fiber가 비운다. 인덱서가 배치마다 permit을 놓아서 그 사이의 대화가 여전히 먼저 인덱싱된다.
+- **도구 결과도 라이브와 똑같이 임베딩한다.** 라이브 인덱서에 kind 필터가 없어서 `tool_result`는 이미 벡터에 들어간다. 이 기기 기록 기준으로 이관할 `tool_result` 14,004개의 토큰 중앙값은 206이고 상한(2048)에 걸리는 건 2,499개뿐이라, 배치 수가 2,051(발언+`tool_call`)에서 6,003(전부)으로 느는 정도다. 전용 fiber에서 돌고 워터마크로 이어받으므로 대화를 막지 않는다.
+- 이관은 사용자가 켜는 서버 기능이고 **모델 도구로 내보내지 않는다**. `~/.codex`는 파일 도구의 자격 증명 거부 목록에 그대로 남는다. 이관한 노드의 `detail.importedFrom`으로 출처를 남기고, 모델 지침에 그 승인·권한이 여기로 넘어오지 않는다고 적는다.
+
 ## ACP: 에디터가 이 에이전트를 부를 때 (2026-09-15)
 
 - ACP 에이전트는 실행 파일의 `context-agent acp [--port 5173]`이다(저장소에서는 `packages/memory-agent/bin/context-agent-acp.ts`, `CONTEXT_AGENT_URL`, 기본 `http://127.0.0.1:5173`). 에디터(Zed 등)가 stdio로 실행하면, 이 프로세스는 **실행 중인 앱의 HTTP API에 붙는 다리**로만 일한다. 저장소를 직접 열지 않는 이유: turbovec 인덱스는 저장 루트마다 한 프로세스만 쓸 수 있고, 같은 대화·lease·승인·기억을 웹 화면과 함께 써야 해서다. 앱이 꺼져 있으면 "앱을 먼저 실행하세요"로 실패한다.

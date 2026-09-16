@@ -23,6 +23,7 @@ src/
                 고정 해시 tgz 설치(Kiwi 모델, 실행 파일의 codex)
   projects/     프로젝트 등록·경로 검사·교차 회상 제외·권한 모드(ask/auto)
   sessions/     프로젝트에 속한 대화
+  imports/      Claude Code·Codex CLI 기록 이관: 줄 읽기 어댑터, 대량 노드 쓰기, 커서와 따라붙기
   memory/       기억: 노드·구조 edge·그래프 탐색·근거 추적·검색·기록 middleware
     embedding/  로컬 임베딩 모델 + turbovec 벡터 인덱스 + 인덱서(형태소 분석 포함)
     morph/      Kiwi 한국어 형태소 분석(worker thread, 모델은 처음 쓸 때 내려받음)
@@ -55,6 +56,17 @@ bin/
 - 교차 프로젝트 회상은 기본 포함이며, 프로젝트별로 제외할 수 있습니다. 결과에는 출처 프로젝트 이름(`projectName`)이 붙습니다.
 - `Interpreter`(llm-interpret)가 답변이 끝난 뒤 사용자·assistant 발언을 해석해 주제(`topic` 노드 + `about`), `corrects`·`retracts`·`related` edge를 붙입니다. 후보는 코드가 고르고, 정정·취소는 사용자 발언에서만, 대상이 분명할 때만 edge가 됩니다. 모호하면 `interpretations`에 `unconfirmed`로 남아 확인 질문이 됩니다.
 - 검색 결과의 `supersededBy`는 그 발언을 정정·취소한 나중 발언, `unconfirmedChallenges`는 확인이 필요한 후보 수, `uninterpreted`는 아직 해석되지 않은 발언 수입니다. 테스트는 `tests/interpret.test.ts`(가짜 codex가 표식으로 해석 결과를 흉내 냄).
+- 인덱싱·해석 대기열은 **보낸 날짜 내림차순**입니다. 이관한 노드는 `seq`가 크고 시각이 옛날이라, `seq` 순으로 두면 방금 나눈 대화를 밀어냅니다. run 뒤 뒷정리는 예산(`indexUpTo(200)`)만큼만 하고, 남은 backlog는 `Importer`의 전용 fiber가 비웁니다.
+
+## 다른 에이전트 대화 이관 (imports/)
+
+Claude Code(`~/.claude/projects/**/*.jsonl`)와 Codex CLI(`~/.codex/sessions/**/rollout-*.jsonl`)의 로컬 기록을 노드로 옮깁니다. 원본은 읽기만 합니다.
+
+- 줄 하나를 `TranscriptItem`(리터럴 태그 유니온: `session`·`message`·`tool_call`·`tool_result`·`ignored`)으로 읽습니다. 새 출처는 어댑터 파일 하나 + `ImportSourceName` 태그 하나입니다.
+- `BulkNodes`가 대화 하나를 한 트랜잭션에 직접 INSERT하며, 줄의 원래 `timestamp`를 `created_at`에 씁니다. 구조 edge와 `interpret_jobs`는 라이브와 같은 규칙입니다. `Nodes.append`는 라이브 전용으로 그대로 둡니다.
+- `Importer`가 `import_cursors`의 byte offset부터 읽고, 마지막 개행까지만 소비합니다(실행 중인 에이전트가 쓰는 중인 꼬리 줄을 반으로 읽지 않기 위해). 중복은 `imported_nodes`가 막습니다.
+- 기록의 `cwd`가 등록된 프로젝트 안일 때만 옮깁니다. 아니면 `skipped = 'no_project'`로 두고 설정 화면에 폴더만 보여 줍니다. 저장 루트 아래(앱 전용 `CODEX_HOME`)는 읽지 않습니다.
+- 설정 화면 "가져오기" 탭에서 켜면 5분마다 따라붙습니다(`config.json`의 `importsEnabled`). 이관은 모델 도구가 아닙니다. 테스트는 `tests/import-readers.test.ts`, `tests/imports.test.ts`.
 
 ## 도구와 권한
 
