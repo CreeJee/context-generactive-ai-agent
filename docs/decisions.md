@@ -421,3 +421,12 @@
   - `Collapsible`, `CollapsibleTrigger`, `CollapsibleContent`는 스타일이 없는 Base UI 래퍼다. 루트 설정의 `no-restyle` contract로 모든 분류를 허용한다.
   - 컴포넌트가 이미 정한 값으로 바뀐 곳이 있다. ItemGroup 간격 8→10px, ItemTitle 안 배지 간격 6→8px, 이미지 hover 미리보기 안쪽 여백 6→10px, 승인 카드 테두리색 amber-500→`warning`.
   - 입력창의 `rounded-xl`과 `text-sm`은 이 정리 전부터 적용되지 않는다. InputGroup의 `has-[textarea]:rounded-md`와 Textarea의 `md:text-xs/relaxed`가 이긴다. 이번 정리는 이 동작을 바꾸지 않았다.
+
+## 임베딩 worker thread (2026-09-16)
+
+- 임베딩 모델(transformers.js)은 Kiwi처럼 서버 프로세스 안의 worker thread(`embed-worker.mjs`)에서 돌린다. 처음 임베딩할 때 띄우고 계속 둔다. 별도 프로세스로 옮기지는 않는다.
+  - onnxruntime-node(1.24.3)의 `run`은 `setImmediate` 안에서 네이티브 추론을 동기로 부른다. 메인 스레드에서 돌리면 배치 하나가 도는 동안 HTTP 요청이 모두 기다린다.
+  - 실측: 가져오기가 켜진 서버를 시작하자 밀린 노드 약 1,140개를 한 번에 임베딩했고, 그동안 메인 스레드가 약 74초 동안 추론에 묶였다. 설정 API가 6–21초 걸렸고, 임베딩이 끝난 뒤에는 3–50ms였다.
+  - 같은 300개(약 2,000토큰짜리 30개 포함)를 임베딩할 때 이벤트 루프 지연 p99가 637ms에서 13ms로 줄었다. 걸린 시간은 같다(약 20초).
+  - worker는 토큰 수 세기와 배치 임베딩(정규화 전 CLS 행)만 맡는다. 배치 나누기와 정규화는 메인 스레드의 `planBatches`, `normalize`가 한다. 모델 적재가 실패하면 worker를 끝내고, 다음 요청이 새 worker로 다시 시도한다.
+  - worker 스크립트 위치는 `runtimeWorker`가 정한다. 저장소에서는 package exports(`memory-agent/embed-worker`, `memory-agent/kiwi-worker`), 실행 파일에서는 runtime 폴더다. `scripts/package.ts`가 두 스크립트를 runtime 폴더에 복사한다.
