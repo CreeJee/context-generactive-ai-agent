@@ -67,6 +67,14 @@ const nativeConfig = [
   'shell_environment_policy.inherit = "none"',
   // Keeps skills installed on this machine out of the model context; still marked under development.
   "features.skip_host_skill_discovery = true",
+  // codex ships its own skills (imagegen, openai-docs, plugin-creator, review-agent, skill-creator,
+  // skill-installer) and unpacks them into CODEX_HOME. They are written for codex's own tool
+  // surface — shell_tool, web_search, plugins, multi_agent, the built-in image tool — and this app
+  // turns all of that off and hands the model its own tools instead. So the model was reading
+  // instructions for tools it does not have: asked for an image, it followed codex's imagegen skill
+  // down to a `scripts/image_gen.py` fallback and asked the user for an OPENAI_API_KEY that the
+  // shell tool strips anyway. Off, the catalog is empty and nothing is unpacked.
+  "skills.bundled = false",
   "suppress_unstable_features_warning = true",
   ...[
     "shell_tool",
