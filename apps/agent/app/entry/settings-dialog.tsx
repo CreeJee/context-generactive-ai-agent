@@ -10,6 +10,7 @@ import {
 import { Schema } from "effect";
 import { useEffect, useState } from "react";
 import { Alert, AlertDescription } from "~/components/ui/alert";
+import { AnimatedNumber } from "~/components/ui/animated-number";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import {
@@ -47,6 +48,7 @@ import {
   api,
   type ExternalAgentView,
   type ExternalAgentsOverview,
+  type ImportActivity,
   type ImportOverview,
   type KagiStatus,
   type McpOverview,
@@ -204,6 +206,50 @@ const isUnplacedReason = Schema.is(UnplacedReason);
 const unplacedReason = (reason: string) =>
   isUnplacedReason(reason) ? unplacedReasons[reason] : reason;
 
+/** How often the tab asks again while a pass reads, and while its nodes wait to be indexed. */
+const refreshWhileReadingMs = 1_000;
+const refreshWhileIndexingMs = 3_000;
+
+const clockTime = (iso: string) =>
+  new Date(iso).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+
+/** The pass this server is running, or how its latest one went. */
+function ImportActivityLine({ activity }: { activity: ImportActivity }) {
+  switch (activity.status) {
+    case "running":
+      return (
+        <FieldDescription className="flex items-center">
+          <Spinner className="mr-1.5" />
+          <span>
+            기록을 읽는 중이에요 · <AnimatedNumber value={activity.checked} />/
+            <AnimatedNumber value={activity.total} />개 확인 · 노드{" "}
+            <AnimatedNumber value={activity.written} />개 추가
+            {activity.failed > 0 && (
+              <>
+                {" "}
+                · <AnimatedNumber value={activity.failed} />개 실패
+              </>
+            )}
+          </span>
+        </FieldDescription>
+      );
+    case "finished":
+      return (
+        <FieldDescription>
+          {clockTime(activity.finishedAt)}에 기록 {activity.checked}개를 확인하고 노드{" "}
+          {activity.written}개를 더했어요.
+          {activity.failed > 0 && ` ${activity.failed}개는 읽지 못했어요.`}
+        </FieldDescription>
+      );
+    case "crashed":
+      return (
+        <FieldError>
+          {clockTime(activity.finishedAt)}에 가져오기가 중간에 멈췄어요: {activity.reason}
+        </FieldError>
+      );
+  }
+}
+
 /** Migrating other coding agents' local conversations into this app's memory. */
 function ImportSettings() {
   const [overview, setOverview] = useState<ImportOverview | null>(null);
@@ -216,6 +262,22 @@ function ImportSettings() {
       .then(setOverview)
       .catch((failure: Error) => setError(errorMessage(failure)));
   }, []);
+
+  // A pass and the indexing after it run in the background; the numbers follow them while open.
+  const reading = overview?.activity?.status === "running";
+  const indexing = (overview?.unindexed ?? 0) > 0;
+  useEffect(() => {
+    if (!reading && !indexing) return;
+    const timer = setInterval(
+      () =>
+        void api
+          .imports()
+          .then(setOverview)
+          .catch(() => undefined),
+      reading ? refreshWhileReadingMs : refreshWhileIndexingMs,
+    );
+    return () => clearInterval(timer);
+  }, [reading, indexing]);
 
   const apply = async (
     command: { action: "run" | "enable" | "disable" } | { action: "interpret"; interpret: boolean },
@@ -267,8 +329,11 @@ function ImportSettings() {
             <ItemContent>
               <ItemTitle>{sourceNames[source.name]}</ItemTitle>
               <ItemDescription>
-                기록 {source.transcripts}개 중 {source.migrated}개를 읽어 {source.nodes}개를 기억에
-                넣었어요.{source.failed > 0 && ` ${source.failed}개는 읽지 못했어요.`}
+                기록 <AnimatedNumber value={source.transcripts} />개 중{" "}
+                <AnimatedNumber value={source.migrated} />
+                개를 읽어 <AnimatedNumber value={source.nodes} />
+                개를 기억에 넣었어요.
+                {source.failed > 0 && ` ${source.failed}개는 읽지 못했어요.`}
               </ItemDescription>
               <ItemDescription>
                 <code>{source.root}</code>
@@ -278,10 +343,13 @@ function ImportSettings() {
         ))}
       </ItemGroup>
 
+      {overview.activity && <ImportActivityLine activity={overview.activity} />}
+
       {overview.unindexed > 0 && (
         <FieldDescription>
-          아직 {overview.unindexed}개를 인덱싱하고 있어요. 최근 대화부터 들어가고, 옛 기록은 뒤에서
-          채워요. 그동안에도 글자·형태소 검색으로는 찾을 수 있어요.
+          아직 <AnimatedNumber value={overview.unindexed} />
+          개를 인덱싱하고 있어요. 최근 대화부터 들어가고, 옛 기록은 뒤에서 채워요. 그동안에도
+          글자·형태소 검색으로는 찾을 수 있어요.
         </FieldDescription>
       )}
 
@@ -333,15 +401,17 @@ function ImportSettings() {
       <Field orientation="horizontal">
         <FieldContent>
           <FieldTitle>지금 가져오기</FieldTitle>
-          <FieldDescription>설정을 바꾸지 않고 한 번만 읽어요.</FieldDescription>
+          <FieldDescription>
+            설정을 바꾸지 않고 한 번만 읽어요. 뒤에서 읽으니 창을 닫아도 계속돼요.
+          </FieldDescription>
         </FieldContent>
         <Button
           variant="outline"
           size="sm"
-          disabled={busy}
+          disabled={busy || reading}
           onClick={() => void apply({ action: "run" })}
         >
-          {busy ? <Spinner /> : <RefreshCwIcon />} 읽기
+          {busy || reading ? <Spinner /> : <RefreshCwIcon />} {reading ? "읽는 중" : "읽기"}
         </Button>
       </Field>
 
