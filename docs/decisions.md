@@ -404,7 +404,10 @@
 
 ## 디자인 시스템 린트 (2026-09-16)
 
-- `@shadcn/lint`를 Oxlint JS 플러그인(`shadcn`)으로 루트 `vite.config.ts`의 `lint.jsPlugins`에 등록한다. 패키지는 린트 설정을 가진 루트의 `devDependencies`에 둔다. 규칙은 아직 켜지 않았다. 어떤 규칙을 켜고 무엇을 허용할지는 따로 정한다.
+- `@shadcn/lint`를 Oxlint JS 플러그인(`shadcn`)으로 루트 `vite.config.ts`의 `lint.jsPlugins`에 등록한다. 패키지는 린트 설정을 가진 루트의 `devDependencies`에 둔다.
+- 여섯 규칙(`no-restyle`, `no-raw-colors`, `no-arbitrary-values`, `no-inline-styles`, `no-unknown-classes`, `require-static-classes`)을 모두 `error`로 켠다. `no-restyle`과 `no-arbitrary-values`는 레이아웃 클래스(`mt-4`, `w-full` 등)를 허용한다(`allow: ["layout"]`).
+  - 컴포넌트 폴더 `apps/agent/app/components/ui/**`에서는 `no-restyle`, `no-arbitrary-values`, `require-static-classes`를 끈다. 컴포넌트는 자기 모양을 스스로 정하고 `ring-[3px]` 같은 구조용 값이 필요하다. `no-raw-colors`와 `no-inline-styles`는 그 폴더에서도 켠다.
+  - 켠 시점에 `apps/agent/app/entry`에 기존 위반이 84개 있었다(`no-restyle` 75, `no-arbitrary-values` 6, `no-raw-colors` 3).
   - `vp lint`와 `vp check`는 어느 폴더에서 실행해도 루트 `vite.config.ts`를 `-c`로 넘긴다. Oxlint는 `-c`를 받으면 하위 설정을 찾지 않는다. 그래서 `apps/agent/vite.config.ts`의 `lint` 블록은 적용되지 않는다. 하위 설정으로 읽혔다면 그 안의 `options.typeAware`가 에러를 냈을 것이다. 앱에만 걸 규칙은 루트 `lint.overrides`에서 `apps/agent/**`로 범위를 정해야 한다.
   - 컴포넌트와 테마는 `apps/agent/components.json`(`~/components/ui`, `app/app.css`)과 앱 `tsconfig.json`의 `paths`에서 찾는다. 루트에서 실행해도 찾으므로 `settings.shadcn`은 두지 않는다.
   - 루트에 `typescript`(catalog, 7.0.2)를 둔다. `@shadcn/lint`가 쓰는 `@typescript-eslint/parser`는 peer로 `typescript <6.1.0`을 요구한다. 루트에 TypeScript가 없으면 pnpm이 TypeScript 6을 설치하고, 루트 `vite-plus`도 그 버전으로 묶인다. 이 파서는 `oxc-parser`가 없을 때만 쓰이므로, TypeScript 7과 peer 범위가 맞지 않아도 동작에는 영향이 없다.
