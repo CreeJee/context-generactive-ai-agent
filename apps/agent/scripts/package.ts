@@ -275,10 +275,13 @@ if (!existsSync(join(app, "build", "client")))
 rmSync(work, { recursive: true, force: true });
 mkdirSync(stage, { recursive: true });
 cpSync(join(app, "build", "client"), join(stage, "client"), { recursive: true });
-cpSync(
-  join(memoryAgent, "src", "memory", "morph", "kiwi-worker.mjs"),
-  join(stage, "kiwi-worker.mjs"),
-);
+// Worker scripts; `runtimeWorker()` looks for them next to the runtime files.
+const workerScripts = {
+  "kiwi-worker.mjs": "morph",
+  "embed-worker.mjs": "embedding",
+} as const;
+for (const [file, folder] of Object.entries(workerScripts))
+  cpSync(join(memoryAgent, "src", "memory", folder, file), join(stage, file));
 // The app's own skills; `builtinSkillsDirectory()` looks for them next to the runtime files.
 cpSync(join(memoryAgent, "skills"), join(stage, "skills"), { recursive: true });
 collectPackages();

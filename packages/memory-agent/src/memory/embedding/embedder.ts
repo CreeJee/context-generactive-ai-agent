@@ -1,7 +1,8 @@
 import { join } from "node:path";
-import { Context, Data, Effect, Layer } from "effect";
+import { Worker } from "node:worker_threads";
+import { Context, Data, Effect, Layer, Schema } from "effect";
 import { StorageRoot } from "../../config/storage-root.ts";
-import { requireRuntime } from "../../runtime/resources.ts";
+import { runtimeWorker } from "../../runtime/resources.ts";
 
 export class EmbeddingError extends Data.TaggedError("EmbeddingError")<{
   readonly cause: unknown;
@@ -90,95 +91,134 @@ export function planBatches(
   return batches;
 }
 
-type Transformers = ReturnType<typeof requireRuntime<"@huggingface/transformers">>;
-interface Loaded {
-  readonly tokenizer: Awaited<ReturnType<Transformers["AutoTokenizer"]["from_pretrained"]>>;
-  readonly model: Awaited<ReturnType<Transformers["AutoModel"]["from_pretrained"]>>;
-}
+/** Replies from `embed-worker.mjs`. */
+const Reply = Schema.Union(
+  Schema.Struct({
+    id: Schema.Number,
+    kind: Schema.Literal("counts"),
+    counts: Schema.Array(Schema.Number),
+  }),
+  Schema.Struct({
+    id: Schema.Number,
+    kind: Schema.Literal("rows"),
+    rows: Schema.instanceOf(Float32Array),
+  }),
+  Schema.Struct({
+    id: Schema.Number,
+    kind: Schema.Literal("failed"),
+    /** `load`: the model never loaded, so the next request starts a new worker to try again. */
+    stage: Schema.Literal("load", "run"),
+    reason: Schema.String,
+  }),
+);
+type Reply = typeof Reply.Type;
+const decodeReply = Schema.decodeUnknownSync(Reply);
 
 /**
- * Runs the local model with transformers.js, loaded on first use and kept. Releasing it when idle
- * was measured and dropped: in the same process the freed memory mostly stays with the allocator
- * (quint8: ~40 MB back) and each reload grows the footprint a little.
+ * Runs the local model with transformers.js in a worker thread, started on first use and kept.
+ * onnxruntime-node runs a session synchronously, so on the main thread a backlog of batches held up
+ * every request the server answered meanwhile: a start with ~1,100 nodes to embed kept settings
+ * waiting for over a minute. Releasing the model when idle was measured and dropped: the freed
+ * memory mostly stays with the allocator (quint8: ~40 MB back) and each reload grows the footprint a
+ * little.
  */
 const makeLocal = (variant: ModelVariant) =>
   Effect.gen(function* () {
     const storage = yield* StorageRoot;
-    const cacheDir = join(storage.path, "models");
-    let loading: Promise<Loaded> | null = null;
+    const workerData = {
+      cacheDir: join(storage.path, "models"),
+      modelId: localModel.id,
+      modelFileName: variantFile[variant],
+      maxTokens: localModel.maxTokens,
+    };
+    let worker: Worker | null = null;
+    let nextId = 1;
+    const pending = new Map<number, (reply: Reply) => void>();
 
-    const load = async (): Promise<Loaded> => {
-      const { AutoModel, AutoTokenizer, env } = requireRuntime("@huggingface/transformers");
-      env.cacheDir = cacheDir;
-      env.allowLocalModels = false;
-      const [tokenizer, model] = await Promise.all([
-        AutoTokenizer.from_pretrained(localModel.id),
-        AutoModel.from_pretrained(localModel.id, {
-          dtype: "fp32",
-          model_file_name: variantFile[variant],
-          // The arena keeps a batch's peak allocation for the next one; without it memory returns.
-          session_options: { enableCpuMemArena: false },
-        }),
-      ]);
-      return { tokenizer, model };
+    const stop = (reason: string) => {
+      const current = worker;
+      worker = null;
+      for (const [id, resolve] of pending) resolve({ id, kind: "failed", stage: "run", reason });
+      pending.clear();
+      return current?.terminate();
     };
 
-    /** Runs work with the model; a failed load is tried again on the next call. */
-    const use = <A>(work: (loaded: Loaded) => Promise<A>) =>
-      Effect.suspend(() => {
-        const pending = (loading ??= load());
-        return Effect.tryPromise({
-          try: () => pending.then(work),
-          catch: (cause) => {
-            if (loading === pending) loading = null;
-            return new EmbeddingError({ cause });
-          },
-        });
+    const start = () => {
+      const created = new Worker(runtimeWorker("embed-worker"), { workerData });
+      const lost = () => {
+        if (worker === created) void stop("embedding worker stopped");
+      };
+      created.on("message", (message) => {
+        const reply = decodeReply(message);
+        pending.get(reply.id)?.(reply);
+        pending.delete(reply.id);
+        // A model that failed to load is tried again by the next request, in a new worker.
+        if (reply.kind === "failed" && reply.stage === "load") lost();
+        // An idle worker must not keep the process alive; one with requests in flight must.
+        else if (pending.size === 0) created.unref();
+      });
+      created.on("error", lost);
+      created.on("exit", lost);
+      created.unref();
+      return created;
+    };
+
+    const request = (kind: "count" | "embed", texts: readonly string[]) =>
+      new Promise<Reply>((resolve) => {
+        const current = (worker ??= start());
+        const id = nextId++;
+        pending.set(id, resolve);
+        current.ref();
+        current.postMessage({ id, kind, texts });
       });
 
-    const embedBatch = async ({ tokenizer, model }: Loaded, texts: readonly string[]) => {
-      const inputs = tokenizer([...texts], {
-        padding: true,
-        truncation: true,
-        max_length: localModel.maxTokens,
-      });
-      const { last_hidden_state: hidden } = await model(inputs);
-      const [batch, tokens, dimensions] = hidden.dims;
-      const data: Float32Array = hidden.data;
-      // CLS pooling: the first token's hidden state is the sentence vector.
-      return Array.from({ length: batch }, (_, row) =>
-        normalize(data.slice(row * tokens * dimensions, row * tokens * dimensions + dimensions)),
-      );
+    const tokenCounts = async (texts: readonly string[]) => {
+      const reply = await request("count", texts);
+      switch (reply.kind) {
+        case "counts":
+          return reply.counts;
+        case "failed":
+          throw new Error(reply.reason);
+        case "rows":
+          throw new Error("the embedding worker answered a count with vectors");
+      }
+    };
+
+    /** One batch's CLS rows, `texts.length` × {@link localModel.dimensions}, not normalized. */
+    const embedBatch = async (texts: readonly string[]) => {
+      const reply = await request("embed", texts);
+      switch (reply.kind) {
+        case "rows":
+          return reply.rows;
+        case "failed":
+          throw new Error(reply.reason);
+        case "counts":
+          throw new Error("the embedding worker answered an embedding with counts");
+      }
     };
 
     yield* Effect.addFinalizer(() =>
-      Effect.promise(async () => {
-        const current = loading;
-        loading = null;
-        if (current) await current.then(({ model }) => model.dispose()).catch(() => undefined);
-      }),
+      Effect.promise(async () => void (await stop("embedder stopped"))),
     );
 
     return {
       identity: `${localModel.id}@${variant}/cls/${localModel.maxTokens}`,
       dimensions: localModel.dimensions,
       embed: (texts: readonly string[]) =>
-        use(async (loaded) => {
-          const counts = texts.map(
-            (text) =>
-              loaded
-                .tokenizer(text, { truncation: true, max_length: localModel.maxTokens })
-                .input_ids.dims.at(-1) ?? 0,
-          );
-          const vectors: Float32Array[] = [];
-          for (const batch of planBatches(counts)) {
-            const embedded = await embedBatch(
-              loaded,
-              batch.map((index) => texts[index]!),
-            );
-            batch.forEach((index, position) => (vectors[index] = embedded[position]!));
-          }
-          return vectors;
+        Effect.tryPromise({
+          try: async () => {
+            const vectors: Float32Array[] = [];
+            if (texts.length === 0) return vectors;
+            for (const batch of planBatches(await tokenCounts(texts))) {
+              const rows = await embedBatch(batch.map((index) => texts[index]!));
+              batch.forEach((index, position) => {
+                const start = position * localModel.dimensions;
+                vectors[index] = normalize(rows.slice(start, start + localModel.dimensions));
+              });
+            }
+            return vectors;
+          },
+          catch: (cause) => new EmbeddingError({ cause }),
         }),
     } satisfies EmbedderApi;
   });

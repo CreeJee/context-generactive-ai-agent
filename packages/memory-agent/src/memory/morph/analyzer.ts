@@ -4,7 +4,7 @@ import { Worker } from "node:worker_threads";
 import { Context, Data, Effect, Layer, Schema } from "effect";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { installArchive } from "../../runtime/archive.ts";
-import { runtimeRequire, runtimeRoot } from "../../runtime/resources.ts";
+import { runtimeWorker } from "../../runtime/resources.ts";
 
 export class MorphAnalysisFailed extends Data.TaggedError("MorphAnalysisFailed")<{
   readonly reason: string;
@@ -63,18 +63,6 @@ async function ensureModel(storageRoot: string) {
 }
 
 /**
- * In a checkout, found through the package exports rather than next to this module, because the
- * app bundles this module into its server build while the worker file stays in the package. The
- * executable unpacks it into its runtime folder, next to `node_modules/kiwi-nlp`.
- */
-const workerPath = () => {
-  const root = runtimeRoot();
-  return root === null
-    ? runtimeRequire().resolve("memory-agent/kiwi-worker")
-    : join(root, "kiwi-worker.mjs");
-};
-
-/**
  * Kiwi in a worker, started on first use and kept. Building the model peaks at ~900 MB and settles
  * near 240 MB (macOS physical footprint). Ending an idle worker was measured and dropped: the
  * footprint did not go down, and every restart paid the build peak and ~2 s again.
@@ -98,7 +86,7 @@ const makeKiwi = Effect.gen(function* () {
 
   const start = async () => {
     const modelDirectory = await ensureModel(storage.path);
-    const created = new Worker(workerPath(), { workerData: { modelDirectory } });
+    const created = new Worker(runtimeWorker("kiwi-worker"), { workerData: { modelDirectory } });
     created.on("message", (message) => {
       const reply = decodeReply(message);
       pending.get(reply.id)?.(reply);

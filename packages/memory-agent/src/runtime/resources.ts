@@ -3,13 +3,13 @@ import { join } from "node:path";
 
 /**
  * Packages this app loads from disk at run time rather than bundling: native addons (vector index,
- * keychain, image encoding) and the embedding runtime. The app server build keeps them external, and the executable cannot hold them
- * (a Node SEA embeds only JS and cannot load a package from disk with `import`).
+ * keychain, image encoding). The app server build keeps them external, and the executable cannot hold them
+ * (a Node SEA embeds only JS and cannot load a package from disk with `import`). The embedding
+ * runtime and Kiwi are loaded the same way, by their worker scripts ({@link runtimeWorker}).
  */
 interface RuntimePackages {
   readonly turbovec: typeof import("turbovec");
   readonly "@napi-rs/keyring": typeof import("@napi-rs/keyring");
-  readonly "@huggingface/transformers": typeof import("@huggingface/transformers");
   readonly sharp: typeof import("sharp");
 }
 
@@ -36,4 +36,20 @@ export function requireRuntime<Name extends keyof RuntimePackages>(
 ): RuntimePackages[Name] {
   // SAFETY: each name maps to the package's own published types; `require` returns that module.
   return runtimeRequire()(name) as RuntimePackages[Name];
+}
+
+/** Worker scripts this package ships as plain `.mjs` files, each loading its runtime package. */
+export type RuntimeWorker = "kiwi-worker" | "embed-worker";
+
+/**
+ * A worker script's file. In a checkout it is found through the package exports rather than next to
+ * the module that starts it, because the app bundles that module into its server build while the
+ * worker file stays in the package. The executable unpacks it into its runtime folder, next to
+ * `node_modules`.
+ */
+export function runtimeWorker(name: RuntimeWorker) {
+  const root = runtimeRoot();
+  return root === null
+    ? runtimeRequire().resolve(`memory-agent/${name}`)
+    : join(root, `${name}.mjs`);
 }

@@ -26,7 +26,7 @@ src/
   imports/      Claude Code·Codex CLI 기록 이관: 줄 읽기 어댑터, 대량 노드 쓰기, 커서와 따라붙기
   secrets/      비밀 가리기(secretlint)와 저장된 텍스트의 소급 정리
   memory/       기억: 노드·구조 edge·그래프 탐색·근거 추적·검색·기록 middleware
-    embedding/  로컬 임베딩 모델 + turbovec 벡터 인덱스 + 인덱서(형태소 분석 포함)
+    embedding/  로컬 임베딩 모델(worker thread) + turbovec 벡터 인덱스 + 인덱서(형태소 분석 포함)
     morph/      Kiwi 한국어 형태소 분석(worker thread, 모델은 처음 쓸 때 내려받음)
   codex/        ChatGPT 계정(고정 @openai/codex의 app-server): 로그인·모델·TanStack 어댑터,
                 codex가 스스로 찾은 스킬 끄기(CodexSkills, 스킬은 read_skill로만),
@@ -48,7 +48,7 @@ skills/
 
 앱 기본 skill은 `SKILL.md` 하나로 완결해야 합니다. 실행 파일에서는 저장 루트 아래에 풀리고 파일 도구가 저장 루트를 읽지 않아서, 옆에 둔 파일은 모델이 읽을 수 없습니다. 같은 이름의 공통·프로젝트 skill이 기본 skill을 덮어씁니다.
 
-네이티브·임베딩 패키지(turbovec, `@napi-rs/keyring`, `@huggingface/transformers`)는 정적 import하지 않고 `runtime/resources.ts`의 `requireRuntime`으로 불러옵니다. 실행 파일(Node SEA)은 디스크 파일을 `import()`하지 못하고, 이 패키지들을 `CONTEXT_AGENT_RUNTIME` 폴더에 풀어 두기 때문입니다.
+네이티브 패키지(turbovec, `@napi-rs/keyring`, sharp)는 정적 import하지 않고 `runtime/resources.ts`의 `requireRuntime`으로 불러옵니다. 실행 파일(Node SEA)은 디스크 파일을 `import()`하지 못하고, 이 패키지들을 `CONTEXT_AGENT_RUNTIME` 폴더에 풀어 두기 때문입니다. 임베딩 모델(`@huggingface/transformers`)과 Kiwi는 worker thread에서 돌고, worker 스크립트(`embed-worker.mjs`, `kiwi-worker.mjs`)가 옆의 패키지를 직접 불러옵니다. 스크립트 위치는 `runtimeWorker`가 정합니다(저장소에서는 package exports, 실행 파일에서는 runtime 폴더).
 
 서비스는 Effect `Context.Tag` + `Layer`로 만들고, 앱은 `ManagedRuntime` 하나로 씁니다.
 도구 입력 스키마는 Effect Schema이며 `toToolSchema`로 TanStack이 요구하는 Standard JSON Schema로 바꿉니다.
@@ -57,7 +57,7 @@ skills/
 
 - 사용자·assistant·tool call·tool result를 모두 원문 그대로 `nodes`에 저장합니다(수정 불가).
 - 저장할 때 구조 edge를 만듭니다: `next`(세션 순서), `reply`, `calls`, `returns`, `touches`(같은 파일/URL).
-- 검색(`find_memory`)은 임베딩 벡터 순위, FTS trigram 순위, Kiwi 형태소(명사·어간) BM25 순위를 RRF로 합친 뒤 그래프를 따라 넓힙니다. Kiwi는 worker thread에서 돌고(쓰기 시작하면 계속 둠, 약 240 MB), 적재 중에는 형태소 순위 없이 검색합니다. 임베딩은 quint8 모델로 노드마다 앞 2048토큰까지, 토큰 길이로 나눈 배치로 합니다. 메모리 측정은 `node --expose-gc --no-warnings eval/memory.ts`. 품질 평가는 `vp run eval:recall`(두 모델이 `~/.context-generactive-agent/models`에 있어야 함).
+- 검색(`find_memory`)은 임베딩 벡터 순위, FTS trigram 순위, Kiwi 형태소(명사·어간) BM25 순위를 RRF로 합친 뒤 그래프를 따라 넓힙니다. Kiwi는 worker thread에서 돌고(쓰기 시작하면 계속 둠, 약 240 MB), 적재 중에는 형태소 순위 없이 검색합니다. 임베딩도 worker thread에서 quint8 모델로 노드마다 앞 2048토큰까지, 토큰 길이로 나눈 배치로 합니다. onnxruntime-node는 추론을 동기로 돌려서, 메인 스레드에서 돌리면 밀린 노드를 임베딩하는 동안 서버의 모든 요청이 기다립니다. 메모리 측정은 `node --expose-gc --no-warnings eval/memory.ts`. 품질 평가는 `vp run eval:recall`(두 모델이 `~/.context-generactive-agent/models`에 있어야 함).
 - `read_evidence`는 원문을 페이지로 읽고, `trace_evidence`는 tool result → call → assistant → user 발언까지 거슬러 갑니다.
 - 교차 프로젝트 회상은 기본 포함이며, 프로젝트별로 제외할 수 있습니다. 결과에는 출처 프로젝트 이름(`projectName`)이 붙습니다.
 - `Interpreter`(llm-interpret)가 답변이 끝난 뒤 사용자·assistant 발언을 해석해 주제(`topic` 노드 + `about`), `corrects`·`retracts`·`related` edge를 붙입니다. 후보는 코드가 고르고, 정정·취소는 사용자 발언에서만, 대상이 분명할 때만 edge가 됩니다. 모호하면 `interpretations`에 `unconfirmed`로 남아 확인 질문이 됩니다.
