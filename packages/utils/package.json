@@ -28,7 +28,6 @@
     "dev": "vp pack --watch",
     "test": "vp test",
     "check": "vp check",
-    "typecheck": "tsc",
     "prepublishOnly": "vp run build"
   },
   "devDependencies": {

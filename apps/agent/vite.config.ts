@@ -82,6 +82,9 @@ export default defineConfig(({ command }) => ({
         dependsOn: [{ task: "build", from: "dependencies" }],
       },
       bundle: { command: "vp pack", dependsOn: ["build"] },
+      // Never cached: Vite Task does not see the files TypeScript 7's native tsc reads, so a cached
+      // pass would hide new errors.
+      typecheck: { command: "react-router typegen && tsc", cache: false },
       // Never cached: each run builds or starts a fresh executable, and Vite Task's file tracking
       // around the started executable keeps it from serving.
       package: { command: "node scripts/package.ts", dependsOn: ["build"], cache: false },

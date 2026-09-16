@@ -7,8 +7,7 @@
   },
   "scripts": {
     "dev": "react-router dev",
-    "start": "node dist/context-agent.mjs",
-    "typecheck": "react-router typegen && tsc"
+    "start": "node dist/context-agent.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "catalog:",

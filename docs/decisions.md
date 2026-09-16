@@ -357,5 +357,12 @@
 - 모노레포 빌드 순서와 캐시는 turborepo를 두지 않고 Vite+의 Vite Task(`vp run`)로 한다. 이미 쓰는 도구에 `dependsOn`, 입력·출력 캐시가 있어서, 태스크 그래프와 캐시를 두 곳에 나누지 않기 위해서다.
   - 루트 `build`(`pnpm build` 또는 `vp run build`)가 turbovec → memory-agent → agent 순서로 빌드한다. 각 패키지의 `build`와 memory-agent `test`, agent `package`는 workspace 의존성의 `build` 뒤에 돈다(`vite.config.ts`의 `run.tasks`).
   - turbovec `build`(cargo)는 크레이트 파일(`src/`, `build.rs`, `Cargo.toml`, `Cargo.lock`, 빌드 스크립트)만 입력으로, `memory-turbovec.node`를 출력으로 둔다. 자동 추적은 cargo의 `target/`·`~/.cargo` 읽기까지 담아 맞지 않는다. 캐시가 맞으면 cargo 없이 애드온을 복원한다.
-  - memory-agent `vp pack`은 선언 파일을 만들지 않는다. 앱이 TypeScript 소스를 바로 쓰고, 선언 생성이 memory-agent 의존성이 아닌 undici-types의 전역 `Response`를 이름 붙이지 못해 빌드가 실패했다.
+  - memory-agent `vp pack`은 선언 파일을 만들지 않는다. 앱이 TypeScript 소스를 바로 쓰고, 선언 생성이 memory-agent 의존성이 아닌 undici-types의 전역 `Response`를 이름 붙이지 못해 빌드가 실패했다. 이 원인과 처리는 아래 '타입 검사 (2026-09-16)'에 있다.
 - 변형은 리터럴 태그를 가진 서로소 유니온으로 표현하고 `switch`로 분기한다. `"key" in obj` 식 판별은 쓰지 않는다. 라이브러리 유니온이 깔끔하게 구분되지 않으면 경계에서 한 번 우리 유니온으로 바꾼다.
+
+## 타입 검사 (2026-09-16)
+
+- 각 패키지의 `typecheck` 태스크(`tsc`, agent는 `react-router typegen && tsc`)를 루트 `vp run typecheck`와 `ready`에서 돌린다. `vp check`의 타입 검사는 선언 이식성 에러(TS2883 등)를 잡지 않아서, memory-agent의 에러가 드러나지 않았다.
+  - `typecheck`는 캐시하지 않는다(`cache: false`). Vite Task의 파일 추적은 TypeScript 7 `tsc`가 실행 파일을 찾는 경로만 기록하고, 네이티브 바이너리가 읽는 `tsconfig.json`과 소스는 기록하지 않는다. 캐시하면 소스가 바뀌어도 이전 통과를 재생한다. `package.json` 스크립트에는 태스크별 설정을 줄 수 없어서 각 `vite.config.ts`의 `run.tasks`에 둔다.
+- DOM 라이브러리가 없는 패키지에서 `Response.json()`과 `new Response()`는 전역 `Response`가 아니라 undici-types의 `Response`를 돌려준다. `@types/node`가 값 `Response`를 `typeof undici.Response`로 선언하기 때문이다. 이 타입이 추론된 export 타입에 들어가면, undici-types가 의존성이 아니어서 이름을 쓸 수 없다. 응답을 만드는 헬퍼의 반환 타입을 전역 `Response`로 적어 막는다(memory-agent `src/agent/chat.ts`의 `json`).
+  - `undici-types`를 의존성으로 두거나 `lib`에 `dom`을 넣지는 않는다. 앞의 것은 `@types/node`가 쓰는 버전과 계속 맞춰야 하고, 뒤의 것은 서버 패키지에 브라우저 전역이 섞인다.
