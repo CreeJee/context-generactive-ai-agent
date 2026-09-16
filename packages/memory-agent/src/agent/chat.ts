@@ -211,6 +211,48 @@ const afterRunBudget = 200;
 const isStreamJoin = (request: Request) =>
   request.headers.has("Last-Event-ID") || new URL(request.url).searchParams.has("offset");
 
+/**
+ * Written out rather than inferred: `Response.json` returns undici's own `Response` type, which
+ * this package cannot name, so an inferred service type would not be portable.
+ */
+interface AgentChatApi {
+  readonly handle: (request: Request, sessionId: string) => Effect.Effect<Response>;
+  readonly hydrate: (request: Request, sessionId: string) => Effect.Effect<Response>;
+  readonly cancel: (sessionId: string, holder: string | null) => Effect.Effect<Response>;
+  readonly status: (sessionId: string, holder: string | null) => Effect.Effect<Response>;
+  readonly lease: (
+    sessionId: string,
+    holder: string,
+    action: "claim" | "release",
+  ) => Effect.Effect<Response>;
+  readonly archive: (
+    sessionId: string,
+    holder: string | null,
+    archived: boolean,
+  ) => Effect.Effect<Response>;
+  readonly queued: (sessionId: string) => Effect.Effect<Response>;
+  readonly enqueue: (
+    sessionId: string,
+    holder: string | null,
+    request: QueueRequest,
+  ) => Effect.Effect<Response>;
+  readonly subagents: (sessionId: string) => Effect.Effect<Response>;
+  readonly subagentTranscript: (sessionId: string, subagentId: string) => Effect.Effect<Response>;
+  readonly approvals: (sessionId: string) => Effect.Effect<Response>;
+  readonly answerApproval: (
+    sessionId: string,
+    holder: string | null,
+    approvalId: string,
+    approved: boolean,
+  ) => Effect.Effect<Response>;
+  readonly editQueued: (
+    sessionId: string,
+    holder: string | null,
+    id: string,
+    edit: QueueEdit,
+  ) => Effect.Effect<Response>;
+}
+
 const make = Effect.gen(function* () {
   const account = yield* CodexAccount;
   const models = yield* CodexModels;
@@ -762,9 +804,6 @@ const make = Effect.gen(function* () {
 });
 
 /** The chat endpoint behind `POST /api/chat`: memory, tools and the ChatGPT model together. */
-export class AgentChat extends Context.Tag("memory-agent/AgentChat")<
-  AgentChat,
-  Effect.Effect.Success<typeof make>
->() {
+export class AgentChat extends Context.Tag("memory-agent/AgentChat")<AgentChat, AgentChatApi>() {
   static readonly layer = Layer.effect(AgentChat, make);
 }
