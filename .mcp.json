@@ -3,6 +3,10 @@
     "shadcn": {
       "command": "pnpx",
       "args": ["shadcn@latest", "mcp"]
+    },
+    "motion": {
+      "type": "http",
+      "url": "https://mcp.motion.dev"
     }
   }
 }
