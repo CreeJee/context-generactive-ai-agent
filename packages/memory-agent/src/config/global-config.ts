@@ -11,6 +11,10 @@ export const Settings = Schema.Struct({
   reasoningEffort: Schema.optional(Schema.NonEmptyString),
   /** The user turned Kagi Search and Extract on. The key itself is in the keychain. */
   kagiEnabled: Schema.optional(Schema.Boolean),
+  /** Keep migrating other coding agents' transcripts as they grow. Default off until turned on. */
+  importsEnabled: Schema.optional(Schema.Boolean),
+  /** Interpret migrated statements for topics and corrections, like the ones said here. */
+  importsInterpret: Schema.optional(Schema.Boolean),
 });
 export type Settings = typeof Settings.Type;
 

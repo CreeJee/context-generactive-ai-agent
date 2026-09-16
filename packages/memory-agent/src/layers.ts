@@ -14,6 +14,8 @@ import { StorageRoot } from "./config/storage-root.ts";
 import { Database } from "./db/database.ts";
 import { Kagi } from "./kagi/kagi.ts";
 import { ExternalAgents } from "./external-agents/agents.ts";
+import { BulkNodes } from "./imports/bulk.ts";
+import { Importer } from "./imports/importer.ts";
 import { McpServers } from "./mcp/servers.ts";
 import { Skills } from "./skills/skills.ts";
 import { Subagents } from "./subagents/subagents.ts";
@@ -60,6 +62,12 @@ export interface MemoryAgentLayerOptions {
   readonly kagiBaseUrl?: string;
   /** Home directory whose `.agents/skills` holds global skills; tests use a temporary one. */
   readonly skillsHome?: string;
+  /**
+   * Home directory holding other coding agents' transcripts (`.claude`, `.codex`), and whether to
+   * keep following them in the background. Default: the real home, following. Tests set both.
+   */
+  readonly importsHome?: string;
+  readonly importsWatching?: boolean;
 }
 
 /** Composition root: every memory-agent service backed by one storage directory. */
@@ -79,6 +87,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     MessageQueue.layer,
     Interpretations.layer,
     RelayedApprovals.layer,
+    BulkNodes.layer,
     options.embedder ?? Embedder.local,
     options.morphAnalyzer ?? MorphAnalyzer.kiwi,
     options.codex ?? CodexAppServer.layer,
@@ -103,6 +112,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     MemorySearch.layer,
     PermissionClassifier.layer,
     QueueDelivery.layer,
+    Importer.layer(options.importsWatching, options.importsHome),
   );
   return AgentChat.layer.pipe(
     Layer.provideMerge(

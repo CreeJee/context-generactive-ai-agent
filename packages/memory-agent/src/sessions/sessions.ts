@@ -13,6 +13,8 @@ export const Session = Schema.Struct({
   agent: Schema.NullOr(Schema.String),
   /** When the user archived it: out of the session list, still part of memory. */
   archivedAt: Schema.NullOr(Schema.String),
+  /** The coding agent whose transcript this conversation was migrated from; null for one held here. */
+  importedFrom: Schema.NullOr(Schema.String),
 });
 export type Session = typeof Session.Type;
 
@@ -23,6 +25,7 @@ const SessionRow = Schema.Struct({
   created_at: Schema.String,
   agent: Schema.NullOr(Schema.String),
   archived_at: Schema.NullOr(Schema.String),
+  imported_from: Schema.NullOr(Schema.String),
 });
 const decodeSessionRow = Schema.decodeUnknownSync(SessionRow);
 
@@ -35,6 +38,7 @@ function toSession(row: Record<string, SQLOutputValue>): Session {
     createdAt: decoded.created_at,
     agent: decoded.agent,
     archivedAt: decoded.archived_at,
+    importedFrom: decoded.imported_from,
   };
 }
 
@@ -63,6 +67,21 @@ const make = Effect.gen(function* () {
           )
           .get(randomUUID(), projectId, title, new Date().toISOString(), agent);
         if (!row) return yield* Effect.die(new Error("Session insert returned no row"));
+        return toSession(row);
+      }),
+
+    /**
+     * A conversation migrated from another tool's transcript. It keeps the time that tool started
+     * it, so the session list (newest first) puts it where it actually happened.
+     */
+    createImported: (projectId: string, title: string | null, createdAt: string, source: string) =>
+      Effect.sync(() => {
+        const row = sqlite
+          .prepare(
+            "INSERT INTO sessions (id, project_id, title, created_at, imported_from) VALUES (?, ?, ?, ?, ?) RETURNING *",
+          )
+          .get(randomUUID(), projectId, title, createdAt, source);
+        if (!row) throw new Error("Session insert returned no row");
         return toSession(row);
       }),
 

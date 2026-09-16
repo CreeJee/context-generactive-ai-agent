@@ -1,0 +1,276 @@
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { Effect, Schema } from "effect";
+import { describe, expect, test } from "vite-plus/test";
+import type { Json } from "../src/codex/app-server.ts";
+import { Database } from "../src/db/database.ts";
+import { Importer } from "../src/imports/importer.ts";
+import { sessionMessages } from "../src/agent/history.ts";
+import { Nodes } from "../src/memory/nodes.ts";
+import { Sessions } from "../src/sessions/sessions.ts";
+import { testRuntime } from "./support/runtime.ts";
+
+type TranscriptLine = { readonly [key: string]: Json };
+const serialize = (lines: readonly TranscriptLine[]) =>
+  `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`;
+
+/** A Claude Code conversation in one project folder, with one tool call and its result. */
+function claudeLines(cwd: string): TranscriptLine[] {
+  return [
+    { type: "cost-state", sessionId: "cc-1", totalCostUSD: 0.1 },
+    {
+      type: "user",
+      uuid: "u-1",
+      timestamp: "2026-03-01T09:00:00.000Z",
+      cwd,
+      sessionId: "cc-1",
+      message: { role: "user", content: "회상 기준을 정하자" },
+    },
+    {
+      type: "assistant",
+      uuid: "a-1",
+      timestamp: "2026-03-01T09:00:10.000Z",
+      cwd,
+      sessionId: "cc-1",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "노트를 읽겠습니다" },
+          { type: "tool_use", id: "call-1", name: "Read", input: { file_path: "notes.md" } },
+        ],
+      },
+    },
+    {
+      type: "user",
+      uuid: "u-2",
+      timestamp: "2026-03-01T09:00:12.000Z",
+      cwd,
+      sessionId: "cc-1",
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "call-1", content: "기준 초안" }],
+      },
+    },
+  ];
+}
+
+function codexLines(cwd: string): TranscriptLine[] {
+  return [
+    {
+      timestamp: "2026-04-02T02:00:00.000Z",
+      ordinal: 0,
+      type: "session_meta",
+      payload: { session_id: "cx-1", cwd },
+    },
+    {
+      timestamp: "2026-04-02T02:00:01.000Z",
+      ordinal: 1,
+      type: "response_item",
+      payload: { type: "reasoning", summary: [] },
+    },
+    {
+      timestamp: "2026-04-02T02:00:02.000Z",
+      ordinal: 2,
+      type: "response_item",
+      payload: { type: "message", role: "user", content: [{ type: "input_text", text: "이어서" }] },
+    },
+  ];
+}
+
+const claudePath = (home: string, name: string) => {
+  const directory = join(home, ".claude", "projects", "encoded-cwd");
+  mkdirSync(directory, { recursive: true });
+  return join(directory, name);
+};
+
+const codexPath = (home: string) => {
+  const directory = join(home, ".codex", "sessions", "2026", "04", "02");
+  mkdirSync(directory, { recursive: true });
+  return join(directory, "rollout-2026-04-02T02-00-00-cx-1.jsonl");
+};
+
+const NodeRow = Schema.Struct({
+  kind: Schema.String,
+  text: Schema.String,
+  created_at: Schema.String,
+  run_id: Schema.NullOr(Schema.String),
+});
+const decodeNodes = Schema.decodeUnknownSync(Schema.Array(NodeRow));
+const decodeEdges = Schema.decodeUnknownSync(
+  Schema.Array(Schema.Struct({ kind: Schema.String, from_kind: Schema.String })),
+);
+const decodeCount = Schema.decodeUnknownSync(Schema.Struct({ count: Schema.Number }));
+
+const nodeRows = (sqlite: Database["Type"]["sqlite"], sessionId: string) =>
+  decodeNodes(
+    sqlite
+      .prepare("SELECT kind, text, created_at, run_id FROM nodes WHERE session_id = ? ORDER BY seq")
+      .all(sessionId),
+  );
+
+describe("migrating other agents' transcripts", () => {
+  test("writes a conversation with the times the other tool recorded", async () => {
+    const { runtime, project, home } = await testRuntime();
+    writeFileSync(claudePath(home, "cc-1.jsonl"), serialize(claudeLines(project.root)));
+
+    const rows = await runtime.runPromise(
+      Effect.gen(function* () {
+        const written = yield* (yield* Importer).runOnce;
+        expect(written).toBe(4);
+        const { sqlite } = yield* Database;
+        const sessions = yield* (yield* Sessions).list(project.id);
+        const migrated = sessions.find((session) => session.importedFrom === "claude-code");
+        expect(migrated).toBeDefined();
+        expect(migrated?.createdAt).toBe("2026-03-01T09:00:00.000Z");
+        expect(migrated?.title).toBe("회상 기준을 정하자");
+        return nodeRows(sqlite, migrated!.id);
+      }),
+    );
+
+    expect(rows.map((row) => row.kind)).toEqual(["user", "assistant", "tool_call", "tool_result"]);
+    expect(rows.map((row) => row.created_at)).toEqual([
+      "2026-03-01T09:00:00.000Z",
+      "2026-03-01T09:00:10.000Z",
+      "2026-03-01T09:00:10.000Z",
+      "2026-03-01T09:00:12.000Z",
+    ]);
+    // Everything answering one user turn shares its run, which is how the transcript renders.
+    expect(new Set(rows.map((row) => row.run_id)).size).toBe(1);
+  });
+
+  test("builds the evidence chain the live recorder builds", async () => {
+    const { runtime, project, home } = await testRuntime();
+    writeFileSync(claudePath(home, "cc-1.jsonl"), serialize(claudeLines(project.root)));
+
+    const edges = await runtime.runPromise(
+      Effect.gen(function* () {
+        yield* (yield* Importer).runOnce;
+        const { sqlite } = yield* Database;
+        return decodeEdges(
+          sqlite
+            .prepare(`
+              SELECT e.kind, n.kind AS from_kind FROM edges e JOIN nodes n ON n.id = e.from_id
+              WHERE n.project_id = ? ORDER BY e.kind, n.seq`)
+            .all(project.id),
+        );
+      }),
+    );
+
+    expect(edges).toContainEqual({ kind: "calls", from_kind: "assistant" });
+    expect(edges).toContainEqual({ kind: "returns", from_kind: "tool_result" });
+    expect(edges).toContainEqual({ kind: "reply", from_kind: "assistant" });
+    expect(edges.filter((edge) => edge.kind === "next")).toHaveLength(3);
+  });
+
+  test("reading a transcript again adds nothing, and new lines are picked up", async () => {
+    const { runtime, project, home } = await testRuntime();
+    const path = claudePath(home, "cc-1.jsonl");
+    writeFileSync(path, serialize(claudeLines(project.root)));
+    const importer = await runtime.runPromise(Importer);
+
+    expect(await runtime.runPromise(importer.runOnce)).toBe(4);
+    expect(await runtime.runPromise(importer.runOnce)).toBe(0);
+
+    appendFileSync(
+      path,
+      serialize([
+        {
+          type: "user",
+          uuid: "u-3",
+          timestamp: "2026-03-01T09:05:00.000Z",
+          cwd: project.root,
+          sessionId: "cc-1",
+          message: { role: "user", content: "좋아 그대로 가자" },
+        },
+      ]),
+    );
+    expect(await runtime.runPromise(importer.runOnce)).toBe(1);
+
+    const texts = await runtime.runPromise(
+      Effect.gen(function* () {
+        const { sqlite } = yield* Database;
+        const sessions = yield* (yield* Sessions).list(project.id);
+        const migrated = sessions.find((session) => session.importedFrom === "claude-code")!;
+        return nodeRows(sqlite, migrated.id).map((row) => row.text);
+      }),
+    );
+    expect(texts.at(-1)).toBe("좋아 그대로 가자");
+  });
+
+  test("leaves a half-written last line for the next pass", async () => {
+    const { runtime, project, home } = await testRuntime();
+    const path = claudePath(home, "cc-1.jsonl");
+    const complete = serialize(claudeLines(project.root));
+    const half = JSON.stringify({
+      type: "user",
+      uuid: "u-4",
+      timestamp: "2026-03-01T09:06:00.000Z",
+      cwd: project.root,
+      sessionId: "cc-1",
+      message: { role: "user", content: "아직 쓰는 중" },
+    });
+    writeFileSync(path, complete + half.slice(0, half.length - 10));
+    const importer = await runtime.runPromise(Importer);
+    expect(await runtime.runPromise(importer.runOnce)).toBe(4);
+
+    writeFileSync(path, `${complete + half}\n`);
+    expect(await runtime.runPromise(importer.runOnce)).toBe(1);
+  });
+
+  test("skips a folder that is not a registered project, and names it", async () => {
+    const { runtime, home } = await testRuntime();
+    writeFileSync(claudePath(home, "cc-1.jsonl"), serialize(claudeLines("/somewhere/else")));
+
+    const overview = await runtime.runPromise(
+      Effect.gen(function* () {
+        const importer = yield* Importer;
+        expect(yield* importer.runOnce).toBe(0);
+        return yield* importer.overview;
+      }),
+    );
+    expect(overview.unregistered).toEqual([{ cwd: "/somewhere/else", transcripts: 1 }]);
+  });
+
+  test("never reads this app's own storage", async () => {
+    const { runtime, project, storage } = await testRuntime();
+    const directory = join(storage, "codex", "sessions", "2026", "04", "02");
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(
+      join(directory, "rollout-2026-04-02T02-00-00-cx-1.jsonl"),
+      serialize(codexLines(project.root)),
+    );
+    // The app's own codex home lives under the storage root; its conversations are already nodes.
+    expect(await runtime.runPromise(Effect.flatMap(Importer, (importer) => importer.runOnce))).toBe(
+      0,
+    );
+  });
+
+  test("reads Codex rollouts too, and queues migrated statements for interpretation", async () => {
+    const { runtime, project, home } = await testRuntime();
+    writeFileSync(codexPath(home), serialize(codexLines(project.root)));
+
+    const { pending, rendered } = await runtime.runPromise(
+      Effect.gen(function* () {
+        yield* (yield* Importer).runOnce;
+        const { sqlite } = yield* Database;
+        const sessions = yield* (yield* Sessions).list(project.id);
+        const migrated = sessions.find((session) => session.importedFrom === "codex")!;
+        expect(migrated.createdAt).toBe("2026-04-02T02:00:00.000Z");
+        const nodes = yield* Nodes;
+        return {
+          pending: decodeCount(
+            sqlite
+              .prepare("SELECT count(*) AS count FROM interpret_jobs WHERE status = 'pending'")
+              .get(),
+          ).count,
+          rendered: sessionMessages(nodes.session(migrated.id), () => []),
+        };
+      }),
+    );
+
+    expect(pending).toBe(1);
+    expect(rendered).toHaveLength(1);
+    expect(rendered[0]?.role).toBe("user");
+    expect(rendered[0]?.parts).toEqual([{ type: "text", content: "이어서" }]);
+  });
+});

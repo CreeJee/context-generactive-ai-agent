@@ -296,11 +296,14 @@ export const migrations: readonly string[] = [
 
   -- How far each transcript was read. A file whose size or mtime disagrees with the cursor was
   -- truncated or rewritten: it is read from the start again and imported_nodes drops the repeats.
-  -- skipped says why a file produced nothing, e.g. 'no_project'. Times are ISO strings.
+  -- skipped says why a file produced nothing, e.g. 'no_project'; cwd is the folder it ran in, so
+  -- the settings screen can name the folders the user would have to register first.
+  -- Times are ISO strings.
   CREATE TABLE import_cursors (
     source TEXT NOT NULL,
     path TEXT NOT NULL,
     external_id TEXT,
+    cwd TEXT,
     byte_offset INTEGER NOT NULL DEFAULT 0 CHECK (byte_offset >= 0),
     size INTEGER NOT NULL,
     mtime_ms INTEGER NOT NULL,
@@ -309,5 +312,6 @@ export const migrations: readonly string[] = [
     updated_at TEXT NOT NULL,
     PRIMARY KEY (source, path)
   );
+  CREATE INDEX import_cursors_skipped ON import_cursors(skipped, cwd);
   `,
 ];

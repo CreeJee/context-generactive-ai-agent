@@ -36,6 +36,9 @@ export async function testRuntime(overrides: MemoryAgentLayerOptions = {}) {
     secrets: SecretStore.memory,
     // The user's real ~/.agents/skills stays out of tests.
     skillsHome: home,
+    // So does the user's real ~/.claude and ~/.codex; a test writes its own transcripts here.
+    importsHome: home,
+    importsWatching: false,
     ...overrides,
   };
   const storage = join(base, "storage");
