@@ -1,8 +1,9 @@
-// Recall evaluation with the real embedding model and Kiwi, on the Korean set in recall-corpus.ts.
+// Recall evaluation with the real embedding model and Kiwi, on two sets: Korean decisions
+// (recall-corpus.ts) and what coding sessions leave behind (recall-technical.ts).
 // Both models must already be under ~/.context-generactive-agent/models (the app downloads them).
-//   vp run eval:recall                    all configurations
+//   vp run eval:recall                    all configurations, both sets
 //   vp run eval:recall "trigram + kiwi"   one configuration
-//   vp run eval:recall --terms            Kiwi terms of the corpus and queries
+//   vp run eval:recall --terms            Kiwi terms of the decision corpus and queries
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,7 +23,13 @@ import { Nodes } from "../src/memory/nodes.ts";
 import { MemorySearch } from "../src/memory/search.ts";
 import { Projects } from "../src/projects/projects.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
-import { recallQueries, recallSessions } from "./recall-corpus.ts";
+import {
+  recallQueries,
+  recallSessions,
+  type RecallQuery,
+  type RecallStatement,
+} from "./recall-corpus.ts";
+import { technicalQueries, technicalSessions } from "./recall-technical.ts";
 
 const home = join(homedir(), ".context-generactive-agent");
 const embeddingModel = join(home, "models", localModel.id, modelFile("quint8"));
@@ -45,18 +52,40 @@ interface Configuration {
   readonly name: string;
   readonly embedder: Layer.Layer<Embedder>;
   readonly morph: Layer.Layer<MorphAnalyzer>;
+  /** Trigram and short substring ranking; "trigram" in the name. */
+  readonly text: boolean;
 }
 
 const configurations: readonly Configuration[] = [
-  { name: "vector + trigram", embedder, morph: MorphAnalyzer.disabled },
-  { name: "vector + trigram + kiwi", embedder, morph: kiwi },
-  { name: "vector(quint8) + trigram", embedder: quantized, morph: MorphAnalyzer.disabled },
-  { name: "vector(quint8) + trigram + kiwi", embedder: quantized, morph: kiwi },
-  { name: "trigram", embedder: noEmbedder, morph: MorphAnalyzer.disabled },
-  { name: "trigram + kiwi", embedder: noEmbedder, morph: kiwi },
+  { name: "vector + trigram", embedder, morph: MorphAnalyzer.disabled, text: true },
+  { name: "vector + trigram + kiwi", embedder, morph: kiwi, text: true },
+  { name: "vector", embedder, morph: MorphAnalyzer.disabled, text: false },
+  { name: "vector + kiwi", embedder, morph: kiwi, text: false },
+  {
+    name: "vector(quint8) + trigram",
+    embedder: quantized,
+    morph: MorphAnalyzer.disabled,
+    text: true,
+  },
+  { name: "vector(quint8) + trigram + kiwi", embedder: quantized, morph: kiwi, text: true },
+  { name: "vector(quint8) + kiwi", embedder: quantized, morph: kiwi, text: false },
+  { name: "trigram", embedder: noEmbedder, morph: MorphAnalyzer.disabled, text: true },
+  { name: "trigram + kiwi", embedder: noEmbedder, morph: kiwi, text: true },
+  { name: "kiwi", embedder: noEmbedder, morph: kiwi, text: false },
 ];
 
-async function evaluate(configuration: Configuration) {
+interface RecallSet {
+  readonly name: string;
+  readonly sessions: readonly (readonly RecallStatement[])[];
+  readonly queries: readonly RecallQuery[];
+}
+
+const recallSets: readonly RecallSet[] = [
+  { name: "decisions", sessions: recallSessions, queries: recallQueries },
+  { name: "technical", sessions: technicalSessions, queries: technicalQueries },
+];
+
+async function evaluate(configuration: Configuration, set: RecallSet) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "memory-agent-recall-")));
   const projectRoot = join(base, "project");
   mkdirSync(projectRoot);
@@ -75,13 +104,13 @@ async function evaluate(configuration: Configuration) {
         const project = yield* (yield* Projects).add(projectRoot);
         const nodes = yield* Nodes;
         const keys = new Map<string, string>();
-        for (const statements of recallSessions) {
+        for (const statements of set.sessions) {
           const session = yield* (yield* Sessions).create(project.id);
           for (const statement of statements) {
             const node = nodes.append({
               projectId: project.id,
               sessionId: session.id,
-              kind: "user",
+              kind: statement.kind ?? "user",
               text: statement.text,
             });
             keys.set(node.id, statement.key);
@@ -92,7 +121,9 @@ async function evaluate(configuration: Configuration) {
         yield* Effect.ignore(indexer.indexAll());
         yield* Effect.ignore(indexer.analyzeAll());
         const indexedMs = Math.round(performance.now() - started);
-        const search = yield* MemorySearch;
+        const search = yield* configuration.text
+          ? MemorySearch
+          : Effect.provide(MemorySearch, MemorySearch.withoutText);
 
         let top1 = 0;
         let top3 = 0;
@@ -100,7 +131,7 @@ async function evaluate(configuration: Configuration) {
         let reciprocal = 0;
         const misses: string[] = [];
         const searchStarted = performance.now();
-        for (const item of recallQueries) {
+        for (const item of set.queries) {
           const result = yield* search.find({
             query: item.query,
             projectId: project.id,
@@ -117,9 +148,9 @@ async function evaluate(configuration: Configuration) {
               `${item.query} → ${rank < 0 ? "없음" : `${rank + 1}위`} (1위 ${found[0] ?? "-"}, degraded ${result.degraded.join(",") || "-"})`,
             );
         }
-        const total = recallQueries.length;
+        const total = set.queries.length;
         return {
-          name: configuration.name,
+          name: `${set.name} · ${configuration.name}`,
           top1: `${top1}/${total}`,
           top3: `${top3}/${total}`,
           top5: `${top5}/${total}`,
@@ -150,11 +181,12 @@ if (only === "--terms") {
   texts.forEach((text, index) => console.log(`${text} | ${terms[index]?.join(" ")}`));
   process.exit(0);
 }
-for (const configuration of configurations) {
-  if (only && configuration.name !== only) continue;
-  const result = await evaluate(configuration);
-  console.log(
-    `## ${result.name}: top1 ${result.top1}, top3 ${result.top3}, top5 ${result.top5}, MRR ${result.mrr} (index ${result.indexedMs} ms, ${result.searchMs} ms/query)`,
-  );
-  for (const miss of result.misses) console.log(`  - ${miss}`);
-}
+for (const set of recallSets)
+  for (const configuration of configurations) {
+    if (only && configuration.name !== only) continue;
+    const result = await evaluate(configuration, set);
+    console.log(
+      `## ${result.name}: top1 ${result.top1}, top3 ${result.top3}, top5 ${result.top5}, MRR ${result.mrr} (index ${result.indexedMs} ms, ${result.searchMs} ms/query)`,
+    );
+    for (const miss of result.misses) console.log(`  - ${miss}`);
+  }

@@ -1,3 +1,5 @@
+import type { NodeKind } from "../src/memory/nodes.ts";
+
 /**
  * A small Korean recall set for comparing search channels. Statements are grouped into sessions
  * the way a project's conversations would be; each query names the statement it should find first.
@@ -6,6 +8,8 @@
  */
 export interface RecallStatement {
   readonly key: string;
+  /** What kind of node it is stored as; a user statement unless set. */
+  readonly kind?: NodeKind;
   readonly text: string;
 }
 

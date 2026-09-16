@@ -92,188 +92,193 @@ export function searchTerms(query: string) {
   };
 }
 
-const make = Effect.gen(function* () {
-  const { sqlite } = yield* Database;
-  const embedder = yield* Embedder;
-  const vectors = yield* VectorIndex;
-  const graph = yield* Graph;
-  const analyzer = yield* MorphAnalyzer;
-  const supersededBy = sqlite.prepare(`
+/** `withText`: rank by trigram and short substring matches too; off only to measure what they add. */
+const make = (withText: boolean) =>
+  Effect.gen(function* () {
+    const { sqlite } = yield* Database;
+    const embedder = yield* Embedder;
+    const vectors = yield* VectorIndex;
+    const graph = yield* Graph;
+    const analyzer = yield* MorphAnalyzer;
+    const supersededBy = sqlite.prepare(`
     SELECT e.from_id, e.kind FROM edges e JOIN nodes n ON n.id = e.from_id
     WHERE e.to_id = ? AND e.kind IN ('corrects', 'retracts') ORDER BY n.seq`);
-  const unconfirmedOf = sqlite.prepare(
-    "SELECT count(*) AS count FROM interpretations WHERE target_id = ? AND status = 'unconfirmed'",
-  );
-  const nameOf = sqlite.prepare("SELECT name FROM projects WHERE id = ?");
-  const projectName = (projectId: string) => {
-    const row = nameOf.get(projectId);
-    return row ? decodeName(row).name : projectId;
-  };
+    const unconfirmedOf = sqlite.prepare(
+      "SELECT count(*) AS count FROM interpretations WHERE target_id = ? AND status = 'unconfirmed'",
+    );
+    const nameOf = sqlite.prepare("SELECT name FROM projects WHERE id = ?");
+    const projectName = (projectId: string) => {
+      const row = nameOf.get(projectId);
+      return row ? decodeName(row).name : projectId;
+    };
 
-  const allowedProjects = (projectId: string, crossProject: boolean) =>
-    crossProject
-      ? [
-          projectId,
-          ...sqlite
-            .prepare("SELECT id FROM projects WHERE cross_recall_excluded = 0 AND id != ?")
-            .all(projectId)
-            .map((row) => decodeId(row).id),
-        ]
-      : [projectId];
+    const allowedProjects = (projectId: string, crossProject: boolean) =>
+      crossProject
+        ? [
+            projectId,
+            ...sqlite
+              .prepare("SELECT id FROM projects WHERE cross_recall_excluded = 0 AND id != ?")
+              .all(projectId)
+              .map((row) => decodeId(row).id),
+          ]
+        : [projectId];
 
-  /** Node ids ranked by cosine similarity to the query, best first. */
-  const vectorRanking = (query: string, allowed: ReadonlySet<string>, k: number) =>
-    Effect.gen(function* () {
-      const [queryVector] = yield* embedder.embed([query]);
-      if (!queryVector) return [];
-      const hits = yield* vectors.search(queryVector, k);
-      const bySeq = sqlite.prepare("SELECT id, project_id FROM nodes WHERE seq = ?");
-      return hits.flatMap((hit) => {
-        const row = bySeq.get(hit.seq);
-        if (!row) return [];
-        const node = decodeIdProject(row);
-        return allowed.has(node.project_id) ? [node.id] : [];
+    /** Node ids ranked by cosine similarity to the query, best first. */
+    const vectorRanking = (query: string, allowed: ReadonlySet<string>, k: number) =>
+      Effect.gen(function* () {
+        const [queryVector] = yield* embedder.embed([query]);
+        if (!queryVector) return [];
+        const hits = yield* vectors.search(queryVector, k);
+        const bySeq = sqlite.prepare("SELECT id, project_id FROM nodes WHERE seq = ?");
+        return hits.flatMap((hit) => {
+          const row = bySeq.get(hit.seq);
+          if (!row) return [];
+          const node = decodeIdProject(row);
+          return allowed.has(node.project_id) ? [node.id] : [];
+        });
       });
-    });
 
-  /**
-   * Node ids ranked by morpheme terms (BM25): "로그 형식을 정했었지" meets "로그 포맷은 … 하기로 했다"
-   * through 로그, and particles or endings no longer decide the match.
-   */
-  const morphRanking = (query: string, allowed: readonly string[], k: number) =>
-    Effect.gen(function* () {
-      if (!analyzer.ready()) {
-        analyzer.warm();
-        return yield* new MorphAnalysisFailed({ reason: "not_ready" });
-      }
-      const [terms = []] = yield* analyzer.terms([query]);
-      const unique = [...new Set(terms)].filter((term) => term.length > 0);
-      if (unique.length === 0) return [];
-      const match = unique.map((term) => `"${term.replaceAll('"', '""')}"`).join(" OR ");
-      const projects = allowed.map(() => "?").join(", ");
-      return sqlite
-        .prepare(`
+    /**
+     * Node ids ranked by morpheme terms (BM25): "로그 형식을 정했었지" meets "로그 포맷은 … 하기로 했다"
+     * through 로그, and particles or endings no longer decide the match.
+     */
+    const morphRanking = (query: string, allowed: readonly string[], k: number) =>
+      Effect.gen(function* () {
+        if (!analyzer.ready()) {
+          analyzer.warm();
+          return yield* new MorphAnalysisFailed({ reason: "not_ready" });
+        }
+        const [terms = []] = yield* analyzer.terms([query]);
+        const unique = [...new Set(terms)].filter((term) => term.length > 0);
+        if (unique.length === 0) return [];
+        const match = unique.map((term) => `"${term.replaceAll('"', '""')}"`).join(" OR ");
+        const projects = allowed.map(() => "?").join(", ");
+        return sqlite
+          .prepare(`
           SELECT n.id, n.project_id FROM nodes_morph f JOIN nodes n ON n.seq = f.rowid
           WHERE nodes_morph MATCH ? AND n.project_id IN (${projects})
           ORDER BY bm25(nodes_morph) LIMIT ?`)
-        .all(match, ...allowed, k)
-        .map((row) => decodeIdProject(row).id);
-    });
+          .all(match, ...allowed, k)
+          .map((row) => decodeIdProject(row).id);
+      });
 
-  /** Node ids ranked by text match: trigram BM25 first, then 2-character substring hits. */
-  function textRanking(query: string, allowed: readonly string[], k: number) {
-    const { trigram, short } = searchTerms(query);
-    const projects = allowed.map(() => "?").join(", ");
-    const ranked: string[] = [];
-    if (trigram.length > 0) {
-      const match = trigram.map((term) => `"${term.replaceAll('"', '""')}"`).join(" OR ");
-      const rows = sqlite
-        .prepare(`
+    /** Node ids ranked by text match: trigram BM25 first, then 2-character substring hits. */
+    function textRanking(query: string, allowed: readonly string[], k: number) {
+      if (!withText) return [];
+      const { trigram, short } = searchTerms(query);
+      const projects = allowed.map(() => "?").join(", ");
+      const ranked: string[] = [];
+      if (trigram.length > 0) {
+        const match = trigram.map((term) => `"${term.replaceAll('"', '""')}"`).join(" OR ");
+        const rows = sqlite
+          .prepare(`
           SELECT n.id, n.project_id FROM nodes_fts f JOIN nodes n ON n.seq = f.rowid
           WHERE nodes_fts MATCH ? AND n.project_id IN (${projects})
           ORDER BY bm25(nodes_fts) LIMIT ?`)
-        .all(match, ...allowed, k);
-      for (const row of rows) ranked.push(decodeIdProject(row).id);
-    }
-    for (const term of short) {
-      const rows = sqlite
-        .prepare(`
+          .all(match, ...allowed, k);
+        for (const row of rows) ranked.push(decodeIdProject(row).id);
+      }
+      for (const term of short) {
+        const rows = sqlite
+          .prepare(`
           SELECT id, project_id FROM nodes
           WHERE instr(text, ?) > 0 AND project_id IN (${projects})
           ORDER BY seq DESC LIMIT ?`)
-        .all(term, ...allowed, k);
-      for (const row of rows) {
-        const id = decodeIdProject(row).id;
-        if (!ranked.includes(id)) ranked.push(id);
+          .all(term, ...allowed, k);
+        for (const row of rows) {
+          const id = decodeIdProject(row).id;
+          if (!ranked.includes(id)) ranked.push(id);
+        }
       }
+      return ranked;
     }
-    return ranked;
-  }
 
-  const find = (input: FindInput) =>
-    Effect.gen(function* () {
-      const limit = input.limit ?? defaultLimit;
-      const allowed = allowedProjects(input.projectId, input.crossProject ?? true);
-      const degraded: ("vector" | "morph")[] = [];
+    const find = (input: FindInput) =>
+      Effect.gen(function* () {
+        const limit = input.limit ?? defaultLimit;
+        const allowed = allowedProjects(input.projectId, input.crossProject ?? true);
+        const degraded: ("vector" | "morph")[] = [];
 
-      const byVector = yield* vectorRanking(input.query, new Set(allowed), limit * 4).pipe(
-        Effect.catchAll(() => {
-          degraded.push("vector");
-          return Effect.succeed([]);
-        }),
-      );
-      const byText = textRanking(input.query, allowed, limit * 2);
-      const byMorph = yield* morphRanking(input.query, allowed, limit * 2).pipe(
-        Effect.catchAll(() => {
-          if (analyzer.identity !== "none") degraded.push("morph");
-          return Effect.succeed([]);
-        }),
-      );
-      const seeds = fuseRanks(
-        byMorph.length > 0 ? [byVector, byText, byMorph] : [byVector, byText],
-      );
-      const vectorIds = new Set(byVector);
+        const byVector = yield* vectorRanking(input.query, new Set(allowed), limit * 4).pipe(
+          Effect.catchAll(() => {
+            degraded.push("vector");
+            return Effect.succeed([]);
+          }),
+        );
+        const byText = textRanking(input.query, allowed, limit * 2);
+        const byMorph = yield* morphRanking(input.query, allowed, limit * 2).pipe(
+          Effect.catchAll(() => {
+            if (analyzer.identity !== "none") degraded.push("morph");
+            return Effect.succeed([]);
+          }),
+        );
+        const seeds = fuseRanks(
+          byMorph.length > 0 ? [byVector, byText, byMorph] : [byVector, byText],
+        );
+        const vectorIds = new Set(byVector);
 
-      const walk = graph.traverse(seeds, {
-        budget: limit * 4,
-        minUtility: 0.2,
-        projectIds: allowed,
-      });
-      const unindexed = Schema.decodeUnknownSync(Count)(
-        sqlite
-          .prepare(`
+        const walk = graph.traverse(seeds, {
+          budget: limit * 4,
+          minUtility: 0.2,
+          projectIds: allowed,
+        });
+        const unindexed = Schema.decodeUnknownSync(Count)(
+          sqlite
+            .prepare(`
             SELECT count(*) AS count FROM nodes n
             LEFT JOIN node_vectors v ON v.node_seq = n.seq AND v.embedder = ?
             WHERE v.node_seq IS NULL AND length(n.text) > 0`)
-          .get(embedder.identity),
-      ).count;
+            .get(embedder.identity),
+        ).count;
 
-      const uninterpreted = Schema.decodeUnknownSync(Count)(
-        sqlite
-          .prepare(`
+        const uninterpreted = Schema.decodeUnknownSync(Count)(
+          sqlite
+            .prepare(`
             SELECT count(*) AS count FROM interpret_jobs j JOIN nodes n ON n.id = j.node_id
             WHERE j.status != 'done' AND n.project_id IN (${allowed.map(() => "?").join(", ")})`)
-          .get(...allowed),
-      ).count;
+            .get(...allowed),
+        ).count;
 
-      const matches = walk.visits.slice(0, limit).map((visit): Match => {
-        let foundBy: Match["foundBy"] = "graph";
-        if (visit.path.length === 0) foundBy = vectorIds.has(visit.node.id) ? "vector" : "text";
+        const matches = walk.visits.slice(0, limit).map((visit): Match => {
+          let foundBy: Match["foundBy"] = "graph";
+          if (visit.path.length === 0) foundBy = vectorIds.has(visit.node.id) ? "vector" : "text";
+          return {
+            id: visit.node.id,
+            kind: visit.node.kind,
+            projectId: visit.node.projectId,
+            sessionId: visit.node.sessionId,
+            createdAt: visit.node.createdAt,
+            snippet: visit.node.text.slice(0, snippetLength),
+            utility: Math.round(visit.utility * 1000) / 1000,
+            foundBy,
+            path: visit.path,
+            projectName: projectName(visit.node.projectId),
+            fromOtherProject: visit.node.projectId !== input.projectId,
+            supersededBy: supersededBy
+              .all(visit.node.id)
+              .map((row) => decodeChallenge(row))
+              .map((challenge) => ({ id: challenge.from_id, relation: challenge.kind })),
+            unconfirmedChallenges: decodeCount(unconfirmedOf.get(visit.node.id)).count,
+          };
+        });
         return {
-          id: visit.node.id,
-          kind: visit.node.kind,
-          projectId: visit.node.projectId,
-          sessionId: visit.node.sessionId,
-          createdAt: visit.node.createdAt,
-          snippet: visit.node.text.slice(0, snippetLength),
-          utility: Math.round(visit.utility * 1000) / 1000,
-          foundBy,
-          path: visit.path,
-          projectName: projectName(visit.node.projectId),
-          fromOtherProject: visit.node.projectId !== input.projectId,
-          supersededBy: supersededBy
-            .all(visit.node.id)
-            .map((row) => decodeChallenge(row))
-            .map((challenge) => ({ id: challenge.from_id, relation: challenge.kind })),
-          unconfirmedChallenges: decodeCount(unconfirmedOf.get(visit.node.id)).count,
-        };
+          matches,
+          complete: walk.complete && walk.visits.length <= limit,
+          degraded,
+          unindexed,
+          uninterpreted,
+        } satisfies FindResult;
       });
-      return {
-        matches,
-        complete: walk.complete && walk.visits.length <= limit,
-        degraded,
-        unindexed,
-        uninterpreted,
-      } satisfies FindResult;
-    });
 
-  return { find, allowedProjects };
-});
+    return { find, allowedProjects };
+  });
 
 /** Finds prior messages: vector and text matches seed a graph walk over the memory. */
 export class MemorySearch extends Context.Tag("memory-agent/MemorySearch")<
   MemorySearch,
-  Effect.Effect.Success<typeof make>
+  Effect.Effect.Success<ReturnType<typeof make>>
 >() {
-  static readonly layer = Layer.effect(MemorySearch, make);
+  static readonly layer = Layer.effect(MemorySearch, make(true));
+  /** Vector and morpheme ranking only, for the recall evaluation. */
+  static readonly withoutText = Layer.effect(MemorySearch, make(false));
 }
