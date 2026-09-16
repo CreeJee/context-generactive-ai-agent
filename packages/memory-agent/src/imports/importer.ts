@@ -19,9 +19,14 @@ const titleLength = 60;
 /** Transcripts only grow, and a stat of every file is cheap, so looking often costs nothing. */
 const pollEvery = "5 minutes";
 
-/** A working directory whose transcripts cannot be migrated because it is not a project here. */
-export interface UnregisteredFolder {
+/**
+ * A working directory whose transcripts could not be migrated. Folders are registered as projects
+ * on their own, so what is left here is what registering could not do: `not_found` (the folder is
+ * gone), `not_directory`, `overlaps_storage` (inside this app's own storage).
+ */
+export interface UnplacedFolder {
   readonly cwd: string;
+  readonly reason: string;
   readonly transcripts: number;
 }
 
@@ -35,8 +40,8 @@ export interface ImportOverview {
     readonly migrated: number;
     readonly nodes: number;
   }[];
-  /** Folders the user would have to register as projects before their transcripts can be read. */
-  readonly unregistered: readonly UnregisteredFolder[];
+  /** Folders whose transcripts could not be placed, with why. */
+  readonly unplaced: readonly UnplacedFolder[];
   /** Nodes still waiting for the embedding backlog; migrated ones join the queue like any other. */
   readonly unindexed: number;
 }
@@ -50,7 +55,7 @@ const decodeSourceTotals = Schema.decodeUnknownSync(
   Schema.Struct({ migrated: Schema.Number, nodes: Schema.Number }),
 );
 const decodeSkipped = Schema.decodeUnknownSync(
-  Schema.Struct({ cwd: Schema.String, transcripts: Schema.Number }),
+  Schema.Struct({ cwd: Schema.String, reason: Schema.String, transcripts: Schema.Number }),
 );
 
 /** True when `candidate` is `root` or below it. Compared by spelling: a recorded cwd may be gone. */
@@ -96,27 +101,47 @@ const make = (watching: boolean, home: string) =>
       SELECT count(*) AS migrated, coalesce(sum(imported), 0) AS nodes FROM import_cursors
       WHERE source = ? AND skipped IS NULL`);
     const skippedFolders = sqlite.prepare(`
-      SELECT cwd, count(*) AS transcripts FROM import_cursors
-      WHERE skipped = 'no_project' AND cwd IS NOT NULL GROUP BY cwd ORDER BY transcripts DESC, cwd`);
+      SELECT cwd, skipped AS reason, count(*) AS transcripts FROM import_cursors
+      WHERE skipped IS NOT NULL AND cwd IS NOT NULL
+      GROUP BY cwd, skipped ORDER BY transcripts DESC, cwd`);
 
-    /** The registered project a recorded working directory belongs to; the deepest root wins. */
+    /**
+     * The project a recorded working directory belongs to, registering the folder when none does.
+     * The deepest registered root wins, and hidden projects count: they still own their memory, so
+     * a transcript from that folder belongs to them rather than to a second registration.
+     *
+     * Registering widens what the file and shell tools may touch. The user asked for this, because
+     * these are their own working folders and naming them one by one is the tedious part; the
+     * project list can be tidied afterwards (`Projects.setHidden`).
+     */
     const projectOf = (cwd: string) =>
-      Effect.map(projects.list, (registered) => {
+      Effect.gen(function* () {
         const canonical = canonicalPath(cwd);
-        return registered
+        const registered = yield* projects.listAll;
+        const owner = registered
           .filter((project) => isWithin(project.root, canonical))
           .sort((a, b) => b.root.length - a.root.length)
           .at(0);
+        if (owner) return { project: owner, rejected: null };
+        // A folder that has been deleted, or one inside this app's own storage, is left alone.
+        const added = yield* Effect.either(projects.add(canonical));
+        return added._tag === "Right"
+          ? { project: added.right, rejected: null }
+          : { project: null, rejected: added.left.reason };
       });
 
-    /** The session a transcript writes into, creating it the first time the transcript is read. */
+    /**
+     * The session a transcript writes into, creating it the first time the transcript is read.
+     * `null` with a reason means the transcript cannot be placed, and the reason is what the
+     * settings screen shows for that folder.
+     */
     const sessionFor = (transcript: Transcript, start: TranscriptStart | undefined) =>
       Effect.gen(function* () {
         const existing = readMapping.get(transcript.source, transcript.externalId);
-        if (existing) return decodeSessionId(existing).session_id;
-        if (!start) return null;
-        const project = yield* projectOf(start.cwd);
-        if (!project) return null;
+        if (existing) return { sessionId: decodeSessionId(existing).session_id, skipped: null };
+        if (!start) return { sessionId: null, skipped: "no_session_line" };
+        const { project, rejected } = yield* projectOf(start.cwd);
+        if (!project) return { sessionId: null, skipped: rejected ?? "no_project" };
         const session = yield* sessions.createImported(
           project.id,
           null,
@@ -124,7 +149,7 @@ const make = (watching: boolean, home: string) =>
           transcript.source,
         );
         saveMapping.run(transcript.source, transcript.externalId, session.id);
-        return session.id;
+        return { sessionId: session.id, skipped: null };
       });
 
     /** Reads what is new in one transcript. Returns how many nodes it wrote. */
@@ -150,10 +175,10 @@ const make = (watching: boolean, home: string) =>
         });
 
         const start = items.find((item) => item.kind === "session");
-        const sessionId = yield* sessionFor(transcript, start);
+        const { sessionId, skipped } = yield* sessionFor(transcript, start);
         const now = new Date().toISOString();
         if (!sessionId) {
-          // Leave the offset at 0: once the folder is registered, the whole transcript is read.
+          // Leave the offset at 0: if the folder comes back, the whole transcript is read.
           saveCursor.run(
             transcript.source,
             transcript.path,
@@ -163,7 +188,7 @@ const make = (watching: boolean, home: string) =>
             stats.size,
             stats.mtimeMs,
             0,
-            "no_project",
+            skipped,
             now,
           );
           return 0;
@@ -251,7 +276,7 @@ const make = (watching: boolean, home: string) =>
             nodes: totals.nodes,
           };
         }),
-        unregistered: skippedFolders.all().map((row) => decodeSkipped(row)),
+        unplaced: skippedFolders.all().map((row) => decodeSkipped(row)),
         unindexed,
       } satisfies ImportOverview;
     });

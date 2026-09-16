@@ -314,4 +314,10 @@ export const migrations: readonly string[] = [
   );
   CREATE INDEX import_cursors_skipped ON import_cursors(skipped, cwd);
   `,
+  `
+  -- A project taken out of the sidebar. Its sessions, nodes, edges and search are untouched; this
+  -- only decides whether it is offered for choosing. Migration registers folders on its own, so
+  -- there has to be a way to tidy the list without losing what was remembered there.
+  ALTER TABLE projects ADD COLUMN hidden_at TEXT;
+  `,
 ];

@@ -21,6 +21,8 @@ export const Project = Schema.Struct({
   crossRecallExcluded: Schema.Boolean,
   permissionMode: PermissionMode,
   createdAt: Schema.String,
+  /** When it was taken out of the sidebar; its memory is still there and still searched. */
+  hiddenAt: Schema.NullOr(Schema.String),
 });
 export type Project = typeof Project.Type;
 
@@ -31,6 +33,7 @@ const ProjectRow = Schema.Struct({
   cross_recall_excluded: Schema.Literal(0, 1),
   permission_mode: PermissionMode,
   created_at: Schema.String,
+  hidden_at: Schema.NullOr(Schema.String),
 });
 const decodeProjectRow = Schema.decodeUnknownSync(ProjectRow);
 
@@ -43,6 +46,7 @@ function toProject(row: Record<string, SQLOutputValue>): Project {
     crossRecallExcluded: decoded.cross_recall_excluded === 1,
     permissionMode: decoded.permission_mode,
     createdAt: decoded.created_at,
+    hiddenAt: decoded.hidden_at,
   };
 }
 
@@ -68,9 +72,30 @@ const make = Effect.gen(function* () {
     );
 
   return {
+    /** The projects offered for choosing. Hidden ones still own their memory and are still searched. */
     list: Effect.sync(() =>
+      db.sqlite
+        .prepare("SELECT * FROM projects WHERE hidden_at IS NULL ORDER BY created_at, id")
+        .all()
+        .map(toProject),
+    ),
+
+    /** Every project, hidden ones included: what the importer matches a recorded folder against. */
+    listAll: Effect.sync(() =>
       db.sqlite.prepare("SELECT * FROM projects ORDER BY created_at, id").all().map(toProject),
     ),
+
+    /** Taken out of the sidebar, or put back. Nothing about its memory changes either way. */
+    setHidden: (id: string, hidden: boolean) =>
+      Effect.sync(() =>
+        db.sqlite
+          .prepare("UPDATE projects SET hidden_at = ? WHERE id = ?")
+          .run(hidden ? new Date().toISOString() : null, id),
+      ).pipe(
+        Effect.flatMap((result) =>
+          result.changes === 0 ? Effect.fail(new ProjectNotFound({ id })) : find(id),
+        ),
+      ),
 
     get: find,
 
@@ -94,15 +119,18 @@ const make = Effect.gen(function* () {
           crossRecallExcluded: false,
           permissionMode: "ask",
           createdAt: new Date().toISOString(),
+          hiddenAt: null,
         };
-        const inserted = db.sqlite
-          .prepare(
-            "INSERT INTO projects (id, root, name, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(root) DO NOTHING",
-          )
-          .run(project.id, project.root, project.name, project.createdAt);
-        if (inserted.changes === 0)
-          return yield* new ProjectRootRejected({ root, reason: "already_registered" });
-        return project;
+        // Adding a folder that is registered but hidden puts it back in the list: asking for it
+        // again is the same intent as un-hiding it, and there is no other way back.
+        const row = db.sqlite
+          .prepare(`
+            INSERT INTO projects (id, root, name, created_at) VALUES (?, ?, ?, ?)
+            ON CONFLICT(root) DO UPDATE SET hidden_at = NULL WHERE projects.hidden_at IS NOT NULL
+            RETURNING *`)
+          .get(project.id, project.root, project.name, project.createdAt);
+        if (!row) return yield* new ProjectRootRejected({ root, reason: "already_registered" });
+        return toProject(row);
       }),
 
     /** R08: excluded projects keep their memory but are not searched from other projects. */

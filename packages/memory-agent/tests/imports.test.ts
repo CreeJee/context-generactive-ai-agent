@@ -8,6 +8,7 @@ import { Importer } from "../src/imports/importer.ts";
 import { sessionMessages } from "../src/agent/history.ts";
 import { Indexer } from "../src/memory/embedding/indexer.ts";
 import { Nodes } from "../src/memory/nodes.ts";
+import { Projects } from "../src/projects/projects.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
 import { testRuntime } from "./support/runtime.ts";
 
@@ -273,9 +274,28 @@ describe("migrating other agents' transcripts", () => {
     expect(await runtime.runPromise(importer.runOnce)).toBe(1);
   });
 
-  test("skips a folder that is not a registered project, and names it", async () => {
+  test("registers the folder a conversation ran in as a project", async () => {
+    const { runtime, home, base } = await testRuntime();
+    const folder = join(base, "another-project");
+    mkdirSync(folder);
+    writeFileSync(claudePath(home, "cc-1.jsonl"), serialize(claudeLines(folder)));
+
+    const registered = await runtime.runPromise(
+      Effect.gen(function* () {
+        expect(yield* (yield* Importer).runOnce).toBe(4);
+        return yield* (yield* Projects).list;
+      }),
+    );
+    const added = registered.find((project) => project.root === folder);
+    expect(added).toBeDefined();
+    expect(added?.name).toBe("another-project");
+    // Registering is what the user asked for, but it never relaxes how tool calls are approved.
+    expect(added?.permissionMode).toBe("ask");
+  });
+
+  test("names a folder it cannot register, with why", async () => {
     const { runtime, home } = await testRuntime();
-    writeFileSync(claudePath(home, "cc-1.jsonl"), serialize(claudeLines("/somewhere/else")));
+    writeFileSync(claudePath(home, "cc-1.jsonl"), serialize(claudeLines("/gone/for/good")));
 
     const overview = await runtime.runPromise(
       Effect.gen(function* () {
@@ -284,7 +304,26 @@ describe("migrating other agents' transcripts", () => {
         return yield* importer.overview;
       }),
     );
-    expect(overview.unregistered).toEqual([{ cwd: "/somewhere/else", transcripts: 1 }]);
+    expect(overview.unplaced).toEqual([
+      { cwd: "/gone/for/good", reason: "not_found", transcripts: 1 },
+    ]);
+  });
+
+  test("a hidden project still owns its folder's transcripts", async () => {
+    const { runtime, project, home } = await testRuntime();
+    writeFileSync(claudePath(home, "cc-1.jsonl"), serialize(claudeLines(project.root)));
+
+    const { visible, all } = await runtime.runPromise(
+      Effect.gen(function* () {
+        const projects = yield* Projects;
+        yield* projects.setHidden(project.id, true);
+        yield* (yield* Importer).runOnce;
+        return { visible: yield* projects.list, all: yield* projects.listAll };
+      }),
+    );
+    // Out of the sidebar, but the conversation went to it rather than registering a second one.
+    expect(visible).toEqual([]);
+    expect(all.filter((entry) => entry.root === project.root)).toHaveLength(1);
   });
 
   test("never reads this app's own storage", async () => {

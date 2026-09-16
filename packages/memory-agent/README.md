@@ -65,7 +65,8 @@ Claude Code(`~/.claude/projects/**/*.jsonl`)와 Codex CLI(`~/.codex/sessions/**/
 - 줄 하나를 `TranscriptItem`(리터럴 태그 유니온: `session`·`message`·`tool_call`·`tool_result`·`ignored`)으로 읽습니다. 새 출처는 어댑터 파일 하나 + `ImportSourceName` 태그 하나입니다.
 - `BulkNodes`가 대화 하나를 한 트랜잭션에 직접 INSERT하며, 줄의 원래 `timestamp`를 `created_at`에 씁니다. 구조 edge와 `interpret_jobs`는 라이브와 같은 규칙입니다. `Nodes.append`는 라이브 전용으로 그대로 둡니다.
 - `Importer`가 `import_cursors`의 byte offset부터 읽고, 마지막 개행까지만 소비합니다(실행 중인 에이전트가 쓰는 중인 꼬리 줄을 반으로 읽지 않기 위해). 중복은 `imported_nodes`가 막습니다.
-- 기록의 `cwd`가 등록된 프로젝트 안일 때만 옮깁니다. 아니면 `skipped = 'no_project'`로 두고 설정 화면에 폴더만 보여 줍니다. 저장 루트 아래(앱 전용 `CODEX_HOME`)는 읽지 않습니다.
+- 기록의 `cwd`를 프로젝트로 자동 등록합니다. 숨긴 프로젝트도 임자로 인정하므로 같은 폴더가 두 번 등록되지 않습니다. 등록할 수 없는 폴더는 `import_cursors.skipped`에 이유와 함께 남습니다. 저장 루트 아래(앱 전용 `CODEX_HOME`)는 읽지 않습니다.
+- 프로젝트는 목록에서 뺄 수 있습니다(`Projects.setHidden`, `projects.hidden_at`). `list`는 보이는 것만, `listAll`은 숨긴 것까지 줍니다. 기억·검색은 숨겨도 그대로입니다.
 - 설정 화면 "가져오기" 탭에서 켜면 5분마다 따라붙습니다(`config.json`의 `importsEnabled`). 이관은 모델 도구가 아닙니다. 테스트는 `tests/import-readers.test.ts`, `tests/imports.test.ts`.
 
 ## 도구와 권한

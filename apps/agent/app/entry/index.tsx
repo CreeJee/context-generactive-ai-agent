@@ -280,6 +280,15 @@ export function App() {
             if (!projectId) return;
             void api.setCrossRecallExcluded(projectId, !allowed).then(replaceProject);
           }}
+          onHide={(hiddenId) => {
+            void api.hideProject(hiddenId).then(() => {
+              setProjects((list) => {
+                const left = list.filter((project) => project.id !== hiddenId);
+                setProjectId(left.at(0)?.id ?? null);
+                return left;
+              });
+            });
+          }}
         />
         <Separator />
         {projectId && (

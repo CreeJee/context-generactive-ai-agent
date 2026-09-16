@@ -113,6 +113,9 @@ export const api = {
     }),
   setPermissionMode: (projectId: string, permissionMode: PermissionMode) =>
     call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}`, { permissionMode }),
+  /** Takes a project out of the sidebar. Its memory stays and adding the folder again brings it back. */
+  hideProject: (projectId: string) =>
+    call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}`, { hidden: true }),
 
   sessions: (projectId: string) =>
     call<Session[]>("GET", `/api/sessions?project=${encodeURIComponent(projectId)}`),

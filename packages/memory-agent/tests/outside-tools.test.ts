@@ -43,6 +43,7 @@ async function outsideTools(project: string, storage: string) {
     crossRecallExcluded: false,
     permissionMode: "ask",
     createdAt: "2026-09-14T00:00:00.000Z",
+    hiddenAt: null,
   });
   return { listOutside, readOutside, searchOutside };
 }

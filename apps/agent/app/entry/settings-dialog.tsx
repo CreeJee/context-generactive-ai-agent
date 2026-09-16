@@ -7,6 +7,7 @@ import {
   SettingsIcon,
   Trash2Icon,
 } from "lucide-react";
+import { Schema } from "effect";
 import { useEffect, useState } from "react";
 import { Alert, AlertDescription } from "~/components/ui/alert";
 import { Badge } from "~/components/ui/badge";
@@ -181,6 +182,27 @@ function KagiSettings() {
 
 const sourceNames = { "claude-code": "Claude Code", codex: "Codex CLI" } as const;
 
+/** Why registering a recorded working directory as a project did not work. */
+const UnplacedReason = Schema.Literal(
+  "not_found",
+  "not_directory",
+  "overlaps_storage",
+  "no_session_line",
+  "no_project",
+);
+const unplacedReasons = {
+  not_found: "폴더가 없어졌어요",
+  not_directory: "폴더가 아니에요",
+  overlaps_storage: "이 앱의 저장 폴더 안이에요",
+  no_session_line: "어느 대화인지 알 수 없어요",
+  no_project: "프로젝트를 찾지 못했어요",
+} satisfies Record<typeof UnplacedReason.Type, string>;
+const isUnplacedReason = Schema.is(UnplacedReason);
+
+/** A reason this build does not know yet is shown as it came, rather than hidden. */
+const unplacedReason = (reason: string) =>
+  isUnplacedReason(reason) ? unplacedReasons[reason] : reason;
+
 /** Migrating other coding agents' local conversations into this app's memory. */
 function ImportSettings() {
   const [overview, setOverview] = useState<ImportOverview | null>(null);
@@ -216,7 +238,8 @@ function ImportSettings() {
       <FieldDescription>
         Claude Code와 Codex CLI가 이 컴퓨터에 남긴 대화를 읽어 기억으로 옮겨요. 발언뿐 아니라 도구
         호출과 결과까지 그대로 옮겨서, 옛 대화도 근거를 따라갈 수 있어요. 원본 파일은 건드리지 않고
-        읽기만 해요.
+        읽기만 해요. 대화가 있던 폴더는 프로젝트로 자동 등록되고, 그 폴더의 파일은 에이전트가 읽고
+        고칠 수 있게 돼요. 필요 없는 프로젝트는 사이드바에서 목록에서 뺄 수 있어요.
       </FieldDescription>
 
       <Field orientation="horizontal">
@@ -259,17 +282,14 @@ function ImportSettings() {
         </FieldDescription>
       )}
 
-      {overview.unregistered.length > 0 && (
+      {overview.unplaced.length > 0 && (
         <Alert>
           <AlertDescription>
-            <div className="mb-1">
-              아래 폴더는 프로젝트로 등록돼 있지 않아 가져오지 않았어요. 사이드바에서 등록하면 다음
-              실행 때 통째로 들어와요.
-            </div>
+            <div className="mb-1">아래 폴더는 프로젝트로 만들 수 없어 가져오지 않았어요.</div>
             <ul className="font-mono text-xs">
-              {overview.unregistered.map((folder) => (
-                <li key={folder.cwd}>
-                  {folder.cwd} · 대화 {folder.transcripts}개
+              {overview.unplaced.map((folder) => (
+                <li key={`${folder.cwd}:${folder.reason}`}>
+                  {folder.cwd} · 대화 {folder.transcripts}개 · {unplacedReason(folder.reason)}
                 </li>
               ))}
             </ul>

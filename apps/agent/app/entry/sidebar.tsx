@@ -4,6 +4,7 @@ import {
   BotIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  EyeOffIcon,
   FolderPlusIcon,
   LogOutIcon,
   PlusIcon,
@@ -224,6 +225,7 @@ export function ProjectSection({
   onAdd,
   onPermissionMode,
   onCrossRecall,
+  onHide,
 }: {
   projects: Project[];
   projectId: string | null;
@@ -232,6 +234,8 @@ export function ProjectSection({
   onPermissionMode: (mode: PermissionMode) => void;
   /** Whether conversations in other projects may recall this project's memory (R08). */
   onCrossRecall: (allowed: boolean) => void;
+  /** Takes the project out of this list; its conversations and memory stay. */
+  onHide: (projectId: string) => void;
 }) {
   const current = projects.find((project) => project.id === projectId);
 
@@ -300,6 +304,18 @@ export function ProjectSection({
               onCheckedChange={(checked) => onCrossRecall(checked)}
             />
           </label>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="mt-1 self-start text-muted-foreground"
+            title="목록에서 빼기(대화와 기억은 그대로)"
+            onClick={() => onHide(current.id)}
+          >
+            <EyeOffIcon /> 목록에서 빼기
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            대화·기억·검색은 그대로 남아요. 같은 폴더를 다시 추가하면 돌아와요.
+          </p>
         </div>
       )}
     </Section>
