@@ -46,6 +46,7 @@ import {
 import { Separator } from "~/components/ui/separator";
 import { Spinner } from "~/components/ui/spinner";
 import { Switch } from "~/components/ui/switch";
+import { dayAndTime } from "~/lib/dates";
 import { cn } from "~/lib/utils";
 import type {
   AuthState,
@@ -386,15 +387,7 @@ function AddProjectDialog({ onAdd }: { onAdd: (root: string) => Promise<string |
   );
 }
 
-const dateFormat = new Intl.DateTimeFormat("ko-KR", {
-  month: "short",
-  day: "numeric",
-  hour: "2-digit",
-  minute: "2-digit",
-});
-
-const sessionLabel = (session: Session) =>
-  session.title ?? dateFormat.format(new Date(session.createdAt));
+const sessionLabel = (session: Session) => session.title ?? dayAndTime(session.createdAt);
 
 export function SessionSection({
   sessions,

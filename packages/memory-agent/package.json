@@ -54,6 +54,7 @@
     "@tanstack/ai-mcp": "catalog:",
     "@tanstack/ai-persistence": "catalog:",
     "cross-spawn": "catalog:",
+    "dayjs": "catalog:",
     "effect": "catalog:",
     "json-rpc-2.0": "catalog:",
     "kiwi-nlp": "catalog:",

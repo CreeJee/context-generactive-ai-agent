@@ -52,6 +52,7 @@ catalog:
   "@secretlint/secretlint-rule-preset-recommend": 13.0.5
   "@shadcn/lint": ^0.1.0
   motion: ^13.3.0
+  dayjs: ^1.11.23
 overrides:
   vite@*: "catalog:"
 peerDependencyRules:

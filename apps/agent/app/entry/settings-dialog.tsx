@@ -43,6 +43,7 @@ import {
 import { Spinner } from "~/components/ui/spinner";
 import { Switch } from "~/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
+import { timeOfDay } from "~/lib/dates";
 import {
   ApiError,
   api,
@@ -210,9 +211,6 @@ const unplacedReason = (reason: string) =>
 const refreshWhileReadingMs = 1_000;
 const refreshWhileIndexingMs = 3_000;
 
-const clockTime = (iso: string) =>
-  new Date(iso).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
-
 /** The pass this server is running, or how its latest one went. */
 function ImportActivityLine({ activity }: { activity: ImportActivity }) {
   switch (activity.status) {
@@ -236,7 +234,7 @@ function ImportActivityLine({ activity }: { activity: ImportActivity }) {
     case "finished":
       return (
         <FieldDescription>
-          {clockTime(activity.finishedAt)}에 기록 {activity.checked}개를 확인하고 노드{" "}
+          {timeOfDay(activity.finishedAt)}에 기록 {activity.checked}개를 확인하고 노드{" "}
           {activity.written}개를 더했어요.
           {activity.failed > 0 && ` ${activity.failed}개는 읽지 못했어요.`}
         </FieldDescription>
@@ -244,7 +242,7 @@ function ImportActivityLine({ activity }: { activity: ImportActivity }) {
     case "crashed":
       return (
         <FieldError>
-          {clockTime(activity.finishedAt)}에 가져오기가 중간에 멈췄어요: {activity.reason}
+          {timeOfDay(activity.finishedAt)}에 가져오기가 중간에 멈췄어요: {activity.reason}
         </FieldError>
       );
   }

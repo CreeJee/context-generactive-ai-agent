@@ -23,6 +23,7 @@
     "class-variance-authority": "catalog:",
     "cmdk": "catalog:",
     "cn": "catalog:",
+    "dayjs": "catalog:",
     "effect": "catalog:",
     "isbot": "^5.1.36",
     "lucide-react": "catalog:",

@@ -9,6 +9,7 @@ import {
   type AnyServerTool,
   type ChatMiddleware,
 } from "@tanstack/ai";
+import dayjs from "dayjs";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import { Attachments } from "../attachments/attachments.ts";
 import { attachmentIdOf } from "../attachments/urls.ts";
@@ -70,8 +71,7 @@ export const memoryInstructions = `You are a local assistant that remembers conv
  */
 export function workspaceInstructions(project: Project, now: Date = new Date()) {
   const { timeZone } = Intl.DateTimeFormat().resolvedOptions();
-  // en-CA formats a date as YYYY-MM-DD.
-  const today = new Intl.DateTimeFormat("en-CA", { timeZone }).format(now);
+  const today = dayjs(now).format("YYYY-MM-DD");
   return `The current project is "${project.name}" at ${project.root}.
 - Today is ${today} (${timeZone}). run_shell runs commands with ${hostShell(process.env)} on ${process.platform}.
 - File tools take paths relative to that root. Read a file before changing it and pass its sha256, so newer edits by the user are never overwritten.
