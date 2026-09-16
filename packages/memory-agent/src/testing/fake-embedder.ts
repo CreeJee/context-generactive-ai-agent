@@ -27,4 +27,5 @@ export const fakeEmbedderLayer = Layer.succeed(Embedder, {
   identity: "fake-trigram-64",
   dimensions,
   embed: (texts) => Effect.sync(() => texts.map(fakeVector)),
+  runtime: () => ({ kind: "other" }),
 });

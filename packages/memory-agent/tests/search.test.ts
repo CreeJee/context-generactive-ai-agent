@@ -125,6 +125,7 @@ describe("MemorySearch.find", () => {
       identity: "broken",
       dimensions: 64,
       embed: () => Effect.fail(new EmbeddingError({ cause: new Error("model not downloaded") })),
+      runtime: () => ({ kind: "other" }),
     });
     const { runtime, project, session } = await testRuntime({ embedder: broken });
     const earlier = await earlierSession(runtime, project.id, session.id);

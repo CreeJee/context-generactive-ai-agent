@@ -24,6 +24,7 @@ import { Subagents } from "./subagents/subagents.ts";
 import { Embedder } from "./memory/embedding/embedder.ts";
 import { MorphAnalyzer } from "./memory/morph/analyzer.ts";
 import { Indexer } from "./memory/embedding/indexer.ts";
+import { EmbeddingSetup } from "./memory/embedding/setup.ts";
 import { VectorIndex } from "./memory/embedding/vector-index.ts";
 import { Graph } from "./memory/graph.ts";
 import { Interpreter } from "./memory/interpret.ts";
@@ -51,7 +52,7 @@ import { OutsideTools } from "./tools/outside.ts";
 
 export interface MemoryAgentLayerOptions {
   /** Defaults to the local embedding model; tests pass a deterministic one. */
-  readonly embedder?: Layer.Layer<Embedder, never, StorageRoot>;
+  readonly embedder?: Layer.Layer<Embedder, never, StorageRoot | GlobalConfig>;
   /** Defaults to Kiwi (model downloaded on first use); tests pass a deterministic one. */
   readonly morphAnalyzer?: Layer.Layer<MorphAnalyzer, never, StorageRoot>;
   /** Defaults to `codex` from PATH; tests pass a fake app server. Starts only when first used. */
@@ -84,14 +85,15 @@ export interface MemoryAgentLayerOptions {
 /** Composition root: every memory-agent service backed by one storage directory. */
 export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerOptions = {}) {
   // Each tier only depends on the tiers below it.
-  const foundation = Layer.merge(
-    StorageRoot.layer(storageRoot),
-    Database.layer(join(storageRoot, "agent.db")),
+  // The settings are read by services in every tier above, the embedder among them.
+  const foundation = GlobalConfig.layer.pipe(
+    Layer.provideMerge(
+      Layer.merge(StorageRoot.layer(storageRoot), Database.layer(join(storageRoot, "agent.db"))),
+    ),
   );
   const stores = Layer.mergeAll(
     Projects.layer,
     Nodes.layer,
-    GlobalConfig.layer,
     PermissionReviews.layer,
     Attachments.layer,
     SessionLeases.layer(options.leaseTtlMs),
@@ -142,6 +144,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
         Interpreter.layer(options.interpretAutomatically),
         // Above retrieval: migrating a transcript hands its nodes straight to the indexer.
         Importer.layer(options.importsWatching, options.importsHome),
+        EmbeddingSetup.layer,
         // Above retrieval too: a swept node's vector and terms are dropped and made again.
         SecretSweep.layer(options.sweepSecrets),
       ),

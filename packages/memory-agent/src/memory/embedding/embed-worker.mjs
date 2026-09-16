@@ -9,25 +9,41 @@ const { AutoModel, AutoTokenizer, env } = createRequire(import.meta.url)(
   "@huggingface/transformers",
 );
 
-const { cacheDir, modelId, modelFileName, maxTokens } = workerData;
+// `devices` in order of preference: the first that loads and runs a short text is used.
+const { cacheDir, modelId, modelFileName, maxTokens, devices } = workerData;
 
 async function load() {
   env.cacheDir = cacheDir;
   env.allowLocalModels = false;
-  const [tokenizer, model] = await Promise.all([
-    AutoTokenizer.from_pretrained(modelId),
-    AutoModel.from_pretrained(modelId, {
-      dtype: "fp32",
-      model_file_name: modelFileName,
-      // The arena keeps a batch's peak allocation for the next one; without it memory returns.
-      session_options: { enableCpuMemArena: false },
-    }),
-  ]);
-  return { tokenizer, model };
+  const tokenizer = await AutoTokenizer.from_pretrained(modelId);
+  const failures = [];
+  for (const device of devices) {
+    let model = null;
+    try {
+      model = await AutoModel.from_pretrained(modelId, {
+        dtype: "fp32",
+        model_file_name: modelFileName,
+        device,
+        // The arena keeps a batch's peak allocation for the next one; without it memory returns.
+        session_options: { enableCpuMemArena: false },
+      });
+      // A device can load a session and still fail to run it.
+      await model(tokenizer(["준비"], { padding: true, truncation: true }));
+      return { tokenizer, model, device };
+    } catch (error) {
+      failures.push(`${device}: ${String(error)}`);
+      await model?.dispose().catch(() => undefined);
+    }
+  }
+  throw new Error(failures.join("; "));
 }
 
 const ready = load().then(
-  (loaded) => ({ loaded }),
+  (loaded) => {
+    // Unasked: tells the server which device the model runs on.
+    parentPort.postMessage({ id: 0, kind: "loaded", device: loaded.device });
+    return { loaded };
+  },
   (error) => ({ error: String(error) }),
 );
 

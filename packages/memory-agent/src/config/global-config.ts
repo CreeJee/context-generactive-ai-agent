@@ -3,6 +3,24 @@ import { join } from "node:path";
 import { Context, Effect, Layer, Schema } from "effect";
 import { StorageRoot } from "./storage-root.ts";
 
+/**
+ * How the embedding model runs. `auto` picks `gpu` on a machine with enough memory where WebGPU
+ * was found to work, and `cpu` otherwise.
+ */
+export const EmbeddingChoice = Schema.Literal("auto", "cpu", "gpu");
+export type EmbeddingChoice = typeof EmbeddingChoice.Type;
+
+/** Whether the full-precision model ran on WebGPU when this machine was last checked. */
+export const GpuCheck = Schema.Union(
+  Schema.Struct({ status: Schema.Literal("available"), checkedAt: Schema.String }),
+  Schema.Struct({
+    status: Schema.Literal("unavailable"),
+    checkedAt: Schema.String,
+    reason: Schema.String,
+  }),
+);
+export type GpuCheck = typeof GpuCheck.Type;
+
 /** User-wide settings. Secrets never go here; they belong in the OS keychain. */
 export const Settings = Schema.Struct({
   /** Model id chosen from the signed-in account's model list. */
@@ -15,6 +33,9 @@ export const Settings = Schema.Struct({
   importsEnabled: Schema.optional(Schema.Boolean),
   /** Interpret migrated statements for topics and corrections, like the ones said here. */
   importsInterpret: Schema.optional(Schema.Boolean),
+  /** Takes effect when the app next starts; `auto` when unset. */
+  embeddingDevice: Schema.optional(EmbeddingChoice),
+  gpuCheck: Schema.optional(GpuCheck),
 });
 export type Settings = typeof Settings.Type;
 

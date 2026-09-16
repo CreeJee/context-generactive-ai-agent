@@ -32,12 +32,13 @@ for (const file of [embeddingModel, kiwiFile])
 
 const sharedModels = StorageRoot.layer(home);
 const embedder = Embedder.localVariant("fp32").pipe(Layer.provide(sharedModels));
-const quantized = Embedder.local.pipe(Layer.provide(sharedModels));
+const quantized = Embedder.localVariant("quint8").pipe(Layer.provide(sharedModels));
 const kiwi = MorphAnalyzer.kiwi.pipe(Layer.provide(sharedModels));
 const noEmbedder = Layer.succeed(Embedder, {
   identity: "none",
   dimensions: 384,
   embed: () => Effect.fail(new EmbeddingError({ cause: "disabled" })),
+  runtime: () => ({ kind: "other" }),
 });
 
 interface Configuration {

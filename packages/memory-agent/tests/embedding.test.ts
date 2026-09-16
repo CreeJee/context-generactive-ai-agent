@@ -4,7 +4,17 @@ import { join } from "node:path";
 import { Cause, Effect, Exit, Layer, ManagedRuntime } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { StorageRoot } from "../src/config/storage-root.ts";
-import { Embedder, localModel, modelFile, planBatches } from "../src/memory/embedding/embedder.ts";
+import { GlobalConfig, type Settings } from "../src/config/global-config.ts";
+import { Database } from "../src/db/database.ts";
+import {
+  Embedder,
+  embeddingModeFor,
+  gpuMemoryThreshold,
+  localModel,
+  modelFile,
+  planBatches,
+} from "../src/memory/embedding/embedder.ts";
+import { EmbeddingSetup } from "../src/memory/embedding/setup.ts";
 import { Indexer } from "../src/memory/embedding/indexer.ts";
 import { MorphAnalyzer } from "../src/memory/morph/analyzer.ts";
 import { VectorIndex } from "../src/memory/embedding/vector-index.ts";
@@ -101,6 +111,63 @@ const modelCached = existsSync(
   join(homedir(), ".context-generactive-agent", "models", localModel.id, modelFile("quint8")),
 );
 
+describe("how the model runs", () => {
+  const plenty = gpuMemoryThreshold;
+  const little = gpuMemoryThreshold - 1;
+  const available = { status: "available", checkedAt: "2026-09-16T00:00:00.000Z" } as const;
+  const unavailable = {
+    status: "unavailable",
+    checkedAt: "2026-09-16T00:00:00.000Z",
+    reason: "no WebGPU device",
+  } as const;
+
+  test("auto takes the GPU only with enough memory and a WebGPU that worked", () => {
+    expect(embeddingModeFor({}, plenty)).toBe("cpu");
+    expect(embeddingModeFor({ gpuCheck: available }, plenty)).toBe("gpu");
+    expect(embeddingModeFor({ gpuCheck: available }, little)).toBe("cpu");
+    expect(embeddingModeFor({ gpuCheck: unavailable }, plenty)).toBe("cpu");
+  });
+
+  test("a choice the user made is kept whatever the machine", () => {
+    expect(embeddingModeFor({ embeddingDevice: "gpu", gpuCheck: unavailable }, little)).toBe("gpu");
+    expect(embeddingModeFor({ embeddingDevice: "cpu", gpuCheck: available }, plenty)).toBe("cpu");
+  });
+
+  test("counts what this embedder has not embedded, whatever others did", async () => {
+    const { runtime, stored } = await seeded();
+    const pending = await runtime.runPromise(
+      Effect.gen(function* () {
+        const indexer = yield* Indexer;
+        const before = yield* indexer.pending;
+        // A vector from another model (the other mode) does not make a node indexed for this one.
+        const { sqlite } = yield* Database;
+        sqlite.prepare("INSERT INTO node_vectors VALUES (?, 'another-model')").run(stored[0]!.seq);
+        const withOther = yield* indexer.pending;
+        yield* indexer.indexAll();
+        return { before, withOther, after: yield* indexer.pending };
+      }),
+    );
+    expect(pending).toEqual({ before: 3, withOther: 3, after: 0 });
+  });
+
+  test("settings show the choice and what it resolves to, and keep a new choice", async () => {
+    const { runtime } = await testRuntime();
+    const { first, chosen, saved } = await runtime.runPromise(
+      Effect.gen(function* () {
+        const setup = yield* EmbeddingSetup;
+        const first = yield* setup.overview;
+        const chosen = yield* setup.choose("gpu");
+        return { first, chosen, saved: yield* (yield* GlobalConfig).read };
+      }),
+    );
+    // The test embedder is not the local model, so nothing is checked.
+    expect(first).toMatchObject({ choice: "auto", running: { kind: "other" }, next: "cpu" });
+    expect(first.gpu).toEqual({ status: "unchecked" });
+    expect(chosen).toMatchObject({ choice: "gpu", next: "gpu", gpu: { status: "unchecked" } });
+    expect(saved.embeddingDevice).toBe("gpu");
+  });
+});
+
 describe("embedding batches", () => {
   test("group texts by length so a long text is never padded together with many short ones", () => {
     const limits = { size: 4, cost: 100 * 100 };
@@ -112,10 +179,10 @@ describe("embedding batches", () => {
   });
 });
 
-describe.skipIf(!modelCached)("Embedder.local (downloaded model)", () => {
+describe.skipIf(!modelCached)("the local model (downloaded, quint8 on the CPU)", () => {
   test("produces normalized 384-dim vectors that rank a paraphrase above an unrelated text", async () => {
     const runtime = ManagedRuntime.make(
-      Embedder.local.pipe(
+      Embedder.localVariant("quint8").pipe(
         Layer.provide(StorageRoot.layer(join(homedir(), ".context-generactive-agent"))),
       ),
     );
@@ -145,6 +212,47 @@ describe.skipIf(!modelCached)("Embedder.local (downloaded model)", () => {
       expect(dot(match!, alone!)).toBeGreaterThan(dot(question!, alone!));
     } finally {
       await runtime.dispose();
+    }
+  }, 120_000);
+});
+
+const fullModelCached = existsSync(
+  join(homedir(), ".context-generactive-agent", "models", localModel.id, modelFile("fp32")),
+);
+
+describe.skipIf(!fullModelCached)("the gpu mode (downloaded full-precision model)", () => {
+  test("runs on WebGPU or falls back to the CPU, with the full-precision vectors either way", async () => {
+    const models = StorageRoot.layer(join(homedir(), ".context-generactive-agent"));
+    // The user's own settings stay out of it: this test chooses the GPU itself.
+    const settings: Settings = { embeddingDevice: "gpu" };
+    const chooseGpu = Layer.succeed(GlobalConfig, {
+      read: Effect.succeed(settings),
+      update: () => Effect.succeed(settings),
+    });
+    const gpu = ManagedRuntime.make(
+      Embedder.local.pipe(Layer.provide(chooseGpu), Layer.provide(models)),
+    );
+    const cpu = ManagedRuntime.make(Embedder.localVariant("fp32").pipe(Layer.provide(models)));
+    try {
+      const sentence = ["저장소는 SQLite로 결정했다."];
+      const { vector, runtime, identity } = await gpu.runPromise(
+        Effect.gen(function* () {
+          const embedder = yield* Embedder;
+          const [vector] = yield* embedder.embed(sentence);
+          return { vector, runtime: embedder.runtime(), identity: embedder.identity };
+        }),
+      );
+      const reference = await cpu.runPromise(
+        Effect.flatMap(Embedder, (embedder) => embedder.embed(sentence)),
+      );
+      expect(runtime).toMatchObject({ kind: "local", mode: "gpu" });
+      expect(["webgpu", "cpu"]).toContain(runtime.kind === "local" ? runtime.device : null);
+      expect(identity).toContain("@fp32/");
+      const cosine = vector!.reduce((sum, value, i) => sum + value * reference[0]![i]!, 0);
+      expect(cosine).toBeGreaterThan(0.9999);
+    } finally {
+      await gpu.dispose();
+      await cpu.dispose();
     }
   }, 120_000);
 });

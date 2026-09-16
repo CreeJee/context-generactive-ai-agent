@@ -6,6 +6,7 @@ import { VectorIndex } from "./vector-index.ts";
 
 const Pending = Schema.Struct({ seq: Schema.Number, text: Schema.String });
 const decodePending = Schema.decodeUnknownSync(Pending);
+const decodeCount = Schema.decodeUnknownSync(Schema.Struct({ count: Schema.Number }));
 
 const make = Effect.gen(function* () {
   const { sqlite, atomic } = yield* Database;
@@ -22,6 +23,10 @@ const make = Effect.gen(function* () {
     WHERE v.node_seq IS NULL AND length(n.text) > 0
     ORDER BY n.created_at DESC, n.seq DESC LIMIT ?`);
   const markIndexed = sqlite.prepare("INSERT INTO node_vectors VALUES (?, ?)");
+  const countPending = sqlite.prepare(`
+    SELECT count(*) AS count FROM nodes n
+    LEFT JOIN node_vectors v ON v.node_seq = n.seq AND v.embedder = ?
+    WHERE v.node_seq IS NULL AND length(n.text) > 0`);
   const selectUnanalyzed = sqlite.prepare(`
     SELECT n.seq, n.text FROM nodes n
     LEFT JOIN node_morphs m ON m.node_seq = n.seq AND m.analyzer = ?
@@ -89,6 +94,8 @@ const make = Effect.gen(function* () {
     ).pipe(Effect.map((state) => state.total));
 
   return {
+    /** Nodes this embedder has not embedded yet; vectors of other embedders do not count. */
+    pending: Effect.sync(() => decodeCount(countPending.get(embedder.identity)).count),
     indexBatch,
     analyzeBatch,
     /**

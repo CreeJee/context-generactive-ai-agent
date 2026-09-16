@@ -82,7 +82,6 @@ export class ImportWorkerFailed extends Data.TaggedError("ImportWorkerFailed")<{
 }> {}
 
 const decodeReply = Schema.decodeUnknownSync(ImportWorkerReply);
-const decodeCount = Schema.decodeUnknownSync(Schema.Struct({ count: Schema.Number }));
 const decodeSourceTotals = Schema.decodeUnknownSync(
   Schema.Struct({ migrated: Schema.Number, nodes: Schema.Number, failed: Schema.Number }),
 );
@@ -121,10 +120,6 @@ const make = (watching: boolean, home: string) =>
     const failedTranscripts = sqlite.prepare(`
       SELECT source, path, failure AS reason FROM import_cursors
       WHERE failure IS NOT NULL ORDER BY source, path LIMIT ?`);
-    const unindexedNodes = sqlite.prepare(`
-      SELECT count(*) AS count FROM nodes n
-      LEFT JOIN node_vectors v ON v.node_seq = n.seq
-      WHERE v.node_seq IS NULL AND length(n.text) > 0`);
 
     // The worker: started on first use and kept. It answers each request with any number of
     // `progress` replies and then one final reply.
@@ -327,7 +322,7 @@ const make = (watching: boolean, home: string) =>
         }),
         unplaced: skippedFolders.all().map((row) => decodeSkipped(row)),
         failures: failedTranscripts.all(listedFailures).map((row) => decodeFailure(row)),
-        unindexed: decodeCount(unindexedNodes.get()).count,
+        unindexed: yield* indexer.pending,
         activity: current,
       } satisfies ImportOverview;
     });

@@ -13,7 +13,7 @@ export { ChatState } from "./chat-state/chat-state.ts";
 export { sqliteChatPersistence } from "./chat-state/persistence.ts";
 
 export { StorageRoot, defaultStorageRoot } from "./config/storage-root.ts";
-export { GlobalConfig, Settings } from "./config/global-config.ts";
+export { EmbeddingChoice, GlobalConfig, GpuCheck, Settings } from "./config/global-config.ts";
 export {
   SecretStore,
   SecretStoreFailed,
@@ -117,8 +117,12 @@ export {
   EmbeddingError,
   localModel,
   type EmbedderApi,
+  type EmbedderRuntime,
+  type EmbeddingDevice,
+  type EmbeddingMode,
 } from "./memory/embedding/embedder.ts";
 export { Indexer } from "./memory/embedding/indexer.ts";
+export { EmbeddingSetup, type EmbeddingOverview, type GpuState } from "./memory/embedding/setup.ts";
 export {
   MorphAnalysisFailed,
   MorphAnalyzer,
