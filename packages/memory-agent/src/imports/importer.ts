@@ -124,10 +124,12 @@ const make = (watching: boolean, home: string) =>
           .at(0);
         if (owner) return { project: owner, rejected: null };
         // A folder that has been deleted, or one inside this app's own storage, is left alone.
-        const added = yield* Effect.either(projects.add(canonical));
-        return added._tag === "Right"
-          ? { project: added.right, rejected: null }
-          : { project: null, rejected: added.left.reason };
+        return yield* projects.add(canonical).pipe(
+          Effect.map((project) => ({ project, rejected: null })),
+          Effect.catchTag("ProjectRootRejected", (rejection) =>
+            Effect.succeed({ project: null, rejected: rejection.reason }),
+          ),
+        );
       });
 
     /**
