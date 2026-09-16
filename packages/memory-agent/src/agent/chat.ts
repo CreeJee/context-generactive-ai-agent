@@ -199,6 +199,13 @@ const json = (status: number, body: Readonly<Record<string, string | null>>) =>
 /** How long a cancel request waits for the run to actually stop before answering. */
 const cancelWaitMs = 5_000;
 
+/**
+ * How many nodes the tidy-up after a run indexes. The run's own nodes are the newest, so they are
+ * always covered; a migrated backlog of thousands is left to the fibre that drains it, instead of
+ * making one run's tidy-up take hours and hold up interpretation behind it.
+ */
+const afterRunBudget = 200;
+
 /** A reconnect names where to continue: `Last-Event-ID`, or `?offset=` for a join from the start. */
 const isStreamJoin = (request: Request) =>
   request.headers.has("Last-Event-ID") || new URL(request.url).searchParams.has("offset");
@@ -308,8 +315,8 @@ const make = Effect.gen(function* () {
       Effect.catchAllCause(Effect.asVoid(effect), () => Effect.void);
     const index = () =>
       void Effect.runPromise(
-        quietly(indexer.indexAll()).pipe(
-          Effect.zipRight(quietly(indexer.analyzeAll())),
+        quietly(indexer.indexUpTo(afterRunBudget)).pipe(
+          Effect.zipRight(quietly(indexer.analyzeUpTo(afterRunBudget))),
           Effect.zipRight(interpreter.automatic ? quietly(interpreter.runPending) : Effect.void),
         ),
       );

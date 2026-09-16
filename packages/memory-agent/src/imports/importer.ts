@@ -6,6 +6,7 @@ import { GlobalConfig } from "../config/global-config.ts";
 import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
 import { canonicalPath } from "../files/paths.ts";
+import { Indexer } from "../memory/embedding/indexer.ts";
 import { Projects } from "../projects/projects.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { BulkNodes } from "./bulk.ts";
@@ -68,9 +69,11 @@ const make = (watching: boolean, home: string) =>
     const sessions = yield* Sessions;
     const bulk = yield* BulkNodes;
     const config = yield* GlobalConfig;
+    const indexer = yield* Indexer;
     const storageRoot = canonicalPath(storage.path);
     // Two passes over the same transcripts would import a line twice before either marks it.
     const onePassAtATime = yield* Effect.makeSemaphore(1);
+    const oneDrainAtATime = yield* Effect.makeSemaphore(1);
 
     const readCursor = sqlite.prepare(
       "SELECT byte_offset, size, mtime_ms FROM import_cursors WHERE source = ? AND path = ?",
@@ -214,6 +217,16 @@ const make = (watching: boolean, home: string) =>
       return written;
     }).pipe(onePassAtATime.withPermits(1));
 
+    /**
+     * Embeds and analyses what a migration added, taking as long as it takes. The indexer gives up
+     * its permit between batches, so a conversation held meanwhile is still indexed first: its
+     * nodes are the newest by time, and that is the order pending nodes come out in.
+     */
+    const backfill = Effect.zipRight(indexer.indexAll(), indexer.analyzeAll()).pipe(
+      Effect.catchAllCause(() => Effect.void),
+      oneDrainAtATime.withPermits(1),
+    );
+
     const overview = Effect.gen(function* () {
       const settings = yield* config.read;
       const found = transcripts();
@@ -243,12 +256,17 @@ const make = (watching: boolean, home: string) =>
       } satisfies ImportOverview;
     });
 
+    /** One pass, then the backlog it created; the backlog never holds up the answer to a request. */
+    const runAndIndex = Effect.tap(runOnce, (written) =>
+      written > 0 ? Effect.forkScoped(backfill) : Effect.void,
+    );
+
     if (watching)
       yield* Effect.forkScoped(
         Effect.repeat(
           Effect.gen(function* () {
             const settings = yield* config.read;
-            if (settings.importsEnabled === true) yield* runOnce;
+            if (settings.importsEnabled === true) yield* runAndIndex;
           }).pipe(Effect.catchAllCause(() => Effect.void)),
           Schedule.spaced(pollEvery),
         ),
@@ -256,12 +274,13 @@ const make = (watching: boolean, home: string) =>
 
     return {
       runOnce,
+      runAndIndex,
       overview,
       /** Turns migration on or off and, when turning it on, reads what is there now. */
       setEnabled: (enabled: boolean) =>
         Effect.zipRight(
           config.update({ importsEnabled: enabled }),
-          enabled ? Effect.asVoid(runOnce) : Effect.void,
+          enabled ? Effect.asVoid(runAndIndex) : Effect.void,
         ),
       setInterpret: (interpret: boolean) =>
         Effect.asVoid(config.update({ importsInterpret: interpret })),

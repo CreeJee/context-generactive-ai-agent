@@ -13,17 +13,20 @@ const make = Effect.gen(function* () {
   const vectors = yield* VectorIndex;
   const analyzer = yield* MorphAnalyzer;
 
+  // Newest by the time the statement was made, not by the order rows landed here. A migrated
+  // transcript arrives with high seqs and old times; without this it would be indexed ahead of the
+  // conversation just held, and a backlog of thousands would push today's words to the back.
   const selectPending = sqlite.prepare(`
     SELECT n.seq, n.text FROM nodes n
     LEFT JOIN node_vectors v ON v.node_seq = n.seq AND v.embedder = ?
     WHERE v.node_seq IS NULL AND length(n.text) > 0
-    ORDER BY n.seq LIMIT ?`);
+    ORDER BY n.created_at DESC, n.seq DESC LIMIT ?`);
   const markIndexed = sqlite.prepare("INSERT INTO node_vectors VALUES (?, ?)");
   const selectUnanalyzed = sqlite.prepare(`
     SELECT n.seq, n.text FROM nodes n
     LEFT JOIN node_morphs m ON m.node_seq = n.seq AND m.analyzer = ?
     WHERE m.node_seq IS NULL AND length(n.text) > 0
-    ORDER BY n.seq LIMIT ?`);
+    ORDER BY n.created_at DESC, n.seq DESC LIMIT ?`);
   const deleteTerms = sqlite.prepare("DELETE FROM nodes_morph WHERE rowid = ?");
   const insertTerms = sqlite.prepare("INSERT INTO nodes_morph (rowid, terms) VALUES (?, ?)");
   const markAnalyzed = sqlite.prepare(
@@ -67,6 +70,24 @@ const make = Effect.gen(function* () {
       return pending.length;
     }).pipe(oneMorphBatchAtATime.withPermits(1));
 
+  /** Runs `work` in batches until nothing is pending or `budget` nodes have been done. */
+  const drain = <E>(
+    work: (limit: number) => Effect.Effect<number, E>,
+    budget: number,
+    batchSize: number,
+  ) =>
+    Effect.iterate(
+      { total: 0, last: -1 },
+      {
+        while: (state) => state.last !== 0 && state.total < budget,
+        body: (state) =>
+          Effect.map(work(Math.min(batchSize, budget - state.total)), (count) => ({
+            total: state.total + count,
+            last: count,
+          })),
+      },
+    ).pipe(Effect.map((state) => state.total));
+
   return {
     indexBatch,
     analyzeBatch,
@@ -74,31 +95,16 @@ const make = Effect.gen(function* () {
      * Stores morpheme terms until nothing is pending. Fails when the analyzer is unavailable (no
      * model, disabled); search then simply works without these terms.
      */
-    analyzeAll: (batchSize = 256) =>
-      Effect.iterate(
-        { total: 0, last: -1 },
-        {
-          while: (state) => state.last !== 0,
-          body: (state) =>
-            Effect.map(analyzeBatch(batchSize), (count) => ({
-              total: state.total + count,
-              last: count,
-            })),
-        },
-      ).pipe(Effect.map((state) => state.total)),
+    analyzeAll: (batchSize = 256) => drain(analyzeBatch, Number.POSITIVE_INFINITY, batchSize),
     /** Indexes until nothing is pending. */
-    indexAll: (batchSize = 64) =>
-      Effect.iterate(
-        { total: 0, last: -1 },
-        {
-          while: (state) => state.last !== 0,
-          body: (state) =>
-            Effect.map(indexBatch(batchSize), (count) => ({
-              total: state.total + count,
-              last: count,
-            })),
-        },
-      ).pipe(Effect.map((state) => state.total)),
+    indexAll: (batchSize = 64) => drain(indexBatch, Number.POSITIVE_INFINITY, batchSize),
+
+    /**
+     * Indexes at most `budget` nodes. A run's own nodes are the newest, so they are always in the
+     * first batches; the rest of a migrated backlog waits for the fibre that drains it.
+     */
+    indexUpTo: (budget: number, batchSize = 64) => drain(indexBatch, budget, batchSize),
+    analyzeUpTo: (budget: number, batchSize = 256) => drain(analyzeBatch, budget, batchSize),
   };
 });
 

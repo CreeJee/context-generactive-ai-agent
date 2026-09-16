@@ -78,10 +78,12 @@ const make = Effect.gen(function* () {
   sqlite.prepare("UPDATE interpret_jobs SET status = 'pending' WHERE status = 'running'").run();
 
   // The newest pending statement picks the session, so the conversation just held is interpreted
-  // before an old backlog; inside that session statements still go oldest first.
+  // before an old backlog; inside that session statements still go oldest first. "Newest" is when
+  // the statement was made: a migrated transcript has high seqs and old times, and ordering by seq
+  // would let thousands of old statements push today's conversation behind them.
   const newestPending = sqlite.prepare(`
     SELECT j.node_id, n.session_id FROM interpret_jobs j JOIN nodes n ON n.id = j.node_id
-    WHERE j.status = 'pending' ORDER BY n.seq DESC LIMIT 1`);
+    WHERE j.status = 'pending' ORDER BY n.created_at DESC, n.seq DESC LIMIT 1`);
   const pendingInSession = sqlite.prepare(`
     SELECT n.* FROM interpret_jobs j JOIN nodes n ON n.id = j.node_id
     WHERE j.status = 'pending' AND n.session_id = ? ORDER BY n.seq LIMIT ?`);

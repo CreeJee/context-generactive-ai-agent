@@ -6,6 +6,7 @@ import type { Json } from "../src/codex/app-server.ts";
 import { Database } from "../src/db/database.ts";
 import { Importer } from "../src/imports/importer.ts";
 import { sessionMessages } from "../src/agent/history.ts";
+import { Indexer } from "../src/memory/embedding/indexer.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
 import { testRuntime } from "./support/runtime.ts";
@@ -100,6 +101,9 @@ const decodeEdges = Schema.decodeUnknownSync(
   Schema.Array(Schema.Struct({ kind: Schema.String, from_kind: Schema.String })),
 );
 const decodeCount = Schema.decodeUnknownSync(Schema.Struct({ count: Schema.Number }));
+const decodeIndexed = Schema.decodeUnknownSync(
+  Schema.Array(Schema.Struct({ text: Schema.String })),
+);
 
 const nodeRows = (sqlite: Database["Type"]["sqlite"], sessionId: string) =>
   decodeNodes(
@@ -243,6 +247,35 @@ describe("migrating other agents' transcripts", () => {
     expect(await runtime.runPromise(Effect.flatMap(Importer, (importer) => importer.runOnce))).toBe(
       0,
     );
+  });
+
+  test("indexes what was said today before a migrated backlog", async () => {
+    const { runtime, project, session, home } = await testRuntime();
+    writeFileSync(claudePath(home, "cc-1.jsonl"), serialize(claudeLines(project.root)));
+
+    const indexed = await runtime.runPromise(
+      Effect.gen(function* () {
+        // The transcript is from March; this is now. Its rows land last but it must index first.
+        const today = (yield* Nodes).append({
+          projectId: project.id,
+          sessionId: session.id,
+          kind: "user",
+          text: "오늘 한 말",
+        });
+        yield* (yield* Importer).runOnce;
+        yield* (yield* Indexer).indexUpTo(1);
+        const { sqlite } = yield* Database;
+        return decodeIndexed(
+          sqlite
+            .prepare(
+              "SELECT n.text FROM node_vectors v JOIN nodes n ON n.seq = v.node_seq ORDER BY n.seq",
+            )
+            .all(),
+        ).map((row) => ({ text: row.text, isToday: row.text === today.text }));
+      }),
+    );
+
+    expect(indexed).toEqual([{ text: "오늘 한 말", isToday: true }]);
   });
 
   test("reads Codex rollouts too, and queues migrated statements for interpretation", async () => {

@@ -112,7 +112,6 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     MemorySearch.layer,
     PermissionClassifier.layer,
     QueueDelivery.layer,
-    Importer.layer(options.importsWatching, options.importsHome),
   );
   return AgentChat.layer.pipe(
     Layer.provideMerge(
@@ -127,6 +126,8 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
         Subagents.layer,
         PermissionGate.layer,
         Interpreter.layer(options.interpretAutomatically),
+        // Above retrieval: migrating a transcript hands its nodes straight to the indexer.
+        Importer.layer(options.importsWatching, options.importsHome),
       ),
     ),
     Layer.provideMerge(retrieval),
