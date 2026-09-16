@@ -405,10 +405,19 @@
 ## 디자인 시스템 린트 (2026-09-16)
 
 - `@shadcn/lint`를 Oxlint JS 플러그인(`shadcn`)으로 루트 `vite.config.ts`의 `lint.jsPlugins`에 등록한다. 패키지는 린트 설정을 가진 루트의 `devDependencies`에 둔다.
-- 여섯 규칙(`no-restyle`, `no-raw-colors`, `no-arbitrary-values`, `no-inline-styles`, `no-unknown-classes`, `require-static-classes`)을 모두 `error`로 켠다. `no-restyle`과 `no-arbitrary-values`는 레이아웃 클래스(`mt-4`, `w-full` 등)를 허용한다(`allow: ["layout"]`).
-  - 컴포넌트 폴더 `apps/agent/app/components/ui/**`에서는 `no-restyle`, `no-arbitrary-values`, `require-static-classes`를 끈다. 컴포넌트는 자기 모양을 스스로 정하고 `ring-[3px]` 같은 구조용 값이 필요하다. `no-raw-colors`와 `no-inline-styles`는 그 폴더에서도 켠다.
-  - 켠 시점에 `apps/agent/app/entry`에 기존 위반이 84개 있었다(`no-restyle` 75, `no-arbitrary-values` 6, `no-raw-colors` 3).
   - `vp lint`와 `vp check`는 어느 폴더에서 실행해도 루트 `vite.config.ts`를 `-c`로 넘긴다. Oxlint는 `-c`를 받으면 하위 설정을 찾지 않는다. 그래서 `apps/agent/vite.config.ts`의 `lint` 블록은 적용되지 않는다. 하위 설정으로 읽혔다면 그 안의 `options.typeAware`가 에러를 냈을 것이다. 앱에만 걸 규칙은 루트 `lint.overrides`에서 `apps/agent/**`로 범위를 정해야 한다.
   - 컴포넌트와 테마는 `apps/agent/components.json`(`~/components/ui`, `app/app.css`)과 앱 `tsconfig.json`의 `paths`에서 찾는다. 루트에서 실행해도 찾으므로 `settings.shadcn`은 두지 않는다.
   - 루트에 `typescript`(catalog, 7.0.2)를 둔다. `@shadcn/lint`가 쓰는 `@typescript-eslint/parser`는 peer로 `typescript <6.1.0`을 요구한다. 루트에 TypeScript가 없으면 pnpm이 TypeScript 6을 설치하고, 루트 `vite-plus`도 그 버전으로 묶인다. 이 파서는 `oxc-parser`가 없을 때만 쓰이므로, TypeScript 7과 peer 범위가 맞지 않아도 동작에는 영향이 없다.
   - README가 Oxlint 1.80 이상을 요구해서 Vite+를 0.3.2(Oxlint 1.82.0)로 올린다. 0.3.0의 Oxlint 1.79.0에서도 로드와 진단은 됐다. 0.3.2는 `pack.dts`의 `tsgo: true`를 `generator: "tsgo"`로 바꿨다(utils `vite.config.ts`).
+- 여섯 규칙(`no-restyle`, `no-raw-colors`, `no-arbitrary-values`, `no-inline-styles`, `no-unknown-classes`, `require-static-classes`)을 모두 `error`로 켠다. `no-restyle`과 `no-arbitrary-values`는 레이아웃 클래스(`mt-4`, `w-full` 등)를 허용한다(`allow: ["layout"]`).
+  - 컴포넌트 폴더 `apps/agent/app/components/ui/**`에서는 `no-restyle`, `no-arbitrary-values`, `require-static-classes`를 끈다. 컴포넌트는 자기 모양을 스스로 정하고 `ring-[3px]` 같은 구조용 값이 필요하다. `no-raw-colors`와 `no-inline-styles`는 그 폴더에서도 켠다.
+  - 켠 시점에 `apps/agent/app/entry`에 기존 위반이 84개 있었다(`no-restyle` 75, `no-arbitrary-values` 6, `no-raw-colors` 3).
+- 기존 위반은 규칙을 풀지 않고 디자인 시스템 쪽을 넓혀서 없앴다. 화면이 거의 그대로 남는 방법을 골랐다.
+  - 토큰: 경고색 `--warning`(`text-warning`, 라이트는 amber-600, 다크는 amber-400 값)과 `text-xs`보다 작은 글자 `--text-2xs`(11px, 섹션 라벨·단축키 안내), `--text-3xs`(10px, 이미지 번호)를 `app.css`에 둔다. 두 글자 크기는 줄 높이를 정하지 않아, 이전 임의값처럼 부모의 줄 높이를 따른다.
+  - 변형: Card `variant="warning"`(승인 요청), Item `variant="card"`(읽기 전용 막대), ItemDescription `variant="destructive"`와 `lines={3}`, Button `variant="ghost-muted"`를 더한다. CardFooter는 기본으로 `gap-2`를 준다.
+  - 입력창은 `components/ui/prompt-input.tsx`(`PromptInput`, `PromptInputHeader`, `PromptInputTextarea`, `PromptInputFooter`, `PromptInputButton`)로 옮긴다. InputGroup을 조합해 입력창만의 모양을 디자인 시스템 안에서 정한다.
+  - 경로·주소처럼 코드인 글자는 `font-mono` 대신 `<code>`로 감싼다. 문제 목록은 `FieldError`로 보인다.
+  - 컴포넌트 안쪽 배치(아이콘 간격, 설명 두 줄 사이)는 margin으로, 컴포넌트 바깥 틀(슬래시 명령 목록의 테두리·그림자, 대화 목록 보관 버튼을 hover 때만 보이기)은 감싸는 일반 요소로 준다. 설정 탭 본문의 윗여백은 `pt-3` 대신 `mt-3`이다.
+  - `Collapsible`, `CollapsibleTrigger`, `CollapsibleContent`는 스타일이 없는 Base UI 래퍼다. 루트 설정의 `no-restyle` contract로 모든 분류를 허용한다.
+  - 컴포넌트가 이미 정한 값으로 바뀐 곳이 있다. ItemGroup 간격 8→10px, ItemTitle 안 배지 간격 6→8px, 이미지 hover 미리보기 안쪽 여백 6→10px, 승인 카드 테두리색 amber-500→`warning`.
+  - 입력창의 `rounded-xl`과 `text-sm`은 이 정리 전부터 적용되지 않는다. InputGroup의 `has-[textarea]:rounded-md`와 Textarea의 `md:text-xs/relaxed`가 이긴다. 이번 정리는 이 동작을 바꾸지 않았다.
