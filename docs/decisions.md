@@ -229,7 +229,7 @@
 
 - Claude Code(`~/.claude/projects/**/*.jsonl`)와 Codex CLI(`~/.codex/sessions/**/rollout-*.jsonl`)가 로컬에 남긴 대화를 노드로 옮긴다. 새 출처는 어댑터 파일 하나와 `ImportSourceName` 태그 하나로 붙는다.
 - **뽑아낼 수 있는 건 다 옮긴다.** 발언뿐 아니라 `tool_call`·`tool_result`까지 노드로 만들고, 구조 edge(`next`·`reply`·`calls`·`returns`·`touches`)를 라이브와 같은 규칙으로 세운다. 옛 대화도 `trace_evidence`로 근거를 따라갈 수 있게 하기 위해서다. 도구 인자의 파일 참조를 읽는 `RefArguments`에 Claude Code가 쓰는 `file_path`·`notebook_path`를 더했다(라이브 MCP 도구에도 같이 적용).
-- **`Nodes.append`는 건드리지 않고 `BulkNodes`를 따로 둔다.** `append`는 대화 한 건을 지금 시각으로 붙이고 노드마다 트랜잭션을 연다. 라이브 턴에는 맞지만 수천 줄 기록에는 맞지 않아서, 파일 하나를 한 트랜잭션에 넣고 **줄의 원래 `timestamp`를 `created_at`에 그대로** 쓰는 경로를 따로 만들었다. 노드는 여전히 수정 불가 증거다.
+- **`Nodes.append`는 건드리지 않고 `BulkNodes`를 따로 둔다.** `append`는 대화 한 건을 지금 시각으로 붙이고 노드마다 트랜잭션을 연다. 라이브 턴에는 맞지만 수천 줄 기록에는 맞지 않아서, 여러 노드를 한 트랜잭션에 넣고(2026-09-16부터 200개씩 끊어서) **줄의 원래 `timestamp`를 `created_at`에 그대로** 쓰는 경로를 따로 만들었다. 노드는 여전히 수정 불가 증거다.
 - **CLI가 사용자 쪽에 써 넣은 글은 버린다.** 슬래시 명령 봉투(`<command-name>`), `<local-command-stdout>`, `[Request interrupted…]`, 압축 요약, Codex의 `<environment_context>`·`<codex_internal_context>`·`# AGENTS.md instructions`·에이전트 인계문. 정정·취소 권위가 사용자 발언에만 있어서, 이걸 사용자 말로 두면 기억이 틀린 근거를 갖는다. Claude의 `isSidechain`(서브에이전트 줄기)·`isMeta`, Codex의 `reasoning`도 버린다.
 - **기록의 `cwd`를 프로젝트로 자동 등록한다**(2026-09-16). 등록된 프로젝트(숨긴 것 포함) 중 가장 깊은 뿌리가 임자이고, 없으면 그 폴더를 등록한다. 등록이 파일·셸 도구가 닿는 범위를 넓히는 것은 그대로지만, 옮길 폴더가 전부 사용자 본인의 작업 폴더이고 스무 개를 손으로 등록하는 것이 이관의 걸림돌이어서 사용자가 자동 등록을 택했다. 권한 모드는 새 프로젝트 기본값 `ask` 그대로라 도구 호출 승인은 느슨해지지 않는다. 등록할 수 없는 폴더(없어짐·폴더 아님·저장 루트 안)는 `import_cursors.skipped`에 이유와 함께 남겨 설정 화면에 보여 준다.
   - 짝이 되는 장치로 **프로젝트를 목록에서 뺄 수 있다**(`projects.hidden_at`). 사이드바에서만 빠지고 대화·노드·edge·검색은 그대로다. 같은 폴더를 다시 추가하면 돌아온다(`Projects.add`가 숨김을 푼다). 이관은 숨긴 프로젝트도 임자로 인정해서, 치운 폴더의 기록이 두 번째 프로젝트를 만들지 않는다.
@@ -430,3 +430,22 @@
   - 같은 300개(약 2,000토큰짜리 30개 포함)를 임베딩할 때 이벤트 루프 지연 p99가 637ms에서 13ms로 줄었다. 걸린 시간은 같다(약 20초).
   - worker는 토큰 수 세기와 배치 임베딩(정규화 전 CLS 행)만 맡는다. 배치 나누기와 정규화는 메인 스레드의 `planBatches`, `normalize`가 한다. 모델 적재가 실패하면 worker를 끝내고, 다음 요청이 새 worker로 다시 시도한다.
   - worker 스크립트 위치는 `runtimeWorker`가 정한다. 저장소에서는 package exports(`memory-agent/embed-worker`, `memory-agent/kiwi-worker`), 실행 파일에서는 runtime 폴더다. `scripts/package.ts`가 두 스크립트를 runtime 폴더에 복사한다.
+
+## 가져오기 worker와 실패 격리 (2026-09-16)
+
+- **기록 하나가 실패해도 회차는 계속한다.** 기록을 읽거나 노드를 쓰다 난 예외는 Effect의 defect라, 기록마다 둔 `orElseSucceed`가 잡지 못하고 회차 전체를 끝냈다. 정렬상 앞의 기록이 매번 실패하면 "기록 N개 중 0개를 읽어"로 영영 남는다(다른 클라이언트에서 764개 중 0개로 보고됨, 읽기 권한을 뺀 기록으로 재현).
+  - 이제 기록마다 `catchAllCause`로 받아 `import_cursors.failure`에 이유(오류 메시지 300자, 기록 내용은 넣지 않음)를 남기고 넘어간다. `size`를 -1로 두어 다음 회차에 다시 시도하고, 읽은 위치와 쓴 노드 수는 그대로 둔다. 설정 탭에 원천별 실패 수와 실패한 기록(최대 20개)을 보인다.
+- **가져오기 회차는 import worker(`imports/worker.ts`)에서 돈다.** 기록 읽기, 줄마다 비밀 가리기, 노드 쓰기가 메인 스레드에서 돌아 그동안 서버 요청이 모두 멈췄다(기록 40개·1만 2천 줄에 메인 스레드 3.7초 정지, worker로 옮긴 뒤 최대 지연 2ms).
+  - worker는 같은 DB에 따로 연결을 열고 회차에 필요한 서비스(프로젝트, 세션, `BulkNodes`, 설정, 비밀 가리기)만 둔다. 기록 폴더 훑기(개수 세기)도 worker가 한다. 메인의 `Importer`는 회차를 시작하거나 도는 회차에 합류하고, 진행 상황(`activity`: running/finished/crashed)을 개요에 싣고, 끝나면 임베딩을 이어 붙인다.
+  - 설정의 "읽기"·"켜기"는 회차를 시작만 하고 바로 답한다. 설정 탭은 도는 동안 1초, 인덱싱이 남아 있으면 3초마다 개요를 다시 묻는다.
+  - **SQLite는 WAL이어도 쓰는 연결은 한 번에 하나다.** 읽기는 동시에 되지만 쓰기는 잠금을 차례로 잡고, 메인 스레드는 `busy_timeout`만큼 동기로 기다린다. 그래서 worker는 기록 하나의 노드를 200개씩 끊어 쓴다. 끊어 쓰려면 이어 쓸 때 열린 턴을 정확히 알아야 해서, `BulkNodes`는 마지막 사용자 발언 **뒤의** 답변만 이어받는다(전에는 앞 턴의 답변에 도구 호출이 붙을 수 있었다).
+  - 저장소에서는 Node가 `worker.ts`를 TypeScript 그대로 돌린다. 실행 파일에는 `scripts/package.ts`가 `vite-plus/pack`의 `build()`로 의존성까지 한 파일(`import-worker.mjs`)로 묶어 runtime 폴더에 넣는다.
+- **secretlint profiler는 끈다.** 기본으로 켜져 있어 검사 한 번마다 performance mark 62개를 남기고 profiler 배열에도 쌓아, 많이 검사하면 메모리가 새고 `MaxPerformanceEntryBufferExceededWarning`이 났다(200번 검사에 mark 12,400개). 주기적으로 지우는 대신 `SecretRedactor`를 만들 때 끈다.
+- 설정 탭의 숫자는 motion(`useSpring`/`useTransform`)으로 새 값까지 부드럽게 바뀐다(`components/ui/animated-number.tsx`). `AnimateNumber`는 Motion+ 전용이라 쓰지 않는다. 움직임 줄이기 설정이면 바로 바뀌고, 화면 읽기에는 값만 준다. Motion 문서는 프로젝트 MCP(`https://mcp.motion.dev`)로 본다.
+- 날짜 포맷은 dayjs로 쓴다(`app/lib/dates.ts`, memory-agent 지침의 오늘 날짜). ko 로케일은 호출마다 붙이고, 개발 서버 SSR 때문에 `dayjs/locale/ko.js`처럼 확장자를 적는다.
+- 개발 서버의 런타임은 모듈이 다시 로드돼도 유지된다. memory-agent의 서비스나 스키마를 바꾸면 **개발 서버를 다시 시작해야** 새 서비스와 마이그레이션이 적용된다(안 하면 새 UI가 옛 개요를 받아 깨진다).
+- 인덱싱·가져오기의 시간 구성(실측, 이 기기).
+  - 인덱싱: 모델 추론이 99.4%(노드 600개에 41.8초), 벡터 인덱스 추가·저장과 SQL은 합쳐 0.7%다. 2048토큰짜리 텍스트 하나가 짧은 텍스트(약 10ms)의 50–75배(460–760ms)다. 상한이 512토큰이면 약 70ms, 1024토큰이면 약 157ms다.
+  - 형태소 분석(Kiwi)은 텍스트당 약 12ms다.
+  - 가져오기 worker: SQLite 쓰기 80%, secretlint 8%, 줄 읽기·파싱 2%다. SQLite 쓰기의 71%는 FTS trigram 트리거다.
+  - CoreML 실행은 이 모델에서 실패한다(가변 길이 입력). WebGPU(fp32)는 CPU quint8과 속도가 비슷하고 결과는 fp32와 같다(quint8은 fp32와 코사인 평균 0.954, 최소 0.878). ONNX 스레드 수 조정은 측정 편차가 커서 적용하지 않았다.
