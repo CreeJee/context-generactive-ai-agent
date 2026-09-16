@@ -1,10 +1,10 @@
 # memory-agent
 
-세션·프로젝트를 넘어 대화를 기억하고, 근거를 따라갈 수 있는 에이전트의 서버 로직입니다.
+세션과 프로젝트를 넘어 대화를 기억하고, 근거를 따라갈 수 있는 에이전트의 서버 로직입니다.
 Node 전용이며 `apps/agent`의 `.server` 모듈과 API 라우트에서만 가져다 씁니다.
 브라우저에서 필요한 도구 정의만 `memory-agent/definitions`로 따로 내보냅니다.
 
-설계 배경과 확정 결정은 [결정 기록](../../docs/decisions.md)을 보세요.
+설계 배경과 확정한 결정은 [결정 기록](../../docs/decisions.md)에 있습니다.
 
 ## 구조
 
@@ -46,7 +46,7 @@ skills/
   draw/SKILL.md          앱 기본 skill: SVG로 다이어그램·차트·와이어프레임·아이콘 그리기
 ```
 
-앱 기본 skill은 `SKILL.md` 하나로 완결해야 합니다. 실행 파일에서는 저장 루트 아래에 풀리고 파일 도구가 저장 루트를 읽지 않아서, 옆에 둔 파일은 모델이 읽을 수 없습니다. 같은 이름의 공통·프로젝트 skill이 기본 skill을 덮어씁니다.
+앱 기본 skill은 `SKILL.md` 하나로 완결해야 합니다. 실행 파일에서는 저장 루트 아래에 풀리고 파일 도구가 저장 루트를 읽지 않아서, 옆에 둔 파일은 모델이 읽을 수 없습니다. 같은 이름의 공통 및 프로젝트 skill이 기본 skill을 덮어씁니다.
 
 네이티브 패키지(turbovec, `@napi-rs/keyring`, sharp)는 정적 import하지 않고 `runtime/resources.ts`의 `requireRuntime`으로 불러옵니다. 실행 파일(Node SEA)은 디스크 파일을 `import()`하지 못하고, 이 패키지들을 `CONTEXT_AGENT_RUNTIME` 폴더에 풀어 두기 때문입니다. 임베딩 모델(`@huggingface/transformers`)과 Kiwi는 worker thread에서 돌고, worker 스크립트(`embed-worker.mjs`, `kiwi-worker.mjs`)가 옆의 패키지를 직접 불러옵니다. 가져오기(`imports/worker.ts`)와 비밀 소급 정리의 탐지(`secrets/redact-worker.ts`)도 worker thread에서 돕니다. 이 둘은 TypeScript라 저장소에서는 그대로 돌고, 실행 파일에는 한 파일로 묶여 들어갑니다. 스크립트 위치는 `runtimeWorker`가 정합니다(저장소에서는 package exports, 실행 파일에서는 runtime 폴더).
 
@@ -55,25 +55,28 @@ skills/
 
 ## 기억 모델
 
-- 사용자·assistant·tool call·tool result를 모두 원문 그대로 `nodes`에 저장합니다(수정 불가).
+- 사용자, assistant, tool call, tool result를 모두 원문 그대로 `nodes`에 저장합니다(수정 불가).
 - 저장할 때 구조 edge를 만듭니다: `next`(세션 순서), `reply`, `calls`, `returns`, `touches`(같은 파일/URL).
-- 검색(`find_memory`)은 임베딩 벡터 순위, FTS trigram 순위, Kiwi 형태소(명사·어간) BM25 순위를 RRF로 합친 뒤 그래프를 따라 넓힙니다. Kiwi는 worker thread에서 돌고(쓰기 시작하면 계속 둠, 약 240 MB), 적재 중에는 형태소 순위 없이 검색합니다. 임베딩은 사용자·assistant 발언과 주제 노드만 합니다(`embeddedKinds`). 도구 호출·결과는 trigram·형태소 순위로 찾고, 발언에서 `calls`·`returns` edge를 따라 닿습니다. 임베딩도 worker thread에서 노드마다 앞 2048토큰까지, 토큰 길이로 나눈 배치로 합니다. CPU 모드는 quint8 모델을 CPU에서, GPU 모드는 fp32 모델을 WebGPU에서(안 되면 CPU에서) 돌리고, 자동이면 메모리 16GB 이상이고 WebGPU 확인에 성공했을 때 GPU 모드입니다(`EmbeddingSetup`, 설정의 "기억" 탭). onnxruntime-node는 추론을 동기로 돌려서, 메인 스레드에서 돌리면 밀린 노드를 임베딩하는 동안 서버의 모든 요청이 기다립니다. 메모리 측정은 `node --expose-gc --no-warnings eval/memory.ts`. 품질 평가는 `vp run eval:recall`(두 모델이 `~/.context-generactive-agent/models`에 있어야 함).
+- 검색(`find_memory`)은 임베딩 벡터 순위, FTS trigram 순위, Kiwi 형태소(명사와 어간) BM25 순위를 RRF로 합친 뒤 그래프를 탐색해 결과를 확장합니다. Kiwi는 worker thread에서 돌고(쓰기 시작하면 계속 둠, 약 240 MB), 적재 중에는 형태소 순위 없이 검색합니다. 임베딩은 사용자, assistant 발언과 주제 노드만 합니다(`embeddedKinds`). 도구 호출과 결과는 trigram, 형태소 순위로 찾고, 발언에서 `calls`, `returns` edge를 따라 닿습니다.
+
+  임베딩은 worker thread에서 처리합니다. 노드마다 앞 2048토큰까지 사용하고, 토큰 길이에 따라 배치를 나눕니다. CPU 모드는 quint8 모델을 CPU에서, GPU 모드는 fp32 모델을 WebGPU에서(안 되면 CPU에서) 돌리고, 자동이면 메모리 16GB 이상이고 WebGPU 확인에 성공했을 때 GPU 모드입니다(`EmbeddingSetup`, 설정의 "기억" 탭). onnxruntime-node는 추론을 동기로 돌려서, 메인 스레드에서 돌리면 밀린 노드를 임베딩하는 동안 서버의 모든 요청이 기다립니다. 메모리 측정은 `node --expose-gc --no-warnings eval/memory.ts`. 품질 평가는 `vp run eval:recall`(두 모델이 `~/.context-generactive-agent/models`에 있어야 함).
+
 - `read_evidence`는 원문을 페이지로 읽고, `trace_evidence`는 tool result → call → assistant → user 발언까지 거슬러 갑니다.
 - 교차 프로젝트 회상은 기본 포함이며, 프로젝트별로 제외할 수 있습니다. 결과에는 출처 프로젝트 이름(`projectName`)이 붙습니다.
-- `Interpreter`(llm-interpret)가 답변이 끝난 뒤 사용자·assistant 발언을 해석해 주제(`topic` 노드 + `about`), `corrects`·`retracts`·`related` edge를 붙입니다. 후보는 코드가 고르고, 정정·취소는 사용자 발언에서만, 대상이 분명할 때만 edge가 됩니다. 모호하면 `interpretations`에 `unconfirmed`로 남아 확인 질문이 됩니다.
-- 검색 결과의 `supersededBy`는 그 발언을 정정·취소한 나중 발언, `unconfirmedChallenges`는 확인이 필요한 후보 수, `uninterpreted`는 아직 해석되지 않은 발언 수입니다. 테스트는 `tests/interpret.test.ts`(가짜 codex가 표식으로 해석 결과를 흉내 냄).
-- 인덱싱·해석 대기열은 **보낸 날짜 내림차순**입니다. 이관한 노드는 `seq`가 크고 시각이 옛날이라, `seq` 순으로 두면 방금 나눈 대화를 밀어냅니다. run 뒤 뒷정리는 예산(`indexUpTo(200)`)만큼만 하고, 남은 backlog는 `Importer`의 전용 fiber가 비웁니다.
+- `Interpreter`(llm-interpret)가 답변이 끝난 뒤 사용자, assistant 발언을 해석해 주제(`topic` 노드 + `about`), `corrects`, `retracts`, `related` edge를 붙입니다. 후보는 코드가 고르고, 정정과 취소는 사용자 발언에서만, 대상이 분명할 때만 edge가 됩니다. 모호하면 `interpretations`에 `unconfirmed`로 남아 확인 질문이 됩니다.
+- 검색 결과의 `supersededBy`는 그 발언을 정정과 취소한 나중 발언, `unconfirmedChallenges`는 확인이 필요한 후보 수, `uninterpreted`는 아직 해석되지 않은 발언 수입니다. 테스트는 `tests/interpret.test.ts`(가짜 codex가 표식으로 해석 결과를 흉내 냄).
+- 인덱싱과 해석 대기열은 보낸 날짜 내림차순입니다. 이관한 노드는 `seq`가 크고 시각이 옛날이라, `seq` 순으로 두면 방금 나눈 대화를 밀어냅니다. run 뒤 뒷정리는 예산(`indexUpTo(200)`)만큼만 하고, 남은 backlog는 `Importer`의 전용 fiber가 비웁니다.
 
 ## 다른 에이전트 대화 이관 (imports/)
 
 Claude Code(`~/.claude/projects/**/*.jsonl`)와 Codex CLI(`~/.codex/sessions/**/rollout-*.jsonl`)의 로컬 기록을 노드로 옮깁니다. 원본은 읽기만 합니다.
 
-- 줄 하나를 `TranscriptItem`(리터럴 태그 유니온: `session`·`message`·`tool_call`·`tool_result`·`ignored`)으로 읽습니다. 새 출처는 어댑터 파일 하나 + `ImportSourceName` 태그 하나입니다.
+- 줄 하나를 `TranscriptItem`(리터럴 태그 유니온: `session`, `message`, `tool_call`, `tool_result`, `ignored`)으로 읽습니다. 새 출처는 어댑터 파일 하나 + `ImportSourceName` 태그 하나입니다.
 - `BulkNodes`가 대화 하나를 한 트랜잭션에 직접 INSERT하며, 줄의 원래 `timestamp`를 `created_at`에 씁니다. 구조 edge와 `interpret_jobs`는 라이브와 같은 규칙입니다. `Nodes.append`는 라이브 전용으로 그대로 둡니다.
 - `Importer`가 `import_cursors`의 byte offset부터 읽고, 마지막 개행까지만 소비합니다(실행 중인 에이전트가 쓰는 중인 꼬리 줄을 반으로 읽지 않기 위해). 중복은 `imported_nodes`가 막습니다.
-- 기록의 `cwd`를 프로젝트로 자동 등록합니다. 숨긴 프로젝트도 임자로 인정하므로 같은 폴더가 두 번 등록되지 않습니다. 등록할 수 없는 폴더는 `import_cursors.skipped`에 이유와 함께 남습니다. 저장 루트 아래(앱 전용 `CODEX_HOME`)는 읽지 않습니다.
-- 프로젝트는 목록에서 뺄 수 있습니다(`Projects.setHidden`, `projects.hidden_at`). `list`는 보이는 것만, `listAll`은 숨긴 것까지 줍니다. 기억·검색은 숨겨도 그대로입니다.
-- 설정 화면 "가져오기" 탭에서 켜면 5분마다 따라붙습니다(`config.json`의 `importsEnabled`). 이관은 모델 도구가 아닙니다. 테스트는 `tests/import-readers.test.ts`, `tests/imports.test.ts`.
+- 기록의 `cwd`를 프로젝트로 자동 등록합니다. 숨긴 프로젝트에도 기록을 연결하므로 같은 폴더가 두 번 등록되지 않습니다. 등록할 수 없는 폴더는 `import_cursors.skipped`에 이유와 함께 남습니다. 저장 루트 아래(앱 전용 `CODEX_HOME`)는 읽지 않습니다.
+- 프로젝트는 목록에서 뺄 수 있습니다(`Projects.setHidden`, `projects.hidden_at`). `list`는 보이는 프로젝트만 반환하고, `listAll`은 숨긴 프로젝트까지 반환합니다. 기억, 검색은 숨겨도 그대로입니다.
+- 설정 화면의 "가져오기" 탭에서 켜면 5분마다 새 기록을 가져옵니다(`config.json`의 `importsEnabled`). 이관은 모델 도구가 아닙니다. 테스트는 `tests/import-readers.test.ts`, `tests/imports.test.ts`.
 
 ## 도구와 권한
 
@@ -95,37 +98,37 @@ Claude Code(`~/.claude/projects/**/*.jsonl`)와 Codex CLI(`~/.codex/sessions/**/
 - `ask`(기본): 승인이 필요한 호출마다 TanStack이 멈추고 사용자가 답합니다(`needsApproval`).
 - `auto`: `PermissionGate` middleware가 실행 직전 호출을 `PermissionClassifier`에 보냅니다.
   분류 모델(선택한 모델의 가장 낮은 추론 강도, 도구 없는 일회용 스레드)이 `allow`/`ask`/`block`을 판정합니다.
-  - 입력은 호출 내용, DB에 저장된 실제 사용자 발언, 프로젝트 경로뿐입니다. 도구 결과·파일 내용은 넣지 않습니다.
+  - 입력은 호출 내용, DB에 저장된 실제 사용자 발언, 프로젝트 경로뿐입니다. 도구 결과, 파일 내용은 넣지 않습니다.
   - `ask`면 `permission-review` interrupt로 사용자에게 묻고, 답은 재개할 때 기록합니다.
-  - 분류 실패·timeout·읽을 수 없는 답은 `ask`로 처리합니다.
+  - 분류 실패, timeout, 읽을 수 없는 답은 `ask`로 처리합니다.
   - 판정과 사용자 답은 `permission_reviews`에 쌓이고, tool result 노드 `detail.permission`에 근거로 남습니다.
 
 MCP 도구는 실행 중에 생기므로 브라우저가 정의를 모릅니다. 그래서 `ask` 모드에서도 `PermissionGate`(decider `user`)가 호출마다 `permission-review` interrupt로 묻고, `auto` 모드에서는 내장 승인 도구와 함께 분류 모델이 판정합니다.
 `McpServers`는 `<storage>/mcp.json`과 `<project>/.mcp.json`을 읽고, 사용자가 신뢰한 설정(fingerprint)만 시작합니다. 테스트는 `tests/mcp.test.ts`(가짜 stdio MCP 서버 `tests/support/fake-mcp-server.mjs`).
 
-`Subagents`는 자식을 부모와 같은 모델·도구(서브에이전트 도구 제외)로 실행합니다. 자식의 승인 필요 호출은 부모 run을 멈추지 않고 `onBeforeToolCall`에서 기다리며, 페이지가 `AgentChat.approvals`/`answerApproval`(`RelayedApprovals`)로 보고 답합니다. 테스트는 `tests/subagents.test.ts`.
+`Subagents`는 자식을 부모와 같은 모델, 도구(서브에이전트 도구 제외)로 실행합니다. 자식의 승인 필요 호출은 부모 run을 멈추지 않고 `onBeforeToolCall`에서 기다리며, 페이지가 `AgentChat.approvals`/`answerApproval`(`RelayedApprovals`)로 보고 답합니다. 테스트는 `tests/subagents.test.ts`.
 
 승인 대기로 HTTP 요청이 끝나도 codex 턴은 `TurnParking`에 threadId로 보관되어, 재개 요청이 같은 턴을 이어갑니다.
 
 ## 대화 상태와 새로고침
 
 - TanStack 대화 threadId는 항상 세션 id입니다(클라이언트가 보낸 값은 무시).
-- `ChatState`가 `@tanstack/ai-persistence`의 `withPersistence` middleware로 run마다 대화(ModelMessage)·run 상태·interrupt를 SQLite(`chat_threads`, `chat_runs`, `chat_interrupts`, `chat_metadata`)에 저장합니다.
+- `ChatState`가 `@tanstack/ai-persistence`의 `withPersistence` middleware로 run마다 대화(ModelMessage), run 상태, interrupt를 SQLite(`chat_threads`, `chat_runs`, `chat_interrupts`, `chat_metadata`)에 저장합니다.
 - 새로고침한 페이지는 `useChat({ persistence: true })`가 `GET /api/chat`으로 `reconstructChat` 결과를 받아 대화와 대기 중인 승인을 되살립니다. 다른 세션의 thread는 읽을 수 없습니다.
 - 이 저장소는 화면 복원용이고 기억의 원본은 여전히 `nodes`입니다. chat state가 없는 예전 세션은 노드에서 대화를 다시 만들어 엽니다.
 - 저장소 계약은 `@tanstack/ai-persistence/testkit`의 conformance 테스트로 확인합니다.
 
-## 실행 중 새로고침·취소·재시작
+## 실행 중 새로고침, 취소, 재시작
 
-- run은 요청과 떨어져 돕니다. 답변 chunk는 delivery durability 로그(`memoryStream`)에 먼저 쓰이고, 새로고침한 페이지는 `GET /api/chat?runId=&offset=-1`로 처음부터 다시 읽으며 따라갑니다. codex를 다시 부르지 않습니다.
+- run은 HTTP 요청과 독립적으로 실행됩니다. 답변 chunk는 delivery durability 로그(`memoryStream`)에 먼저 쓰이고, 새로고침한 페이지는 `GET /api/chat?runId=&offset=-1`로 처음부터 다시 읽으며 따라갑니다. codex를 다시 부르지 않습니다.
 - `LiveRuns`가 세션마다 진행 중인 run 하나를 들고 있습니다. 같은 세션의 두 번째 run은 409이고, 취소(`AgentChat.cancel`)는 여기서 run을 찾아 `requestRunCancel` 후 `RUN_CANCEL_REASON`으로 abort합니다. codex 어댑터는 abort 신호에 `turn/interrupt`로 답합니다.
-- `AgentChat.status`는 진행 중인 run과 마지막 run의 상태·오류를 돌려줍니다(`SessionRunState`).
+- `AgentChat.status`는 진행 중인 run과 마지막 run의 상태, 오류를 돌려줍니다(`SessionRunState`).
 - `ChatState`가 만들어질 때 `running`으로 남은 run은 `failed`/`server_restarted`로 바뀝니다. 다시 실행하지 않습니다.
-- 쓰던 답변은 1초마다 스냅샷되고, 취소·실패 때 바로 저장됩니다.
-- `SessionLeases`는 세션마다 쓰기 가능한 페이지(holder) 하나를 메모리에 둡니다(`claim`·`release`·`permits`·`view`). `AgentChat.handle`·`cancel`은 `X-Session-Holder`가 소유자가 아니면 423을 돌려주고, `AgentChat.lease`가 claim/release를, `status`가 요청한 페이지 기준 `LeaseView`(`mine`·`other`·`free`)를 돌려줍니다. 테스트는 `tests/leases.test.ts`.
-- `MessageQueue`는 답변 중에 보낸 메시지를 순서대로 둡니다(`waiting`·`editing`·`held`·`delivered`·`failed`). `deliverable`은 앞에서부터 `waiting`만 돌려주고 편집 중이거나 확인이 필요한 메시지에서 멈춥니다. 새 프로세스는 남은 `waiting`/`editing`을 `held`로 바꿉니다.
+- 작성 중인 답변은 1초마다 스냅샷으로 저장하며, 취소하거나 실패하면 즉시 저장합니다.
+- `SessionLeases`는 세션마다 쓰기 가능한 페이지(holder) 하나를 메모리에 둡니다(`claim`, `release`, `permits`, `view`). `AgentChat.handle`, `cancel`은 `X-Session-Holder`가 소유자가 아니면 423을 돌려주고, `AgentChat.lease`가 claim/release를, `status`가 요청한 페이지 기준 `LeaseView`(`mine`, `other`, `free`)를 돌려줍니다. 테스트는 `tests/leases.test.ts`.
+- `MessageQueue`는 답변 중에 보낸 메시지를 순서대로 둡니다(`waiting`, `editing`, `held`, `delivered`, `failed`). `deliverable`은 앞에서부터 `waiting`만 돌려주고 편집 중이거나 확인이 필요한 메시지에서 멈춥니다. 새 프로세스는 남은 `waiting`/`editing`을 `held`로 바꿉니다.
 - `QueueDelivery.forRun` middleware는 도구 결과 뒤(`beforeModel`) 대기 메시지를 codex `turn/steer`와 대화에 함께 넣고 사용자 노드로 기록합니다. `steer`는 답변 중인 턴에 바로 넣습니다(`CodexChat.steer`, `ActiveTurns`).
-- `AgentChat.enqueue`·`editQueued`·`queued`가 대기열 API이고, 소유 페이지가 `forwardedProps.queuedMessageId`로 다음 턴을 보내면 `handle`이 그 메시지를 전달됨으로 표시합니다. run이 끝날 때(`LiveRuns` onEnded) 취소·실패·소유 페이지 없음이면 `held`로 둡니다. 테스트는 `tests/queue.test.ts`.
+- `AgentChat.enqueue`, `editQueued`, `queued`가 대기열 API이고, 소유 페이지가 `forwardedProps.queuedMessageId`로 다음 턴을 보내면 `handle`이 그 메시지를 전달됨으로 표시합니다. run이 끝날 때(`LiveRuns` onEnded) 취소, 실패, 소유 페이지 없음이면 `held`로 둡니다. 테스트는 `tests/queue.test.ts`.
 - 테스트(`tests/runs.test.ts`)는 실제 `ChatClient`로 중간 새로고침 후 이어 읽기, 취소, 동시 run 거절, 재시작 후 실패 기록, 재시작을 넘긴 승인을 확인합니다.
 
 ## 이미지
@@ -138,10 +141,10 @@ MCP 도구는 실행 중에 생기므로 브라우저가 정의를 모릅니다.
 ## 보안 경계
 
 - 자격 증명으로 보이는 경로(`.ssh`, `.env`, `*.pem`, `~/.codex`, 앱 저장 루트 등)와 `.git` 내부는 어떤 승인으로도 파일 도구가 건드리지 않습니다. 이름 기반 판정이라 일반 파일 안의 비밀은 아래 탐지기가 맡습니다.
-- 출력에 찍힌 비밀은 `SecretRedactor`(`secrets/redactor.ts`, secretlint + 비밀처럼 보이는 이름 옆의 값)가 `[redacted:<종류>]`로 가립니다. 모든 도구 결과와 에러 메시지는 모델·페이지·노드에 닿기 전에, assistant 글·도구 인자·참조·사용자 발언·이관 기록은 기억에 남기 전에 가립니다. 모델은 사용자가 보낸 메시지를 그대로 읽습니다.
-- 이미 저장된 텍스트는 `SecretSweep`(`secrets/sweep.ts`)이 시작할 때마다 백그라운드에서 훑습니다. 노드는 `secret_sweep_permits` 허가가 있을 때만 `text`가 바뀌고(트리거가 나머지 변경은 계속 거부), FTS·형태소·벡터도 새 텍스트로 다시 만듭니다. secretlint 검사는 사이사이 이벤트 루프에 차례를 주지 않아서, 탐지는 스윕마다 띄우는 redaction worker가 배치 단위로 하고 DB 읽기·쓰기와 벡터 정리는 메인에 남습니다. 테스트는 `tests/secret-redactor.test.ts`, `tests/secret-redaction.test.ts`, `tests/secret-sweep.test.ts`.
-- 프로젝트 파일 도구는 경로를 한 칸씩 `lstat`해 symlink·hard link를 거부합니다. 밖 도구는 링크가 가리키는 실제 대상으로 판단합니다. OS 샌드박스는 아닙니다.
-- 셸은 호스트에서 격리 없이 실행됩니다. `TOKEN`·`API_KEY`처럼 비밀로 보이는 환경 변수는 명령에 넘기지 않습니다.
+- 출력에 찍힌 비밀은 `SecretRedactor`(`secrets/redactor.ts`, secretlint + 비밀처럼 보이는 이름 옆의 값)가 `[redacted:<종류>]`로 가립니다. 모든 도구 결과와 에러 메시지는 모델, 페이지, 노드에 닿기 전에, assistant 글, 도구 인자, 참조, 사용자 발언, 이관 기록은 기억에 남기 전에 가립니다. 모델은 사용자가 보낸 메시지를 그대로 읽습니다.
+- 이미 저장된 텍스트는 `SecretSweep`(`secrets/sweep.ts`)이 시작할 때마다 백그라운드에서 훑습니다. 노드는 `secret_sweep_permits` 허가가 있을 때만 `text`가 바뀌고(트리거가 나머지 변경은 계속 거부), FTS, 형태소, 벡터도 새 텍스트로 다시 만듭니다. secretlint 검사는 사이사이 이벤트 루프에 차례를 주지 않아서, 탐지는 스윕마다 띄우는 redaction worker가 배치 단위로 하고 DB 읽기와 쓰기와 벡터 정리는 메인에 남습니다. 테스트는 `tests/secret-redactor.test.ts`, `tests/secret-redaction.test.ts`, `tests/secret-sweep.test.ts`.
+- 프로젝트 파일 도구는 경로를 한 칸씩 `lstat`해 symlink, hard link를 거부합니다. 밖 도구는 링크가 가리키는 실제 대상으로 판단합니다. OS 샌드박스는 아닙니다.
+- 셸은 호스트에서 격리 없이 실행됩니다. `TOKEN`, `API_KEY`처럼 비밀로 보이는 환경 변수는 명령에 넘기지 않습니다.
 - ChatGPT 토큰은 codex가 관리하며 이 패키지는 읽지 않습니다.
 - Kagi API 키는 `SecretStore`(OS 키체인)에만 저장하고 요청 직전에 읽습니다. 키체인이 실패해도 다른 곳에 저장하지 않습니다. 테스트는 `SecretStore.memory`를 씁니다.
 
@@ -165,7 +168,7 @@ Zed 예시(`settings.json`):
 ```
 
 - 에디터에서 연 폴더가 앱에 등록된 프로젝트여야 합니다.
-- 대화는 앱의 대화 목록에도 보이고, 기억·승인·취소가 앱과 같습니다. 승인은 에디터의 권한 질문으로 뜹니다.
+- 대화는 앱의 대화 목록에도 보이고, 기억, 승인, 취소가 앱과 같습니다. 승인은 에디터의 권한 질문으로 뜹니다.
 - 테스트는 `tests/acp-agent.test.ts`(SDK 클라이언트 ↔ 다리 ↔ 앱 핸들러를 한 프로세스에서 연결).
 
 ## 외부 에이전트 부르기 (ACP 클라이언트)
@@ -190,7 +193,7 @@ vp test bench --dir bench   # 도구 지연 측정(합성 저장소 3,000 파일
 vp check         # 루트에서: 포맷·lint·타입 검사
 ```
 
-테스트는 임시 디렉터리의 실제 SQLite·turbovec·파일 시스템과 가짜 codex app-server(`tests/support/fake-codex.mjs`)를 씁니다.
-승인·auto 모드 테스트는 실제 `@tanstack/ai-client` `ChatClient`로 요청과 재개를 끝까지 주고받습니다.
+테스트는 임시 디렉터리의 실제 SQLite, turbovec, 파일 시스템과 가짜 codex app-server(`tests/support/fake-codex.mjs`)를 씁니다.
+승인, auto 모드 테스트는 실제 `@tanstack/ai-client` `ChatClient`로 요청과 재개를 끝까지 주고받습니다.
 
-`AGENT.md`도 함께 읽어 주세요.
+추가 지침은 `AGENT.md`에 있습니다.
