@@ -32,6 +32,7 @@ import { Recorder } from "./memory/record.ts";
 import { MemorySearch } from "./memory/search.ts";
 import { PermissionClassifier } from "./permissions/classifier.ts";
 import { SecretRedactor } from "./secrets/redactor.ts";
+import { SecretSweep } from "./secrets/sweep.ts";
 import { PermissionGate } from "./permissions/gate.ts";
 import { PermissionReviews } from "./permissions/reviews.ts";
 import { Projects } from "./projects/projects.ts";
@@ -72,6 +73,11 @@ export interface MemoryAgentLayerOptions {
    */
   readonly importsHome?: string;
   readonly importsWatching?: boolean;
+  /**
+   * Sweep secrets out of text stored before they were hidden on the way in, in the background at
+   * start. Default true; tests run the sweep themselves.
+   */
+  readonly sweepSecrets?: boolean;
 }
 
 /** Composition root: every memory-agent service backed by one storage directory. */
@@ -134,6 +140,8 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
         Interpreter.layer(options.interpretAutomatically),
         // Above retrieval: migrating a transcript hands its nodes straight to the indexer.
         Importer.layer(options.importsWatching, options.importsHome),
+        // Above retrieval too: a swept node's vector and terms are dropped and made again.
+        SecretSweep.layer(options.sweepSecrets),
       ),
     ),
     Layer.provideMerge(retrieval),

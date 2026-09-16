@@ -41,6 +41,7 @@ export async function testRuntime(overrides: MemoryAgentLayerOptions = {}) {
     // So does the user's real ~/.claude and ~/.codex; a test writes its own transcripts here.
     importsHome: home,
     importsWatching: false,
+    sweepSecrets: false,
     ...overrides,
   };
   const storage = join(base, "storage");

@@ -24,6 +24,7 @@ src/
   projects/     프로젝트 등록·경로 검사·교차 회상 제외·권한 모드(ask/auto)
   sessions/     프로젝트에 속한 대화
   imports/      Claude Code·Codex CLI 기록 이관: 줄 읽기 어댑터, 대량 노드 쓰기, 커서와 따라붙기
+  secrets/      비밀 가리기(secretlint)와 저장된 텍스트의 소급 정리
   memory/       기억: 노드·구조 edge·그래프 탐색·근거 추적·검색·기록 middleware
     embedding/  로컬 임베딩 모델 + turbovec 벡터 인덱스 + 인덱서(형태소 분석 포함)
     morph/      Kiwi 한국어 형태소 분석(worker thread, 모델은 처음 쓸 때 내려받음)
@@ -135,7 +136,9 @@ MCP 도구는 실행 중에 생기므로 브라우저가 정의를 모릅니다.
 
 ## 보안 경계
 
-- 자격 증명으로 보이는 경로(`.ssh`, `.env`, `*.pem`, `~/.codex`, 앱 저장 루트 등)와 `.git` 내부는 어떤 승인으로도 파일 도구가 건드리지 않습니다. 이름 기반 판정이라 일반 파일 안의 비밀까지 찾지는 못합니다.
+- 자격 증명으로 보이는 경로(`.ssh`, `.env`, `*.pem`, `~/.codex`, 앱 저장 루트 등)와 `.git` 내부는 어떤 승인으로도 파일 도구가 건드리지 않습니다. 이름 기반 판정이라 일반 파일 안의 비밀은 아래 탐지기가 맡습니다.
+- 출력에 찍힌 비밀은 `SecretRedactor`(`secrets/redactor.ts`, secretlint + 비밀처럼 보이는 이름 옆의 값)가 `[redacted:<종류>]`로 가립니다. 모든 도구 결과와 에러 메시지는 모델·페이지·노드에 닿기 전에, assistant 글·도구 인자·참조·사용자 발언·이관 기록은 기억에 남기 전에 가립니다. 모델은 사용자가 보낸 메시지를 그대로 읽습니다.
+- 이미 저장된 텍스트는 `SecretSweep`(`secrets/sweep.ts`)이 시작할 때마다 백그라운드에서 훑습니다. 노드는 `secret_sweep_permits` 허가가 있을 때만 `text`가 바뀌고(트리거가 나머지 변경은 계속 거부), FTS·형태소·벡터도 새 텍스트로 다시 만듭니다. 테스트는 `tests/secret-redactor.test.ts`, `tests/secret-redaction.test.ts`, `tests/secret-sweep.test.ts`.
 - 프로젝트 파일 도구는 경로를 한 칸씩 `lstat`해 symlink·hard link를 거부합니다. 밖 도구는 링크가 가리키는 실제 대상으로 판단합니다. OS 샌드박스는 아닙니다.
 - 셸은 호스트에서 격리 없이 실행됩니다. `TOKEN`·`API_KEY`처럼 비밀로 보이는 환경 변수는 명령에 넘기지 않습니다.
 - ChatGPT 토큰은 codex가 관리하며 이 패키지는 읽지 않습니다.

@@ -16,6 +16,7 @@ import { request as httpRequest } from "node:http";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { Schema } from "effect";
 
@@ -86,6 +87,9 @@ async function stop(child: ChildProcess) {
 
 const Auth = Schema.Struct({ status: Schema.String });
 const Created = Schema.Struct({ id: Schema.String });
+const Text = Schema.Struct({ text: Schema.String });
+/** Assembled at run time so no key-shaped text sits in the repository. */
+const smokeToken = `${"gh"}p_${"S1m2O3k4E5t6O7k8E9n0A1b2C3d4E5f6G7h8"}`;
 const Catalog = Schema.Struct({
   skills: Schema.Array(Schema.Struct({ name: Schema.String, scope: Schema.String })),
 });
@@ -226,6 +230,24 @@ try {
     );
 
   const unpackedAt = folder ? statSync(join(storage, "runtime", folder, ".complete")).mtimeMs : 0;
+
+  // A node stored the way it was before secrets were hidden on the way in; the start below sweeps
+  // it. This is the only check that runs the bundled secret detector.
+  const sessionId = session.status === 201 ? (await json(Created, session)).id : "";
+  const seeded = (() => {
+    const database = new DatabaseSync(join(storage, "agent.db"));
+    try {
+      database
+        .prepare(
+          "INSERT INTO nodes (id, project_id, session_id, kind, text, created_at) VALUES ('smoke-secret', ?, ?, 'tool_result', ?, ?)",
+        )
+        .run(projectId, sessionId, `GITHUB_TOKEN=${smokeToken}`, new Date().toISOString());
+      return true;
+    } finally {
+      database.close();
+    }
+  })();
+
   started = Date.now();
   server = start(port);
   await until(
@@ -238,6 +260,27 @@ try {
     folder !== undefined &&
       statSync(join(storage, "runtime", folder, ".complete")).mtimeMs === unpackedAt,
     `${Date.now() - started} ms`,
+  );
+  // The agent (and the sweep it starts) is made on the first API request, as the page makes one.
+  await fetch(`${url}/api/auth`);
+  const swept = await until(
+    "the secret sweep",
+    async () => {
+      const database = new DatabaseSync(join(storage, "agent.db"), { readOnly: true });
+      try {
+        const row = database.prepare("SELECT text FROM nodes WHERE id = 'smoke-secret'").get();
+        const text = row ? Schema.decodeUnknownSync(Text)(row).text : "";
+        return text.includes(smokeToken) ? null : text;
+      } finally {
+        database.close();
+      }
+    },
+    30_000,
+  );
+  check(
+    "stored secrets swept on start (bundled detector)",
+    seeded && swept === "GITHUB_TOKEN=[redacted:github]",
+    swept,
   );
   await stop(server);
 } finally {

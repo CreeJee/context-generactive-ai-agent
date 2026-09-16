@@ -8,7 +8,7 @@ import { requireRuntime } from "../../runtime/resources.ts";
 import { Embedder } from "./embedder.ts";
 
 export class VectorIndexError extends Data.TaggedError("VectorIndexError")<{
-  readonly operation: "open" | "add" | "search" | "save";
+  readonly operation: "open" | "add" | "remove" | "search" | "save";
   readonly cause: unknown;
 }> {
   override get message() {
@@ -90,6 +90,19 @@ const make = Effect.gen(function* () {
           index.add(batch, seqs.map(String));
         },
         catch: (cause) => new VectorIndexError({ operation: "add", cause }),
+      }),
+
+    /**
+     * Drops the vectors of nodes whose text changed, so the indexer embeds the new text. Callers
+     * delete the matching `node_vectors` rows in the same step, keeping the count the open check
+     * compares.
+     */
+    remove: (seqs: readonly number[]) =>
+      Effect.try({
+        try: () => {
+          for (const seq of seqs) index.remove(String(seq));
+        },
+        catch: (cause) => new VectorIndexError({ operation: "remove", cause }),
       }),
 
     /** Whole-index search; callers filter by project because node ownership lives in SQLite. */

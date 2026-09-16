@@ -105,6 +105,14 @@ const make = Effect.gen(function* () {
      */
     indexUpTo: (budget: number, batchSize = 64) => drain(indexBatch, budget, batchSize),
     analyzeUpTo: (budget: number, batchSize = 256) => drain(analyzeBatch, budget, batchSize),
+
+    /**
+     * Runs `work` while no batch is embedding or analysing. For changing a node's text: a batch
+     * picks a node, works on its text and records the result, and a change in the middle of that
+     * would leave the index holding the text as it was.
+     */
+    exclusive: <A, E, R>(work: Effect.Effect<A, E, R>) =>
+      work.pipe(oneBatchAtATime.withPermits(1), oneMorphBatchAtATime.withPermits(1)),
   };
 });
 

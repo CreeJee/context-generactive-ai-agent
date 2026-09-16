@@ -320,4 +320,34 @@ export const migrations: readonly string[] = [
   -- there has to be a way to tidy the list without losing what was remembered there.
   ALTER TABLE projects ADD COLUMN hidden_at TEXT;
   `,
+  `
+  -- Text stored before secrets were hidden on the way in is swept once, in place.
+  --
+  -- Nodes stay immutable evidence; the one exception is a sweep hiding a secret in a node's text.
+  -- It writes a permit for that node, changes the text and removes the permit in one transaction.
+  -- Without a permit, or when anything but the text changes, the update is refused as before.
+  CREATE TABLE secret_sweep_permits (node_seq INTEGER PRIMARY KEY);
+  DROP TRIGGER nodes_immutable;
+  CREATE TRIGGER nodes_immutable BEFORE UPDATE ON nodes
+  WHEN NOT (
+    EXISTS (SELECT 1 FROM secret_sweep_permits WHERE node_seq = old.seq)
+    AND new.seq = old.seq AND new.id = old.id AND new.project_id = old.project_id
+    AND new.session_id IS old.session_id AND new.run_id IS old.run_id
+    AND new.kind = old.kind AND new.detail = old.detail AND new.created_at = old.created_at
+  )
+  BEGIN SELECT RAISE(ABORT, 'nodes are immutable evidence'); END;
+
+  -- How far the sweep of each table has got, by rowid, and whether its latest pass reached the end.
+  -- Tables that only grow resume from here on the next start; tables rewritten in place are read in
+  -- full every time. version names the detector: a later one that finds more starts again from the
+  -- beginning. Times are ISO strings.
+  CREATE TABLE secret_sweeps (
+    target TEXT PRIMARY KEY,
+    version INTEGER NOT NULL,
+    after INTEGER NOT NULL DEFAULT 0,
+    done INTEGER NOT NULL DEFAULT 0 CHECK (done IN (0, 1)),
+    hidden INTEGER NOT NULL DEFAULT 0 CHECK (hidden >= 0),
+    updated_at TEXT NOT NULL
+  );
+  `,
 ];
