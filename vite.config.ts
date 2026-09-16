@@ -52,7 +52,24 @@ export default defineConfig({
       "anti-slop/no-widen-then-assert": "error",
       "anti-slop/require-safety-comment-for-type-assertion": "error",
       "anti-slop-effect/no-service-constructor-imports": "error",
+      "shadcn/no-restyle": ["error", { allow: ["layout"] }],
+      "shadcn/no-raw-colors": "error",
+      "shadcn/no-arbitrary-values": ["error", { allow: ["layout"] }],
+      "shadcn/no-inline-styles": "error",
+      "shadcn/no-unknown-classes": "error",
+      "shadcn/require-static-classes": "error",
     },
+    overrides: [
+      {
+        // Design-system components own their appearance and may need structural values.
+        files: ["apps/agent/app/components/ui/**"],
+        rules: {
+          "shadcn/no-restyle": "off",
+          "shadcn/no-arbitrary-values": "off",
+          "shadcn/require-static-classes": "off",
+        },
+      },
+    ],
     options: { typeAware: true, typeCheck: true },
   },
   run: {
