@@ -191,6 +191,12 @@ catalogs:
     '@react-router/fs-routes':
       specifier: ^8.3.1
       version: 8.3.1
+    '@secretlint/core':
+      specifier: 13.0.5
+      version: 13.0.5
+    '@secretlint/secretlint-rule-preset-recommend':
+      specifier: 13.0.5
+      version: 13.0.5
     '@standard-schema/spec':
       specifier: ^1.1.0
       version: 1.1.0
@@ -422,6 +428,12 @@ importers:
       '@openai/codex':
         specifier: 'catalog:'
         version: 0.154.0
+      '@secretlint/core':
+        specifier: 'catalog:'
+        version: 13.0.5
+      '@secretlint/secretlint-rule-preset-recommend':
+        specifier: 'catalog:'
+        version: 13.0.5
       '@standard-schema/spec':
         specifier: 'catalog:'
         version: 1.1.0
@@ -1707,6 +1719,21 @@ packages:
   '@sec-ant/readable-stream@0.4.1':
     resolution: {integrity: sha512-831qok9r2t8AlxLko40y2ebgSDhenenCatLVeW/uBtnHPyhHOvG0C7TvfgecV+wHzIm5KUICgzmVpWS+IMEAeg==}
 
+  '@secretlint/core@13.0.5':
+    resolution: {integrity: sha512-GOT2sDxb3Gz1kLx1/1zfSbnzjQrmZ/8rB62jcz98uA2eavtMNkwgybsaW0toNIaGGCVvnfYJ35pwRR6UG8lJRQ==}
+    engines: {node: '>=22.0.0'}
+
+  '@secretlint/profiler@13.0.5':
+    resolution: {integrity: sha512-FAQIuD+sHgBqUl3zf4PN/zPW4aMDo5Ou9z3lMqL7vWSDvujhqwqolyLbdK/FKsmpdE8L87vfiabL2XvWqufZ7Q==}
+
+  '@secretlint/secretlint-rule-preset-recommend@13.0.5':
+    resolution: {integrity: sha512-dxOmTLf1w7I6rQEFPL8Hkdz6dR1FQXF0bzmTahH/Wyezy89TMPLL+8LbZ2YD8trkmYBnS37zUmOsZT6rMVftKQ==}
+    engines: {node: '>=22.0.0'}
+
+  '@secretlint/types@13.0.5':
+    resolution: {integrity: sha512-VUIv9iZ9pg2lcWARUmR+7psoi02QBjgUtQnQGPRmAq/3Yt1whB5y52xwP2v5zxfj7C8KGrM2fxf7GhbHCHJUgQ==}
+    engines: {node: '>=22.0.0'}
+
   '@shikijs/core@3.23.0':
     resolution: {integrity: sha512-NSWQz0riNb67xthdm5br6lAkvpDJRTgB36fxlo37ZzM2yq0PQFFzbd8psqC2XMPgCzo1fW6cVi18+ArJ44wqgA==}
 
@@ -2486,6 +2513,9 @@ packages:
   boolean@3.2.0:
     resolution: {integrity: sha512-d0II/GO9uf9lfUHH2BQsjxzRJZBdsjgsBiW4BvhWk/3qoKwQFjIDVN19PfX8F2D/r9PCMTtLWjYVCFrpeYUzsw==}
     deprecated: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
+
+  boundary@2.0.0:
+    resolution: {integrity: sha512-rJKn5ooC9u8q13IMCrW0RSp31pxBCHE3y9V/tp3TdWSLf8Em3p6Di4NBpfzbJge9YjjFEsD0RtFEjtvHL5VyEA==}
 
   brace-expansion@5.0.9:
     resolution: {integrity: sha512-ScQ4IuvIEF1TMlP7Zt+vjJ//9zlPb2SDcxWxM3bk8s6t6GGdJ7KO1dCcTidOPJKePW30LE/2cT7wCyPho9/Wxg==}
@@ -4366,6 +4396,9 @@ packages:
     resolution: {integrity: sha512-aulFJcD6YK8V1G7iRB5tigAP4TsHBZZrOV8pjV++zdUwmeV8uzbY7yn6h9MswN62adStNZFuCIx4haBnRuMDaw==}
     engines: {node: '>=18'}
 
+  structured-source@4.0.0:
+    resolution: {integrity: sha512-qGzRFNJDjFieQkl/sVOI2dUjHKRyL9dAJi2gCPGJLbJHBIkyOHxjuocpIEfbLioX+qSJpvbYdT49/YCdMznKxA==}
+
   style-to-js@1.1.21:
     resolution: {integrity: sha512-RjQetxJrrUJLQPHbLku6U/ocGtzyjbJMP9lCNK7Ag0CNh690nSH8woqWH9u16nMjYBAok+i7JO1NP2pOy8IsPQ==}
 
@@ -5632,6 +5665,21 @@ snapshots:
 
   '@sec-ant/readable-stream@0.4.1': {}
 
+  '@secretlint/core@13.0.5':
+    dependencies:
+      '@secretlint/profiler': 13.0.5
+      '@secretlint/types': 13.0.5
+      debug: 4.4.3
+      structured-source: 4.0.0
+    transitivePeerDependencies:
+      - supports-color
+
+  '@secretlint/profiler@13.0.5': {}
+
+  '@secretlint/secretlint-rule-preset-recommend@13.0.5': {}
+
+  '@secretlint/types@13.0.5': {}
+
   '@shikijs/core@3.23.0':
     dependencies:
       '@shikijs/types': 3.23.0
@@ -6343,6 +6391,8 @@ snapshots:
       - supports-color
 
   boolean@3.2.0: {}
+
+  boundary@2.0.0: {}
 
   brace-expansion@5.0.9:
     dependencies:
@@ -8575,6 +8625,10 @@ snapshots:
   strip-final-newline@2.0.0: {}
 
   strip-final-newline@4.0.0: {}
+
+  structured-source@4.0.0:
+    dependencies:
+      boundary: 2.0.0
 
   style-to-js@1.1.21:
     dependencies:
