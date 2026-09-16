@@ -408,4 +408,4 @@
   - `vp lint`와 `vp check`는 어느 폴더에서 실행해도 루트 `vite.config.ts`를 `-c`로 넘긴다. Oxlint는 `-c`를 받으면 하위 설정을 찾지 않는다. 그래서 `apps/agent/vite.config.ts`의 `lint` 블록은 적용되지 않는다. 하위 설정으로 읽혔다면 그 안의 `options.typeAware`가 에러를 냈을 것이다. 앱에만 걸 규칙은 루트 `lint.overrides`에서 `apps/agent/**`로 범위를 정해야 한다.
   - 컴포넌트와 테마는 `apps/agent/components.json`(`~/components/ui`, `app/app.css`)과 앱 `tsconfig.json`의 `paths`에서 찾는다. 루트에서 실행해도 찾으므로 `settings.shadcn`은 두지 않는다.
   - 루트에 `typescript`(catalog, 7.0.2)를 둔다. `@shadcn/lint`가 쓰는 `@typescript-eslint/parser`는 peer로 `typescript <6.1.0`을 요구한다. 루트에 TypeScript가 없으면 pnpm이 TypeScript 6을 설치하고, 루트 `vite-plus`도 그 버전으로 묶인다. 이 파서는 `oxc-parser`가 없을 때만 쓰이므로, TypeScript 7과 peer 범위가 맞지 않아도 동작에는 영향이 없다.
-  - README는 Oxlint 1.80 이상을 요구하지만, Vite+ 0.3.0에 든 Oxlint는 1.79.0이다. 여섯 규칙을 임시 설정으로 모두 켜서 1.79.0에서 플러그인이 로드되고 진단을 내는지 확인했다. Oxlint 1.82.0은 Vite+ 0.3.2에 들어 있다.
+  - README가 Oxlint 1.80 이상을 요구해서 Vite+를 0.3.2(Oxlint 1.82.0)로 올린다. 0.3.0의 Oxlint 1.79.0에서도 로드와 진단은 됐다. 0.3.2는 `pack.dts`의 `tsgo: true`를 `generator: "tsgo"`로 바꿨다(utils `vite.config.ts`).
