@@ -112,6 +112,14 @@ describe("SecretRedactor", () => {
     // About 4 ms on a laptop; the bound only catches a pathological regex.
     expect(performance.now() - started).toBeLessThan(500);
   });
+
+  test("leaves nothing in the performance buffer, however many texts it checks", async () => {
+    // secretlint's profiler would add about 60 marks per check, and nothing ever clears them.
+    const before = performance.getEntriesByType("mark").length;
+    for (let i = 0; i < 20; i++) await redact(`line ${i} GITHUB_TOKEN=${fake.github}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(performance.getEntriesByType("mark").length).toBe(before);
+  });
 });
 
 describe("mergeFindings", () => {

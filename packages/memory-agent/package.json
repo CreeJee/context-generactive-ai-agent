@@ -45,6 +45,7 @@
     "@napi-rs/keyring": "catalog:",
     "@openai/codex": "catalog:",
     "@secretlint/core": "catalog:",
+    "@secretlint/profiler": "catalog:",
     "@secretlint/secretlint-rule-preset-recommend": "catalog:",
     "@standard-schema/spec": "catalog:",
     "@tanstack/ai": "catalog:",

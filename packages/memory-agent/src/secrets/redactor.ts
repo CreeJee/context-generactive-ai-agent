@@ -1,5 +1,6 @@
 import type { AnyServerTool } from "@tanstack/ai";
 import { lintSource } from "@secretlint/core";
+import { secretLintProfiler } from "@secretlint/profiler";
 import { creator as recommendedRules } from "@secretlint/secretlint-rule-preset-recommend";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import type { Json } from "../codex/app-server.ts";
@@ -152,6 +153,11 @@ const JsonValue: Schema.Schema<Json> = Schema.Union(
 const decodeJson = Schema.decodeUnknownOption(JsonValue);
 
 const make = Effect.sync(() => {
+  // secretlint profiles every lint by default: each check leaves about 60 entries in the global
+  // performance buffer and in the profiler's own arrays, never cleared. Over a sweep or an import
+  // that is a leak, and Node warns (MaxPerformanceEntryBufferExceededWarning). Nothing reads them.
+  secretLintProfiler.setEnabled(false);
+
   const redactText = (text: string) =>
     Effect.promise(async (): Promise<Redaction> => {
       if (text.length === 0) return { text, hidden: 0 };

@@ -48,6 +48,7 @@ catalog:
   sharp: 0.34.5
   "@types/cross-spawn": 6.0.6
   "@secretlint/core": 13.0.5
+  "@secretlint/profiler": 13.0.5
   "@secretlint/secretlint-rule-preset-recommend": 13.0.5
   "@shadcn/lint": ^0.1.0
 overrides:
