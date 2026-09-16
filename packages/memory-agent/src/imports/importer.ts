@@ -1,7 +1,7 @@
 import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { relative, isAbsolute, sep } from "node:path";
-import { Context, Effect, Layer, Schedule, Schema } from "effect";
+import { Cause, Context, Effect, Layer, Schedule, Schema } from "effect";
 import { GlobalConfig } from "../config/global-config.ts";
 import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
@@ -11,7 +11,7 @@ import { Projects } from "../projects/projects.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { BulkNodes } from "./bulk.ts";
-import type { ImportSourceName, TranscriptItem, TranscriptStart } from "./items.ts";
+import { ImportSourceName, type TranscriptItem, type TranscriptStart } from "./items.ts";
 import { readLinesFrom } from "./lines.ts";
 import { findTranscripts, importSources, type Transcript } from "./sources.ts";
 
@@ -19,6 +19,10 @@ import { findTranscripts, importSources, type Transcript } from "./sources.ts";
 const titleLength = 60;
 /** Transcripts only grow, and a stat of every file is cheap, so looking often costs nothing. */
 const pollEvery = "5 minutes";
+/** How much of a failure settings shows; the rest adds nothing to "this file could not be read". */
+const failureLength = 300;
+/** How many unreadable transcripts settings lists by name. */
+const listedFailures = 20;
 
 /**
  * A working directory whose transcripts could not be migrated. Folders are registered as projects
@@ -31,6 +35,13 @@ export interface UnplacedFolder {
   readonly transcripts: number;
 }
 
+/** A transcript whose latest pass failed. It is tried again on the next pass. */
+export interface ImportFailure {
+  readonly source: ImportSourceName;
+  readonly path: string;
+  readonly reason: string;
+}
+
 export interface ImportOverview {
   readonly enabled: boolean;
   readonly interpret: boolean;
@@ -40,9 +51,13 @@ export interface ImportOverview {
     readonly transcripts: number;
     readonly migrated: number;
     readonly nodes: number;
+    /** Transcripts whose latest pass failed. */
+    readonly failed: number;
   }[];
   /** Folders whose transcripts could not be placed, with why. */
   readonly unplaced: readonly UnplacedFolder[];
+  /** Some of the transcripts that could not be read, with why. */
+  readonly failures: readonly ImportFailure[];
   /** Nodes still waiting for the embedding backlog; migrated ones join the queue like any other. */
   readonly unindexed: number;
 }
@@ -53,8 +68,18 @@ const decodeCursor = Schema.decodeUnknownSync(
 const decodeSessionId = Schema.decodeUnknownSync(Schema.Struct({ session_id: Schema.String }));
 const decodeCount = Schema.decodeUnknownSync(Schema.Struct({ count: Schema.Number }));
 const decodeSourceTotals = Schema.decodeUnknownSync(
-  Schema.Struct({ migrated: Schema.Number, nodes: Schema.Number }),
+  Schema.Struct({ migrated: Schema.Number, nodes: Schema.Number, failed: Schema.Number }),
 );
+const decodeFailure = Schema.decodeUnknownSync(
+  Schema.Struct({ source: ImportSourceName, path: Schema.String, reason: Schema.String }),
+);
+
+/** What settings says went wrong: the error's message, never the transcript's content. */
+const failureOf = (cause: Cause.Cause<unknown>) => {
+  const error = Cause.squash(cause);
+  const reason = error instanceof Error ? error.message || error.name : String(error);
+  return reason.slice(0, failureLength);
+};
 const decodeSkipped = Schema.decodeUnknownSync(
   Schema.Struct({ cwd: Schema.String, reason: Schema.String, transcripts: Schema.Number }),
 );
@@ -106,13 +131,19 @@ const make = (watching: boolean, home: string) =>
       "SELECT byte_offset, size, mtime_ms FROM import_cursors WHERE source = ? AND path = ?",
     );
     const saveCursor = sqlite.prepare(`
-      INSERT INTO import_cursors (source, path, external_id, cwd, byte_offset, size, mtime_ms, imported, skipped, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO import_cursors (source, path, external_id, cwd, byte_offset, size, mtime_ms, imported, skipped, failure, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
       ON CONFLICT (source, path) DO UPDATE SET external_id = excluded.external_id,
         cwd = coalesce(excluded.cwd, import_cursors.cwd), byte_offset = excluded.byte_offset,
         size = excluded.size, mtime_ms = excluded.mtime_ms,
         imported = import_cursors.imported + excluded.imported, skipped = excluded.skipped,
-        updated_at = excluded.updated_at`);
+        failure = NULL, updated_at = excluded.updated_at`);
+    // Keeps how far the transcript was read and what it wrote; size -1 makes the next pass retry it.
+    const saveFailure = sqlite.prepare(`
+      INSERT INTO import_cursors (source, path, external_id, size, mtime_ms, failure, updated_at)
+      VALUES (?, ?, ?, -1, 0, ?, ?)
+      ON CONFLICT (source, path) DO UPDATE SET size = -1, skipped = NULL,
+        failure = excluded.failure, updated_at = excluded.updated_at`);
     const readMapping = sqlite.prepare(
       "SELECT session_id FROM imported_sessions WHERE source = ? AND external_id = ?",
     );
@@ -120,12 +151,31 @@ const make = (watching: boolean, home: string) =>
       "INSERT INTO imported_sessions (source, external_id, session_id) VALUES (?, ?, ?)",
     );
     const sourceTotals = sqlite.prepare(`
-      SELECT count(*) AS migrated, coalesce(sum(imported), 0) AS nodes FROM import_cursors
-      WHERE source = ? AND skipped IS NULL`);
+      SELECT
+        coalesce(sum(skipped IS NULL AND failure IS NULL), 0) AS migrated,
+        coalesce(sum(CASE WHEN skipped IS NULL AND failure IS NULL THEN imported END), 0) AS nodes,
+        coalesce(sum(failure IS NOT NULL), 0) AS failed
+      FROM import_cursors WHERE source = ?`);
     const skippedFolders = sqlite.prepare(`
       SELECT cwd, skipped AS reason, count(*) AS transcripts FROM import_cursors
       WHERE skipped IS NOT NULL AND cwd IS NOT NULL
       GROUP BY cwd, skipped ORDER BY transcripts DESC, cwd`);
+    const failedTranscripts = sqlite.prepare(`
+      SELECT source, path, failure AS reason FROM import_cursors
+      WHERE failure IS NOT NULL ORDER BY source, path LIMIT ?`);
+
+    /** Records why a transcript failed, so the pass can go on with the rest. */
+    const recordFailure = (transcript: Transcript, cause: Cause.Cause<unknown>) =>
+      Effect.sync(() => {
+        saveFailure.run(
+          transcript.source,
+          transcript.path,
+          transcript.externalId,
+          failureOf(cause),
+          new Date().toISOString(),
+        );
+        return 0;
+      });
 
     /**
      * The project a recorded working directory belongs to, registering the folder when none does.
@@ -264,7 +314,10 @@ const make = (watching: boolean, home: string) =>
       const interpret = settings.importsInterpret ?? true;
       let written = 0;
       for (const transcript of transcripts())
-        written += yield* migrate(transcript, interpret).pipe(Effect.orElseSucceed(() => 0));
+        // A file that cannot be read, or a line that cannot be written, fails that transcript alone.
+        written += yield* migrate(transcript, interpret).pipe(
+          Effect.catchAllCause((cause) => recordFailure(transcript, cause)),
+        );
       return written;
     }).pipe(onePassAtATime.withPermits(1));
 
@@ -300,9 +353,11 @@ const make = (watching: boolean, home: string) =>
             transcripts: found.filter((entry) => entry.source === source.name).length,
             migrated: totals.migrated,
             nodes: totals.nodes,
+            failed: totals.failed,
           };
         }),
         unplaced: skippedFolders.all().map((row) => decodeSkipped(row)),
+        failures: failedTranscripts.all(listedFailures).map((row) => decodeFailure(row)),
         unindexed,
       } satisfies ImportOverview;
     });

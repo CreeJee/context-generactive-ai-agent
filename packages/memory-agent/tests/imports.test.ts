@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Effect, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
@@ -308,6 +308,43 @@ describe("migrating other agents' transcripts", () => {
       { cwd: "/gone/for/good", reason: "not_found", transcripts: 1 },
     ]);
   });
+
+  // chmod cannot take read access away from root, nor on Windows.
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "reports a transcript it cannot read, reads the others, and tries it again next time",
+    async () => {
+      const { runtime, project, home } = await testRuntime();
+      const unreadable = claudePath(home, "cc-1.jsonl");
+      writeFileSync(unreadable, serialize(claudeLines(project.root)));
+      writeFileSync(codexPath(home), serialize(codexLines(project.root)));
+      chmodSync(unreadable, 0o000);
+      const importer = await runtime.runPromise(Importer);
+      try {
+        // The Claude Code transcript comes first; failing it must not stop the Codex one.
+        expect(await runtime.runPromise(importer.runOnce)).toBe(1);
+        const overview = await runtime.runPromise(importer.overview);
+        expect(
+          overview.sources.map(({ name, migrated, failed }) => [name, migrated, failed]),
+        ).toEqual([
+          ["claude-code", 0, 1],
+          ["codex", 1, 0],
+        ]);
+        expect(overview.failures).toEqual([
+          { source: "claude-code", path: unreadable, reason: expect.stringContaining("EACCES") },
+        ]);
+      } finally {
+        chmodSync(unreadable, 0o600);
+      }
+
+      expect(await runtime.runPromise(importer.runOnce)).toBe(4);
+      const overview = await runtime.runPromise(importer.overview);
+      expect(overview.failures).toEqual([]);
+      expect(overview.sources.map(({ migrated, failed }) => [migrated, failed])).toEqual([
+        [1, 0],
+        [1, 0],
+      ]);
+    },
+  );
 
   test("a hidden project still owns its folder's transcripts", async () => {
     const { runtime, project, home } = await testRuntime();

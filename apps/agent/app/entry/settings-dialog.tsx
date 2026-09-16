@@ -268,7 +268,7 @@ function ImportSettings() {
               <ItemTitle>{sourceNames[source.name]}</ItemTitle>
               <ItemDescription>
                 기록 {source.transcripts}개 중 {source.migrated}개를 읽어 {source.nodes}개를 기억에
-                넣었어요.
+                넣었어요.{source.failed > 0 && ` ${source.failed}개는 읽지 못했어요.`}
               </ItemDescription>
               <ItemDescription>
                 <code>{source.root}</code>
@@ -293,6 +293,21 @@ function ImportSettings() {
               {overview.unplaced.map((folder) => (
                 <li key={`${folder.cwd}:${folder.reason}`}>
                   {folder.cwd} · 대화 {folder.transcripts}개 · {unplacedReason(folder.reason)}
+                </li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {overview.failures.length > 0 && (
+        <Alert variant="destructive">
+          <AlertDescription>
+            <div className="mb-1">아래 기록은 읽지 못했어요. 다음에 읽을 때 다시 시도해요.</div>
+            <ul className="font-mono text-xs">
+              {overview.failures.map((failure) => (
+                <li key={`${failure.source}:${failure.path}`}>
+                  {failure.path} · {failure.reason}
                 </li>
               ))}
             </ul>

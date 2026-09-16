@@ -350,4 +350,10 @@ export const migrations: readonly string[] = [
     updated_at TEXT NOT NULL
   );
   `,
+  `
+  -- Why a transcript could not be read on its latest pass (an unreadable file, a line that could
+  -- not be written), for settings to show. One such transcript no longer stops the others. It is
+  -- tried again on every pass: its size is stored as -1, so it never looks unchanged.
+  ALTER TABLE import_cursors ADD COLUMN failure TEXT;
+  `,
 ];
