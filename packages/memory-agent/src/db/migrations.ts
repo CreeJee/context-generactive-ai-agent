@@ -270,4 +270,44 @@ export const migrations: readonly string[] = [
   -- An archived conversation leaves the session list but keeps its messages and memory.
   ALTER TABLE sessions ADD COLUMN archived_at TEXT;
   `,
+  `
+  -- Conversations migrated from another coding agent's local history (Claude Code, Codex CLI).
+  -- The transcripts stay where that tool wrote them; this side keeps nodes with the original times.
+
+  -- Which tool a conversation came from; NULL for one held in this app.
+  ALTER TABLE sessions ADD COLUMN imported_from TEXT;
+
+  -- One transcript becomes one session, so a rescan never starts a second one for it.
+  CREATE TABLE imported_sessions (
+    source TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    PRIMARY KEY (source, external_id)
+  );
+
+  -- Lines that already became nodes. Nodes are immutable evidence, so a duplicate is contamination;
+  -- this is what makes rereading a transcript add only what is new.
+  CREATE TABLE imported_nodes (
+    source TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    node_id TEXT NOT NULL REFERENCES nodes(id),
+    PRIMARY KEY (source, external_id)
+  );
+
+  -- How far each transcript was read. A file whose size or mtime disagrees with the cursor was
+  -- truncated or rewritten: it is read from the start again and imported_nodes drops the repeats.
+  -- skipped says why a file produced nothing, e.g. 'no_project'. Times are ISO strings.
+  CREATE TABLE import_cursors (
+    source TEXT NOT NULL,
+    path TEXT NOT NULL,
+    external_id TEXT,
+    byte_offset INTEGER NOT NULL DEFAULT 0 CHECK (byte_offset >= 0),
+    size INTEGER NOT NULL,
+    mtime_ms INTEGER NOT NULL,
+    imported INTEGER NOT NULL DEFAULT 0 CHECK (imported >= 0),
+    skipped TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (source, path)
+  );
+  `,
 ];

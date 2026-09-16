@@ -29,6 +29,11 @@ export const NodeDetail = Schema.Struct({
   ),
   /** assistant: said by an external ACP agent in a direct conversation, not the app's model. */
   externalAgent: Schema.optional(Schema.String),
+  /**
+   * Migrated from another coding agent's local transcript ('claude-code', 'codex'), not said here.
+   * Its approvals and permissions were that tool's, and do not carry over.
+   */
+  importedFrom: Schema.optional(Schema.String),
 });
 export type NodeDetail = typeof NodeDetail.Type;
 
