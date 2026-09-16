@@ -1,8 +1,9 @@
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Effect, Schema } from "effect";
-import { describe, expect, test } from "vite-plus/test";
+import { describe, expect, onTestFinished, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { CodexAppServer } from "../src/codex/app-server.ts";
 import { CodexModels } from "../src/codex/models.ts";
@@ -117,6 +118,75 @@ describe("Skills", () => {
       expect(skill.description.length).toBeGreaterThan(0);
       expect(skill.description.length).toBeLessThanOrEqual(maxDescriptionCharacters);
     }
+  });
+
+  test("each run turns off the skills codex found on its own, including ones added since", async () => {
+    // The folder codex reads skills from on its own (the user's ~/.agents/skills).
+    const codexSees = mkdtempSync(join(tmpdir(), "codex-sees-"));
+    onTestFinished(() => rmSync(codexSees, { recursive: true, force: true }));
+    const { runtime, session } = await testRuntime({
+      codex: CodexAppServer.withCommand({
+        executable: process.execPath,
+        args: [fakeServer, "--signed-in", `--skills=${codexSees}`],
+      }),
+    });
+    writeSkill(codexSees, "figma", "name: figma\ndescription: Figma via MCP.");
+    await runtime.runPromise(Effect.flatMap(CodexModels, (models) => models.select("fast-1")));
+
+    const Writes = Schema.Struct({
+      log: Schema.Array(
+        Schema.Struct({
+          method: Schema.String,
+          params: Schema.optional(
+            Schema.Struct({
+              path: Schema.optional(Schema.String),
+              enabled: Schema.optional(Schema.Boolean),
+            }),
+          ),
+        }),
+      ),
+    });
+    const run = async (runId: string) => {
+      await runtime.runPromise(
+        Effect.flatMap(AgentChat, (agent) =>
+          Effect.promise(async () => {
+            const response = await Effect.runPromise(
+              agent.handle(
+                new Request("http://127.0.0.1/api/chat", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    threadId: session.id,
+                    runId,
+                    messages: [{ id: runId, role: "user", content: "hello" }],
+                    tools: [],
+                    context: [],
+                  }),
+                }),
+                session.id,
+              ),
+            );
+            await response.text();
+          }),
+        ),
+      );
+      const { log } = await runtime.runPromise(
+        Effect.flatMap(CodexAppServer, (codex) => codex.request("test/log", {}, Writes)),
+      );
+      return log
+        .filter((entry) => entry.method === "skills/config/write")
+        .map((entry) => entry.params);
+    };
+
+    expect(await run("run-1")).toEqual([
+      { path: join(codexSees, "figma", "SKILL.md"), enabled: false },
+    ]);
+    // Already off: nothing is written again. A skill added while the app runs is off by the next run.
+    writeSkill(codexSees, "orca", "name: orca\ndescription: Orca CLI.");
+    expect(await run("run-2")).toEqual([
+      { path: join(codexSees, "figma", "SKILL.md"), enabled: false },
+      { path: join(codexSees, "orca", "SKILL.md"), enabled: false },
+    ]);
   });
 
   test("a chat run lists skills and offers read_skill only when there are skills", async () => {

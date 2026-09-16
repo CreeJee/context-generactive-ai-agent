@@ -350,6 +350,9 @@ const make = (command: CodexCommand | null) =>
     );
 
     return {
+      /** CODEX_HOME, which is also the folder codex runs in and so the folder its threads see. */
+      home: codexHome,
+
       request: <A, I>(method: string, params: Json | undefined, schema: Schema.Schema<A, I>) =>
         Effect.gen(function* () {
           const conn = yield* connect;

@@ -9,6 +9,7 @@ import { CodexAccount } from "./codex/account.ts";
 import { CodexAppServer } from "./codex/app-server.ts";
 import { CodexChat } from "./codex/chat.ts";
 import { CodexModels } from "./codex/models.ts";
+import { CodexSkills } from "./codex/skills.ts";
 import { GlobalConfig } from "./config/global-config.ts";
 import { SecretStore } from "./config/secrets.ts";
 import { StorageRoot } from "./config/storage-root.ts";
@@ -113,6 +114,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     CodexAccount.layer,
     CodexModels.layer,
     CodexChat.layer,
+    CodexSkills.layer,
     ChatState.layer,
     Kagi.layer({ baseUrl: options.kagiBaseUrl }),
     McpServers.layer,

@@ -195,7 +195,15 @@
 - **codex 번들 skill은 끈다**(2026-09-16, `skills.bundled.enabled = false`). codex는 imagegen·openai-docs·plugin-creator·review-agent·skill-creator·skill-installer를 CODEX_HOME에 풀어 모델에 보여 주는데, 모두 codex 자신의 도구(shell_tool·web_search·plugins·multi_agent·내장 이미지 도구)를 전제로 쓰였고 이 앱은 그것들을 끄고 `dynamicTools`로 바꿨다. 그래서 모델이 없는 도구를 쓰라는 지침을 읽었다: 이미지를 요청받으면 imagegen을 따라 `scripts/image_gen.py` 폴백에 이르러 사용자에게 `OPENAI_API_KEY`를 설정하라고 했다.
   - 플랜별로 나누지 않고 전부 끈다. 플랜에 따라 달라지는 건 imagegen 하나뿐이고(무료 플랜은 내장 이미지 도구가 없고, 유료 플랜은 있다), 나머지 다섯은 이 앱 설정 때문에 어느 플랜에서도 쓸 수 없다.
   - 파일을 지우지 않고 설정 키로 끈다. 파일 삭제는 codex 레이아웃에 묶이고, codex가 다시 풀 수 있다.
-  - 키 이름은 실제 codex로 확인한다(`tests/codex-config.test.ts`). 다른 codex 테스트는 가짜 app-server라 어떤 `-c` 줄이든 받아들인다. 처음 넣은 `skills.bundled = false`는 codex가 설정 오류로 거절해 앱이 기동하지 않는 키였고, 가짜 서버 테스트는 모두 통과했다.
+  - **codex가 스스로 찾은 스킬도 끈다**(2026-09-16). codex는 사용자의 `~/.agents/skills`(와 작업 폴더의 `.agents/skills`)를 읽어 모델에 알려 준다. 이 앱도 같은 폴더를 읽어 `read_skill`로 주므로, 모델은 같은 스킬을 두 번 들었고 그중 하나에는 "지침일 뿐 권한이 아니다"가 붙지 않았다. 스킬은 이 앱이 주인이므로 codex 쪽을 끈다.
+    - 이름을 맞추는 문제가 아니다. 이름이 겹칠 때 누가 이기는지는 이미 `Skills`가 정한다(기본 → 공통 → 프로젝트).
+    - 대화마다 `skills/list`로 codex가 보는 스킬을 묻고, 켜져 있는 것을 `skills/config/write { path, enabled: false }`로 끈다. 이 앱이 찾은 경로를 넘기지 않고 codex에게 물어서, 경로 표기가 달라도, 이 앱이 읽지 않는 폴더여도 새지 않는다.
+    - 끄는 단위는 `SKILL.md` 경로다. 폴더 경로로는 아무것도 꺼지지 않고, 이름으로는 같은 이름의 두 스킬을 구분하지 못한다(실측).
+    - 실행 중에 적용되어 codex를 다시 띄우지 않아도 된다. 앱이 도는 동안 추가한 스킬도 다음 대화에서 꺼진다. 기동 설정(`-c skills.config=…`)으로 넘기면 재시작 전까지 새 스킬이 두 번 보였을 것이다.
+    - 설정은 앱 전용 `CODEX_HOME/config.toml`에 쌓이고 사용자의 `~/.codex`는 쓰지 않는다. 지운 스킬의 경로가 남아도 영향은 없다. 실패해도 대화는 막지 않는다(스킬이 두 번 보일 뿐이다).
+    - 지금 겹치는 것은 사용자 스킬뿐이다. codex는 앱 전용 CODEX_HOME에서 돌고 스레드에 작업 폴더를 넘기지 않아서 프로젝트 스킬은 찾지 않는다. Linux에서는 codex의 HOME이 CODEX_HOME이라 사용자 스킬도 찾지 않는다.
+    - 검토하고 쓰지 않은 것: `thread/start.selectedCapabilityRoots`는 `id`가 필요한 실험 API이고 스킬보다 플러그인 루트 쪽이었다.
+  - 키 이름과 요청 모양은 실제 codex로 확인한다(`tests/codex-config.test.ts`). 다른 codex 테스트는 가짜 app-server라 어떤 `-c` 줄이든 받아들인다. 처음 넣은 `skills.bundled = false`는 codex가 설정 오류로 거절해 앱이 기동하지 않는 키였고, 가짜 서버 테스트는 모두 통과했다.
 
 ## 서브에이전트 (2026-09-15)
 

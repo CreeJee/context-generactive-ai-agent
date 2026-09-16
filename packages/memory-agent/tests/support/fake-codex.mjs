@@ -1,6 +1,7 @@
 // Minimal stand-in for `codex app-server --listen stdio://`: newline-delimited JSON-RPC
 // without the "jsonrpc" field, like codex. Only what the tests exercise.
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 
 // Options arrive as arguments: the client passes codex only a fixed, minimal environment.
@@ -8,6 +9,20 @@ const completeLogin = process.argv.includes("--complete-login");
 const authUrl =
   process.argv.find((arg) => arg.startsWith("--auth-url="))?.slice("--auth-url=".length) ??
   "https://auth.openai.com/oauth/authorize?client_id=x";
+/** Where the real codex would find the user's skills (`~/.agents/skills`); none unless given. */
+const skillsRoot = process.argv
+  .find((arg) => arg.startsWith("--skills="))
+  ?.slice("--skills=".length);
+const disabledSkills = new Set();
+
+/** Every `<skillsRoot>/<name>/SKILL.md`, as codex's skills/list reports them. */
+function listSkills() {
+  if (!skillsRoot || !existsSync(skillsRoot)) return [];
+  return readdirSync(skillsRoot)
+    .map((name) => ({ name, path: join(skillsRoot, name, "SKILL.md") }))
+    .filter((skill) => existsSync(skill.path))
+    .map((skill) => ({ ...skill, scope: "user", enabled: !disabledSkills.has(skill.path) }));
+}
 
 let signedIn = process.argv.includes("--signed-in");
 let nextServerRequest = 1000;
@@ -375,6 +390,15 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       });
     case "thread/unsubscribe":
       return reply(id, {});
+    case "skills/list":
+      return reply(id, {
+        data: (params?.cwds ?? []).map((cwd) => ({ cwd, skills: listSkills() })),
+      });
+    case "skills/config/write":
+      // Only by path, like the real codex: a folder or a name the list does not report changes nothing.
+      if (params.enabled === false) disabledSkills.add(params.path);
+      else disabledSkills.delete(params.path);
+      return reply(id, { effectiveEnabled: !disabledSkills.has(params.path) });
     case "test/log":
       return reply(id, { log });
     case "test/env":

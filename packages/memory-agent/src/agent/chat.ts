@@ -31,6 +31,7 @@ import { DrawingPreviews } from "../attachments/previews.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { KagiTools, kagiInstructions } from "../tools/kagi.ts";
 import { SkillTools } from "../tools/skills.ts";
+import { CodexSkills } from "../codex/skills.ts";
 import { DelegateTools } from "../tools/delegate.ts";
 import { parallelReads } from "../tools/parallel-reads.ts";
 import { Subagents, subagentInstructions } from "../subagents/subagents.ts";
@@ -233,6 +234,7 @@ const make = Effect.gen(function* () {
   const kagiTools = yield* KagiTools;
   const mcpServers = yield* McpServers;
   const skillTools = yield* SkillTools;
+  const codexSkills = yield* CodexSkills;
   const delegateTools = yield* DelegateTools;
   const subagents = yield* Subagents;
   const externalAgents = yield* ExternalAgents;
@@ -461,6 +463,10 @@ const make = Effect.gen(function* () {
         const mcpTools = yield* mcpServers.tools(project);
         // Skills from ~/.agents/skills and the project's .agents/skills: guidance, not permission.
         const skills = skillTools.forProject(project);
+        // codex reads the same folders and would list them to the model a second time, without that
+        // rule. Checked on every run, so a skill added since is off too. A failure only means the
+        // model may hear of a skill twice; it does not hold up the run.
+        yield* Effect.ignore(codexSkills.silenceOwnSkills);
 
         // Not tied to the request: a reload or a closed tab must not stop the run (R10). Only an
         // explicit cancel aborts it.
