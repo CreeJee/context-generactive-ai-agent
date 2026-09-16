@@ -2,8 +2,11 @@ import type {
   Attachment,
   AuthState,
   CodexModel,
+  EmbeddingChoice,
+  EmbeddingOverview,
   ExternalAgentsOverview,
   ExternalAgentView,
+  GpuState,
   ImportActivity,
   ImportOverview,
   KagiStatus,
@@ -36,8 +39,11 @@ export type {
   AuthState,
   CancelResult,
   CodexModel,
+  EmbeddingChoice,
+  EmbeddingOverview,
   ExternalAgentsOverview,
   ExternalAgentView,
+  GpuState,
   ImportActivity,
   ImportOverview,
   KagiStatus,
@@ -185,6 +191,10 @@ export const api = {
   importAction: (
     command: { action: "run" | "enable" | "disable" } | { action: "interpret"; interpret: boolean },
   ) => call<ImportOverview>("POST", "/api/settings/imports", command),
+
+  embedding: () => call<EmbeddingOverview>("GET", "/api/settings/embedding"),
+  embeddingAction: (command: { action: "choose"; choice: EmbeddingChoice } | { action: "check" }) =>
+    call<EmbeddingOverview>("POST", "/api/settings/embedding", command),
 
   mcpServers: (projectId: string) =>
     call<McpOverview>("GET", `/api/projects/${encodeURIComponent(projectId)}/mcp`),

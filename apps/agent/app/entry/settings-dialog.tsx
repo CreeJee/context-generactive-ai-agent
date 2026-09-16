@@ -40,15 +40,25 @@ import {
   ItemMedia,
   ItemTitle,
 } from "~/components/ui/item";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "~/components/ui/select";
 import { Spinner } from "~/components/ui/spinner";
 import { Switch } from "~/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
-import { timeOfDay } from "~/lib/dates";
+import { dayAndTime, timeOfDay } from "~/lib/dates";
 import {
   ApiError,
   api,
   type ExternalAgentView,
+  type EmbeddingChoice,
+  type EmbeddingOverview,
   type ExternalAgentsOverview,
+  type GpuState,
   type ImportActivity,
   type ImportOverview,
   type KagiStatus,
@@ -412,6 +422,177 @@ function ImportSettings() {
           {busy || reading ? <Spinner /> : <RefreshCwIcon />} {reading ? "읽는 중" : "읽기"}
         </Button>
       </Field>
+
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+    </FieldGroup>
+  );
+}
+
+const embeddingChoices = [
+  { value: "auto", label: "자동" },
+  { value: "cpu", label: "CPU (메모리 적게)" },
+  { value: "gpu", label: "GPU (CPU 적게)" },
+] as const satisfies ReadonlyArray<{ value: EmbeddingChoice; label: string }>;
+
+const modeNames = { cpu: "CPU", gpu: "GPU" } as const;
+
+/** How often the tab asks again while WebGPU is checked or nodes wait to be embedded. */
+const refreshEmbeddingMs = 3_000;
+
+const gibibytes = (bytes: number) => Math.round(bytes / 1024 ** 3);
+
+/** What the model runs on in this process, in words. */
+function runningText(running: EmbeddingOverview["running"]) {
+  switch (running.kind) {
+    case "other":
+      return null;
+    case "local":
+      if (running.device === null)
+        return `${modeNames[running.mode]} 모드로 시작했어요. 모델은 처음 임베딩할 때 불러와요.`;
+      switch (running.mode) {
+        case "cpu":
+          return "지금 CPU에서 경량(양자화) 모델을 돌리고 있어요.";
+        case "gpu":
+          return running.device === "webgpu"
+            ? "지금 GPU(WebGPU)에서 원본 모델을 돌리고 있어요."
+            : "GPU 모드지만 WebGPU를 쓸 수 없어 CPU에서 원본 모델을 돌리고 있어요. 벡터는 같고 더 느려요.";
+      }
+  }
+}
+
+function gpuText(gpu: GpuState) {
+  switch (gpu.status) {
+    case "unchecked":
+      return "아직 확인하지 않았어요.";
+    case "checking":
+      return "확인하는 중이에요. 처음이면 원본 모델(약 390MB)을 내려받아요.";
+    case "available":
+      return `쓸 수 있어요(${dayAndTime(gpu.checkedAt)} 확인).`;
+    case "unavailable":
+      return `쓸 수 없어요(${dayAndTime(gpu.checkedAt)} 확인): ${gpu.reason}`;
+  }
+}
+
+/** How the embedding model runs: on the CPU with little memory, or on the GPU with little CPU. */
+function EmbeddingSettings() {
+  const [overview, setOverview] = useState<EmbeddingOverview | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void api
+      .embedding()
+      .then(setOverview)
+      .catch((failure: Error) => setError(errorMessage(failure)));
+  }, []);
+
+  const checking = overview?.gpu.status === "checking";
+  const indexing = (overview?.unindexed ?? 0) > 0;
+  useEffect(() => {
+    if (!checking && !indexing) return;
+    const timer = setInterval(
+      () =>
+        void api
+          .embedding()
+          .then(setOverview)
+          .catch(() => undefined),
+      refreshEmbeddingMs,
+    );
+    return () => clearInterval(timer);
+  }, [checking, indexing]);
+
+  const apply = async (
+    command: { action: "choose"; choice: EmbeddingChoice } | { action: "check" },
+  ) => {
+    setBusy(true);
+    setError(null);
+    try {
+      setOverview(await api.embeddingAction(command));
+    } catch (failure) {
+      setError(errorMessage(failure instanceof Error ? failure : new Error(String(failure))));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!overview) return error ? <FieldDescription>{error}</FieldDescription> : <Spinner />;
+
+  const running = runningText(overview.running);
+  const restartNeeded =
+    overview.running.kind === "local" && overview.running.mode !== overview.next;
+
+  return (
+    <FieldGroup>
+      <FieldTitle>임베딩 실행</FieldTitle>
+      <FieldDescription>
+        기억을 뜻으로 찾기 위한 벡터를 어디서 만들지 정해요. CPU는 메모리를 적게 쓰는 대신 만드는
+        동안 CPU 코어를 여럿 써요. GPU는 CPU를 훨씬 덜 쓰고 원본 모델 그대로의 벡터를 만들지만
+        메모리를 1–1.6GB 더 써요.
+      </FieldDescription>
+
+      <Field>
+        <FieldLabel htmlFor="embedding-device">실행 방식</FieldLabel>
+        <Select
+          value={overview.choice}
+          items={embeddingChoices}
+          disabled={busy}
+          onValueChange={(value) => {
+            const choice = embeddingChoices.find((option) => option.value === value);
+            if (choice) void apply({ action: "choose", choice: choice.value });
+          }}
+        >
+          <SelectTrigger id="embedding-device" className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {embeddingChoices.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <FieldDescription>
+          자동은 메모리가 {gibibytes(overview.gpuMemoryThreshold)}GB 이상이고 WebGPU가 되면 GPU를
+          써요. 이 기기의 메모리는 {gibibytes(overview.memoryBytes)}GB예요.
+        </FieldDescription>
+      </Field>
+
+      {running && <FieldDescription>{running}</FieldDescription>}
+      {restartNeeded && (
+        <Alert>
+          <AlertDescription>
+            앱을 다시 시작하면 {modeNames[overview.next]} 모드로 돌아가요. 그 모드로 만든 벡터가
+            없으면 처음부터 다시 만들고, 그동안에도 글자·형태소 검색은 돼요.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <Field orientation="horizontal">
+        <FieldContent>
+          <FieldTitle>WebGPU</FieldTitle>
+          <FieldDescription>{gpuText(overview.gpu)}</FieldDescription>
+        </FieldContent>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={busy || checking}
+          onClick={() => void apply({ action: "check" })}
+        >
+          {busy || checking ? <Spinner /> : <RefreshCwIcon />} 다시 확인
+        </Button>
+      </Field>
+
+      {indexing && (
+        <FieldDescription>
+          아직 <AnimatedNumber value={overview.unindexed} />
+          개를 임베딩하지 않았어요. 최근 대화부터 채워요.
+        </FieldDescription>
+      )}
 
       {error && (
         <Alert variant="destructive">
@@ -803,6 +984,7 @@ export function SettingsDialog({
             <TabsTrigger value="skills">Skills</TabsTrigger>
             <TabsTrigger value="agents">에이전트</TabsTrigger>
             <TabsTrigger value="imports">가져오기</TabsTrigger>
+            <TabsTrigger value="memory">기억</TabsTrigger>
           </TabsList>
           <TabsContent value="web" className="mt-3">
             <KagiSettings />
@@ -827,6 +1009,12 @@ export function SettingsDialog({
             className="mt-3 max-h-[60vh] overflow-x-hidden overflow-y-auto"
           >
             <ImportSettings />
+          </TabsContent>
+          <TabsContent
+            value="memory"
+            className="mt-3 max-h-[60vh] overflow-x-hidden overflow-y-auto"
+          >
+            <EmbeddingSettings />
           </TabsContent>
         </Tabs>
       </DialogContent>
