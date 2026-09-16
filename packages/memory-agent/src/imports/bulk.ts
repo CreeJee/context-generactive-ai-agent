@@ -88,7 +88,7 @@ const make = Effect.gen(function* () {
         kind: NodeKind,
         text: string,
         at: string,
-        externalId: string,
+        externalId: string | null,
         detail: NodeDetail,
       ) => {
         const id = randomUUID();
@@ -107,9 +107,24 @@ const make = Effect.gen(function* () {
         );
         if (previousId) link(previousId, id, "next", at);
         previousId = id;
-        if (migration.interpret && interpretedKinds.has(kind)) insertJob.run(id, at);
-        markImported.run(source, externalId, id);
+        // An empty answer is not a statement; interpreting it would cost a model call for nothing.
+        if (migration.interpret && interpretedKinds.has(kind) && text.length > 0)
+          insertJob.run(id, at);
+        if (externalId !== null) markImported.run(source, externalId, id);
         written += 1;
+        return id;
+      };
+
+      /**
+       * The assistant turn a tool call belongs to. When the assistant called a tool without saying
+       * anything, there is no statement to hang the call on, so an empty one stands in — the same
+       * node the live recorder writes in that case, so both look alike to `trace_evidence`.
+       */
+      const assistantFor = (at: string) => {
+        if (assistantNodeId) return assistantNodeId;
+        const id = append("assistant", "", at, null, {});
+        if (userNodeId) link(id, userNodeId, "reply", at);
+        assistantNodeId = id;
         return id;
       };
 
@@ -132,11 +147,12 @@ const make = Effect.gen(function* () {
             continue;
           }
           case "tool_call": {
+            const calledBy = assistantFor(item.at);
             const id = append("tool_call", item.text, item.at, item.externalId, {
               toolName: item.toolName,
               toolCallId: item.toolCallId,
             });
-            if (assistantNodeId) link(assistantNodeId, id, "calls", item.at);
+            link(calledBy, id, "calls", item.at);
             for (const ref of new Set(item.refs)) {
               const earlier = idOf(latestWithRef.get(ref, projectId));
               insertRef.run(id, ref);

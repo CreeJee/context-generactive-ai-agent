@@ -166,6 +166,58 @@ describe("migrating other agents' transcripts", () => {
     expect(edges.filter((edge) => edge.kind === "next")).toHaveLength(3);
   });
 
+  test("stands in an empty answer when the assistant only called a tool", async () => {
+    const { runtime, project, home } = await testRuntime();
+    writeFileSync(
+      claudePath(home, "cc-2.jsonl"),
+      serialize([
+        {
+          type: "user",
+          uuid: "u-1",
+          timestamp: "2026-03-02T09:00:00.000Z",
+          cwd: project.root,
+          sessionId: "cc-2",
+          message: { role: "user", content: "노트 좀 봐줘" },
+        },
+        {
+          type: "assistant",
+          uuid: "a-1",
+          timestamp: "2026-03-02T09:00:01.000Z",
+          cwd: project.root,
+          sessionId: "cc-2",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "tool_use", id: "call-1", name: "Read", input: { file_path: "a.md" } },
+            ],
+          },
+        },
+      ]),
+    );
+
+    const { kinds, calls, jobs } = await runtime.runPromise(
+      Effect.gen(function* () {
+        yield* (yield* Importer).runOnce;
+        const { sqlite } = yield* Database;
+        const sessions = yield* (yield* Sessions).list(project.id);
+        const migrated = sessions.find((session) => session.importedFrom === "claude-code")!;
+        return {
+          kinds: nodeRows(sqlite, migrated.id).map((row) => row.kind),
+          calls: decodeCount(
+            sqlite.prepare("SELECT count(*) AS count FROM edges WHERE kind = 'calls'").get(),
+          ).count,
+          // The stand-in says nothing, so it is not a statement to interpret.
+          jobs: decodeCount(sqlite.prepare("SELECT count(*) AS count FROM interpret_jobs").get())
+            .count,
+        };
+      }),
+    );
+
+    expect(kinds).toEqual(["user", "assistant", "tool_call"]);
+    expect(calls).toBe(1);
+    expect(jobs).toBe(1);
+  });
+
   test("reading a transcript again adds nothing, and new lines are picked up", async () => {
     const { runtime, project, home } = await testRuntime();
     const path = claudePath(home, "cc-1.jsonl");
