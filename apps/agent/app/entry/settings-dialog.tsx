@@ -809,16 +809,25 @@ export function SettingsDialog({
           <TabsContent value="web" className="mt-3">
             <KagiSettings />
           </TabsContent>
-          <TabsContent value="mcp" className="max-h-[60vh] overflow-y-auto mt-3">
+          <TabsContent value="mcp" className="mt-3 max-h-[60vh] overflow-x-hidden overflow-y-auto">
             <McpSettings project={project} />
           </TabsContent>
-          <TabsContent value="skills" className="max-h-[60vh] overflow-y-auto mt-3">
+          <TabsContent
+            value="skills"
+            className="mt-3 max-h-[60vh] overflow-x-hidden overflow-y-auto"
+          >
             <SkillSettings project={project} />
           </TabsContent>
-          <TabsContent value="agents" className="max-h-[60vh] overflow-y-auto mt-3">
+          <TabsContent
+            value="agents"
+            className="mt-3 max-h-[60vh] overflow-x-hidden overflow-y-auto"
+          >
             <AgentSettings project={project} />
           </TabsContent>
-          <TabsContent value="imports" className="max-h-[60vh] overflow-y-auto mt-3">
+          <TabsContent
+            value="imports"
+            className="mt-3 max-h-[60vh] overflow-x-hidden overflow-y-auto"
+          >
             <ImportSettings />
           </TabsContent>
         </Tabs>
