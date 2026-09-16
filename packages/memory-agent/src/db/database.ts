@@ -47,6 +47,9 @@ const make = (file: string) =>
           sqlite.exec("PRAGMA journal_mode = WAL");
           sqlite.exec("PRAGMA foreign_keys = ON");
           sqlite.exec("PRAGMA busy_timeout = 5000");
+          // Up to 64 MiB of pages instead of 2: updating the trigram index reads and rewrites many of
+          // them, and a bulk write took a fifth less time (docs/decisions.md).
+          sqlite.exec("PRAGMA cache_size = -65536");
           migrate(sqlite);
           return sqlite;
         } catch (error) {
