@@ -48,7 +48,7 @@ export interface CodexCommand {
  * `code_mode_host` stays on (its default): code_mode_only models such as gpt-5.6 call this app's
  * tools from inside codex's V8 code-mode sandbox, and without the host they see no tools at all.
  */
-const nativeConfig = [
+export const nativeConfig = [
   'cli_auth_credentials_store = "keyring"',
   'forced_login_method = "chatgpt"',
   'model_provider = "openai"',
@@ -73,8 +73,9 @@ const nativeConfig = [
   // turns all of that off and hands the model its own tools instead. So the model was reading
   // instructions for tools it does not have: asked for an image, it followed codex's imagegen skill
   // down to a `scripts/image_gen.py` fallback and asked the user for an OPENAI_API_KEY that the
-  // shell tool strips anyway. Off, the catalog is empty and nothing is unpacked.
-  "skills.bundled = false",
+  // shell tool strips anyway. Off, none of them are unpacked and the skill catalog drops from 22
+  // entries to 17.
+  "skills.bundled.enabled = false",
   "suppress_unstable_features_warning = true",
   ...[
     "shell_tool",
