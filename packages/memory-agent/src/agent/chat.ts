@@ -28,6 +28,7 @@ import { ApprovedTools } from "../tools/approved.ts";
 import { gatedToolNames, permissionReviewInterrupt } from "../tools/definitions.ts";
 import { FileTools } from "../tools/files.ts";
 import { DrawingPreviews } from "../attachments/previews.ts";
+import { SecretRedactor } from "../secrets/redactor.ts";
 import { KagiTools, kagiInstructions } from "../tools/kagi.ts";
 import { SkillTools } from "../tools/skills.ts";
 import { DelegateTools } from "../tools/delegate.ts";
@@ -226,6 +227,7 @@ const make = Effect.gen(function* () {
   const memoryTools = yield* MemoryTools;
   const fileTools = yield* FileTools;
   const drawingPreviews = yield* DrawingPreviews;
+  const redactor = yield* SecretRedactor;
   const outsideTools = yield* OutsideTools;
   const approvedTools = yield* ApprovedTools;
   const kagiTools = yield* KagiTools;
@@ -387,7 +389,9 @@ const make = Effect.gen(function* () {
 
         let userNode = turn ? null : nodes.latestOfKind(sessionId, "user");
         if (turn) {
-          userNode = nodes.append({ projectId, sessionId, kind: "user", text: turn.text });
+          // The model still reads the message as sent; memory keeps it without a pasted key.
+          const kept = yield* redactor.redactText(turn.text);
+          userNode = nodes.append({ projectId, sessionId, kind: "user", text: kept.text });
           attachments.link(userNode.id, attached);
         }
         if (!userNode) return json(409, { error: "no_user_turn" });
@@ -503,7 +507,8 @@ const make = Effect.gen(function* () {
             }),
           );
         // Tools come from several sources (built-in, web search, MCP), so the list is kept untyped.
-        const sharedTools: AnyServerTool[] = [
+        // Every result has its secrets hidden before the model, the page or memory sees it.
+        const sharedTools: AnyServerTool[] = redactor.withHiddenResults([
           ...memoryTools.forProject(projectId),
           // An SVG the model writes comes back with a picture of it, for the page to show.
           ...drawingPreviews.withPreviews(project, fileTools.forProject(project)),
@@ -512,7 +517,7 @@ const make = Effect.gen(function* () {
           ...mcpTools,
           ...skills.tools,
           ...delegation.tools,
-        ];
+        ]);
         const sharedPrompts = [
           memoryInstructions,
           workspaceInstructions(project),
@@ -529,13 +534,22 @@ const make = Effect.gen(function* () {
           runId,
           selection,
           abortSignal: abortController.signal,
-          tools: [...sharedTools, ...approvedTools.forProject(project, "gate")],
+          tools: [
+            ...sharedTools,
+            ...redactor.withHiddenResults(approvedTools.forProject(project, "gate")),
+          ],
           systemPrompts: sharedPrompts,
           gated: new Set([...gatedToolNames, ...askEveryCall]),
         });
         // Read-only calls of one step run at once instead of one after another.
         const reads = parallelReads(
-          [...sharedTools, ...approvedTools.forProject(project), ...children.tools],
+          [
+            ...sharedTools,
+            ...redactor.withHiddenResults([
+              ...approvedTools.forProject(project),
+              ...children.tools,
+            ]),
+          ],
           abortController.signal,
         );
         middleware.push(

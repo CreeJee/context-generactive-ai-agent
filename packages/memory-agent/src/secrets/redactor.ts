@@ -1,3 +1,4 @@
+import type { AnyServerTool } from "@tanstack/ai";
 import { lintSource } from "@secretlint/core";
 import { creator as recommendedRules } from "@secretlint/secretlint-rule-preset-recommend";
 import { Context, Effect, Layer, Option, Schema } from "effect";
@@ -176,19 +177,50 @@ const make = Effect.sync(() => {
     );
   };
 
+  /**
+   * A tool's result with its secrets hidden, keeping its structure. A result that is not plain
+   * JSON (nothing this app's tools return) is passed through.
+   */
+  const redactResult = <A>(result: A) =>
+    Option.match(decodeJson(result), {
+      onNone: () => Effect.succeed<A | Json>(result),
+      onSome: (json) => Effect.map(redactJson(json), (redacted): A | Json => redacted),
+    });
+
+  const hide = (text: string) =>
+    Effect.runPromise(Effect.map(redactText(text), (redaction) => redaction.text));
+
   return {
     redactText,
     redactJson,
+    redactResult,
 
     /**
-     * A tool's result with its secrets hidden, keeping its structure. A result that is not plain
-     * JSON (nothing this app's tools return) is passed through.
+     * The same tools, with secrets hidden in what they return and in the errors they throw, before
+     * either reaches the model, the page or memory. Every tool is covered — the shell, file reads,
+     * web pages, MCP servers, other agents — because any of them can print a key.
      */
-    redactResult: <A>(result: A) =>
-      Option.match(decodeJson(result), {
-        onNone: () => Effect.succeed<A | Json>(result),
-        onSome: (json) => Effect.map(redactJson(json), (redacted): A | Json => redacted),
-      }),
+    withHiddenResults(tools: readonly AnyServerTool[]): AnyServerTool[] {
+      return tools.map((tool): AnyServerTool => {
+        const execute = tool.execute;
+        if (!execute) return tool;
+        return {
+          ...tool,
+          execute: async (...call: Parameters<typeof execute>) => {
+            let result: Awaited<ReturnType<typeof execute>>;
+            try {
+              result = await execute(...call);
+            } catch (error) {
+              if (!(error instanceof Error)) throw error;
+              const message = await hide(error.message);
+              if (message === error.message) throw error;
+              throw new Error(message, { cause: "secret hidden from the message" });
+            }
+            return Effect.runPromise(redactResult(result));
+          },
+        };
+      });
+    },
   };
 });
 

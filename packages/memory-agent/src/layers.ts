@@ -31,6 +31,7 @@ import { Nodes } from "./memory/nodes.ts";
 import { Recorder } from "./memory/record.ts";
 import { MemorySearch } from "./memory/search.ts";
 import { PermissionClassifier } from "./permissions/classifier.ts";
+import { SecretRedactor } from "./secrets/redactor.ts";
 import { PermissionGate } from "./permissions/gate.ts";
 import { PermissionReviews } from "./permissions/reviews.ts";
 import { Projects } from "./projects/projects.ts";
@@ -91,6 +92,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     Interpretations.layer,
     RelayedApprovals.layer,
     BulkNodes.layer,
+    SecretRedactor.layer,
     options.embedder ?? Embedder.local,
     options.morphAnalyzer ?? MorphAnalyzer.kiwi,
     options.codex ?? CodexAppServer.layer,

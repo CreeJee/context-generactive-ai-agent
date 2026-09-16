@@ -5,6 +5,7 @@ import { attachmentUrl } from "../attachments/urls.ts";
 import { ChatState } from "../chat-state/chat-state.ts";
 import { CodexChat } from "../codex/chat.ts";
 import { Nodes } from "../memory/nodes.ts";
+import { SecretRedactor } from "../secrets/redactor.ts";
 import { MessageQueue } from "./queue.ts";
 import type { QueuedMessage } from "./queue-state.ts";
 
@@ -23,6 +24,7 @@ const make = Effect.gen(function* () {
   const nodes = yield* Nodes;
   const attachments = yield* Attachments;
   const chatState = yield* ChatState;
+  const redactor = yield* SecretRedactor;
 
   /** The queued message as the user turn the model receives. */
   const toUserMessage = (message: QueuedMessage): ModelMessage => {
@@ -41,23 +43,24 @@ const make = Effect.gen(function* () {
     return { role: "user", content };
   };
 
-  /** Every delivered message is evidence, like any user turn. */
-  const record = (binding: DeliveryBinding, message: QueuedMessage) => {
-    const node = nodes.append({
-      projectId: binding.projectId,
-      sessionId: binding.sessionId,
-      runId: binding.runId,
-      kind: "user",
-      text: message.text,
+  /** Every delivered message is evidence, like any user turn, and kept without a pasted key. */
+  const record = (binding: DeliveryBinding, message: QueuedMessage) =>
+    Effect.map(redactor.redactText(message.text), (kept) => {
+      const node = nodes.append({
+        projectId: binding.projectId,
+        sessionId: binding.sessionId,
+        runId: binding.runId,
+        kind: "user",
+        text: kept.text,
+      });
+      attachments.link(
+        node.id,
+        message.attachmentIds.flatMap((id) => {
+          const attachment = attachments.get(id);
+          return attachment ? [attachment] : [];
+        }),
+      );
     });
-    attachments.link(
-      node.id,
-      message.attachmentIds.flatMap((id) => {
-        const attachment = attachments.get(id);
-        return attachment ? [attachment] : [];
-      }),
-    );
-  };
 
   /** Puts steered messages into the saved conversation, before the answer they arrived during. */
   const saveSteered = async (binding: DeliveryBinding) => {
@@ -83,12 +86,10 @@ const make = Effect.gen(function* () {
      */
     steer: (binding: DeliveryBinding, message: QueuedMessage) =>
       Effect.tryPromise(() => codexChat.steer(binding.sessionId, toUserMessage(message))).pipe(
-        Effect.map((outcome) => {
-          if (outcome === "steered") {
-            queue.markDelivered(message.id, "steer", binding.runId, false);
-            record(binding, message);
-          }
-          return outcome;
+        Effect.tap((outcome) => {
+          if (outcome !== "steered") return Effect.void;
+          queue.markDelivered(message.id, "steer", binding.runId, false);
+          return record(binding, message);
         }),
       ),
 
@@ -122,7 +123,7 @@ const make = Effect.gen(function* () {
               }
               added.push(userMessage);
               queue.markDelivered(message.id, "tool_boundary", binding.runId, true);
-              record(binding, message);
+              await Effect.runPromise(record(binding, message));
               delivered.push(message.id);
             }
           }

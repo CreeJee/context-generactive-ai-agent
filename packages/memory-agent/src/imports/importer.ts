@@ -8,6 +8,7 @@ import { Database } from "../db/database.ts";
 import { canonicalPath } from "../files/paths.ts";
 import { Indexer } from "../memory/embedding/indexer.ts";
 import { Projects } from "../projects/projects.ts";
+import { SecretRedactor } from "../secrets/redactor.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { BulkNodes } from "./bulk.ts";
 import type { ImportSourceName, TranscriptItem, TranscriptStart } from "./items.ts";
@@ -75,10 +76,31 @@ const make = (watching: boolean, home: string) =>
     const bulk = yield* BulkNodes;
     const config = yield* GlobalConfig;
     const indexer = yield* Indexer;
+    const redactor = yield* SecretRedactor;
     const storageRoot = canonicalPath(storage.path);
     // Two passes over the same transcripts would import a line twice before either marks it.
     const onePassAtATime = yield* Effect.makeSemaphore(1);
     const oneDrainAtATime = yield* Effect.makeSemaphore(1);
+
+    const hideText = (text: string) =>
+      Effect.map(redactor.redactText(text), (redaction) => redaction.text);
+
+    /** An item as memory may keep it: its text and the files or URLs it names, secrets hidden. */
+    const hideSecrets = (item: TranscriptItem): Effect.Effect<TranscriptItem> => {
+      switch (item.kind) {
+        case "session":
+        case "ignored":
+          return Effect.succeed(item);
+        case "message":
+        case "tool_result":
+          return Effect.map(hideText(item.text), (text) => ({ ...item, text }));
+        case "tool_call":
+          return Effect.map(
+            Effect.all([hideText(item.text), Effect.forEach(item.refs, hideText)]),
+            ([text, refs]) => ({ ...item, text, refs }),
+          );
+      }
+    };
 
     const readCursor = sqlite.prepare(
       "SELECT byte_offset, size, mtime_ms FROM import_cursors WHERE source = ? AND path = ?",
@@ -171,10 +193,12 @@ const make = (watching: boolean, home: string) =>
         const source = importSources.find((entry) => entry.name === transcript.source);
         if (!source) return 0;
         const read = source.reader(transcript.externalId);
-        const items: TranscriptItem[] = [];
+        const lines: TranscriptItem[] = [];
         const { offset } = readLinesFrom(transcript.path, from, (line) => {
-          for (const item of read(line)) items.push(item);
+          for (const item of read(line)) lines.push(item);
         });
+        // Another agent's transcript holds whatever its shell printed; memory keeps none of it.
+        const items = yield* Effect.forEach(lines, hideSecrets);
 
         const start = items.find((item) => item.kind === "session");
         const { sessionId, skipped } = yield* sessionFor(transcript, start);
