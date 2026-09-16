@@ -45,6 +45,7 @@ import {
   api,
   type ExternalAgentView,
   type ExternalAgentsOverview,
+  type ImportOverview,
   type KagiStatus,
   type McpOverview,
   type McpServerView,
@@ -168,6 +169,143 @@ function KagiSettings() {
           </Field>
         </form>
       )}
+
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+    </FieldGroup>
+  );
+}
+
+const sourceNames = { "claude-code": "Claude Code", codex: "Codex CLI" } as const;
+
+/** Migrating other coding agents' local conversations into this app's memory. */
+function ImportSettings() {
+  const [overview, setOverview] = useState<ImportOverview | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void api
+      .imports()
+      .then(setOverview)
+      .catch((failure: Error) => setError(errorMessage(failure)));
+  }, []);
+
+  const apply = async (
+    command: { action: "run" | "enable" | "disable" } | { action: "interpret"; interpret: boolean },
+  ) => {
+    setBusy(true);
+    setError(null);
+    try {
+      setOverview(await api.importAction(command));
+    } catch (failure) {
+      setError(errorMessage(failure instanceof Error ? failure : new Error(String(failure))));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!overview) return error ? <FieldDescription>{error}</FieldDescription> : <Spinner />;
+
+  return (
+    <FieldGroup>
+      <FieldTitle>다른 에이전트의 대화 가져오기</FieldTitle>
+      <FieldDescription>
+        Claude Code와 Codex CLI가 이 컴퓨터에 남긴 대화를 읽어 기억으로 옮겨요. 발언뿐 아니라 도구
+        호출과 결과까지 그대로 옮겨서, 옛 대화도 근거를 따라갈 수 있어요. 원본 파일은 건드리지 않고
+        읽기만 해요.
+      </FieldDescription>
+
+      <Field orientation="horizontal">
+        <FieldContent>
+          <FieldLabel htmlFor="imports-enabled">계속 가져오기</FieldLabel>
+          <FieldDescription>
+            5분마다 새로 쌓인 대화를 이어서 읽어요. 켤 때 지금 있는 기록을 한 번 읽어요.
+          </FieldDescription>
+        </FieldContent>
+        <Switch
+          id="imports-enabled"
+          checked={overview.enabled}
+          disabled={busy}
+          onCheckedChange={(checked) => void apply({ action: checked ? "enable" : "disable" })}
+        />
+      </Field>
+
+      <ItemGroup>
+        {overview.sources.map((source) => (
+          <Item key={source.name} variant="outline">
+            <ItemMedia>
+              <BotIcon className="size-4" />
+            </ItemMedia>
+            <ItemContent>
+              <ItemTitle>{sourceNames[source.name]}</ItemTitle>
+              <ItemDescription>
+                기록 {source.transcripts}개 중 {source.migrated}개를 읽어 {source.nodes}개를 기억에
+                넣었어요.
+              </ItemDescription>
+              <ItemDescription className="font-mono text-xs">{source.root}</ItemDescription>
+            </ItemContent>
+          </Item>
+        ))}
+      </ItemGroup>
+
+      {overview.unindexed > 0 && (
+        <FieldDescription>
+          아직 {overview.unindexed}개를 인덱싱하고 있어요. 최근 대화부터 들어가고, 옛 기록은 뒤에서
+          채워요. 그동안에도 글자·형태소 검색으로는 찾을 수 있어요.
+        </FieldDescription>
+      )}
+
+      {overview.unregistered.length > 0 && (
+        <Alert>
+          <AlertDescription>
+            <div className="mb-1">
+              아래 폴더는 프로젝트로 등록돼 있지 않아 가져오지 않았어요. 사이드바에서 등록하면 다음
+              실행 때 통째로 들어와요.
+            </div>
+            <ul className="font-mono text-xs">
+              {overview.unregistered.map((folder) => (
+                <li key={folder.cwd}>
+                  {folder.cwd} · 대화 {folder.transcripts}개
+                </li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <Field orientation="horizontal">
+        <FieldContent>
+          <FieldLabel htmlFor="imports-interpret">가져온 발언도 해석</FieldLabel>
+          <FieldDescription>
+            주제와 정정·취소 관계를 붙여요. 모델을 쓰기 때문에 답변이 끝난 뒤 조금씩 처리돼요.
+          </FieldDescription>
+        </FieldContent>
+        <Switch
+          id="imports-interpret"
+          checked={overview.interpret}
+          disabled={busy}
+          onCheckedChange={(checked) => void apply({ action: "interpret", interpret: checked })}
+        />
+      </Field>
+
+      <Field orientation="horizontal">
+        <FieldContent>
+          <FieldTitle>지금 가져오기</FieldTitle>
+          <FieldDescription>설정을 바꾸지 않고 한 번만 읽어요.</FieldDescription>
+        </FieldContent>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={busy}
+          onClick={() => void apply({ action: "run" })}
+        >
+          {busy ? <Spinner /> : <RefreshCwIcon />} 읽기
+        </Button>
+      </Field>
 
       {error && (
         <Alert variant="destructive">
@@ -549,6 +687,7 @@ export function SettingsDialog({
             <TabsTrigger value="mcp">MCP</TabsTrigger>
             <TabsTrigger value="skills">Skills</TabsTrigger>
             <TabsTrigger value="agents">에이전트</TabsTrigger>
+            <TabsTrigger value="imports">가져오기</TabsTrigger>
           </TabsList>
           <TabsContent value="web" className="pt-3">
             <KagiSettings />
@@ -561,6 +700,9 @@ export function SettingsDialog({
           </TabsContent>
           <TabsContent value="agents" className="max-h-[60vh] overflow-y-auto pt-3">
             <AgentSettings project={project} />
+          </TabsContent>
+          <TabsContent value="imports" className="max-h-[60vh] overflow-y-auto pt-3">
+            <ImportSettings />
           </TabsContent>
         </Tabs>
       </DialogContent>

@@ -256,9 +256,13 @@ const make = (watching: boolean, home: string) =>
       } satisfies ImportOverview;
     });
 
+    // The backlog is forked into this layer's scope, not the caller's: a request that starts a
+    // migration must return as soon as the transcripts are read, and the drain outlives it.
+    const layerScope = yield* Effect.scope;
+
     /** One pass, then the backlog it created; the backlog never holds up the answer to a request. */
     const runAndIndex = Effect.tap(runOnce, (written) =>
-      written > 0 ? Effect.forkScoped(backfill) : Effect.void,
+      written > 0 ? Effect.forkIn(backfill, layerScope) : Effect.void,
     );
 
     if (watching)

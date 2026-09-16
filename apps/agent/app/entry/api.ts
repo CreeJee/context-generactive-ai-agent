@@ -4,6 +4,7 @@ import type {
   CodexModel,
   ExternalAgentsOverview,
   ExternalAgentView,
+  ImportOverview,
   KagiStatus,
   McpOverview,
   McpScope,
@@ -36,6 +37,7 @@ export type {
   CodexModel,
   ExternalAgentsOverview,
   ExternalAgentView,
+  ImportOverview,
   KagiStatus,
   LeaseView,
   McpOverview,
@@ -173,6 +175,11 @@ export const api = {
   kagiAction: (
     command: { action: "register"; key: string } | { action: "remove" | "enable" | "disable" },
   ) => call<KagiStatus>("POST", "/api/settings/kagi", command),
+
+  imports: () => call<ImportOverview>("GET", "/api/settings/imports"),
+  importAction: (
+    command: { action: "run" | "enable" | "disable" } | { action: "interpret"; interpret: boolean },
+  ) => call<ImportOverview>("POST", "/api/settings/imports", command),
 
   mcpServers: (projectId: string) =>
     call<McpOverview>("GET", `/api/projects/${encodeURIComponent(projectId)}/mcp`),
