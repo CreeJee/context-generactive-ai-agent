@@ -66,6 +66,8 @@ const modes: ReadonlyArray<{ readonly id: PermissionMode; readonly label: string
 ];
 
 export interface Suggestion {
+  /** A command, a skill run as its own command, or a value for the command being typed. */
+  readonly kind: "command" | "skill" | "value";
   /** The composer text after picking it. */
   readonly text: string;
   readonly label: string;
@@ -94,21 +96,46 @@ function split(draft: string) {
   return { word: match[1] ?? "", hasSpace: match[2] !== undefined, rest: match[3] ?? "" };
 }
 
+const specNamed = (word: string) =>
+  commandSpecs.find((candidate) => candidate.name === word.toLowerCase());
+
+/**
+ * A skill typed as its own command, `/<skill> [request]`. A command of the same name wins; that
+ * skill is still reachable with `/skill`.
+ */
+const skillNamed = (word: string, context: SlashContext) =>
+  specNamed(word)
+    ? undefined
+    : context.skills.find((skill) => skill.name.toLowerCase() === word.toLowerCase());
+
 /** Suggestions for the draft, or none when it is not a command being typed. */
 export function suggest(draft: string, context: SlashContext): Suggestion[] {
   const parts = split(draft);
   if (!parts) return [];
-  if (!parts.hasSpace)
-    return commandSpecs
-      .filter((spec) => spec.name.startsWith(parts.word.toLowerCase()))
-      .map((spec) => ({
+  if (!parts.hasSpace) {
+    const word = parts.word.toLowerCase();
+    const commands = commandSpecs
+      .filter((spec) => spec.name.startsWith(word))
+      .map((spec): Suggestion => ({
+        kind: "command",
         text: spec.argument.kind === "none" ? `/${spec.name}` : `/${spec.name} `,
         label: `/${spec.name}`,
         description: spec.description,
         runnable: spec.argument.kind === "none",
       }));
+    const skills = context.skills
+      .filter((skill) => skill.name.toLowerCase().startsWith(word) && !specNamed(skill.name))
+      .map((skill): Suggestion => ({
+        kind: "skill",
+        text: `/${skill.name} `,
+        label: `/${skill.name}`,
+        description: skill.description,
+        runnable: false,
+      }));
+    return [...commands, ...skills];
+  }
 
-  const spec = commandSpecs.find((candidate) => candidate.name === parts.word.toLowerCase());
+  const spec = specNamed(parts.word);
   if (!spec) return [];
   switch (spec.argument.kind) {
     case "none":
@@ -119,10 +146,12 @@ export function suggest(draft: string, context: SlashContext): Suggestion[] {
       // Once a value is followed by a space, what comes next is free text.
       if (parts.rest.length > value.length) return [];
       const lower = value.toLowerCase();
-      return choices(spec.argument.from, context)
+      const { from } = spec.argument;
+      return choices(from, context)
         .filter((choice) => choice.id.toLowerCase().startsWith(lower))
         .slice(0, 20)
-        .map((choice) => ({
+        .map((choice): Suggestion => ({
+          kind: from === "skills" ? "skill" : "value",
           text: spec.trailingText ? `/${spec.name} ${choice.id} ` : `/${spec.name} ${choice.id}`,
           label: choice.id,
           description: choice.label === choice.id ? spec.description : choice.label,
@@ -142,7 +171,13 @@ export type SlashParse =
 export function parseSlash(draft: string, context: SlashContext): SlashParse {
   const parts = split(draft.trim());
   if (!parts) return { kind: "not_command" };
-  const spec = commandSpecs.find((candidate) => candidate.name === parts.word.toLowerCase());
+  const skill = skillNamed(parts.word, context);
+  if (skill)
+    return {
+      kind: "command",
+      command: { kind: "skill", skill: skill.name, request: parts.rest.trim() },
+    };
+  const spec = specNamed(parts.word);
   // Not one of ours: an ordinary message that happens to start with "/", like a path.
   if (!spec) return { kind: "not_command" };
   const rest = parts.rest.trim();

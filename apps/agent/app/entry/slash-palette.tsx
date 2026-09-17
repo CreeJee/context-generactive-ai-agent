@@ -1,6 +1,15 @@
-import { TerminalSquareIcon } from "lucide-react";
+import { SparklesIcon, TerminalSquareIcon } from "lucide-react";
 import { Command, CommandGroup, CommandItem, CommandList } from "~/components/ui/command";
 import type { Suggestion } from "./slash-commands";
+
+const headings = {
+  command: "명령",
+  skill: "Skills",
+  value: "고를 수 있는 값",
+} satisfies Record<Suggestion["kind"], string>;
+
+// The order suggestions come in, so ↑/↓ walk the groups top to bottom.
+const groups: ReadonlyArray<Suggestion["kind"]> = ["command", "skill", "value"];
 
 /**
  * Suggestions for a slash command above the composer. Focus stays in the composer: it moves the
@@ -20,22 +29,31 @@ export function SlashPalette({
     <div className="mb-2 overflow-hidden rounded-xl border bg-popover shadow-md">
       <Command shouldFilter={false} value={highlighted.text} className="h-auto">
         <CommandList>
-          <CommandGroup heading="명령: ↑↓로 고르고, Tab으로 채우고, Enter로 실행해요">
-            {suggestions.map((suggestion) => (
-              <CommandItem
-                key={suggestion.text}
-                value={suggestion.text}
-                // Keep the caret in the composer while clicking.
-                onMouseDown={(event) => event.preventDefault()}
-                onSelect={() => onPick(suggestion)}
-              >
-                <TerminalSquareIcon />
-                <span className="font-mono">{suggestion.label}</span>
-                <span className="truncate text-muted-foreground">{suggestion.description}</span>
-              </CommandItem>
-            ))}
-          </CommandGroup>
+          {groups.map((kind) => {
+            const items = suggestions.filter((suggestion) => suggestion.kind === kind);
+            if (items.length === 0) return null;
+            return (
+              <CommandGroup key={kind} heading={headings[kind]}>
+                {items.map((suggestion) => (
+                  <CommandItem
+                    key={suggestion.text}
+                    value={suggestion.text}
+                    // Keep the caret in the composer while clicking.
+                    onMouseDown={(event) => event.preventDefault()}
+                    onSelect={() => onPick(suggestion)}
+                  >
+                    {suggestion.kind === "skill" ? <SparklesIcon /> : <TerminalSquareIcon />}
+                    <span className="font-mono">{suggestion.label}</span>
+                    <span className="truncate text-muted-foreground">{suggestion.description}</span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            );
+          })}
         </CommandList>
+        <p className="border-t px-3 py-1.5 text-xs text-muted-foreground">
+          ↑↓로 고르고, Tab으로 채우고, Enter로 실행해요.
+        </p>
       </Command>
     </div>
   );
