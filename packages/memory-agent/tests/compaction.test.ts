@@ -1,7 +1,14 @@
 import { chat, type ChatMiddleware, type ModelMessage } from "@tanstack/ai";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
-import { clearedOutput, compactionFor, estimateTokens } from "../src/agent/compaction.ts";
+import { AgentChat } from "../src/agent/chat.ts";
+import {
+  clearedOutput,
+  compactionFor,
+  estimateTokens,
+  manualCompaction,
+} from "../src/agent/compaction.ts";
+import { ChatState } from "../src/chat-state/chat-state.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { ScriptedTextAdapter } from "../src/testing/scripted-adapter.ts";
 import { MemoryTools } from "../src/tools/memory.ts";
@@ -18,6 +25,14 @@ function canonical() {
   };
   return { saved: () => latest, middleware };
 }
+
+const decodeCompact = Schema.decodeUnknownSync(
+  Schema.Struct({
+    cleared: Schema.Number,
+    tokensBefore: Schema.Number,
+    tokensAfter: Schema.Number,
+  }),
+);
 
 async function drain(stream: AsyncIterable<unknown>) {
   for await (const _chunk of stream) {
@@ -125,6 +140,79 @@ describe("compaction", () => {
     expect(sent.length).toBeLessThan(messages.length);
     expect(sent[0]?.content).toContain("find_memory");
     expect(sent.at(-1)).toEqual({ role: "user", content: "마지막 질문" });
+  });
+
+  test("/compact keeps answered tool output out of the runs that follow", async () => {
+    const { runtime, project, session } = await testRuntime();
+    const { agent, nodes, stores } = await runtime.runPromise(
+      Effect.all({
+        agent: AgentChat,
+        nodes: Nodes,
+        stores: Effect.map(ChatState, (state) => state.persistence.stores),
+      }),
+    );
+    const output = "테스트 결과 ".repeat(200);
+    const result = nodes.append({
+      projectId: project.id,
+      sessionId: session.id,
+      kind: "tool_result",
+      text: output,
+      detail: { toolName: "run_shell", toolCallId: "old-1", ok: true },
+    });
+    const saved: ModelMessage[] = [
+      { role: "user", content: "테스트 돌려 줘" },
+      {
+        role: "assistant",
+        content: null,
+        toolCalls: [
+          {
+            id: "old-1",
+            type: "function",
+            function: { name: "run_shell", arguments: '{"command":"pnpm test"}' },
+          },
+        ],
+      },
+      { role: "tool", toolCallId: "old-1", content: output },
+      { role: "assistant", content: "모두 통과했어요." },
+    ];
+    await stores.messages.saveThread(session.id, saved);
+    const compact = async (holder: string | null) => {
+      const response = await runtime.runPromise(agent.compact(session.id, holder));
+      return { status: response.status, body: decodeCompact(await response.json()) };
+    };
+
+    await runtime.runPromise(agent.lease(session.id, "tab-a", "claim"));
+    expect((await runtime.runPromise(agent.compact(session.id, "tab-b"))).status).toBe(423);
+    expect((await runtime.runPromise(agent.compact("no-such-session", "tab-a"))).status).toBe(404);
+    const first = await compact("tab-a");
+    expect(first.status).toBe(200);
+    expect(first.body.cleared).toBe(1);
+    expect(first.body.tokensAfter).toBeLessThan(first.body.tokensBefore);
+    expect((await compact("tab-a")).body).toEqual({
+      cleared: 0,
+      tokensBefore: first.body.tokensAfter,
+      tokensAfter: first.body.tokensAfter,
+    });
+
+    // The next question: what was answered goes as a pointer, however small the conversation.
+    const adapter = new ScriptedTextAdapter([{ text: "네" }]);
+    await drain(
+      chat({
+        adapter,
+        threadId: session.id,
+        messages: [...saved, { role: "user", content: "다음 질문" }],
+        middleware: [
+          manualCompaction(stores.metadata, () => nodes.toolResultIds(session.id)),
+          compactionFor(() => nodes.toolResultIds(session.id)),
+        ],
+      }),
+    );
+    const sent = adapter.invocations[0]?.messages ?? [];
+    expect(sent.find((message) => message.role === "tool")?.content).toBe(clearedOutput(result.id));
+    expect(sent.at(-1)).toEqual({ role: "user", content: "다음 질문" });
+    // The saved conversation still has the output.
+    const kept = await stores.messages.loadThread(session.id);
+    expect(kept.find((message) => message.role === "tool")?.content).toBe(output);
   });
 
   test("counts Korean closer to how models do than characters / 4", () => {

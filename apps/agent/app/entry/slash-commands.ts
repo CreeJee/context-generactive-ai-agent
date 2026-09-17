@@ -8,6 +8,8 @@ export type SlashCommand =
   | { readonly kind: "model"; readonly model: string }
   | { readonly kind: "settings" }
   | { readonly kind: "cancel" }
+  /** Stops sending the model tool output it has already answered from. */
+  | { readonly kind: "compact" }
   /** Sent as a message asking the model to follow one skill. */
   | { readonly kind: "skill"; readonly skill: string; readonly request: string }
   /** Sent as a message asking the model to answer from memory. */
@@ -49,6 +51,7 @@ export const commandSpecs: readonly CommandSpec[] = [
   { name: "model", description: "모델 바꾸기", argument: { kind: "choice", from: "models" } },
   { name: "settings", description: "설정 열기", argument: { kind: "none" } },
   { name: "cancel", description: "답변 멈추기", argument: { kind: "none" } },
+  { name: "compact", description: "이미 답한 도구 출력 비우기", argument: { kind: "none" } },
 ];
 
 export interface SlashContext {
@@ -161,6 +164,8 @@ export function parseSlash(draft: string, context: SlashContext): SlashParse {
       return { kind: "command", command: { kind: "settings" } };
     case "cancel":
       return { kind: "command", command: { kind: "cancel" } };
+    case "compact":
+      return { kind: "command", command: { kind: "compact" } };
     case "agent":
       return known("agents") && others.length === 0
         ? { kind: "command", command: { kind: "agent", agent: value } }

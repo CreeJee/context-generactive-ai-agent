@@ -269,16 +269,16 @@ const make = Effect.gen(function* () {
         if (batch.length === 0) break;
         const now = new Date().toISOString();
         for (const statement of batch) markRunning.run(now, statement.id);
-        const outcome = yield* Effect.either(interpretBatch(batch, selection));
-        if (outcome._tag === "Right") interpreted += outcome.right;
-        else
-          for (const statement of batch)
-            markFailed.run(
-              maxAttempts,
-              outcome.left instanceof Error ? outcome.left.message : "interpret_failed",
-              new Date().toISOString(),
-              statement.id,
-            );
+        interpreted += yield* interpretBatch(batch, selection).pipe(
+          Effect.catchAll((error) =>
+            Effect.sync(() => {
+              const reason = error instanceof Error ? error.message : "interpret_failed";
+              for (const statement of batch)
+                markFailed.run(maxAttempts, reason, new Date().toISOString(), statement.id);
+              return 0;
+            }),
+          ),
+        );
       }
       return interpreted;
     }).pipe(oneRunAtATime.withPermits(1)),

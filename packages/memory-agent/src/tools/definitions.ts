@@ -13,6 +13,7 @@ export { attachmentIdOf, attachmentUrl } from "../attachments/urls.ts";
 export {
   serverRestartedCode,
   type CancelResult,
+  type CompactResult,
   type SessionRunState,
 } from "../agent/run-state.ts";
 export { sessionHolderHeader, type LeaseView } from "../sessions/lease-state.ts";

@@ -25,6 +25,7 @@ import { Schema } from "effect";
 import {
   sessionHolderHeader,
   type CancelResult,
+  type CompactResult,
   type LeaseView,
   type QueueEdit,
   type QueuedMessage,
@@ -39,6 +40,7 @@ export type {
   AuthState,
   CancelResult,
   CodexModel,
+  CompactResult,
   EmbeddingChoice,
   EmbeddingOverview,
   ExternalAgentsOverview,
@@ -149,6 +151,14 @@ export const api = {
     call<CancelResult>(
       "POST",
       `/api/sessions/${encodeURIComponent(sessionId)}/cancel`,
+      {},
+      { [sessionHolderHeader]: holder },
+    ),
+  /** Refused with 409 while the session is answering. */
+  compactSession: (sessionId: string, holder: string) =>
+    call<CompactResult>(
+      "POST",
+      `/api/sessions/${encodeURIComponent(sessionId)}/compact`,
       {},
       { [sessionHolderHeader]: holder },
     ),
@@ -307,4 +317,17 @@ export function archiveErrorMessage(error: Error) {
   return error instanceof ApiError && Schema.is(ArchiveRejection)(error.code)
     ? archiveRejections[error.code]
     : "대화를 바꾸지 못했어요.";
+}
+
+const CompactRejection = Schema.Literal("run_in_progress", "session_in_use", "session_not_found");
+const compactRejections = {
+  run_in_progress: "답변이 끝난 뒤에 비울 수 있어요.",
+  session_in_use: "다른 탭에서 쓰고 있는 대화예요. 그 탭에서 다시 시도하세요.",
+  session_not_found: "대화를 찾을 수 없어요.",
+} satisfies Record<typeof CompactRejection.Type, string>;
+
+export function compactErrorMessage(error: Error) {
+  return error instanceof ApiError && Schema.is(CompactRejection)(error.code)
+    ? compactRejections[error.code]
+    : "도구 출력을 비우지 못했어요.";
 }

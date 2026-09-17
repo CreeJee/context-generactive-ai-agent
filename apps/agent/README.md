@@ -52,7 +52,7 @@ vp run smoke-package                  # 실행 파일을 저장소 밖에서 띄
 - 기억: 답변이 끝나면 뒤에서 발언의 주제와 정정 또는 취소 관계를 정리합니다(선택한 모델을 가장 낮은 추론 강도로 사용). 나중에 "무엇으로 하기로 했지?"를 물으면 바뀐 결정과 이전 결정을 함께 답하고, 무엇을 정정한 것인지 불분명하면 되묻습니다.
 - 대화: 답변 스트리밍 마크다운([streamdown](https://streamdown.ai), 코드 하이라이트와 한글 강조), 도구 호출 카드(인자, 결과, 상태 배지).
 - 이미지 첨부: 붙여넣기, 끌어놓기, 첨부 버튼. 입력창 위 카드의 `#N`을 누르면 본문에 참조가 들어가고, 보낸 메시지에서는 `#N` 칩에 마우스를 올려 미리보거나 눌러서 크게 봅니다. 이미지를 못 읽는 모델을 고르면 첨부가 막힙니다.
-- Slash 명령: 입력창에 `/`를 치면 `/new`, `/agent`, `/skill`, `/recall`, `/mode`, `/model`, `/settings`, `/cancel` 목록이 나옵니다. ↑/↓로 고르고, Tab으로 채우고, Enter로 실행합니다.
+- Slash 명령: 입력창에 `/`를 치면 `/new`, `/agent`, `/skill`, `/recall`, `/mode`, `/model`, `/settings`, `/cancel`, `/compact` 목록이 나옵니다. ↑/↓로 고르고, Tab으로 채우고, Enter로 실행합니다.
 - Esc: 입력 중인 글과 이미지를 비우고, 비어 있으면 실행 중인 답변을 멈춥니다. 중지는 서버에 취소를 요청하고, 실제로 멈췄는지 확인해 알려줍니다.
 - 답변 중 새로고침이나 탭 닫기는 답변을 멈추지 않습니다. 다시 열면 진행 중인 답변에 이어 붙습니다. 서버가 답변 중에 다시 시작되면 그 답변은 자동으로 다시 실행하지 않고, 끝나지 않았다고 알립니다.
 - 비밀 가리기: 도구 결과에 찍힌 API 키, 토큰, 비밀번호는 모델과 화면에 `[redacted:종류]`로 보이고 기억에도 그렇게 남습니다. 직접 붙여 넣은 키는 그 턴의 모델에는 그대로 가지만 기억에는 남지 않습니다. 예전에 저장된 대화도 앱을 시작할 때 뒤에서 한 번씩 정리합니다. 파일에서 키가 가려진 줄은 에이전트가 원문을 볼 수 없어 고칠 수 없습니다.
@@ -86,6 +86,7 @@ UI 컴포넌트는 shadcn으로 추가합니다(`AGENT.md`).
 | `POST /api/sessions/:session`                | `{archived}` 보관과 복원(답변 중 409, 다른 탭 사용 중 423)                           |
 | `POST /api/sessions/:session/lease`          | 탭의 소유권 얻기, 갱신(`claim`), 놓기(`release`)                                     |
 | `POST /api/sessions/:session/cancel`         | 진행 중인 run 취소(소유 탭만), 실제로 멈췄는지 응답                                  |
+| `POST /api/sessions/:session/compact`        | 이미 답한 도구 출력 비우기(`/compact`, 답변 중 409), 비운 개수와 추정 토큰 응답      |
 | `GET/POST /api/sessions/:session/queue`      | 대기열 목록, 답변 중 메시지 넣기(`queue`/`steer`)                                    |
 | `POST /api/sessions/:session/queue/:message` | 대기 메시지 편집 내용 저장, 저장, 제거, 확인 후 보내기                               |
 | `GET /api/sessions/:session/subagents`       | 서브에이전트 목록과 상태                                                             |

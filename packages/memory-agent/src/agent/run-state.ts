@@ -24,3 +24,13 @@ export interface CancelResult {
   readonly stopped: boolean;
   readonly status: RunStatus | null;
 }
+
+/**
+ * Answer to `/compact`: how many earlier tool outputs the model is no longer sent, and the
+ * conversation's estimated tokens before and after.
+ */
+export interface CompactResult {
+  readonly cleared: number;
+  readonly tokensBefore: number;
+  readonly tokensAfter: number;
+}

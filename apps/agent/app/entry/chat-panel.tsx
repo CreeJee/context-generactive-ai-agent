@@ -6,6 +6,7 @@ import {
   permissionReviewInterrupt,
   sessionHolderHeader,
 } from "memory-agent/definitions";
+import { cn } from "cn";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import {
@@ -33,7 +34,7 @@ import {
 } from "./approval";
 import { acceptedImageTypes, renumberReferences, useDraftImages } from "./draft-images";
 import { DraftImageTray } from "./images";
-import { api, type QueuedMessage } from "./api";
+import { api, compactErrorMessage, type CompactResult, type QueuedMessage } from "./api";
 import { ComposerShortcuts, ComposerStatus, type ComposerMode } from "./composer-status";
 import { MessageView } from "./message";
 import { isPending, useMessageQueue } from "./message-queue";
@@ -73,6 +74,26 @@ type Composer =
 
 /** Unsaved edit text is stored after typing pauses this long. */
 const editDraftSaveMs = 400;
+
+/** The line above the input box: why something did not happen, or what a command did. */
+interface Notice {
+  readonly tone: "problem" | "done";
+  readonly text: string;
+}
+const problem = (text: string): Notice => ({ tone: "problem", text });
+
+const tokenCount = new Intl.NumberFormat("ko-KR", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+
+const compacted = ({ cleared, tokensBefore, tokensAfter }: CompactResult): Notice => ({
+  tone: "done",
+  text:
+    cleared === 0
+      ? "비울 도구 출력이 없어요. 이미 답한 도구 출력만 비울 수 있어요."
+      : `지난 도구 출력 ${cleared}개를 비웠어요. 다음 질문부터 대화를 약 ${tokenCount.format(tokensBefore)} 토큰에서 ${tokenCount.format(tokensAfter)} 토큰으로 보내요.`,
+});
 
 /** A user turn from text and uploaded images, as the chat endpoint expects it. */
 const contentOf = (text: string, attachmentIds: readonly string[]) => ({
@@ -156,7 +177,7 @@ function ChatPanel({
   const readOnly = lease.state !== "mine";
   const [draft, setDraft] = useState("");
   const [dragging, setDragging] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
   const draftImages = useDraftImages();
   const textarea = useRef<HTMLTextAreaElement>(null);
   const caretAfterRender = useRef<number | null>(null);
@@ -218,6 +239,8 @@ function ChatPanel({
   const ready = draftImages.images.flatMap((image) => (image.status === "ready" ? [image] : []));
   const uploading = draftImages.images.some((image) => image.status === "uploading");
   const failed = draftImages.images.some((image) => image.status === "failed");
+  const shownNotice =
+    notice ?? (failed ? problem("올리지 못한 이미지가 있어요. 빼고 보내 주세요.") : null);
   const editing = composer.kind === "editing" ? composer : null;
   const composerMode: ComposerMode = editing
     ? { kind: "editing" }
@@ -319,7 +342,7 @@ function ChatPanel({
   /** Alt+↑ picks the last message still waiting, Alt+↓ the first. */
   const pickQueued = (direction: "up" | "down") => {
     if (editing) {
-      setNotice("Enter로 저장하거나 Esc로 지운 뒤 다른 메시지를 고를 수 있어요.");
+      setNotice(problem("Enter로 저장하거나 Esc로 지운 뒤 다른 메시지를 고를 수 있어요."));
       return;
     }
     const editable = queue.items.filter(isEditable);
@@ -334,7 +357,7 @@ function ChatPanel({
   const attach = (files: readonly File[]) => {
     if (files.length === 0) return;
     if (!imagesSupported) {
-      setNotice("선택한 모델은 이미지를 읽지 못해요. 이미지를 지원하는 모델을 고르세요.");
+      setNotice(problem("선택한 모델은 이미지를 읽지 못해요. 이미지를 지원하는 모델을 고르세요."));
       return;
     }
     setNotice(null);
@@ -368,7 +391,7 @@ function ChatPanel({
    */
   const submit = async (mode: "queue" | "steer") => {
     if (editing) {
-      if (mode === "steer") setNotice("편집을 끝낸 뒤 스티어링할 수 있어요.");
+      if (mode === "steer") setNotice(problem("편집을 끝낸 뒤 스티어링할 수 있어요."));
       else await finishEdit("save");
       return;
     }
@@ -384,7 +407,7 @@ function ChatPanel({
       case "not_command":
         break;
       case "incomplete":
-        return setNotice(parsed.reason);
+        return setNotice(problem(parsed.reason));
       case "command": {
         const command = parsed.command;
         switch (command.kind) {
@@ -394,9 +417,21 @@ function ChatPanel({
             break;
           case "cancel":
             setDraft("");
-            setNotice(generating ? null : "멈출 답변이 없어요.");
+            setNotice(generating ? null : problem("멈출 답변이 없어요."));
             if (generating) void cancel();
             return;
+          case "compact":
+            setDraft("");
+            setNotice(null);
+            return api.compactSession(sessionId, holder).then(
+              (result) => setNotice(compacted(result)),
+              (error) =>
+                setNotice(
+                  problem(
+                    compactErrorMessage(error instanceof Error ? error : new Error(String(error))),
+                  ),
+                ),
+            );
           case "new":
           case "agent":
           case "mode":
@@ -404,7 +439,7 @@ function ChatPanel({
           case "settings":
             setDraft("");
             setNotice(null);
-            return slash.run(command).catch(() => setNotice("명령을 실행하지 못했어요."));
+            return slash.run(command).catch(() => setNotice(problem("명령을 실행하지 못했어요.")));
         }
       }
     }
@@ -430,9 +465,9 @@ function ChatPanel({
       case "not-running":
         return sendTurn();
       case "steer-unavailable":
-        return setNotice("지금은 바로 전달할 수 없어요. Enter로 대기열에 넣을 수 있어요.");
+        return setNotice(problem("지금은 바로 전달할 수 없어요. Enter로 대기열에 넣을 수 있어요."));
       case "failed":
-        return setNotice("메시지를 넣지 못했어요. 다시 시도해 주세요.");
+        return setNotice(problem("메시지를 넣지 못했어요. 다시 시도해 주세요."));
     }
   };
 
@@ -519,9 +554,14 @@ function ChatPanel({
 
       <div className="bg-background px-6 pt-2 pb-4">
         <div className="mx-auto max-w-3xl">
-          {(notice ?? failed) && (
-            <p className="px-1 pb-1.5 text-xs text-destructive">
-              {notice ?? "올리지 못한 이미지가 있어요. 빼고 보내 주세요."}
+          {shownNotice && (
+            <p
+              className={cn(
+                "px-1 pb-1.5 text-xs",
+                shownNotice.tone === "problem" ? "text-destructive" : "text-muted-foreground",
+              )}
+            >
+              {shownNotice.text}
             </p>
           )}
           {lease.state === "other" || lease.state === "free" ? (

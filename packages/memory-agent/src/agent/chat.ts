@@ -46,9 +46,9 @@ import { QueueDelivery } from "../queue/delivery.ts";
 import { hostShell } from "../shell/run.ts";
 import { MessageQueue, type QueueChangeRefused } from "../queue/queue.ts";
 import type { QueueEdit, QueuedMessage } from "../queue/queue-state.ts";
-import { compactionFor } from "./compaction.ts";
+import { compactByHand, compactionFor, manualCompaction } from "./compaction.ts";
 import { LiveRuns } from "./live-runs.ts";
-import type { CancelResult, SessionRunState } from "./run-state.ts";
+import type { CancelResult, CompactResult, SessionRunState } from "./run-state.ts";
 import { sessionHolderHeader } from "../sessions/lease-state.ts";
 import { SessionLeases } from "../sessions/leases.ts";
 
@@ -252,6 +252,8 @@ const make = Effect.gen(function* () {
   const delivery = yield* QueueDelivery;
   const liveRuns = new LiveRuns();
   const inUse = () => json(423, { error: "session_in_use" });
+  /** Every handler that looks a session up answers this when it does not exist. */
+  const sessionNotFound = () => Effect.succeed(json(404, { error: "session_not_found" }));
 
   /**
    * What happens to queued messages when a run ends. After a normal finish the page holding the
@@ -342,18 +344,15 @@ const make = Effect.gen(function* () {
      */
     handle: (request: Request, sessionId: string) =>
       Effect.gen(function* () {
-        const session = yield* Effect.either(sessions.get(sessionId));
-        if (session._tag === "Left") return json(404, { error: "session_not_found" });
+        const { projectId, agent: external } = yield* sessions.get(sessionId);
         // Sending, approving and answering all come here; a read-only page may do none of them.
         if (!leases.permits(sessionId, request.headers.get(sessionHolderHeader))) return inUse();
-        const { projectId } = session.right;
         // Sessions reference projects by foreign key, so a missing project is a broken store.
         const project = yield* Effect.orDie(projects.get(projectId));
         // One run at a time per session: a second would race the first for the codex turn.
         const live = liveRuns.get(sessionId);
         if (live) return json(409, { error: "run_in_progress", runId: live.runId });
         // A direct conversation with an external agent needs that agent, not the ChatGPT model.
-        const external = session.right.agent;
         if (external !== null && !externalAgents.available(project).includes(external))
           return json(409, { error: "external_agent_unavailable", agent: external });
         const auth = external === null ? yield* account.status : null;
@@ -559,13 +558,15 @@ const make = Effect.gen(function* () {
           ],
           abortController.signal,
         );
+        const toolResultIds = () => nodes.toolResultIds(sessionId);
         middleware.push(
           children.middleware,
           reads.middleware,
           recorder.forRun({ projectId, sessionId, runId, userNodeId: userNode.id }),
           indexInBackground(),
           // Last to shape what the model is sent, so nothing after it replaces the compacted history.
-          compactionFor(() => nodes.toolResultIds(sessionId)),
+          manualCompaction(chatState.persistence.stores.metadata, toolResultIds),
+          compactionFor(toolResultIds),
           codexChat.runMiddleware(),
         );
         const tools = reads.tools;
@@ -592,7 +593,7 @@ const make = Effect.gen(function* () {
           // never trails what the server has recorded.
           durability: { adapter: memoryStream({ runId }), batch: 1 },
         });
-      }),
+      }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
 
     /**
      * GET handler for a reloaded page. With `?threadId=` it hydrates: the stored transcript, a run
@@ -601,8 +602,7 @@ const make = Effect.gen(function* () {
      */
     hydrate: (request: Request, sessionId: string) =>
       Effect.gen(function* () {
-        const session = yield* Effect.either(sessions.get(sessionId));
-        if (session._tag === "Left") return json(404, { error: "session_not_found" });
+        yield* sessions.get(sessionId);
         if (!isStreamJoin(request))
           return yield* Effect.promise(() => chatState.hydrate(request, sessionId));
 
@@ -612,7 +612,7 @@ const make = Effect.gen(function* () {
         const run = runId ? yield* Effect.promise(() => chatState.run(sessionId, runId)) : null;
         if (!run) return json(404, { error: "run_not_found" });
         return resumeServerSentEventsResponse({ adapter: adapter.value });
-      }),
+      }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
 
     /**
      * Explicit cancel of the session's running run. The intent is recorded on the run first, then
@@ -639,13 +639,30 @@ const make = Effect.gen(function* () {
       }),
 
     /**
+     * `/compact`: stops sending the model the tool output it has already answered from. Refused
+     * while the session is answering, since the run in progress still works with its own output.
+     */
+    compact: (sessionId: string, holder: string | null) =>
+      Effect.gen(function* () {
+        if (!leases.permits(sessionId, holder)) return inUse();
+        yield* sessions.get(sessionId);
+        if (liveRuns.get(sessionId)) return json(409, { error: "run_in_progress" });
+        const { messages, metadata } = chatState.persistence.stores;
+        const result: CompactResult = yield* Effect.promise(async () =>
+          compactByHand(metadata, sessionId, await messages.loadThread(sessionId), () =>
+            nodes.toolResultIds(sessionId),
+          ),
+        );
+        return json(200, result);
+      }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
+
+    /**
      * What a page needs beyond the transcript: whether a run is producing, how the last one ended,
      * and whether this page (`holder`) may change the session.
      */
     status: (sessionId: string, holder: string | null) =>
       Effect.gen(function* () {
-        const session = yield* Effect.either(sessions.get(sessionId));
-        if (session._tag === "Left") return json(404, { error: "session_not_found" });
+        yield* sessions.get(sessionId);
         const live = liveRuns.get(sessionId);
         const last = yield* Effect.promise(() => chatState.lastRun(sessionId));
         const state: SessionRunState = {
@@ -654,7 +671,7 @@ const make = Effect.gen(function* () {
           lease: leases.view(sessionId, holder),
         };
         return json(200, state);
-      }),
+      }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
 
     /**
      * Claims or renews the session for a page, or gives it up. A page that is refused stays
@@ -662,8 +679,7 @@ const make = Effect.gen(function* () {
      */
     lease: (sessionId: string, holder: string, action: "claim" | "release") =>
       Effect.gen(function* () {
-        const session = yield* Effect.either(sessions.get(sessionId));
-        if (session._tag === "Left") return json(404, { error: "session_not_found" });
+        yield* sessions.get(sessionId);
         switch (action) {
           case "claim":
             leases.claim(sessionId, holder);
@@ -676,7 +692,7 @@ const make = Effect.gen(function* () {
             break;
         }
         return json(200, leases.view(sessionId, holder));
-      }),
+      }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
 
     /**
      * Archives a conversation (out of the list, kept in memory) or brings it back. Not while it is
@@ -686,19 +702,16 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         if (!leases.permits(sessionId, holder)) return inUse();
         if (liveRuns.get(sessionId)) return json(409, { error: "run_in_progress" });
-        const session = yield* Effect.either(sessions.setArchived(sessionId, archived));
-        if (session._tag === "Left") return json(404, { error: "session_not_found" });
-        return json(200, session.right);
-      }),
+        return json(200, yield* sessions.setArchived(sessionId, archived));
+      }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
 
     /** The session's queue: messages still to deliver, and those the latest run delivered. */
     queued: (sessionId: string) =>
       Effect.gen(function* () {
-        const session = yield* Effect.either(sessions.get(sessionId));
-        if (session._tag === "Left") return json(404, { error: "session_not_found" });
+        yield* sessions.get(sessionId);
         const last = yield* Effect.promise(() => chatState.lastRun(sessionId));
         return json(200, queue.list(sessionId, last?.runId ?? null));
-      }),
+      }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
 
     /**
      * A message written while a run answers. `queue` keeps it for the next tool-call boundary (or
@@ -708,8 +721,7 @@ const make = Effect.gen(function* () {
      */
     enqueue: (sessionId: string, holder: string | null, request: QueueRequest) =>
       Effect.gen(function* () {
-        const session = yield* Effect.either(sessions.get(sessionId));
-        if (session._tag === "Left") return json(404, { error: "session_not_found" });
+        const { projectId } = yield* sessions.get(sessionId);
         if (!leases.permits(sessionId, holder)) return inUse();
         const { text, attachmentIds, mode } = request;
         if (text.trim().length === 0 && attachmentIds.length === 0)
@@ -724,26 +736,27 @@ const make = Effect.gen(function* () {
           case "queue":
             return json(201, message);
           case "steer": {
-            const binding = { projectId: session.right.projectId, sessionId, runId: live.runId };
-            const outcome = yield* Effect.either(delivery.steer(binding, message));
-            if (outcome._tag === "Right" && outcome.right === "steered")
-              return json(201, queue.get(sessionId, message.id));
             // Not delivered: the message is not kept, so the page still has it as a draft.
-            yield* Effect.ignore(queue.remove(sessionId, message.id));
-            return outcome._tag === "Right"
-              ? json(409, { error: "steer_unavailable" })
-              : json(502, { error: "steer_failed" });
+            const undelivered = (response: Response) =>
+              Effect.as(Effect.ignore(queue.remove(sessionId, message.id)), response);
+            return yield* delivery.steer({ projectId, sessionId, runId: live.runId }, message).pipe(
+              Effect.matchEffect({
+                onSuccess: (outcome) =>
+                  outcome === "steered"
+                    ? Effect.succeed(json(201, queue.get(sessionId, message.id)))
+                    : undelivered(json(409, { error: "steer_unavailable" })),
+                onFailure: () => undelivered(json(502, { error: "steer_failed" })),
+              }),
+            );
           }
         }
-      }),
+      }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
 
     /** The session's subagents. */
     subagents: (sessionId: string) =>
-      Effect.gen(function* () {
-        const session = yield* Effect.either(sessions.get(sessionId));
-        if (session._tag === "Left") return json(404, { error: "session_not_found" });
-        return json(200, subagents.list(sessionId));
-      }),
+      Effect.map(sessions.get(sessionId), () => json(200, subagents.list(sessionId))).pipe(
+        Effect.catchTag("SessionNotFound", sessionNotFound),
+      ),
 
     /** One subagent's saved conversation. */
     subagentTranscript: (sessionId: string, subagentId: string) =>
@@ -757,11 +770,9 @@ const make = Effect.gen(function* () {
      * agent's own permission requests.
      */
     approvals: (sessionId: string) =>
-      Effect.gen(function* () {
-        const session = yield* Effect.either(sessions.get(sessionId));
-        if (session._tag === "Left") return json(404, { error: "session_not_found" });
-        return json(200, relayed.pending(sessionId));
-      }),
+      Effect.map(sessions.get(sessionId), () => json(200, relayed.pending(sessionId))).pipe(
+        Effect.catchTag("SessionNotFound", sessionNotFound),
+      ),
 
     /** The page's answer to a relayed approval. Only the page holding the session may answer. */
     answerApproval: (
