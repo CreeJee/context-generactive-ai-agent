@@ -1,6 +1,12 @@
 import {
   BookOpenIcon,
   BotIcon,
+  CheckIcon,
+  CopyIcon,
+  CpuIcon,
+  FolderIcon,
+  GlobeIcon,
+  HistoryIcon,
   KeyRoundIcon,
   PlugIcon,
   RefreshCwIcon,
@@ -8,7 +14,7 @@ import {
   Trash2Icon,
 } from "lucide-react";
 import { Schema } from "effect";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Alert, AlertDescription } from "~/components/ui/alert";
 import { AnimatedNumber } from "~/components/ui/animated-number";
 import { Badge } from "~/components/ui/badge";
@@ -76,6 +82,209 @@ const kagiErrors = new Map([
 const errorMessage = (error: Error) =>
   (error instanceof ApiError && kagiErrors.get(error.code)) || "설정을 바꾸지 못했어요.";
 
+/**
+ * The top of every settings page: what it is, the project it applies to when it depends on one,
+ * and its main action.
+ */
+function PageHeader({
+  title,
+  badge,
+  description,
+  project,
+  action,
+}: {
+  title: string;
+  badge?: ReactNode;
+  description: ReactNode;
+  /** Set on pages that read the selected project's files. */
+  project?: Project | null;
+  action?: ReactNode;
+}) {
+  return (
+    <header className="flex items-start gap-3">
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="text-sm font-medium">{title}</h3>
+          {badge}
+          {project && (
+            <Badge variant="outline">
+              <FolderIcon data-icon="inline-start" />
+              {project.name}
+            </Badge>
+          )}
+        </div>
+        <p className="text-xs/relaxed text-muted-foreground">{description}</p>
+      </div>
+      {action}
+    </header>
+  );
+}
+
+/** A page's body while it loads, or when loading failed. */
+function PageLoading({ error }: { error: string | null }) {
+  return error ? <FieldError>{error}</FieldError> : <Spinner />;
+}
+
+function PageError({ error }: { error: string | null }) {
+  if (!error) return null;
+  return (
+    <Alert variant="destructive">
+      <AlertDescription>{error}</AlertDescription>
+    </Alert>
+  );
+}
+
+function NoProject() {
+  return (
+    <FieldDescription>사이드바에서 프로젝트를 고르면 그 프로젝트의 설정이 보여요.</FieldDescription>
+  );
+}
+
+/** A path as the page shows it: the home folder as `~`, and only its end when it is long. */
+function shortPath(path: string) {
+  const fromHome = path
+    .replace(/^\/(?:Users|home)\/[^/]+/u, "~")
+    .replace(/^[A-Za-z]:\\Users\\[^\\]+/u, "~");
+  const parts = fromHome.split(/[/\\]/u);
+  return parts.length > 5 ? `…/${parts.slice(-3).join("/")}` : fromHome;
+}
+
+/** A file of the project named from the project, a file elsewhere by its shortened path. */
+function pathIn(project: Project, path: string) {
+  const inside = path.startsWith(`${project.root}/`) || path.startsWith(`${project.root}\\`);
+  return inside ? `${project.name}${path.slice(project.root.length)}` : shortPath(path);
+}
+
+/** How long the copy button shows that it copied. */
+const copiedForMs = 1_500;
+
+function CopyPathButton({ path }: { path: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), copiedForMs);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  return (
+    <Button
+      variant="ghost-muted"
+      size="icon-xs"
+      aria-label={copied ? "경로를 복사했어요" : "전체 경로 복사"}
+      title={path}
+      onClick={() =>
+        void navigator.clipboard.writeText(path).then(
+          () => setCopied(true),
+          () => undefined,
+        )
+      }
+    >
+      {copied ? <CheckIcon /> : <CopyIcon />}
+    </Button>
+  );
+}
+
+interface SourceFile {
+  readonly label: string;
+  readonly path: string;
+  readonly shown: string;
+  readonly error?: string | null;
+}
+
+/** Where a page's list comes from, one short line per file; the full path is copied on demand. */
+function SourceFiles({ files, note }: { files: readonly SourceFile[]; note?: string }) {
+  return (
+    <div className="flex flex-col gap-1 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+      {files.map((file) => (
+        <div key={file.label}>
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="w-12 shrink-0">{file.label}</span>
+            <code className="min-w-0 flex-1 truncate" title={file.path}>
+              {file.shown}
+            </code>
+            <CopyPathButton path={file.path} />
+          </div>
+          {file.error && <p className="whitespace-pre-wrap text-destructive">{file.error}</p>}
+        </div>
+      ))}
+      {note && <p>{note}</p>}
+    </div>
+  );
+}
+
+const scopeLabels = { global: "공통", project: "프로젝트" } as const;
+/** Skills also come built into the app, which MCP servers and agents do not. */
+const skillScopeLabels = { builtin: "기본", ...scopeLabels } as const;
+
+/** One configured MCP server or agent: name, where it is set, how it runs, and what to do. */
+function ConfigEntry({
+  icon,
+  name,
+  scope,
+  state,
+  target,
+  secretKind,
+  secretNames,
+  problem,
+  children,
+  actions,
+}: {
+  icon: ReactNode;
+  name: string;
+  scope: keyof typeof scopeLabels;
+  state: ReactNode;
+  target: string;
+  secretKind: string;
+  secretNames: readonly string[];
+  problem: string | null;
+  children?: ReactNode;
+  actions?: ReactNode;
+}) {
+  return (
+    <Item variant="outline" size="sm">
+      <ItemMedia variant="icon">{icon}</ItemMedia>
+      <ItemContent className="min-w-0">
+        <ItemTitle className="flex-wrap">
+          {name}
+          <Badge variant="secondary">{scopeLabels[scope]}</Badge>
+          {state}
+        </ItemTitle>
+        <ItemDescription className="break-all">
+          <code>{target}</code>
+        </ItemDescription>
+        {secretNames.length > 0 && (
+          <ItemDescription>
+            {secretKind}: {secretNames.join(", ")} (값은 보여주지 않아요)
+          </ItemDescription>
+        )}
+        {problem && <ItemDescription variant="destructive">{problem}</ItemDescription>}
+        {children}
+      </ItemContent>
+      {actions && <ItemActions>{actions}</ItemActions>}
+    </Item>
+  );
+}
+
+/** What a trust button says: stop what runs, or trust what does not (again, if it changed). */
+function TrustButton({
+  active,
+  changed,
+  busy,
+  onClick,
+}: {
+  active: boolean;
+  changed: boolean;
+  busy: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <Button size="sm" variant={active ? "ghost" : "outline"} disabled={busy} onClick={onClick}>
+      {active ? "사용 중지" : changed ? "다시 신뢰하기" : "신뢰하기"}
+    </Button>
+  );
+}
+
+const shadowedBadge = <Badge variant="outline">프로젝트 설정으로 대체됨</Badge>;
+
 function KagiBadge({ status }: { status: KagiStatus }) {
   if (status.enabled) return <Badge>켜짐</Badge>;
   if (status.keyRegistered) return <Badge variant="secondary">꺼짐</Badge>;
@@ -111,25 +320,32 @@ function KagiSettings() {
     }
   };
 
-  if (!status) return error ? <FieldDescription>{error}</FieldDescription> : <Spinner />;
+  const header = (
+    <PageHeader
+      title="웹 검색"
+      badge={status && <KagiBadge status={status} />}
+      description="켜면 모델이 필요할 때 Kagi로 웹을 검색하고 페이지를 읽어요. 모든 프로젝트에 적용되고, 호출마다 Kagi 요금이 나가요."
+    />
+  );
+  if (!status)
+    return (
+      <FieldGroup>
+        {header}
+        <PageLoading error={error} />
+      </FieldGroup>
+    );
 
   return (
     <FieldGroup>
-      <div className="flex items-center gap-2">
-        <FieldTitle>Kagi Search · Extract</FieldTitle>
-        <KagiBadge status={status} />
-      </div>
-      <FieldDescription>
-        켜면 모델이 필요할 때 웹을 검색하고 페이지를 읽어요. 호출마다 Kagi 계정에 요금이 청구되고,
-        실패해도 자동으로 다시 시도하지 않아요. 모든 프로젝트에 적용돼요.
-      </FieldDescription>
-
+      {header}
       {status.keyRegistered ? (
         <>
           <Field orientation="horizontal">
             <FieldContent>
               <FieldLabel htmlFor="kagi-enabled">검색과 페이지 읽기 사용</FieldLabel>
-              <FieldDescription>끄면 다음 호출부터 바로 막혀요.</FieldDescription>
+              <FieldDescription>
+                실패해도 다시 시도하지 않아요. 끄면 다음 호출부터 바로 막혀요.
+              </FieldDescription>
             </FieldContent>
             <Switch
               id="kagi-enabled"
@@ -184,12 +400,7 @@ function KagiSettings() {
           </Field>
         </form>
       )}
-
-      {error && (
-        <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
+      <PageError error={error} />
     </FieldGroup>
   );
 }
@@ -217,7 +428,7 @@ const isUnplacedReason = Schema.is(UnplacedReason);
 const unplacedReason = (reason: string) =>
   isUnplacedReason(reason) ? unplacedReasons[reason] : reason;
 
-/** How often the tab asks again while a pass reads, and while its nodes wait to be indexed. */
+/** How often the page asks again while a pass reads, and while its nodes wait to be indexed. */
 const refreshWhileReadingMs = 1_000;
 const refreshWhileIndexingMs = 3_000;
 
@@ -303,17 +514,36 @@ function ImportSettings() {
     }
   };
 
-  if (!overview) return error ? <FieldDescription>{error}</FieldDescription> : <Spinner />;
+  const header = (
+    <PageHeader
+      title="대화 가져오기"
+      description="Claude Code와 Codex CLI가 이 컴퓨터에 남긴 대화를 기억으로 옮겨요. 도구 호출과 결과까지 옮겨서 옛 대화도 근거를 따라갈 수 있고, 원본 파일은 읽기만 해요."
+      action={
+        overview && (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy || reading}
+            onClick={() => void apply({ action: "run" })}
+          >
+            {busy || reading ? <Spinner /> : <RefreshCwIcon />}
+            {reading ? "읽는 중" : "지금 가져오기"}
+          </Button>
+        )
+      }
+    />
+  );
+  if (!overview)
+    return (
+      <FieldGroup>
+        {header}
+        <PageLoading error={error} />
+      </FieldGroup>
+    );
 
   return (
     <FieldGroup>
-      <FieldTitle>다른 에이전트의 대화 가져오기</FieldTitle>
-      <FieldDescription>
-        Claude Code와 Codex CLI가 이 컴퓨터에 남긴 대화를 읽어 기억으로 옮겨요. 발언뿐 아니라 도구
-        호출과 결과까지 그대로 옮겨서, 옛 대화도 근거를 따라갈 수 있어요. 원본 파일은 건드리지 않고
-        읽기만 해요. 대화가 있던 폴더는 프로젝트로 자동 등록되고, 그 폴더의 파일은 에이전트가 읽고
-        고칠 수 있게 돼요. 필요 없는 프로젝트는 사이드바의 목록에서 뺄 수 있어요.
-      </FieldDescription>
+      {header}
 
       <Field orientation="horizontal">
         <FieldContent>
@@ -330,23 +560,39 @@ function ImportSettings() {
         />
       </Field>
 
+      <Field orientation="horizontal">
+        <FieldContent>
+          <FieldLabel htmlFor="imports-interpret">가져온 발언도 해석</FieldLabel>
+          <FieldDescription>
+            주제를 붙이고 정정, 취소 관계를 정리해요. 모델을 쓰기 때문에 답변이 끝난 뒤 조금씩
+            처리돼요.
+          </FieldDescription>
+        </FieldContent>
+        <Switch
+          id="imports-interpret"
+          checked={overview.interpret}
+          disabled={busy}
+          onCheckedChange={(checked) => void apply({ action: "interpret", interpret: checked })}
+        />
+      </Field>
+
       <ItemGroup>
         {overview.sources.map((source) => (
-          <Item key={source.name} variant="outline">
-            <ItemMedia>
-              <BotIcon className="size-4" />
+          <Item key={source.name} variant="outline" size="sm">
+            <ItemMedia variant="icon">
+              <BotIcon />
             </ItemMedia>
-            <ItemContent>
+            <ItemContent className="min-w-0">
               <ItemTitle>{sourceNames[source.name]}</ItemTitle>
               <ItemDescription>
                 기록 <AnimatedNumber value={source.transcripts} />개 중{" "}
                 <AnimatedNumber value={source.migrated} />
-                개를 읽어 <AnimatedNumber value={source.nodes} />
-                개를 기억에 넣었어요.
+                개를 읽어 노드 <AnimatedNumber value={source.nodes} />
+                개를 넣었어요.
                 {source.failed > 0 && ` ${source.failed}개는 읽지 못했어요.`}
               </ItemDescription>
-              <ItemDescription>
-                <code>{source.root}</code>
+              <ItemDescription className="break-all" title={source.root}>
+                <code>{shortPath(source.root)}</code>
               </ItemDescription>
             </ItemContent>
           </Item>
@@ -358,10 +604,15 @@ function ImportSettings() {
       {overview.unindexed > 0 && (
         <FieldDescription>
           아직 <AnimatedNumber value={overview.unindexed} />
-          개를 인덱싱하고 있어요. 최근 대화부터 들어가고, 옛 기록은 뒤에서 채워요. 그동안에도 글자
-          검색과 형태소 검색으로는 찾을 수 있어요.
+          개를 인덱싱하고 있어요. 최근 대화부터 채우고, 그동안에도 글자 검색과 형태소 검색으로는
+          찾을 수 있어요.
         </FieldDescription>
       )}
+
+      <FieldDescription>
+        대화가 있던 폴더는 프로젝트로 등록돼요. 에이전트가 그 폴더의 파일을 읽고 고칠 수 있게 되니,
+        필요 없는 프로젝트는 사이드바에서 목록에서 빼세요.
+      </FieldDescription>
 
       {overview.unplaced.length > 0 && (
         <Alert>
@@ -385,7 +636,7 @@ function ImportSettings() {
             <ul className="font-mono text-xs">
               {overview.failures.map((failure) => (
                 <li key={`${failure.source}:${failure.path}`}>
-                  {failure.path} · {failure.reason}
+                  {failure.path}: {failure.reason}
                 </li>
               ))}
             </ul>
@@ -393,44 +644,7 @@ function ImportSettings() {
         </Alert>
       )}
 
-      <Field orientation="horizontal">
-        <FieldContent>
-          <FieldLabel htmlFor="imports-interpret">가져온 발언도 해석</FieldLabel>
-          <FieldDescription>
-            주제를 붙이고 정정, 취소 관계를 정리해요. 모델을 쓰기 때문에 답변이 끝난 뒤 조금씩
-            처리돼요.
-          </FieldDescription>
-        </FieldContent>
-        <Switch
-          id="imports-interpret"
-          checked={overview.interpret}
-          disabled={busy}
-          onCheckedChange={(checked) => void apply({ action: "interpret", interpret: checked })}
-        />
-      </Field>
-
-      <Field orientation="horizontal">
-        <FieldContent>
-          <FieldTitle>지금 가져오기</FieldTitle>
-          <FieldDescription>
-            설정을 바꾸지 않고 한 번만 읽어요. 뒤에서 읽으니 창을 닫아도 계속돼요.
-          </FieldDescription>
-        </FieldContent>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={busy || reading}
-          onClick={() => void apply({ action: "run" })}
-        >
-          {busy || reading ? <Spinner /> : <RefreshCwIcon />} {reading ? "읽는 중" : "읽기"}
-        </Button>
-      </Field>
-
-      {error && (
-        <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
+      <PageError error={error} />
     </FieldGroup>
   );
 }
@@ -443,26 +657,48 @@ const embeddingChoices = [
 
 const modeNames = { cpu: "CPU", gpu: "GPU" } as const;
 
-/** How often the tab asks again while WebGPU is checked or nodes wait to be embedded. */
+/** How often the page asks again while WebGPU is checked or nodes wait to be embedded. */
 const refreshEmbeddingMs = 3_000;
 
 const gibibytes = (bytes: number) => Math.round(bytes / 1024 ** 3);
 
-/** What the model runs on in this process, in words. */
-function runningText(running: EmbeddingOverview["running"]) {
+/** What the model runs on in this process, as a badge. */
+function RunningBadge({ running }: { running: EmbeddingOverview["running"] }) {
   switch (running.kind) {
     case "other":
       return null;
     case "local":
       if (running.device === null)
-        return `${modeNames[running.mode]} 모드로 시작했어요. 모델은 처음 임베딩할 때 불러와요.`;
+        return (
+          <Badge variant="secondary">{modeNames[running.mode]} 모드, 아직 불러오지 않음</Badge>
+        );
       switch (running.mode) {
         case "cpu":
-          return "지금 CPU에서 경량(양자화) 모델을 돌리고 있어요.";
+          return <Badge variant="secondary">CPU에서 실행 중</Badge>;
+        case "gpu":
+          return running.device === "webgpu" ? (
+            <Badge variant="secondary">GPU(WebGPU)에서 실행 중</Badge>
+          ) : (
+            <Badge variant="outline">GPU 모드, CPU에서 실행 중</Badge>
+          );
+      }
+  }
+}
+
+/** What the running model means for the user, in words; nothing when the badge says it all. */
+function runningNote(running: EmbeddingOverview["running"]) {
+  switch (running.kind) {
+    case "other":
+      return null;
+    case "local":
+      if (running.device === null) return "모델은 처음 임베딩할 때 불러와요.";
+      switch (running.mode) {
+        case "cpu":
+          return null;
         case "gpu":
           return running.device === "webgpu"
-            ? "지금 GPU(WebGPU)에서 원본 모델을 돌리고 있어요."
-            : "GPU 모드지만 WebGPU를 쓸 수 없어 CPU에서 원본 모델을 돌리고 있어요. 벡터는 같지만 더 느려요.";
+            ? null
+            : "WebGPU를 쓸 수 없어 CPU에서 원본 모델을 돌리고 있어요. 벡터는 같지만 더 느려요.";
       }
   }
 }
@@ -522,20 +758,28 @@ function EmbeddingSettings() {
     }
   };
 
-  if (!overview) return error ? <FieldDescription>{error}</FieldDescription> : <Spinner />;
+  const header = (
+    <PageHeader
+      title="임베딩"
+      badge={overview && <RunningBadge running={overview.running} />}
+      description="기억을 뜻으로 찾을 때 쓰는 벡터를 어디서 만들지 정해요. 사용자와 모델의 발언만 임베딩하고, 도구 기록은 글자 검색으로 찾아요."
+    />
+  );
+  if (!overview)
+    return (
+      <FieldGroup>
+        {header}
+        <PageLoading error={error} />
+      </FieldGroup>
+    );
 
-  const running = runningText(overview.running);
+  const note = runningNote(overview.running);
   const restartNeeded =
     overview.running.kind === "local" && overview.running.mode !== overview.next;
 
   return (
     <FieldGroup>
-      <FieldTitle>임베딩 실행</FieldTitle>
-      <FieldDescription>
-        기억을 뜻으로 찾기 위한 벡터를 어디서 만들지 정해요. CPU는 메모리를 적게 쓰는 대신 만드는
-        동안 CPU 코어를 여럿 써요. GPU는 CPU를 훨씬 덜 쓰고 원본 모델 그대로의 벡터를 만들지만
-        메모리를 1~1.6GB 더 써요.
-      </FieldDescription>
+      {header}
 
       <Field>
         <FieldLabel htmlFor="embedding-device">실행 방식</FieldLabel>
@@ -560,12 +804,14 @@ function EmbeddingSettings() {
           </SelectContent>
         </Select>
         <FieldDescription>
-          자동은 메모리가 {gibibytes(overview.gpuMemoryThreshold)}GB 이상이고 WebGPU가 되면 GPU를
-          써요. 이 기기의 메모리는 {gibibytes(overview.memoryBytes)}GB예요.
+          CPU는 메모리를 적게 쓰는 대신 벡터를 만드는 동안 코어를 여럿 써요. GPU는 CPU를 훨씬 덜
+          쓰지만 메모리를 1~1.6GB 더 써요. 자동은 메모리가 {gibibytes(overview.gpuMemoryThreshold)}
+          GB 이상이고 WebGPU가 되면 GPU를 써요. 이 기기의 메모리는 {gibibytes(overview.memoryBytes)}
+          GB예요.
         </FieldDescription>
       </Field>
 
-      {running && <FieldDescription>{running}</FieldDescription>}
+      {note && <FieldDescription>{note}</FieldDescription>}
       {restartNeeded && (
         <Alert>
           <AlertDescription>
@@ -597,17 +843,13 @@ function EmbeddingSettings() {
         </FieldDescription>
       )}
 
-      {error && (
-        <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
+      <PageError error={error} />
     </FieldGroup>
   );
 }
 
 function McpStateBadge({ server }: { server: McpServerView }) {
-  if (server.shadowed) return <Badge variant="outline">프로젝트 설정이 대신함</Badge>;
+  if (server.shadowed) return shadowedBadge;
   switch (server.state.status) {
     case "untrusted":
       return <Badge variant="outline">신뢰 필요</Badge>;
@@ -620,66 +862,6 @@ function McpStateBadge({ server }: { server: McpServerView }) {
     case "failed":
       return <Badge variant="destructive">시작 실패</Badge>;
   }
-}
-
-const scopeLabels = { global: "공통", project: "프로젝트" } as const;
-/** Skills also come built into the app, which MCP servers and agents do not. */
-const skillScopeLabels = { builtin: "기본", ...scopeLabels } as const;
-
-function McpServerItem({
-  server,
-  busy,
-  onTrust,
-}: {
-  server: McpServerView;
-  busy: boolean;
-  onTrust: (trusted: boolean) => void;
-}) {
-  const trusted = server.state.status !== "untrusted";
-  const names = [...server.envNames, ...server.headerNames];
-  return (
-    <Item variant="outline" size="sm">
-      <ItemMedia variant="icon">
-        <PlugIcon />
-      </ItemMedia>
-      <ItemContent className="min-w-0">
-        <ItemTitle className="flex-wrap">
-          {server.name}
-          <Badge variant="secondary">{scopeLabels[server.scope]}</Badge>
-          <McpStateBadge server={server} />
-        </ItemTitle>
-        <ItemDescription className="break-all">
-          <code>{server.target}</code>
-        </ItemDescription>
-        {names.length > 0 && (
-          <ItemDescription>
-            {server.transport === "stdio" ? "환경 변수" : "헤더"}: {names.join(", ")} (값은 보여주지
-            않아요)
-          </ItemDescription>
-        )}
-        {server.state.status === "failed" && (
-          <ItemDescription variant="destructive">{server.state.error}</ItemDescription>
-        )}
-        {server.state.status === "connected" && server.state.tools.length > 0 && (
-          <ItemDescription>
-            <code>{server.state.tools.join(", ")}</code>
-          </ItemDescription>
-        )}
-      </ItemContent>
-      {!server.shadowed && (
-        <ItemActions>
-          <Button
-            size="sm"
-            variant={trusted && server.state.status !== "changed" ? "ghost" : "outline"}
-            disabled={busy}
-            onClick={() => onTrust(!(trusted && server.state.status !== "changed"))}
-          >
-            {trusted && server.state.status !== "changed" ? "사용 중지" : "신뢰하고 시작"}
-          </Button>
-        </ItemActions>
-      )}
-    </Item>
-  );
 }
 
 /** MCP servers from the user-wide and project config files (R18). */
@@ -696,8 +878,27 @@ function McpSettings({ project }: { project: Project | null }) {
       .catch(() => setError("MCP 설정을 읽지 못했어요."));
   }, [project]);
 
-  if (!project) return <FieldDescription>프로젝트를 먼저 선택하세요.</FieldDescription>;
-  if (!overview) return error ? <FieldDescription>{error}</FieldDescription> : <Spinner />;
+  const header = (
+    <PageHeader
+      title="MCP 서버"
+      project={project}
+      description="신뢰한 서버만 시작해요. 설정 파일이 바뀌면 다시 신뢰해야 하고, 신뢰해도 도구를 부를 때마다 승인이나 자동 판단을 거쳐요."
+    />
+  );
+  if (!project)
+    return (
+      <FieldGroup>
+        {header}
+        <NoProject />
+      </FieldGroup>
+    );
+  if (!overview)
+    return (
+      <FieldGroup>
+        {header}
+        <PageLoading error={error} />
+      </FieldGroup>
+    );
 
   const trust = async (server: McpServerView, trusted: boolean) => {
     setBusy(true);
@@ -713,44 +914,61 @@ function McpSettings({ project }: { project: Project | null }) {
 
   return (
     <FieldGroup>
-      <FieldDescription>
-        설정 파일에 적힌 서버는 신뢰하기 전에는 시작하지 않아요. 신뢰는 적힌 명령과 주소 그대로에만
-        적용되고, 파일이 바뀌면 다시 신뢰해야 해요. 신뢰해도 도구 호출은 매번 승인(또는 자동 판단)을
-        거쳐요.
-      </FieldDescription>
-      <div className="flex flex-col gap-1">
-        {overview.files.map((file) => (
-          <div key={file.scope} className="text-xs text-muted-foreground">
-            {scopeLabels[file.scope]}: <code className="break-all">{file.path}</code>
-            {file.error && <div className="text-destructive whitespace-pre-wrap">{file.error}</div>}
-          </div>
-        ))}
-      </div>
+      {header}
+      <SourceFiles
+        files={overview.files.map((file) => ({
+          label: scopeLabels[file.scope],
+          path: file.path,
+          shown: pathIn(project, file.path),
+          error: file.error,
+        }))}
+        note="이름이 같으면 프로젝트 설정을 써요."
+      />
       {overview.servers.length === 0 ? (
         <FieldDescription>설정된 MCP 서버가 없어요.</FieldDescription>
       ) : (
         <ItemGroup>
-          {overview.servers.map((server) => (
-            <McpServerItem
-              key={`${server.scope}/${server.name}`}
-              server={server}
-              busy={busy}
-              onTrust={(trusted) => void trust(server, trusted)}
-            />
-          ))}
+          {overview.servers.map((server) => {
+            const active = server.state.status !== "untrusted" && server.state.status !== "changed";
+            return (
+              <ConfigEntry
+                key={`${server.scope}/${server.name}`}
+                icon={<PlugIcon />}
+                name={server.name}
+                scope={server.scope}
+                state={<McpStateBadge server={server} />}
+                target={server.target}
+                secretKind={server.transport === "stdio" ? "환경 변수" : "헤더"}
+                secretNames={[...server.envNames, ...server.headerNames]}
+                problem={server.state.status === "failed" ? server.state.error : null}
+                actions={
+                  !server.shadowed && (
+                    <TrustButton
+                      active={active}
+                      changed={server.state.status === "changed"}
+                      busy={busy}
+                      onClick={() => void trust(server, !active)}
+                    />
+                  )
+                }
+              >
+                {server.state.status === "connected" && server.state.tools.length > 0 && (
+                  <ItemDescription>
+                    <code>{server.state.tools.join(", ")}</code>
+                  </ItemDescription>
+                )}
+              </ConfigEntry>
+            );
+          })}
         </ItemGroup>
       )}
-      {error && (
-        <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
+      <PageError error={error} />
     </FieldGroup>
   );
 }
 
 function AgentStateBadge({ agent }: { agent: ExternalAgentView }) {
-  if (agent.shadowed) return <Badge variant="outline">프로젝트 설정이 대신함</Badge>;
+  if (agent.shadowed) return shadowedBadge;
   switch (agent.state.status) {
     case "untrusted":
       return <Badge variant="outline">신뢰 필요</Badge>;
@@ -772,6 +990,26 @@ function AgentStateBadge({ agent }: { agent: ExternalAgentView }) {
   }
 }
 
+/** Why a trusted agent is not connected, when it tried and failed. */
+function agentProblem(agent: ExternalAgentView) {
+  switch (agent.state.status) {
+    case "untrusted":
+    case "changed":
+      return null;
+    case "trusted":
+      switch (agent.state.link.status) {
+        case "idle":
+        case "connecting":
+        case "connected":
+          return null;
+        case "retrying":
+          return agent.state.link.error;
+        case "stopped":
+          return `${agent.state.link.error} 두 번 연달아 실패해서 멈췄어요. 다시 연결을 눌러 주세요.`;
+      }
+  }
+}
+
 /** External ACP agents (Codex and others) the conversation may delegate to (R17). */
 function AgentSettings({ project }: { project: Project | null }) {
   const [overview, setOverview] = useState<ExternalAgentsOverview | null>(null);
@@ -786,8 +1024,27 @@ function AgentSettings({ project }: { project: Project | null }) {
       .catch(() => setError("에이전트 설정을 읽지 못했어요."));
   }, [project]);
 
-  if (!project) return <FieldDescription>프로젝트를 먼저 선택하세요.</FieldDescription>;
-  if (!overview) return error ? <FieldDescription>{error}</FieldDescription> : <Spinner />;
+  const header = (
+    <PageHeader
+      title="외부 에이전트"
+      project={project}
+      description="신뢰한 ACP 에이전트에게 모델이 작업을 맡길 수 있어요. 맡길 때마다 승인하고, 에이전트는 이 앱의 ChatGPT 로그인이 아니라 자기 로그인으로 일해요."
+    />
+  );
+  if (!project)
+    return (
+      <FieldGroup>
+        {header}
+        <NoProject />
+      </FieldGroup>
+    );
+  if (!overview)
+    return (
+      <FieldGroup>
+        {header}
+        <PageLoading error={error} />
+      </FieldGroup>
+    );
 
   const apply = async (change: () => Promise<ExternalAgentsOverview>) => {
     setBusy(true);
@@ -803,20 +1060,16 @@ function AgentSettings({ project }: { project: Project | null }) {
 
   return (
     <FieldGroup>
-      <FieldDescription>
-        설정 파일에 적힌 ACP 에이전트를 신뢰하면, 모델이 작업 일부를 맡길 수 있어요. 에이전트는 자기
-        공식 로그인으로 동작하고 이 앱의 ChatGPT 토큰이나 키를 받지 않아요. 맡길 때마다 승인을 받고,
-        에이전트가 요청하는 권한도 따로 물어요. 연결이 끊기면 두 번까지 다시 연결하고, 그래도
-        실패하면 여기서 다시 연결해야 해요.
-      </FieldDescription>
-      <div className="flex flex-col gap-1">
-        {overview.files.map((file) => (
-          <div key={file.scope} className="text-xs text-muted-foreground">
-            {scopeLabels[file.scope]}: <code className="break-all">{file.path}</code>
-            {file.error && <div className="whitespace-pre-wrap text-destructive">{file.error}</div>}
-          </div>
-        ))}
-      </div>
+      {header}
+      <SourceFiles
+        files={overview.files.map((file) => ({
+          label: scopeLabels[file.scope],
+          path: file.path,
+          shown: pathIn(project, file.path),
+          error: file.error,
+        }))}
+        note="이름이 같으면 프로젝트 설정을 써요."
+      />
       {overview.agents.length === 0 ? (
         <FieldDescription>설정된 에이전트가 없어요.</FieldDescription>
       ) : (
@@ -824,72 +1077,52 @@ function AgentSettings({ project }: { project: Project | null }) {
           {overview.agents.map((agent) => {
             const trusted = agent.state.status === "trusted";
             const stopped =
-              trusted && agent.state.status === "trusted" && agent.state.link.status === "stopped";
+              agent.state.status === "trusted" && agent.state.link.status === "stopped";
             return (
-              <Item key={`${agent.scope}/${agent.name}`} variant="outline" size="sm">
-                <ItemMedia variant="icon">
-                  <BotIcon />
-                </ItemMedia>
-                <ItemContent className="min-w-0">
-                  <ItemTitle className="flex-wrap">
-                    {agent.name}
-                    <Badge variant="secondary">{scopeLabels[agent.scope]}</Badge>
-                    <AgentStateBadge agent={agent} />
-                  </ItemTitle>
-                  <ItemDescription className="break-all">
-                    <code>{agent.target}</code>
-                  </ItemDescription>
-                  {agent.envNames.length > 0 && (
-                    <ItemDescription>
-                      환경 변수: {agent.envNames.join(", ")} (값은 보여주지 않아요)
-                    </ItemDescription>
-                  )}
-                  {agent.state.status === "trusted" &&
-                    (agent.state.link.status === "retrying" ||
-                      agent.state.link.status === "stopped") && (
-                      <ItemDescription variant="destructive">
-                        {agent.state.link.error}
-                      </ItemDescription>
-                    )}
-                </ItemContent>
-                {!agent.shadowed && (
-                  <ItemActions>
-                    {stopped && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={busy}
+              <ConfigEntry
+                key={`${agent.scope}/${agent.name}`}
+                icon={<BotIcon />}
+                name={agent.name}
+                scope={agent.scope}
+                state={<AgentStateBadge agent={agent} />}
+                target={agent.target}
+                secretKind="환경 변수"
+                secretNames={agent.envNames}
+                problem={agentProblem(agent)}
+                actions={
+                  !agent.shadowed && (
+                    <>
+                      {stopped && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={busy}
+                          onClick={() =>
+                            void apply(() => api.reconnectExternalAgent(project.id, agent.name))
+                          }
+                        >
+                          <RefreshCwIcon /> 다시 연결
+                        </Button>
+                      )}
+                      <TrustButton
+                        active={trusted}
+                        changed={agent.state.status === "changed"}
+                        busy={busy}
                         onClick={() =>
-                          void apply(() => api.reconnectExternalAgent(project.id, agent.name))
+                          void apply(() =>
+                            api.trustExternalAgent(project.id, agent.scope, agent.name, !trusted),
+                          )
                         }
-                      >
-                        <RefreshCwIcon /> 다시 연결
-                      </Button>
-                    )}
-                    <Button
-                      size="sm"
-                      variant={trusted ? "ghost" : "outline"}
-                      disabled={busy}
-                      onClick={() =>
-                        void apply(() =>
-                          api.trustExternalAgent(project.id, agent.scope, agent.name, !trusted),
-                        )
-                      }
-                    >
-                      {trusted ? "사용 중지" : "신뢰"}
-                    </Button>
-                  </ItemActions>
-                )}
-              </Item>
+                      />
+                    </>
+                  )
+                }
+              />
             );
           })}
         </ItemGroup>
       )}
-      {error && (
-        <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
+      <PageError error={error} />
     </FieldGroup>
   );
 }
@@ -913,23 +1146,46 @@ function SkillSettings({ project }: { project: Project | null }) {
       .catch(() => setError("skill 목록을 읽지 못했어요."));
   }, [project]);
 
-  if (!project) return <FieldDescription>프로젝트를 먼저 선택하세요.</FieldDescription>;
-  if (!catalog) return error ? <FieldDescription>{error}</FieldDescription> : <Spinner />;
+  const header = (
+    <PageHeader
+      title="Skills"
+      project={project}
+      badge={catalog && <Badge variant="secondary">{catalog.skills.length}개</Badge>}
+      description="모델이 이름과 설명을 보고 작업에 맞는 skill을 읽어 따라요. skill은 지침일 뿐이라 승인을 대신하지 않아요."
+    />
+  );
+  if (!project)
+    return (
+      <FieldGroup>
+        {header}
+        <NoProject />
+      </FieldGroup>
+    );
+  if (!catalog)
+    return (
+      <FieldGroup>
+        {header}
+        <PageLoading error={error} />
+      </FieldGroup>
+    );
 
   return (
     <FieldGroup>
-      <FieldDescription>
-        모델은 목록의 이름과 설명을 보고, 작업에 맞으면 내용을 읽어 따라요. skill 문구는 지침일
-        뿐이라 승인을 대신하지 않아요. 이름이 같으면 프로젝트 → 공통 → 기본 순으로 앞의 것이 쓰이니,
-        기본 skill도 같은 이름으로 덮어쓸 수 있어요.
-      </FieldDescription>
-      <div className="flex flex-col gap-1">
-        {catalog.directories.map((directory) => (
-          <div key={directory.scope} className="text-xs text-muted-foreground">
-            {skillScopeLabels[directory.scope]}: <code className="break-all">{directory.path}</code>
-          </div>
-        ))}
-      </div>
+      {header}
+      <SourceFiles
+        files={catalog.directories.map((directory) => ({
+          label: skillScopeLabels[directory.scope],
+          path: directory.path,
+          shown: pathIn(project, directory.path),
+        }))}
+        note="이름이 같으면 프로젝트, 공통, 기본 순으로 앞의 것을 써요. 기본 skill도 같은 이름으로 덮어쓸 수 있어요."
+      />
+      {catalog.problems.map((problem) => (
+        <FieldError key={problem.directory}>
+          <code className="break-all">{pathIn(project, problem.directory)}</code>:{" "}
+          {skillProblems[problem.problem]}
+        </FieldError>
+      ))}
       {catalog.skills.length === 0 ? (
         <FieldDescription>쓸 수 있는 skill이 없어요.</FieldDescription>
       ) : (
@@ -944,22 +1200,59 @@ function SkillSettings({ project }: { project: Project | null }) {
                   {skill.name}
                   <Badge variant="secondary">{skillScopeLabels[skill.scope]}</Badge>
                 </ItemTitle>
-                <ItemDescription lines={3}>{skill.description}</ItemDescription>
+                <ItemDescription>{skill.description}</ItemDescription>
               </ItemContent>
             </Item>
           ))}
         </ItemGroup>
       )}
-      {catalog.problems.map((problem) => (
-        <FieldError key={problem.directory}>
-          <code className="break-all">{problem.directory}</code>: {skillProblems[problem.problem]}
-        </FieldError>
-      ))}
     </FieldGroup>
   );
 }
 
-/** Settings that apply beyond one conversation: web search, MCP servers, skills and agents. */
+/** The pages of the dialog, in the groups the list on the left shows. */
+const settingsGroups = [
+  {
+    label: "연결",
+    pages: [
+      { value: "web", label: "웹 검색", icon: GlobeIcon },
+      { value: "mcp", label: "MCP 서버", icon: PlugIcon },
+      { value: "agents", label: "외부 에이전트", icon: BotIcon },
+    ],
+  },
+  {
+    label: "기억",
+    pages: [
+      { value: "imports", label: "대화 가져오기", icon: HistoryIcon },
+      { value: "embedding", label: "임베딩", icon: CpuIcon },
+    ],
+  },
+  { label: "지침", pages: [{ value: "skills", label: "Skills", icon: BookOpenIcon }] },
+] as const;
+
+type SettingsPage = (typeof settingsGroups)[number]["pages"][number]["value"];
+
+function SettingsPageBody({ page, project }: { page: SettingsPage; project: Project | null }) {
+  switch (page) {
+    case "web":
+      return <KagiSettings />;
+    case "mcp":
+      return <McpSettings project={project} />;
+    case "agents":
+      return <AgentSettings project={project} />;
+    case "imports":
+      return <ImportSettings />;
+    case "embedding":
+      return <EmbeddingSettings />;
+    case "skills":
+      return <SkillSettings project={project} />;
+  }
+}
+
+/**
+ * Settings that apply beyond one conversation. The dialog keeps one size while pages change; a
+ * page scrolls inside it.
+ */
 export function SettingsDialog({
   project,
   open,
@@ -975,50 +1268,42 @@ export function SettingsDialog({
       <DialogTrigger render={<Button variant="ghost" size="icon-sm" aria-label="설정" />}>
         <SettingsIcon />
       </DialogTrigger>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent className="flex h-[min(40rem,calc(100dvh-2rem))] flex-col sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>설정</DialogTitle>
           <DialogDescription>대화 밖에서 쓰는 도구와 연결을 관리해요.</DialogDescription>
         </DialogHeader>
-        <Tabs defaultValue="web">
-          <TabsList>
-            <TabsTrigger value="web">웹 검색</TabsTrigger>
-            <TabsTrigger value="mcp">MCP</TabsTrigger>
-            <TabsTrigger value="skills">Skills</TabsTrigger>
-            <TabsTrigger value="agents">에이전트</TabsTrigger>
-            <TabsTrigger value="imports">가져오기</TabsTrigger>
-            <TabsTrigger value="memory">기억</TabsTrigger>
-          </TabsList>
-          <TabsContent value="web" className="mt-3">
-            <KagiSettings />
-          </TabsContent>
-          <TabsContent value="mcp" className="mt-3 max-h-[60vh] overflow-x-hidden overflow-y-auto">
-            <McpSettings project={project} />
-          </TabsContent>
-          <TabsContent
-            value="skills"
-            className="mt-3 max-h-[60vh] overflow-x-hidden overflow-y-auto"
-          >
-            <SkillSettings project={project} />
-          </TabsContent>
-          <TabsContent
-            value="agents"
-            className="mt-3 max-h-[60vh] overflow-x-hidden overflow-y-auto"
-          >
-            <AgentSettings project={project} />
-          </TabsContent>
-          <TabsContent
-            value="imports"
-            className="mt-3 max-h-[60vh] overflow-x-hidden overflow-y-auto"
-          >
-            <ImportSettings />
-          </TabsContent>
-          <TabsContent
-            value="memory"
-            className="mt-3 max-h-[60vh] overflow-x-hidden overflow-y-auto"
-          >
-            <EmbeddingSettings />
-          </TabsContent>
+        <Tabs defaultValue="web" orientation="vertical" className="min-h-0 flex-1">
+          <div className="mr-2 w-40 shrink-0 border-r pr-3">
+            <TabsList variant="nav" className="w-full items-stretch justify-start">
+              {settingsGroups.map((group) => (
+                <div key={group.label} className="flex flex-col gap-0.5 not-first:pt-3">
+                  <div className="px-2 pb-1 text-2xs font-medium text-muted-foreground">
+                    {group.label}
+                  </div>
+                  {group.pages.map((page) => (
+                    <TabsTrigger key={page.value} value={page.value}>
+                      <page.icon />
+                      {page.label}
+                    </TabsTrigger>
+                  ))}
+                </div>
+              ))}
+            </TabsList>
+          </div>
+          {settingsGroups.flatMap((group) =>
+            group.pages.map((page) => (
+              <TabsContent
+                key={page.value}
+                value={page.value}
+                className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto data-ending-style:hidden"
+              >
+                <div className="pr-2">
+                  <SettingsPageBody page={page.value} project={project} />
+                </div>
+              </TabsContent>
+            )),
+          )}
         </Tabs>
       </DialogContent>
     </Dialog>
