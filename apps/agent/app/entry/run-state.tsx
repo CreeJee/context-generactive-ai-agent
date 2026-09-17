@@ -1,4 +1,5 @@
 import type { SessionRunState } from "memory-agent/definitions";
+import type { WorkflowPhase } from "./api";
 import { RefreshCwIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "~/components/ui/alert";
@@ -60,10 +61,18 @@ export function useRunState(
     }
   };
 
+  const setWorkflowPhase = async (phase: WorkflowPhase) => {
+    const workflow = await api.setWorkflowPhase(sessionId, holder, phase);
+    setState((current) => (current ? { ...current, workflow } : current));
+    return workflow;
+  };
+
   return {
     cancelling,
     cancel,
     context: state?.context ?? null,
+    workflow: state?.workflow ?? null,
+    setWorkflowPhase,
     notice: cancelPending ? ({ kind: "cancel-pending" } as const) : noticeOf(state, page),
   };
 }

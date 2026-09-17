@@ -10,6 +10,7 @@ const record = (
   lastRun,
   lease: { state: "mine" },
   context: { usedTokens: null, windowTokens: 258_400, compactAtTokens: 64_600 },
+  workflow: { phase: "chat", goal: null, plan: null, ledger: [] },
 });
 const ended = (status: "completed" | "interrupted" | "failed" | "aborted", code?: string) =>
   record({

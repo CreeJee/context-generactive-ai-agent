@@ -10,6 +10,13 @@ export type SlashCommand =
   | { readonly kind: "cancel" }
   /** Stops sending the model tool output it has already answered from. */
   | { readonly kind: "compact" }
+  /** Selects Goal/Plan input or starts execution of a ready Plan. */
+  | {
+      readonly kind: "workflow";
+      readonly phase: "goal" | "plan" | "execute";
+      readonly request: string;
+    }
+  | { readonly kind: "workflow_status" }
   /** Sent as a message asking the model to follow one skill. */
   | { readonly kind: "skill"; readonly skill: string; readonly request: string }
   /** Sent as a message asking the model to answer from memory. */
@@ -47,6 +54,10 @@ export const commandSpecs: readonly CommandSpec[] = [
     description: "기억에서 찾아 답하기",
     argument: { kind: "text", placeholder: "질문" },
   },
+  { name: "goal", description: "결과를 맡기고 자율적으로 진행하기", argument: { kind: "none" } },
+  { name: "plan", description: "변경 없이 조사하고 실행 계획 만들기", argument: { kind: "none" } },
+  { name: "execute", description: "준비된 계획 승인하고 실행하기", argument: { kind: "none" } },
+  { name: "status", description: "현재 목표와 계획 상태 보기", argument: { kind: "none" } },
   { name: "mode", description: "권한 모드 바꾸기", argument: { kind: "choice", from: "modes" } },
   { name: "model", description: "모델 바꾸기", argument: { kind: "choice", from: "models" } },
   { name: "settings", description: "설정 열기", argument: { kind: "none" } },
@@ -201,6 +212,19 @@ export function parseSlash(draft: string, context: SlashContext): SlashParse {
       return { kind: "command", command: { kind: "cancel" } };
     case "compact":
       return { kind: "command", command: { kind: "compact" } };
+    case "goal":
+    case "plan":
+      return {
+        kind: "command",
+        command: { kind: "workflow", phase: spec.name, request: rest },
+      };
+    case "execute":
+      return {
+        kind: "command",
+        command: { kind: "workflow", phase: "execute", request: "" },
+      };
+    case "status":
+      return { kind: "command", command: { kind: "workflow_status" } };
     case "agent":
       return known("agents") && others.length === 0
         ? { kind: "command", command: { kind: "agent", agent: value } }

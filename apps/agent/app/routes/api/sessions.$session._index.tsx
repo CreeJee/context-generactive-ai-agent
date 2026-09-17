@@ -1,10 +1,13 @@
 import { Effect, Either, Schema } from "effect";
-import { AgentChat, sessionHolderHeader } from "memory-agent";
+import { AgentChat, WorkflowPhase, sessionHolderHeader } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/sessions.$session._index";
 
-const ChangeSession = Schema.Struct({ archived: Schema.Boolean });
+const ChangeSession = Schema.Union(
+  Schema.Struct({ archived: Schema.Boolean }),
+  Schema.Struct({ phase: WorkflowPhase }),
+);
 
 /**
  * GET /api/sessions/:session?holder= — run state the transcript does not carry: whether a run is
@@ -28,6 +31,10 @@ export async function action({ request, params }: Route.ActionArgs) {
     return Response.json({ error: "invalid_session_change" }, { status: 400 });
   const holder = request.headers.get(sessionHolderHeader);
   return agent.runPromise(
-    Effect.flatMap(AgentChat, (chat) => chat.archive(params.session, holder, body.right.archived)),
+    Effect.flatMap(AgentChat, (chat) =>
+      "archived" in body.right
+        ? chat.archive(params.session, holder, body.right.archived)
+        : chat.setWorkflowPhase(params.session, holder, body.right.phase),
+    ),
   );
 }

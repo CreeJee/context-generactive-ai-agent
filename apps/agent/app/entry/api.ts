@@ -18,10 +18,12 @@ import type {
   Project,
   Session,
   SkillCatalog,
+  WorkflowPhase,
+  WorkflowState,
 } from "memory-agent";
 import type { ModelMessage } from "@tanstack/ai";
 import type { UIMessage } from "@tanstack/ai-react";
-import { Schema } from "effect";
+import { Option, Schema } from "effect";
 import {
   sessionHolderHeader,
   type CancelResult,
@@ -66,21 +68,93 @@ export type {
   ApprovalRequester,
   RelayedApprovalView,
   SubagentView,
+  WorkflowPhase,
+  WorkflowState,
 };
+
+/** Every error code the browser API currently understands, including local fallbacks. */
+export const ApiErrorCode = Schema.Literal(
+  "approval_not_pending",
+  "attachment_not_found",
+  "attachment_rejected",
+  "codex_unavailable",
+  "cross_site_request",
+  "empty_message",
+  "external_agent_unavailable",
+  "images_not_supported",
+  "invalid_agent_change",
+  "invalid_answer",
+  "invalid_chat_request",
+  "invalid_embedding_action",
+  "invalid_import_action",
+  "invalid_intent",
+  "invalid_json",
+  "invalid_kagi_action",
+  "invalid_lease_request",
+  "invalid_mcp_change",
+  "invalid_origin",
+  "invalid_project",
+  "invalid_queue_edit",
+  "invalid_queue_request",
+  "invalid_selection",
+  "invalid_session",
+  "invalid_session_change",
+  "invalid_settings",
+  "invalid_stream_offset",
+  "kagi_key_required",
+  "keychain_failed",
+  "login_required",
+  "model_list_failed",
+  "model_selection_required",
+  "model_unavailable",
+  "no_running_run",
+  "no_user_turn",
+  "not_running",
+  "plan_not_ready",
+  "project_not_found",
+  "project_rejected",
+  "project_required",
+  "queue_delivered",
+  "queue_not_found",
+  "queue_not_held",
+  "queued_message_not_next",
+  "request_failed",
+  "run_in_progress",
+  "run_not_found",
+  "session_in_use",
+  "session_not_found",
+  "session_required",
+  "steer_failed",
+  "steer_unavailable",
+  "subagent_not_found",
+  "unknown_attachment",
+  "upload_failed",
+);
+export type ApiErrorCode = typeof ApiErrorCode.Type;
 
 export class ApiError extends Error {
   constructor(
     readonly status: number,
-    readonly code: string,
+    readonly code: ApiErrorCode,
     readonly reason: string | null,
   ) {
     super(code);
   }
 }
 
-interface ErrorBody {
-  error?: string;
-  reason?: string;
+const ErrorBody = Schema.Struct({
+  error: Schema.optional(ApiErrorCode),
+  reason: Schema.optional(Schema.String),
+});
+const decodeErrorBody = Schema.decodeUnknownOption(ErrorBody);
+type ErrorBody = typeof ErrorBody.Type;
+
+function apiError(
+  status: number,
+  body: ErrorBody | undefined,
+  fallback: "request_failed" | "upload_failed" = "request_failed",
+) {
+  return new ApiError(status, body?.error ?? fallback, body?.reason ?? null);
 }
 
 type JsonBody = Readonly<Record<string, string | boolean | readonly string[] | undefined>>;
@@ -102,8 +176,7 @@ async function call<T>(
       : { method, headers },
   );
   const json: T & ErrorBody = await response.json();
-  if (!response.ok)
-    throw new ApiError(response.status, json.error ?? "request_failed", json.reason ?? null);
+  if (!response.ok) throw apiError(response.status, Option.getOrUndefined(decodeErrorBody(json)));
   return json;
 }
 
@@ -139,6 +212,14 @@ export const api = {
       "POST",
       `/api/sessions/${encodeURIComponent(sessionId)}`,
       { archived },
+      { [sessionHolderHeader]: holder },
+    ),
+  /** Refused while a run is active; execute also requires a ready Plan. */
+  setWorkflowPhase: (sessionId: string, holder: string, phase: WorkflowPhase) =>
+    call<WorkflowState>(
+      "POST",
+      `/api/sessions/${encodeURIComponent(sessionId)}`,
+      { phase },
       { [sessionHolderHeader]: holder },
     ),
   /** `agent`: talk directly to that trusted external ACP agent instead of the app's model. */
@@ -271,7 +352,11 @@ export const api = {
     });
     const json: Attachment & ErrorBody = await response.json();
     if (!response.ok)
-      throw new ApiError(response.status, json.error ?? "upload_failed", json.reason ?? null);
+      throw apiError(
+        response.status,
+        Option.getOrUndefined(decodeErrorBody(json)),
+        "upload_failed",
+      );
     return json;
   },
 };

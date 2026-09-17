@@ -67,6 +67,26 @@ describe("slash command parsing", () => {
     expect(parseSlash("/agent claude", context)).toMatchObject({ kind: "incomplete" });
     expect(parseSlash("/mode", context)).toMatchObject({ kind: "incomplete" });
     expect(parseSlash("/recall", context)).toMatchObject({ kind: "incomplete" });
+    expect(parseSlash("/goal 결제 실패를 줄이고 싶어", context)).toEqual({
+      kind: "command",
+      command: {
+        kind: "workflow",
+        phase: "goal",
+        request: "결제 실패를 줄이고 싶어",
+      },
+    });
+    expect(parseSlash("/plan", context)).toEqual({
+      kind: "command",
+      command: { kind: "workflow", phase: "plan", request: "" },
+    });
+    expect(parseSlash("/execute", context)).toEqual({
+      kind: "command",
+      command: { kind: "workflow", phase: "execute", request: "" },
+    });
+    expect(parseSlash("/status", context)).toEqual({
+      kind: "command",
+      command: { kind: "workflow_status" },
+    });
     // A path is a message, not an unknown command.
     expect(parseSlash("/usr/local/bin 에 뭐가 있어?", context)).toEqual({ kind: "not_command" });
 

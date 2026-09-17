@@ -26,6 +26,7 @@ import {
   PromptInputHeader,
   PromptInputTextarea,
 } from "~/components/ui/prompt-input";
+import { Button } from "~/components/ui/button";
 import { Command } from "~/components/ui/command";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { Spinner } from "~/components/ui/spinner";
@@ -40,12 +41,15 @@ import { acceptedImageTypes, renumberReferences, useDraftImages } from "./draft-
 import { DraftImageTray } from "./images";
 import {
   api,
+  ApiError,
   compactErrorMessage,
   decodeContextEvent,
   decodeDeliveredEvent,
   type CompactResult,
   type ContextView,
   type QueuedMessage,
+  type WorkflowPhase,
+  type WorkflowState,
 } from "./api";
 import { ContextMeter } from "./context-meter";
 import { ComposerShortcuts, ComposerStatus, type ComposerMode } from "./composer-status";
@@ -103,6 +107,171 @@ interface Notice {
   readonly text: string;
 }
 const problem = (text: string): Notice => ({ tone: "problem", text });
+const done = (text: string): Notice => ({ tone: "done", text });
+
+const phaseLabels: Readonly<Record<WorkflowPhase, string>> = {
+  chat: "Chat",
+  goal: "Goal",
+  plan: "Plan",
+  execute: "Execute",
+  verify: "Verify",
+};
+
+const goalStatusLabels: Record<NonNullable<WorkflowState["goal"]>["status"], string> = {
+  draft: "준비 중",
+  active: "진행 중",
+  paused: "일시 중지",
+  completed: "완료",
+  failed: "중단됨",
+};
+
+const planStatusLabels: Record<NonNullable<WorkflowState["plan"]>["status"], string> = {
+  draft: "작성 중",
+  ready: "준비 완료",
+  executing: "실행 중",
+  completed: "완료",
+  blocked: "막힘",
+};
+
+const stepStatusLabels: Record<
+  NonNullable<WorkflowState["plan"]>["steps"][number]["status"],
+  string
+> = {
+  pending: "대기",
+  in_progress: "진행 중",
+  completed: "완료",
+  blocked: "막힘",
+};
+
+function workflowStatus(state: WorkflowState | null): Notice {
+  if (!state) return problem("워크플로 상태를 아직 불러오지 못했어요.");
+  const goal = state.goal
+    ? `Goal v${state.goal.version} · ${goalStatusLabels[state.goal.status]}`
+    : "Goal 없음";
+  const plan = state.plan
+    ? `Plan v${state.plan.version} · ${planStatusLabels[state.plan.status]}${state.goal && state.plan.goalVersion !== state.goal.version ? " · Goal 변경으로 오래됨" : ""}`
+    : "Plan 없음";
+  return done(`${phaseLabels[state.phase]} 모드 · ${goal} · ${plan}`);
+}
+
+function WorkflowArtifactPanel({
+  state,
+  busy,
+  disabled,
+  onRevise,
+  onExecute,
+}: {
+  readonly state: WorkflowState | null;
+  readonly busy: boolean;
+  readonly disabled: boolean;
+  readonly onRevise: () => void;
+  readonly onExecute: () => void;
+}) {
+  if (!state || state.phase === "chat") return null;
+  if (state.phase === "goal") {
+    return (
+      <Alert>
+        <AlertTitle>
+          {state.goal
+            ? `Goal v${state.goal.version} · ${goalStatusLabels[state.goal.status]}`
+            : "Goal"}
+        </AlertTitle>
+        <AlertDescription>
+          <p>
+            {state.goal?.statement ??
+              "달성할 결과를 입력하면 조사부터 수정과 검증까지 자율적으로 진행해요."}
+          </p>
+          {state.goal && state.goal.evidence.length > 0 && (
+            <ul className="mt-3 list-disc space-y-1 pl-5">
+              {state.goal.evidence.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          )}
+          {state.goal && state.goal.verification.status !== "not_run" && (
+            <p className="mt-3">
+              검증 {state.goal.verification.status === "passed" ? "통과" : "실패"} ·{" "}
+              {state.goal.verification.summary}
+            </p>
+          )}
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  const plan = state.plan;
+  if (!plan) {
+    if (state.phase !== "plan") return null;
+    return (
+      <Alert>
+        <AlertTitle>Plan</AlertTitle>
+        <AlertDescription>
+          요청을 입력하면 프로젝트를 변경하지 않고 조사해서 실행 계획을 만들어요.
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  const current = state.goal !== null && plan.goalVersion === state.goal.version;
+  const executable = state.phase === "plan" && plan.status === "ready" && current;
+  return (
+    <Alert>
+      <AlertTitle>
+        Plan v{plan.version} ·{" "}
+        {state.phase === "verify" ? "검증 중" : planStatusLabels[plan.status]}
+      </AlertTitle>
+      <AlertDescription>
+        <p>{plan.summary}</p>
+        {plan.steps.length > 0 && (
+          <ol className="mt-3 list-decimal space-y-1 pl-5">
+            {plan.steps.map((step) => (
+              <li key={step.id}>
+                {step.title} · {stepStatusLabels[step.status]}
+                {step.evidence.length > 0 && (
+                  <ul className="list-disc pl-5">
+                    {step.evidence.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            ))}
+          </ol>
+        )}
+        {plan.verification.status !== "not_run" && (
+          <p className="mt-3">
+            검증 {plan.verification.status === "passed" ? "통과" : "실패"} ·{" "}
+            {plan.verification.summary}
+          </p>
+        )}
+        {!current && (
+          <p className="mt-3 text-destructive">Goal이 변경되어 이 계획을 다시 확인해야 해요.</p>
+        )}
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={busy || disabled}
+            onClick={onRevise}
+          >
+            수정 요청
+          </Button>
+          {state.phase === "plan" && (
+            <Button
+              type="button"
+              size="sm"
+              disabled={!executable || busy || disabled}
+              onClick={onExecute}
+            >
+              계획 실행
+            </Button>
+          )}
+        </div>
+      </AlertDescription>
+    </Alert>
+  );
+}
 
 const tokenCount = new Intl.NumberFormat("ko-KR", {
   notation: "compact",
@@ -279,6 +448,36 @@ function ChatPanel({
     waitingForApproval,
     answered: endsWithText,
   });
+  const changeWorkflowPhase = async (phase: WorkflowPhase) => {
+    try {
+      const state = await run.setWorkflowPhase(phase);
+      setNotice(done(`${phaseLabels[state.phase]} 모드로 바꿨어요.`));
+      return state;
+    } catch (failure) {
+      const message =
+        failure instanceof ApiError && failure.code === "plan_not_ready"
+          ? "실행하려면 먼저 준비된 Plan이 필요해요."
+          : failure instanceof ApiError && failure.code === "run_in_progress"
+            ? "답변이 끝난 뒤 모드를 바꿀 수 있어요."
+            : "워크플로 모드를 바꾸지 못했어요.";
+      setNotice(problem(message));
+      return null;
+    }
+  };
+
+  const revisePlan = async () => {
+    if (run.workflow?.phase !== "plan" && !(await changeWorkflowPhase("plan"))) return;
+    textarea.current?.focus();
+    setNotice(done("바꾸고 싶은 내용을 입력해 주세요."));
+  };
+
+  const executePlan = async () => {
+    if (!(await changeWorkflowPhase("execute"))) return;
+    setNotice(null);
+    void sendMessage(
+      contentOf("승인한 Plan을 첫 번째 미완료 단계부터 실행하고 결과를 검증해 줘.", []),
+    );
+  };
   // The server's view is read again once the run stops, and from then on it is the latest.
   useEffect(() => setLiveContext(null), [run.context]);
   const context = liveContext ?? run.context;
@@ -491,6 +690,26 @@ function ChatPanel({
           case "recall":
             text = promptOf(command);
             break;
+          case "workflow_status":
+            setDraft("");
+            return setNotice(workflowStatus(run.workflow));
+          case "workflow": {
+            const state = await changeWorkflowPhase(command.phase);
+            if (!state) return;
+            const request =
+              command.request ||
+              (command.phase === "plan"
+                ? "요청에서 목표를 정리하고 실행 가능한 Plan을 읽기 전용으로 조사해 기록해 줘."
+                : command.phase === "execute"
+                  ? "승인한 Plan을 첫 번째 미완료 단계부터 실행해 줘."
+                  : "");
+            if (!request) {
+              setDraft("");
+              return;
+            }
+            text = request;
+            break;
+          }
           case "cancel":
             setDraft("");
             setNotice(generating ? null : problem("멈출 답변이 없어요."));
@@ -614,6 +833,13 @@ function ChatPanel({
           {unplaced.map((taken) => (
             <DeliveredMessageView key={taken.id} message={taken} />
           ))}
+          <WorkflowArtifactPanel
+            state={run.workflow}
+            busy={generating}
+            disabled={readOnly}
+            onRevise={() => void revisePlan()}
+            onExecute={() => void executePlan()}
+          />
           {approvals.map((approval) => (
             <ApprovalCard key={approval.id} approval={approval} disabled={readOnly} />
           ))}
@@ -792,7 +1018,11 @@ function ChatPanel({
                           ? "Enter를 누르면 고친 내용을 저장해요"
                           : generating
                             ? "답변 중에도 이어서 보낼 수 있어요"
-                            : "메시지를 입력하세요. /로 명령을 부르고, 이미지는 붙여넣거나 끌어다 놓아요"
+                            : run.workflow?.phase === "goal"
+                              ? "달성할 결과를 입력하세요"
+                              : run.workflow?.phase === "plan"
+                                ? "변경 없이 조사해서 계획할 내용을 입력하세요"
+                                : "메시지를 입력하세요. /로 명령을 부르고, 이미지는 붙여넣거나 끌어다 놓아요"
                     }
                     rows={1}
                   />
@@ -815,6 +1045,34 @@ function ChatPanel({
                       </TooltipContent>
                     </Tooltip>
                     <ComposerStatus mode={composerMode} />
+                    <div
+                      className="flex items-center rounded-md border bg-muted/30 p-0.5"
+                      role="group"
+                      aria-label="입력 방식"
+                    >
+                      {(["chat", "goal", "plan"] as const).map((phase) => (
+                        <Button
+                          key={phase}
+                          type="button"
+                          size="xs"
+                          variant={
+                            (run.workflow?.phase ?? "chat") === phase ? "secondary" : "ghost"
+                          }
+                          disabled={readOnly || generating || editing !== null}
+                          aria-pressed={(run.workflow?.phase ?? "chat") === phase}
+                          title={
+                            phase === "goal"
+                              ? "결과를 맡기면 조사, 수정, 검증까지 진행해요"
+                              : phase === "plan"
+                                ? "프로젝트를 변경하지 않고 실행 계획을 만들어요"
+                                : "일반 대화"
+                          }
+                          onClick={() => void changeWorkflowPhase(phase)}
+                        >
+                          {phaseLabels[phase]}
+                        </Button>
+                      ))}
+                    </div>
                     <div className="ml-auto flex items-center gap-3">
                       <ComposerShortcuts mode={composerMode} />
                       {generating && !editing && (
