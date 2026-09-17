@@ -85,6 +85,37 @@ export {
 } from "./projects/projects.ts";
 export { Session, Sessions } from "./sessions/sessions.ts";
 export {
+  GoalArtifact,
+  PlanArtifact,
+  WorkflowPhase,
+  WorkflowState,
+  WorkflowProgressRefused,
+  WorkflowTransitionRefused,
+  Workflows,
+  type UpdateGoal,
+  type UpdatePlan,
+  type UpdateWorkflowProgress,
+  type Verification,
+} from "./workflow/workflow.ts";
+export {
+  RuleSource,
+  WorkflowRule,
+  WorkflowRules,
+  builtInWorkflowRules,
+  type ResolvedRules,
+  type RuleQuery,
+} from "./workflow/rules.ts";
+export {
+  localWorkflowRules,
+  projectWorkflowRules,
+  projectWorkflowRulesPath,
+  skillWorkflowRules,
+  structuredWorkflowRules,
+  type LoadedRuleSources,
+  type StructuredRuleOrigin,
+  type RuleSourceProblem,
+} from "./workflow/sources.ts";
+export {
   Importer,
   ImportWorkerFailed,
   type ImportActivity,

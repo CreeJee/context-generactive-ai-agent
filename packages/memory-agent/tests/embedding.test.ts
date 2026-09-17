@@ -138,7 +138,9 @@ describe("Indexer + VectorIndex", () => {
         mark.run(statement.seq, embedder.identity);
         mark.run(call.seq, embedder.identity);
         // The migration that stopped embedding tool nodes, as an upgrade runs it.
-        sqlite.exec(migrations.at(-1)!);
+        const cleanup = migrations.find((step) => step.includes("DELETE FROM node_vectors"));
+        if (!cleanup) throw new Error("missing tool-node vector cleanup migration");
+        sqlite.exec(cleanup);
         return { statement: statement.seq };
       }),
     );

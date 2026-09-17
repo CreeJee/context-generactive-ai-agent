@@ -50,6 +50,9 @@ import { KagiTools } from "./tools/kagi.ts";
 import { SkillTools } from "./tools/skills.ts";
 import { MemoryTools } from "./tools/memory.ts";
 import { OutsideTools } from "./tools/outside.ts";
+import { Workflows } from "./workflow/workflow.ts";
+import { WorkflowTools } from "./workflow/tools.ts";
+import { WorkflowRules } from "./workflow/rules.ts";
 
 export interface MemoryAgentLayerOptions {
   /** Defaults to the local embedding model; tests pass a deterministic one. */
@@ -105,6 +108,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     RelayedApprovals.layer,
     BulkNodes.layer,
     SecretRedactor.layer,
+    Workflows.layer,
     options.embedder ?? Embedder.local,
     options.morphAnalyzer ?? MorphAnalyzer.kiwi,
     options.codex ?? CodexAppServer.layer,
@@ -130,6 +134,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     Indexer.layer,
     MemorySearch.layer,
     PermissionClassifier.layer,
+    WorkflowRules.layer,
     QueueDelivery.layer,
     TurnSummaries.layer(options.summarizeAutomatically),
   );
@@ -142,6 +147,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
         ApprovedTools.layer,
         KagiTools.layer,
         SkillTools.layer,
+        WorkflowTools.layer,
         DelegateTools.layer,
         Subagents.layer,
         PermissionGate.layer,

@@ -1,5 +1,6 @@
 import type { RunStatus } from "@tanstack/ai-persistence";
 import type { LeaseView } from "../sessions/lease-state.ts";
+import type { WorkflowState } from "../workflow/workflow.ts";
 
 /** Browser-safe shapes of the session run endpoints. */
 
@@ -17,6 +18,8 @@ export interface SessionRunState {
   /** Whether the asking page may change the session. */
   readonly lease: LeaseView;
   readonly context: ContextView;
+  /** Durable Goal/Plan phase and artifacts for this conversation. */
+  readonly workflow: WorkflowState;
 }
 
 /** Answer to a cancel: `stopped` is false when the run had not ended by the time we answered. */

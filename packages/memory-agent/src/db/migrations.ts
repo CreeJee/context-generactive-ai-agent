@@ -363,4 +363,13 @@ export const migrations: readonly string[] = [
   DELETE FROM node_vectors
   WHERE node_seq IN (SELECT seq FROM nodes WHERE kind NOT IN ('user', 'assistant', 'topic'));
   `,
+  `
+  -- Goal/Plan are durable workflow artifacts, not prompt text. Keeping the versioned state outside
+  -- the transcript lets each run materialize only its current phase and step-sized context.
+  CREATE TABLE session_workflows (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    state_json TEXT NOT NULL CHECK (json_valid(state_json)),
+    updated_at TEXT NOT NULL
+  );
+  `,
 ];

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -40,6 +41,8 @@ export interface Skill {
   readonly name: string;
   readonly description: string;
   readonly directory: string;
+  /** SHA-256 of the exact SKILL.md used to discover this skill. */
+  readonly contentHash: string;
 }
 
 export interface SkillProblem {
@@ -123,7 +126,8 @@ function readSkill(scope: SkillScope, directory: string, folder: string): SkillR
     const stats = lstatSync(file);
     if (!stats.isFile()) return { _tag: "none" };
     if (stats.size > maxSkillBytes) return problem("too_large");
-    const { fields, body } = parseFrontMatter(readFileSync(file, "utf8"));
+    const text = readFileSync(file, "utf8");
+    const { fields, body } = parseFrontMatter(text);
     const description = fields.get("description") ?? "";
     if (description.length === 0) return problem("no_description");
     const skill: Skill = {
@@ -131,6 +135,7 @@ function readSkill(scope: SkillScope, directory: string, folder: string): SkillR
       name: fields.get("name") || folder,
       description: description.slice(0, maxDescriptionCharacters),
       directory,
+      contentHash: createHash("sha256").update(text).digest("hex"),
     };
     return { _tag: "skill", skill, body };
   } catch {

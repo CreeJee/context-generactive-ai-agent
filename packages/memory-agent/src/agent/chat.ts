@@ -59,6 +59,10 @@ import { LiveRuns } from "./live-runs.ts";
 import type { CancelResult, CompactResult, SessionRunState } from "./run-state.ts";
 import { sessionHolderHeader } from "../sessions/lease-state.ts";
 import { SessionLeases } from "../sessions/leases.ts";
+import { Workflows, type WorkflowPhase } from "../workflow/workflow.ts";
+import { WorkflowTools, workflowInstructions } from "../workflow/tools.ts";
+import { WorkflowRules } from "../workflow/rules.ts";
+import { localWorkflowRules } from "../workflow/sources.ts";
 
 /** Standing instructions: how to use memory without mistaking leads for facts or permission. */
 export const memoryInstructions = `You are a local assistant that remembers conversations across sessions and projects.
@@ -247,6 +251,22 @@ const cancelWaitMs = 5_000;
  */
 const afterRunBudget = 200;
 
+/** Plan/Verify investigate without project writes, shell, outside access, MCP or delegation. */
+const readOnlyWorkflowPhases: ReadonlySet<WorkflowPhase> = new Set(["plan", "verify"]);
+const workflowReadToolNames: ReadonlySet<string> = new Set([
+  "find_memory",
+  "read_evidence",
+  "trace_evidence",
+  "list_files",
+  "search_files",
+  "read_file",
+  "read_skill",
+  "kagi_search",
+  "kagi_extract",
+  "update_goal",
+  "update_plan",
+]);
+
 /** A reconnect names where to continue: `Last-Event-ID`, or `?offset=` for a join from the start. */
 const isStreamJoin = (request: Request) =>
   request.headers.has("Last-Event-ID") || new URL(request.url).searchParams.has("offset");
@@ -283,6 +303,9 @@ const make = Effect.gen(function* () {
   const queue = yield* MessageQueue;
   const delivery = yield* QueueDelivery;
   const summaries = yield* TurnSummaries;
+  const workflows = yield* Workflows;
+  const workflowTools = yield* WorkflowTools;
+  const workflowRules = yield* WorkflowRules;
   const places: SettingsPlaces = {
     storageRoot: (yield* StorageRoot).path,
     globalSkills: (yield* Skills).globalDirectory,
@@ -393,6 +416,7 @@ const make = Effect.gen(function* () {
         if (!leases.permits(sessionId, request.headers.get(sessionHolderHeader))) return inUse();
         // Sessions reference projects by foreign key, so a missing project is a broken store.
         const project = yield* Effect.orDie(projects.get(projectId));
+        const workflow = yield* workflows.get(sessionId);
         // One run at a time per session: a second would race the first for the codex turn.
         const live = liveRuns.get(sessionId);
         if (live) return json(409, { error: "run_in_progress", runId: live.runId });
@@ -501,10 +525,12 @@ const make = Effect.gen(function* () {
         }
         if (!selection) return json(412, { error: "model_selection_required" });
 
+        const workflowActive = workflow.phase !== "chat";
+        const workflowReadOnly = readOnlyWorkflowPhases.has(workflow.phase);
         // Present only while the user has Kagi turned on with a key (R19).
         const webTools = yield* kagiTools.tools;
-        // Trusted MCP servers of this project and the user (R18); every call is gated below.
-        const mcpTools = yield* mcpServers.tools(project);
+        // Plan/Verify do not even connect to external MCP servers while investigating.
+        const mcpTools = workflowReadOnly ? [] : yield* mcpServers.tools(project);
         // Skills from ~/.agents/skills and the project's .agents/skills: guidance, not permission.
         const skills = skillTools.forProject(project);
         // codex reads the same folders and would list them to the model a second time, without that
@@ -529,7 +555,9 @@ const make = Effect.gen(function* () {
           delivery.forRun({ projectId, sessionId, runId }),
         ];
         // Trusted external ACP agents (R17); every delegation is gated below.
-        const delegation = delegateTools.forRun(project, sessionId, abortController.signal);
+        const delegation = workflowReadOnly
+          ? { tools: [], instructions: null }
+          : delegateTools.forRun(project, sessionId, abortController.signal);
         // The gate runs right after chat state, so a refused call is skipped before tools run. In
         // `auto` mode it reviews every gated call; in `ask` mode the built-in tools use TanStack's
         // own approval and the gate asks about the calls the page has no definitions for (MCP tools,
@@ -556,9 +584,10 @@ const make = Effect.gen(function* () {
               decider: "user",
             }),
           );
-        // Tools come from several sources (built-in, web search, MCP), so the list is kept untyped.
-        // Every result has its secrets hidden before the model, the page or memory sees it.
-        const sharedTools: AnyServerTool[] = redactor.withHiddenResults([
+        // Plan/Verify have a hard capability boundary: only project reads, recall, trusted
+        // documentation search and artifact updates reach the model. This is enforced by omitting
+        // tools, not by relying on the prompt.
+        const allSharedTools: AnyServerTool[] = redactor.withHiddenResults([
           ...memoryTools.forProject(projectId),
           // An SVG the model writes comes back with a picture of it, for the page to show.
           ...drawingPreviews.withPreviews(project, fileTools.forProject(project)),
@@ -567,16 +596,36 @@ const make = Effect.gen(function* () {
           ...mcpTools,
           ...skills.tools,
           ...delegation.tools,
+          ...workflowTools.forSession(sessionId, workflow.phase),
         ]);
+        const sharedTools = workflowReadOnly
+          ? allSharedTools.filter((tool) => workflowReadToolNames.has(tool.name))
+          : allSharedTools;
         const standingPrompts = [
           memoryInstructions,
           ...(webTools.length > 0 ? [kagiInstructions] : []),
-          ...(mcpTools.length > 0 ? [mcpInstructions] : []),
+          ...(!workflowReadOnly && mcpTools.length > 0 ? [mcpInstructions] : []),
         ];
+        const localRules = localWorkflowRules(project, skills.skills);
+        const resolved = yield* workflowRules.resolve({
+          phase: workflow.phase,
+          text: [
+            turn?.text ?? "",
+            workflow.goal?.statement ?? "",
+            workflow.plan?.summary ?? "",
+          ].join("\n"),
+          rules: localRules.rules,
+        });
+        const resolvedRules =
+          localRules.problems.length === 0
+            ? resolved
+            : { ...resolved, degraded: [...resolved.degraded, "source" as const] };
+        const workflowPrompt = workflowInstructions(workflow, resolvedRules);
         const contextPrompts = [
-          ...(skills.instructions ? [skills.instructions] : []),
-          ...(delegation.instructions ? [delegation.instructions] : []),
+          ...(!workflowActive && skills.instructions ? [skills.instructions] : []),
+          ...(!workflowReadOnly && delegation.instructions ? [delegation.instructions] : []),
           workspaceInstructions(project, places),
+          ...(workflowPrompt ? [workflowPrompt] : []),
         ];
         const sharedPrompts = promptLayout(standingPrompts, contextPrompts);
         // Children get the same tools and rules, never more, and no subagent tools of their own.
@@ -589,7 +638,9 @@ const make = Effect.gen(function* () {
           abortSignal: abortController.signal,
           tools: [
             ...sharedTools,
-            ...redactor.withHiddenResults(approvedTools.forProject(project, "gate")),
+            ...(workflowReadOnly
+              ? []
+              : redactor.withHiddenResults(approvedTools.forProject(project, "gate"))),
           ],
           systemPrompts: sharedPrompts,
           gated: new Set([...gatedToolNames, ...askEveryCall]),
@@ -598,10 +649,9 @@ const make = Effect.gen(function* () {
         const reads = parallelReads(
           [
             ...sharedTools,
-            ...redactor.withHiddenResults([
-              ...approvedTools.forProject(project),
-              ...children.tools,
-            ]),
+            ...redactor.withHiddenResults(
+              workflowReadOnly ? [] : [...approvedTools.forProject(project), ...children.tools],
+            ),
           ],
           abortController.signal,
         );
@@ -625,7 +675,7 @@ const make = Effect.gen(function* () {
           tools,
           systemPrompts: promptLayout(standingPrompts, contextPrompts, [
             attachmentInstructions,
-            subagentInstructions,
+            ...(!workflowReadOnly ? [subagentInstructions] : []),
           ]),
           threadId,
           runId,
@@ -728,9 +778,24 @@ const make = Effect.gen(function* () {
           lastRun: last && { runId: last.runId, status: last.status, error: last.error ?? null },
           lease: leases.view(sessionId, holder),
           context: contextView(used, windowFor(yield* models.selected)),
+          workflow: yield* workflows.get(sessionId),
         };
         return json(200, state);
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
+
+    /** Changes the durable workflow phase. Execute also records the user's Plan approval. */
+    setWorkflowPhase: (sessionId: string, holder: string | null, phase: WorkflowPhase) =>
+      Effect.gen(function* () {
+        if (!leases.permits(sessionId, holder)) return inUse();
+        yield* sessions.get(sessionId);
+        if (liveRuns.get(sessionId)) return json(409, { error: "run_in_progress" });
+        return json(200, yield* workflows.setPhase(sessionId, phase));
+      }).pipe(
+        Effect.catchTag("WorkflowTransitionRefused", (failure) =>
+          Effect.succeed(json(409, { error: failure.reason })),
+        ),
+        Effect.catchTag("SessionNotFound", sessionNotFound),
+      ),
 
     /**
      * Claims or renews the session for a page, or gives it up. A page that is refused stays
