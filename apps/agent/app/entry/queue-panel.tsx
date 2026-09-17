@@ -90,6 +90,7 @@ export function QueuePanel({
   items,
   editingId,
   readOnly,
+  showDelivered,
   onEdit,
   onRemove,
   onConfirm,
@@ -97,13 +98,20 @@ export function QueuePanel({
   items: readonly QueuedMessage[];
   editingId: string | null;
   readOnly: boolean;
+  /**
+   * Whether the run that took messages in is still going (answering or waiting for an approval).
+   * Once it ends the page reloads the conversation, which shows them in place.
+   */
+  showDelivered: boolean;
   onEdit: (message: QueuedMessage) => void;
   onRemove: (message: QueuedMessage) => void;
   onConfirm: (message: QueuedMessage) => void;
 }) {
-  // A message sent as the next turn is already in the conversation itself.
+  // A message sent as the next turn is already in the conversation itself, and so is one a
+  // finished run took in.
   const shown = items.filter(
-    (message) => !(message.state.kind === "delivered" && message.state.via === "next_turn"),
+    (message) =>
+      message.state.kind !== "delivered" || (showDelivered && message.state.via !== "next_turn"),
   );
   if (shown.length === 0) return null;
   const waiting = shown.filter((message) => message.state.kind !== "delivered").length;

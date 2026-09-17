@@ -560,6 +560,7 @@ function ChatPanel({
                   items={queue.items}
                   editingId={editing?.id ?? null}
                   readOnly={readOnly}
+                  showDelivered={generating || waitingForApproval}
                   onEdit={startEdit}
                   onRemove={(message) => void removeQueued(message)}
                   onConfirm={(message) => void confirmQueued(message)}
