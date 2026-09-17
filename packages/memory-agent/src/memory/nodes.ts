@@ -124,6 +124,10 @@ export function toEdge(row: Record<string, SQLOutputValue>): Edge {
   };
 }
 
+const decodeToolResultId = Schema.decodeUnknownSync(
+  Schema.Struct({ call: Schema.String, id: Schema.String }),
+);
+
 /** Characters of original text returned per read_evidence page. */
 export const evidencePageLength = 4000;
 
@@ -225,6 +229,23 @@ const make = Effect.gen(function* () {
         .get(sessionId, kind, toolCallId);
       return row ? toNode(row) : null;
     },
+
+    /**
+     * A session's tool_result node ids, by the tool call id each one answers; the first one recorded,
+     * as in `toolNode`.
+     */
+    toolResultIds: (sessionId: string): ReadonlyMap<string, string> =>
+      new Map(
+        sqlite
+          .prepare(
+            "SELECT json_extract(detail, '$.toolCallId') AS call, id FROM nodes WHERE session_id = ? AND kind = 'tool_result' AND call IS NOT NULL ORDER BY seq DESC",
+          )
+          .all(sessionId)
+          .map((row) => {
+            const { call, id } = decodeToolResultId(row);
+            return [call, id] as const;
+          }),
+      ),
 
     session: (sessionId: string): Node[] =>
       sqlite

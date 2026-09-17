@@ -218,6 +218,9 @@ catalogs:
     '@tanstack/ai-client':
       specifier: ^0.31.1
       version: 0.31.1
+    '@tanstack/ai-compaction':
+      specifier: ^0.1.2
+      version: 0.1.2
     '@tanstack/ai-mcp':
       specifier: 0.3.10
       version: 0.3.10
@@ -470,6 +473,9 @@ importers:
       '@tanstack/ai-client':
         specifier: 'catalog:'
         version: 0.31.1(zod@3.25.76)
+      '@tanstack/ai-compaction':
+        specifier: 'catalog:'
+        version: 0.1.2(@tanstack/ai@0.54.0(zod@3.25.76))
       '@tanstack/ai-mcp':
         specifier: 'catalog:'
         version: 0.3.10(zod@3.25.76)
@@ -2098,6 +2104,11 @@ packages:
 
   '@tanstack/ai-client@0.31.1':
     resolution: {integrity: sha512-45JeYoVb53q4nD9Bk00mdQUGyYKiP9CrvKRRmXN460I1YHdxiSQRbiL5n4POLXUQUcCYFDL2bxSq5I84Eu6/cw==}
+
+  '@tanstack/ai-compaction@0.1.2':
+    resolution: {integrity: sha512-cDYyaLuWML4XhHt12GnfrZpItZWuOpNB7iTYZc8niyTJ/ilMn4CpLZlDbv/YZC5YZ4zOpdD7GXuP4CihD7X4gw==}
+    peerDependencies:
+      '@tanstack/ai': ^0.54.0
 
   '@tanstack/ai-event-client@0.11.3':
     resolution: {integrity: sha512-K5Nw05TG2NPJNunV7LI/5m7S97XHHdxN7vwTYcbKbmA5txlToaiF4wCfYBT406m7BOeGlLHZJpr3m1M6Vaai4g==}
@@ -6439,6 +6450,10 @@ snapshots:
     transitivePeerDependencies:
       - '@opentelemetry/api'
       - zod
+
+  '@tanstack/ai-compaction@0.1.2(@tanstack/ai@0.54.0(zod@3.25.76))':
+    dependencies:
+      '@tanstack/ai': 0.54.0(zod@3.25.76)
 
   '@tanstack/ai-event-client@0.11.3':
     dependencies:

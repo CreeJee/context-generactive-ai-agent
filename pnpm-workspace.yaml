@@ -53,6 +53,7 @@ catalog:
   "@shadcn/lint": ^0.1.0
   motion: ^13.3.0
   dayjs: ^1.11.23
+  "@tanstack/ai-compaction": ^0.1.2
 overrides:
   vite@*: "catalog:"
 peerDependencyRules:

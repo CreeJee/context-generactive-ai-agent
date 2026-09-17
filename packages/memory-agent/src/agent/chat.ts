@@ -46,6 +46,7 @@ import { QueueDelivery } from "../queue/delivery.ts";
 import { hostShell } from "../shell/run.ts";
 import { MessageQueue, type QueueChangeRefused } from "../queue/queue.ts";
 import type { QueueEdit, QueuedMessage } from "../queue/queue-state.ts";
+import { compactionFor } from "./compaction.ts";
 import { LiveRuns } from "./live-runs.ts";
 import type { CancelResult, SessionRunState } from "./run-state.ts";
 import { sessionHolderHeader } from "../sessions/lease-state.ts";
@@ -563,6 +564,8 @@ const make = Effect.gen(function* () {
           reads.middleware,
           recorder.forRun({ projectId, sessionId, runId, userNodeId: userNode.id }),
           indexInBackground(),
+          // Last to shape what the model is sent, so nothing after it replaces the compacted history.
+          compactionFor(() => nodes.toolResultIds(sessionId)),
           codexChat.runMiddleware(),
         );
         const tools = reads.tools;

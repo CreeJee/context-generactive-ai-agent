@@ -52,6 +52,7 @@
     "@standard-schema/spec": "catalog:",
     "@tanstack/ai": "catalog:",
     "@tanstack/ai-client": "catalog:",
+    "@tanstack/ai-compaction": "catalog:",
     "@tanstack/ai-mcp": "catalog:",
     "@tanstack/ai-persistence": "catalog:",
     "cross-spawn": "catalog:",
