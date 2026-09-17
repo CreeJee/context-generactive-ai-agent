@@ -26,6 +26,7 @@ import {
   PromptInputHeader,
   PromptInputTextarea,
 } from "~/components/ui/prompt-input";
+import { Command } from "~/components/ui/command";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { Spinner } from "~/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
@@ -285,9 +286,10 @@ function ChatPanel({
   const [composer, setComposer] = useState<Composer>({ kind: "compose" });
   const [submitting, setSubmitting] = useState(false);
   // Slash command suggestions for what is typed, and which one the arrow keys point at.
-  const [highlight, setHighlight] = useState(0);
+  const [highlight, setHighlight] = useState("");
   const suggestions = composer.kind === "compose" ? suggest(draft, slash.context) : [];
-  const highlighted = suggestions[Math.min(highlight, suggestions.length - 1)] ?? null;
+  const highlighted =
+    suggestions.find((suggestion) => suggestion.text === highlight) ?? suggestions[0] ?? null;
 
   // Messages the run took in, shown in the conversation until it is read again with them.
   const inFlight =
@@ -660,181 +662,193 @@ function ChatPanel({
           {lease.state === "other" || lease.state === "free" ? (
             <ReadOnlyBar lease={lease} refused={refused} onContinue={onContinue} />
           ) : (
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                void submit("queue");
-              }}
+            <Command
+              shouldFilter={false}
+              loop
+              vimBindings={false}
+              onValueChange={setHighlight}
+              variant="composer"
             >
-              <input
-                ref={filePicker}
-                type="file"
-                accept={acceptedImageTypes}
-                multiple
-                hidden
-                onChange={(event) => {
-                  attach(imageFiles(event.target.files));
-                  event.target.value = "";
+              <form
+                onKeyDown={(event) => {
+                  // Buttons keep native keyboard activation, outside cmdk navigation.
+                  if (event.target !== textarea.current) event.stopPropagation();
                 }}
-              />
-              {suggestions.length > 0 && highlighted && (
-                <SlashPalette
-                  suggestions={suggestions}
-                  highlighted={highlighted}
-                  onPick={(suggestion) => {
-                    caretAfterRender.current = suggestion.text.length;
-                    setDraft(suggestion.text);
-                    setHighlight(0);
-                  }}
-                />
-              )}
-              <PromptInput editing={editing !== null}>
-                <QueuePanel
-                  items={queue.items}
-                  editingId={editing?.id ?? null}
-                  readOnly={readOnly}
-                  onEdit={startEdit}
-                  onRemove={(message) => void removeQueued(message)}
-                  onConfirm={(message) => void confirmQueued(message)}
-                />
-                {!editing && draftImages.images.length > 0 && (
-                  <PromptInputHeader>
-                    <DraftImageTray
-                      images={draftImages.images}
-                      onReference={insertReference}
-                      onRemove={draftImages.remove}
-                    />
-                  </PromptInputHeader>
-                )}
-                <PromptInputTextarea
-                  ref={textarea}
-                  value={draft}
-                  disabled={readOnly}
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void submit("queue");
+                }}
+              >
+                <input
+                  ref={filePicker}
+                  type="file"
+                  accept={acceptedImageTypes}
+                  multiple
+                  hidden
                   onChange={(event) => {
-                    setDraft(event.target.value);
-                    setHighlight(0);
+                    attach(imageFiles(event.target.files));
+                    event.target.value = "";
                   }}
-                  onPaste={(event) => {
-                    const files = imageFiles(event.clipboardData.files);
-                    if (files.length === 0) return;
-                    event.preventDefault();
-                    attach(files);
-                  }}
-                  onKeyDown={(event) => {
-                    // Enter that confirms Korean IME input, and Esc that cancels it, belong to the IME.
-                    if (event.nativeEvent.isComposing) return;
-                    if (suggestions.length > 0 && highlighted) {
-                      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                        event.preventDefault();
-                        const step = event.key === "ArrowDown" ? 1 : -1;
-                        setHighlight(
-                          (Math.min(highlight, suggestions.length - 1) +
-                            step +
-                            suggestions.length) %
-                            suggestions.length,
-                        );
-                        return;
-                      }
-                      // Tab, or Enter on a suggestion that is not what is typed yet, completes it.
-                      const completes =
-                        event.key === "Tab" ||
-                        (event.key === "Enter" && !event.shiftKey && highlighted.text !== draft);
-                      if (completes) {
-                        event.preventDefault();
-                        caretAfterRender.current = highlighted.text.length;
-                        setDraft(highlighted.text);
-                        setHighlight(0);
-                        return;
-                      }
-                    }
-                    const steerKeys = event.shiftKey && (event.ctrlKey || event.metaKey);
-                    if (event.key === "Enter" && steerKeys) {
-                      event.preventDefault();
-                      void submit("steer");
-                    } else if (event.key === "Enter" && !event.shiftKey) {
-                      event.preventDefault();
-                      void submit("queue");
-                    } else if (
-                      event.altKey &&
-                      (event.key === "ArrowUp" || event.key === "ArrowDown")
-                    ) {
-                      // Ctrl+↑/↓ belong to macOS Mission Control, so the web uses Alt(⌥).
-                      event.preventDefault();
-                      pickQueued(event.key === "ArrowUp" ? "up" : "down");
-                    } else if (event.key === "Escape") {
-                      // In edit mode Esc removes the queued message and never reaches the run.
-                      if (editing) void finishEdit("remove");
-                      // Esc clears a draft (text and images); with nothing drafted it stops the run.
-                      else if (draft.length > 0 || draftImages.images.length > 0) {
-                        setDraft("");
-                        draftImages.clear();
-                        setNotice(null);
-                      } else if (generating) void cancel();
-                    }
-                  }}
-                  placeholder={
-                    waitingForApproval
-                      ? "위의 승인 요청에 먼저 답해 주세요"
-                      : editing
-                        ? "Enter를 누르면 고친 내용을 저장해요"
-                        : generating
-                          ? "답변 중에도 이어서 보낼 수 있어요"
-                          : "메시지를 입력하세요. /로 명령을 부르고, 이미지는 붙여넣거나 끌어다 놓아요"
-                  }
-                  rows={1}
                 />
-                <PromptInputFooter>
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <PromptInputButton
-                          variant="ghost"
-                          disabled={!imagesSupported || readOnly || editing !== null}
-                          aria-label="이미지 첨부"
-                          onClick={() => filePicker.current?.click()}
-                        />
+                {suggestions.length > 0 && highlighted && (
+                  <SlashPalette
+                    suggestions={suggestions}
+                    onPick={(suggestion) => {
+                      caretAfterRender.current = suggestion.text.length;
+                      setDraft(suggestion.text);
+                    }}
+                  />
+                )}
+                <PromptInput editing={editing !== null}>
+                  <QueuePanel
+                    items={queue.items}
+                    editingId={editing?.id ?? null}
+                    readOnly={readOnly}
+                    onEdit={startEdit}
+                    onRemove={(message) => void removeQueued(message)}
+                    onConfirm={(message) => void confirmQueued(message)}
+                  />
+                  {!editing && draftImages.images.length > 0 && (
+                    <PromptInputHeader>
+                      <DraftImageTray
+                        images={draftImages.images}
+                        onReference={insertReference}
+                        onRemove={draftImages.remove}
+                      />
+                    </PromptInputHeader>
+                  )}
+                  <PromptInputTextarea
+                    ref={textarea}
+                    value={draft}
+                    disabled={readOnly}
+                    onChange={(event) => {
+                      setDraft(event.target.value);
+                    }}
+                    onPaste={(event) => {
+                      const files = imageFiles(event.clipboardData.files);
+                      if (files.length === 0) return;
+                      event.preventDefault();
+                      attach(files);
+                    }}
+                    onKeyDown={(event) => {
+                      // Enter that confirms Korean IME input, and Esc that cancels it, belong to the IME.
+                      if (event.nativeEvent.isComposing || event.keyCode === 229) {
+                        event.stopPropagation();
+                        return;
                       }
-                    >
-                      <ImagePlusIcon />
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      {imagesSupported ? "이미지 첨부" : "선택한 모델은 이미지를 읽지 못해요"}
-                    </TooltipContent>
-                  </Tooltip>
-                  <ComposerStatus mode={composerMode} />
-                  <div className="ml-auto flex items-center gap-3">
-                    <ComposerShortcuts mode={composerMode} />
-                    {generating && !editing && (
-                      <Tooltip>
-                        <TooltipTrigger
-                          render={
-                            <PromptInputButton
-                              variant="outline"
-                              disabled={run.cancelling || readOnly}
-                              aria-label={run.cancelling ? "멈추는 중" : "중지"}
-                              onClick={() => void cancel()}
-                            />
-                          }
-                        >
-                          {run.cancelling ? <Spinner /> : <SquareIcon className="fill-current" />}
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          {run.cancelling ? "멈추는 중" : "중지(입력창이 비었을 때 Esc)"}
-                        </TooltipContent>
-                      </Tooltip>
-                    )}
-                    <PromptInputButton
-                      type="submit"
-                      variant="default"
-                      disabled={editing ? readOnly : !canSend}
-                      aria-label={editing ? "저장" : generating ? "대기열에 넣기" : "전송"}
-                    >
-                      {editing ? <CheckIcon /> : <ArrowUpIcon />}
-                    </PromptInputButton>
-                  </div>
-                </PromptInputFooter>
-              </PromptInput>
-            </form>
+                      // Preserve composer Home/End/Enter behavior instead of cmdk bindings.
+                      if (
+                        !suggestions.length ||
+                        (event.key !== "ArrowDown" && event.key !== "ArrowUp")
+                      ) {
+                        event.stopPropagation();
+                      }
+                      if (suggestions.length > 0 && highlighted) {
+                        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                          // Command owns arrow selection and built-in scrolling.
+                          return;
+                        }
+                        // Tab, or Enter on a suggestion that is not what is typed yet, completes it.
+                        const completes =
+                          event.key === "Tab" ||
+                          (event.key === "Enter" && !event.shiftKey && highlighted.text !== draft);
+                        if (completes) {
+                          event.preventDefault();
+                          caretAfterRender.current = highlighted.text.length;
+                          setDraft(highlighted.text);
+
+                          return;
+                        }
+                      }
+                      const steerKeys = event.shiftKey && (event.ctrlKey || event.metaKey);
+                      if (event.key === "Enter" && steerKeys) {
+                        event.preventDefault();
+                        void submit("steer");
+                      } else if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
+                        void submit("queue");
+                      } else if (
+                        event.altKey &&
+                        (event.key === "ArrowUp" || event.key === "ArrowDown")
+                      ) {
+                        // Ctrl+↑/↓ belong to macOS Mission Control, so the web uses Alt(⌥).
+                        event.preventDefault();
+                        pickQueued(event.key === "ArrowUp" ? "up" : "down");
+                      } else if (event.key === "Escape") {
+                        // In edit mode Esc removes the queued message and never reaches the run.
+                        if (editing) void finishEdit("remove");
+                        // Esc clears a draft (text and images); with nothing drafted it stops the run.
+                        else if (draft.length > 0 || draftImages.images.length > 0) {
+                          setDraft("");
+                          draftImages.clear();
+                          setNotice(null);
+                        } else if (generating) void cancel();
+                      }
+                    }}
+                    placeholder={
+                      waitingForApproval
+                        ? "위의 승인 요청에 먼저 답해 주세요"
+                        : editing
+                          ? "Enter를 누르면 고친 내용을 저장해요"
+                          : generating
+                            ? "답변 중에도 이어서 보낼 수 있어요"
+                            : "메시지를 입력하세요. /로 명령을 부르고, 이미지는 붙여넣거나 끌어다 놓아요"
+                    }
+                    rows={1}
+                  />
+                  <PromptInputFooter>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <PromptInputButton
+                            variant="ghost"
+                            disabled={!imagesSupported || readOnly || editing !== null}
+                            aria-label="이미지 첨부"
+                            onClick={() => filePicker.current?.click()}
+                          />
+                        }
+                      >
+                        <ImagePlusIcon />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        {imagesSupported ? "이미지 첨부" : "선택한 모델은 이미지를 읽지 못해요"}
+                      </TooltipContent>
+                    </Tooltip>
+                    <ComposerStatus mode={composerMode} />
+                    <div className="ml-auto flex items-center gap-3">
+                      <ComposerShortcuts mode={composerMode} />
+                      {generating && !editing && (
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <PromptInputButton
+                                variant="outline"
+                                disabled={run.cancelling || readOnly}
+                                aria-label={run.cancelling ? "멈추는 중" : "중지"}
+                                onClick={() => void cancel()}
+                              />
+                            }
+                          >
+                            {run.cancelling ? <Spinner /> : <SquareIcon className="fill-current" />}
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            {run.cancelling ? "멈추는 중" : "중지(입력창이 비었을 때 Esc)"}
+                          </TooltipContent>
+                        </Tooltip>
+                      )}
+                      <PromptInputButton
+                        type="submit"
+                        variant="default"
+                        disabled={editing ? readOnly : !canSend}
+                        aria-label={editing ? "저장" : generating ? "대기열에 넣기" : "전송"}
+                      >
+                        {editing ? <CheckIcon /> : <ArrowUpIcon />}
+                      </PromptInputButton>
+                    </div>
+                  </PromptInputFooter>
+                </PromptInput>
+              </form>
+            </Command>
           )}
           {context && (
             <div className="flex justify-end px-1 pt-1.5">

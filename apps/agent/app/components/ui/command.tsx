@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Command as CommandPrimitive } from "cmdk";
+import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "cn";
 
 import {
@@ -12,14 +13,27 @@ import {
 import { InputGroup, InputGroupAddon } from "~/components/ui/input-group";
 import { SearchIcon, CheckIcon } from "lucide-react";
 
-function Command({ className, ...props }: React.ComponentProps<typeof CommandPrimitive>) {
+const commandVariants = cva("flex flex-col", {
+  variants: {
+    variant: {
+      default: "size-full overflow-hidden rounded-xl bg-popover p-1 text-popover-foreground",
+      composer: "w-full text-foreground",
+    },
+  },
+  defaultVariants: {
+    variant: "default",
+  },
+});
+
+function Command({
+  className,
+  variant = "default",
+  ...props
+}: React.ComponentProps<typeof CommandPrimitive> & VariantProps<typeof commandVariants>) {
   return (
     <CommandPrimitive
       data-slot="command"
-      className={cn(
-        "flex size-full flex-col overflow-hidden rounded-xl bg-popover p-1 text-popover-foreground",
-        className,
-      )}
+      className={cn(commandVariants({ variant, className }))}
       {...props}
     />
   );
