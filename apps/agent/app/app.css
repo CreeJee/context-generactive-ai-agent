@@ -21,10 +21,6 @@
 html,
 body {
   @apply bg-white dark:bg-gray-950;
-
-  @media (prefers-color-scheme: dark) {
-    color-scheme: dark;
-  }
 }
 
 @theme inline {
@@ -108,6 +104,8 @@ body {
 }
 
 .dark {
+  /* Native parts (scrollbars, form controls) follow the theme the page shows, not the OS. */
+  color-scheme: dark;
   --background: oklch(0.141 0.005 285.823);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.21 0.006 285.885);
@@ -148,6 +146,22 @@ body {
   }
   body {
     @apply bg-background text-foreground;
+    /* Korean wraps between words, not inside one; a path or URL with no break still wraps
+       rather than running out of its box. */
+    word-break: keep-all;
+    overflow-wrap: anywhere;
+  }
+  /* No single word left alone on the last line of a paragraph, and titles split evenly. */
+  p,
+  li,
+  [data-slot$="description"] {
+    text-wrap: pretty;
+  }
+  h1,
+  h2,
+  h3,
+  [data-slot$="title"] {
+    text-wrap: balance;
   }
   button:not(:disabled),
   [role="button"]:not(:disabled) {
