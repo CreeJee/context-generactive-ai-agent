@@ -1,4 +1,3 @@
-// oxlint-disable anti-slop/require-safety-comment-for-type-assertion
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "cn";

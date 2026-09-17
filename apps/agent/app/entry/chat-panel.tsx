@@ -10,7 +10,7 @@ import {
 } from "memory-agent/definitions";
 import { cn } from "cn";
 import { Option } from "effect";
-import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import {
   Empty,
@@ -600,6 +600,36 @@ function ChatPanel({
   const wasGenerating = useRef(generating);
   const startedWorkflowPhase = useRef<WorkflowPhase | null>(null);
   const automaticVerification = useRef<string | null>(null);
+  const handleRunSettled = useEffectEvent(async (finishedPhase: WorkflowPhase | null) => {
+    setCatchingUp(true);
+    try {
+      const [items, state] = await Promise.all([queue.refresh(), run.refresh().catch(() => null)]);
+      if (!items || !state || state.running || state.lastRun?.status === "interrupted") return;
+      if (items.some(isTakenIn)) setMessages((await api.transcript(sessionId)).messages);
+      if (state.lastRun?.status !== "completed") return;
+      const waiting = nextInLine(items);
+      if (waiting) {
+        sendNextQueued(items);
+        return;
+      }
+      if (
+        finishedPhase === "execute" &&
+        state.workflow.phase === "verify" &&
+        state.workflow.plan?.status === "executing"
+      ) {
+        automaticVerification.current = `${sessionId}:${state.workflow.plan.version}`;
+        void sendMessage(
+          contentOf(
+            "실행 결과를 Goal과 Plan의 acceptance criteria에 맞춰 읽기 전용으로 검증하고, evidence와 최종 상태를 기록해 줘.",
+            [],
+          ),
+        );
+      }
+    } finally {
+      setCatchingUp(false);
+      setPlacements(new Map());
+    }
+  });
   useEffect(() => {
     if (!wasGenerating.current && generating)
       startedWorkflowPhase.current = run.workflow?.phase ?? null;
@@ -607,44 +637,26 @@ function ChatPanel({
     const finishedPhase = startedWorkflowPhase.current;
     wasGenerating.current = generating;
     if (!settled || readOnly) return;
-    setCatchingUp(true);
-    void (async () => {
-      try {
-        const [items, state] = await Promise.all([
-          queue.refresh(),
-          run.refresh().catch(() => null),
-        ]);
-        if (!items || !state || state.running || state.lastRun?.status === "interrupted") return;
-        if (items.some(isTakenIn)) setMessages((await api.transcript(sessionId)).messages);
-        if (state.lastRun?.status !== "completed") return;
-        const waiting = nextInLine(items);
-        if (waiting) {
-          sendNextQueued(items);
-          return;
-        }
-        if (
-          finishedPhase === "execute" &&
-          state.workflow.phase === "verify" &&
-          state.workflow.plan?.status === "executing"
-        ) {
-          automaticVerification.current = `${sessionId}:${state.workflow.plan.version}`;
-          void sendMessage(
-            contentOf(
-              "실행 결과를 Goal과 Plan의 acceptance criteria에 맞춰 읽기 전용으로 검증하고, evidence와 최종 상태를 기록해 줘.",
-              [],
-            ),
-          );
-        }
-      } finally {
-        setCatchingUp(false);
-        setPlacements(new Map());
-      }
-    })();
-    // Runs only on the generating → idle edge.
-    // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, [generating]);
+    void handleRunSettled(finishedPhase);
+  }, [generating, readOnly, run.workflow?.phase]);
 
   // A reload may happen after Execute finished but before its verification turn started.
+  const recoverAutomaticVerification = useEffectEvent(async (planVersion: number) => {
+    const key = `${sessionId}:${planVersion}`;
+    if (automaticVerification.current === key) return;
+    automaticVerification.current = key;
+    const items = await queue.refresh();
+    if (!items || nextInLine(items)) {
+      automaticVerification.current = null;
+      return;
+    }
+    void sendMessage(
+      contentOf(
+        "실행 결과를 Goal과 Plan의 acceptance criteria에 맞춰 읽기 전용으로 검증하고, evidence와 최종 상태를 기록해 줘.",
+        [],
+      ),
+    );
+  });
   useEffect(() => {
     const plan = run.workflow?.plan;
     if (
@@ -655,34 +667,17 @@ function ChatPanel({
       plan.verification.status !== "not_run"
     )
       return;
-    const key = `${sessionId}:${plan.version}`;
-    if (automaticVerification.current === key) return;
-    automaticVerification.current = key;
-    void queue.refresh().then((items) => {
-      if (!items || nextInLine(items)) {
-        automaticVerification.current = null;
-        return;
-      }
-      void sendMessage(
-        contentOf(
-          "실행 결과를 Goal과 Plan의 acceptance criteria에 맞춰 읽기 전용으로 검증하고, evidence와 최종 상태를 기록해 줘.",
-          [],
-        ),
-      );
-    });
-    // React to durable workflow changes; sendMessage and queue are intentionally not dependencies.
-    // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, [generating, readOnly, run.workflow, sessionId]);
+    void recoverAutomaticVerification(plan.version);
+  }, [generating, readOnly, run.workflow]);
 
   // Unsaved edit text is stored as it is typed, so a restart restores it as a draft.
+  const saveEditDraft = useEffectEvent((id: string, text: string) =>
+    queue.change(id, { action: "edit", draft: text }),
+  );
   useEffect(() => {
     if (!editing) return;
-    const timer = setTimeout(
-      () => void queue.change(editing.id, { action: "edit", draft }),
-      editDraftSaveMs,
-    );
+    const timer = setTimeout(() => void saveEditDraft(editing.id, draft), editDraftSaveMs);
     return () => clearTimeout(timer);
-    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [draft, editing?.id]);
 
   const startEdit = (message: QueuedMessage) => {
