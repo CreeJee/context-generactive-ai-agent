@@ -33,6 +33,7 @@ export async function testRuntime(overrides: MemoryAgentLayerOptions = {}) {
     embedder: fakeEmbedderLayer,
     morphAnalyzer: fakeMorphLayer,
     interpretAutomatically: false,
+    summarizeAutomatically: false,
     secrets: SecretStore.memory,
     // The user's real ~/.agents/skills stays out of tests, and so do the app's own skills: a test
     // lists exactly the skills it writes. `skills.test.ts` checks the built-in ones on their own.

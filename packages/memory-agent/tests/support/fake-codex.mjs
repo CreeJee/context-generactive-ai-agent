@@ -87,7 +87,11 @@ async function streamAnswer(threadId, turnId, text) {
   notify("thread/tokenUsage/updated", {
     threadId,
     turnId,
-    tokenUsage: { last: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } },
+    tokenUsage: {
+      last: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+      total: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+      modelContextWindow: 200_000,
+    },
   });
   notify("turn/completed", { threadId, turn: { id: turnId, status: "completed", items: [] } });
 }
@@ -147,6 +151,12 @@ async function runTurn(threadId, turnId, input) {
       return { id: statement.id, topics, links };
     });
     return streamAnswer(threadId, turnId, JSON.stringify({ statements }));
+  }
+  if (thread.instructions.includes("You summarize part of a conversation")) {
+    // Turn summarizer: one bullet naming how many user turns it read, citing the first of them.
+    const users = [...text.matchAll(/^\[user (\S+)\]$/gmu)].map((match) => match[1]);
+    if (text.includes("[broken-summary]")) return streamAnswer(threadId, turnId, "  ");
+    return streamAnswer(threadId, turnId, `- 사용자 턴 ${users.length}개 (node ${users[0]})`);
   }
   const toolCall = text.match(/^call (\S+) (\{.*\})$/s);
   if (toolCall) {

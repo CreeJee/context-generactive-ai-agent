@@ -26,6 +26,7 @@ import {
   sessionHolderHeader,
   type CancelResult,
   type CompactResult,
+  type ContextView,
   type LeaseView,
   type QueueEdit,
   type QueuedMessage,
@@ -41,6 +42,7 @@ export type {
   CancelResult,
   CodexModel,
   CompactResult,
+  ContextView,
   EmbeddingChoice,
   EmbeddingOverview,
   ExternalAgentsOverview,
@@ -318,6 +320,15 @@ export function archiveErrorMessage(error: Error) {
     ? archiveRejections[error.code]
     : "대화를 바꾸지 못했어요.";
 }
+
+/** A context update a run sends while it answers. */
+export const decodeContextEvent = Schema.decodeUnknownOption(
+  Schema.Struct({
+    usedTokens: Schema.NullOr(Schema.Number),
+    windowTokens: Schema.Number,
+    compactAtTokens: Schema.Number,
+  }),
+);
 
 const CompactRejection = Schema.Literal("run_in_progress", "session_in_use", "session_not_found");
 const compactRejections = {

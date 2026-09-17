@@ -3,10 +3,12 @@ import { ArrowUpIcon, CheckIcon, ImagePlusIcon, MessageSquareIcon, SquareIcon } 
 import {
   approvalToolDefinitions,
   attachmentUrl,
+  contextUsageEvent,
   permissionReviewInterrupt,
   sessionHolderHeader,
 } from "memory-agent/definitions";
 import { cn } from "cn";
+import { Option } from "effect";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import {
@@ -34,7 +36,15 @@ import {
 } from "./approval";
 import { acceptedImageTypes, renumberReferences, useDraftImages } from "./draft-images";
 import { DraftImageTray } from "./images";
-import { api, compactErrorMessage, type CompactResult, type QueuedMessage } from "./api";
+import {
+  api,
+  compactErrorMessage,
+  decodeContextEvent,
+  type CompactResult,
+  type ContextView,
+  type QueuedMessage,
+} from "./api";
+import { ContextMeter } from "./context-meter";
 import { ComposerShortcuts, ComposerStatus, type ComposerMode } from "./composer-status";
 import { MessageView } from "./message";
 import { isPending, useMessageQueue } from "./message-queue";
@@ -87,13 +97,23 @@ const tokenCount = new Intl.NumberFormat("ko-KR", {
   maximumFractionDigits: 1,
 });
 
-const compacted = ({ cleared, tokensBefore, tokensAfter }: CompactResult): Notice => ({
-  tone: "done",
-  text:
-    cleared === 0
-      ? "비울 도구 출력이 없어요. 이미 답한 도구 출력만 비울 수 있어요."
-      : `지난 도구 출력 ${cleared}개를 비웠어요. 다음 질문부터 대화를 약 ${tokenCount.format(tokensBefore)} 토큰에서 ${tokenCount.format(tokensAfter)} 토큰으로 보내요.`,
-});
+/** What `/compact` did, in one or two sentences. */
+function compacted(result: CompactResult): Notice {
+  const { cleared, summarizedTurns, summaryFailed, tokensBefore, tokensAfter } = result;
+  // One sentence per change, so each noun keeps its own particle.
+  const done = [
+    ...(cleared > 0 ? [`지난 도구 출력 ${cleared}개를 비웠어요.`] : []),
+    ...(summarizedTurns > 0 ? [`앞 대화 ${summarizedTurns}턴은 요약으로 보내요.`] : []),
+  ];
+  const failed = summaryFailed ? ["앞 대화는 요약하지 못했어요."] : [];
+  if (done.length === 0)
+    return {
+      tone: summaryFailed ? "problem" : "done",
+      text: ["더 줄일 내용이 없어요. 최근 대화는 그대로 보내요.", ...failed].join(" "),
+    };
+  const size = `다음 질문부터 대화가 약 ${tokenCount.format(tokensBefore)} 토큰에서 ${tokenCount.format(tokensAfter)} 토큰으로 줄어요.`;
+  return { tone: "done", text: [...done, ...failed, size].join(" ") };
+}
 
 /** A user turn from text and uploaded images, as the chat endpoint expects it. */
 const contentOf = (text: string, attachmentIds: readonly string[]) => ({
@@ -178,6 +198,8 @@ function ChatPanel({
   const [draft, setDraft] = useState("");
   const [dragging, setDragging] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
+  // What the run in progress reports; the server's record covers the time before and after it.
+  const [liveContext, setLiveContext] = useState<ContextView | null>(null);
   const draftImages = useDraftImages();
   const textarea = useRef<HTMLTextAreaElement>(null);
   const caretAfterRender = useRef<number | null>(null);
@@ -204,6 +226,11 @@ function ChatPanel({
     // tool approvals in `ask` mode, permission reviews in `auto` mode.
     tools: approvalToolDefinitions,
     interrupts: approvalInterrupts,
+    onCustomEvent: (eventType, data) => {
+      if (eventType !== contextUsageEvent) return;
+      const view = Option.getOrNull(decodeContextEvent(data));
+      if (view) setLiveContext(view);
+    },
   });
   const approvals = interrupts.flatMap((interrupt) => toPendingApproval(interrupt) ?? []);
   const waitingForApproval = interrupts.length > 0;
@@ -223,6 +250,9 @@ function ChatPanel({
     waitingForApproval,
     answered: endsWithText,
   });
+  // The server's view is read again once the run stops, and from then on it is the latest.
+  useEffect(() => setLiveContext(null), [run.context]);
+  const context = liveContext ?? run.context;
   const queue = useMessageQueue(sessionId, holder, generating);
   const [composer, setComposer] = useState<Composer>({ kind: "compose" });
   const [submitting, setSubmitting] = useState(false);
@@ -743,6 +773,11 @@ function ChatPanel({
                 </PromptInputFooter>
               </PromptInput>
             </form>
+          )}
+          {context && (
+            <div className="flex justify-end px-1 pt-1.5">
+              <ContextMeter context={context} />
+            </div>
           )}
         </div>
       </div>

@@ -63,6 +63,7 @@ export function useRunState(
   return {
     cancelling,
     cancel,
+    context: state?.context ?? null,
     notice: cancelPending ? ({ kind: "cancel-pending" } as const) : noticeOf(state, page),
   };
 }

@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { Layer } from "effect";
 import { AgentChat } from "./agent/chat.ts";
+import { TurnSummaries } from "./agent/turn-summaries.ts";
 import { ChatState } from "./chat-state/chat-state.ts";
 import { RelayedApprovals } from "./approvals/relayed.ts";
 import { Attachments } from "./attachments/attachments.ts";
@@ -61,6 +62,8 @@ export interface MemoryAgentLayerOptions {
   readonly leaseTtlMs?: number;
   /** Interpret statements in the background after each run. Default true; tests turn it off. */
   readonly interpretAutomatically?: boolean;
+  /** Summarize earlier turns in the background after each run. Default true; tests turn it off. */
+  readonly summarizeAutomatically?: boolean;
   /** Defaults to the OS keychain; tests keep secrets in memory. */
   readonly secrets?: Layer.Layer<SecretStore>;
   /** Defaults to Kagi's API server; tests point it at a local one. */
@@ -128,6 +131,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     MemorySearch.layer,
     PermissionClassifier.layer,
     QueueDelivery.layer,
+    TurnSummaries.layer(options.summarizeAutomatically),
   );
   return AgentChat.layer.pipe(
     Layer.provideMerge(

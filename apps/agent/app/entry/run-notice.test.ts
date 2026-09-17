@@ -5,7 +5,12 @@ import { noticeOf } from "./run-notice";
 const record = (
   lastRun: SessionRunState["lastRun"],
   running: SessionRunState["running"] = null,
-): SessionRunState => ({ running, lastRun, lease: { state: "mine" } });
+): SessionRunState => ({
+  running,
+  lastRun,
+  lease: { state: "mine" },
+  context: { usedTokens: null, windowTokens: 258_400, compactAtTokens: 64_600 },
+});
 const ended = (status: "completed" | "interrupted" | "failed" | "aborted", code?: string) =>
   record({
     runId: "run-1",

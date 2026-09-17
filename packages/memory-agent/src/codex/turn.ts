@@ -54,6 +54,8 @@ export const TokenUsageNotification = Schema.Struct({
       outputTokens: Schema.Number,
       totalTokens: Schema.Number,
     }),
+    /** The tokens the model may read, as codex counts them for this model. */
+    modelContextWindow: Schema.optionalWith(Schema.NullOr(Schema.Number), { default: () => null }),
   }),
 });
 export const ErrorNotification = Schema.Struct({
@@ -84,10 +86,12 @@ export class CodexTurn extends EventEmitter<TurnEvents> {
   readonly events: AsyncIterator<TurnEvent>;
 
   readonly threadId: string;
+  readonly model: string;
 
-  constructor(threadId: string) {
+  constructor(threadId: string, model: string) {
     super();
     this.threadId = threadId;
+    this.model = model;
     this.events = pEventIterator<TurnEvents, "event">(this, "event", {
       resolutionEvents: ["completed"],
       rejectionEvents: ["failed"],

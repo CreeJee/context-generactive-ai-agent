@@ -15,8 +15,8 @@ import { Attachments } from "../attachments/attachments.ts";
 import { attachmentIdOf } from "../attachments/urls.ts";
 import { ChatState } from "../chat-state/chat-state.ts";
 import { CodexAccount } from "../codex/account.ts";
-import { CodexChat } from "../codex/chat.ts";
-import { CodexModels } from "../codex/models.ts";
+import { CodexChat, defaultContextWindow } from "../codex/chat.ts";
+import { CodexModels, type ModelSelection } from "../codex/models.ts";
 import { McpServers, mcpInstructions } from "../mcp/servers.ts";
 import { Indexer } from "../memory/embedding/indexer.ts";
 import { Interpreter } from "../memory/interpret.ts";
@@ -46,7 +46,9 @@ import { QueueDelivery } from "../queue/delivery.ts";
 import { hostShell } from "../shell/run.ts";
 import { MessageQueue, type QueueChangeRefused } from "../queue/queue.ts";
 import type { QueueEdit, QueuedMessage } from "../queue/queue-state.ts";
-import { compactByHand, compactionFor, manualCompaction } from "./compaction.ts";
+import { budgetFor, compactByHand, compaction, type CompactionSources } from "./compaction.ts";
+import { contextView, lastInputTokens, recordContextUsage } from "./context-usage.ts";
+import { TurnSummaries } from "./turn-summaries.ts";
 import { LiveRuns } from "./live-runs.ts";
 import type { CancelResult, CompactResult, SessionRunState } from "./run-state.ts";
 import { sessionHolderHeader } from "../sessions/lease-state.ts";
@@ -250,8 +252,16 @@ const make = Effect.gen(function* () {
   const leases = yield* SessionLeases;
   const queue = yield* MessageQueue;
   const delivery = yield* QueueDelivery;
+  const summaries = yield* TurnSummaries;
   const liveRuns = new LiveRuns();
+  const { metadata } = chatState.persistence.stores;
   const inUse = () => json(423, { error: "session_in_use" });
+  const windowFor = (selection: ModelSelection | null) =>
+    selection ? codexChat.contextWindow(selection.model) : defaultContextWindow;
+  const compactionSources = (sessionId: string): CompactionSources => ({
+    toolResultIds: () => nodes.toolResultIds(sessionId),
+    nodeText: (id) => nodes.get(id)?.text ?? null,
+  });
   /** Every handler that looks a session up answers this when it does not exist. */
   const sessionNotFound = () => Effect.succeed(json(404, { error: "session_not_found" }));
 
@@ -558,15 +568,16 @@ const make = Effect.gen(function* () {
           ],
           abortController.signal,
         );
-        const toolResultIds = () => nodes.toolResultIds(sessionId);
+        const window = () => windowFor(selection);
         middleware.push(
           children.middleware,
           reads.middleware,
           recorder.forRun({ projectId, sessionId, runId, userNodeId: userNode.id }),
           indexInBackground(),
+          summaries.afterRun(sessionId),
+          recordContextUsage(metadata, window),
           // Last to shape what the model is sent, so nothing after it replaces the compacted history.
-          manualCompaction(chatState.persistence.stores.metadata, toolResultIds),
-          compactionFor(toolResultIds),
+          compaction(metadata, compactionSources(sessionId), budgetFor(window())),
           codexChat.runMiddleware(),
         );
         const tools = reads.tools;
@@ -647,10 +658,16 @@ const make = Effect.gen(function* () {
         if (!leases.permits(sessionId, holder)) return inUse();
         yield* sessions.get(sessionId);
         if (liveRuns.get(sessionId)) return json(409, { error: "run_in_progress" });
-        const { messages, metadata } = chatState.persistence.stores;
+        const budget = budgetFor(windowFor(yield* models.selected));
+        const { messages } = chatState.persistence.stores;
         const result: CompactResult = yield* Effect.promise(async () =>
-          compactByHand(metadata, sessionId, await messages.loadThread(sessionId), () =>
-            nodes.toolResultIds(sessionId),
+          compactByHand(
+            metadata,
+            sessionId,
+            await messages.loadThread(sessionId),
+            compactionSources(sessionId),
+            budget,
+            () => Effect.runPromise(summaries.catchUp(sessionId, true)),
           ),
         );
         return json(200, result);
@@ -665,10 +682,12 @@ const make = Effect.gen(function* () {
         yield* sessions.get(sessionId);
         const live = liveRuns.get(sessionId);
         const last = yield* Effect.promise(() => chatState.lastRun(sessionId));
+        const used = yield* Effect.promise(() => lastInputTokens(metadata, sessionId));
         const state: SessionRunState = {
           running: live ? { runId: live.runId } : null,
           lastRun: last && { runId: last.runId, status: last.status, error: last.error ?? null },
           lease: leases.view(sessionId, holder),
+          context: contextView(used, windowFor(yield* models.selected)),
         };
         return json(200, state);
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),

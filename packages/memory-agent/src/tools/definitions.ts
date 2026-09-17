@@ -11,9 +11,11 @@ import { toToolSchema } from "./schema.ts";
 
 export { attachmentIdOf, attachmentUrl } from "../attachments/urls.ts";
 export {
+  contextUsageEvent,
   serverRestartedCode,
   type CancelResult,
   type CompactResult,
+  type ContextView,
   type SessionRunState,
 } from "../agent/run-state.ts";
 export { sessionHolderHeader, type LeaseView } from "../sessions/lease-state.ts";

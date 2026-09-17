@@ -262,13 +262,15 @@ export class CodexTextAdapter extends BaseTextAdapter<
           }
           this.parking.park(threadId, turn, this.#nextEvent);
           this.#nextEvent = null;
-          yield {
+          const paused: AdapterYieldChunk = {
             ...stamp(),
             type: EventType.RUN_FINISHED,
             runId,
             threadId,
             finishReason: "tool_calls",
           };
+          if (usage) paused.usage = usage.usage;
+          yield paused;
           return;
         }
       }
@@ -344,6 +346,12 @@ export class CodexTextAdapter extends BaseTextAdapter<
   }
 }
 
+/**
+ * The usable context of the models ChatGPT accounts offer: 272k tokens, of which codex lets 95%
+ * be input (`models_cache.json`, 2026-09).
+ */
+export const defaultContextWindow = 258_400;
+
 const make = Effect.gen(function* () {
   const codex = yield* CodexAppServer;
   const attachments = yield* Attachments;
@@ -371,17 +379,22 @@ const make = Effect.gen(function* () {
       forThread(delta)?.push({ kind: "delta", text: delta.delta, itemId: delta.itemId }),
     ),
   );
+  const contextWindows = new Map<string, number>();
   codex.onNotification("thread/tokenUsage/updated", (params) =>
-    Option.map(Schema.decodeUnknownOption(TokenUsageNotification)(params), (update) =>
-      forThread(update)?.push({
+    Option.map(Schema.decodeUnknownOption(TokenUsageNotification)(params), (update) => {
+      const turn = forThread(update);
+      if (!turn) return;
+      const window = update.tokenUsage.modelContextWindow;
+      if (window !== null && window > 0) contextWindows.set(turn.model, window);
+      turn.push({
         kind: "usage",
         usage: {
           promptTokens: update.tokenUsage.last.inputTokens,
           completionTokens: update.tokenUsage.last.outputTokens,
           totalTokens: update.tokenUsage.last.totalTokens,
         },
-      }),
-    ),
+      });
+    }),
   );
   codex.onNotification("turn/completed", (params) =>
     Option.map(Schema.decodeUnknownOption(TurnCompletedNotification)(params), (completed) => {
@@ -456,7 +469,7 @@ const make = Effect.gen(function* () {
           ThreadStarted,
         ),
       );
-      const turn = new CodexTurn(thread.thread.id);
+      const turn = new CodexTurn(thread.thread.id, selection.model);
       turns.set(turn.threadId, turn);
       try {
         if (history.length > 0)
@@ -523,6 +536,12 @@ const make = Effect.gen(function* () {
     /** A TanStack adapter for one chat() request using the saved model selection. */
     adapter: (selection: ModelSelection) =>
       new CodexTextAdapter(bridge, selection, parking, active),
+
+    /**
+     * The tokens a model may read. Codex reports it with each model call; until one has been made
+     * in this process, every model the accounts offer has the same window.
+     */
+    contextWindow: (model: string) => contextWindows.get(model) ?? defaultContextWindow,
 
     /** Pass as `agentLoopStrategy` to every chat() with this adapter and tools. */
     agentLoop: codexAgentLoop,

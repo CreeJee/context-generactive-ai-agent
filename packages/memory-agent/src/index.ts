@@ -9,9 +9,11 @@ export {
 export { sessionMessages } from "./agent/history.ts";
 export { LiveRuns, type LiveRun } from "./agent/live-runs.ts";
 export {
+  contextUsageEvent,
   serverRestartedCode,
   type CancelResult,
   type CompactResult,
+  type ContextView,
   type SessionRunState,
 } from "./agent/run-state.ts";
 export { ChatState } from "./chat-state/chat-state.ts";
