@@ -177,3 +177,39 @@ describe("auto permission mode", () => {
     });
   });
 });
+
+test("a restored permission review resolves once after leaving the conversation", async () => {
+  const { client, runtime, session, shellResult } = await autoSetup();
+  await client.sendMessage("shell: printf ask-me-restored");
+  await until(() => client.getInterrupts().length === 1, "pending review");
+  client.dispose();
+  const reloaded = new ChatClient({
+    threadId: session.id,
+    persistence: true,
+    tools: approvalToolDefinitions,
+    interrupts: [permissionReviewInterrupt],
+    connection: fetchServerSentEvents("http://127.0.0.1/api/chat", {
+      fetchClient: (input, init) =>
+        runtime.runPromise(
+          Effect.flatMap(AgentChat, (agent) =>
+            (init?.method ?? "GET") === "POST"
+              ? agent.handle(new Request(input, init), session.id)
+              : agent.hydrate(new Request(input, init), session.id),
+          ),
+        ),
+    }),
+  });
+  reloaded.attach();
+  try {
+    await until(() => reloaded.getInterrupts().length === 1, "restored review");
+    reloaded.resolveInterrupts((item) => {
+      if (item.kind === "generic") item.resolveInterrupt({ approved: true });
+    });
+    await until(() => shellResult() !== undefined, "approved call to execute");
+    await until(() => !reloaded.getIsLoading(), "resumed run to finish");
+    expect(reloaded.getInterrupts()).toHaveLength(0);
+    expect(shellResult()?.detail).toMatchObject({ ok: true });
+  } finally {
+    reloaded.dispose();
+  }
+});

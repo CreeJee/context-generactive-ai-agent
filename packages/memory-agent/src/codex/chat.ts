@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
   EventType,
-  convertSchemaToJsonSchema,
-  normalizeSystemPrompts,
   type AdapterYieldChunk,
   type AgentLoopStrategy,
   type ChatMiddleware,
@@ -21,6 +19,7 @@ import { CodexAppServer, type Json } from "./app-server.ts";
 import { Attachments } from "../attachments/attachments.ts";
 import { attachmentIdOf } from "../attachments/urls.ts";
 import { imageSources, toCodexTurnInput, type ResolvedImage } from "./history.ts";
+import { codexRequestPrefix } from "./request.ts";
 import type { ModelSelection } from "./models.ts";
 import {
   CodexTurn,
@@ -37,7 +36,6 @@ const ThreadStarted = Schema.Struct({ thread: Schema.Struct({ id: Schema.String 
 const TurnStarted = Schema.Struct({ turn: Schema.Struct({ id: Schema.String }) });
 const Ignored = Schema.Unknown;
 
-const defaultInstructions = "You are a helpful assistant.";
 /** Parallel tool calls from one model step arrive within a few milliseconds of each other. */
 const toolCallSettleMs = 25;
 /** A turn left waiting on tool results this long is abandoned (e.g. the run paused for approval). */
@@ -432,19 +430,7 @@ const make = Effect.gen(function* () {
 
   const bridge: CodexTurns = {
     async start(options, selection) {
-      const instructions = normalizeSystemPrompts(options.systemPrompts ?? []).map(
-        (prompt) => prompt.content,
-      );
-      const dynamicTools = (options.tools ?? []).map((tool) => ({
-        type: "function",
-        name: tool.name,
-        description: tool.description,
-        deferLoading: false,
-        inputSchema: convertSchemaToJsonSchema(tool.inputSchema) ?? {
-          type: "object",
-          properties: {},
-        },
-      }));
+      const prefix = codexRequestPrefix(options);
       const { history, input } = toCodexTurnInput(
         options.messages,
         await resolveImages(imageSources(options.messages)),
@@ -461,10 +447,8 @@ const make = Effect.gen(function* () {
             approvalPolicy: "never",
             sandbox: "read-only",
             runtimeWorkspaceRoots: [],
-            baseInstructions:
-              instructions.length > 0 ? instructions.join("\n\n") : defaultInstructions,
+            ...prefix,
             developerInstructions: "",
-            dynamicTools,
           },
           ThreadStarted,
         ),

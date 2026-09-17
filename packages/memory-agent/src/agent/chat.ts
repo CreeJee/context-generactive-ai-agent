@@ -54,6 +54,7 @@ import type { QueueEdit, QueuedMessage } from "../queue/queue-state.ts";
 import { budgetFor, compactByHand, compaction, type CompactionSources } from "./compaction.ts";
 import { contextView, lastInputTokens, recordContextUsage } from "./context-usage.ts";
 import { TurnSummaries } from "./turn-summaries.ts";
+import { promptLayout } from "./prompt-layout.ts";
 import { LiveRuns } from "./live-runs.ts";
 import type { CancelResult, CompactResult, SessionRunState } from "./run-state.ts";
 import { sessionHolderHeader } from "../sessions/lease-state.ts";
@@ -567,14 +568,17 @@ const make = Effect.gen(function* () {
           ...skills.tools,
           ...delegation.tools,
         ]);
-        const sharedPrompts = [
+        const standingPrompts = [
           memoryInstructions,
-          workspaceInstructions(project, places),
           ...(webTools.length > 0 ? [kagiInstructions] : []),
           ...(mcpTools.length > 0 ? [mcpInstructions] : []),
+        ];
+        const contextPrompts = [
           ...(skills.instructions ? [skills.instructions] : []),
           ...(delegation.instructions ? [delegation.instructions] : []),
+          workspaceInstructions(project, places),
         ];
+        const sharedPrompts = promptLayout(standingPrompts, contextPrompts);
         // Children get the same tools and rules, never more, and no subagent tools of their own.
         // Their approval-gated calls wait on the page instead of pausing this run (R18).
         const children = subagents.forRun({
@@ -619,7 +623,10 @@ const make = Effect.gen(function* () {
           agentLoopStrategy: codexChat.agentLoop,
           messages,
           tools,
-          systemPrompts: [...sharedPrompts, attachmentInstructions, subagentInstructions],
+          systemPrompts: promptLayout(standingPrompts, contextPrompts, [
+            attachmentInstructions,
+            subagentInstructions,
+          ]),
           threadId,
           runId,
           parentRunId,

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { SQLOutputValue } from "node:sqlite";
 import { Context, Effect, Layer, Schema } from "effect";
+import { firstMessageTitle } from "../sessions/title.ts";
 import { Database } from "../db/database.ts";
 import { EdgeKind, EdgeOrigin, edgeWeights, type Edge, type NodeLink } from "./edges.ts";
 
@@ -177,6 +178,16 @@ const make = Effect.gen(function* () {
       );
       if (!row) throw new Error("Node insert returned no row");
       const node = toNode(row);
+      // Only the first accepted, redacted user message names a local conversation.
+      if (input.kind === "user" && input.sessionId && !input.detail?.importedFrom) {
+        const label = firstMessageTitle(input.text);
+        sqlite
+          .prepare(`
+          UPDATE sessions SET title = ? WHERE id = ? AND title IS NULL AND imported_from IS NULL
+          AND NOT EXISTS (SELECT 1 FROM nodes WHERE session_id = ? AND kind = 'user' AND seq < ?)
+        `)
+          .run(label || "이미지 대화", input.sessionId, input.sessionId, node.seq);
+      }
 
       if (previous) link(previous, node.id, "next", createdAt);
       for (const declared of input.links ?? []) {

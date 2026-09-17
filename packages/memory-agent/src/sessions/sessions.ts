@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { SQLOutputValue } from "node:sqlite";
 import { Context, Data, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
+import { firstMessageTitle } from "./title.ts";
 import { Projects } from "../projects/projects.ts";
 
 export const Session = Schema.Struct({
@@ -27,6 +28,7 @@ const SessionRow = Schema.Struct({
   archived_at: Schema.NullOr(Schema.String),
   imported_from: Schema.NullOr(Schema.String),
 });
+const decodeFirstMessage = Schema.decodeUnknownSync(Schema.Struct({ text: Schema.String }));
 const decodeSessionRow = Schema.decodeUnknownSync(SessionRow);
 
 function toSession(row: Record<string, SQLOutputValue>): Session {
@@ -49,12 +51,24 @@ export class SessionNotFound extends Data.TaggedError("SessionNotFound")<{
 const make = Effect.gen(function* () {
   const { sqlite } = yield* Database;
   const projects = yield* Projects;
+  const firstMessage = sqlite.prepare(
+    "SELECT text FROM nodes WHERE session_id = ? AND kind = 'user' ORDER BY seq LIMIT 1",
+  );
+  // Older local conversations predate automatic title persistence.
+  const withTitle = (row: Record<string, SQLOutputValue>): Session => {
+    const session = toSession(row);
+    if (session.title !== null || session.importedFrom !== null) return session;
+    const message = firstMessage.get(session.id);
+    return message
+      ? { ...session, title: firstMessageTitle(decodeFirstMessage(message).text) }
+      : session;
+  };
 
   return {
     get: (id: string) =>
       Effect.suspend(() => {
         const row = sqlite.prepare("SELECT * FROM sessions WHERE id = ?").get(id);
-        return row ? Effect.succeed(toSession(row)) : Effect.fail(new SessionNotFound({ id }));
+        return row ? Effect.succeed(withTitle(row)) : Effect.fail(new SessionNotFound({ id }));
       }),
 
     /** Fails with ProjectNotFound when the project is not registered. */
@@ -94,7 +108,7 @@ const make = Effect.gen(function* () {
              ORDER BY created_at DESC, id`,
           )
           .all(projectId)
-          .map(toSession),
+          .map(withTitle),
       ),
 
     /** Moves a conversation out of the list or back. Messages, memory and search are untouched. */
@@ -103,7 +117,7 @@ const make = Effect.gen(function* () {
         const row = sqlite
           .prepare("UPDATE sessions SET archived_at = ? WHERE id = ? RETURNING *")
           .get(archived ? new Date().toISOString() : null, id);
-        return row ? Effect.succeed(toSession(row)) : Effect.fail(new SessionNotFound({ id }));
+        return row ? Effect.succeed(withTitle(row)) : Effect.fail(new SessionNotFound({ id }));
       }),
   };
 });

@@ -19,6 +19,7 @@ import {
   type Session,
 } from "./api";
 import { SessionView, type SlashSupport } from "./chat-panel";
+import { ThemeSelect } from "./theme";
 import { pageHolder } from "./session-lease";
 import type { SlashContext } from "./slash-commands";
 import { SettingsDialog } from "./settings-dialog";
@@ -115,6 +116,31 @@ export function App() {
     });
     void api.archivedSessions(projectId).then(setArchived, () => setArchived([]));
   }, [projectId]);
+
+  const untitled = sessions.some((session) => session.id === sessionId && session.title === null);
+  useEffect(() => {
+    if (!projectId || !untitled) return;
+    let current = true;
+    const timer = setInterval(() => {
+      void api.sessions(projectId).then(
+        (list) => {
+          if (!current) return;
+          const updated = list.find((session) => session.id === sessionId);
+          if (!updated?.title) return;
+          setSessions((existing) =>
+            existing.map((session) =>
+              session.id === updated.id ? { ...session, title: updated.title } : session,
+            ),
+          );
+        },
+        () => {},
+      );
+    }, 1000);
+    return () => {
+      current = false;
+      clearInterval(timer);
+    };
+  }, [projectId, sessionId, untitled]);
 
   const archiveSession = async (id: string) => {
     try {
@@ -273,6 +299,9 @@ export function App() {
           />
         </div>
         <Separator />
+        <div className="px-4 py-2">
+          <ThemeSelect />
+        </div>
         <AccountSection auth={auth} onAction={(intent) => void authAction(intent)} />
         {signedIn && (
           <ModelSection
