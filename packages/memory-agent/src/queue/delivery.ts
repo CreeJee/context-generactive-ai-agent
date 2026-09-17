@@ -7,7 +7,7 @@ import { CodexChat } from "../codex/chat.ts";
 import { Nodes } from "../memory/nodes.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { MessageQueue } from "./queue.ts";
-import type { QueuedMessage } from "./queue-state.ts";
+import { queueDeliveredEvent, type QueuedMessage } from "./queue-state.ts";
 
 export interface DeliveryBinding {
   readonly projectId: string;
@@ -15,8 +15,7 @@ export interface DeliveryBinding {
   readonly runId: string;
 }
 
-/** Custom stream event telling the page that queued messages reached the agent in this run. */
-export const queueDeliveredEvent = "memory-agent.queue.delivered";
+export { queueDeliveredEvent };
 
 const make = Effect.gen(function* () {
   const queue = yield* MessageQueue;

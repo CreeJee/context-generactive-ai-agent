@@ -321,6 +321,11 @@ export function archiveErrorMessage(error: Error) {
     : "대화를 바꾸지 못했어요.";
 }
 
+/** Which queued messages a run just took in at a tool call. */
+export const decodeDeliveredEvent = Schema.decodeUnknownOption(
+  Schema.Struct({ ids: Schema.Array(Schema.String) }),
+);
+
 /** A context update a run sends while it answers. */
 export const decodeContextEvent = Schema.decodeUnknownOption(
   Schema.Struct({

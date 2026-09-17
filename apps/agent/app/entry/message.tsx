@@ -3,7 +3,7 @@ import { Option, Schema } from "effect";
 import { ChevronRightIcon, WrenchIcon } from "lucide-react";
 import { Badge } from "~/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
-import { attachmentIdOf, attachmentUrl } from "memory-agent/definitions";
+import { attachmentIdOf, attachmentUrl, type QueuedMessage } from "memory-agent/definitions";
 import { DrawingPicture, UserMessageBody } from "./images";
 import { Markdown } from "./markdown";
 
@@ -203,6 +203,27 @@ function ToolCallCard({
  * One chat message. Assistant text renders as Markdown (`streaming` while it is still arriving);
  * user text stays exactly as typed. Tool calls show what was looked up and what came back.
  */
+/**
+ * A message the running answer took in (steered, or at a tool call). It shows where the saved
+ * conversation will have it, until the run ends and the conversation is read again.
+ */
+export function DeliveredMessageView({ message }: { message: QueuedMessage }) {
+  const images = message.attachmentIds.map((id, index) => ({
+    number: index + 1,
+    url: attachmentUrl(id),
+  }));
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <UserMessageBody text={message.text} images={images} />
+      <span className="text-2xs text-muted-foreground">
+        {message.state.kind === "delivered" && message.state.via === "steer"
+          ? "답변 중에 바로 전달했어요"
+          : "도구 호출 뒤에 전달했어요"}
+      </span>
+    </div>
+  );
+}
+
 export function MessageView({
   message,
   streaming,

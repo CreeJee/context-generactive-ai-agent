@@ -1,5 +1,8 @@
 /** Browser-safe shapes of the message queue (R03: follow-up messages while a run answers). */
 
+/** Custom stream event telling the page that queued messages reached the agent in this run. */
+export const queueDeliveredEvent = "memory-agent.queue.delivered";
+
 /** How a queued message reached the agent. */
 export type DeliveryVia =
   /** Added to the conversation when a tool call returned. */

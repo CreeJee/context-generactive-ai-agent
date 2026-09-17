@@ -7,7 +7,7 @@ const pollMs = 1_500;
 /** What became of a message written while a run was answering. */
 export type AddOutcome =
   | { readonly kind: "queued" }
-  | { readonly kind: "steered" }
+  | { readonly kind: "steered"; readonly message: QueuedMessage }
   /** Nothing is answering any more: send it as a normal turn. */
   | { readonly kind: "not-running" }
   /** Steering is not possible right now; nothing was sent and the draft stays. */
@@ -16,6 +16,10 @@ export type AddOutcome =
 
 /** Messages a page can still change: everything that has not reached the agent. */
 export const isPending = (message: QueuedMessage) => message.state.kind !== "delivered";
+
+/** Messages a run took in while it answered; the conversation shows them, not the queue. */
+export const isTakenIn = (message: QueuedMessage) =>
+  message.state.kind === "delivered" && message.state.via !== "next_turn";
 
 /**
  * The session's message queue as this page sees it (R03). Refreshed whenever the page's run starts
@@ -49,9 +53,9 @@ export function useMessageQueue(sessionId: string, holder: string, generating: b
     mode: "queue" | "steer",
   ): Promise<AddOutcome> => {
     try {
-      await api.enqueue(sessionId, holder, { text, attachmentIds, mode });
+      const message = await api.enqueue(sessionId, holder, { text, attachmentIds, mode });
       void refresh();
-      return mode === "steer" ? { kind: "steered" } : { kind: "queued" };
+      return mode === "steer" ? { kind: "steered", message } : { kind: "queued" };
     } catch (failure) {
       if (failure instanceof ApiError && failure.code === "not_running")
         return { kind: "not-running" };

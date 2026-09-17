@@ -14,6 +14,7 @@ import { Button } from "~/components/ui/button";
 import { Kbd, KbdGroup } from "~/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
+import { isPending } from "./message-queue";
 
 const deliveryLabel = (via: DeliveryVia) => {
   switch (via) {
@@ -90,7 +91,6 @@ export function QueuePanel({
   items,
   editingId,
   readOnly,
-  showDelivered,
   onEdit,
   onRemove,
   onConfirm,
@@ -98,32 +98,20 @@ export function QueuePanel({
   items: readonly QueuedMessage[];
   editingId: string | null;
   readOnly: boolean;
-  /**
-   * Whether the run that took messages in is still going (answering or waiting for an approval).
-   * Once it ends the page reloads the conversation, which shows them in place.
-   */
-  showDelivered: boolean;
   onEdit: (message: QueuedMessage) => void;
   onRemove: (message: QueuedMessage) => void;
   onConfirm: (message: QueuedMessage) => void;
 }) {
-  // A message sent as the next turn is already in the conversation itself, and so is one a
-  // finished run took in.
-  const shown = items.filter(
-    (message) =>
-      message.state.kind !== "delivered" || (showDelivered && message.state.via !== "next_turn"),
-  );
+  // A delivered message leaves the queue: the conversation shows it from then on.
+  const shown = items.filter(isPending);
   if (shown.length === 0) return null;
-  const waiting = shown.filter((message) => message.state.kind !== "delivered").length;
   const busy = editingId !== null || readOnly;
 
   return (
     <div className="flex w-full flex-col border-b">
       <div className="flex items-center justify-between px-3 pt-2 pb-1 text-2xs text-muted-foreground">
-        <span className="font-medium">
-          {waiting > 0 ? `보낼 메시지 ${waiting}개` : "답변 중에 전달한 메시지"}
-        </span>
-        {waiting > 0 && !busy && (
+        <span className="font-medium">보낼 메시지 {shown.length}개</span>
+        {!busy && (
           <span className="flex items-center gap-1">
             <KbdGroup>
               <Kbd>⌥</Kbd>
@@ -145,7 +133,6 @@ export function QueuePanel({
               className={cn(
                 "group/row flex h-8 items-center gap-2 rounded-md px-1.5 text-sm transition-colors hover:bg-muted/60",
                 editingHere && "bg-primary/5 hover:bg-primary/10",
-                kind === "delivered" && "text-muted-foreground",
               )}
             >
               <Icon className={cn("size-3.5 shrink-0", view.tone)} />
@@ -172,20 +159,19 @@ export function QueuePanel({
                   보내기
                 </Button>
               )}
-              {kind !== "delivered" &&
-                !editingHere && (
-                  // Row actions stay out of the way until the row is hovered or focused.
-                  <div className="flex shrink-0 items-center opacity-0 transition-opacity group-focus-within/row:opacity-100 group-hover/row:opacity-100">
-                    {kind !== "failed" && (
-                      <RowAction label="편집" disabled={busy} onClick={() => onEdit(message)}>
-                        <PencilIcon />
-                      </RowAction>
-                    )}
-                    <RowAction label="지우기" disabled={readOnly} onClick={() => onRemove(message)}>
-                      <XIcon />
+              {!editingHere && (
+                // Row actions stay out of the way until the row is hovered or focused.
+                <div className="flex shrink-0 items-center opacity-0 transition-opacity group-focus-within/row:opacity-100 group-hover/row:opacity-100">
+                  {kind !== "failed" && (
+                    <RowAction label="편집" disabled={busy} onClick={() => onEdit(message)}>
+                      <PencilIcon />
                     </RowAction>
-                  </div>
-                )}
+                  )}
+                  <RowAction label="지우기" disabled={readOnly} onClick={() => onRemove(message)}>
+                    <XIcon />
+                  </RowAction>
+                </div>
+              )}
             </li>
           );
         })}

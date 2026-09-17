@@ -5,11 +5,12 @@ import {
   attachmentUrl,
   contextUsageEvent,
   permissionReviewInterrupt,
+  queueDeliveredEvent,
   sessionHolderHeader,
 } from "memory-agent/definitions";
 import { cn } from "cn";
 import { Option } from "effect";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import {
   Empty,
@@ -40,14 +41,15 @@ import {
   api,
   compactErrorMessage,
   decodeContextEvent,
+  decodeDeliveredEvent,
   type CompactResult,
   type ContextView,
   type QueuedMessage,
 } from "./api";
 import { ContextMeter } from "./context-meter";
 import { ComposerShortcuts, ComposerStatus, type ComposerMode } from "./composer-status";
-import { MessageView } from "./message";
-import { isPending, useMessageQueue } from "./message-queue";
+import { DeliveredMessageView, MessageView } from "./message";
+import { isPending, isTakenIn, useMessageQueue } from "./message-queue";
 import { QueuePanel } from "./queue-panel";
 import { SubagentPanel } from "./subagent-panel";
 import { ReadOnlyBar } from "./read-only-bar";
@@ -81,6 +83,15 @@ type Composer =
   | { readonly kind: "compose" }
   /** `stash` is the new message the user was writing before picking the queued one. */
   | { readonly kind: "editing"; readonly id: string; readonly stash: string };
+
+/**
+ * Where a message the running answer took in shows, next to a message of the conversation, until
+ * the saved conversation (read again when the run ends) has it in place.
+ */
+interface Placement {
+  readonly side: "before" | "after";
+  readonly messageId: string;
+}
 
 /** Unsaved edit text is stored after typing pauses this long. */
 const editDraftSaveMs = 400;
@@ -200,6 +211,11 @@ function ChatPanel({
   const [notice, setNotice] = useState<Notice | null>(null);
   // What the run in progress reports; the server's record covers the time before and after it.
   const [liveContext, setLiveContext] = useState<ContextView | null>(null);
+  const [placements, setPlacements] = useState<ReadonlyMap<string, Placement>>(new Map());
+  // Set while the conversation is read again after a run, so taken-in messages do not blink out.
+  const [catchingUp, setCatchingUp] = useState(false);
+  const place = (ids: readonly string[], placement: Placement) =>
+    setPlacements((current) => new Map([...current, ...ids.map((id) => [id, placement] as const)]));
   const draftImages = useDraftImages();
   const textarea = useRef<HTMLTextAreaElement>(null);
   const caretAfterRender = useRef<number | null>(null);
@@ -227,9 +243,21 @@ function ChatPanel({
     tools: approvalToolDefinitions,
     interrupts: approvalInterrupts,
     onCustomEvent: (eventType, data) => {
-      if (eventType !== contextUsageEvent) return;
-      const view = Option.getOrNull(decodeContextEvent(data));
-      if (view) setLiveContext(view);
+      switch (eventType) {
+        case contextUsageEvent: {
+          const view = Option.getOrNull(decodeContextEvent(data));
+          if (view) setLiveContext(view);
+          return;
+        }
+        case queueDeliveredEvent: {
+          // Taken in at a tool call: after the message that made it, before the answer that follows.
+          const last = messages.at(-1);
+          const delivered = Option.getOrNull(decodeDeliveredEvent(data));
+          if (last && delivered) place(delivered.ids, { side: "after", messageId: last.id });
+          void queue.refresh();
+          return;
+        }
+      }
     },
   });
   const approvals = interrupts.flatMap((interrupt) => toPendingApproval(interrupt) ?? []);
@@ -260,6 +288,19 @@ function ChatPanel({
   const [highlight, setHighlight] = useState(0);
   const suggestions = composer.kind === "compose" ? suggest(draft, slash.context) : [];
   const highlighted = suggestions[Math.min(highlight, suggestions.length - 1)] ?? null;
+
+  // Messages the run took in, shown in the conversation until it is read again with them.
+  const inFlight =
+    generating || waitingForApproval || catchingUp ? queue.items.filter(isTakenIn) : [];
+  const takenIn = (side: Placement["side"], messageId: string) =>
+    inFlight.filter((taken) => {
+      const placement = placements.get(taken.id);
+      return placement?.side === side && placement.messageId === messageId;
+    });
+  const unplaced = inFlight.filter((taken) => {
+    const placement = placements.get(taken.id);
+    return !placement || !messages.some((message) => message.id === placement.messageId);
+  });
 
   const cancel = async () => {
     // Stopping only the local stream would leave the run going on the server, so ask it first.
@@ -304,17 +345,20 @@ function ChatPanel({
     const settled = wasGenerating.current && !generating;
     wasGenerating.current = generating;
     if (!settled || readOnly) return;
+    setCatchingUp(true);
     void (async () => {
-      const [items, state] = await Promise.all([
-        queue.refresh(),
-        api.sessionRunState(sessionId, holder).catch(() => null),
-      ]);
-      if (!items || !state || state.running || state.lastRun?.status === "interrupted") return;
-      const tookInQueued = items.some(
-        (message) => message.state.kind === "delivered" && message.state.via !== "next_turn",
-      );
-      if (tookInQueued) setMessages((await api.transcript(sessionId)).messages);
-      if (state.lastRun?.status === "completed") sendNextQueued(items);
+      try {
+        const [items, state] = await Promise.all([
+          queue.refresh(),
+          api.sessionRunState(sessionId, holder).catch(() => null),
+        ]);
+        if (!items || !state || state.running || state.lastRun?.status === "interrupted") return;
+        if (items.some(isTakenIn)) setMessages((await api.transcript(sessionId)).messages);
+        if (state.lastRun?.status === "completed") sendNextQueued(items);
+      } finally {
+        setCatchingUp(false);
+        setPlacements(new Map());
+      }
     })();
     // Runs only on the generating → idle edge.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
@@ -490,8 +534,17 @@ function ChatPanel({
     setSubmitting(false);
     switch (outcome.kind) {
       case "queued":
-      case "steered":
         return clearDraft();
+      case "steered": {
+        // The saved conversation puts a steered message before the answer it arrived during.
+        const last = messages.at(-1);
+        if (last)
+          place([outcome.message.id], {
+            side: last.role === "assistant" ? "before" : "after",
+            messageId: last.id,
+          });
+        return clearDraft();
+      }
       case "not-running":
         return sendTurn();
       case "steer-unavailable":
@@ -542,12 +595,22 @@ function ChatPanel({
             </Empty>
           )}
           {messages.map((message, index) => (
-            <MessageView
-              key={message.id}
-              message={message}
-              streaming={generating && index === messages.length - 1}
-              awaitingApproval={awaitingApproval}
-            />
+            <Fragment key={message.id}>
+              {takenIn("before", message.id).map((taken) => (
+                <DeliveredMessageView key={taken.id} message={taken} />
+              ))}
+              <MessageView
+                message={message}
+                streaming={generating && index === messages.length - 1}
+                awaitingApproval={awaitingApproval}
+              />
+              {takenIn("after", message.id).map((taken) => (
+                <DeliveredMessageView key={taken.id} message={taken} />
+              ))}
+            </Fragment>
+          ))}
+          {unplaced.map((taken) => (
+            <DeliveredMessageView key={taken.id} message={taken} />
           ))}
           {approvals.map((approval) => (
             <ApprovalCard key={approval.id} approval={approval} disabled={readOnly} />
@@ -630,7 +693,6 @@ function ChatPanel({
                   items={queue.items}
                   editingId={editing?.id ?? null}
                   readOnly={readOnly}
-                  showDelivered={generating || waitingForApproval}
                   onEdit={startEdit}
                   onRemove={(message) => void removeQueued(message)}
                   onConfirm={(message) => void confirmQueued(message)}

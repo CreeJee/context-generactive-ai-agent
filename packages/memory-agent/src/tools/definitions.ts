@@ -21,11 +21,12 @@ export {
 export { sessionHolderHeader, type LeaseView } from "../sessions/lease-state.ts";
 export type { SubagentStatus, SubagentView } from "../subagents/subagent-state.ts";
 export type { ApprovalRequester, RelayedApprovalView } from "../approvals/relayed-state.ts";
-export type {
-  DeliveryVia,
-  QueueEdit,
-  QueueItemState,
-  QueuedMessage,
+export {
+  queueDeliveredEvent,
+  type DeliveryVia,
+  type QueueEdit,
+  type QueueItemState,
+  type QueuedMessage,
 } from "../queue/queue-state.ts";
 
 export const RunShellInput = Schema.Struct({
