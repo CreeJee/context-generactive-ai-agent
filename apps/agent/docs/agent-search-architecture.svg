@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1312 1040" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" style="color:#172033">
+<title>범용 에이전트 검색 구조: 증분 색인, 하이브리드 검색, 재정렬과 선택적 확장</title>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="currentColor"/></marker></defs>
+<rect x="16" y="16" width="1280" height="1008" rx="16" fill="white"/>
+<text x="32" y="56" font-size="28" font-weight="700" fill="currentColor">범용 에이전트 검색 — 기본 경로와 선택적 확장</text>
+<text x="32" y="88" font-size="16" fill="currentColor">기본은 hybrid + 문맥 있는 색인 + reranker. 실패 유형에 맞춰 추가 기능을 적용합니다.</text>
+<g fill="currentColor" font-size="18" font-weight="700"><text x="32" y="128">① 색인 · 비동기</text><text x="416" y="128">② 검색 · 요청 시</text><text x="960" y="128">③ 필요할 때만 확장</text></g>
+<g fill="none" stroke="currentColor" stroke-width="1.5"><path d="M176 224V264" marker-end="url(#arrow)"/><path d="M176 344V384" marker-end="url(#arrow)"/><path d="M176 464V496H98V528" marker-end="url(#arrow)"/><path d="M176 496H254V528" marker-end="url(#arrow)"/><path d="M640 224V256H520V288" marker-end="url(#arrow)"/><path d="M640 256H760V288" marker-end="url(#arrow)"/><path d="M520 368V400H640V432" marker-end="url(#arrow)"/><path d="M760 368V400H640" marker-end="url(#arrow)"/><path d="M640 512V552" marker-end="url(#arrow)"/><path d="M640 632V672" marker-end="url(#arrow)"/><path d="M640 752V792" marker-end="url(#arrow)"/>
+<path d="M98 608V648H352V328H416" stroke-dasharray="5 5" marker-end="url(#arrow)"/>
+<path d="M254 608V624H376V272H760V288" stroke-dasharray="5 5" marker-end="url(#arrow)"/>
+<path d="M960 328H864" stroke-dasharray="5 5" marker-end="url(#arrow)"/>
+<path d="M960 472H864" stroke-dasharray="5 5" marker-end="url(#arrow)"/>
+<path d="M960 712H864" stroke-dasharray="5 5" marker-end="url(#arrow)"/>
+</g>
+<g fill="currentColor"><g><rect x="32" y="144" width="288" height="80" rx="12" fill="white" stroke="currentColor"/><text x="176" y="176" text-anchor="middle" font-size="19" font-weight="600">원문 수집</text><text x="176" y="202" text-anchor="middle" font-size="14">코드 · 문서 · 대화</text></g>
+<g><rect x="32" y="264" width="288" height="80" rx="12" fill="white" stroke="currentColor"/><text x="176" y="296" text-anchor="middle" font-size="19" font-weight="600">변경 감지 · 의미 단위 분할</text><text x="176" y="322" text-anchor="middle" font-size="14">내용 해시 · 함수 / 섹션 / 발언</text></g>
+<g><rect x="32" y="384" width="288" height="80" rx="12" fill="white" stroke="currentColor"/><text x="176" y="416" text-anchor="middle" font-size="19" font-weight="600">문맥 · 메타데이터 추가</text><text x="176" y="442" text-anchor="middle" font-size="14">제목 · 경로 · 권한 · 원문 위치</text></g>
+<g><rect x="32" y="528" width="132" height="80" rx="12" fill="white" stroke="currentColor"/><text x="98" y="560" text-anchor="middle" font-size="17" font-weight="600">BM25 색인</text><text x="98" y="586" text-anchor="middle" font-size="14">정확한 단어</text></g>
+<g><rect x="188" y="528" width="132" height="80" rx="12" fill="white" stroke="currentColor"/><text x="254" y="560" text-anchor="middle" font-size="17" font-weight="600">벡터 색인</text><text x="254" y="586" text-anchor="middle" font-size="14">의미 표현</text></g>
+<g><rect x="416" y="144" width="448" height="80" rx="12" fill="white" stroke="currentColor"/><text x="640" y="176" text-anchor="middle" font-size="19" font-weight="600">질문 + 검색 범위</text><text x="640" y="202" text-anchor="middle" font-size="14">권한 적용 · 프로젝트 등 명시 조건</text></g>
+<g><rect x="416" y="288" width="208" height="80" rx="12" fill="white" stroke="currentColor"/><text x="520" y="320" text-anchor="middle" font-size="19" font-weight="600">BM25 검색</text><text x="520" y="346" text-anchor="middle" font-size="14">이름 · 문자열 일치</text></g>
+<g><rect x="656" y="288" width="208" height="80" rx="12" fill="white" stroke="currentColor"/><text x="760" y="320" text-anchor="middle" font-size="19" font-weight="600">벡터 검색</text><text x="760" y="346" text-anchor="middle" font-size="14">의미 유사도</text></g>
+<g><rect x="416" y="432" width="448" height="80" rx="12" fill="white" stroke="currentColor"/><text x="640" y="464" text-anchor="middle" font-size="19" font-weight="600">RRF 결합 · 중복 제거</text><text x="640" y="490" text-anchor="middle" font-size="14">다른 검색기의 후보를 함께 모으기</text></g>
+<g><rect x="416" y="552" width="448" height="80" rx="12" fill="white" stroke="currentColor"/><text x="640" y="584" text-anchor="middle" font-size="19" font-weight="600">Reranker</text><text x="640" y="610" text-anchor="middle" font-size="14">질문과 후보를 함께 보고 재정렬</text></g>
+<g><rect x="416" y="672" width="448" height="80" rx="12" fill="white" stroke="currentColor"/><text x="640" y="704" text-anchor="middle" font-size="19" font-weight="600">주변 원문 확장 · 근거 확인</text><text x="640" y="730" text-anchor="middle" font-size="14">버전 · 유효성 · 수정 / 철회 관계</text></g>
+<g><rect x="416" y="792" width="448" height="80" rx="12" fill="white" stroke="currentColor"/><text x="640" y="824" text-anchor="middle" font-size="19" font-weight="600">근거 기반 답변</text><text x="640" y="850" text-anchor="middle" font-size="14">원문 출처 연결</text></g>
+<g><rect x="960" y="288" width="320" height="80" rx="12" fill="#eef2ff" stroke="currentColor"/><text x="1120" y="320" text-anchor="middle" font-size="19" font-weight="600">질의 분해 · 확장</text><text x="1120" y="346" text-anchor="middle" font-size="14">복합 질문 → 하위 질문별 검색</text></g>
+<g><rect x="960" y="432" width="320" height="80" rx="12" fill="#eef2ff" stroke="currentColor"/><text x="1120" y="464" text-anchor="middle" font-size="19" font-weight="600">Multi-vector / learned sparse</text><text x="1120" y="490" text-anchor="middle" font-size="14">세부 조건 누락 → 표현력 보강</text></g>
+<g><rect x="960" y="672" width="320" height="80" rx="12" fill="#eef2ff" stroke="currentColor"/><text x="1120" y="704" text-anchor="middle" font-size="19" font-weight="600">관계 그래프 탐색</text><text x="1120" y="730" text-anchor="middle" font-size="14">연결 추론 → 관련 개체·원문 탐색</text></g></g>
+<g fill="currentColor" font-size="15">
+<text x="32" y="704">변경된 조각만 재색인</text><text x="32" y="732">삭제 · 수정 시 오래된 색인 정리</text><text x="32" y="760">캐시는 색인 버전에 맞춰 무효화</text>
+<text x="960" y="192">점선: 색인 공급 또는 선택적 보강</text>
+<text x="960" y="224">확장 기능은 지연 · 비용과 교환</text>
+<text x="960" y="552">후보에 정답이 없다 → 검색 개선</text>
+<text x="960" y="580">후보에 있지만 순위가 낮다</text><text x="960" y="608">→ 재정렬 개선</text>
+</g>
+<rect x="32" y="912" width="1248" height="88" rx="12" fill="#eef2ff" stroke="currentColor"/>
+<text x="56" y="944" font-size="19" font-weight="700" fill="currentColor">④ 공통 평가 → 색인 · 검색 설정에 피드백</text>
+<text x="56" y="975" font-size="16" fill="currentColor">정답 근거 Recall@k · 순위 품질 nDCG · 최종 답변 정확도 · p95 지연 · 색인 처리량 · 비용</text>
+</svg>
