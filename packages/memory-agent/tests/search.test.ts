@@ -6,9 +6,15 @@ import { describe, expect, test } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { Embedder, EmbeddingError } from "../src/memory/embedding/embedder.ts";
 import { Indexer } from "../src/memory/embedding/indexer.ts";
+import { MorphAnalyzer } from "../src/memory/morph/analyzer.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { Recorder } from "../src/memory/record.ts";
-import { fuseRanks, MemorySearch, searchTerms } from "../src/memory/search.ts";
+import {
+  fuseRanks,
+  MemorySearch,
+  namesSomethingExactly,
+  searchTerms,
+} from "../src/memory/search.ts";
 import { Projects } from "../src/projects/projects.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
 import { ScriptedTextAdapter } from "../src/testing/scripted-adapter.ts";
@@ -92,6 +98,42 @@ describe("fuseRanks", () => {
     expect(fused.get("text-only")!).toBeLessThan(fused.get("vector-only")!);
     expect(fuseRanks([["a"], ["a"]]).get("a")).toBeCloseTo(1);
   });
+
+  test("a weighted list outvotes the others by its weight", () => {
+    const fused = fuseRanks(
+      [
+        ["exact", "other"],
+        ["near", "exact"],
+      ],
+      [2, 1],
+    );
+    expect(fused.get("exact")!).toBeGreaterThan(fused.get("near")!);
+    expect(fuseRanks([["a"], ["b"]], [2, 1]).get("a")).toBeCloseTo(2 / 3);
+  });
+});
+
+describe("namesSomethingExactly", () => {
+  test("tells error codes, paths and identifiers from questions in words", () => {
+    for (const query of [
+      "ERR_PNPM_OUTDATED_LOCKFILE",
+      "TS2345 오류",
+      "payment.test.ts 타임아웃",
+      "useSessionLease",
+      "Access-Control-Allow-Origin",
+      "ECONNRESET",
+      "EADDRINUSE 5174",
+      "redis:7.2-alpine",
+    ])
+      expect(namesSomethingExactly(query), query).toBe(true);
+    for (const query of [
+      "로그 형식을 뭐로 정했었지?",
+      "주 DB를 무엇으로 하기로 했나요",
+      "ORM 도입했었나?",
+      "PG사 어디랑 계약했어?",
+      "Node 버전 고정",
+    ])
+      expect(namesSomethingExactly(query), query).toBe(false);
+  });
 });
 
 describe("MemorySearch.find", () => {
@@ -118,6 +160,31 @@ describe("MemorySearch.find", () => {
       "calls",
       "returns",
     ]);
+  });
+
+  test("a query naming something exactly finds the tool output ahead of the nearest statement", async () => {
+    const { runtime, project, session } = await testRuntime({
+      morphAnalyzer: MorphAnalyzer.disabled,
+    });
+    const found = await runtime.runPromise(
+      Effect.gen(function* () {
+        const nodes = yield* Nodes;
+        const at = { projectId: project.id, sessionId: session.id };
+        nodes.append({ ...at, kind: "user", text: "개발 서버를 띄워 줘" });
+        const output = nodes.append({
+          ...at,
+          kind: "tool_result",
+          text: "Error: listen EADDRINUSE: address already in use 127.0.0.1:5174",
+        });
+        nodes.append({ ...at, kind: "assistant", text: "다른 포트로 옮길게요." });
+        yield* (yield* Indexer).indexAll();
+        // Only the statements have vectors, so the vector ranking is all statements.
+        const search = yield* MemorySearch;
+        const result = yield* search.find({ query: "EADDRINUSE 5174", projectId: project.id });
+        return { first: result.matches[0], output: output.id };
+      }),
+    );
+    expect(found.first).toMatchObject({ id: found.output, foundBy: "text" });
   });
 
   test("falls back to text search when the embedder fails, and says so", async () => {

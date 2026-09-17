@@ -64,14 +64,40 @@ const fusionK = 60;
 
 /**
  * Merges ranked id lists by Reciprocal Rank Fusion. Cosine and BM25 scores are not comparable,
- * so only ranks are used. A node first in every list gets 1; first in one of two lists gets 0.5.
+ * so only ranks are used. A node first in every list gets 1; first in one of two equally weighted
+ * lists gets 0.5. Equal scores keep the order of the lists: a node the first list holds comes out
+ * ahead.
  */
-export function fuseRanks(lists: readonly (readonly string[])[]): Map<string, number> {
+export function fuseRanks(
+  lists: readonly (readonly string[])[],
+  weights: readonly number[] = lists.map(() => 1),
+): Map<string, number> {
   const scores = new Map<string, number>();
-  for (const list of lists)
-    list.forEach((id, rank) => scores.set(id, (scores.get(id) ?? 0) + 1 / (fusionK + rank + 1)));
-  const best = lists.length / (fusionK + 1);
+  lists.forEach((list, index) => {
+    const weight = weights[index] ?? 1;
+    list.forEach((id, rank) =>
+      scores.set(id, (scores.get(id) ?? 0) + weight / (fusionK + rank + 1)),
+    );
+  });
+  const best = weights.reduce((sum, weight) => sum + weight, 0) / (fusionK + 1);
   return new Map([...scores].map(([id, score]) => [id, score / best]));
+}
+
+/**
+ * Whether a query names something exactly: an error code, a path or file name, an identifier, a
+ * version, a hash, a port. Such a query is answered by the text match, not by meaning.
+ */
+export function namesSomethingExactly(query: string) {
+  return query
+    .split(/\s+/u)
+    .some(
+      (term) =>
+        /[A-Za-z0-9][_\-./:@][A-Za-z0-9]/u.test(term) ||
+        /[a-z][A-Z]/u.test(term) ||
+        (/[A-Za-z]/u.test(term) && /\d/u.test(term)) ||
+        /^[A-Z]{5,}$/u.test(term) ||
+        /^\d{3,}$/u.test(term),
+    );
 }
 
 const IdProject = Schema.Struct({ id: Schema.String, project_id: Schema.String });
@@ -96,8 +122,25 @@ export function searchTerms(query: string) {
   };
 }
 
-/** `withText`: rank by trigram and short substring matches too; off only to measure what they add. */
-const make = (withText: boolean) =>
+/** What the recall evaluation varies; the app searches with {@link searchTuning}. */
+export interface SearchTuning {
+  /** Rank by trigram and short substring matches too. */
+  readonly text: boolean;
+  /**
+   * Whether a query that names something exactly ({@link namesSomethingExactly}) puts the text
+   * ranking first, so it wins ties, weighted by `exactTextWeight` against 1 for the others.
+   */
+  readonly exactFirst: boolean;
+  readonly exactTextWeight: number;
+}
+
+export const searchTuning: SearchTuning = {
+  text: true,
+  exactFirst: true,
+  exactTextWeight: 2,
+};
+
+const make = (tuning: SearchTuning) =>
   Effect.gen(function* () {
     const { sqlite } = yield* Database;
     const embedder = yield* Embedder;
@@ -168,7 +211,7 @@ const make = (withText: boolean) =>
 
     /** Node ids ranked by text match: trigram BM25 first, then 2-character substring hits. */
     function textRanking(query: string, allowed: readonly string[], k: number) {
-      if (!withText) return [];
+      if (!tuning.text) return [];
       const { trigram, short } = searchTerms(query);
       const projects = allowed.map(() => "?").join(", ");
       const ranked: string[] = [];
@@ -216,9 +259,16 @@ const make = (withText: boolean) =>
             return Effect.succeed([]);
           }),
         );
-        const seeds = fuseRanks(
-          byMorph.length > 0 ? [byVector, byText, byMorph] : [byVector, byText],
-        );
+        // The vector list is always full, related or not. For a query that names something
+        // exactly it would outvote the text match, so the text ranking goes first and counts more.
+        const morph = byMorph.length > 0 ? [byMorph] : [];
+        const seeds =
+          tuning.text && tuning.exactFirst && namesSomethingExactly(input.query)
+            ? fuseRanks(
+                [byText, ...morph, byVector],
+                [tuning.exactTextWeight, ...morph.map(() => 1), 1],
+              )
+            : fuseRanks([byVector, byText, ...morph]);
         const vectorIds = new Set(byVector);
 
         const walk = graph.traverse(seeds, {
@@ -282,7 +332,8 @@ export class MemorySearch extends Context.Tag("memory-agent/MemorySearch")<
   MemorySearch,
   Effect.Effect.Success<ReturnType<typeof make>>
 >() {
-  static readonly layer = Layer.effect(MemorySearch, make(true));
-  /** Vector and morpheme ranking only, for the recall evaluation. */
-  static readonly withoutText = Layer.effect(MemorySearch, make(false));
+  static readonly layer = Layer.effect(MemorySearch, make(searchTuning));
+  /** The search with some settings changed, for the recall evaluation. */
+  static readonly tuned = (tuning: Partial<SearchTuning>) =>
+    Layer.effect(MemorySearch, make({ ...searchTuning, ...tuning }));
 }

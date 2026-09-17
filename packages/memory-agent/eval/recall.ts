@@ -123,7 +123,7 @@ async function evaluate(configuration: Configuration, set: RecallSet) {
         const indexedMs = Math.round(performance.now() - started);
         const search = yield* configuration.text
           ? MemorySearch
-          : Effect.provide(MemorySearch, MemorySearch.withoutText);
+          : Effect.provide(MemorySearch, MemorySearch.tuned({ text: false }));
 
         let top1 = 0;
         let top3 = 0;
