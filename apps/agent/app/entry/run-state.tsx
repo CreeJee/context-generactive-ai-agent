@@ -1,7 +1,7 @@
 import type { SessionRunState } from "memory-agent/definitions";
-import type { WorkflowPhase } from "./api";
+import type { WorkflowAction, WorkflowPhase } from "./api";
 import { RefreshCwIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
 import { api, ApiError } from "./api";
@@ -22,29 +22,32 @@ export function useRunState(
 ) {
   const [state, setState] = useState<SessionRunState | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [controlling, setControlling] = useState(false);
   // Asked to stop, but the server had not confirmed it by the time it answered.
   const [cancelPending, setCancelPending] = useState(false);
   const detached = !generating && state !== null && state.running !== null;
 
+  const refresh = useCallback(async () => {
+    const next = await api.sessionRunState(sessionId, holder);
+    setState(next);
+    if (next.running === null) setCancelPending(false);
+    return next;
+  }, [sessionId, holder]);
+
   useEffect(() => {
     if (generating) return;
     let current = true;
-    const refresh = () =>
-      api.sessionRunState(sessionId, holder).then(
-        (next) => {
-          if (!current) return;
-          setState(next);
-          if (next.running === null) setCancelPending(false);
-        },
-        () => {},
-      );
-    void refresh();
-    const poll = cancelPending || detached ? setInterval(() => void refresh(), pollMs) : null;
+    const poll = () =>
+      refresh().catch(() => {
+        if (!current) return;
+      });
+    void poll();
+    const timer = cancelPending || detached ? setInterval(() => void poll(), pollMs) : null;
     return () => {
       current = false;
-      if (poll) clearInterval(poll);
+      if (timer) clearInterval(timer);
     };
-  }, [sessionId, holder, generating, cancelPending, detached]);
+  }, [generating, cancelPending, detached, refresh]);
 
   /** Asks the server to stop the run. Resolves false when nothing could be asked (network error). */
   const cancel = async () => {
@@ -67,9 +70,23 @@ export function useRunState(
     return workflow;
   };
 
+  const controlWorkflow = async (action: WorkflowAction) => {
+    setControlling(true);
+    try {
+      const workflow = await api.controlWorkflow(sessionId, holder, action);
+      setState((current) => (current ? { ...current, workflow } : current));
+      return workflow;
+    } finally {
+      setControlling(false);
+    }
+  };
+
   return {
     cancelling,
+    controlling,
     cancel,
+    controlWorkflow,
+    refresh,
     context: state?.context ?? null,
     workflow: state?.workflow ?? null,
     setWorkflowPhase,

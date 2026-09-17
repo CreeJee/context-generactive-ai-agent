@@ -18,6 +18,7 @@ import type {
   Project,
   Session,
   SkillCatalog,
+  WorkflowAction,
   WorkflowPhase,
   WorkflowState,
 } from "memory-agent";
@@ -68,6 +69,7 @@ export type {
   ApprovalRequester,
   RelayedApprovalView,
   SubagentView,
+  WorkflowAction,
   WorkflowPhase,
   WorkflowState,
 };
@@ -81,6 +83,7 @@ export const ApiErrorCode = Schema.Literal(
   "cross_site_request",
   "empty_message",
   "external_agent_unavailable",
+  "goal_missing",
   "images_not_supported",
   "invalid_agent_change",
   "invalid_answer",
@@ -220,6 +223,13 @@ export const api = {
       "POST",
       `/api/sessions/${encodeURIComponent(sessionId)}`,
       { phase },
+      { [sessionHolderHeader]: holder },
+    ),
+  controlWorkflow: (sessionId: string, holder: string, workflowAction: WorkflowAction) =>
+    call<WorkflowState>(
+      "POST",
+      `/api/sessions/${encodeURIComponent(sessionId)}`,
+      { workflowAction },
       { [sessionHolderHeader]: holder },
     ),
   /** `agent`: talk directly to that trusted external ACP agent instead of the app's model. */

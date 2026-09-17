@@ -158,12 +158,20 @@ function WorkflowArtifactPanel({
   state,
   busy,
   disabled,
+  controlling,
+  onPause,
+  onResume,
+  onStop,
   onRevise,
   onExecute,
 }: {
   readonly state: WorkflowState | null;
   readonly busy: boolean;
   readonly disabled: boolean;
+  readonly controlling: boolean;
+  readonly onPause: () => void;
+  readonly onResume: () => void;
+  readonly onStop: () => void;
   readonly onRevise: () => void;
   readonly onExecute: () => void;
 }) {
@@ -193,6 +201,39 @@ function WorkflowArtifactPanel({
               검증 {state.goal.verification.status === "passed" ? "통과" : "실패"} ·{" "}
               {state.goal.verification.summary}
             </p>
+          )}
+          {state.goal && !["completed", "failed"].includes(state.goal.status) && (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {state.goal.status === "paused" ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={disabled || controlling || busy}
+                  onClick={onResume}
+                >
+                  계속
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={disabled || controlling}
+                  onClick={onPause}
+                >
+                  일시 중지
+                </Button>
+              )}
+              <Button
+                type="button"
+                size="sm"
+                variant="destructive"
+                disabled={disabled || controlling}
+                onClick={onStop}
+              >
+                중단
+              </Button>
+            </div>
           )}
         </AlertDescription>
       </Alert>
@@ -478,6 +519,21 @@ function ChatPanel({
       contentOf("승인한 Plan을 첫 번째 미완료 단계부터 실행하고 결과를 검증해 줘.", []),
     );
   };
+
+  const controlGoal = async (action: "pause" | "resume" | "stop") => {
+    try {
+      await run.controlWorkflow(action);
+      if (action === "pause" || action === "stop") {
+        if (generating) stop();
+        setNotice(done(action === "pause" ? "Goal을 일시 중지했어요." : "Goal을 중단했어요."));
+        return;
+      }
+      setNotice(null);
+      void sendMessage(contentOf("일시 중지한 Goal을 현재 상태에서 이어서 진행해 줘.", []));
+    } catch {
+      setNotice(problem("Goal 상태를 바꾸지 못했어요."));
+    }
+  };
   // The server's view is read again once the run stops, and from then on it is the latest.
   useEffect(() => setLiveContext(null), [run.context]);
   const context = liveContext ?? run.context;
@@ -542,8 +598,13 @@ function ChatPanel({
   // When this page's run stops: catch up with messages the run took in along the way, then, after
   // a normal finish, send what is waiting as the next turn (R03). Not after a cancel or failure.
   const wasGenerating = useRef(generating);
+  const startedWorkflowPhase = useRef<WorkflowPhase | null>(null);
+  const automaticVerification = useRef<string | null>(null);
   useEffect(() => {
+    if (!wasGenerating.current && generating)
+      startedWorkflowPhase.current = run.workflow?.phase ?? null;
     const settled = wasGenerating.current && !generating;
+    const finishedPhase = startedWorkflowPhase.current;
     wasGenerating.current = generating;
     if (!settled || readOnly) return;
     setCatchingUp(true);
@@ -551,11 +612,29 @@ function ChatPanel({
       try {
         const [items, state] = await Promise.all([
           queue.refresh(),
-          api.sessionRunState(sessionId, holder).catch(() => null),
+          run.refresh().catch(() => null),
         ]);
         if (!items || !state || state.running || state.lastRun?.status === "interrupted") return;
         if (items.some(isTakenIn)) setMessages((await api.transcript(sessionId)).messages);
-        if (state.lastRun?.status === "completed") sendNextQueued(items);
+        if (state.lastRun?.status !== "completed") return;
+        const waiting = nextInLine(items);
+        if (waiting) {
+          sendNextQueued(items);
+          return;
+        }
+        if (
+          finishedPhase === "execute" &&
+          state.workflow.phase === "verify" &&
+          state.workflow.plan?.status === "executing"
+        ) {
+          automaticVerification.current = `${sessionId}:${state.workflow.plan.version}`;
+          void sendMessage(
+            contentOf(
+              "실행 결과를 Goal과 Plan의 acceptance criteria에 맞춰 읽기 전용으로 검증하고, evidence와 최종 상태를 기록해 줘.",
+              [],
+            ),
+          );
+        }
       } finally {
         setCatchingUp(false);
         setPlacements(new Map());
@@ -564,6 +643,36 @@ function ChatPanel({
     // Runs only on the generating → idle edge.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [generating]);
+
+  // A reload may happen after Execute finished but before its verification turn started.
+  useEffect(() => {
+    const plan = run.workflow?.plan;
+    if (
+      generating ||
+      readOnly ||
+      run.workflow?.phase !== "verify" ||
+      plan?.status !== "executing" ||
+      plan.verification.status !== "not_run"
+    )
+      return;
+    const key = `${sessionId}:${plan.version}`;
+    if (automaticVerification.current === key) return;
+    automaticVerification.current = key;
+    void queue.refresh().then((items) => {
+      if (!items || nextInLine(items)) {
+        automaticVerification.current = null;
+        return;
+      }
+      void sendMessage(
+        contentOf(
+          "실행 결과를 Goal과 Plan의 acceptance criteria에 맞춰 읽기 전용으로 검증하고, evidence와 최종 상태를 기록해 줘.",
+          [],
+        ),
+      );
+    });
+    // React to durable workflow changes; sendMessage and queue are intentionally not dependencies.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [generating, readOnly, run.workflow, sessionId]);
 
   // Unsaved edit text is stored as it is typed, so a restart restores it as a draft.
   useEffect(() => {
@@ -837,6 +946,10 @@ function ChatPanel({
             state={run.workflow}
             busy={generating}
             disabled={readOnly}
+            controlling={run.controlling}
+            onPause={() => void controlGoal("pause")}
+            onResume={() => void controlGoal("resume")}
+            onStop={() => void controlGoal("stop")}
             onRevise={() => void revisePlan()}
             onExecute={() => void executePlan()}
           />

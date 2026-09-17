@@ -6,6 +6,9 @@ import { Database } from "../db/database.ts";
 export const WorkflowPhase = Schema.Literal("chat", "goal", "plan", "execute", "verify");
 export type WorkflowPhase = typeof WorkflowPhase.Type;
 
+export const WorkflowAction = Schema.Literal("pause", "resume", "stop");
+export type WorkflowAction = typeof WorkflowAction.Type;
+
 const GoalQuestion = Schema.Struct({
   id: Schema.String,
   question: Schema.String,
@@ -279,6 +282,93 @@ const make = Effect.gen(function* () {
         }),
       ),
 
+    controlGoal: (sessionId: string, action: WorkflowAction) =>
+      serialize(
+        sessionId,
+        Effect.suspend(() => {
+          const current = get(sessionId);
+          if (current.goal === null)
+            return Effect.fail(new WorkflowProgressRefused({ reason: "goal_missing" }));
+          const currentGoal = current.goal;
+          return Effect.sync(() =>
+            atomic(() => {
+              const now = new Date().toISOString();
+              const goalStatus =
+                action === "pause" ? "paused" : action === "resume" ? "active" : "failed";
+              const plan =
+                action === "stop" && current.plan?.status === "executing"
+                  ? { ...current.plan, status: "blocked" as const, updatedAt: now }
+                  : current.plan;
+              const phase =
+                action === "resume"
+                  ? plan?.status === "executing"
+                    ? "execute"
+                    : "goal"
+                  : current.phase;
+              const kind =
+                action === "pause"
+                  ? "goal_paused"
+                  : action === "resume"
+                    ? "goal_resumed"
+                    : "workflow_stopped";
+              const detail =
+                action === "pause"
+                  ? "Paused by the user"
+                  : action === "resume"
+                    ? "Resumed by the user"
+                    : "Stopped by the user";
+              const next: WorkflowState = {
+                ...current,
+                phase,
+                goal: { ...currentGoal, status: goalStatus, updatedAt: now },
+                plan,
+              };
+              return save(sessionId, {
+                ...next,
+                ledger: [...next.ledger, event(current, kind, detail)],
+              });
+            }),
+          );
+        }),
+      ),
+
+    finishRun: (sessionId: string, startedPhase: WorkflowPhase) =>
+      change(sessionId, (current) => {
+        const now = new Date().toISOString();
+        if (startedPhase === "execute" && current.phase === "execute") {
+          const next = { ...current, phase: "verify" as const };
+          return {
+            ...next,
+            ledger: [...next.ledger, event(current, "phase_changed", "execute -> verify")],
+          };
+        }
+        if (startedPhase !== "verify" || current.phase !== "verify" || current.plan === null)
+          return current;
+        const verified =
+          current.plan.verification.status === "passed" &&
+          current.plan.verification.evidence.length > 0 &&
+          current.plan.steps.every((step) => step.status === "completed");
+        if (!verified) return current;
+        const goal = current.goal
+          ? {
+              ...current.goal,
+              status: "completed" as const,
+              verification: current.plan.verification,
+              updatedAt: now,
+            }
+          : null;
+        const plan = { ...current.plan, status: "completed" as const, updatedAt: now };
+        return {
+          ...current,
+          goal,
+          plan,
+          ledger: [
+            ...current.ledger,
+            event(current, "progress_updated", "Verification completed the workflow"),
+          ],
+        };
+      }),
+
     updateGoal: (sessionId: string, input: UpdateGoal) =>
       change(sessionId, (current) => {
         const goal: GoalArtifact = {
@@ -372,6 +462,7 @@ const make = Effect.gen(function* () {
                 verification !== null &&
                 (input.goalStatus !== undefined ||
                   current.phase === "goal" ||
+                  current.phase === "verify" ||
                   current.plan === null);
               const recordPlanVerification =
                 verification !== null &&

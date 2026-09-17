@@ -87,6 +87,7 @@ export { Session, Sessions } from "./sessions/sessions.ts";
 export {
   GoalArtifact,
   PlanArtifact,
+  WorkflowAction,
   WorkflowPhase,
   WorkflowState,
   WorkflowProgressRefused,

@@ -59,7 +59,7 @@ import { LiveRuns } from "./live-runs.ts";
 import type { CancelResult, CompactResult, SessionRunState } from "./run-state.ts";
 import { sessionHolderHeader } from "../sessions/lease-state.ts";
 import { SessionLeases } from "../sessions/leases.ts";
-import { Workflows, type WorkflowPhase } from "../workflow/workflow.ts";
+import { Workflows, type WorkflowAction, type WorkflowPhase } from "../workflow/workflow.ts";
 import { WorkflowTools, workflowInstructions } from "../workflow/tools.ts";
 import { WorkflowRules } from "../workflow/rules.ts";
 import { localWorkflowRules } from "../workflow/sources.ts";
@@ -265,6 +265,7 @@ const workflowReadToolNames: ReadonlySet<string> = new Set([
   "kagi_extract",
   "update_goal",
   "update_plan",
+  "update_workflow_progress",
 ]);
 
 /** A reconnect names where to continue: `Last-Event-ID`, or `?offset=` for a join from the start. */
@@ -385,6 +386,11 @@ const make = Effect.gen(function* () {
         Effect.orElseSucceed(() => ""),
       ),
     );
+
+  const workflowAfterRun = (sessionId: string, phase: WorkflowPhase): ChatMiddleware => ({
+    name: "memory-agent/workflow-lifecycle",
+    onFinish: () => Effect.runPromise(Effect.asVoid(workflows.finishRun(sessionId, phase))),
+  });
 
   const indexInBackground = (): ChatMiddleware => {
     // Embedding can take seconds (the model loads on first use), and interpretation is a model
@@ -660,6 +666,7 @@ const make = Effect.gen(function* () {
           children.middleware,
           reads.middleware,
           recorder.forRun({ projectId, sessionId, runId, userNodeId: userNode.id }),
+          workflowAfterRun(sessionId, workflow.phase),
           indexInBackground(),
           summaries.afterRun(sessionId),
           recordContextUsage(metadata, window),
@@ -792,6 +799,28 @@ const make = Effect.gen(function* () {
         return json(200, yield* workflows.setPhase(sessionId, phase));
       }).pipe(
         Effect.catchTag("WorkflowTransitionRefused", (failure) =>
+          Effect.succeed(json(409, { error: failure.reason })),
+        ),
+        Effect.catchTag("SessionNotFound", sessionNotFound),
+      ),
+
+    /** Pauses, resumes or permanently stops the active Goal and cancels its run when needed. */
+    controlWorkflow: (sessionId: string, holder: string | null, action: WorkflowAction) =>
+      Effect.gen(function* () {
+        if (!leases.permits(sessionId, holder)) return inUse();
+        yield* sessions.get(sessionId);
+        const live = liveRuns.get(sessionId);
+        if (action === "resume" && live) return json(409, { error: "run_in_progress" });
+        const state = yield* workflows.controlGoal(sessionId, action);
+        if (action !== "resume" && live) {
+          yield* Effect.promise(() =>
+            requestRunCancel(chatState.persistence.stores.runs, live.runId),
+          );
+          live.controller.abort(RUN_CANCEL_REASON);
+        }
+        return json(200, state);
+      }).pipe(
+        Effect.catchTag("WorkflowProgressRefused", (failure) =>
           Effect.succeed(json(409, { error: failure.reason })),
         ),
         Effect.catchTag("SessionNotFound", sessionNotFound),

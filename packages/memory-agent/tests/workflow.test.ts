@@ -287,6 +287,82 @@ describe("Workflows", () => {
     ]);
   });
 
+  test("controls a Goal and records pause, resume and stop", async () => {
+    const { runtime, session } = await testRuntime();
+    const state = await runtime.runPromise(
+      Effect.gen(function* () {
+        const workflows = yield* Workflows;
+        yield* workflows.setPhase(session.id, "goal");
+        yield* workflows.updateGoal(session.id, goal);
+        yield* workflows.controlGoal(session.id, "pause");
+        yield* workflows.controlGoal(session.id, "resume");
+        return yield* workflows.controlGoal(session.id, "stop");
+      }),
+    );
+
+    expect(state.goal?.status).toBe("failed");
+    expect(state.ledger.slice(-3).map((event) => event.kind)).toEqual([
+      "goal_paused",
+      "goal_resumed",
+      "workflow_stopped",
+    ]);
+  });
+
+  test("advances Execute to Verify after a successful run", async () => {
+    const { runtime, session } = await testRuntime();
+    const state = await runtime.runPromise(
+      Effect.gen(function* () {
+        const workflows = yield* Workflows;
+        yield* workflows.updateGoal(session.id, goal);
+        yield* workflows.updatePlan(session.id, plan);
+        yield* workflows.setPhase(session.id, "execute");
+        return yield* workflows.finishRun(session.id, "execute");
+      }),
+    );
+
+    expect(state.phase).toBe("verify");
+    expect(state.plan?.status).toBe("executing");
+    expect(state.ledger.at(-1)).toMatchObject({
+      kind: "phase_changed",
+      detail: "execute -> verify",
+    });
+  });
+
+  test("completes verified artifacts after the Verify run", async () => {
+    const { runtime, session } = await testRuntime();
+    const state = await runtime.runPromise(
+      Effect.gen(function* () {
+        const workflows = yield* Workflows;
+        yield* workflows.updateGoal(session.id, goal);
+        yield* workflows.updatePlan(session.id, plan);
+        yield* workflows.setPhase(session.id, "execute");
+        yield* workflows.updateProgress(session.id, {
+          steps: [{ id: "store", status: "completed", evidence: ["workflow test passed"] }],
+          goalEvidence: [],
+          planEvidence: [],
+          detail: "Implementation complete",
+        });
+        yield* workflows.finishRun(session.id, "execute");
+        yield* workflows.updateProgress(session.id, {
+          steps: [],
+          goalEvidence: [],
+          planEvidence: [],
+          verification: {
+            status: "passed",
+            summary: "Acceptance criteria passed",
+            evidence: ["workflow test passed"],
+          },
+          detail: "Verification passed",
+        });
+        return yield* workflows.finishRun(session.id, "verify");
+      }),
+    );
+
+    expect(state.phase).toBe("verify");
+    expect(state.goal).toMatchObject({ status: "completed", verification: { status: "passed" } });
+    expect(state.plan).toMatchObject({ status: "completed", verification: { status: "passed" } });
+  });
+
   test("refuses Execute until a Plan is ready", async () => {
     const { runtime, session } = await testRuntime();
     const result = await runtime.runPromise(

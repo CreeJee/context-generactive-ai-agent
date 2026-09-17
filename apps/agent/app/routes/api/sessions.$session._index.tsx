@@ -1,5 +1,5 @@
 import { Effect, Either, Schema } from "effect";
-import { AgentChat, WorkflowPhase, sessionHolderHeader } from "memory-agent";
+import { AgentChat, WorkflowAction, WorkflowPhase, sessionHolderHeader } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/sessions.$session._index";
@@ -7,6 +7,7 @@ import type { Route } from "./+types/sessions.$session._index";
 const ChangeSession = Schema.Union(
   Schema.Struct({ archived: Schema.Boolean }),
   Schema.Struct({ phase: WorkflowPhase }),
+  Schema.Struct({ workflowAction: WorkflowAction }),
 );
 
 /**
@@ -31,10 +32,11 @@ export async function action({ request, params }: Route.ActionArgs) {
     return Response.json({ error: "invalid_session_change" }, { status: 400 });
   const holder = request.headers.get(sessionHolderHeader);
   return agent.runPromise(
-    Effect.flatMap(AgentChat, (chat) =>
-      "archived" in body.right
-        ? chat.archive(params.session, holder, body.right.archived)
-        : chat.setWorkflowPhase(params.session, holder, body.right.phase),
-    ),
+    Effect.flatMap(AgentChat, (chat) => {
+      const change = body.right;
+      if ("archived" in change) return chat.archive(params.session, holder, change.archived);
+      if ("phase" in change) return chat.setWorkflowPhase(params.session, holder, change.phase);
+      return chat.controlWorkflow(params.session, holder, change.workflowAction);
+    }),
   );
 }
