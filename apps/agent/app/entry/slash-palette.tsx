@@ -43,8 +43,19 @@ export function SlashPalette({
                     onSelect={() => onPick(suggestion)}
                   >
                     {suggestion.kind === "skill" ? <SparklesIcon /> : <TerminalSquareIcon />}
-                    <span className="font-mono">{suggestion.label}</span>
-                    <span className="truncate text-muted-foreground">{suggestion.description}</span>
+                    {/* Two columns: names line up and never wrap, descriptions take the rest. */}
+                    <span
+                      title={suggestion.label}
+                      className="w-36 shrink-0 truncate font-mono sm:w-52"
+                    >
+                      {suggestion.label}
+                    </span>
+                    <span
+                      title={suggestion.description}
+                      className="min-w-0 flex-1 truncate text-muted-foreground"
+                    >
+                      {suggestion.description}
+                    </span>
                   </CommandItem>
                 ))}
               </CommandGroup>
