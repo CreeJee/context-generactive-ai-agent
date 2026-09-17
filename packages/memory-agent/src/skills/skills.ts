@@ -207,6 +207,9 @@ const make = (options: SkillsOptions) =>
     };
 
     return {
+      /** Where the user's own skills, shared by every project, live. */
+      globalDirectory: globalSkillsDirectory(home),
+
       catalog: (project: Project): SkillCatalog => {
         const { entries, problems } = load(project);
         return {

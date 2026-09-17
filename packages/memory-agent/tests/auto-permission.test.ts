@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
 import { Effect } from "effect";
@@ -70,17 +71,27 @@ async function autoSetup() {
 
 describe("workspace instructions", () => {
   test("say what the permission mode allows, with the date and shell codex no longer describes", async () => {
-    const { project } = await testRuntime({ codex: fakeCodex });
+    const { project, storage, home } = await testRuntime({ codex: fakeCodex });
+    const places = { storageRoot: storage, globalSkills: join(home, ".agents", "skills") };
     const auto = workspaceInstructions(
       { ...project, permissionMode: "auto" },
+      places,
       new Date("2026-09-15T12:00:00Z"),
     );
     expect(auto).toContain("reviewed before each call: routine requested work runs");
     expect(auto).toMatch(/Today is 2026-09-1[56] \(.+\)\. run_shell runs commands with \S+ on /);
     expect(auto).not.toContain("read-only");
-    expect(workspaceInstructions({ ...project, permissionMode: "ask" })).toContain(
+    expect(workspaceInstructions({ ...project, permissionMode: "ask" }, places)).toContain(
       "wait for the user's approval of each call",
     );
+    // Where the app keeps its own settings, and that its storage is not for the file tools.
+    expect(auto).toContain(
+      `MCP servers: ${join(storage, "mcp.json")}, ${join(project.root, ".mcp.json")}`,
+    );
+    expect(auto).toContain(
+      `${join(storage, "agents.json")}, ${join(project.root, ".agents", "agents.json")}`,
+    );
+    expect(auto).toContain("the file tools never open it");
   });
 });
 

@@ -9,6 +9,7 @@ import {
   type AnyServerTool,
   type ChatMiddleware,
 } from "@tanstack/ai";
+import { join } from "node:path";
 import dayjs from "dayjs";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import { Attachments } from "../attachments/attachments.ts";
@@ -33,6 +34,10 @@ import { SecretRedactor } from "../secrets/redactor.ts";
 import { KagiTools, kagiInstructions } from "../tools/kagi.ts";
 import { SkillTools } from "../tools/skills.ts";
 import { CodexSkills } from "../codex/skills.ts";
+import { StorageRoot } from "../config/storage-root.ts";
+import { globalAgentsFile, projectAgentsFile } from "../external-agents/config.ts";
+import { globalMcpFile, projectMcpFile } from "../mcp/config.ts";
+import { projectSkillsDirectory, Skills } from "../skills/skills.ts";
 import { DelegateTools } from "../tools/delegate.ts";
 import { parallelReads } from "../tools/parallel-reads.ts";
 import { Subagents, subagentInstructions } from "../subagents/subagents.ts";
@@ -67,12 +72,34 @@ export const memoryInstructions = `You are a local assistant that remembers conv
 - When memory is missing or conflicting, say so and ask; never assume approval.
 - Cite where a remembered fact came from (project and time) when it matters.`;
 
+/** Where this app keeps settings the model may be asked about. */
+export interface SettingsPlaces {
+  readonly storageRoot: string;
+  readonly globalSkills: string;
+}
+
+/** The app's own settings files, and how the model may (and may not) reach them. */
+function settingsInstructions(project: Project, places: SettingsPlaces) {
+  return `This app (context-agent) keeps its own settings in these places. The first of each pair applies to every project, the second to this one:
+- External ACP agents: ${globalAgentsFile(places.storageRoot)}, ${projectAgentsFile(project.root)}
+- MCP servers: ${globalMcpFile(places.storageRoot)}, ${projectMcpFile(project.root)}
+- Skills (one folder with a SKILL.md each): ${places.globalSkills}, ${projectSkillsDirectory(project.root)}
+- App settings such as the model and web search: ${join(places.storageRoot, "config.json")}
+- Settings in the project can be changed with the file tools. ${places.storageRoot} also holds the account login and the memory database, so the file tools never open it: for a file there, show the user the exact change, or use run_shell, which is approved like any other call. Never print keys or tokens these files hold.
+- An agent or MCP server that is added or changed does nothing until the user trusts it in the app's settings.`;
+}
+
 /**
  * Where the file tools work, and how to change files without losing the user's edits. Also the
  * date and shell, which codex's own environment context would otherwise give (it is turned off
- * because it describes codex's read-only sandbox and folder, not this app's tools).
+ * because it describes codex's read-only sandbox and folder, not this app's tools), and where the
+ * app keeps its own settings.
  */
-export function workspaceInstructions(project: Project, now: Date = new Date()) {
+export function workspaceInstructions(
+  project: Project,
+  places: SettingsPlaces,
+  now: Date = new Date(),
+) {
   const { timeZone } = Intl.DateTimeFormat().resolvedOptions();
   const today = dayjs(now).format("YYYY-MM-DD");
   return `The current project is "${project.name}" at ${project.root}.
@@ -87,7 +114,9 @@ export function workspaceInstructions(project: Project, now: Date = new Date()) 
   }
 - run_shell runs on the host, not in a sandbox. Prefer file tools for reading and editing; use the shell for builds, tests, git and other programs, and never to print secrets.
 - Credential files and .git internals are off limits to the file tools; no approval changes that.
-- Report what you actually changed and verified. Do not claim a change or check that did not happen.`;
+- Report what you actually changed and verified. Do not claim a change or check that did not happen.
+
+${settingsInstructions(project, places)}`;
 }
 
 /** How attached images are referred to in the user's text. */
@@ -253,6 +282,10 @@ const make = Effect.gen(function* () {
   const queue = yield* MessageQueue;
   const delivery = yield* QueueDelivery;
   const summaries = yield* TurnSummaries;
+  const places: SettingsPlaces = {
+    storageRoot: (yield* StorageRoot).path,
+    globalSkills: (yield* Skills).globalDirectory,
+  };
   const liveRuns = new LiveRuns();
   const { metadata } = chatState.persistence.stores;
   const inUse = () => json(423, { error: "session_in_use" });
@@ -536,7 +569,7 @@ const make = Effect.gen(function* () {
         ]);
         const sharedPrompts = [
           memoryInstructions,
-          workspaceInstructions(project),
+          workspaceInstructions(project, places),
           ...(webTools.length > 0 ? [kagiInstructions] : []),
           ...(mcpTools.length > 0 ? [mcpInstructions] : []),
           ...(skills.instructions ? [skills.instructions] : []),
