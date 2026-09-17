@@ -148,9 +148,10 @@ export function parseSlash(draft: string, context: SlashContext): SlashParse {
 
   const known = (from: "agents" | "modes" | "models" | "skills") =>
     choices(from, context).some((choice) => choice.id === value);
-  const needValue = (what: string): SlashParse => ({
+  // Whole sentences per command, so each noun gets its own particle.
+  const needValue = (choose: string, unknown: string): SlashParse => ({
     kind: "incomplete",
-    reason: value ? `${what} "${value}"을(를) 찾지 못했어요.` : `${what}을(를) 골라 주세요.`,
+    reason: value ? `${unknown}: ${value}` : choose,
   });
 
   switch (spec.name) {
@@ -163,19 +164,22 @@ export function parseSlash(draft: string, context: SlashContext): SlashParse {
     case "agent":
       return known("agents") && others.length === 0
         ? { kind: "command", command: { kind: "agent", agent: value } }
-        : needValue("신뢰한 에이전트");
+        : needValue("신뢰한 에이전트를 골라 주세요.", "신뢰한 에이전트 목록에 없어요");
     case "mode":
       return value === "ask" || value === "auto"
         ? { kind: "command", command: { kind: "mode", mode: value } }
-        : needValue("권한 모드(ask 또는 auto)");
+        : needValue(
+            "권한 모드를 골라 주세요(ask 또는 auto).",
+            "권한 모드는 ask나 auto만 쓸 수 있어요",
+          );
     case "model":
       return known("models")
         ? { kind: "command", command: { kind: "model", model: value } }
-        : needValue("모델");
+        : needValue("모델을 골라 주세요.", "쓸 수 있는 모델 목록에 없어요");
     case "skill":
       return known("skills")
         ? { kind: "command", command: { kind: "skill", skill: value, request: trailing } }
-        : needValue("skill");
+        : needValue("skill을 골라 주세요.", "쓸 수 있는 skill 목록에 없어요");
     case "recall":
       return rest
         ? { kind: "command", command: { kind: "recall", question: rest } }
@@ -191,6 +195,6 @@ export function promptOf(command: Extract<SlashCommand, { kind: "skill" | "recal
     case "skill":
       return `"${command.skill}" skill을 read_skill로 읽고 그 지침대로 해 주세요.${command.request ? `\n\n${command.request}` : ""}`;
     case "recall":
-      return `find_memory로 기억을 찾아서, 출처(프로젝트·시점)와 나중에 바뀐 결정이 있으면 함께 답해 주세요: ${command.question}`;
+      return `find_memory로 기억을 찾아서, 출처(프로젝트와 시점)와 나중에 바뀐 결정이 있으면 함께 답해 주세요: ${command.question}`;
   }
 }

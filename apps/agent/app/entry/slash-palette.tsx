@@ -20,7 +20,7 @@ export function SlashPalette({
     <div className="mb-2 overflow-hidden rounded-xl border bg-popover shadow-md">
       <Command shouldFilter={false} value={highlighted.text} className="h-auto">
         <CommandList>
-          <CommandGroup heading="명령 · ↑↓ 고르기 · Tab 채우기 · Enter 실행">
+          <CommandGroup heading="명령: ↑↓로 고르고, Tab으로 채우고, Enter로 실행해요">
             {suggestions.map((suggestion) => (
               <CommandItem
                 key={suggestion.text}

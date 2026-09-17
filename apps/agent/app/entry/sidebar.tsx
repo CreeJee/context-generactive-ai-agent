@@ -108,7 +108,7 @@ export function AccountSection({
       )}
       {auth.status === "installing" && (
         <div className="flex items-center gap-2 text-xs">
-          <Spinner /> ChatGPT 연결에 필요한 codex를 받는 중이에요(처음 한 번)
+          <Spinner /> ChatGPT 연결에 필요한 codex를 받는 중이에요. 처음 한 번만 받아요.
         </div>
       )}
       {auth.status === "pending" && (
@@ -313,7 +313,7 @@ export function ProjectSection({
             <EyeOffIcon /> 목록에서 빼기
           </Button>
           <p className="text-xs text-muted-foreground">
-            대화·기억·검색은 그대로 남아요. 같은 폴더를 다시 추가하면 돌아와요.
+            대화와 기억, 검색은 그대로 남아요. 같은 폴더를 다시 추가하면 돌아와요.
           </p>
         </div>
       )}
@@ -488,7 +488,7 @@ export function SessionSection({
                   size="icon-xs"
                   onClick={() => onArchive(session.id)}
                   aria-label="대화 보관"
-                  title="보관(목록에서 빼고 기억은 유지)"
+                  title="보관하기(목록에서만 빼고 기억은 남겨요)"
                 >
                   <ArchiveIcon />
                 </Button>

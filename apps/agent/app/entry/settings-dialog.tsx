@@ -128,7 +128,7 @@ function KagiSettings() {
         <>
           <Field orientation="horizontal">
             <FieldContent>
-              <FieldLabel htmlFor="kagi-enabled">검색·페이지 읽기 사용</FieldLabel>
+              <FieldLabel htmlFor="kagi-enabled">검색과 페이지 읽기 사용</FieldLabel>
               <FieldDescription>끄면 다음 호출부터 바로 막혀요.</FieldDescription>
             </FieldContent>
             <Switch
@@ -171,15 +171,15 @@ function KagiSettings() {
                 autoComplete="off"
                 value={key}
                 onChange={(event) => setKey(event.target.value)}
-                placeholder="kagi.com/api/keys 에서 발급한 키"
+                placeholder="kagi.com/api/keys에서 발급한 키"
               />
               <Button type="submit" variant="outline" disabled={busy || !key.trim()}>
                 {busy ? <Spinner /> : <KeyRoundIcon />} 저장
               </Button>
             </div>
             <FieldDescription>
-              키는 OS 키체인에만 저장되고 모델·대화·로그에는 보이지 않아요. 저장만으로 켜지지
-              않아요.
+              키는 OS 키체인에만 저장되고 모델, 대화, 로그에는 보이지 않아요. 저장해도 저절로
+              켜지지는 않아요.
             </FieldDescription>
           </Field>
         </form>
@@ -229,13 +229,15 @@ function ImportActivityLine({ activity }: { activity: ImportActivity }) {
         <FieldDescription className="flex items-center">
           <Spinner className="mr-1.5" />
           <span>
-            기록을 읽는 중이에요 · <AnimatedNumber value={activity.checked} />/
-            <AnimatedNumber value={activity.total} />개 확인 · 노드{" "}
-            <AnimatedNumber value={activity.written} />개 추가
+            기록을 읽는 중이에요. <AnimatedNumber value={activity.checked} />/
+            <AnimatedNumber value={activity.total} />
+            개를 확인하고 노드 <AnimatedNumber value={activity.written} />
+            개를 더했어요.
             {activity.failed > 0 && (
               <>
                 {" "}
-                · <AnimatedNumber value={activity.failed} />개 실패
+                <AnimatedNumber value={activity.failed} />
+                개는 읽지 못했어요.
               </>
             )}
           </span>
@@ -310,7 +312,7 @@ function ImportSettings() {
         Claude Code와 Codex CLI가 이 컴퓨터에 남긴 대화를 읽어 기억으로 옮겨요. 발언뿐 아니라 도구
         호출과 결과까지 그대로 옮겨서, 옛 대화도 근거를 따라갈 수 있어요. 원본 파일은 건드리지 않고
         읽기만 해요. 대화가 있던 폴더는 프로젝트로 자동 등록되고, 그 폴더의 파일은 에이전트가 읽고
-        고칠 수 있게 돼요. 필요 없는 프로젝트는 사이드바에서 목록에서 뺄 수 있어요.
+        고칠 수 있게 돼요. 필요 없는 프로젝트는 사이드바의 목록에서 뺄 수 있어요.
       </FieldDescription>
 
       <Field orientation="horizontal">
@@ -356,8 +358,8 @@ function ImportSettings() {
       {overview.unindexed > 0 && (
         <FieldDescription>
           아직 <AnimatedNumber value={overview.unindexed} />
-          개를 인덱싱하고 있어요. 최근 대화부터 들어가고, 옛 기록은 뒤에서 채워요. 그동안에도
-          글자·형태소 검색으로는 찾을 수 있어요.
+          개를 인덱싱하고 있어요. 최근 대화부터 들어가고, 옛 기록은 뒤에서 채워요. 그동안에도 글자
+          검색과 형태소 검색으로는 찾을 수 있어요.
         </FieldDescription>
       )}
 
@@ -368,7 +370,7 @@ function ImportSettings() {
             <ul className="font-mono text-xs">
               {overview.unplaced.map((folder) => (
                 <li key={`${folder.cwd}:${folder.reason}`}>
-                  {folder.cwd} · 대화 {folder.transcripts}개 · {unplacedReason(folder.reason)}
+                  {folder.cwd}: 대화 {folder.transcripts}개, {unplacedReason(folder.reason)}
                 </li>
               ))}
             </ul>
@@ -395,7 +397,8 @@ function ImportSettings() {
         <FieldContent>
           <FieldLabel htmlFor="imports-interpret">가져온 발언도 해석</FieldLabel>
           <FieldDescription>
-            주제와 정정·취소 관계를 붙여요. 모델을 쓰기 때문에 답변이 끝난 뒤 조금씩 처리돼요.
+            주제를 붙이고 정정, 취소 관계를 정리해요. 모델을 쓰기 때문에 답변이 끝난 뒤 조금씩
+            처리돼요.
           </FieldDescription>
         </FieldContent>
         <Switch
@@ -459,7 +462,7 @@ function runningText(running: EmbeddingOverview["running"]) {
         case "gpu":
           return running.device === "webgpu"
             ? "지금 GPU(WebGPU)에서 원본 모델을 돌리고 있어요."
-            : "GPU 모드지만 WebGPU를 쓸 수 없어 CPU에서 원본 모델을 돌리고 있어요. 벡터는 같고 더 느려요.";
+            : "GPU 모드지만 WebGPU를 쓸 수 없어 CPU에서 원본 모델을 돌리고 있어요. 벡터는 같지만 더 느려요.";
       }
   }
 }
@@ -531,7 +534,7 @@ function EmbeddingSettings() {
       <FieldDescription>
         기억을 뜻으로 찾기 위한 벡터를 어디서 만들지 정해요. CPU는 메모리를 적게 쓰는 대신 만드는
         동안 CPU 코어를 여럿 써요. GPU는 CPU를 훨씬 덜 쓰고 원본 모델 그대로의 벡터를 만들지만
-        메모리를 1–1.6GB 더 써요.
+        메모리를 1~1.6GB 더 써요.
       </FieldDescription>
 
       <Field>
@@ -567,7 +570,7 @@ function EmbeddingSettings() {
         <Alert>
           <AlertDescription>
             앱을 다시 시작하면 {modeNames[overview.next]} 모드로 돌아가요. 그 모드로 만든 벡터가
-            없으면 처음부터 다시 만들고, 그동안에도 글자·형태소 검색은 돼요.
+            없으면 처음부터 다시 만들고, 그동안에도 글자 검색과 형태소 검색은 돼요.
           </AlertDescription>
         </Alert>
       )}
@@ -609,7 +612,7 @@ function McpStateBadge({ server }: { server: McpServerView }) {
     case "untrusted":
       return <Badge variant="outline">신뢰 필요</Badge>;
     case "changed":
-      return <Badge variant="destructive">설정 바뀜 · 다시 신뢰 필요</Badge>;
+      return <Badge variant="destructive">설정 바뀜, 다시 신뢰 필요</Badge>;
     case "trusted":
       return <Badge variant="secondary">다음 대화에서 시작</Badge>;
     case "connected":
@@ -711,7 +714,7 @@ function McpSettings({ project }: { project: Project | null }) {
   return (
     <FieldGroup>
       <FieldDescription>
-        설정 파일에 적힌 서버는 신뢰하기 전에는 시작하지 않아요. 신뢰는 적힌 명령·주소 그대로에만
+        설정 파일에 적힌 서버는 신뢰하기 전에는 시작하지 않아요. 신뢰는 적힌 명령과 주소 그대로에만
         적용되고, 파일이 바뀌면 다시 신뢰해야 해요. 신뢰해도 도구 호출은 매번 승인(또는 자동 판단)을
         거쳐요.
       </FieldDescription>
@@ -752,7 +755,7 @@ function AgentStateBadge({ agent }: { agent: ExternalAgentView }) {
     case "untrusted":
       return <Badge variant="outline">신뢰 필요</Badge>;
     case "changed":
-      return <Badge variant="destructive">설정 바뀜 · 다시 신뢰 필요</Badge>;
+      return <Badge variant="destructive">설정 바뀜, 다시 신뢰 필요</Badge>;
     case "trusted":
       switch (agent.state.link.status) {
         case "idle":
@@ -802,7 +805,7 @@ function AgentSettings({ project }: { project: Project | null }) {
     <FieldGroup>
       <FieldDescription>
         설정 파일에 적힌 ACP 에이전트를 신뢰하면, 모델이 작업 일부를 맡길 수 있어요. 에이전트는 자기
-        공식 로그인으로 동작하고 이 앱의 ChatGPT 토큰·키를 받지 않아요. 맡길 때마다 승인을 받고,
+        공식 로그인으로 동작하고 이 앱의 ChatGPT 토큰이나 키를 받지 않아요. 맡길 때마다 승인을 받고,
         에이전트가 요청하는 권한도 따로 물어요. 연결이 끊기면 두 번까지 다시 연결하고, 그래도
         실패하면 여기서 다시 연결해야 해요.
       </FieldDescription>

@@ -216,7 +216,7 @@ function describe(call: GatedCall): CallView {
       };
     case "mcp":
       return {
-        title: `MCP 도구 ${call.name}을(를) 실행할까요?`,
+        title: `MCP 도구 ${call.name} 실행을 승인할까요?`,
         modelReason: undefined,
         shell: false,
         body: (

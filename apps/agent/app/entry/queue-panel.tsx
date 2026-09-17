@@ -36,13 +36,13 @@ function stateView(message: QueuedMessage, editingHere: boolean) {
       return {
         icon: PencilLineIcon,
         tone: "text-primary",
-        label: editingHere ? "편집 중" : "편집 중 · 저장 안 됨",
+        label: editingHere ? "편집 중" : "편집 중, 저장 안 됨",
       };
     case "held":
       return {
         icon: CircleAlertIcon,
         tone: "text-amber-600 dark:text-amber-400",
-        label: state.draft === null ? "확인 필요" : "확인 필요 · 저장 안 된 편집",
+        label: state.draft === null ? "확인 필요" : "확인 필요, 편집 저장 안 됨",
       };
     case "delivered":
       return { icon: CheckIcon, tone: "text-muted-foreground", label: deliveryLabel(state.via) };
@@ -113,7 +113,7 @@ export function QueuePanel({
     <div className="flex w-full flex-col border-b">
       <div className="flex items-center justify-between px-3 pt-2 pb-1 text-2xs text-muted-foreground">
         <span className="font-medium">
-          {waiting > 0 ? `보낼 메시지 ${waiting}` : "답변 중에 전달한 메시지"}
+          {waiting > 0 ? `보낼 메시지 ${waiting}개` : "답변 중에 전달한 메시지"}
         </span>
         {waiting > 0 && !busy && (
           <span className="flex items-center gap-1">

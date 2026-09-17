@@ -172,7 +172,7 @@ function draftCard(image: DraftImage) {
     case "uploading":
       return { state: "uploading", description: "올리는 중…" } as const;
     case "ready":
-      return { state: "done", description: "눌러서 본문에 넣기" } as const;
+      return { state: "done", description: "누르면 본문에 넣어요" } as const;
     case "failed":
       return { state: "error", description: image.reason } as const;
   }

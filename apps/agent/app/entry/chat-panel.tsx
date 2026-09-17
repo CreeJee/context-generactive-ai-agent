@@ -643,10 +643,10 @@ function ChatPanel({
                     waitingForApproval
                       ? "위의 승인 요청에 먼저 답해 주세요"
                       : editing
-                        ? "고친 내용을 저장하려면 Enter"
+                        ? "Enter를 누르면 고친 내용을 저장해요"
                         : generating
                           ? "답변 중에도 이어서 보낼 수 있어요"
-                          : "메시지를 입력하세요 · / 명령 · 이미지는 붙여넣거나 끌어다 놓기"
+                          : "메시지를 입력하세요. /로 명령을 부르고, 이미지는 붙여넣거나 끌어다 놓아요"
                   }
                   rows={1}
                 />
@@ -686,7 +686,7 @@ function ChatPanel({
                           {run.cancelling ? <Spinner /> : <SquareIcon className="fill-current" />}
                         </TooltipTrigger>
                         <TooltipContent>
-                          {run.cancelling ? "멈추는 중" : "중지 · 입력창이 비었을 때 Esc"}
+                          {run.cancelling ? "멈추는 중" : "중지(입력창이 비었을 때 Esc)"}
                         </TooltipContent>
                       </Tooltip>
                     )}
