@@ -15,10 +15,24 @@ const GoalQuestion = Schema.Struct({
   blocking: Schema.Boolean,
 });
 
+export const VerificationStatus = Schema.Literal(
+  "not_run",
+  "passed",
+  "failed",
+  "invalid_hypothesis",
+  "invalid_criterion",
+  "inconclusive",
+  "blocked",
+);
+export type VerificationStatus = typeof VerificationStatus.Type;
+
 const Verification = Schema.Struct({
-  status: Schema.Literal("not_run", "passed", "failed"),
+  status: VerificationStatus,
   summary: Schema.String,
   evidence: Schema.Array(Schema.String),
+  recoveryPhase: Schema.optionalWith(Schema.NullOr(Schema.Literal("goal", "plan")), {
+    default: () => null,
+  }),
   updatedAt: Schema.NullOr(Schema.String),
 });
 export type Verification = typeof Verification.Type;
@@ -27,6 +41,7 @@ const verificationDefault = (): Verification => ({
   status: "not_run",
   summary: "",
   evidence: [],
+  recoveryPhase: null,
   updatedAt: null,
 });
 
@@ -96,6 +111,7 @@ const LedgerEvent = Schema.Struct({
     "goal_resumed",
     "workflow_stopped",
     "verification_recorded",
+    "verification_invalidated",
   ),
   detail: Schema.String,
 });
@@ -134,7 +150,12 @@ const StepProgress = Schema.Struct({
   evidence: Schema.optionalWith(Schema.Array(Schema.String), { default: () => [] }),
 });
 
-const VerificationUpdate = Verification.omit("updatedAt");
+const VerificationUpdate = Schema.Struct({
+  status: VerificationStatus,
+  summary: Schema.String,
+  evidence: Schema.Array(Schema.String),
+  recoveryPhase: Schema.optional(Schema.NullOr(Schema.Literal("goal", "plan"))),
+});
 
 export const UpdateWorkflowProgress = Schema.Struct({
   goalStatus: Schema.optional(Schema.Literal("active", "paused", "completed", "failed")),
@@ -336,6 +357,13 @@ const make = Effect.gen(function* () {
       change(sessionId, (current) => {
         const now = new Date().toISOString();
         if (startedPhase === "execute" && current.phase === "execute") {
+          const readyToVerify =
+            current.plan !== null &&
+            current.plan.status === "executing" &&
+            current.plan.steps.every(
+              (step) => step.status === "completed" && step.evidence.length > 0,
+            );
+          if (!readyToVerify) return current;
           const next = { ...current, phase: "verify" as const };
           return {
             ...next,
@@ -344,10 +372,36 @@ const make = Effect.gen(function* () {
         }
         if (startedPhase !== "verify" || current.phase !== "verify" || current.plan === null)
           return current;
-        const verified =
-          current.plan.verification.status === "passed" &&
-          current.plan.verification.evidence.length > 0 &&
-          current.plan.steps.every((step) => step.status === "completed");
+        const verification = current.plan.verification;
+        if (verification.status === "not_run" || verification.evidence.length === 0) return current;
+        if (verification.status !== "passed") {
+          const phase =
+            verification.status === "failed"
+              ? ("execute" as const)
+              : verification.status === "invalid_hypothesis"
+                ? (verification.recoveryPhase ?? "plan")
+                : verification.status === "blocked"
+                  ? ("verify" as const)
+                  : ("plan" as const);
+          const plan =
+            verification.status === "blocked"
+              ? { ...current.plan, status: "blocked" as const, updatedAt: now }
+              : current.plan;
+          if (phase === current.phase && plan === current.plan) return current;
+          return {
+            ...current,
+            phase,
+            plan,
+            ledger:
+              phase === current.phase
+                ? current.ledger
+                : [
+                    ...current.ledger,
+                    event(current, "phase_changed", `verify -> ${phase} (${verification.status})`),
+                  ],
+          };
+        }
+        const verified = current.plan.steps.every((step) => step.status === "completed");
         if (!verified) return current;
         const goal = current.goal
           ? {
@@ -438,7 +492,11 @@ const make = Effect.gen(function* () {
             return Effect.fail(new WorkflowProgressRefused({ reason: "step_evidence_required" }));
 
           const verification = input.verification
-            ? { ...input.verification, updatedAt: new Date().toISOString() }
+            ? {
+                ...input.verification,
+                recoveryPhase: input.verification.recoveryPhase ?? null,
+                updatedAt: new Date().toISOString(),
+              }
             : null;
           const goalVerification = verification ?? current.goal?.verification;
           if (
@@ -497,7 +555,10 @@ const make = Effect.gen(function* () {
                       ? "workflow_stopped"
                       : verification === null
                         ? "progress_updated"
-                        : "verification_recorded";
+                        : verification.status === "invalid_hypothesis" ||
+                            verification.status === "invalid_criterion"
+                          ? "verification_invalidated"
+                          : "verification_recorded";
               const next: WorkflowState = { ...current, goal, plan };
               return save(sessionId, {
                 ...next,

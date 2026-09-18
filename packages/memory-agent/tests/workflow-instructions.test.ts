@@ -33,4 +33,14 @@ describe("workflowInstructions", () => {
     expect(prompt).toContain("the user does not need to enter Goal mode first");
     expect(prompt).toContain("restricted to read-only investigation");
   });
+
+  test("distinguishes implementation failure from invalid verification premises", () => {
+    const prompt = workflowInstructions(state("verify"), resolved("verify"));
+
+    expect(prompt).toContain("invalid_hypothesis");
+    expect(prompt).toContain("invalid_criterion");
+    expect(prompt).toContain("inconclusive");
+    expect(prompt).toContain("blocked only for a confirmed external dependency");
+    expect(prompt).toContain("Do not invent settings");
+  });
 });

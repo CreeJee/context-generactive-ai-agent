@@ -143,6 +143,19 @@ const stepStatusLabels: Record<
   blocked: "막힘",
 };
 
+const verificationStatusLabels: Record<
+  NonNullable<WorkflowState["plan"]>["verification"]["status"],
+  string
+> = {
+  not_run: "미실행",
+  passed: "통과",
+  failed: "구현 실패",
+  invalid_hypothesis: "가설 무효",
+  invalid_criterion: "검증 조건 무효",
+  inconclusive: "판정 불가",
+  blocked: "외부 요인으로 막힘",
+};
+
 function workflowStatus(state: WorkflowState | null): Notice {
   if (!state) return problem("워크플로 상태를 아직 불러오지 못했어요.");
   const goal = state.goal
@@ -198,7 +211,7 @@ function WorkflowArtifactPanel({
           )}
           {state.goal && state.goal.verification.status !== "not_run" && (
             <p className="mt-3">
-              검증 {state.goal.verification.status === "passed" ? "통과" : "실패"} ·{" "}
+              검증 {verificationStatusLabels[state.goal.verification.status]} ·{" "}
               {state.goal.verification.summary}
             </p>
           )}
@@ -281,8 +294,7 @@ function WorkflowArtifactPanel({
         )}
         {plan.verification.status !== "not_run" && (
           <p className="mt-3">
-            검증 {plan.verification.status === "passed" ? "통과" : "실패"} ·{" "}
-            {plan.verification.summary}
+            검증 {verificationStatusLabels[plan.verification.status]} · {plan.verification.summary}
           </p>
         )}
         {!current && (

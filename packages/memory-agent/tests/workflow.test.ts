@@ -308,7 +308,7 @@ describe("Workflows", () => {
     ]);
   });
 
-  test("advances Execute to Verify after a successful run", async () => {
+  test("keeps Execute active while any Plan step lacks completion evidence", async () => {
     const { runtime, session } = await testRuntime();
     const state = await runtime.runPromise(
       Effect.gen(function* () {
@@ -316,6 +316,28 @@ describe("Workflows", () => {
         yield* workflows.updateGoal(session.id, goal);
         yield* workflows.updatePlan(session.id, plan);
         yield* workflows.setPhase(session.id, "execute");
+        return yield* workflows.finishRun(session.id, "execute");
+      }),
+    );
+
+    expect(state.phase).toBe("execute");
+    expect(state.plan?.steps[0]?.status).toBe("pending");
+  });
+
+  test("advances Execute to Verify only after every step has completion evidence", async () => {
+    const { runtime, session } = await testRuntime();
+    const state = await runtime.runPromise(
+      Effect.gen(function* () {
+        const workflows = yield* Workflows;
+        yield* workflows.updateGoal(session.id, goal);
+        yield* workflows.updatePlan(session.id, plan);
+        yield* workflows.setPhase(session.id, "execute");
+        yield* workflows.updateProgress(session.id, {
+          steps: [{ id: "store", status: "completed", evidence: ["workflow test passed"] }],
+          goalEvidence: [],
+          planEvidence: [],
+          detail: "Implementation complete",
+        });
         return yield* workflows.finishRun(session.id, "execute");
       }),
     );
@@ -361,6 +383,155 @@ describe("Workflows", () => {
     expect(state.phase).toBe("verify");
     expect(state.goal).toMatchObject({ status: "completed", verification: { status: "passed" } });
     expect(state.plan).toMatchObject({ status: "completed", verification: { status: "passed" } });
+  });
+
+  test.each([
+    ["failed", "execute"],
+    ["invalid_criterion", "plan"],
+    ["inconclusive", "plan"],
+  ] as const)("routes %s verification to %s", async (status, expectedPhase) => {
+    const { runtime, session } = await testRuntime();
+    const state = await runtime.runPromise(
+      Effect.gen(function* () {
+        const workflows = yield* Workflows;
+        yield* workflows.updateGoal(session.id, goal);
+        yield* workflows.updatePlan(session.id, plan);
+        yield* workflows.setPhase(session.id, "execute");
+        yield* workflows.updateProgress(session.id, {
+          steps: [{ id: "store", status: "completed", evidence: ["implementation evidence"] }],
+          goalEvidence: [],
+          planEvidence: [],
+          detail: "Implementation complete",
+        });
+        yield* workflows.finishRun(session.id, "execute");
+        yield* workflows.updateProgress(session.id, {
+          steps: [],
+          goalEvidence: [],
+          planEvidence: [],
+          verification: {
+            status,
+            summary: `Verification ended as ${status}`,
+            evidence: ["diagnostic evidence"],
+          },
+          detail: `Recorded ${status}`,
+        });
+        return yield* workflows.finishRun(session.id, "verify");
+      }),
+    );
+
+    expect(state.phase).toBe(expectedPhase);
+    expect(state.goal?.status).toBe("active");
+    expect(state.plan?.status).toBe("executing");
+    expect(state.ledger.at(-1)).toMatchObject({
+      kind: "phase_changed",
+      detail: `verify -> ${expectedPhase} (${status})`,
+    });
+    if (status === "invalid_criterion")
+      expect(state.ledger.at(-2)?.kind).toBe("verification_invalidated");
+  });
+
+  test("routes an invalid hypothesis to its requested recovery phase", async () => {
+    const { runtime, session } = await testRuntime();
+    const state = await runtime.runPromise(
+      Effect.gen(function* () {
+        const workflows = yield* Workflows;
+        yield* workflows.updateGoal(session.id, goal);
+        yield* workflows.updatePlan(session.id, plan);
+        yield* workflows.setPhase(session.id, "execute");
+        yield* workflows.updateProgress(session.id, {
+          steps: [{ id: "store", status: "completed", evidence: ["implementation evidence"] }],
+          goalEvidence: [],
+          planEvidence: [],
+          detail: "Implementation complete",
+        });
+        yield* workflows.finishRun(session.id, "execute");
+        yield* workflows.updateProgress(session.id, {
+          steps: [],
+          goalEvidence: [],
+          planEvidence: [],
+          verification: {
+            status: "invalid_hypothesis",
+            summary: "The Goal premise was disproven",
+            evidence: ["The observed failure has a different cause"],
+            recoveryPhase: "goal",
+          },
+          detail: "Invalidate the premise and revise the Goal",
+        });
+        return yield* workflows.finishRun(session.id, "verify");
+      }),
+    );
+
+    expect(state.phase).toBe("goal");
+    expect(state.ledger.at(-2)?.kind).toBe("verification_invalidated");
+    expect(state.ledger.at(-1)?.detail).toBe("verify -> goal (invalid_hypothesis)");
+  });
+
+  test("keeps a confirmed external block in Verify and marks the Plan blocked", async () => {
+    const { runtime, session } = await testRuntime();
+    const state = await runtime.runPromise(
+      Effect.gen(function* () {
+        const workflows = yield* Workflows;
+        yield* workflows.updateGoal(session.id, goal);
+        yield* workflows.updatePlan(session.id, plan);
+        yield* workflows.setPhase(session.id, "execute");
+        yield* workflows.updateProgress(session.id, {
+          steps: [{ id: "store", status: "completed", evidence: ["implementation evidence"] }],
+          goalEvidence: [],
+          planEvidence: [],
+          detail: "Implementation complete",
+        });
+        yield* workflows.finishRun(session.id, "execute");
+        yield* workflows.updateProgress(session.id, {
+          steps: [],
+          goalEvidence: [],
+          planEvidence: [],
+          verification: {
+            status: "blocked",
+            summary: "A real account login is required",
+            evidence: ["The provider returned an authentication challenge"],
+          },
+          detail: "Waiting for the user to authenticate",
+        });
+        return yield* workflows.finishRun(session.id, "verify");
+      }),
+    );
+
+    expect(state.phase).toBe("verify");
+    expect(state.plan?.status).toBe("blocked");
+    expect(state.plan?.verification.status).toBe("blocked");
+  });
+
+  test("does not route a verification outcome without evidence", async () => {
+    const { runtime, session } = await testRuntime();
+    const state = await runtime.runPromise(
+      Effect.gen(function* () {
+        const workflows = yield* Workflows;
+        yield* workflows.updateGoal(session.id, goal);
+        yield* workflows.updatePlan(session.id, plan);
+        yield* workflows.setPhase(session.id, "execute");
+        yield* workflows.updateProgress(session.id, {
+          steps: [{ id: "store", status: "completed", evidence: ["implementation evidence"] }],
+          goalEvidence: [],
+          planEvidence: [],
+          detail: "Implementation complete",
+        });
+        yield* workflows.finishRun(session.id, "execute");
+        yield* workflows.updateProgress(session.id, {
+          steps: [],
+          goalEvidence: [],
+          planEvidence: [],
+          verification: {
+            status: "invalid_criterion",
+            summary: "Unsupported invalidation claim",
+            evidence: [],
+          },
+          detail: "Tried to invalidate without evidence",
+        });
+        return yield* workflows.finishRun(session.id, "verify");
+      }),
+    );
+
+    expect(state.phase).toBe("verify");
   });
 
   test("refuses Execute until a Plan is ready", async () => {

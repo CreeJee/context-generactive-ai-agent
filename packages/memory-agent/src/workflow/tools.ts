@@ -46,7 +46,7 @@ const make = Effect.gen(function* () {
       const updateProgress = toolDefinition({
         name: "update_workflow_progress",
         description:
-          "Record durable Goal/Plan/step progress, evidence and verification. A completed step needs evidence; a completed Goal or Plan needs passed verification with evidence; a completed Plan also needs every step completed.",
+          "Record durable Goal/Plan/step progress, evidence and verification. Classify verification as passed, failed, invalid_hypothesis, invalid_criterion, inconclusive, or blocked instead of treating every non-pass as an implementation failure. Set recoveryPhase to goal or plan for invalid_hypothesis. A completed step needs evidence; a completed Goal or Plan needs passed verification with evidence; a completed Plan also needs every step completed.",
         inputSchema: toToolSchema(UpdateWorkflowProgress),
       }).server((input) =>
         run(
@@ -158,7 +158,7 @@ ${plan}`;
     }
     case "execute":
       return `${common}
-Execute only the current Plan. Before each step, record it as in_progress. Record completed steps with actual evidence using update_workflow_progress; never mark work complete from intention alone. After every step completes, verify the result and only then mark the Plan completed.
+Execute only the current Plan. Before each step, record it as in_progress. Record completed steps with actual evidence using update_workflow_progress; never mark work complete from intention alone. The workflow advances to Verify only when every step is completed with evidence.
 
 ${goal}
 
@@ -171,7 +171,7 @@ ${state.plan.steps.map((step) => `- ${step.id} [${step.status}]: ${step.title}`)
 }`;
     case "verify":
       return `${common}
-Verify the implementation against the Goal, Plan acceptance criteria and applicable rules. Persist the verification result and its evidence with update_workflow_progress. Report failures; do not silently repair or waive a failed criterion.
+Verify the implementation against the Goal, Plan acceptance criteria and applicable rules. First check whether the hypothesis and each criterion can actually distinguish the claimed cause and can be run in this phase. Record passed only with supporting evidence. Record failed only when valid criteria show an implementation defect. Use invalid_hypothesis when the premise is wrong (set recoveryPhase to goal or plan), invalid_criterion when the check itself is unsound, inconclusive when evidence cannot decide, and blocked only for a confirmed external dependency. Persist the result and evidence with update_workflow_progress. Do not invent settings, silently repair, or waive a criterion; the workflow will return to the appropriate phase.
 
 ${goal}`;
   }
