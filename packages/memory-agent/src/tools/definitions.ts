@@ -35,7 +35,8 @@ export const RunShellInput = Schema.Struct({
   }),
   workdir: Schema.optional(
     Schema.String.annotations({
-      description: 'Project-relative directory to run in. Defaults to the project root (".").',
+      description:
+        'Project-relative directory or absolute directory below /tmp to run in. Defaults to the project root (".").',
     }),
   ),
   timeoutSeconds: Schema.optional(

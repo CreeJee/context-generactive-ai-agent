@@ -7,6 +7,9 @@ import type { WorkflowState } from "../workflow/workflow.ts";
 /** Error code on runs that were still producing when the previous server process ended. */
 export const serverRestartedCode = "server_restarted";
 
+/** Error code after the user discards an approval whose continuation can no longer start. */
+export const interruptContinuationLostCode = "interrupt_continuation_lost";
+
 /** `GET /api/sessions/:session`: run state that the transcript does not carry. */
 export interface SessionRunState {
   readonly running: { readonly runId: string } | null;

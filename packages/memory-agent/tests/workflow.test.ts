@@ -324,6 +324,45 @@ describe("Workflows", () => {
     expect(state.plan?.steps[0]?.status).toBe("pending");
   });
 
+  test("reconciles a stale Verify phase with unfinished steps back to Execute", async () => {
+    const { runtime, session } = await testRuntime();
+    const state = await runtime.runPromise(
+      Effect.gen(function* () {
+        const workflows = yield* Workflows;
+        yield* workflows.updateGoal(session.id, goal);
+        yield* workflows.updatePlan(session.id, plan);
+        yield* workflows.setPhase(session.id, "execute");
+        yield* workflows.setPhase(session.id, "verify");
+        return yield* workflows.reconcile(session.id);
+      }),
+    );
+
+    expect(state.phase).toBe("execute");
+    expect(state.ledger.at(-1)?.detail).toBe("verify -> execute (state reconciled)");
+  });
+
+  test("reconciles completed Execute work to Verify before the next turn", async () => {
+    const { runtime, session } = await testRuntime();
+    const state = await runtime.runPromise(
+      Effect.gen(function* () {
+        const workflows = yield* Workflows;
+        yield* workflows.updateGoal(session.id, goal);
+        yield* workflows.updatePlan(session.id, plan);
+        yield* workflows.setPhase(session.id, "execute");
+        yield* workflows.updateProgress(session.id, {
+          steps: [{ id: "store", status: "completed", evidence: ["workflow test passed"] }],
+          goalEvidence: [],
+          planEvidence: [],
+          detail: "Implementation complete",
+        });
+        return yield* workflows.reconcile(session.id);
+      }),
+    );
+
+    expect(state.phase).toBe("verify");
+    expect(state.ledger.at(-1)?.detail).toBe("execute -> verify (state reconciled)");
+  });
+
   test("advances Execute to Verify only after every step has completion evidence", async () => {
     const { runtime, session } = await testRuntime();
     const state = await runtime.runPromise(

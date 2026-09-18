@@ -251,7 +251,7 @@ const cancelWaitMs = 5_000;
  */
 const afterRunBudget = 200;
 
-/** Plan/Verify investigate without project writes, shell, outside access, MCP or delegation. */
+/** Plan/Verify never receive project mutation, outside access, MCP or delegation tools. */
 const readOnlyWorkflowPhases: ReadonlySet<WorkflowPhase> = new Set(["plan", "verify"]);
 const workflowReadToolNames: ReadonlySet<string> = new Set([
   "find_memory",
@@ -267,6 +267,8 @@ const workflowReadToolNames: ReadonlySet<string> = new Set([
   "update_plan",
   "update_workflow_progress",
 ]);
+/** Verify can execute checks, but cannot mutate source files or install dependencies. */
+const verificationToolNames: ReadonlySet<string> = new Set(["run_shell"]);
 
 /** A reconnect names where to continue: `Last-Event-ID`, or `?offset=` for a join from the start. */
 const isStreamJoin = (request: Request) =>
@@ -430,10 +432,12 @@ const make = Effect.gen(function* () {
         if (!leases.permits(sessionId, request.headers.get(sessionHolderHeader))) return inUse();
         // Sessions reference projects by foreign key, so a missing project is a broken store.
         const project = yield* Effect.orDie(projects.get(projectId));
-        const workflow = yield* workflows.get(sessionId);
         // One run at a time per session: a second would race the first for the codex turn.
         const live = liveRuns.get(sessionId);
         if (live) return json(409, { error: "run_in_progress", runId: live.runId });
+        // Repair stale persisted phases before choosing tools for the next turn. In particular, an
+        // old Verify row with unfinished implementation must regain Execute capabilities.
+        const workflow = yield* workflows.reconcile(sessionId);
         // A direct conversation with an external agent needs that agent, not the ChatGPT model.
         if (external !== null && !externalAgents.available(project).includes(external))
           return json(409, { error: "external_agent_unavailable", agent: external });
@@ -598,9 +602,16 @@ const make = Effect.gen(function* () {
               decider: "user",
             }),
           );
-        // Plan/Verify have a hard capability boundary: only project reads, recall, trusted
-        // documentation search and artifact updates reach the model. This is enforced by omitting
-        // tools, not by relying on the prompt.
+        // Plan/Verify have a hard mutation boundary. Verify additionally receives only run_shell
+        // from the approved tool set so it can execute builds and tests without editing source.
+        // This is enforced by omitting tools, not by relying on the prompt.
+        const phaseApprovedTools = workflowReadOnly
+          ? workflow.phase === "verify"
+            ? approvedTools
+                .forProject(project)
+                .filter((tool) => verificationToolNames.has(tool.name))
+            : []
+          : approvedTools.forProject(project);
         const allSharedTools: AnyServerTool[] = redactor.withHiddenResults([
           ...memoryTools.forProject(projectId),
           // An SVG the model writes comes back with a picture of it, for the page to show.
@@ -663,9 +674,10 @@ const make = Effect.gen(function* () {
         const reads = parallelReads(
           [
             ...sharedTools,
-            ...redactor.withHiddenResults(
-              workflowReadOnly ? [] : [...approvedTools.forProject(project), ...children.tools],
-            ),
+            ...redactor.withHiddenResults([
+              ...phaseApprovedTools,
+              ...(workflowReadOnly ? [] : children.tools),
+            ]),
           ],
           abortController.signal,
         );
@@ -755,6 +767,24 @@ const make = Effect.gen(function* () {
       }),
 
     /**
+     * Discards a persisted approval after its continuation has become unusable. The gated tool is
+     * never run; the abandoned run becomes terminal so the conversation can accept a new turn.
+     */
+    discardInterrupts: (sessionId: string, holder: string | null) =>
+      Effect.gen(function* () {
+        if (!leases.permits(sessionId, holder)) return inUse();
+        yield* sessions.get(sessionId);
+        if (liveRuns.get(sessionId)) return json(409, { error: "run_in_progress" });
+        const discarded = yield* Effect.promise(() =>
+          chatState.discardPendingInterrupts(sessionId),
+        );
+        const workflow = yield* workflows.get(sessionId);
+        yield* workflows.finishRun(sessionId, workflow.phase);
+        queue.holdWaiting(sessionId);
+        return json(200, { discarded });
+      }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
+
+    /**
      * `/compact`: stops sending the model the tool output it has already answered from. Refused
      * while the session is answering, since the run in progress still works with its own output.
      */
@@ -793,7 +823,7 @@ const make = Effect.gen(function* () {
           lastRun: last && { runId: last.runId, status: last.status, error: last.error ?? null },
           lease: leases.view(sessionId, holder),
           context: contextView(used, windowFor(yield* models.selected)),
-          workflow: yield* workflows.get(sessionId),
+          workflow: live ? yield* workflows.get(sessionId) : yield* workflows.reconcile(sessionId),
         };
         return json(200, state);
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),

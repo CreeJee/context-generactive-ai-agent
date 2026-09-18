@@ -10,7 +10,7 @@ import { Attachments } from "../attachments/attachments.ts";
 import { messageText } from "../codex/history.ts";
 import { Database } from "../db/database.ts";
 import { Nodes } from "../memory/nodes.ts";
-import { serverRestartedCode } from "../agent/run-state.ts";
+import { interruptContinuationLostCode, serverRestartedCode } from "../agent/run-state.ts";
 import { sqliteChatPersistence } from "./persistence.ts";
 
 const make = Effect.gen(function* () {
@@ -99,6 +99,44 @@ const make = Effect.gen(function* () {
     run: async (sessionId: string, runId: string) => {
       const run = await persistence.stores.runs.get(runId);
       return run?.threadId === sessionId ? run : null;
+    },
+
+    /**
+     * Retires approvals that the browser can still display after their server-side continuation
+     * was lost. This is explicit rather than automatic: abandoning an approval must never be
+     * mistaken for approving and executing the gated tool.
+     */
+    discardPendingInterrupts: async (sessionId: string) => {
+      const pending = await persistence.stores.interrupts.listPending(sessionId);
+      if (pending.length === 0) return 0;
+      const discardedAt = Date.now();
+      sqlite.exec("BEGIN IMMEDIATE");
+      try {
+        sqlite
+          .prepare(
+            `UPDATE chat_interrupts
+             SET status = 'cancelled', resolved_at = ?
+             WHERE thread_id = ? AND status = 'pending'`,
+          )
+          .run(discardedAt, sessionId);
+        sqlite
+          .prepare(
+            `UPDATE chat_runs
+             SET status = 'failed', finished_at = ?, error = ?, error_code = ?
+             WHERE thread_id = ? AND status IN ('running', 'interrupted')`,
+          )
+          .run(
+            discardedAt,
+            "The approval continuation was no longer available, so the request was discarded.",
+            interruptContinuationLostCode,
+            sessionId,
+          );
+        sqlite.exec("COMMIT");
+      } catch (error) {
+        sqlite.exec("ROLLBACK");
+        throw error;
+      }
+      return pending.length;
     },
 
     /** The session's most recent run, if any. */

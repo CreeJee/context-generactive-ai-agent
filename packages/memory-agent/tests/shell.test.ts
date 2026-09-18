@@ -1,8 +1,10 @@
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Either } from "effect";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import { commandEnvironment, runCommand } from "../src/shell/run.ts";
+import { resolveShellWorkingDirectory } from "../src/tools/approved.ts";
 
 const directories: string[] = [];
 afterEach(() => {
@@ -27,6 +29,19 @@ const options = (
 });
 
 describe("runCommand", () => {
+  test("allows shell experiments below /tmp but not arbitrary absolute workdirs", () => {
+    const project = workdir();
+    const storage = workdir();
+    const scratch = workdir();
+    const allowed = resolveShellWorkingDirectory(project, storage, scratch);
+    expect(Either.isRight(allowed)).toBe(true);
+    if (Either.isRight(allowed)) expect(allowed.right.absolute).toBe(scratch);
+
+    const refused = resolveShellWorkingDirectory(project, storage, "/usr");
+    expect(Either.isLeft(refused)).toBe(true);
+    if (Either.isLeft(refused)) expect(refused.left.reason).toBe("invalid_path");
+  });
+
   test("reports output, exit code and the working directory", async () => {
     const cwd = workdir();
     const ok = await runCommand("pwd; printf 'err' >&2", options(cwd));

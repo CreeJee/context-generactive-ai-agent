@@ -1,5 +1,13 @@
 import { fetchServerSentEvents, useChat } from "@tanstack/ai-react";
-import { ArrowUpIcon, CheckIcon, ImagePlusIcon, MessageSquareIcon, SquareIcon } from "lucide-react";
+import {
+  ArrowUpIcon,
+  CheckIcon,
+  ChevronRightIcon,
+  ImagePlusIcon,
+  MessageSquareIcon,
+  RefreshCwIcon,
+  SquareIcon,
+} from "lucide-react";
 import {
   approvalToolDefinitions,
   attachmentUrl,
@@ -27,6 +35,7 @@ import {
   PromptInputTextarea,
 } from "~/components/ui/prompt-input";
 import { Button } from "~/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
 import { Command } from "~/components/ui/command";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { Spinner } from "~/components/ui/spinner";
@@ -275,6 +284,17 @@ function WorkflowArtifactPanel({
       (state.phase === "execute" && plan.verification.status === "failed"));
   const executable =
     (current && state.phase === "plan" && plan.status === "ready") || continuingImplementation;
+  const completedSteps = plan.steps.filter((step) => step.status === "completed").length;
+  const activeStep =
+    plan.steps.find((step) => step.status === "in_progress") ??
+    plan.steps.find((step) => step.status === "blocked") ??
+    plan.steps.find((step) => step.status === "pending");
+  const activeStepLabel =
+    activeStep?.status === "in_progress"
+      ? "현재"
+      : activeStep?.status === "blocked"
+        ? "막힘"
+        : "다음";
   return (
     <Alert>
       <AlertTitle>
@@ -282,28 +302,45 @@ function WorkflowArtifactPanel({
         {state.phase === "verify" ? "검증 중" : planStatusLabels[plan.status]}
       </AlertTitle>
       <AlertDescription>
-        <p>{plan.summary}</p>
-        {plan.steps.length > 0 && (
-          <ol className="mt-3 list-decimal space-y-1 pl-5">
-            {plan.steps.map((step) => (
-              <li key={step.id}>
-                {step.title} · {stepStatusLabels[step.status]}
-                {step.evidence.length > 0 && (
-                  <ul className="list-disc pl-5">
-                    {step.evidence.map((item) => (
-                      <li key={item}>{item}</li>
-                    ))}
-                  </ul>
-                )}
-              </li>
-            ))}
-          </ol>
-        )}
-        {plan.verification.status !== "not_run" && (
-          <p className="mt-3">
-            검증 {verificationStatusLabels[plan.verification.status]} · {plan.verification.summary}
-          </p>
-        )}
+        <Collapsible className="rounded-md border bg-background/50">
+          <CollapsibleTrigger className="group flex w-full items-center gap-2 px-3 py-2 text-left">
+            <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground group-data-[panel-open]:rotate-90" />
+            <span className="shrink-0 font-medium">
+              단계 {completedSteps}/{plan.steps.length}
+            </span>
+            {activeStep && (
+              <span className="min-w-0 truncate text-muted-foreground">
+                {activeStepLabel}: {activeStep.title}
+              </span>
+            )}
+            <span className="ml-auto shrink-0 text-xs text-muted-foreground">계획 내용</span>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="max-h-80 space-y-3 overflow-y-auto border-t px-3 py-3">
+            <p className="whitespace-pre-wrap">{plan.summary}</p>
+            {plan.steps.length > 0 && (
+              <ol className="list-decimal space-y-1.5 pl-5">
+                {plan.steps.map((step) => (
+                  <li key={step.id}>
+                    {step.title} · {stepStatusLabels[step.status]}
+                    {step.evidence.length > 0 && (
+                      <ul className="list-disc pl-5 text-muted-foreground">
+                        {step.evidence.map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            )}
+            {plan.verification.status !== "not_run" && (
+              <p>
+                검증 {verificationStatusLabels[plan.verification.status]} ·{" "}
+                {plan.verification.summary}
+              </p>
+            )}
+          </CollapsibleContent>
+        </Collapsible>
         {!current && (
           <p className="mt-3 text-destructive">Goal이 변경되어 이 계획을 다시 확인해야 해요.</p>
         )}
@@ -399,15 +436,17 @@ export function SessionView({
   slash: SlashSupport;
 }) {
   const { holder, lease, revision, refused, continueHere } = useSessionLease(sessionId);
+  const [syncRevision, setSyncRevision] = useState(0);
   const reading = lease.state === "other" || lease.state === "free";
   return (
     <ChatPanel
-      key={reading ? `read:${revision}` : "write"}
+      key={`${reading ? `read:${revision}` : "write"}:sync:${syncRevision}`}
       sessionId={sessionId}
       holder={holder}
       lease={lease}
       refused={refused}
       onContinue={() => void continueHere()}
+      onResync={() => setSyncRevision((current) => current + 1)}
       imagesSupported={imagesSupported}
       slash={slash}
     />
@@ -424,6 +463,7 @@ function ChatPanel({
   lease,
   refused,
   onContinue,
+  onResync,
   imagesSupported,
   slash,
 }: {
@@ -432,6 +472,7 @@ function ChatPanel({
   lease: PageLease;
   refused: boolean;
   onContinue: () => void;
+  onResync: () => void;
   imagesSupported: boolean;
   slash: SlashSupport;
 }) {
@@ -461,6 +502,10 @@ function ChatPanel({
     error,
     status,
     interrupts,
+    interruptErrors,
+    resuming,
+    resolveInterrupts,
+    retryInterrupts,
   } = useChat<ApprovalTools, undefined, unknown, ApprovalInterrupts>({
     connection: fetchServerSentEvents(`/api/chat?session=${encodeURIComponent(sessionId)}`, {
       // The server refuses sends and approval answers from a page that does not hold the session.
@@ -491,8 +536,58 @@ function ChatPanel({
     },
   });
   const approvals = interrupts.flatMap((interrupt) => toPendingApproval(interrupt) ?? []);
+  const approvalBatchKey = approvals.map((approval) => approval.id).join("\u0000");
+  const [approvalDecisions, setApprovalDecisions] = useState<Readonly<Record<string, boolean>>>({});
+  useEffect(() => setApprovalDecisions({}), [approvalBatchKey]);
   const waitingForApproval = interrupts.length > 0;
   const awaitingApproval = new Set(approvals.map((approval) => approval.toolCallId));
+  const incompleteApprovalBatch = approvals.length !== interrupts.length;
+  const staleApprovalBatch = interruptErrors.some((interruptError) =>
+    ["incomplete-batch", "unknown-interrupt", "stale", "conflict", "expired"].includes(
+      interruptError.code,
+    ),
+  );
+  const retryableApprovalBatch = interruptErrors.some((interruptError) => interruptError.retryable);
+  const approvalErrorMessage = interruptErrors.at(-1)?.message;
+  const continuationStartFailed = error?.message === "Interrupt continuation could not be started.";
+  const [discardingInterrupts, setDiscardingInterrupts] = useState(false);
+  const discardBrokenInterrupts = async () => {
+    setDiscardingInterrupts(true);
+    try {
+      await api.discardInterrupts(sessionId, holder);
+      onResync();
+    } catch (failure) {
+      setDiscardingInterrupts(false);
+      setNotice(
+        problem(
+          failure instanceof ApiError && failure.code === "run_in_progress"
+            ? "실행 중인 응답이 끝난 뒤 다시 시도해 주세요."
+            : "끊어진 승인 요청을 폐기하지 못했어요.",
+        ),
+      );
+    }
+  };
+  const stageApproval = (approvalId: string, approved: boolean) => {
+    const decisions = { ...approvalDecisions, [approvalId]: approved };
+    setApprovalDecisions(decisions);
+    // TanStack resumes an interrupt batch atomically. Do not submit until every visible item has
+    // a decision, or a reconnect could send only an older subset of the server's pending batch.
+    if (
+      incompleteApprovalBatch ||
+      staleApprovalBatch ||
+      approvals.some((approval) => decisions[approval.id] === undefined)
+    )
+      return;
+    try {
+      resolveInterrupts((interrupt) => {
+        const pending = toPendingApproval(interrupt);
+        const decision = decisions[interrupt.id];
+        if (pending && decision !== undefined) pending.answer(decision);
+      });
+    } catch {
+      setNotice(problem("승인 응답을 준비하지 못했어요. 서버 상태를 다시 불러와 주세요."));
+    }
+  };
   // A run rejoined after a reload streams without a local request, so both count as busy.
   const generating = isLoading || sessionGenerating;
   // What the conversation ends with: text means an answer, a tool call means work in between.
@@ -975,8 +1070,62 @@ function ChatPanel({
             onRevise={() => void revisePlan()}
             onExecute={() => void executePlan()}
           />
+          {(incompleteApprovalBatch || interruptErrors.length > 0 || continuationStartFailed) && (
+            <Alert variant="destructive">
+              <AlertTitle>승인 요청을 이어가지 못했어요</AlertTitle>
+              <AlertDescription>
+                <div className="flex flex-col items-start gap-3">
+                  <p>
+                    {continuationStartFailed
+                      ? "서버에 이 승인 요청을 이어갈 실행 상태가 남아 있지 않아요. 요청을 폐기해도 셸 명령은 실행되지 않으며, 대화와 작업 evidence는 유지돼요."
+                      : staleApprovalBatch || incompleteApprovalBatch
+                        ? "연결이 끊긴 사이 승인 목록이 바뀌었어요. 서버의 최신 요청을 다시 불러와야 해요."
+                        : (approvalErrorMessage ?? "승인 응답을 전송하지 못했어요.")}
+                  </p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={readOnly || resuming || discardingInterrupts}
+                    onClick={
+                      continuationStartFailed
+                        ? () => void discardBrokenInterrupts()
+                        : retryableApprovalBatch && !staleApprovalBatch
+                          ? retryInterrupts
+                          : onResync
+                    }
+                  >
+                    <RefreshCwIcon
+                      className={cn(
+                        "size-3.5",
+                        (resuming || discardingInterrupts) && "animate-spin",
+                      )}
+                    />
+                    {continuationStartFailed
+                      ? "끊어진 요청 폐기하고 계속"
+                      : retryableApprovalBatch && !staleApprovalBatch
+                        ? "응답 다시 보내기"
+                        : "최신 요청 불러오기"}
+                  </Button>
+                </div>
+              </AlertDescription>
+            </Alert>
+          )}
           {approvals.map((approval) => (
-            <ApprovalCard key={approval.id} approval={approval} disabled={readOnly} />
+            <ApprovalCard
+              key={approval.id}
+              approval={approval}
+              decision={approvalDecisions[approval.id]}
+              disabled={
+                readOnly ||
+                resuming ||
+                incompleteApprovalBatch ||
+                staleApprovalBatch ||
+                retryableApprovalBatch ||
+                continuationStartFailed
+              }
+              onAnswer={(approved) => stageApproval(approval.id, approved)}
+            />
           ))}
           <SubagentPanel
             sessionId={sessionId}
@@ -995,7 +1144,7 @@ function ChatPanel({
               <Spinner /> 작업 중…
             </div>
           )}
-          {error && run.notice === null && (
+          {error && !continuationStartFailed && run.notice === null && (
             <Alert variant="destructive">
               <AlertTitle>응답을 받지 못했어요</AlertTitle>
               <AlertDescription>{error.message}</AlertDescription>

@@ -230,6 +230,40 @@ function rowText(row: Record<string, SQLOutputValue> | undefined) {
   return row ? decodeRow(row).state_json : null;
 }
 
+const implementationComplete = (plan: PlanArtifact) =>
+  plan.steps.every((step) => step.status === "completed" && step.evidence.length > 0);
+
+/** Derives the only phase that can make progress from the durable artifacts. */
+export function reconciledWorkflowPhase(state: WorkflowState): WorkflowPhase {
+  if (state.phase !== "execute" && state.phase !== "verify") return state.phase;
+  if (state.plan === null || state.goal === null) return state.goal === null ? "goal" : "plan";
+  if (state.plan.goalVersion !== state.goal.version) return "plan";
+  if (state.plan.status !== "executing")
+    return state.plan.status === "completed" || state.plan.status === "blocked"
+      ? state.phase
+      : "plan";
+
+  const complete = implementationComplete(state.plan);
+  if (state.phase === "execute") return complete ? "verify" : "execute";
+  if (!complete) return "execute";
+
+  const verification = state.plan.verification;
+  if (verification.evidence.length === 0) return "verify";
+  switch (verification.status) {
+    case "failed":
+      return "execute";
+    case "invalid_hypothesis":
+      return verification.recoveryPhase ?? "plan";
+    case "invalid_criterion":
+    case "inconclusive":
+      return "plan";
+    case "not_run":
+    case "passed":
+    case "blocked":
+      return "verify";
+  }
+}
+
 const make = Effect.gen(function* () {
   const { sqlite, atomic } = yield* Database;
   const serialize = keyedSerialLimit();
@@ -265,6 +299,27 @@ const make = Effect.gen(function* () {
 
   return {
     get: (sessionId: string) => Effect.sync(() => get(sessionId)),
+
+    /** Repairs stale persisted phases before a new turn or an idle status response. */
+    reconcile: (sessionId: string) =>
+      serialize(
+        sessionId,
+        Effect.sync(() => {
+          const current = get(sessionId);
+          const phase = reconciledWorkflowPhase(current);
+          if (phase === current.phase) return current;
+          const next = { ...current, phase };
+          return atomic(() =>
+            save(sessionId, {
+              ...next,
+              ledger: [
+                ...next.ledger,
+                event(current, "phase_changed", `${current.phase} -> ${phase} (state reconciled)`),
+              ],
+            }),
+          );
+        }),
+      ),
 
     setPhase: (sessionId: string, phase: WorkflowPhase) =>
       serialize(

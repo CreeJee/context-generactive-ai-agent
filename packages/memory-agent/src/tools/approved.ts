@@ -1,7 +1,14 @@
 import type { ToolExecutionContext } from "@tanstack/ai";
-import { Context, Effect, Layer } from "effect";
+import { tmpdir } from "node:os";
+import { isAbsolute, relative, sep } from "node:path";
+import { Context, Effect, Either, Layer } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
-import { PathRejected, resolveOutsidePath, resolveProjectPath } from "../files/paths.ts";
+import {
+  canonicalPath,
+  PathRejected,
+  resolveOutsidePath,
+  resolveProjectPath,
+} from "../files/paths.ts";
 import { createTextFile, deleteTextFile, replaceTextFile } from "../files/text.ts";
 import type { Project } from "../projects/projects.ts";
 import { defaultTimeoutSeconds, maxTimeoutSeconds, runCommand } from "../shell/run.ts";
@@ -13,6 +20,30 @@ import {
   type WriteOutsideFileInput,
 } from "./definitions.ts";
 import { guarded, orThrow } from "./failure.ts";
+
+const isSameOrBelow = (root: string, candidate: string) => {
+  const path = relative(root, candidate);
+  return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path));
+};
+
+/** Project-relative directories plus host temp directories are valid shell working directories. */
+export function resolveShellWorkingDirectory(
+  projectRoot: string,
+  storageRoot: string,
+  workdir: string,
+) {
+  if (!isAbsolute(workdir)) return resolveProjectPath(projectRoot, workdir, "directory");
+  const resolved = resolveOutsidePath(projectRoot, storageRoot, workdir, "directory");
+  if (Either.isLeft(resolved)) return Either.left(resolved.left);
+  const tempRoots = [canonicalPath("/tmp"), canonicalPath(tmpdir())];
+  if (!tempRoots.some((root) => isSameOrBelow(root, resolved.right.absolute)))
+    return Either.left(new PathRejected({ path: workdir, reason: "invalid_path" }));
+  return Either.right({
+    absolute: resolved.right.absolute,
+    relative: resolved.right.absolute,
+    stats: resolved.right.stats,
+  });
+}
 
 const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
@@ -32,7 +63,9 @@ const make = Effect.gen(function* () {
         context?: ToolExecutionContext,
       ) =>
         guarded(workdir ?? ".", async () => {
-          const directory = orThrow(resolveProjectPath(project.root, workdir ?? ".", "directory"));
+          const directory = orThrow(
+            resolveShellWorkingDirectory(project.root, storage.path, workdir ?? "."),
+          );
           const seconds = Math.min(
             Math.max(1, timeoutSeconds ?? defaultTimeoutSeconds),
             maxTimeoutSeconds,

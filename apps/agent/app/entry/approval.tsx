@@ -173,7 +173,8 @@ function describe(call: GatedCall): CallView {
           <div className="flex flex-col gap-2">
             <pre className={codeBlock}>{call.input.command}</pre>
             <div className="text-muted-foreground">
-              실행 위치: <code>{call.input.workdir ?? "."}</code> (프로젝트 기준)
+              실행 위치: <code>{call.input.workdir ?? "."}</code> (
+              {call.input.workdir?.startsWith("/") ? "임시 경로" : "프로젝트 기준"})
             </div>
           </div>
         ),
@@ -243,12 +244,18 @@ export function ApprovalCard({
   approval,
   disabled,
   requester,
+  decision,
+  onAnswer,
 }: {
   approval: PendingApproval;
   /** A read-only page shows the request but cannot answer it. */
   disabled: boolean;
   /** Who asks, when it is not the conversation's own agent (a subagent). */
   requester?: string;
+  /** A decision staged for an atomic TanStack interrupt batch. */
+  decision?: boolean;
+  /** Stages a decision instead of resolving this interrupt immediately. */
+  onAnswer?: (approved: boolean) => void;
 }) {
   const view = describe(decodeCall(approval.toolName, approval.argumentsJson));
   const reviewReason =
@@ -275,16 +282,23 @@ export function ApprovalCard({
       </CardHeader>
       <CardContent>{view.body}</CardContent>
       <CardFooter>
-        <Button size="sm" disabled={disabled} onClick={() => approval.answer(true)}>
-          승인
+        <Button
+          size="sm"
+          variant={decision === true ? "default" : "outline"}
+          disabled={disabled}
+          aria-pressed={decision === true}
+          onClick={() => (onAnswer ?? approval.answer)(true)}
+        >
+          {decision === true ? "승인 선택됨" : "승인"}
         </Button>
         <Button
           size="sm"
-          variant="outline"
+          variant={decision === false ? "destructive" : "outline"}
           disabled={disabled}
-          onClick={() => approval.answer(false)}
+          aria-pressed={decision === false}
+          onClick={() => (onAnswer ?? approval.answer)(false)}
         >
-          거부
+          {decision === false ? "거부 선택됨" : "거부"}
         </Button>
       </CardFooter>
     </Card>

@@ -5,8 +5,10 @@ import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { CodexAppServer } from "../src/codex/app-server.ts";
 import { CodexModels } from "../src/codex/models.ts";
+import { ChatState } from "../src/chat-state/chat-state.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { approvalToolDefinitions } from "../src/tools/definitions.ts";
+import { Workflows } from "../src/workflow/workflow.ts";
 import { testRuntime } from "./support/runtime.ts";
 
 const fakeServer = fileURLToPath(new URL("./support/fake-codex.mjs", import.meta.url));
@@ -94,6 +96,56 @@ describe("approval-gated tools", () => {
     expect(log.filter((entry) => entry.method === "thread/start")).toHaveLength(1);
   });
 
+  test("Verify can run an approval-gated shell check", async () => {
+    const { client, runtime, session, lastText } = await approvalSetup();
+    await runtime.runPromise(
+      Effect.gen(function* () {
+        const workflows = yield* Workflows;
+        yield* workflows.updateGoal(session.id, {
+          statement: "Verify the implementation",
+          outcomes: ["Checks pass"],
+          constraints: [],
+          nonGoals: [],
+          assumptions: [],
+          openQuestions: [],
+          status: "active",
+        });
+        yield* workflows.updatePlan(session.id, {
+          summary: "Implement and verify",
+          steps: [
+            {
+              id: "implementation",
+              title: "Implement",
+              description: "Make the change",
+              dependsOn: [],
+              acceptanceCriteria: ["The check passes"],
+              ruleRefs: [],
+            },
+          ],
+          risks: [],
+          openQuestions: [],
+          status: "ready",
+        });
+        yield* workflows.setPhase(session.id, "execute");
+        yield* workflows.updateProgress(session.id, {
+          steps: [{ id: "implementation", status: "completed", evidence: ["change made"] }],
+          goalEvidence: [],
+          planEvidence: [],
+          detail: "Implementation complete",
+        });
+        yield* workflows.finishRun(session.id, "execute");
+      }),
+    );
+
+    await client.sendMessage("please use the shell");
+    await until(() => client.getInterrupts().length === 1, "the Verify approval request");
+    expect(client.getInterrupts()[0]).toMatchObject({ toolName: "run_shell" });
+    client.resolveInterrupts(true);
+    await until(() => lastText().includes("approved-output"), "the Verify shell result");
+    await until(() => !client.getIsLoading(), "the Verify run to finish");
+    expect(lastText()).toContain("approved-output");
+  });
+
   test("a reloaded page gets the pending approval back from the server and can answer it", async () => {
     const context = await approvalSetup();
     const { runtime, session } = context;
@@ -175,6 +227,31 @@ describe("approval-gated tools", () => {
       lastRun: { status: "failed", error: { code: "server_restarted" } },
     });
     restarted.dispose();
+  });
+
+  test("a broken approval continuation can be discarded without running the tool", async () => {
+    const context = await approvalSetup();
+    const { runtime, session } = context;
+    await context.client.sendMessage("please use the shell");
+    await until(() => context.client.getInterrupts().length === 1, "the approval request");
+    context.client.dispose();
+
+    const response = await runtime.runPromise(
+      Effect.flatMap(AgentChat, (agent) => agent.discardInterrupts(session.id, null)),
+    );
+    expect(await response.json()).toEqual({ discarded: 1 });
+    const state = await runtime.runPromise(ChatState);
+    expect(await state.persistence.stores.interrupts.listPending(session.id)).toEqual([]);
+
+    const status = await runtime.runPromise(
+      Effect.flatMap(AgentChat, (agent) => agent.status(session.id, null)),
+    );
+    expect(await status.json()).toMatchObject({
+      running: null,
+      lastRun: { status: "failed", error: { code: "interrupt_continuation_lost" } },
+    });
+    const nodes = await runtime.runPromise(Nodes);
+    expect(nodes.session(session.id).filter((node) => node.kind === "tool_result")).toEqual([]);
   });
 
   test("a declined approval never runs the command and tells the model", async () => {

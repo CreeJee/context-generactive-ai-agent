@@ -247,6 +247,13 @@ export const api = {
       {},
       { [sessionHolderHeader]: holder },
     ),
+  discardInterrupts: (sessionId: string, holder: string) =>
+    call<{ discarded: number }>(
+      "POST",
+      `/api/sessions/${encodeURIComponent(sessionId)}/interrupts/discard`,
+      {},
+      { [sessionHolderHeader]: holder },
+    ),
   /** Refused with 409 while the session is answering. */
   compactSession: (sessionId: string, holder: string) =>
     call<CompactResult>(
