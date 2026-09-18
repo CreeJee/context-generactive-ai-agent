@@ -7,6 +7,8 @@ const headBytes = 8 * 1024;
 const tailBytes = 56 * 1024;
 /** Grace period between SIGTERM and SIGKILL when stopping a command. */
 const killGraceMs = 3_000;
+/** Final wait for Node's close event after SIGKILL before detached pipes are abandoned. */
+const closeGraceMs = 500;
 
 export const defaultTimeoutSeconds = 120;
 export const maxTimeoutSeconds = 1_800;
@@ -134,30 +136,22 @@ export function runCommand(command: string, options: CommandOptions): Promise<Co
     });
     let stopReason: "timed_out" | "cancelled" | null = null;
     let killTimer: NodeJS.Timeout | undefined;
-
-    const stop = (reason: "timed_out" | "cancelled") => {
-      if (stopReason || child.exitCode !== null || child.pid === undefined) return;
-      stopReason = reason;
-      const pid = child.pid;
-      stopProcessTree(pid, false);
-      if (!windows) killTimer = setTimeout(() => stopProcessTree(pid, true), killGraceMs);
-    };
+    let closeTimer: NodeJS.Timeout | undefined;
+    let settled = false;
 
     const timeout = setTimeout(() => stop("timed_out"), options.timeoutSeconds * 1000);
     const onAbort = () => stop("cancelled");
-    options.signal?.addEventListener("abort", onAbort, { once: true });
 
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.once("error", (error) => {
-      clearTimeout(timeout);
-      options.signal?.removeEventListener("abort", onAbort);
-      reject(error);
-    });
-    child.once("close", (exitCode, signal) => {
+    const cleanup = () => {
       clearTimeout(timeout);
       if (killTimer) clearTimeout(killTimer);
+      if (closeTimer) clearTimeout(closeTimer);
       options.signal?.removeEventListener("abort", onAbort);
+    };
+    const finish = (exitCode: number | null, signal: NodeJS.Signals | null) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
       const out = stdout.result();
       const err = stderr.result();
       resolve({
@@ -172,6 +166,35 @@ export function runCommand(command: string, options: CommandOptions): Promise<Co
         stdoutTruncated: out.truncated,
         stderrTruncated: err.truncated,
       });
+    };
+    const abandonPipes = () => {
+      child.stdout.destroy();
+      child.stderr.destroy();
+      finish(child.exitCode, child.signalCode);
+    };
+    const force = (pid: number) => {
+      stopProcessTree(pid, true);
+      closeTimer = setTimeout(abandonPipes, closeGraceMs);
+    };
+    function stop(reason: "timed_out" | "cancelled") {
+      if (stopReason || child.pid === undefined) return;
+      stopReason = reason;
+      const pid = child.pid;
+      // The shell leader may already have exited while a detached descendant still owns its pipes.
+      // Signal the original group anyway, then stop waiting for pipes that escaped that group.
+      stopProcessTree(pid, false);
+      killTimer = setTimeout(() => force(pid), killGraceMs);
+    }
+
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.once("error", (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
     });
+    child.once("close", finish);
   });
 }

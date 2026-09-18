@@ -81,7 +81,7 @@ export const DeleteOutsideFileInput = Schema.Struct({
 const runShell = {
   name: "run_shell",
   description:
-    "Run a shell command in the project on the host, for builds, tests, git and other programs. Each run is approved first, by the user or by the permission review. Returns exit code, signal and output (long output keeps its start and end).",
+    "Run a finite, unattended shell command in the project on the host, for builds, tests, git and other programs. Do not use it for browser sign-in, user input, servers, watchers or other interactive/background work: ask the user to run those in a terminal instead. Each run is approved first, by the user or by the permission review. Returns exit code, signal and output (long output keeps its start and end).",
   inputSchema: toToolSchema(RunShellInput),
 } as const;
 

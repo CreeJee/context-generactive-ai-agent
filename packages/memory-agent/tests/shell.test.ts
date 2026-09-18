@@ -1,11 +1,13 @@
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Either } from "effect";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import { commandEnvironment, runCommand } from "../src/shell/run.ts";
 import { resolveShellWorkingDirectory } from "../src/tools/approved.ts";
 
+const holdStdio = fileURLToPath(new URL("./support/hold-stdio.mjs", import.meta.url));
 const directories: string[] = [];
 afterEach(() => {
   for (const directory of directories.splice(0))
@@ -84,6 +86,28 @@ describe("runCommand", () => {
     const cancelled = await runCommand("sleep 30", { ...options(cwd), signal: controller.signal });
     expect(cancelled.status).toBe("cancelled");
   });
+
+  test("settles after timeout when a detached Node child keeps the output pipes open", async () => {
+    const cwd = workdir();
+    const pidFile = join(cwd, "detached.pid");
+    let pid: number | null = null;
+    try {
+      const result = await runCommand(
+        [process.execPath, holdStdio, pidFile].map((part) => JSON.stringify(part)).join(" "),
+        { ...options(cwd), timeoutSeconds: 0.5 },
+      );
+      pid = Number(readFileSync(pidFile, "utf8"));
+      expect(result.status).toBe("timed_out");
+      expect(result.durationMs).toBeLessThan(4_500);
+    } finally {
+      if (pid !== null)
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // The child already stopped.
+        }
+    }
+  }, 8_000);
 
   test("does not pass secret-looking variables to commands", async () => {
     const env = {

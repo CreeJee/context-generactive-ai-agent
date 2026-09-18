@@ -203,20 +203,24 @@ describe("runs across reloads, cancels and restarts", () => {
     reloaded.client.dispose();
   });
 
-  test("an approval left waiting across a restart can still be answered", async () => {
+  test("a restart retires an approval whose Codex continuation no longer exists", async () => {
     const context = await setup();
     const tab = openTab(context.runtime, context.session.id);
-    await tab.client.sendMessage("please use the shell");
+    // Approval deliberately pauses the request, so wait for the interrupt rather than for the
+    // send promise, which only settles after that interrupt has been answered.
+    void tab.client.sendMessage("please use the shell");
     await until(() => tab.client.getInterrupts().length === 1, "the approval request");
     tab.client.dispose();
 
     const restarted = await context.reopen();
     const reloaded = openTab(restarted, context.session.id);
-    await until(() => reloaded.client.getInterrupts().length === 1, "the restored approval");
-    reloaded.client.resolveInterrupts(true);
-    await until(() => reloaded.text().includes("approved-output"), "the answer after approval");
-    await until(() => !reloaded.client.getIsLoading(), "the run to finish");
-    expect((await statusOf(restarted, context.session.id)).lastRun?.status).toBe("completed");
+    await until(() => reloaded.client.getMessages().length > 0, "the restored transcript");
+    expect(reloaded.client.getInterrupts()).toEqual([]);
+    expect(reloaded.client.getError()).toBeUndefined();
+    expect(await statusOf(restarted, context.session.id)).toMatchObject({
+      running: null,
+      lastRun: { status: "failed", error: { code: "server_restarted" } },
+    });
     reloaded.client.dispose();
   });
 });
