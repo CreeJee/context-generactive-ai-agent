@@ -9,6 +9,8 @@ import {
   LogOutIcon,
   PlusIcon,
 } from "lucide-react";
+import { useAtom } from "jotai";
+import { atomWithStorage } from "jotai/utils";
 import { useState } from "react";
 import { Alert, AlertDescription } from "~/components/ui/alert";
 import { Badge } from "~/components/ui/badge";
@@ -219,6 +221,8 @@ const permissionHints = {
   auto: "분류 모델이 호출마다 판단해서 안전하면 바로 실행하고, 애매하면 묻고, 위험하면 막아요. 판단할 때마다 모델 호출이 추가돼요.",
 } satisfies Record<PermissionMode, string>;
 
+const projectSectionOpenAtom = atomWithStorage("context-agent-project-section-open", true);
+
 export function ProjectSection({
   projects,
   projectId,
@@ -239,85 +243,98 @@ export function ProjectSection({
   onHide: (projectId: string) => void;
 }) {
   const current = projects.find((project) => project.id === projectId);
+  const [open, setOpen] = useAtom(projectSectionOpenAtom);
 
   return (
-    <Section title="프로젝트">
-      <div className="flex items-center gap-2">
-        {projects.length > 0 ? (
-          <Select
-            value={projectId}
-            items={projects.map((project) => ({ value: project.id, label: project.name }))}
-            onValueChange={(value) => value && onSelect(value)}
-          >
-            <SelectTrigger className="min-w-0 flex-1">
-              <SelectValue placeholder="프로젝트를 선택하세요" />
-            </SelectTrigger>
-            <SelectContent>
-              {projects.map((project) => (
-                <SelectItem key={project.id} value={project.id}>
-                  {project.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : (
-          <p className="flex-1 text-xs text-muted-foreground">등록된 프로젝트가 없어요.</p>
-        )}
-        <AddProjectDialog onAdd={onAdd} />
-      </div>
-      {current && (
-        <div className="mt-1 flex flex-col gap-1.5 border-l-2 pl-2.5">
-          <span className="text-2xs font-medium text-muted-foreground">{current.name} 설정</span>
-          <Select
-            value={current.permissionMode}
-            items={permissionModes}
-            onValueChange={(value) => {
-              const mode = permissionModes.find((option) => option.value === value);
-              if (mode) onPermissionMode(mode.value);
-            }}
-          >
-            <SelectTrigger className="w-full" size="sm" aria-label="권한 모드">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {permissionModes.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <p className="text-xs text-muted-foreground">{permissionHints[current.permissionMode]}</p>
-          <label className="mt-1.5 flex cursor-pointer items-start justify-between gap-3">
-            <span className="flex flex-col gap-0.5">
-              <span className="text-xs font-medium">다른 프로젝트에서 이 기억 찾기</span>
-              <span className="text-xs text-muted-foreground">
-                {current.crossRecallExcluded
-                  ? "다른 프로젝트 대화에서는 이 프로젝트의 기억을 찾지 않아요."
-                  : "다른 프로젝트 대화에서도 찾아서 출처 프로젝트와 함께 보여줘요."}
+    <section className="px-4 py-3">
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <CollapsibleTrigger className="flex w-full items-center gap-1 text-2xs font-medium tracking-wide text-muted-foreground uppercase">
+          {open ? <ChevronDownIcon className="size-3" /> : <ChevronRightIcon className="size-3" />}
+          프로젝트
+        </CollapsibleTrigger>
+        <CollapsibleContent className="mt-2 flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            {projects.length > 0 ? (
+              <Select
+                value={projectId}
+                items={projects.map((project) => ({ value: project.id, label: project.name }))}
+                onValueChange={(value) => value && onSelect(value)}
+              >
+                <SelectTrigger className="min-w-0 flex-1">
+                  <SelectValue placeholder="프로젝트를 선택하세요" />
+                </SelectTrigger>
+                <SelectContent>
+                  {projects.map((project) => (
+                    <SelectItem key={project.id} value={project.id}>
+                      {project.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <p className="flex-1 text-xs text-muted-foreground">등록된 프로젝트가 없어요.</p>
+            )}
+            <AddProjectDialog onAdd={onAdd} />
+          </div>
+          {current && (
+            <div className="mt-1 flex flex-col gap-1.5 border-l-2 pl-2.5">
+              <span className="text-2xs font-medium text-muted-foreground">
+                {current.name} 설정
               </span>
-            </span>
-            <Switch
-              className="mt-0.5"
-              checked={!current.crossRecallExcluded}
-              onCheckedChange={(checked) => onCrossRecall(checked)}
-            />
-          </label>
-          <Button
-            variant="ghost-muted"
-            size="sm"
-            className="mt-1 self-start"
-            title="목록에서 빼기(대화와 기억은 그대로)"
-            onClick={() => onHide(current.id)}
-          >
-            <EyeOffIcon /> 목록에서 빼기
-          </Button>
-          <p className="text-xs text-muted-foreground">
-            대화와 기억, 검색은 그대로 남아요. 같은 폴더를 다시 추가하면 돌아와요.
-          </p>
-        </div>
-      )}
-    </Section>
+              <Select
+                value={current.permissionMode}
+                items={permissionModes}
+                onValueChange={(value) => {
+                  const mode = permissionModes.find((option) => option.value === value);
+                  if (mode) onPermissionMode(mode.value);
+                }}
+              >
+                <SelectTrigger className="w-full" size="sm" aria-label="권한 모드">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {permissionModes.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {permissionHints[current.permissionMode]}
+              </p>
+              <label className="mt-1.5 flex cursor-pointer items-start justify-between gap-3">
+                <span className="flex flex-col gap-0.5">
+                  <span className="text-xs font-medium">다른 프로젝트에서 이 기억 찾기</span>
+                  <span className="text-xs text-muted-foreground">
+                    {current.crossRecallExcluded
+                      ? "다른 프로젝트 대화에서는 이 프로젝트의 기억을 찾지 않아요."
+                      : "다른 프로젝트 대화에서도 찾아서 출처 프로젝트와 함께 보여줘요."}
+                  </span>
+                </span>
+                <Switch
+                  className="mt-0.5"
+                  checked={!current.crossRecallExcluded}
+                  onCheckedChange={(checked) => onCrossRecall(checked)}
+                />
+              </label>
+              <Button
+                variant="ghost-muted"
+                size="sm"
+                className="mt-1 self-start"
+                title="목록에서 빼기(대화와 기억은 그대로)"
+                onClick={() => onHide(current.id)}
+              >
+                <EyeOffIcon /> 목록에서 빼기
+              </Button>
+              <p className="text-xs text-muted-foreground">
+                대화와 기억, 검색은 그대로 남아요. 같은 폴더를 다시 추가하면 돌아와요.
+              </p>
+            </div>
+          )}
+        </CollapsibleContent>
+      </Collapsible>
+    </section>
   );
 }
 

@@ -18,6 +18,7 @@ import {
 } from "memory-agent/definitions";
 import { cn } from "cn";
 import { Option } from "effect";
+import { useAtom } from "jotai";
 import { Fragment, useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import {
@@ -48,6 +49,7 @@ import {
 } from "./approval";
 import { acceptedImageTypes, renumberReferences, useDraftImages } from "./draft-images";
 import { DraftImageTray } from "./images";
+import { interruptContinuationState } from "./interrupt-recovery";
 import {
   api,
   ApiError,
@@ -68,6 +70,7 @@ import { QueuePanel } from "./queue-panel";
 import { SubagentPanel } from "./subagent-panel";
 import { ReadOnlyBar } from "./read-only-bar";
 import { RunNoticeView, useRunState } from "./run-state";
+import { sessionDraftsAtom } from "./session-drafts";
 import { useSessionLease, type PageLease } from "./session-lease";
 import { SlashPalette } from "./slash-palette";
 import {
@@ -93,10 +96,7 @@ const imageFiles = (files: FileList | null) =>
   Array.from(files ?? []).filter((file) => file.type.startsWith("image/"));
 
 /** The input box either writes a new message or edits one that is waiting in the queue. */
-type Composer =
-  | { readonly kind: "compose" }
-  /** `stash` is the new message the user was writing before picking the queued one. */
-  | { readonly kind: "editing"; readonly id: string; readonly stash: string };
+type Composer = { readonly kind: "compose" } | { readonly kind: "editing"; readonly id: string };
 
 /**
  * Where a message the running answer took in shows, next to a message of the conversation, until
@@ -477,7 +477,23 @@ function ChatPanel({
   slash: SlashSupport;
 }) {
   const readOnly = lease.state !== "mine";
-  const [draft, setDraft] = useState("");
+  const [composer, setComposer] = useState<Composer>({ kind: "compose" });
+  const [sessionDrafts, setSessionDrafts] = useAtom(sessionDraftsAtom);
+  const [editingDraft, setEditingDraft] = useState("");
+  const composeDraft = sessionDrafts[sessionId] ?? "";
+  const draft = composer.kind === "editing" ? editingDraft : composeDraft;
+  const setDraft = (next: string) => {
+    if (composer.kind === "editing") {
+      setEditingDraft(next);
+      return;
+    }
+    setSessionDrafts((current) => {
+      if (next.length > 0) return { ...current, [sessionId]: next };
+      const remaining = { ...current };
+      delete remaining[sessionId];
+      return remaining;
+    });
+  };
   const [dragging, setDragging] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
   // What the run in progress reports; the server's record covers the time before and after it.
@@ -549,7 +565,9 @@ function ChatPanel({
   );
   const retryableApprovalBatch = interruptErrors.some((interruptError) => interruptError.retryable);
   const approvalErrorMessage = interruptErrors.at(-1)?.message;
-  const continuationStartFailed = error?.message === "Interrupt continuation could not be started.";
+  const continuation = interruptContinuationState(error?.message, interrupts.length);
+  const continuationStartFailed = continuation === "lost";
+  const continuationReachedNextApproval = continuation === "continued";
   const [discardingInterrupts, setDiscardingInterrupts] = useState(false);
   const discardBrokenInterrupts = async () => {
     setDiscardingInterrupts(true);
@@ -660,7 +678,6 @@ function ChatPanel({
   useEffect(() => setLiveContext(null), [run.context]);
   const context = liveContext ?? run.context;
   const queue = useMessageQueue(sessionId, holder, generating);
-  const [composer, setComposer] = useState<Composer>({ kind: "compose" });
   const [submitting, setSubmitting] = useState(false);
   // Slash command suggestions for what is typed, and which one the arrow keys point at.
   const [highlight, setHighlight] = useState("");
@@ -810,9 +827,9 @@ function ChatPanel({
         : message.state.kind === "held" && message.state.draft !== null
           ? message.state.draft
           : message.text;
-    setComposer({ kind: "editing", id: message.id, stash: draft });
+    setComposer({ kind: "editing", id: message.id });
     caretAfterRender.current = text.length;
-    setDraft(text);
+    setEditingDraft(text);
     setNotice(null);
     void queue.change(message.id, { action: "edit", draft: text });
   };
@@ -820,7 +837,6 @@ function ChatPanel({
   const finishEdit = async (outcome: "save" | "remove") => {
     if (!editing) return;
     setComposer({ kind: "compose" });
-    setDraft(editing.stash);
     const text = draft.trim();
     const items = await queue.change(
       editing.id,
@@ -1144,12 +1160,15 @@ function ChatPanel({
               <Spinner /> 작업 중…
             </div>
           )}
-          {error && !continuationStartFailed && run.notice === null && (
-            <Alert variant="destructive">
-              <AlertTitle>응답을 받지 못했어요</AlertTitle>
-              <AlertDescription>{error.message}</AlertDescription>
-            </Alert>
-          )}
+          {error &&
+            !continuationStartFailed &&
+            !continuationReachedNextApproval &&
+            run.notice === null && (
+              <Alert variant="destructive">
+                <AlertTitle>응답을 받지 못했어요</AlertTitle>
+                <AlertDescription>{error.message}</AlertDescription>
+              </Alert>
+            )}
           {!generating && !waitingForApproval && run.notice && (
             <RunNoticeView notice={run.notice} />
           )}

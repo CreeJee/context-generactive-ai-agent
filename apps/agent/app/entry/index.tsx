@@ -1,4 +1,5 @@
 import { FolderIcon, LogInIcon } from "lucide-react";
+import { parseAsString, useQueryStates } from "nuqs";
 import { useCallback, useEffect, useState } from "react";
 import {
   Empty,
@@ -26,6 +27,10 @@ import { SettingsDialog } from "./settings-dialog";
 import { AccountSection, ModelSection, ProjectSection, SessionSection } from "./sidebar";
 
 const loginPollMs = 2000;
+const locationParsers = {
+  project: parseAsString,
+  session: parseAsString,
+};
 
 function Placeholder({
   icon,
@@ -52,11 +57,10 @@ export function App() {
   const [models, setModels] = useState<CodexModel[]>([]);
   const [selection, setSelection] = useState<ModelSelection | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [projectId, setProjectId] = useState<string | null>(null);
+  const [{ project: projectId, session: sessionId }, setLocation] = useQueryStates(locationParsers);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [archived, setArchived] = useState<Session[]>([]);
   const [archiveError, setArchiveError] = useState<string | null>(null);
-  const [sessionId, setSessionId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [slashAgents, setSlashAgents] = useState<string[]>([]);
   const [slashSkills, setSlashSkills] = useState<SlashContext["skills"]>([]);
@@ -67,16 +71,17 @@ export function App() {
     void refreshAuth();
     void api.projects().then((list) => {
       setProjects(list);
-      // `context-agent <folder>` opens the page with ?project=<id>; keep the URL clean afterwards.
-      const url = new URL(window.location.href);
-      const launched = list.find((project) => project.id === url.searchParams.get("project"));
-      if (url.searchParams.has("project")) {
-        url.searchParams.delete("project");
-        window.history.replaceState(null, "", url);
-      }
-      setProjectId((current) => launched?.id ?? current ?? list[0]?.id ?? null);
+      void setLocation((current) => {
+        const project = list.some((item) => item.id === current.project)
+          ? current.project
+          : (list[0]?.id ?? null);
+        return {
+          project,
+          session: project === current.project ? current.session : null,
+        };
+      });
     });
-  }, [refreshAuth]);
+  }, [refreshAuth, setLocation]);
 
   // While the browser login is open or codex is still being fetched, poll until that changes.
   useEffect(() => {
@@ -112,10 +117,22 @@ export function App() {
     setArchiveError(null);
     void api.sessions(projectId).then((list) => {
       setSessions(list);
-      setSessionId(list[0]?.id ?? null);
+      void setLocation((current) =>
+        current.project === projectId
+          ? {
+              session: list.some((item) => item.id === current.session)
+                ? current.session
+                : (list[0]?.id ?? null),
+            }
+          : {},
+      );
     });
     void api.archivedSessions(projectId).then(setArchived, () => setArchived([]));
   }, [projectId]);
+
+  const selectProject = (id: string) =>
+    void setLocation({ project: id, session: null }, { history: "push" });
+  const selectSession = (id: string) => void setLocation({ session: id }, { history: "push" });
 
   const untitled = sessions.some((session) => session.id === sessionId && session.title === null);
   useEffect(() => {
@@ -149,7 +166,7 @@ export function App() {
       const remaining = sessions.filter((item) => item.id !== id);
       setSessions(remaining);
       setArchived((list) => [session, ...list]);
-      if (sessionId === id) setSessionId(remaining[0]?.id ?? null);
+      if (sessionId === id) void setLocation({ session: remaining[0]?.id ?? null });
     } catch (error) {
       setArchiveError(
         archiveErrorMessage(error instanceof Error ? error : new Error(String(error))),
@@ -182,7 +199,7 @@ export function App() {
     try {
       const project = await api.addProject(root);
       setProjects((list) => [...list, project]);
-      setProjectId(project.id);
+      void setLocation({ project: project.id, session: null }, { history: "push" });
       return null;
     } catch (error) {
       return projectErrorMessage(error instanceof Error ? error : new Error(String(error)));
@@ -195,12 +212,12 @@ export function App() {
     if (open) return;
     void api.projects().then((list) => {
       setProjects(list);
-      setProjectId((current) => current ?? list[0]?.id ?? null);
+      void setLocation((current) => ({ project: current.project ?? list[0]?.id ?? null }));
     });
     if (projectId)
       void api.sessions(projectId).then((list) => {
         setSessions(list);
-        setSessionId((current) => current ?? list[0]?.id ?? null);
+        void setLocation((current) => ({ session: current.session ?? list[0]?.id ?? null }));
       });
   };
 
@@ -211,7 +228,7 @@ export function App() {
     if (!projectId) return;
     const session = await api.createSession(projectId, agent);
     setSessions((list) => [session, ...list]);
-    setSessionId(session.id);
+    void setLocation({ session: session.id }, { history: "push" });
   };
 
   const slash: SlashSupport = {
@@ -314,7 +331,7 @@ export function App() {
         <ProjectSection
           projects={projects}
           projectId={projectId}
-          onSelect={setProjectId}
+          onSelect={selectProject}
           onAdd={addProject}
           onPermissionMode={(mode) => {
             if (!projectId) return;
@@ -326,11 +343,9 @@ export function App() {
           }}
           onHide={(hiddenId) => {
             void api.hideProject(hiddenId).then(() => {
-              setProjects((list) => {
-                const left = list.filter((project) => project.id !== hiddenId);
-                setProjectId(left.at(0)?.id ?? null);
-                return left;
-              });
+              const left = projects.filter((project) => project.id !== hiddenId);
+              setProjects(left);
+              void setLocation({ project: left.at(0)?.id ?? null, session: null });
             });
           }}
         />
@@ -341,7 +356,7 @@ export function App() {
             archived={archived}
             sessionId={sessionId}
             archiveError={archiveError}
-            onSelect={setSessionId}
+            onSelect={selectSession}
             onCreate={(agent) => void createSession(agent)}
             onArchive={(id) => void archiveSession(id)}
             onRestore={(id) => void restoreSession(id)}
