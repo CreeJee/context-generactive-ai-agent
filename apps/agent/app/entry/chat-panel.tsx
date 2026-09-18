@@ -267,7 +267,14 @@ function WorkflowArtifactPanel({
   }
 
   const current = state.goal !== null && plan.goalVersion === state.goal.version;
-  const executable = state.phase === "plan" && plan.status === "ready" && current;
+  const continuingImplementation =
+    current &&
+    plan.status === "executing" &&
+    ((state.phase === "verify" &&
+      (plan.verification.status === "not_run" || plan.verification.status === "failed")) ||
+      (state.phase === "execute" && plan.verification.status === "failed"));
+  const executable =
+    (current && state.phase === "plan" && plan.status === "ready") || continuingImplementation;
   return (
     <Alert>
       <AlertTitle>
@@ -310,14 +317,14 @@ function WorkflowArtifactPanel({
           >
             수정 요청
           </Button>
-          {state.phase === "plan" && (
+          {(state.phase === "plan" || continuingImplementation) && (
             <Button
               type="button"
               size="sm"
               disabled={!executable || busy || disabled}
               onClick={onExecute}
             >
-              계획 실행
+              {continuingImplementation ? "구현 계속" : "계획 실행"}
             </Button>
           )}
         </div>
@@ -525,10 +532,18 @@ function ChatPanel({
   };
 
   const executePlan = async () => {
-    if (!(await changeWorkflowPhase("execute"))) return;
+    const retryingFailedVerification =
+      run.workflow?.plan?.status === "executing" &&
+      run.workflow.plan.verification.status === "failed";
+    if (run.workflow?.phase !== "execute" && !(await changeWorkflowPhase("execute"))) return;
     setNotice(null);
     void sendMessage(
-      contentOf("승인한 Plan을 첫 번째 미완료 단계부터 실행하고 결과를 검증해 줘.", []),
+      contentOf(
+        retryingFailedVerification
+          ? "저장된 검증 실패 evidence를 바탕으로 구현 결함을 수정하고 다시 검증해 줘."
+          : "승인한 Plan을 첫 번째 미완료 단계부터 실행하고 결과를 검증해 줘.",
+        [],
+      ),
     );
   };
 

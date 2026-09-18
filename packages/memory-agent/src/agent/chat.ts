@@ -387,10 +387,18 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const workflowAfterRun = (sessionId: string, phase: WorkflowPhase): ChatMiddleware => ({
-    name: "memory-agent/workflow-lifecycle",
-    onFinish: () => Effect.runPromise(Effect.asVoid(workflows.finishRun(sessionId, phase))),
-  });
+  const workflowAfterRun = (sessionId: string, phase: WorkflowPhase): ChatMiddleware => {
+    // Verification may record a failed result immediately before the provider or its continuation
+    // errors. Settle from the durable artifact on every terminal path, not only a clean finish, so
+    // the session returns to Execute instead of remaining trapped in read-only Verify.
+    const settle = () => Effect.runPromise(Effect.asVoid(workflows.finishRun(sessionId, phase)));
+    return {
+      name: "memory-agent/workflow-lifecycle",
+      onFinish: settle,
+      onAbort: settle,
+      onError: settle,
+    };
+  };
 
   const indexInBackground = (): ChatMiddleware => {
     // Embedding can take seconds (the model loads on first use), and interpretation is a model

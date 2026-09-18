@@ -142,6 +142,41 @@ describe("approval-gated tools", () => {
     reloaded.dispose();
   });
 
+  test("a server restart retires an approval whose continuation no longer exists", async () => {
+    const context = await approvalSetup();
+    const { session } = context;
+    await context.client.sendMessage("please use the shell");
+    await until(() => context.client.getInterrupts().length === 1, "the approval request");
+    context.client.dispose();
+
+    const runtime = await context.reopen();
+    const connection = fetchServerSentEvents(`http://127.0.0.1/api/chat?session=${session.id}`, {
+      fetchClient: (input, init) =>
+        runtime.runPromise(
+          Effect.flatMap(AgentChat, (agent) => agent.hydrate(new Request(input, init), session.id)),
+        ),
+    });
+    const restarted = new ChatClient({
+      threadId: session.id,
+      persistence: true,
+      tools: approvalToolDefinitions,
+      connection,
+    });
+    restarted.attach();
+    await until(() => restarted.getMessages().length > 0, "the restored transcript");
+
+    expect(restarted.getInterrupts()).toEqual([]);
+    expect(restarted.getError()).toBeUndefined();
+    const response = await runtime.runPromise(
+      Effect.flatMap(AgentChat, (agent) => agent.status(session.id, null)),
+    );
+    expect(await response.json()).toMatchObject({
+      running: null,
+      lastRun: { status: "failed", error: { code: "server_restarted" } },
+    });
+    restarted.dispose();
+  });
+
   test("a declined approval never runs the command and tells the model", async () => {
     const { client, runtime, session, lastText } = await approvalSetup();
 

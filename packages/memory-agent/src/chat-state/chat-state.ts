@@ -23,13 +23,34 @@ const make = Effect.gen(function* () {
     convertMessagesToModelMessages(sessionMessages(nodes.session(threadId), attachments.forNode)),
   );
 
-  // One process owns the database, so a run still marked running was cut off by a restart. It is
-  // not resumed or rerun on its own (R10): it is recorded as failed and the user decides.
-  sqlite
-    .prepare(
-      "UPDATE chat_runs SET status = 'failed', finished_at = ?, error = ?, error_code = ? WHERE status = 'running'",
-    )
-    .run(Date.now(), "The server stopped before this answer finished.", serverRestartedCode);
+  // One process owns the database, so running and approval-interrupted runs belonged to the old
+  // process after a restart. The provider continuation they depended on is gone: leaving their
+  // interrupts pending makes a reloaded page offer an approval that can only fail. Retire the
+  // interrupts and runs together, then let the user decide whether to send the request again (R10).
+  const restartedAt = Date.now();
+  sqlite.exec("BEGIN IMMEDIATE");
+  try {
+    sqlite
+      .prepare(
+        `UPDATE chat_interrupts
+         SET status = 'cancelled', resolved_at = ?
+         WHERE status = 'pending' AND run_id IN (
+           SELECT run_id FROM chat_runs WHERE status IN ('running', 'interrupted')
+         )`,
+      )
+      .run(restartedAt);
+    sqlite
+      .prepare(
+        `UPDATE chat_runs
+         SET status = 'failed', finished_at = ?, error = ?, error_code = ?
+         WHERE status IN ('running', 'interrupted')`,
+      )
+      .run(restartedAt, "The server stopped before this answer finished.", serverRestartedCode);
+    sqlite.exec("COMMIT");
+  } catch (error) {
+    sqlite.exec("ROLLBACK");
+    throw error;
+  }
 
   /**
    * A cancelled or failed run has no finish to save its transcript, and the answer it was writing
