@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vp run -r build",
+    "build": "vp run --no-cache agent#package",
+    "start": "node apps/agent/dist/context-agent.mjs",
     "typecheck": "vp run -r typecheck",
     "ready": "vp check && vp run -r typecheck && vp run -r test && vp run -r build",
     "dev": "vp run agent#dev",
