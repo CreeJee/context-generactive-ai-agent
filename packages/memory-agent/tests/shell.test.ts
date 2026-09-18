@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Either } from "effect";
 import { afterEach, describe, expect, test } from "vite-plus/test";
-import { commandEnvironment, runCommand } from "../src/shell/run.ts";
+import { commandEnvironment, runCommand, stopAllCommands } from "../src/shell/run.ts";
 import { resolveShellWorkingDirectory } from "../src/tools/approved.ts";
 
 const holdStdio = fileURLToPath(new URL("./support/hold-stdio.mjs", import.meta.url));
@@ -85,6 +85,12 @@ describe("runCommand", () => {
     setTimeout(() => controller.abort(), 100);
     const cancelled = await runCommand("sleep 30", { ...options(cwd), signal: controller.signal });
     expect(cancelled.status).toBe("cancelled");
+  });
+
+  test("cancels active commands during server shutdown", async () => {
+    const running = runCommand("sleep 30", options(workdir()));
+    stopAllCommands();
+    expect(await running).toMatchObject({ status: "cancelled" });
   });
 
   test("settles after timeout when a detached Node child keeps the output pipes open", async () => {

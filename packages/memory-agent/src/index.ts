@@ -203,6 +203,7 @@ export {
   hostShell,
   maxTimeoutSeconds,
   runCommand,
+  stopAllCommands,
   type CommandOptions,
   type CommandResult,
 } from "./shell/run.ts";

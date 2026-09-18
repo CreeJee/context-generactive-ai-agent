@@ -1,5 +1,5 @@
 import { Layer, ManagedRuntime } from "effect";
-import { defaultStorageRoot, memoryAgentLayer } from "memory-agent";
+import { defaultStorageRoot, memoryAgentLayer, stopAllCommands } from "memory-agent";
 
 function createAgentRuntime() {
   // The storage root is read when the first request builds the layer, so the executable can set
@@ -10,7 +10,10 @@ function createAgentRuntime() {
   // Stop the codex child process and release the vector index lock with the server. SIGHUP is a
   // closed terminal, and on Windows a closed console window (it has no SIGTERM).
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const)
-    process.once(signal, () => void runtime.dispose().finally(() => process.exit(0)));
+    process.once(signal, () => {
+      stopAllCommands();
+      void runtime.dispose().finally(() => process.exit(0));
+    });
   return runtime;
 }
 

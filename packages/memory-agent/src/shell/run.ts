@@ -10,6 +10,22 @@ const killGraceMs = 3_000;
 /** Final wait for Node's close event after SIGKILL before detached pipes are abandoned. */
 const closeGraceMs = 500;
 
+interface ActiveCommand {
+  readonly cancel: () => void;
+  readonly force: () => void;
+}
+
+const activeCommands = new Set<ActiveCommand>();
+
+/** Stops every shell command owned by this process, normally during server shutdown. */
+export function stopAllCommands(force = false) {
+  for (const command of activeCommands) (force ? command.force : command.cancel)();
+}
+
+// The app installs graceful signal handlers. Its eventual process.exit reaches this final,
+// synchronous safety net even if runtime disposal did not propagate an AbortSignal to a tool.
+process.once("exit", () => stopAllCommands(true));
+
 export const defaultTimeoutSeconds = 120;
 export const maxTimeoutSeconds = 1_800;
 
@@ -138,6 +154,7 @@ export function runCommand(command: string, options: CommandOptions): Promise<Co
     let killTimer: NodeJS.Timeout | undefined;
     let closeTimer: NodeJS.Timeout | undefined;
     let settled = false;
+    let active: ActiveCommand | undefined;
 
     const timeout = setTimeout(() => stop("timed_out"), options.timeoutSeconds * 1000);
     const onAbort = () => stop("cancelled");
@@ -147,6 +164,7 @@ export function runCommand(command: string, options: CommandOptions): Promise<Co
       if (killTimer) clearTimeout(killTimer);
       if (closeTimer) clearTimeout(closeTimer);
       options.signal?.removeEventListener("abort", onAbort);
+      if (active) activeCommands.delete(active);
     };
     const finish = (exitCode: number | null, signal: NodeJS.Signals | null) => {
       if (settled) return;
@@ -186,6 +204,11 @@ export function runCommand(command: string, options: CommandOptions): Promise<Co
       killTimer = setTimeout(() => force(pid), killGraceMs);
     }
 
+    active = {
+      cancel: () => stop("cancelled"),
+      force: () => child.pid !== undefined && stopProcessTree(child.pid, true),
+    };
+    activeCommands.add(active);
     options.signal?.addEventListener("abort", onAbort, { once: true });
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
