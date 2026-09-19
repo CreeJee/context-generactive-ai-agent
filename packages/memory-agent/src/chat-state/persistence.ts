@@ -11,7 +11,7 @@ import {
   type RunRecord,
 } from "@tanstack/ai-persistence";
 import { Schema } from "effect";
-import type { Json } from "../codex/app-server.ts";
+type Json = string | number | boolean | null | Json[] | { readonly [key: string]: Json };
 
 const RunRow = Schema.Struct({
   run_id: Schema.String,
@@ -43,12 +43,51 @@ const decodeInterruptRow = Schema.decodeUnknownSync(InterruptRow);
 
 const JsonText = Schema.Struct({ value: Schema.String });
 const decodeJsonText = Schema.decodeUnknownSync(JsonText);
+const LegacyThreadRow = Schema.Struct({ id: Schema.String });
+const decodeLegacyThreadRow = Schema.decodeUnknownSync(LegacyThreadRow);
 
 // Stored JSON was written by these stores from the same TanStack types, so parsing restores them.
 const parseMessages = (text: string): ModelMessage[] => JSON.parse(text);
 const parseUsage = (text: string): TokenUsage => JSON.parse(text);
 const parsePayload = (text: string): Record<string, Json> => JSON.parse(text);
 const parseValue = (text: string): Json => JSON.parse(text);
+
+/**
+ * Materializes sessions created before TanStack chat persistence existed. Existing chat threads
+ * are authoritative and are never overwritten. The session id remains the thread id, so titles,
+ * memory nodes, attachments and URLs keep pointing at the same conversation after the provider
+ * runtime migration.
+ */
+export function migrateLegacyChatThreads(
+  sqlite: DatabaseSync,
+  fallbackThread: (threadId: string) => ModelMessage[],
+) {
+  const rows = sqlite
+    .prepare(
+      `SELECT sessions.id
+       FROM sessions
+       LEFT JOIN chat_threads ON chat_threads.thread_id = sessions.id
+       WHERE chat_threads.thread_id IS NULL
+       ORDER BY sessions.created_at, sessions.id`,
+    )
+    .all()
+    .map((row) => decodeLegacyThreadRow(row));
+  if (rows.length === 0) return 0;
+
+  const insert = sqlite.prepare(
+    "INSERT INTO chat_threads (thread_id, messages, updated_at) VALUES (?, ?, ?)",
+  );
+  const migratedAt = Date.now();
+  sqlite.exec("BEGIN IMMEDIATE");
+  try {
+    for (const { id } of rows) insert.run(id, JSON.stringify(fallbackThread(id)), migratedAt);
+    sqlite.exec("COMMIT");
+  } catch (error) {
+    sqlite.exec("ROLLBACK");
+    throw error;
+  }
+  return rows.length;
+}
 
 /** Optional record fields are left off, not set to undefined, when their column is NULL. */
 function toRun(row: Record<string, SQLOutputValue>): RunRecord {
