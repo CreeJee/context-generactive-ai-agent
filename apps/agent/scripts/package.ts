@@ -28,6 +28,9 @@ const target = `${process.platform}-${process.arch}`;
 const work = join(app, "build", "package");
 const stage = join(work, "runtime");
 const assetsFile = join(work, "sea-assets.json");
+// `vp pack` cleans dist/ while it builds. Create the executable outside dist/ and
+// publish it only after packing finishes so the clean step cannot remove its directory.
+const packedOutput = join(work, `context-agent-${target}`);
 const output = join(app, "dist", `context-agent-${target}`);
 
 const PackageJson = Schema.Struct({
@@ -151,47 +154,6 @@ function collectPackages() {
   }
 }
 
-/** Platforms `@openai/codex` publishes a binary for, and the Rust target triple inside each. */
-const CodexTarget = Schema.Literal(
-  "darwin-arm64",
-  "darwin-x64",
-  "linux-arm64",
-  "linux-x64",
-  "win32-arm64",
-  "win32-x64",
-);
-const codexTriples = {
-  "darwin-arm64": "aarch64-apple-darwin",
-  "darwin-x64": "x86_64-apple-darwin",
-  "linux-arm64": "aarch64-unknown-linux-musl",
-  "linux-x64": "x86_64-unknown-linux-musl",
-  "win32-arm64": "aarch64-pc-windows-msvc",
-  "win32-x64": "x86_64-pc-windows-msvc",
-} satisfies Record<typeof CodexTarget.Type, string>;
-
-/** The pinned codex platform package the executable downloads on first need. */
-function writeCodexManifest() {
-  const codex = findPackage(memoryAgent, "@openai/codex");
-  if (!codex) throw new Error("@openai/codex is not installed; run vp install");
-  const { version } = readPackage(codex);
-  if (!Schema.is(CodexTarget)(target)) throw new Error(`codex has no binary for ${target}`);
-  const triple = codexTriples[target];
-  const lock = readFileSync(join(repo, "pnpm-lock.yaml"), "utf8");
-  const entry = new RegExp(
-    `'@openai/codex@${version.replaceAll(".", "\\.")}-${target}':\\s*\\n\\s*resolution: \\{integrity: (sha512-[A-Za-z0-9+/=]+)\\}`,
-  ).exec(lock);
-  if (!entry?.[1]) throw new Error(`no lockfile integrity for @openai/codex@${version}-${target}`);
-  writeFileSync(
-    join(stage, "codex.json"),
-    JSON.stringify({
-      version,
-      triple,
-      url: `https://registry.npmjs.org/@openai/codex/-/codex-${version}-${target}.tgz`,
-      integrity: entry[1],
-    }),
-  );
-}
-
 /**
  * Native files the executable cannot run without. Most come with this machine's optional
  * packages; turbovec's addon is built locally and is not in the repository, so a fresh clone must
@@ -308,7 +270,6 @@ for (const [name, source] of Object.entries(bundledWorkers))
 cpSync(join(memoryAgent, "skills"), join(stage, "skills"), { recursive: true });
 collectPackages();
 verifyNativeFiles();
-writeCodexManifest();
 
 // Asset names and manifest entries use `/` on every platform; the executable joins them itself.
 const files = listFiles(stage)
@@ -329,8 +290,14 @@ assets["runtime/manifest.json"] = manifestFile;
 writeFileSync(assetsFile, JSON.stringify(assets));
 console.log(`runtime: ${files.length} files, ${(bytes / 1e6).toFixed(1)} MB`);
 
+rmSync(packedOutput, { recursive: true, force: true });
+mkdirSync(packedOutput, { recursive: true });
+run("vp", ["pack"], {
+  CONTEXT_AGENT_EXE_ASSETS: assetsFile,
+  CONTEXT_AGENT_EXE_DIR: packedOutput,
+});
 rmSync(output, { recursive: true, force: true });
-run("vp", ["pack"], { CONTEXT_AGENT_EXE_ASSETS: assetsFile, CONTEXT_AGENT_EXE_DIR: output });
+cpSync(packedOutput, output, { recursive: true });
 
 const executable = join(
   output,

@@ -64,7 +64,7 @@ const busyCodes = ["EPERM", "EACCES", "EBUSY"];
 
 /**
  * `renameSync`, retried on Windows for up to ~10 s while the moved files are still held open:
- * antivirus scans freshly written executables (codex is ~300 MB) before letting their folder move.
+ * antivirus may scan freshly written executables or native libraries before releasing their folder.
  */
 export async function renameWhenReleased(
   from: string,
@@ -113,8 +113,8 @@ const pick = (env: NodeJS.ProcessEnv, names: readonly string[]) =>
   Object.fromEntries(names.flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])));
 
 /**
- * The environment for a helper program the app runs on its own (codex, git): only what the system
- * needs to start it and a fixed search path (`searchDirectories`, then the system folders), never
+ * The environment for a helper program the app runs on its own: only what the system needs to
+ * start it and a fixed search path (`searchDirectories`, then the system folders), never
  * the user's other variables (R14). `user` adds the per-user folders on Windows.
  */
 export function helperEnvironment(

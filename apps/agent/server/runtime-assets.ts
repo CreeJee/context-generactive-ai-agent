@@ -18,8 +18,8 @@ const hashFolder = /^[0-9a-f]{16}$/;
 const completeMarker = ".complete";
 
 /**
- * Unpacks the files the executable carries (client build, native packages, Kiwi worker, codex
- * manifest) into `<storage>/runtime/<hash>`, once per build, and removes folders of other builds.
+ * Unpacks the files the executable carries (client build, native packages and Kiwi worker) into
+ * `<storage>/runtime/<hash>`, once per build, and removes folders of other builds.
  * Returns that folder, or null when not running as the executable.
  */
 export function unpackRuntime(storageRoot: string): string | null {
@@ -49,7 +49,7 @@ export function unpackRuntime(storageRoot: string): string | null {
     }
   }
 
-  // Codex installs (codex-*) stay; only other builds' unpacked folders go.
+  // Remove unpacked folders from older builds.
   for (const entry of readdirSync(runtimeFolder))
     if (hashFolder.test(entry) && entry !== manifest.hash)
       rmSync(join(runtimeFolder, entry), { recursive: true, force: true });

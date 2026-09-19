@@ -45,7 +45,6 @@
     "@huggingface/transformers": "catalog:",
     "@modelcontextprotocol/sdk": "catalog:",
     "@napi-rs/keyring": "catalog:",
-    "@openai/codex": "catalog:",
     "@secretlint/core": "catalog:",
     "@secretlint/profiler": "catalog:",
     "@secretlint/secretlint-rule-preset-recommend": "catalog:",
@@ -58,10 +57,7 @@
     "cross-spawn": "catalog:",
     "dayjs": "catalog:",
     "effect": "catalog:",
-    "json-rpc-2.0": "catalog:",
     "kiwi-nlp": "catalog:",
-    "p-defer": "catalog:",
-    "p-event": "catalog:",
     "sharp": "catalog:",
     "turbovec": "workspace:*"
   },

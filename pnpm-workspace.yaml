@@ -25,9 +25,6 @@ catalog:
   class-variance-authority: ^0.7.1
   cn: ^0.3.0
   effect: 3.22.2
-  json-rpc-2.0: 1.8.0
-  p-defer: 4.0.1
-  p-event: 7.1.0
   lucide-react: ^1.45.0
   react: ^19.3.0
   react-dom: ^19.3.0
@@ -43,7 +40,6 @@ catalog:
   "@tanstack/ai-mcp": 0.3.10
   cmdk: ^1.1.1
   kiwi-nlp: 0.24.0
-  "@openai/codex": 0.154.0
   cross-spawn: 7.0.6
   sharp: 0.34.5
   "@types/cross-spawn": 6.0.6

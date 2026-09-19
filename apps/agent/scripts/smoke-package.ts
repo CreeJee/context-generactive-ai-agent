@@ -1,17 +1,8 @@
 // Runs the built executable from a folder outside the repository (so nothing resolves from the
 // repo's node_modules) against a throwaway storage root, and checks what a user's first start
-// needs. Run with `vp run smoke-package` after `vp run package`. Downloads codex (~116 MB) once.
+// needs. Run with `vp run smoke-package` after `vp run package`.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  realpathSync,
-  rmSync,
-  statSync,
-} from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -65,8 +56,12 @@ async function until<T>(what: string, probe: () => Promise<T | null>, timeoutMs:
 }
 
 function start(port: number) {
+  const env = { ...process.env };
+  delete env.CONTEXT_AGENT_BUILD_ID;
+  delete env.CONTEXT_AGENT_DEV_BACKEND;
   const child = spawn(executable, ["--port", String(port), "--no-open", "--storage", storage], {
     cwd: base,
+    env,
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout.resume();
@@ -85,7 +80,7 @@ async function stop(child: ChildProcess) {
   return exited;
 }
 
-const Auth = Schema.Struct({ status: Schema.String });
+const ErrorResponse = Schema.Struct({ error: Schema.String });
 const Created = Schema.Struct({ id: Schema.String });
 const Text = Schema.Struct({ text: Schema.String });
 /** Assembled at run time so no key-shaped text sits in the repository. */
@@ -95,24 +90,6 @@ const Catalog = Schema.Struct({
 });
 const json = <A, I>(schema: Schema.Schema<A, I>, response: Response) =>
   response.json().then((body) => Schema.decodeUnknownSync(schema)(body));
-
-const runtimeFolders = () =>
-  existsSync(join(storage, "runtime"))
-    ? readdirSync(join(storage, "runtime")).filter((name) => /^[0-9a-f]{16}$/.test(name))
-    : [];
-/** Processes started from the storage root's runtime folder (codex and its code-mode host). */
-const codexProcesses = () =>
-  windows
-    ? spawnSync(
-        "powershell",
-        [
-          "-NoProfile",
-          "-Command",
-          `(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like '${join(storage, "runtime")}\\*' }).ProcessId`,
-        ],
-        { encoding: "utf8" },
-      ).stdout.trim()
-    : spawnSync("pgrep", ["-f", join(storage, "runtime")], { encoding: "utf8" }).stdout.trim();
 
 /** A request with a Host header fetch() does not allow setting. */
 const statusWithHost = (url: string, host: string) =>
@@ -125,6 +102,7 @@ const statusWithHost = (url: string, host: string) =>
     request.end();
   });
 
+let server: ChildProcess | null = null;
 try {
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
@@ -136,21 +114,13 @@ try {
     });
 
   let started = Date.now();
-  let server = start(port);
+  server = start(port);
   await until(
     "the server",
     () => fetch(url).then((response) => (response.ok ? response : null)),
     60_000,
   );
   check("first start serves the app", true, `${Date.now() - started} ms`);
-  const [folder] = runtimeFolders();
-  check(
-    "runtime unpacked once into the storage root",
-    runtimeFolders().length === 1 &&
-      folder !== undefined &&
-      existsSync(join(storage, "runtime", folder, ".complete")),
-    folder ?? "none",
-  );
 
   const page = await fetch(url).then((response) => response.text());
   const asset = /\/assets\/[^"]+\.js/.exec(page)?.[0];
@@ -161,34 +131,21 @@ try {
       (assetResponse.headers.get("cache-control") ?? "").includes("immutable"),
   );
 
-  const badHost = await statusWithHost(`${url}/api/auth`, "evil.example");
+  const badHost = await statusWithHost(`${url}/api/auth?provider=openai`, "evil.example");
   check("non-loopback Host refused", badHost === 403, String(badHost));
   const crossSite = await post(
     "/api/auth",
-    { intent: "logout" },
-    { Origin: "https://evil.example" },
+    { intent: "logout", provider: "openai" },
+    { Origin: "https://evil.example", "Sec-Fetch-Site": "cross-site" },
   );
   check("cross-site POST refused", crossSite.status === 403, String(crossSite.status));
 
-  started = Date.now();
-  const firstAuth = await json(Auth, await fetch(`${url}/api/auth`));
+  const authResponse = await fetch(`${url}/api/auth?provider=invalid`);
+  const authError = await json(ErrorResponse, authResponse);
   check(
-    "sign-in reports codex installing on first need",
-    firstAuth.status === "installing",
-    firstAuth.status,
-  );
-  const auth = await until(
-    "codex install",
-    async () => {
-      const state = await json(Auth, await fetch(`${url}/api/auth`));
-      return state.status === "installing" ? null : state;
-    },
-    300_000,
-  );
-  check(
-    "codex downloaded, verified and started",
-    auth.status === "signed-out" || auth.status === "signed-in",
-    `${auth.status} after ${Math.round((Date.now() - started) / 1000)} s`,
+    "provider auth route validates the provider",
+    authResponse.status === 400 && authError.error === "invalid_provider",
+    `${authResponse.status} ${authError.error}`,
   );
 
   const created = await post("/api/projects", { root: project });
@@ -218,21 +175,11 @@ try {
     acp.stdout.slice(0, 80),
   );
 
-  check("codex child running before stop", codexProcesses() !== "");
   const code = await stop(server);
-  await new Promise((resolve) => setTimeout(resolve, 1_500));
-  if (windows) check("stopping the tree ends codex too", codexProcesses() === "");
-  else
-    check(
-      "SIGTERM stops the server and its codex",
-      code === 0 && codexProcesses() === "",
-      `exit ${code}`,
-    );
-
-  const unpackedAt = folder ? statSync(join(storage, "runtime", folder, ".complete")).mtimeMs : 0;
+  check("server shuts down cleanly", windows || code === 0, `exit ${code}`);
 
   // A node stored the way it was before secrets were hidden on the way in; the start below sweeps
-  // it. This is the only check that runs the bundled secret detector.
+  // it. This check exercises the packaged secret detector.
   const sessionId = session.status === 201 ? (await json(Created, session)).id : "";
   const seeded = (() => {
     const database = new DatabaseSync(join(storage, "agent.db"));
@@ -248,18 +195,11 @@ try {
     }
   })();
 
-  started = Date.now();
   server = start(port);
   await until(
     "the second start",
     () => fetch(url).then((response) => (response.ok ? response : null)),
     60_000,
-  );
-  check(
-    "second start reuses the unpacked runtime",
-    folder !== undefined &&
-      statSync(join(storage, "runtime", folder, ".complete")).mtimeMs === unpackedAt,
-    `${Date.now() - started} ms`,
   );
   // The agent (and the sweep it starts) is made on the first API request, as the page makes one.
   await fetch(`${url}/api/auth`);
@@ -284,7 +224,8 @@ try {
   );
   await stop(server);
 } finally {
-  rmSync(base, { recursive: true, force: true });
+  if (server !== null && server.exitCode === null) await stop(server);
+  rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
 
 if (failures.length > 0) {

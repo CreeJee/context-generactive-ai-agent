@@ -1,11 +1,11 @@
 import { describe, expect, test } from "vite-plus/test";
-import type { Json } from "../src/codex/app-server.ts";
+import type { JsonValue } from "../src/json.ts";
 import { readClaudeCodeLine } from "../src/imports/claude-code.ts";
 import { codexReader } from "../src/imports/codex.ts";
 import type { TranscriptItem } from "../src/imports/items.ts";
 
 /** A transcript line as the tools write it; the readers take it serialized, as it is on disk. */
-type TranscriptLine = { readonly [key: string]: Json };
+type TranscriptLine = { readonly [key: string]: JsonValue };
 
 const claudeLine = (line: TranscriptLine) => readClaudeCodeLine(JSON.stringify(line));
 const readCodex = codexReader("01a0-session");

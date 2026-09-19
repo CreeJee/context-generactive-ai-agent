@@ -2,7 +2,7 @@ import { appendFileSync, chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Effect, Fiber, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
-import type { Json } from "../src/codex/app-server.ts";
+import type { JsonValue } from "../src/json.ts";
 import { Database } from "../src/db/database.ts";
 import { Importer } from "../src/imports/importer.ts";
 import { sessionMessages } from "../src/agent/history.ts";
@@ -12,7 +12,7 @@ import { Projects } from "../src/projects/projects.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
 import { testRuntime } from "./support/runtime.ts";
 
-type TranscriptLine = { readonly [key: string]: Json };
+type TranscriptLine = { readonly [key: string]: JsonValue };
 const serialize = (lines: readonly TranscriptLine[]) =>
   `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`;
 
@@ -257,7 +257,7 @@ describe("migrating other agents' transcripts", () => {
   test("a tool call read in a later pass belongs to the turn still open", async () => {
     const { runtime, project, home } = await testRuntime();
     const path = claudePath(home, "cc-1.jsonl");
-    const line = (uuid: string, role: "user" | "assistant", content: Json) => ({
+    const line = (uuid: string, role: "user" | "assistant", content: JsonValue) => ({
       type: role,
       uuid,
       timestamp: "2026-03-01T09:10:00.000Z",
