@@ -11,18 +11,23 @@ ChatGPT 계정으로 대화하고, 세션과 프로젝트를 넘어 기억하는
 vp install
 ```
 
-React Router 개발 서버를 실행합니다:
+개발 서버를 실행합니다:
 
 ```bash
 cd apps/agent
-vp run dev --host 127.0.0.1 --port 5174
+pnpm dev
 ```
 
-- 스크립트 인자는 `--` 없이 넘깁니다. `vp run dev -- --host ...`로 쓰면 `--`까지 전달되어 서버가 뜨지 않습니다.
-- 의존성을 바꾼 뒤 처음 실행하면 Vite가 의존성을 다시 번들링하고 페이지를 새로고침합니다. 그 전에 연 페이지가 로딩 상태에 머물면 직접 새로고침하세요.
-- ChatGPT 로그인과 모델 호출에는 의존성으로 설치한 codex(`@openai/codex` 0.154.0 고정)를 사용합니다. codex를 따로 설치할 필요가 없고, 전역에 설치된 codex는 쓰지 않습니다.
+개발 모드에서는 에이전트 backend(`127.0.0.1:5180`)를 한 번 build한 뒤 HMR 없이 실행하고, UI(`127.0.0.1:5173`)만 React Router HMR로 실행합니다. `/api`는 UI 서버가 backend로 전달합니다.
 
-데이터는 `~/.context-generactive-agent`에 저장됩니다(SQLite, 벡터 인덱스, 임베딩 모델과 Kiwi 모델, codex 홈, 설정, 실행 파일이 푼 `runtime/`).
+- UI 코드 변경은 HMR로 바로 반영됩니다.
+- `memory-agent`, API route, OAuth/provider 또는 server 코드가 바뀌면 새 mutation과 OAuth callback을 차단하고 화면 상단에 재시작 안내를 표시합니다. 실행 중 요청을 새 코드로 자동 재전송하지 않습니다. 터미널에서 `pnpm dev`를 다시 시작하세요.
+- 두 터미널로 나누려면 먼저 `pnpm dev:agent`, 이어서 `pnpm dev:web`을 실행합니다.
+- 포트는 `CONTEXT_AGENT_DEV_BACKEND_PORT`와 `CONTEXT_AGENT_DEV_WEB_PORT`, 저장 위치는 `CONTEXT_AGENT_HOME` 환경 변수로 바꿀 수 있습니다.
+- 같은 저장 위치를 사용하는 backend는 하나만 실행됩니다. 종료 시 신규 mutation을 막고 실행 중인 모델 요청과 명령을 정리합니다.
+- ChatGPT 로그인과 모델 호출은 앱의 provider OAuth 연결을 사용합니다.
+
+데이터는 `~/.context-generactive-agent`에 저장됩니다(SQLite, 벡터 인덱스, 임베딩 모델과 Kiwi 모델, 설정, 실행 파일이 푼 `runtime/`).
 
 ### 프로덕션 서버와 실행 파일
 
@@ -31,11 +36,11 @@ cd apps/agent
 vp run bundle                         # 의존 패키지 build + react-router build + vp pack → dist/context-agent.mjs
 vp run start --port 5175 --no-open    # 번들로 서버 실행(저장소의 네이티브 패키지 사용)
 vp run package                        # 의존 패키지 build 뒤 이 기기용 실행 파일 → dist/context-agent-<플랫폼>-<아키텍처>/context-agent
-vp run smoke-package                  # 실행 파일을 저장소 밖에서 띄워 확인(codex 116 MB를 한 번 받음)
+vp run smoke-package                  # 실행 파일을 저장소 밖에서 띄워 패키지 동작 확인
 ```
 
 - 실행 파일: `context-agent [폴더] [--port 5173] [--no-open] [--storage <폴더>]`. 폴더(없으면 실행한 위치)를 프로젝트로 추가하고 선택해 브라우저를 엽니다. 홈 폴더나 `/`(Finder 더블클릭)에서 실행하면 프로젝트 없이 엽니다. 앱이 이미 떠 있으면 새로 띄우지 않고 그 앱에서 폴더를 엽니다. `127.0.0.1`에만 열고, 루프백이 아닌 Host는 거부합니다. 에디터용 ACP는 `context-agent acp [--port 5173]`입니다.
-- 첫 실행에서 실행 파일 안의 파일을 `~/.context-generactive-agent/runtime/<해시>`에 풀고, 처음 로그인 상태를 볼 때 codex를 받습니다(받는 동안 사이드바에 "받는 중"이 보입니다).
+- 첫 실행에서 네이티브 패키지와 worker 자원을 `~/.context-generactive-agent/runtime/<해시>`에 풉니다.
 - 빌드는 대상 플랫폼의 기기에서 합니다. Node 26.8.2와 turbovec 빌드용 Rust가 필요하며, 윈도우에서는 MSVC 빌드 도구도 필요합니다. 서명은 ad-hoc만 합니다. 준비물, 릴리스, Linux는 [빌드 가이드](../../docs/building.md)를 봅니다.
 
 ## 화면

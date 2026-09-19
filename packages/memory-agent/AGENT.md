@@ -5,8 +5,7 @@
 ## Used Libraries
 
 - Security: @secretlint/*
-- AI: @tanstack/ai-*, @openai/codex
-- util: p-defer, p-event
+- AI: @tanstack/ai-*
 - logic flow: effect
 
 ## Effect 지침

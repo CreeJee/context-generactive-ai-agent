@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { Context, Layer } from "effect";
 
-/** `~/.context-generactive-agent`: database, vector indexes, models, codex home and config. */
+/** `~/.context-generactive-agent`: database, vector indexes, models and config. */
 export const defaultStorageRoot = join(homedir(), ".context-generactive-agent");
 
 /** Directory holding the database, vector indexes and global config. Never inside a project. */

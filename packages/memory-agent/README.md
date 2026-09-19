@@ -20,7 +20,7 @@ src/
   external-agents/  외부 ACP 에이전트(Codex 등) 설정·신뢰·연결·재연결 정책
   approvals/    run을 멈추지 못하는 승인 요청 중계(서브에이전트·외부 에이전트)
   runtime/      실행 시점 자원: 네이티브·임베딩 패키지를 require로 불러올 위치(실행 파일이 푼 폴더 또는 이 패키지),
-                고정 해시 tgz 설치(Kiwi 모델, 실행 파일의 codex)
+                고정 해시 tgz 설치(Kiwi 모델)
   projects/     프로젝트 등록·경로 검사·교차 회상 제외·권한 모드(ask/auto)
   sessions/     프로젝트에 속한 대화
   imports/      Claude Code·Codex CLI 기록 이관: 줄 읽기 어댑터, 대량 노드 쓰기, 커서와 따라붙기
@@ -28,9 +28,8 @@ src/
   memory/       기억: 노드·구조 edge·그래프 탐색·근거 추적·검색·기록 middleware
     embedding/  로컬 임베딩 모델(worker thread) + turbovec 벡터 인덱스 + 인덱서(형태소 분석 포함)
     morph/      Kiwi 한국어 형태소 분석(worker thread, 모델은 처음 쓸 때 내려받음)
-  codex/        ChatGPT 계정(고정 @openai/codex의 app-server): 로그인·모델·TanStack 어댑터,
-                codex가 스스로 찾은 스킬 끄기(CodexSkills, 스킬은 read_skill로만),
-                실행 파일에서는 처음 필요할 때 codex를 받는 installer
+  oauth/        provider 구독 계정의 OAuth 로그인·토큰 갱신
+  providers/    provider별 모델 목록·TanStack 어댑터·실행 중 모델 선택
   files/        경로·자격 증명 검사, 텍스트 파일 읽기/쓰기, 목록, 줄 검색
   attachments/  업로드 이미지 저장(sha256, 바이트 서명 검사)과 메시지 연결, 첨부 URL 규칙
   shell/        호스트 셸 실행(프로세스 그룹, timeout, 출력 앞뒤 보존)
@@ -64,7 +63,7 @@ skills/
 - `read_evidence`는 원문을 페이지로 읽고, `trace_evidence`는 tool result → call → assistant → user 발언까지 거슬러 갑니다.
 - 교차 프로젝트 회상은 기본 포함이며, 프로젝트별로 제외할 수 있습니다. 결과에는 출처 프로젝트 이름(`projectName`)이 붙습니다.
 - `Interpreter`(llm-interpret)가 답변이 끝난 뒤 사용자, assistant 발언을 해석해 주제(`topic` 노드 + `about`), `corrects`, `retracts`, `related` edge를 붙입니다. 후보는 코드가 고르고, 정정과 취소는 사용자 발언에서만, 대상이 분명할 때만 edge가 됩니다. 모호하면 `interpretations`에 `unconfirmed`로 남아 확인 질문이 됩니다.
-- 검색 결과의 `supersededBy`는 그 발언을 정정과 취소한 나중 발언, `unconfirmedChallenges`는 확인이 필요한 후보 수, `uninterpreted`는 아직 해석되지 않은 발언 수입니다. 테스트는 `tests/interpret.test.ts`(가짜 codex가 표식으로 해석 결과를 흉내 냄).
+- 검색 결과의 `supersededBy`는 그 발언을 정정과 취소한 나중 발언, `unconfirmedChallenges`는 확인이 필요한 후보 수, `uninterpreted`는 아직 해석되지 않은 발언 수입니다. 테스트는 `tests/interpret.test.ts`.
 - 인덱싱과 해석 대기열은 보낸 날짜 내림차순입니다. 이관한 노드는 `seq`가 크고 시각이 옛날이라, `seq` 순으로 두면 방금 나눈 대화를 밀어냅니다. run 뒤 뒷정리는 예산(`indexUpTo(200)`)만큼만 하고, 남은 backlog는 `Importer`의 전용 fiber가 비웁니다.
 
 ## 다른 에이전트 대화 이관 (imports/)
@@ -74,7 +73,7 @@ Claude Code(`~/.claude/projects/**/*.jsonl`)와 Codex CLI(`~/.codex/sessions/**/
 - 줄 하나를 `TranscriptItem`(리터럴 태그 유니온: `session`, `message`, `tool_call`, `tool_result`, `ignored`)으로 읽습니다. 새 출처는 어댑터 파일 하나 + `ImportSourceName` 태그 하나입니다.
 - `BulkNodes`가 대화 하나를 한 트랜잭션에 직접 INSERT하며, 줄의 원래 `timestamp`를 `created_at`에 씁니다. 구조 edge와 `interpret_jobs`는 라이브와 같은 규칙입니다. `Nodes.append`는 라이브 전용으로 그대로 둡니다.
 - `Importer`가 `import_cursors`의 byte offset부터 읽고, 마지막 개행까지만 소비합니다(실행 중인 에이전트가 쓰는 중인 꼬리 줄을 반으로 읽지 않기 위해). 중복은 `imported_nodes`가 막습니다.
-- 기록의 `cwd`를 프로젝트로 자동 등록합니다. 숨긴 프로젝트에도 기록을 연결하므로 같은 폴더가 두 번 등록되지 않습니다. 등록할 수 없는 폴더는 `import_cursors.skipped`에 이유와 함께 남습니다. 저장 루트 아래(앱 전용 `CODEX_HOME`)는 읽지 않습니다.
+- 기록의 `cwd`를 프로젝트로 자동 등록합니다. 숨긴 프로젝트에도 기록을 연결하므로 같은 폴더가 두 번 등록되지 않습니다. 등록할 수 없는 폴더는 `import_cursors.skipped`에 이유와 함께 남습니다. 앱 저장 루트 아래 기록은 읽지 않습니다.
 - 프로젝트는 목록에서 뺄 수 있습니다(`Projects.setHidden`, `projects.hidden_at`). `list`는 보이는 프로젝트만 반환하고, `listAll`은 숨긴 프로젝트까지 반환합니다. 기억, 검색은 숨겨도 그대로입니다.
 - 설정 화면의 "가져오기" 탭에서 켜면 5분마다 새 기록을 가져옵니다(`config.json`의 `importsEnabled`). 이관은 모델 도구가 아닙니다. 테스트는 `tests/import-readers.test.ts`, `tests/imports.test.ts`.
 
@@ -108,7 +107,7 @@ MCP 도구는 실행 중에 생기므로 브라우저가 정의를 모릅니다.
 
 `Subagents`는 자식을 부모와 같은 모델, 도구(서브에이전트 도구 제외)로 실행합니다. 자식의 승인 필요 호출은 부모 run을 멈추지 않고 `onBeforeToolCall`에서 기다리며, 페이지가 `AgentChat.approvals`/`answerApproval`(`RelayedApprovals`)로 보고 답합니다. 테스트는 `tests/subagents.test.ts`.
 
-승인 대기로 HTTP 요청이 끝나도 codex 턴은 `TurnParking`에 threadId로 보관되어, 재개 요청이 같은 턴을 이어갑니다.
+승인으로 모델 호출이 멈추면 durable run에 저장된 대화와 interrupt로 재개합니다.
 
 ## 대화 상태와 새로고침
 
@@ -120,14 +119,14 @@ MCP 도구는 실행 중에 생기므로 브라우저가 정의를 모릅니다.
 
 ## 실행 중 새로고침, 취소, 재시작
 
-- run은 HTTP 요청과 독립적으로 실행됩니다. 답변 chunk는 delivery durability 로그(`memoryStream`)에 먼저 쓰이고, 새로고침한 페이지는 `GET /api/chat?runId=&offset=-1`로 처음부터 다시 읽으며 따라갑니다. codex를 다시 부르지 않습니다.
-- `LiveRuns`가 세션마다 진행 중인 run 하나를 들고 있습니다. 같은 세션의 두 번째 run은 409이고, 취소(`AgentChat.cancel`)는 여기서 run을 찾아 `requestRunCancel` 후 `RUN_CANCEL_REASON`으로 abort합니다. codex 어댑터는 abort 신호에 `turn/interrupt`로 답합니다.
+- run은 HTTP 요청과 독립적으로 실행됩니다. 답변 chunk는 delivery durability 로그(`memoryStream`)에 먼저 쓰이고, 새로고침한 페이지는 `GET /api/chat?runId=&offset=-1`로 처음부터 다시 읽으며 따라갑니다. 모델을 다시 호출하지 않습니다.
+- `LiveRuns`가 세션마다 진행 중인 run 하나를 들고 있습니다. 같은 세션의 두 번째 run은 409이고, 취소(`AgentChat.cancel`)는 여기서 run을 찾아 `requestRunCancel` 후 `RUN_CANCEL_REASON`으로 abort합니다. provider 어댑터가 abort 신호를 처리합니다.
 - `AgentChat.status`는 진행 중인 run과 마지막 run의 상태, 오류를 돌려줍니다(`SessionRunState`).
 - `ChatState`가 만들어질 때 `running`으로 남은 run은 `failed`/`server_restarted`로 바뀝니다. 다시 실행하지 않습니다.
 - 작성 중인 답변은 1초마다 스냅샷으로 저장하며, 취소하거나 실패하면 즉시 저장합니다.
 - `SessionLeases`는 세션마다 쓰기 가능한 페이지(holder) 하나를 메모리에 둡니다(`claim`, `release`, `permits`, `view`). `AgentChat.handle`, `cancel`은 `X-Session-Holder`가 소유자가 아니면 423을 돌려주고, `AgentChat.lease`가 claim/release를, `status`가 요청한 페이지 기준 `LeaseView`(`mine`, `other`, `free`)를 돌려줍니다. 테스트는 `tests/leases.test.ts`.
 - `MessageQueue`는 답변 중에 보낸 메시지를 순서대로 둡니다(`waiting`, `editing`, `held`, `delivered`, `failed`). `deliverable`은 앞에서부터 `waiting`만 돌려주고 편집 중이거나 확인이 필요한 메시지에서 멈춥니다. 새 프로세스는 남은 `waiting`/`editing`을 `held`로 바꿉니다.
-- `QueueDelivery.forRun` middleware는 도구 결과 뒤(`beforeModel`) 대기 메시지를 codex `turn/steer`와 대화에 함께 넣고 사용자 노드로 기록합니다. `steer`는 답변 중인 턴에 바로 넣습니다(`CodexChat.steer`, `ActiveTurns`).
+- `QueueDelivery.forRun` middleware는 도구 결과 뒤(`beforeModel`) 대기 메시지를 provider의 live-turn steering과 대화에 함께 넣고 사용자 노드로 기록합니다. `steer`를 지원하지 않는 provider에서는 다음 모델 요청의 대화로 전달합니다.
 - `AgentChat.enqueue`, `editQueued`, `queued`가 대기열 API이고, 소유 페이지가 `forwardedProps.queuedMessageId`로 다음 턴을 보내면 `handle`이 그 메시지를 전달됨으로 표시합니다. run이 끝날 때(`LiveRuns` onEnded) 취소, 실패, 소유 페이지 없음이면 `held`로 둡니다. 테스트는 `tests/queue.test.ts`.
 - 테스트(`tests/runs.test.ts`)는 실제 `ChatClient`로 중간 새로고침 후 이어 읽기, 취소, 동시 run 거절, 재시작 후 실패 기록, 재시작을 넘긴 승인을 확인합니다.
 
@@ -135,7 +134,7 @@ MCP 도구는 실행 중에 생기므로 브라우저가 정의를 모릅니다.
 
 - 앱이 올린 이미지는 `Attachments`가 `<storage>/attachments/<sha256>`에 저장하고, 사용자 노드에 순서대로 연결합니다(`node_attachments`).
 - 채팅 요청의 이미지 파트는 `/api/attachments/<id>` URL로만 받습니다. 모르는 첨부는 400, 이미지를 못 읽는 모델은 422입니다.
-- codex에는 이번 턴 이미지를 `localImage`(파일 경로), 이전 턴 이미지를 `input_image`(data URL)로 넘깁니다.
+- provider에는 이번 턴 이미지의 파일 경로와 이전 턴 이미지의 `data:` URL을 어댑터가 지원하는 형식으로 넘깁니다.
 - 본문의 `#1`은 첫 번째 첨부 이미지를 뜻한다고 모델 지침에 적어 둡니다. 대화 기록 API는 사용자 메시지에 이미지 파트를 다시 붙입니다.
 
 ## 보안 경계
@@ -145,7 +144,7 @@ MCP 도구는 실행 중에 생기므로 브라우저가 정의를 모릅니다.
 - 이미 저장된 텍스트는 `SecretSweep`(`secrets/sweep.ts`)이 시작할 때마다 백그라운드에서 훑습니다. 노드는 `secret_sweep_permits` 허가가 있을 때만 `text`가 바뀌고(트리거가 나머지 변경은 계속 거부), FTS, 형태소, 벡터도 새 텍스트로 다시 만듭니다. secretlint 검사는 사이사이 이벤트 루프에 차례를 주지 않아서, 탐지는 스윕마다 띄우는 redaction worker가 배치 단위로 하고 DB 읽기와 쓰기와 벡터 정리는 메인에 남습니다. 테스트는 `tests/secret-redactor.test.ts`, `tests/secret-redaction.test.ts`, `tests/secret-sweep.test.ts`.
 - 프로젝트 파일 도구는 경로를 한 칸씩 `lstat`해 symlink, hard link를 거부합니다. 밖 도구는 링크가 가리키는 실제 대상으로 판단합니다. OS 샌드박스는 아닙니다.
 - 셸은 호스트에서 격리 없이 실행됩니다. `TOKEN`, `API_KEY`처럼 비밀로 보이는 환경 변수는 명령에 넘기지 않습니다.
-- ChatGPT 토큰은 codex가 관리하며 이 패키지는 읽지 않습니다.
+- provider OAuth 자격 증명은 인증 서비스가 관리하며 파일 도구에 노출하지 않습니다.
 - Kagi API 키는 `SecretStore`(OS 키체인)에만 저장하고 요청 직전에 읽습니다. 키체인이 실패해도 다른 곳에 저장하지 않습니다. 테스트는 `SecretStore.memory`를 씁니다.
 
 ## 에디터에서 쓰기 (ACP)
@@ -193,7 +192,7 @@ vp test bench --dir bench   # 도구 지연 측정(합성 저장소 3,000 파일
 vp check         # 루트에서: 포맷·lint·타입 검사
 ```
 
-테스트는 임시 디렉터리의 실제 SQLite, turbovec, 파일 시스템과 가짜 codex app-server(`tests/support/fake-codex.mjs`)를 씁니다.
+테스트는 임시 디렉터리의 실제 SQLite, turbovec, 파일 시스템을 씁니다.
 승인, auto 모드 테스트는 실제 `@tanstack/ai-client` `ChatClient`로 요청과 재개를 끝까지 주고받습니다.
 
 추가 지침은 `AGENT.md`에 있습니다.

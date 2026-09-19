@@ -46,8 +46,8 @@ export interface McpOverview {
 }
 
 /**
- * Prefix of every MCP tool name, so gates and the UI can tell them apart. Not `mcp__`: codex
- * reserves that for its own MCP tools and refuses dynamic tools named so.
+ * Prefix of every MCP tool name, so gates and the UI can tell them apart. Not `mcp__`, which is
+ * reserved for provider-native MCP tools and unavailable to dynamic tools.
  */
 export const mcpToolPrefix = "mcp_";
 

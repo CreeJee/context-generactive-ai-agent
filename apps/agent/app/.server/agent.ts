@@ -7,8 +7,8 @@ function createAgentRuntime() {
   const runtime = ManagedRuntime.make(
     Layer.suspend(() => memoryAgentLayer(process.env.CONTEXT_AGENT_HOME ?? defaultStorageRoot)),
   );
-  // Stop the codex child process and release the vector index lock with the server. SIGHUP is a
-  // closed terminal, and on Windows a closed console window (it has no SIGTERM).
+  // Stop child commands and release the vector index lock with the server. SIGHUP is a closed
+  // terminal, and on Windows a closed console window (it has no SIGTERM).
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const)
     process.once(signal, () => {
       stopAllCommands();
@@ -18,7 +18,7 @@ function createAgentRuntime() {
 }
 
 declare global {
-  // Survives dev-server module reloads so codex and the index lock are not started twice.
+  // Survives dev-server module reloads so the runtime and index lock are not started twice.
   var contextGeneractiveAgent: ReturnType<typeof createAgentRuntime> | undefined;
 }
 
