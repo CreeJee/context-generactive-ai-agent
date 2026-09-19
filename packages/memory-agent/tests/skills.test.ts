@@ -1,12 +1,8 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { Effect, Schema } from "effect";
-import { describe, expect, onTestFinished, test } from "vite-plus/test";
+import { Effect } from "effect";
+import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
-import { CodexAppServer } from "../src/codex/app-server.ts";
-import { CodexModels } from "../src/codex/models.ts";
 import {
   Skills,
   builtinSkillsDirectory,
@@ -15,12 +11,6 @@ import {
 } from "../src/skills/skills.ts";
 import { SkillTools } from "../src/tools/skills.ts";
 import { testRuntime } from "./support/runtime.ts";
-
-const fakeServer = fileURLToPath(new URL("./support/fake-codex.mjs", import.meta.url));
-const fakeCodex = CodexAppServer.withCommand({
-  executable: process.execPath,
-  args: [fakeServer, "--signed-in"],
-});
 
 function writeSkill(root: string, folder: string, frontMatter: string, body = "Do it well.") {
   const directory = join(root, folder);
@@ -120,92 +110,12 @@ describe("Skills", () => {
     }
   });
 
-  test("each run turns off the skills codex found on its own, including ones added since", async () => {
-    // The folder codex reads skills from on its own (the user's ~/.agents/skills).
-    const codexSees = mkdtempSync(join(tmpdir(), "codex-sees-"));
-    onTestFinished(() => rmSync(codexSees, { recursive: true, force: true }));
-    const { runtime, session } = await testRuntime({
-      codex: CodexAppServer.withCommand({
-        executable: process.execPath,
-        args: [fakeServer, "--signed-in", `--skills=${codexSees}`],
-      }),
-    });
-    writeSkill(codexSees, "figma", "name: figma\ndescription: Figma via MCP.");
-    await runtime.runPromise(Effect.flatMap(CodexModels, (models) => models.select("fast-1")));
-
-    const Writes = Schema.Struct({
-      log: Schema.Array(
-        Schema.Struct({
-          method: Schema.String,
-          params: Schema.optional(
-            Schema.Struct({
-              path: Schema.optional(Schema.String),
-              enabled: Schema.optional(Schema.Boolean),
-            }),
-          ),
-        }),
-      ),
-    });
-    const run = async (runId: string) => {
-      await runtime.runPromise(
-        Effect.flatMap(AgentChat, (agent) =>
-          Effect.promise(async () => {
-            const response = await Effect.runPromise(
-              agent.handle(
-                new Request("http://127.0.0.1/api/chat", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    threadId: session.id,
-                    runId,
-                    messages: [{ id: runId, role: "user", content: "hello" }],
-                    tools: [],
-                    context: [],
-                  }),
-                }),
-                session.id,
-              ),
-            );
-            await response.text();
-          }),
-        ),
-      );
-      const { log } = await runtime.runPromise(
-        Effect.flatMap(CodexAppServer, (codex) => codex.request("test/log", {}, Writes)),
-      );
-      return log
-        .filter((entry) => entry.method === "skills/config/write")
-        .map((entry) => entry.params);
-    };
-
-    expect(await run("run-1")).toEqual([
-      { path: join(codexSees, "figma", "SKILL.md"), enabled: false },
-    ]);
-    // Already off: nothing is written again. A skill added while the app runs is off by the next run.
-    writeSkill(codexSees, "orca", "name: orca\ndescription: Orca CLI.");
-    expect(await run("run-2")).toEqual([
-      { path: join(codexSees, "figma", "SKILL.md"), enabled: false },
-      { path: join(codexSees, "orca", "SKILL.md"), enabled: false },
-    ]);
-  });
-
   test("a chat run lists skills and offers read_skill only when there are skills", async () => {
-    const { runtime, project, session } = await testRuntime({ codex: fakeCodex });
-    await runtime.runPromise(Effect.flatMap(CodexModels, (models) => models.select("fast-1")));
-    const Starts = Schema.Struct({
-      log: Schema.Array(
-        Schema.Struct({
-          method: Schema.String,
-          params: Schema.optional(
-            Schema.Struct({
-              baseInstructions: Schema.optional(Schema.String),
-              dynamicTools: Schema.optional(Schema.Array(Schema.Struct({ name: Schema.String }))),
-            }),
-          ),
-        }),
-      ),
-    });
+    const context = await testRuntime({ testProvider: {} });
+    const { runtime, project, session } = context;
+    await context.provider!.select(runtime);
     const send = async (text: string) => {
+      const invocationIndex = context.provider!.adapter.invocations.length;
       const response = await runtime.runPromise(
         Effect.flatMap(AgentChat, (agent) =>
           agent.handle(
@@ -225,17 +135,11 @@ describe("Skills", () => {
         ),
       );
       const events = await response.text();
-      const log = await runtime.runPromise(
-        Effect.flatMap(CodexAppServer, (codex) => codex.request("test/log", {}, Starts)),
-      );
-      return {
-        events,
-        start: log.log.filter((entry) => entry.method === "thread/start").at(-1)?.params,
-      };
+      return { events, invocation: context.provider!.adapter.invocations[invocationIndex] };
     };
 
     const without = await send("hello");
-    expect(without.start?.dynamicTools?.map((tool) => tool.name)).not.toContain("read_skill");
+    expect(without.invocation?.toolNames).not.toContain("read_skill");
 
     writeSkill(
       join(project.root, ".agents", "skills"),
@@ -244,8 +148,10 @@ describe("Skills", () => {
       "Say hello in Korean.",
     );
     const withSkill = await send('call read_skill {"name":"greet"}');
-    expect(withSkill.start?.dynamicTools?.map((tool) => tool.name)).toContain("read_skill");
-    expect(withSkill.start?.baseInstructions).toContain("- greet (project): Greet warmly.");
+    expect(withSkill.invocation?.toolNames).toContain("read_skill");
+    expect(withSkill.invocation?.systemPrompts.join("\n")).toContain(
+      "- greet (project): Greet warmly.",
+    );
     expect(withSkill.events).toContain("Say hello in Korean.");
   });
 });

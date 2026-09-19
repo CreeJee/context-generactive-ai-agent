@@ -9,8 +9,8 @@ import {
 } from "@tanstack/ai";
 import { Context, Effect, Layer, Schema } from "effect";
 import { ChatState } from "../chat-state/chat-state.ts";
-import { CodexChat } from "../codex/chat.ts";
-import type { ModelSelection } from "../codex/models.ts";
+import { ActiveProvider } from "../providers/active-provider.ts";
+import type { ModelSelection } from "../providers/contracts.ts";
 import { Database } from "../db/database.ts";
 import { PermissionClassifier } from "../permissions/classifier.ts";
 import { RelayedApprovals } from "../approvals/relayed.ts";
@@ -132,7 +132,7 @@ const everyCallReason = "호출할 때마다 확인하는 도구예요.";
 
 const make = Effect.gen(function* () {
   const { sqlite } = yield* Database;
-  const codexChat = yield* CodexChat;
+  const active = yield* ActiveProvider;
   const chatState = yield* ChatState;
   const classifier = yield* PermissionClassifier;
   const reviews = yield* PermissionReviews;
@@ -192,6 +192,8 @@ const make = Effect.gen(function* () {
           decidedBy,
           reason,
         });
+
+      if (binding.project.permissionMode === "full") return undefined;
 
       let reason = everyCallReason;
       let askedBy: "review" | "every_call" = "every_call";
@@ -256,16 +258,17 @@ const make = Effect.gen(function* () {
     try {
       const history = await chatState.persistence.stores.messages.loadThread(threadId);
       const messages: ModelMessage[] = [...history, { role: "user", content: task }];
+      const runtime = await Effect.runPromise(active.runtime(binding.selection));
       const reads = parallelReads(binding.tools, controller.signal);
       const middleware: ChatMiddleware[] = [
         ...chatState.middleware(),
         relayGate(binding, row, controller.signal),
         reads.middleware,
-        codexChat.runMiddleware(),
+        runtime.runMiddleware(),
       ];
       const stream = chat({
-        adapter: codexChat.adapter(binding.selection),
-        agentLoopStrategy: codexChat.agentLoop,
+        adapter: runtime.adapter(binding.selection),
+        agentLoopStrategy: runtime.agentLoop,
         messages,
         tools: reads.tools,
         systemPrompts: [...binding.systemPrompts, childInstructions(row.name, row.instructions)],
@@ -388,7 +391,8 @@ const make = Effect.gen(function* () {
           const busyChild = byName.get(binding.sessionId, input.agent);
           if (busyChild && busy.has(decodeRow(busyChild).id)) {
             const row = decodeRow(busyChild);
-            const steered = await codexChat
+            const runtime = await Effect.runPromise(active.runtime(binding.selection));
+            const steered = await runtime
               .steer(subagentThreadId(row.id), { role: "user", content: input.message })
               .catch(() => "no_turn" as const);
             if (steered === "steered")

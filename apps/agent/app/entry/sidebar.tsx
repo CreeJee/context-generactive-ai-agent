@@ -51,21 +51,25 @@ import { Switch } from "~/components/ui/switch";
 import { dayAndTime } from "~/lib/dates";
 import { cn } from "~/lib/utils";
 import type {
-  AuthState,
-  CodexModel,
+  ProviderModel,
   ModelSelection,
   PermissionMode,
+  ProviderAuthState,
+  ProviderId,
   Project,
   Session,
 } from "./api";
 
-const unavailableReasons = {
-  not_installed: "앱에 이 기기용 codex가 들어 있지 않아요. 이 기기에 맞는 앱을 다시 설치하세요.",
-  install_failed:
-    "ChatGPT 연결에 필요한 codex를 받거나 설치하지 못했어요. 잠시 뒤 다시 시도하세요. 계속되면 앱을 실행한 창에 나온 오류를 확인하세요.",
-  spawn_failed: "codex를 시작하지 못했어요.",
-  exited: "codex 프로세스가 종료됐어요. 다시 시도하세요.",
-} satisfies Record<Extract<AuthState, { status: "unavailable" }>["reason"], string>;
+const providerLabels = { openai: "ChatGPT", anthropic: "Claude" } satisfies Record<
+  ProviderId,
+  string
+>;
+const providerOptions = [
+  { value: "openai", label: providerLabels.openai },
+  { value: "anthropic", label: providerLabels.anthropic },
+] satisfies ReadonlyArray<{ value: ProviderId; label: string }>;
+const isProviderId = (value: string): value is ProviderId =>
+  value === "openai" || value === "anthropic";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -80,20 +84,35 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 export function AccountSection({
   auth,
+  provider,
+  onProviderChange,
   onAction,
 }: {
-  auth: AuthState | null;
+  auth: ProviderAuthState | null;
+  provider: ProviderId;
+  onProviderChange: (provider: ProviderId) => void;
   onAction: (intent: "login" | "cancel" | "logout") => void;
 }) {
-  if (!auth)
-    return (
-      <Section title="ChatGPT">
-        <Spinner />
-      </Section>
-    );
   return (
-    <Section title="ChatGPT">
-      {auth.status === "signed-in" && (
+    <Section title="구독 계정">
+      <Select
+        value={provider}
+        items={providerOptions}
+        onValueChange={(value) => value && isProviderId(value) && onProviderChange(value)}
+      >
+        <SelectTrigger className="w-full">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {providerOptions.map(({ value, label }) => (
+            <SelectItem key={value} value={value}>
+              {label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {!auth && <Spinner />}
+      {auth?.status === "signed-in" && (
         <div className="flex items-center gap-2">
           <Badge variant="secondary">연결됨</Badge>
           {auth.planType && <span className="text-xs text-muted-foreground">{auth.planType}</span>}
@@ -102,18 +121,13 @@ export function AccountSection({
             size="icon-sm"
             className="ml-auto"
             onClick={() => onAction("logout")}
-            aria-label="로그아웃"
+            aria-label="연결 해제"
           >
             <LogOutIcon />
           </Button>
         </div>
       )}
-      {auth.status === "installing" && (
-        <div className="flex items-center gap-2 text-xs">
-          <Spinner /> ChatGPT 연결에 필요한 codex를 받는 중이에요. 처음 한 번만 받아요.
-        </div>
-      )}
-      {auth.status === "pending" && (
+      {auth?.status === "pending" && (
         <div className="flex flex-col gap-2">
           <div className="flex items-center gap-2 text-xs">
             <Spinner /> 브라우저에서 로그인을 완료하세요
@@ -132,21 +146,14 @@ export function AccountSection({
           </div>
         </div>
       )}
-      {(auth.status === "signed-out" ||
-        auth.status === "error" ||
-        auth.status === "unavailable") && (
+      {(auth?.status === "signed-out" || auth?.status === "error") && (
         <div className="flex flex-col gap-2">
           {auth.status === "error" && (
             <Alert variant="destructive">
               <AlertDescription>{auth.message}</AlertDescription>
             </Alert>
           )}
-          {auth.status === "unavailable" && (
-            <Alert variant="destructive">
-              <AlertDescription>{unavailableReasons[auth.reason]}</AlertDescription>
-            </Alert>
-          )}
-          <Button onClick={() => onAction("login")}>ChatGPT로 로그인</Button>
+          <Button onClick={() => onAction("login")}>{providerLabels[provider]}로 로그인</Button>
         </div>
       )}
     </Section>
@@ -158,16 +165,16 @@ export function ModelSection({
   selection,
   onSelect,
 }: {
-  models: CodexModel[];
+  models: ProviderModel[];
   selection: ModelSelection | null;
   onSelect: (model: string, reasoningEffort?: string) => void;
 }) {
-  const current = models.find((model) => model.model === selection?.model);
+  const current = models.find((model) => model.id === selection?.model);
   return (
     <Section title="모델">
       <Select
         value={selection?.model ?? null}
-        items={models.map((model) => ({ value: model.model, label: model.displayName }))}
+        items={models.map((model) => ({ value: model.id, label: model.displayName }))}
         onValueChange={(value) => value && onSelect(value)}
       >
         <SelectTrigger className="w-full">
@@ -175,7 +182,7 @@ export function ModelSection({
         </SelectTrigger>
         <SelectContent>
           {models.map((model) => (
-            <SelectItem key={model.model} value={model.model}>
+            <SelectItem key={model.id} value={model.id}>
               {model.displayName}
             </SelectItem>
           ))}
@@ -184,19 +191,19 @@ export function ModelSection({
       {current && selection && (
         <Select
           value={selection.reasoningEffort}
-          items={current.supportedReasoningEfforts.map((option) => ({
-            value: option.reasoningEffort,
-            label: `추론 ${option.reasoningEffort}`,
+          items={current.supportedReasoningEfforts.map((effort) => ({
+            value: effort,
+            label: `추론 ${effort}`,
           }))}
-          onValueChange={(value) => value && onSelect(current.model, value)}
+          onValueChange={(value) => value && onSelect(current.id, value)}
         >
           <SelectTrigger className="w-full" size="sm">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {current.supportedReasoningEfforts.map((option) => (
-              <SelectItem key={option.reasoningEffort} value={option.reasoningEffort}>
-                추론 {option.reasoningEffort}
+            {current.supportedReasoningEfforts.map((effort) => (
+              <SelectItem key={effort} value={effort}>
+                추론 {effort}
               </SelectItem>
             ))}
           </SelectContent>
@@ -214,11 +221,13 @@ export function ModelSection({
 const permissionModes = [
   { value: "ask", label: "매번 묻기" },
   { value: "auto", label: "자동 판단 (auto)" },
+  { value: "full", label: "전체 권한 (full)" },
 ] satisfies ReadonlyArray<{ value: PermissionMode; label: string }>;
 
 const permissionHints = {
   ask: "셸 실행과 프로젝트 밖 쓰기는 호출마다 승인을 받아요.",
   auto: "분류 모델이 호출마다 판단해서 안전하면 바로 실행하고, 애매하면 묻고, 위험하면 막아요. 판단할 때마다 모델 호출이 추가돼요.",
+  full: "호출별 승인 없이 실행해요. 프로젝트 경로, 자격 증명, .git 보호 규칙은 계속 적용돼요.",
 } satisfies Record<PermissionMode, string>;
 
 const projectSectionOpenAtom = atomWithStorage("context-agent-project-section-open", true);

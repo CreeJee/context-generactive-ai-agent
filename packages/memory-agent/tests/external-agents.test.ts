@@ -6,8 +6,6 @@ import { Effect } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { RelayedApprovals } from "../src/approvals/relayed.ts";
-import { CodexAppServer } from "../src/codex/app-server.ts";
-import { CodexModels } from "../src/codex/models.ts";
 import { ExternalAgents } from "../src/external-agents/agents.ts";
 import { Indexer } from "../src/memory/embedding/indexer.ts";
 import { Nodes } from "../src/memory/nodes.ts";
@@ -15,12 +13,7 @@ import { Sessions } from "../src/sessions/sessions.ts";
 import { approvalToolDefinitions, permissionReviewInterrupt } from "../src/tools/definitions.ts";
 import { testRuntime } from "./support/runtime.ts";
 
-const fakeServer = fileURLToPath(new URL("./support/fake-codex.mjs", import.meta.url));
 const fakeAgent = fileURLToPath(new URL("./support/fake-acp-agent.mjs", import.meta.url));
-const fakeCodex = CodexAppServer.withCommand({
-  executable: process.execPath,
-  args: [fakeServer, "--signed-in"],
-});
 
 async function until(condition: () => boolean, what: string) {
   for (let attempt = 0; attempt < 300; attempt++) {
@@ -31,7 +24,7 @@ async function until(condition: () => boolean, what: string) {
 }
 
 async function agentSetup() {
-  const context = await testRuntime({ codex: fakeCodex });
+  const context = await testRuntime({ testProvider: {} });
   const log = join(context.base, "acp-starts.log");
   const refuse = join(context.base, "refuse");
   mkdirSync(join(context.project.root, ".agents"), { recursive: true });
@@ -166,7 +159,7 @@ describe("external ACP agents", () => {
     const context = await agentSetup();
     const { runtime, project, session, agents, run } = context;
     await run(agents.setTrusted(project, "project", "fake", true));
-    await runtime.runPromise(Effect.flatMap(CodexModels, (models) => models.select("fast-1")));
+    await context.provider!.select(runtime);
     const relayed = await runtime.runPromise(RelayedApprovals);
     const client = new ChatClient({
       tools: approvalToolDefinitions,

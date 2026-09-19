@@ -11,7 +11,7 @@ import {
   type StructuredOutputResult,
 } from "@tanstack/ai/adapters";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
-import { messageText } from "../codex/history.ts";
+import { messageText } from "../messages/text.ts";
 import type { ExternalPromptOutcome } from "./agents.ts";
 
 /** Sends one user turn to the external agent; updates arrive through `onUpdate`. */

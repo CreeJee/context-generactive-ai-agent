@@ -1,24 +1,14 @@
 import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import * as acp from "@agentclientprotocol/sdk";
 import type { AnyMessage, SessionNotification } from "@agentclientprotocol/sdk";
-import { Effect } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { AppApi } from "../src/acp/app-api.ts";
 import { startAcpAgent } from "../src/acp/agent-bridge.ts";
-import { CodexAppServer } from "../src/codex/app-server.ts";
-import { CodexModels } from "../src/codex/models.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { appFetch } from "./support/app-fetch.ts";
 import { testRuntime } from "./support/runtime.ts";
-
-const fakeServer = fileURLToPath(new URL("./support/fake-codex.mjs", import.meta.url));
-const fakeCodex = CodexAppServer.withCommand({
-  executable: process.execPath,
-  args: [fakeServer, "--signed-in"],
-});
 
 /** Two ends of an in-memory ACP connection. */
 function linkedStreams() {
@@ -31,12 +21,17 @@ function linkedStreams() {
 }
 
 async function acpSetup(answerPermission: "allow" | "reject" = "allow") {
-  const context = await testRuntime({ codex: fakeCodex });
-  await context.runtime.runPromise(Effect.flatMap(CodexModels, (m) => m.select("fast-1")));
+  const context = await testRuntime({ testProvider: {} });
+  await context.provider!.select(context.runtime);
   const streams = linkedStreams();
+  const fetcher = appFetch(context.runtime);
   const agentConnection = startAcpAgent({
     stream: streams.agent,
-    api: new AppApi("http://app.test", appFetch(context.runtime)),
+    api: new AppApi("http://app.test", (input, init) =>
+      new URL(input instanceof Request ? input.url : input).pathname === "/api/auth"
+        ? Promise.resolve(Response.json({ status: "signed-in" }))
+        : fetcher(input, init),
+    ),
   });
   const updates: SessionNotification[] = [];
   const permissions: string[] = [];

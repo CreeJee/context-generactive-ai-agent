@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import { toolLocations } from "../src/acp/tool-view.ts";
-import { codexEnvironment } from "../src/codex/app-server.ts";
 import {
   findExecutable,
   helperEnvironment,
@@ -73,26 +72,6 @@ describe("host differences", () => {
       "APPDATA",
       "C:\\Users\\me\\AppData\\Roaming",
     );
-  });
-
-  test("codex keeps its own CODEX_HOME and reaches the OS credential store on each platform", () => {
-    const home = "/storage/codex";
-    expect(codexEnvironment(home, {}, "darwin", () => "/Users/me")).toEqual({
-      PATH: "/usr/bin:/bin",
-      CODEX_HOME: home,
-      LANG: "en_US.UTF-8",
-      HOME: "/Users/me",
-    });
-    expect(codexEnvironment(home, {}, "linux")).toMatchObject({ HOME: home, CODEX_HOME: home });
-    const windows = codexEnvironment("C:\\storage\\codex", windowsEnv, "win32");
-    expect(windows).toMatchObject({
-      CODEX_HOME: "C:\\storage\\codex",
-      USERPROFILE: "C:\\Users\\me",
-      LOCALAPPDATA: "C:\\Users\\me\\AppData\\Local",
-      SystemRoot: "C:\\Windows",
-    });
-    expect(windows).not.toHaveProperty("HOME");
-    expect(windows).not.toHaveProperty("GITHUB_TOKEN");
   });
 
   test("commands run through sh -c, or cmd.exe /d /s /c on Windows", () => {

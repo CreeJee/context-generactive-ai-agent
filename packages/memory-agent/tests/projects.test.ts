@@ -113,13 +113,23 @@ describe("Projects", () => {
         const projects = yield* Projects;
         const project = yield* projects.add(app);
         const auto = yield* projects.setPermissionMode(project.id, "auto");
+        const full = yield* projects.setPermissionMode(project.id, "full");
+        const ask = yield* projects.setPermissionMode(project.id, "ask");
         const missing = yield* rejection(projects.setPermissionMode("nope", "auto"));
-        return { initial: project.permissionMode, auto: auto.permissionMode, missing };
+        return {
+          initial: project.permissionMode,
+          auto: auto.permissionMode,
+          full: full.permissionMode,
+          ask: ask.permissionMode,
+          missing,
+        };
       }),
     );
     expect(modes).toMatchObject({
       initial: "ask",
       auto: "auto",
+      full: "full",
+      ask: "ask",
       missing: { _tag: "ProjectNotFound" },
     });
   });

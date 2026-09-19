@@ -6,11 +6,6 @@ import { ChatState } from "./chat-state/chat-state.ts";
 import { RelayedApprovals } from "./approvals/relayed.ts";
 import { Attachments } from "./attachments/attachments.ts";
 import { DrawingPreviews } from "./attachments/previews.ts";
-import { CodexAccount } from "./codex/account.ts";
-import { CodexAppServer } from "./codex/app-server.ts";
-import { CodexChat } from "./codex/chat.ts";
-import { CodexModels } from "./codex/models.ts";
-import { CodexSkills } from "./codex/skills.ts";
 import { GlobalConfig } from "./config/global-config.ts";
 import { SecretStore } from "./config/secrets.ts";
 import { StorageRoot } from "./config/storage-root.ts";
@@ -39,6 +34,9 @@ import { SecretSweep } from "./secrets/sweep.ts";
 import { PermissionGate } from "./permissions/gate.ts";
 import { PermissionReviews } from "./permissions/reviews.ts";
 import { Projects } from "./projects/projects.ts";
+import { ActiveProvider } from "./providers/active-provider.ts";
+import { ProviderRegistry } from "./providers/registry.ts";
+import { SubscriptionProviderRegistry } from "./providers/subscriptions.ts";
 import { QueueDelivery } from "./queue/delivery.ts";
 import { MessageQueue } from "./queue/queue.ts";
 import { SessionLeases } from "./sessions/leases.ts";
@@ -59,8 +57,8 @@ export interface MemoryAgentLayerOptions {
   readonly embedder?: Layer.Layer<Embedder, never, StorageRoot | GlobalConfig>;
   /** Defaults to Kiwi (model downloaded on first use); tests pass a deterministic one. */
   readonly morphAnalyzer?: Layer.Layer<MorphAnalyzer, never, StorageRoot>;
-  /** Defaults to `codex` from PATH; tests pass a fake app server. Starts only when first used. */
-  readonly codex?: Layer.Layer<CodexAppServer, never, StorageRoot>;
+  /** Provider-neutral registry override for tests. Production uses subscription providers. */
+  readonly providerRegistry?: Layer.Layer<ProviderRegistry, never, GlobalConfig>;
   /** How long a page keeps a session without renewing; tests shorten it. */
   readonly leaseTtlMs?: number;
   /** Interpret statements in the background after each run. Default true; tests turn it off. */
@@ -111,7 +109,6 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     Workflows.layer,
     options.embedder ?? Embedder.local,
     options.morphAnalyzer ?? MorphAnalyzer.kiwi,
-    options.codex ?? CodexAppServer.layer,
     options.secrets ?? SecretStore.keychain,
   );
   const memory = Layer.mergeAll(
@@ -120,15 +117,14 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     DrawingPreviews.layer,
     Graph.layer,
     VectorIndex.layer,
-    CodexAccount.layer,
-    CodexModels.layer,
-    CodexChat.layer,
-    CodexSkills.layer,
     ChatState.layer,
     Kagi.layer({ baseUrl: options.kagiBaseUrl }),
     McpServers.layer,
     ExternalAgents.layer,
     Skills.layer({ home: options.skillsHome, builtin: options.skillsBuiltin }),
+  );
+  const providers = ActiveProvider.layer.pipe(
+    Layer.provideMerge(options.providerRegistry ?? SubscriptionProviderRegistry),
   );
   const retrieval = Layer.mergeAll(
     Indexer.layer,
@@ -137,7 +133,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     WorkflowRules.layer,
     QueueDelivery.layer,
     TurnSummaries.layer(options.summarizeAutomatically),
-  );
+  ).pipe(Layer.provideMerge(providers));
   return AgentChat.layer.pipe(
     Layer.provideMerge(
       Layer.mergeAll(

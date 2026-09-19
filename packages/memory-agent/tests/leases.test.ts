@@ -1,20 +1,11 @@
-import { fileURLToPath } from "node:url";
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
-import { Effect, Schema } from "effect";
+import { Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
-import { CodexAppServer } from "../src/codex/app-server.ts";
-import { CodexModels } from "../src/codex/models.ts";
 import { sessionHolderHeader } from "../src/sessions/lease-state.ts";
 import { makeLeases } from "../src/sessions/leases.ts";
 import { approvalToolDefinitions } from "../src/tools/definitions.ts";
 import { testRuntime } from "./support/runtime.ts";
-
-const fakeServer = fileURLToPath(new URL("./support/fake-codex.mjs", import.meta.url));
-const fakeCodex = CodexAppServer.withCommand({
-  executable: process.execPath,
-  args: [fakeServer, "--signed-in"],
-});
 
 const Lease = Schema.Union(
   Schema.Struct({ state: Schema.Literal("mine") }),
@@ -62,8 +53,9 @@ describe("session leases", () => {
   });
 
   test("a page that does not hold the session can read it but not send, approve or cancel", async () => {
-    const { runtime, session } = await testRuntime({ codex: fakeCodex });
-    await runtime.runPromise(Effect.flatMap(CodexModels, (models) => models.select("fast-1")));
+    const context = await testRuntime({ testProvider: {} });
+    const { runtime, session } = context;
+    await context.provider!.select(runtime);
     const agent = await runtime.runPromise(AgentChat);
     const leaseOf = async (holder: string) =>
       Schema.decodeUnknownSync(StatusLease)(

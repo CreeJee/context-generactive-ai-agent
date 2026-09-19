@@ -30,7 +30,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   switch (request.params.name) {
     case "echo":
-      return { content: [{ type: "text", text: `echo: ${request.params.arguments?.text}` }] };
+      return {
+        content: [{ type: "text", text: `echo: ${String(request.params.arguments?.text)}` }],
+      };
     case "where":
       return {
         content: [

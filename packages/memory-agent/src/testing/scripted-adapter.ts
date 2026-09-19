@@ -1,4 +1,5 @@
 import { EventType } from "@tanstack/ai";
+import { Schema } from "effect";
 import type {
   AdapterYieldChunk,
   DefaultMessageMetadataByModality,
@@ -22,43 +23,78 @@ export interface ScriptedToolCall {
 export interface ScriptedTurn {
   readonly text?: string;
   readonly toolCalls?: readonly ScriptedToolCall[];
+  /** Wait before emitting this turn. Useful for cancellation and concurrency tests. */
+  readonly delayMs?: number;
   /** Stream `text`, then fail the model call. */
   readonly failAfterText?: string;
 }
 
 export interface AdapterInvocation {
+  readonly index: number;
   readonly runId: string | undefined;
+  readonly threadId: string | undefined;
   readonly messages: readonly ModelMessage[];
+  readonly systemPrompts: readonly string[];
   readonly toolNames: readonly string[];
 }
+
+export type ScriptedResponder = (
+  invocation: AdapterInvocation,
+) => ScriptedTurn | Promise<ScriptedTurn>;
 
 const model = "scripted-1";
 
 export class ScriptedTextAdapter extends BaseTextAdapter<
   typeof model,
   Record<string, never>,
-  ["text"],
+  ["text", "image"],
   DefaultMessageMetadataByModality
 > {
   readonly name = "scripted";
   readonly invocations: AdapterInvocation[] = [];
-  readonly #turns: readonly ScriptedTurn[];
+  readonly #respond: ScriptedResponder;
 
-  constructor(turns: readonly ScriptedTurn[]) {
+  constructor(turns: readonly ScriptedTurn[] | ScriptedResponder) {
     super({}, model);
-    if (turns.length === 0) throw new Error("scripted adapter needs at least one turn");
-    this.#turns = turns;
+    if (Array.isArray(turns) && turns.length === 0)
+      throw new Error("scripted adapter needs at least one turn");
+    this.#respond =
+      turns instanceof Function
+        ? turns
+        : (invocation) => {
+            const turn = turns[invocation.index];
+            if (!turn)
+              throw new Error(`scripted adapter ran out of turns at index ${invocation.index}`);
+            return turn;
+          };
   }
 
   async *chatStream(options: TextOptions<Record<string, never>>): AsyncIterable<AdapterYieldChunk> {
     const index = this.invocations.length;
-    this.invocations.push({
+    const invocation: AdapterInvocation = {
+      index,
       runId: options.runId,
-      messages: [...options.messages],
+      threadId: options.threadId,
+      messages: structuredClone(options.messages),
+      systemPrompts: (options.systemPrompts ?? []).map((prompt) =>
+        Schema.is(Schema.String)(prompt) ? prompt : prompt.content,
+      ),
       toolNames: (options.tools ?? []).map((tool) => tool.name),
-    });
-    const turn = this.#turns[index];
-    if (!turn) throw new Error(`scripted adapter ran out of turns at index ${index}`);
+    };
+    this.invocations.push(invocation);
+    const turn = await this.#respond(invocation);
+    if (turn.delayMs !== undefined)
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, turn.delayMs);
+        options.abortController?.signal.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer);
+            reject(options.abortController?.signal.reason ?? new Error("aborted"));
+          },
+          { once: true },
+        );
+      });
 
     const runId = options.runId ?? `scripted-run-${index}`;
     const threadId = options.threadId ?? "scripted-thread";

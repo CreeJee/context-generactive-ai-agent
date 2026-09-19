@@ -233,8 +233,8 @@ const make = Effect.gen(function* () {
     read: (attachment: Attachment) => readFile(fileOf(attachment)),
 
     /**
-     * The image to send to the model, made once: codex reads its path for a new turn, and earlier
-     * turns replay it as a `data:` URL, so a smaller file saves both.
+     * The image to send to the model, made once: the provider reads its path for a new turn, and
+     * earlier turns replay it as a `data:` URL, so a smaller file saves both.
      */
     forModel: (attachment: Attachment) => {
       const known = forModel.get(attachment.id);

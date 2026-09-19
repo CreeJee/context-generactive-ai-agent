@@ -13,10 +13,11 @@ import {
   api,
   archiveErrorMessage,
   projectErrorMessage,
-  type AuthState,
-  type CodexModel,
+  type ProviderModel,
   type ModelSelection,
   type Project,
+  type ProviderAuthState,
+  type ProviderId,
   type Session,
 } from "./api";
 import { SessionView, type SlashSupport } from "./chat-panel";
@@ -27,6 +28,7 @@ import { SettingsDialog } from "./settings-dialog";
 import { AccountSection, ModelSection, ProjectSection, SessionSection } from "./sidebar";
 
 const loginPollMs = 2000;
+const providers: readonly ProviderId[] = ["openai", "anthropic"];
 const locationParsers = {
   project: parseAsString,
   session: parseAsString,
@@ -53,8 +55,16 @@ function Placeholder({
 }
 
 export function App() {
-  const [auth, setAuth] = useState<AuthState | null>(null);
-  const [models, setModels] = useState<CodexModel[]>([]);
+  const [auth, setAuth] = useState<Record<ProviderId, ProviderAuthState | null>>({
+    openai: null,
+    anthropic: null,
+  });
+  const [provider, setProvider] = useState<ProviderId>("openai");
+  const [catalogs, setCatalogs] = useState<Record<ProviderId, ProviderModel[]>>({
+    openai: [],
+    anthropic: [],
+  });
+  const models = catalogs[provider];
   const [selection, setSelection] = useState<ModelSelection | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [{ project: projectId, session: sessionId }, setLocation] = useQueryStates(locationParsers);
@@ -65,10 +75,14 @@ export function App() {
   const [slashAgents, setSlashAgents] = useState<string[]>([]);
   const [slashSkills, setSlashSkills] = useState<SlashContext["skills"]>([]);
 
-  const refreshAuth = useCallback(() => api.auth().then(setAuth), []);
+  const refreshAuth = useCallback(
+    (provider: ProviderId) =>
+      api.auth(provider).then((state) => setAuth((current) => ({ ...current, [provider]: state }))),
+    [],
+  );
 
   useEffect(() => {
-    void refreshAuth();
+    for (const provider of providers) void refreshAuth(provider);
     void api.projects().then((list) => {
       setProjects(list);
       void setLocation((current) => {
@@ -83,21 +97,34 @@ export function App() {
     });
   }, [refreshAuth, setLocation]);
 
-  // While the browser login is open or codex is still being fetched, poll until that changes.
+  // Poll each provider independently while its browser login is in progress.
   useEffect(() => {
-    if (auth?.status !== "pending" && auth?.status !== "installing") return;
-    const timer = setInterval(() => void refreshAuth(), loginPollMs);
+    const pending = providers.filter((provider) => auth[provider]?.status === "pending");
+    if (pending.length === 0) return;
+    const timer = setInterval(
+      () => pending.forEach((provider) => void refreshAuth(provider)),
+      loginPollMs,
+    );
     return () => clearInterval(timer);
-  }, [auth?.status, refreshAuth]);
+  }, [auth, refreshAuth]);
 
-  const signedIn = auth?.status === "signed-in";
+  const signedIn = auth[provider]?.status === "signed-in";
+  const selectedSignedIn = selection !== null && auth[selection.provider]?.status === "signed-in";
   useEffect(() => {
-    if (!signedIn) return;
-    void api.models().then(({ models, selected }) => {
-      setModels(models);
-      setSelection(selected);
-    });
-  }, [signedIn]);
+    for (const candidate of providers) {
+      if (auth[candidate]?.status !== "signed-in") {
+        setCatalogs((current) => ({ ...current, [candidate]: [] }));
+        continue;
+      }
+      void api.models(candidate).then(({ models, selected }) => {
+        setCatalogs((current) => ({ ...current, [candidate]: models }));
+        if (selected) {
+          setSelection(selected);
+          setProvider(selected.provider);
+        }
+      });
+    }
+  }, [auth]);
 
   // What slash commands can offer in this project; settings may change it, so reload on close.
   useEffect(() => {
@@ -190,8 +217,8 @@ export function App() {
   };
 
   const authAction = async (intent: "login" | "cancel" | "logout") => {
-    const state = await api.authAction(intent);
-    setAuth(state);
+    const state = await api.authAction(intent, provider);
+    setAuth((current) => ({ ...current, [provider]: state }));
     if (state.status === "pending") window.open(state.authUrl, "_blank", "noopener");
   };
 
@@ -234,7 +261,7 @@ export function App() {
   const slash: SlashSupport = {
     context: {
       agents: slashAgents,
-      models: models.map((model) => ({ id: model.model, label: model.displayName })),
+      models: models.map((model) => ({ id: model.id, label: model.displayName })),
       skills: slashSkills,
     },
     run: async (command) => {
@@ -249,19 +276,19 @@ export function App() {
           if (projectId) replaceProject(await api.setPermissionMode(projectId, command.mode));
           return;
         case "model":
-          setSelection(await api.selectModel(command.model));
+          setSelection(await api.selectModel(command.model, undefined, provider));
           return;
       }
     },
   };
 
   let main: React.ReactNode;
-  if (!signedIn)
+  if (!selection && !signedIn)
     main = (
       <Placeholder
         icon={<LogInIcon />}
-        title="ChatGPT에 로그인하세요"
-        description="왼쪽에서 로그인하면 대화를 시작할 수 있어요."
+        title="구독 계정에 로그인하세요"
+        description="왼쪽에서 ChatGPT 또는 Claude에 연결하면 대화를 시작할 수 있어요."
       />
     );
   else if (!selection)
@@ -270,6 +297,14 @@ export function App() {
         icon={<LogInIcon />}
         title="모델을 선택하세요"
         description="계정에서 쓸 수 있는 모델 중 하나를 고르세요."
+      />
+    );
+  else if (!selectedSignedIn)
+    main = (
+      <Placeholder
+        icon={<LogInIcon />}
+        title="선택한 공급자에 로그인하세요"
+        description={`${selection.provider === "openai" ? "ChatGPT" : "Claude"} 연결이 필요해요.`}
       />
     );
   else if (!projectId)
@@ -296,9 +331,9 @@ export function App() {
         slash={slash}
         imagesSupported={
           sessions.find((session) => session.id === sessionId)?.agent == null &&
-          (models
-            .find((model) => model.model === selection.model)
-            ?.inputModalities.includes("image") ??
+          (catalogs[selection.provider]
+            .find((model) => model.id === selection.model)
+            ?.capabilities.inputModalities.includes("image") ??
             false)
         }
       />
@@ -319,12 +354,19 @@ export function App() {
         <div className="px-4 py-2">
           <ThemeSelect />
         </div>
-        <AccountSection auth={auth} onAction={(intent) => void authAction(intent)} />
+        <AccountSection
+          auth={auth[provider]}
+          provider={provider}
+          onProviderChange={setProvider}
+          onAction={(intent) => void authAction(intent)}
+        />
         {signedIn && (
           <ModelSection
             models={models}
-            selection={selection}
-            onSelect={(model, effort) => void api.selectModel(model, effort).then(setSelection)}
+            selection={selection?.provider === provider ? selection : null}
+            onSelect={(model, effort) =>
+              void api.selectModel(model, effort, provider).then(setSelection)
+            }
           />
         )}
         <Separator />

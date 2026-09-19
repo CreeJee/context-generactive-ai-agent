@@ -3,7 +3,8 @@ import { Context, Effect, Layer } from "effect";
 import { Attachments } from "../attachments/attachments.ts";
 import { attachmentUrl } from "../attachments/urls.ts";
 import { ChatState } from "../chat-state/chat-state.ts";
-import { CodexChat } from "../codex/chat.ts";
+import { ActiveProvider } from "../providers/active-provider.ts";
+import type { ModelSelection } from "../providers/contracts.ts";
 import { Nodes } from "../memory/nodes.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { MessageQueue } from "./queue.ts";
@@ -13,13 +14,14 @@ export interface DeliveryBinding {
   readonly projectId: string;
   readonly sessionId: string;
   readonly runId: string;
+  readonly selection: ModelSelection;
 }
 
 export { queueDeliveredEvent };
 
 const make = Effect.gen(function* () {
   const queue = yield* MessageQueue;
-  const codexChat = yield* CodexChat;
+  const active = yield* ActiveProvider;
   const nodes = yield* Nodes;
   const attachments = yield* Attachments;
   const chatState = yield* ChatState;
@@ -84,7 +86,9 @@ const make = Effect.gen(function* () {
      * joins the saved conversation at the run's next boundary or end.
      */
     steer: (binding: DeliveryBinding, message: QueuedMessage) =>
-      Effect.tryPromise(() => codexChat.steer(binding.sessionId, toUserMessage(message))).pipe(
+      Effect.flatMap(active.runtime(binding.selection), (runtime) =>
+        Effect.tryPromise(() => runtime.steer(binding.sessionId, toUserMessage(message))),
+      ).pipe(
         Effect.tap((outcome) => {
           if (outcome !== "steered") return Effect.void;
           queue.markDelivered(message.id, "steer", binding.runId, false);
@@ -93,7 +97,7 @@ const make = Effect.gen(function* () {
       ),
 
     /**
-     * Delivers waiting messages when a tool call returns: they go into the running codex turn and
+     * Delivers waiting messages when a tool call returns: they go into the live provider turn and
      * into the conversation, in queue order. Steered messages not yet in the conversation are added
      * at the same boundary.
      */
@@ -110,14 +114,15 @@ const make = Effect.gen(function* () {
           queue.markInTranscript(steered.map((message) => message.id));
 
           if (config.messages.at(-1)?.role === "tool") {
+            const runtime = await Effect.runPromise(active.runtime(binding.selection));
             for (const message of queue.deliverable(binding.sessionId)) {
               const userMessage = toUserMessage(message);
               try {
-                // With no live turn (a fresh codex thread follows), the conversation carries it.
-                await codexChat.steer(binding.sessionId, userMessage);
+                // With no live turn, the next provider request carries it in the conversation.
+                await runtime.steer(binding.sessionId, userMessage);
               } catch {
                 // Later messages stay behind it, so the order the user wrote in holds.
-                queue.markFailed(message.id, "codex_refused");
+                queue.markFailed(message.id, "steer_refused");
                 break;
               }
               added.push(userMessage);

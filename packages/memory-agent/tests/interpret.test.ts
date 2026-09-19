@@ -1,8 +1,5 @@
-import { fileURLToPath } from "node:url";
 import { Effect, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
-import { CodexAppServer } from "../src/codex/app-server.ts";
-import { CodexModels } from "../src/codex/models.ts";
 import { Database } from "../src/db/database.ts";
 import { Indexer } from "../src/memory/embedding/indexer.ts";
 import { Interpreter } from "../src/memory/interpret.ts";
@@ -10,12 +7,6 @@ import { Nodes } from "../src/memory/nodes.ts";
 import { MemorySearch } from "../src/memory/search.ts";
 import { MemoryTools } from "../src/tools/memory.ts";
 import { testRuntime } from "./support/runtime.ts";
-
-const fakeServer = fileURLToPath(new URL("./support/fake-codex.mjs", import.meta.url));
-const fakeCodex = CodexAppServer.withCommand({
-  executable: process.execPath,
-  args: [fakeServer, "--signed-in"],
-});
 
 const EdgeRow = Schema.Struct({
   from_id: Schema.String,
@@ -43,10 +34,8 @@ async function run<I, O>(tool: { execute?: (args: I) => O }, input: I) {
 }
 
 async function setup() {
-  const context = await testRuntime({ codex: fakeCodex });
-  await context.runtime.runPromise(
-    Effect.flatMap(CodexModels, (models) => models.select("fast-1")),
-  );
+  const context = await testRuntime({ testProvider: {} });
+  await context.provider!.select(context.runtime);
   const nodes = await context.runtime.runPromise(Nodes);
   const { sqlite } = await context.runtime.runPromise(Database);
   const say = (kind: "user" | "assistant", text: string) =>
@@ -172,7 +161,7 @@ describe("llm-interpret", () => {
   });
 
   test("without a selected model nothing is interpreted and the jobs wait", async () => {
-    const context = await testRuntime({ codex: fakeCodex });
+    const context = await testRuntime({ testProvider: {} });
     const nodes = await context.runtime.runPromise(Nodes);
     nodes.append({
       projectId: context.project.id,

@@ -1,18 +1,11 @@
-import { fileURLToPath } from "node:url";
 import { Effect, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
-import { CodexAppServer } from "../src/codex/app-server.ts";
-import { CodexModels } from "../src/codex/models.ts";
 import { Database } from "../src/db/database.ts";
 import { embeddedKindFilter, Indexer } from "../src/memory/embedding/indexer.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
 import { testRuntime } from "./support/runtime.ts";
-
-const fakeServer = fileURLToPath(new URL("./support/fake-codex.mjs", import.meta.url));
-const fakeCodex = (...flags: string[]) =>
-  CodexAppServer.withCommand({ executable: process.execPath, args: [fakeServer, ...flags] });
 
 function chatRequest(text: string) {
   return new Request("http://127.0.0.1/api/chat", {
@@ -31,11 +24,12 @@ function chatRequest(text: string) {
 const Count = Schema.Struct({ count: Schema.Number });
 
 describe("AgentChat.handle", () => {
-  test("answers from memory through codex tools, records the run and indexes it", async () => {
-    const { runtime, project, session } = await testRuntime({ codex: fakeCodex("--signed-in") });
+  test("answers from memory through provider tools, records the run and indexes it", async () => {
+    const context = await testRuntime({ testProvider: {} });
+    const { runtime, project, session } = context;
+    await context.provider!.select(context.runtime);
     const earlier = await runtime.runPromise(
       Effect.gen(function* () {
-        yield* (yield* CodexModels).select("fast-1");
         const node = (yield* Nodes).append({
           projectId: project.id,
           sessionId: session.id,
@@ -96,21 +90,19 @@ describe("AgentChat.handle", () => {
   });
 
   test("refuses to run without login, without a chosen model, or for an unknown session", async () => {
-    const signedOut = await testRuntime({ codex: fakeCodex() });
+    const signedOut = await testRuntime({ testProvider: { signedIn: false } });
     const handle = (context: typeof signedOut, sessionId: string) =>
       context.runtime.runPromise(
         Effect.flatMap(AgentChat, (agent) => agent.handle(chatRequest("hi"), sessionId)),
       );
     expect((await handle(signedOut, signedOut.session.id)).status).toBe(401);
 
-    const noModel = await testRuntime({ codex: fakeCodex("--signed-in") });
+    const noModel = await testRuntime({ testProvider: {} });
     const missingModel = await handle(noModel, noModel.session.id);
     expect(missingModel.status).toBe(412);
     expect(await missingModel.json()).toEqual({ error: "model_selection_required" });
 
-    await noModel.runtime.runPromise(
-      Effect.flatMap(CodexModels, (models) => models.select("fast-1")),
-    );
+    await noModel.provider!.select(noModel.runtime);
     expect((await handle(noModel, "no-such-session")).status).toBe(404);
   });
 });

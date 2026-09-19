@@ -1,24 +1,16 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { Effect, Either, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { sessionMessages } from "../src/agent/history.ts";
 import { Attachments, maxDrawingBytes } from "../src/attachments/attachments.ts";
 import { DrawingPreviews } from "../src/attachments/previews.ts";
-import { CodexAppServer, type Json } from "../src/codex/app-server.ts";
-import { CodexModels } from "../src/codex/models.ts";
+import type { JsonValue } from "../src/json.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { requireRuntime } from "../src/runtime/resources.ts";
 import { FileTools } from "../src/tools/files.ts";
 import { testRuntime } from "./support/runtime.ts";
-
-const fakeServer = fileURLToPath(new URL("./support/fake-codex.mjs", import.meta.url));
-const fakeCodex = CodexAppServer.withCommand({
-  executable: process.execPath,
-  args: [fakeServer, "--signed-in"],
-});
 
 const svg = (body: string) =>
   `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 64 64">${body}</svg>`;
@@ -120,7 +112,7 @@ describe("DrawingPreviews", () => {
         return (yield* DrawingPreviews).withPreviews(setup.project, files);
       }),
     );
-    const call = async (name: string, args: { readonly [key: string]: Json }) => {
+    const call = async (name: string, args: { readonly [key: string]: JsonValue }) => {
       const tool = tools.find((candidate) => candidate.name === name);
       return tool?.execute?.(args, { toolCallId: name, emitCustomEvent: () => undefined });
     };
@@ -166,8 +158,9 @@ describe("DrawingPreviews", () => {
   });
 
   test("a chat run records the picture with the result, so a reloaded page shows it", async () => {
-    const { runtime, session } = await testRuntime({ codex: fakeCodex });
-    await runtime.runPromise(Effect.flatMap(CodexModels, (models) => models.select("fast-1")));
+    const context = await testRuntime({ testProvider: {} });
+    const { runtime, session } = context;
+    await context.provider!.select(runtime);
     const args = JSON.stringify({
       path: "arch.svg",
       content: svg('<rect width="64" height="64" fill="#00aa00"/>'),

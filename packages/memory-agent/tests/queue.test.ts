@@ -1,21 +1,12 @@
-import { fileURLToPath } from "node:url";
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
 import { Effect, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
-import { CodexAppServer } from "../src/codex/app-server.ts";
-import { CodexModels } from "../src/codex/models.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { MessageQueue } from "../src/queue/queue.ts";
 import { sessionHolderHeader } from "../src/sessions/lease-state.ts";
 import { approvalToolDefinitions } from "../src/tools/definitions.ts";
 import { testRuntime } from "./support/runtime.ts";
-
-const fakeServer = fileURLToPath(new URL("./support/fake-codex.mjs", import.meta.url));
-const fakeCodex = CodexAppServer.withCommand({
-  executable: process.execPath,
-  args: [fakeServer, "--signed-in"],
-});
 
 type Runtime = Awaited<ReturnType<typeof testRuntime>>["runtime"];
 
@@ -74,10 +65,8 @@ function openTab(runtime: Runtime, sessionId: string, holder: string | null = nu
 }
 
 async function setup() {
-  const context = await testRuntime({ codex: fakeCodex });
-  await context.runtime.runPromise(
-    Effect.flatMap(CodexModels, (models) => models.select("fast-1")),
-  );
+  const context = await testRuntime({ testProvider: {} });
+  await context.provider!.select(context.runtime);
   const agent = await context.runtime.runPromise(AgentChat);
   const run = <A>(effect: Effect.Effect<A>) => context.runtime.runPromise(effect);
   const enqueue = async (text: string, mode: "queue" | "steer", holder: string | null = null) => {
@@ -141,9 +130,17 @@ describe("message queue", () => {
     expect(queued.status).toBe(201);
     expect(decodeQueued(queued.body).state).toEqual({ kind: "waiting" });
 
-    await until(() => tab.answer().includes("Heard:"), "the answer");
+    await until(
+      () => context.provider!.adapter.invocations.length === 2,
+      "the provider continuation",
+    );
     await until(() => !tab.client.getIsLoading(), "the run to finish");
-    expect(tab.answer()).toContain("Heard: look in the tests folder");
+    const continuation = context.provider!.adapter.invocations[1];
+    expect(
+      continuation?.messages.some(
+        (message) => message.role === "user" && message.content === "look in the tests folder",
+      ),
+    ).toBe(true);
     const [delivered] = await context.list();
     expect(delivered?.state).toMatchObject({ kind: "delivered", via: "tool_boundary" });
 
@@ -163,30 +160,27 @@ describe("message queue", () => {
     reloaded.client.dispose();
   });
 
-  test("steering sends a message into the answering turn at once", async () => {
+  test("unavailable steering leaves the message for an explicit queue fallback", async () => {
     const context = await setup();
     const tab = openTab(context.runtime, context.session.id);
     void tab.client.sendMessage("please be slow");
-    await until(() => tab.answer().includes("2 "), "the answer to start");
+    await until(() => context.provider!.adapter.invocations.length === 1, "the run to start");
 
     const steered = await context.enqueue("shorter please", "steer");
-    expect(steered.status).toBe(201);
-    expect(decodeQueued(steered.body).state).toMatchObject({ kind: "delivered", via: "steer" });
+    expect(steered.status).toBe(409);
+    expect(steered.body).toEqual({ error: "steer_unavailable" });
+    expect(await context.list()).toEqual([]);
+
+    const queued = await context.enqueue("shorter please", "queue");
+    expect(queued.status).toBe(201);
+    expect(decodeQueued(queued.body).state).toEqual({ kind: "waiting" });
 
     await until(() => tab.answer().includes("done"), "the answer to finish");
     await until(() => !tab.client.getIsLoading(), "the run to finish");
-    // The reply to the steered message is a new paragraph, not glued onto the last sentence.
-    expect(tab.answer()).toContain("done\n\nsteered: shorter please");
+    const [held] = await context.list();
+    expect(held?.text).toBe("shorter please");
+    expect(held?.state).toEqual({ kind: "held", draft: null });
     tab.client.dispose();
-
-    const reloaded = openTab(context.runtime, context.session.id);
-    await until(() => reloaded.texts("user").length === 2, "the saved conversation");
-    expect(reloaded.client.getMessages().map((message) => message.role)).toEqual([
-      "user",
-      "user",
-      "assistant",
-    ]);
-    reloaded.client.dispose();
 
     // With nothing answering there is nothing to queue for or steer into.
     expect((await context.enqueue("too late", "steer")).status).toBe(409);
@@ -199,7 +193,7 @@ describe("message queue", () => {
     await context.run(context.agent.lease(context.session.id, "tab", "claim"));
     const tab = openTab(context.runtime, context.session.id, "tab");
     void tab.client.sendMessage("please be slow");
-    await until(() => tab.answer().includes("1 "), "the answer to start");
+    await until(() => context.provider!.adapter.invocations.length === 1, "the answer to start");
     const first = decodeQueued((await context.enqueue("hello again", "queue", "tab")).body);
     const second = decodeQueued((await context.enqueue("and once more", "queue", "tab")).body);
     await until(() => tab.answer().includes("done"), "the first answer");
@@ -229,7 +223,7 @@ describe("message queue", () => {
     const context = await setup();
     const tab = openTab(context.runtime, context.session.id);
     void tab.client.sendMessage("please be slow");
-    await until(() => tab.answer().includes("1 "), "the answer to start");
+    await until(() => context.provider!.adapter.invocations.length === 1, "the answer to start");
     await context.enqueue("never mind", "queue");
     await context.run(context.agent.cancel(context.session.id, null));
     await until(() => !tab.client.getIsLoading(), "the run to stop");

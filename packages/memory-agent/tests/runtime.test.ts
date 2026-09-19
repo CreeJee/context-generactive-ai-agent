@@ -13,18 +13,11 @@ import { createServer, type Server } from "node:http";
 import { type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { Effect, Layer, ManagedRuntime } from "effect";
 import { afterEach, describe, expect, test } from "vite-plus/test";
-import { CodexAccount } from "../src/codex/account.ts";
-import { CodexAppServer, targetTriple } from "../src/codex/app-server.ts";
-import { codexManifestFile } from "../src/codex/installer.ts";
-import { StorageRoot } from "../src/config/storage-root.ts";
 import { installArchive, npmIntegrity, type PinnedArchive } from "../src/runtime/archive.ts";
 import { requireRuntime } from "../src/runtime/resources.ts";
 import { tgz, type TarEntry } from "./support/tgz.ts";
 
-const fakeServer = fileURLToPath(new URL("./support/fake-codex.mjs", import.meta.url));
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
@@ -139,54 +132,5 @@ describe("installArchive", () => {
       algorithm: "sha512",
       digest: createHash("sha512").update(bytes).digest("hex"),
     });
-  });
-});
-
-describe("codex in the executable", () => {
-  test("is fetched on first need while sign-in reports installing, then starts from the storage root", async () => {
-    const triple = targetTriple(process.platform, process.arch);
-    if (!triple) throw new Error("unsupported test platform");
-    // Stands in for the platform package: a codex that runs the fake app server.
-    const archive = tgz([
-      {
-        name: `package/vendor/${triple}/bin/codex`,
-        content: `#!/bin/sh\nexec "${process.execPath}" "${fakeServer}" --signed-in "$@"\n`,
-        mode: 0o755,
-      },
-    ]);
-    const url = await archiveServer({ "/codex.tgz": archive });
-    const runtime = tempDir();
-    const storage = tempDir();
-    writeFileSync(
-      join(runtime, codexManifestFile),
-      JSON.stringify({
-        version: "0.0.0-test",
-        triple,
-        url: url("/codex.tgz"),
-        integrity: `sha512-${createHash("sha512").update(archive).digest("base64")}`,
-      }),
-    );
-    process.env.CONTEXT_AGENT_RUNTIME = runtime;
-    cleanups.push(() => void delete process.env.CONTEXT_AGENT_RUNTIME);
-
-    const app = ManagedRuntime.make(
-      CodexAccount.layer.pipe(
-        Layer.provideMerge(CodexAppServer.layer),
-        Layer.provide(StorageRoot.layer(storage)),
-      ),
-    );
-    cleanups.push(() => app.dispose());
-    const status = () => app.runPromise(Effect.flatMap(CodexAccount, (account) => account.status));
-
-    expect(await status()).toEqual({ status: "installing" });
-    let state = await status();
-    for (let attempt = 0; attempt < 100 && state.status === "installing"; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      state = await status();
-    }
-    expect(state).toEqual({ status: "signed-in", planType: "plus" });
-    expect(
-      existsSync(join(storage, "runtime", `codex-0.0.0-test-${process.platform}-${process.arch}`)),
-    ).toBe(true);
   });
 });

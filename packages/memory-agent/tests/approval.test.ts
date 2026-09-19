@@ -1,23 +1,12 @@
-import { fileURLToPath } from "node:url";
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
-import { Effect, Schema } from "effect";
+import { Effect } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
-import { CodexAppServer } from "../src/codex/app-server.ts";
-import { CodexModels } from "../src/codex/models.ts";
 import { ChatState } from "../src/chat-state/chat-state.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { approvalToolDefinitions } from "../src/tools/definitions.ts";
 import { Workflows } from "../src/workflow/workflow.ts";
 import { testRuntime } from "./support/runtime.ts";
-
-const fakeServer = fileURLToPath(new URL("./support/fake-codex.mjs", import.meta.url));
-const fakeCodex = CodexAppServer.withCommand({
-  executable: process.execPath,
-  args: [fakeServer, "--signed-in"],
-});
-
-const Log = Schema.Struct({ log: Schema.Array(Schema.Struct({ method: Schema.String })) });
 
 async function until(condition: () => boolean, what: string) {
   for (let attempt = 0; attempt < 200; attempt++) {
@@ -29,10 +18,8 @@ async function until(condition: () => boolean, what: string) {
 
 /** A real TanStack chat client talking to AgentChat in-process, like the browser UI does. */
 async function approvalSetup() {
-  const context = await testRuntime({ codex: fakeCodex });
-  await context.runtime.runPromise(
-    Effect.flatMap(CodexModels, (models) => models.select("fast-1")),
-  );
+  const context = await testRuntime({ testProvider: {} });
+  await context.provider!.select(context.runtime);
   const client = new ChatClient({
     tools: approvalToolDefinitions,
     connection: fetchServerSentEvents("http://127.0.0.1/api/chat", {
@@ -57,8 +44,8 @@ async function approvalSetup() {
 }
 
 describe("approval-gated tools", () => {
-  test("run_shell waits for approval, then runs and the same codex turn continues", async () => {
-    const { client, runtime, session, lastText } = await approvalSetup();
+  test("run_shell waits for approval, then resumes the durable app run", async () => {
+    const { client, runtime, session, lastText, provider } = await approvalSetup();
 
     await client.sendMessage("please use the shell");
     await until(() => client.getInterrupts().length === 1, "the approval request");
@@ -90,10 +77,11 @@ describe("approval-gated tools", () => {
     expect(result!.runId).toBe(call!.runId);
     expect(result!.detail).toMatchObject({ toolName: "run_shell", ok: true });
 
-    // The approval did not restart the conversation in codex.
-    const codex = await runtime.runPromise(CodexAppServer);
-    const { log } = await runtime.runPromise(codex.request("test/log", {}, Log));
-    expect(log.filter((entry) => entry.method === "thread/start")).toHaveLength(1);
+    // The durable app run resumes with the approved tool result in a fresh model invocation.
+    expect(provider!.adapter.invocations).toHaveLength(2);
+    expect(
+      provider!.adapter.invocations[1]?.messages.some((message) => message.role === "tool"),
+    ).toBe(true);
   });
 
   test("Verify can run an approval-gated shell check", async () => {

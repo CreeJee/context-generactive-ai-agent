@@ -1,26 +1,13 @@
-import { fileURLToPath } from "node:url";
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
-import { Effect, Schema } from "effect";
+import { Effect } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { sessionMessages } from "../src/agent/history.ts";
 import { Attachments } from "../src/attachments/attachments.ts";
 import { attachmentUrl } from "../src/attachments/urls.ts";
-import { CodexAppServer } from "../src/codex/app-server.ts";
-import { CodexModels } from "../src/codex/models.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { tinyPng } from "./support/images.ts";
 import { testRuntime } from "./support/runtime.ts";
-
-const fakeServer = fileURLToPath(new URL("./support/fake-codex.mjs", import.meta.url));
-const fakeCodex = CodexAppServer.withCommand({
-  executable: process.execPath,
-  args: [fakeServer, "--signed-in"],
-});
-
-const Log = Schema.Struct({
-  log: Schema.Array(Schema.Struct({ method: Schema.String, params: Schema.Unknown })),
-});
 
 async function until(condition: () => boolean, what: string) {
   for (let attempt = 0; attempt < 200; attempt++) {
@@ -31,12 +18,10 @@ async function until(condition: () => boolean, what: string) {
 }
 
 async function imageSetup(model: string) {
-  const context = await testRuntime({ codex: fakeCodex });
+  const context = await testRuntime({ testProvider: {} });
+  await context.provider!.select(context.runtime, model, model === "deep-1" ? "medium" : "low");
   const attachment = await context.runtime.runPromise(
-    Effect.gen(function* () {
-      yield* (yield* CodexModels).select(model);
-      return yield* (yield* Attachments).save(tinyPng);
-    }),
+    Effect.flatMap(Attachments, (attachments) => attachments.save(tinyPng)),
   );
   const handle = (input: string | URL | Request, init?: RequestInit) =>
     context.runtime.runPromise(
@@ -64,35 +49,39 @@ async function imageSetup(model: string) {
 }
 
 describe("images in chat", () => {
-  test("stores the images with the user turn and hands codex the local files", async () => {
-    const { client, answer, imagePart, runtime, session, attachment } = await imageSetup("fast-1");
+  test("stores images with the user turn and sends provider-neutral image parts", async () => {
+    const { client, answer, imagePart, runtime, session, attachment, provider } =
+      await imageSetup("fast-1");
 
     await client.sendMessage({
       content: [{ type: "text", content: "look at #1 please" }, imagePart],
     });
     await until(() => !client.getIsLoading() && answer().length > 0, "the answer");
-    expect(answer()).toBe("Saw 1 new image(s) and 0 earlier image(s)");
+    expect(answer()).toBe("Saw 1 image(s)");
 
-    const [nodes, attachments, codex] = await Promise.all([
+    const [nodes, attachments] = await Promise.all([
       runtime.runPromise(Nodes),
       runtime.runPromise(Attachments),
-      runtime.runPromise(CodexAppServer),
     ]);
     const user = nodes.session(session.id).find((node) => node.kind === "user");
     expect(user?.text).toBe("look at #1 please");
     expect(attachments.forNode(user?.id ?? "").map((stored) => stored.id)).toEqual([attachment.id]);
 
-    const { log } = await runtime.runPromise(codex.request("test/log", {}, Log));
-    expect(log.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
-      input: [
-        { type: "text", text: "look at #1 please" },
-        { type: "localImage", path: (await attachments.forModel(attachment)).path },
-      ],
-    });
+    const modelUser = provider!.adapter.invocations[0]?.messages.find(
+      (message) => message.role === "user",
+    );
+    expect(modelUser?.content).toEqual([{ type: "text", content: "look at #1 please" }, imagePart]);
 
-    // A later turn replays the earlier image to a fresh codex thread.
+    // A later turn replays the earlier image in provider-neutral conversation history.
     await client.sendMessage("look at it again");
-    await until(() => answer().includes("1 earlier image"), "the second answer");
+    await until(() => provider!.adapter.invocations.length === 2, "the second provider invocation");
+    expect(
+      provider!.adapter.invocations[1]?.messages.flatMap((message) =>
+        Array.isArray(message.content)
+          ? message.content.filter((part) => part.type === "image")
+          : [],
+      ),
+    ).toEqual([imagePart]);
 
     // The stored transcript shows the image again after a reload.
     const [firstUser] = sessionMessages(nodes.session(session.id), attachments.forNode);

@@ -3,7 +3,7 @@ import { lintSource } from "@secretlint/core";
 import { secretLintProfiler } from "@secretlint/profiler";
 import { creator as recommendedRules } from "@secretlint/secretlint-rule-preset-recommend";
 import { Context, Effect, Layer, Option, Schema } from "effect";
-import type { Json } from "../codex/app-server.ts";
+import { JsonValue, type JsonValue as Json } from "../json.ts";
 
 /**
  * Hides secrets in text before a model reads it or memory keeps it.
@@ -139,17 +139,6 @@ const isString = Schema.is(Schema.String);
 const isNumber = Schema.is(Schema.Number);
 const isBoolean = Schema.is(Schema.Boolean);
 
-const JsonValue: Schema.Schema<Json> = Schema.Union(
-  Schema.String,
-  Schema.Number,
-  Schema.Boolean,
-  Schema.Null,
-  Schema.Array(Schema.suspend((): Schema.Schema<Json> => JsonValue)),
-  Schema.Record({
-    key: Schema.String,
-    value: Schema.suspend((): Schema.Schema<Json> => JsonValue),
-  }),
-);
 const decodeJson = Schema.decodeUnknownOption(JsonValue);
 
 const make = Effect.sync(() => {

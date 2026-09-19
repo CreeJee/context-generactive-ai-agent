@@ -1,21 +1,12 @@
-import { fileURLToPath } from "node:url";
 import { Effect, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
-import { CodexAppServer } from "../src/codex/app-server.ts";
-import { CodexModels } from "../src/codex/models.ts";
 import { Database } from "../src/db/database.ts";
 import { PermissionReviews } from "../src/permissions/reviews.ts";
 import { Projects } from "../src/projects/projects.ts";
 import { RelayedApprovals } from "../src/approvals/relayed.ts";
 import { Subagents } from "../src/subagents/subagents.ts";
 import { testRuntime } from "./support/runtime.ts";
-
-const fakeServer = fileURLToPath(new URL("./support/fake-codex.mjs", import.meta.url));
-const fakeCodex = CodexAppServer.withCommand({
-  executable: process.execPath,
-  args: [fakeServer, "--signed-in"],
-});
 
 async function until(condition: () => boolean, what: string) {
   for (let attempt = 0; attempt < 300; attempt++) {
@@ -37,27 +28,11 @@ const answerOf = (events: string) =>
     .flatMap((event) => (event.type === "TEXT_MESSAGE_CONTENT" && event.delta ? [event.delta] : []))
     .join("");
 
-const ThreadStarts = Schema.Struct({
-  log: Schema.Array(
-    Schema.Struct({
-      method: Schema.String,
-      params: Schema.optional(
-        Schema.Struct({
-          baseInstructions: Schema.optional(Schema.String),
-          dynamicTools: Schema.optional(Schema.Array(Schema.Struct({ name: Schema.String }))),
-        }),
-      ),
-    }),
-  ),
-});
-
 async function subagentSetup(mode: "ask" | "auto" = "ask") {
-  const context = await testRuntime({ codex: fakeCodex });
+  const context = await testRuntime({ testProvider: {} });
+  await context.provider!.select(context.runtime);
   await context.runtime.runPromise(
-    Effect.gen(function* () {
-      yield* (yield* CodexModels).select("fast-1");
-      yield* (yield* Projects).setPermissionMode(context.project.id, mode);
-    }),
+    Effect.flatMap(Projects, (projects) => projects.setPermissionMode(context.project.id, mode)),
   );
   const subagents = await context.runtime.runPromise(Subagents);
   const relayed = await context.runtime.runPromise(RelayedApprovals);
@@ -87,16 +62,12 @@ async function subagentSetup(mode: "ask" | "auto" = "ask") {
     );
     return response.text().then(answerOf);
   };
-  const threadStarts = () =>
-    context.runtime.runPromise(
-      Effect.flatMap(CodexAppServer, (codex) => codex.request("test/log", {}, ThreadStarts)),
-    );
-  return { ...context, subagents, relayed, state, send, threadStarts };
+  return { ...context, subagents, relayed, state, send };
 }
 
 describe("subagents", () => {
   test("a one-off child gets only the task, the parent's tools minus subagents, and reports back", async () => {
-    const { send, subagents, session, state, threadStarts } = await subagentSetup();
+    const { send, subagents, session, state, provider } = await subagentSetup();
 
     const answer = await send('call run_subagent {"task":"list what matters"}');
     expect(answer).toContain("child done: list what matters (earlier user messages: 0)");
@@ -105,22 +76,29 @@ describe("subagents", () => {
     const [child] = state().subagents;
     expect(child).toMatchObject({ name: null, status: "completed", lastTask: "list what matters" });
 
-    const starts = (await threadStarts()).log.filter((entry) => entry.method === "thread/start");
-    const childStart = starts.find((entry) =>
-      entry.params?.baseInstructions?.includes("You are a subagent"),
+    const invocations = provider!.adapter.invocations;
+    const childStart = invocations.find((invocation) =>
+      invocation.systemPrompts.some((prompt) => prompt.includes("You are a subagent")),
     );
-    const parentStart = starts.find((entry) =>
-      entry.params?.baseInstructions?.includes("You can delegate with run_subagent"),
+    const parentStart = invocations.find((invocation) =>
+      invocation.systemPrompts.some((prompt) =>
+        prompt.includes("You can delegate with run_subagent"),
+      ),
     );
-    const names = (entry: typeof childStart) =>
-      entry?.params?.dynamicTools?.map((tool) => tool.name) ?? [];
-    expect(names(parentStart)).toContain("run_subagent");
+    expect(parentStart?.toolNames).toContain("run_subagent");
     // No nesting, and nothing the parent does not have.
-    expect(names(childStart)).not.toContain("run_subagent");
-    expect(names(childStart)).not.toContain("message_subagent");
-    expect(names(childStart).every((name) => names(parentStart).includes(name))).toBe(true);
+    expect(childStart?.toolNames).not.toContain("run_subagent");
+    expect(childStart?.toolNames).not.toContain("message_subagent");
+    expect(childStart?.toolNames.every((name) => parentStart?.toolNames.includes(name))).toBe(true);
     // The parent's conversation is not copied into the child.
-    expect(childStart?.params?.baseInstructions).not.toContain("call run_subagent");
+    expect(
+      childStart?.messages.some(
+        (message) =>
+          message.role === "user" &&
+          Schema.is(Schema.String)(message.content) &&
+          message.content.includes("call run_subagent"),
+      ),
+    ).toBe(false);
 
     const transcript = await subagents.transcript(session.id, child!.id);
     expect(transcript?.messages.map((message) => message.role)).toEqual(["user", "assistant"]);

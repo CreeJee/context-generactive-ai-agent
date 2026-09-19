@@ -1,21 +1,12 @@
 import { createServer, type IncomingMessage } from "node:http";
 import type { AnyServerTool } from "@tanstack/ai";
 import type { AddressInfo } from "node:net";
-import { fileURLToPath } from "node:url";
-import { Effect, Either, Schema } from "effect";
+import { Effect, Either } from "effect";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
-import { CodexAppServer } from "../src/codex/app-server.ts";
-import { CodexModels } from "../src/codex/models.ts";
 import { Kagi } from "../src/kagi/kagi.ts";
 import { KagiTools, maxPageCharacters } from "../src/tools/kagi.ts";
 import { testRuntime } from "./support/runtime.ts";
-
-const fakeServer = fileURLToPath(new URL("./support/fake-codex.mjs", import.meta.url));
-const fakeCodex = CodexAppServer.withCommand({
-  executable: process.execPath,
-  args: [fakeServer, "--signed-in"],
-});
 
 interface Received {
   readonly path: string;
@@ -70,7 +61,7 @@ const searchReply: Reply = {
 
 async function kagiSetup(reply: (path: string) => Reply = () => searchReply) {
   const kagi = await fakeKagi(reply);
-  const context = await testRuntime({ codex: fakeCodex, kagiBaseUrl: kagi.baseUrl });
+  const context = await testRuntime({ testProvider: {}, kagiBaseUrl: kagi.baseUrl });
   const enable = () =>
     context.runtime.runPromise(
       Effect.gen(function* () {
@@ -209,22 +200,11 @@ describe("Kagi tools", () => {
   });
 
   test("a chat run offers the tools and their instructions only while Kagi is on", async () => {
-    const { runtime, session, enable } = await kagiSetup();
-    await runtime.runPromise(Effect.flatMap(CodexModels, (models) => models.select("fast-1")));
-    const ThreadStarts = Schema.Struct({
-      log: Schema.Array(
-        Schema.Struct({
-          method: Schema.String,
-          params: Schema.optional(
-            Schema.Struct({
-              baseInstructions: Schema.optional(Schema.String),
-              dynamicTools: Schema.optional(Schema.Array(Schema.Struct({ name: Schema.String }))),
-            }),
-          ),
-        }),
-      ),
-    });
+    const context = await kagiSetup();
+    const { runtime, session, enable } = context;
+    await context.provider!.select(runtime);
     const send = async (text: string) => {
+      const invocationIndex = context.provider!.adapter.invocations.length;
       const response = await runtime.runPromise(
         Effect.flatMap(AgentChat, (agent) =>
           agent.handle(
@@ -244,21 +224,18 @@ describe("Kagi tools", () => {
         ),
       );
       const events = await response.text();
-      const starts = await runtime.runPromise(
-        Effect.flatMap(CodexAppServer, (codex) => codex.request("test/log", {}, ThreadStarts)),
-      );
-      const last = starts.log.filter((entry) => entry.method === "thread/start").at(-1)?.params;
-      return { events, last };
+      const invocation = context.provider!.adapter.invocations[invocationIndex];
+      return { events, invocation };
     };
 
     const off = await send("hello");
-    expect(off.last?.dynamicTools?.map((entry) => entry.name)).not.toContain("kagi_search");
-    expect(off.last?.baseInstructions).not.toContain("Kagi web search is enabled");
+    expect(off.invocation?.toolNames).not.toContain("kagi_search");
+    expect(off.invocation?.systemPrompts.join("\n")).not.toContain("Kagi web search is enabled");
 
     await enable();
     const on = await send('call kagi_search {"query":"effect schema"}');
-    expect(on.last?.dynamicTools?.map((entry) => entry.name)).toContain("kagi_search");
-    expect(on.last?.baseInstructions).toContain("Kagi web search is enabled");
+    expect(on.invocation?.toolNames).toContain("kagi_search");
+    expect(on.invocation?.systemPrompts.join("\n")).toContain("Kagi web search is enabled");
     expect(on.events).toContain("summary of A");
     expect(on.events).not.toContain("sk-test-key");
   });

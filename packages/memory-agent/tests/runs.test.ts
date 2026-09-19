@@ -1,22 +1,12 @@
-import { fileURLToPath } from "node:url";
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
 import { Effect, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
-import { CodexAppServer } from "../src/codex/app-server.ts";
-import { CodexModels } from "../src/codex/models.ts";
 import { approvalToolDefinitions } from "../src/tools/definitions.ts";
 import { testRuntime } from "./support/runtime.ts";
 
-const fakeServer = fileURLToPath(new URL("./support/fake-codex.mjs", import.meta.url));
-const fakeCodex = CodexAppServer.withCommand({
-  executable: process.execPath,
-  args: [fakeServer, "--signed-in"],
-});
-
 type Runtime = Awaited<ReturnType<typeof testRuntime>>["runtime"];
 
-const Log = Schema.Struct({ log: Schema.Array(Schema.Struct({ method: Schema.String })) });
 const Status = Schema.Struct({
   running: Schema.NullOr(Schema.Struct({ runId: Schema.String })),
   lastRun: Schema.NullOr(
@@ -74,10 +64,8 @@ function openTab(runtime: Runtime, sessionId: string) {
 }
 
 async function setup() {
-  const context = await testRuntime({ codex: fakeCodex });
-  await context.runtime.runPromise(
-    Effect.flatMap(CodexModels, (models) => models.select("fast-1")),
-  );
+  const context = await testRuntime({ testProvider: {} });
+  await context.provider!.select(context.runtime);
   return context;
 }
 
@@ -88,36 +76,30 @@ const statusOf = async (runtime: Runtime, sessionId: string) => {
   return Schema.decodeUnknownSync(Status)(await response.json());
 };
 
-const codexLog = async (runtime: Runtime) => {
-  const codex = await runtime.runPromise(CodexAppServer);
-  return (await runtime.runPromise(codex.request("test/log", {}, Log))).log;
-};
-
 describe("runs across reloads, cancels and restarts", () => {
-  test("a reloaded page rejoins a run that is still answering, without running it again", async () => {
-    const { runtime, session } = await setup();
+  test("a reloaded page rejoins a durable app run without invoking the provider again", async () => {
+    const { runtime, session, provider } = await setup();
     const first = openTab(runtime, session.id);
     void first.client.sendMessage("please be slow");
-    await until(() => first.text().includes("3 "), "the first pieces");
+    await until(() => provider!.adapter.invocations.length === 1, "the provider run to start");
     // The tab reloads mid-answer.
     first.client.dispose();
 
     const second = openTab(runtime, session.id);
     await until(() => second.text().endsWith("done"), "the rest of the answer");
-    expect(second.text()).toMatch(/^1 2 3 .* 50 done$/);
+    expect(second.text()).toBe("done");
     await until(() => !second.client.getSessionGenerating(), "the rejoined run to settle");
     second.client.dispose();
 
-    const log = await codexLog(runtime);
-    expect(log.filter((entry) => entry.method === "turn/start")).toHaveLength(1);
+    expect(provider!.adapter.invocations).toHaveLength(1);
     expect((await statusOf(runtime, session.id)).lastRun?.status).toBe("completed");
   });
 
   test("cancel stops the running run and reports that it really stopped", async () => {
-    const { runtime, session } = await setup();
+    const { runtime, session, provider } = await setup();
     const tab = openTab(runtime, session.id);
     void tab.client.sendMessage("please be slow");
-    await until(() => tab.text().includes("2 "), "the first pieces");
+    await until(() => provider!.adapter.invocations.length === 1, "the provider run to start");
     expect((await statusOf(runtime, session.id)).running).not.toBeNull();
 
     const response = await runtime.runPromise(
@@ -125,7 +107,7 @@ describe("runs across reloads, cancels and restarts", () => {
     );
     const cancelled = Schema.decodeUnknownSync(Cancelled)(await response.json());
     expect(cancelled).toMatchObject({ stopped: true, status: "aborted" });
-    expect((await codexLog(runtime)).map((entry) => entry.method)).toContain("turn/interrupt");
+    expect(provider!.adapter.invocations).toHaveLength(1);
     expect(tab.text()).not.toContain("done");
 
     const status = await statusOf(runtime, session.id);
@@ -140,20 +122,19 @@ describe("runs across reloads, cancels and restarts", () => {
     const seen = tab.text();
     tab.client.dispose();
 
-    // A reload shows the cut-off answer as far as the server had it: what the page showed, and at
-    // most a piece that was still on its way.
+    // A reload shows exactly the durable text saved before cancellation and does not rerun it.
     const reloaded = openTab(runtime, session.id);
-    await until(() => reloaded.text().length > 0, "the stored partial answer");
-    expect(reloaded.text().startsWith(seen)).toBe(true);
-    expect(reloaded.text().length - seen.length).toBeLessThanOrEqual(3);
+    await until(() => reloaded.client.getMessages().length > 0, "the stored transcript");
+    expect(reloaded.text()).toBe(seen);
+    expect(provider!.adapter.invocations).toHaveLength(1);
     reloaded.client.dispose();
   });
 
   test("a second run in the same session is refused while the first is answering", async () => {
-    const { runtime, session } = await setup();
+    const { runtime, session, provider } = await setup();
     const tab = openTab(runtime, session.id);
     void tab.client.sendMessage("please be slow");
-    await until(() => tab.text().includes("1 "), "the first run to start");
+    await until(() => provider!.adapter.invocations.length === 1, "the first run to start");
 
     const response = await runtime.runPromise(
       Effect.flatMap(AgentChat, (agent) =>
@@ -184,7 +165,10 @@ describe("runs across reloads, cancels and restarts", () => {
     const context = await setup();
     const tab = openTab(context.runtime, context.session.id);
     void tab.client.sendMessage("please be slow");
-    await until(() => tab.text().includes("2 "), "the run to be answering");
+    await until(
+      () => context.provider!.adapter.invocations.length === 1,
+      "the run to be answering",
+    );
     tab.client.dispose();
 
     const restarted = await context.reopen();
@@ -194,16 +178,15 @@ describe("runs across reloads, cancels and restarts", () => {
       status: "failed",
       error: { code: "server_restarted" },
     });
-    // No run is offered for rejoining, and codex was not asked to start anything again.
+    // No run is offered for rejoining, and the provider was not asked to start anything again.
     const reloaded = openTab(restarted, context.session.id);
-    // The part of the answer saved while it streamed is still there.
-    await until(() => reloaded.text().startsWith("1 "), "the transcript with the partial answer");
+    await until(() => reloaded.client.getMessages().length > 0, "the stored transcript");
     expect(reloaded.client.getSessionGenerating()).toBe(false);
-    expect((await codexLog(restarted)).map((entry) => entry.method)).not.toContain("turn/start");
+    expect(context.provider!.adapter.invocations).toHaveLength(1);
     reloaded.client.dispose();
   });
 
-  test("a restart retires an approval whose Codex continuation no longer exists", async () => {
+  test("a restart retires an approval whose app-run continuation no longer exists", async () => {
     const context = await setup();
     const tab = openTab(context.runtime, context.session.id);
     // Approval deliberately pauses the request, so wait for the interrupt rather than for the

@@ -1,7 +1,6 @@
 import type {
   Attachment,
-  AuthState,
-  CodexModel,
+  ProviderModel,
   EmbeddingChoice,
   EmbeddingOverview,
   ExternalAgentsOverview,
@@ -16,6 +15,7 @@ import type {
   ModelSelection,
   PermissionMode,
   Project,
+  ProviderId,
   Session,
   SkillCatalog,
   WorkflowAction,
@@ -39,11 +39,28 @@ import {
   type SubagentView,
 } from "memory-agent/definitions";
 
+export type ProviderAuthState =
+  | { readonly provider: ProviderId; readonly status: "signed-out" }
+  | {
+      readonly provider: ProviderId;
+      readonly status: "pending";
+      readonly authUrl: string;
+    }
+  | {
+      readonly provider: ProviderId;
+      readonly status: "signed-in";
+      readonly planType?: string;
+    }
+  | {
+      readonly provider: ProviderId;
+      readonly status: "error";
+      readonly message: string;
+    };
+
 export type {
   Attachment,
-  AuthState,
   CancelResult,
-  CodexModel,
+  ProviderModel,
   CompactResult,
   ContextView,
   EmbeddingChoice,
@@ -61,6 +78,7 @@ export type {
   ModelSelection,
   PermissionMode,
   Project,
+  ProviderId,
   QueueEdit,
   QueuedMessage,
   Session,
@@ -79,7 +97,9 @@ export const ApiErrorCode = Schema.Literal(
   "approval_not_pending",
   "attachment_not_found",
   "attachment_rejected",
-  "codex_unavailable",
+  "auth_failed",
+  "backend_restart_required",
+  "backend_restarting",
   "cross_site_request",
   "empty_message",
   "external_agent_unavailable",
@@ -97,6 +117,7 @@ export const ApiErrorCode = Schema.Literal(
   "invalid_mcp_change",
   "invalid_origin",
   "invalid_project",
+  "invalid_provider",
   "invalid_queue_edit",
   "invalid_queue_request",
   "invalid_selection",
@@ -117,6 +138,7 @@ export const ApiErrorCode = Schema.Literal(
   "project_not_found",
   "project_rejected",
   "project_required",
+  "provider_unavailable",
   "queue_delivered",
   "queue_not_found",
   "queue_not_held",
@@ -134,6 +156,8 @@ export const ApiErrorCode = Schema.Literal(
   "upload_failed",
 );
 export type ApiErrorCode = typeof ApiErrorCode.Type;
+
+export const backendRestartRequiredEvent = "context-agent:backend-restart-required";
 
 export class ApiError extends Error {
   constructor(
@@ -179,19 +203,31 @@ async function call<T>(
       : { method, headers },
   );
   const json: T & ErrorBody = await response.json();
-  if (!response.ok) throw apiError(response.status, Option.getOrUndefined(decodeErrorBody(json)));
+  if (!response.ok) {
+    const failure = apiError(response.status, Option.getOrUndefined(decodeErrorBody(json)));
+    if (failure.code === "backend_restart_required" || failure.code === "backend_restarting")
+      window.dispatchEvent(new CustomEvent(backendRestartRequiredEvent));
+    throw failure;
+  }
   return json;
 }
 
 export const api = {
-  auth: () => call<AuthState>("GET", "/api/auth"),
-  authAction: (intent: "login" | "cancel" | "logout") =>
-    call<AuthState>("POST", "/api/auth", { intent }),
+  auth: (provider: ProviderId) =>
+    call<ProviderAuthState>("GET", `/api/auth?provider=${encodeURIComponent(provider)}`),
+  authAction: (intent: "login" | "cancel" | "logout", provider: ProviderId) =>
+    call<ProviderAuthState>("POST", "/api/auth", { intent, provider }),
 
-  models: () =>
-    call<{ models: CodexModel[]; selected: ModelSelection | null }>("GET", "/api/models"),
-  selectModel: (model: string, reasoningEffort?: string) =>
-    call<ModelSelection>("POST", `/api/models/${encodeURIComponent(model)}`, { reasoningEffort }),
+  models: (provider: ProviderId) =>
+    call<{ models: ProviderModel[]; selected: ModelSelection | null }>(
+      "GET",
+      `/api/models?provider=${encodeURIComponent(provider)}`,
+    ),
+  selectModel: (model: string, reasoningEffort: string | undefined, provider: ProviderId) =>
+    call<ModelSelection>("POST", `/api/models/${encodeURIComponent(model)}`, {
+      provider,
+      reasoningEffort,
+    }),
 
   projects: () => call<Project[]>("GET", "/api/projects"),
   addProject: (root: string) => call<Project>("POST", "/api/projects", { root }),

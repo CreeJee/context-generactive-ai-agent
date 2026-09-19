@@ -2,9 +2,8 @@ import { randomUUID } from "node:crypto";
 import { chat, type ChatMiddleware } from "@tanstack/ai";
 import { Context, Effect, Layer } from "effect";
 import { ChatState } from "../chat-state/chat-state.ts";
-import { CodexAccount } from "../codex/account.ts";
-import { CodexChat } from "../codex/chat.ts";
-import { CodexModels, type ModelSelection } from "../codex/models.ts";
+import { ActiveProvider } from "../providers/active-provider.ts";
+import type { ModelSelection } from "../providers/contracts.ts";
 import { Nodes, type Node, type NodeKind } from "../memory/nodes.ts";
 import {
   compactionState,
@@ -53,15 +52,14 @@ const make = (automatic: boolean) =>
   Effect.gen(function* () {
     const nodes = yield* Nodes;
     const chatState = yield* ChatState;
-    const account = yield* CodexAccount;
-    const models = yield* CodexModels;
-    const codexChat = yield* CodexChat;
+    const active = yield* ActiveProvider;
     const oneAtATime = yield* Effect.makeSemaphore(1);
     const { messages: messageStore, metadata } = chatState.persistence.stores;
 
     const summarize = (part: readonly Node[], selection: ModelSelection) =>
       Effect.gen(function* () {
-        const cheap = yield* models.cheapestEffort(selection);
+        const { services } = yield* active.resolve(selection);
+        const cheap = yield* services.models.cheapestEffort(selection);
         const input = part
           .filter((node) => nodeCharacters[node.kind] > 0)
           .map(nodeLine)
@@ -71,7 +69,7 @@ const make = (automatic: boolean) =>
           const abortController = new AbortController();
           const timer = setTimeout(() => abortController.abort(), summaryTimeoutMs);
           return chat({
-            adapter: codexChat.adapter(cheap),
+            adapter: services.runtime.adapter(cheap),
             messages: [{ role: "user", content: `Nodes:\n\n${input}` }],
             systemPrompts: [summaryInstructions],
             threadId: randomUUID(),
@@ -92,9 +90,10 @@ const make = (automatic: boolean) =>
      */
     const catchUp = (sessionId: string, whole: boolean): Effect.Effect<SummaryOutcome> =>
       Effect.gen(function* () {
-        const auth = yield* account.status;
-        const selection = yield* models.selected;
-        if (auth.status !== "signed-in" || !selection) return "unavailable" as const;
+        const selection = yield* active.selected;
+        if (!selection) return "unavailable" as const;
+        const auth = yield* active.auth(selection);
+        if (auth.status !== "signed-in") return "unavailable" as const;
 
         const messages = yield* Effect.promise(() => messageStore.loadThread(sessionId));
         const nodeText = (id: string) => nodes.get(id)?.text ?? null;

@@ -372,4 +372,10 @@ export const migrations: readonly string[] = [
     updated_at TEXT NOT NULL
   );
   `,
+  `
+  -- Full mode bypasses approval prompts and the classifier, while all path and credential
+  -- restrictions remain enforced. Keep the older permission_mode constraint for compatibility.
+  ALTER TABLE projects ADD COLUMN permission_full INTEGER NOT NULL DEFAULT 0
+    CHECK (permission_full IN (0, 1));
+  `,
 ];

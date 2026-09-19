@@ -37,25 +37,42 @@ export {
   type KagiFailureReason,
   type KagiStatus,
 } from "./kagi/kagi.ts";
-export { CodexAccount, isChatgptAuthUrl, type AuthState } from "./codex/account.ts";
-export { CodexChat, CodexTextAdapter, TurnParking, type CodexTurns } from "./codex/chat.ts";
-export {
-  imageSources,
-  messageText,
-  toCodexTurnInput,
-  type ImageLookup,
-  type ResolvedImage,
-} from "./codex/history.ts";
 export { attachmentIdOf, attachmentUrl } from "./attachments/urls.ts";
+export { JsonValue, type JsonValue as Json } from "./json.ts";
 export {
-  CodexAppServer,
-  CodexRequestFailed,
-  CodexUnavailable,
-  bundledCodex,
-  type CodexCommand,
-  type Json,
-} from "./codex/app-server.ts";
-export { CodexModel, CodexModels, ModelUnavailable, type ModelSelection } from "./codex/models.ts";
+  ModelCapabilities,
+  ModelSelection,
+  ModelUnavailable,
+  ProviderId,
+  ProviderModel,
+  ProviderOperationFailed,
+  ProviderUnavailable,
+  type AgentModelRuntime,
+  type AuthConnectionState,
+  type AuthProvider,
+  type ModelCatalog,
+  type ProviderConfiguration,
+  type ProviderServices,
+} from "./providers/contracts.ts";
+export {
+  ProviderRegistry,
+  providerRegistryFrom,
+  type ProviderRegistryApi,
+} from "./providers/registry.ts";
+export {
+  SubscriptionTextAdapter,
+  subscriptionRequest,
+  type StreamingOAuthClient,
+} from "./providers/subscription-adapter.ts";
+export {
+  createSubscriptionProvider,
+  parseSubscriptionCatalog,
+  type SubscriptionProviderOptions,
+} from "./providers/subscription-provider.ts";
+export {
+  createSubscriptionRuntime,
+  subscriptionAgentLoop,
+} from "./providers/subscription-runtime.ts";
 export { Database, DatabaseOpenError } from "./db/database.ts";
 export {
   Attachment,

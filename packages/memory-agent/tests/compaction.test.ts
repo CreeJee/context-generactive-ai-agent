@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
 import { chat, type ChatMiddleware, type ModelMessage } from "@tanstack/ai";
 import { Effect, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
@@ -12,20 +11,11 @@ import {
   type Budget,
   type CompactionSources,
 } from "../src/agent/compaction.ts";
-import { contextUsageEvent } from "../src/agent/run-state.ts";
 import { ChatState } from "../src/chat-state/chat-state.ts";
-import { CodexAppServer } from "../src/codex/app-server.ts";
-import { CodexModels } from "../src/codex/models.ts";
 import { Nodes, type Node } from "../src/memory/nodes.ts";
 import { ScriptedTextAdapter } from "../src/testing/scripted-adapter.ts";
 import { MemoryTools } from "../src/tools/memory.ts";
 import { testRuntime } from "./support/runtime.ts";
-
-const fakeServer = fileURLToPath(new URL("./support/fake-codex.mjs", import.meta.url));
-const fakeCodex = CodexAppServer.withCommand({
-  executable: process.execPath,
-  args: [fakeServer, "--signed-in"],
-});
 
 /** Records the conversation as the engine keeps it, whatever the model was sent. */
 function canonical() {
@@ -292,8 +282,9 @@ describe("compaction", () => {
   });
 
   test("/compact summarizes earlier turns and clears answered output for the runs that follow", async () => {
-    const { runtime, project, session } = await testRuntime({ codex: fakeCodex });
-    await runtime.runPromise(Effect.flatMap(CodexModels, (models) => models.select("fast-1")));
+    const context = await testRuntime({ testProvider: {} });
+    const { runtime, project, session } = context;
+    await context.provider!.select(runtime);
     const { agent, nodes, stores } = await runtime.runPromise(
       Effect.all({
         agent: AgentChat,
@@ -348,9 +339,10 @@ describe("compaction", () => {
     expect(kept.find((message) => message.role === "tool")?.content).toBe(toolOutput);
   });
 
-  test("a run reports how much of the model's context it read", async () => {
-    const { runtime, session } = await testRuntime({ codex: fakeCodex });
-    await runtime.runPromise(Effect.flatMap(CodexModels, (models) => models.select("fast-1")));
+  test("reports the model's context window and leaves usage unknown without provider data", async () => {
+    const setup = await testRuntime({ testProvider: {} });
+    const { runtime, session } = setup;
+    await setup.provider!.select(runtime);
     const agent = await runtime.runPromise(AgentChat);
     const status = async () =>
       decodeStatus(await (await runtime.runPromise(agent.status(session.id, null))).json()).context;
@@ -358,8 +350,8 @@ describe("compaction", () => {
     // Before any run: nothing read yet, and the window every offered model has.
     expect(await status()).toEqual({
       usedTokens: null,
-      windowTokens: 258_400,
-      compactAtTokens: 64_600,
+      windowTokens: 200_000,
+      compactAtTokens: 50_000,
     });
 
     const response = await runtime.runPromise(
@@ -383,10 +375,14 @@ describe("compaction", () => {
       .flatMap((line) =>
         line.startsWith("data: ") ? [Schema.decodeUnknownSync(StreamEvent)(line.slice(6))] : [],
       );
-    // The fake model reads 10 tokens of a 200k window.
-    const context = { usedTokens: 10, windowTokens: 200_000, compactAtTokens: 50_000 };
-    expect(events).toContainEqual({ type: "CUSTOM", name: contextUsageEvent, value: context });
-    expect(await status()).toEqual(context);
+    expect(
+      events.some((event) => event.type === "CUSTOM" && event.name === "memory-agent.context"),
+    ).toBe(false);
+    expect(await status()).toEqual({
+      usedTokens: null,
+      windowTokens: 200_000,
+      compactAtTokens: 50_000,
+    });
   });
 
   test("counts Korean closer to how models do than characters / 4", () => {

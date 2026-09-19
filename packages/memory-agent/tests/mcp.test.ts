@@ -5,8 +5,6 @@ import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
 import { Effect } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
-import { CodexAppServer } from "../src/codex/app-server.ts";
-import { CodexModels } from "../src/codex/models.ts";
 import { McpServers, mcpToolName } from "../src/mcp/servers.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { PermissionReviews } from "../src/permissions/reviews.ts";
@@ -14,12 +12,7 @@ import { Projects } from "../src/projects/projects.ts";
 import { approvalToolDefinitions, permissionReviewInterrupt } from "../src/tools/definitions.ts";
 import { testRuntime } from "./support/runtime.ts";
 
-const fakeServer = fileURLToPath(new URL("./support/fake-codex.mjs", import.meta.url));
 const fakeMcp = fileURLToPath(new URL("./support/fake-mcp-server.mjs", import.meta.url));
-const fakeCodex = CodexAppServer.withCommand({
-  executable: process.execPath,
-  args: [fakeServer, "--signed-in"],
-});
 
 async function until(condition: () => boolean, what: string) {
   for (let attempt = 0; attempt < 300; attempt++) {
@@ -49,7 +42,7 @@ interface McpJson {
 const writeJson = (path: string, value: McpJson) => writeFileSync(path, JSON.stringify(value));
 
 async function mcpSetup() {
-  const context = await testRuntime({ codex: fakeCodex });
+  const context = await testRuntime({ testProvider: {} });
   const log = join(context.base, "mcp-starts.log");
   const starts = () =>
     existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean).length : 0;
@@ -171,9 +164,9 @@ describe("MCP tool calls in a chat", () => {
     writeJson(join(context.project.root, ".mcp.json"), {
       mcpServers: { fake: context.fakeEntry() },
     });
+    await context.provider!.select(context.runtime);
     await context.runtime.runPromise(
       Effect.gen(function* () {
-        yield* (yield* CodexModels).select("fast-1");
         yield* (yield* Projects).setPermissionMode(context.project.id, mode);
         yield* (yield* McpServers).setTrusted(context.project, "project", "fake", true);
       }),

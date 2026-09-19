@@ -67,8 +67,8 @@ const wholeToolOutputs = (messages: readonly ModelMessage[]) =>
 /**
  * The messages with the output of tool calls the model has already answered from cleared: every
  * tool result before the latest assistant message that called no tools. What follows it (the
- * calls of the run in progress) stays whole, since the model is working with it and a waiting
- * codex turn is handed it. Each cleared result names its memory node, so the model can read it
+ * calls of the run in progress) stays whole, since the model is still working with it. Each
+ * cleared result names its memory node, so the model can read it
  * again. Null when there is nothing to clear.
  */
 function clearAnswered(

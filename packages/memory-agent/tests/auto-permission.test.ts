@@ -1,23 +1,15 @@
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
 import { Effect } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat, workspaceInstructions } from "../src/agent/chat.ts";
-import { CodexAppServer } from "../src/codex/app-server.ts";
-import { CodexModels } from "../src/codex/models.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { reviewInstructions, routineShellVerdict } from "../src/permissions/classifier.ts";
 import { PermissionReviews } from "../src/permissions/reviews.ts";
 import { Projects } from "../src/projects/projects.ts";
+import { ApprovedTools } from "../src/tools/approved.ts";
 import { approvalToolDefinitions, permissionReviewInterrupt } from "../src/tools/definitions.ts";
 import { testRuntime } from "./support/runtime.ts";
-
-const fakeServer = fileURLToPath(new URL("./support/fake-codex.mjs", import.meta.url));
-const fakeCodex = CodexAppServer.withCommand({
-  executable: process.execPath,
-  args: [fakeServer, "--signed-in"],
-});
 
 async function until(condition: () => boolean, what: string) {
   for (let attempt = 0; attempt < 300; attempt++) {
@@ -29,12 +21,10 @@ async function until(condition: () => boolean, what: string) {
 
 /** A project in `auto` mode and a real chat client talking to AgentChat in-process. */
 async function autoSetup() {
-  const context = await testRuntime({ codex: fakeCodex });
+  const context = await testRuntime({ testProvider: {} });
+  await context.provider!.select(context.runtime);
   await context.runtime.runPromise(
-    Effect.gen(function* () {
-      yield* (yield* CodexModels).select("fast-1");
-      yield* (yield* Projects).setPermissionMode(context.project.id, "auto");
-    }),
+    Effect.flatMap(Projects, (projects) => projects.setPermissionMode(context.project.id, "auto")),
   );
   const client = new ChatClient({
     tools: approvalToolDefinitions,
@@ -71,8 +61,8 @@ async function autoSetup() {
 }
 
 describe("workspace instructions", () => {
-  test("say what the permission mode allows, with the date and shell codex no longer describes", async () => {
-    const { project, storage, home } = await testRuntime({ codex: fakeCodex });
+  test("say what the permission mode allows, including the date and shell environment", async () => {
+    const { project, storage, home } = await testRuntime({ testProvider: {} });
     const places = { storageRoot: storage, globalSkills: join(home, ".agents", "skills") };
     const auto = workspaceInstructions(
       { ...project, permissionMode: "auto" },
@@ -84,6 +74,9 @@ describe("workspace instructions", () => {
     expect(auto).not.toContain("read-only");
     expect(workspaceInstructions({ ...project, permissionMode: "ask" }, places)).toContain(
       "wait for the user's approval of each call",
+    );
+    expect(workspaceInstructions({ ...project, permissionMode: "full" }, places)).toContain(
+      "run without per-call approval",
     );
     // Where the app keeps its own settings, and that its storage is not for the file tools.
     expect(auto).toContain(
@@ -97,6 +90,17 @@ describe("workspace instructions", () => {
 });
 
 describe("auto permission mode", () => {
+  test("full mode removes static approval while ask mode keeps it", async () => {
+    const context = await testRuntime({ testProvider: {} });
+    const approved = await context.runtime.runPromise(ApprovedTools);
+    expect(
+      approved.forProject({ ...context.project, permissionMode: "ask" })[0].needsApproval,
+    ).toBe(true);
+    expect(
+      approved.forProject({ ...context.project, permissionMode: "full" })[0].needsApproval,
+    ).toBe(false);
+  });
+
   test("pre-allows routine package and git commands, including safe compound commands", () => {
     for (const command of [
       "pnpm i",
@@ -126,12 +130,23 @@ describe("auto permission mode", () => {
     );
   });
 
+  test("asks before npx or pnpx and recommends a local-only package runner", () => {
+    for (const command of ["npx eslint .", "pnpx prettier --check ."]) {
+      const verdict = routineShellVerdict("run_shell", JSON.stringify({ command }));
+      expect(verdict).toMatchObject({ decision: "ask", decidedBy: "classifier" });
+      expect(verdict?.reason).toContain("pnpm exec");
+      expect(verdict?.reason).toContain("npm exec --");
+    }
+  });
+
   test("tells the reviewer not to ask merely for installs, pulls, or &&", () => {
     expect(reviewInstructions).toContain("git pull/fetch");
     expect(reviewInstructions).toContain("multiple &&-joined steps");
     expect(reviewInstructions).toContain(
       "Ordinary package-registry or git network access is not by itself a reason to ask",
     );
+    expect(reviewInstructions).toContain("npx and pnpx may download a missing package");
+    expect(reviewInstructions).toContain("pnpm exec (or npm exec --)");
   });
 
   test("runs a call the review allows without asking, and records why", async () => {

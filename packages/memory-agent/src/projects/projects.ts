@@ -10,8 +10,9 @@ import { canonicalPath, pathsOverlap } from "../files/paths.ts";
 /**
  * How approval-gated tools (shell, writes outside the project) are allowed.
  * `ask`: the user answers every call. `auto`: a classifier allows, asks or blocks each call first.
+ * `full`: approval-gated calls run immediately under the app's path and credential restrictions.
  */
-export const PermissionMode = Schema.Literal("ask", "auto");
+export const PermissionMode = Schema.Literal("ask", "auto", "full");
 export type PermissionMode = typeof PermissionMode.Type;
 
 export const Project = Schema.Struct({
@@ -31,7 +32,8 @@ const ProjectRow = Schema.Struct({
   root: Schema.String,
   name: Schema.String,
   cross_recall_excluded: Schema.Literal(0, 1),
-  permission_mode: PermissionMode,
+  permission_mode: Schema.Literal("ask", "auto"),
+  permission_full: Schema.Literal(0, 1),
   created_at: Schema.String,
   hidden_at: Schema.NullOr(Schema.String),
 });
@@ -44,7 +46,7 @@ function toProject(row: Record<string, SQLOutputValue>): Project {
     root: decoded.root,
     name: decoded.name,
     crossRecallExcluded: decoded.cross_recall_excluded === 1,
-    permissionMode: decoded.permission_mode,
+    permissionMode: decoded.permission_full === 1 ? "full" : decoded.permission_mode,
     createdAt: decoded.created_at,
     hiddenAt: decoded.hidden_at,
   };
@@ -145,10 +147,12 @@ const make = Effect.gen(function* () {
         ),
       ),
 
-    /** Choosing `auto` is the user's standing consent to let the classifier allow calls. */
+    /** Choosing `auto` or `full` records the user's standing permission policy. */
     setPermissionMode: (id: string, mode: PermissionMode) =>
       Effect.sync(() =>
-        db.sqlite.prepare("UPDATE projects SET permission_mode = ? WHERE id = ?").run(mode, id),
+        db.sqlite
+          .prepare("UPDATE projects SET permission_mode = ?, permission_full = ? WHERE id = ?")
+          .run(mode === "full" ? "auto" : mode, mode === "full" ? 1 : 0, id),
       ).pipe(
         Effect.flatMap((result) =>
           result.changes === 0 ? Effect.fail(new ProjectNotFound({ id })) : find(id),

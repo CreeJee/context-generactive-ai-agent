@@ -1,6 +1,6 @@
 import type { ChatMiddleware, ModelMessage, ToolCall } from "@tanstack/ai";
 import { Context, Effect, Layer } from "effect";
-import type { ModelSelection } from "../codex/models.ts";
+import type { ModelSelection } from "../providers/contracts.ts";
 import type { Project } from "../projects/projects.ts";
 import { permissionReviewInterrupt } from "../tools/definitions.ts";
 import { PermissionClassifier } from "./classifier.ts";

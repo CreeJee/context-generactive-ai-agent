@@ -50,13 +50,13 @@ const make = Effect.gen(function* () {
 
   return {
     /**
-     * Server side of the approval-gated tools. They only execute after an approval: with `static`
-     * approval (`ask` mode) TanStack waits for the user; with `gate` (`auto` mode, subagents) a
-     * middleware must have allowed the call. Approval never lifts the credential and `.git` rules.
+     * Server side of the approval-gated tools. With `static` approval (`ask` mode) TanStack waits
+     * for the user; with `gate` (`auto`/`full` modes, subagents) middleware either reviews the call
+     * or full mode lets it proceed. Permission mode never lifts path, credential or `.git` rules.
      */
     forProject(
       project: Project,
-      approval: "static" | "gate" = project.permissionMode === "auto" ? "gate" : "static",
+      approval: "static" | "gate" = project.permissionMode === "ask" ? "static" : "gate",
     ) {
       const runShell = (
         { command, workdir, timeoutSeconds }: typeof RunShellInput.Type,

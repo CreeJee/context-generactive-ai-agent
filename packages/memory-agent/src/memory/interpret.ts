@@ -2,9 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { SQLOutputValue } from "node:sqlite";
 import { chat } from "@tanstack/ai";
 import { Context, Effect, Layer, Option, Schema } from "effect";
-import { CodexAccount } from "../codex/account.ts";
-import { CodexChat } from "../codex/chat.ts";
-import { CodexModels, type ModelSelection } from "../codex/models.ts";
+import { ActiveProvider } from "../providers/active-provider.ts";
+import type { ModelSelection } from "../providers/contracts.ts";
 import { Database } from "../db/database.ts";
 import { Interpretations } from "./interpretations.ts";
 import { Nodes, toNode, type Node } from "./nodes.ts";
@@ -69,9 +68,7 @@ const make = Effect.gen(function* () {
   const nodes = yield* Nodes;
   const search = yield* MemorySearch;
   const interpretations = yield* Interpretations;
-  const account = yield* CodexAccount;
-  const models = yield* CodexModels;
-  const codexChat = yield* CodexChat;
+  const active = yield* ActiveProvider;
   const oneRunAtATime = yield* Effect.makeSemaphore(1);
 
   // A process that stopped mid-batch left jobs running; nothing is working on them now.
@@ -173,12 +170,13 @@ const make = Effect.gen(function* () {
         })),
       };
 
-      const cheap = yield* models.cheapestEffort(selection);
+      const { services } = yield* active.resolve(selection);
+      const cheap = yield* services.models.cheapestEffort(selection);
       const answer = yield* Effect.tryPromise(() => {
         const abortController = new AbortController();
         const timer = setTimeout(() => abortController.abort(), interpretTimeoutMs);
         return chat({
-          adapter: codexChat.adapter(cheap),
+          adapter: services.runtime.adapter(cheap),
           messages: [{ role: "user", content: `Input (JSON): ${JSON.stringify(input)}` }],
           systemPrompts: [interpretInstructions],
           threadId: randomUUID(),
@@ -260,9 +258,10 @@ const make = Effect.gen(function* () {
      * search keeps working either way.
      */
     runPending: Effect.gen(function* () {
-      const auth = yield* account.status;
-      const selection = yield* models.selected;
-      if (auth.status !== "signed-in" || !selection) return 0;
+      const selection = yield* active.selected;
+      if (!selection) return 0;
+      const auth = yield* active.auth(selection);
+      if (auth.status !== "signed-in") return 0;
       let interpreted = 0;
       for (let round = 0; round < batchesPerRun; round++) {
         const batch = nextBatch();

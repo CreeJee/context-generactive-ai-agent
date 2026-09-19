@@ -7,6 +7,7 @@ import { memoryAgentLayer, type MemoryAgentLayerOptions, Projects, Sessions } fr
 import { SecretStore } from "../../src/config/secrets.ts";
 import { fakeEmbedderLayer } from "../../src/testing/fake-embedder.ts";
 import { fakeMorphLayer } from "../../src/testing/fake-morph.ts";
+import { testProvider as makeTestProvider, type TestProviderOptions } from "./provider.ts";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -19,17 +20,23 @@ function open(storage: string, options: MemoryAgentLayerOptions) {
   return runtime;
 }
 
+export interface TestRuntimeOptions extends MemoryAgentLayerOptions {
+  readonly testProvider?: TestProviderOptions;
+}
+
 /**
  * A real runtime over a throwaway storage root, with one registered project and session.
  * Uses the deterministic embedder unless another one is passed.
  */
-export async function testRuntime(overrides: MemoryAgentLayerOptions = {}) {
+export async function testRuntime(overrides: TestRuntimeOptions = {}) {
   // Interpretation is a model call; tests that need it run it by hand. Secrets never touch the
   // real keychain.
   const base = realpathSync(mkdtempSync(join(tmpdir(), "memory-agent-")));
   const home = join(base, "home");
   mkdirSync(home);
-  const options = {
+  const { testProvider: providerOptions, ...layerOverrides } = overrides;
+  const provider = providerOptions ? makeTestProvider(providerOptions) : undefined;
+  const baseOptions: MemoryAgentLayerOptions = {
     embedder: fakeEmbedderLayer,
     morphAnalyzer: fakeMorphLayer,
     interpretAutomatically: false,
@@ -43,8 +50,11 @@ export async function testRuntime(overrides: MemoryAgentLayerOptions = {}) {
     importsHome: home,
     importsWatching: false,
     sweepSecrets: false,
-    ...overrides,
+    ...layerOverrides,
   };
+  const options: MemoryAgentLayerOptions = provider
+    ? { ...baseOptions, providerRegistry: provider.layer }
+    : baseOptions;
   const storage = join(base, "storage");
   const projectRoot = join(base, "project");
   mkdirSync(projectRoot);
@@ -65,6 +75,7 @@ export async function testRuntime(overrides: MemoryAgentLayerOptions = {}) {
     base,
     home,
     storage,
+    provider,
     /** Closes this runtime and opens a new one on the same storage, like a process restart. */
     reopen: async () => {
       await runtime.dispose();

@@ -1,28 +1,20 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { Effect, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
-import { CodexAppServer, type Json } from "../src/codex/app-server.ts";
-import { CodexModels } from "../src/codex/models.ts";
 import { Database } from "../src/db/database.ts";
 import { Importer } from "../src/imports/importer.ts";
+import type { JsonValue } from "../src/json.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
 import { testRuntime } from "./support/runtime.ts";
-
-const fakeServer = fileURLToPath(new URL("./support/fake-codex.mjs", import.meta.url));
-const fakeCodex = CodexAppServer.withCommand({
-  executable: process.execPath,
-  args: [fakeServer, "--signed-in"],
-});
 
 /** Assembled at run time so no key-shaped text sits in the repository. */
 const githubToken = `${"gh"}p_${"Z9y8X7w6V5u4T3s2R1q0P9o8N7m6L5k4J3i2"}`;
 
 const decodeRefs = Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ ref: Schema.String })));
-const line = (entry: { readonly [key: string]: Json }) => JSON.stringify(entry);
+const line = (entry: { readonly [key: string]: JsonValue }) => JSON.stringify(entry);
 
 const send = (
   runtime: Awaited<ReturnType<typeof testRuntime>>["runtime"],
@@ -56,8 +48,9 @@ const send = (
 
 describe("secrets in a chat run", () => {
   test("a tool result is hidden before the model, the page or memory sees it", async () => {
-    const { runtime, project, session } = await testRuntime({ codex: fakeCodex });
-    await runtime.runPromise(Effect.flatMap(CodexModels, (models) => models.select("fast-1")));
+    const context = await testRuntime({ testProvider: {} });
+    const { runtime, project, session } = context;
+    await context.provider!.select(runtime);
     writeFileSync(join(project.root, "deploy.txt"), `remote: origin\ntoken: ${githubToken}\n`);
 
     // The fake model repeats the result it got; the stream itself is never filtered, so what it
@@ -84,8 +77,9 @@ describe("secrets in a chat run", () => {
   });
 
   test("a key the user pastes is not kept in memory", async () => {
-    const { runtime, session } = await testRuntime({ codex: fakeCodex });
-    await runtime.runPromise(Effect.flatMap(CodexModels, (models) => models.select("fast-1")));
+    const context = await testRuntime({ testProvider: {} });
+    const { runtime, session } = context;
+    await context.provider!.select(runtime);
     await send(runtime, session.id, "run-paste", `이 토큰으로 배포해줘 ${githubToken}`);
 
     const user = await runtime.runPromise(

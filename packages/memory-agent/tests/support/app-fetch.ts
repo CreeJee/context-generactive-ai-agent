@@ -1,12 +1,12 @@
 import { Effect, type ManagedRuntime } from "effect";
 import { AgentChat } from "../../src/agent/chat.ts";
-import { CodexAccount } from "../../src/codex/account.ts";
 import { Projects } from "../../src/projects/projects.ts";
+import { ProviderRegistry } from "../../src/providers/registry.ts";
 import { sessionHolderHeader } from "../../src/sessions/lease-state.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 
 type Runtime = ManagedRuntime.ManagedRuntime<
-  AgentChat | CodexAccount | Projects | Sessions,
+  AgentChat | Projects | ProviderRegistry | Sessions,
   unknown
 >;
 
@@ -15,8 +15,9 @@ type Runtime = ManagedRuntime.ManagedRuntime<
  * tests exercise the real handlers without starting the web app.
  */
 export function appFetch(runtime: Runtime): typeof fetch {
-  const run = <A, E>(effect: Effect.Effect<A, E, AgentChat | CodexAccount | Projects | Sessions>) =>
-    runtime.runPromise(effect);
+  const run = <A, E>(
+    effect: Effect.Effect<A, E, AgentChat | Projects | ProviderRegistry | Sessions>,
+  ) => runtime.runPromise(effect);
   const chat = <A>(use: (agent: Effect.Effect.Success<typeof AgentChat>) => Effect.Effect<A>) =>
     run(Effect.flatMap(AgentChat, use));
 
@@ -28,8 +29,22 @@ export function appFetch(runtime: Runtime): typeof fetch {
     const path = url.pathname;
     let match: RegExpExecArray | null;
 
-    if (path === "/api/auth")
-      return Response.json(await run(Effect.flatMap(CodexAccount, (a) => a.status)));
+    if (path === "/api/auth") {
+      const state = await run(
+        Effect.gen(function* () {
+          const registry = yield* ProviderRegistry;
+          const requested = url.searchParams.get("provider");
+          const provider = registry.providers.find((candidate) => candidate === requested);
+          const configured = yield* registry.get(provider ?? registry.providers[0]!);
+          return yield* configured.auth.status;
+        }),
+      );
+      return Response.json(
+        state.status === "pending"
+          ? { provider: state.provider, status: state.status, authUrl: state.authorizationUrl }
+          : state,
+      );
+    }
     if (path === "/api/projects")
       return Response.json(await run(Effect.flatMap(Projects, (p) => p.list)));
     if (path === "/api/sessions" && request.method === "POST") {

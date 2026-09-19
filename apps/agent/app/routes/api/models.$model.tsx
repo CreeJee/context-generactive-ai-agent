@@ -1,42 +1,53 @@
 import { Effect, Either, Schema } from "effect";
-import { CodexModels } from "memory-agent";
+import { ProviderId, ProviderRegistry } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/models.$model";
 
-const Selection = Schema.Struct({ reasoningEffort: Schema.optional(Schema.NonEmptyString) });
+const Selection = Schema.Struct({
+  provider: ProviderId,
+  reasoningEffort: Schema.optional(Schema.NonEmptyString),
+});
 
-/**
- * POST /api/models/:model { reasoningEffort? } — switches the model used for the next chat run.
- * A model the account does not offer is refused, never replaced by another (PRD R02).
- */
+interface ModelUnavailableBody {
+  error: "model_unavailable";
+  provider: "openai" | "anthropic";
+  model: string;
+  reasoningEffort: string | null;
+}
+
+const modelUnavailable = (error: {
+  readonly provider: "openai" | "anthropic";
+  readonly model: string;
+  readonly reasoningEffort?: string;
+}) => {
+  const body: ModelUnavailableBody = {
+    error: "model_unavailable",
+    provider: error.provider,
+    model: error.model,
+    reasoningEffort: error.reasoningEffort ?? null,
+  };
+  return Response.json(body, { status: 404 });
+};
+
+/** Validates and saves an explicit provider/model/effort tuple, with no provider fallback. */
 export async function action({ request, params }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected) return rejected;
   const body = await readJson(request, Selection);
   if (Either.isLeft(body)) return Response.json({ error: "invalid_selection" }, { status: 400 });
 
-  const response = Effect.flatMap(CodexModels, (models) =>
-    models.select(params.model, body.right.reasoningEffort),
-  ).pipe(
+  const { provider, reasoningEffort } = body.right;
+  const response = Effect.gen(function* () {
+    const configured = yield* (yield* ProviderRegistry).get(provider);
+    return yield* configured.models.select(params.model, reasoningEffort);
+  }).pipe(
     Effect.map((selection) => Response.json(selection)),
     Effect.catchTags({
-      ModelUnavailable: (error) =>
-        Effect.succeed(
-          Response.json(
-            {
-              error: "model_unavailable",
-              model: error.model,
-              reasoningEffort: error.reasoningEffort ?? null,
-            },
-            { status: 404 },
-          ),
-        ),
-      CodexUnavailable: (error) =>
-        Effect.succeed(
-          Response.json({ error: "codex_unavailable", reason: error.reason }, { status: 503 }),
-        ),
-      CodexRequestFailed: () =>
+      ModelUnavailable: (error) => Effect.succeed(modelUnavailable(error)),
+      ProviderUnavailable: () =>
+        Effect.succeed(Response.json({ error: "provider_unavailable" }, { status: 404 })),
+      ProviderOperationFailed: () =>
         Effect.succeed(Response.json({ error: "model_list_failed" }, { status: 502 })),
     }),
   );
