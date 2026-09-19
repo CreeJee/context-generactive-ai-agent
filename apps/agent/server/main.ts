@@ -2,6 +2,7 @@
 // process and opens the folder (or the folder it was started from) as a project;
 // `context-agent acp` is the stdio ACP agent editors start, working through that server.
 // Runs as the packaged executable (Node SEA) or as the `vp pack` bundle (`vp run start`).
+import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 import { isSea } from "node:sea";
 import { Readable, Writable } from "node:stream";
@@ -13,6 +14,7 @@ import { AppApi, startAcpAgent } from "memory-agent/acp";
 import * as build from "#server-build";
 import { isThisApp, launchFolder, openProject, type LaunchFolder } from "./launch-project.ts";
 import { unpackRuntime } from "./runtime-assets.ts";
+import { acquireStorageLock } from "./dev-safety.ts";
 import { openInBrowser, serve } from "./serve.ts";
 
 const usage = `사용법:
@@ -28,6 +30,7 @@ const { values, positionals } = parseArgs({
     port: { type: "string", default: "5173" },
     open: { type: "boolean", default: true },
     storage: { type: "string" },
+    "dev-backend": { type: "boolean", default: false },
     help: { type: "boolean", short: "h", default: false },
   },
 });
@@ -75,7 +78,9 @@ if (positionals[0] === "acp") {
   const storageRoot = values.storage ?? defaultStorageRoot;
   // Only the executable has a folder of its own; `node` running the bundle does not count.
   const executableFolder = isSea() ? dirname(process.execPath) : null;
-  const folder = launchFolder(positionals[0], process.cwd(), storageRoot, executableFolder);
+  const folder: LaunchFolder = values["dev-backend"]
+    ? { kind: "none" }
+    : launchFolder(positionals[0], process.cwd(), storageRoot, executableFolder);
   if (folder.kind === "invalid") {
     console.error(`폴더를 찾을 수 없어요: ${folder.path}`);
     process.exit(2);
@@ -90,13 +95,23 @@ if (positionals[0] === "acp") {
   }
 
   process.env.CONTEXT_AGENT_HOME = storageRoot;
+  const developmentBuildId = process.env.CONTEXT_AGENT_BUILD_ID;
+  const runtimeInstanceId = randomUUID();
+  const releaseStorageLock = acquireStorageLock(storageRoot, port, runtimeInstanceId);
+  process.once("exit", releaseStorageLock);
   const runtime = unpackRuntime(storageRoot);
   if (runtime !== null) process.env.CONTEXT_AGENT_RUNTIME = runtime;
   const clientDirectory =
     runtime === null
       ? fileURLToPath(new URL("../build/client", import.meta.url))
       : `${runtime}/client`;
-  await serve({ build, port, clientDirectory }).catch((error: NodeJS.ErrnoException) => {
+  await serve({
+    build,
+    port,
+    clientDirectory,
+    developmentBuildId,
+    runtimeInstanceId,
+  }).catch((error: NodeJS.ErrnoException) => {
     console.error(
       error.code === "EADDRINUSE"
         ? `포트 ${port}를 다른 프로그램이 쓰고 있어요. --port로 다른 포트를 지정하세요.`

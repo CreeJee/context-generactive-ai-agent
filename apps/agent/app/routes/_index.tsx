@@ -1,7 +1,6 @@
-import type { Route } from "./+types/_index";
 import { App } from "../entry";
 
-export function meta({}: Route.MetaArgs) {
+export function meta() {
   return [{ title: "Agent" }, { name: "description", content: "Run!" }];
 }
 

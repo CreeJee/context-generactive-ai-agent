@@ -6,7 +6,9 @@
     "#server-build": "./build/server/index.js"
   },
   "scripts": {
-    "dev": "react-router dev",
+    "dev": "node --experimental-strip-types scripts/dev.ts",
+    "dev:agent": "node --experimental-strip-types scripts/dev.ts agent",
+    "dev:web": "node --experimental-strip-types scripts/dev.ts web",
     "start": "node dist/context-agent.mjs"
   },
   "dependencies": {

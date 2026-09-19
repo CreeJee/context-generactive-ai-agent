@@ -7,7 +7,9 @@ import {
   ScrollRestoration,
 } from "react-router";
 import { NuqsAdapter } from "nuqs/adapters/react-router/v8";
+import { useEffect, useState } from "react";
 
+import { backendRestartRequiredEvent } from "./entry/api";
 import { themeScript } from "./entry/theme";
 import { TooltipProvider } from "~/components/ui/tooltip";
 import type { Route } from "./+types/root";
@@ -35,8 +37,23 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  const [backendRestartRequired, setBackendRestartRequired] = useState(false);
+  useEffect(() => {
+    const show = () => setBackendRestartRequired(true);
+    window.addEventListener(backendRestartRequiredEvent, show);
+    return () => window.removeEventListener(backendRestartRequiredEvent, show);
+  }, []);
+
   return (
     <NuqsAdapter>
+      {backendRestartRequired && (
+        <div
+          className="fixed inset-x-0 top-0 z-100 border-b border-warning/40 bg-background px-4 py-2 text-center text-sm text-foreground shadow-sm"
+          role="alert"
+        >
+          에이전트 코드가 변경되어 새 작업을 차단했어요. 터미널에서 개발 서버를 다시 시작하세요.
+        </div>
+      )}
       <Outlet />
     </NuqsAdapter>
   );

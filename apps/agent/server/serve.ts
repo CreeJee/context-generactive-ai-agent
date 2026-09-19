@@ -5,12 +5,20 @@ import { extname, resolve, sep } from "node:path";
 import { createRequestListener } from "@react-router/node";
 import { Schema } from "effect";
 import type { ServerBuild } from "react-router";
+import {
+  developmentBuildHeader,
+  developmentRequestDecision,
+  createDevelopmentBoundary,
+} from "./dev-safety.ts";
 
 export interface ServeOptions {
   readonly build: ServerBuild;
   readonly port: number;
   /** React Router's client build (`build/client`). */
   readonly clientDirectory: string;
+  /** Present only for the stable development backend behind the HMR frontend. */
+  readonly developmentBuildId?: string;
+  readonly runtimeInstanceId?: string;
 }
 
 /** Only the loopback names; any other Host means a rebinding page is talking to this server (R14). */
@@ -89,6 +97,9 @@ export function openInBrowser(url: string) {
 export function serve(options: ServeOptions) {
   const clientDirectory = resolve(options.clientDirectory);
   const handle = createRequestListener({ build: options.build, mode: "production" });
+  const development = options.developmentBuildId
+    ? createDevelopmentBoundary(options.developmentBuildId, options.runtimeInstanceId)
+    : null;
 
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
     if (!isLoopbackHost(request.headers.host)) {
@@ -98,6 +109,24 @@ export function serve(options: ServeOptions) {
       return;
     }
     const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    if (development !== null) {
+      const presented = request.headers[developmentBuildHeader];
+      const decision = developmentRequestDecision(
+        development,
+        request.method,
+        pathname,
+        Array.isArray(presented) ? presented[0] : presented,
+      );
+      if (decision.kind !== "allow") {
+        response
+          .writeHead(decision.status, {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "no-store",
+          })
+          .end(decision.body);
+        return;
+      }
+    }
     const file =
       request.method === "GET" || request.method === "HEAD"
         ? clientFile(clientDirectory, pathname)
@@ -114,6 +143,14 @@ export function serve(options: ServeOptions) {
     if (request.method === "HEAD") return void response.end();
     createReadStream(file).pipe(response);
   });
+
+  if (development !== null) {
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const)
+      process.once(signal, () => {
+        development.beginDrain();
+        server.close();
+      });
+  }
 
   return new Promise<void>((resolveListening, reject) => {
     server.once("error", reject);
