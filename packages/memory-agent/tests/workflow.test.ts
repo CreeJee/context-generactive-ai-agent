@@ -61,6 +61,35 @@ describe("Workflows", () => {
     ]);
   });
 
+  test("returns Execute to Plan when the Plan is revised", async () => {
+    const { runtime, session } = await testRuntime();
+    const state = await runtime.runPromise(
+      Effect.gen(function* () {
+        const workflows = yield* Workflows;
+        yield* workflows.updateGoal(session.id, goal);
+        yield* workflows.updatePlan(session.id, plan);
+        yield* workflows.setPhase(session.id, "execute");
+        return yield* workflows.updatePlan(session.id, {
+          ...plan,
+          summary: "Revised execution scope",
+        });
+      }),
+    );
+
+    expect(state.phase).toBe("plan");
+    expect(state.plan).toMatchObject({
+      version: 2,
+      status: "ready",
+      summary: "Revised execution scope",
+      steps: [{ status: "pending", evidence: [] }],
+    });
+    expect(state.ledger.slice(-2)).toMatchObject([
+      { kind: "plan_replanned", detail: "plan v2 (ready)" },
+      { kind: "phase_changed", detail: "execute -> plan (plan revised)" },
+    ]);
+    expect(state.ledger.at(-1)?.sequence).toBe(state.ledger.at(-2)!.sequence + 1);
+  });
+
   test("keeps an older Plan visibly tied to its Goal version", async () => {
     const { runtime, session } = await testRuntime();
     const state = await runtime.runPromise(

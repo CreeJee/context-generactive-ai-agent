@@ -509,14 +509,26 @@ const make = Effect.gen(function* () {
           updatedAt: new Date().toISOString(),
         };
         const kind = current.plan === null ? "plan_updated" : "plan_replanned";
-        return {
+        const phase =
+          current.phase === "execute" || current.phase === "verify" ? "plan" : current.phase;
+        const planned = {
           ...current,
+          phase,
           plan,
           ledger: [
             ...current.ledger,
             event(current, kind, `plan v${plan.version} (${plan.status})`),
           ],
         };
+        return phase === current.phase
+          ? planned
+          : {
+              ...planned,
+              ledger: [
+                ...planned.ledger,
+                event(planned, "phase_changed", `${current.phase} -> plan (plan revised)`),
+              ],
+            };
       }),
 
     updateProgress: (sessionId: string, input: UpdateWorkflowProgress) =>

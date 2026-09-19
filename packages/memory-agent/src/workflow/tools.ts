@@ -76,6 +76,7 @@ const make = Effect.gen(function* () {
         case "plan":
           return [updateGoal, updatePlan];
         case "execute":
+          return [updatePlan, updateProgress];
         case "verify":
           return [updateProgress];
         case "chat":
@@ -158,7 +159,7 @@ ${plan}`;
     }
     case "execute":
       return `${common}
-Execute only the current Plan. Before each step, record it as in_progress. Record completed steps with actual evidence using update_workflow_progress; never mark work complete from intention alone. The workflow advances to Verify only when every step is completed with evidence.
+Execute only the current Plan. Before each step, record it as in_progress. Record completed steps with actual evidence using update_workflow_progress; never mark work complete from intention alone. If the user materially changes the scope, design or acceptance criteria, revise the Plan with update_plan; this returns the workflow to Plan so the revised version can be confirmed before execution resumes. The workflow advances to Verify only when every step is completed with evidence.
 
 ${goal}
 

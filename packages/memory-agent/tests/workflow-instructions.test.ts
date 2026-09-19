@@ -34,6 +34,14 @@ describe("workflowInstructions", () => {
     expect(prompt).toContain("restricted to read-only investigation");
   });
 
+  test("allows material Plan revisions during Execute and requires reconfirmation", () => {
+    const prompt = workflowInstructions(state("execute"), resolved("execute"));
+
+    expect(prompt).toContain("revise the Plan with update_plan");
+    expect(prompt).toContain("returns the workflow to Plan");
+    expect(prompt).toContain("confirmed before execution resumes");
+  });
+
   test("distinguishes implementation failure from invalid verification premises", () => {
     const prompt = workflowInstructions(state("verify"), resolved("verify"));
 
