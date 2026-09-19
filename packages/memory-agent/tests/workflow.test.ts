@@ -90,6 +90,40 @@ describe("Workflows", () => {
     expect(state.ledger.at(-1)?.sequence).toBe(state.ledger.at(-2)!.sequence + 1);
   });
 
+  test("rejects stale execution progress after a Plan revision", async () => {
+    const { runtime, session } = await testRuntime();
+    const result = await runtime.runPromise(
+      Effect.gen(function* () {
+        const workflows = yield* Workflows;
+        yield* workflows.updateGoal(session.id, goal);
+        yield* workflows.updatePlan(session.id, plan);
+        yield* workflows.setPhase(session.id, "execute");
+        yield* workflows.updatePlan(session.id, {
+          ...plan,
+          summary: "Revised execution scope",
+        });
+        const progress = yield* Effect.either(
+          workflows.updateProgress(session.id, {
+            goalEvidence: [],
+            planEvidence: [],
+            planStatus: "executing",
+            steps: [],
+            detail: "stale Execute tool call",
+          }),
+        );
+        return { progress, state: yield* workflows.get(session.id) };
+      }),
+    );
+
+    expect(Either.isLeft(result.progress)).toBe(true);
+    if (Either.isLeft(result.progress))
+      expect(result.progress.left).toMatchObject({ reason: "phase_not_executable" });
+    expect(result.state).toMatchObject({
+      phase: "plan",
+      plan: { version: 2, status: "ready" },
+    });
+  });
+
   test("keeps an older Plan visibly tied to its Goal version", async () => {
     const { runtime, session } = await testRuntime();
     const state = await runtime.runPromise(

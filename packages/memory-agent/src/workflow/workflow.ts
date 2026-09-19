@@ -223,7 +223,8 @@ export class WorkflowProgressRefused extends Data.TaggedError("WorkflowProgressR
     | "unknown_step"
     | "step_evidence_required"
     | "verification_required"
-    | "steps_incomplete";
+    | "steps_incomplete"
+    | "phase_not_executable";
 }> {}
 
 function rowText(row: Record<string, SQLOutputValue> | undefined) {
@@ -544,6 +545,14 @@ const make = Effect.gen(function* () {
             input.steps.some((update) => !current.plan?.steps.some((step) => step.id === update.id))
           )
             return Effect.fail(new WorkflowProgressRefused({ reason: "unknown_step" }));
+          if (
+            current.phase === "plan" &&
+            (input.planStatus !== undefined ||
+              input.steps.length > 0 ||
+              input.planEvidence.length > 0 ||
+              input.verification !== undefined)
+          )
+            return Effect.fail(new WorkflowProgressRefused({ reason: "phase_not_executable" }));
 
           const steps =
             current.plan?.steps.map((step) => {
