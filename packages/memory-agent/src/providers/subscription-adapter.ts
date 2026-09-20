@@ -319,6 +319,11 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
           };
           continue;
         }
+        if (event.type === "content-block-end" && textOpen) {
+          textOpen = false;
+          yield { ...stamp(), type: EventType.TEXT_MESSAGE_END, messageId };
+          continue;
+        }
         if (textOpen) {
           textOpen = false;
           yield { ...stamp(), type: EventType.TEXT_MESSAGE_END, messageId };

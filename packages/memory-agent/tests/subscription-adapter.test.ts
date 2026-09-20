@@ -364,6 +364,36 @@ describe("subscription model adapters", () => {
     });
   });
 
+  test("accepts Anthropic content block end after streamed text", async () => {
+    const client = {
+      async *stream() {
+        yield { type: "text" as const, text: "Which option?" };
+        yield { type: "content-block-end" as const, index: 0 };
+      },
+    };
+    const adapter = new SubscriptionTextAdapter(client, {
+      provider: "anthropic",
+      model: "model-1",
+      reasoningEffort: "medium",
+    });
+    const events = [];
+    for await (const event of adapter.chatStream({
+      ...options,
+      model: "model-1",
+      logger,
+    }))
+      events.push(event);
+
+    expect(events.map((event) => event.type)).toEqual([
+      EventType.RUN_STARTED,
+      EventType.TEXT_MESSAGE_START,
+      EventType.TEXT_MESSAGE_CONTENT,
+      EventType.TEXT_MESSAGE_END,
+      EventType.RUN_FINISHED,
+    ]);
+    expect(events.at(-1)).toMatchObject({ finishReason: "stop" });
+  });
+
   test("forwards abort to the provider request and ends without a model error", async () => {
     let receivedSignal: AbortSignal | undefined;
     const client = {
