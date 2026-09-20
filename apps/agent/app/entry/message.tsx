@@ -1,11 +1,15 @@
 import type { UIMessage } from "@tanstack/ai-react";
 import { Option, Schema } from "effect";
-import { ChevronRightIcon, WrenchIcon } from "lucide-react";
+import { BotIcon, ChevronRightIcon, Clock3Icon, WrenchIcon } from "lucide-react";
+import type { TraceTaskView } from "memory-agent";
+import { useState } from "react";
 import { Badge } from "~/components/ui/badge";
+import { Button } from "~/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
 import { attachmentIdOf, attachmentUrl, type QueuedMessage } from "memory-agent/definitions";
 import { DrawingPicture, UserMessageBody } from "./images";
 import { Markdown } from "./markdown";
+import type { TraceConnection } from "./work-trace";
 
 type Part = UIMessage["parts"][number];
 type ToolCall = Extract<Part, { type: "tool-call" }>;
@@ -140,19 +144,252 @@ function StatusBadge({ status }: { status: CallStatus }) {
   }
 }
 
+const activeTaskStatuses = new Set(["queued", "running", "waiting", "blocked", "resuming"]);
+
+function elapsed(task: TraceTaskView) {
+  const milliseconds = Math.max(
+    0,
+    (activeTaskStatuses.has(task.status) ? Date.now() : task.updatedAt) - task.createdAt,
+  );
+  const seconds = Math.round(milliseconds / 1_000);
+  if (seconds < 60) return `${Math.max(1, seconds)}초`;
+  const minutes = Math.round(seconds / 60);
+  return minutes < 60 ? `${minutes}분` : `${Math.round(minutes / 60)}시간`;
+}
+
+function taskStatus(task: TraceTaskView) {
+  switch (task.status) {
+    case "queued":
+      return { label: "대기 중", variant: "outline" as const };
+    case "running":
+      return { label: "실행 중", variant: "outline" as const };
+    case "waiting":
+      return { label: "승인 대기", variant: "outline" as const };
+    case "blocked":
+      return { label: "확인 필요", variant: "destructive" as const };
+    case "interrupted":
+      return { label: "중단됨", variant: "destructive" as const };
+    case "resumable":
+      return { label: "재개 가능", variant: "destructive" as const };
+    case "resuming":
+      return { label: "새 실행으로 재개 중", variant: "outline" as const };
+    case "completed":
+      return { label: "완료", variant: "secondary" as const };
+    case "failed":
+      return { label: "실패", variant: "destructive" as const };
+    case "cancelled":
+      return { label: "중단됨", variant: "destructive" as const };
+    case "archived":
+      return { label: "보관됨", variant: "secondary" as const };
+    case "deleted":
+      return { label: "삭제됨", variant: "secondary" as const };
+  }
+}
+
+type ResumeActionResult =
+  | { readonly status: "queued" }
+  | { readonly status: "blocked"; readonly reason: string }
+  | { readonly status: "failed" };
+type ArchiveActionResult =
+  | { readonly status: "archived" }
+  | { readonly status: "blocked"; readonly reason: string }
+  | { readonly status: "failed" };
+type DeleteActionResult =
+  | { readonly status: "deleted" }
+  | { readonly status: "blocked"; readonly reason: string }
+  | { readonly status: "failed" };
+const archivableTaskStatuses = new Set([
+  "queued",
+  "running",
+  "waiting",
+  "blocked",
+  "interrupted",
+  "resumable",
+  "resuming",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+
+function TaskSummaryCard({
+  task,
+  connection,
+  readOnly,
+  onResume,
+  onArchive,
+  onDelete,
+}: {
+  task: TraceTaskView;
+  connection: TraceConnection;
+  readOnly: boolean;
+  onResume: (task: TraceTaskView, confirmUncertain: boolean) => Promise<ResumeActionResult>;
+  onArchive: (task: TraceTaskView) => Promise<ArchiveActionResult>;
+  onDelete: (task: TraceTaskView) => Promise<DeleteActionResult>;
+}) {
+  const status = taskStatus(task);
+  const active = activeTaskStatuses.has(task.status);
+  const [resumeState, setResumeState] = useState<
+    "idle" | "requesting" | "confirm-uncertain" | "queued" | "failed"
+  >("idle");
+  const resume = async (confirmUncertain: boolean) => {
+    setResumeState("requesting");
+    const result = await onResume(task, confirmUncertain);
+    if (result.status === "queued") return setResumeState("queued");
+    if (result.status === "blocked" && result.reason === "uncertain_side_effect")
+      return setResumeState("confirm-uncertain");
+    setResumeState("failed");
+  };
+  const [archiveState, setArchiveState] = useState<"idle" | "requesting" | "failed">("idle");
+  const archive = async () => {
+    setArchiveState("requesting");
+    const result = await onArchive(task);
+    setArchiveState(result.status === "archived" ? "idle" : "failed");
+  };
+  const [deleteState, setDeleteState] = useState<"idle" | "requesting" | "failed">("idle");
+  const remove = async () => {
+    if (
+      !window.confirm(
+        "이 작업의 transcript·checkpoint·locator를 삭제할까요? 채택된 project memory와 provenance는 유지돼요.",
+      )
+    )
+      return;
+    setDeleteState("requesting");
+    const result = await onDelete(task);
+    setDeleteState(result.status === "deleted" ? "idle" : "failed");
+  };
+  const openTrace = () =>
+    window.dispatchEvent(new CustomEvent("work-trace:open", { detail: { taskId: task.id } }));
+  return (
+    <section
+      className="min-w-72 rounded-lg border bg-muted/30 px-3 py-2.5"
+      aria-label={`서브에이전트 작업: ${task.title}`}
+    >
+      <div className="flex items-center gap-2">
+        <BotIcon className="size-4 text-muted-foreground" aria-hidden />
+        <span className="min-w-0 truncate font-medium">{task.agentName ?? "서브에이전트"}</span>
+        <Badge className="ml-auto shrink-0" variant={status.variant}>
+          {status.label}
+        </Badge>
+      </div>
+      <p className="mt-1.5 line-clamp-2 text-sm">{task.request}</p>
+      <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Clock3Icon className="size-3.5" aria-hidden />
+        <span>{elapsed(task)}</span>
+        <span aria-hidden>·</span>
+        <span className="min-w-0 truncate">
+          {active && connection !== "live"
+            ? "실행 상태에 다시 연결 중"
+            : (task.latestActivity ?? "작업 기록을 준비하는 중")}
+        </span>
+      </div>
+      {task.latestResumedFromAttemptId && (
+        <p className="mt-1 text-xs text-muted-foreground">이전 실행에서 새 attempt로 재개됨</p>
+      )}
+      {task.status === "resumable" && (
+        <p className="mt-1 text-xs text-destructive">
+          실행 연결이 소실됐어요. checkpoint에서 새 attempt로 재개할 수 있어요.
+        </p>
+      )}
+      {resumeState === "confirm-uncertain" && (
+        <p className="mt-1 text-xs text-destructive">
+          완료 여부가 불확실한 도구가 있어요. 중복 side effect 가능성을 확인해야 해요.
+        </p>
+      )}
+      {resumeState === "failed" && (
+        <p className="mt-1 text-xs text-destructive">최신 상태에서 재개할 수 없어요.</p>
+      )}
+      <div className="mt-2 flex items-center justify-end gap-1">
+        {task.status === "resumable" && task.latestAttemptId && (
+          <Button
+            type="button"
+            size="xs"
+            variant={resumeState === "confirm-uncertain" ? "destructive" : "outline"}
+            disabled={readOnly || resumeState === "requesting" || resumeState === "queued"}
+            onClick={() => void resume(resumeState === "confirm-uncertain")}
+          >
+            {resumeState === "requesting"
+              ? "요청 중"
+              : resumeState === "queued"
+                ? "재개 요청됨"
+                : resumeState === "confirm-uncertain"
+                  ? "위험 확인 후 재개"
+                  : "재개"}
+          </Button>
+        )}
+        {archivableTaskStatuses.has(task.status) && (
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            disabled={readOnly || archiveState === "requesting"}
+            onClick={() => void archive()}
+          >
+            {archiveState === "requesting"
+              ? "보관 중"
+              : archiveState === "failed"
+                ? "보관 재시도"
+                : "보관"}
+          </Button>
+        )}
+        {task.status !== "deleted" && (
+          <Button
+            type="button"
+            size="xs"
+            variant="destructive"
+            disabled={readOnly || deleteState === "requesting"}
+            onClick={() => void remove()}
+          >
+            {deleteState === "requesting"
+              ? "삭제 중"
+              : deleteState === "failed"
+                ? "삭제 재시도"
+                : "삭제"}
+          </Button>
+        )}
+        <Button type="button" size="xs" variant="ghost" onClick={openTrace}>
+          Work Trace에서 보기
+        </Button>
+      </div>
+    </section>
+  );
+}
+
 function ToolCallView({
   call,
   result,
   awaitingApproval,
+  task,
+  traceConnection,
+  readOnly,
+  onResumeTask,
+  onArchiveTask,
+  onDeleteTask,
 }: {
   call: ToolCall;
   result: ToolResult | undefined;
   awaitingApproval: boolean;
+  task: TraceTaskView | undefined;
+  traceConnection: TraceConnection;
+  readOnly: boolean;
+  onResumeTask: (task: TraceTaskView, confirmUncertain: boolean) => Promise<ResumeActionResult>;
+  onArchiveTask: (task: TraceTaskView) => Promise<ArchiveActionResult>;
+  onDeleteTask: (task: TraceTaskView) => Promise<DeleteActionResult>;
 }) {
   const drawing = drawingOf(result);
   return (
     <div className="flex flex-col gap-1.5">
-      <ToolCallCard call={call} result={result} awaitingApproval={awaitingApproval} />
+      {task ? (
+        <TaskSummaryCard
+          task={task}
+          connection={traceConnection}
+          readOnly={readOnly}
+          onResume={onResumeTask}
+          onArchive={onArchiveTask}
+          onDelete={onDeleteTask}
+        />
+      ) : (
+        <ToolCallCard call={call} result={result} awaitingApproval={awaitingApproval} />
+      )}
       {/* Outside the collapsed card: the picture is the point of the call. */}
       {drawing && <DrawingPicture url={drawing.url} path={drawing.path} />}
     </div>
@@ -228,11 +465,23 @@ export function MessageView({
   message,
   streaming,
   awaitingApproval,
+  tasksByToolCall,
+  traceConnection,
+  readOnly,
+  onResumeTask,
+  onArchiveTask,
+  onDeleteTask,
 }: {
   message: UIMessage;
   streaming: boolean;
   /** Tool call ids with an approval card open. */
   awaitingApproval: ReadonlySet<string>;
+  tasksByToolCall: ReadonlyMap<string, TraceTaskView>;
+  traceConnection: TraceConnection;
+  readOnly: boolean;
+  onResumeTask: (task: TraceTaskView, confirmUncertain: boolean) => Promise<ResumeActionResult>;
+  onArchiveTask: (task: TraceTaskView) => Promise<ArchiveActionResult>;
+  onDeleteTask: (task: TraceTaskView) => Promise<DeleteActionResult>;
 }) {
   const results = new Map(
     message.parts.flatMap((part) =>
@@ -269,6 +518,12 @@ export function MessageView({
                 call={part}
                 result={results.get(part.id)}
                 awaitingApproval={awaitingApproval.has(part.id)}
+                task={tasksByToolCall.get(part.id)}
+                traceConnection={traceConnection}
+                readOnly={readOnly}
+                onResumeTask={onResumeTask}
+                onArchiveTask={onArchiveTask}
+                onDeleteTask={onDeleteTask}
               />
             );
           return null;

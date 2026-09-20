@@ -8,6 +8,7 @@ import {
   FolderPlusIcon,
   LogOutIcon,
   PlusIcon,
+  Trash2Icon,
 } from "lucide-react";
 import { useAtom } from "jotai";
 import { atomWithStorage } from "jotai/utils";
@@ -423,6 +424,7 @@ export function SessionSection({
   onSelect,
   onCreate,
   onArchive,
+  onDelete,
   onRestore,
   loadAgents,
 }: {
@@ -435,6 +437,7 @@ export function SessionSection({
   /** Without an agent the conversation uses the app's model. */
   onCreate: (agent?: string) => void;
   onArchive: (sessionId: string) => void;
+  onDelete: (sessionId: string) => void;
   onRestore: (sessionId: string) => void;
   /** Trusted external agents a conversation can talk to directly. */
   loadAgents: () => Promise<string[]>;
@@ -514,9 +517,25 @@ export function SessionSection({
                   size="icon-xs"
                   onClick={() => onArchive(session.id)}
                   aria-label="대화 보관"
-                  title="보관하기(목록에서만 빼고 기억은 남겨요)"
+                  title="보관하기(실행 중이면 안전하게 중단하고 기억은 남겨요)"
                 >
                   <ArchiveIcon />
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="icon-xs"
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        "대화 원본을 삭제할까요? 채택된 project memory와 Work Trace provenance는 유지돼요.",
+                      )
+                    )
+                      onDelete(session.id);
+                  }}
+                  aria-label="대화 삭제"
+                  title="원본 삭제(채택된 project 지식과 provenance는 유지)"
+                >
+                  <Trash2Icon />
                 </Button>
               </div>
             </div>
@@ -549,6 +568,20 @@ export function SessionSection({
                     <span className="min-w-0 flex-1 truncate">{sessionLabel(session)}</span>
                     <Button variant="ghost" size="xs" onClick={() => onRestore(session.id)}>
                       <ArchiveRestoreIcon /> 복원
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      size="xs"
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            "보관된 대화 원본을 삭제할까요? 채택된 project memory와 provenance는 유지돼요.",
+                          )
+                        )
+                          onDelete(session.id);
+                      }}
+                    >
+                      <Trash2Icon /> 삭제
                     </Button>
                   </div>
                 ))}

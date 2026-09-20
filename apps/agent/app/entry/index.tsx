@@ -26,6 +26,7 @@ import { pageHolder } from "./session-lease";
 import type { SlashContext } from "./slash-commands";
 import { SettingsDialog } from "./settings-dialog";
 import { AccountSection, ModelSection, ProjectSection, SessionSection } from "./sidebar";
+import { WorkTracePanel } from "./work-trace-panel";
 
 const loginPollMs = 2000;
 const providers: readonly ProviderId[] = ["openai", "anthropic"];
@@ -193,6 +194,21 @@ export function App() {
       const remaining = sessions.filter((item) => item.id !== id);
       setSessions(remaining);
       setArchived((list) => [session, ...list]);
+      if (sessionId === id) void setLocation({ session: remaining[0]?.id ?? null });
+    } catch (error) {
+      setArchiveError(
+        archiveErrorMessage(error instanceof Error ? error : new Error(String(error))),
+      );
+    }
+  };
+
+  const deleteSession = async (id: string) => {
+    try {
+      await api.deleteSession(id, pageHolder());
+      setArchiveError(null);
+      const remaining = sessions.filter((item) => item.id !== id);
+      setSessions(remaining);
+      setArchived((list) => list.filter((item) => item.id !== id));
       if (sessionId === id) void setLocation({ session: remaining[0]?.id ?? null });
     } catch (error) {
       setArchiveError(
@@ -401,12 +417,14 @@ export function App() {
             onSelect={selectSession}
             onCreate={(agent) => void createSession(agent)}
             onArchive={(id) => void archiveSession(id)}
+            onDelete={(id) => void deleteSession(id)}
             onRestore={(id) => void restoreSession(id)}
             loadAgents={() => api.usableExternalAgents(projectId)}
           />
         )}
       </aside>
       <main className="min-w-0 flex-1">{main}</main>
+      {projectId && <WorkTracePanel projectId={projectId} sessionId={sessionId} />}
     </div>
   );
 }

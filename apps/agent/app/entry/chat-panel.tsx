@@ -18,6 +18,7 @@ import {
   sessionHolderHeader,
 } from "memory-agent/definitions";
 import { cn } from "cn";
+import type { TraceTaskView } from "memory-agent";
 import { Option } from "effect";
 import { useAtom } from "jotai";
 import { Fragment, useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
@@ -76,6 +77,7 @@ import { RunNoticeView, useRunState } from "./run-state";
 import { sessionDraftsAtom } from "./session-drafts";
 import { useSessionLease, type PageLease } from "./session-lease";
 import { SlashPalette } from "./slash-palette";
+import { useWorkTrace } from "./work-trace";
 import {
   parseSlash,
   promptOf,
@@ -480,6 +482,7 @@ function ChatPanel({
   slash: SlashSupport;
 }) {
   const readOnly = lease.state !== "mine";
+  const workTrace = useWorkTrace(sessionId);
   const [composer, setComposer] = useState<Composer>({ kind: "compose" });
   const [sessionDrafts, setSessionDrafts] = useAtom(sessionDraftsAtom);
   const [editingDraft, setEditingDraft] = useState("");
@@ -721,6 +724,71 @@ function ChatPanel({
   const cancel = async () => {
     // Stopping only the local stream would leave the run going on the server, so ask it first.
     if (await run.cancel()) stop();
+  };
+
+  const resumeTask = async (task: TraceTaskView, confirmUncertain: boolean) => {
+    if (!task.latestAttemptId) return { status: "failed" as const };
+    try {
+      const result = await api.resumeWorkTraceTask(
+        sessionId,
+        holder,
+        task.id,
+        task.latestAttemptId,
+        confirmUncertain,
+      );
+      if (result.status === "queued") {
+        setNotice(done("재개 요청을 저장했어요. 다음 실행 연결에서 새 attempt로 이어가요."));
+        return { status: "queued" as const };
+      }
+      if (result.reason !== "uncertain_side_effect")
+        setNotice(
+          problem(
+            result.reason === "stale_attempt"
+              ? "작업 상태가 바뀌었어요. 최신 Work Trace를 확인해 주세요."
+              : result.reason === "attempt_alive"
+                ? "이미 실행 중인 attempt가 있어요."
+                : "이 작업은 현재 안전하게 재개할 수 없어요.",
+          ),
+        );
+      return result;
+    } catch {
+      setNotice(problem("재개 요청을 저장하지 못했어요."));
+      return { status: "failed" as const };
+    }
+  };
+
+  const archiveTask = async (task: TraceTaskView) => {
+    try {
+      const result = await api.archiveWorkTraceTask(sessionId, holder, task.id);
+      if (result.status === "completed") {
+        setNotice(done("작업을 보관했어요. Work Trace 기록과 project provenance는 유지돼요."));
+        return { status: "archived" as const };
+      }
+      setNotice(problem("작업 중단을 기다리고 있어요. 완료 후 다시 확인해 주세요."));
+      return result.status === "blocked"
+        ? { status: "blocked" as const, reason: result.blocker }
+        : { status: "failed" as const };
+    } catch {
+      setNotice(problem("작업을 보관하지 못했어요."));
+      return { status: "failed" as const };
+    }
+  };
+
+  const deleteTask = async (task: TraceTaskView) => {
+    try {
+      const result = await api.deleteWorkTraceTask(sessionId, holder, task.id);
+      if (result.status === "completed") {
+        setNotice(done("작업 원본을 삭제했어요. 채택된 project memory와 provenance는 유지돼요."));
+        return { status: "deleted" as const };
+      }
+      setNotice(problem("작업 중단을 기다리고 있어요. 완료 후 다시 확인해 주세요."));
+      return result.status === "blocked"
+        ? { status: "blocked" as const, reason: result.blocker }
+        : { status: "failed" as const };
+    } catch {
+      setNotice(problem("작업 원본을 삭제하지 못했어요."));
+      return { status: "failed" as const };
+    }
   };
 
   const ready = draftImages.images.flatMap((image) => (image.status === "ready" ? [image] : []));
@@ -1138,6 +1206,12 @@ function ChatPanel({
                 message={message}
                 streaming={generating && index === messages.length - 1}
                 awaitingApproval={awaitingApproval}
+                tasksByToolCall={workTrace.tasksByToolCall}
+                traceConnection={workTrace.connection}
+                readOnly={readOnly}
+                onResumeTask={resumeTask}
+                onArchiveTask={archiveTask}
+                onDeleteTask={deleteTask}
               />
               {takenIn("after", message.id).map((taken) => (
                 <DeliveredMessageView key={taken.id} message={taken} />
