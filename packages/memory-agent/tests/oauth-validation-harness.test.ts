@@ -157,7 +157,8 @@ async function fakeProvider(provider: OAuthProvider) {
     modelUrl: `${base}/model`,
     catalogUrl: `${base}/catalog`,
     callbackPort: null,
-    callbackRedirectHost: "127.0.0.1",
+    // Exercise the production hostname instead of bypassing localhost resolution with IPv4.
+    callbackRedirectHost: "localhost",
   };
   return {
     protocol,

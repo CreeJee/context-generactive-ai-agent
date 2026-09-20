@@ -339,7 +339,9 @@ export class SubscriptionOAuthClient {
     try {
       await new Promise<void>((resolve, reject) => {
         server.once("error", reject);
-        server.listen(protocol.callbackPort ?? 0, "127.0.0.1", () => resolve());
+        // Bind the same loopback hostname used in the registered redirect URI. On Windows,
+        // `localhost` can prefer ::1, which cannot reach a server bound only to 127.0.0.1.
+        server.listen(protocol.callbackPort ?? 0, protocol.callbackRedirectHost, () => resolve());
       });
     } catch {
       this.#loginActive = false;
