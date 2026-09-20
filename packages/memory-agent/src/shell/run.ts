@@ -15,7 +15,22 @@ interface ActiveCommand {
   readonly force: () => void;
 }
 
-const activeCommands = new Set<ActiveCommand>();
+interface ShellProcessState {
+  readonly activeCommands: Set<ActiveCommand>;
+  exitListenerInstalled: boolean;
+}
+
+declare global {
+  var __contextGeneractiveAgentShellProcessState: ShellProcessState | undefined;
+}
+
+// The server bundle can contain this module more than once, and development module reloads can
+// evaluate it again. Keep one registry on the process global so every copy shares one exit hook.
+const shellProcessState = (globalThis.__contextGeneractiveAgentShellProcessState ??= {
+  activeCommands: new Set(),
+  exitListenerInstalled: false,
+});
+const activeCommands = shellProcessState.activeCommands;
 
 /** Stops every shell command owned by this process, normally during server shutdown. */
 export function stopAllCommands(force = false) {
@@ -24,7 +39,10 @@ export function stopAllCommands(force = false) {
 
 // The app installs graceful signal handlers. Its eventual process.exit reaches this final,
 // synchronous safety net even if runtime disposal did not propagate an AbortSignal to a tool.
-process.once("exit", () => stopAllCommands(true));
+if (!shellProcessState.exitListenerInstalled) {
+  shellProcessState.exitListenerInstalled = true;
+  process.once("exit", () => stopAllCommands(true));
+}
 
 export const defaultTimeoutSeconds = 120;
 export const maxTimeoutSeconds = 1_800;

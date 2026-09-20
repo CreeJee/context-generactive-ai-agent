@@ -31,6 +31,13 @@ const options = (
 });
 
 describe("runCommand", () => {
+  test("installs one exit listener across duplicate module evaluations", async () => {
+    const listeners = process.listenerCount("exit");
+    await import(new URL("../src/shell/run.ts?duplicate=1", import.meta.url).href);
+    await import(new URL("../src/shell/run.ts?duplicate=2", import.meta.url).href);
+    expect(process.listenerCount("exit")).toBe(listeners);
+  });
+
   test("allows shell experiments below /tmp but not arbitrary absolute workdirs", () => {
     const project = workdir();
     const storage = workdir();
