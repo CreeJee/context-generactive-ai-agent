@@ -40,6 +40,7 @@ function openTab(runtime: Runtime, sessionId: string, holder: string | null = nu
   const client = new ChatClient({
     threadId: sessionId,
     persistence: true,
+    history: { pageSize: 10_000 },
     tools: approvalToolDefinitions,
     connection: fetchServerSentEvents(`http://127.0.0.1/api/chat?session=${sessionId}`, {
       headers: holder ? { [sessionHolderHeader]: holder } : {},
@@ -86,6 +87,22 @@ async function setup() {
 }
 
 describe("message queue", () => {
+  test("server-authoritative turns persist once instead of resending the whole transcript", async () => {
+    const context = await setup();
+    const tab = openTab(context.runtime, context.session.id);
+
+    await tab.client.sendMessage("first turn");
+    await until(() => !tab.client.getIsLoading(), "the first turn to finish");
+    await tab.client.sendMessage("second turn");
+    await until(() => !tab.client.getIsLoading(), "the second turn to finish");
+
+    const reloaded = openTab(context.runtime, context.session.id);
+    await until(() => reloaded.texts("user").length > 0, "the persisted turns");
+    expect(reloaded.texts("user")).toEqual(["first turn", "second turn"]);
+    tab.client.dispose();
+    reloaded.client.dispose();
+  }, 15_000);
+
   test("order holds behind a message being edited, and a restart holds everything for confirmation", async () => {
     const context = await setup();
     const queue = await context.runtime.runPromise(MessageQueue);
@@ -158,7 +175,7 @@ describe("message queue", () => {
     await until(() => reloaded.texts("user").length === 2, "the saved conversation");
     expect(reloaded.texts("user")).toEqual(["please check files", "look in the tests folder"]);
     reloaded.client.dispose();
-  });
+  }, 10_000);
 
   test("unavailable steering leaves the message for an explicit queue fallback", async () => {
     const context = await setup();

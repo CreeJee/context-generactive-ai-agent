@@ -7,6 +7,7 @@ import {
   MessageSquareIcon,
   RefreshCwIcon,
   SquareIcon,
+  WandSparklesIcon,
 } from "lucide-react";
 import {
   approvalToolDefinitions,
@@ -58,6 +59,8 @@ import {
   decodeDeliveredEvent,
   type CompactResult,
   type ContextView,
+  type GeneratedImageAsset,
+  type ImageFeatureStatus,
   type QueuedMessage,
   type WorkflowPhase,
   type WorkflowState,
@@ -495,6 +498,20 @@ function ChatPanel({
     });
   };
   const [dragging, setDragging] = useState(false);
+  const [imageIntent, setImageIntent] = useState(false);
+  const [imageSettings, setImageSettings] = useState<ImageFeatureStatus | null>(null);
+  const [generatingImage, setGeneratingImage] = useState(false);
+  const [generatedImage, setGeneratedImage] = useState<GeneratedImageAsset | null>(null);
+  useEffect(() => {
+    const refresh = () =>
+      void api
+        .imageSettings()
+        .then(setImageSettings)
+        .catch(() => undefined);
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, []);
   const [notice, setNotice] = useState<Notice | null>(null);
   // What the run in progress reports; the server's record covers the time before and after it.
   const [liveContext, setLiveContext] = useState<ContextView | null>(null);
@@ -529,6 +546,9 @@ function ChatPanel({
     }),
     threadId: sessionId,
     persistence: true,
+    // Enables TanStack's server-authoritative delta protocol: hydrated and completed message ids are
+    // remembered, so the next turn sends only messages the server has not persisted already.
+    history: { pageSize: 10_000 },
     // The same definitions the server uses, so approval requests can be matched and answered:
     // tool approvals in `ask` mode, permission reviews in `auto` mode.
     tools: approvalToolDefinitions,
@@ -984,13 +1004,65 @@ function ChatPanel({
     const clearDraft = () => {
       setDraft("");
       draftImages.clear();
+      setImageIntent(false);
       setNotice(null);
     };
     const sendTurn = () => {
       clearDraft();
       void sendMessage(contentOf(text, attachmentIds));
     };
+    if (!generating && imageIntent) {
+      if (attachmentIds.length > 0)
+        return setNotice(problem("첫 버전의 이미지 생성은 텍스트 프롬프트만 지원해요."));
+      if (!window.confirm("이미지 생성은 별도 유료 미디어 모델을 호출할 수 있어요. 실행할까요?"))
+        return;
+      clearDraft();
+      setGeneratingImage(true);
+      setGeneratedImage(null);
+      try {
+        setGeneratedImage(await api.generateImage(text, true));
+      } catch (failure) {
+        if (
+          failure instanceof ApiError &&
+          failure.code === "image_approval_required" &&
+          failure.reason === "cross_provider" &&
+          failure.approval
+        ) {
+          const disclosure =
+            "Claude는 이미지를 직접 생성하지 않습니다. 이미지 프롬프트가 OpenAI로 전송되고 사용량은 OpenAI 계정에 귀속됩니다.";
+          const once = window.confirm(`${disclosure}\n\n이번 요청에서만 허용할까요?`);
+          try {
+            if (once) {
+              setGeneratedImage(await api.generateImage(text, true, failure.approval));
+              return;
+            }
+            const always = window.confirm(
+              `${disclosure}\n\n앞으로 Claude 대화에서 OpenAI 이미지 실행을 항상 허용할까요? 취소하면 실행하지 않습니다.`,
+            );
+            if (!always) return;
+            await api.setCrossProviderMediaConsent("always");
+            setGeneratedImage(await api.generateImage(text, true));
+            return;
+          } catch {
+            setNotice(
+              problem(
+                "공급자 간 이미지 실행 승인을 적용하지 못했어요. 설정과 계정 권한을 확인해 주세요.",
+              ),
+            );
+            return;
+          }
+        }
+        setNotice(
+          problem("이미지를 생성하지 못했어요. 설정, 계정 권한과 경로 상태를 확인해 주세요."),
+        );
+      } finally {
+        setGeneratingImage(false);
+      }
+      return;
+    }
     if (!generating) return sendTurn();
+    if (imageIntent)
+      return setNotice(problem("이미지 생성 요청은 답변이 끝난 뒤 별도 요청으로 보내 주세요."));
 
     setSubmitting(true);
     const outcome = await queue.add(text, attachmentIds, mode);
@@ -1228,6 +1300,35 @@ function ChatPanel({
                     }}
                   />
                 )}
+                {generatingImage && (
+                  <div className="mb-2 rounded-lg border bg-muted/40 p-3 text-sm text-muted-foreground">
+                    승인된 미디어 경로에서 이미지를 생성하고 있어요…
+                  </div>
+                )}
+                {generatedImage && (
+                  <div className="mb-2 overflow-hidden rounded-lg border bg-card">
+                    <img
+                      src={generatedImage.url}
+                      alt="생성된 이미지"
+                      className="max-h-96 w-full object-contain"
+                    />
+                    <div className="space-y-1 border-t p-3 text-xs text-muted-foreground">
+                      <div>
+                        대화 모델: {generatedImage.initiatorChatModel} · 실행 경로:{" "}
+                        {generatedImage.executorMediaRouteId}
+                      </div>
+                      <div>
+                        실행 방식: {generatedImage.executionMode}
+                        {generatedImage.estimatedCostUsd === undefined
+                          ? " · 예상 비용 미확인"
+                          : ` · 예상 비용 $${generatedImage.estimatedCostUsd.toFixed(4)}`}
+                      </div>
+                      {generatedImage.usage && (
+                        <div>사용량: {JSON.stringify(generatedImage.usage)}</div>
+                      )}
+                    </div>
+                  </div>
+                )}
                 <PromptInput editing={editing !== null}>
                   <QueuePanel
                     items={queue.items}
@@ -1307,9 +1408,10 @@ function ChatPanel({
                         // In edit mode Esc removes the queued message and never reaches the run.
                         if (editing) void finishEdit("remove");
                         // Esc clears a draft (text and images); with nothing drafted it stops the run.
-                        else if (draft.length > 0 || draftImages.images.length > 0) {
+                        else if (draft.length > 0 || draftImages.images.length > 0 || imageIntent) {
                           setDraft("");
                           draftImages.clear();
+                          setImageIntent(false);
                           setNotice(null);
                         } else if (generating) void cancel();
                       }
@@ -1347,6 +1449,37 @@ function ChatPanel({
                         {imagesSupported ? "이미지 첨부" : "선택한 모델은 이미지를 읽지 못해요"}
                       </TooltipContent>
                     </Tooltip>
+                    {imageSettings?.featureAvailable && (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <PromptInputButton
+                              type="button"
+                              variant={imageIntent ? "secondary" : "ghost"}
+                              disabled={
+                                !imageSettings.imageGenerationEnabled ||
+                                readOnly ||
+                                generating ||
+                                generatingImage ||
+                                editing !== null
+                              }
+                              aria-label="이미지 생성 요청"
+                              aria-pressed={imageIntent}
+                              onClick={() => setImageIntent((current) => !current)}
+                            />
+                          }
+                        >
+                          <WandSparklesIcon />
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          {imageSettings.imageGenerationEnabled
+                            ? imageIntent
+                              ? "이미지 생성 모드 끄기"
+                              : "이번 요청에서만 이미지 생성"
+                            : "설정에서 이미지 생성을 먼저 켜세요"}
+                        </TooltipContent>
+                      </Tooltip>
+                    )}
                     <ComposerStatus mode={composerMode} />
                     <div
                       className="flex items-center rounded-md border bg-muted/30 p-0.5"
@@ -1361,7 +1494,7 @@ function ChatPanel({
                           variant={
                             (run.workflow?.phase ?? "chat") === phase ? "secondary" : "ghost"
                           }
-                          disabled={readOnly || generating || editing !== null}
+                          disabled={readOnly || generating || generatingImage || editing !== null}
                           aria-pressed={(run.workflow?.phase ?? "chat") === phase}
                           title={
                             phase === "goal"

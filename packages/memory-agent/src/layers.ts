@@ -35,8 +35,19 @@ import { PermissionGate } from "./permissions/gate.ts";
 import { PermissionReviews } from "./permissions/reviews.ts";
 import { Projects } from "./projects/projects.ts";
 import { ActiveProvider } from "./providers/active-provider.ts";
+import { CrossProviderMediaConsent } from "./providers/cross-provider-media-consent.ts";
 import { ProviderRegistry } from "./providers/registry.ts";
 import { SubscriptionProviderRegistry } from "./providers/subscriptions.ts";
+import {
+  ProviderToolCapabilityRegistry,
+  providerToolDescriptors,
+} from "./providers/tool-capabilities.ts";
+import { ModelFeatureFlags } from "./providers/model-feature-flags.ts";
+import { ProviderToolPolicy, ProviderToolRuntime } from "./providers/tool-policy.ts";
+import { RouteCatalog } from "./providers/route-catalog.ts";
+import { ImageFeature } from "./providers/image-feature.ts";
+import { DirectImageExecutor, ImageMediaWorkflow } from "./providers/image-media.ts";
+import { ImageRouteFacts, ImageRouter } from "./providers/image-router.ts";
 import { QueueDelivery } from "./queue/delivery.ts";
 import { MessageQueue } from "./queue/queue.ts";
 import { SessionLeases } from "./sessions/leases.ts";
@@ -59,6 +70,28 @@ export interface MemoryAgentLayerOptions {
   readonly morphAnalyzer?: Layer.Layer<MorphAnalyzer, never, StorageRoot>;
   /** Provider-neutral registry override for tests. Production uses subscription providers. */
   readonly providerRegistry?: Layer.Layer<ProviderRegistry, never, GlobalConfig>;
+  /** Provider Tool capability metadata override; it never executes tools or enforces policy. */
+  readonly providerToolRegistry?: Layer.Layer<ProviderToolCapabilityRegistry>;
+  /** Persisted model-dependent feature flag service override for tests. */
+  readonly modelFeatureFlags?: Layer.Layer<ModelFeatureFlags>;
+  /** Explicit provider-pair media consent override for tests. */
+  readonly crossProviderMediaConsent?: Layer.Layer<CrossProviderMediaConsent>;
+  /** Server-authoritative Provider Tool policy override for tests. */
+  readonly providerToolPolicy?: Layer.Layer<ProviderToolPolicy>;
+  /** Provider Tool lifecycle runtime override; no tools are exposed without explicit inputs. */
+  readonly providerToolRuntime?: Layer.Layer<ProviderToolRuntime>;
+  /** Chat, media and execution route catalog override for deterministic tests. */
+  readonly routeCatalog?: Layer.Layer<RouteCatalog>;
+  /** Account-specific image availability, cost and performance evidence. */
+  readonly imageRouteFacts?: Layer.Layer<ImageRouteFacts>;
+  /** Deterministic image routing override; production uses the catalog and route facts. */
+  readonly imageRouter?: Layer.Layer<ImageRouter>;
+  /** Server-authoritative image feature/settings gate override. */
+  readonly imageFeature?: Layer.Layer<ImageFeature>;
+  /** Direct image execution override. Production remains unavailable until explicitly configured. */
+  readonly directImageExecutor?: Layer.Layer<DirectImageExecutor>;
+  /** Separate durable media workflow override. */
+  readonly imageMediaWorkflow?: Layer.Layer<ImageMediaWorkflow>;
   /** How long a page keeps a session without renewing; tests shorten it. */
   readonly leaseTtlMs?: number;
   /** Interpret statements in the background after each run. Default true; tests turn it off. */
@@ -95,6 +128,28 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
       Layer.merge(StorageRoot.layer(storageRoot), Database.layer(join(storageRoot, "agent.db"))),
     ),
   );
+  const providerRegistry = options.providerRegistry ?? SubscriptionProviderRegistry;
+  const providerToolRegistry = options.providerToolRegistry ?? ProviderToolCapabilityRegistry.layer;
+  const modelFeatureFlags =
+    options.modelFeatureFlags ??
+    ModelFeatureFlags.layer(providerToolDescriptors.map((descriptor) => descriptor.id)).pipe(
+      Layer.provide(foundation),
+    );
+  const crossProviderMediaConsent =
+    options.crossProviderMediaConsent ??
+    CrossProviderMediaConsent.layer.pipe(Layer.provide(foundation));
+  const providerToolPolicy =
+    options.providerToolPolicy ??
+    ProviderToolPolicy.featureFlagLayer.pipe(
+      Layer.provide(modelFeatureFlags),
+      Layer.provide(providerToolRegistry),
+    );
+  const providerToolRuntime =
+    options.providerToolRuntime ??
+    ProviderToolRuntime.layer.pipe(
+      Layer.provide(providerToolPolicy),
+      Layer.provide(providerToolRegistry),
+    );
   const stores = Layer.mergeAll(
     Projects.layer,
     Nodes.layer,
@@ -107,6 +162,11 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     BulkNodes.layer,
     SecretRedactor.layer,
     Workflows.layer,
+    providerToolRegistry,
+    modelFeatureFlags,
+    crossProviderMediaConsent,
+    providerToolPolicy,
+    providerToolRuntime,
     options.embedder ?? Embedder.local,
     options.morphAnalyzer ?? MorphAnalyzer.kiwi,
     options.secrets ?? SecretStore.keychain,
@@ -123,8 +183,43 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     ExternalAgents.layer,
     Skills.layer({ home: options.skillsHome, builtin: options.skillsBuiltin }),
   );
-  const providers = ActiveProvider.layer.pipe(
-    Layer.provideMerge(options.providerRegistry ?? SubscriptionProviderRegistry),
+  const routeCatalog =
+    options.routeCatalog ??
+    RouteCatalog.layer.pipe(Layer.provide(providerRegistry), Layer.provide(providerToolRegistry));
+  const imageRouteFacts = options.imageRouteFacts ?? ImageRouteFacts.openAIEnvironmentLayer;
+  const imageRouter =
+    options.imageRouter ??
+    ImageRouter.featureFlagLayer.pipe(
+      Layer.provide(routeCatalog),
+      Layer.provide(imageRouteFacts),
+      Layer.provide(modelFeatureFlags),
+      Layer.provide(crossProviderMediaConsent),
+    );
+  const imageFeature =
+    options.imageFeature ??
+    ImageFeature.layerWithModelFeatureFlags({
+      imageGenerationAvailable: process.env.CONTEXT_AGENT_IMAGE_GENERATION === "1",
+    }).pipe(Layer.provide(modelFeatureFlags), Layer.provide(foundation));
+  const directImageExecutor =
+    options.directImageExecutor ?? DirectImageExecutor.openAIEnvironmentLayer;
+  const imageMediaWorkflow =
+    options.imageMediaWorkflow ??
+    ImageMediaWorkflow.layer.pipe(
+      Layer.provide(imageFeature),
+      Layer.provide(imageRouter),
+      Layer.provide(routeCatalog),
+      Layer.provide(directImageExecutor),
+      Layer.provide(Attachments.layer),
+      Layer.provide(crossProviderMediaConsent),
+    );
+  const providers = Layer.mergeAll(
+    ActiveProvider.layer.pipe(Layer.provideMerge(providerRegistry)),
+    routeCatalog,
+    imageRouteFacts,
+    imageRouter,
+    imageFeature,
+    directImageExecutor,
+    imageMediaWorkflow,
   );
   const retrieval = Layer.mergeAll(
     Indexer.layer,

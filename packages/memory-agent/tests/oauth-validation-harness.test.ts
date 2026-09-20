@@ -181,6 +181,23 @@ async function login(harness: OAuthValidationHarness) {
   return attempt.completed;
 }
 
+test("identifies the provider, operation and HTTP status without exposing response data", () => {
+  const error = new OAuthHarnessError("provider_rejected", 429, {
+    provider: "openai",
+    operation: "model_stream",
+  });
+
+  expect(error).toMatchObject({
+    code: "provider_rejected",
+    provider: "openai",
+    operation: "model_stream",
+    status: 429,
+  });
+  expect(error.message).toBe(
+    "oauth_provider_rejected [provider=OpenAI, operation=model_stream, status=429]: The provider rejected the request.",
+  );
+});
+
 for (const provider of ["openai", "anthropic"] as const) {
   describe(`${provider} OAuth validation harness`, () => {
     test("uses PKCE/state, exchanges the callback internally, and exposes only status", async () => {

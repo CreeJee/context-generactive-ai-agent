@@ -1,6 +1,7 @@
 import { Effect, Either } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
+import { WorkflowTools } from "../src/workflow/tools.ts";
 import { Workflows } from "../src/workflow/workflow.ts";
 import { testRuntime } from "./support/runtime.ts";
 
@@ -121,6 +122,39 @@ describe("Workflows", () => {
     expect(result.state).toMatchObject({
       phase: "plan",
       plan: { version: 2, status: "ready" },
+    });
+  });
+
+  test("returns a typed tool result for stale progress instead of a generic execution error", async () => {
+    const { runtime, session } = await testRuntime();
+    const result = await runtime.runPromise(
+      Effect.gen(function* () {
+        const workflows = yield* Workflows;
+        yield* workflows.updateGoal(session.id, goal);
+        yield* workflows.updatePlan(session.id, plan);
+        yield* workflows.setPhase(session.id, "execute");
+        const tools = (yield* WorkflowTools).forSession(session.id, "execute");
+        const progress = tools.find((tool) => tool.name === "update_workflow_progress");
+        if (!progress?.execute) throw new Error("progress tool has no server implementation");
+        yield* workflows.updatePlan(session.id, {
+          ...plan,
+          summary: "Revised before stale progress arrived",
+        });
+        return yield* Effect.promise(() =>
+          progress.execute!({
+            planStatus: "executing",
+            steps: [],
+            goalEvidence: [],
+            planEvidence: [],
+            detail: "stale Execute tool call",
+          }),
+        );
+      }),
+    );
+
+    expect(result).toEqual({
+      error: "workflow_progress_refused",
+      reason: "phase_not_executable",
     });
   });
 

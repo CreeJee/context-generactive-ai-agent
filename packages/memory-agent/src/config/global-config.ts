@@ -22,6 +22,29 @@ export const GpuCheck = Schema.Union(
 );
 export type GpuCheck = typeof GpuCheck.Type;
 
+/** Persisted, versioned policy for model-dependent capabilities. Missing entries deny access. */
+export const ModelFeatureFlagSettings = Schema.Struct({
+  version: Schema.Literal(1),
+  global: Schema.Boolean,
+  providers: Schema.Record({ key: Schema.String, value: Schema.Boolean }),
+  capabilities: Schema.Record({ key: Schema.String, value: Schema.Boolean }),
+  models: Schema.Record({
+    key: Schema.String,
+    value: Schema.Record({ key: Schema.String, value: Schema.Boolean }),
+  }),
+  routes: Schema.Record({ key: Schema.String, value: Schema.Boolean }),
+});
+export type ModelFeatureFlagSettings = typeof ModelFeatureFlagSettings.Type;
+
+export const CrossProviderMediaConsentMode = Schema.Literal("disabled", "ask", "always");
+export type CrossProviderMediaConsentMode = typeof CrossProviderMediaConsentMode.Type;
+/** Explicit provider-pair consent. Login or entitlement never creates an entry automatically. */
+export const CrossProviderMediaConsentSettings = Schema.Struct({
+  version: Schema.Literal(1),
+  pairs: Schema.Record({ key: Schema.String, value: CrossProviderMediaConsentMode }),
+});
+export type CrossProviderMediaConsentSettings = typeof CrossProviderMediaConsentSettings.Type;
+
 /** User-wide settings. Secrets never go here; they belong in the OS keychain. */
 export const Settings = Schema.Struct({
   /** Provider paired with the selected model. Legacy model-only settings migrate to OpenAI. */
@@ -36,6 +59,14 @@ export const Settings = Schema.Struct({
   importsEnabled: Schema.optional(Schema.Boolean),
   /** Interpret migrated statements for topics and corrections, like the ones said here. */
   importsInterpret: Schema.optional(Schema.Boolean),
+  /** User explicitly enabled image generation. Defaults off when absent. */
+  imageGenerationEnabled: Schema.optional(Schema.Boolean),
+  /** User separately permits the chat Provider Tool path. Defaults off when absent. */
+  imageProviderToolEnabled: Schema.optional(Schema.Boolean),
+  /** Server-authoritative flags for every model-dependent capability. */
+  modelFeatureFlags: Schema.optional(ModelFeatureFlagSettings),
+  /** Explicit consent for sending a media request from one provider to another. */
+  crossProviderMediaConsent: Schema.optional(CrossProviderMediaConsentSettings),
   /** Takes effect when the app next starts; `auto` when unset. */
   embeddingDevice: Schema.optional(EmbeddingChoice),
   gpuCheck: Schema.optional(GpuCheck),
@@ -78,10 +109,12 @@ const make = Effect.gen(function* () {
   };
 });
 
+export type GlobalConfigApi = Effect.Effect.Success<typeof make>;
+
 /** `<storage>/config.json`. */
 export class GlobalConfig extends Context.Tag("memory-agent/GlobalConfig")<
   GlobalConfig,
-  Effect.Effect.Success<typeof make>
+  GlobalConfigApi
 >() {
   static readonly layer = Layer.effect(GlobalConfig, make);
 }

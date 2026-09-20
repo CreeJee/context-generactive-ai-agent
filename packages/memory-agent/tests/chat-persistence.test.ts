@@ -7,7 +7,7 @@ import { migrateLegacyChatThreads, sqliteChatPersistence } from "../src/chat-sta
 function freshPersistence() {
   const sqlite = new DatabaseSync(":memory:");
   for (const migration of migrations) sqlite.exec(migration);
-  return sqliteChatPersistence(sqlite, () => []);
+  return sqliteChatPersistence(sqlite);
 }
 
 // The TanStack contract suite: full-replace threads, idempotent runs and interrupts, ordering,
@@ -37,7 +37,7 @@ test("materializes legacy session transcripts without overwriting persisted chat
   expect(migrated).toBe(1);
   expect(migrateLegacyChatThreads(sqlite, () => [])).toBe(0);
 
-  const persistence = sqliteChatPersistence(sqlite, () => []);
+  const persistence = sqliteChatPersistence(sqlite);
   await expect(persistence.stores.messages.loadThread("legacy")).resolves.toEqual([
     { role: "user", content: "rebuilt legacy" },
   ]);

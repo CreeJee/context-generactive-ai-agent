@@ -16,7 +16,14 @@ import { Attachments } from "../attachments/attachments.ts";
 import { attachmentIdOf } from "../attachments/urls.ts";
 import { ChatState } from "../chat-state/chat-state.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
+import {
+  ImageFeature,
+  decideImageContext,
+  imageProviderWorkflowPrompt,
+} from "../providers/image-feature.ts";
+import { ImageRouter } from "../providers/image-router.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
+import { ProviderToolRuntime } from "../providers/tool-policy.ts";
 import { McpServers, mcpInstructions } from "../mcp/servers.ts";
 import { Indexer } from "../memory/embedding/indexer.ts";
 import { Interpreter } from "../memory/interpret.ts";
@@ -223,6 +230,9 @@ const decodeUserTurn = Schema.decodeUnknownOption(IncomingUserTurn);
 const decodeQueuedTurn = Schema.decodeUnknownOption(
   Schema.Struct({ queuedMessageId: Schema.NonEmptyString }),
 );
+const decodeImageTurnIntent = Schema.decodeUnknownOption(
+  Schema.Struct({ imageIntent: Schema.Literal("generate_image") }),
+);
 
 export const QueueRequest = Schema.Struct({
   text: Schema.String,
@@ -274,6 +284,9 @@ const isStreamJoin = (request: Request) =>
 
 const make = Effect.gen(function* () {
   const active = yield* ActiveProvider;
+  const imageFeature = yield* ImageFeature;
+  const imageRouter = yield* ImageRouter;
+  const providerToolRuntime = yield* ProviderToolRuntime;
   const sessions = yield* Sessions;
   const nodes = yield* Nodes;
   const recorder = yield* Recorder;
@@ -318,6 +331,63 @@ const make = Effect.gen(function* () {
   const compactionSources = (sessionId: string): CompactionSources => ({
     toolResultIds: () => nodes.toolResultIds(sessionId),
     nodeText: (id) => nodes.get(id)?.text ?? null,
+  });
+  /**
+   * Stored transcripts use browser-safe relative attachment URLs. Providers cannot fetch those, so
+   * only the model-bound copy gets the smaller stored image as provider-neutral inline data.
+   */
+  const modelImages = (): ChatMiddleware => ({
+    name: "memory-agent/model-images",
+    async onConfig(ctx, config) {
+      if (ctx.phase === "init") return;
+      let changed = false;
+      const inlineImages = new Map<
+        string,
+        Promise<{
+          readonly type: "image";
+          readonly source: {
+            readonly type: "data";
+            readonly value: string;
+            readonly mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+          };
+        }>
+      >();
+      const providerMessages = await Promise.all(
+        config.messages.map(async (message) => {
+          if (!Array.isArray(message.content)) return message;
+          const content = await Promise.all(
+            message.content.map(async (part) => {
+              if (part.type !== "image" || part.source.type !== "url") return part;
+              const id = attachmentIdOf(part.source.value);
+              if (id === null) return part;
+              changed = true;
+              const attachment = attachments.get(id);
+              if (attachment === null)
+                return { type: "text" as const, content: "[Attached image is unavailable.]" };
+              const known = inlineImages.get(id);
+              if (known) return known;
+              const inline = (async () => {
+                const image = await attachments.forModel(attachment);
+                const prefix = `data:${image.mimeType};base64,`;
+                const dataUrl = await attachments.dataUrl(image);
+                return {
+                  type: "image" as const,
+                  source: {
+                    type: "data" as const,
+                    value: dataUrl.slice(prefix.length),
+                    mimeType: image.mimeType,
+                  },
+                };
+              })();
+              inlineImages.set(id, inline);
+              return inline;
+            }),
+          );
+          return { ...message, content };
+        }),
+      );
+      return changed ? { providerMessages } : undefined;
+    },
   });
   /** Every handler that looks a session up answers this when it does not exist. */
   const sessionNotFound = () => Effect.succeed(json(404, { error: "session_not_found" }));
@@ -546,6 +616,46 @@ const make = Effect.gen(function* () {
         }
         if (!selection) return json(412, { error: "model_selection_required" });
         const runtime = yield* active.runtime(selection);
+        const requestedImage = Option.isSome(decodeImageTurnIntent(forwardedProps));
+        const imageStatus = yield* imageFeature.status;
+        const imageRoute =
+          requestedImage && imageStatus.featureAvailable && imageStatus.imageGenerationEnabled
+            ? Option.getOrNull(
+                yield* imageRouter
+                  .select({
+                    initiatorChatRouteId: `chat:${selection.provider}:${selection.model}`,
+                    intent: {
+                      operation: attached.length > 0 ? "edit" : "generate",
+                      sourceImageCount: attached.length,
+                      requiresMask: false,
+                    },
+                    policy: { mode: "auto", preference: "balanced" },
+                  })
+                  .pipe(Effect.option),
+              )
+            : null;
+        const imageContext = decideImageContext({
+          status: imageStatus,
+          intent: requestedImage
+            ? { kind: "generate_image", source: "composer_action" }
+            : { kind: "none", source: "api" },
+          route: imageRoute,
+        });
+        const injectImageProviderTool =
+          imageContext.injectProviderTool && selection.provider === "openai";
+        if (
+          requestedImage &&
+          imageStatus.featureAvailable &&
+          imageStatus.imageGenerationEnabled &&
+          imageRoute === null
+        )
+          return json(422, { error: "image_route_unavailable" });
+        // A direct adapter is a separate media workflow and never consumes chat tool context.
+        if (imageContext.directWorkflowAllowed)
+          return json(409, {
+            error: "image_direct_workflow_required",
+            route: imageRoute?.executorMediaRouteId,
+          });
 
         const workflowActive = workflow.phase !== "chat";
         const workflowReadOnly = readOnlyWorkflowPhases.has(workflow.phase);
@@ -629,6 +739,7 @@ const make = Effect.gen(function* () {
           memoryInstructions,
           ...(webTools.length > 0 ? [kagiInstructions] : []),
           ...(!workflowReadOnly && mcpTools.length > 0 ? [mcpInstructions] : []),
+          ...(injectImageProviderTool ? [imageProviderWorkflowPrompt] : []),
         ];
         const localRules = localWorkflowRules(project, skills.skills);
         const resolved = yield* workflowRules.resolve({
@@ -689,11 +800,41 @@ const make = Effect.gen(function* () {
           indexInBackground(),
           summaries.afterRun(sessionId),
           recordContextUsage(metadata, window),
-          // Last to shape what the model is sent, so nothing after it replaces the compacted history.
+          // Last to choose the history sent to the model; only retained local images are inlined.
           compaction(metadata, compactionSources(sessionId), budgetFor(window())),
+          modelImages(),
           runtime.runMiddleware(),
         );
-        const tools = reads.tools;
+        const providerTools = injectImageProviderTool
+          ? Option.getOrElse(
+              yield* providerToolRuntime
+                .compose(
+                  {
+                    provider: selection.provider,
+                    model: selection.model,
+                    accountToolKinds: ["image_generation"],
+                    app: {
+                      enabledToolIds: ["openai:image_generation"],
+                      allowHighRisk: true,
+                    },
+                    user: {
+                      enabledToolIds: ["openai:image_generation"],
+                      allowHighRisk: true,
+                    },
+                    route: `chat:${selection.provider}:${selection.model}`,
+                  },
+                  [{ id: "openai:image_generation", args: [{}] }],
+                )
+                .pipe(Effect.option),
+              () => [],
+            )
+          : [];
+        // SAFETY: ProviderToolRuntime only returns tools created by TanStack's installed Provider
+        // Tool factories; those satisfy chat's server-tool contract but retain provider-specific types.
+        const tools: AnyServerTool[] = [
+          ...reads.tools,
+          ...providerTools.map((providerTool) => providerTool.tool as AnyServerTool),
+        ];
         const stream = chat({
           adapter: runtime.adapter(selection),
           agentLoopStrategy: runtime.agentLoop,

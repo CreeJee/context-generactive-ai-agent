@@ -129,15 +129,12 @@ function toInterrupt(row: Record<string, SQLOutputValue>): InterruptRecord {
 /**
  * TanStack AI chat persistence on the app's SQLite database: the four state stores with the
  * contract's invariants (full-replace threads, insert-if-absent runs and interrupts, NULL clears
- * for durable-run fields, ordered listings).
- *
- * `fallbackThread` supplies a transcript for a thread that has never been saved, so sessions
- * recorded before chat persistence existed still open with their history.
+ * for durable-run fields, ordered listings). Legacy transcripts are materialized by
+ * `migrateLegacyChatThreads` before this store is constructed; a missing row is therefore a new
+ * thread and must be empty. Rebuilding it dynamically from nodes would include the user node that
+ * `AgentChat` records immediately before a first run and duplicate that incoming message.
  */
-export function sqliteChatPersistence(
-  sqlite: DatabaseSync,
-  fallbackThread: (threadId: string) => ModelMessage[],
-): ChatPersistence {
+export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
   const selectThread = sqlite.prepare(
     "SELECT messages AS value FROM chat_threads WHERE thread_id = ?",
   );
@@ -148,7 +145,7 @@ export function sqliteChatPersistence(
   const messages = defineMessageStore({
     async loadThread(threadId) {
       const row = selectThread.get(threadId);
-      return row ? parseMessages(decodeJsonText(row).value) : fallbackThread(threadId);
+      return row ? parseMessages(decodeJsonText(row).value) : [];
     },
     async saveThread(threadId, next) {
       upsertThread.run(threadId, JSON.stringify(next), Date.now());

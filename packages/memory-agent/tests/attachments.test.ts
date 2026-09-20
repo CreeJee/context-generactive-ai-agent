@@ -2,7 +2,12 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { Effect, Either } from "effect";
 import { describe, expect, test } from "vite-plus/test";
-import { Attachments, modelImageEdge, sniffImageType } from "../src/attachments/attachments.ts";
+import {
+  Attachments,
+  maxModelImageBytes,
+  modelImageEdge,
+  sniffImageType,
+} from "../src/attachments/attachments.ts";
 import { requireRuntime } from "../src/runtime/resources.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { tinyPng } from "./support/images.ts";
@@ -54,7 +59,7 @@ describe("Attachments", () => {
     expect(readFileSync(result.path)).toEqual(tinyPng);
   });
 
-  test("sends the model a smaller WebP within 2048px, made once, and GIFs as uploaded", async () => {
+  test("eagerly starts a bounded model WebP and keeps GIFs as uploaded", async () => {
     const { runtime } = await testRuntime();
     const sharp = requireRuntime("sharp");
     // A wide screenshot of text, where a lossless WebP is smaller than the PNG upload.
@@ -89,9 +94,10 @@ describe("Attachments", () => {
     );
     expect(result.image.mimeType).toBe("image/webp");
     expect(result.image.path.endsWith(`${result.png.id}.model.webp`)).toBe(true);
-    expect(result.again).toBe(result.image);
+    expect(result.again).toEqual(result.image);
     const size = await sharp(result.image.path).metadata();
     expect([size.width, size.height]).toEqual([modelImageEdge, Math.round((1000 * 2048) / 3000)]);
+    expect(statSync(result.image.path).size).toBeLessThanOrEqual(maxModelImageBytes);
     expect(statSync(result.image.path).size).toBeLessThan(result.png.bytes);
     expect(result.dataUrl.startsWith("data:image/webp;base64,")).toBe(true);
     expect(result.gif).toEqual({ path: result.gifPath, mimeType: "image/gif" });

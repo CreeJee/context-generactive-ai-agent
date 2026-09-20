@@ -70,9 +70,19 @@ describe("images in chat", () => {
     const modelUser = provider!.adapter.invocations[0]?.messages.find(
       (message) => message.role === "user",
     );
-    expect(modelUser?.content).toEqual([{ type: "text", content: "look at #1 please" }, imagePart]);
+    expect(modelUser?.content).toEqual([
+      { type: "text", content: "look at #1 please" },
+      {
+        type: "image",
+        source: {
+          type: "data",
+          value: expect.any(String),
+          mimeType: expect.stringMatching(/^image\//),
+        },
+      },
+    ]);
 
-    // A later turn replays the earlier image in provider-neutral conversation history.
+    // A later turn replays the earlier image as inline data the provider can read.
     await client.sendMessage("look at it again");
     await until(() => provider!.adapter.invocations.length === 2, "the second provider invocation");
     expect(
@@ -81,7 +91,16 @@ describe("images in chat", () => {
           ? message.content.filter((part) => part.type === "image")
           : [],
       ),
-    ).toEqual([imagePart]);
+    ).toEqual([
+      {
+        type: "image",
+        source: {
+          type: "data",
+          value: expect.any(String),
+          mimeType: expect.stringMatching(/^image\//),
+        },
+      },
+    ]);
 
     // The stored transcript shows the image again after a reload.
     const [firstUser] = sessionMessages(nodes.session(session.id), attachments.forNode);

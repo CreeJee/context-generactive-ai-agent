@@ -107,15 +107,45 @@ const failureMessages: Record<OAuthHarnessFailure, string> = {
   transport_unavailable: "The provider could not be reached.",
 };
 
+export type OAuthHarnessOperation =
+  | "credential_store"
+  | "login_callback"
+  | "model_catalog"
+  | "model_stream"
+  | "token_exchange"
+  | "token_refresh";
+
+export interface OAuthHarnessErrorContext {
+  readonly provider?: OAuthProvider;
+  readonly operation?: OAuthHarnessOperation;
+}
+
+const providerName = (provider: OAuthProvider) => (provider === "openai" ? "OpenAI" : "Anthropic");
+
 export class OAuthHarnessError extends Error {
   readonly code: OAuthHarnessFailure;
   readonly status: number | null;
+  readonly provider: OAuthProvider | null;
+  readonly operation: OAuthHarnessOperation | null;
 
-  constructor(code: OAuthHarnessFailure, status: number | null = null) {
-    super(`oauth_${code}: ${failureMessages[code]}`);
+  constructor(
+    code: OAuthHarnessFailure,
+    status: number | null = null,
+    context: OAuthHarnessErrorContext = {},
+  ) {
+    const details = [
+      context.provider === undefined ? null : `provider=${providerName(context.provider)}`,
+      context.operation === undefined ? null : `operation=${context.operation}`,
+      status === null ? null : `status=${status}`,
+    ].filter((detail) => detail !== null);
+    super(
+      `oauth_${code}${details.length === 0 ? "" : ` [${details.join(", ")}]`}: ${failureMessages[code]}`,
+    );
     this.name = "OAuthHarnessError";
     this.code = code;
     this.status = status;
+    this.provider = context.provider ?? null;
+    this.operation = context.operation ?? null;
   }
 }
 
@@ -404,9 +434,17 @@ export class SubscriptionOAuthClient {
           response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
           response.end("Connected. You may close this window.");
           await finish({ status: await this.status() });
-        } catch {
+        } catch (error) {
           response.writeHead(502).end("OAuth provider rejected the request.");
-          await finish({ error: new OAuthHarnessError("provider_rejected") });
+          await finish({
+            error:
+              error instanceof OAuthHarnessError
+                ? error
+                : new OAuthHarnessError("provider_rejected", null, {
+                    provider: protocol.provider,
+                    operation: "login_callback",
+                  }),
+          });
         }
       })();
     });
@@ -420,6 +458,10 @@ export class SubscriptionOAuthClient {
   }
 
   async #exchange(values: TokenGrant, previous?: StoredCredential): Promise<StoredCredential> {
+    const context: OAuthHarnessErrorContext = {
+      provider: this.#protocol.provider,
+      operation: values.grant_type === "refresh_token" ? "token_refresh" : "token_exchange",
+    };
     const encoded = tokenBody(this.#protocol, values);
     let response: Response;
     try {
@@ -430,19 +472,19 @@ export class SubscriptionOAuthClient {
         redirect: "error",
       });
     } catch {
-      throw new OAuthHarnessError("transport_unavailable");
+      throw new OAuthHarnessError("transport_unavailable", null, context);
     }
-    if (!response.ok) throw new OAuthHarnessError("provider_rejected", response.status);
+    if (!response.ok) throw new OAuthHarnessError("provider_rejected", response.status, context);
     try {
       const token = Option.getOrThrowWith(
         decodeTokenResponse(await response.json()),
-        () => new OAuthHarnessError("invalid_token_response"),
+        () => new OAuthHarnessError("invalid_token_response", response.status, context),
       );
       const parsed = parseTokens(token, previous);
       return { ...parsed, expiresAt: this.#now() + (parsed.expiresAt - Date.now()) };
     } catch (error) {
       if (error instanceof OAuthHarnessError) throw error;
-      throw new OAuthHarnessError("invalid_token_response");
+      throw new OAuthHarnessError("invalid_token_response", response.status, context);
     }
   }
 
@@ -497,14 +539,21 @@ export class SubscriptionOAuthClient {
       redirect: "error",
       signal: AbortSignal.timeout(30_000),
     }).catch(() => {
-      throw new OAuthHarnessError("transport_unavailable");
+      throw new OAuthHarnessError("transport_unavailable", null, {
+        provider: this.#protocol.provider,
+        operation: "model_catalog",
+      });
     });
   }
 
   /** Fetches only the provider's fixed model-catalog endpoint and never returns credentials. */
   async modelCatalog(): Promise<ReadonlyArray<unknown>> {
+    const context: OAuthHarnessErrorContext = {
+      provider: this.#protocol.provider,
+      operation: "model_catalog",
+    };
     let credential = await this.#store.read(this.#protocol.provider);
-    if (!credential) throw new OAuthHarnessError("not_connected");
+    if (!credential) throw new OAuthHarnessError("not_connected", null, context);
     if (credential.expiresAt <= this.#now() + 30_000) credential = await this.#refresh(credential);
 
     const pages: unknown[] = [];
@@ -520,12 +569,12 @@ export class SubscriptionOAuthClient {
         credential = await this.#refresh(credential);
         response = await this.#authorizedCatalogRequest(url, credential);
       }
-      if (!response.ok) throw new OAuthHarnessError("provider_rejected", response.status);
+      if (!response.ok) throw new OAuthHarnessError("provider_rejected", response.status, context);
       let page: unknown;
       try {
         page = await response.json();
       } catch {
-        throw new OAuthHarnessError("provider_rejected", response.status);
+        throw new OAuthHarnessError("provider_rejected", response.status, context);
       }
       pages.push(page);
       if (this.#protocol.provider !== "anthropic") break;
@@ -540,8 +589,12 @@ export class SubscriptionOAuthClient {
     serializedBody: string,
     signal?: AbortSignal,
   ): AsyncGenerator<NormalizedStreamEvent> {
+    const context: OAuthHarnessErrorContext = {
+      provider: this.#protocol.provider,
+      operation: "model_stream",
+    };
     let credential = await this.#store.read(this.#protocol.provider);
-    if (!credential) throw new OAuthHarnessError("not_connected");
+    if (!credential) throw new OAuthHarnessError("not_connected", null, context);
     if (credential.expiresAt <= this.#now() + 30_000) credential = await this.#refresh(credential);
 
     const providerBody =
@@ -576,7 +629,7 @@ export class SubscriptionOAuthClient {
         redirect: "error",
         signal,
       }).catch(() => {
-        throw new OAuthHarnessError("transport_unavailable");
+        throw new OAuthHarnessError("transport_unavailable", null, context);
       });
     };
 
@@ -585,7 +638,7 @@ export class SubscriptionOAuthClient {
       credential = await this.#refresh(credential);
       response = await request(credential);
     }
-    if (!response.ok) throw new OAuthHarnessError("provider_rejected", response.status);
+    if (!response.ok) throw new OAuthHarnessError("provider_rejected", response.status, context);
     yield* sseEvents(this.#protocol.provider, response);
   }
 }

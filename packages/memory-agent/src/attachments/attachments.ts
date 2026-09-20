@@ -71,6 +71,10 @@ export const isAttachmentId = (id: string) => /^[0-9a-f]{64}$/.test(id);
  * fit within this anyway, so nothing it would have seen is lost.
  */
 export const modelImageEdge = 2048;
+/** Target ceiling for a model image; adaptive encoding trades detail only when the copy exceeds it. */
+export const maxModelImageBytes = 2 * 1024 * 1024;
+/** Sharp is memory hungry, so uploads and lazy migration fallbacks share this small process queue. */
+const maxConcurrentImageConversions = 2;
 
 /** Largest SVG turned into a picture; a figure is a few KB, anything near this is not a drawing. */
 export const maxDrawingBytes = 2 * 1024 * 1024;
@@ -87,6 +91,26 @@ const extensions = new Map<AttachmentMimeType, string>([
   ["image/gif", "gif"],
   ["image/webp", "webp"],
 ]);
+
+/** Minimal FIFO semaphore: queued closures hold no image buffers, only their attachment metadata. */
+function conversionQueue(limit: number) {
+  let active = 0;
+  const waiting: Array<() => void> = [];
+  const release = () => {
+    const next = waiting.shift();
+    if (next) next();
+    else active -= 1;
+  };
+  return async <Value>(task: () => Promise<Value>): Promise<Value> => {
+    if (active >= limit) await new Promise<void>((resolve) => waiting.push(resolve));
+    else active += 1;
+    try {
+      return await task();
+    } finally {
+      release();
+    }
+  };
+}
 
 const make = Effect.gen(function* () {
   const { sqlite } = yield* Database;
@@ -114,30 +138,52 @@ const make = Effect.gen(function* () {
     return row ? toAttachment(row) : null;
   };
 
+  const runConversion = conversionQueue(maxConcurrentImageConversions);
+  const inFlightConversions = new Map<string, Promise<ModelImage>>();
+
   /**
-   * Fits the image within {@link modelImageEdge} as WebP: lossless for screenshots and other
-   * PNG/WebP images (text stays sharp, and it is usually smaller than lossy quality 100), quality 100
-   * for JPEG photos. GIFs (possibly animated) and copies that would not be smaller keep the upload.
-   * Any failure also keeps the upload, so an image is never held back.
+   * Fits an image into an adaptive WebP budget. A disk marker remembers that conversion brought no
+   * benefit; memory retains only conversions that are currently running. GIFs keep their animation.
    */
   const encodeForModel = async (attachment: Attachment): Promise<ModelImage> => {
     const upload: ModelImage = { path: fileOf(attachment), mimeType: attachment.mimeType };
     if (attachment.mimeType === "image/gif") return upload;
     const copy = join(directory, `${attachment.id}.model.webp`);
-    if (await stat(copy).catch(() => undefined)) return { path: copy, mimeType: "image/webp" };
+    const noCopy = join(directory, `${attachment.id}.model-original`);
+    const existingCopy = await stat(copy).catch(() => undefined);
+    if (existingCopy && existingCopy.size <= maxModelImageBytes)
+      return { path: copy, mimeType: "image/webp" };
+    if (existingCopy) await rm(copy, { force: true });
+    if (await stat(noCopy).catch(() => undefined)) return upload;
     try {
-      const sharp = requireRuntime("sharp");
-      const encoded = await sharp(upload.path)
-        .rotate()
-        .resize({
-          width: modelImageEdge,
-          height: modelImageEdge,
-          fit: "inside",
-          withoutEnlargement: true,
-        })
-        .webp(attachment.mimeType === "image/jpeg" ? { quality: 100 } : { lossless: true })
-        .toBuffer();
-      if (encoded.length >= attachment.bytes) return upload;
+      const encoded = await runConversion(async () => {
+        const sharp = requireRuntime("sharp");
+        const attempts = [
+          { edge: modelImageEdge, quality: 86 },
+          { edge: 1600, quality: 78 },
+          { edge: 1280, quality: 70 },
+          { edge: 1024, quality: 64 },
+        ] as const;
+        let candidate: Uint8Array = new Uint8Array();
+        for (const attempt of attempts) {
+          candidate = await sharp(upload.path)
+            .rotate()
+            .resize({
+              width: attempt.edge,
+              height: attempt.edge,
+              fit: "inside",
+              withoutEnlargement: true,
+            })
+            .webp({ quality: attempt.quality, smartSubsample: true })
+            .toBuffer();
+          if (candidate.length <= maxModelImageBytes) break;
+        }
+        return candidate;
+      });
+      if (encoded.length >= attachment.bytes) {
+        await writeFile(noCopy, "", { mode: 0o600 });
+        return upload;
+      }
       const temporary = `${copy}.${randomUUID()}.tmp`;
       try {
         await writeFile(temporary, encoded, { mode: 0o600, flag: "wx" });
@@ -150,8 +196,19 @@ const make = Effect.gen(function* () {
       return upload;
     }
   };
-  /** Per process, so an image whose copy is not smaller is not encoded again on every run. */
-  const forModel = new Map<string, Promise<ModelImage>>();
+
+  const forModel = (attachment: Attachment) => {
+    const known = inFlightConversions.get(attachment.id);
+    if (known) return known;
+    const made = encodeForModel(attachment);
+    inFlightConversions.set(attachment.id, made);
+    const forget = () => {
+      if (inFlightConversions.get(attachment.id) === made)
+        inFlightConversions.delete(attachment.id);
+    };
+    void made.then(forget, forget);
+    return made;
+  };
 
   /**
    * Stores an image by content hash (storing the same image twice keeps one copy). The type comes
@@ -189,7 +246,11 @@ const make = Effect.gen(function* () {
         attachment.bytes,
         attachment.createdAt,
       );
-      return get(attachment.id) ?? attachment;
+      const stored = get(attachment.id) ?? attachment;
+      // Start eagerly without retaining the upload request buffer while Sharp waits in the queue.
+      // An immediate chat call joins this same in-flight conversion through forModel.
+      void forModel(stored);
+      return stored;
     });
 
   /**
@@ -232,17 +293,8 @@ const make = Effect.gen(function* () {
 
     read: (attachment: Attachment) => readFile(fileOf(attachment)),
 
-    /**
-     * The image to send to the model, made once: the provider reads its path for a new turn, and
-     * earlier turns replay it as a `data:` URL, so a smaller file saves both.
-     */
-    forModel: (attachment: Attachment) => {
-      const known = forModel.get(attachment.id);
-      if (known) return known;
-      const made = encodeForModel(attachment);
-      forModel.set(attachment.id, made);
-      return made;
-    },
+    /** Model derivative, eagerly made on upload with a lazy fallback for pre-existing files. */
+    forModel,
 
     /** `data:` URL of an image file, for replaying earlier turns to the model. */
     dataUrl: async (image: ModelImage) =>
@@ -258,10 +310,12 @@ const make = Effect.gen(function* () {
   };
 });
 
+export type AttachmentsApi = Effect.Effect.Success<typeof make>;
+
 /** Images uploaded into conversations. Kept like the rest of the evidence: never expired. */
 export class Attachments extends Context.Tag("memory-agent/Attachments")<
   Attachments,
-  Effect.Effect.Success<typeof make>
+  AttachmentsApi
 >() {
   static readonly layer = Layer.effect(Attachments, make);
 }

@@ -8,10 +8,16 @@ import type {
   GpuState,
   ImportActivity,
   ImportOverview,
+  ImageFeatureStatus,
+  ImageMediaAsset,
   KagiStatus,
   McpOverview,
   McpScope,
+  CrossProviderMediaConsentMode,
+  CrossProviderMediaConsentSettings,
+  CrossProviderMediaRunApproval,
   McpServerView,
+  ModelFeatureFlagSettings,
   ModelSelection,
   PermissionMode,
   Project,
@@ -38,6 +44,12 @@ import {
   type RelayedApprovalView,
   type SubagentView,
 } from "memory-agent/definitions";
+
+export type GeneratedImageAsset = ImageMediaAsset & { readonly url: string };
+export type ImageSettingsView = ImageFeatureStatus & {
+  readonly modelFeatureFlags: ModelFeatureFlagSettings;
+  readonly crossProviderMediaConsent: CrossProviderMediaConsentSettings;
+};
 
 export type ProviderAuthState =
   | { readonly provider: ProviderId; readonly status: "signed-out" }
@@ -70,11 +82,17 @@ export type {
   GpuState,
   ImportActivity,
   ImportOverview,
+  ImageFeatureStatus,
+  ImageMediaAsset,
   KagiStatus,
   LeaseView,
   McpOverview,
   McpScope,
+  CrossProviderMediaConsentMode,
+  CrossProviderMediaConsentSettings,
+  CrossProviderMediaRunApproval,
   McpServerView,
+  ModelFeatureFlagSettings,
   ModelSelection,
   PermissionMode,
   Project,
@@ -105,11 +123,18 @@ export const ApiErrorCode = Schema.Literal(
   "external_agent_unavailable",
   "goal_missing",
   "images_not_supported",
+  "image_approval_required",
+  "image_direct_workflow_required",
+  "image_execution_failed",
+  "image_feature_unavailable",
+  "image_route_unavailable",
   "invalid_agent_change",
   "invalid_answer",
   "invalid_chat_request",
   "invalid_embedding_action",
   "invalid_import_action",
+  "invalid_image_request",
+  "invalid_image_settings_action",
   "invalid_intent",
   "invalid_json",
   "invalid_kagi_action",
@@ -164,14 +189,27 @@ export class ApiError extends Error {
     readonly status: number,
     readonly code: ApiErrorCode,
     readonly reason: string | null,
+    readonly approval?: CrossProviderMediaRunApproval,
   ) {
     super(code);
   }
 }
 
+const CrossProviderMediaRunApproval = Schema.Struct({
+  runId: Schema.String,
+  initiatorChatRouteId: Schema.TemplateLiteral(
+    "chat:",
+    Schema.Literal("openai", "anthropic"),
+    ":",
+    Schema.String,
+  ),
+  executorMediaRouteId: Schema.String,
+  capability: Schema.Literal("media.image.generate"),
+});
 const ErrorBody = Schema.Struct({
   error: Schema.optional(ApiErrorCode),
   reason: Schema.optional(Schema.String),
+  approval: Schema.optional(CrossProviderMediaRunApproval),
 });
 const decodeErrorBody = Schema.decodeUnknownOption(ErrorBody);
 type ErrorBody = typeof ErrorBody.Type;
@@ -181,10 +219,17 @@ function apiError(
   body: ErrorBody | undefined,
   fallback: "request_failed" | "upload_failed" = "request_failed",
 ) {
-  return new ApiError(status, body?.error ?? fallback, body?.reason ?? null);
+  return new ApiError(status, body?.error ?? fallback, body?.reason ?? null, body?.approval);
 }
 
-type JsonBody = Readonly<Record<string, string | boolean | readonly string[] | undefined>>;
+type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly JsonValue[]
+  | Readonly<{ [key: string]: JsonValue | undefined }>;
+type JsonBody = Readonly<{ [key: string]: JsonValue | undefined }>;
 
 async function call<T>(
   method: "GET" | "POST",
@@ -327,6 +372,41 @@ export const api = {
       "GET",
       `/api/chat?session=${encodeURIComponent(sessionId)}&threadId=${encodeURIComponent(sessionId)}`,
     ),
+
+  imageSettings: () => call<ImageSettingsView>("GET", "/api/settings/image"),
+  setImageSetting: (
+    action:
+      | "image_generation"
+      | "provider_tool"
+      | "features_global"
+      | "features_openai"
+      | "feature_image",
+    enabled: boolean,
+  ) => call<ImageSettingsView>("POST", "/api/settings/image", { action, enabled }),
+  setCrossProviderMediaConsent: (mode: CrossProviderMediaConsentMode) =>
+    call<ImageSettingsView>("POST", "/api/settings/image", {
+      action: "cross_provider_media",
+      mode,
+    }),
+  generateImage: (
+    prompt: string,
+    approved: boolean,
+    crossProviderApproval?: CrossProviderMediaRunApproval,
+  ) => {
+    if (crossProviderApproval === undefined)
+      return call<GeneratedImageAsset>("POST", "/api/media/image", { prompt, approved });
+    return call<GeneratedImageAsset>("POST", "/api/media/image", {
+      prompt,
+      approved,
+      runId: crossProviderApproval.runId,
+      crossProviderApproval: {
+        runId: crossProviderApproval.runId,
+        initiatorChatRouteId: crossProviderApproval.initiatorChatRouteId,
+        executorMediaRouteId: crossProviderApproval.executorMediaRouteId,
+        capability: crossProviderApproval.capability,
+      },
+    });
+  },
 
   kagi: () => call<KagiStatus>("GET", "/api/settings/kagi"),
   kagiAction: (

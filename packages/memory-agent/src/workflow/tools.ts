@@ -4,12 +4,23 @@ import {
   UpdateGoal,
   UpdatePlan,
   UpdateWorkflowProgress,
+  WorkflowProgressRefused,
   Workflows,
   type WorkflowPhase,
   type WorkflowState,
 } from "./workflow.ts";
 import { toToolSchema } from "../tools/schema.ts";
 import type { ResolvedRules } from "./rules.ts";
+
+const exposeProgressRefusal = <A, R>(effect: Effect.Effect<A, WorkflowProgressRefused, R>) =>
+  effect.pipe(
+    Effect.catchTag("WorkflowProgressRefused", (failure) =>
+      Effect.succeed({
+        error: "workflow_progress_refused" as const,
+        reason: failure.reason,
+      }),
+    ),
+  );
 
 const make = Effect.gen(function* () {
   const runtime = yield* Effect.runtime<Workflows>();
@@ -33,7 +44,7 @@ const make = Effect.gen(function* () {
       const updatePlan = toolDefinition({
         name: "update_plan",
         description:
-          "Save the session's canonical Plan artifact. Use after making or revising an actionable plan. Each step needs stable ids, dependencies, acceptance criteria and applicable workflow rule ids. This creates the next version.",
+          "Save the session's canonical Plan artifact. Use after making or revising an actionable plan. Each step needs stable ids, dependencies, acceptance criteria and applicable workflow rule ids. This creates the next version. Revising a Plan during Execute returns the workflow to Plan and invalidates concurrent or later progress calls from that turn; do not call update_workflow_progress in parallel with update_plan.",
         inputSchema: toToolSchema(UpdatePlan),
       }).server((input) =>
         run(
@@ -46,26 +57,28 @@ const make = Effect.gen(function* () {
       const updateProgress = toolDefinition({
         name: "update_workflow_progress",
         description:
-          "Record durable Goal/Plan/step progress, evidence and verification. Classify verification as passed, failed, invalid_hypothesis, invalid_criterion, inconclusive, or blocked instead of treating every non-pass as an implementation failure. Set recoveryPhase to goal or plan for invalid_hypothesis. A completed step needs evidence; a completed Goal or Plan needs passed verification with evidence; a completed Plan also needs every step completed.",
+          "Record durable Goal/Plan/step progress, evidence and verification. Plan and step progress is executable only while the workflow is in Execute or Verify; after update_plan returns the workflow to Plan, wait for Execute to be confirmed before recording it. Never call this in parallel with update_plan. Classify verification as passed, failed, invalid_hypothesis, invalid_criterion, inconclusive, or blocked instead of treating every non-pass as an implementation failure. Set recoveryPhase to goal or plan for invalid_hypothesis. A completed step needs evidence; a completed Goal or Plan needs passed verification with evidence; a completed Plan also needs every step completed.",
         inputSchema: toToolSchema(UpdateWorkflowProgress),
       }).server((input) =>
         run(
-          Effect.flatMap(Workflows, (workflows) =>
-            workflows.updateProgress(sessionId, {
-              ...input,
-              steps: (input.steps ?? []).map((step) => ({
-                ...step,
-                evidence: step.evidence ?? [],
+          exposeProgressRefusal(
+            Effect.flatMap(Workflows, (workflows) =>
+              workflows.updateProgress(sessionId, {
+                ...input,
+                steps: (input.steps ?? []).map((step) => ({
+                  ...step,
+                  evidence: step.evidence ?? [],
+                })),
+                goalEvidence: input.goalEvidence ?? [],
+                planEvidence: input.planEvidence ?? [],
+              }),
+            ).pipe(
+              Effect.map((state) => ({
+                phase: state.phase,
+                goal: state.goal,
+                plan: state.plan,
               })),
-              goalEvidence: input.goalEvidence ?? [],
-              planEvidence: input.planEvidence ?? [],
-            }),
-          ).pipe(
-            Effect.map((state) => ({
-              phase: state.phase,
-              goal: state.goal,
-              plan: state.plan,
-            })),
+            ),
           ),
         ),
       );

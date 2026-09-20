@@ -23,7 +23,7 @@ const make = Effect.gen(function* () {
   const fallbackThread = (threadId: string) =>
     convertMessagesToModelMessages(sessionMessages(nodes.session(threadId), attachments.forNode));
   migrateLegacyChatThreads(sqlite, fallbackThread);
-  const persistence = sqliteChatPersistence(sqlite, fallbackThread);
+  const persistence = sqliteChatPersistence(sqlite);
 
   // One process owns the database, so running and approval-interrupted runs belonged to the old
   // process after a restart. The provider continuation they depended on is gone: leaving their
