@@ -24,6 +24,8 @@ import type {
   ProviderId,
   Session,
   SkillCatalog,
+  TraceTaskDetail,
+  TraceTreeSnapshot,
   WorkflowAction,
   WorkflowPhase,
   WorkflowState,
@@ -213,6 +215,34 @@ const ErrorBody = Schema.Struct({
 });
 const decodeErrorBody = Schema.decodeUnknownOption(ErrorBody);
 type ErrorBody = typeof ErrorBody.Type;
+const ResumeTaskResult = Schema.Union(
+  Schema.Struct({
+    status: Schema.Literal("queued"),
+    jobId: Schema.String,
+    taskId: Schema.String,
+    expectedAttemptId: Schema.String,
+  }),
+  Schema.Struct({ status: Schema.Literal("blocked"), reason: Schema.String }),
+);
+const decodeResumeTaskResult = Schema.decodeUnknownOption(ResumeTaskResult);
+type ResumeTaskResult = typeof ResumeTaskResult.Type;
+const ArchiveTaskResult = Schema.Union(
+  Schema.Struct({
+    status: Schema.Literal("completed"),
+    operationId: Schema.optional(Schema.String),
+    targetId: Schema.String,
+    intent: Schema.optional(Schema.Literal("archive", "restore", "delete")),
+    receiptId: Schema.optional(Schema.NullOr(Schema.String)),
+  }),
+  Schema.Struct({ status: Schema.Literal("blocked"), blocker: Schema.String }),
+  Schema.Struct({
+    status: Schema.Literal("waiting_for_stop"),
+    operationId: Schema.String,
+    targetId: Schema.String,
+  }),
+);
+const decodeArchiveTaskResult = Schema.decodeUnknownOption(ArchiveTaskResult);
+type ArchiveTaskResult = typeof ArchiveTaskResult.Type;
 
 function apiError(
   status: number,
@@ -290,12 +320,19 @@ export const api = {
     call<Session[]>("GET", `/api/sessions?project=${encodeURIComponent(projectId)}`),
   archivedSessions: (projectId: string) =>
     call<Session[]>("GET", `/api/sessions?project=${encodeURIComponent(projectId)}&archived=1`),
-  /** Refused with 409 while it is answering and 423 while another page holds it. */
+  /** Active parent/child runs are checkpointed and stopped before the conversation is archived. */
   setArchived: (sessionId: string, holder: string, archived: boolean) =>
     call<Session>(
       "POST",
       `/api/sessions/${encodeURIComponent(sessionId)}`,
-      { archived },
+      { archived, idempotencyKey: crypto.randomUUID() },
+      { [sessionHolderHeader]: holder },
+    ),
+  deleteSession: (sessionId: string, holder: string) =>
+    call<{ status: "completed"; targetId: string }>(
+      "POST",
+      `/api/sessions/${encodeURIComponent(sessionId)}`,
+      { delete: true, idempotencyKey: crypto.randomUUID() },
       { [sessionHolderHeader]: holder },
     ),
   /** Refused while a run is active; execute also requires a ready Plan. */
@@ -459,6 +496,89 @@ export const api = {
   skills: (projectId: string) =>
     call<SkillCatalog>("GET", `/api/projects/${encodeURIComponent(projectId)}/skills`),
 
+  projectWorkTrace: (projectId: string) =>
+    call<TraceTreeSnapshot>("GET", `/api/projects/${encodeURIComponent(projectId)}/trace`),
+  projectWorkTraceTask: (projectId: string, taskId: string) =>
+    call<TraceTaskDetail>(
+      "GET",
+      `/api/projects/${encodeURIComponent(projectId)}/trace/tasks/${encodeURIComponent(taskId)}`,
+    ),
+  workTrace: (sessionId: string) =>
+    call<TraceTreeSnapshot>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/trace`),
+  workTraceTask: (sessionId: string, taskId: string) =>
+    call<TraceTaskDetail>(
+      "GET",
+      `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
+    ),
+  resumeWorkTraceTask: async (
+    sessionId: string,
+    holder: string,
+    taskId: string,
+    expectedAttemptId: string,
+    confirmUncertain = false,
+  ): Promise<ResumeTaskResult> => {
+    const response = await fetch(
+      `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
+      {
+        method: "POST",
+        headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
+        body: JSON.stringify({ intent: "resume", expectedAttemptId, confirmUncertain }),
+      },
+    );
+    const body: unknown = await response.json();
+    const result = Option.getOrUndefined(decodeResumeTaskResult(body));
+    // A safety refusal is an expected action result, not a transport failure.
+    if (response.status === 409 && result?.status === "blocked") return result;
+    if (!response.ok) throw apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
+    if (!result || result.status !== "queued") throw apiError(502, undefined);
+    return result;
+  },
+  archiveWorkTraceTask: async (
+    sessionId: string,
+    holder: string,
+    taskId: string,
+  ): Promise<ArchiveTaskResult> => {
+    const response = await fetch(
+      `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
+      {
+        method: "POST",
+        headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
+        body: JSON.stringify({ intent: "archive", idempotencyKey: crypto.randomUUID() }),
+      },
+    );
+    const body: unknown = await response.json();
+    const result = Option.getOrUndefined(decodeArchiveTaskResult(body));
+    if (response.status === 409 && result?.status === "blocked") return result;
+    if (!response.ok) throw apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
+    if (!result || (result.status !== "completed" && result.status !== "waiting_for_stop"))
+      throw apiError(502, undefined);
+    window.dispatchEvent(new CustomEvent("work-trace:changed"));
+    return result;
+  },
+  deleteWorkTraceTask: async (
+    sessionId: string,
+    holder: string,
+    taskId: string,
+  ): Promise<ArchiveTaskResult> => {
+    const response = await fetch(
+      `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
+      {
+        method: "POST",
+        headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
+        body: JSON.stringify({ intent: "delete", idempotencyKey: crypto.randomUUID() }),
+      },
+    );
+    const body: unknown = await response.json();
+    const result = Option.getOrUndefined(decodeArchiveTaskResult(body));
+    if (response.status === 409 && result?.status === "blocked") return result;
+    if (!response.ok) throw apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
+    if (!result || (result.status !== "completed" && result.status !== "waiting_for_stop"))
+      throw apiError(502, undefined);
+    window.dispatchEvent(new CustomEvent("work-trace:changed"));
+    return result;
+  },
+  workTraceStreamUrl: (sessionId: string, after = 0) =>
+    `/api/sessions/${encodeURIComponent(sessionId)}/trace/stream?after=${after}`,
   subagents: (sessionId: string) =>
     call<SubagentView[]>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/subagents`),
   relayedApprovals: (sessionId: string) =>

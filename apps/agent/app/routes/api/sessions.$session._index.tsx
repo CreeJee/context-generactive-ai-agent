@@ -5,7 +5,8 @@ import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/sessions.$session._index";
 
 const ChangeSession = Schema.Union(
-  Schema.Struct({ archived: Schema.Boolean }),
+  Schema.Struct({ archived: Schema.Boolean, idempotencyKey: Schema.optional(Schema.String) }),
+  Schema.Struct({ delete: Schema.Literal(true), idempotencyKey: Schema.String }),
   Schema.Struct({ phase: WorkflowPhase }),
   Schema.Struct({ workflowAction: WorkflowAction }),
 );
@@ -34,7 +35,15 @@ export async function action({ request, params }: Route.ActionArgs) {
   return agent.runPromise(
     Effect.flatMap(AgentChat, (chat) => {
       const change = body.right;
-      if ("archived" in change) return chat.archive(params.session, holder, change.archived);
+      if ("archived" in change)
+        return chat.archive(
+          params.session,
+          holder,
+          change.archived,
+          change.idempotencyKey ?? crypto.randomUUID(),
+        );
+      if ("delete" in change)
+        return chat.deleteSession(params.session, holder, change.idempotencyKey);
       if ("phase" in change) return chat.setWorkflowPhase(params.session, holder, change.phase);
       return chat.controlWorkflow(params.session, holder, change.workflowAction);
     }),
