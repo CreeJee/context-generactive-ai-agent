@@ -529,6 +529,40 @@ export {
   type SubagentReport,
 } from "./subagents/subagents.ts";
 export type { SubagentStatus, SubagentView } from "./subagents/subagent-state.ts";
+export {
+  AgentIdentity,
+  AgentIdentityKind,
+  AgentInvocation,
+  AgentRunAttempt,
+  AttemptStatus,
+  DecisionStatus,
+  EvidenceRef,
+  EvidenceSourceKind,
+  EvidenceVerification,
+  InvocationKind,
+  InvocationStatus,
+  MemoryCandidate,
+  MemoryCandidateStatus,
+  RedactionState,
+  ReportAdoption,
+  ReportDisposition,
+  Resumability,
+  ResumeBlocker,
+  ResumeReason,
+  RunEvent,
+  RunEventKind,
+  TaskStatus,
+  ToolExecutionState,
+  TraceVisibility,
+  WorkCheckpoint,
+  WorkDecision,
+  WorkTask,
+  canTransitionAttempt,
+  isActiveAttemptStatus,
+  isTerminalAttemptStatus,
+  isUserVisibleTrace,
+  resumeCreatesNewAttempt,
+} from "./work-trace/contracts.ts";
 export { RelayedApprovals, type RelayedRequest } from "./approvals/relayed.ts";
 export type { ApprovalRequester, RelayedApprovalView } from "./approvals/relayed-state.ts";
 export { KagiTools, kagiInstructions, kagiToolNames, maxPageCharacters } from "./tools/kagi.ts";

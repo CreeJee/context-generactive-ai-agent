@@ -10,6 +10,14 @@
 이 저장소의 제품과 설계 결정을 날짜와 함께 기록합니다. 결정이 바뀌면 해당 내용을 현재 결정으로 교체하고 날짜를 갱신합니다. 이전 결정은 git 기록에서 확인할 수 있습니다.
 요구사항의 원본은 이전 프로젝트(`topic-generactive-ai-agent`)의 PRD R01-R19이며, 여기서는 그중 이 저장소에서 바꾸거나 구체화한 부분만 적습니다.
 
+## Work Trace 실행 경계 (2026-09-20)
+
+- TanStack `chat_runs`는 SDK의 run·interrupt·durable-run 계약에 그대로 사용한다. Task의 여러 실행과 재개 계보는 별도 앱 소유 `agent_run_attempts`로 저장하고 `chat_run_id`로 연결한다.
+- 연결이 끊겨도 producer가 살아 있으면 같은 run에 다시 붙는다. 서버 재시작 등으로 continuation이 소실되면 원 Task 아래 새 attempt와 child run을 만들어 transcript/checkpoint에서 논리적으로 이어간다. 두 동작을 모두 "resume"으로 숨기지 않는다.
+- 완료가 확인된 tool result만 논리적 재개에 재사용한다. 실행 여부가 불명확한 비멱등 tool과 이전 attempt의 pending approval은 자동으로 계속하지 않는다.
+- Work Trace는 부모 chat stream과 독립된 session-scoped SSE로 전달한다. SQLite event store를 원본으로 삼고, 기존 SSE offset/rejoin 패턴을 재사용해 프로세스 재시작 뒤에도 replay한다.
+- 세부 계약과 구현 불변식은 [Work Trace 런타임 계약](./work-trace-runtime-contract.md)에 기록한다.
+
 ## 범위와 구조 (2026-09-15)
 
 - PRD 전체(R01-R19)를 단계별로 옮기되, 연구용 계약(예산 원장, r00x 평가 등)은 가져오지 않고 직관적인 구조로 다시 만든다.
