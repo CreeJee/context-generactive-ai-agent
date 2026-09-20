@@ -63,6 +63,8 @@ export const Settings = Schema.Struct({
   imageGenerationEnabled: Schema.optional(Schema.Boolean),
   /** User separately permits the chat Provider Tool path. Defaults off when absent. */
   imageProviderToolEnabled: Schema.optional(Schema.Boolean),
+  /** Staged Work Trace UI/API exposure. Instrumentation and migrations stay on to avoid data loss. */
+  workTraceEnabled: Schema.optional(Schema.Boolean),
   /** Server-authoritative flags for every model-dependent capability. */
   modelFeatureFlags: Schema.optional(ModelFeatureFlagSettings),
   /** Explicit consent for sending a media request from one provider to another. */

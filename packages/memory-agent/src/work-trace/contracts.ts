@@ -30,6 +30,8 @@ export const TaskStatus = Schema.Literal(
   "completed",
   "failed",
   "cancelled",
+  "archived",
+  "deleted",
 );
 export type TaskStatus = typeof TaskStatus.Type;
 
@@ -98,6 +100,7 @@ export const EvidenceSourceKind = Schema.Literal(
   "message",
   "tool_call",
   "tool_result",
+  "file",
   "artifact",
   "checkpoint",
   "memory",
@@ -109,8 +112,45 @@ export const EvidenceVerification = Schema.Literal(
   "verified",
   "invalidated",
   "unavailable",
+  "source_deleted",
 );
 export type EvidenceVerification = typeof EvidenceVerification.Type;
+
+/** A durable pointer to source material. It identifies content without copying that content. */
+export const EvidenceLocator = Schema.Union(
+  Schema.Struct({
+    kind: Schema.Literal("message"),
+    threadId: Schema.String,
+    messageId: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("tool_call", "tool_result"),
+    threadId: Schema.String,
+    toolCallId: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("file"),
+    path: Schema.String,
+    sha256: Schema.String,
+    startLine: Schema.optional(Schema.Number),
+    endLine: Schema.optional(Schema.Number),
+  }),
+  Schema.Struct({ kind: Schema.Literal("artifact"), artifactId: Schema.String }),
+  Schema.Struct({ kind: Schema.Literal("checkpoint"), checkpointId: Schema.String }),
+  Schema.Struct({ kind: Schema.Literal("memory"), memoryId: Schema.String }),
+);
+export type EvidenceLocator = typeof EvidenceLocator.Type;
+
+export const ArtifactKind = Schema.Literal("file", "generated", "external");
+export type ArtifactKind = typeof ArtifactKind.Type;
+
+/** Artifact metadata points at a result; generated contents remain in their owning store. */
+export const ArtifactLocator = Schema.Union(
+  Schema.Struct({ kind: Schema.Literal("file"), path: Schema.String, sha256: Schema.String }),
+  Schema.Struct({ kind: Schema.Literal("generated"), reference: Schema.String }),
+  Schema.Struct({ kind: Schema.Literal("external"), reference: Schema.String }),
+);
+export type ArtifactLocator = typeof ArtifactLocator.Type;
 
 /** User-visible trace never exposes internal reasoning. */
 export const TraceVisibility = Schema.Literal("public", "summary", "internal");
@@ -154,6 +194,10 @@ export const RunEventKind = Schema.Literal(
   "report_used",
   "report_not_used",
   "report_superseded",
+  "recovery_queued",
+  "recovery_blocked",
+  "parent_notified",
+  "task_archived",
 );
 export type RunEventKind = typeof RunEventKind.Type;
 
@@ -169,14 +213,18 @@ export type AgentIdentity = typeof AgentIdentity.Type;
 
 export const WorkTask = Schema.Struct({
   id: Schema.String,
-  sessionId: Schema.String,
+  projectId: Schema.String,
+  originSessionId: Schema.NullOr(Schema.String),
+  parentTaskId: Schema.NullOr(Schema.String),
   parentRunId: Schema.String,
   parentToolCallId: Schema.String,
-  agentId: Schema.String,
+  agentId: Schema.NullOr(Schema.String),
+  agentName: Schema.String,
   status: TaskStatus,
   title: Schema.String,
   request: Schema.String,
   activeAttemptId: Schema.NullOr(Schema.String),
+  originDeletedAt: Schema.NullOr(Schema.Number),
   createdAt: Schema.Number,
   updatedAt: Schema.Number,
 });
@@ -214,7 +262,7 @@ export type AgentRunAttempt = typeof AgentRunAttempt.Type;
 
 export const RunEvent = Schema.Struct({
   id: Schema.String,
-  sessionId: Schema.String,
+  originSessionId: Schema.NullOr(Schema.String),
   taskId: Schema.String,
   invocationId: Schema.String,
   attemptId: Schema.String,
@@ -246,13 +294,29 @@ export const EvidenceRef = Schema.Struct({
   taskId: Schema.String,
   attemptId: Schema.String,
   sourceKind: EvidenceSourceKind,
-  sourceId: Schema.String,
+  locator: Schema.NullOr(EvidenceLocator),
   verification: EvidenceVerification,
   visibility: TraceVisibility,
   redaction: RedactionState,
+  sourceDeletedAt: Schema.NullOr(Schema.Number),
   createdAt: Schema.Number,
+  updatedAt: Schema.Number,
 });
 export type EvidenceRef = typeof EvidenceRef.Type;
+
+export const ArtifactRef = Schema.Struct({
+  id: Schema.String,
+  taskId: Schema.String,
+  attemptId: Schema.String,
+  kind: ArtifactKind,
+  locator: Schema.NullOr(ArtifactLocator),
+  mediaType: Schema.NullOr(Schema.String),
+  verification: EvidenceVerification,
+  sourceDeletedAt: Schema.NullOr(Schema.Number),
+  createdAt: Schema.Number,
+  updatedAt: Schema.Number,
+});
+export type ArtifactRef = typeof ArtifactRef.Type;
 
 export const ReportAdoption = Schema.Struct({
   taskId: Schema.String,

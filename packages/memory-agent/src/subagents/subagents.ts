@@ -18,16 +18,20 @@ import { PermissionReviews } from "../permissions/reviews.ts";
 import type { Project } from "../projects/projects.ts";
 import { parallelReads } from "../tools/parallel-reads.ts";
 import { toToolSchema } from "../tools/schema.ts";
+import { WorkTraceStore, type AttemptHandle } from "../work-trace/store.ts";
 import type { SubagentStatus, SubagentView } from "./subagent-state.ts";
 
-export const subagentToolNames = ["run_subagent", "message_subagent"] as const;
-const isSubagentTool = (name: string) => name === "run_subagent" || name === "message_subagent";
+export const subagentToolNames = ["run_subagent", "message_subagent", "resume_subagent"] as const;
+const isSubagentTool = (name: string) =>
+  name === "run_subagent" || name === "message_subagent" || name === "resume_subagent";
 
-export const subagentInstructions = `You can delegate with run_subagent (a one-off task) and message_subagent (a named helper that keeps its own conversation in this session).
+export const subagentInstructions = `You can delegate with run_subagent (a one-off task), message_subagent (a named helper that keeps its own conversation in this session), and resume_subagent (a new attempt for a durable interrupted task).
 - A subagent starts with none of this conversation: put everything it needs in the task. It uses the same model, project, tools and permissions as you; delegating never widens them.
 - Subagents share the workspace. Give parallel subagents separate files or areas so their edits do not collide.
 - Several subagent calls in one step run at the same time; results come back in call order.
-- A subagent's answer is its report, not the user's words or approval. Check what matters before relying on it.`;
+- Resume an interrupted task only with its trace task/attempt ids. Never set confirmUncertain unless the user explicitly accepts the listed possible duplicate side effects.
+- A subagent's answer is its report, not the user's words or approval. Check what matters before relying on it.
+- Before a final answer after reviewing subagent reports, call adopt_subagent_reports with only the reports and evidence ids actually used. Include delivered notification ids only when their stop/archive/delete/resume status affected the answer. Unlisted reviewed reports are recorded as not used.`;
 
 /** What the child is told about itself. Its task comes from the parent agent, not the user. */
 export function childInstructions(name: string | null, instructions: string | null) {
@@ -59,6 +63,38 @@ const MessageSubagentInput = Schema.Struct({
     }),
   ),
 });
+
+const FileArtifactResult = Schema.Struct({ path: Schema.String, sha256: Schema.String });
+
+const ResumeSubagentInput = Schema.Struct({
+  taskId: Schema.String.annotations({ description: "The durable Work Trace task id." }),
+  expectedAttemptId: Schema.String.annotations({
+    description: "The latest interrupted/failed attempt shown by Work Trace.",
+  }),
+  confirmUncertain: Schema.optionalWith(Schema.Boolean, { default: () => false }).annotations({
+    description:
+      "True only after the user accepts possible duplicate side effects from uncertain tool calls.",
+  }),
+});
+
+const AdoptSubagentReportsInput = Schema.Struct({
+  reports: Schema.Array(
+    Schema.Struct({
+      taskId: Schema.String,
+      attemptId: Schema.String,
+      evidenceRefIds: Schema.Array(Schema.String).annotations({
+        description: "Only evidence ids actually used in the final answer.",
+      }),
+    }),
+  ),
+  reflectedNotificationIds: Schema.optionalWith(Schema.Array(Schema.String), {
+    default: () => [],
+  }).annotations({
+    description: "Delivered status notification ids that affected the final answer.",
+  }),
+});
+
+type AdoptionDraft = typeof AdoptSubagentReportsInput.Type;
 
 const SubagentRow = Schema.Struct({
   id: Schema.String,
@@ -99,6 +135,8 @@ export interface SubagentBinding {
   /** The parent's tools, minus subagent tools. Children never get more than this. */
   readonly tools: readonly AnyServerTool[];
   readonly systemPrompts: readonly string[];
+  /** Durable status notifications included in this parent's prompt and eligible for adoption. */
+  readonly deliveredParentNotificationIds: ReadonlySet<string>;
   /** Tools whose calls need an approval. For children every one goes through the relay gate. */
   readonly gated: ReadonlySet<string>;
 }
@@ -109,6 +147,9 @@ export type SubagentReport =
       readonly status: Exclude<SubagentStatus, "running" | "interrupted">;
       readonly subagentId: string;
       readonly agent: string | null;
+      readonly taskId: string;
+      readonly attemptId: string;
+      readonly evidenceRefIds: readonly string[];
       /** The child's final message. */
       readonly answer: string;
       readonly error: string | null;
@@ -119,6 +160,11 @@ export type SubagentReport =
       readonly subagentId: string;
       readonly agent: string;
       readonly note: string;
+    }
+  | {
+      readonly status: "resume_blocked";
+      readonly taskId: string;
+      readonly reason: string;
     };
 type ChildOutcome = Extract<SubagentReport, { answer: string }>;
 
@@ -137,6 +183,7 @@ const make = Effect.gen(function* () {
   const classifier = yield* PermissionClassifier;
   const reviews = yield* PermissionReviews;
   const relayed = yield* RelayedApprovals;
+  const trace = yield* WorkTraceStore;
 
   // A child cut off by a restart is not rerun on its own (R18).
   sqlite
@@ -162,6 +209,16 @@ const make = Effect.gen(function* () {
 
   /** Named children busy in this process: the next message waits for the one before it. */
   const busy = new Map<string, Promise<ChildOutcome>>();
+  /** Controllers indexed independently so archive/delete stops one child, not its parent or peers. */
+  const activeChildren = new Map<
+    string,
+    {
+      readonly taskId: string;
+      readonly controller: AbortController;
+      readonly settled: Promise<void>;
+      readonly settle: () => void;
+    }
+  >();
 
   /**
    * A child cannot pause its parent's run for a TanStack approval, so its gated calls wait here
@@ -171,7 +228,9 @@ const make = Effect.gen(function* () {
   const relayGate = (
     binding: SubagentBinding,
     row: SubagentRow,
+    handle: AttemptHandle,
     signal: AbortSignal,
+    skippedTools: Set<string>,
   ): ChatMiddleware => ({
     name: "memory-agent/subagent-gate",
     async onBeforeToolCall(_ctx, hook) {
@@ -210,6 +269,7 @@ const make = Effect.gen(function* () {
           case "allow":
             return undefined;
           case "block":
+            skippedTools.add(hook.toolCallId);
             return {
               type: "skip",
               result: { error: `blocked_by_permission_review: ${verdict.reason}` },
@@ -219,6 +279,13 @@ const make = Effect.gen(function* () {
             askedBy = "review";
         }
       }
+      trace.transitionAttempt(
+        handle,
+        binding.sessionId,
+        "waiting",
+        "approval_waiting",
+        `Waiting for approval: ${hook.toolName}`,
+      );
       const approved = await relayed.ask(
         binding.sessionId,
         {
@@ -235,6 +302,14 @@ const make = Effect.gen(function* () {
         "user",
         approved ? "사용자가 승인했어요." : "사용자가 거부했어요.",
       );
+      trace.transitionAttempt(
+        handle,
+        binding.sessionId,
+        "running",
+        "approval_resolved",
+        approved ? `Approved: ${hook.toolName}` : `Denied: ${hook.toolName}`,
+      );
+      if (!approved) skippedTools.add(hook.toolCallId);
       return approved
         ? undefined
         : { type: "skip", result: { approved: false, message: "User denied this action" } };
@@ -245,9 +320,16 @@ const make = Effect.gen(function* () {
     binding: SubagentBinding,
     row: SubagentRow,
     task: string,
+    handle: AttemptHandle,
+    notifyParentImmediately = true,
   ): Promise<ChildOutcome> => {
     const threadId = subagentThreadId(row.id);
     const controller = new AbortController();
+    let settle: () => void = () => undefined;
+    const settled = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    activeChildren.set(row.id, { taskId: handle.taskId, controller, settled, settle });
     const stop = () => controller.abort(binding.abortSignal.reason);
     if (binding.abortSignal.aborted) stop();
     binding.abortSignal.addEventListener("abort", stop, { once: true });
@@ -255,14 +337,82 @@ const make = Effect.gen(function* () {
     const texts = new Map<string, string>();
     let lastMessageId: string | null = null;
     let failure: string | null = null;
+    const runningTools = new Set<string>();
+    const requestedTools = new Set<string>();
+    const resultTools = new Set<string>();
+    const completedTools = new Set<string>();
+    const skippedTools = new Set<string>();
+    trace.transitionAttempt(
+      handle,
+      binding.sessionId,
+      "running",
+      "attempt_started",
+      "Subagent started",
+      null,
+      notifyParentImmediately,
+      binding.runId,
+    );
     try {
       const history = await chatState.persistence.stores.messages.loadThread(threadId);
       const messages: ModelMessage[] = [...history, { role: "user", content: task }];
       const runtime = await Effect.runPromise(active.runtime(binding.selection));
       const reads = parallelReads(binding.tools, controller.signal);
+      const traceMiddleware: ChatMiddleware = {
+        name: "memory-agent/subagent-trace",
+        onBeforeToolCall(_ctx, hook) {
+          runningTools.add(hook.toolCallId);
+          requestedTools.add(hook.toolCallId);
+          trace.appendEvent({
+            handle,
+            sessionId: binding.sessionId,
+            kind: "tool_requested",
+            summary: `Requested ${hook.toolName}`,
+            payload: { toolCallId: hook.toolCallId, toolName: hook.toolName },
+          });
+          return undefined;
+        },
+        onAfterToolCall(_ctx, hook) {
+          runningTools.delete(hook.toolCallId);
+          resultTools.add(hook.toolCallId);
+          const completed = hook.ok && !skippedTools.has(hook.toolCallId);
+          if (completed) completedTools.add(hook.toolCallId);
+          trace.appendEvent({
+            handle,
+            sessionId: binding.sessionId,
+            kind: completed ? "tool_completed" : "tool_failed",
+            summary: completed ? `Completed ${hook.toolName}` : `Failed ${hook.toolName}`,
+            payload: { toolCallId: hook.toolCallId, toolName: hook.toolName },
+          });
+          if (
+            completed &&
+            (hook.toolName === "write_file" || hook.toolName === "edit_file") &&
+            Schema.is(FileArtifactResult)(hook.result)
+          )
+            trace.recordArtifact({
+              handle,
+              kind: "file",
+              locator: { kind: "file", path: hook.result.path, sha256: hook.result.sha256 },
+              mediaType: "text/plain",
+              verification: "verified",
+            });
+          const saved = trace.checkpoint(binding.sessionId, {
+            handle,
+            completedToolCallIds: [...completedTools],
+            uncertainToolCallIds: [...runningTools],
+            pendingApprovalIds: [],
+            remainingWork: "Continue the assigned task from the saved transcript.",
+          });
+          trace.recordEvidence({
+            handle,
+            locator: { kind: "checkpoint", checkpointId: saved.checkpointId },
+            verification: "verified",
+          });
+        },
+      };
       const middleware: ChatMiddleware[] = [
         ...chatState.middleware(),
-        relayGate(binding, row, controller.signal),
+        traceMiddleware,
+        relayGate(binding, row, handle, controller.signal, skippedTools),
         reads.middleware,
         runtime.runMiddleware(),
       ];
@@ -273,7 +423,7 @@ const make = Effect.gen(function* () {
         tools: reads.tools,
         systemPrompts: [...binding.systemPrompts, childInstructions(row.name, row.instructions)],
         threadId,
-        runId: randomUUID(),
+        runId: handle.chatRunId,
         abortController: controller,
         middleware,
       });
@@ -296,10 +446,93 @@ const make = Effect.gen(function* () {
       binding.abortSignal.removeEventListener("abort", stop);
     }
 
+    const persisted = await chatState.persistence.stores.messages.loadThread(threadId);
+    const persistedMessageIds = new Set(persisted.map((message) => message.id));
+    const persistedToolCalls = new Set(
+      persisted.flatMap((message) =>
+        message.role === "assistant" ? (message.toolCalls ?? []).map((call) => call.id) : [],
+      ),
+    );
+    const persistedToolResults = new Set(
+      persisted.flatMap((message) => (message.role === "tool" ? [message.toolCallId] : [])),
+    );
+    for (const toolCallId of requestedTools)
+      if (persistedToolCalls.has(toolCallId))
+        trace.recordEvidence({
+          handle,
+          locator: { kind: "tool_call", threadId, toolCallId },
+          verification: "verified",
+        });
+    for (const toolCallId of resultTools)
+      if (persistedToolResults.has(toolCallId))
+        trace.recordEvidence({
+          handle,
+          locator: { kind: "tool_result", threadId, toolCallId },
+          // The result is authentic provenance even when it records denial or execution failure.
+          verification: "verified",
+        });
+
     const answer = lastMessageId ? (texts.get(lastMessageId) ?? "") : "";
     const status = controller.signal.aborted ? "cancelled" : failure ? "failed" : "completed";
+    const saved = trace.checkpoint(binding.sessionId, {
+      handle,
+      transcriptMessageId: lastMessageId,
+      completedToolCallIds: [...completedTools],
+      uncertainToolCallIds: [...runningTools],
+      pendingApprovalIds: [],
+      remainingWork: status === "completed" ? "" : "Resume the unfinished assigned task.",
+    });
+    trace.recordEvidence({
+      handle,
+      locator: { kind: "checkpoint", checkpointId: saved.checkpointId },
+      verification: "verified",
+    });
+    if (status === "completed" && lastMessageId && persistedMessageIds.has(lastMessageId))
+      trace.recordEvidence({
+        handle,
+        locator: { kind: "message", threadId, messageId: lastMessageId },
+      });
+    trace.transitionAttempt(
+      handle,
+      binding.sessionId,
+      status,
+      status === "completed"
+        ? "attempt_completed"
+        : status === "cancelled"
+          ? "attempt_cancelled"
+          : "attempt_failed",
+      status === "completed"
+        ? "Subagent completed"
+        : status === "cancelled"
+          ? "Subagent cancelled"
+          : "Subagent failed",
+      failure,
+      notifyParentImmediately,
+      binding.runId,
+    );
+    if (status === "completed")
+      trace.recordReportDisposition({
+        handle,
+        sessionId: binding.sessionId,
+        disposition: "returned",
+        parentRunId: binding.runId,
+      });
     finish.run(status, answer, failure, Date.now(), row.id);
-    return { status, subagentId: row.id, agent: row.name, answer, error: failure };
+    const registered = activeChildren.get(row.id);
+    if (registered?.taskId === handle.taskId) {
+      registered.settle();
+      activeChildren.delete(row.id);
+    }
+    return {
+      status,
+      subagentId: row.id,
+      agent: row.name,
+      taskId: handle.taskId,
+      attemptId: handle.id,
+      evidenceRefIds: trace.evidenceIdsForAttempt(handle.id),
+      answer,
+      error: failure,
+    };
   };
 
   /** A named child runs one message at a time; the next waits for the previous to finish. */
@@ -313,7 +546,12 @@ const make = Effect.gen(function* () {
     return next;
   };
 
-  const startOneOff = (binding: SubagentBinding, task: string, instructions: string | null) => {
+  const startOneOff = (
+    binding: SubagentBinding,
+    parentToolCallId: string,
+    task: string,
+    instructions: string | null,
+  ) => {
     const now = Date.now();
     const row = decodeRow(
       insert.get(
@@ -327,11 +565,22 @@ const make = Effect.gen(function* () {
         now,
       ),
     );
-    return runChild(binding, row, task);
+    const handle = trace.startAttempt({
+      sessionId: binding.sessionId,
+      parentRunId: binding.runId,
+      parentToolCallId,
+      agentId: row.id,
+      title: task.replace(/\s+/gu, " ").trim().slice(0, 80),
+      request: task,
+      kind: "start",
+      threadId: subagentThreadId(row.id),
+    });
+    return runChild(binding, row, task, handle);
   };
 
   const startNamed = (
     binding: SubagentBinding,
+    parentToolCallId: string,
     agent: string,
     message: string,
     instructions: string | undefined,
@@ -351,7 +600,17 @@ const make = Effect.gen(function* () {
           now,
         ),
       );
-      return serialized(row.id, () => runChild(binding, row, message));
+      const handle = trace.startAttempt({
+        sessionId: binding.sessionId,
+        parentRunId: binding.runId,
+        parentToolCallId,
+        agentId: row.id,
+        title: message.replace(/\s+/gu, " ").trim().slice(0, 80),
+        request: message,
+        kind: "start",
+        threadId: subagentThreadId(row.id),
+      });
+      return serialized(row.id, () => runChild(binding, row, message, handle));
     }
     const known = decodeRow(existing);
     return serialized(known.id, async () => {
@@ -364,8 +623,115 @@ const make = Effect.gen(function* () {
           known.id,
         ),
       );
-      return runChild(binding, row, message);
+      const handle = trace.startAttempt({
+        sessionId: binding.sessionId,
+        parentRunId: binding.runId,
+        parentToolCallId,
+        agentId: row.id,
+        title: message.replace(/\s+/gu, " ").trim().slice(0, 80),
+        request: message,
+        kind: "continue",
+        threadId: subagentThreadId(row.id),
+      });
+      return runChild(binding, row, message, handle);
     });
+  };
+
+  const resumeTask = (
+    binding: SubagentBinding,
+    parentToolCallId: string,
+    input: typeof ResumeSubagentInput.Type,
+  ): Promise<SubagentReport> => {
+    const claim = trace.claimResume({
+      sessionId: binding.sessionId,
+      taskId: input.taskId,
+      expectedAttemptId: input.expectedAttemptId,
+      parentRunId: binding.runId,
+      parentToolCallId,
+      confirmUncertain: input.confirmUncertain,
+    });
+    if (claim.status === "blocked")
+      return Promise.resolve({
+        status: "resume_blocked",
+        taskId: input.taskId,
+        reason: claim.reason,
+      });
+    const existing = byId.get(binding.sessionId, claim.agentId);
+    if (!existing)
+      return Promise.resolve({
+        status: "resume_blocked",
+        taskId: input.taskId,
+        reason: "agent_not_found",
+      });
+    const known = decodeRow(existing);
+    const context = claim.context;
+    const resumeMessage = [
+      "Resume the interrupted task as a new execution attempt.",
+      `Original task:\n${context.originalRequest}`,
+      context.remainingWork ? `Remaining work:\n${context.remainingWork}` : "Review what remains.",
+      context.completedToolCallIds.length > 0
+        ? `Already completed tool calls (do not run again): ${context.completedToolCallIds.join(", ")}`
+        : "No completed tool calls were recorded.",
+      context.uncertainToolCallIds.length > 0
+        ? `Uncertain tool calls (do not repeat automatically): ${context.uncertainToolCallIds.join(", ")}`
+        : "No uncertain tool calls were recorded.",
+      context.expiredApprovalIds.length > 0
+        ? `Expired approvals (request fresh approval if still needed): ${context.expiredApprovalIds.join(", ")}`
+        : "No pending approvals were carried over.",
+      `Checkpoint: ${context.checkpointId}`,
+    ].join("\n\n");
+    return serialized(known.id, () => {
+      const row = decodeRow(
+        startAgain.get(
+          known.instructions,
+          binding.runId,
+          context.originalRequest,
+          Date.now(),
+          known.id,
+        ),
+      );
+      return runChild(binding, row, resumeMessage, claim.handle);
+    });
+  };
+
+  const recoverForRun = async (binding: SubagentBinding) => {
+    const jobs = trace.claimRecoveryJobs(binding.sessionId, binding.runId);
+    await Promise.all(
+      jobs.map(async ({ jobId, claim }) => {
+        const existing = byId.get(binding.sessionId, claim.agentId);
+        if (!existing) {
+          trace.finishRecoveryJob(jobId, false);
+          return;
+        }
+        const known = decodeRow(existing);
+        const context = claim.context;
+        const message = [
+          "Automatically resume the interrupted task as a new execution attempt.",
+          `Original task:\n${context.originalRequest}`,
+          context.remainingWork
+            ? `Remaining work:\n${context.remainingWork}`
+            : "Review what remains.",
+          context.completedToolCallIds.length > 0
+            ? `Already completed tool calls (do not run again): ${context.completedToolCallIds.join(", ")}`
+            : "No completed tool calls were recorded.",
+          "Old approvals are expired. Request fresh approval for any gated action.",
+          `Checkpoint: ${context.checkpointId}`,
+        ].join("\n\n");
+        const outcome = await serialized(known.id, () => {
+          const row = decodeRow(
+            startAgain.get(
+              known.instructions,
+              binding.runId,
+              context.originalRequest,
+              Date.now(),
+              known.id,
+            ),
+          );
+          return runChild(binding, row, message, claim.handle, false);
+        }).catch(() => null);
+        trace.finishRecoveryJob(jobId, outcome?.status === "completed");
+      }),
+    );
   };
 
   return {
@@ -376,6 +742,9 @@ const make = Effect.gen(function* () {
      */
     forRun(binding: SubagentBinding): SubagentRunTools {
       const started = new Map<string, Promise<SubagentReport>>();
+      const reviewed = new Map<string, ChildOutcome>();
+      let adoptionDraft: AdoptionDraft | null = null;
+      void recoverForRun(binding).catch(() => undefined);
 
       const start = (toolCallId: string, name: string, argumentsJson: string) => {
         const existing = started.get(toolCallId);
@@ -384,7 +753,11 @@ const make = Effect.gen(function* () {
           const parsed = JSON.parse(argumentsJson || "{}");
           if (name === "run_subagent") {
             const input = Schema.decodeUnknownSync(RunSubagentInput)(parsed);
-            return startOneOff(binding, input.task, input.instructions ?? null);
+            return startOneOff(binding, toolCallId, input.task, input.instructions ?? null);
+          }
+          if (name === "resume_subagent") {
+            const input = Schema.decodeUnknownSync(ResumeSubagentInput)(parsed);
+            return resumeTask(binding, toolCallId, input);
           }
           const input = Schema.decodeUnknownSync(MessageSubagentInput)(parsed);
           // A named child already answering hears the message now, in its running turn.
@@ -395,15 +768,25 @@ const make = Effect.gen(function* () {
             const steered = await runtime
               .steer(subagentThreadId(row.id), { role: "user", content: input.message })
               .catch(() => "no_turn" as const);
-            if (steered === "steered")
+            if (steered === "steered") {
+              const handle = trace.activeAttemptForAgent(row.id);
+              if (handle)
+                trace.recordSteer({
+                  handle,
+                  sessionId: binding.sessionId,
+                  parentRunId: binding.runId,
+                  parentToolCallId: toolCallId,
+                  message: input.message,
+                });
               return {
                 status: "steered",
                 subagentId: row.id,
                 agent: input.agent,
                 note: "The subagent was still working; its report for the earlier task will include this message if it acts on it.",
               };
+            }
           }
-          return startNamed(binding, input.agent, input.message, input.instructions);
+          return startNamed(binding, toolCallId, input.agent, input.message, input.instructions);
         })();
         outcome.catch(() => undefined);
         started.set(toolCallId, outcome);
@@ -428,6 +811,43 @@ const make = Effect.gen(function* () {
         start(context?.toolCallId ?? randomUUID(), "message_subagent", JSON.stringify(input)),
       );
 
+      const resumeTool = toolDefinition({
+        name: "resume_subagent",
+        description:
+          "Resume one durable interrupted subagent task as a new execution attempt. Completed tool calls are not rerun, uncertain side effects require explicit user confirmation, and old approvals are not carried over.",
+        inputSchema: toToolSchema(ResumeSubagentInput),
+      }).server((input, context) =>
+        start(context?.toolCallId ?? randomUUID(), "resume_subagent", JSON.stringify(input)),
+      );
+
+      const adoptTool = toolDefinition({
+        name: "adopt_subagent_reports",
+        description:
+          "Declare which reviewed subagent reports and evidence ids are actually used in the upcoming final answer. Call after review and before answering; omitted reviewed reports are recorded as not used.",
+        inputSchema: toToolSchema(AdoptSubagentReportsInput),
+      }).server((input) => {
+        const draft = Schema.decodeUnknownSync(AdoptSubagentReportsInput)(input);
+        for (const report of draft.reports) {
+          const available = reviewed.get(`${report.taskId}:${report.attemptId}`);
+          if (!available) throw new Error("Only reports reviewed in this run can be adopted");
+          const evidence = new Set(available.evidenceRefIds);
+          if (report.evidenceRefIds.some((id) => !evidence.has(id)))
+            throw new Error("Only evidence ids returned with that report can be adopted");
+        }
+        if (
+          draft.reflectedNotificationIds.some(
+            (id) => !binding.deliveredParentNotificationIds.has(id),
+          )
+        )
+          throw new Error("Only status notifications delivered in this run can be adopted");
+        adoptionDraft = draft;
+        return {
+          status: "recorded" as const,
+          usedReportCount: draft.reports.length,
+          reflectedNotificationCount: draft.reflectedNotificationIds.length,
+        };
+      });
+
       const middleware: ChatMiddleware = {
         name: "memory-agent/subagent-batch",
         onBeforeToolCall(ctx, hook) {
@@ -450,9 +870,52 @@ const make = Effect.gen(function* () {
               void start(call.id, call.function.name, call.function.arguments);
           return undefined;
         },
+        async onAfterToolCall(_ctx, info) {
+          if (!isSubagentTool(info.toolName) || !info.ok) return;
+          const outcome = await started.get(info.toolCallId);
+          if (!outcome || !("answer" in outcome) || outcome.status !== "completed") return;
+          const key = `${outcome.taskId}:${outcome.attemptId}`;
+          if (reviewed.has(key)) return;
+          const handle = trace.attemptHandle(outcome.taskId, outcome.attemptId);
+          if (!handle) return;
+          reviewed.set(key, outcome);
+          trace.recordReportDisposition({
+            handle,
+            sessionId: binding.sessionId,
+            disposition: "reviewed",
+            parentRunId: binding.runId,
+          });
+        },
+        onFinish(ctx) {
+          if ((reviewed.size === 0 && adoptionDraft === null) || !ctx.currentMessageId) return;
+          const draft = adoptionDraft ?? { reports: [], reflectedNotificationIds: [] };
+          trace.finalizeAnswerClaim({
+            projectId: binding.project.id,
+            sessionId: binding.sessionId,
+            parentRunId: binding.runId,
+            parentMessageId: ctx.currentMessageId,
+            usedReports: draft.reports,
+            reflectedNotificationIds: draft.reflectedNotificationIds,
+          });
+        },
+        onAbort() {
+          trace.releaseParentNotifications(binding.sessionId, binding.runId);
+        },
+        onError() {
+          trace.releaseParentNotifications(binding.sessionId, binding.runId);
+        },
       };
 
-      return { tools: [runTool, messageTool], middleware };
+      return { tools: [runTool, messageTool, resumeTool, adoptTool], middleware };
+    },
+
+    /** Stop exactly one live child and wait until its checkpoint and terminal transition settle. */
+    async stopTask(taskId: string) {
+      const entry = [...activeChildren.values()].find((child) => child.taskId === taskId);
+      if (!entry) return "not_running" as const;
+      entry.controller.abort(new Error("task_lifecycle_requested"));
+      await entry.settled;
+      return "stopped" as const;
     },
 
     /** Children of a session. Their calls waiting for the user are in `RelayedApprovals`. */

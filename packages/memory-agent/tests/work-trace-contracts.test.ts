@@ -79,7 +79,7 @@ describe("Work Trace domain contracts", () => {
     const decode = Schema.decodeUnknownSync(RunEvent);
     const base = {
       id: "event-1",
-      sessionId: "session-1",
+      originSessionId: "session-1",
       taskId: "task-1",
       invocationId: "invocation-1",
       attemptId: "attempt-1",

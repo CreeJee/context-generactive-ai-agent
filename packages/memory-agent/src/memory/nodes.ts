@@ -35,6 +35,10 @@ export const NodeDetail = Schema.Struct({
    * Its approvals and permissions were that tool's, and do not carry over.
    */
   importedFrom: Schema.optional(Schema.String),
+  /** Project-owned topic node created only after an explicit memory-promotion disposition. */
+  memoryCandidateId: Schema.optional(Schema.String),
+  /** User message whose turn authorized the promotion disposition. */
+  authorizedByUserNodeId: Schema.optional(Schema.String),
 });
 export type NodeDetail = typeof NodeDetail.Type;
 

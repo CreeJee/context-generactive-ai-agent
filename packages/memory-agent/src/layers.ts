@@ -25,6 +25,7 @@ import { VectorIndex } from "./memory/embedding/vector-index.ts";
 import { Graph } from "./memory/graph.ts";
 import { Interpreter } from "./memory/interpret.ts";
 import { Interpretations } from "./memory/interpretations.ts";
+import { KnowledgePromotions } from "./memory/knowledge.ts";
 import { Nodes } from "./memory/nodes.ts";
 import { Recorder } from "./memory/record.ts";
 import { MemorySearch } from "./memory/search.ts";
@@ -59,6 +60,7 @@ import { KagiTools } from "./tools/kagi.ts";
 import { SkillTools } from "./tools/skills.ts";
 import { MemoryTools } from "./tools/memory.ts";
 import { OutsideTools } from "./tools/outside.ts";
+import { WorkTraceStore } from "./work-trace/store.ts";
 import { Workflows } from "./workflow/workflow.ts";
 import { WorkflowTools } from "./workflow/tools.ts";
 import { WorkflowRules } from "./workflow/rules.ts";
@@ -162,6 +164,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     BulkNodes.layer,
     SecretRedactor.layer,
     Workflows.layer,
+    WorkTraceStore.layer,
     providerToolRegistry,
     modelFeatureFlags,
     crossProviderMediaConsent,
@@ -174,6 +177,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
   const memory = Layer.mergeAll(
     Sessions.layer,
     Recorder.layer,
+    KnowledgePromotions.layer,
     DrawingPreviews.layer,
     Graph.layer,
     VectorIndex.layer,

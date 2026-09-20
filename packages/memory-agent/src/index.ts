@@ -534,8 +534,12 @@ export {
   AgentIdentityKind,
   AgentInvocation,
   AgentRunAttempt,
+  ArtifactKind,
+  ArtifactLocator,
+  ArtifactRef,
   AttemptStatus,
   DecisionStatus,
+  EvidenceLocator,
   EvidenceRef,
   EvidenceSourceKind,
   EvidenceVerification,
@@ -563,6 +567,27 @@ export {
   isUserVisibleTrace,
   resumeCreatesNewAttempt,
 } from "./work-trace/contracts.ts";
+export {
+  WorkTraceStore,
+  type AppendEventInput,
+  type AttemptHandle,
+  type CheckpointInput,
+  type RecordArtifactInput,
+  type RecordEvidenceInput,
+  type ResumeClaim,
+  type ResumeContext,
+  type StartAttemptInput,
+  type TraceArtifactView,
+  type TraceAttemptView,
+  type TraceCheckpointView,
+  type TraceEvidenceView,
+  type TraceEventView,
+  type TraceFinalAnswerClaimView,
+  type TraceReportAdoptionView,
+  type TraceTaskDetail,
+  type TraceTaskView,
+  type TraceTreeSnapshot,
+} from "./work-trace/store.ts";
 export { RelayedApprovals, type RelayedRequest } from "./approvals/relayed.ts";
 export type { ApprovalRequester, RelayedApprovalView } from "./approvals/relayed-state.ts";
 export { KagiTools, kagiInstructions, kagiToolNames, maxPageCharacters } from "./tools/kagi.ts";

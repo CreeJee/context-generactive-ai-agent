@@ -307,6 +307,26 @@ const make = Effect.gen(function* () {
     },
 
     forNode: (nodeId: string): Attachment[] => selectForNode.all(nodeId).map(toAttachment),
+
+    /** Removes content-addressed blobs only after their last message reference is gone. */
+    purgeOrphans: Effect.promise(async () => {
+      const orphaned = sqlite
+        .prepare(
+          `SELECT a.* FROM attachments a
+           WHERE NOT EXISTS (SELECT 1 FROM node_attachments n WHERE n.attachment_id = a.id)`,
+        )
+        .all()
+        .map(toAttachment);
+      for (const attachment of orphaned) {
+        sqlite.prepare("DELETE FROM attachments WHERE id = ?").run(attachment.id);
+        await Promise.all([
+          rm(fileOf(attachment), { force: true }),
+          rm(join(directory, `${attachment.id}.model.webp`), { force: true }),
+          rm(join(directory, `${attachment.id}.model-original`), { force: true }),
+        ]);
+      }
+      return orphaned.length;
+    }),
   };
 });
 

@@ -60,7 +60,7 @@ describe("archived conversations", () => {
     expect(Either.isLeft(result.missing) && result.missing.left._tag).toBe("SessionNotFound");
   });
 
-  test("are not archived while another page holds them or while they are answering", async () => {
+  test("respect another page's lease and safely stop a running answer before archive", async () => {
     const context = await testRuntime({ testProvider: {} });
     const { runtime, session } = context;
     await context.provider!.select(runtime);
@@ -92,14 +92,11 @@ describe("archived conversations", () => {
         await (await runtime.runPromise(agent.status(session.id, "tab-a"))).json(),
       ).running !== null;
     await until(running, "the run to start");
-    expect((await archive("tab-a")).status).toBe(409);
-
-    await runtime.runPromise(agent.cancel(session.id, "tab-a"));
+    const done = await archive("tab-a");
+    expect(done.status).toBe(200);
     await until(async () => !(await running()), "the run to stop");
     client.dispose();
 
-    const done = await archive("tab-a");
-    expect(done.status).toBe(200);
     expect(Schema.decodeUnknownSync(Archived)(await done.json()).archivedAt).not.toBeNull();
     const back = await archive("tab-a", false);
     expect(Schema.decodeUnknownSync(Archived)(await back.json()).archivedAt).toBeNull();

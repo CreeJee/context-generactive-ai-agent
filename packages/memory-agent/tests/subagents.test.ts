@@ -6,6 +6,7 @@ import { PermissionReviews } from "../src/permissions/reviews.ts";
 import { Projects } from "../src/projects/projects.ts";
 import { RelayedApprovals } from "../src/approvals/relayed.ts";
 import { Subagents } from "../src/subagents/subagents.ts";
+import { WorkTraceStore } from "../src/work-trace/store.ts";
 import { testRuntime } from "./support/runtime.ts";
 
 async function until(condition: () => boolean, what: string) {
@@ -19,6 +20,34 @@ async function until(condition: () => boolean, what: string) {
 const Delta = Schema.parseJson(
   Schema.Struct({ type: Schema.String, delta: Schema.optional(Schema.String) }),
 );
+const JobStatus = Schema.Struct({ status: Schema.String });
+
+const RestartedTrace = Schema.Struct({
+  attempt_status: Schema.String,
+  task_status: Schema.String,
+  active_attempt_id: Schema.NullOr(Schema.String),
+  resume_reason: Schema.NullOr(Schema.String),
+});
+
+const ResumeIds = Schema.Struct({ task_id: Schema.String, attempt_id: Schema.String });
+const ResumeResult = Schema.Struct({ attempts: Schema.Number, latest_status: Schema.String });
+const ArtifactSummary = Schema.Struct({ kind: Schema.String, locator: Schema.String });
+const LocatorRows = Schema.Array(Schema.Struct({ locator: Schema.String }));
+
+const TraceSummary = Schema.Struct({
+  task_id: Schema.String,
+  attempt_id: Schema.String,
+  task_status: Schema.String,
+  attempt_status: Schema.String,
+  parent_run_id: Schema.String,
+  parent_tool_call_id: Schema.String,
+  chat_run_id: Schema.String,
+  event_kinds: Schema.String,
+  checkpoints: Schema.Number,
+  evidence_kinds: Schema.String,
+  evidence_count: Schema.Number,
+});
+
 const answerOf = (events: string) =>
   events
     .split("\n")
@@ -28,7 +57,7 @@ const answerOf = (events: string) =>
     .flatMap((event) => (event.type === "TEXT_MESSAGE_CONTENT" && event.delta ? [event.delta] : []))
     .join("");
 
-async function subagentSetup(mode: "ask" | "auto" = "ask") {
+async function subagentSetup(mode: "ask" | "auto" | "full" = "ask") {
   const context = await testRuntime({ testProvider: {} });
   await context.provider!.select(context.runtime);
   await context.runtime.runPromise(
@@ -67,7 +96,7 @@ async function subagentSetup(mode: "ask" | "auto" = "ask") {
 
 describe("subagents", () => {
   test("a one-off child gets only the task, the parent's tools minus subagents, and reports back", async () => {
-    const { send, subagents, session, state, provider } = await subagentSetup();
+    const { send, subagents, session, state, provider, runtime } = await subagentSetup();
 
     const answer = await send('call run_subagent {"task":"list what matters"}');
     expect(answer).toContain("child done: list what matters (earlier user messages: 0)");
@@ -102,6 +131,99 @@ describe("subagents", () => {
 
     const transcript = await subagents.transcript(session.id, child!.id);
     expect(transcript?.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+
+    const db = await runtime.runPromise(Database);
+    const trace = Schema.decodeUnknownSync(TraceSummary)(
+      db.sqlite
+        .prepare(
+          `SELECT t.id AS task_id, a.id AS attempt_id,
+                  t.status AS task_status, a.status AS attempt_status,
+                  t.parent_run_id, t.parent_tool_call_id, a.chat_run_id,
+                  (SELECT group_concat(kind, ',') FROM run_events e
+                   WHERE e.attempt_id = a.id ORDER BY e.attempt_sequence) AS event_kinds,
+                  (SELECT count(*) FROM work_checkpoints c WHERE c.attempt_id = a.id) AS checkpoints,
+                  (SELECT group_concat(source_kind, ',') FROM evidence_refs r
+                   WHERE r.attempt_id = a.id ORDER BY r.created_at, r.id) AS evidence_kinds,
+                  (SELECT count(*) FROM evidence_refs r WHERE r.attempt_id = a.id) AS evidence_count
+           FROM work_tasks t
+           JOIN agent_run_attempts a ON a.task_id = t.id
+           WHERE t.agent_id = ?`,
+        )
+        .get(child!.id),
+    );
+    expect(trace).toMatchObject({
+      task_status: "completed",
+      attempt_status: "completed",
+    });
+    expect(trace.parent_run_id).not.toBe("");
+    expect(trace.parent_tool_call_id).not.toBe("");
+    expect(trace.chat_run_id).not.toBe("");
+    expect(trace.event_kinds.split(",")).toEqual([
+      "attempt_queued",
+      "attempt_started",
+      "checkpoint_created",
+      "attempt_completed",
+      "report_returned",
+      "report_reviewed",
+      "report_not_used",
+    ]);
+    expect(trace.checkpoints).toBe(1);
+    expect(trace.evidence_count).toBe(2);
+    expect(trace.evidence_kinds.split(",").sort()).toEqual(["checkpoint", "message"]);
+    expect(
+      JSON.stringify(
+        db.sqlite
+          .prepare("SELECT locator FROM evidence_refs WHERE attempt_id = ?")
+          .all(trace.attempt_id),
+      ),
+    ).not.toContain("child done: list what matters");
+
+    const chatApi = await runtime.runPromise(AgentChat);
+    const treeResponse = await runtime.runPromise(chatApi.traceTree(session.id));
+    expect(treeResponse.status).toBe(200);
+    expect(await treeResponse.text()).toContain(trace.task_id);
+    const detailResponse = await runtime.runPromise(chatApi.traceTask(session.id, trace.task_id));
+    expect(detailResponse.status).toBe(200);
+    const detail = await detailResponse.text();
+    expect(detail).toContain(trace.chat_run_id);
+    expect(detail).toContain('"sourceKind":"message"');
+    expect(detail).toContain('"sourceKind":"checkpoint"');
+    const terminalResume = await runtime.runPromise(
+      chatApi.requestTraceResume(session.id, null, trace.task_id, trace.attempt_id, false),
+    );
+    expect(terminalResume.status).toBe(409);
+    expect(await terminalResume.json()).toEqual({ status: "blocked", reason: "task_terminal" });
+    db.atomic(() => {
+      db.sqlite
+        .prepare("UPDATE agent_run_attempts SET status = 'interrupted' WHERE id = ?")
+        .run(trace.attempt_id);
+      db.sqlite
+        .prepare(
+          "UPDATE work_tasks SET status = 'resumable', active_attempt_id = NULL WHERE id = ?",
+        )
+        .run(trace.task_id);
+    });
+    const queuedResume = await runtime.runPromise(
+      chatApi.requestTraceResume(session.id, null, trace.task_id, trace.attempt_id, false),
+    );
+    expect(queuedResume.status).toBe(202);
+    expect(await queuedResume.json()).toMatchObject({
+      status: "queued",
+      taskId: trace.task_id,
+      expectedAttemptId: trace.attempt_id,
+    });
+    const streamResponse = await runtime.runPromise(
+      chatApi.traceStream(new Request("http://local/trace/stream?after=0"), session.id),
+    );
+    expect(streamResponse.headers.get("content-type")).toContain("text/event-stream");
+    const reader = streamResponse.body!.getReader();
+    const first = await reader.read();
+    expect(new TextDecoder().decode(first.value)).toContain("event: snapshot");
+    await reader.cancel();
+    const invalidCursor = await runtime.runPromise(
+      chatApi.traceStream(new Request("http://local/trace/stream?after=nope"), session.id),
+    );
+    expect(invalidCursor.status).toBe(400);
   });
 
   test("subagent calls of one step run at the same time and answer in call order", async () => {
@@ -129,7 +251,7 @@ describe("subagents", () => {
   });
 
   test("a child's gated call waits for the user on the page, and a denial never runs it", async () => {
-    const { send, relayed, session, state, runtime } = await subagentSetup("ask");
+    const { send, subagents, relayed, session, state, runtime } = await subagentSetup("ask");
 
     const approved = send('call run_subagent {"task":"shell: printf child-approved"}');
     await until(() => state().approvals.length === 1, "the child's approval");
@@ -160,6 +282,187 @@ describe("subagents", () => {
     expect(reviews.latest(session.id, `subagent-${children[1]!.id}:call-shell`)?.decision).toBe(
       "denied",
     );
+    const db = await runtime.runPromise(Database);
+    const toolEvidenceCount = (agentId: string) =>
+      db.sqlite
+        .prepare(
+          `SELECT count(*) AS count FROM evidence_refs e
+           JOIN work_tasks t ON t.id = e.task_id
+           WHERE t.agent_id = ? AND e.source_kind IN ('tool_call', 'tool_result')`,
+        )
+        .get(agentId);
+    expect(toolEvidenceCount(children[0]!.id)).toEqual({ count: 2 });
+    expect(toolEvidenceCount(children[1]!.id)).toEqual({ count: 2 });
+    expect(
+      db.sqlite
+        .prepare(
+          `SELECT verification FROM evidence_refs e
+           JOIN work_tasks t ON t.id = e.task_id
+           WHERE t.agent_id = ? AND e.source_kind = 'tool_result'`,
+        )
+        .get(children[1]!.id),
+    ).toEqual({ verification: "verified" });
+    for (const child of children) {
+      const transcript = await subagents.transcript(session.id, child.id);
+      const persisted = JSON.stringify(transcript?.messages ?? []);
+      const locators = Schema.decodeUnknownSync(LocatorRows)(
+        db.sqlite
+          .prepare(
+            `SELECT e.locator FROM evidence_refs e
+             JOIN work_tasks t ON t.id = e.task_id
+             WHERE t.agent_id = ? AND e.source_kind IN ('tool_call', 'tool_result')`,
+          )
+          .all(child.id),
+      );
+      for (const { locator } of locators) {
+        const toolCallId = Schema.decodeUnknownSync(
+          Schema.parseJson(Schema.Struct({ toolCallId: Schema.String })),
+        )(locator).toolCallId;
+        expect(persisted).toContain(toolCallId);
+      }
+    }
+  });
+
+  test("a child file write records the actual artifact without copying its contents", async () => {
+    const { send, state, runtime } = await subagentSetup("full");
+    const answer = await send(
+      'call run_subagent {"task":"call write_file {\\"path\\":\\"wt-artifact.txt\\",\\"content\\":\\"artifact sentinel body\\"}"}',
+    );
+    expect(answer).toContain("write_file said");
+
+    const db = await runtime.runPromise(Database);
+    const artifact = Schema.decodeUnknownSync(ArtifactSummary)(
+      db.sqlite
+        .prepare(
+          `SELECT w.kind, w.locator FROM work_artifacts w
+           JOIN work_tasks t ON t.id = w.task_id
+           WHERE t.agent_id = ?`,
+        )
+        .get(state().subagents[0]!.id),
+    );
+    expect(artifact.kind).toBe("file");
+    expect(artifact.locator).toContain('"path":"wt-artifact.txt"');
+    expect(
+      JSON.stringify({
+        evidence: db.sqlite.prepare("SELECT * FROM evidence_refs").all(),
+        artifacts: db.sqlite.prepare("SELECT * FROM work_artifacts").all(),
+      }),
+    ).not.toContain("artifact sentinel body");
+  });
+
+  test("resume_subagent runs a new child attempt from the durable checkpoint", async () => {
+    const { send, session, runtime } = await subagentSetup();
+    await send('call run_subagent {"task":"collect facts"}');
+    const db = await runtime.runPromise(Database);
+    const ids = Schema.decodeUnknownSync(ResumeIds)(
+      db.sqlite
+        .prepare(
+          `SELECT t.id AS task_id, a.id AS attempt_id
+           FROM work_tasks t JOIN agent_run_attempts a ON a.task_id = t.id
+           WHERE t.origin_session_id = ? ORDER BY a.created_at DESC LIMIT 1`,
+        )
+        .get(session.id),
+    );
+    db.atomic(() => {
+      db.sqlite
+        .prepare("UPDATE agent_run_attempts SET status = 'interrupted' WHERE id = ?")
+        .run(ids.attempt_id);
+      db.sqlite
+        .prepare(
+          "UPDATE work_tasks SET status = 'resumable', active_attempt_id = NULL WHERE id = ?",
+        )
+        .run(ids.task_id);
+    });
+
+    const resumed = await send(
+      `call resume_subagent ${JSON.stringify({ taskId: ids.task_id, expectedAttemptId: ids.attempt_id })}`,
+    );
+    expect(resumed).toContain('"status":"completed"');
+    expect(resumed).toContain("Resume the interrupted task as a new execution attempt");
+    const result = Schema.decodeUnknownSync(ResumeResult)(
+      db.sqlite
+        .prepare(
+          `SELECT count(*) AS attempts,
+                  (SELECT status FROM agent_run_attempts WHERE task_id = ?
+                   ORDER BY attempt_number DESC LIMIT 1) AS latest_status
+           FROM agent_run_attempts WHERE task_id = ?`,
+        )
+        .get(ids.task_id, ids.task_id),
+    );
+    expect(result).toEqual({ attempts: 2, latest_status: "completed" });
+  });
+
+  test("restart recovery stays blocked when the checkpoint has an uncertain side effect", async () => {
+    const { send, session, runtime, reopen } = await subagentSetup();
+    await send('call run_subagent {"task":"write externally"}');
+    const db = await runtime.runPromise(Database);
+    const ids = Schema.decodeUnknownSync(ResumeIds)(
+      db.sqlite
+        .prepare(
+          `SELECT t.id AS task_id, a.id AS attempt_id
+           FROM work_tasks t JOIN agent_run_attempts a ON a.task_id = t.id
+           WHERE t.origin_session_id = ? ORDER BY a.created_at DESC LIMIT 1`,
+        )
+        .get(session.id),
+    );
+    db.atomic(() => {
+      db.sqlite
+        .prepare(
+          `UPDATE work_checkpoints SET uncertain_tool_call_ids = '["non-idempotent-write"]'
+           WHERE attempt_id = ?`,
+        )
+        .run(ids.attempt_id);
+      db.sqlite
+        .prepare(
+          "UPDATE agent_run_attempts SET status = 'running', finished_at = NULL WHERE id = ?",
+        )
+        .run(ids.attempt_id);
+      db.sqlite
+        .prepare("UPDATE work_tasks SET status = 'running', active_attempt_id = ? WHERE id = ?")
+        .run(ids.attempt_id, ids.task_id);
+    });
+
+    const reopened = await reopen();
+    const reopenedDb = await reopened.runPromise(Database);
+    expect(
+      reopenedDb.sqlite
+        .prepare("SELECT status, blocker FROM work_recovery_jobs WHERE task_id = ?")
+        .get(ids.task_id),
+    ).toEqual({ status: "blocked", blocker: "uncertain_side_effect" });
+    expect(
+      reopenedDb.sqlite
+        .prepare("SELECT status, active_attempt_id FROM work_tasks WHERE id = ?")
+        .get(ids.task_id),
+    ).toEqual({ status: "blocked", active_attempt_id: null });
+
+    const reopenedAgent = await reopened.runPromise(AgentChat);
+    const response = await reopened.runPromise(
+      reopenedAgent.handle(
+        new Request("http://127.0.0.1/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            threadId: session.id,
+            runId: "blocked-recovery-parent",
+            messages: [{ id: "blocked-turn", role: "user", content: "continue" }],
+            tools: [],
+            context: [],
+          }),
+        }),
+        session.id,
+      ),
+    );
+    await response.text();
+    expect(
+      reopenedDb.sqlite
+        .prepare("SELECT count(*) AS attempts FROM agent_run_attempts WHERE task_id = ?")
+        .get(ids.task_id),
+    ).toEqual({ attempts: 1 });
+    expect(
+      reopenedDb.sqlite
+        .prepare("SELECT status, blocker FROM work_recovery_jobs WHERE task_id = ?")
+        .get(ids.task_id),
+    ).toEqual({ status: "blocked", blocker: "uncertain_side_effect" });
   });
 
   test("cancelling the parent stops a waiting child, and a restart never reruns one", async () => {
@@ -175,11 +478,102 @@ describe("subagents", () => {
     await until(() => state().subagents[0]?.status === "cancelled", "the child to stop");
     expect(state().approvals).toEqual([]);
 
-    // A child left running by a crash is marked interrupted when the server starts again.
+    // Create a safe checkpoint with no uncertain tool side effects, then simulate a crash while that
+    // newest child attempt is still running.
+    await send('call run_subagent {"task":"recover facts"}');
     const db = await runtime.runPromise(Database);
     db.sqlite.prepare("UPDATE subagents SET status = 'running'").run();
+    db.atomic(() => {
+      db.sqlite
+        .prepare(
+          `UPDATE agent_run_attempts SET status = 'running', finished_at = NULL
+           WHERE id = (SELECT id FROM agent_run_attempts ORDER BY created_at DESC LIMIT 1)`,
+        )
+        .run();
+      db.sqlite
+        .prepare(
+          `UPDATE work_tasks SET status = 'running', active_attempt_id =
+             (SELECT id FROM agent_run_attempts ORDER BY created_at DESC LIMIT 1)
+           WHERE id = (SELECT task_id FROM agent_run_attempts ORDER BY created_at DESC LIMIT 1)`,
+        )
+        .run();
+    });
     const reopened = await reopen();
     const after = await reopened.runPromise(Effect.map(Subagents, (s) => s.list(session.id)));
     expect(after[0]?.status).toBe("interrupted");
+    const reopenedDb = await reopened.runPromise(Database);
+    const restartedTrace = Schema.decodeUnknownSync(RestartedTrace)(
+      reopenedDb.sqlite
+        .prepare(
+          `SELECT a.status AS attempt_status, a.resume_reason, t.status AS task_status,
+                  t.active_attempt_id
+           FROM agent_run_attempts a JOIN work_tasks t ON t.id = a.task_id
+           ORDER BY a.created_at DESC LIMIT 1`,
+        )
+        .get(),
+    );
+    expect(restartedTrace).toEqual({
+      attempt_status: "interrupted",
+      task_status: "resumable",
+      active_attempt_id: null,
+      resume_reason: "server_restarted",
+    });
+    expect(
+      reopenedDb.sqlite
+        .prepare("SELECT status, blocker FROM work_recovery_jobs ORDER BY created_at DESC LIMIT 1")
+        .get(),
+    ).toEqual({ status: "queued", blocker: null });
+    const reopenedAgent = await reopened.runPromise(AgentChat);
+    const recoveryParentRun = "recovery-parent-run";
+    const recoveryResponse = await reopened.runPromise(
+      reopenedAgent.handle(
+        new Request("http://127.0.0.1/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            threadId: session.id,
+            runId: recoveryParentRun,
+            messages: [{ id: "recovery-turn", role: "user", content: "continue" }],
+            tools: [],
+            context: [],
+          }),
+        }),
+        session.id,
+      ),
+    );
+    await recoveryResponse.text();
+    await until(
+      () =>
+        ["completed", "failed", "blocked"].includes(
+          Schema.decodeUnknownSync(JobStatus)(
+            reopenedDb.sqlite
+              .prepare("SELECT status FROM work_recovery_jobs ORDER BY created_at DESC LIMIT 1")
+              .get(),
+          ).status,
+        ),
+      "the recovery job to finish",
+    );
+    expect(
+      Schema.decodeUnknownSync(JobStatus)(
+        reopenedDb.sqlite
+          .prepare("SELECT status FROM work_recovery_jobs ORDER BY created_at DESC LIMIT 1")
+          .get(),
+      ).status,
+    ).toBe("completed");
+    expect(
+      reopenedDb.sqlite
+        .prepare(
+          `SELECT count(*) AS attempts FROM agent_run_attempts
+           WHERE task_id = (SELECT task_id FROM work_recovery_jobs ORDER BY created_at DESC LIMIT 1)`,
+        )
+        .get(),
+    ).toEqual({ attempts: 2 });
+    const reopenedTrace = await reopened.runPromise(WorkTraceStore);
+    const notifications = reopenedTrace.consumeParentNotifications(session.id, "next-parent-run");
+    expect(notifications).toEqual([
+      expect.objectContaining({ kind: "resumed", taskId: expect.any(String) }),
+      expect.objectContaining({ kind: "completed", taskId: expect.any(String) }),
+    ]);
+    expect(reopenedTrace.consumeParentNotifications(session.id, "another-run")).toEqual([]);
   });
 });
