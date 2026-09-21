@@ -28,8 +28,10 @@ jobs:
       # Only for attaching the archives to the release.
       contents: write
     env:
-      # The release tag, or the commit for a manual run.
+      # Release builds embed the v-prefixed SemVer tag; manual artifacts identify as development.
       LABEL: ${{ github.event_name == 'release' && github.event.release.tag_name || github.sha }}
+      CONTEXT_AGENT_VERSION: ${{ github.event_name == 'release' && github.event.release.tag_name || '0.0.0-dev' }}
+      CONTEXT_AGENT_RELEASE_CHANNEL: ${{ github.event_name == 'release' && (github.event.release.prerelease && 'prerelease' || 'stable') || 'prerelease' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

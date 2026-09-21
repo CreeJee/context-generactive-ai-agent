@@ -13,6 +13,7 @@ import { defaultStorageRoot } from "memory-agent";
 import { AppApi, startAcpAgent } from "memory-agent/acp";
 import * as build from "#server-build";
 import { isThisApp, launchFolder, openProject, type LaunchFolder } from "./launch-project.ts";
+import { readReleaseInfo } from "./release-info.ts";
 import { unpackRuntime } from "./runtime-assets.ts";
 import { acquireStorageLock } from "./dev-safety.ts";
 import { openInBrowser, serve } from "./serve.ts";
@@ -21,7 +22,9 @@ const usage = `사용법:
   context-agent [폴더] [--port 5173] [--no-open] [--storage <폴더>]
       폴더(없으면 실행한 위치)를 프로젝트로 열어요. 앱이 이미 실행 중이면 그 앱에서 열어요.
   context-agent acp [--port 5173]
-      에디터(Zed 등)용 ACP 에이전트(실행 중인 앱에 연결)`;
+      에디터(Zed 등)용 ACP 에이전트(실행 중인 앱에 연결)
+  context-agent --version
+      실행 파일의 버전, 릴리스 채널과 대상 플랫폼을 표시해요.`;
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -32,8 +35,15 @@ const { values, positionals } = parseArgs({
     storage: { type: "string" },
     "dev-backend": { type: "boolean", default: false },
     help: { type: "boolean", short: "h", default: false },
+    version: { type: "boolean", short: "v", default: false },
   },
 });
+
+if (values.version) {
+  const release = readReleaseInfo();
+  console.log(`context-agent ${release.version} (${release.channel}, ${release.target})`);
+  process.exit(0);
+}
 
 const port = Number(values.port);
 if (values.help || !Number.isInteger(port) || port < 1 || port > 65_535 || positionals.length > 1) {

@@ -46,6 +46,19 @@ const readPackage = (directory: string) =>
     readFileSync(join(directory, "package.json"), "utf8"),
   );
 
+const ReleaseVersion = Schema.String.pipe(
+  Schema.pattern(
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/,
+  ),
+);
+const releaseVersion = Schema.decodeUnknownSync(ReleaseVersion)(
+  (process.env.CONTEXT_AGENT_VERSION ?? readPackage(repo).version).replace(/^v/, ""),
+);
+const releaseChannel = Schema.decodeUnknownSync(Schema.Literal("stable", "prerelease"))(
+  process.env.CONTEXT_AGENT_RELEASE_CHANNEL ??
+    (process.env.CONTEXT_AGENT_VERSION && !releaseVersion.includes("-") ? "stable" : "prerelease"),
+);
+
 function run(command: string, args: readonly string[], env: Record<string, string> = {}) {
   const result = spawnSync(command, args, {
     cwd: app,
@@ -287,8 +300,16 @@ for (const file of files) {
 const manifestFile = join(work, "runtime-manifest.json");
 writeFileSync(manifestFile, JSON.stringify({ hash: hash.digest("hex").slice(0, 16), files }));
 assets["runtime/manifest.json"] = manifestFile;
+const releaseInfoFile = join(work, "release-info.json");
+writeFileSync(
+  releaseInfoFile,
+  JSON.stringify({ version: releaseVersion, channel: releaseChannel, target }),
+);
+assets["release/info.json"] = releaseInfoFile;
 writeFileSync(assetsFile, JSON.stringify(assets));
-console.log(`runtime: ${files.length} files, ${(bytes / 1e6).toFixed(1)} MB`);
+console.log(
+  `runtime: ${files.length} files, ${(bytes / 1e6).toFixed(1)} MB; release: ${releaseVersion} (${releaseChannel}, ${target})`,
+);
 
 rmSync(packedOutput, { recursive: true, force: true });
 mkdirSync(packedOutput, { recursive: true });
