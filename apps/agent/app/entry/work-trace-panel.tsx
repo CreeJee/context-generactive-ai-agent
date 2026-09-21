@@ -489,7 +489,7 @@ function PanelBody({
             </div>
           </ScrollArea>
         </div>
-        <ScrollArea>
+        <ScrollArea className="min-h-0 h-full">
           <TaskDetail detail={detail} />
         </ScrollArea>
       </div>
