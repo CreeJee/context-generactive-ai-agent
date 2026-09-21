@@ -22,6 +22,7 @@
     "@tanstack/ai": "catalog:",
     "@tanstack/ai-openai": "catalog:",
     "@tanstack/ai-react": "catalog:",
+    "@tanstack/react-query": "catalog:",
     "class-variance-authority": "catalog:",
     "cmdk": "catalog:",
     "cn": "catalog:",

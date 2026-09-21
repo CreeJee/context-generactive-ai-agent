@@ -1,5 +1,6 @@
 import { Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../../db/database.ts";
+import { AppEvents } from "../../events/app-events.ts";
 import { MorphAnalyzer } from "../morph/analyzer.ts";
 import type { NodeKind } from "../nodes.ts";
 import { Embedder } from "./embedder.ts";
@@ -21,6 +22,7 @@ const decodeCount = Schema.decodeUnknownSync(Schema.Struct({ count: Schema.Numbe
 
 const make = Effect.gen(function* () {
   const { sqlite, atomic } = yield* Database;
+  const events = yield* AppEvents;
   const embedder = yield* Embedder;
   const vectors = yield* VectorIndex;
   const analyzer = yield* MorphAnalyzer;
@@ -65,6 +67,8 @@ const make = Effect.gen(function* () {
       atomic(() => {
         for (const seq of seqs) markIndexed.run(seq, embedder.identity);
       });
+      events.publishGlobal("embedding");
+      events.publishGlobal("imports");
       return pending.length;
     }).pipe(oneBatchAtATime.withPermits(1));
 

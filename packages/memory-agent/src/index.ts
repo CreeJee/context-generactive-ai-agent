@@ -588,6 +588,14 @@ export {
   type TraceTaskView,
   type TraceTreeSnapshot,
 } from "./work-trace/store.ts";
+export {
+  AppEvents,
+  makeAppEvents,
+  type AppChangedEvent,
+  type GlobalEventTopic,
+  type ProjectEventTopic,
+  type SessionEventTopic,
+} from "./events/app-events.ts";
 export { RelayedApprovals, type RelayedRequest } from "./approvals/relayed.ts";
 export type { ApprovalRequester, RelayedApprovalView } from "./approvals/relayed-state.ts";
 export { KagiTools, kagiInstructions, kagiToolNames, maxPageCharacters } from "./tools/kagi.ts";

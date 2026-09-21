@@ -1,5 +1,5 @@
 import { Effect, Either, Schema } from "effect";
-import { AgentChat } from "memory-agent";
+import { AgentChat, AppEvents } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/sessions.$session.lease";
@@ -23,6 +23,10 @@ export async function action({ request, params }: Route.ActionArgs) {
   return agent.runPromise(
     Effect.flatMap(AgentChat, (chat) =>
       chat.lease(params.session, body.right.holder, body.right.action),
+    ).pipe(
+      Effect.tap(() =>
+        Effect.map(AppEvents, (events) => events.publishSession(params.session, "run-state")),
+      ),
     ),
   );
 }

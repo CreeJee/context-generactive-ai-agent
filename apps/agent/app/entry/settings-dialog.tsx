@@ -1,3 +1,4 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BookOpenIcon,
   BotIcon,
@@ -68,7 +69,6 @@ import {
   type ExternalAgentsOverview,
   type GpuState,
   type ImportActivity,
-  type ImportOverview,
   type ImageSettingsView,
   type KagiStatus,
   type McpOverview,
@@ -76,6 +76,7 @@ import {
   type Project,
   type SkillCatalog,
 } from "./api";
+import { appQueryKeys } from "./events/query-keys";
 
 const kagiErrors = new Map([
   ["keychain_failed", "OS 키체인에 접근하지 못했어요. 키를 다른 곳에 대신 저장하지 않아요."],
@@ -636,9 +637,6 @@ const unplacedReason = (reason: string) =>
   isUnplacedReason(reason) ? unplacedReasons[reason] : reason;
 
 /** How often the page asks again while a pass reads, and while its nodes wait to be indexed. */
-const refreshWhileReadingMs = 1_000;
-const refreshWhileIndexingMs = 3_000;
-
 /** The pass this server is running, or how its latest one went. */
 function ImportActivityLine({ activity }: { activity: ImportActivity }) {
   switch (activity.status) {
@@ -680,32 +678,16 @@ function ImportActivityLine({ activity }: { activity: ImportActivity }) {
 
 /** Migrating other coding agents' local conversations into this app's memory. */
 function ImportSettings() {
-  const [overview, setOverview] = useState<ImportOverview | null>(null);
+  const queryClient = useQueryClient();
+  const query = useQuery({ queryKey: appQueryKeys.global.imports, queryFn: api.imports });
+  const overview = query.data ?? null;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    void api
-      .imports()
-      .then(setOverview)
-      .catch((failure: Error) => setError(errorMessage(failure)));
-  }, []);
-
-  // A pass and the indexing after it run in the background; the numbers follow them while open.
+    if (query.error instanceof Error) setError(errorMessage(query.error));
+  }, [query.error]);
   const reading = overview?.activity?.status === "running";
-  const indexing = (overview?.unindexed ?? 0) > 0;
-  useEffect(() => {
-    if (!reading && !indexing) return;
-    const timer = setInterval(
-      () =>
-        void api
-          .imports()
-          .then(setOverview)
-          .catch(() => undefined),
-      reading ? refreshWhileReadingMs : refreshWhileIndexingMs,
-    );
-    return () => clearInterval(timer);
-  }, [reading, indexing]);
 
   const apply = async (
     command: { action: "run" | "enable" | "disable" } | { action: "interpret"; interpret: boolean },
@@ -713,7 +695,7 @@ function ImportSettings() {
     setBusy(true);
     setError(null);
     try {
-      setOverview(await api.importAction(command));
+      queryClient.setQueryData(appQueryKeys.global.imports, await api.importAction(command));
     } catch (failure) {
       setError(errorMessage(failure instanceof Error ? failure : new Error(String(failure))));
     } finally {
@@ -865,8 +847,6 @@ const embeddingChoices = [
 const modeNames = { cpu: "CPU", gpu: "GPU" } as const;
 
 /** How often the page asks again while WebGPU is checked or nodes wait to be embedded. */
-const refreshEmbeddingMs = 3_000;
-
 const gibibytes = (bytes: number) => Math.round(bytes / 1024 ** 3);
 
 /** What the model runs on in this process, as a badge. */
@@ -925,31 +905,17 @@ function gpuText(gpu: GpuState) {
 
 /** How the embedding model runs: on the CPU with little memory, or on the GPU with little CPU. */
 function EmbeddingSettings() {
-  const [overview, setOverview] = useState<EmbeddingOverview | null>(null);
+  const queryClient = useQueryClient();
+  const query = useQuery({ queryKey: appQueryKeys.global.embedding, queryFn: api.embedding });
+  const overview = query.data ?? null;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    void api
-      .embedding()
-      .then(setOverview)
-      .catch((failure: Error) => setError(errorMessage(failure)));
-  }, []);
-
+    if (query.error instanceof Error) setError(errorMessage(query.error));
+  }, [query.error]);
   const checking = overview?.gpu.status === "checking";
   const indexing = (overview?.unindexed ?? 0) > 0;
-  useEffect(() => {
-    if (!checking && !indexing) return;
-    const timer = setInterval(
-      () =>
-        void api
-          .embedding()
-          .then(setOverview)
-          .catch(() => undefined),
-      refreshEmbeddingMs,
-    );
-    return () => clearInterval(timer);
-  }, [checking, indexing]);
 
   const apply = async (
     command: { action: "choose"; choice: EmbeddingChoice } | { action: "check" },
@@ -957,7 +923,7 @@ function EmbeddingSettings() {
     setBusy(true);
     setError(null);
     try {
-      setOverview(await api.embeddingAction(command));
+      queryClient.setQueryData(appQueryKeys.global.embedding, await api.embeddingAction(command));
     } catch (failure) {
       setError(errorMessage(failure instanceof Error ? failure : new Error(String(failure))));
     } finally {

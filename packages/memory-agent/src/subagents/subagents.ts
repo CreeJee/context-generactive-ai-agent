@@ -20,6 +20,7 @@ import { parallelReads } from "../tools/parallel-reads.ts";
 import { toToolSchema } from "../tools/schema.ts";
 import { WorkTraceStore, type AttemptHandle } from "../work-trace/store.ts";
 import type { SubagentStatus, SubagentView } from "./subagent-state.ts";
+import { AppEvents } from "../events/app-events.ts";
 
 export const subagentToolNames = ["run_subagent", "message_subagent", "resume_subagent"] as const;
 const isSubagentTool = (name: string) =>
@@ -178,6 +179,7 @@ const everyCallReason = "호출할 때마다 확인하는 도구예요.";
 
 const make = Effect.gen(function* () {
   const { sqlite } = yield* Database;
+  const events = yield* AppEvents;
   const active = yield* ActiveProvider;
   const chatState = yield* ChatState;
   const classifier = yield* PermissionClassifier;
@@ -286,7 +288,7 @@ const make = Effect.gen(function* () {
         "approval_waiting",
         `Waiting for approval: ${hook.toolName}`,
       );
-      const approved = await relayed.ask(
+      const decision = relayed.ask(
         binding.sessionId,
         {
           requester: { kind: "subagent", subagentId: row.id, name: row.name },
@@ -297,6 +299,9 @@ const make = Effect.gen(function* () {
         },
         signal,
       );
+      events.publishSession(binding.sessionId, "relayed-approvals");
+      const approved = await decision;
+      events.publishSession(binding.sessionId, "relayed-approvals");
       record(
         approved ? "approved" : "denied",
         "user",
@@ -323,6 +328,7 @@ const make = Effect.gen(function* () {
     handle: AttemptHandle,
     notifyParentImmediately = true,
   ): Promise<ChildOutcome> => {
+    events.publishSession(binding.sessionId, "subagents");
     const threadId = subagentThreadId(row.id);
     const controller = new AbortController();
     let settle: () => void = () => undefined;
@@ -518,6 +524,7 @@ const make = Effect.gen(function* () {
         parentRunId: binding.runId,
       });
     finish.run(status, answer, failure, Date.now(), row.id);
+    events.publishSession(binding.sessionId, "subagents");
     const registered = activeChildren.get(row.id);
     if (registered?.taskId === handle.taskId) {
       registered.settle();

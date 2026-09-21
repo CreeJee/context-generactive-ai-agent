@@ -71,6 +71,7 @@ import { WorkflowTools, workflowInstructions } from "../workflow/tools.ts";
 import { WorkflowRules } from "../workflow/rules.ts";
 import { localWorkflowRules } from "../workflow/sources.ts";
 import { WorkTraceStore } from "../work-trace/store.ts";
+import { AppEvents } from "../events/app-events.ts";
 
 /** Standing instructions: how to use memory without mistaking leads for facts or permission. */
 export const memoryInstructions = `You are a local assistant that remembers conversations across sessions and projects.
@@ -289,6 +290,7 @@ const isStreamJoin = (request: Request) =>
 
 const make = Effect.gen(function* () {
   const active = yield* ActiveProvider;
+  const events = yield* AppEvents;
   const config = yield* GlobalConfig;
   const workTraceExposed = Effect.map(
     config.read,
@@ -431,19 +433,24 @@ const make = Effect.gen(function* () {
   };
 
   const settleQueue = async (sessionId: string, runId: string) => {
-    const run = await chatState.run(sessionId, runId);
-    switch (run?.status) {
-      case "completed":
-        if (leases.view(sessionId, null).state === "free") queue.holdWaiting(sessionId);
-        return;
-      case "failed":
-      case "aborted":
-      case undefined:
-        queue.holdWaiting(sessionId);
-        return;
-      case "interrupted":
-      case "running":
-        return;
+    try {
+      const run = await chatState.run(sessionId, runId);
+      switch (run?.status) {
+        case "completed":
+          if (leases.view(sessionId, null).state === "free") queue.holdWaiting(sessionId);
+          return;
+        case "failed":
+        case "aborted":
+        case undefined:
+          queue.holdWaiting(sessionId);
+          return;
+        case "interrupted":
+        case "running":
+          return;
+      }
+    } finally {
+      events.publishSession(sessionId, "queue");
+      events.publishSession(sessionId, "run-state");
     }
   };
 
@@ -690,7 +697,7 @@ const make = Effect.gen(function* () {
      */
     handle: (request: Request, sessionId: string) =>
       Effect.gen(function* () {
-        const { projectId, agent: external } = yield* sessions.get(sessionId);
+        const { projectId, agent: external, title } = yield* sessions.get(sessionId);
         // Sending, approving and answering all come here; a read-only page may do none of them.
         if (!leases.permits(sessionId, request.headers.get(sessionHolderHeader))) return inUse();
         // Sessions reference projects by foreign key, so a missing project is a broken store.
@@ -750,6 +757,7 @@ const make = Effect.gen(function* () {
           const kept = yield* redactor.redactText(turn.text);
           userNode = nodes.append({ projectId, sessionId, kind: "user", text: kept.text });
           attachments.link(userNode.id, attached);
+          if (title === null) events.publishProject(projectId, "sessions");
         }
         if (!userNode) return json(409, { error: "no_user_turn" });
 
@@ -762,7 +770,11 @@ const make = Effect.gen(function* () {
             () => void settleQueue(sessionId, runId),
           );
           if (!claim) return json(409, { error: "run_in_progress" });
-          if (queued) queue.markDelivered(queued.queuedMessageId, "next_turn", runId, true);
+          events.publishSession(sessionId, "run-state");
+          if (queued) {
+            queue.markDelivered(queued.queuedMessageId, "next_turn", runId, true);
+            events.publishSession(sessionId, "queue");
+          }
           const answeredBy = external;
           const adapter = new ExternalAgentAdapter(
             answeredBy,
@@ -770,8 +782,8 @@ const make = Effect.gen(function* () {
               externalAgents.prompt(project, answeredBy, `direct:${sessionId}`, text, {
                 signal,
                 onUpdate,
-                askPermission: (permission) =>
-                  relayed.ask(
+                askPermission: async (permission) => {
+                  const decision = relayed.ask(
                     sessionId,
                     {
                       requester: { kind: "external_agent", agent: answeredBy },
@@ -781,7 +793,12 @@ const make = Effect.gen(function* () {
                       askedBy: "agent",
                     },
                     signal,
-                  ),
+                  );
+                  events.publishSession(sessionId, "relayed-approvals");
+                  const approved = await decision;
+                  events.publishSession(sessionId, "relayed-approvals");
+                  return approved;
+                },
               }),
             (text) => memoryPreamble(project, text, userNode.id),
           );
@@ -871,7 +888,11 @@ const make = Effect.gen(function* () {
           () => void settleQueue(sessionId, runId),
         );
         if (!claim) return json(409, { error: "run_in_progress" });
-        if (queued) queue.markDelivered(queued.queuedMessageId, "next_turn", runId, true);
+        events.publishSession(sessionId, "run-state");
+        if (queued) {
+          queue.markDelivered(queued.queuedMessageId, "next_turn", runId, true);
+          events.publishSession(sessionId, "queue");
+        }
         const middleware: Array<ChatMiddleware<unknown, typeof permissionReviewInterrupt>> = [
           ...chatState.middleware(),
           // After chat state, so steered messages are added to the transcript it has just saved.

@@ -1,53 +1,43 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { SessionRunState } from "memory-agent/definitions";
 import type { WorkflowAction, WorkflowPhase } from "./api";
 import { RefreshCwIcon } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
 import { api, ApiError } from "./api";
+import { useSessionEventScope } from "./events/providers";
+import { appQueryKeys } from "./events/query-keys";
 import { noticeOf, type PageView, type RunNotice } from "./run-notice";
 
-const pollMs = 2_000;
-
-/**
- * The server's view of a session's runs: refreshed whenever the page stops generating, so a run
- * that was cancelled, cut off by a restart, or is still going without this page is reported from
- * the record rather than guessed. While such a run goes on, it is checked again until it ends.
- */
+/** The authoritative durable run/workflow snapshot, refreshed by session SSE invalidations. */
 export function useRunState(
   sessionId: string,
   holder: string,
   generating: boolean,
   page: PageView,
 ) {
-  const [state, setState] = useState<SessionRunState | null>(null);
+  const { projectId } = useSessionEventScope();
+  if (!projectId) throw new Error("Run state requires an active project");
+  const queryClient = useQueryClient();
+  const queryKey = appQueryKeys.session.runState(projectId, sessionId);
+  const query = useQuery({
+    queryKey,
+    queryFn: () => api.sessionRunState(sessionId, holder),
+    enabled: !generating,
+    staleTime: 0,
+  });
+  const state = query.data ?? null;
   const [cancelling, setCancelling] = useState(false);
   const [controlling, setControlling] = useState(false);
-  // Asked to stop, but the server had not confirmed it by the time it answered.
   const [cancelPending, setCancelPending] = useState(false);
-  const detached = !generating && state !== null && state.running !== null;
 
-  const refresh = useCallback(async () => {
-    const next = await api.sessionRunState(sessionId, holder);
-    setState(next);
-    if (next.running === null) setCancelPending(false);
-    return next;
-  }, [sessionId, holder]);
-
-  useEffect(() => {
-    if (generating) return;
-    let current = true;
-    const poll = () =>
-      refresh().catch(() => {
-        if (!current) return;
-      });
-    void poll();
-    const timer = cancelPending || detached ? setInterval(() => void poll(), pollMs) : null;
-    return () => {
-      current = false;
-      if (timer) clearInterval(timer);
-    };
-  }, [generating, cancelPending, detached, refresh]);
+  const refresh = async () => {
+    const result = await query.refetch();
+    if (result.data?.running === null) setCancelPending(false);
+    if (!result.data) throw new Error("Run state refresh returned no snapshot");
+    return result.data;
+  };
 
   /** Asks the server to stop the run. Resolves false when nothing could be asked (network error). */
   const cancel = async () => {
@@ -55,9 +45,9 @@ export function useRunState(
     try {
       const result = await api.cancelRun(sessionId, holder);
       setCancelPending(!result.stopped);
+      await queryClient.invalidateQueries({ queryKey });
       return true;
     } catch (failure) {
-      // 409: the server has nothing running any more, so there is only the local stream to end.
       return failure instanceof ApiError && failure.status === 409;
     } finally {
       setCancelling(false);
@@ -66,7 +56,9 @@ export function useRunState(
 
   const setWorkflowPhase = async (phase: WorkflowPhase) => {
     const workflow = await api.setWorkflowPhase(sessionId, holder, phase);
-    setState((current) => (current ? { ...current, workflow } : current));
+    queryClient.setQueryData<SessionRunState>(queryKey, (current) =>
+      current ? { ...current, workflow } : current,
+    );
     return workflow;
   };
 
@@ -74,7 +66,9 @@ export function useRunState(
     setControlling(true);
     try {
       const workflow = await api.controlWorkflow(sessionId, holder, action);
-      setState((current) => (current ? { ...current, workflow } : current));
+      queryClient.setQueryData<SessionRunState>(queryKey, (current) =>
+        current ? { ...current, workflow } : current,
+      );
       return workflow;
     } finally {
       setControlling(false);

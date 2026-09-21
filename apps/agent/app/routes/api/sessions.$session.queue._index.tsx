@@ -1,5 +1,5 @@
 import { Effect, Either } from "effect";
-import { AgentChat, QueueRequest, sessionHolderHeader } from "memory-agent";
+import { AgentChat, AppEvents, QueueRequest, sessionHolderHeader } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/sessions.$session.queue._index";
@@ -22,6 +22,10 @@ export async function action({ request, params }: Route.ActionArgs) {
     return Response.json({ error: "invalid_queue_request" }, { status: 400 });
   const holder = request.headers.get(sessionHolderHeader);
   return agent.runPromise(
-    Effect.flatMap(AgentChat, (chat) => chat.enqueue(params.session, holder, body.right)),
+    Effect.flatMap(AgentChat, (chat) => chat.enqueue(params.session, holder, body.right)).pipe(
+      Effect.tap(() =>
+        Effect.map(AppEvents, (events) => events.publishSession(params.session, "queue")),
+      ),
+    ),
   );
 }

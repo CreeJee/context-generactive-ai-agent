@@ -1,5 +1,5 @@
 import { Effect, Either, Schema } from "effect";
-import { ExternalAgents, Projects, Sessions } from "memory-agent";
+import { AppEvents, ExternalAgents, Projects, Sessions } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/sessions._index";
@@ -45,6 +45,7 @@ export async function action({ request }: Route.ActionArgs) {
         return Response.json({ error: "external_agent_unavailable" }, { status: 409 });
     }
     const session = yield* (yield* Sessions).create(projectId, title ?? null, external ?? null);
+    (yield* AppEvents).publishProject(projectId, "sessions");
     return Response.json(session, { status: 201 });
   }).pipe(
     Effect.catchTag("ProjectNotFound", () =>

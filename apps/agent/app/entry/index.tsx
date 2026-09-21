@@ -1,6 +1,7 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FolderIcon, LogInIcon } from "lucide-react";
 import { parseAsString, useQueryStates } from "nuqs";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Empty,
   EmptyDescription,
@@ -16,11 +17,16 @@ import {
   type ProviderModel,
   type ModelSelection,
   type Project,
-  type ProviderAuthState,
   type ProviderId,
   type Session,
 } from "./api";
 import { SessionView, type SlashSupport } from "./chat-panel";
+import {
+  GlobalEventsProvider,
+  ProjectEventsProvider,
+  SessionEventsProvider,
+} from "./events/providers";
+import { appQueryKeys } from "./events/query-keys";
 import { ThemeSelect } from "./theme";
 import { pageHolder } from "./session-lease";
 import type { SlashContext } from "./slash-commands";
@@ -28,7 +34,6 @@ import { SettingsDialog } from "./settings-dialog";
 import { AccountSection, ModelSection, ProjectSection, SessionSection } from "./sidebar";
 import { WorkTracePanel } from "./work-trace-panel";
 
-const loginPollMs = 2000;
 const providers: readonly ProviderId[] = ["openai", "anthropic"];
 const locationParsers = {
   project: parseAsString,
@@ -56,10 +61,16 @@ function Placeholder({
 }
 
 export function App() {
-  const [auth, setAuth] = useState<Record<ProviderId, ProviderAuthState | null>>({
-    openai: null,
-    anthropic: null,
+  const queryClient = useQueryClient();
+  const openAIAuth = useQuery({
+    queryKey: [...appQueryKeys.global.auth, "openai"],
+    queryFn: () => api.auth("openai"),
   });
+  const anthropicAuth = useQuery({
+    queryKey: [...appQueryKeys.global.auth, "anthropic"],
+    queryFn: () => api.auth("anthropic"),
+  });
+  const auth = { openai: openAIAuth.data ?? null, anthropic: anthropicAuth.data ?? null };
   const [provider, setProvider] = useState<ProviderId>("openai");
   const [catalogs, setCatalogs] = useState<Record<ProviderId, ProviderModel[]>>({
     openai: [],
@@ -67,48 +78,54 @@ export function App() {
   });
   const models = catalogs[provider];
   const [selection, setSelection] = useState<ModelSelection | null>(null);
-  const [projects, setProjects] = useState<Project[]>([]);
+  const projectsQuery = useQuery({
+    queryKey: appQueryKeys.global.projects,
+    queryFn: api.projects,
+  });
+  const projects = projectsQuery.data ?? [];
   const [{ project: projectId, session: sessionId }, setLocation] = useQueryStates(locationParsers);
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [archived, setArchived] = useState<Session[]>([]);
+  const sessionsQuery = useQuery({
+    queryKey: projectId ? appQueryKeys.project.sessions(projectId) : ["app", "project", null],
+    queryFn: async () => ({
+      active: await api.sessions(projectId!),
+      archived: await api.archivedSessions(projectId!),
+    }),
+    enabled: projectId !== null,
+  });
+  const sessions = sessionsQuery.data?.active ?? [];
+  const archived = sessionsQuery.data?.archived ?? [];
+  const setSessionLists = (
+    update: (current: { active: Session[]; archived: Session[] }) => {
+      active: Session[];
+      archived: Session[];
+    },
+  ) => {
+    if (!projectId) return;
+    queryClient.setQueryData<{ active: Session[]; archived: Session[] }>(
+      appQueryKeys.project.sessions(projectId),
+      (current = { active: [], archived: [] }) => update(current),
+    );
+  };
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [slashAgents, setSlashAgents] = useState<string[]>([]);
   const [slashSkills, setSlashSkills] = useState<SlashContext["skills"]>([]);
 
-  const refreshAuth = useCallback(
-    (provider: ProviderId) =>
-      api.auth(provider).then((state) => setAuth((current) => ({ ...current, [provider]: state }))),
-    [],
-  );
-
   useEffect(() => {
-    for (const provider of providers) void refreshAuth(provider);
-    void api.projects().then((list) => {
-      setProjects(list);
-      void setLocation((current) => {
-        const project = list.some((item) => item.id === current.project)
-          ? current.project
-          : (list[0]?.id ?? null);
-        return {
-          project,
-          session: project === current.project ? current.session : null,
-        };
-      });
+    if (!projectsQuery.data) return;
+    void setLocation((current) => {
+      const project = projects.some((item) => item.id === current.project)
+        ? current.project
+        : (projects[0]?.id ?? null);
+      return {
+        project,
+        session: project === current.project ? current.session : null,
+      };
     });
-  }, [refreshAuth, setLocation]);
+  }, [projects, projectsQuery.data, setLocation]);
 
-  // Poll each provider independently while its browser login is in progress.
-  useEffect(() => {
-    const pending = providers.filter((provider) => auth[provider]?.status === "pending");
-    if (pending.length === 0) return;
-    const timer = setInterval(
-      () => pending.forEach((provider) => void refreshAuth(provider)),
-      loginPollMs,
-    );
-    return () => clearInterval(timer);
-  }, [auth, refreshAuth]);
-
+  const globalEventsActive =
+    settingsOpen || providers.some((candidate) => auth[candidate]?.status === "pending");
   const signedIn = auth[provider]?.status === "signed-in";
   const selectedSignedIn = selection !== null && auth[selection.provider]?.status === "signed-in";
   useEffect(() => {
@@ -125,7 +142,7 @@ export function App() {
         }
       });
     }
-  }, [auth]);
+  }, [anthropicAuth.data, openAIAuth.data]);
 
   // What slash commands can offer in this project; settings may change it, so reload on close.
   useEffect(() => {
@@ -141,59 +158,32 @@ export function App() {
   }, [projectId, settingsOpen]);
 
   useEffect(() => {
-    if (!projectId) return;
+    if (!projectId || !sessionsQuery.data) return;
     setArchiveError(null);
-    void api.sessions(projectId).then((list) => {
-      setSessions(list);
-      void setLocation((current) =>
-        current.project === projectId
-          ? {
-              session: list.some((item) => item.id === current.session)
-                ? current.session
-                : (list[0]?.id ?? null),
-            }
-          : {},
-      );
-    });
-    void api.archivedSessions(projectId).then(setArchived, () => setArchived([]));
-  }, [projectId]);
+    void setLocation((current) =>
+      current.project === projectId
+        ? {
+            session: sessions.some((item) => item.id === current.session)
+              ? current.session
+              : (sessions[0]?.id ?? null),
+          }
+        : {},
+    );
+  }, [projectId, sessions, sessionsQuery.data, setLocation]);
 
   const selectProject = (id: string) =>
     void setLocation({ project: id, session: null }, { history: "push" });
   const selectSession = (id: string) => void setLocation({ session: id }, { history: "push" });
-
-  const untitled = sessions.some((session) => session.id === sessionId && session.title === null);
-  useEffect(() => {
-    if (!projectId || !untitled) return;
-    let current = true;
-    const timer = setInterval(() => {
-      void api.sessions(projectId).then(
-        (list) => {
-          if (!current) return;
-          const updated = list.find((session) => session.id === sessionId);
-          if (!updated?.title) return;
-          setSessions((existing) =>
-            existing.map((session) =>
-              session.id === updated.id ? { ...session, title: updated.title } : session,
-            ),
-          );
-        },
-        () => {},
-      );
-    }, 1000);
-    return () => {
-      current = false;
-      clearInterval(timer);
-    };
-  }, [projectId, sessionId, untitled]);
 
   const archiveSession = async (id: string) => {
     try {
       const session = await api.setArchived(id, pageHolder(), true);
       setArchiveError(null);
       const remaining = sessions.filter((item) => item.id !== id);
-      setSessions(remaining);
-      setArchived((list) => [session, ...list]);
+      setSessionLists((current) => ({
+        active: remaining,
+        archived: [session, ...current.archived],
+      }));
       if (sessionId === id) void setLocation({ session: remaining[0]?.id ?? null });
     } catch (error) {
       setArchiveError(
@@ -207,8 +197,10 @@ export function App() {
       await api.deleteSession(id, pageHolder());
       setArchiveError(null);
       const remaining = sessions.filter((item) => item.id !== id);
-      setSessions(remaining);
-      setArchived((list) => list.filter((item) => item.id !== id));
+      setSessionLists((current) => ({
+        active: remaining,
+        archived: current.archived.filter((item) => item.id !== id),
+      }));
       if (sessionId === id) void setLocation({ session: remaining[0]?.id ?? null });
     } catch (error) {
       setArchiveError(
@@ -221,10 +213,10 @@ export function App() {
     try {
       const session = await api.setArchived(id, pageHolder(), false);
       setArchiveError(null);
-      setArchived((list) => list.filter((item) => item.id !== id));
-      setSessions((list) =>
-        [session, ...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
-      );
+      setSessionLists((current) => ({
+        active: [session, ...current.active].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+        archived: current.archived.filter((item) => item.id !== id),
+      }));
     } catch (error) {
       setArchiveError(
         archiveErrorMessage(error instanceof Error ? error : new Error(String(error))),
@@ -234,14 +226,17 @@ export function App() {
 
   const authAction = async (intent: "login" | "cancel" | "logout") => {
     const state = await api.authAction(intent, provider);
-    setAuth((current) => ({ ...current, [provider]: state }));
+    queryClient.setQueryData([...appQueryKeys.global.auth, provider], state);
     if (state.status === "pending") window.open(state.authUrl, "_blank", "noopener");
   };
 
   const addProject = async (root: string) => {
     try {
       const project = await api.addProject(root);
-      setProjects((list) => [...list, project]);
+      queryClient.setQueryData<Project[]>(appQueryKeys.global.projects, (list = []) => [
+        ...list,
+        project,
+      ]);
       void setLocation({ project: project.id, session: null }, { history: "push" });
       return null;
     } catch (error) {
@@ -249,28 +244,24 @@ export function App() {
     }
   };
 
-  // Imports register projects and add conversations in the background; show them once settings close.
+  // Closing settings drops its global stream; one final snapshot catches any event-open race.
   const changeSettingsOpen = (open: boolean) => {
     setSettingsOpen(open);
     if (open) return;
-    void api.projects().then((list) => {
-      setProjects(list);
-      void setLocation((current) => ({ project: current.project ?? list[0]?.id ?? null }));
-    });
+    void queryClient.invalidateQueries({ queryKey: appQueryKeys.global.root });
     if (projectId)
-      void api.sessions(projectId).then((list) => {
-        setSessions(list);
-        void setLocation((current) => ({ session: current.session ?? list[0]?.id ?? null }));
-      });
+      void queryClient.invalidateQueries({ queryKey: appQueryKeys.project.sessions(projectId) });
   };
 
   const replaceProject = (updated: Project) =>
-    setProjects((list) => list.map((project) => (project.id === updated.id ? updated : project)));
+    queryClient.setQueryData<Project[]>(appQueryKeys.global.projects, (list = []) =>
+      list.map((project) => (project.id === updated.id ? updated : project)),
+    );
 
   const createSession = async (agent?: string) => {
     if (!projectId) return;
     const session = await api.createSession(projectId, agent);
-    setSessions((list) => [session, ...list]);
+    setSessionLists((current) => ({ ...current, active: [session, ...current.active] }));
     void setLocation({ session: session.id }, { history: "push" });
   };
 
@@ -356,75 +347,81 @@ export function App() {
     );
 
   return (
-    <div className="flex h-dvh bg-background text-foreground">
-      <aside className="flex w-72 shrink-0 flex-col border-r">
-        <div className="flex items-center justify-between py-2 pr-2 pl-4">
-          <span className="text-sm font-semibold">Context Agent</span>
-          <SettingsDialog
-            project={projects.find((project) => project.id === projectId) ?? null}
-            open={settingsOpen}
-            onOpenChange={changeSettingsOpen}
-          />
-        </div>
-        <Separator />
-        <div className="px-4 py-2">
-          <ThemeSelect />
-        </div>
-        <AccountSection
-          auth={auth[provider]}
-          provider={provider}
-          onProviderChange={setProvider}
-          onAction={(intent) => void authAction(intent)}
-        />
-        {signedIn && (
-          <ModelSection
-            models={models}
-            selection={selection?.provider === provider ? selection : null}
-            onSelect={(model, effort) =>
-              void api.selectModel(model, effort, provider).then(setSelection)
-            }
-          />
-        )}
-        <Separator />
-        <ProjectSection
-          projects={projects}
-          projectId={projectId}
-          onSelect={selectProject}
-          onAdd={addProject}
-          onPermissionMode={(mode) => {
-            if (!projectId) return;
-            void api.setPermissionMode(projectId, mode).then(replaceProject);
-          }}
-          onCrossRecall={(allowed) => {
-            if (!projectId) return;
-            void api.setCrossRecallExcluded(projectId, !allowed).then(replaceProject);
-          }}
-          onHide={(hiddenId) => {
-            void api.hideProject(hiddenId).then(() => {
-              const left = projects.filter((project) => project.id !== hiddenId);
-              setProjects(left);
-              void setLocation({ project: left.at(0)?.id ?? null, session: null });
-            });
-          }}
-        />
-        <Separator />
-        {projectId && (
-          <SessionSection
-            sessions={sessions}
-            archived={archived}
-            sessionId={sessionId}
-            archiveError={archiveError}
-            onSelect={selectSession}
-            onCreate={(agent) => void createSession(agent)}
-            onArchive={(id) => void archiveSession(id)}
-            onDelete={(id) => void deleteSession(id)}
-            onRestore={(id) => void restoreSession(id)}
-            loadAgents={() => api.usableExternalAgents(projectId)}
-          />
-        )}
-      </aside>
-      <main className="min-w-0 flex-1">{main}</main>
-      {projectId && <WorkTracePanel projectId={projectId} sessionId={sessionId} />}
-    </div>
+    <GlobalEventsProvider active={globalEventsActive}>
+      <ProjectEventsProvider projectId={projectId}>
+        <SessionEventsProvider projectId={projectId} sessionId={sessionId}>
+          <div className="flex h-dvh bg-background text-foreground">
+            <aside className="flex w-72 shrink-0 flex-col border-r">
+              <div className="flex items-center justify-between py-2 pr-2 pl-4">
+                <span className="text-sm font-semibold">Context Agent</span>
+                <SettingsDialog
+                  project={projects.find((project) => project.id === projectId) ?? null}
+                  open={settingsOpen}
+                  onOpenChange={changeSettingsOpen}
+                />
+              </div>
+              <Separator />
+              <div className="px-4 py-2">
+                <ThemeSelect />
+              </div>
+              <AccountSection
+                auth={auth[provider]}
+                provider={provider}
+                onProviderChange={setProvider}
+                onAction={(intent) => void authAction(intent)}
+              />
+              {signedIn && (
+                <ModelSection
+                  models={models}
+                  selection={selection?.provider === provider ? selection : null}
+                  onSelect={(model, effort) =>
+                    void api.selectModel(model, effort, provider).then(setSelection)
+                  }
+                />
+              )}
+              <Separator />
+              <ProjectSection
+                projects={projects}
+                projectId={projectId}
+                onSelect={selectProject}
+                onAdd={addProject}
+                onPermissionMode={(mode) => {
+                  if (!projectId) return;
+                  void api.setPermissionMode(projectId, mode).then(replaceProject);
+                }}
+                onCrossRecall={(allowed) => {
+                  if (!projectId) return;
+                  void api.setCrossRecallExcluded(projectId, !allowed).then(replaceProject);
+                }}
+                onHide={(hiddenId) => {
+                  void api.hideProject(hiddenId).then(() => {
+                    const left = projects.filter((project) => project.id !== hiddenId);
+                    queryClient.setQueryData(appQueryKeys.global.projects, left);
+                    void setLocation({ project: left.at(0)?.id ?? null, session: null });
+                  });
+                }}
+              />
+              <Separator />
+              {projectId && (
+                <SessionSection
+                  sessions={sessions}
+                  archived={archived}
+                  sessionId={sessionId}
+                  archiveError={archiveError}
+                  onSelect={selectSession}
+                  onCreate={(agent) => void createSession(agent)}
+                  onArchive={(id) => void archiveSession(id)}
+                  onDelete={(id) => void deleteSession(id)}
+                  onRestore={(id) => void restoreSession(id)}
+                  loadAgents={() => api.usableExternalAgents(projectId)}
+                />
+              )}
+            </aside>
+            <main className="min-w-0 flex-1">{main}</main>
+            {projectId && <WorkTracePanel projectId={projectId} sessionId={sessionId} />}
+          </div>
+        </SessionEventsProvider>
+      </ProjectEventsProvider>
+    </GlobalEventsProvider>
   );
 }

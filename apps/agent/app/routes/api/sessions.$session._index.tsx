@@ -1,5 +1,12 @@
 import { Effect, Either, Schema } from "effect";
-import { AgentChat, WorkflowAction, WorkflowPhase, sessionHolderHeader } from "memory-agent";
+import {
+  AgentChat,
+  AppEvents,
+  Sessions,
+  WorkflowAction,
+  WorkflowPhase,
+  sessionHolderHeader,
+} from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/sessions.$session._index";
@@ -33,19 +40,33 @@ export async function action({ request, params }: Route.ActionArgs) {
     return Response.json({ error: "invalid_session_change" }, { status: 400 });
   const holder = request.headers.get(sessionHolderHeader);
   return agent.runPromise(
-    Effect.flatMap(AgentChat, (chat) => {
+    Effect.gen(function* () {
+      const chat = yield* AgentChat;
+      const events = yield* AppEvents;
+      const sessions = yield* Sessions;
+      const session = yield* sessions.get(params.session);
       const change = body.right;
-      if ("archived" in change)
-        return chat.archive(
+      if ("archived" in change) {
+        const result = yield* chat.archive(
           params.session,
           holder,
           change.archived,
           change.idempotencyKey ?? crypto.randomUUID(),
         );
-      if ("delete" in change)
-        return chat.deleteSession(params.session, holder, change.idempotencyKey);
-      if ("phase" in change) return chat.setWorkflowPhase(params.session, holder, change.phase);
-      return chat.controlWorkflow(params.session, holder, change.workflowAction);
+        events.publishProject(session.projectId, "sessions");
+        return result;
+      }
+      if ("delete" in change) {
+        const result = yield* chat.deleteSession(params.session, holder, change.idempotencyKey);
+        events.publishProject(session.projectId, "sessions");
+        return result;
+      }
+      const workflow =
+        "phase" in change
+          ? yield* chat.setWorkflowPhase(params.session, holder, change.phase)
+          : yield* chat.controlWorkflow(params.session, holder, change.workflowAction);
+      events.publishSession(params.session, "run-state");
+      return workflow;
     }),
   );
 }

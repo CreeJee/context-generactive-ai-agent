@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, type QueuedMessage, type QueueEdit } from "./api";
-
-/** While a run answers, the queue is checked this often to show messages being delivered. */
-const pollMs = 1_500;
+import { useSessionEventScope } from "./events/providers";
+import { appQueryKeys } from "./events/query-keys";
 
 /** What became of a message written while a run was answering. */
 export type AddOutcome =
@@ -21,31 +20,17 @@ export const isPending = (message: QueuedMessage) => message.state.kind !== "del
 export const isTakenIn = (message: QueuedMessage) =>
   message.state.kind === "delivered" && message.state.via !== "next_turn";
 
-/**
- * The session's message queue as this page sees it (R03). Refreshed whenever the page's run starts
- * or stops, and polled while it answers.
- */
-export function useMessageQueue(sessionId: string, holder: string, generating: boolean) {
-  const [items, setItems] = useState<readonly QueuedMessage[]>([]);
-
-  const refresh = useCallback(
-    () =>
-      api.queue(sessionId).then(
-        (next) => {
-          setItems(next);
-          return next;
-        },
-        () => null,
-      ),
-    [sessionId],
-  );
-
-  useEffect(() => {
-    void refresh();
-    if (!generating) return;
-    const timer = setInterval(() => void refresh(), pollMs);
-    return () => clearInterval(timer);
-  }, [refresh, generating]);
+/** The authoritative queue snapshot, refreshed by session SSE invalidations. */
+export function useMessageQueue(sessionId: string, holder: string, _generating: boolean) {
+  const { projectId } = useSessionEventScope();
+  if (!projectId) throw new Error("Message queue requires an active project");
+  const queryClient = useQueryClient();
+  const queryKey = appQueryKeys.session.queue(projectId, sessionId);
+  const query = useQuery({ queryKey, queryFn: () => api.queue(sessionId) });
+  const refresh = async () => {
+    const result = await query.refetch();
+    return result.data ?? null;
+  };
 
   const add = async (
     text: string,
@@ -54,7 +39,7 @@ export function useMessageQueue(sessionId: string, holder: string, generating: b
   ): Promise<AddOutcome> => {
     try {
       const message = await api.enqueue(sessionId, holder, { text, attachmentIds, mode });
-      void refresh();
+      await queryClient.invalidateQueries({ queryKey });
       return mode === "steer" ? { kind: "steered", message } : { kind: "queued" };
     } catch (failure) {
       if (failure instanceof ApiError && failure.code === "not_running")
@@ -70,5 +55,5 @@ export function useMessageQueue(sessionId: string, holder: string, generating: b
     return refresh();
   };
 
-  return { items, refresh, add, change };
+  return { items: query.data ?? [], refresh, add, change };
 }

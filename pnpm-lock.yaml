@@ -233,6 +233,9 @@ catalogs:
     '@tanstack/ai-react':
       specifier: ^0.27.0
       version: 0.27.0
+    '@tanstack/react-query':
+      specifier: ^5.103.1
+      version: 5.103.1
     '@types/cross-spawn':
       specifier: 6.0.6
       version: 6.0.6
@@ -346,6 +349,9 @@ importers:
       '@tanstack/ai-react':
         specifier: 'catalog:'
         version: 0.27.0(@tanstack/ai@0.55.0(zod@3.25.76))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@3.25.76)
+      '@tanstack/react-query':
+        specifier: 'catalog:'
+        version: 5.103.1(react@19.3.0)
       class-variance-authority:
         specifier: 'catalog:'
         version: 0.7.1
@@ -2154,6 +2160,14 @@ packages:
     resolution: {integrity: sha512-FcaUXi2xP8r12HetLej4r04oIscVs4Xi4sN5EAE85jZDbfHOTUTRbRSywu6DthXiR8R4+ht8MzznMlenf/QLFg==}
     peerDependencies:
       '@tanstack/ai': ^0.55.0
+
+  '@tanstack/query-core@5.103.1':
+    resolution: {integrity: sha512-rms8HqTGp6zA00dM+cUQ2eBcgzNJefuu5CAMB37i/6MiGT1zulPOytCFu2a0qjLqVR2n1jENPj9woqFQNuCzWA==}
+
+  '@tanstack/react-query@5.103.1':
+    resolution: {integrity: sha512-rmAPPApNEK17VXRJhtE1rja53n23VV5w30C0saCgJhhX+EpdUnVqMGV/s5nnzV43X75KTHKzuoiuxSzGTBIkag==}
+    peerDependencies:
+      react: ^18 || ^19
 
   '@testing-library/dom@10.4.1':
     resolution: {integrity: sha512-o4PXJQidqJl82ckFaXUeoAW+XysPLauYI43Abki5hABd853iMhitooc6znOnczgbTYmEP6U6/y1ZyKAIsvMKGg==}
@@ -6516,6 +6530,13 @@ snapshots:
       - '@smithy/signature-v4'
       - ws
       - zod
+
+  '@tanstack/query-core@5.103.1': {}
+
+  '@tanstack/react-query@5.103.1(react@19.3.0)':
+    dependencies:
+      '@tanstack/query-core': 5.103.1
+      react: 19.3.0
 
   '@testing-library/dom@10.4.1':
     dependencies:

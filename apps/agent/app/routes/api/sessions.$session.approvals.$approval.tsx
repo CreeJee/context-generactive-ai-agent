@@ -1,5 +1,5 @@
 import { Effect, Either, Schema } from "effect";
-import { AgentChat, sessionHolderHeader } from "memory-agent";
+import { AgentChat, AppEvents, sessionHolderHeader } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/sessions.$session.approvals.$approval";
@@ -19,6 +19,12 @@ export async function action({ request, params }: Route.ActionArgs) {
   return agent.runPromise(
     Effect.flatMap(AgentChat, (chat) =>
       chat.answerApproval(params.session, holder, params.approval, body.right.approved),
+    ).pipe(
+      Effect.tap(() =>
+        Effect.map(AppEvents, (events) =>
+          events.publishSession(params.session, "relayed-approvals"),
+        ),
+      ),
     ),
   );
 }

@@ -1,5 +1,5 @@
 import { Effect, Either, Schema } from "effect";
-import { ProviderId, ProviderRegistry } from "memory-agent";
+import { AppEvents, ProviderId, ProviderRegistry } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/auth";
@@ -63,7 +63,26 @@ export async function action({ request }: Route.ActionArgs) {
         : intent === "logout"
           ? configured.auth.disconnect
           : configured.auth.cancel;
-    return Response.json(browserState(yield* operation));
+    const state = yield* operation;
+    const events = yield* AppEvents;
+    events.publishGlobal("auth");
+    if (state.status === "pending")
+      yield* Effect.forkDaemon(
+        Effect.gen(function* () {
+          for (;;) {
+            yield* Effect.sleep("250 millis");
+            if ((yield* configured.auth.status).status !== "pending") break;
+          }
+          events.publishGlobal("auth");
+        }).pipe(
+          Effect.catchAllCause(() =>
+            Effect.sync(() => {
+              events.publishGlobal("auth");
+            }),
+          ),
+        ),
+      );
+    return Response.json(browserState(state));
   }).pipe(
     Effect.catchTags({
       ProviderUnavailable: () =>

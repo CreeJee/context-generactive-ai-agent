@@ -1,5 +1,5 @@
 import { Effect, Either, Schema } from "effect";
-import { PermissionMode, Projects } from "memory-agent";
+import { AppEvents, PermissionMode, Projects } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/projects.$project._index";
@@ -32,6 +32,7 @@ export async function action({ request, params }: Route.ActionArgs) {
     if (permissionMode !== undefined)
       project = yield* projects.setPermissionMode(project.id, permissionMode);
     if (hidden !== undefined) project = yield* projects.setHidden(project.id, hidden);
+    (yield* AppEvents).publishGlobal("projects");
     return Response.json(project);
   }).pipe(
     Effect.catchTag("ProjectNotFound", () =>

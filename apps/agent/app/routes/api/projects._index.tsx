@@ -1,5 +1,5 @@
 import { Effect, Either, Schema } from "effect";
-import { Projects } from "memory-agent";
+import { AppEvents, Projects } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/projects._index";
@@ -23,8 +23,11 @@ export async function action({ request }: Route.ActionArgs) {
   const body = await readJson(request, AddProject);
   if (Either.isLeft(body)) return Response.json({ error: "invalid_project" }, { status: 400 });
 
-  const response = Effect.flatMap(Projects, (projects) => projects.add(body.right.root)).pipe(
-    Effect.map((project) => Response.json(project, { status: 201 })),
+  const response = Effect.gen(function* () {
+    const project = yield* (yield* Projects).add(body.right.root);
+    (yield* AppEvents).publishGlobal("projects");
+    return Response.json(project, { status: 201 });
+  }).pipe(
     Effect.catchTag("ProjectRootRejected", (error) =>
       Effect.succeed(
         Response.json({ error: "project_rejected", reason: error.reason }, { status: 422 }),

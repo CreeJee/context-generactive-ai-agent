@@ -1,5 +1,5 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BotIcon } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
 import { Badge } from "~/components/ui/badge";
 import {
   Item,
@@ -12,40 +12,35 @@ import {
 import { Spinner } from "~/components/ui/spinner";
 import { api, type ApprovalRequester, type RelayedApprovalView, type SubagentView } from "./api";
 import { ApprovalCard, type PendingApproval } from "./approval";
-
-/** While a run answers, delegated work is checked this often for progress and approval requests. */
-const pollMs = 1_500;
+import { useSessionEventScope } from "./events/providers";
+import { appQueryKeys } from "./events/query-keys";
 
 interface DelegatedState {
   readonly subagents: readonly SubagentView[];
   readonly approvals: readonly RelayedApprovalView[];
 }
 
-const empty: DelegatedState = { subagents: [], approvals: [] };
-
-/**
- * Subagents of the session and calls waiting for the user from work that cannot pause the run
- * (subagents, external agents). Refreshed when the run starts or stops and polled while it runs.
- */
-export function useDelegatedWork(sessionId: string, generating: boolean) {
-  const [state, setState] = useState<DelegatedState>(empty);
-
-  const refresh = useCallback(
-    () =>
-      Promise.all([api.subagents(sessionId), api.relayedApprovals(sessionId)]).then(
-        ([subagents, approvals]) => setState({ subagents, approvals }),
-        () => undefined,
-      ),
-    [sessionId],
-  );
-
-  useEffect(() => {
-    void refresh();
-    if (!generating) return;
-    const timer = setInterval(() => void refresh(), pollMs);
-    return () => clearInterval(timer);
-  }, [refresh, generating]);
-
+/** Subagent and relayed-approval snapshots, refreshed by their session SSE topics. */
+export function useDelegatedWork(sessionId: string, _generating: boolean) {
+  const { projectId } = useSessionEventScope();
+  if (!projectId) throw new Error("Delegated work requires an active project");
+  const queryClient = useQueryClient();
+  const subagentsKey = appQueryKeys.session.subagents(projectId, sessionId);
+  const approvalsKey = appQueryKeys.session.approvals(projectId, sessionId);
+  const subagents = useQuery({ queryKey: subagentsKey, queryFn: () => api.subagents(sessionId) });
+  const approvals = useQuery({
+    queryKey: approvalsKey,
+    queryFn: () => api.relayedApprovals(sessionId),
+  });
+  const state: DelegatedState = {
+    subagents: subagents.data ?? [],
+    approvals: approvals.data ?? [],
+  };
+  const setState = (update: (current: DelegatedState) => DelegatedState) => {
+    const next = update(state);
+    queryClient.setQueryData(subagentsKey, next.subagents);
+    queryClient.setQueryData(approvalsKey, next.approvals);
+  };
   return { state, setState };
 }
 
@@ -74,10 +69,7 @@ function toPending(
   };
 }
 
-/**
- * Subagents working right now, and calls waiting for the user that could not pause the run. They
- * are answered here while the run keeps going.
- */
+/** Active delegated work and permission calls relayed from it. */
 export function SubagentPanel({
   sessionId,
   holder,

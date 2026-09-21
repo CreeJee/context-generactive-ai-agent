@@ -4,7 +4,9 @@ import { Context, Data, Deferred, Effect, Layer, Schedule, Schema } from "effect
 import { GlobalConfig } from "../config/global-config.ts";
 import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
+import { AppEvents } from "../events/app-events.ts";
 import { Indexer } from "../memory/embedding/indexer.ts";
+import { Projects } from "../projects/projects.ts";
 import { runtimeWorker } from "../runtime/resources.ts";
 import { ImportSourceName } from "./items.ts";
 import type { PassProgress, TranscriptCounts } from "./pass.ts";
@@ -104,7 +106,9 @@ const make = (watching: boolean, home: string) =>
     const { sqlite } = yield* Database;
     const storage = yield* StorageRoot;
     const config = yield* GlobalConfig;
+    const events = yield* AppEvents;
     const indexer = yield* Indexer;
+    const projects = yield* Projects;
     const oneDrainAtATime = yield* Effect.makeSemaphore(1);
 
     const sourceTotals = sqlite.prepare(`
@@ -201,11 +205,15 @@ const make = (watching: boolean, home: string) =>
           switch (reply.kind) {
             case "progress":
               activity = { status: "running", startedAt, ...progressOf(reply) };
+              events.publishGlobal("imports");
               return;
             case "finished":
               latestCounts = reply.counts;
+              events.publishGlobal("imports");
+              events.publishGlobal("projects");
               return resume(Effect.succeed(progressOf(reply)));
             case "failed":
+              events.publishGlobal("imports");
               return resume(Effect.fail(new ImportWorkerFailed({ reason: reply.reason })));
             case "counts":
               return;
@@ -225,6 +233,7 @@ const make = (watching: boolean, home: string) =>
         running = done;
         const startedAt = new Date().toISOString();
         activity = { status: "running", startedAt, checked: 0, total: 0, written: 0, failed: 0 };
+        events.publishGlobal("imports");
         yield* pass(startedAt).pipe(
           Effect.tap((progress) =>
             Effect.sync(() => {
@@ -234,7 +243,15 @@ const make = (watching: boolean, home: string) =>
                 finishedAt: new Date().toISOString(),
                 ...progress,
               };
+              events.publishGlobal("imports");
             }),
+          ),
+          Effect.tap(() =>
+            Effect.tap(projects.listAll, (list) =>
+              Effect.sync(() => {
+                for (const project of list) events.publishProject(project.id, "sessions");
+              }),
+            ),
           ),
           Effect.tapError((failure) =>
             Effect.sync(() => {
@@ -244,6 +261,7 @@ const make = (watching: boolean, home: string) =>
                 finishedAt: new Date().toISOString(),
                 reason: failure.reason,
               };
+              events.publishGlobal("imports");
             }),
           ),
           Effect.map((progress) => progress.written),

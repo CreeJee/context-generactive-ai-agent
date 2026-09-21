@@ -10,6 +10,7 @@ import { GlobalConfig } from "./config/global-config.ts";
 import { SecretStore } from "./config/secrets.ts";
 import { StorageRoot } from "./config/storage-root.ts";
 import { Database } from "./db/database.ts";
+import { AppEvents } from "./events/app-events.ts";
 import { Kagi } from "./kagi/kagi.ts";
 import { ExternalAgents } from "./external-agents/agents.ts";
 import { BulkNodes } from "./imports/bulk.ts";
@@ -153,6 +154,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
       Layer.provide(providerToolRegistry),
     );
   const stores = Layer.mergeAll(
+    AppEvents.layer,
     Projects.layer,
     Nodes.layer,
     PermissionReviews.layer,

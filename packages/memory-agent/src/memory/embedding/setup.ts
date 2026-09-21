@@ -7,6 +7,7 @@ import {
   type Settings,
 } from "../../config/global-config.ts";
 import { StorageRoot } from "../../config/storage-root.ts";
+import { AppEvents } from "../../events/app-events.ts";
 import {
   checkGpu,
   Embedder,
@@ -56,6 +57,7 @@ const wantsCheck = (settings: Settings, memoryBytes: number) => {
 const make = Effect.gen(function* () {
   const config = yield* GlobalConfig;
   const storage = yield* StorageRoot;
+  const events = yield* AppEvents;
   const embedder = yield* Embedder;
   const indexer = yield* Indexer;
   const memoryBytes = totalmem();
@@ -70,6 +72,7 @@ const make = Effect.gen(function* () {
     // Tests and evaluations run other embedders; there is no local model to check for them.
     if (checking || embedder.runtime().kind !== "local") return Effect.void;
     checking = true;
+    events.publishGlobal("embedding");
     return Effect.asVoid(
       Effect.forkIn(
         checkGpu(storage.path).pipe(
@@ -78,6 +81,7 @@ const make = Effect.gen(function* () {
           Effect.ensuring(
             Effect.sync(() => {
               checking = false;
+              events.publishGlobal("embedding");
             }),
           ),
         ),
@@ -110,6 +114,7 @@ const make = Effect.gen(function* () {
     choose: (choice: EmbeddingChoice) =>
       Effect.gen(function* () {
         const settings = yield* config.update({ embeddingDevice: choice });
+        events.publishGlobal("embedding");
         if (wantsCheck(settings, memoryBytes)) yield* startCheck;
         return yield* overview;
       }),
