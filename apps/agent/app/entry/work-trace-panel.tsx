@@ -112,10 +112,10 @@ function TaskTree({
   }, [tasks]);
   const branch = (parentId: string | null, depth: number): React.ReactNode =>
     (children.get(parentId) ?? []).map((task) => (
-      <div key={task.id}>
+      <div key={task.id} className="min-w-0">
         <button
           type="button"
-          className={`flex w-full items-start gap-2 rounded-md py-2 pr-2 text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${depthPadding[Math.min(depth, depthPadding.length - 1)]}`}
+          className={`flex w-full min-w-0 items-start gap-2 rounded-md py-2 pr-2 text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${depthPadding[Math.min(depth, depthPadding.length - 1)]}`}
           aria-current={selectedTaskId === task.id ? "true" : undefined}
           onClick={() => onSelect(task.id)}
         >
@@ -140,7 +140,11 @@ function TaskTree({
         {branch(task.id, depth + 1)}
       </div>
     ));
-  return <nav aria-label="작업 트리">{branch(null, 0)}</nav>;
+  return (
+    <nav className="min-w-0" aria-label="작업 트리">
+      {branch(null, 0)}
+    </nav>
+  );
 }
 
 function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
@@ -150,10 +154,10 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
     );
   const task = detail.task;
   return (
-    <div className="space-y-5 p-4">
-      <section aria-labelledby="trace-overview">
-        <div className="flex items-center gap-2">
-          <h3 id="trace-overview" className="font-medium">
+    <div className="min-w-0 space-y-5 p-4 break-words">
+      <section className="min-w-0" aria-labelledby="trace-overview">
+        <div className="flex min-w-0 items-center gap-2">
+          <h3 id="trace-overview" className="min-w-0 break-words font-medium">
             {task.title}
           </h3>
           <Badge className="ml-auto" variant="outline">
@@ -161,15 +165,17 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
           </Badge>
         </div>
         <p className="mt-2 text-sm">{task.request}</p>
-        <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs text-muted-foreground">
+        <dl className="mt-3 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs text-muted-foreground">
           <dt>에이전트</dt>
-          <dd>{task.agentName}</dd>
+          <dd className="min-w-0 break-words">{task.agentName}</dd>
           <dt>Task</dt>
-          <dd className="truncate font-mono" title={task.id}>
+          <dd className="min-w-0 truncate font-mono" title={task.id}>
             {task.id}
           </dd>
           <dt>Origin</dt>
-          <dd>{task.originSessionId ?? "삭제된 대화 · project 기록 유지"}</dd>
+          <dd className="min-w-0 break-all">
+            {task.originSessionId ?? "삭제된 대화 · project 기록 유지"}
+          </dd>
         </dl>
       </section>
       <Separator />
@@ -439,9 +445,9 @@ function PanelBody({
     };
   }, [projectId, selectedTaskId, tasks]);
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div
-        className="flex items-center gap-1 border-b p-2"
+        className="flex min-w-0 items-center gap-1 border-b p-2"
         role="toolbar"
         aria-label="Work Trace 보기 모드"
       >
@@ -460,7 +466,7 @@ function PanelBody({
           Review
         </Button>
         <span
-          className="ml-auto flex items-center gap-1 text-xs text-muted-foreground"
+          className="ml-auto flex min-w-0 items-center justify-end gap-1 text-right text-xs text-muted-foreground"
           role="status"
         >
           {mode === "review" ? "저장된 전체 기록" : connectionLabel(connection)}
@@ -472,10 +478,10 @@ function PanelBody({
           Work Trace를 불러오지 못했어요.
         </p>
       )}
-      <div className="grid min-h-0 flex-1 grid-rows-[minmax(8rem,35%)_1fr]">
-        <div className="min-h-0 border-b">
-          <ScrollArea className="h-full">
-            <div className="p-2">
+      <div className="grid min-h-0 min-w-0 flex-1 grid-rows-[minmax(8rem,35%)_1fr]">
+        <div className="min-h-0 min-w-0 border-b">
+          <ScrollArea className="h-full min-w-0">
+            <div className="min-w-0 p-2">
               {shownTasks.length === 0 ? (
                 <p className="p-3 text-sm text-muted-foreground">아직 기록된 작업이 없어요.</p>
               ) : (
@@ -488,7 +494,7 @@ function PanelBody({
             </div>
           </ScrollArea>
         </div>
-        <ScrollArea className="min-h-0 h-full">
+        <ScrollArea className="h-full min-h-0 min-w-0">
           <TaskDetail detail={detail} />
         </ScrollArea>
       </div>
@@ -532,7 +538,7 @@ export function WorkTracePanel({
         </Button>
       )}
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent className="min-w-0 overflow-hidden">
+        <SheetContent className="min-w-0">
           <SheetHeader>
             <SheetTitle>
               <span className="flex items-center gap-2">
