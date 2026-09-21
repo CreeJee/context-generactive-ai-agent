@@ -1,3 +1,4 @@
+import { ANTHROPIC_MODELS } from "@tanstack/ai-anthropic";
 import { Effect, Option, Schema } from "effect";
 import type { Settings } from "../config/global-config.ts";
 import {
@@ -181,6 +182,19 @@ export function parseSubscriptionCatalog(
   });
 }
 
+const anthropicInstalledCatalog = [
+  {
+    data: ANTHROPIC_MODELS.map((id) => ({
+      id,
+      display_name: id
+        .split("-")
+        .map((segment) => `${segment.slice(0, 1).toUpperCase()}${segment.slice(1)}`)
+        .join(" ")
+        .replace(/(\d) (\d)/g, "$1.$2"),
+    })),
+  },
+] as const;
+
 const operationFailure = (provider: ProviderId, operation: "auth" | "catalog" | "model") =>
   new ProviderOperationFailed({ provider, operation });
 
@@ -260,7 +274,9 @@ export function createSubscriptionProvider(
 
   const load = async () => {
     if (catalogCache && Date.now() - catalogCache.loadedAt < 30_000) return catalogCache.models;
-    const models = parseSubscriptionCatalog(provider, await client.modelCatalog());
+    const pages =
+      provider === "anthropic" ? anthropicInstalledCatalog : await client.modelCatalog();
+    const models = parseSubscriptionCatalog(provider, pages);
     if (models.length === 0) throw new Error("empty_model_catalog");
     catalogCache = { loadedAt: Date.now(), models };
     return models;

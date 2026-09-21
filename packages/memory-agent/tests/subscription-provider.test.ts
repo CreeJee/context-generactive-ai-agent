@@ -26,6 +26,7 @@ const settingsStore = () => {
 const fakeClient = (provider: "openai" | "anthropic", pages: ReadonlyArray<unknown>) => {
   let connected = false;
   let cancelled = false;
+  let catalogRequests = 0;
   let finish!: (status: OAuthConnectionStatus) => void;
   const completed = new Promise<OAuthConnectionStatus>((resolve) => {
     finish = resolve;
@@ -46,7 +47,10 @@ const fakeClient = (provider: "openai" | "anthropic", pages: ReadonlyArray<unkno
         connected = false;
         return { provider, connected, expiresAt: null };
       },
-      modelCatalog: async () => pages,
+      modelCatalog: async () => {
+        catalogRequests += 1;
+        return pages;
+      },
     },
     complete: () => {
       connected = true;
@@ -54,6 +58,9 @@ const fakeClient = (provider: "openai" | "anthropic", pages: ReadonlyArray<unkno
     },
     get cancelled() {
       return cancelled;
+    },
+    get catalogRequests() {
+      return catalogRequests;
     },
   };
 };
@@ -118,6 +125,21 @@ describe("subscription provider product services", () => {
     expect(models[0]?.supportedReasoningEfforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(models[1]?.supportedReasoningEfforts).toEqual(["none"]);
     expect(models[2]?.supportedReasoningEfforts).toEqual(["low", "medium", "high", "max"]);
+  });
+
+  test("uses installed Anthropic metadata without requesting the API-key-only model endpoint", async () => {
+    const fake = fakeClient("anthropic", []);
+    const provider = createSubscriptionProvider({
+      protocol: providerProtocols.anthropic,
+      config: settingsStore(),
+      client: fake.client,
+    });
+
+    const models = await Effect.runPromise(provider.models.list);
+
+    expect(models.map((model) => model.id)).toContain("claude-sonnet-4-6");
+    expect(models.map((model) => model.id)).toContain("claude-opus-5");
+    expect(fake.catalogRequests).toBe(0);
   });
 
   test("returns pending immediately and keeps credentials out of the auth contract", async () => {

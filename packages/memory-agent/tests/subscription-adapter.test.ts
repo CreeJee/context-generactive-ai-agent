@@ -364,6 +364,86 @@ describe("subscription model adapters", () => {
     });
   });
 
+  test("normalizes OpenAI history into valid alternating Anthropic turns", () => {
+    const request = JSON.parse(
+      subscriptionRequest(
+        "anthropic",
+        { provider: "anthropic", model: "claude-opus-5", reasoningEffort: "medium" },
+        {
+          messages: [
+            { role: "user", content: "first" },
+            { role: "user", content: "second" },
+            {
+              role: "assistant",
+              content: null,
+              thinking: [
+                {
+                  content: "provider-private",
+                  signature: `openai-reasoning:${Buffer.from(
+                    JSON.stringify({ id: "reasoning-1", encryptedContent: "secret" }),
+                  ).toString("base64url")}`,
+                },
+              ],
+            },
+            {
+              role: "assistant",
+              content: null,
+              toolCalls: [
+                {
+                  type: "function",
+                  id: "call-1",
+                  function: { name: "lookup", arguments: '{"key":"one"}' },
+                },
+                {
+                  type: "function",
+                  id: "call-2",
+                  function: { name: "lookup", arguments: '{"key":"two"}' },
+                },
+              ],
+            },
+            { role: "tool", toolCallId: "call-1", content: "one" },
+            { role: "tool", toolCallId: "call-2", content: "two" },
+          ],
+          systemPrompts: [],
+          tools: [],
+        },
+      ),
+    );
+
+    expect(request.messages).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "first" },
+          { type: "text", text: "second" },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "call-1", name: "lookup", input: { key: "one" } },
+          { type: "tool_use", id: "call-2", name: "lookup", input: { key: "two" } },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "call-1",
+            content: "one",
+            is_error: false,
+          },
+          {
+            type: "tool_result",
+            tool_use_id: "call-2",
+            content: "two",
+            is_error: false,
+          },
+        ],
+      },
+    ]);
+  });
   test("accepts Anthropic content block end after streamed text", async () => {
     const client = {
       async *stream() {

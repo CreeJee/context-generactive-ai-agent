@@ -149,6 +149,13 @@ export class OAuthHarnessError extends Error {
   }
 }
 
+const invalidatesStoredCredential = (error: OAuthHarnessError) =>
+  error.operation === "token_refresh" &&
+  (error.code === "invalid_token_response" ||
+    (error.code === "provider_rejected" &&
+      error.status !== null &&
+      [400, 401, 403].includes(error.status)));
+
 export interface OAuthConnectionStatus {
   readonly provider: OAuthProvider;
   readonly connected: boolean;
@@ -308,7 +315,16 @@ export class SubscriptionOAuthClient {
   }
 
   async status(): Promise<OAuthConnectionStatus> {
-    const credential = await this.#store.read(this.#protocol.provider);
+    let credential = await this.#store.read(this.#protocol.provider);
+    if (credential !== null && credential.expiresAt <= this.#now() + 30_000) {
+      try {
+        credential = await this.#refresh(credential);
+      } catch (error) {
+        if (error instanceof OAuthHarnessError && invalidatesStoredCredential(error))
+          credential = null;
+        else throw error;
+      }
+    }
     return {
       provider: this.#protocol.provider,
       connected: credential !== null,
@@ -513,9 +529,15 @@ export class SubscriptionOAuthClient {
               scope: this.#protocol.scopes.replace("org:create_api_key ", ""),
             }
           : commonGrant;
-      const next = await this.#exchange(grant, credential);
-      await this.#store.write(this.#protocol.provider, next);
-      return next;
+      try {
+        const next = await this.#exchange(grant, credential);
+        await this.#store.write(this.#protocol.provider, next);
+        return next;
+      } catch (error) {
+        if (error instanceof OAuthHarnessError && invalidatesStoredCredential(error))
+          await this.#store.remove(this.#protocol.provider);
+        throw error;
+      }
     })();
     try {
       return await this.#refreshing;

@@ -46,6 +46,7 @@ async function fakeProvider(provider: OAuthProvider) {
   let modelRequests = 0;
   let catalogRequests = 0;
   let forceUnauthorized = false;
+  let rejectRefresh = false;
   const authorizations: string[] = [];
   const tokenBodies: string[] = [];
   const modelBodies: string[] = [];
@@ -71,6 +72,10 @@ async function fakeProvider(provider: OAuthProvider) {
           ? raw.includes('"grant_type":"refresh_token"')
           : new URLSearchParams(raw).get("grant_type") === "refresh_token";
       if (isRefresh) refreshRequests += 1;
+      if (isRefresh && rejectRefresh) {
+        response.writeHead(401).end();
+        return;
+      }
       const suffix = isRefresh ? "2" : "1";
       const claims = Buffer.from(
         JSON.stringify({
@@ -171,6 +176,9 @@ async function fakeProvider(provider: OAuthProvider) {
     counts: () => ({ tokenRequests, refreshRequests, modelRequests, catalogRequests }),
     requireRefresh: () => {
       forceUnauthorized = true;
+    },
+    rejectRefresh: () => {
+      rejectRefresh = true;
     },
   };
 }
@@ -335,6 +343,37 @@ for (const provider of ["openai", "anthropic"] as const) {
       expect(fake.counts().refreshRequests).toBe(1);
       expect(store.values.get(provider)?.refreshToken).toBe("refresh-secret-2");
       expect(fake.modelHeaders.at(-1)?.authorization).toBe("Bearer access-secret-2");
+    });
+
+    test("refreshes an expiring credential while checking connection status", async () => {
+      const fake = await fakeProvider(provider);
+      const store = new MemoryCredentialStore();
+      const harness = new OAuthValidationHarness({ protocol: fake.protocol, store });
+      await login(harness);
+      const credential = store.values.get(provider)!;
+      store.values.set(provider, { ...credential, expiresAt: Date.now() + 20_000 });
+
+      await expect(harness.status()).resolves.toMatchObject({ provider, connected: true });
+      expect(fake.counts().refreshRequests).toBe(1);
+      expect(store.values.get(provider)?.accessToken).toBe("access-secret-2");
+    });
+
+    test("signs out after the provider permanently rejects an expired credential", async () => {
+      const fake = await fakeProvider(provider);
+      const store = new MemoryCredentialStore();
+      const harness = new OAuthValidationHarness({ protocol: fake.protocol, store });
+      await login(harness);
+      const credential = store.values.get(provider)!;
+      store.values.set(provider, { ...credential, expiresAt: Date.now() - 1 });
+      fake.rejectRefresh();
+
+      await expect(harness.status()).resolves.toEqual({
+        provider,
+        connected: false,
+        expiresAt: null,
+      });
+      expect(fake.counts().refreshRequests).toBe(1);
+      expect(store.values.has(provider)).toBe(false);
     });
   });
 }

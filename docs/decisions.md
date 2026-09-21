@@ -627,3 +627,20 @@
 - 기본 지침에 앱 설정 파일 위치를 적는다. 외부 ACP 에이전트(`<저장소>/agents.json`, `<프로젝트>/.agents/agents.json`), MCP 서버(`<저장소>/mcp.json`, `<프로젝트>/.mcp.json`), skill 폴더(`~/.agents/skills`, `<프로젝트>/.agents/skills`), 앱 설정(`<저장소>/config.json`)이다.
   - 이유: 모델이 "codex 에이전트를 다시 등록해 줘" 같은 요청에서 설정 파일을 찾지 못했다.
 - 저장소 폴더는 계정 로그인과 기억 DB가 있어서 file 도구의 거부 대상 그대로 둔다. 그 안의 파일은 사용자에게 바꿀 내용을 보여 주거나, 승인을 거치는 run_shell로 다루라고 적는다. 추가하거나 바꾼 에이전트와 MCP 서버는 사용자가 설정에서 신뢰하기 전에는 쓰이지 않는다.
+
+## Anthropic 구독 모델 카탈로그 (2026-09-21)
+
+- Anthropic 구독 OAuth 토큰으로 `/v1/models`를 호출하면 모델 추론 권한이 있어도 403이 반환된다. 모델 선택 UI는 이 API를 entitlement 근거로 사용하지 않는다.
+- Claude 모델 목록은 앱이 이미 설치한 `@tanstack/ai-anthropic`의 `ANTHROPIC_MODELS` 메타데이터에서 만든다. 실제 계정 entitlement는 실행 요청의 provider 응답으로 검증하며, OpenAI 구독 모델은 기존 원격 카탈로그를 유지한다.
+- 이 결정은 개발 서버 시작과 모델 선택 시 불필요한 403, 토큰 갱신, 재시도 왕복을 제거한다.
+
+## Provider 간 대화 전환 (2026-09-21)
+
+- 같은 세션에서 OpenAI와 Anthropic 모델을 바꿀 수 있다. 저장된 대화는 provider 중립 `ModelMessage`를 원본으로 유지하고, 요청 직전에 대상 provider wire format으로 다시 만든다.
+- Anthropic 요청은 빈 메시지를 제거하고 같은 역할의 연속 메시지를 한 턴으로 합친다. 특히 OpenAI의 병렬 tool call 뒤에 저장된 여러 tool result는 Anthropic이 요구하는 하나의 바로 다음 user 턴에 모은다.
+- 다른 provider의 암호화 reasoning은 대상 provider에 전달하지 않는다. 화면에 보이는 대화와 tool 결과는 유지한다.
+
+## OAuth 로그인 만료 (2026-09-21)
+
+- 로그인 상태를 조회할 때 access token이 30초 안에 만료되면 refresh token으로 먼저 갱신한다. 일시적인 네트워크 오류나 서버 오류는 로그인 정보를 보존하지만, refresh가 400, 401, 403으로 거절되거나 유효한 토큰 응답을 돌려주지 않으면 저장된 로그인을 지우고 `signed-out`으로 바꾼다.
+- 화면은 OpenAI와 Anthropic 로그인 상태를 60초마다 다시 확인한다. 앱을 계속 열어 둔 동안 자격 증명이 만료되어도 설정이나 새 요청을 기다리지 않고 상태와 모델 목록을 갱신한다.

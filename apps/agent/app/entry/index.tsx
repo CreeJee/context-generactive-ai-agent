@@ -35,6 +35,7 @@ import { AccountSection, ModelSection, ProjectSection, SessionSection } from "./
 import { WorkTracePanel } from "./work-trace-panel";
 
 const providers: readonly ProviderId[] = ["openai", "anthropic"];
+const authRefetchIntervalMs = 60_000;
 const locationParsers = {
   project: parseAsString,
   session: parseAsString,
@@ -65,10 +66,12 @@ export function App() {
   const openAIAuth = useQuery({
     queryKey: [...appQueryKeys.global.auth, "openai"],
     queryFn: () => api.auth("openai"),
+    refetchInterval: authRefetchIntervalMs,
   });
   const anthropicAuth = useQuery({
     queryKey: [...appQueryKeys.global.auth, "anthropic"],
     queryFn: () => api.auth("anthropic"),
+    refetchInterval: authRefetchIntervalMs,
   });
   const auth = { openai: openAIAuth.data ?? null, anthropic: anthropicAuth.data ?? null };
   const [provider, setProvider] = useState<ProviderId>("openai");

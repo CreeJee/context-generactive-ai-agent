@@ -147,44 +147,68 @@ const openAiInput = (messages: ReadonlyArray<ModelMessage>) => {
   return input;
 };
 
+interface AnthropicMessage {
+  readonly role: "user" | "assistant";
+  readonly content: unknown[];
+}
+
+const appendAnthropicMessage = (
+  output: AnthropicMessage[],
+  role: AnthropicMessage["role"],
+  blocks: readonly unknown[],
+) => {
+  if (blocks.length === 0) return;
+  const previous = output.at(-1);
+  if (previous?.role === role) {
+    output[output.length - 1] = { role, content: [...previous.content, ...blocks] };
+    return;
+  }
+  output.push({ role, content: [...blocks] });
+};
+
 const anthropicMessages = (messages: ReadonlyArray<ModelMessage>) => {
-  const output: unknown[] = [];
+  const output: AnthropicMessage[] = [];
   for (const message of messages) {
-    if (message.role === "tool") {
-      output.push({
-        role: "user",
-        content: [
+    switch (message.role) {
+      case "tool":
+        appendAnthropicMessage(output, "user", [
           {
             type: "tool_result",
             tool_use_id: message.toolCallId,
             content: textOf(message.content),
             is_error: message.error !== undefined,
           },
-        ],
-      });
-      continue;
+        ]);
+        break;
+      case "user":
+      case "assistant": {
+        const converted = anthropicContent(message.content);
+        const blocks: unknown[] = [];
+        for (const thinking of message.thinking ?? []) {
+          if (
+            thinking.signature === undefined ||
+            decodeOpenAiReasoning(thinking.signature) !== null
+          )
+            continue;
+          blocks.push({
+            type: "thinking",
+            thinking: thinking.content,
+            signature: thinking.signature,
+          });
+        }
+        if (Array.isArray(converted)) blocks.push(...converted);
+        else if (converted !== "") blocks.push({ type: "text", text: converted });
+        for (const call of message.toolCalls ?? [])
+          blocks.push({
+            type: "tool_use",
+            id: call.id,
+            name: call.function.name,
+            input: toolInput(call.function.arguments),
+          });
+        appendAnthropicMessage(output, message.role, blocks);
+        break;
+      }
     }
-    const converted = anthropicContent(message.content);
-    const blocks: unknown[] = [];
-    for (const thinking of message.thinking ?? []) {
-      if (thinking.signature === undefined || decodeOpenAiReasoning(thinking.signature) !== null)
-        continue;
-      blocks.push({
-        type: "thinking",
-        thinking: thinking.content,
-        signature: thinking.signature,
-      });
-    }
-    if (Array.isArray(converted)) blocks.push(...converted);
-    else if (converted !== "") blocks.push({ type: "text", text: converted });
-    for (const call of message.toolCalls ?? [])
-      blocks.push({
-        type: "tool_use",
-        id: call.id,
-        name: call.function.name,
-        input: toolInput(call.function.arguments),
-      });
-    output.push({ role: message.role, content: blocks });
   }
   return output;
 };
