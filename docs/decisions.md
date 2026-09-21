@@ -644,3 +644,9 @@
 
 - 로그인 상태를 조회할 때 access token이 30초 안에 만료되면 refresh token으로 먼저 갱신한다. 일시적인 네트워크 오류나 서버 오류는 로그인 정보를 보존하지만, refresh가 400, 401, 403으로 거절되거나 유효한 토큰 응답을 돌려주지 않으면 저장된 로그인을 지우고 `signed-out`으로 바꾼다.
 - 화면은 OpenAI와 Anthropic 로그인 상태를 60초마다 다시 확인한다. 앱을 계속 열어 둔 동안 자격 증명이 만료되어도 설정이나 새 요청을 기다리지 않고 상태와 모델 목록을 갱신한다.
+
+## 개발 backend 변경 감지 (2026-09-21)
+
+- HMR frontend와 안정 backend의 build id가 다르면 모든 browser fetch가 `backend_restart_required`와 `backend_restarting` 응답을 감지한다. 일반 JSON API뿐 아니라 채팅 SSE도 같은 전역 상태를 올린다.
+- Fast Refresh 대상인 `app/entry/*.tsx`는 런타임에 React 컴포넌트만 export한다. 훅, context, 변환 함수, 초기 실행 스크립트는 `.ts` 모듈로 분리하고 `react/only-export-components`를 오류로 검사한다. 타입 전용 export와 React Router가 요구하는 route export는 예외다.
+- 재시작 필요 상태에서는 대화 초안을 보존한 채 입력, 첨부, workflow 변경과 전송을 비활성화한다. 화면 위 경고는 유지하며, backend는 차단한 method, path, backend build id와 browser build id를 터미널에 기록한다.

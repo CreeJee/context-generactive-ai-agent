@@ -38,7 +38,7 @@ export default defineConfig(({ command }) => {
       rules: {
         "react/rules-of-hooks": "error",
         "react/only-export-components": [
-          "warn",
+          "error",
           {
             allowConstantExport: true,
           },

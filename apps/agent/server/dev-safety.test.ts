@@ -52,7 +52,13 @@ describe("stable development backend safety", () => {
     });
     expect(
       developmentRequestDecision(boundary, "GET", "/api/auth/anthropic/callback", "build-b"),
-    ).toMatchObject({ kind: "reject", status: 409 });
+    ).toMatchObject({
+      kind: "reject",
+      status: 409,
+      error: "backend_restart_required",
+      backendBuildId: "build-a",
+      presentedBuildId: "build-b",
+    });
     expect(developmentRequestDecision(boundary, "POST", "/api/chat", "build-b")).toMatchObject({
       kind: "reject",
       status: 409,
@@ -64,6 +70,9 @@ describe("stable development backend safety", () => {
     expect(developmentRequestDecision(boundary, "POST", "/api/chat", "build-a")).toMatchObject({
       kind: "reject",
       status: 503,
+      error: "backend_restarting",
+      backendBuildId: "build-a",
+      presentedBuildId: "build-a",
     });
   });
 

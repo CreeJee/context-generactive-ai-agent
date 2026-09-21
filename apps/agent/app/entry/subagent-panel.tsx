@@ -1,4 +1,3 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BotIcon } from "lucide-react";
 import { Badge } from "~/components/ui/badge";
 import {
@@ -10,48 +9,10 @@ import {
   ItemTitle,
 } from "~/components/ui/item";
 import { Spinner } from "~/components/ui/spinner";
-import { api, type ApprovalRequester, type RelayedApprovalView, type SubagentView } from "./api";
-import { ApprovalCard, type PendingApproval } from "./approval";
-import { useSessionEventScope } from "./events/providers";
-import { appQueryKeys } from "./events/query-keys";
-
-interface DelegatedState {
-  readonly subagents: readonly SubagentView[];
-  readonly approvals: readonly RelayedApprovalView[];
-}
-
-/** Subagent and relayed-approval snapshots, refreshed by their session SSE topics. */
-export function useDelegatedWork(sessionId: string, _generating: boolean) {
-  const { projectId } = useSessionEventScope();
-  if (!projectId) throw new Error("Delegated work requires an active project");
-  const queryClient = useQueryClient();
-  const subagentsKey = appQueryKeys.session.subagents(projectId, sessionId);
-  const approvalsKey = appQueryKeys.session.approvals(projectId, sessionId);
-  const subagents = useQuery({ queryKey: subagentsKey, queryFn: () => api.subagents(sessionId) });
-  const approvals = useQuery({
-    queryKey: approvalsKey,
-    queryFn: () => api.relayedApprovals(sessionId),
-  });
-  const state: DelegatedState = {
-    subagents: subagents.data ?? [],
-    approvals: approvals.data ?? [],
-  };
-  const setState = (update: (current: DelegatedState) => DelegatedState) => {
-    const next = update(state);
-    queryClient.setQueryData(subagentsKey, next.subagents);
-    queryClient.setQueryData(approvalsKey, next.approvals);
-  };
-  return { state, setState };
-}
-
-export function requesterLabel(requester: ApprovalRequester) {
-  switch (requester.kind) {
-    case "subagent":
-      return requester.name ? `서브에이전트 ${requester.name}` : "일회 서브에이전트";
-    case "external_agent":
-      return `외부 에이전트 ${requester.agent}`;
-  }
-}
+import { api, type RelayedApprovalView } from "./api";
+import { ApprovalCard } from "./approval";
+import { requesterLabel, useDelegatedWork } from "./delegated-work";
+import type { PendingApproval } from "./pending-approval";
 
 function toPending(
   approval: RelayedApprovalView,

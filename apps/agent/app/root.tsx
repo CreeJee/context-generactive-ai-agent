@@ -8,10 +8,10 @@ import {
 } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { NuqsAdapter } from "nuqs/adapters/react-router/v8";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
-import { backendRestartRequiredEvent } from "./entry/api";
-import { themeScript } from "./entry/theme";
+import { useBackendRestartRequired } from "./entry/use-backend-restart";
+import { themeScript } from "./entry/theme-script";
 import { TooltipProvider } from "~/components/ui/tooltip";
 import type { Route } from "./+types/root";
 import "./app.css";
@@ -50,12 +50,7 @@ export default function App() {
         },
       }),
   );
-  const [backendRestartRequired, setBackendRestartRequired] = useState(false);
-  useEffect(() => {
-    const show = () => setBackendRestartRequired(true);
-    window.addEventListener(backendRestartRequiredEvent, show);
-    return () => window.removeEventListener(backendRestartRequiredEvent, show);
-  }, []);
+  const backendRestartRequired = useBackendRestartRequired();
 
   return (
     <QueryClientProvider client={queryClient}>

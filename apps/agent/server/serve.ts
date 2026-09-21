@@ -118,6 +118,11 @@ export function serve(options: ServeOptions) {
         Array.isArray(presented) ? presented[0] : presented,
       );
       if (decision.kind !== "allow") {
+        if (decision.kind === "reject")
+          console.warn(
+            `[dev-backend] blocked ${request.method ?? "UNKNOWN"} ${pathname}: ${decision.error} ` +
+              `(backend=${decision.backendBuildId}, browser=${decision.presentedBuildId ?? "missing"})`,
+          );
         response
           .writeHead(decision.status, {
             "content-type": "application/json; charset=utf-8",

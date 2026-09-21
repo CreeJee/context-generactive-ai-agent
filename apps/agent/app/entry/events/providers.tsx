@@ -1,23 +1,10 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { PropsWithChildren } from "react";
+import { EventConnectionContext, SessionEventScopeContext } from "./context";
 import { connectAppEvents, type EventConnectionState } from "./event-source";
 import { createInvalidationBatch } from "./invalidation";
 import { appQueryKeys } from "./query-keys";
-
-const EventConnectionContext = createContext<EventConnectionState>("connecting");
-const SessionEventScopeContext = createContext<{
-  readonly projectId: string | null;
-  readonly sessionId: string | null;
-}>({ projectId: null, sessionId: null });
-
-export function useEventConnection() {
-  return useContext(EventConnectionContext);
-}
-
-export function useSessionEventScope() {
-  return useContext(SessionEventScopeContext);
-}
 
 function useScopedEvents(
   url: string | null,

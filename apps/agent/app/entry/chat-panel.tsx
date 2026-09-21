@@ -43,12 +43,7 @@ import { Command } from "~/components/ui/command";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { Spinner } from "~/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
-import {
-  ApprovalCard,
-  toPendingApproval,
-  type ApprovalInterrupts,
-  type ApprovalTools,
-} from "./approval";
+import { ApprovalCard } from "./approval";
 import { acceptedImageTypes, renumberReferences, useDraftImages } from "./draft-images";
 import { DraftImageTray } from "./images";
 import { interruptContinuationState } from "./interrupt-recovery";
@@ -66,6 +61,7 @@ import {
   type WorkflowPhase,
   type WorkflowState,
 } from "./api";
+import { appFetch } from "./backend-restart";
 import { ContextMeter } from "./context-meter";
 import { ComposerShortcuts, ComposerStatus, type ComposerMode } from "./composer-status";
 import { DeliveredMessageView, MessageView } from "./message";
@@ -73,11 +69,14 @@ import { isPending, isTakenIn, useMessageQueue } from "./message-queue";
 import { QueuePanel } from "./queue-panel";
 import { SubagentPanel } from "./subagent-panel";
 import { ReadOnlyBar } from "./read-only-bar";
-import { RunNoticeView, useRunState } from "./run-state";
+import { toPendingApproval, type ApprovalInterrupts, type ApprovalTools } from "./pending-approval";
+import { RunNoticeView } from "./run-state";
 import { sessionDraftsAtom } from "./session-drafts";
 import { useSessionLease, type PageLease } from "./session-lease";
 import { SlashPalette } from "./slash-palette";
 import { useWorkTrace } from "./work-trace";
+import { useBackendRestartRequired } from "./use-backend-restart";
+import { useRunState } from "./use-run-state";
 import {
   parseSlash,
   promptOf,
@@ -482,6 +481,8 @@ function ChatPanel({
   slash: SlashSupport;
 }) {
   const readOnly = lease.state !== "mine";
+  const backendRestartRequired = useBackendRestartRequired();
+  const mutationBlocked = readOnly || backendRestartRequired;
   const workTrace = useWorkTrace(sessionId);
   const [composer, setComposer] = useState<Composer>({ kind: "compose" });
   const [sessionDrafts, setSessionDrafts] = useAtom(sessionDraftsAtom);
@@ -546,6 +547,7 @@ function ChatPanel({
     connection: fetchServerSentEvents(`/api/chat?session=${encodeURIComponent(sessionId)}`, {
       // The server refuses sends and approval answers from a page that does not hold the session.
       headers: { [sessionHolderHeader]: holder },
+      fetchClient: appFetch,
     }),
     threadId: sessionId,
     persistence: true,
@@ -810,7 +812,7 @@ function ChatPanel({
     !failed &&
     !submitting &&
     !waitingForApproval &&
-    !readOnly;
+    !mutationBlocked;
 
   /** Sends the first waiting message as a new turn, if it is next in line. */
   const sendNextQueued = (items: readonly QueuedMessage[]) => {
@@ -1407,7 +1409,7 @@ function ChatPanel({
                   <QueuePanel
                     items={queue.items}
                     editingId={editing?.id ?? null}
-                    readOnly={readOnly}
+                    readOnly={mutationBlocked}
                     onEdit={startEdit}
                     onRemove={(message) => void removeQueued(message)}
                     onConfirm={(message) => void confirmQueued(message)}
@@ -1424,7 +1426,7 @@ function ChatPanel({
                   <PromptInputTextarea
                     ref={textarea}
                     value={draft}
-                    disabled={readOnly}
+                    disabled={mutationBlocked}
                     onChange={(event) => {
                       setDraft(event.target.value);
                     }}
@@ -1511,7 +1513,7 @@ function ChatPanel({
                         render={
                           <PromptInputButton
                             variant="ghost"
-                            disabled={!imagesSupported || readOnly || editing !== null}
+                            disabled={!imagesSupported || mutationBlocked || editing !== null}
                             aria-label="이미지 첨부"
                             onClick={() => filePicker.current?.click()}
                           />
@@ -1532,7 +1534,7 @@ function ChatPanel({
                               variant={imageIntent ? "secondary" : "ghost"}
                               disabled={
                                 !imageSettings.imageGenerationEnabled ||
-                                readOnly ||
+                                mutationBlocked ||
                                 generating ||
                                 generatingImage ||
                                 editing !== null
@@ -1568,7 +1570,9 @@ function ChatPanel({
                           variant={
                             (run.workflow?.phase ?? "chat") === phase ? "secondary" : "ghost"
                           }
-                          disabled={readOnly || generating || generatingImage || editing !== null}
+                          disabled={
+                            mutationBlocked || generating || generatingImage || editing !== null
+                          }
                           aria-pressed={(run.workflow?.phase ?? "chat") === phase}
                           title={
                             phase === "goal"
@@ -1591,7 +1595,7 @@ function ChatPanel({
                             render={
                               <PromptInputButton
                                 variant="outline"
-                                disabled={run.cancelling || readOnly}
+                                disabled={run.cancelling || mutationBlocked}
                                 aria-label={run.cancelling ? "멈추는 중" : "중지"}
                                 onClick={() => void cancel()}
                               />
@@ -1607,7 +1611,7 @@ function ChatPanel({
                       <PromptInputButton
                         type="submit"
                         variant="default"
-                        disabled={editing ? readOnly : !canSend}
+                        disabled={editing ? mutationBlocked : !canSend}
                         aria-label={editing ? "저장" : generating ? "대기열에 넣기" : "전송"}
                       >
                         {editing ? <CheckIcon /> : <ArrowUpIcon />}

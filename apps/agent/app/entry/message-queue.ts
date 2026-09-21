@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, type QueuedMessage, type QueueEdit } from "./api";
-import { useSessionEventScope } from "./events/providers";
+import { useSessionEventScope } from "./events/context";
 import { appQueryKeys } from "./events/query-keys";
 
 /** What became of a message written while a run was answering. */

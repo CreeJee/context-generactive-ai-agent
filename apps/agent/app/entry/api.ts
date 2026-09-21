@@ -33,6 +33,7 @@ import type {
 import type { ModelMessage } from "@tanstack/ai";
 import type { UIMessage } from "@tanstack/ai-react";
 import { Option, Schema } from "effect";
+import { appFetch } from "./backend-restart";
 import {
   sessionHolderHeader,
   type CancelResult,
@@ -184,8 +185,6 @@ export const ApiErrorCode = Schema.Literal(
 );
 export type ApiErrorCode = typeof ApiErrorCode.Type;
 
-export const backendRestartRequiredEvent = "context-agent:backend-restart-required";
-
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -267,7 +266,7 @@ async function call<T>(
   body?: JsonBody,
   headers: Readonly<Record<string, string>> = {},
 ): Promise<T> {
-  const response = await fetch(
+  const response = await appFetch(
     path,
     method === "POST"
       ? {
@@ -280,8 +279,6 @@ async function call<T>(
   const json: T & ErrorBody = await response.json();
   if (!response.ok) {
     const failure = apiError(response.status, Option.getOrUndefined(decodeErrorBody(json)));
-    if (failure.code === "backend_restart_required" || failure.code === "backend_restarting")
-      window.dispatchEvent(new CustomEvent(backendRestartRequiredEvent));
     throw failure;
   }
   return json;

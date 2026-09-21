@@ -104,7 +104,14 @@ export function createDevelopmentBoundary(
 export type DevelopmentRequestDecision =
   | { readonly kind: "allow" }
   | { readonly kind: "health"; readonly status: 200; readonly body: string }
-  | { readonly kind: "reject"; readonly status: 409 | 503; readonly body: string };
+  | {
+      readonly kind: "reject";
+      readonly status: 409 | 503;
+      readonly error: "backend_restart_required" | "backend_restarting";
+      readonly backendBuildId: string;
+      readonly presentedBuildId: string | null;
+      readonly body: string;
+    };
 
 export function developmentRequestDecision(
   boundary: DevelopmentBoundary,
@@ -128,17 +135,25 @@ export function developmentRequestDecision(
   const mutates = oauthCallback || (method !== "GET" && method !== "HEAD" && method !== "OPTIONS");
   if (!pathname.startsWith("/api/") || !mutates) return { kind: "allow" };
   if (boundary.draining()) {
+    const error = "backend_restarting" as const;
     return {
       kind: "reject",
       status: 503,
-      body: JSON.stringify({ error: "backend_restarting" }),
+      error,
+      backendBuildId: boundary.buildId,
+      presentedBuildId: presentedBuildId ?? null,
+      body: JSON.stringify({ error }),
     };
   }
   if (presentedBuildId !== boundary.buildId) {
+    const error = "backend_restart_required" as const;
     return {
       kind: "reject",
       status: 409,
-      body: JSON.stringify({ error: "backend_restart_required" }),
+      error,
+      backendBuildId: boundary.buildId,
+      presentedBuildId: presentedBuildId ?? null,
+      body: JSON.stringify({ error }),
     };
   }
   return { kind: "allow" };

@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api, type LeaseView, type SessionRunState } from "./api";
-import { useSessionEventScope } from "./events/providers";
+import { useSessionEventScope } from "./events/context";
 import { appQueryKeys } from "./events/query-keys";
 
 const holderKey = "context-agent:page-holder";
