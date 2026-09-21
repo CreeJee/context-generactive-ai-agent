@@ -13,9 +13,10 @@ import {
   type StructuredOutputOptions,
   type StructuredOutputResult,
 } from "@tanstack/ai/adapters";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Option, Schema } from "effect";
 import {
+  ProviderFeatureRejectedError,
   ToolArguments,
   type NormalizedStreamEvent,
   type OAuthProvider,
@@ -155,7 +156,7 @@ interface AnthropicMessage {
 const appendAnthropicMessage = (
   output: AnthropicMessage[],
   role: AnthropicMessage["role"],
-  blocks: readonly unknown[],
+  blocks: unknown[],
 ) => {
   if (blocks.length === 0) return;
   const previous = output.at(-1);
@@ -163,7 +164,7 @@ const appendAnthropicMessage = (
     output[output.length - 1] = { role, content: [...previous.content, ...blocks] };
     return;
   }
-  output.push({ role, content: [...blocks] });
+  output.push({ role, content: blocks });
 };
 
 const anthropicMessages = (messages: ReadonlyArray<ModelMessage>) => {
@@ -213,34 +214,65 @@ const anthropicMessages = (messages: ReadonlyArray<ModelMessage>) => {
   return output;
 };
 
+const sha256 = (serialized: string) => createHash("sha256").update(serialized).digest("hex");
+const systemText = (options: Pick<TextOptions<Record<string, never>>, "systemPrompts">) =>
+  normalizeSystemPrompts(options.systemPrompts ?? [])
+    .map((prompt) => prompt.content)
+    .join("\n\n");
+const canonicalTools = (options: Pick<TextOptions<Record<string, never>>, "tools">) =>
+  (options.tools ?? [])
+    .map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      input_schema: convertSchemaToJsonSchema(tool.inputSchema) ?? {
+        type: "object",
+        properties: {},
+      },
+    }))
+    .toSorted((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+
+export function requestFingerprints(
+  options: Pick<TextOptions<Record<string, never>>, "messages" | "systemPrompts" | "tools">,
+) {
+  return {
+    messageFingerprint: sha256(
+      JSON.stringify({ system: systemText(options), messages: options.messages }),
+    ),
+    toolFingerprint: sha256(JSON.stringify(canonicalTools(options))),
+  };
+}
+
 export function subscriptionRequest(
   provider: OAuthProvider,
   selection: ModelSelection,
   options: Pick<TextOptions<Record<string, never>>, "messages" | "systemPrompts" | "tools">,
+  requestOptions: { readonly promptCache?: "provider-default" | "disabled" } = {},
 ) {
-  const system = normalizeSystemPrompts(options.systemPrompts ?? [])
-    .map((prompt) => prompt.content)
-    .join("\n\n");
-  const tools = (options.tools ?? []).map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    input_schema: convertSchemaToJsonSchema(tool.inputSchema) ?? {
-      type: "object",
-      properties: {},
-    },
-  }));
-  if (provider === "anthropic")
+  const system = systemText(options);
+  const tools = canonicalTools(options);
+  if (provider === "anthropic") {
+    const promptCache = requestOptions.promptCache !== "disabled";
     return JSON.stringify({
       model: selection.model,
       max_tokens: 32_000,
       stream: true,
-      system,
+      system:
+        promptCache && system.length > 0
+          ? [{ type: "text", text: system, cache_control: { type: "ephemeral", ttl: "1h" } }]
+          : system,
       messages: anthropicMessages(options.messages),
-      tools,
+      tools: tools.map((tool, index) =>
+        promptCache && index === tools.length - 1
+          ? { ...tool, cache_control: { type: "ephemeral", ttl: "1h" } }
+          : tool,
+      ),
       tool_choice: tools.length > 0 ? { type: "auto" } : undefined,
       output_config:
         selection.reasoningEffort === "none" ? undefined : { effort: selection.reasoningEffort },
     });
+  }
+  // The ChatGPT Responses subscription endpoint has no confirmed explicit cache-hint contract.
+  // Keep its stable prefix and rely on the provider's automatic cache instead of sending API-only fields.
   return JSON.stringify({
     model: selection.model,
     instructions: system,
@@ -258,6 +290,43 @@ export function subscriptionRequest(
     stream: true,
     store: false,
   });
+}
+
+const isPromptCacheRejection = (event: NormalizedStreamEvent) =>
+  event.type === "error" &&
+  /cache[_ -]?control|prompt[_ -]?cach/i.test(`${event.code} ${event.message}`) &&
+  /invalid|unsupported|unknown|not (?:allowed|supported)|unrecognized/i.test(
+    `${event.code} ${event.message}`,
+  );
+
+async function* providerEventsWithPromptCacheFallback(
+  client: StreamingOAuthClient,
+  provider: OAuthProvider,
+  body: string,
+  baselineBody: string,
+  signal: AbortSignal | undefined,
+  onFallback: () => void,
+): AsyncGenerator<NormalizedStreamEvent> {
+  let emitted = false;
+  try {
+    for await (const event of client.stream(body, signal)) {
+      if (provider === "anthropic" && isPromptCacheRejection(event))
+        throw new ProviderFeatureRejectedError("anthropic", "prompt-cache");
+      emitted = true;
+      yield event;
+    }
+    return;
+  } catch (error) {
+    if (
+      provider !== "anthropic" ||
+      emitted ||
+      !(error instanceof ProviderFeatureRejectedError) ||
+      error.feature !== "prompt-cache"
+    )
+      throw error;
+  }
+  onFallback();
+  yield* client.stream(baselineBody, signal);
 }
 
 export class SubscriptionTextAdapter extends BaseTextAdapter<
@@ -292,14 +361,29 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
     const streamingReasoning = new Map<number, string>();
 
     yield { ...stamp(), type: EventType.RUN_STARTED, runId, threadId };
+    const body = subscriptionRequest(this.name, this.#selection, options);
+    const baselineBody = subscriptionRequest(this.name, this.#selection, options, {
+      promptCache: "disabled",
+    });
+    const fingerprints = requestFingerprints(options);
     options.logger.request("subscription model request", {
       provider: this.name,
       model: this.model,
+      messages: options.messages.length,
+      tools: options.tools?.length ?? 0,
+      ...fingerprints,
     });
     try {
-      for await (const event of this.#client.stream(
-        subscriptionRequest(this.name, this.#selection, options),
+      for await (const event of providerEventsWithPromptCacheFallback(
+        this.#client,
+        this.name,
+        body,
+        baselineBody,
         signal,
+        () =>
+          options.logger.provider("subscription prompt cache rejected; retrying baseline request", {
+            provider: this.name,
+          }),
       )) {
         if (signal?.aborted) return;
         options.logger.provider("subscription stream event", {

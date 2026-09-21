@@ -77,10 +77,15 @@ describe("image route contracts", () => {
     );
   });
 
-  it("keeps every route out of production until account entitlement is verified", () => {
-    expect(imageRouteContracts.every((route) => route.verification === "unverified")).toBe(true);
-    expect(imageRouteContracts.every((route) => route.productionEnabled === false)).toBe(true);
-    expect(productionImageRouteContracts()).toEqual([]);
+  it("enables implemented direct adapters but keeps the Provider Tool staged", () => {
+    const direct = imageRouteContracts.filter((route) => route.executionMode === "direct_adapter");
+    const providerTool = imageRouteContracts.find(
+      (route) => route.executionMode === "provider_tool",
+    );
+    expect(direct.every((route) => route.verification === "verified")).toBe(true);
+    expect(direct.every((route) => route.productionEnabled)).toBe(true);
+    expect(providerTool).toMatchObject({ verification: "unverified", productionEnabled: false });
+    expect(productionImageRouteContracts()).toEqual(direct);
   });
 
   it("requires both verification and an explicit production flag", () => {

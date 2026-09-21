@@ -5,6 +5,7 @@ import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import {
   clearedOutput,
+  compact,
   compaction,
   estimateTokens,
   turnSummariesNamespace,
@@ -42,6 +43,11 @@ const decodeStatus = Schema.decodeUnknownSync(
   Schema.Struct({
     context: Schema.Struct({
       usedTokens: Schema.NullOr(Schema.Number),
+      cachedTokens: Schema.NullOr(Schema.Number),
+      cacheRatio: Schema.NullOr(Schema.Number),
+      compactionStage: Schema.NullOr(
+        Schema.Literal("none", "clear-answered", "summarize", "leave-out"),
+      ),
       windowTokens: Schema.Number,
       compactAtTokens: Schema.Number,
     }),
@@ -235,17 +241,28 @@ describe("compaction", () => {
     const sent = (budget: Budget, conversation: readonly ModelMessage[]) =>
       firstSent(conversation, compaction(metadata, sources, budget), session.id);
 
-    // Six turns: the four latest stay, the two before them go as their summary.
-    const summarized = await sent({ compactAt: 1_000, leaveOutAt: noLimit }, messages);
-    expect(summarized[0]).toEqual({
+    const firstBlock = await sent({ compactAt: 1_000, leaveOutAt: noLimit }, messages);
+    expect(firstBlock[0]).toEqual({
       role: "assistant",
-      content: expect.stringContaining("Turns 1-2:\n- 배포 절차를 정했다"),
+      content: expect.stringContaining("user turns 1-2"),
     });
-    expect(summarized[1]).toEqual({ role: "user", content: "질문 3" });
-    expect(summarized.at(-1)).toEqual({ role: "user", content: "질문 6" });
+    expect(firstBlock[0]?.content).toContain("- 배포 절차를 정했다");
+    expect(firstBlock[1]).toEqual({ role: "user", content: "질문 3" });
+    expect(firstBlock.at(-1)).toEqual({ role: "user", content: "질문 6" });
 
-    // Under budget, nothing changes.
-    expect(await sent({ compactAt: noLimit, leaveOutAt: noLimit }, messages)).toEqual(messages);
+    await metadata.set(turnSummariesNamespace, session.id, {
+      blocks: [
+        { end: 2, nextTurnNodeId: userNodes[2]!.id, text: "- 배포 절차를 정했다" },
+        { end: 4, nextTurnNodeId: userNodes[4]!.id, text: "- 배포 검증을 마쳤다" },
+      ],
+    });
+    const twoBlocks = await sent({ compactAt: 1_000, leaveOutAt: noLimit }, messages);
+    expect(twoBlocks[0]).toEqual(firstBlock[0]);
+    expect(twoBlocks[1]?.content).toContain("user turns 3-4");
+    expect(twoBlocks[2]).toEqual({ role: "user", content: "질문 5" });
+
+    // Stored blocks are the monotonic watermark: falling under budget never restores raw turns.
+    expect(await sent({ compactAt: noLimit, leaveOutAt: noLimit }, messages)).toEqual(twoBlocks);
 
     // A conversation whose turn 3 is not the one summarized gets no summary.
     const other = messages.map((message) =>
@@ -281,6 +298,112 @@ describe("compaction", () => {
     expect(sent.at(-1)).toEqual({ role: "user", content: "마지막 질문" });
   });
 
+  test("adds bounded retrieval only after compaction omitted content, and continues on failure", async () => {
+    const messages: ModelMessage[] = [
+      { role: "user", content: "earlier question" },
+      {
+        role: "assistant",
+        content: null,
+        toolCalls: [
+          {
+            id: "old-1",
+            type: "function",
+            function: { name: "run_shell", arguments: "{}" },
+          },
+        ],
+      },
+      { role: "tool", toolCallId: "old-1", content: "large earlier output" },
+      { role: "assistant", content: "done" },
+      { role: "user", content: "current question" },
+    ];
+    let appendixCalls = 0;
+    const sources: CompactionSources = {
+      toolResultIds: () => new Map([["old-1", "omitted-node"]]),
+      nodeText: () => null,
+      retrievalAppendix: async () => {
+        appendixCalls += 1;
+        return { role: "assistant", content: "[Retrieval appendix]\n- node omitted-node" };
+      },
+    };
+    const compacted = await compact(
+      messages,
+      { manual: { clearedThrough: 0, summarizedTurns: 0 }, blocks: [] },
+      sources,
+      {
+        compactAt: noLimit,
+        leaveOutAt: noLimit,
+      },
+    );
+    expect(appendixCalls).toBe(1);
+    expect(compacted.messages.at(-2)).toEqual({
+      role: "assistant",
+      content: "[Retrieval appendix]\n- node omitted-node",
+    });
+    expect(compacted.messages.at(-1)).toEqual({ role: "user", content: "current question" });
+
+    let intactCalls = 0;
+    await compact(
+      [{ role: "user", content: "uncompacted" }],
+      { manual: { clearedThrough: 0, summarizedTurns: 0 }, blocks: [] },
+      { ...sources, retrievalAppendix: async () => ((intactCalls += 1), null) },
+      { compactAt: noLimit, leaveOutAt: noLimit },
+    );
+    expect(intactCalls).toBe(0);
+
+    const fallback = await compact(
+      messages,
+      { manual: { clearedThrough: 0, summarizedTurns: 0 }, blocks: [] },
+      {
+        ...sources,
+        retrievalAppendix: async () => Promise.reject(new Error("search unavailable")),
+      },
+      { compactAt: noLimit, leaveOutAt: noLimit },
+    );
+    expect(fallback.messages.at(-1)).toEqual({ role: "user", content: "current question" });
+  });
+
+  test("keeps the provider request user-last when retrieval adds an appendix", async () => {
+    const { runtime } = await testRuntime();
+    const metadata = await runtime.runPromise(
+      Effect.map(ChatState, (state) => state.persistence.stores.metadata),
+    );
+    const messages: ModelMessage[] = [
+      { role: "user", content: "earlier question" },
+      {
+        role: "assistant",
+        content: null,
+        toolCalls: [
+          {
+            id: "old-1",
+            type: "function",
+            function: { name: "run_shell", arguments: "{}" },
+          },
+        ],
+      },
+      { role: "tool", toolCallId: "old-1", content: "large earlier output" },
+      { role: "assistant", content: "done" },
+      { role: "user", content: "current question" },
+    ];
+    const sent = await firstSent(
+      messages,
+      compaction(
+        metadata,
+        {
+          toolResultIds: () => new Map([["old-1", "omitted-node"]]),
+          nodeText: () => null,
+          retrievalAppendix: async () => ({
+            role: "assistant",
+            content: "[Retrieval appendix]",
+          }),
+        },
+        { compactAt: noLimit, leaveOutAt: noLimit },
+      ),
+    );
+
+    expect(sent.at(-2)).toEqual({ role: "assistant", content: "[Retrieval appendix]" });
+    expect(sent.at(-1)).toEqual({ role: "user", content: "current question" });
+  });
+
   test("/compact summarizes earlier turns and clears answered output for the runs that follow", async () => {
     const context = await testRuntime({ testProvider: {} });
     const { runtime, project, session } = context;
@@ -308,8 +431,8 @@ describe("compaction", () => {
     expect((await runtime.runPromise(agent.compact("no-such-session", "tab-a"))).status).toBe(404);
     const first = await compact("tab-a");
     expect(first.status).toBe(200);
-    // The two turns before the latest four; the tool output was in the first of them.
-    expect(first.body).toMatchObject({ cleared: 1, summarizedTurns: 2, summaryFailed: false });
+    // The latest two stay raw. Answered tool output is already pointerized by automatic compaction.
+    expect(first.body).toMatchObject({ cleared: 0, summarizedTurns: 4, summaryFailed: false });
     expect(first.body.tokensAfter).toBeLessThan(first.body.tokensBefore);
     expect((await compact("tab-a")).body).toEqual({
       cleared: 0,
@@ -330,58 +453,84 @@ describe("compaction", () => {
     );
     expect(sent[0]).toEqual({
       role: "assistant",
-      content: expect.stringContaining(`- 사용자 턴 2개 (node ${userNodes[0]!.id})`),
+      content: expect.stringContaining(`- 사용자 턴 4개 (node ${userNodes[0]!.id})`),
     });
-    expect(sent[1]).toEqual({ role: "user", content: "질문 3" });
+    expect(sent[1]).toEqual({ role: "user", content: "질문 5" });
     expect(JSON.stringify(sent)).not.toContain(toolResult.id);
     // The saved conversation still has everything.
     const kept = await stores.messages.loadThread(session.id);
     expect(kept.find((message) => message.role === "tool")?.content).toBe(toolOutput);
   });
 
-  test("reports the model's context window and leaves usage unknown without provider data", async () => {
-    const setup = await testRuntime({ testProvider: {} });
+  test("reports prompt cache usage across consecutive requests and distinguishes zero", async () => {
+    const setup = await testRuntime({
+      testProvider: {
+        responder: (invocation) => ({
+          text: "ok",
+          usage: {
+            promptTokens: 120,
+            completionTokens: 5,
+            totalTokens: 125,
+            promptTokensDetails: { cachedTokens: invocation.index === 0 ? 30 : 0 },
+          },
+        }),
+      },
+    });
     const { runtime, session } = setup;
     await setup.provider!.select(runtime);
     const agent = await runtime.runPromise(AgentChat);
     const status = async () =>
       decodeStatus(await (await runtime.runPromise(agent.status(session.id, null))).json()).context;
+    const run = async (runId: string) => {
+      const response = await runtime.runPromise(
+        agent.handle(
+          new Request("http://127.0.0.1/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              threadId: session.id,
+              runId,
+              messages: [{ id: `${runId}-message`, role: "user", content: "hello" }],
+              tools: [],
+              context: [],
+            }),
+          }),
+          session.id,
+        ),
+      );
+      return (await response.text())
+        .split("\n")
+        .flatMap((line) =>
+          line.startsWith("data: ") ? [Schema.decodeUnknownSync(StreamEvent)(line.slice(6))] : [],
+        );
+    };
 
-    // Before any run: nothing read yet, and the window every offered model has.
     expect(await status()).toEqual({
       usedTokens: null,
+      cachedTokens: null,
+      cacheRatio: null,
+      compactionStage: null,
       windowTokens: 200_000,
       compactAtTokens: 50_000,
     });
 
-    const response = await runtime.runPromise(
-      agent.handle(
-        new Request("http://127.0.0.1/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            threadId: session.id,
-            runId: "run-1",
-            messages: [{ id: "m1", role: "user", content: "hello" }],
-            tools: [],
-            context: [],
-          }),
-        }),
-        session.id,
-      ),
-    );
-    const events = (await response.text())
-      .split("\n")
-      .flatMap((line) =>
-        line.startsWith("data: ") ? [Schema.decodeUnknownSync(StreamEvent)(line.slice(6))] : [],
-      );
+    const firstEvents = await run("run-1");
     expect(
-      events.some((event) => event.type === "CUSTOM" && event.name === "memory-agent.context"),
-    ).toBe(false);
-    expect(await status()).toEqual({
-      usedTokens: null,
-      windowTokens: 200_000,
-      compactAtTokens: 50_000,
+      firstEvents.some((event) => event.type === "CUSTOM" && event.name === "memory-agent.context"),
+    ).toBe(true);
+    expect(await status()).toMatchObject({
+      usedTokens: 120,
+      cachedTokens: 30,
+      cacheRatio: 0.25,
+      compactionStage: "none",
+    });
+
+    await run("run-2");
+    expect(await status()).toMatchObject({
+      usedTokens: 120,
+      cachedTokens: 0,
+      cacheRatio: 0,
+      compactionStage: "none",
     });
   });
 

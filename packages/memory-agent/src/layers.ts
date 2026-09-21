@@ -192,20 +192,15 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
   const routeCatalog =
     options.routeCatalog ??
     RouteCatalog.layer.pipe(Layer.provide(providerRegistry), Layer.provide(providerToolRegistry));
-  const imageRouteFacts = options.imageRouteFacts ?? ImageRouteFacts.openAIEnvironmentLayer;
+  const imageRouteFacts = options.imageRouteFacts ?? ImageRouteFacts.authenticatedRoutesLayer;
   const imageRouter =
     options.imageRouter ??
-    ImageRouter.featureFlagLayer.pipe(
+    ImageRouter.consentLayer.pipe(
       Layer.provide(routeCatalog),
       Layer.provide(imageRouteFacts),
-      Layer.provide(modelFeatureFlags),
       Layer.provide(crossProviderMediaConsent),
     );
-  const imageFeature =
-    options.imageFeature ??
-    ImageFeature.layerWithModelFeatureFlags({
-      imageGenerationAvailable: process.env.CONTEXT_AGENT_IMAGE_GENERATION === "1",
-    }).pipe(Layer.provide(modelFeatureFlags), Layer.provide(foundation));
+  const imageFeature = options.imageFeature ?? ImageFeature.layer.pipe(Layer.provide(foundation));
   const directImageExecutor =
     options.directImageExecutor ?? DirectImageExecutor.openAIEnvironmentLayer;
   const imageMediaWorkflow =

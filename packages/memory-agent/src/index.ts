@@ -233,14 +233,12 @@ export {
 } from "./providers/image-router.ts";
 export {
   ImageFeature,
-  ImageFeatureUnavailable,
   decideImageContext,
   imageProviderWorkflowPrompt,
   makeImageFeature,
   type ImageContextGateDecision,
   type ImageContextGateInput,
   type ImageFeatureApi,
-  type ImageFeatureFlags,
   type ImageFeatureStatus,
   type ImageTurnIntent,
 } from "./providers/image-feature.ts";

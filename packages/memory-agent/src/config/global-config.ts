@@ -61,8 +61,6 @@ export const Settings = Schema.Struct({
   importsInterpret: Schema.optional(Schema.Boolean),
   /** User explicitly enabled image generation. Defaults off when absent. */
   imageGenerationEnabled: Schema.optional(Schema.Boolean),
-  /** User separately permits the chat Provider Tool path. Defaults off when absent. */
-  imageProviderToolEnabled: Schema.optional(Schema.Boolean),
   /** Staged Work Trace UI/API exposure. Instrumentation and migrations stay on to avoid data loss. */
   workTraceEnabled: Schema.optional(Schema.Boolean),
   /** Server-authoritative flags for every model-dependent capability. */

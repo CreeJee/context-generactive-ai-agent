@@ -1,14 +1,13 @@
 import { Effect, Either } from "effect";
 import {
+  ImageRouteFacts,
   makeImageRouter,
-  makeModelFeatureFlags,
   makeRouteCatalog,
   rankImageRoutes,
   type ChatRoute,
   type ImageRouteFact,
   type MediaRoute,
   type RouteCatalogSource,
-  type Settings,
 } from "memory-agent";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -110,8 +109,7 @@ const intent = { operation: "generate" as const, sourceImageCount: 0, requiresMa
 
 async function router(
   factValues: readonly ImageRouteFact[] = facts,
-  modelFeatures?: Parameters<typeof makeImageRouter>[2],
-  crossProviderConsent?: Parameters<typeof makeImageRouter>[3],
+  crossProviderConsent?: Parameters<typeof makeImageRouter>[2],
 ) {
   const source: RouteCatalogSource = {
     load: Effect.succeed({ chat: [chat], media: routes, execution: [] }),
@@ -121,7 +119,6 @@ async function router(
   return makeImageRouter(
     catalog,
     { forRoutes: () => Effect.succeed(factValues) },
-    modelFeatures,
     crossProviderConsent,
   );
 }
@@ -129,7 +126,7 @@ async function router(
 describe("image router", () => {
   it("filters disabled cross-provider routes and marks ask routes for approval", async () => {
     let mode: "disabled" | "ask" | "always" = "disabled";
-    const consent: NonNullable<Parameters<typeof makeImageRouter>[3]> = {
+    const consent: NonNullable<Parameters<typeof makeImageRouter>[2]> = {
       read: Effect.succeed({ version: 1, pairs: {} }),
       decide: (pair) =>
         Effect.succeed({
@@ -143,7 +140,7 @@ describe("image router", () => {
         }),
       set: () => Effect.die("unused"),
     };
-    const service = await router(facts, undefined, consent);
+    const service = await router(facts, consent);
     const request = {
       initiatorChatRouteId: chat.id,
       intent,
@@ -177,35 +174,6 @@ describe("image router", () => {
     expect(first.executorMediaRouteId).toBe(quality.id);
     expect(first.initiatorChatModel).toBe("claude-test");
     expect(first.executorMediaModel).toEqual({ type: "explicit", model: "gpt-image-2" });
-  });
-
-  it("recomputes persisted route flags and excludes a disabled route", async () => {
-    let settings: Settings = {
-      modelFeatureFlags: {
-        version: 1,
-        global: true,
-        providers: { openai: true },
-        capabilities: { "openai:image_generation": true },
-        models: {},
-        routes: { [quality.id]: false },
-      },
-    };
-    const flags = makeModelFeatureFlags(
-      {
-        read: Effect.sync(() => settings),
-        update: (patch) => Effect.sync(() => (settings = { ...settings, ...patch })),
-      },
-      ["openai:image_generation"],
-    );
-    const service = await router(facts, flags);
-    const request = { initiatorChatRouteId: chat.id, intent, policy: { mode: "auto" as const } };
-    expect((await Effect.runPromise(service.select(request))).executorMediaRouteId).not.toBe(
-      quality.id,
-    );
-    await Effect.runPromise(flags.set({ type: "route", route: quality.id }, true));
-    expect((await Effect.runPromise(service.select(request))).executorMediaRouteId).toBe(
-      quality.id,
-    );
   });
 
   it("changes route according to explicit quality, speed and cost preferences", async () => {
@@ -271,7 +239,37 @@ describe("image router", () => {
     expect(allowed.find((score) => score.routeId === fast.id)).toMatchObject({ eligible: true });
   });
 
-  it("filters unverified, unauthenticated, disabled and unavailable routes", async () => {
+  it("treats configured direct routes as attemptable without an operator verification flag", async () => {
+    const service = await Effect.runPromise(
+      Effect.provide(ImageRouteFacts, ImageRouteFacts.authenticatedRoutesLayer),
+    );
+    const routeFacts = await Effect.runPromise(
+      service.forRoutes([
+        quality,
+        { ...cheap, authentication: { ...cheap.authentication, verified: false } },
+      ]),
+    );
+    expect(routeFacts[0]).toMatchObject({
+      routeId: quality.id,
+      available: true,
+      accountId: "openai-api-key",
+    });
+    expect(routeFacts[1]).toMatchObject({ routeId: cheap.id, available: false });
+  });
+
+  it("does not treat unverified account entitlement as implementation failure", async () => {
+    const [score] = await Effect.runPromise(
+      rankImageRoutes({
+        routes: [{ ...quality, entitlement: { ...quality.entitlement, status: "unverified" } }],
+        facts: [facts[0]!],
+        intent,
+        policy: { mode: "auto" },
+      }),
+    );
+    expect(score?.eligible).toBe(true);
+  });
+
+  it("filters unauthenticated, disabled and unavailable routes", async () => {
     const disabled = media("gpt-image-2", { production: false });
     const ranking = await Effect.runPromise(
       rankImageRoutes({

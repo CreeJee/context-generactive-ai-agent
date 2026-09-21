@@ -29,13 +29,8 @@ const decision: ImageRouteDecision = {
   ranking: [],
 };
 const feature: ImageFeatureApi = {
-  status: Effect.succeed({
-    featureAvailable: true,
-    imageGenerationEnabled: true,
-    imageProviderToolEnabled: false,
-  }),
+  status: Effect.succeed({ imageGenerationEnabled: true }),
   setImageGenerationEnabled: () => Effect.die("unused"),
-  setImageProviderToolEnabled: () => Effect.die("unused"),
 };
 const router: ImageRouterApi = {
   select: () => Effect.succeed(decision),

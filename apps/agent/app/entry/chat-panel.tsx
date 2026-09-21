@@ -1525,7 +1525,7 @@ function ChatPanel({
                         {imagesSupported ? "이미지 첨부" : "선택한 모델은 이미지를 읽지 못해요"}
                       </TooltipContent>
                     </Tooltip>
-                    {imageSettings?.featureAvailable && (
+                    {imageSettings && (
                       <Tooltip>
                         <TooltipTrigger
                           render={

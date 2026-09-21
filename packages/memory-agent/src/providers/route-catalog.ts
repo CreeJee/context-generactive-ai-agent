@@ -244,20 +244,9 @@ const sourceFromServices = Effect.gen(function* () {
       const openAIAuth =
         authByProvider.get("openai") ??
         authEvidence("openai", { provider: "openai", status: "signed-out" }, "openai_api_key");
-      for (const baseContract of imageRouteContracts) {
-        const operatorVerified =
-          baseContract.executionMode === "direct_adapter" &&
-          process.env.OPENAI_API_KEY !== undefined &&
-          process.env.CONTEXT_AGENT_OPENAI_IMAGE_VERIFIED === "1";
-        const contract = operatorVerified
-          ? Object.freeze({
-              ...baseContract,
-              verification: "verified" as const,
-              productionEnabled: true,
-            })
-          : baseContract;
+      for (const contract of imageRouteContracts) {
         const authentication =
-          baseContract.executionMode === "direct_adapter"
+          contract.executionMode === "direct_adapter"
             ? Object.freeze({
                 mechanism: "openai_api_key" as const,
                 status:
@@ -277,11 +266,10 @@ const sourceFromServices = Effect.gen(function* () {
             operations: contract.operations,
             authentication,
             entitlement: Object.freeze({
-              status: contract.verification,
-              source: operatorVerified ? "account_capability" : "account_smoke_test_not_run",
-              detail: operatorVerified
-                ? "Operator explicitly verified this API-key account for image execution."
-                : "Installed contract is known; account image entitlement was not smoke-tested.",
+              status: "unverified",
+              source: "account_smoke_test_not_run",
+              detail:
+                "The execution path is implemented; account image access is validated by execution.",
             }),
             billingAttribution: contract.billingAttribution,
             contract,

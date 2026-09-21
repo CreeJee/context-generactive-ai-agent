@@ -49,12 +49,20 @@ export interface CompactResult {
  * How much of the model's context the conversation takes. Also sent live during a run as the
  * `memory-agent.context` custom event.
  */
+export type CompactionStage = "none" | "clear-answered" | "summarize" | "leave-out";
+
 export interface ContextView {
   /**
    * Tokens the model read in its latest request in this conversation: instructions, tools and
    * the conversation. Null before the first.
    */
   readonly usedTokens: number | null;
+  /** Prompt tokens served from the provider cache. Null when the provider did not report it. */
+  readonly cachedTokens: number | null;
+  /** `cachedTokens / usedTokens`. Null when either value was unavailable or input was empty. */
+  readonly cacheRatio: number | null;
+  /** The strongest compaction operation applied to the latest model request. */
+  readonly compactionStage: CompactionStage | null;
   /** Tokens the selected model may read. */
   readonly windowTokens: number;
   /** Estimated conversation size past which earlier parts are compacted. */

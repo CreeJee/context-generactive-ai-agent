@@ -8,6 +8,7 @@ import {
   createOAuthState,
   createPkce,
   decodeProviderEvent,
+  ProviderFeatureRejectedError,
   type NormalizedStreamEvent,
   type OAuthProvider,
   type ProviderProtocol,
@@ -662,7 +663,19 @@ export class SubscriptionOAuthClient {
       credential = await this.#refresh(credential);
       response = await request(credential);
     }
-    if (!response.ok) throw new OAuthHarnessError("provider_rejected", response.status, context);
+    if (!response.ok) {
+      const responseText = await response
+        .clone()
+        .text()
+        .catch(() => "");
+      if (
+        this.#protocol.provider === "anthropic" &&
+        (response.status === 400 || response.status === 422) &&
+        /cache[_ -]?control|prompt[_ -]?cach/i.test(responseText)
+      )
+        throw new ProviderFeatureRejectedError("anthropic", "prompt-cache", response.status);
+      throw new OAuthHarnessError("provider_rejected", response.status, context);
+    }
     yield* sseEvents(this.#protocol.provider, response);
   }
 }

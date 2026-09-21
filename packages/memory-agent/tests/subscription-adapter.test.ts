@@ -2,10 +2,15 @@ import { EventType, chat, toolDefinition, type TextOptions } from "@tanstack/ai"
 import { InternalLogger } from "@tanstack/ai/adapter-internals";
 import { Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
-import { decodeProviderEvent } from "../src/oauth/protocol.ts";
+import {
+  ProviderFeatureRejectedError,
+  decodeProviderEvent,
+  providerProtocols,
+} from "../src/oauth/protocol.ts";
 import { toToolSchema } from "../src/tools/schema.ts";
 import {
   SubscriptionTextAdapter,
+  requestFingerprints,
   subscriptionRequest,
 } from "../src/providers/subscription-adapter.ts";
 import {
@@ -68,6 +73,47 @@ const logger = new InternalLogger(
 );
 
 describe("subscription model adapters", () => {
+  test("fingerprints messages and tool definitions without retaining their contents", () => {
+    const first = requestFingerprints(options);
+    expect(requestFingerprints(options)).toEqual(first);
+    expect(first.messageFingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(first.toolFingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(first)).not.toContain("Follow the rules");
+    expect(JSON.stringify(first)).not.toContain("Look up a value");
+    expect(
+      requestFingerprints({ ...options, messages: [{ role: "user", content: "changed" }] })
+        .messageFingerprint,
+    ).not.toBe(first.messageFingerprint);
+    expect(requestFingerprints({ ...options, tools: [] }).toolFingerprint).not.toBe(
+      first.toolFingerprint,
+    );
+
+    const alphabetic = {
+      name: "alpha",
+      description: "Earlier by name",
+      inputSchema: {
+        type: "object",
+        properties: { zeta: { type: "string" }, alpha: { type: "number" } },
+      },
+    };
+    const forward = { ...options, tools: [options.tools[0]!, alphabetic] };
+    const reversed = { ...options, tools: [alphabetic, options.tools[0]!] };
+    expect(requestFingerprints(forward).toolFingerprint).toBe(
+      requestFingerprints(reversed).toolFingerprint,
+    );
+    for (const provider of ["openai", "anthropic"] as const) {
+      const selection = { provider, model: "model-1", reasoningEffort: "medium" };
+      expect(subscriptionRequest(provider, selection, forward)).toBe(
+        subscriptionRequest(provider, selection, reversed),
+      );
+      const request = JSON.parse(subscriptionRequest(provider, selection, forward));
+      expect(request.tools.map((tool: { name: string }) => tool.name)).toEqual(["alpha", "lookup"]);
+      const schema =
+        provider === "openai" ? request.tools[0].parameters : request.tools[0].input_schema;
+      expect(Object.keys(schema.properties)).toEqual(["zeta", "alpha"]);
+    }
+  });
+
   test("normalizes provider usage, errors, and encrypted reasoning", () => {
     expect(
       decodeProviderEvent(
@@ -319,6 +365,10 @@ describe("subscription model adapters", () => {
       reasoning: { effort: "high", summary: "auto" },
       include: ["reasoning.encrypted_content"],
     });
+    expect(request).not.toHaveProperty("prompt_cache_key");
+    expect(request).not.toHaveProperty("cache_control");
+    expect(JSON.stringify(request)).not.toContain("messageFingerprint");
+    expect(JSON.stringify(request)).not.toContain("toolFingerprint");
     expect(request.input).toContainEqual({
       type: "message",
       role: "user",
@@ -364,6 +414,37 @@ describe("subscription model adapters", () => {
     });
   });
 
+  test("falls back once when Anthropic rejects the prompt-cache feature", async () => {
+    const bodies: string[] = [];
+    const client = {
+      async *stream(body: string) {
+        bodies.push(body);
+        if (bodies.length === 1)
+          throw new ProviderFeatureRejectedError("anthropic", "prompt-cache", 400);
+        yield { type: "text" as const, text: "fallback worked" };
+      },
+    };
+    const adapter = new SubscriptionTextAdapter(client, {
+      provider: "anthropic",
+      model: "model-1",
+      reasoningEffort: "medium",
+    });
+    const events = [];
+    for await (const event of adapter.chatStream({ ...options, model: "model-1", logger }))
+      events.push(event);
+
+    expect(bodies).toHaveLength(2);
+    expect(JSON.parse(bodies[0]!).system[0]).toHaveProperty("cache_control");
+    expect(JSON.parse(bodies[0]!).tools.at(-1)).toHaveProperty("cache_control");
+    expect(JSON.parse(bodies[1]!).system).toBe("Follow the rules.");
+    expect(JSON.parse(bodies[1]!).tools.at(-1)).not.toHaveProperty("cache_control");
+    expect(
+      events
+        .flatMap((event) => (event.type === EventType.TEXT_MESSAGE_CONTENT ? [event.delta] : []))
+        .join(""),
+    ).toBe("fallback worked");
+  });
+
   test("normalizes OpenAI history into valid alternating Anthropic turns", () => {
     const request = JSON.parse(
       subscriptionRequest(
@@ -407,6 +488,7 @@ describe("subscription model adapters", () => {
           systemPrompts: [],
           tools: [],
         },
+        { promptCache: "disabled" },
       ),
     );
 
@@ -444,6 +526,29 @@ describe("subscription model adapters", () => {
       },
     ]);
   });
+
+  test("does not retry unrelated provider failures", async () => {
+    let attempts = 0;
+    const client = {
+      async *stream() {
+        attempts += 1;
+        yield { type: "error" as const, code: "overloaded_error", message: "busy" };
+      },
+    };
+    const adapter = new SubscriptionTextAdapter(client, {
+      provider: "anthropic",
+      model: "model-1",
+      reasoningEffort: "medium",
+    });
+    const stream = adapter
+      .chatStream({ ...options, model: "model-1", logger })
+      [Symbol.asyncIterator]();
+
+    await stream.next();
+    await expect(stream.next()).rejects.toThrow("anthropic overloaded_error: busy");
+    expect(attempts).toBe(1);
+  });
+
   test("accepts Anthropic content block end after streamed text", async () => {
     const client = {
       async *stream() {
@@ -578,10 +683,23 @@ describe("subscription model adapters", () => {
     );
     expect(request).toMatchObject({
       model: "model-1",
-      system: "Follow the rules.",
+      system: [
+        {
+          type: "text",
+          text: "Follow the rules.",
+          cache_control: { type: "ephemeral", ttl: "1h" },
+        },
+      ],
       stream: true,
       output_config: { effort: "medium" },
     });
+    expect(request.tools.at(-1)).toMatchObject({
+      name: "lookup",
+      cache_control: { type: "ephemeral", ttl: "1h" },
+    });
+    expect(providerProtocols.anthropic.modelHeaders["anthropic-beta"]).toContain(
+      "prompt-caching-scope-2026-01-05",
+    );
     expect(request.messages).toContainEqual({
       role: "assistant",
       content: [

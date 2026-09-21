@@ -5,6 +5,7 @@ import type {
   DefaultMessageMetadataByModality,
   ModelMessage,
   TextOptions,
+  TokenUsage,
 } from "@tanstack/ai";
 import { BaseTextAdapter } from "@tanstack/ai/adapters";
 import type { StructuredOutputOptions, StructuredOutputResult } from "@tanstack/ai/adapters";
@@ -27,6 +28,8 @@ export interface ScriptedTurn {
   readonly delayMs?: number;
   /** Stream `text`, then fail the model call. */
   readonly failAfterText?: string;
+  /** Optional provider usage for middleware and context-meter tests. */
+  readonly usage?: TokenUsage;
 }
 
 export interface AdapterInvocation {
@@ -142,6 +145,7 @@ export class ScriptedTextAdapter extends BaseTextAdapter<
       model,
       timestamp,
       finishReason: toolCalls.length > 0 ? "tool_calls" : "stop",
+      usage: turn.usage,
     };
   }
 

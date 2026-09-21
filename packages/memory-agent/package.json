@@ -38,6 +38,7 @@
     "dev": "vp pack --watch",
     "check": "vp check",
     "eval:recall": "node --no-warnings eval/recall.ts",
+    "eval:compaction": "node --no-warnings eval/compaction-cli.ts",
     "prepublishOnly": "vp run build"
   },
   "dependencies": {

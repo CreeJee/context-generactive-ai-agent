@@ -148,15 +148,13 @@ Migration guide 기준 확인 항목은 activity별 adapter 분리, common optio
 - TanStack 문서 조회는 제거된 MCP endpoint가 아니라 공식 CLI의 `tanstack doc query`, `tanstack search-docs`, `tanstack libraries` JSON 출력으로 전환했다.
 - 호환 package family는 `@tanstack/ai@0.55.0`, `@tanstack/ai-openai@0.22.8`, `@tanstack/ai-anthropic@0.18.7`이며 lockfile을 함께 갱신했다.
 - Provider Tool은 package export, model metadata, account capability, 앱 정책과 사용자 정책의 교집합만 노출한다. Unknown model/account, 빈 capability 및 미검증 entitlement는 차단한다.
-- 전체 이미지 기능은 `CONTEXT_AGENT_IMAGE_GENERATION=1`일 때만 사용할 수 있다. 사용자 이미지 생성 toggle과 별개인 Provider Tool toggle은 기본 비활성이다.
-- OpenAI direct image route는 API key만으로 활성화하지 않는다. 운영자가 account/region/결제 자격을 확인한 뒤 `CONTEXT_AGENT_OPENAI_IMAGE_VERIFIED=1`을 설정해야 한다.
-- 이미지 turn이 아닌 일반 대화에는 image Provider Tool schema와 workflow prompt를 넣지 않는다. 세 gate가 모두 열린 Provider Tool turn만 공식 schema를 주입한다.
+- 이미지 생성은 설정 UI의 단일 toggle로 켜고 끈다. 저장 즉시 다음 요청부터 적용되며 프로세스 재시작이 필요 없다.
+- 이미지 turn이 아닌 일반 대화에는 image Provider Tool schema와 workflow prompt를 넣지 않는다. Provider Tool 경로는 chat-model/account 통합 검증이 끝날 때까지 production route에서 제외한다.
 - 기본 이미지 실행은 chat tool context와 분리된 direct media workflow다. 유료 실행 전 명시적 승인을 요구하며, 실패 후 다른 유료 route로 자동 전환하지 않고 대안을 사용자 확인 대상으로 반환한다.
 - 생성 payload는 최대 25 MiB와 PNG/JPEG/WebP로 제한하고 durable attachment로 저장한다. UI와 결과에는 initiator chat model, executor media route/model, execution mode, 예상 비용, provider usage/request id를 가능한 범위에서 구분해 기록한다.
-- Anthropic은 설치 adapter에 image generation factory가 없어 이미지 실행 route를 제공하지 않는다. OpenAI에서도 account verification 또는 capability가 없으면 route 상태는 unavailable이다.
-- 모델 의존 기능의 rollout은 설정 UI에서 global → provider → capability 순서로 켠다. 저장된 설정은 매 모델 요청과 실행 직전에 다시 읽으므로 프로세스 재시작이 필요 없고, ON은 다음 메시지부터 적용된다.
-- rollback은 capability, provider 또는 global flag를 끄는 방식으로 수행한다. OFF는 다음 요청의 schema/route 후보를 제거하며 이미 노출됐지만 아직 실행되지 않은 호출도 같은 서버 정책의 실행 직전 재검증에서 거절한다. 진행 중인 provider 요청의 입력은 소급 변경하지 않는다.
-- 환경 변수 기반 build/runtime capability(`CONTEXT_AGENT_IMAGE_GENERATION`, 검증된 image entitlement)는 서버 시작 시 읽으므로 이 값만 변경할 때는 재시작이 필요하다. 저장형 사용자 flag만 바꿀 때는 재시작하지 않는다.
+- Anthropic은 설치 adapter에 image generation factory가 없어 이미지 실행 route를 제공하지 않는다. Claude 대화의 이미지 생성은 별도 동의를 받은 뒤 OpenAI direct adapter로 실행한다.
+- OpenAI direct adapter는 API key가 구성된 경우 후보가 되며 실제 account/region/결제 자격은 실행 응답으로 확인한다. Provider가 거절하면 실패로 처리하고 자격이 검증됐다고 기록하지 않는다.
+- rollback은 이미지 생성 toggle을 끄는 방식으로 수행한다. OFF는 다음 요청부터 route 선택과 실행을 차단하며 진행 중인 provider 요청의 입력은 소급 변경하지 않는다.
 
 ## Cross-provider media consent
 

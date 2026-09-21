@@ -10,7 +10,6 @@ import {
   CrossProviderMediaConsent,
   type CrossProviderMediaConsentApi,
 } from "./cross-provider-media-consent.ts";
-import { ModelFeatureFlags, type ModelFeatureFlagsApi } from "./model-feature-flags.ts";
 
 export type ImageRoutingPreference = "balanced" | "quality" | "speed" | "cost";
 export type ImageRoutingMode = "auto" | "fixed";
@@ -123,14 +122,12 @@ export class ImageRouteFacts extends Context.Tag("memory-agent/ImageRouteFacts")
         })),
       ),
   });
-  static readonly openAIEnvironmentLayer = Layer.succeed(ImageRouteFacts, {
+  static readonly authenticatedRoutesLayer = Layer.succeed(ImageRouteFacts, {
     forRoutes: (routes) => {
-      const verified =
-        process.env.OPENAI_API_KEY !== undefined &&
-        process.env.CONTEXT_AGENT_OPENAI_IMAGE_VERIFIED === "1";
       return Effect.succeed(
         routes.map((route) => {
-          const direct = route.executionMode === "direct_adapter";
+          const available =
+            route.executionMode === "direct_adapter" && route.authentication.verified;
           const profile = route.id.endsWith(":gpt-image-2")
             ? { quality: 1, speed: 0.45 }
             : route.id.endsWith(":gpt-image-1-mini")
@@ -138,14 +135,14 @@ export class ImageRouteFacts extends Context.Tag("memory-agent/ImageRouteFacts")
               : { quality: 0.8, speed: 0.55 };
           return {
             routeId: route.id,
-            accountId: verified && direct ? "openai-api-key" : "unverified",
-            available: verified && direct,
+            accountId: available ? "openai-api-key" : "unverified",
+            available,
             quality: profile.quality,
             speed: profile.speed,
             evidence: [
-              verified && direct
-                ? "API-key image entitlement explicitly verified by operator configuration."
-                : "Image entitlement is not verified for this execution mode.",
+              available
+                ? "OpenAI API key is configured; account image access is validated by execution."
+                : "An authenticated direct image route is not configured.",
             ],
           };
         }),
@@ -201,7 +198,7 @@ function scoreRoute(
   policy: ImageRoutingPolicy,
 ): ImageRouteScore {
   const reasons: string[] = [];
-  if (route.entitlement.status !== "verified") reasons.push("route entitlement is not verified");
+  if (route.contract.verification !== "verified") reasons.push("route contract is not verified");
   if (!route.authentication.verified) reasons.push("provider account is not authenticated");
   if (!route.contract.productionEnabled) reasons.push("route is not production-enabled");
   if (!route.operations.includes(intent.operation))
@@ -304,7 +301,6 @@ export interface ImageRouterApi {
 export function makeImageRouter(
   catalog: RouteCatalogApi,
   factsService: ImageRouteFactsApi,
-  modelFeatures?: ModelFeatureFlagsApi,
   crossProviderConsent?: CrossProviderMediaConsentApi,
 ): ImageRouterApi {
   const decisions = (request: ImageRouterRequest) =>
@@ -318,28 +314,11 @@ export function makeImageRouter(
             }),
         ),
       );
-      const featureRoutes =
-        modelFeatures === undefined
-          ? snapshot.media
-          : yield* Effect.filter(snapshot.media, (route) =>
-              modelFeatures
-                .decide({
-                  provider: route.provider,
-                  capability: "openai:image_generation",
-                  model:
-                    route.executorModel.type === "explicit" ? route.executorModel.model : undefined,
-                  route: route.id,
-                })
-                .pipe(
-                  Effect.map((decision) => decision.allowed),
-                  Effect.catchAll(() => Effect.succeed(false)),
-                ),
-            );
       const consentByRoute = new Map<string, CrossProviderMediaConsentMode>();
       const routes =
         crossProviderConsent === undefined
-          ? featureRoutes
-          : yield* Effect.filter(featureRoutes, (route) =>
+          ? snapshot.media
+          : yield* Effect.filter(snapshot.media, (route) =>
               crossProviderConsent
                 .decide({
                   initiatorProvider: chat.provider,
@@ -478,13 +457,12 @@ export class ImageRouter extends Context.Tag("memory-agent/ImageRouter")<
       return makeImageRouter(yield* RouteCatalog, yield* ImageRouteFacts);
     }),
   );
-  static readonly featureFlagLayer = Layer.effect(
+  static readonly consentLayer = Layer.effect(
     ImageRouter,
     Effect.gen(function* () {
       return makeImageRouter(
         yield* RouteCatalog,
         yield* ImageRouteFacts,
-        yield* ModelFeatureFlags,
         yield* CrossProviderMediaConsent,
       );
     }),

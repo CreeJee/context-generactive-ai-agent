@@ -62,8 +62,8 @@ const directModelCapabilities = {
 } as const satisfies Record<OpenAIImageModel, DirectImageModelCapability>;
 
 /**
- * Candidate contracts verified from installed package exports/types/source.
- * They remain disabled until the concrete account entitlement is smoke-tested.
+ * Contracts verified from installed package exports/types/source. Direct adapters are implemented;
+ * the Provider Tool remains disabled until its account and chat-model integration is verified.
  */
 export const openAIImageRouteContracts: readonly ImageRouteContract[] = Object.freeze([
   {
@@ -107,8 +107,8 @@ export const openAIImageRouteContracts: readonly ImageRouteContract[] = Object.f
       provider: "openai",
       executionMode: "direct_adapter",
       executorModel: { type: "explicit", model },
-      verification: "unverified",
-      productionEnabled: false,
+      verification: "verified",
+      productionEnabled: true,
       authentication: "openai_api_key",
       billingAttribution: "executor_model",
       operations: capability.images ? ["generate", "edit"] : ["generate"],

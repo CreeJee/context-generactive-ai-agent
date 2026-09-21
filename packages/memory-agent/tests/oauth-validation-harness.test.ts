@@ -9,6 +9,7 @@ import {
   type StoredCredential,
 } from "../src/oauth/validation-harness.ts";
 import {
+  ProviderFeatureRejectedError,
   providerProtocols,
   type OAuthProvider,
   type ProviderProtocol,
@@ -391,6 +392,37 @@ describe("provider wire contracts", () => {
     expect(providerProtocols.anthropic.callbackRedirectHost).toBe("localhost");
     expect(providerProtocols.anthropic.callbackPath).toBe("/callback");
     expect(providerProtocols.anthropic.authorizeParameters?.["code"]).toBe("true");
+    expect(providerProtocols.anthropic.modelHeaders["anthropic-beta"]).toContain(
+      "prompt-caching-scope-2026-01-05",
+    );
+  });
+
+  test("classifies only Anthropic cache-feature HTTP rejection for safe fallback", async () => {
+    const store = new MemoryCredentialStore();
+    store.values.set("anthropic", {
+      accessToken: "access-secret",
+      refreshToken: "refresh-secret",
+      expiresAt: Date.now() + 60_000,
+    });
+    const cacheRejected = new OAuthValidationHarness({
+      protocol: providerProtocols.anthropic,
+      store,
+      fetch: async () =>
+        new Response('{"error":{"message":"cache_control is unsupported"}}', { status: 400 }),
+    });
+    const unrelated = new OAuthValidationHarness({
+      protocol: providerProtocols.anthropic,
+      store,
+      fetch: async () => new Response('{"error":{"message":"invalid model"}}', { status: 400 }),
+    });
+    const drain = async (harness: OAuthValidationHarness) => {
+      for await (const _event of harness.stream('{"model":"test","stream":true}')) {
+        // Drain the deterministic mock response.
+      }
+    };
+
+    await expect(drain(cacheRejected)).rejects.toBeInstanceOf(ProviderFeatureRejectedError);
+    await expect(drain(unrelated)).rejects.toBeInstanceOf(OAuthHarnessError);
   });
 });
 

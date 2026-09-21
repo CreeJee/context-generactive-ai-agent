@@ -31,11 +31,15 @@
 - 앱이 이미 떠 있는 포트에서 다시 실행하면 서버를 또 띄우지 않는다. 떠 있는 앱에 폴더를 넘기고 브라우저만 연 뒤 끝낸다. 저장 루트당 서버는 하나만 뜰 수 있어서다(벡터 인덱스 잠금). 포트를 다른 프로그램이 쓰고 있으면 `--port`를 안내한다.
 - 저장 루트는 `~/.context-generactive-agent`.
 
-## 요청 구성과 프롬프트 캐시 (2026-09-17)
+## 요청 구성, compact와 프롬프트 캐시 (2026-09-21)
 
 - 메인 대화는 공통 고정 지침 → 역할 지침 → 스킬·위임 안내와 프로젝트/날짜 문맥 순서로 구성한다. 지침 내용과 권한은 유지하고 지침 자체를 자동 정렬하지 않는다.
-- Codex 지침/도구 정의 구성을 history/input 변환과 분리한다. 도구는 이름 순서로 복사 정렬해 등록 순서에 따른 요청 변동을 없앤다. 스키마 내부 순서는 바꾸지 않는다.
-- 실제 서버 캐시 적중은 보장하지 않는다. 기존 압축·이미지 축약 정책은 유지하므로 압축 경계에서는 과거 prefix가 바뀔 수 있다.
+- 도구는 이름 순서로 복사 정렬해 등록 순서에 따른 요청 변동을 없앤다. 스키마 내부 순서는 바꾸지 않는다. 지침·메시지·도구 fingerprint에는 원문 대신 SHA-256만 기록한다.
+- 완료된 run의 도구 결과는 다음 모델 요청부터 immutable memory node pointer로 바꾼다. 최근 user turns 2개는 원문으로 유지하고, 그 이전은 4턴마다 독립적인 불변 요약 블록으로 단조롭게 누적한다. 새 블록 때문에 이전 요약 메시지를 다시 쓰지 않는다.
+- compact가 원문을 생략한 요청에만 현재 질문 기반의 세션 우선 retrieval appendix를 넣는다. 최대 5개·600 estimated tokens이며 최신 user 메시지 바로 앞에 둔다. 결과는 lead일 뿐이므로 답에 쓸 때 `read_evidence`와 `trace_evidence`로 원문과 정정을 확인한다.
+- Anthropic 요청은 안정된 system/tool prefix에 ephemeral cache marker를 쓰고, 해당 기능만 거부되면 stream 시작 전에 marker 없이 한 번 재시도한다. ChatGPT Responses는 지원이 확인되지 않은 cache field를 보내지 않고 provider 자동 prefix cache를 사용한다.
+- 장기 대화 결정론적 평가에서 현재 기본값은 기존 10턴 결합 요약·최근 4턴 프로파일보다 평균 입력 토큰 39.9% 감소, byte-identical cacheable prefix 2.9%p 증가를 보였다. 대신 summary provider call은 2회에서 6회로 늘었다. 4턴·2턴·600-token 기본값을 유지하고 실제 `cachedTokens`는 운영 context usage로 관측한다. 상세 방법과 재실행 명령은 [긴 대화 compact 평가](./compaction-evaluation.md)에 기록한다.
+- 실제 서버 캐시 적중은 provider TTL·라우팅·최소 prefix 길이에 좌우되므로 보장하지 않는다. deterministic 평가는 wire-prefix 안정성을, runtime 지표는 provider가 보고한 `cachedTokens`와 cache ratio를 각각 측정한다.
 
 ## 인증과 모델 (2026-09-15)
 

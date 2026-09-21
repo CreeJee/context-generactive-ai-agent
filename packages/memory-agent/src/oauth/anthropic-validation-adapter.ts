@@ -8,7 +8,7 @@ const AnthropicValidationRequestSchema = Schema.Struct({
   model: Schema.optional(Schema.String),
   max_tokens: Schema.optional(Schema.Number),
   stream: Schema.optional(Schema.Boolean),
-  system: Schema.optional(Schema.String),
+  system: Schema.optional(Schema.Union(Schema.String, Schema.Array(Schema.Unknown))),
   messages: Schema.optional(Schema.Array(Schema.Unknown)),
   tools: Schema.optional(Schema.Array(Schema.Unknown)),
   tool_choice: Schema.optional(Schema.Unknown),
@@ -35,13 +35,9 @@ export const prepareAnthropicValidationBody = (
   const originalSystem =
     decoded.system === undefined || decoded.system.length === 0
       ? []
-      : [
-          {
-            type: "text",
-            text: decoded.system,
-            cache_control: { type: "ephemeral", ttl: "1h" },
-          },
-        ];
+      : Array.isArray(decoded.system)
+        ? decoded.system
+        : [{ type: "text", text: decoded.system }];
 
   return JSON.stringify({
     ...decoded,

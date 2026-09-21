@@ -17,7 +17,6 @@ import type {
   CrossProviderMediaConsentSettings,
   CrossProviderMediaRunApproval,
   McpServerView,
-  ModelFeatureFlagSettings,
   ModelSelection,
   PermissionMode,
   Project,
@@ -50,7 +49,6 @@ import {
 
 export type GeneratedImageAsset = ImageMediaAsset & { readonly url: string };
 export type ImageSettingsView = ImageFeatureStatus & {
-  readonly modelFeatureFlags: ModelFeatureFlagSettings;
   readonly crossProviderMediaConsent: CrossProviderMediaConsentSettings;
 };
 
@@ -95,7 +93,6 @@ export type {
   CrossProviderMediaConsentSettings,
   CrossProviderMediaRunApproval,
   McpServerView,
-  ModelFeatureFlagSettings,
   ModelSelection,
   PermissionMode,
   Project,
@@ -408,15 +405,11 @@ export const api = {
     ),
 
   imageSettings: () => call<ImageSettingsView>("GET", "/api/settings/image"),
-  setImageSetting: (
-    action:
-      | "image_generation"
-      | "provider_tool"
-      | "features_global"
-      | "features_openai"
-      | "feature_image",
-    enabled: boolean,
-  ) => call<ImageSettingsView>("POST", "/api/settings/image", { action, enabled }),
+  setImageGenerationEnabled: (enabled: boolean) =>
+    call<ImageSettingsView>("POST", "/api/settings/image", {
+      action: "image_generation",
+      enabled,
+    }),
   setCrossProviderMediaConsent: (mode: CrossProviderMediaConsentMode) =>
     call<ImageSettingsView>("POST", "/api/settings/image", {
       action: "cross_provider_media",
@@ -665,6 +658,12 @@ export const decodeDeliveredEvent = Schema.decodeUnknownOption(
 export const decodeContextEvent = Schema.decodeUnknownOption(
   Schema.Struct({
     usedTokens: Schema.NullOr(Schema.Number),
+    cachedTokens: Schema.optionalWith(Schema.NullOr(Schema.Number), { default: () => null }),
+    cacheRatio: Schema.optionalWith(Schema.NullOr(Schema.Number), { default: () => null }),
+    compactionStage: Schema.optionalWith(
+      Schema.NullOr(Schema.Literal("none", "clear-answered", "summarize", "leave-out")),
+      { default: () => null },
+    ),
     windowTokens: Schema.Number,
     compactAtTokens: Schema.Number,
   }),

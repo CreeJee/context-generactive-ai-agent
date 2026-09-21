@@ -1,7 +1,8 @@
 import type { ChatMiddleware, MetadataStore, ModelMessage } from "@tanstack/ai";
 import { evictOldest } from "@tanstack/ai-compaction";
 import { Option, Schema } from "effect";
-import type { CompactResult } from "./run-state.ts";
+import { recentRawUserTurns } from "./compaction-policy.ts";
+import type { CompactResult, CompactionStage } from "./run-state.ts";
 
 /**
  * Share of the model's context the conversation may take before it is compacted: answered tool
@@ -10,8 +11,6 @@ import type { CompactResult } from "./run-state.ts";
 export const compactAtShare = 0.25;
 /** Share past which the oldest messages are left out, whatever else was done. */
 export const leaveOutAtShare = 0.55;
-/** The latest user turns, always sent as they are. */
-export const keepRecentTurns = 4;
 
 /** Estimated conversation tokens at which each step starts. */
 export interface Budget {
@@ -140,18 +139,20 @@ export function linedUp(
   return fitting;
 }
 
-/** The summaries, sent in place of the turns they cover. */
-function summaryMessage(blocks: readonly SummaryBlock[]): ModelMessage {
+/**
+ * Immutable summaries, one message per stored block. Appending a block never rewrites an earlier
+ * message, so the provider can keep the KV prefix through the previous block.
+ */
+function summaryMessages(blocks: readonly SummaryBlock[]): ModelMessage[] {
   let start = 0;
-  const parts = blocks.map((block) => {
-    const part = `Turns ${start + 1}-${block.end}:\n${block.text}`;
+  return blocks.map((block) => {
+    const message: ModelMessage = {
+      role: "assistant",
+      content: `[Summary of user turns ${start + 1}-${block.end}, written afterwards. The turns themselves were left out to save context and are kept in memory. This summary is a lead, not evidence: read the nodes it cites with read_evidence before relying on a point. Only the user's own words are decisions.]\n\n${block.text}`,
+    };
     start = block.end;
-    return part;
+    return message;
   });
-  return {
-    role: "assistant",
-    content: `[Summary of the first ${start} user turns of this conversation, written afterwards. The turns themselves were left out to save context and are kept in memory. The summary is a lead, not evidence: read the nodes it cites with read_evidence before relying on a point. Only the user's own words are decisions.]\n\n${parts.join("\n\n")}`,
-  };
 }
 
 /** Where `/compact` records how far it compacted a session's conversation. */
@@ -197,6 +198,11 @@ export interface CompactionSources {
   /** The session's tool_result node ids, by tool call id. */
   readonly toolResultIds: () => ReadonlyMap<string, string>;
   readonly nodeText: (id: string) => string | null;
+  /**
+   * Bounded, variable-tail leads for content this request left out. It must fail closed: compaction
+   * still sends the request when retrieval is unavailable.
+   */
+  readonly retrievalAppendix?: (sent: readonly ModelMessage[]) => Promise<ModelMessage | null>;
 }
 
 /** Where dropped messages went, for the model: they are in memory, not gone. */
@@ -206,6 +212,8 @@ const leaveOutOldest = evictOldest({ marker: droppedMarker });
 
 export interface Compacted {
   readonly messages: readonly ModelMessage[];
+  /** The strongest operation applied while preparing this request. */
+  readonly stage: CompactionStage;
   /** The user turns sent as their summaries. */
   readonly summarizedTurns: number;
 }
@@ -225,32 +233,61 @@ export async function compact(
   // A record for a longer conversation was made for another one.
   const manual = state.manual.clearedThrough <= messages.length ? state.manual : noManualCompaction;
   let sent = messages;
+  let stage: CompactionStage = "none";
   const clearedByHand = clearAnswered(
     messages.slice(0, manual.clearedThrough),
     sources.toolResultIds,
   );
   if (clearedByHand) sent = [...clearedByHand, ...messages.slice(manual.clearedThrough)];
-  if (estimateConversation(sent) > budget.compactAt)
-    sent = clearAnswered(sent, sources.toolResultIds) ?? sent;
+  // A completed run no longer needs its tool payload in the next request. This transition happens
+  // once; clearAnswered leaves pointers unchanged and never touches the run still in progress.
+  const cleared = clearAnswered(sent, sources.toolResultIds);
+  if (cleared) sent = cleared;
+  if (clearedByHand || cleared) stage = "clear-answered";
 
-  // Clearing keeps every message in place, so turns still count from the saved conversation.
+  // A valid stored block is a monotonic watermark: once summarized, those turns never come back as
+  // raw messages merely because the shorter request fell below the compact threshold.
   const turns = userTurns(messages);
-  let through = manual.summarizedTurns;
+  const fitting = linedUp(messages, state.blocks, sources.nodeText);
+  let through = Math.max(manual.summarizedTurns, fitting.at(-1)?.end ?? 0);
   if (estimateConversation(sent) > budget.compactAt)
-    through = Math.max(through, turns.length - keepRecentTurns);
-  const summaries = linedUp(messages, state.blocks, sources.nodeText).filter(
-    (block) => block.end <= through,
-  );
+    through = Math.max(through, turns.length - recentRawUserTurns);
+  const summaries = fitting.filter((block) => block.end <= through);
   const summarizedTurns = summaries.at(-1)?.end ?? 0;
   const firstKept = turns[summarizedTurns];
-  if (summarizedTurns > 0 && firstKept !== undefined)
-    sent = [summaryMessage(summaries), ...sent.slice(firstKept)];
+  if (summarizedTurns > 0 && firstKept !== undefined) {
+    sent = [...summaryMessages(summaries), ...sent.slice(firstKept)];
+    stage = "summarize";
+  }
 
-  if (estimateConversation(sent) > budget.leaveOutAt)
-    sent =
-      (await leaveOutOldest(sent, { maxTokens: budget.leaveOutAt, estimate: estimateTokens })) ??
-      sent;
-  return { messages: sent, summarizedTurns };
+  if (estimateConversation(sent) > budget.leaveOutAt) {
+    const leftOut = await leaveOutOldest(sent, {
+      maxTokens: budget.leaveOutAt,
+      estimate: estimateTokens,
+    });
+    if (leftOut) {
+      sent = leftOut;
+      stage = "leave-out";
+    }
+  }
+  // Do not perturb an intact prefix with retrieval. Once this request did omit original content,
+  // an optional appendix belongs at its variable tail, immediately before the latest user message,
+  // so providers that require user-last requests still accept it. Retrieval is deliberately best-effort.
+  if (stage !== "none" && sources.retrievalAppendix) {
+    try {
+      const appendix = await sources.retrievalAppendix(sent);
+      if (appendix) {
+        const lastUser = sent.findLastIndex((message) => message.role === "user");
+        sent =
+          lastUser < 0
+            ? [...sent, appendix]
+            : [...sent.slice(0, lastUser), appendix, ...sent.slice(lastUser)];
+      }
+    } catch {
+      // Search may be warming or degraded; failure must not prevent the chat request.
+    }
+  }
+  return { messages: sent, stage, summarizedTurns };
 }
 
 /**
@@ -261,6 +298,7 @@ export function compaction(
   metadata: MetadataStore,
   sources: CompactionSources,
   budget: Budget,
+  observed: (stage: CompactionStage) => void = () => undefined,
 ): ChatMiddleware {
   return {
     name: "memory-agent/compaction",
@@ -268,7 +306,8 @@ export function compaction(
       // Only the model-bound phases shape what is sent.
       if (ctx.phase === "init") return;
       const state = await compactionState(metadata, ctx.threadId);
-      const { messages } = await compact(config.messages, state, sources, budget);
+      const { messages, stage } = await compact(config.messages, state, sources, budget);
+      observed(stage);
       return messages === config.messages ? undefined : { providerMessages: [...messages] };
     },
   };
@@ -299,7 +338,7 @@ export async function compactByHand(
   const outcome = await summarize();
   const state = await compactionState(metadata, threadId);
   const summaries = linedUp(messages, state.blocks, sources.nodeText).filter(
-    (block) => block.end <= userTurns(messages).length - keepRecentTurns,
+    (block) => block.end <= userTurns(messages).length - recentRawUserTurns,
   );
   const manual: ManualCompaction = {
     clearedThrough: messages.length,

@@ -314,19 +314,11 @@ function ImageSettings() {
       .catch(() => setError("이미지 설정을 불러오지 못했어요."));
   }, []);
 
-  const apply = async (
-    action:
-      | "image_generation"
-      | "provider_tool"
-      | "features_global"
-      | "features_openai"
-      | "feature_image",
-    enabled: boolean,
-  ) => {
+  const setImageGenerationEnabled = async (enabled: boolean) => {
     setBusy(true);
     setError(null);
     try {
-      setStatus(await api.setImageSetting(action, enabled));
+      setStatus(await api.setImageGenerationEnabled(enabled));
     } catch {
       setError("이미지 설정을 바꾸지 못했어요.");
     } finally {
@@ -351,12 +343,12 @@ function ImageSettings() {
       title="이미지 생성"
       badge={
         status && (
-          <Badge variant={status.featureAvailable ? "secondary" : "outline"}>
-            {status.featureAvailable ? "사용 가능" : "앱에서 꺼짐"}
+          <Badge variant={status.imageGenerationEnabled ? "secondary" : "outline"}>
+            {status.imageGenerationEnabled ? "사용 중" : "꺼짐"}
           </Badge>
         )
       }
-      description="기본적으로 일반 대화에 이미지 도구를 넣지 않아요. 앱 기능, 사용자 설정, 명시적인 이미지 요청이 모두 켜진 순간에만 필요한 경로를 준비해요."
+      description="이미지 생성이 필요할 때만 작성창에서 생성 모드를 선택해 사용해요. 일반 대화에는 이미지 도구가 추가되지 않아요."
     />
   );
   if (!status)
@@ -370,18 +362,33 @@ function ImageSettings() {
   return (
     <FieldGroup>
       {header}
+      <Field orientation="horizontal">
+        <FieldContent>
+          <FieldLabel htmlFor="image-generation-enabled">이미지 생성 사용</FieldLabel>
+          <FieldDescription>
+            OpenAI API 키가 필요하며 생성할 때마다 비용이 발생할 수 있어요. 설정은 바로 적용되고
+            앱을 다시 시작할 필요가 없어요.
+          </FieldDescription>
+        </FieldContent>
+        <Switch
+          id="image-generation-enabled"
+          checked={status.imageGenerationEnabled}
+          disabled={busy}
+          onCheckedChange={(checked) => void setImageGenerationEnabled(checked)}
+        />
+      </Field>
       <Alert>
         <AlertDescription>
-          켜기는 다음 메시지부터 도구와 route를 다시 계산해 적용해요. 끄기는 다음 요청뿐 아니라 아직
-          실행되지 않은 도구 호출도 서버에서 차단해요.
+          켜도 이미지는 자동으로 생성되지 않아요. 작성창에서 이미지 생성 모드를 선택한 요청만
+          처리하고, 유료 실행 전에는 별도로 확인해요.
         </AlertDescription>
       </Alert>
       <Field orientation="horizontal">
         <FieldContent>
-          <FieldLabel htmlFor="cross-provider-media">Claude → OpenAI 이미지 실행</FieldLabel>
+          <FieldLabel htmlFor="cross-provider-media">Claude에서 이미지 생성</FieldLabel>
           <FieldDescription>
-            Claude는 이미지를 직접 생성하지 않아요. 허용하면 이미지 프롬프트가 OpenAI로 전송되고
-            사용량은 OpenAI 계정에 귀속돼요. 로그인만으로는 자동 허용되지 않아요.
+            Claude 사용 중 이미지 생성을 요청하면 프롬프트를 OpenAI로 보내요. 사용량은 OpenAI 계정에
+            귀속되며, 로그인만으로 자동 허용되지 않아요.
           </FieldDescription>
         </FieldContent>
         <Select
@@ -389,7 +396,7 @@ function ImageSettings() {
             status.crossProviderMediaConsent.pairs["anthropic->openai:media.image.generate"] ??
             "disabled"
           }
-          disabled={busy}
+          disabled={busy || !status.imageGenerationEnabled}
           onValueChange={(value) => {
             if (isCrossProviderMediaConsentMode(value)) void applyCrossProviderMode(value);
           }}
@@ -403,93 +410,6 @@ function ImageSettings() {
             <SelectItem value="always">항상 허용</SelectItem>
           </SelectContent>
         </Select>
-      </Field>
-      <Field orientation="horizontal">
-        <FieldContent>
-          <FieldLabel htmlFor="model-features-global">모델 기능 전체 허용</FieldLabel>
-          <FieldDescription>
-            Provider Tool과 이미지처럼 모델에 따라 달라지는 기능의 최상위 차단 스위치예요.
-          </FieldDescription>
-        </FieldContent>
-        <Switch
-          id="model-features-global"
-          checked={status.modelFeatureFlags.global}
-          disabled={busy}
-          onCheckedChange={(checked) => void apply("features_global", checked)}
-        />
-      </Field>
-      <Field orientation="horizontal">
-        <FieldContent>
-          <FieldLabel htmlFor="model-features-openai">OpenAI 기능 허용</FieldLabel>
-          <FieldDescription>
-            OpenAI 모델과 실행 route에서 지원되는 기능만 추가로 허용해요.
-          </FieldDescription>
-        </FieldContent>
-        <Switch
-          id="model-features-openai"
-          checked={status.modelFeatureFlags.providers.openai ?? false}
-          disabled={busy || !status.modelFeatureFlags.global}
-          onCheckedChange={(checked) => void apply("features_openai", checked)}
-        />
-      </Field>
-      <Field orientation="horizontal">
-        <FieldContent>
-          <FieldLabel htmlFor="model-feature-image">이미지 capability 허용</FieldLabel>
-          <FieldDescription>
-            지원·인증·entitlement 정책을 통과한 direct adapter와 Provider Tool에만 적용돼요.
-          </FieldDescription>
-        </FieldContent>
-        <Switch
-          id="model-feature-image"
-          checked={status.modelFeatureFlags.capabilities["openai:image_generation"] ?? false}
-          disabled={
-            busy ||
-            !status.modelFeatureFlags.global ||
-            !(status.modelFeatureFlags.providers.openai ?? false)
-          }
-          onCheckedChange={(checked) => void apply("feature_image", checked)}
-        />
-      </Field>
-      {!status.featureAvailable &&
-        status.modelFeatureFlags.global &&
-        (status.modelFeatureFlags.providers.openai ?? false) &&
-        (status.modelFeatureFlags.capabilities["openai:image_generation"] ?? false) && (
-          <Alert>
-            <AlertDescription>
-              이 빌드에서는 이미지 실행 capability를 사용할 수 없어요. 서버에서
-              CONTEXT_AGENT_IMAGE_GENERATION=1로 켠 뒤 다시 시작해야 해요.
-            </AlertDescription>
-          </Alert>
-        )}
-      <Field orientation="horizontal">
-        <FieldContent>
-          <FieldLabel htmlFor="image-generation-enabled">이미지 생성 사용</FieldLabel>
-          <FieldDescription>
-            켜도 일반 대화에는 이미지 schema가 들어가지 않아요. 작성창에서 이미지 생성 모드를 선택한
-            요청만 처리해요.
-          </FieldDescription>
-        </FieldContent>
-        <Switch
-          id="image-generation-enabled"
-          checked={status.imageGenerationEnabled}
-          disabled={busy || !status.featureAvailable}
-          onCheckedChange={(checked) => void apply("image_generation", checked)}
-        />
-      </Field>
-      <Field orientation="horizontal">
-        <FieldContent>
-          <FieldLabel htmlFor="image-provider-tool-enabled">Provider Tool 허용</FieldLabel>
-          <FieldDescription>
-            기본 경로는 별도 direct media adapter예요. 이 옵션을 켜야 Provider Tool schema가 조건을
-            만족한 요청에만 포함돼요.
-          </FieldDescription>
-        </FieldContent>
-        <Switch
-          id="image-provider-tool-enabled"
-          checked={status.imageProviderToolEnabled}
-          disabled={busy || !status.featureAvailable || !status.imageGenerationEnabled}
-          onCheckedChange={(checked) => void apply("provider_tool", checked)}
-        />
       </Field>
       {error && (
         <Alert variant="destructive">
