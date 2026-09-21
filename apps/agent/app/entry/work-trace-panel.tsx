@@ -6,7 +6,6 @@ import {
   CircleDotIcon,
   HistoryIcon,
   NetworkIcon,
-  PanelRightCloseIcon,
   PanelRightOpenIcon,
   RefreshCwIcon,
   ShieldAlertIcon,
@@ -505,15 +504,7 @@ export function WorkTracePanel({
   sessionId: string | null;
 }) {
   const [open, setOpen] = useState(false);
-  const [isDesktop, setIsDesktop] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  useEffect(() => {
-    const media = window.matchMedia("(min-width: 64rem)");
-    const changed = () => setIsDesktop(media.matches);
-    changed();
-    media.addEventListener("change", changed);
-    return () => media.removeEventListener("change", changed);
-  }, []);
   useEffect(() => {
     const show = (event: Event) => {
       const taskId =
@@ -540,53 +531,24 @@ export function WorkTracePanel({
           <PanelRightOpenIcon />
         </Button>
       )}
-      {open && isDesktop && (
-        <aside
-          className="flex w-96 shrink-0 flex-col border-l bg-background"
-          aria-label="Work Trace"
-        >
-          <header className="flex items-center gap-2 px-3 py-2">
-            <NetworkIcon className="size-4" aria-hidden />
-            <h2 className="text-sm font-semibold">Work Trace</h2>
-            <Button
-              className="ml-auto"
-              size="icon-sm"
-              variant="ghost"
-              aria-label="Work Trace 닫기"
-              onClick={() => setOpen(false)}
-            >
-              <PanelRightCloseIcon />
-            </Button>
-          </header>
-          <Separator />
+      <Sheet open={open} onOpenChange={setOpen}>
+        <SheetContent className="min-w-0 overflow-hidden">
+          <SheetHeader>
+            <SheetTitle>
+              <span className="flex items-center gap-2">
+                <NetworkIcon className="size-4" aria-hidden /> Work Trace
+              </span>
+            </SheetTitle>
+            <SheetDescription>저장된 작업 계층과 실행 근거를 확인해요.</SheetDescription>
+          </SheetHeader>
           <PanelBody
             projectId={projectId}
             sessionId={sessionId}
             selectedTaskId={selectedTaskId}
             onSelectedTaskIdChange={setSelectedTaskId}
           />
-        </aside>
-      )}
-      {!isDesktop && (
-        <Sheet open={open} onOpenChange={setOpen}>
-          <SheetContent>
-            <SheetHeader>
-              <SheetTitle>
-                <span className="flex items-center gap-2">
-                  <NetworkIcon className="size-4" aria-hidden /> Work Trace
-                </span>
-              </SheetTitle>
-              <SheetDescription>저장된 작업 계층과 실행 근거를 확인해요.</SheetDescription>
-            </SheetHeader>
-            <PanelBody
-              projectId={projectId}
-              sessionId={sessionId}
-              selectedTaskId={selectedTaskId}
-              onSelectedTaskIdChange={setSelectedTaskId}
-            />
-          </SheetContent>
-        </Sheet>
-      )}
+        </SheetContent>
+      </Sheet>
     </>
   );
 }
