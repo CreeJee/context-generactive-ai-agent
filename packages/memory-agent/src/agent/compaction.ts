@@ -210,6 +210,21 @@ const droppedMarker = (count: number) =>
   `[${count} earlier messages of this conversation were left out to save context. They are kept in memory: use find_memory, read_evidence and trace_evidence to recall them.]`;
 const leaveOutOldest = evictOldest({ marker: droppedMarker });
 
+/** OpenAI rejects a function_call_output when compaction removed its matching function_call. */
+function dropOrphanToolResults(messages: readonly ModelMessage[]): readonly ModelMessage[] {
+  const callIds = new Set(
+    messages.flatMap((message) =>
+      message.role === "assistant" ? (message.toolCalls ?? []).map((call) => call.id) : [],
+    ),
+  );
+  return messages.filter(
+    (message) =>
+      message.role !== "tool" ||
+      message.toolCallId === undefined ||
+      callIds.has(message.toolCallId),
+  );
+}
+
 export interface Compacted {
   readonly messages: readonly ModelMessage[];
   /** The strongest operation applied while preparing this request. */
@@ -286,6 +301,11 @@ export async function compact(
     } catch {
       // Search may be warming or degraded; failure must not prevent the chat request.
     }
+  }
+  const paired = dropOrphanToolResults(sent);
+  if (paired.length !== sent.length) {
+    sent = paired;
+    if (stage === "none") stage = "clear-answered";
   }
   return { messages: sent, stage, summarizedTurns };
 }

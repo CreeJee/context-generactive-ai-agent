@@ -141,6 +141,40 @@ function conversation(
 }
 
 describe("compaction", () => {
+  test("drops a tool result when compaction has removed its matching tool call", async () => {
+    const messages: ModelMessage[] = [
+      { role: "assistant", content: "earlier call was compacted" },
+      { role: "tool", toolCallId: "orphaned", content: "result without a call" },
+      {
+        role: "assistant",
+        content: null,
+        toolCalls: [
+          {
+            id: "paired",
+            type: "function",
+            function: { name: "read_file", arguments: '{"path":"README.md"}' },
+          },
+        ],
+      },
+      { role: "tool", toolCallId: "paired", content: "paired result" },
+      { role: "user", content: "continue" },
+    ];
+    const result = await compact(
+      messages,
+      { manual: { clearedThrough: 0, summarizedTurns: 0 }, blocks: [] },
+      { toolResultIds: () => new Map(), nodeText: () => null },
+      { compactAt: noLimit, leaveOutAt: noLimit },
+    );
+
+    expect(result.messages).not.toContainEqual(
+      expect.objectContaining({ role: "tool", toolCallId: "orphaned" }),
+    );
+    expect(result.messages).toContainEqual(
+      expect.objectContaining({ role: "tool", toolCallId: "paired" }),
+    );
+    expect(result.stage).toBe("clear-answered");
+  });
+
   test("clears tool output the model already answered from, and keeps the run's own whole", async () => {
     const { runtime, project, session } = await testRuntime();
     const { nodes, tools, metadata } = await runtime.runPromise(
