@@ -119,9 +119,24 @@ export type OAuthHarnessOperation =
 export interface OAuthHarnessErrorContext {
   readonly provider?: OAuthProvider;
   readonly operation?: OAuthHarnessOperation;
+  /** A bounded provider error message. Never include response headers or request bodies here. */
+  readonly reason?: string;
 }
 
 const providerName = (provider: OAuthProvider) => (provider === "openai" ? "OpenAI" : "Anthropic");
+const maxProviderReasonCharacters = 1_000;
+const ProviderErrorBody = Schema.Struct({
+  error: Schema.optional(Schema.Struct({ message: Schema.String })),
+  message: Schema.optional(Schema.String),
+});
+const decodeProviderErrorBody = Schema.decodeUnknownOption(Schema.parseJson(ProviderErrorBody));
+
+const providerReason = (body: string): string | undefined => {
+  const parsed = Option.getOrUndefined(decodeProviderErrorBody(body));
+  const reason = parsed?.error?.message ?? parsed?.message ?? body;
+  const bounded = reason.replace(/\s+/g, " ").trim().slice(0, maxProviderReasonCharacters);
+  return bounded.length > 0 ? bounded : undefined;
+};
 
 export class OAuthHarnessError extends Error {
   readonly code: OAuthHarnessFailure;
@@ -140,7 +155,7 @@ export class OAuthHarnessError extends Error {
       status === null ? null : `status=${status}`,
     ].filter((detail) => detail !== null);
     super(
-      `oauth_${code}${details.length === 0 ? "" : ` [${details.join(", ")}]`}: ${failureMessages[code]}`,
+      `oauth_${code}${details.length === 0 ? "" : ` [${details.join(", ")}]`}: ${failureMessages[code]}${context.reason === undefined ? "" : ` ${context.reason}`}`,
     );
     this.name = "OAuthHarnessError";
     this.code = code;
@@ -674,7 +689,10 @@ export class SubscriptionOAuthClient {
         /cache[_ -]?control|prompt[_ -]?cach/i.test(responseText)
       )
         throw new ProviderFeatureRejectedError("anthropic", "prompt-cache", response.status);
-      throw new OAuthHarnessError("provider_rejected", response.status, context);
+      throw new OAuthHarnessError("provider_rejected", response.status, {
+        ...context,
+        reason: providerReason(responseText),
+      });
     }
     yield* sseEvents(this.#protocol.provider, response);
   }

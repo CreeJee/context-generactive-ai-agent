@@ -422,7 +422,10 @@ describe("provider wire contracts", () => {
     };
 
     await expect(drain(cacheRejected)).rejects.toBeInstanceOf(ProviderFeatureRejectedError);
-    await expect(drain(unrelated)).rejects.toBeInstanceOf(OAuthHarnessError);
+    await expect(drain(unrelated)).rejects.toMatchObject({
+      message:
+        "oauth_provider_rejected [provider=Anthropic, operation=model_stream, status=400]: The provider rejected the request. invalid model",
+    });
   });
 });
 
