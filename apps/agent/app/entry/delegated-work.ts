@@ -35,7 +35,7 @@ export function useDelegatedWork(sessionId: string, _generating: boolean) {
 export function requesterLabel(requester: ApprovalRequester) {
   switch (requester.kind) {
     case "subagent":
-      return requester.name ? `서브에이전트 ${requester.name}` : "일회 서브에이전트";
+      return requester.name ? `서브에이전트 ${requester.name}` : "서브에이전트";
     case "external_agent":
       return `외부 에이전트 ${requester.agent}`;
   }
