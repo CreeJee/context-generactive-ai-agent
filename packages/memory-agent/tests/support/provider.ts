@@ -137,6 +137,43 @@ export const defaultTestResponder: ScriptedResponder = async (invocation) => {
 
   if (tools.length > 0) {
     const byId = new Map(tools.map((message) => [message.toolCallId, toolText(message)]));
+    // Exercise the asynchronous contract explicitly: dispatch -> wait -> retrieve. The test
+    // model waits by choice; production dispatch tools no longer block their parent turn.
+    if (!instructions.includes("You are a subagent") && !user.includes("dispatch only")) {
+      const receipts = tools.flatMap((message) => {
+        if (message.toolCallId === "call-get_subagent_report") return [];
+        try {
+          const value = JSON.parse(toolText(message));
+          return value.status === "running" && value.taskId && value.attemptId
+            ? [{ taskId: String(value.taskId), attemptId: String(value.attemptId) }]
+            : [];
+        } catch {
+          return [];
+        }
+      });
+      if (receipts.length > 0)
+        return call("call-wait-children", "wait_subagents", { attempts: receipts });
+      if (byId.has("call-wait-children")) {
+        const result = Schema.decodeUnknownSync(
+          Schema.parseJson(
+            Schema.Struct({
+              attempts: Schema.Array(
+                Schema.Struct({ taskId: Schema.String, attemptId: Schema.String }),
+              ),
+            }),
+          ),
+        )(byId.get("call-wait-children")!);
+        return {
+          toolCalls: result.attempts.map((attempt, index) => ({
+            id: `call-report-${index}`,
+            name: "get_subagent_report",
+            arguments: JSON.stringify(attempt),
+          })),
+        };
+      }
+      if ([...byId.keys()].some((id) => id.startsWith("call-report-")))
+        return { text: [...byId.values()].join(" | ") };
+    }
     if (byId.has("call-memory")) {
       const found = JSON.parse(byId.get("call-memory")!);
       return { text: `Found: ${found.matches?.[0]?.snippet ?? "nothing"}` };
@@ -165,6 +202,10 @@ export const defaultTestResponder: ScriptedResponder = async (invocation) => {
     if (generic) return { text: `${generic[0].slice(5)} said ${generic[1]}` };
   }
 
+  if (instructions.includes("This is an automatic subagent completion follow-up"))
+    return { text: "Background work completed." };
+  if (user === "dispatch only")
+    return call("call-background", "run_subagent", { task: "nap background" });
   const generic = user.match(/^call (\S+) (\{.*\})$/s);
   if (generic) return call(`call-${generic[1]}`, generic[1]!, JSON.parse(generic[2]!));
   if (user.includes("remember"))

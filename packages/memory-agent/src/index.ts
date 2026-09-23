@@ -525,6 +525,7 @@ export {
   subagentToolNames,
   type SubagentBinding,
   type SubagentReport,
+  type SubagentReceipt,
 } from "./subagents/subagents.ts";
 export type { SubagentStatus, SubagentView } from "./subagents/subagent-state.ts";
 export {

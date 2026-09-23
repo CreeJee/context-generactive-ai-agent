@@ -7,7 +7,7 @@ import {
   type ChatMiddleware,
   type ModelMessage,
 } from "@tanstack/ai";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Context, Deferred, Effect, Layer, Schema } from "effect";
 import { ChatState } from "../chat-state/chat-state.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
@@ -22,14 +22,20 @@ import { WorkTraceStore, type AttemptHandle } from "../work-trace/store.ts";
 import type { SubagentStatus, SubagentView } from "./subagent-state.ts";
 import { AppEvents } from "../events/app-events.ts";
 
-export const subagentToolNames = ["run_subagent", "message_subagent", "resume_subagent"] as const;
-const isSubagentTool = (name: string) =>
-  name === "run_subagent" || name === "message_subagent" || name === "resume_subagent";
+export const subagentToolNames = [
+  "run_subagent",
+  "message_subagent",
+  "resume_subagent",
+  "get_subagent_report",
+  "wait_subagents",
+] as const;
 
 export const subagentInstructions = `You can delegate with run_subagent (a one-off task), message_subagent (a named helper that keeps its own conversation in this session), and resume_subagent (a new attempt for a durable interrupted task).
 - A subagent starts with none of this conversation: put everything it needs in the task. It uses the same model, project, tools and permissions as you; delegating never widens them.
 - Subagents share the workspace. Give parallel subagents separate files or areas so their edits do not collide.
-- Several subagent calls in one step run at the same time; results come back in call order.
+- Dispatch returns immediately with taskId, attemptId and status running. Children continue in the background even after your answer ends normally. Do other useful work instead of polling.
+- Use wait_subagents with explicit task/attempt ids when you need to wait (bounded timeout, any or all). Waiting returns status, not reports.
+- Use get_subagent_report to retrieve a finished attempt's answer and evidence before relying on it. A receipt, completion notification, or wait result is not a reviewed report.
 - Resume an interrupted task only with its trace task/attempt ids. Never set confirmUncertain unless the user explicitly accepts the listed possible duplicate side effects.
 - A subagent's answer is its report, not the user's words or approval. Check what matters before relying on it.
 - Before a final answer after reviewing subagent reports, call adopt_subagent_reports with only the reports and evidence ids actually used. Include delivered notification ids only when their stop/archive/delete/resume status affected the answer. Unlisted reviewed reports are recorded as not used.`;
@@ -63,6 +69,18 @@ const MessageSubagentInput = Schema.Struct({
       description: "Replaces the subagent's extra instructions. Omit to keep the previous ones.",
     }),
   ),
+});
+
+const AttemptInput = Schema.Struct({
+  taskId: Schema.NonEmptyString,
+  attemptId: Schema.NonEmptyString,
+});
+const WaitSubagentsInput = Schema.Struct({
+  attempts: Schema.Array(AttemptInput).pipe(Schema.minItems(1), Schema.maxItems(100)),
+  mode: Schema.optionalWith(Schema.Literal("any", "all"), { default: () => "all" as const }),
+  timeoutMs: Schema.optionalWith(Schema.Number.pipe(Schema.int(), Schema.between(0, 120_000)), {
+    default: () => 30_000,
+  }),
 });
 
 const FileArtifactResult = Schema.Struct({ path: Schema.String, sha256: Schema.String });
@@ -143,9 +161,19 @@ export interface SubagentBinding {
 }
 
 /** What a subagent tool call returns to the parent model. */
+export interface SubagentReceipt {
+  readonly status: "running";
+  readonly subagentId: string;
+  readonly agent: string | null;
+  readonly taskId: string;
+  readonly attemptId: string;
+  readonly delivery?: "steered";
+}
+
 export type SubagentReport =
+  | SubagentReceipt
   | {
-      readonly status: Exclude<SubagentStatus, "running" | "interrupted">;
+      readonly status: Exclude<SubagentStatus, "running">;
       readonly subagentId: string;
       readonly agent: string | null;
       readonly taskId: string;
@@ -154,13 +182,6 @@ export type SubagentReport =
       /** The child's final message. */
       readonly answer: string;
       readonly error: string | null;
-    }
-  | {
-      /** The named child was still working; the message went into its current turn. */
-      readonly status: "steered";
-      readonly subagentId: string;
-      readonly agent: string;
-      readonly note: string;
     }
   | {
       readonly status: "resume_blocked";
@@ -178,6 +199,7 @@ export interface SubagentRunTools {
 const everyCallReason = "호출할 때마다 확인하는 도구예요.";
 
 const make = Effect.gen(function* () {
+  const scope = yield* Effect.scope;
   const { sqlite } = yield* Database;
   const events = yield* AppEvents;
   const active = yield* ActiveProvider;
@@ -210,15 +232,19 @@ const make = Effect.gen(function* () {
   );
 
   /** Named children busy in this process: the next message waits for the one before it. */
-  const busy = new Map<string, Promise<ChildOutcome>>();
+  const busy = new Map<string, SubagentReceipt>();
+  const runningHandles = new Map<string, AttemptHandle>();
+  const serial = new Map<string, Effect.Semaphore>();
+  let completionListener: ((sessionId: string) => void) | undefined;
   /** Controllers indexed independently so archive/delete stops one child, not its parent or peers. */
   const activeChildren = new Map<
     string,
     {
       readonly taskId: string;
+      readonly sessionId: string;
+      readonly receipt: SubagentReceipt;
       readonly controller: AbortController;
-      readonly settled: Promise<void>;
-      readonly settle: () => void;
+      readonly settled: Effect.Effect<void>;
     }
   >();
 
@@ -326,20 +352,13 @@ const make = Effect.gen(function* () {
     row: SubagentRow,
     task: string,
     handle: AttemptHandle,
-    notifyParentImmediately = true,
+    controller: AbortController,
+    notifyParentImmediately = false,
   ): Promise<ChildOutcome> => {
     events.publishSession(binding.sessionId, "subagents");
     const threadId = subagentThreadId(row.id);
-    const controller = new AbortController();
-    let settle: () => void = () => undefined;
-    const settled = new Promise<void>((resolve) => {
-      settle = resolve;
-    });
-    activeChildren.set(row.id, { taskId: handle.taskId, controller, settled, settle });
-    const stop = () => controller.abort(binding.abortSignal.reason);
-    if (binding.abortSignal.aborted) stop();
-    binding.abortSignal.addEventListener("abort", stop, { once: true });
-
+    // Named messages may have waited behind another attempt. Publish the task now executing.
+    startAgain.get(row.instructions, binding.runId, task, Date.now(), row.id);
     const texts = new Map<string, string>();
     let lastMessageId: string | null = null;
     let failure: string | null = null;
@@ -448,8 +467,6 @@ const make = Effect.gen(function* () {
       }
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);
-    } finally {
-      binding.abortSignal.removeEventListener("abort", stop);
     }
 
     const persisted = await chatState.persistence.stores.messages.loadThread(threadId);
@@ -516,20 +533,8 @@ const make = Effect.gen(function* () {
       notifyParentImmediately,
       binding.runId,
     );
-    if (status === "completed")
-      trace.recordReportDisposition({
-        handle,
-        sessionId: binding.sessionId,
-        disposition: "returned",
-        parentRunId: binding.runId,
-      });
     finish.run(status, answer, failure, Date.now(), row.id);
     events.publishSession(binding.sessionId, "subagents");
-    const registered = activeChildren.get(row.id);
-    if (registered?.taskId === handle.taskId) {
-      registered.settle();
-      activeChildren.delete(row.id);
-    }
     return {
       status,
       subagentId: row.id,
@@ -542,15 +547,132 @@ const make = Effect.gen(function* () {
     };
   };
 
-  /** A named child runs one message at a time; the next waits for the previous to finish. */
-  const serialized = (subagentId: string, work: () => Promise<ChildOutcome>) => {
-    const previous = busy.get(subagentId) ?? Promise.resolve(null);
-    const next = previous.then(work, work);
-    busy.set(subagentId, next);
-    void next.finally(() => {
-      if (busy.get(subagentId) === next) busy.delete(subagentId);
+  /** Every job belongs to the service scope, not the tool invocation or HTTP request. */
+  const launch = async (
+    binding: SubagentBinding,
+    row: SubagentRow,
+    task: string,
+    handle: AttemptHandle,
+    onSettled?: (outcome: ChildOutcome | null) => void,
+  ): Promise<SubagentReceipt> => {
+    const receipt: SubagentReceipt = {
+      status: "running",
+      subagentId: row.id,
+      agent: row.name,
+      taskId: handle.taskId,
+      attemptId: handle.id,
+    };
+    const controller = new AbortController();
+    const done = Effect.runSync(Deferred.make<void>());
+    const stop = () => controller.abort(binding.abortSignal.reason);
+    binding.abortSignal.addEventListener("abort", stop, { once: true });
+    if (binding.abortSignal.aborted) stop();
+    activeChildren.set(handle.id, {
+      taskId: handle.taskId,
+      sessionId: binding.sessionId,
+      receipt,
+      controller,
+      settled: Deferred.await(done),
     });
-    return next;
+    busy.set(row.id, receipt);
+    let semaphore = serial.get(row.id);
+    if (!semaphore) {
+      semaphore = Effect.runSync(Effect.makeSemaphore(1));
+      serial.set(row.id, semaphore);
+    }
+    let pending: Promise<ChildOutcome> | undefined;
+    const work = Effect.tryPromise({
+      try: (signal) => {
+        runningHandles.set(row.id, handle);
+        const interrupted = () => controller.abort(signal.reason);
+        signal.addEventListener("abort", interrupted, { once: true });
+        pending = runChild(binding, row, task, handle, controller).finally(() =>
+          signal.removeEventListener("abort", interrupted),
+        );
+        return pending;
+      },
+      catch: (error) => error,
+    }).pipe(
+      Effect.catchAll((error) =>
+        Effect.sync(() => {
+          trace.transitionAttempt(
+            handle,
+            binding.sessionId,
+            "failed",
+            "attempt_failed",
+            "Subagent failed",
+            String(error),
+            false,
+            binding.runId,
+          );
+          finish.run("failed", "", String(error), Date.now(), row.id);
+        }),
+      ),
+      // Keep the named-agent permit until the SDK has stopped and persisted its checkpoint.
+      // Releasing on Effect interruption alone would let the next message overlap that stream.
+      Effect.ensuring(
+        Effect.promise(async () => {
+          await pending?.catch(() => undefined);
+          if (runningHandles.get(row.id)?.id === handle.id) runningHandles.delete(row.id);
+        }),
+      ),
+    );
+    const cancelled = Effect.async<never>((resume) => {
+      const abort = () => resume(Effect.interrupt);
+      if (controller.signal.aborted) abort();
+      else controller.signal.addEventListener("abort", abort, { once: true });
+      return Effect.sync(() => controller.signal.removeEventListener("abort", abort));
+    });
+    const job = Effect.raceFirst(semaphore.withPermits(1)(work), cancelled).pipe(
+      Effect.ensuring(
+        Effect.promise(async () => {
+          // Interruption aborts the SDK signal; retain the service until the checkpoint settles.
+          try {
+            if (pending) {
+              const outcome = await pending.catch(() => null);
+              onSettled?.(outcome);
+            } else {
+              trace.checkpoint(binding.sessionId, {
+                handle,
+                completedToolCallIds: [],
+                uncertainToolCallIds: [],
+                pendingApprovalIds: [],
+                remainingWork: task,
+              });
+              trace.transitionAttempt(
+                handle,
+                binding.sessionId,
+                "cancelled",
+                "attempt_cancelled",
+                "Queued subagent cancelled",
+                null,
+                false,
+                binding.runId,
+              );
+              onSettled?.(null);
+            }
+          } finally {
+            binding.abortSignal.removeEventListener("abort", stop);
+            activeChildren.delete(handle.id);
+            const remaining = [...activeChildren.values()].filter(
+              (entry) => entry.receipt.subagentId === row.id,
+            );
+            const latest = remaining.at(-1);
+            if (latest) busy.set(row.id, latest.receipt);
+            else {
+              busy.delete(row.id);
+              serial.delete(row.id);
+              if (!pending) finish.run("cancelled", "", null, Date.now(), row.id);
+            }
+            Effect.runSync(Deferred.succeed(done, undefined));
+            events.publishSession(binding.sessionId, "subagents");
+            completionListener?.(binding.sessionId);
+          }
+        }),
+      ),
+    );
+    await Effect.runPromise(Effect.forkIn(job, scope));
+    return receipt;
   };
 
   const startOneOff = (
@@ -582,7 +704,7 @@ const make = Effect.gen(function* () {
       kind: "start",
       threadId: subagentThreadId(row.id),
     });
-    return runChild(binding, row, task, handle);
+    return launch(binding, row, task, handle);
   };
 
   const startNamed = (
@@ -591,7 +713,7 @@ const make = Effect.gen(function* () {
     agent: string,
     message: string,
     instructions: string | undefined,
-  ): Promise<ChildOutcome> => {
+  ): Promise<SubagentReceipt> => {
     const existing = byName.get(binding.sessionId, agent);
     const now = Date.now();
     if (!existing) {
@@ -617,10 +739,10 @@ const make = Effect.gen(function* () {
         kind: "start",
         threadId: subagentThreadId(row.id),
       });
-      return serialized(row.id, () => runChild(binding, row, message, handle));
+      return launch(binding, row, message, handle);
     }
     const known = decodeRow(existing);
-    return serialized(known.id, async () => {
+    {
       const row = decodeRow(
         startAgain.get(
           instructions === undefined ? known.instructions : instructions,
@@ -640,8 +762,8 @@ const make = Effect.gen(function* () {
         kind: "continue",
         threadId: subagentThreadId(row.id),
       });
-      return runChild(binding, row, message, handle);
-    });
+      return launch(binding, row, message, handle);
+    }
   };
 
   const resumeTask = (
@@ -687,7 +809,7 @@ const make = Effect.gen(function* () {
         : "No pending approvals were carried over.",
       `Checkpoint: ${context.checkpointId}`,
     ].join("\n\n");
-    return serialized(known.id, () => {
+    {
       const row = decodeRow(
         startAgain.get(
           known.instructions,
@@ -697,8 +819,8 @@ const make = Effect.gen(function* () {
           known.id,
         ),
       );
-      return runChild(binding, row, resumeMessage, claim.handle);
-    });
+      return launch(binding, row, resumeMessage, claim.handle);
+    }
   };
 
   const recoverForRun = async (binding: SubagentBinding) => {
@@ -724,7 +846,7 @@ const make = Effect.gen(function* () {
           "Old approvals are expired. Request fresh approval for any gated action.",
           `Checkpoint: ${context.checkpointId}`,
         ].join("\n\n");
-        const outcome = await serialized(known.id, () => {
+        {
           const row = decodeRow(
             startAgain.get(
               known.instructions,
@@ -734,24 +856,75 @@ const make = Effect.gen(function* () {
               known.id,
             ),
           );
-          return runChild(binding, row, message, claim.handle, false);
-        }).catch(() => null);
-        trace.finishRecoveryJob(jobId, outcome?.status === "completed");
+          await launch(binding, row, message, claim.handle, (outcome) =>
+            trace.finishRecoveryJob(jobId, outcome?.status === "completed"),
+          );
+        }
       }),
     );
   };
 
+  const attemptState = (sessionId: string, taskId: string, attemptId: string) => {
+    const detail = trace.taskDetail(sessionId, taskId);
+    const attempt = detail?.attempts.find((candidate) => candidate.id === attemptId);
+    if (
+      !detail ||
+      !attempt ||
+      detail.task.deletedAt !== null ||
+      detail.task.deleteRequestedAt !== null
+    )
+      throw new Error("Subagent attempt not found in this session");
+    return { detail, attempt };
+  };
+  const terminal = (status: string) => !["queued", "running", "waiting"].includes(status);
+  const getReport = async (
+    sessionId: string,
+    taskId: string,
+    attemptId: string,
+  ): Promise<SubagentReport> => {
+    const { detail, attempt } = attemptState(sessionId, taskId, attemptId);
+    if (!detail.task.agentId) throw new Error("Subagent no longer exists");
+    const row = decodeRow(byId.get(sessionId, detail.task.agentId));
+    const base = { subagentId: detail.task.agentId, agent: row.name, taskId, attemptId };
+    if (!terminal(attempt.status)) return { ...base, status: "running" };
+    const checkpoint = [...detail.checkpoints]
+      .reverse()
+      .find((entry) => entry.attemptId === attemptId && entry.transcriptMessageId);
+    const messages = await chatState.persistence.stores.messages.loadThread(attempt.threadId);
+    const message = checkpoint?.transcriptMessageId
+      ? messages.find(
+          (entry) => entry.role === "assistant" && entry.id === checkpoint.transcriptMessageId,
+        )
+      : undefined;
+    const answer = Schema.is(Schema.String)(message?.content)
+      ? message.content
+      : (message?.content ?? [])
+          .flatMap((part) => (part.type === "text" ? [part.content] : []))
+          .join("");
+    return {
+      ...base,
+      status:
+        attempt.status === "completed"
+          ? "completed"
+          : attempt.status === "cancelled"
+            ? "cancelled"
+            : attempt.status === "failed"
+              ? "failed"
+              : "interrupted",
+      answer,
+      error:
+        attempt.status === "failed" ? "Subagent failed; inspect Work Trace for details." : null,
+      evidenceRefIds: trace.evidenceIdsForAttempt(attemptId),
+    };
+  };
+
   return {
-    /**
-     * Subagent tools for one parent run, plus the middleware that starts every subagent call of a
-     * step at once (TanStack runs a step's tool calls one after another; the calls then just wait
-     * for their own child, so results still come back in call order).
-     */
+    /** Dispatch is nonblocking; only explicit retrieval marks a report reviewed in this run. */
     forRun(binding: SubagentBinding): SubagentRunTools {
       const started = new Map<string, Promise<SubagentReport>>();
       const reviewed = new Map<string, ChildOutcome>();
+      const deliveredNotificationIds = new Set(binding.deliveredParentNotificationIds);
       let adoptionDraft: AdoptionDraft | null = null;
-      void recoverForRun(binding).catch(() => undefined);
 
       const start = (toolCallId: string, name: string, argumentsJson: string) => {
         const existing = started.get(toolCallId);
@@ -776,7 +949,7 @@ const make = Effect.gen(function* () {
               .steer(subagentThreadId(row.id), { role: "user", content: input.message })
               .catch(() => "no_turn" as const);
             if (steered === "steered") {
-              const handle = trace.activeAttemptForAgent(row.id);
+              const handle = runningHandles.get(row.id);
               if (handle)
                 trace.recordSteer({
                   handle,
@@ -785,12 +958,15 @@ const make = Effect.gen(function* () {
                   parentToolCallId: toolCallId,
                   message: input.message,
                 });
-              return {
-                status: "steered",
-                subagentId: row.id,
-                agent: input.agent,
-                note: "The subagent was still working; its report for the earlier task will include this message if it acts on it.",
-              };
+              if (handle)
+                return {
+                  status: "running",
+                  subagentId: row.id,
+                  agent: input.agent,
+                  taskId: handle.taskId,
+                  attemptId: handle.id,
+                  delivery: "steered",
+                };
             }
           }
           return startNamed(binding, toolCallId, input.agent, input.message, input.instructions);
@@ -803,7 +979,7 @@ const make = Effect.gen(function* () {
       const runTool = toolDefinition({
         name: "run_subagent",
         description:
-          "Run one task in a temporary subagent with its own conversation and return its final report. It shares the workspace, model and permissions; it cannot start subagents.",
+          "Start one background task and immediately return a running receipt with taskId and attemptId. Retrieve its report explicitly with get_subagent_report. It shares the workspace, model and permissions; it cannot start subagents.",
         inputSchema: toToolSchema(RunSubagentInput),
       }).server((input, context) =>
         start(context?.toolCallId ?? randomUUID(), "run_subagent", JSON.stringify(input)),
@@ -812,7 +988,7 @@ const make = Effect.gen(function* () {
       const messageTool = toolDefinition({
         name: "message_subagent",
         description:
-          "Create a named subagent or continue one from earlier in this session, and return its report. A message to a subagent that is still working is delivered into its current turn instead (status steered).",
+          "Create a named background subagent or continue one from earlier in this session, and immediately return a running receipt. A message to a subagent that is still working is delivered into its current turn instead (running receipt with delivery steered).",
         inputSchema: toToolSchema(MessageSubagentInput),
       }).server((input, context) =>
         start(context?.toolCallId ?? randomUUID(), "message_subagent", JSON.stringify(input)),
@@ -821,11 +997,64 @@ const make = Effect.gen(function* () {
       const resumeTool = toolDefinition({
         name: "resume_subagent",
         description:
-          "Resume one durable interrupted subagent task as a new execution attempt. Completed tool calls are not rerun, uncertain side effects require explicit user confirmation, and old approvals are not carried over.",
+          "Resume one durable interrupted subagent task as a new background attempt and immediately return its running receipt. Completed tool calls are not rerun, uncertain side effects require explicit user confirmation, and old approvals are not carried over.",
         inputSchema: toToolSchema(ResumeSubagentInput),
       }).server((input, context) =>
         start(context?.toolCallId ?? randomUUID(), "resume_subagent", JSON.stringify(input)),
       );
+
+      const reportResults = new Map<string, SubagentReport>();
+      const reportTool = toolDefinition({
+        name: "get_subagent_report",
+        description:
+          "Retrieve one exact subagent attempt's report and evidence in this session. Returns running if unfinished. Only completed reports retrieved here can be adopted; notifications and wait results do not count as review.",
+        inputSchema: toToolSchema(AttemptInput),
+      }).server(async (input, context) => {
+        const result = await getReport(binding.sessionId, input.taskId, input.attemptId);
+        reportResults.set(context?.toolCallId ?? "", result);
+        return result;
+      });
+      const waitTool = toolDefinition({
+        name: "wait_subagents",
+        description:
+          "Explicitly wait for any or all listed task/attempt ids, up to timeoutMs (0–120000, default 30000). Returns statuses only, never reviews or adopts reports. Timeout or cancelling the wait does not cancel children.",
+        inputSchema: toToolSchema(WaitSubagentsInput),
+      }).server(async (raw) => {
+        const input = Schema.decodeUnknownSync(WaitSubagentsInput)(raw);
+        const snapshot = () =>
+          input.attempts.map(({ taskId, attemptId }) => ({
+            taskId,
+            attemptId,
+            status: trace.subagentAttemptStatus(binding.sessionId, taskId, attemptId),
+          }));
+        const ready = (states: ReturnType<typeof snapshot>) =>
+          input.mode === "all"
+            ? states.every((entry) => terminal(entry.status))
+            : states.some((entry) => terminal(entry.status));
+        const waiting = Effect.gen(function* () {
+          while (true) {
+            // Read the durable cursor before status so completion cannot fall between the read
+            // and subscription. waitForChange rechecks that cursor after registering its listener.
+            const cursor = trace.latestCursor(binding.sessionId);
+            const states = snapshot();
+            if (ready(states)) return { status: "completed" as const, attempts: states };
+            yield* Effect.tryPromise((signal) =>
+              trace.waitForChange(binding.sessionId, cursor, signal),
+            );
+          }
+        });
+        return Effect.runPromise(
+          waiting.pipe(
+            Effect.timeoutOption(input.timeoutMs),
+            Effect.map((result) =>
+              result._tag === "Some"
+                ? result.value
+                : { status: "timed_out" as const, attempts: snapshot() },
+            ),
+          ),
+          { signal: binding.abortSignal },
+        );
+      });
 
       const adoptTool = toolDefinition({
         name: "adopt_subagent_reports",
@@ -841,11 +1070,7 @@ const make = Effect.gen(function* () {
           if (report.evidenceRefIds.some((id) => !evidence.has(id)))
             throw new Error("Only evidence ids returned with that report can be adopted");
         }
-        if (
-          draft.reflectedNotificationIds.some(
-            (id) => !binding.deliveredParentNotificationIds.has(id),
-          )
-        )
+        if (draft.reflectedNotificationIds.some((id) => !deliveredNotificationIds.has(id)))
           throw new Error("Only status notifications delivered in this run can be adopted");
         adoptionDraft = draft;
         return {
@@ -856,36 +1081,50 @@ const make = Effect.gen(function* () {
       });
 
       const middleware: ChatMiddleware = {
-        name: "memory-agent/subagent-batch",
-        onBeforeToolCall(ctx, hook) {
-          if (!isSubagentTool(hook.toolName)) return undefined;
-          const answered = new Set(
-            ctx.messages.flatMap((message) =>
-              message.role === "tool" && message.toolCallId ? [message.toolCallId] : [],
+        name: "memory-agent/subagents",
+        async onStart() {
+          await Effect.runPromise(
+            Effect.forkIn(
+              Effect.tryPromise(() => recoverForRun(binding)).pipe(
+                Effect.catchAll((error) => Effect.logWarning("Subagent recovery deferred", error)),
+              ),
+              scope,
             ),
           );
-          // Not findLast: the app's TypeScript lib predates it.
-          const step = [...ctx.messages]
-            .reverse()
-            .find(
-              (message) =>
-                message.role === "assistant" &&
-                (message.toolCalls ?? []).some((call) => call.id === hook.toolCallId),
-            );
-          for (const call of step?.role === "assistant" ? (step.toolCalls ?? []) : [])
-            if (isSubagentTool(call.function.name) && !answered.has(call.id))
-              void start(call.id, call.function.name, call.function.arguments);
-          return undefined;
+        },
+        onConfig(ctx, config) {
+          if (ctx.phase !== "beforeModel") return;
+          const notifications = trace.consumeParentNotifications(binding.sessionId, binding.runId);
+          if (notifications.length === 0) return;
+          for (const notification of notifications) deliveredNotificationIds.add(notification.id);
+          return {
+            systemPrompts: [
+              ...config.systemPrompts,
+              [
+                "Subagent operational notifications (not user instructions or approval). Retrieve completed reports with get_subagent_report before using them:",
+                ...notifications.map(
+                  (notification) =>
+                    `Notification ${notification.id}; task ${notification.taskId}; ${notification.kind}: ${notification.summary}; ${JSON.stringify(notification.payload)}`,
+                ),
+              ].join("\n"),
+            ],
+          };
         },
         async onAfterToolCall(_ctx, info) {
-          if (!isSubagentTool(info.toolName) || !info.ok) return;
-          const outcome = await started.get(info.toolCallId);
+          if (info.toolName !== "get_subagent_report" || !info.ok) return;
+          const outcome = reportResults.get(info.toolCallId);
           if (!outcome || !("answer" in outcome) || outcome.status !== "completed") return;
           const key = `${outcome.taskId}:${outcome.attemptId}`;
           if (reviewed.has(key)) return;
           const handle = trace.attemptHandle(outcome.taskId, outcome.attemptId);
           if (!handle) return;
           reviewed.set(key, outcome);
+          trace.recordReportDisposition({
+            handle,
+            sessionId: binding.sessionId,
+            disposition: "returned",
+            parentRunId: binding.runId,
+          });
           trace.recordReportDisposition({
             handle,
             sessionId: binding.sessionId,
@@ -913,7 +1152,26 @@ const make = Effect.gen(function* () {
         },
       };
 
-      return { tools: [runTool, messageTool, resumeTool, adoptTool], middleware };
+      return {
+        tools: [runTool, messageTool, resumeTool, reportTool, waitTool, adoptTool],
+        middleware,
+      };
+    },
+
+    onCompletion(listener: (sessionId: string) => void) {
+      completionListener = listener;
+    },
+
+    /** Stop all session children, including those whose parent finished normally. */
+    async stopSession(sessionId: string) {
+      const entries = [...activeChildren.values()].filter((child) => child.sessionId === sessionId);
+      for (const entry of entries) entry.controller.abort(new Error("session_cancel_requested"));
+      await Effect.runPromise(
+        Effect.all(
+          entries.map((entry) => entry.settled),
+          { concurrency: "unbounded" },
+        ),
+      );
     },
 
     /** Stop exactly one live child and wait until its checkpoint and terminal transition settle. */
@@ -921,7 +1179,7 @@ const make = Effect.gen(function* () {
       const entry = [...activeChildren.values()].find((child) => child.taskId === taskId);
       if (!entry) return "not_running" as const;
       entry.controller.abort(new Error("task_lifecycle_requested"));
-      await entry.settled;
+      await Effect.runPromise(entry.settled);
       return "stopped" as const;
     },
 
@@ -949,5 +1207,5 @@ export class Subagents extends Context.Tag("memory-agent/Subagents")<
   Subagents,
   Effect.Effect.Success<typeof make>
 >() {
-  static readonly layer = Layer.effect(Subagents, make);
+  static readonly layer = Layer.scoped(Subagents, make);
 }

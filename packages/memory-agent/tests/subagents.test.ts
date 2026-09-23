@@ -570,10 +570,18 @@ describe("subagents", () => {
     ).toEqual({ attempts: 2 });
     const reopenedTrace = await reopened.runPromise(WorkTraceStore);
     const notifications = reopenedTrace.consumeParentNotifications(session.id, "next-parent-run");
-    expect(notifications).toEqual([
-      expect.objectContaining({ kind: "resumed", taskId: expect.any(String) }),
-      expect.objectContaining({ kind: "completed", taskId: expect.any(String) }),
-    ]);
+    // Resumed may already have reached the active parent's next model boundary. Completion
+    // remains durable until either the active turn, idle follow-up, or this explicit consumer.
+    expect(
+      notifications.every((notification) => ["resumed", "completed"].includes(notification.kind)),
+    ).toBe(true);
+    expect(
+      reopenedDb.sqlite
+        .prepare(
+          "SELECT count(*) AS count FROM parent_notifications WHERE kind IN ('resumed', 'completed') AND delivered_at IS NOT NULL",
+        )
+        .get(),
+    ).toEqual({ count: 3 });
     expect(reopenedTrace.consumeParentNotifications(session.id, "another-run")).toEqual([]);
   });
 });

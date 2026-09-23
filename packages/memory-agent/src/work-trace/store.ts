@@ -549,6 +549,13 @@ const taskStatusForAttempt = (status: AttemptStatus): TaskStatus => {
 
 const make = Effect.gen(function* () {
   const { sqlite, atomic } = yield* Database;
+  // A crash after prompt delivery but before parent completion must not lose operational
+  // notifications. No current-process runs exist while this singleton is being constructed.
+  sqlite
+    .prepare(`UPDATE parent_notifications SET delivered_to_run_id = NULL, delivered_at = NULL
+    WHERE delivered_to_run_id IS NOT NULL AND NOT EXISTS
+      (SELECT 1 FROM chat_runs WHERE run_id = delivered_to_run_id AND status = 'completed')`)
+    .run();
 
   const assertHandle = (handle: AttemptHandle) => {
     const found = sqlite
@@ -1190,6 +1197,7 @@ const make = Effect.gen(function* () {
           kind: notificationKind,
           summary,
           idempotencyKey: `attempt:${handle.id}:${notificationKind}`,
+          payload: { attemptId: handle.id },
           deliveredImmediately,
           deliveredToRunId,
         });
@@ -2756,6 +2764,15 @@ const make = Effect.gen(function* () {
     appendEvent,
     notifyParent,
     consumeParentNotifications,
+    /** Durable wake-up source. Reading does not mark a notification delivered. */
+    pendingParentNotificationSessions: () =>
+      Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ origin_session_id: Schema.String })))(
+        sqlite
+          .prepare(
+            "SELECT DISTINCT origin_session_id FROM parent_notifications WHERE delivered_at IS NULL AND origin_session_id IS NOT NULL",
+          )
+          .all(),
+      ).map((row) => row.origin_session_id),
     releaseParentNotifications,
     transitionAttempt,
     checkpoint,
@@ -2773,6 +2790,17 @@ const make = Effect.gen(function* () {
     taskTree,
     projectTaskTree,
     taskDetail,
+    /** A small session-authorized projection for event-driven waits, not a report retrieval. */
+    subagentAttemptStatus: (sessionId: string, taskId: string, attemptId: string) => {
+      const row = sqlite
+        .prepare(`SELECT a.status FROM agent_run_attempts a
+        JOIN work_tasks t ON t.id = a.task_id
+        WHERE a.id = ? AND a.task_id = ? AND t.origin_session_id = ?
+          AND t.agent_id IS NOT NULL AND t.deleted_at IS NULL AND t.delete_requested_at IS NULL`)
+        .get(attemptId, taskId, sessionId);
+      if (!row) throw new Error("Subagent attempt not found in this session");
+      return Schema.decodeUnknownSync(Schema.Struct({ status: AttemptStatus }))(row).status;
+    },
     projectTaskDetail,
     claimResume,
     requestResume,
