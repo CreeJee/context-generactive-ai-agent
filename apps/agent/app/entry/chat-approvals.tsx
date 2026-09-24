@@ -1,5 +1,6 @@
 import { RefreshCwIcon } from "lucide-react";
 import { useState } from "react";
+import { useLoading } from "react-simplikit";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
 import { cn } from "cn";
@@ -42,7 +43,7 @@ export function ChatApprovals({
   onProblem: (message: string) => void;
 }) {
   const [decisions, setDecisions] = useState<Readonly<Record<string, boolean>>>({});
-  const [discarding, setDiscarding] = useState(false);
+  const [discarding, trackDiscard] = useLoading();
 
   const answer = (id: string, approved: boolean) => {
     const next = { ...decisions, [id]: approved };
@@ -57,12 +58,10 @@ export function ChatApprovals({
   };
 
   const discard = async () => {
-    setDiscarding(true);
     try {
-      await api.discardInterrupts(sessionId, holder);
+      await trackDiscard(api.discardInterrupts(sessionId, holder));
       onResync();
     } catch (failure) {
-      setDiscarding(false);
       onProblem(
         failure instanceof ApiError && failure.code === "run_in_progress"
           ? "실행 중인 응답이 끝난 뒤 다시 시도해 주세요."

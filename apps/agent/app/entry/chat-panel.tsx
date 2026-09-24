@@ -12,6 +12,7 @@ import type { TraceTaskView } from "memory-agent";
 import { Option } from "effect";
 import { useAtom } from "jotai";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useLoading } from "react-simplikit";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Spinner } from "~/components/ui/spinner";
 import { renumberReferences, useDraftImages } from "./draft-images";
@@ -378,7 +379,7 @@ function ChatPanel({
   useEffect(() => setLiveContext(null), [run.context]);
   const context = liveContext ?? run.context;
   const queue = useMessageQueue(sessionId, holder, generating);
-  const [submitting, setSubmitting] = useState(false);
+  const [submitting, trackSubmission] = useLoading();
 
   // Messages the run took in, shown in the conversation until it is read again with them.
   const inFlight =
@@ -736,9 +737,7 @@ function ChatPanel({
     if (media.intent)
       return setNotice(problem("이미지 생성 요청은 답변이 끝난 뒤 별도 요청으로 보내 주세요."));
 
-    setSubmitting(true);
-    const outcome = await queue.add(text, attachmentIds, mode);
-    setSubmitting(false);
+    const outcome = await trackSubmission(queue.add(text, attachmentIds, mode));
     switch (outcome.kind) {
       case "queued":
         return clearDraft();
