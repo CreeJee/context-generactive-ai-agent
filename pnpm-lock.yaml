@@ -278,6 +278,9 @@ catalogs:
     nuqs:
       specifier: ^2.10.1
       version: 2.10.1
+    react-simplikit:
+      specifier: ^0.3.1
+      version: 0.3.1
     sharp:
       specifier: 0.34.5
       version: 0.34.5
@@ -400,6 +403,9 @@ importers:
       react-router:
         specifier: ^8
         version: 8.3.1(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      react-simplikit:
+        specifier: 'catalog:'
+        version: 0.3.1(react@19.3.0)
       shadcn:
         specifier: ^4.21.0
         version: 4.21.0(typescript@7.0.2)
@@ -4608,6 +4614,11 @@ packages:
     peerDependenciesMeta:
       react-dom:
         optional: true
+
+  react-simplikit@0.3.1:
+    resolution: {integrity: sha512-Rlc9PDX2HPqmJGbA0hjjR/TxnySIJK1nRzQVJFnvhH9gvaiOYaWhQKbkqaLzLF2yFgDuzY/G1Xxzne7ubfV3Rg==}
+    peerDependencies:
+      react: '*'
 
   react-style-singleton@2.2.3:
     resolution: {integrity: sha512-b6jSvxvVnyptAiLjbkWLE/lOnR4lfTtDAl+eUC7RZy+QQWc6wRzIV2CE6xBuMmDxc2qIihtDCZD5NPOFl7fRBQ==}
@@ -9119,6 +9130,10 @@ snapshots:
       react: 19.3.0
     optionalDependencies:
       react-dom: 19.3.0(react@19.3.0)
+
+  react-simplikit@0.3.1(react@19.3.0):
+    dependencies:
+      react: 19.3.0
 
   react-style-singleton@2.2.3(@types/react@19.3.0)(react@19.3.0):
     dependencies:

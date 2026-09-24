@@ -1,14 +1,4 @@
 import { fetchServerSentEvents, useChat } from "@tanstack/ai-react";
-import { useVirtualizer } from "@tanstack/react-virtual";
-import {
-  ArrowUpIcon,
-  CheckIcon,
-  ImagePlusIcon,
-  MessageSquareIcon,
-  RefreshCwIcon,
-  SquareIcon,
-  WandSparklesIcon,
-} from "lucide-react";
 import {
   approvalToolDefinitions,
   attachmentUrl,
@@ -21,30 +11,10 @@ import { cn } from "cn";
 import type { TraceTaskView } from "memory-agent";
 import { Option } from "effect";
 import { useAtom } from "jotai";
-import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "~/components/ui/empty";
-import {
-  PromptInput,
-  PromptInputButton,
-  PromptInputFooter,
-  PromptInputHeader,
-  PromptInputTextarea,
-} from "~/components/ui/prompt-input";
-import { Button } from "~/components/ui/button";
-import { Command } from "~/components/ui/command";
-import { ScrollArea } from "~/components/ui/scroll-area";
 import { Spinner } from "~/components/ui/spinner";
-import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
-import { ApprovalCard } from "./approval";
-import { acceptedImageTypes, renumberReferences, useDraftImages } from "./draft-images";
-import { DraftImageTray } from "./images";
+import { renumberReferences, useDraftImages } from "./draft-images";
 import { interruptContinuationState } from "./interrupt-recovery";
 import {
   api,
@@ -54,28 +24,28 @@ import {
   decodeDeliveredEvent,
   type CompactResult,
   type ContextView,
-  type GeneratedImageAsset,
-  type ImageFeatureStatus,
   type QueuedMessage,
   type QueueSnapshot,
   type WorkflowPhase,
   type WorkflowState,
 } from "./api";
 import { appFetch } from "./backend-restart";
+import { ChatApprovals } from "./chat-approvals";
+import { ChatComposer, type ChatComposerHandle } from "./chat-composer";
+import { ChatHistory } from "./chat-history";
 import { ContextMeter } from "./context-meter";
-import { ComposerShortcuts, ComposerStatus, type ComposerMode } from "./composer-status";
+import { type ComposerMode } from "./composer-status";
 import { DeliveredMessageView, MessageView } from "./message";
 import { isTakenIn, useMessageQueue } from "./message-queue";
-import { QueuePanel } from "./queue-panel";
 import { SubagentPanel } from "./subagent-panel";
 import { ReadOnlyBar } from "./read-only-bar";
 import { toPendingApproval, type ApprovalInterrupts, type ApprovalTools } from "./pending-approval";
 import { RunNoticeView } from "./run-state";
 import { sessionDraftsAtom } from "./session-drafts";
 import { useSessionLease, type PageLease } from "./session-lease";
-import { SlashPalette } from "./slash-palette";
 import { useWorkTrace } from "./work-trace";
 import { useBackendRestartRequired } from "./use-backend-restart";
+import { useImageGeneration } from "./use-image-generation";
 import { useRunState } from "./use-run-state";
 import {
   WorkflowArtifactPanel,
@@ -83,13 +53,7 @@ import {
   goalStatusLabels,
   planStatusLabels,
 } from "./workflow-panel";
-import {
-  parseSlash,
-  promptOf,
-  suggest,
-  type SlashCommand,
-  type SlashContext,
-} from "./slash-commands";
+import { parseSlash, promptOf, type SlashCommand, type SlashContext } from "./slash-commands";
 
 /** Slash commands: what they can offer, and how the app runs the ones outside this panel. */
 export interface SlashSupport {
@@ -265,21 +229,8 @@ function ChatPanel({
     });
   };
   const [dragging, setDragging] = useState(false);
-  const [imageIntent, setImageIntent] = useState(false);
-  const [imageSettings, setImageSettings] = useState<ImageFeatureStatus | null>(null);
-  const [generatingImage, setGeneratingImage] = useState(false);
-  const [generatedImage, setGeneratedImage] = useState<GeneratedImageAsset | null>(null);
-  useEffect(() => {
-    const refresh = () =>
-      void api
-        .imageSettings()
-        .then(setImageSettings)
-        .catch(() => undefined);
-    refresh();
-    window.addEventListener("focus", refresh);
-    return () => window.removeEventListener("focus", refresh);
-  }, []);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const media = useImageGeneration((message) => setNotice(problem(message)));
   // What the run in progress reports; the server's record covers the time before and after it.
   const [liveContext, setLiveContext] = useState<ContextView | null>(null);
   const [placements, setPlacements] = useState<ReadonlyMap<string, Placement>>(new Map());
@@ -288,12 +239,7 @@ function ChatPanel({
   const place = (ids: readonly string[], placement: Placement) =>
     setPlacements((current) => new Map([...current, ...ids.map((id) => [id, placement] as const)]));
   const draftImages = useDraftImages();
-  const textarea = useRef<HTMLTextAreaElement>(null);
-  const caretAfterRender = useRef<number | null>(null);
-  const filePicker = useRef<HTMLInputElement>(null);
-  const scrollViewport = useRef<HTMLDivElement>(null);
-  const [initialScrollDone, setInitialScrollDone] = useState(false);
-  const [olderLoadFailed, setOlderLoadFailed] = useState(false);
+  const composerInput = useRef<ChatComposerHandle>(null);
   const {
     messages,
     setMessages,
@@ -343,20 +289,8 @@ function ChatPanel({
       }
     },
   });
-  const messageVirtualizer = useVirtualizer({
-    count: messages.length,
-    getScrollElement: () => scrollViewport.current,
-    getItemKey: (index) => messages[index]?.id ?? index,
-    estimateSize: () => 180,
-    overscan: 5,
-    anchorTo: "end",
-    followOnAppend: "auto",
-    scrollEndThreshold: 120,
-  });
   const approvals = interrupts.flatMap((interrupt) => toPendingApproval(interrupt) ?? []);
   const approvalBatchKey = approvals.map((approval) => approval.id).join("\u0000");
-  const [approvalDecisions, setApprovalDecisions] = useState<Readonly<Record<string, boolean>>>({});
-  useEffect(() => setApprovalDecisions({}), [approvalBatchKey]);
   const waitingForApproval = interrupts.length > 0;
   const awaitingApproval = new Set(approvals.map((approval) => approval.toolCallId));
   const incompleteApprovalBatch = approvals.length !== interrupts.length;
@@ -370,44 +304,6 @@ function ChatPanel({
   const continuation = interruptContinuationState(error?.message, interrupts.length);
   const continuationStartFailed = continuation === "lost";
   const continuationReachedNextApproval = continuation === "continued";
-  const [discardingInterrupts, setDiscardingInterrupts] = useState(false);
-  const discardBrokenInterrupts = async () => {
-    setDiscardingInterrupts(true);
-    try {
-      await api.discardInterrupts(sessionId, holder);
-      onResync();
-    } catch (failure) {
-      setDiscardingInterrupts(false);
-      setNotice(
-        problem(
-          failure instanceof ApiError && failure.code === "run_in_progress"
-            ? "실행 중인 응답이 끝난 뒤 다시 시도해 주세요."
-            : "끊어진 승인 요청을 폐기하지 못했어요.",
-        ),
-      );
-    }
-  };
-  const stageApproval = (approvalId: string, approved: boolean) => {
-    const decisions = { ...approvalDecisions, [approvalId]: approved };
-    setApprovalDecisions(decisions);
-    // TanStack resumes an interrupt batch atomically. Do not submit until every visible item has
-    // a decision, or a reconnect could send only an older subset of the server's pending batch.
-    if (
-      incompleteApprovalBatch ||
-      staleApprovalBatch ||
-      approvals.some((approval) => decisions[approval.id] === undefined)
-    )
-      return;
-    try {
-      resolveInterrupts((interrupt) => {
-        const pending = toPendingApproval(interrupt);
-        const decision = decisions[interrupt.id];
-        if (pending && decision !== undefined) pending.answer(decision);
-      });
-    } catch {
-      setNotice(problem("승인 응답을 준비하지 못했어요. 서버 상태를 다시 불러와 주세요."));
-    }
-  };
   // A run rejoined after a reload streams without a local request, so both count as busy.
   const generating = isLoading || sessionGenerating;
   // What the conversation ends with: text means an answer, a tool call means work in between.
@@ -443,7 +339,7 @@ function ChatPanel({
 
   const revisePlan = async () => {
     if (run.workflow?.phase !== "plan" && !(await changeWorkflowPhase("plan"))) return;
-    textarea.current?.focus();
+    composerInput.current?.focus();
     setNotice(done("바꾸고 싶은 내용을 입력해 주세요."));
   };
 
@@ -483,11 +379,6 @@ function ChatPanel({
   const context = liveContext ?? run.context;
   const queue = useMessageQueue(sessionId, holder, generating);
   const [submitting, setSubmitting] = useState(false);
-  // Slash command suggestions for what is typed, and which one the arrow keys point at.
-  const [highlight, setHighlight] = useState("");
-  const suggestions = composer.kind === "compose" ? suggest(draft, slash.context) : [];
-  const highlighted =
-    suggestions.find((suggestion) => suggestion.text === highlight) ?? suggestions[0] ?? null;
 
   // Messages the run took in, shown in the conversation until it is read again with them.
   const inFlight =
@@ -696,7 +587,6 @@ function ChatPanel({
           ? message.state.draft
           : message.text;
     setComposer({ kind: "editing", id: message.id, draft: text });
-    caretAfterRender.current = text.length;
     setNotice(null);
     void queue.change(message.id, { action: "edit", draft: text });
   };
@@ -734,28 +624,6 @@ function ChatPanel({
     if (message) startEdit(message);
   };
 
-  const loadPreviousMessages = async () => {
-    if (!hasOlderMessages) return;
-    setOlderLoadFailed(false);
-    try {
-      await loadOlderMessages();
-    } catch {
-      setOlderLoadFailed(true);
-    }
-  };
-
-  useLayoutEffect(() => {
-    if (messages.length === 0 || initialScrollDone) return;
-    messageVirtualizer.scrollToEnd();
-    setInitialScrollDone(true);
-  }, [messages.length, initialScrollDone, messageVirtualizer]);
-
-  const onConversationScroll = (event: React.UIEvent<HTMLDivElement>) => {
-    const viewport = event.currentTarget;
-    if (initialScrollDone && !olderLoadFailed && viewport.scrollTop < 200)
-      void loadPreviousMessages();
-  };
-
   const attach = (files: readonly File[]) => {
     if (files.length === 0) return;
     if (!imagesSupported) {
@@ -765,27 +633,6 @@ function ChatPanel({
     setNotice(null);
     draftImages.add(files);
   };
-
-  /** Puts `#N` at the cursor so the text can point at a specific image. */
-  const insertReference = (number: number) => {
-    const element = textarea.current;
-    const start = element?.selectionStart ?? draft.length;
-    const end = element?.selectionEnd ?? draft.length;
-    const before = draft.slice(0, start);
-    const after = draft.slice(end);
-    const token = `${before.length > 0 && !/\s$/.test(before) ? " " : ""}#${number}${/^\s/.test(after) ? "" : " "}`;
-    caretAfterRender.current = start + token.length;
-    setDraft(before + token + after);
-  };
-
-  // Writing a new value moves the caret to the end, so place it once React has committed.
-  useLayoutEffect(() => {
-    const caret = caretAfterRender.current;
-    if (caret === null) return;
-    caretAfterRender.current = null;
-    textarea.current?.focus();
-    textarea.current?.setSelectionRange(caret, caret);
-  }, [draft]);
 
   /**
    * Enter. While nothing runs it sends a turn. While a run answers it queues the message for the
@@ -869,64 +716,24 @@ function ChatPanel({
     const clearDraft = () => {
       setDraft("");
       draftImages.clear();
-      setImageIntent(false);
+      media.clearIntent();
       setNotice(null);
     };
     const sendTurn = () => {
       clearDraft();
       void sendMessage(contentOf(text, attachmentIds));
     };
-    if (!generating && imageIntent) {
+    if (!generating && media.intent) {
       if (attachmentIds.length > 0)
         return setNotice(problem("첫 버전의 이미지 생성은 텍스트 프롬프트만 지원해요."));
       if (!window.confirm("이미지 생성은 별도 유료 미디어 모델을 호출할 수 있어요. 실행할까요?"))
         return;
       clearDraft();
-      setGeneratingImage(true);
-      setGeneratedImage(null);
-      try {
-        setGeneratedImage(await api.generateImage(text, true));
-      } catch (failure) {
-        if (
-          failure instanceof ApiError &&
-          failure.code === "image_approval_required" &&
-          failure.reason === "cross_provider" &&
-          failure.approval
-        ) {
-          const disclosure =
-            "Claude는 이미지를 직접 생성하지 않습니다. 이미지 프롬프트가 OpenAI로 전송되고 사용량은 OpenAI 계정에 귀속됩니다.";
-          const once = window.confirm(`${disclosure}\n\n이번 요청에서만 허용할까요?`);
-          try {
-            if (once) {
-              setGeneratedImage(await api.generateImage(text, true, failure.approval));
-              return;
-            }
-            const always = window.confirm(
-              `${disclosure}\n\n앞으로 Claude 대화에서 OpenAI 이미지 실행을 항상 허용할까요? 취소하면 실행하지 않습니다.`,
-            );
-            if (!always) return;
-            await api.setCrossProviderMediaConsent("always");
-            setGeneratedImage(await api.generateImage(text, true));
-            return;
-          } catch {
-            setNotice(
-              problem(
-                "공급자 간 이미지 실행 승인을 적용하지 못했어요. 설정과 계정 권한을 확인해 주세요.",
-              ),
-            );
-            return;
-          }
-        }
-        setNotice(
-          problem("이미지를 생성하지 못했어요. 설정, 계정 권한과 경로 상태를 확인해 주세요."),
-        );
-      } finally {
-        setGeneratingImage(false);
-      }
+      await media.generate(text);
       return;
     }
     if (!generating) return sendTurn();
-    if (imageIntent)
+    if (media.intent)
       return setNotice(problem("이미지 생성 요청은 답변이 끝난 뒤 별도 요청으로 보내 주세요."));
 
     setSubmitting(true);
@@ -979,178 +786,99 @@ function ChatPanel({
           {imagesSupported ? "이미지를 놓으면 첨부돼요" : "선택한 모델은 이미지를 읽지 못해요"}
         </div>
       )}
-      <ScrollArea
-        className="min-h-0 flex-1"
-        viewportRef={scrollViewport}
-        onViewportScroll={onConversationScroll}
+      <ChatHistory
+        messages={messages}
+        hasOlderMessages={hasOlderMessages}
+        loadOlderMessages={loadOlderMessages}
+        renderMessage={(message, index) => (
+          <>
+            {takenIn("before", message.id).map((taken) => (
+              <DeliveredMessageView key={taken.id} message={taken} />
+            ))}
+            <MessageView
+              message={message}
+              streaming={generating && index === messages.length - 1}
+              awaitingApproval={awaitingApproval}
+              tasksByToolCall={workTrace.tasksByToolCall}
+              traceConnection={workTrace.connection}
+              readOnly={readOnly}
+              onResumeTask={resumeTask}
+              onArchiveTask={archiveTask}
+              onDeleteTask={deleteTask}
+            />
+            {takenIn("after", message.id).map((taken) => (
+              <DeliveredMessageView key={taken.id} message={taken} />
+            ))}
+          </>
+        )}
       >
-        <div className="mx-auto flex max-w-3xl flex-col gap-5 px-6 pb-6">
-          {messages.length === 0 && (
-            <Empty className="mt-24">
-              <EmptyHeader>
-                <EmptyMedia variant="icon">
-                  <MessageSquareIcon />
-                </EmptyMedia>
-                <EmptyTitle>새 대화</EmptyTitle>
-                <EmptyDescription>
-                  이전 세션과 다른 프로젝트에서 나눈 대화도 기억해서 답해요.
-                </EmptyDescription>
-              </EmptyHeader>
-            </Empty>
-          )}
-          {olderLoadFailed && (
-            <Button type="button" variant="outline" onClick={() => void loadPreviousMessages()}>
-              이전 메시지를 불러오지 못했어요. 다시 시도
-            </Button>
-          )}
-          <div
-            className="relative h-(--virtual-height) w-full"
-            // SAFETY: This style only sets a CSS custom property consumed by the height utility.
-            style={
-              {
-                "--virtual-height": `${messageVirtualizer.getTotalSize()}px`,
-              } as React.CSSProperties
-            }
-          >
-            {messageVirtualizer.getVirtualItems().map((item) => {
-              const message = messages[item.index];
-              if (!message) return null;
-              return (
-                <div
-                  key={item.key}
-                  data-index={item.index}
-                  ref={messageVirtualizer.measureElement}
-                  className={cn(
-                    "absolute top-(--virtual-start) left-0 w-full",
-                    item.index === 0 ? "pt-6" : "pt-5",
-                  )}
-                  // SAFETY: This style only sets a CSS custom property consumed by the top utility.
-                  style={{ "--virtual-start": `${item.start}px` } as React.CSSProperties}
-                >
-                  {takenIn("before", message.id).map((taken) => (
-                    <DeliveredMessageView key={taken.id} message={taken} />
-                  ))}
-                  <MessageView
-                    message={message}
-                    streaming={generating && item.index === messages.length - 1}
-                    awaitingApproval={awaitingApproval}
-                    tasksByToolCall={workTrace.tasksByToolCall}
-                    traceConnection={workTrace.connection}
-                    readOnly={readOnly}
-                    onResumeTask={resumeTask}
-                    onArchiveTask={archiveTask}
-                    onDeleteTask={deleteTask}
-                  />
-                  {takenIn("after", message.id).map((taken) => (
-                    <DeliveredMessageView key={taken.id} message={taken} />
-                  ))}
-                </div>
-              );
-            })}
+        {unplaced.map((taken) => (
+          <DeliveredMessageView key={taken.id} message={taken} />
+        ))}
+        <WorkflowArtifactPanel
+          state={run.workflow}
+          actions={run.actions}
+          busy={generating}
+          disabled={mutationBlocked}
+          controlling={run.controlling}
+          onPause={() => void controlGoal("pause")}
+          onResume={() => void controlGoal("resume")}
+          onStop={() => void controlGoal("stop")}
+          onRevise={() => void revisePlan()}
+          onExecute={() => void executePlan()}
+        />
+        <ChatApprovals
+          key={approvalBatchKey}
+          sessionId={sessionId}
+          holder={holder}
+          approvals={approvals}
+          incomplete={incompleteApprovalBatch}
+          stale={staleApprovalBatch}
+          retryable={retryableApprovalBatch}
+          continuationLost={continuationStartFailed}
+          errorCount={interruptErrors.length}
+          errorMessage={approvalErrorMessage ?? null}
+          readOnly={readOnly}
+          resuming={resuming}
+          onResolve={(decisions) =>
+            resolveInterrupts((interrupt) => {
+              const pending = toPendingApproval(interrupt);
+              const decision = decisions[interrupt.id];
+              if (pending && decision !== undefined) pending.answer(decision);
+            })
+          }
+          onRetry={retryInterrupts}
+          onResync={onResync}
+          onProblem={(message) => setNotice(problem(message))}
+        />
+        <SubagentPanel
+          sessionId={sessionId}
+          holder={holder}
+          generating={generating}
+          readOnly={readOnly}
+        />
+        {status === "submitted" && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Spinner /> 생각하는 중…
           </div>
-          {unplaced.map((taken) => (
-            <DeliveredMessageView key={taken.id} message={taken} />
-          ))}
-          <WorkflowArtifactPanel
-            state={run.workflow}
-            actions={run.actions}
-            busy={generating}
-            disabled={mutationBlocked}
-            controlling={run.controlling}
-            onPause={() => void controlGoal("pause")}
-            onResume={() => void controlGoal("resume")}
-            onStop={() => void controlGoal("stop")}
-            onRevise={() => void revisePlan()}
-            onExecute={() => void executePlan()}
-          />
-          {(incompleteApprovalBatch || interruptErrors.length > 0 || continuationStartFailed) && (
+        )}
+        {/* Between tool calls nothing streams, so the thread itself says the answer goes on. */}
+        {generating && status !== "submitted" && !waitingForApproval && !endsWithText && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Spinner /> 작업 중…
+          </div>
+        )}
+        {error &&
+          !continuationStartFailed &&
+          !continuationReachedNextApproval &&
+          run.notice === null && (
             <Alert variant="destructive">
-              <AlertTitle>승인 요청을 이어가지 못했어요</AlertTitle>
-              <AlertDescription>
-                <div className="flex flex-col items-start gap-3">
-                  <p>
-                    {continuationStartFailed
-                      ? "서버에 이 승인 요청을 이어갈 실행 상태가 남아 있지 않아요. 요청을 폐기해도 셸 명령은 실행되지 않으며, 대화와 작업 evidence는 유지돼요."
-                      : staleApprovalBatch || incompleteApprovalBatch
-                        ? "연결이 끊긴 사이 승인 목록이 바뀌었어요. 서버의 최신 요청을 다시 불러와야 해요."
-                        : (approvalErrorMessage ?? "승인 응답을 전송하지 못했어요.")}
-                  </p>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    disabled={readOnly || resuming || discardingInterrupts}
-                    onClick={
-                      continuationStartFailed
-                        ? () => void discardBrokenInterrupts()
-                        : retryableApprovalBatch && !staleApprovalBatch
-                          ? retryInterrupts
-                          : onResync
-                    }
-                  >
-                    <RefreshCwIcon
-                      className={cn(
-                        "size-3.5",
-                        (resuming || discardingInterrupts) && "animate-spin",
-                      )}
-                    />
-                    {continuationStartFailed
-                      ? "끊어진 요청 폐기하고 계속"
-                      : retryableApprovalBatch && !staleApprovalBatch
-                        ? "응답 다시 보내기"
-                        : "최신 요청 불러오기"}
-                  </Button>
-                </div>
-              </AlertDescription>
+              <AlertTitle>응답을 받지 못했어요</AlertTitle>
+              <AlertDescription>{error.message}</AlertDescription>
             </Alert>
           )}
-          {approvals.map((approval) => (
-            <ApprovalCard
-              key={approval.id}
-              approval={approval}
-              decision={approvalDecisions[approval.id]}
-              disabled={
-                readOnly ||
-                resuming ||
-                incompleteApprovalBatch ||
-                staleApprovalBatch ||
-                retryableApprovalBatch ||
-                continuationStartFailed
-              }
-              onAnswer={(approved) => stageApproval(approval.id, approved)}
-            />
-          ))}
-          <SubagentPanel
-            sessionId={sessionId}
-            holder={holder}
-            generating={generating}
-            readOnly={readOnly}
-          />
-          {status === "submitted" && (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Spinner /> 생각하는 중…
-            </div>
-          )}
-          {/* Between tool calls nothing streams, so the thread itself says the answer goes on. */}
-          {generating && status !== "submitted" && !waitingForApproval && !endsWithText && (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Spinner /> 작업 중…
-            </div>
-          )}
-          {error &&
-            !continuationStartFailed &&
-            !continuationReachedNextApproval &&
-            run.notice === null && (
-              <Alert variant="destructive">
-                <AlertTitle>응답을 받지 못했어요</AlertTitle>
-                <AlertDescription>{error.message}</AlertDescription>
-              </Alert>
-            )}
-          {!generating && !waitingForApproval && run.notice && (
-            <RunNoticeView notice={run.notice} />
-          )}
-        </div>
-      </ScrollArea>
+        {!generating && !waitingForApproval && run.notice && <RunNoticeView notice={run.notice} />}
+      </ChatHistory>
 
       <div className="bg-background px-6 pt-2 pb-4">
         <div className="mx-auto max-w-3xl">
@@ -1167,293 +895,42 @@ function ChatPanel({
           {lease.state === "other" || lease.state === "free" ? (
             <ReadOnlyBar lease={lease} refused={refused} onContinue={onContinue} />
           ) : (
-            <Command
-              shouldFilter={false}
-              loop
-              vimBindings={false}
-              onValueChange={setHighlight}
-              variant="composer"
-            >
-              <form
-                onKeyDown={(event) => {
-                  // Buttons keep native keyboard activation, outside cmdk navigation.
-                  if (event.target !== textarea.current) event.stopPropagation();
-                }}
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void submit("queue");
-                }}
-              >
-                <input
-                  ref={filePicker}
-                  type="file"
-                  accept={acceptedImageTypes}
-                  multiple
-                  hidden
-                  onChange={(event) => {
-                    attach(imageFiles(event.target.files));
-                    event.target.value = "";
-                  }}
-                />
-                {suggestions.length > 0 && highlighted && (
-                  <SlashPalette
-                    suggestions={suggestions}
-                    onPick={(suggestion) => {
-                      caretAfterRender.current = suggestion.text.length;
-                      setDraft(suggestion.text);
-                    }}
-                  />
-                )}
-                {generatingImage && (
-                  <div className="mb-2 rounded-lg border bg-muted/40 p-3 text-sm text-muted-foreground">
-                    승인된 미디어 경로에서 이미지를 생성하고 있어요…
-                  </div>
-                )}
-                {generatedImage && (
-                  <div className="mb-2 overflow-hidden rounded-lg border bg-card">
-                    <img
-                      src={generatedImage.url}
-                      alt="생성된 이미지"
-                      className="max-h-96 w-full object-contain"
-                    />
-                    <div className="space-y-1 border-t p-3 text-xs text-muted-foreground">
-                      <div>
-                        대화 모델: {generatedImage.initiatorChatModel} · 실행 경로:{" "}
-                        {generatedImage.executorMediaRouteId}
-                      </div>
-                      <div>
-                        실행 방식: {generatedImage.executionMode}
-                        {generatedImage.estimatedCostUsd === undefined
-                          ? " · 예상 비용 미확인"
-                          : ` · 예상 비용 $${generatedImage.estimatedCostUsd.toFixed(4)}`}
-                      </div>
-                      {generatedImage.usage && (
-                        <div>사용량: {JSON.stringify(generatedImage.usage)}</div>
-                      )}
-                    </div>
-                  </div>
-                )}
-                <PromptInput editing={editing !== null}>
-                  <QueuePanel
-                    items={queue.items}
-                    editingId={editing?.id ?? null}
-                    readOnly={mutationBlocked}
-                    onEdit={startEdit}
-                    onRemove={(message) => void removeQueued(message)}
-                    onConfirm={(message) => void confirmQueued(message)}
-                  />
-                  {!editing && draftImages.images.length > 0 && (
-                    <PromptInputHeader>
-                      <DraftImageTray
-                        images={draftImages.images}
-                        onReference={insertReference}
-                        onRemove={draftImages.remove}
-                      />
-                    </PromptInputHeader>
-                  )}
-                  <PromptInputTextarea
-                    ref={textarea}
-                    value={draft}
-                    disabled={mutationBlocked}
-                    onChange={(event) => {
-                      setDraft(event.target.value);
-                    }}
-                    onPaste={(event) => {
-                      const files = imageFiles(event.clipboardData.files);
-                      if (files.length === 0) return;
-                      event.preventDefault();
-                      attach(files);
-                    }}
-                    onKeyDown={(event) => {
-                      // Enter that confirms Korean IME input, and Esc that cancels it, belong to the IME.
-                      if (event.nativeEvent.isComposing || event.keyCode === 229) {
-                        event.stopPropagation();
-                        return;
-                      }
-                      // Preserve composer Home/End/Enter behavior instead of cmdk bindings.
-                      if (
-                        !suggestions.length ||
-                        (event.key !== "ArrowDown" && event.key !== "ArrowUp")
-                      ) {
-                        event.stopPropagation();
-                      }
-                      if (suggestions.length > 0 && highlighted) {
-                        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                          // Command owns arrow selection and built-in scrolling.
-                          return;
-                        }
-                        // Tab, or Enter on a suggestion that is not what is typed yet, completes it.
-                        const completes =
-                          event.key === "Tab" ||
-                          (event.key === "Enter" && !event.shiftKey && highlighted.text !== draft);
-                        if (completes) {
-                          event.preventDefault();
-                          caretAfterRender.current = highlighted.text.length;
-                          setDraft(highlighted.text);
-
-                          return;
-                        }
-                      }
-                      const steerKeys = event.shiftKey && (event.ctrlKey || event.metaKey);
-                      if (event.key === "Enter" && steerKeys) {
-                        event.preventDefault();
-                        void submit("steer");
-                      } else if (event.key === "Enter" && !event.shiftKey) {
-                        event.preventDefault();
-                        void submit("queue");
-                      } else if (
-                        event.altKey &&
-                        (event.key === "ArrowUp" || event.key === "ArrowDown")
-                      ) {
-                        // Ctrl+↑/↓ belong to macOS Mission Control, so the web uses Alt(⌥).
-                        event.preventDefault();
-                        pickQueued(event.key === "ArrowUp" ? "up" : "down");
-                      } else if (event.key === "Escape") {
-                        // In edit mode Esc removes the queued message and never reaches the run.
-                        if (editing) void finishEdit("remove");
-                        // Esc clears a draft (text and images); with nothing drafted it stops the run.
-                        else if (draft.length > 0 || draftImages.images.length > 0 || imageIntent) {
-                          setDraft("");
-                          draftImages.clear();
-                          setImageIntent(false);
-                          setNotice(null);
-                        } else if (generating) void cancel();
-                      }
-                    }}
-                    placeholder={
-                      waitingForApproval
-                        ? "위의 승인 요청에 먼저 답해 주세요"
-                        : editing
-                          ? "Enter를 누르면 고친 내용을 저장해요"
-                          : generating
-                            ? "답변 중에도 이어서 보낼 수 있어요"
-                            : run.workflow?.phase === "goal"
-                              ? "달성할 결과를 입력하세요"
-                              : run.workflow?.phase === "plan"
-                                ? "변경 없이 조사해서 계획할 내용을 입력하세요"
-                                : "메시지를 입력하세요. /로 명령을 부르고, 이미지는 붙여넣거나 끌어다 놓아요"
-                    }
-                    rows={1}
-                  />
-                  <PromptInputFooter>
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <PromptInputButton
-                            variant="ghost"
-                            disabled={!imagesSupported || mutationBlocked || editing !== null}
-                            aria-label="이미지 첨부"
-                            onClick={() => filePicker.current?.click()}
-                          />
-                        }
-                      >
-                        <ImagePlusIcon />
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        {imagesSupported ? "이미지 첨부" : "선택한 모델은 이미지를 읽지 못해요"}
-                      </TooltipContent>
-                    </Tooltip>
-                    {imageSettings && (
-                      <Tooltip>
-                        <TooltipTrigger
-                          render={
-                            <PromptInputButton
-                              type="button"
-                              variant={imageIntent ? "secondary" : "ghost"}
-                              disabled={
-                                !imageSettings.imageGenerationEnabled ||
-                                mutationBlocked ||
-                                generating ||
-                                generatingImage ||
-                                editing !== null
-                              }
-                              aria-label="이미지 생성 요청"
-                              aria-pressed={imageIntent}
-                              onClick={() => setImageIntent((current) => !current)}
-                            />
-                          }
-                        >
-                          <WandSparklesIcon />
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          {imageSettings.imageGenerationEnabled
-                            ? imageIntent
-                              ? "이미지 생성 모드 끄기"
-                              : "이번 요청에서만 이미지 생성"
-                            : "설정에서 이미지 생성을 먼저 켜세요"}
-                        </TooltipContent>
-                      </Tooltip>
-                    )}
-                    <ComposerStatus mode={composerMode} />
-                    <div
-                      className="flex items-center rounded-md border bg-muted/30 p-0.5"
-                      role="group"
-                      aria-label="입력 방식"
-                    >
-                      {(["chat", "goal", "plan"] as const).map((phase) => (
-                        <Button
-                          key={phase}
-                          type="button"
-                          size="xs"
-                          variant={
-                            (run.workflow?.phase ?? "chat") === phase ? "secondary" : "ghost"
-                          }
-                          disabled={
-                            !run.actions?.phases[phase].allowed ||
-                            run.controlling ||
-                            mutationBlocked ||
-                            generating ||
-                            generatingImage ||
-                            editing !== null
-                          }
-                          aria-pressed={(run.workflow?.phase ?? "chat") === phase}
-                          title={
-                            phase === "goal"
-                              ? "결과를 맡기면 조사, 수정, 검증까지 진행해요"
-                              : phase === "plan"
-                                ? "프로젝트를 변경하지 않고 실행 계획을 만들어요"
-                                : "일반 대화"
-                          }
-                          onClick={() => void changeWorkflowPhase(phase)}
-                        >
-                          {phaseLabels[phase]}
-                        </Button>
-                      ))}
-                    </div>
-                    <div className="ml-auto flex items-center gap-3">
-                      <ComposerShortcuts mode={composerMode} />
-                      {generating && !editing && (
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={
-                              <PromptInputButton
-                                variant="outline"
-                                disabled={run.cancelling || mutationBlocked}
-                                aria-label={run.cancelling ? "멈추는 중" : "중지"}
-                                onClick={() => void cancel()}
-                              />
-                            }
-                          >
-                            {run.cancelling ? <Spinner /> : <SquareIcon className="fill-current" />}
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            {run.cancelling ? "멈추는 중" : "중지(입력창이 비었을 때 Esc)"}
-                          </TooltipContent>
-                        </Tooltip>
-                      )}
-                      <PromptInputButton
-                        type="submit"
-                        variant="default"
-                        disabled={editing ? mutationBlocked : !canSend}
-                        aria-label={editing ? "저장" : generating ? "대기열에 넣기" : "전송"}
-                      >
-                        {editing ? <CheckIcon /> : <ArrowUpIcon />}
-                      </PromptInputButton>
-                    </div>
-                  </PromptInputFooter>
-                </PromptInput>
-              </form>
-            </Command>
+            <ChatComposer
+              ref={composerInput}
+              draft={draft}
+              onDraftChange={setDraft}
+              editingId={editing?.id ?? null}
+              slashContext={slash.context}
+              draftImages={draftImages}
+              queueItems={queue.items}
+              imageSettings={media.settings}
+              imageIntent={media.intent}
+              onToggleImageIntent={media.toggleIntent}
+              generatingImage={media.generating}
+              generatedImage={media.asset}
+              imagesSupported={imagesSupported}
+              mutationBlocked={mutationBlocked}
+              generating={generating}
+              waitingForApproval={waitingForApproval}
+              canSend={canSend}
+              composerMode={composerMode}
+              run={run}
+              onSubmit={(mode) => void submit(mode)}
+              onAttach={attach}
+              onEditQueued={startEdit}
+              onRemoveQueued={(message) => void removeQueued(message)}
+              onConfirmQueued={(message) => void confirmQueued(message)}
+              onFinishEdit={() => void finishEdit("remove")}
+              onPickQueued={pickQueued}
+              onCancel={() => void cancel()}
+              onClear={() => {
+                setDraft("");
+                draftImages.clear();
+                media.clearIntent();
+                setNotice(null);
+              }}
+              onWorkflowPhase={(phase) => void changeWorkflowPhase(phase)}
+            />
           )}
           {context && (
             <div className="flex justify-end px-1 pt-1.5">

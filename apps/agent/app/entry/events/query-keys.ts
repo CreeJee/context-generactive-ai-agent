@@ -9,6 +9,7 @@ export const appQueryKeys = {
     auth: ["app", "global", "auth"] as const,
     imports: ["app", "global", "imports"] as const,
     embedding: ["app", "global", "embedding"] as const,
+    imageSettings: ["app", "global", "image-settings"] as const,
     projects: ["app", "global", "projects"] as const,
   },
   project: {
