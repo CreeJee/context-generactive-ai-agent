@@ -35,6 +35,7 @@ export function ChatHistory({
     getScrollElement: () => viewport.current,
     getItemKey: (index) => messages[index]?.id ?? index,
     estimateSize: () => 180,
+    gap: 20,
     overscan: 5,
     anchorTo: "end",
     followOnAppend: "auto",
@@ -66,7 +67,12 @@ export function ChatHistory({
           void loadPreviousMessages();
       }}
     >
-      <div className="mx-auto flex max-w-3xl flex-col gap-5 px-6 pb-6">
+      <div
+        className={cn(
+          "mx-auto flex max-w-3xl flex-col gap-5 px-6 pb-6",
+          messages.length > 0 && "pt-6",
+        )}
+      >
         {messages.length === 0 && (
           <Empty className="mt-24">
             <EmptyHeader>
@@ -98,10 +104,7 @@ export function ChatHistory({
                 key={item.key}
                 data-index={item.index}
                 ref={virtualizer.measureElement}
-                className={cn(
-                  "absolute top-(--virtual-start) left-0 w-full",
-                  item.index === 0 ? "pt-6" : "pt-5",
-                )}
+                className="absolute top-(--virtual-start) left-0 w-full"
                 // SAFETY: This style only sets a CSS custom property consumed by the top utility.
                 style={{ "--virtual-start": `${item.start}px` } as React.CSSProperties}
               >
