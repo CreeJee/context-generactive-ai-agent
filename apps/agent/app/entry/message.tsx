@@ -508,13 +508,15 @@ export function MessageView({
   return (
     <div className="flex justify-start">
       <div className="flex max-w-[85%] flex-col gap-2 text-sm/relaxed">
-        {message.parts.map((part, index) => {
+        {message.parts.map((part) => {
           if (part.type === "text")
-            return <Markdown key={index} text={part.content} streaming={streaming} />;
+            return (
+              <Markdown key={JSON.stringify(part)} text={part.content} streaming={streaming} />
+            );
           if (part.type === "tool-call")
             return (
               <ToolCallView
-                key={part.id}
+                key={`tool-${part.id}`}
                 call={part}
                 result={results.get(part.id)}
                 awaitingApproval={awaitingApproval.has(part.id)}

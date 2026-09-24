@@ -960,7 +960,7 @@ function ChatPanel({
             </Empty>
           )}
           {messages.map((message, index) => (
-            <Fragment key={message.id}>
+            <Fragment key={`panel-${message.id}`}>
               {takenIn("before", message.id).map((taken) => (
                 <DeliveredMessageView key={taken.id} message={taken} />
               ))}
