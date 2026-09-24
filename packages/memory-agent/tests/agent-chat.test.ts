@@ -5,6 +5,7 @@ import { GlobalConfig } from "../src/config/global-config.ts";
 import { Database } from "../src/db/database.ts";
 import { embeddedKindFilter, Indexer } from "../src/memory/embedding/indexer.ts";
 import { Nodes } from "../src/memory/nodes.ts";
+import { ProviderRegistry } from "../src/providers/registry.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
 import { WorkTraceStore } from "../src/work-trace/store.ts";
 import { testRuntime } from "./support/runtime.ts";
@@ -23,7 +24,7 @@ function chatRequest(text: string) {
   });
 }
 
-const Count = Schema.Struct({ count: Schema.Number });
+const Count = Schema.Struct({ count: Schema.Finite });
 
 describe("AgentChat.handle", () => {
   test("answers from memory through provider tools, records the run and indexes it", async () => {
@@ -57,7 +58,7 @@ describe("AgentChat.handle", () => {
     const answer = (await response.text())
       .split("\n")
       .flatMap((line) =>
-        line.startsWith("data: ") ? [Schema.decodeUnknownSync(Delta)(line.slice(6))] : [],
+        line.startsWith("data: ") ? [Schema.decodeSync(Delta)(line.slice(6))] : [],
       )
       .flatMap((event) =>
         event.type === "TEXT_MESSAGE_CONTENT" && event.delta ? [event.delta] : [],
@@ -146,5 +147,13 @@ describe("AgentChat.handle", () => {
 
     await noModel.provider!.select(noModel.runtime);
     expect((await handle(noModel, "no-such-session")).status).toBe(404);
+
+    const unavailable = await testRuntime({ providerRegistry: ProviderRegistry.layer([], []) });
+    const unavailableResponse = await handle(unavailable, unavailable.session.id);
+    expect(unavailableResponse.status).toBe(503);
+    expect(await unavailableResponse.json()).toEqual({
+      error: "provider_auth_unavailable",
+      provider: "openai",
+    });
   });
 });

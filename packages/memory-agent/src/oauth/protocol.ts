@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { optionalProperty } from "../optional-property.ts";
 import { Data, Option, Schema } from "effect";
 import { JsonValue } from "../json.ts";
 
@@ -224,10 +225,10 @@ const OpenAiWireEvent = Schema.Union([
     type: Schema.Literal("response.completed"),
     response: Schema.Struct({
       usage: Schema.Struct({
-        input_tokens: Schema.Number,
-        output_tokens: Schema.Number,
+        input_tokens: Schema.Finite,
+        output_tokens: Schema.Finite,
         input_tokens_details: Schema.optional(
-          Schema.Struct({ cached_tokens: Schema.optional(Schema.Number) }),
+          Schema.Struct({ cached_tokens: Schema.optional(Schema.Finite) }),
         ),
       }),
     }),
@@ -251,12 +252,12 @@ const OpenAiWireEvent = Schema.Union([
 const AnthropicWireEvent = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("content_block_delta"),
-    index: Schema.Number,
+    index: Schema.Finite,
     delta: Schema.Struct({ type: Schema.Literal("text_delta"), text: Schema.String }),
   }),
   Schema.Struct({
     type: Schema.Literal("content_block_start"),
-    index: Schema.Number,
+    index: Schema.Finite,
     content_block: Schema.Struct({
       type: Schema.Literal("tool_use"),
       id: Schema.String,
@@ -266,7 +267,7 @@ const AnthropicWireEvent = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("content_block_start"),
-    index: Schema.Number,
+    index: Schema.Finite,
     content_block: Schema.Struct({
       type: Schema.Literal("thinking"),
       thinking: Schema.String,
@@ -275,7 +276,7 @@ const AnthropicWireEvent = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("content_block_delta"),
-    index: Schema.Number,
+    index: Schema.Finite,
     delta: Schema.Struct({
       type: Schema.Literal("input_json_delta"),
       partial_json: Schema.String,
@@ -283,7 +284,7 @@ const AnthropicWireEvent = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("content_block_delta"),
-    index: Schema.Number,
+    index: Schema.Finite,
     delta: Schema.Struct({
       type: Schema.Literal("thinking_delta"),
       thinking: Schema.String,
@@ -291,7 +292,7 @@ const AnthropicWireEvent = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("content_block_delta"),
-    index: Schema.Number,
+    index: Schema.Finite,
     delta: Schema.Struct({
       type: Schema.Literal("signature_delta"),
       signature: Schema.String,
@@ -299,20 +300,20 @@ const AnthropicWireEvent = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("content_block_stop"),
-    index: Schema.Number,
+    index: Schema.Finite,
   }),
   Schema.Struct({
     type: Schema.Literal("message_start"),
     message: Schema.Struct({
       usage: Schema.Struct({
-        input_tokens: Schema.Number,
-        cache_read_input_tokens: Schema.optional(Schema.Number),
+        input_tokens: Schema.Finite,
+        cache_read_input_tokens: Schema.optional(Schema.Finite),
       }),
     }),
   }),
   Schema.Struct({
     type: Schema.Literal("message_delta"),
-    usage: Schema.Struct({ output_tokens: Schema.Number }),
+    usage: Schema.Struct({ output_tokens: Schema.Finite }),
   }),
   Schema.Struct({
     type: Schema.Literal("error"),
@@ -340,7 +341,10 @@ export function decodeProviderEvent(
               type: "usage",
               promptTokens: event.response.usage.input_tokens,
               completionTokens: event.response.usage.output_tokens,
-              cachedPromptTokens: event.response.usage.input_tokens_details?.cached_tokens,
+              ...optionalProperty(
+                "cachedPromptTokens",
+                event.response.usage.input_tokens_details?.cached_tokens,
+              ),
             };
           if (event.type === "response.failed")
             return {
@@ -382,7 +386,7 @@ export function decodeProviderEvent(
           return {
             type: "usage",
             promptTokens: event.message.usage.input_tokens,
-            cachedPromptTokens: event.message.usage.cache_read_input_tokens,
+            ...optionalProperty("cachedPromptTokens", event.message.usage.cache_read_input_tokens),
           };
         if (event.type === "message_delta")
           return { type: "usage", completionTokens: event.usage.output_tokens };

@@ -15,7 +15,7 @@ interface DatabaseApi {
   readonly atomic: <T>(work: () => T) => T;
 }
 
-const UserVersion = Schema.Struct({ user_version: Schema.Number });
+const UserVersion = Schema.Struct({ user_version: Schema.Finite });
 
 function migrate(sqlite: DatabaseSync) {
   const { user_version: applied } = Schema.decodeUnknownSync(UserVersion)(

@@ -1,5 +1,6 @@
 import { isAbsolute, resolve } from "node:path";
-import { Cause, Context, Data, Effect, Result, Exit, Layer } from "effect";
+import { optionalProperty } from "../optional-property.ts";
+import { Cause, Context, Data, Effect, Result, Exit, Layer, Predicate } from "effect";
 import { canonicalPath, isCredentialPath, resolveProjectPath } from "../files/paths.ts";
 import {
   ModelFeatureFlags,
@@ -458,7 +459,7 @@ export function makeProviderToolPolicy(
               provider: context.provider,
               model: context.model,
               capability: tool.id,
-              route: context.route,
+              ...optionalProperty("route", context.route),
             }),
             (decision) => decision.allowed,
           ),
@@ -474,7 +475,7 @@ export function makeProviderToolPolicy(
             provider: context.provider,
             model: context.model,
             capability: tool.id,
-            route: context.route,
+            ...optionalProperty("route", context.route),
           }),
           (decision) =>
             decision.allowed
@@ -502,38 +503,34 @@ export function makeProviderToolPolicy(
           input.policy.provider !== input.provider ||
           tool.kind !== input.kind
         )
-          return yield* Effect.fail(
-            new ProviderToolOptionsViolation({
-              toolId: input.toolId,
-              reason: "tool_identity_mismatch",
-            }),
-          );
+          return yield* new ProviderToolOptionsViolation({
+            toolId: input.toolId,
+            reason: "tool_identity_mismatch",
+          });
         yield* assertFeatureFlag(tool, input.policy);
         const modelTools = yield* registry
           .resolve({ provider: input.provider, model: input.policy.model })
           .pipe(Effect.mapError(() => unsupported(input.toolId, input.policy, "unknown_model")));
         if (!modelTools.some((entry) => entry.id === tool.id))
-          return yield* Effect.fail(unsupported(input.toolId, input.policy, "model_unsupported"));
+          return yield* unsupported(input.toolId, input.policy, "model_unsupported");
         const accountTools = yield* resolveAccount(input.policy);
         if (!accountTools.some((entry) => entry.id === tool.id))
-          return yield* Effect.fail(
-            new ProviderToolCapabilityDenied({
-              toolId: input.toolId,
-              provider: input.policy.provider,
-              model: input.policy.model,
-              reason: "account_unsupported",
-            }),
-          );
+          return yield* new ProviderToolCapabilityDenied({
+            toolId: input.toolId,
+            provider: input.policy.provider,
+            model: input.policy.model,
+            reason: "account_unsupported",
+          });
         const refused = denial(tool, input.policy.app, input.policy.user);
-        if (refused) return yield* Effect.fail(refused);
+        if (refused) return yield* refused;
         const exposed = publicDescriptor(tool);
         if (exposed.requiresApproval) {
           if (input.approval === "not_requested")
-            return yield* Effect.fail(new ProviderToolApprovalRequired({ toolId: input.toolId }));
+            return yield* new ProviderToolApprovalRequired({ toolId: input.toolId });
           if (input.approval === "denied")
-            return yield* Effect.fail(new ProviderToolApprovalDenied({ toolId: input.toolId }));
+            return yield* new ProviderToolApprovalDenied({ toolId: input.toolId });
           if (input.approval === "cancelled")
-            return yield* Effect.fail(new ProviderToolApprovalCancelled({ toolId: input.toolId }));
+            return yield* new ProviderToolApprovalCancelled({ toolId: input.toolId });
         }
         const workspaceRoot = yield* Result.match(validateSandbox(tool, input.options, sandbox), {
           onFailure: Effect.fail,
@@ -744,11 +741,8 @@ export type ProviderToolRuntimeFailure =
 /* oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof, anti-slop/no-unsafe-dictionary-type -- Provider SDK payloads are intentionally opaque; normalization reads optional reported counters while retaining the exact raw value. */
 const finite = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? value : undefined;
-const objectRecord = (value: unknown): Readonly<Record<string, unknown>> | undefined => {
-  if (typeof value !== "object" || value === null) return undefined;
-  // SAFETY: the non-null object check establishes string-key property access; every read remains unknown.
-  return value as Readonly<Record<string, unknown>>;
-};
+const objectRecord = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
+  Predicate.isReadonlyObject(value) ? value : undefined;
 const firstNumber = (source: Readonly<Record<string, unknown>>, keys: readonly string[]) => {
   for (const key of keys) {
     const found = finite(source[key]);
@@ -772,20 +766,33 @@ export function normalizeProviderToolUsage(
   const source = objectRecord(raw);
   if (source === undefined) return undefined;
   return Object.freeze({
-    attribution: attribution === undefined ? undefined : Object.freeze({ ...attribution }),
-    inputTokens: firstNumber(source, ["inputTokens", "input_tokens", "promptTokens"]),
-    outputTokens: firstNumber(source, ["outputTokens", "output_tokens", "completionTokens"]),
-    totalTokens: firstNumber(source, ["totalTokens", "total_tokens"]),
-    cacheReadTokens: firstNumber(source, [
+    ...optionalProperty(
+      "attribution",
+      attribution === undefined ? undefined : Object.freeze({ ...attribution }),
+    ),
+    ...optionalProperty(
+      "inputTokens",
+      firstNumber(source, ["inputTokens", "input_tokens", "promptTokens"]),
+    ),
+    ...optionalProperty(
+      "outputTokens",
+      firstNumber(source, ["outputTokens", "output_tokens", "completionTokens"]),
+    ),
+    ...optionalProperty("totalTokens", firstNumber(source, ["totalTokens", "total_tokens"])),
+    ...optionalProperty(
       "cacheReadTokens",
-      "cache_read_input_tokens",
-      "cachedTokens",
-    ]),
-    cacheWriteTokens: firstNumber(source, ["cacheWriteTokens", "cache_creation_input_tokens"]),
-    serverToolRequests:
+      firstNumber(source, ["cacheReadTokens", "cache_read_input_tokens", "cachedTokens"]),
+    ),
+    ...optionalProperty(
+      "cacheWriteTokens",
+      firstNumber(source, ["cacheWriteTokens", "cache_creation_input_tokens"]),
+    ),
+    ...optionalProperty(
+      "serverToolRequests",
       numberRecord(source.serverToolRequests) ??
-      numberRecord(source.server_tool_requests) ??
-      numberRecord(source.server_tool_use),
+        numberRecord(source.server_tool_requests) ??
+        numberRecord(source.server_tool_use),
+    ),
     raw,
   });
 }
@@ -797,7 +804,10 @@ export function normalizeProviderToolCost(raw: unknown): ProviderToolCost | unde
     ? undefined
     : Object.freeze({
         amount,
-        currency: typeof source.currency === "string" ? source.currency : undefined,
+        ...optionalProperty(
+          "currency",
+          typeof source.currency === "string" ? source.currency : undefined,
+        ),
         raw,
       });
 }
@@ -842,16 +852,19 @@ const runtimeEnvelope = <Raw>(
     runId: request.runId,
     execution: descriptor.execution,
     status,
-    providerKind: result.kind,
+    ...optionalProperty("providerKind", result.kind),
     unknownKind: result.kind !== undefined && !providerStatus.has(result.kind),
-    usage: normalizeProviderToolUsage(result.usage, {
-      provider: descriptor.provider,
-      model: request.policy.model,
-      accountId: request.accountId,
-      toolId: descriptor.id,
-      runId: request.runId,
-    }),
-    cost: normalizeProviderToolCost(result.cost),
+    ...optionalProperty(
+      "usage",
+      normalizeProviderToolUsage(result.usage, {
+        provider: descriptor.provider,
+        model: request.policy.model,
+        accountId: request.accountId,
+        toolId: descriptor.id,
+        runId: request.runId,
+      }),
+    ),
+    ...optionalProperty("cost", normalizeProviderToolCost(result.cost)),
     raw: result.raw,
   });
 };

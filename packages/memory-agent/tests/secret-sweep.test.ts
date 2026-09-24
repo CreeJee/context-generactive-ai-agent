@@ -9,7 +9,7 @@ import { testRuntime } from "./support/runtime.ts";
 /** Assembled at run time so no key-shaped text sits in the repository. */
 const githubToken = `${"gh"}p_${"Q1w2E3r4T5y6U7i8O9p0A1s2D3f4G5h6J7k8"}`;
 
-const decodeCount = Schema.decodeUnknownSync(Schema.Struct({ count: Schema.Number }));
+const decodeCount = Schema.decodeUnknownSync(Schema.Struct({ count: Schema.Finite }));
 const decodeText = Schema.decodeUnknownSync(Schema.Struct({ text: Schema.String }));
 const decodeValue = Schema.decodeUnknownSync(Schema.Struct({ value: Schema.String }));
 

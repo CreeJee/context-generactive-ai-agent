@@ -132,7 +132,7 @@ describe("Indexer + VectorIndex", () => {
         const vectors = yield* VectorIndex;
         const [first, second] = yield* embedder.embed([statement.text, call.text]);
         yield* vectors.add([statement.seq, call.seq], [first!, second!]);
-        yield* vectors.save();
+        yield* vectors.save;
         const { sqlite } = yield* Database;
         const mark = sqlite.prepare("INSERT INTO node_vectors VALUES (?, ?)");
         mark.run(statement.seq, embedder.identity);

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { optionalProperty } from "../optional-property.ts";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import { JsonValue } from "../json.ts";
@@ -25,7 +26,7 @@ const AttemptRow = Schema.Struct({
   id: Schema.String,
   task_id: Schema.String,
   invocation_id: Schema.String,
-  attempt_number: Schema.Number,
+  attempt_number: Schema.Finite,
   chat_run_id: Schema.String,
   thread_id: Schema.String,
   status: AttemptStatus,
@@ -40,14 +41,14 @@ const RecoveryRow = Schema.Struct({
 });
 const RecoveryAssessment = Schema.Struct({
   checkpoint_id: Schema.NullOr(Schema.String),
-  uncertain_count: Schema.Number,
-  approval_count: Schema.Number,
+  uncertain_count: Schema.Finite,
+  approval_count: Schema.Finite,
 });
 const RecoveryJobRow = Schema.Struct({
   id: Schema.String,
   task_id: Schema.String,
   interrupted_attempt_id: Schema.String,
-  confirm_uncertain: Schema.Number,
+  confirm_uncertain: Schema.Finite,
 });
 const NotificationTaskRow = Schema.Struct({
   project_id: Schema.String,
@@ -60,14 +61,14 @@ const ParentNotificationRow = Schema.Struct({
   kind: Schema.String,
   summary: Schema.String,
   payload: Schema.String,
-  created_at: Schema.Number,
+  created_at: Schema.Finite,
 });
-const SequenceRow = Schema.Struct({ sequence: Schema.Number });
-const CursorRow = Schema.Struct({ seq: Schema.Number });
+const SequenceRow = Schema.Struct({ sequence: Schema.Finite });
+const CursorRow = Schema.Struct({ seq: Schema.Finite });
 const IdRow = Schema.Struct({ id: Schema.String });
 const TaskIdRow = Schema.Struct({ task_id: Schema.String });
 const AttemptIdRow = Schema.Struct({ attempt_id: Schema.String });
-const AttemptNumberRow = Schema.Struct({ attempt_number: Schema.Number });
+const AttemptNumberRow = Schema.Struct({ attempt_number: Schema.Finite });
 const LifecycleOperationRow = Schema.Struct({
   id: Schema.String,
   project_id: Schema.String,
@@ -86,9 +87,9 @@ const LifecycleOperationRow = Schema.Struct({
   ]),
   idempotency_key: Schema.String,
   blocker: Schema.NullOr(Schema.String),
-  requested_at: Schema.Number,
-  updated_at: Schema.Number,
-  completed_at: Schema.NullOr(Schema.Number),
+  requested_at: Schema.Finite,
+  updated_at: Schema.Finite,
+  completed_at: Schema.NullOr(Schema.Finite),
 });
 const LifecycleTaskRow = Schema.Struct({
   project_id: Schema.String,
@@ -96,9 +97,9 @@ const LifecycleTaskRow = Schema.Struct({
   agent_id: Schema.NullOr(Schema.String),
   parent_run_id: Schema.String,
   active_attempt_id: Schema.NullOr(Schema.String),
-  archived_at: Schema.NullOr(Schema.Number),
-  delete_requested_at: Schema.NullOr(Schema.Number),
-  deleted_at: Schema.NullOr(Schema.Number),
+  archived_at: Schema.NullOr(Schema.Finite),
+  delete_requested_at: Schema.NullOr(Schema.Finite),
+  deleted_at: Schema.NullOr(Schema.Finite),
   purge_receipt_id: Schema.NullOr(Schema.String),
 });
 const TaskViewRow = Schema.Struct({
@@ -116,31 +117,31 @@ const TaskViewRow = Schema.Struct({
   active_attempt_id: Schema.NullOr(Schema.String),
   latest_attempt_id: Schema.NullOr(Schema.String),
   latest_attempt_status: Schema.NullOr(AttemptStatus),
-  latest_attempt_number: Schema.NullOr(Schema.Number),
+  latest_attempt_number: Schema.NullOr(Schema.Finite),
   latest_resumed_from_attempt_id: Schema.NullOr(Schema.String),
   latest_activity: Schema.NullOr(Schema.String),
-  latest_activity_at: Schema.NullOr(Schema.Number),
-  archived_at: Schema.NullOr(Schema.Number),
-  delete_requested_at: Schema.NullOr(Schema.Number),
-  deleted_at: Schema.NullOr(Schema.Number),
+  latest_activity_at: Schema.NullOr(Schema.Finite),
+  archived_at: Schema.NullOr(Schema.Finite),
+  delete_requested_at: Schema.NullOr(Schema.Finite),
+  deleted_at: Schema.NullOr(Schema.Finite),
   purge_receipt_id: Schema.NullOr(Schema.String),
-  updated_at: Schema.Number,
-  created_at: Schema.Number,
+  updated_at: Schema.Finite,
+  created_at: Schema.Finite,
 });
 const AttemptViewRow = Schema.Struct({
   id: Schema.String,
   invocation_id: Schema.String,
-  attempt_number: Schema.Number,
+  attempt_number: Schema.Finite,
   chat_run_id: Schema.String,
   thread_id: Schema.String,
   status: AttemptStatus,
   resumed_from_attempt_id: Schema.NullOr(Schema.String),
   superseded_by_attempt_id: Schema.NullOr(Schema.String),
   resumability: Schema.String,
-  started_at: Schema.NullOr(Schema.Number),
-  finished_at: Schema.NullOr(Schema.Number),
-  created_at: Schema.Number,
-  updated_at: Schema.Number,
+  started_at: Schema.NullOr(Schema.Finite),
+  finished_at: Schema.NullOr(Schema.Finite),
+  created_at: Schema.Finite,
+  updated_at: Schema.Finite,
 });
 const ResumeTaskRow = Schema.Struct({
   id: Schema.String,
@@ -149,24 +150,24 @@ const ResumeTaskRow = Schema.Struct({
   request: Schema.String,
   status: Schema.String,
   active_attempt_id: Schema.NullOr(Schema.String),
-  archived_at: Schema.NullOr(Schema.Number),
-  delete_requested_at: Schema.NullOr(Schema.Number),
-  deleted_at: Schema.NullOr(Schema.Number),
+  archived_at: Schema.NullOr(Schema.Finite),
+  delete_requested_at: Schema.NullOr(Schema.Finite),
+  deleted_at: Schema.NullOr(Schema.Finite),
   previous_attempt_id: Schema.String,
-  previous_attempt_number: Schema.Number,
+  previous_attempt_number: Schema.Finite,
   previous_status: AttemptStatus,
   thread_id: Schema.String,
 });
 const CheckpointViewRow = Schema.Struct({
   id: Schema.String,
   attempt_id: Schema.String,
-  event_sequence: Schema.Number,
+  event_sequence: Schema.Finite,
   transcript_message_id: Schema.NullOr(Schema.String),
   completed_tool_call_ids: Schema.String,
   uncertain_tool_call_ids: Schema.String,
   pending_approval_ids: Schema.String,
   remaining_work: Schema.String,
-  created_at: Schema.Number,
+  created_at: Schema.Finite,
 });
 const CheckpointRow = Schema.Struct({
   id: Schema.String,
@@ -184,9 +185,9 @@ const EvidenceRow = Schema.Struct({
   verification: EvidenceVerification,
   visibility: TraceVisibility,
   redaction: RedactionState,
-  source_deleted_at: Schema.NullOr(Schema.Number),
-  created_at: Schema.Number,
-  updated_at: Schema.Number,
+  source_deleted_at: Schema.NullOr(Schema.Finite),
+  created_at: Schema.Finite,
+  updated_at: Schema.Finite,
 });
 const ArtifactRow = Schema.Struct({
   id: Schema.String,
@@ -196,12 +197,12 @@ const ArtifactRow = Schema.Struct({
   locator: Schema.NullOr(Schema.String),
   media_type: Schema.NullOr(Schema.String),
   verification: EvidenceVerification,
-  source_deleted_at: Schema.NullOr(Schema.Number),
-  created_at: Schema.Number,
-  updated_at: Schema.Number,
+  source_deleted_at: Schema.NullOr(Schema.Finite),
+  created_at: Schema.Finite,
+  updated_at: Schema.Finite,
 });
 const ReportAdoptionRow = Schema.Struct({
-  seq: Schema.Number,
+  seq: Schema.Finite,
   task_id: Schema.String,
   attempt_id: Schema.String,
   disposition: ReportDisposition,
@@ -209,7 +210,7 @@ const ReportAdoptionRow = Schema.Struct({
   parent_run_id: Schema.NullOr(Schema.String),
   parent_message_id: Schema.NullOr(Schema.String),
   claim_id: Schema.NullOr(Schema.String),
-  updated_at: Schema.Number,
+  updated_at: Schema.Finite,
 });
 const FinalAnswerClaimRow = Schema.Struct({
   id: Schema.String,
@@ -217,7 +218,7 @@ const FinalAnswerClaimRow = Schema.Struct({
   origin_session_id: Schema.NullOr(Schema.String),
   parent_run_id: Schema.String,
   parent_message_id: Schema.String,
-  created_at: Schema.Number,
+  created_at: Schema.Finite,
 });
 const FinalAnswerSourceRow = Schema.Struct({
   id: Schema.String,
@@ -232,19 +233,19 @@ const FinalAnswerNotificationRow = Schema.Struct({
   task_id: Schema.String,
 });
 const StoredEventRow = Schema.Struct({
-  cursor: Schema.Number,
+  cursor: Schema.Finite,
   id: Schema.String,
   origin_session_id: Schema.NullOr(Schema.String),
   task_id: Schema.String,
   invocation_id: Schema.String,
   attempt_id: Schema.String,
-  attempt_sequence: Schema.Number,
+  attempt_sequence: Schema.Finite,
   kind: RunEventKind,
   visibility: TraceVisibility,
   redaction: RedactionState,
   summary: Schema.String,
   payload: Schema.String,
-  occurred_at: Schema.Number,
+  occurred_at: Schema.Finite,
 });
 const decodeAttempt = Schema.decodeUnknownSync(AttemptRow);
 const decodeRecoveryRows = Schema.decodeUnknownSync(Schema.Array(RecoveryRow));
@@ -611,7 +612,7 @@ const make = Effect.gen(function* () {
   const recordEvidence = (input: RecordEvidenceInput): TraceEvidenceView =>
     atomic(() => {
       assertHandle(input.handle);
-      const locator = Schema.decodeUnknownSync(EvidenceLocator)(input.locator);
+      const locator = Schema.decodeSync(EvidenceLocator)(input.locator);
       if (locator.kind !== input.locator.kind)
         throw new Error("Evidence locator kind changed during decoding");
       if (locator.kind === "file") assertSafeFile(locator);
@@ -702,7 +703,7 @@ const make = Effect.gen(function* () {
   const recordArtifact = (input: RecordArtifactInput): TraceArtifactView =>
     atomic(() => {
       assertHandle(input.handle);
-      const locator = Schema.decodeUnknownSync(ArtifactLocator)(input.locator);
+      const locator = Schema.decodeSync(ArtifactLocator)(input.locator);
       if (locator.kind !== input.kind) throw new Error("Artifact kind must match its locator");
       if (locator.kind === "file") assertSafeFile(locator);
       const encoded = JSON.stringify(locator);
@@ -1201,7 +1202,7 @@ const make = Effect.gen(function* () {
           idempotencyKey: `attempt:${handle.id}:${notificationKind}`,
           payload: { attemptId: handle.id },
           deliveredImmediately,
-          deliveredToRunId,
+          ...optionalProperty("deliveredToRunId", deliveredToRunId),
         });
       return appended;
     });
@@ -2473,7 +2474,7 @@ const make = Effect.gen(function* () {
         Schema.Struct({
           active_attempt_id: Schema.NullOr(Schema.String),
           status: Schema.String,
-          archived_at: Schema.NullOr(Schema.Number),
+          archived_at: Schema.NullOr(Schema.Finite),
         }),
       )(existing);
       if (Option.isNone(decoded))

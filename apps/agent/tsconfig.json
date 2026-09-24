@@ -11,6 +11,10 @@
     "paths": {
       "~/*": ["./app/*"]
     },
+    "incremental": true,
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
     "esModuleInterop": true,
     "verbatimModuleSyntax": true,
     "noEmit": true,

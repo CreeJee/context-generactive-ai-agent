@@ -200,5 +200,5 @@ export const encodeSearchCursor = (cursor: SearchCursor) =>
 
 export const decodeSearchCursor = (text: string) =>
   Option.getOrUndefined(
-    Schema.decodeUnknownOption(Cursor)(Buffer.from(text, "base64url").toString("utf8")),
+    Schema.decodeOption(Cursor)(Buffer.from(text, "base64url").toString("utf8")),
   );

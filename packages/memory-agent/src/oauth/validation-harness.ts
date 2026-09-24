@@ -1,4 +1,5 @@
 import { createServer, type Server } from "node:http";
+import { optionalProperty } from "../optional-property.ts";
 import type { AddressInfo } from "node:net";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { Data, Option, Schema } from "effect";
@@ -19,7 +20,7 @@ const StoredCredentialSchema = Schema.Struct({
   refreshToken: Schema.String,
   idToken: Schema.optional(Schema.String),
   accountId: Schema.optional(Schema.String),
-  expiresAt: Schema.Number,
+  expiresAt: Schema.Finite,
 });
 
 export interface StoredCredential {
@@ -52,10 +53,17 @@ export const createKeychainCredentialStore = (): CredentialStore => ({
         "subscription-oauth",
       ).getPassword();
       if (encoded === undefined || encoded === null) return null;
-      return Option.getOrThrowWith(
+      const credential = Option.getOrThrowWith(
         decodeStoredCredential(encoded),
         () => new OAuthHarnessError("credential_store_unavailable"),
       );
+      return {
+        accessToken: credential.accessToken,
+        refreshToken: credential.refreshToken,
+        expiresAt: credential.expiresAt,
+        ...optionalProperty("idToken", credential.idToken),
+        ...optionalProperty("accountId", credential.accountId),
+      };
     } catch (error) {
       if (error instanceof OAuthHarnessError) throw error;
       throw new OAuthHarnessError("credential_store_unavailable");
@@ -210,7 +218,7 @@ const close = (server: Server) =>
 const TokenResponse = Schema.Struct({
   access_token: Schema.String,
   refresh_token: Schema.optional(Schema.String),
-  expires_in: Schema.Number,
+  expires_in: Schema.Finite,
   id_token: Schema.optional(Schema.String),
 });
 const decodeTokenResponse = Schema.decodeUnknownOption(TokenResponse);
@@ -679,7 +687,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
         headers,
         body: providerBody,
         redirect: "error",
-        signal,
+        signal: signal ?? null,
       }).catch(() => {
         throw new OAuthHarnessError("transport_unavailable", null, context);
       });
@@ -701,9 +709,10 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
         /cache[_ -]?control|prompt[_ -]?cach/i.test(responseText)
       )
         throw new ProviderFeatureRejectedError("anthropic", "prompt-cache", response.status);
+      const reason = providerReason(responseText);
       throw new OAuthHarnessError("provider_rejected", response.status, {
         ...context,
-        reason: providerReason(responseText),
+        ...optionalProperty("reason", reason),
       });
     }
     yield* sseEvents(protocol.provider, response);

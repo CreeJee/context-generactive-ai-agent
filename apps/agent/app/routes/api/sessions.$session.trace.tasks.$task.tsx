@@ -8,9 +8,7 @@ const TaskAction = Schema.Union([
   Schema.Struct({
     intent: Schema.Literal("resume"),
     expectedAttemptId: Schema.String,
-    confirmUncertain: Schema.Boolean.pipe(
-      Schema.withDecodingDefaultTypeKey(Effect.sync(() => false)),
-    ),
+    confirmUncertain: Schema.Boolean.pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed(false))),
   }),
   Schema.Struct({
     intent: Schema.Literals(["archive", "restore", "delete"]),

@@ -1,7 +1,12 @@
 import { Layer, ManagedRuntime } from "effect";
 import { defaultStorageRoot, memoryAgentLayer, stopAllCommands } from "memory-agent";
 
-function createAgentRuntime() {
+type AgentRuntime = ManagedRuntime.ManagedRuntime<
+  Layer.Success<ReturnType<typeof memoryAgentLayer>>,
+  Layer.Error<ReturnType<typeof memoryAgentLayer>>
+>;
+
+function createAgentRuntime(): AgentRuntime {
   // The storage root is read when the first request builds the layer, so the executable can set
   // CONTEXT_AGENT_HOME (its --storage option) after this module is loaded.
   const runtime = ManagedRuntime.make(

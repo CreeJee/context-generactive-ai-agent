@@ -32,7 +32,7 @@ const Verification = Schema.Struct({
   summary: Schema.String,
   evidence: Schema.Array(Schema.String),
   recoveryPhase: Schema.NullOr(Schema.Literals(["goal", "plan"])).pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.sync(() => null)),
+    Schema.withDecodingDefaultTypeKey(Effect.succeed(null)),
   ),
   updatedAt: Schema.NullOr(Schema.String),
 });

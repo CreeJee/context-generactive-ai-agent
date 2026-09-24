@@ -67,11 +67,11 @@ const CandidateRow = Schema.Struct({
   resolved_text: Schema.String,
   disposition: Schema.Literals(["saved", "edited_saved", "conversation_only", "rejected"]),
   memory_node_id: Schema.NullOr(Schema.String),
-  created_at: Schema.Number,
+  created_at: Schema.Finite,
 });
 const CandidateEvidenceRow = Schema.Struct({
   evidence_ref_id_snapshot: Schema.String,
-  source_deleted_at: Schema.NullOr(Schema.Number),
+  source_deleted_at: Schema.NullOr(Schema.Finite),
 });
 const CandidateIdentityRow = Schema.Struct({ id: Schema.String, memory_node_id: Schema.String });
 const UsageRow = Schema.Struct({
@@ -82,7 +82,7 @@ const UsageRow = Schema.Struct({
   parent_run_id: Schema.String,
   parent_message_id: Schema.NullOr(Schema.String),
   kind: Schema.Literals(["retrieved", "used"]),
-  created_at: Schema.Number,
+  created_at: Schema.Finite,
 });
 const decodeClaimSource = Schema.decodeUnknownSync(ClaimSourceRow);
 const decodeExisting = Schema.decodeUnknownSync(ExistingRow);

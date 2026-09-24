@@ -1,6 +1,7 @@
 import { memoryTool } from "@tanstack/ai-anthropic/tools";
+import { optionalProperty } from "../src/optional-property.ts";
 import { OPENAI_CHAT_MODELS } from "@tanstack/ai-openai";
-import { Effect, Result, Layer } from "effect";
+import { Effect, Result } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import {
   ProviderToolCapabilityRegistry,
@@ -84,8 +85,13 @@ describe("ProviderToolCapabilityRegistry", () => {
       Effect.gen(function* () {
         const registry = yield* ProviderToolCapabilityRegistry;
         const ids = (model: string, accountToolKinds?: readonly string[]) =>
-          Effect.map(registry.resolve({ provider: "openai", model, accountToolKinds }), (entries) =>
-            entries.map((entry) => entry.id),
+          Effect.map(
+            registry.resolve({
+              provider: "openai",
+              model,
+              ...optionalProperty("accountToolKinds", accountToolKinds),
+            }),
+            (entries) => entries.map((entry) => entry.id),
           );
         return {
           full: yield* ids("gpt-5.2"),
@@ -167,7 +173,7 @@ describe("ProviderToolCapabilityRegistry", () => {
     };
     const value = await Effect.runPromise(
       Effect.map(ProviderToolCapabilityRegistry, (registry) => registry).pipe(
-        Effect.provide(Layer.succeed(ProviderToolCapabilityRegistry, override)),
+        Effect.provideService(ProviderToolCapabilityRegistry, override),
       ),
     );
     expect(value).toBe(override);

@@ -39,11 +39,11 @@ const maxCharacters = 20_000;
 
 const Reply = Schema.Union([
   Schema.Struct({
-    id: Schema.Number,
+    id: Schema.Finite,
     kind: Schema.Literal("terms"),
     terms: Schema.Array(Schema.Array(Schema.String)),
   }),
-  Schema.Struct({ id: Schema.Number, kind: Schema.Literal("error"), error: Schema.String }),
+  Schema.Struct({ id: Schema.Finite, kind: Schema.Literal("error"), error: Schema.String }),
 ]);
 const decodeReply = Schema.decodeUnknownSync(Reply);
 

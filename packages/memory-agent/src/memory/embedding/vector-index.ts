@@ -37,8 +37,8 @@ export interface VectorHit {
 /** 4-bit quantization: turbovec's best recall setting at a quarter of float32 size. */
 const quantizationBits = 4;
 
-const Count = Schema.Struct({ count: Schema.Number });
-const decodeSeq = Schema.decodeUnknownSync(Schema.Struct({ seq: Schema.Number }));
+const Count = Schema.Struct({ count: Schema.Finite });
+const decodeSeq = Schema.decodeUnknownSync(Schema.Struct({ seq: Schema.Finite }));
 
 /** Writes a new file then swaps it in, so a crash never leaves a half-written index. */
 function write(index: { save(path: string): void }, file: string) {
@@ -138,11 +138,10 @@ const make = Effect.gen(function* () {
         catch: (cause) => new VectorIndexError({ operation: "search", cause }),
       }),
 
-    save: () =>
-      Effect.try({
-        try: () => write(index, file),
-        catch: (cause) => new VectorIndexError({ operation: "save", cause }),
-      }),
+    save: Effect.try({
+      try: () => write(index, file),
+      catch: (cause) => new VectorIndexError({ operation: "save", cause }),
+    }),
   };
 });
 

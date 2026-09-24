@@ -13,7 +13,7 @@ const EdgeRow = Schema.Struct({
   to_id: Schema.String,
   kind: Schema.String,
 });
-const JobRow = Schema.Struct({ status: Schema.String, attempts: Schema.Number });
+const JobRow = Schema.Struct({ status: Schema.String, attempts: Schema.Finite });
 
 const Trace = Schema.Struct({
   challengedBy: Schema.Array(
@@ -28,7 +28,7 @@ const Trace = Schema.Struct({
   ),
 });
 
-async function run<I, O>(tool: { execute?: (args: I) => O }, input: I) {
+async function run<I, O>(tool: { execute?: ((args: I) => O) | undefined }, input: I) {
   if (!tool.execute) throw new Error("tool has no server implementation");
   return tool.execute(input);
 }

@@ -71,9 +71,9 @@ export const affectsDevelopmentBackend = (file: string) => {
 };
 
 const LockRecord = Schema.Struct({
-  pid: Schema.Number,
+  pid: Schema.Finite,
   instanceId: Schema.String,
-  port: Schema.Number,
+  port: Schema.Finite,
 });
 const decodeLock = Schema.decodeUnknownOption(Schema.fromJsonString(LockRecord));
 

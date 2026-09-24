@@ -214,7 +214,11 @@ const make = Effect.gen(function* () {
     // Kept unwrapped: a start that outlives its timeout still gets closed with the connection.
     const client = (async () =>
       createMCPClient({
-        transport: transportFor(project, server.config),
+        // SAFETY: The SDK's concrete HTTP transport declares sessionId as string | undefined while
+        // TanStack's TransportInput expects an exact optional string. Runtime contracts agree.
+        transport: transportFor(project, server.config) as Parameters<
+          typeof createMCPClient
+        >[0]["transport"],
         name: "context-generactive-agent",
       }))();
     client.catch(() => undefined);

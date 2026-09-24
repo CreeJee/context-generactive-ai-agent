@@ -24,7 +24,7 @@ export const Attachment = Schema.Struct({
   /** sha256 of the bytes, hex. */
   id: Schema.String,
   mimeType: AttachmentMimeType,
-  bytes: Schema.Number,
+  bytes: Schema.Finite,
   createdAt: Schema.String,
 });
 export type Attachment = typeof Attachment.Type;
@@ -41,7 +41,7 @@ export class AttachmentStorageFailed extends Data.TaggedError("AttachmentStorage
 const AttachmentRow = Schema.Struct({
   id: Schema.String,
   mime_type: AttachmentMimeType,
-  bytes: Schema.Number,
+  bytes: Schema.Finite,
   created_at: Schema.String,
 });
 const decodeAttachmentRow = Schema.decodeUnknownSync(AttachmentRow);
@@ -99,6 +99,7 @@ const extensions = new Map<AttachmentMimeType, string>([
 ]);
 
 const make = Effect.gen(function* () {
+  const run = Effect.runPromiseWith(yield* Effect.context());
   const { sqlite } = yield* Database;
   const storage = yield* StorageRoot;
   const directory = join(storage.path, "attachments");
@@ -142,7 +143,7 @@ const make = Effect.gen(function* () {
     if (existingCopy) await rm(copy, { force: true });
     if (await stat(noCopy).catch(() => undefined)) return upload;
     try {
-      const encoded = await Effect.runPromise(
+      const encoded = await run(
         conversionPermits.withPermits(1)(
           Effect.tryPromise({
             try: async () => {

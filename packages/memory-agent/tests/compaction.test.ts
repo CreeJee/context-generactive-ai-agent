@@ -42,24 +42,24 @@ function canonical() {
 
 const decodeCompact = Schema.decodeUnknownSync(
   Schema.Struct({
-    cleared: Schema.Number,
-    summarizedTurns: Schema.Number,
+    cleared: Schema.Finite,
+    summarizedTurns: Schema.Finite,
     summaryFailed: Schema.Boolean,
-    tokensBefore: Schema.Number,
-    tokensAfter: Schema.Number,
+    tokensBefore: Schema.Finite,
+    tokensAfter: Schema.Finite,
   }),
 );
 const decodeStatus = Schema.decodeUnknownSync(
   Schema.Struct({
     context: Schema.Struct({
-      usedTokens: Schema.NullOr(Schema.Number),
-      cachedTokens: Schema.NullOr(Schema.Number),
-      cacheRatio: Schema.NullOr(Schema.Number),
+      usedTokens: Schema.NullOr(Schema.Finite),
+      cachedTokens: Schema.NullOr(Schema.Finite),
+      cacheRatio: Schema.NullOr(Schema.Finite),
       compactionStage: Schema.NullOr(
         Schema.Literals(["none", "clear-answered", "summarize", "leave-out"]),
       ),
-      windowTokens: Schema.Number,
-      compactAtTokens: Schema.Number,
+      windowTokens: Schema.Finite,
+      compactAtTokens: Schema.Finite,
     }),
   }),
 );
@@ -867,7 +867,7 @@ describe("compaction", () => {
       return (await response.text())
         .split("\n")
         .flatMap((line) =>
-          line.startsWith("data: ") ? [Schema.decodeUnknownSync(StreamEvent)(line.slice(6))] : [],
+          line.startsWith("data: ") ? [Schema.decodeSync(StreamEvent)(line.slice(6))] : [],
         );
     };
 

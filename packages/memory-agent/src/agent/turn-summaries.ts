@@ -64,6 +64,7 @@ const nodeLine = (node: Node) =>
 
 const make = (automatic: boolean) =>
   Effect.gen(function* () {
+    const run = Effect.runPromiseWith(yield* Effect.context());
     const nodes = yield* Nodes;
     const chatState = yield* ChatState;
     const active = yield* ActiveProvider;
@@ -167,7 +168,7 @@ const make = (automatic: boolean) =>
         onFinish: () => {
           if (!automatic) return;
           // Retried after the next run; a failure here never reaches the conversation.
-          void Effect.runPromise(Effect.catchCause(catchUp(sessionId, false), () => Effect.void));
+          void run(Effect.catchCause(catchUp(sessionId, false), () => Effect.void));
         },
       }),
     };

@@ -12,8 +12,8 @@ export interface ConnectAppEventsOptions {
   readonly url: () => string;
   readonly signal?: AbortSignal;
   readonly createSource?: (url: string) => EventSourceLike;
-  readonly onChanged: (event: typeof AppChangedEvent.Type) => void;
-  readonly onReady: (event: typeof AppReadyEvent.Type) => void;
+  readonly onChanged: (event: AppChangedEvent) => void;
+  readonly onReady: (event: AppReadyEvent) => void;
   readonly onStatus?: (status: EventConnectionState) => void;
   readonly onDecodeError?: (error: Error) => void;
 }

@@ -6,7 +6,7 @@ const CLAUDE_CODE_IDENTITY = "You are a Claude agent, built on Anthropic's Claud
 
 const AnthropicValidationRequestSchema = Schema.Struct({
   model: Schema.optional(Schema.String),
-  max_tokens: Schema.optional(Schema.Number),
+  max_tokens: Schema.optional(Schema.Finite),
   stream: Schema.optional(Schema.Boolean),
   system: Schema.optional(Schema.Union([Schema.String, Schema.Array(Schema.Unknown)])),
   messages: Schema.optional(Schema.Array(Schema.Unknown)),

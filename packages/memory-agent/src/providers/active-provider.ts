@@ -25,8 +25,8 @@ const make = Effect.gen(function* () {
 
   const resolve = (selection: ModelSelection) =>
     Effect.gen(function* () {
-      const configuration = yield* Effect.orDie(registry.get(selection.provider));
-      const runtime = yield* Effect.orDie(registry.runtime(selection.provider));
+      const configuration = yield* registry.get(selection.provider);
+      const runtime = yield* registry.runtime(selection.provider);
       return {
         selection,
         services: { ...configuration, runtime },
@@ -34,7 +34,7 @@ const make = Effect.gen(function* () {
     });
 
   const authFor = (provider: ProviderId) =>
-    Effect.flatMap(Effect.orDie(registry.get(provider)), ({ auth }) => auth.status).pipe(
+    Effect.flatMap(registry.get(provider), ({ auth }) => auth.status).pipe(
       Effect.orElseSucceed(() => ({
         provider,
         status: "error" as const,

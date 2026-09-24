@@ -39,7 +39,7 @@ export type TranscriptCounts = ReadonlyArray<{
 }>;
 
 const decodeCursor = Schema.decodeUnknownSync(
-  Schema.Struct({ byte_offset: Schema.Number, size: Schema.Number, mtime_ms: Schema.Number }),
+  Schema.Struct({ byte_offset: Schema.Finite, size: Schema.Finite, mtime_ms: Schema.Finite }),
 );
 const decodeSessionId = Schema.decodeUnknownSync(Schema.Struct({ session_id: Schema.String }));
 
@@ -286,10 +286,9 @@ const make = (home: string) =>
           for (const transcript of found) {
             const outcome = yield* migrate(transcript, interpret).pipe(
               Effect.map((written) => ({ written, failed: 0 })),
-              Effect.catchCause((cause) =>
-                Cause.hasInterruptsOnly(cause)
-                  ? Effect.failCause(cause)
-                  : Effect.as(recordFailure(transcript, cause), { written: 0, failed: 1 }),
+              Effect.catchCauseIf(
+                (cause) => !Cause.hasInterruptsOnly(cause),
+                (cause) => Effect.as(recordFailure(transcript, cause), { written: 0, failed: 1 }),
               ),
             );
             progress = {

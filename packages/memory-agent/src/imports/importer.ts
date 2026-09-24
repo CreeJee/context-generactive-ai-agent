@@ -86,13 +86,13 @@ export class ImportWorkerFailed extends Data.TaggedError("ImportWorkerFailed")<{
 
 const decodeReply = Schema.decodeUnknownSync(ImportWorkerReply);
 const decodeSourceTotals = Schema.decodeUnknownSync(
-  Schema.Struct({ migrated: Schema.Number, nodes: Schema.Number, failed: Schema.Number }),
+  Schema.Struct({ migrated: Schema.Finite, nodes: Schema.Finite, failed: Schema.Finite }),
 );
 const decodeFailure = Schema.decodeUnknownSync(
   Schema.Struct({ source: ImportSourceName, path: Schema.String, reason: Schema.String }),
 );
 const decodeSkipped = Schema.decodeUnknownSync(
-  Schema.Struct({ cwd: Schema.String, reason: Schema.String, transcripts: Schema.Number }),
+  Schema.Struct({ cwd: Schema.String, reason: Schema.String, transcripts: Schema.Finite }),
 );
 
 const progressOf = (reply: PassProgress): PassProgress => ({
@@ -289,7 +289,7 @@ const make = (watching: boolean, home: string) =>
      * nodes are the newest by time, and that is the order pending nodes come out in.
      */
     const backfill = Effect.andThen(indexer.indexAll(), indexer.analyzeAll()).pipe(
-      Effect.catchCause(() => Effect.void),
+      Effect.ignoreCause,
       oneDrainAtATime.withPermits(1),
     );
 
@@ -298,7 +298,7 @@ const make = (watching: boolean, home: string) =>
       Effect.forkIn(
         Deferred.await(done).pipe(
           Effect.flatMap((written) => (written > 0 ? backfill : Effect.void)),
-          Effect.catchCause(() => Effect.void),
+          Effect.ignoreCause,
         ),
         layerScope,
       ),
@@ -311,7 +311,7 @@ const make = (watching: boolean, home: string) =>
             const settings = yield* config.read;
             if (settings.importsEnabled !== true) return;
             if ((yield* runOnce) > 0) yield* backfill;
-          }).pipe(Effect.catchCause(() => Effect.void)),
+          }).pipe(Effect.ignoreCause),
           Schedule.spaced(pollEvery),
         ),
       );

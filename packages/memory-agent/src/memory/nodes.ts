@@ -43,7 +43,7 @@ export const NodeDetail = Schema.Struct({
 export type NodeDetail = typeof NodeDetail.Type;
 
 export const Node = Schema.Struct({
-  seq: Schema.Number,
+  seq: Schema.Finite,
   id: Schema.String,
   projectId: Schema.String,
   sessionId: Schema.NullOr(Schema.String),
@@ -80,7 +80,7 @@ export interface EvidencePage {
 }
 
 const NodeRow = Schema.Struct({
-  seq: Schema.Number,
+  seq: Schema.Finite,
   id: Schema.String,
   project_id: Schema.String,
   session_id: Schema.NullOr(Schema.String),
@@ -112,7 +112,7 @@ const EdgeRow = Schema.Struct({
   to_id: Schema.String,
   kind: EdgeKind,
   origin: EdgeOrigin,
-  weight: Schema.Number,
+  weight: Schema.Finite,
   created_at: Schema.String,
 });
 const decodeEdgeRow = Schema.decodeUnknownSync(EdgeRow);

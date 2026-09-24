@@ -6,7 +6,7 @@ import type { DeliveryVia, QueueItemState, QueuedMessage, QueueSnapshot } from "
 
 const Row = Schema.Struct({
   id: Schema.String,
-  seq: Schema.Number,
+  seq: Schema.Finite,
   text: Schema.String,
   attachment_ids: Schema.fromJsonString(Schema.Array(Schema.String)),
   state: Schema.Literals(["waiting", "editing", "held", "delivered", "failed"]),
@@ -14,7 +14,7 @@ const Row = Schema.Struct({
   delivered_via: Schema.NullOr(Schema.Literals(["tool_boundary", "steer", "next_turn"])),
   run_id: Schema.NullOr(Schema.String),
   failure: Schema.NullOr(Schema.String),
-  created_at: Schema.Number,
+  created_at: Schema.Finite,
 });
 const decodeRow = Schema.decodeUnknownSync(Row);
 

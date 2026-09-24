@@ -99,7 +99,7 @@ export const turnSummariesNamespace = "memory-agent/turn-summaries";
  * there says something else is not the one summarized, and the summary is not used for it.
  */
 export const SummaryBlock = Schema.Struct({
-  end: Schema.Number,
+  end: Schema.Finite,
   nextTurnNodeId: Schema.String,
   text: Schema.String,
 });
@@ -162,8 +162,8 @@ export const manualCompactionNamespace = "memory-agent/manual-compaction";
  * `summarizedTurns` turns (as their summaries), are never sent as they were.
  */
 const ManualCompaction = Schema.Struct({
-  clearedThrough: Schema.Number,
-  summarizedTurns: Schema.Number.pipe(Schema.withDecodingDefaultTypeKey(Effect.sync(() => 0))),
+  clearedThrough: Schema.Finite,
+  summarizedTurns: Schema.Finite.pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed(0))),
 });
 type ManualCompaction = typeof ManualCompaction.Type;
 const decodeManualCompaction = Schema.decodeUnknownOption(ManualCompaction);
@@ -328,9 +328,9 @@ export async function compact(
 const largeShellResult = Schema.fromJsonString(
   Schema.Struct({
     status: Schema.String,
-    exitCode: Schema.NullOr(Schema.Number),
+    exitCode: Schema.NullOr(Schema.Finite),
     signal: Schema.NullOr(Schema.String),
-    durationMs: Schema.Number,
+    durationMs: Schema.Finite,
     stdoutTruncated: Schema.Boolean,
     stderrTruncated: Schema.Boolean,
     stdout: Schema.String,
@@ -339,21 +339,21 @@ const largeShellResult = Schema.fromJsonString(
 );
 const largeListResult = Schema.fromJsonString(
   Schema.Struct({
-    total: Schema.Number,
+    total: Schema.Finite,
     paths: Schema.Array(Schema.String),
-    nextOffset: Schema.NullOr(Schema.Number),
+    nextOffset: Schema.NullOr(Schema.Finite),
     snapshot: Schema.String,
     truncated: Schema.Boolean,
-    excludedCredentialFiles: Schema.Number,
+    excludedCredentialFiles: Schema.Finite,
   }),
 );
 const largeSearchResult = Schema.fromJsonString(
   Schema.Struct({
     matches: Schema.Array(
-      Schema.Struct({ path: Schema.String, line: Schema.Number, text: Schema.String }),
+      Schema.Struct({ path: Schema.String, line: Schema.Finite, text: Schema.String }),
     ),
     skipped: Schema.Array(Schema.Struct({ path: Schema.String, reason: Schema.String })),
-    filesInView: Schema.Number,
+    filesInView: Schema.Finite,
     nextCursor: Schema.NullOr(Schema.String),
     complete: Schema.Boolean,
   }),
@@ -400,9 +400,7 @@ export function lightweightToolResults(
     };
     let summary;
     if (name === "run_shell") {
-      const result = Option.getOrUndefined(
-        Schema.decodeUnknownOption(largeShellResult)(message.content),
-      );
+      const result = Option.getOrUndefined(Schema.decodeOption(largeShellResult)(message.content));
       if (!result) return message;
       summary = {
         // The command is already present in the tool call. Avoid echoing it (and the shell path)
@@ -418,9 +416,7 @@ export function lightweightToolResults(
         stderr: preview(result.stderr, result.status === "succeeded" ? 600 : 1_500),
       };
     } else if (name === "list_files") {
-      const result = Option.getOrUndefined(
-        Schema.decodeUnknownOption(largeListResult)(message.content),
-      );
+      const result = Option.getOrUndefined(Schema.decodeOption(largeListResult)(message.content));
       if (!result) return message;
       summary = {
         ...result,
@@ -428,9 +424,7 @@ export function lightweightToolResults(
         shown: Math.min(20, result.paths.length),
       };
     } else if (name === "search_files") {
-      const result = Option.getOrUndefined(
-        Schema.decodeUnknownOption(largeSearchResult)(message.content),
-      );
+      const result = Option.getOrUndefined(Schema.decodeOption(largeSearchResult)(message.content));
       if (!result) return message;
       summary = {
         ...result,
@@ -442,9 +436,7 @@ export function lightweightToolResults(
         skipped: result.skipped.slice(0, 5),
       };
     } else {
-      const result = Option.getOrUndefined(
-        Schema.decodeUnknownOption(largeReportResult)(message.content),
-      );
+      const result = Option.getOrUndefined(Schema.decodeOption(largeReportResult)(message.content));
       if (!result) return message;
       summary = {
         ...result,

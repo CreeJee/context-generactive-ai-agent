@@ -20,7 +20,7 @@ const ImageMediaRequest = Schema.Struct({
   approved: Schema.Boolean,
   runId: Schema.optional(Schema.String),
   crossProviderApproval: Schema.optional(CrossProviderApproval),
-  maximumEstimatedCostUsd: Schema.optional(Schema.Number),
+  maximumEstimatedCostUsd: Schema.optional(Schema.Finite),
 });
 
 /** POST /api/media/image — paid direct media workflow, deliberately outside chat tool context. */

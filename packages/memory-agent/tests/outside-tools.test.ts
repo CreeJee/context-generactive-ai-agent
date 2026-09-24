@@ -48,7 +48,7 @@ async function outsideTools(project: string, storage: string) {
   return { listOutside, readOutside, searchOutside };
 }
 
-async function run<I, O>(tool: { execute?: (args: I) => O }, input: I) {
+async function run<I, O>(tool: { execute?: ((args: I) => O) | undefined }, input: I) {
   if (!tool.execute) throw new Error("tool has no server implementation");
   return tool.execute(input);
 }
@@ -61,7 +61,7 @@ const failure = <A>(promise: Promise<A>) =>
 
 const Matches = Schema.Struct({
   matches: Schema.Array(
-    Schema.Struct({ path: Schema.String, line: Schema.Number, text: Schema.String }),
+    Schema.Struct({ path: Schema.String, line: Schema.Finite, text: Schema.String }),
   ),
 });
 

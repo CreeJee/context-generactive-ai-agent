@@ -60,7 +60,7 @@ const SessionLine = Schema.Struct({
 const ItemLine = Schema.Struct({
   type: Schema.Literal("response_item"),
   timestamp: Schema.String,
-  ordinal: Schema.Number,
+  ordinal: Schema.Finite,
   payload: Schema.Unknown,
 });
 const decodeLine = Schema.decodeUnknownOption(

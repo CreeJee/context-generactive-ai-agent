@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { renameSync, statSync } from "node:fs";
 import { posix, win32 } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { Schema } from "effect";
+import { Option, Schema } from "effect";
 
 /**
  * Host differences between POSIX systems and Windows, in one place. Every function takes the
@@ -78,7 +78,10 @@ export async function renameWhenReleased(
       return;
     } catch (error) {
       const code = Schema.decodeUnknownOption(ErrorCode)(error);
-      const busy = code._tag === "Some" && busyCodes.includes(code.value.code);
+      const busy = Option.match(code, {
+        onNone: () => false,
+        onSome: ({ code }) => busyCodes.includes(code),
+      });
       if (platform !== "win32" || !busy || attempt === 20) throw error;
       await sleep(500);
     }

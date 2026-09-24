@@ -22,14 +22,14 @@ const Report = Schema.Struct({
   answer: Schema.String,
   evidenceRefIds: Schema.Array(Schema.String),
 });
-const Count = Schema.Struct({ count: Schema.Number });
+const Count = Schema.Struct({ count: Schema.Finite });
 const Chunk = Schema.fromJsonString(
   Schema.Struct({ type: Schema.String, delta: Schema.optional(Schema.String) }),
 );
 const receiptFrom = (answer: string) =>
-  Schema.decodeUnknownSync(Schema.fromJsonString(Receipt))(answer.slice(answer.indexOf("{")));
+  Schema.decodeSync(Schema.fromJsonString(Receipt))(answer.slice(answer.indexOf("{")));
 const reportFrom = (answer: string) =>
-  Schema.decodeUnknownSync(Schema.fromJsonString(Report))(answer.slice(answer.indexOf("{")));
+  Schema.decodeSync(Schema.fromJsonString(Report))(answer.slice(answer.indexOf("{")));
 const idsOf = ({ taskId, attemptId }: typeof Ids.Type) => ({ taskId, attemptId });
 async function until(condition: () => boolean, description: string) {
   for (let i = 0; i < 300; i++) {
@@ -67,14 +67,12 @@ async function setup() {
           };
         }
         if (!internal && user.startsWith("review-and-adopt ")) {
-          const ids = Schema.decodeUnknownSync(Schema.fromJsonString(Ids))(
+          const ids = Schema.decodeSync(Schema.fromJsonString(Ids))(
             user.slice("review-and-adopt ".length),
           );
           const last = invocation.messages.at(-1);
           if (last?.role === "tool" && last.toolCallId === "call-review-report") {
-            const report = Schema.decodeUnknownSync(Schema.fromJsonString(Report))(
-              messageText(last),
-            );
+            const report = Schema.decodeSync(Schema.fromJsonString(Report))(messageText(last));
             return {
               toolCalls: [
                 {
@@ -136,7 +134,7 @@ async function setup() {
     return (await response.text())
       .split("\n")
       .flatMap((line) =>
-        line.startsWith("data: ") ? [Schema.decodeUnknownSync(Chunk)(line.slice(6))] : [],
+        line.startsWith("data: ") ? [Schema.decodeSync(Chunk)(line.slice(6))] : [],
       )
       .flatMap((chunk) =>
         chunk.type === "TEXT_MESSAGE_CONTENT" && chunk.delta ? [chunk.delta] : [],
@@ -211,7 +209,7 @@ describe("asynchronous subagents", () => {
       "post-parent notification",
     );
     const runs = Schema.decodeUnknownSync(
-      Schema.Array(Schema.Struct({ started_at: Schema.Number, finished_at: Schema.Number })),
+      Schema.Array(Schema.Struct({ started_at: Schema.Finite, finished_at: Schema.Finite })),
     )(
       db.sqlite
         .prepare(

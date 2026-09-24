@@ -111,7 +111,7 @@ export default defineConfig(({ command }) => {
               // The shipped app ignores NODE_OPTIONS, so a developer's or tool's Node flags (preloads,
               // --conditions) cannot change or break it.
               execArgvExtension: "none",
-              assets: Schema.decodeUnknownSync(
+              assets: Schema.decodeSync(
                 Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)),
               )(readFileSync(process.env.CONTEXT_AGENT_EXE_ASSETS, "utf8")),
             },

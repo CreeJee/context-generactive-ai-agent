@@ -20,6 +20,7 @@ import { renumberReferences, useDraftImages } from "./draft-images";
 import { interruptContinuationState } from "../session/interrupt-recovery";
 import {
   ApiError,
+  chatFetch,
   compactErrorMessage,
   decodeContextEvent,
   decodeDeliveredEvent,
@@ -30,7 +31,6 @@ import {
   type WorkflowPhase,
   type WorkflowState,
 } from "../api";
-import { appFetch } from "../shared/backend-restart";
 import { ChatApprovals } from "./chat-approvals";
 import { ChatComposer, type ChatComposerHandle } from "./chat-composer";
 import { ChatHistory } from "./chat-history";
@@ -279,7 +279,7 @@ function ChatPanel({
     connection: fetchServerSentEvents(`/api/chat?session=${encodeURIComponent(sessionId)}`, {
       // The server refuses sends and approval answers from a page that does not hold the session.
       headers: { [sessionHolderHeader]: holder },
-      fetchClient: appFetch,
+      fetchClient: chatFetch,
     }),
     threadId: sessionId,
     persistence: true,
@@ -891,7 +891,13 @@ function ChatPanel({
           run.notice === null && (
             <Alert variant="destructive">
               <AlertTitle>응답을 받지 못했어요</AlertTitle>
-              <AlertDescription>{error.message}</AlertDescription>
+              <AlertDescription>
+                {error instanceof ApiError && error.code === "provider_auth_unavailable"
+                  ? "인증 상태를 확인할 수 없어요. 잠시 후 다시 시도해 주세요."
+                  : error instanceof ApiError && error.code === "provider_unavailable"
+                    ? "선택한 제공자를 사용할 수 없어요. 제공자 설정을 확인해 주세요."
+                    : error.message}
+              </AlertDescription>
             </Alert>
           )}
         {!generating && !waitingForApproval && run.notice && <RunNoticeView notice={run.notice} />}

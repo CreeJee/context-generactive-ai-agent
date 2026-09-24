@@ -1,6 +1,7 @@
 // Tool latency at the tool-execution seam (no model, HTTP or UI): `vp test bench`.
 // A synthetic repository is generated once per process in the OS temp directory.
 import { execFileSync } from "node:child_process";
+import { optionalProperty } from "../src/optional-property.ts";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -107,7 +108,11 @@ interface ReadInput {
 /** Every page of a listing, as a model paging through it would. */
 async function listAll(list: (input: ListInput) => Promise<Page>) {
   let page = await list({});
-  while (page.nextOffset) page = await list({ snapshot: page.snapshot, offset: page.nextOffset });
+  while (page.nextOffset)
+    page = await list({
+      ...optionalProperty("snapshot", page.snapshot),
+      offset: page.nextOffset,
+    });
 }
 
 /** Every page of a search. */

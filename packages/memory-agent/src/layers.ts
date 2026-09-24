@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { optionalProperty } from "./optional-property.ts";
 import { Layer } from "effect";
 import { AgentChat } from "./agent/chat.ts";
 import { ApiUsage } from "./agent/api-usage.ts";
@@ -186,10 +187,13 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     Graph.layer,
     VectorIndex.layer,
     ChatState.layer,
-    Kagi.layer({ baseUrl: options.kagiBaseUrl }),
+    Kagi.layer(options.kagiBaseUrl === undefined ? {} : { baseUrl: options.kagiBaseUrl }),
     McpServers.layer,
     ExternalAgents.layer,
-    Skills.layer({ home: options.skillsHome, builtin: options.skillsBuiltin }),
+    Skills.layer({
+      ...optionalProperty("home", options.skillsHome),
+      ...optionalProperty("builtin", options.skillsBuiltin),
+    }),
   );
   const routeCatalog =
     options.routeCatalog ??

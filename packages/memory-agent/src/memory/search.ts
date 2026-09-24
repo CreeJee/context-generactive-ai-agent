@@ -104,7 +104,7 @@ const IdProject = Schema.Struct({ id: Schema.String, project_id: Schema.String }
 const decodeIdProject = Schema.decodeUnknownSync(IdProject);
 const Id = Schema.Struct({ id: Schema.String });
 const decodeId = Schema.decodeUnknownSync(Id);
-const Count = Schema.Struct({ count: Schema.Number });
+const Count = Schema.Struct({ count: Schema.Finite });
 const decodeCount = Schema.decodeUnknownSync(Count);
 const decodeName = Schema.decodeUnknownSync(Schema.Struct({ name: Schema.String }));
 const decodeChallenge = Schema.decodeUnknownSync(
@@ -276,22 +276,22 @@ const make = (tuning: SearchTuning) =>
           minUtility: 0.2,
           projectIds: allowed,
         });
-        const unindexed = Schema.decodeUnknownSync(Count)(
+        const unindexed = (yield* Schema.decodeUnknownEffect(Count)(
           sqlite
             .prepare(`
             SELECT count(*) AS count FROM nodes n
             LEFT JOIN node_vectors v ON v.node_seq = n.seq AND v.embedder = ?
             WHERE v.node_seq IS NULL AND length(n.text) > 0 AND ${embeddedKindFilter}`)
             .get(embedder.identity),
-        ).count;
+        )).count;
 
-        const uninterpreted = Schema.decodeUnknownSync(Count)(
+        const uninterpreted = (yield* Schema.decodeUnknownEffect(Count)(
           sqlite
             .prepare(`
             SELECT count(*) AS count FROM interpret_jobs j JOIN nodes n ON n.id = j.node_id
             WHERE j.status != 'done' AND n.project_id IN (${allowed.map(() => "?").join(", ")})`)
             .get(...allowed),
-        ).count;
+        )).count;
 
         const matches = walk.visits.slice(0, limit).map((visit): Match => {
           let foundBy: Match["foundBy"] = "graph";

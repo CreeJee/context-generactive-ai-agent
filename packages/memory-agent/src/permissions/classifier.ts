@@ -93,6 +93,7 @@ export function routineShellVerdict(toolName: string, argumentsJson: string): Ve
 }
 
 const make = Effect.gen(function* () {
+  const run = Effect.runPromiseWith(yield* Effect.context());
   const active = yield* ActiveProvider;
   const usageLedger = yield* ApiUsage;
   const nodes = yield* Nodes;
@@ -122,8 +123,8 @@ const make = Effect.gen(function* () {
       const timer = setTimeout(() => abortController.abort(), reviewTimeoutMs);
       try {
         // The review runs on every gated call, so it uses the cheapest effort.
-        const { services } = await Effect.runPromise(active.resolve(request.selection));
-        const cheap = await Effect.runPromise(services.models.cheapestEffort(request.selection));
+        const { services } = await run(active.resolve(request.selection));
+        const cheap = await run(services.models.cheapestEffort(request.selection));
         const answer = await chat({
           adapter: services.runtime.adapter(cheap),
           messages: [{ role: "user", content: prompt(request) }],

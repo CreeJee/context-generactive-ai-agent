@@ -17,9 +17,9 @@ export const embeddedKinds = ["user", "assistant", "topic"] as const satisfies r
 /** `n.kind` limited to {@link embeddedKinds}, for queries over nodes aliased `n`. */
 export const embeddedKindFilter = `n.kind IN (${embeddedKinds.map((kind) => `'${kind}'`).join(", ")})`;
 
-const Pending = Schema.Struct({ seq: Schema.Number, text: Schema.String });
+const Pending = Schema.Struct({ seq: Schema.Finite, text: Schema.String });
 const decodePending = Schema.decodeUnknownSync(Pending);
-const decodeCount = Schema.decodeUnknownSync(Schema.Struct({ count: Schema.Number }));
+const decodeCount = Schema.decodeUnknownSync(Schema.Struct({ count: Schema.Finite }));
 
 const make = Effect.gen(function* () {
   const { sqlite, atomic } = yield* Database;
@@ -64,7 +64,7 @@ const make = Effect.gen(function* () {
       const seqs = pending.map((node) => node.seq);
       yield* vectors.add(seqs, embedded);
       // Save before recording: a crash in between leaves the index ahead, which reopen detects.
-      yield* vectors.save();
+      yield* vectors.save;
       atomic(() => {
         for (const seq of seqs) markIndexed.run(seq, embedder.identity);
       });

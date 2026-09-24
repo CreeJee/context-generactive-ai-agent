@@ -171,6 +171,7 @@ export const ApiErrorCode = Schema.Literals([
   "project_rejected",
   "project_required",
   "provider_unavailable",
+  "provider_auth_unavailable",
   "queue_delivered",
   "queue_not_found",
   "queue_not_held",
@@ -283,6 +284,19 @@ function apiError(
 ) {
   return new ApiError(status, body?.error ?? fallback, body?.reason ?? null, body?.approval);
 }
+
+/** Preserve the server's typed error code through the chat transport. */
+export const chatFetch: typeof fetch = async (...arguments_) => {
+  const response = await appFetch(...arguments_);
+  if (!response.ok) {
+    const body: unknown = await response
+      .clone()
+      .json()
+      .catch(() => null);
+    throw apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
+  }
+  return response;
+};
 
 type JsonValue =
   | string
@@ -698,18 +712,18 @@ export const decodeDeliveredEvent = Schema.decodeUnknownOption(
 /** A context update a run sends while it answers. */
 export const decodeContextEvent = Schema.decodeUnknownOption(
   Schema.Struct({
-    usedTokens: Schema.NullOr(Schema.Number),
-    cachedTokens: Schema.NullOr(Schema.Number).pipe(
-      Schema.withDecodingDefaultTypeKey(Effect.sync(() => null)),
+    usedTokens: Schema.NullOr(Schema.Finite),
+    cachedTokens: Schema.NullOr(Schema.Finite).pipe(
+      Schema.withDecodingDefaultTypeKey(Effect.succeed(null)),
     ),
-    cacheRatio: Schema.NullOr(Schema.Number).pipe(
-      Schema.withDecodingDefaultTypeKey(Effect.sync(() => null)),
+    cacheRatio: Schema.NullOr(Schema.Finite).pipe(
+      Schema.withDecodingDefaultTypeKey(Effect.succeed(null)),
     ),
     compactionStage: Schema.NullOr(
       Schema.Literals(["none", "clear-answered", "summarize", "leave-out"]),
-    ).pipe(Schema.withDecodingDefaultTypeKey(Effect.sync(() => null))),
-    windowTokens: Schema.Number,
-    compactAtTokens: Schema.Number,
+    ).pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed(null))),
+    windowTokens: Schema.Finite,
+    compactAtTokens: Schema.Finite,
   }),
 );
 

@@ -134,6 +134,32 @@ describe("provider-neutral contracts", () => {
     );
   });
 
+  test("keeps unavailable providers in the typed error channel", async () => {
+    const storage = mkdtempSync(join(tmpdir(), "active-provider-missing-"));
+    cleanups.push(() => rmSync(storage, { recursive: true, force: true }));
+    const runtime = ManagedRuntime.make(
+      ActiveProvider.layer.pipe(
+        Layer.provide(ProviderRegistry.layer([fakeProvider("openai")], [])),
+        Layer.provide(GlobalConfig.layer.pipe(Layer.provide(StorageRoot.layer(storage)))),
+      ),
+    );
+    cleanups.push(() => runtime.dispose());
+
+    const active = await runtime.runPromise(ActiveProvider);
+    const missingRuntime = await runtime.runPromise(
+      Effect.result(
+        active.runtime({ provider: "openai", model: "test", reasoningEffort: "medium" }),
+      ),
+    );
+    expect(Result.isFailure(missingRuntime) && missingRuntime.failure).toMatchObject({
+      _tag: "ProviderUnavailable",
+      provider: "openai",
+    });
+    expect(await runtime.runPromise(active.authFor("anthropic"))).toMatchObject({
+      status: "error",
+    });
+  });
+
   test("keeps credentials outside the authentication contract", () => {
     const auth = fakeProvider("openai").auth;
     expect("token" in auth).toBe(false);

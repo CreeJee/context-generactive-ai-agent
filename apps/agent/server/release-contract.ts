@@ -17,7 +17,7 @@ const SemVer = Schema.String.pipe(
 export const ReleaseAsset = Schema.Struct({
   name: Schema.String,
   url: Schema.String,
-  size: Schema.Number.pipe(Schema.check(Schema.isInt()), Schema.check(Schema.isGreaterThan(0))),
+  size: Schema.Finite.pipe(Schema.check(Schema.isInt()), Schema.check(Schema.isGreaterThan(0))),
   sha256: Sha256,
 });
 export type ReleaseAsset = typeof ReleaseAsset.Type;
@@ -29,15 +29,15 @@ export const ReleaseManifest = Schema.Struct({
   publishedAt: Schema.String,
   minUpdaterVersion: SemVer,
   database: Schema.Struct({
-    target: Schema.Number.pipe(
+    target: Schema.Finite.pipe(
       Schema.check(Schema.isInt()),
       Schema.check(Schema.isGreaterThanOrEqualTo(0)),
     ),
-    minimumReadable: Schema.Number.pipe(
+    minimumReadable: Schema.Finite.pipe(
       Schema.check(Schema.isInt()),
       Schema.check(Schema.isGreaterThanOrEqualTo(0)),
     ),
-    rollbackReadableThrough: Schema.Number.pipe(
+    rollbackReadableThrough: Schema.Finite.pipe(
       Schema.check(Schema.isInt()),
       Schema.check(Schema.isGreaterThanOrEqualTo(0)),
     ),
@@ -63,7 +63,7 @@ type Json = null | boolean | number | string | readonly Json[] | { readonly [key
 export function canonicalJson(value: Json): string {
   if (value === null || Schema.is(Schema.Boolean)(value) || Schema.is(Schema.String)(value))
     return JSON.stringify(value);
-  if (Schema.is(Schema.Number)(value)) {
+  if (Schema.is(Schema.Finite)(value)) {
     if (!Number.isFinite(value))
       throw new Error("canonical JSON cannot contain a non-finite number");
     return JSON.stringify(value);
@@ -75,8 +75,8 @@ export function canonicalJson(value: Json): string {
     .join(",")}}`;
 }
 
-export const decodeReleaseManifest = Schema.decodeUnknownSync(ReleaseManifest);
-export const decodeManifestSignature = Schema.decodeUnknownSync(ManifestSignature);
+export const decodeReleaseManifest = Schema.decodeSync(ReleaseManifest);
+export const decodeManifestSignature = Schema.decodeSync(ManifestSignature);
 
 const unsigned = (manifest: ReleaseManifest) => Buffer.from(canonicalJson(manifest), "utf8");
 
@@ -106,7 +106,7 @@ interface ParsedVersion {
 }
 
 function parseVersion(version: string): ParsedVersion {
-  const valid = Schema.decodeUnknownSync(SemVer)(version);
+  const valid = Schema.decodeSync(SemVer)(version);
   const withoutBuild = valid.split("+", 1)[0]!;
   const [core, suffix] = withoutBuild.split("-", 2);
   const [major, minor, patch] = core!.split(".").map(Number);
@@ -142,7 +142,7 @@ export function compareVersions(left: string, right: string) {
 }
 
 export function releaseAssetName(version: string, target: string) {
-  const normalized = Schema.decodeUnknownSync(SemVer)(version.replace(/^v/, ""));
+  const normalized = Schema.decodeSync(SemVer)(version.replace(/^v/, ""));
   const extension = target.startsWith("win32-") ? "zip" : "tar.gz";
   return `context-agent-v${normalized}-${target}.${extension}`;
 }

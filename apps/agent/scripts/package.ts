@@ -40,7 +40,7 @@ const PackageJson = Schema.Struct({
   optionalDependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
 });
 const readPackage = (directory: string) =>
-  Schema.decodeUnknownSync(Schema.fromJsonString(PackageJson))(
+  Schema.decodeSync(Schema.fromJsonString(PackageJson))(
     readFileSync(join(directory, "package.json"), "utf8"),
   );
 
@@ -51,7 +51,7 @@ const ReleaseVersion = Schema.String.pipe(
     ),
   ),
 );
-const releaseVersion = Schema.decodeUnknownSync(ReleaseVersion)(
+const releaseVersion = Schema.decodeSync(ReleaseVersion)(
   (process.env.CONTEXT_AGENT_VERSION ?? readPackage(repo).version).replace(/^v/, ""),
 );
 const releaseChannel = Schema.decodeUnknownSync(Schema.Literals(["stable", "prerelease"]))(

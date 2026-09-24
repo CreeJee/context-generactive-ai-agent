@@ -154,7 +154,7 @@ export const defaultTestResponder: ScriptedResponder = async (invocation) => {
       if (receipts.length > 0)
         return call("call-wait-children", "wait_subagents", { attempts: receipts });
       if (byId.has("call-wait-children")) {
-        const result = Schema.decodeUnknownSync(
+        const result = Schema.decodeSync(
           Schema.fromJsonString(
             Schema.Struct({
               attempts: Schema.Array(

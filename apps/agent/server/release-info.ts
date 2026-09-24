@@ -20,7 +20,5 @@ const development: ReleaseInfo = {
 /** Build identity embedded as a SEA asset; source bundles identify themselves as development. */
 export function readReleaseInfo(): ReleaseInfo {
   if (!isSea()) return development;
-  return Schema.decodeUnknownSync(Schema.fromJsonString(ReleaseInfo))(
-    getAsset(releaseInfoAsset, "utf8"),
-  );
+  return Schema.decodeSync(Schema.fromJsonString(ReleaseInfo))(getAsset(releaseInfoAsset, "utf8"));
 }

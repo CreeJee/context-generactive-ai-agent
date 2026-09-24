@@ -121,24 +121,24 @@ export function planBatches(
 /** Replies from `embed-worker.mjs`. */
 const Reply = Schema.Union([
   Schema.Struct({
-    id: Schema.Number,
+    id: Schema.Finite,
     kind: Schema.Literal("counts"),
-    counts: Schema.Array(Schema.Number),
+    counts: Schema.Array(Schema.Finite),
   }),
   Schema.Struct({
-    id: Schema.Number,
+    id: Schema.Finite,
     kind: Schema.Literal("rows"),
     rows: Schema.instanceOf(Float32Array),
   }),
   Schema.Struct({
-    id: Schema.Number,
+    id: Schema.Finite,
     kind: Schema.Literal("failed"),
     /** `load`: the model never loaded, so the next request starts a new worker to try again. */
     stage: Schema.Literals(["load", "run"]),
     reason: Schema.String,
   }),
   /** Sent unasked once the model runs, with the device it runs on. */
-  Schema.Struct({ id: Schema.Number, kind: Schema.Literal("loaded"), device: EmbeddingDevice }),
+  Schema.Struct({ id: Schema.Finite, kind: Schema.Literal("loaded"), device: EmbeddingDevice }),
 ]);
 type Reply = typeof Reply.Type;
 const decodeReply = Schema.decodeUnknownSync(Reply);

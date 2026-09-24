@@ -1,4 +1,5 @@
 import type { ChatMiddleware } from "@tanstack/ai";
+import { optionalProperty } from "../optional-property.ts";
 import { Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 
@@ -30,13 +31,13 @@ export interface ApiUsageTotals {
 }
 
 const CountRow = Schema.Struct({
-  responses: Schema.Number,
-  input_tokens: Schema.NullOr(Schema.Number),
-  output_tokens: Schema.NullOr(Schema.Number),
-  cache_read_tokens: Schema.NullOr(Schema.Number),
-  cache_write_tokens: Schema.NullOr(Schema.Number),
-  uncached_input_tokens: Schema.NullOr(Schema.Number),
-  total_input_tokens: Schema.NullOr(Schema.Number),
+  responses: Schema.Finite,
+  input_tokens: Schema.NullOr(Schema.Finite),
+  output_tokens: Schema.NullOr(Schema.Finite),
+  cache_read_tokens: Schema.NullOr(Schema.Finite),
+  cache_write_tokens: Schema.NullOr(Schema.Finite),
+  uncached_input_tokens: Schema.NullOr(Schema.Finite),
+  total_input_tokens: Schema.NullOr(Schema.Finite),
 });
 const decodeCount = Schema.decodeUnknownSync(CountRow);
 
@@ -125,8 +126,8 @@ export const collectApiUsage = (
       threadId: ctx.threadId,
       inputTokens: usage.promptTokens,
       outputTokens: usage.completionTokens,
-      cacheReadTokens: usage.promptTokensDetails?.cachedTokens,
-      cacheWriteTokens: usage.promptTokensDetails?.cacheWriteTokens,
+      ...optionalProperty("cacheReadTokens", usage.promptTokensDetails?.cachedTokens),
+      ...optionalProperty("cacheWriteTokens", usage.promptTokensDetails?.cacheWriteTokens),
     });
   },
 });

@@ -79,19 +79,19 @@ const targetName = (target: Target) => {
 };
 
 const Progress = Schema.Struct({
-  version: Schema.Number,
-  after: Schema.Number,
+  version: Schema.Finite,
+  after: Schema.Finite,
   done: Schema.Literals([0, 1]),
-  hidden: Schema.Number,
+  hidden: Schema.Finite,
 });
 const decodeProgress = Schema.decodeUnknownSync(Progress);
 const decodeNodeRow = Schema.decodeUnknownSync(
-  Schema.Struct({ seq: Schema.Number, text: Schema.String }),
+  Schema.Struct({ seq: Schema.Finite, text: Schema.String }),
 );
 const decodeRefRow = Schema.decodeUnknownSync(
-  Schema.Struct({ row_key: Schema.Number, ref: Schema.String }),
+  Schema.Struct({ row_key: Schema.Finite, ref: Schema.String }),
 );
-const decodeRowKey = Schema.decodeUnknownSync(Schema.Struct({ row_key: Schema.Number }));
+const decodeRowKey = Schema.decodeUnknownSync(Schema.Struct({ row_key: Schema.Finite }));
 const decodeCell = Schema.decodeUnknownSync(Schema.NullOr(Schema.String));
 const decodeReply = Schema.decodeUnknownSync(RedactReply);
 
@@ -237,7 +237,7 @@ const make = (running: boolean) =>
               // Saved before the database commits, as the indexer does: a crash in between leaves
               // the index and the table disagreeing on size, which reopening detects and rebuilds.
               yield* vectors.remove(changed.map((row) => row.seq));
-              yield* vectors.save();
+              yield* vectors.save;
             }
             atomic(() => {
               for (const row of changed) {

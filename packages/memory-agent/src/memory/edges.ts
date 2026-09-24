@@ -39,7 +39,7 @@ export const Edge = Schema.Struct({
   toId: Schema.String,
   kind: EdgeKind,
   origin: EdgeOrigin,
-  weight: Schema.Number,
+  weight: Schema.Finite,
   createdAt: Schema.String,
 });
 export type Edge = typeof Edge.Type;

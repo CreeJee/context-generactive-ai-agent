@@ -14,7 +14,7 @@ import { interruptContinuationLostCode, serverRestartedCode } from "../agent/run
 import { latestChatRun, migrateLegacyChatThreads, sqliteChatPersistence } from "./persistence.ts";
 
 const make = Effect.gen(function* () {
-  const { sqlite } = yield* Database;
+  const { sqlite, atomic } = yield* Database;
   const nodes = yield* Nodes;
   const attachments = yield* Attachments;
 
@@ -31,8 +31,7 @@ const make = Effect.gen(function* () {
   // interrupts pending makes a reloaded page offer an approval that can only fail. Retire the
   // interrupts and runs together, then let the user decide whether to send the request again (R10).
   const restartedAt = Date.now();
-  sqlite.exec("BEGIN IMMEDIATE");
-  try {
+  atomic(() => {
     sqlite
       .prepare(
         `UPDATE chat_interrupts
@@ -49,11 +48,7 @@ const make = Effect.gen(function* () {
          WHERE status IN ('running', 'interrupted')`,
       )
       .run(restartedAt, "The server stopped before this answer finished.", serverRestartedCode);
-    sqlite.exec("COMMIT");
-  } catch (error) {
-    sqlite.exec("ROLLBACK");
-    throw error;
-  }
+  });
 
   /**
    * A cancelled or failed run has no finish to save its transcript, and the answer it was writing

@@ -1,6 +1,5 @@
-import { Context, Effect, Layer, Schema } from "effect";
-import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
-import { Embedder } from "../memory/embedding/embedder.ts";
+import { Cache, Context, Effect, Exit, Layer, Result, Schema } from "effect";
+import { Embedder, type EmbeddingError } from "../memory/embedding/embedder.ts";
 import { WorkflowPhase } from "./workflow.ts";
 
 export const RuleSource = Schema.Union([
@@ -170,38 +169,32 @@ const cosine = (left: Float32Array, right: Float32Array) => {
 
 const make = Effect.gen(function* () {
   const embedder = yield* Embedder;
-  const embeddingLimit = keyedSerialLimit();
-  const vectorSets = new Map<string, ReadonlyMap<string, Float32Array>>();
-
-  const vectors = (rules: readonly WorkflowRule[]) => {
-    const key = rules
-      .map((rule) => `${rule.id}@${rule.version}:${JSON.stringify(rule.source)}`)
-      .sort()
-      .join("|");
-    return embeddingLimit(
-      key,
-      Effect.suspend(() => {
-        const cached = vectorSets.get(key);
-        if (cached) return Effect.succeed(cached);
-        return embedder
-          .embed(rules.map((rule) => `${rule.title}\n${rule.terms.join(" ")}\n${rule.instruction}`))
-          .pipe(
-            Effect.map((embedded) => {
-              const byId = new Map(
+  const vectorSets = yield* Cache.makeWith<
+    readonly WorkflowRule[],
+    ReadonlyMap<string, Float32Array>,
+    EmbeddingError
+  >(
+    (rules) =>
+      embedder
+        .embed(rules.map((rule) => `${rule.title}\n${rule.terms.join(" ")}\n${rule.instruction}`))
+        .pipe(
+          Effect.map(
+            (embedded) =>
+              new Map(
                 rules.flatMap((rule, index) => {
                   const vector = embedded[index];
                   return vector ? [[rule.id, vector] as const] : [];
                 }),
-              );
-              // Bound stale entries when a project's rule resource changes repeatedly.
-              if (vectorSets.size >= 32) vectorSets.delete(vectorSets.keys().next().value ?? "");
-              vectorSets.set(key, byId);
-              return byId;
-            }),
-          );
-      }),
-    );
-  };
+              ),
+          ),
+        ),
+    {
+      capacity: 32,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? "1 hour" : 0),
+    },
+  );
+
+  const vectors = (rules: readonly WorkflowRule[]) => Cache.get(vectorSets, rules);
 
   return {
     resolve: ({ phase, text, rules = [], limit = 3 }: RuleQuery): Effect.Effect<ResolvedRules> => {
@@ -238,7 +231,13 @@ const make = Effect.gen(function* () {
             ranks.set(rule.id, (ranks.get(rule.id) ?? 0) + 1 / (60 + index + 1)),
           );
         addRanks(lexical);
-        if (semantic._tag === "Success") addRanks(semantic.success);
+        const degraded = Result.match(semantic, {
+          onFailure: () => ["embedding"] as const,
+          onSuccess: (ranked) => {
+            addRanks(ranked);
+            return [] as const;
+          },
+        });
 
         const selected = optional
           .filter((rule) => lexicalScore(queryTerms, rule) > 0 || ranks.has(rule.id))
@@ -246,7 +245,7 @@ const make = Effect.gen(function* () {
           .slice(0, limit);
         return {
           rules: [...required, ...selected],
-          degraded: semantic._tag === "Failure" ? (["embedding"] as const) : [],
+          degraded,
         };
       });
     },

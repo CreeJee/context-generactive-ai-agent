@@ -101,7 +101,7 @@ const decodeNodes = Schema.decodeUnknownSync(Schema.Array(NodeRow));
 const decodeEdges = Schema.decodeUnknownSync(
   Schema.Array(Schema.Struct({ kind: Schema.String, from_kind: Schema.String })),
 );
-const decodeCount = Schema.decodeUnknownSync(Schema.Struct({ count: Schema.Number }));
+const decodeCount = Schema.decodeUnknownSync(Schema.Struct({ count: Schema.Finite }));
 const decodeIndexed = Schema.decodeUnknownSync(
   Schema.Array(Schema.Struct({ text: Schema.String })),
 );

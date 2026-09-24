@@ -30,7 +30,7 @@ const RestartedTrace = Schema.Struct({
 });
 
 const ResumeIds = Schema.Struct({ task_id: Schema.String, attempt_id: Schema.String });
-const ResumeResult = Schema.Struct({ attempts: Schema.Number, latest_status: Schema.String });
+const ResumeResult = Schema.Struct({ attempts: Schema.Finite, latest_status: Schema.String });
 const ArtifactSummary = Schema.Struct({ kind: Schema.String, locator: Schema.String });
 const LocatorRows = Schema.Array(Schema.Struct({ locator: Schema.String }));
 
@@ -43,17 +43,15 @@ const TraceSummary = Schema.Struct({
   parent_tool_call_id: Schema.String,
   chat_run_id: Schema.String,
   event_kinds: Schema.String,
-  checkpoints: Schema.Number,
+  checkpoints: Schema.Finite,
   evidence_kinds: Schema.String,
-  evidence_count: Schema.Number,
+  evidence_count: Schema.Finite,
 });
 
 const answerOf = (events: string) =>
   events
     .split("\n")
-    .flatMap((line) =>
-      line.startsWith("data: ") ? [Schema.decodeUnknownSync(Delta)(line.slice(6))] : [],
-    )
+    .flatMap((line) => (line.startsWith("data: ") ? [Schema.decodeSync(Delta)(line.slice(6))] : []))
     .flatMap((event) => (event.type === "TEXT_MESSAGE_CONTENT" && event.delta ? [event.delta] : []))
     .join("");
 
@@ -336,7 +334,7 @@ describe("subagents", () => {
           .all(child.id),
       );
       for (const { locator } of locators) {
-        const toolCallId = Schema.decodeUnknownSync(
+        const toolCallId = Schema.decodeSync(
           Schema.fromJsonString(Schema.Struct({ toolCallId: Schema.String })),
         )(locator).toolCallId;
         expect(persisted).toContain(toolCallId);

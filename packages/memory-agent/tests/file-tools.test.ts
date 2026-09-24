@@ -47,7 +47,7 @@ async function fileTools(root: string) {
 }
 
 /** Runs a server tool the way the chat engine does, after input validation. */
-async function run<I, O>(tool: { execute?: (args: I) => O }, input: I) {
+async function run<I, O>(tool: { execute?: ((args: I) => O) | undefined }, input: I) {
   if (!tool.execute) throw new Error("tool has no server implementation");
   return tool.execute(input);
 }
@@ -62,10 +62,10 @@ const failure = <A>(promise: Promise<A>) =>
 const ListPage = Schema.Struct({
   snapshot: Schema.String,
   paths: Schema.Array(Schema.String),
-  nextOffset: Schema.NullOr(Schema.Number),
+  nextOffset: Schema.NullOr(Schema.Finite),
 });
 const SearchPage = Schema.Struct({
-  matches: Schema.Array(Schema.Struct({ path: Schema.String, line: Schema.Number })),
+  matches: Schema.Array(Schema.Struct({ path: Schema.String, line: Schema.Finite })),
   nextCursor: Schema.NullOr(Schema.String),
 });
 const WithSha = Schema.Struct({ sha256: Schema.String });

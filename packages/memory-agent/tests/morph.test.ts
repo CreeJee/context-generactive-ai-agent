@@ -30,7 +30,7 @@ describe("morpheme search terms", () => {
         const analyzed = yield* indexer.analyzeAll();
         const again = yield* indexer.analyzeAll();
         const { sqlite } = yield* Database;
-        const stored = Schema.decodeUnknownSync(Terms)(
+        const stored = yield* Schema.decodeUnknownEffect(Terms)(
           sqlite.prepare("SELECT terms FROM nodes_morph WHERE rowid = ?").get(target.seq),
         );
         // "결제모듈을" never occurs as text, so only the morpheme terms tie the question to it.

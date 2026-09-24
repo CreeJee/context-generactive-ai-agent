@@ -1,4 +1,5 @@
 import { Context, Data, Effect, Layer, Schema } from "effect";
+import { optionalProperty } from "../optional-property.ts";
 import { Attachments, type Attachment, type AttachmentsApi } from "../attachments/attachments.ts";
 import {
   CrossProviderMediaConsent,
@@ -70,7 +71,7 @@ export class DirectImageExecutor extends Context.Service<
               prompt,
               output_format: "png",
             }),
-            signal,
+            signal: signal ?? null,
           });
           if (!response.ok)
             throw new DirectImageExecutionFailed({
@@ -296,9 +297,9 @@ export function makeImageMediaWorkflow(
           provider: decision.provider,
           accountId: decision.accountId,
           executionMode: "direct_adapter",
-          estimatedCostUsd: decision.estimatedCostUsd,
-          usage: output.usage,
-          providerRequestId: output.providerRequestId,
+          ...optionalProperty("estimatedCostUsd", decision.estimatedCostUsd),
+          ...optionalProperty("usage", output.usage),
+          ...optionalProperty("providerRequestId", output.providerRequestId),
         };
       }),
   };

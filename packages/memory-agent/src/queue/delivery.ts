@@ -25,6 +25,7 @@ export class QueueSteerFailed extends Data.TaggedError("QueueSteerFailed")<{
 }> {}
 
 const make = Effect.gen(function* () {
+  const run = Effect.runPromiseWith(yield* Effect.context());
   const queue = yield* MessageQueue;
   const active = yield* ActiveProvider;
   const nodes = yield* Nodes;
@@ -122,7 +123,7 @@ const make = Effect.gen(function* () {
           queue.markInTranscript(steered.map((message) => message.id));
 
           if (config.messages.at(-1)?.role === "tool") {
-            const runtime = await Effect.runPromise(active.runtime(binding.selection));
+            const runtime = await run(active.runtime(binding.selection));
             for (const message of queue.deliverable(binding.sessionId)) {
               const userMessage = toUserMessage(message);
               try {
@@ -135,7 +136,7 @@ const make = Effect.gen(function* () {
               }
               added.push(userMessage);
               queue.markDelivered(message.id, "tool_boundary", binding.runId, true);
-              await Effect.runPromise(record(binding, message));
+              await run(record(binding, message));
               delivered.push(message.id);
             }
           }

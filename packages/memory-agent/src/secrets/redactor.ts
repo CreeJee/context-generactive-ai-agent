@@ -140,7 +140,7 @@ function replaceFindings(text: string, findings: readonly Finding[]): string {
 }
 
 const isString = Schema.is(Schema.String);
-const isNumber = Schema.is(Schema.Number);
+const isNumber = Schema.is(Schema.Finite);
 const isBoolean = Schema.is(Schema.Boolean);
 
 const decodeJson = Schema.decodeUnknownOption(JsonValue);
@@ -166,12 +166,10 @@ const make = Effect.sync(() => {
   const redactJson = (value: Json): Effect.Effect<Json, SecretRedactionFailed> => {
     if (isString(value)) return Effect.map(redactText(value), (redaction) => redaction.text);
     if (value === null || isNumber(value) || isBoolean(value)) return Effect.succeed(value);
-    if (Array.isArray(value)) return Effect.all(value.map(redactJson));
+    if (Array.isArray(value)) return Effect.forEach(value, redactJson);
     return Effect.map(
-      Effect.all(
-        Object.entries(value).map(([key, item]) =>
-          Effect.map(redactJson(item), (redacted) => [key, redacted] as const),
-        ),
+      Effect.forEach(Object.entries(value), ([key, item]) =>
+        Effect.map(redactJson(item), (redacted) => [key, redacted] as const),
       ),
       (entries) => Object.fromEntries(entries),
     );

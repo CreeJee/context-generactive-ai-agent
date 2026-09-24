@@ -47,6 +47,7 @@ function failureText(info: AfterToolCallInfo | ErrorInfo): string {
 }
 
 const make = Effect.gen(function* () {
+  const run = Effect.runPromiseWith(yield* Effect.context());
   const nodes = yield* Nodes;
   const reviews = yield* PermissionReviews;
   const redactor = yield* SecretRedactor;
@@ -57,7 +58,7 @@ const make = Effect.gen(function* () {
    * user pasted, and error messages, which are not results.
    */
   const hide = (text: string) =>
-    Effect.runPromise(Effect.map(redactor.redactText(text), (redaction) => redaction.text));
+    run(Effect.map(redactor.redactText(text), (redaction) => redaction.text));
 
   /** The review behind a gated call's result, when the permission gate decided it. */
   const permissionOf = (sessionId: string, toolCallId: string) => {

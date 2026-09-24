@@ -25,17 +25,18 @@ const findMemoryInput = Schema.Struct({
 const readEvidenceInput = Schema.Struct({
   id: Schema.String.annotate({ description: "Node id from find_memory or trace_evidence." }),
   offset: Schema.optionalKey(
-    Schema.Number.annotate({ description: "nextOffset from the previous page, if any." }),
+    Schema.Finite.annotate({ description: "nextOffset from the previous page, if any." }),
   ),
 });
 const readToolResultInput = Schema.Struct({
   id: Schema.NonEmptyString.annotate({
     description: "Recorded tool-result node ID from a result summary in this session.",
   }),
-  offset: Schema.Number.pipe(
+  offset: Schema.Finite.pipe(
     Schema.check(Schema.isInt()),
     Schema.check(Schema.isGreaterThanOrEqualTo(0)),
-  ).pipe(Schema.withDecodingDefaultTypeKey(Effect.sync(() => 0))),
+    Schema.withDecodingDefaultTypeKey(Effect.succeed(0)),
+  ),
 });
 const traceEvidenceInput = Schema.Struct({
   id: Schema.String.annotate({ description: "Node id to trace back to its cause." }),
@@ -212,7 +213,7 @@ const make = Effect.gen(function* () {
       run(
         Effect.flatMap(KnowledgePromotions, (knowledge) =>
           knowledge.promote({
-            ...Schema.decodeUnknownSync(PromoteMemoryCandidateInput)(input),
+            ...Schema.decodeSync(PromoteMemoryCandidateInput)(input),
             projectId,
             sessionId: binding.sessionId,
             authorizedByUserNodeId: binding.userNodeId,
@@ -227,7 +228,7 @@ const make = Effect.gen(function* () {
         "Declare which promoted project-memory nodes retrieved in this run are actually used in the upcoming answer. Call after reading them and before answering. Retrieval alone is not use.",
       inputSchema: toToolSchema(UsePromotedMemoryInput),
     }).server((input) => {
-      const ids = Schema.decodeUnknownSync(UsePromotedMemoryInput)(input).memoryNodeIds;
+      const ids = Schema.decodeSync(UsePromotedMemoryInput)(input).memoryNodeIds;
       if (ids.some((id) => !retrieved.has(id)))
         throw new Error("Only promoted memories retrieved in this run can be used");
       usedDraft = new Set(ids);

@@ -18,15 +18,15 @@ const RunRow = Schema.Struct({
   run_id: Schema.String,
   thread_id: Schema.String,
   status: Schema.Literals(["running", "interrupted", "completed", "failed", "aborted"]),
-  started_at: Schema.Number,
-  finished_at: Schema.NullOr(Schema.Number),
+  started_at: Schema.Finite,
+  finished_at: Schema.NullOr(Schema.Finite),
   error: Schema.NullOr(Schema.String),
   error_code: Schema.NullOr(Schema.String),
   usage: Schema.NullOr(Schema.String),
   sandbox_key: Schema.NullOr(Schema.String),
-  detached_since: Schema.NullOr(Schema.Number),
+  detached_since: Schema.NullOr(Schema.Finite),
   cancel_requested: Schema.NullOr(Schema.Literals([0, 1])),
-  driver_epoch: Schema.NullOr(Schema.Number),
+  driver_epoch: Schema.NullOr(Schema.Finite),
 });
 const decodeRunRow = Schema.decodeUnknownSync(RunRow);
 
@@ -35,8 +35,8 @@ const InterruptRow = Schema.Struct({
   run_id: Schema.String,
   thread_id: Schema.String,
   status: Schema.Literals(["pending", "resolved", "cancelled"]),
-  requested_at: Schema.Number,
-  resolved_at: Schema.NullOr(Schema.Number),
+  requested_at: Schema.Finite,
+  resolved_at: Schema.NullOr(Schema.Finite),
   payload: Schema.String,
   response: Schema.NullOr(Schema.String),
 });

@@ -132,8 +132,8 @@ export const EvidenceLocator = Schema.Union([
     kind: Schema.Literal("file"),
     path: Schema.String,
     sha256: Schema.String,
-    startLine: Schema.optional(Schema.Number),
-    endLine: Schema.optional(Schema.Number),
+    startLine: Schema.optional(Schema.Finite),
+    endLine: Schema.optional(Schema.Finite),
   }),
   Schema.Struct({ kind: Schema.Literal("artifact"), artifactId: Schema.String }),
   Schema.Struct({ kind: Schema.Literal("checkpoint"), checkpointId: Schema.String }),
@@ -207,7 +207,7 @@ export const AgentIdentity = Schema.Struct({
   kind: AgentIdentityKind,
   name: Schema.NullOr(Schema.String),
   instructions: Schema.NullOr(Schema.String),
-  createdAt: Schema.Number,
+  createdAt: Schema.Finite,
 });
 export type AgentIdentity = typeof AgentIdentity.Type;
 
@@ -224,9 +224,9 @@ export const WorkTask = Schema.Struct({
   title: Schema.String,
   request: Schema.String,
   activeAttemptId: Schema.NullOr(Schema.String),
-  originDeletedAt: Schema.NullOr(Schema.Number),
-  createdAt: Schema.Number,
-  updatedAt: Schema.Number,
+  originDeletedAt: Schema.NullOr(Schema.Finite),
+  createdAt: Schema.Finite,
+  updatedAt: Schema.Finite,
 });
 export type WorkTask = typeof WorkTask.Type;
 
@@ -239,8 +239,8 @@ export const AgentInvocation = Schema.Struct({
   status: InvocationStatus,
   message: Schema.String,
   targetAttemptId: Schema.NullOr(Schema.String),
-  createdAt: Schema.Number,
-  finishedAt: Schema.NullOr(Schema.Number),
+  createdAt: Schema.Finite,
+  finishedAt: Schema.NullOr(Schema.Finite),
 });
 export type AgentInvocation = typeof AgentInvocation.Type;
 
@@ -248,14 +248,14 @@ export const AgentRunAttempt = Schema.Struct({
   id: Schema.String,
   taskId: Schema.String,
   invocationId: Schema.String,
-  attemptNumber: Schema.Number,
+  attemptNumber: Schema.Finite,
   chatRunId: Schema.String,
   threadId: Schema.String,
   status: AttemptStatus,
   resumedFromAttemptId: Schema.NullOr(Schema.String),
   supersededByAttemptId: Schema.NullOr(Schema.String),
-  startedAt: Schema.NullOr(Schema.Number),
-  finishedAt: Schema.NullOr(Schema.Number),
+  startedAt: Schema.NullOr(Schema.Finite),
+  finishedAt: Schema.NullOr(Schema.Finite),
   resumability: Resumability,
 });
 export type AgentRunAttempt = typeof AgentRunAttempt.Type;
@@ -266,12 +266,12 @@ export const RunEvent = Schema.Struct({
   taskId: Schema.String,
   invocationId: Schema.String,
   attemptId: Schema.String,
-  sequence: Schema.Number,
+  sequence: Schema.Finite,
   kind: RunEventKind,
   visibility: TraceVisibility,
   redaction: RedactionState,
   summary: Schema.String,
-  occurredAt: Schema.Number,
+  occurredAt: Schema.Finite,
 });
 export type RunEvent = typeof RunEvent.Type;
 
@@ -279,13 +279,13 @@ export const WorkCheckpoint = Schema.Struct({
   id: Schema.String,
   taskId: Schema.String,
   attemptId: Schema.String,
-  eventSequence: Schema.Number,
+  eventSequence: Schema.Finite,
   transcriptMessageId: Schema.NullOr(Schema.String),
   completedToolCallIds: Schema.Array(Schema.String),
   uncertainToolCallIds: Schema.Array(Schema.String),
   pendingApprovalIds: Schema.Array(Schema.String),
   remainingWork: Schema.String,
-  createdAt: Schema.Number,
+  createdAt: Schema.Finite,
 });
 export type WorkCheckpoint = typeof WorkCheckpoint.Type;
 
@@ -298,9 +298,9 @@ export const EvidenceRef = Schema.Struct({
   verification: EvidenceVerification,
   visibility: TraceVisibility,
   redaction: RedactionState,
-  sourceDeletedAt: Schema.NullOr(Schema.Number),
-  createdAt: Schema.Number,
-  updatedAt: Schema.Number,
+  sourceDeletedAt: Schema.NullOr(Schema.Finite),
+  createdAt: Schema.Finite,
+  updatedAt: Schema.Finite,
 });
 export type EvidenceRef = typeof EvidenceRef.Type;
 
@@ -312,9 +312,9 @@ export const ArtifactRef = Schema.Struct({
   locator: Schema.NullOr(ArtifactLocator),
   mediaType: Schema.NullOr(Schema.String),
   verification: EvidenceVerification,
-  sourceDeletedAt: Schema.NullOr(Schema.Number),
-  createdAt: Schema.Number,
-  updatedAt: Schema.Number,
+  sourceDeletedAt: Schema.NullOr(Schema.Finite),
+  createdAt: Schema.Finite,
+  updatedAt: Schema.Finite,
 });
 export type ArtifactRef = typeof ArtifactRef.Type;
 
@@ -323,7 +323,7 @@ export const ReportAdoption = Schema.Struct({
   attemptId: Schema.String,
   disposition: ReportDisposition,
   supersededByAttemptId: Schema.NullOr(Schema.String),
-  updatedAt: Schema.Number,
+  updatedAt: Schema.Finite,
 });
 export type ReportAdoption = typeof ReportAdoption.Type;
 
@@ -344,8 +344,8 @@ export const MemoryCandidate = Schema.Struct({
   evidenceRefIds: Schema.Array(Schema.String),
   status: MemoryCandidateStatus,
   requiresUserConfirmation: Schema.Boolean,
-  createdAt: Schema.Number,
-  updatedAt: Schema.Number,
+  createdAt: Schema.Finite,
+  updatedAt: Schema.Finite,
 });
 export type MemoryCandidate = typeof MemoryCandidate.Type;
 
@@ -357,8 +357,8 @@ export const WorkDecision = Schema.Struct({
   evidenceRefIds: Schema.Array(Schema.String),
   status: DecisionStatus,
   decidedBy: Schema.Literals(["user", "assistant"]),
-  createdAt: Schema.Number,
-  updatedAt: Schema.Number,
+  createdAt: Schema.Finite,
+  updatedAt: Schema.Finite,
 });
 export type WorkDecision = typeof WorkDecision.Type;
 

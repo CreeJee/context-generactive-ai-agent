@@ -9,7 +9,7 @@ import { testRuntime } from "./support/runtime.ts";
 
 const Lease = Schema.Union([
   Schema.Struct({ state: Schema.Literal("mine") }),
-  Schema.Struct({ state: Schema.Literal("other"), since: Schema.Number }),
+  Schema.Struct({ state: Schema.Literal("other"), since: Schema.Finite }),
   Schema.Struct({ state: Schema.Literal("free") }),
 ]);
 const StatusLease = Schema.Struct({ lease: Lease });

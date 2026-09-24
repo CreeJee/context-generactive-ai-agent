@@ -12,7 +12,7 @@ export type JsonValue =
 export const JsonValue: Schema.Codec<JsonValue> = Schema.suspend(() =>
   Schema.Union([
     Schema.String,
-    Schema.Number,
+    Schema.Finite,
     Schema.Boolean,
     Schema.Null,
     Schema.Array(JsonValue),

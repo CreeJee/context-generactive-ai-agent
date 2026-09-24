@@ -31,6 +31,7 @@ export class DrawingPreviewReadFailed extends Data.TaggedError("DrawingPreviewRe
 const isDrawing = (path: string) => path.toLowerCase().endsWith(".svg");
 
 const make = Effect.gen(function* () {
+  const run = Effect.runPromiseWith(yield* Effect.context());
   const attachments = yield* Attachments;
 
   /**
@@ -71,7 +72,7 @@ const make = Effect.gen(function* () {
             const result = await execute(...call);
             const written = Option.getOrUndefined(decodeWritten(result));
             if (!written || !isDrawing(written.path)) return result;
-            const preview = await Effect.runPromise(previewOf(project, written.path));
+            const preview = await run(previewOf(project, written.path));
             return Option.match(preview, {
               onNone: () => result,
               onSome: (picture) => ({ ...result, preview: picture }),

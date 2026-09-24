@@ -1,4 +1,5 @@
 import { Context, Data, Effect, Layer } from "effect";
+import { optionalProperty } from "../optional-property.ts";
 import {
   RouteCatalog,
   type ChatRoute,
@@ -249,7 +250,7 @@ function scoreRoute(
     quality: fact?.quality ?? 0,
     speed: fact?.speed ?? 0,
     affordability,
-    estimatedCostUsd: cost,
+    ...optionalProperty("estimatedCostUsd", cost),
     reasons: Object.freeze(reasons),
   });
 }
@@ -329,7 +330,7 @@ export function makeImageRouter(
                     consentByRoute.set(route.id, decision.mode);
                     return !decision.crossProvider || decision.mode !== "disabled";
                   }),
-                  Effect.catch(() => Effect.succeed(false)),
+                  Effect.orElseSucceed(() => false),
                 ),
             );
       const facts = yield* factsService.forRoutes(routes);
@@ -394,7 +395,7 @@ export function makeImageRouter(
           result.chat.provider !== route.provider && result.consentByRoute.get(route.id) === "ask",
         accountId: fact.accountId,
         executionMode: route.executionMode,
-        estimatedCostUsd: selectedScore.estimatedCostUsd,
+        ...optionalProperty("estimatedCostUsd", selectedScore.estimatedCostUsd),
         score: selectedScore.score,
         reasons: Object.freeze([
           `${preference} preference selected the highest eligible deterministic score`,
@@ -426,7 +427,7 @@ export function makeImageRouter(
               provider: route.provider,
               accountId: fact.accountId,
               executionMode: route.executionMode,
-              estimatedCostUsd: candidate.estimatedCostUsd,
+              ...optionalProperty("estimatedCostUsd", candidate.estimatedCostUsd),
               score: candidate.score,
               reasons: Object.freeze([
                 "Alternative requires explicit user confirmation.",

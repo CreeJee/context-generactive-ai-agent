@@ -1,6 +1,6 @@
 import { toolDefinition, type AnyServerTool, type ToolExecutionContext } from "@tanstack/ai";
 import { Context, Effect, Layer, Schema } from "effect";
-import { Kagi, maxExtractUrls, type KagiFailed } from "../kagi/kagi.ts";
+import { Kagi, maxExtractUrls } from "../kagi/kagi.ts";
 import { toToolSchema } from "./schema.ts";
 
 export const kagiToolNames = ["kagi_search", "kagi_extract"] as const;
@@ -38,7 +38,7 @@ const isWebUrl = (value: string) => {
 const make = Effect.gen(function* () {
   const kagi = yield* Kagi;
   // The tool fails with the `kagi_<reason>: ...` message, which is what the model sees.
-  const run = <A>(effect: Effect.Effect<A, KagiFailed>) => Effect.runPromise(effect);
+  const run = Effect.runPromiseWith(yield* Effect.context());
 
   const search = toolDefinition({
     name: "kagi_search",

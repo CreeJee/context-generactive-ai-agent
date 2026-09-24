@@ -12,16 +12,16 @@ export const consumedColdUsageNamespace = "memory-agent/consumed-cold-usage";
 
 const CompactionStageSchema = Schema.Literals(["none", "clear-answered", "summarize", "leave-out"]);
 const ContextUsage = Schema.Struct({
-  inputTokens: Schema.Number,
-  cachedTokens: Schema.NullOr(Schema.Number).pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.sync(() => null)),
+  inputTokens: Schema.Finite,
+  cachedTokens: Schema.NullOr(Schema.Finite).pipe(
+    Schema.withDecodingDefaultTypeKey(Effect.succeed(null)),
   ),
   /** Absent on usage persisted before cache-cold tracking was introduced. */
   observationId: Schema.NullOr(Schema.String).pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.sync(() => null)),
+    Schema.withDecodingDefaultTypeKey(Effect.succeed(null)),
   ),
   compactionStage: Schema.NullOr(CompactionStageSchema).pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.sync(() => null)),
+    Schema.withDecodingDefaultTypeKey(Effect.succeed(null)),
   ),
 });
 const decodeContextUsage = Schema.decodeUnknownOption(ContextUsage);

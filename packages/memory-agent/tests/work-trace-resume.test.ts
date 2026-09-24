@@ -5,7 +5,7 @@ import { WorkTraceStore } from "../src/work-trace/store.ts";
 
 const AttemptLineage = Schema.Struct({
   id: Schema.String,
-  attempt_number: Schema.Number,
+  attempt_number: Schema.Finite,
   chat_run_id: Schema.String,
   status: Schema.String,
   resumed_from_attempt_id: Schema.NullOr(Schema.String),

@@ -7,7 +7,7 @@ import {
   type ChatMiddleware,
   type ModelMessage,
 } from "@tanstack/ai";
-import { Context, Data, Deferred, Effect, FiberMap, Layer, Schema } from "effect";
+import { Context, Data, Deferred, Effect, FiberMap, Layer, Option, Schema } from "effect";
 import { ChatState } from "../chat-state/chat-state.ts";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { ApiUsage, collectApiUsage } from "../agent/api-usage.ts";
@@ -89,20 +89,22 @@ const WaitSubagentsInput = Schema.Struct({
     Schema.check(Schema.isMaxLength(100)),
   ),
   mode: Schema.Literals(["any", "all"]).pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.sync(() => "all" as const)),
+    Schema.withDecodingDefaultTypeKey(Effect.succeed("all" as const)),
   ),
-  timeoutMs: Schema.Number.pipe(
+  timeoutMs: Schema.Finite.pipe(
     Schema.check(Schema.isInt()),
     Schema.check(Schema.isBetween({ minimum: 0, maximum: 120_000 })),
-  ).pipe(Schema.withDecodingDefaultTypeKey(Effect.sync(() => 30_000))),
+    Schema.withDecodingDefaultTypeKey(Effect.succeed(30_000)),
+  ),
 });
 
 const ChildResultInput = Schema.Struct({
   toolCallId: Schema.NonEmptyString,
-  offset: Schema.Number.pipe(
+  offset: Schema.Finite.pipe(
     Schema.check(Schema.isInt()),
     Schema.check(Schema.isGreaterThanOrEqualTo(0)),
-  ).pipe(Schema.withDecodingDefaultTypeKey(Effect.sync(() => 0))),
+    Schema.withDecodingDefaultTypeKey(Effect.succeed(0)),
+  ),
 });
 const childResultPageLength = 4_000;
 
@@ -140,7 +142,7 @@ const ResumeSubagentInput = Schema.Struct({
     description: "The latest interrupted/failed attempt shown by Work Trace.",
   }),
   confirmUncertain: Schema.Boolean.pipe(
-    Schema.withDecodingDefaultTypeKey(Effect.sync(() => false)),
+    Schema.withDecodingDefaultTypeKey(Effect.succeed(false)),
   ).annotate({
     description:
       "True only after the user accepts possible duplicate side effects from uncertain tool calls.",
@@ -175,8 +177,8 @@ const SubagentRow = Schema.Struct({
   last_task: Schema.String,
   last_answer: Schema.NullOr(Schema.String),
   error: Schema.NullOr(Schema.String),
-  created_at: Schema.Number,
-  updated_at: Schema.Number,
+  created_at: Schema.Finite,
+  updated_at: Schema.Finite,
 });
 type SubagentRow = typeof SubagentRow.Type;
 const decodeRow = Schema.decodeUnknownSync(SubagentRow);
@@ -250,6 +252,9 @@ export interface SubagentRunTools {
 const everyCallReason = "호출할 때마다 확인하는 도구예요.";
 
 const make = Effect.gen(function* () {
+  const context = yield* Effect.context();
+  const runEffect = Effect.runPromiseWith(context);
+  const runEffectSync = Effect.runSyncWith(context);
   const scope = yield* Effect.scope;
   const { sqlite } = yield* Database;
   const events = yield* AppEvents;
@@ -444,7 +449,7 @@ const make = Effect.gen(function* () {
     try {
       const history = await chatState.persistence.stores.messages.loadThread(threadId);
       const messages: ModelMessage[] = [...history, { role: "user", content: task }];
-      const runtime = await Effect.runPromise(active.runtime(binding.selection));
+      const runtime = await runEffect(active.runtime(binding.selection));
       const readChildResult = toolDefinition({
         name: "read_subagent_tool_result",
         description:
@@ -677,7 +682,7 @@ const make = Effect.gen(function* () {
       attemptId: handle.id,
     };
     const controller = new AbortController();
-    const done = Effect.runSync(Deferred.make<void>());
+    const done = runEffectSync(Deferred.make<void>());
     const stop = () => controller.abort(binding.abortSignal.reason);
     binding.abortSignal.addEventListener("abort", stop, { once: true });
     if (binding.abortSignal.aborted) stop();
@@ -766,14 +771,14 @@ const make = Effect.gen(function* () {
             binding.abortSignal.removeEventListener("abort", stop);
             if (!activeFor(row.id, false, handle.id) && !pending)
               finish.run("cancelled", "", null, Date.now(), row.id);
-            Effect.runSync(Deferred.succeed(done, undefined));
+            runEffectSync(Deferred.succeed(done, undefined));
             events.publishSession(binding.sessionId, "subagents");
             completionListener?.(binding.sessionId);
           }
         }),
       ),
     );
-    await Effect.runPromise(FiberMap.run(activeChildren, child, job));
+    await runEffect(FiberMap.run(activeChildren, child, job));
     return receipt;
   };
 
@@ -1034,19 +1039,19 @@ const make = Effect.gen(function* () {
         const outcome = (async (): Promise<SubagentReport> => {
           const parsed = JSON.parse(argumentsJson || "{}");
           if (name === "run_subagent") {
-            const input = Schema.decodeUnknownSync(RunSubagentInput)(parsed);
+            const input = Schema.decodeSync(RunSubagentInput)(parsed);
             return startOneOff(binding, toolCallId, input.task, input.instructions ?? null);
           }
           if (name === "resume_subagent") {
-            const input = Schema.decodeUnknownSync(ResumeSubagentInput)(parsed);
+            const input = Schema.decodeSync(ResumeSubagentInput)(parsed);
             return resumeTask(binding, toolCallId, input);
           }
-          const input = Schema.decodeUnknownSync(MessageSubagentInput)(parsed);
+          const input = Schema.decodeSync(MessageSubagentInput)(parsed);
           // A named child already answering hears the message now, in its running turn.
           const busyChild = byName.get(binding.sessionId, input.agent);
           if (busyChild && activeFor(decodeRow(busyChild).id)) {
             const row = decodeRow(busyChild);
-            const runtime = await Effect.runPromise(active.runtime(binding.selection));
+            const runtime = await runEffect(active.runtime(binding.selection));
             const steered = await runtime
               .steer(subagentThreadId(row.id), { role: "user", content: input.message })
               .catch(() => "no_turn" as const);
@@ -1122,7 +1127,7 @@ const make = Effect.gen(function* () {
           "Explicitly wait for any or all listed task/attempt ids, up to timeoutMs (0–120000, default 30000). Returns statuses only, never reviews or adopts reports. Timeout or cancelling the wait does not cancel children.",
         inputSchema: toToolSchema(WaitSubagentsInput),
       }).server(async (raw) => {
-        const input = Schema.decodeUnknownSync(WaitSubagentsInput)(raw);
+        const input = Schema.decodeSync(WaitSubagentsInput)(raw);
         const snapshot = () =>
           input.attempts.map(({ taskId, attemptId }) => ({
             taskId,
@@ -1146,13 +1151,14 @@ const make = Effect.gen(function* () {
             });
           }
         });
-        return Effect.runPromise(
+        return runEffect(
           waiting.pipe(
             Effect.timeoutOption(input.timeoutMs),
             Effect.map((result) =>
-              result._tag === "Some"
-                ? result.value
-                : { status: "timed_out" as const, attempts: snapshot() },
+              Option.match(result, {
+                onNone: () => ({ status: "timed_out" as const, attempts: snapshot() }),
+                onSome: (value) => value,
+              }),
             ),
           ),
           { signal: binding.abortSignal },
@@ -1165,7 +1171,7 @@ const make = Effect.gen(function* () {
           "Declare which reviewed subagent reports and evidence ids are actually used in the upcoming final answer. Call after review and before answering; omitted reviewed reports are recorded as not used.",
         inputSchema: toToolSchema(AdoptSubagentReportsInput),
       }).server((input) => {
-        const draft = Schema.decodeUnknownSync(AdoptSubagentReportsInput)(input);
+        const draft = Schema.decodeSync(AdoptSubagentReportsInput)(input);
         for (const report of draft.reports) {
           const available = reviewed.get(`${report.taskId}:${report.attemptId}`);
           if (!available) throw new Error("Only reports reviewed in this run can be adopted");
@@ -1186,7 +1192,7 @@ const make = Effect.gen(function* () {
       const middleware: ChatMiddleware = {
         name: "memory-agent/subagents",
         async onStart() {
-          await Effect.runPromise(
+          await runEffect(
             Effect.forkIn(
               Effect.tryPromise({
                 try: () => recoverForRun(binding),
@@ -1274,11 +1280,8 @@ const make = Effect.gen(function* () {
         .map(([child]) => child)
         .filter((child) => child.sessionId === sessionId);
       for (const entry of entries) entry.controller.abort(new Error("session_cancel_requested"));
-      await Effect.runPromise(
-        Effect.all(
-          entries.map((entry) => entry.settled),
-          { concurrency: "unbounded" },
-        ),
+      await runEffect(
+        Effect.forEach(entries, (entry) => entry.settled, { concurrency: "unbounded" }),
       );
     },
 
@@ -1289,7 +1292,7 @@ const make = Effect.gen(function* () {
         .find((child) => child.taskId === taskId);
       if (!entry) return "not_running" as const;
       entry.controller.abort(new Error("task_lifecycle_requested"));
-      await Effect.runPromise(entry.settled);
+      await runEffect(entry.settled);
       return "stopped" as const;
     },
 

@@ -66,7 +66,9 @@ describe("runtime packages", () => {
     expect(real.VectorIndex).toBeTypeOf("function");
 
     process.env.CONTEXT_AGENT_RUNTIME = runtime;
-    cleanups.push(() => void delete process.env.CONTEXT_AGENT_RUNTIME);
+    cleanups.push(() => {
+      Reflect.deleteProperty(process.env, "CONTEXT_AGENT_RUNTIME");
+    });
     // The stand-in returns a marker string where the real addon returns its classes.
     expect(requireRuntime("turbovec").loadTurbovec()).toEqual("from the runtime folder");
   });

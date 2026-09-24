@@ -1,4 +1,4 @@
-import { Context, Data, Effect, Layer, Option, Schema } from "effect";
+import { Context, Data, Effect, Layer, Schema } from "effect";
 import { GlobalConfig } from "../config/global-config.ts";
 import { SecretStore, type SecretStoreFailed } from "../config/secrets.ts";
 
@@ -159,7 +159,7 @@ const make = (options: KagiOptions) =>
               body: JSON.stringify(body),
               // A redirect could carry the key to another host.
               redirect: "error",
-              signal,
+              signal: signal ?? null,
             }),
           // The transport error can quote the request, so only the reason is kept.
           catch: () => new KagiFailed({ reason: "unavailable", status: null }),
@@ -169,10 +169,10 @@ const make = (options: KagiOptions) =>
           try: () => response.json(),
           catch: () => new KagiFailed({ reason: "invalid_response", status: response.status }),
         });
-        return yield* Option.match(Schema.decodeUnknownOption(schema)(json), {
-          onNone: () => Effect.fail(new KagiFailed({ reason: "invalid_response", status: 200 })),
-          onSome: Effect.succeed,
-        });
+        return yield* Effect.fromOption(
+          Schema.decodeUnknownOption(schema)(json),
+          () => new KagiFailed({ reason: "invalid_response", status: 200 }),
+        );
       });
 
     return {
