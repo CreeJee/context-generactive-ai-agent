@@ -2,7 +2,11 @@ import { DatabaseSync } from "node:sqlite";
 import { runPersistenceConformance } from "@tanstack/ai-persistence/testkit";
 import { expect, test } from "vite-plus/test";
 import { migrations } from "../src/db/migrations.ts";
-import { migrateLegacyChatThreads, sqliteChatPersistence } from "../src/chat-state/persistence.ts";
+import {
+  migrateLegacyChatThreads,
+  migrateMissingChatThread,
+  sqliteChatPersistence,
+} from "../src/chat-state/persistence.ts";
 
 function freshPersistence() {
   const sqlite = new DatabaseSync(":memory:");
@@ -44,5 +48,25 @@ test("materializes legacy session transcripts without overwriting persisted chat
   await expect(persistence.stores.messages.loadThread("persisted")).resolves.toEqual([
     { role: "assistant", content: "keep me" },
   ]);
+  sqlite.close();
+});
+
+test("materializes a session imported after startup when its chat is first opened", async () => {
+  const sqlite = new DatabaseSync(":memory:");
+  for (const migration of migrations) sqlite.exec(migration);
+  sqlite
+    .prepare("INSERT INTO projects (id, root, name, created_at) VALUES (?, ?, ?, ?)")
+    .run("project", "/tmp/project", "project", "2026-01-01T00:00:00.000Z");
+  expect(migrateLegacyChatThreads(sqlite, () => [])).toBe(0);
+  sqlite
+    .prepare("INSERT INTO sessions (id, project_id, created_at) VALUES (?, ?, ?)")
+    .run("imported", "project", "2026-01-02T00:00:00.000Z");
+
+  const rebuilt = () => [{ role: "user" as const, content: "imported transcript" }];
+  expect(migrateMissingChatThread(sqlite, "imported", rebuilt)).toBe(true);
+  expect(migrateMissingChatThread(sqlite, "imported", () => [])).toBe(false);
+  expect(migrateMissingChatThread(sqlite, "unknown", rebuilt)).toBe(false);
+  const persistence = sqliteChatPersistence(sqlite);
+  await expect(persistence.stores.messages.loadThread("imported")).resolves.toEqual(rebuilt());
   sqlite.close();
 });

@@ -11,7 +11,12 @@ import { messageText } from "../messages/text.ts";
 import { Database } from "../db/database.ts";
 import { Nodes } from "../memory/nodes.ts";
 import { interruptContinuationLostCode, serverRestartedCode } from "../agent/run-state.ts";
-import { latestChatRun, migrateLegacyChatThreads, sqliteChatPersistence } from "./persistence.ts";
+import {
+  latestChatRun,
+  migrateLegacyChatThreads,
+  migrateMissingChatThread,
+  sqliteChatPersistence,
+} from "./persistence.ts";
 
 const make = Effect.gen(function* () {
   const { sqlite, atomic } = yield* Database;
@@ -88,10 +93,13 @@ const make = Effect.gen(function* () {
      * The `GET` a reloaded page hydrates from: transcript, a still-running run to rejoin, and
      * pending approvals to show again. Only the session's own thread may be read.
      */
-    hydrate: (request: Request, sessionId: string) =>
-      reconstructChat(persistence, request, {
+    hydrate: (request: Request, sessionId: string) => {
+      // Imports may create sessions after this service's startup migration has already run.
+      migrateMissingChatThread(sqlite, sessionId, fallbackThread);
+      return reconstructChat(persistence, request, {
         authorize: async (threadId) => threadId === sessionId,
-      }),
+      });
+    },
 
     /** The run record, when it belongs to the session. */
     run: async (sessionId: string, runId: string) => {

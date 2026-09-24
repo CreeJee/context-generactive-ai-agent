@@ -90,6 +90,29 @@ export function migrateLegacyChatThreads(
   return rows.length;
 }
 
+/** Materializes a session imported after the chat-state service started, if still missing. */
+export function migrateMissingChatThread(
+  sqlite: DatabaseSync,
+  threadId: string,
+  fallbackThread: (threadId: string) => ModelMessage[],
+) {
+  const row = sqlite
+    .prepare(
+      `SELECT sessions.id FROM sessions
+       LEFT JOIN chat_threads ON chat_threads.thread_id = sessions.id
+       WHERE sessions.id = ? AND chat_threads.thread_id IS NULL`,
+    )
+    .get(threadId);
+  if (!row) return false;
+  const { id } = decodeLegacyThreadRow(row);
+  sqlite
+    .prepare(
+      "INSERT OR IGNORE INTO chat_threads (thread_id, messages, updated_at) VALUES (?, ?, ?)",
+    )
+    .run(id, JSON.stringify(fallbackThread(id)), Date.now());
+  return true;
+}
+
 /** Optional record fields are left off, not set to undefined, when their column is NULL. */
 function toRun(row: Record<string, SQLOutputValue>): RunRecord {
   const run = decodeRunRow(row);
