@@ -9,6 +9,14 @@ const LeaseRequest = Schema.Struct({
   action: Schema.Literal("claim", "release"),
 });
 
+/** A lease is changed through POST only. Return a clear response for accidental GETs. */
+export function loader() {
+  return Response.json(
+    { error: "method_not_allowed", method: "POST" },
+    { status: 405, headers: { Allow: "POST" } },
+  );
+}
+
 /**
  * POST /api/sessions/:session/lease { holder, action } — a page claims (or renews) the right to
  * change the session, or gives it up (also sent as a beacon when the page closes). Answers who

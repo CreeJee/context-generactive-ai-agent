@@ -17,7 +17,7 @@ export function useWorkTrace(sessionId: string) {
     let active = true;
     let cursor = 0;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
-    let cleanupSource: () => void = () => undefined;
+    let source: EventSource | null = null;
     const refresh = async () => {
       try {
         const snapshot = await api.workTrace(sessionId);
@@ -36,20 +36,31 @@ export function useWorkTrace(sessionId: string) {
       }, 50);
     };
 
-    window.addEventListener("work-trace:changed", scheduleRefresh);
-    void refresh().finally(() => {
-      if (!active) return;
-      const source = new EventSource(api.workTraceStreamUrl(sessionId, cursor));
+    const connect = () => {
+      if (!active || document.hidden || source) return;
+      source = new EventSource(api.workTraceStreamUrl(sessionId, cursor));
       source.addEventListener("open", () => setConnection("live"));
       source.addEventListener("snapshot", scheduleRefresh);
       source.addEventListener("trace", scheduleRefresh);
       source.addEventListener("error", () => setConnection("reconnecting"));
-      cleanupSource = () => source.close();
-    });
+    };
+    const visibilityChanged = () => {
+      if (document.hidden) {
+        source?.close();
+        source = null;
+        setConnection("connecting");
+      } else {
+        void refresh().finally(connect);
+      }
+    };
+    window.addEventListener("work-trace:changed", scheduleRefresh);
+    document.addEventListener("visibilitychange", visibilityChanged);
+    visibilityChanged();
     return () => {
       active = false;
       window.removeEventListener("work-trace:changed", scheduleRefresh);
-      cleanupSource();
+      document.removeEventListener("visibilitychange", visibilityChanged);
+      source?.close();
       if (refreshTimer !== null) clearTimeout(refreshTimer);
     };
   }, [sessionId]);

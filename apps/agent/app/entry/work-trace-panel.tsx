@@ -417,13 +417,28 @@ function PanelBody({
       setConnection("connecting");
       return;
     }
-    const source = new EventSource(api.workTraceStreamUrl(sessionId));
+    let source: EventSource | null = null;
     const changed = () => void refresh();
-    source.addEventListener("open", () => setConnection("live"));
-    source.addEventListener("trace", changed);
-    source.addEventListener("snapshot", changed);
-    source.addEventListener("error", () => setConnection("reconnecting"));
-    return () => source.close();
+    const visibilityChanged = () => {
+      source?.close();
+      source = null;
+      if (document.hidden) {
+        setConnection("connecting");
+        return;
+      }
+      source = new EventSource(api.workTraceStreamUrl(sessionId));
+      source.addEventListener("open", () => setConnection("live"));
+      source.addEventListener("trace", changed);
+      source.addEventListener("snapshot", changed);
+      source.addEventListener("error", () => setConnection("reconnecting"));
+      changed();
+    };
+    document.addEventListener("visibilitychange", visibilityChanged);
+    visibilityChanged();
+    return () => {
+      document.removeEventListener("visibilitychange", visibilityChanged);
+      source?.close();
+    };
   }, [mode, sessionId]);
   const shownTasks =
     mode === "live" && sessionId

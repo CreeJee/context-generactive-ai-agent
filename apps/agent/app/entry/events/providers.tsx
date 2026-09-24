@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { PropsWithChildren } from "react";
 import { EventConnectionContext, SessionEventScopeContext } from "./context";
 import { connectAppEvents, type EventConnectionState } from "./event-source";
@@ -18,46 +18,36 @@ function useScopedEvents(
       (queryKey) => void queryClient.invalidateQueries({ queryKey }),
       readyKey,
     );
-    const disconnect = connectAppEvents({
-      url: () => url,
-      onChanged: (event) => invalidations.changed(event),
-      onReady: () => {
-        onStatus?.("live");
-        invalidations.ready();
-      },
-      onStatus,
-    });
+    let disconnect: (() => void) | null = null;
+    const visibilityChanged = () => {
+      disconnect?.();
+      disconnect = null;
+      if (document.hidden) return;
+      disconnect = connectAppEvents({
+        url: () => url,
+        onChanged: (event) => invalidations.changed(event),
+        onReady: () => {
+          onStatus?.("live");
+          invalidations.ready();
+        },
+        onStatus,
+      });
+    };
+    document.addEventListener("visibilitychange", visibilityChanged);
+    visibilityChanged();
     return () => {
-      disconnect();
+      document.removeEventListener("visibilitychange", visibilityChanged);
+      disconnect?.();
       invalidations.close();
     };
   }, [onStatus, queryClient, readyKey, url]);
 }
 
-/** One project-scoped invalidation stream while that project is selected. */
-export function ProjectEventsProvider({
-  projectId,
-  children,
-}: PropsWithChildren<{ readonly projectId: string | null }>) {
-  const readyKey = useMemo(
-    () => (projectId ? appQueryKeys.project.root(projectId) : appQueryKeys.global.root),
-    [projectId],
-  );
-  useScopedEvents(
-    projectId ? `/api/projects/${encodeURIComponent(projectId)}/events` : null,
-    readyKey,
-  );
-  return children;
-}
-
-/** Global invalidations exist only while OAuth or settings background work needs them. */
-export function GlobalEventsProvider({
-  active,
-  children,
-}: PropsWithChildren<{ readonly active: boolean }>) {
-  const readyKey = useMemo(() => appQueryKeys.global.root, []);
-  useScopedEvents(active ? "/api/events" : null, readyKey);
-  return children;
+/** One stream carries global, project, and session invalidations. */
+export function AppEventsProvider({ children }: PropsWithChildren) {
+  const [connection, setConnection] = useState<EventConnectionState>("connecting");
+  useScopedEvents("/api/events", appQueryKeys.root, setConnection);
+  return <EventConnectionContext value={connection}>{children}</EventConnectionContext>;
 }
 
 export function SessionEventsProvider({
@@ -65,23 +55,7 @@ export function SessionEventsProvider({
   sessionId,
   children,
 }: PropsWithChildren<{ readonly projectId: string | null; readonly sessionId: string | null }>) {
-  const [connection, setConnection] = useState<EventConnectionState>("connecting");
-  const readyKey = useMemo(
-    () =>
-      projectId && sessionId
-        ? appQueryKeys.session.root(projectId, sessionId)
-        : appQueryKeys.global.root,
-    [projectId, sessionId],
-  );
-  useScopedEvents(
-    projectId && sessionId ? `/api/sessions/${encodeURIComponent(sessionId)}/events` : null,
-    readyKey,
-    setConnection,
-  );
-
   return (
-    <SessionEventScopeContext value={{ projectId, sessionId }}>
-      <EventConnectionContext value={connection}>{children}</EventConnectionContext>
-    </SessionEventScopeContext>
+    <SessionEventScopeContext value={{ projectId, sessionId }}>{children}</SessionEventScopeContext>
   );
 }

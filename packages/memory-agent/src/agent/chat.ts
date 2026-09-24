@@ -686,7 +686,9 @@ const make = Effect.gen(function* () {
         if (requested.status === "blocked") return json(409, requested);
         if (requested.status === "completed") return json(200, requested);
         if ("activeAttemptId" in requested && requested.activeAttemptId !== null)
-          yield* Effect.promise(() => subagents.stopTask(taskId));
+          yield* Effect.promise(() => subagents.stopTask(taskId)).pipe(
+            Effect.timeoutOption(cancelWaitMs),
+          );
         if (!("operationId" in requested) || requested.operationId === undefined)
           return json(409, { status: "blocked", blocker: "operation_not_found" });
         const completed = workTrace.finalizeTaskLifecycle(requested.operationId);
@@ -1290,11 +1292,14 @@ const make = Effect.gen(function* () {
         if (!live) {
           const children = subagents.list(sessionId).some((child) => child.status === "running");
           if (!children) return json(409, { error: "no_running_run" });
-          yield* Effect.promise(() => subagents.stopSession(sessionId));
+          const stopped = yield* Effect.promise(() => subagents.stopSession(sessionId)).pipe(
+            Effect.timeoutOption(cancelWaitMs),
+            Effect.map(Option.isSome),
+          );
           const last = yield* Effect.promise(() => chatState.lastRun(sessionId));
           return json(200, {
             runId: last?.runId ?? "",
-            stopped: true,
+            stopped,
             status: last?.status ?? null,
           });
         }
@@ -1302,13 +1307,9 @@ const make = Effect.gen(function* () {
           requestRunCancel(chatState.persistence.stores.runs, live.runId),
         );
         live.controller.abort(RUN_CANCEL_REASON);
-        yield* Effect.promise(() => subagents.stopSession(sessionId));
         const stopped = yield* Effect.promise(() =>
-          Promise.race([
-            live.ended.then(() => true),
-            new Promise<false>((resolve) => setTimeout(() => resolve(false), cancelWaitMs)),
-          ]),
-        );
+          Promise.all([live.ended, subagents.stopSession(sessionId)]),
+        ).pipe(Effect.timeoutOption(cancelWaitMs), Effect.map(Option.isSome));
         const run = yield* Effect.promise(() => chatState.run(sessionId, live.runId));
         const result: CancelResult = { runId: live.runId, stopped, status: run?.status ?? null };
         return json(200, result);

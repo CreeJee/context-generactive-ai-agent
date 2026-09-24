@@ -504,6 +504,7 @@ export class SubscriptionOAuthClient {
         headers: { Accept: "application/json", "Content-Type": encoded.contentType },
         body: encoded.body,
         redirect: "error",
+        signal: AbortSignal.timeout(30_000),
       });
     } catch {
       throw new OAuthHarnessError("transport_unavailable", null, context);
@@ -562,7 +563,11 @@ export class SubscriptionOAuthClient {
     }
   }
 
-  async #authorizedCatalogRequest(url: URL, credential: StoredCredential): Promise<Response> {
+  async #authorizedCatalogRequest(
+    url: URL,
+    credential: StoredCredential,
+    signal: AbortSignal,
+  ): Promise<Response> {
     const headers = new Headers(this.#protocol.modelHeaders);
     headers.set("Accept", "application/json");
     headers.delete("Content-Type");
@@ -577,7 +582,7 @@ export class SubscriptionOAuthClient {
       method: "GET",
       headers,
       redirect: "error",
-      signal: AbortSignal.timeout(30_000),
+      signal,
     }).catch(() => {
       throw new OAuthHarnessError("transport_unavailable", null, {
         provider: this.#protocol.provider,
@@ -597,6 +602,8 @@ export class SubscriptionOAuthClient {
     if (credential.expiresAt <= this.#now() + 30_000) credential = await this.#refresh(credential);
 
     const pages: unknown[] = [];
+    const signal = AbortSignal.timeout(30_000);
+    const seenCursors = new Set<string>();
     let afterId: string | undefined;
     for (;;) {
       const url = new URL(this.#protocol.catalogUrl);
@@ -604,10 +611,10 @@ export class SubscriptionOAuthClient {
         url.searchParams.set("limit", "1000");
         if (afterId !== undefined) url.searchParams.set("after_id", afterId);
       }
-      let response = await this.#authorizedCatalogRequest(url, credential);
+      let response = await this.#authorizedCatalogRequest(url, credential, signal);
       if (this.#protocol.refreshStatuses.includes(response.status)) {
         credential = await this.#refresh(credential);
-        response = await this.#authorizedCatalogRequest(url, credential);
+        response = await this.#authorizedCatalogRequest(url, credential, signal);
       }
       if (!response.ok) throw new OAuthHarnessError("provider_rejected", response.status, context);
       let page: unknown;
@@ -620,6 +627,12 @@ export class SubscriptionOAuthClient {
       if (this.#protocol.provider !== "anthropic") break;
       const pagination = Option.getOrUndefined(decodeCatalogPage(page));
       if (pagination?.has_more !== true || pagination.last_id === undefined) break;
+      if (pages.length >= 10 || seenCursors.has(pagination.last_id))
+        throw new OAuthHarnessError("provider_rejected", null, {
+          ...context,
+          reason: "Model catalog pagination did not terminate.",
+        });
+      seenCursors.add(pagination.last_id);
       afterId = pagination.last_id;
     }
     return pages;

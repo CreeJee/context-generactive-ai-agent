@@ -21,11 +21,7 @@ import {
   type Session,
 } from "./api";
 import { SessionView, type SlashSupport } from "./chat-panel";
-import {
-  GlobalEventsProvider,
-  ProjectEventsProvider,
-  SessionEventsProvider,
-} from "./events/providers";
+import { AppEventsProvider, SessionEventsProvider } from "./events/providers";
 import { appQueryKeys } from "./events/query-keys";
 import { ThemeSelect } from "./theme";
 import { pageHolder } from "./session-lease";
@@ -127,8 +123,6 @@ export function App() {
     });
   }, [projects, projectsQuery.data, setLocation]);
 
-  const globalEventsActive =
-    settingsOpen || providers.some((candidate) => auth[candidate]?.status === "pending");
   const signedIn = auth[provider]?.status === "signed-in";
   const selectedSignedIn = selection !== null && auth[selection.provider]?.status === "signed-in";
   useEffect(() => {
@@ -363,81 +357,79 @@ export function App() {
     );
 
   return (
-    <GlobalEventsProvider active={globalEventsActive}>
-      <ProjectEventsProvider projectId={projectId}>
-        <SessionEventsProvider projectId={projectId} sessionId={sessionId}>
-          <div className="flex h-dvh bg-background text-foreground">
-            <aside className="flex w-72 shrink-0 flex-col border-r">
-              <div className="flex items-center justify-between py-2 pr-2 pl-4">
-                <span className="text-sm font-semibold">Context Agent</span>
-                <SettingsDialog
-                  project={projects.find((project) => project.id === projectId) ?? null}
-                  open={settingsOpen}
-                  onOpenChange={changeSettingsOpen}
-                />
-              </div>
-              <Separator />
-              <div className="px-4 py-2">
-                <ThemeSelect />
-              </div>
-              <AccountSection
-                auth={auth[provider]}
-                provider={provider}
-                onProviderChange={setProvider}
-                onAction={(intent) => void authAction(intent)}
+    <AppEventsProvider>
+      <SessionEventsProvider projectId={projectId} sessionId={sessionId}>
+        <div className="flex h-dvh bg-background text-foreground">
+          <aside className="flex w-72 shrink-0 flex-col border-r">
+            <div className="flex items-center justify-between py-2 pr-2 pl-4">
+              <span className="text-sm font-semibold">Context Agent</span>
+              <SettingsDialog
+                project={projects.find((project) => project.id === projectId) ?? null}
+                open={settingsOpen}
+                onOpenChange={changeSettingsOpen}
               />
-              {signedIn && (
-                <ModelSection
-                  models={models}
-                  selection={selection?.provider === provider ? selection : null}
-                  onSelect={(model, effort) =>
-                    void api.selectModel(model, effort, provider).then(setSelection)
-                  }
-                />
-              )}
-              <Separator />
-              <ProjectSection
-                projects={projects}
+            </div>
+            <Separator />
+            <div className="px-4 py-2">
+              <ThemeSelect />
+            </div>
+            <AccountSection
+              auth={auth[provider]}
+              provider={provider}
+              onProviderChange={setProvider}
+              onAction={(intent) => void authAction(intent)}
+            />
+            {signedIn && (
+              <ModelSection
+                models={models}
+                selection={selection?.provider === provider ? selection : null}
+                onSelect={(model, effort) =>
+                  void api.selectModel(model, effort, provider).then(setSelection)
+                }
+              />
+            )}
+            <Separator />
+            <ProjectSection
+              projects={projects}
+              projectId={projectId}
+              onSelect={selectProject}
+              onAdd={addProject}
+              onPermissionMode={(mode) => {
+                if (!projectId) return;
+                void api.setPermissionMode(projectId, mode).then(replaceProject);
+              }}
+              onCrossRecall={(allowed) => {
+                if (!projectId) return;
+                void api.setCrossRecallExcluded(projectId, !allowed).then(replaceProject);
+              }}
+              onHide={(hiddenId) => {
+                void api.hideProject(hiddenId).then(() => {
+                  const left = projects.filter((project) => project.id !== hiddenId);
+                  queryClient.setQueryData(appQueryKeys.global.projects, left);
+                  void setLocation({ project: left.at(0)?.id ?? null, session: null });
+                });
+              }}
+            />
+            <Separator />
+            {projectId && (
+              <SessionSection
+                sessions={sessions}
+                archived={archived}
                 projectId={projectId}
-                onSelect={selectProject}
-                onAdd={addProject}
-                onPermissionMode={(mode) => {
-                  if (!projectId) return;
-                  void api.setPermissionMode(projectId, mode).then(replaceProject);
-                }}
-                onCrossRecall={(allowed) => {
-                  if (!projectId) return;
-                  void api.setCrossRecallExcluded(projectId, !allowed).then(replaceProject);
-                }}
-                onHide={(hiddenId) => {
-                  void api.hideProject(hiddenId).then(() => {
-                    const left = projects.filter((project) => project.id !== hiddenId);
-                    queryClient.setQueryData(appQueryKeys.global.projects, left);
-                    void setLocation({ project: left.at(0)?.id ?? null, session: null });
-                  });
-                }}
+                sessionId={sessionId}
+                archiveError={archiveError}
+                onCreate={(agent) => void createSession(agent)}
+                onArchive={(id) => void archiveSession(id)}
+                onDelete={(id) => void deleteSession(id)}
+                onRestore={(id) => void restoreSession(id)}
+                loadAgents={() => api.usableExternalAgents(projectId)}
               />
-              <Separator />
-              {projectId && (
-                <SessionSection
-                  sessions={sessions}
-                  archived={archived}
-                  projectId={projectId}
-                  sessionId={sessionId}
-                  archiveError={archiveError}
-                  onCreate={(agent) => void createSession(agent)}
-                  onArchive={(id) => void archiveSession(id)}
-                  onDelete={(id) => void deleteSession(id)}
-                  onRestore={(id) => void restoreSession(id)}
-                  loadAgents={() => api.usableExternalAgents(projectId)}
-                />
-              )}
-            </aside>
-            <main className="min-w-0 flex-1">{main}</main>
-            {projectId && <WorkTracePanel projectId={projectId} sessionId={sessionId} />}
-          </div>
-        </SessionEventsProvider>
-      </ProjectEventsProvider>
-    </GlobalEventsProvider>
+            )}
+          </aside>
+          <main className="min-w-0 flex-1">{main}</main>
+          {projectId && <WorkTracePanel projectId={projectId} sessionId={sessionId} />}
+        </div>
+      </SessionEventsProvider>
+    </AppEventsProvider>
   );
 }

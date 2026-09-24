@@ -1,4 +1,4 @@
-import { Effect, Either, Schema } from "effect";
+import { Effect, Either, Option, Schema } from "effect";
 import { AppEvents, ProviderId, ProviderRegistry } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
@@ -42,6 +42,12 @@ export async function loader({ request }: Route.LoaderArgs) {
       ProviderOperationFailed: () =>
         Effect.succeed(Response.json({ error: "auth_failed" }, { status: 502 })),
     }),
+    Effect.timeoutOption("10 seconds"),
+    Effect.map((result) =>
+      Option.getOrElse(result, () =>
+        Response.json({ error: "auth_failed", reason: "auth_status_timeout" }, { status: 504 }),
+      ),
+    ),
   );
   return agent.runPromise(response);
 }

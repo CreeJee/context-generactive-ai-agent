@@ -39,6 +39,7 @@ export interface AppEventsApi {
   readonly sessionStream: (request: Request, sessionId: string) => Response;
   readonly projectStream: (request: Request, projectId: string) => Response;
   readonly globalStream: (request: Request) => Response;
+  readonly allStream: (request: Request) => Response;
 }
 
 type SsePayload = AppChangedEvent | { readonly revision: number } | { readonly at: number };
@@ -118,6 +119,7 @@ const make = (projectForSession: (sessionId: string) => string | null): AppEvent
     projectStream: (request: Request, projectId: string) =>
       stream(request, (event) => event.scope === "project" && event.projectId === projectId),
     globalStream: (request: Request) => stream(request, (event) => event.scope === "global"),
+    allStream: (request: Request) => stream(request, () => true),
   };
 };
 
