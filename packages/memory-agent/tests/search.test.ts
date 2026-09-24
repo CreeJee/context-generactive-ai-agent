@@ -137,6 +137,43 @@ describe("namesSomethingExactly", () => {
 });
 
 describe("MemorySearch.find", () => {
+  test("ranks vectors inside the allowed project before applying the result limit", async () => {
+    const { runtime, project, session, base } = await testRuntime({
+      morphAnalyzer: MorphAnalyzer.disabled,
+    });
+    const excluded = await otherProject(runtime, base, "shared vector text");
+    const nodes = await runtime.runPromise(Nodes);
+    const distractors = Array.from({ length: 50 }, () =>
+      nodes.append({
+        projectId: excluded.project.id,
+        sessionId: excluded.node.sessionId,
+        kind: "user",
+        text: "shared vector text",
+      }),
+    );
+    const target = nodes.append({
+      projectId: project.id,
+      sessionId: session.id,
+      kind: "user",
+      text: "shared vector text",
+    });
+    await runtime.runPromise(indexAll);
+
+    const result = await runtime.runPromise(
+      Effect.flatMap(MemorySearch, (search) =>
+        search.find({
+          query: "unrelated query",
+          projectId: project.id,
+          crossProject: false,
+          limit: 1,
+        }),
+      ),
+    );
+    expect(result.degraded).toEqual([]);
+    expect(result.matches[0]).toMatchObject({ id: target.id, foundBy: "vector" });
+    expect(result.matches.map((match) => match.id)).not.toContain(distractors[0]?.id);
+  });
+
   test("seeds from vector and text matches, then reaches linked evidence through the graph", async () => {
     const { runtime, project, session } = await testRuntime();
     const earlier = await earlierSession(runtime, project.id, session.id);

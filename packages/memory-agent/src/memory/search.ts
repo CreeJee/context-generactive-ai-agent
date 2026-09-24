@@ -104,6 +104,7 @@ const IdProject = Schema.Struct({ id: Schema.String, project_id: Schema.String }
 const decodeIdProject = Schema.decodeUnknownSync(IdProject);
 const Id = Schema.Struct({ id: Schema.String });
 const decodeId = Schema.decodeUnknownSync(Id);
+const decodeSeq = Schema.decodeUnknownSync(Schema.Struct({ seq: Schema.Finite }));
 const Count = Schema.Struct({ count: Schema.Finite });
 const decodeCount = Schema.decodeUnknownSync(Count);
 const decodeName = Schema.decodeUnknownSync(Schema.Struct({ name: Schema.String }));
@@ -170,18 +171,24 @@ const make = (tuning: SearchTuning) =>
           ]
         : [projectId];
 
-    /** Node ids ranked by cosine similarity to the query, best first. */
-    const vectorRanking = (query: string, allowed: ReadonlySet<string>, k: number) =>
+    /** Node ids ranked by cosine similarity within the allowed projects, best first. */
+    const vectorRanking = (query: string, allowed: readonly string[], k: number) =>
       Effect.gen(function* () {
         const [queryVector] = yield* embedder.embed([query]);
         if (!queryVector) return [];
-        const hits = yield* vectors.search(queryVector, k);
-        const bySeq = sqlite.prepare("SELECT id, project_id FROM nodes WHERE seq = ?");
+        const projects = allowed.map(() => "?").join(", ");
+        const allowedSeqs = sqlite
+          .prepare(`
+            SELECT n.seq FROM node_vectors v JOIN nodes n ON n.seq = v.node_seq
+            WHERE v.embedder = ? AND n.project_id IN (${projects})`)
+          .all(embedder.identity, ...allowed)
+          .map((row) => decodeSeq(row).seq);
+        if (allowedSeqs.length === 0) return [];
+        const hits = yield* vectors.search(queryVector, k, allowedSeqs);
+        const bySeq = sqlite.prepare("SELECT id FROM nodes WHERE seq = ?");
         return hits.flatMap((hit) => {
           const row = bySeq.get(hit.seq);
-          if (!row) return [];
-          const node = decodeIdProject(row);
-          return allowed.has(node.project_id) ? [node.id] : [];
+          return row ? [decodeId(row).id] : [];
         });
       });
 
@@ -246,7 +253,7 @@ const make = (tuning: SearchTuning) =>
         const allowed = allowedProjects(input.projectId, input.crossProject ?? true);
         const degraded: ("vector" | "morph")[] = [];
 
-        const byVector = yield* vectorRanking(input.query, new Set(allowed), limit * 4).pipe(
+        const byVector = yield* vectorRanking(input.query, allowed, limit * 4).pipe(
           Effect.catch(() => {
             degraded.push("vector");
             return Effect.succeed([]);

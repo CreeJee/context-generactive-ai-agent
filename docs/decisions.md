@@ -91,6 +91,7 @@
 - 근거를 추적할 수 있도록 사용자, assistant, tool call, tool result를 모두 수정 불가 노드로 저장한다.
 - 채팅은 그래프 구조를 가진다: 저장 시 구조 edge(`next`, `reply`, `calls`, `returns`, `touches`), 이후 LLM 해석(`llm-interpret`)으로 의미 edge(about, corrects, retracts, related)를 보강한다.
 - 검색은 turbovec 벡터 순위 + SQLite FTS trigram 순위 + Kiwi 형태소 순위(아래 "Kiwi 형태소 검색")를 RRF(k=60)로 합친 뒤 그래프를 탐색한다.
+- 벡터 검색은 허용된 프로젝트의 인덱싱된 노드 ID만 turbovec 후보로 넘겨 순위를 매긴다(2026-09-25). 전체 인덱스의 상위 k개를 뽑은 뒤 프로젝트를 걸러내면 다른 프로젝트의 벡터가 결과 자리를 차지해 허용된 기억을 놓친다.
 - 임베딩은 로컬 모델 `ibm-granite/granite-embedding-97m-multilingual-r2`의 quint8 파일(CLS pooling)이다. 한 노드는 앞 2048토큰까지 임베딩하고, 배치는 토큰 길이로 나눈다(아래 "메모리"). 모델 파일은 `~/.context-generactive-agent/models`.
 
 ## 기억 보강: llm-interpret (2026-09-14)

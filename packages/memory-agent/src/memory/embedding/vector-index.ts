@@ -127,12 +127,12 @@ const make = Effect.gen(function* () {
         catch: (cause) => new VectorIndexError({ operation: "remove", cause }),
       }),
 
-    /** Whole-index search; callers filter by project because node ownership lives in SQLite. */
-    search: (query: Float32Array, k: number) =>
+    /** Restrict candidates before ranking when callers supply indexed node sequences. */
+    search: (query: Float32Array, k: number, allowedSeqs?: readonly number[]) =>
       Effect.try({
         try: (): VectorHit[] => {
           if (index.size() === 0) return [];
-          const result = index.search(query, Math.min(k, index.size()));
+          const result = index.search(query, Math.min(k, index.size()), allowedSeqs?.map(String));
           return result.ids.map((id, rank) => ({ seq: Number(id), score: result.scores[rank]! }));
         },
         catch: (cause) => new VectorIndexError({ operation: "search", cause }),
