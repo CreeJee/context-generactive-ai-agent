@@ -20,7 +20,8 @@ export function useRunState(
   const query = useQuery({
     queryKey,
     queryFn: () => api.sessionRunState(sessionId, holder),
-    enabled: !generating,
+    // Workflow tools can save a new Goal/Plan before the answer finishes streaming.
+    // Keep this query active so session SSE invalidations refetch those snapshots.
     staleTime: 0,
   });
   const state = query.data ?? null;
@@ -35,41 +36,48 @@ export function useRunState(
     return result.data;
   };
 
-  /** Asks the server to stop the run. Resolves false when nothing could be asked (network error). */
+  /** The server may have running children even when this page has no streaming parent. */
   const cancel = async () => {
     setCancelling(true);
     try {
       const result = await api.cancelRun(sessionId, holder);
       setCancelPending(!result.stopped);
-      await queryClient.invalidateQueries({ queryKey });
-      return true;
+      return "requested" as const;
     } catch (failure) {
-      return failure instanceof ApiError && failure.status === 409;
+      if (failure instanceof ApiError && failure.code === "no_running_run") {
+        setCancelPending(false);
+        return "idle" as const;
+      }
+      return "failed" as const;
     } finally {
-      setCancelling(false);
+      try {
+        await queryClient.invalidateQueries({ queryKey });
+      } finally {
+        setCancelling(false);
+      }
     }
   };
 
-  const setWorkflowPhase = async (phase: WorkflowPhase) => {
-    const workflow = await api.setWorkflowPhase(sessionId, holder, phase);
-    queryClient.setQueryData<SessionRunState>(queryKey, (current) =>
-      current ? { ...current, workflow } : current,
-    );
-    return workflow;
-  };
-
-  const controlWorkflow = async (action: WorkflowAction) => {
+  // Artifacts and their allowed actions are one server snapshot. Do not merge a mutation's
+  // artifact-only response into older permissions. Refetch even after a stale action is refused.
+  const mutateWorkflow = async (mutate: () => Promise<SessionRunState["workflow"]>) => {
     setControlling(true);
     try {
-      const workflow = await api.controlWorkflow(sessionId, holder, action);
-      queryClient.setQueryData<SessionRunState>(queryKey, (current) =>
-        current ? { ...current, workflow } : current,
-      );
-      return workflow;
+      return await mutate();
     } finally {
-      setControlling(false);
+      try {
+        await queryClient.invalidateQueries({ queryKey });
+      } finally {
+        setControlling(false);
+      }
     }
   };
+
+  const setWorkflowPhase = (phase: WorkflowPhase) =>
+    mutateWorkflow(() => api.setWorkflowPhase(sessionId, holder, phase));
+
+  const controlWorkflow = (action: WorkflowAction) =>
+    mutateWorkflow(() => api.controlWorkflow(sessionId, holder, action));
 
   return {
     cancelling,
@@ -79,7 +87,12 @@ export function useRunState(
     refresh,
     context: state?.context ?? null,
     workflow: state?.workflow ?? null,
+    actions: state?.actions ?? null,
     setWorkflowPhase,
-    notice: cancelPending ? ({ kind: "cancel-pending" } as const) : noticeOf(state, page),
+    notice: cancelPending
+      ? ({ kind: "cancel-pending" } as const)
+      : generating
+        ? null
+        : noticeOf(state, page),
   };
 }

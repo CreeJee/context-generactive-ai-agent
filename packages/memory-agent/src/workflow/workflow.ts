@@ -2,6 +2,7 @@ import type { SQLOutputValue } from "node:sqlite";
 import { Context, Data, Effect, Layer, Schema } from "effect";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { Database } from "../db/database.ts";
+import { evaluateWorkflowAction, type WorkflowActionReason } from "./actions.ts";
 
 export const WorkflowPhase = Schema.Literal("chat", "goal", "plan", "execute", "verify");
 export type WorkflowPhase = typeof WorkflowPhase.Type;
@@ -213,12 +214,12 @@ const encodeState = Schema.encodeSync(Schema.parseJson(WorkflowState));
 const decodeRow = Schema.decodeUnknownSync(Schema.Struct({ state_json: Schema.String }));
 
 export class WorkflowTransitionRefused extends Data.TaggedError("WorkflowTransitionRefused")<{
-  readonly reason: "plan_not_ready";
+  readonly reason: WorkflowActionReason;
 }> {}
 
 export class WorkflowProgressRefused extends Data.TaggedError("WorkflowProgressRefused")<{
   readonly reason:
-    | "goal_missing"
+    | WorkflowActionReason
     | "plan_missing"
     | "unknown_step"
     | "step_evidence_required"
@@ -327,14 +328,9 @@ const make = Effect.gen(function* () {
         sessionId,
         Effect.suspend(() => {
           const current = get(sessionId);
-          if (
-            phase === "execute" &&
-            (current.plan === null ||
-              (current.plan.status !== "ready" && current.plan.status !== "executing") ||
-              current.goal === null ||
-              current.plan.goalVersion !== current.goal.version)
-          )
-            return Effect.fail(new WorkflowTransitionRefused({ reason: "plan_not_ready" }));
+          const decision = evaluateWorkflowAction(current, { kind: "phase", phase });
+          if (!decision.allowed)
+            return Effect.fail(new WorkflowTransitionRefused({ reason: decision.reason }));
           return Effect.sync(() =>
             atomic(() => {
               const now = new Date().toISOString();
@@ -364,6 +360,10 @@ const make = Effect.gen(function* () {
         sessionId,
         Effect.suspend(() => {
           const current = get(sessionId);
+          const decision = evaluateWorkflowAction(current, { kind: "control", action });
+          if (!decision.allowed)
+            return Effect.fail(new WorkflowProgressRefused({ reason: decision.reason }));
+          // An allowed control always has a goal; keep narrowing local to the mutation.
           if (current.goal === null)
             return Effect.fail(new WorkflowProgressRefused({ reason: "goal_missing" }));
           const currentGoal = current.goal;

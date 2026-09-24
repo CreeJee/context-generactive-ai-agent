@@ -1,11 +1,13 @@
 import { serverRestartedCode, type SessionRunState } from "memory-agent/definitions";
 import { describe, expect, test } from "vite-plus/test";
+import { allowedWorkflowActions } from "./workflow-test-fixtures";
 import { noticeOf } from "./run-notice";
 
 const record = (
   lastRun: SessionRunState["lastRun"],
   running: SessionRunState["running"] = null,
 ): SessionRunState => ({
+  actions: allowedWorkflowActions,
   running,
   lastRun,
   lease: { state: "mine" },

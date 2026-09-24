@@ -58,3 +58,15 @@ pnpm exec vp test packages/memory-agent/tests/compaction-eval.test.ts packages/m
 ```
 
 `compaction-eval.test.ts`는 입력 토큰 감소, cacheable-prefix 개선, 원문 node 도달, 최신 정정 반영 및 retrieval 예산을 회귀 기준으로 고정한다. 기존 `eval:recall`은 decision·technical corpus의 검색 품질을 별도로 확인한다.
+
+## 2026-09-24 실제 API usage 기준선 감사 (P12)
+
+**전체 작업의 실제 API usage 기준선은 현재 기록만으로 복원할 수 없다.** 위 9,244→5,556은 결정론적 *추정 입력*이며 실제 provider 응답 usage, 총비용 또는 앱의 구독 표시량 감소가 아니다. 약 40% 캐시 비율과 요청당 약 1% 구독 잔량 감소도 사용자의 관측이며 모델·기간·분모가 확인되지 않았다.
+
+- 주 채팅의 `recordContextUsage`는 세션에서 가장 최근 provider 응답의 입력·optional 캐시만 덮어쓴다. 출력 토큰과 응답별 이력은 남지 않는다. `chat_runs.usage`에 run-level usage 패치가 있지만 **응답별 합계와 일치하는지는 검증되지 않았다**.
+- 자동·수동 턴 요약은 별도 `chat()` 호출이고 usage를 주 채팅 집계에 기록하지 않는다. 자식 agent의 별도 `chat()`, 메모리 해석 및 권한 분류 모델 호출도 주 채팅 사용량 관측으로 귀속되지 않는다. 현재 임베딩은 로컬 실행이며 text provider 토큰으로 더하지 않는다.
+- 동일/비슷한 코딩 작업 완료까지 **모든 provider 응답**의 입력·출력·캐시 읽기·캐시 쓰기(있는 경우)를 원문이나 인증 정보를 기록하지 않고 작업·run·호출 목적별로 수집해야 한다. 실패·재시도·요약·서브에이전트·재조회 호출 수, 성공 여부 및 지연을 함께 비교한다. 미보고 필드는 0이 아니라 **unknown**이다.
+- OpenAI의 cached input은 전체 input의 **부분집합**이라 더하지 않는다. 설치된 Anthropic adapter는 `usage.input_tokens`를 promptTokens, `cache_read_input_tokens`를 cachedTokens, `cache_creation_input_tokens`를 cacheWriteTokens로 _별도_ 전달한다. Anthropic에는 OpenAI 식 `promptTokens - cachedTokens`를 적용하면 안 된다. 설치된 일부 API-key adapter는 명시적 cache 0을 optional 필드에서 생략할 수 있으므로 0과 미보고의 구별도 수집 단계에서 확인해야 한다.
+- 시스템 지침·도구 정의·동적 prefix 및 도구 결과 각각의 **실제** 토큰 기여도는 저장되지 않는다. 기존 고정 prefix 2,000-token 수치는 평가 fixture의 가정이지 프로덕션 측정치가 아니다. 이것과 전체 호출의 실측 usage 기준선이 마련되기 전에는 A/B 토큰 절감이나 Codex 대비 동등 비용을 주장할 수 없다.
+
+P13에서 `api_usage_responses`에 **새로 도착하는** 주 채팅·요약·자식 agent·메모리 해석·권한 분류 응답의 counts-only usage 기록을 연결했다. `ApiUsage.byRootSession(sessionId)`는 OpenAI의 캐시 포함 입력과 Anthropic의 별도 캐시를 구분하며, 미보고 필드를 `null`로 둔다. 과거 세션은 소급 기록되지 않고, provider가 usage 이벤트를 보내지 않은 응답도 이 테이블에 행이 없으므로 기록된 행만으로 전체 호출 coverage를 단정할 수 없다. 백그라운드 해석은 세션에 귀속되지만 반드시 특정 사용자 요청의 run에 귀속되지는 않는다. 아직 실제 동일 코딩 작업 전후의 provider 응답·성공률·지연을 측정하지 않았으므로 A/B 절감량은 **미확인**이다. 이 한계를 보고하고 문자열 크기 추정치를 실제 API usage로 대체하지 않는다.

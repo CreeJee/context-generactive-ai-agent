@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { chat } from "@tanstack/ai";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import { ActiveProvider } from "../providers/active-provider.ts";
+import { ApiUsage, collectApiUsage } from "../agent/api-usage.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
 import { Nodes } from "../memory/nodes.ts";
 import type { Project } from "../projects/projects.ts";
@@ -93,6 +94,7 @@ export function routineShellVerdict(toolName: string, argumentsJson: string): Ve
 
 const make = Effect.gen(function* () {
   const active = yield* ActiveProvider;
+  const usageLedger = yield* ApiUsage;
   const nodes = yield* Nodes;
 
   const prompt = (request: ReviewRequest) => {
@@ -127,6 +129,14 @@ const make = Effect.gen(function* () {
           messages: [{ role: "user", content: prompt(request) }],
           systemPrompts: [reviewInstructions],
           threadId: randomUUID(),
+          middleware: [
+            collectApiUsage(usageLedger, {
+              rootSessionId: request.sessionId,
+              purpose: "permission-classification",
+              provider: cheap.provider,
+              model: cheap.model,
+            }),
+          ],
           abortController,
           stream: false,
         });

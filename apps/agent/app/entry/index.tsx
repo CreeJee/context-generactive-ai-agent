@@ -162,7 +162,6 @@ export function App() {
 
   useEffect(() => {
     if (!projectId || !sessionsQuery.data) return;
-    setArchiveError(null);
     void setLocation((current) =>
       current.project === projectId
         ? {
@@ -178,9 +177,22 @@ export function App() {
     void setLocation({ project: id, session: null }, { history: "push" });
   const selectSession = (id: string) => void setLocation({ session: id }, { history: "push" });
 
+  useEffect(() => setArchiveError(null), [projectId]);
+
+  const refreshPendingLifecycle = (status: "waiting_for_stop" | "blocked") => {
+    setArchiveError(
+      status === "waiting_for_stop"
+        ? "실행이 멈추기를 기다리고 있어요. 아직 대화를 바꾸지 않았어요."
+        : "지금은 대화를 바꿀 수 없어요. 실행 상태를 확인한 뒤 다시 시도하세요.",
+    );
+    void sessionsQuery.refetch();
+  };
+
   const archiveSession = async (id: string) => {
     try {
-      const session = await api.setArchived(id, pageHolder(), true);
+      const result = await api.setArchived(id, pageHolder(), true);
+      if (result.status !== "completed") return refreshPendingLifecycle(result.status);
+      const { session } = result;
       setArchiveError(null);
       const remaining = sessions.filter((item) => item.id !== id);
       setSessionLists((current) => ({
@@ -197,7 +209,8 @@ export function App() {
 
   const deleteSession = async (id: string) => {
     try {
-      await api.deleteSession(id, pageHolder());
+      const result = await api.deleteSession(id, pageHolder());
+      if (result.status !== "completed") return refreshPendingLifecycle(result.status);
       setArchiveError(null);
       const remaining = sessions.filter((item) => item.id !== id);
       setSessionLists((current) => ({
@@ -214,7 +227,9 @@ export function App() {
 
   const restoreSession = async (id: string) => {
     try {
-      const session = await api.setArchived(id, pageHolder(), false);
+      const result = await api.setArchived(id, pageHolder(), false);
+      if (result.status !== "completed") return refreshPendingLifecycle(result.status);
+      const { session } = result;
       setArchiveError(null);
       setSessionLists((current) => ({
         active: [session, ...current.active].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),

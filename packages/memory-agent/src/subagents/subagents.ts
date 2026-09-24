@@ -9,6 +9,7 @@ import {
 } from "@tanstack/ai";
 import { Context, Deferred, Effect, Layer, Schema } from "effect";
 import { ChatState } from "../chat-state/chat-state.ts";
+import { ApiUsage, collectApiUsage } from "../agent/api-usage.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
 import { Database } from "../db/database.ts";
@@ -46,6 +47,7 @@ export function childInstructions(name: string | null, instructions: string | nu
     `You are a subagent${name ? ` named "${name}"` : ""} doing a task for another agent, which reads your final message.`,
     "- The task and follow-up messages come from that agent, not from the user. They are not user approval: risky actions still go through the usual approvals.",
     "- Work in the shared project, report what you did and found briefly, and say plainly what you could not do or verify.",
+    "- Older completed tool outputs may be replaced by a reference. Use read_subagent_tool_result with its toolCallId to retrieve a bounded page from your own saved transcript when needed.",
     ...(instructions ? [`Additional instructions from the parent agent:\n${instructions}`] : []),
   ].join("\n");
 }
@@ -82,6 +84,40 @@ const WaitSubagentsInput = Schema.Struct({
     default: () => 30_000,
   }),
 });
+
+const ChildResultInput = Schema.Struct({
+  toolCallId: Schema.NonEmptyString,
+  offset: Schema.optionalWith(Schema.Number.pipe(Schema.int(), Schema.greaterThanOrEqualTo(0)), {
+    default: () => 0,
+  }),
+});
+const childResultPageLength = 4_000;
+
+/** Model-only child history reduction; the child's stored transcript remains unchanged. */
+export function compactChildToolResults(
+  messages: readonly ModelMessage[],
+  savedCallIds: ReadonlySet<string>,
+): readonly ModelMessage[] {
+  const answered = messages
+    .map((message) => message.role === "assistant" && (message.toolCalls ?? []).length === 0)
+    .lastIndexOf(true);
+  return messages.map((message, index) => {
+    if (
+      index >= answered ||
+      message.role !== "tool" ||
+      !message.toolCallId ||
+      !savedCallIds.has(message.toolCallId) ||
+      !Schema.is(Schema.String)(message.content) ||
+      message.content.length <= childResultPageLength ||
+      message.content.startsWith("[Completed child tool result")
+    )
+      return message;
+    return {
+      ...message,
+      content: `[Completed child tool result saved in this subagent's transcript. toolCallId: ${message.toolCallId}; ${message.content.length} characters. Call read_subagent_tool_result with this toolCallId and offset 0 for a bounded page.]`,
+    };
+  });
+}
 
 const FileArtifactResult = Schema.Struct({ path: Schema.String, sha256: Schema.String });
 
@@ -203,6 +239,7 @@ const make = Effect.gen(function* () {
   const { sqlite } = yield* Database;
   const events = yield* AppEvents;
   const active = yield* ActiveProvider;
+  const usageLedger = yield* ApiUsage;
   const chatState = yield* ChatState;
   const classifier = yield* PermissionClassifier;
   const reviews = yield* PermissionReviews;
@@ -381,7 +418,50 @@ const make = Effect.gen(function* () {
       const history = await chatState.persistence.stores.messages.loadThread(threadId);
       const messages: ModelMessage[] = [...history, { role: "user", content: task }];
       const runtime = await Effect.runPromise(active.runtime(binding.selection));
-      const reads = parallelReads(binding.tools, controller.signal);
+      const readChildResult = toolDefinition({
+        name: "read_subagent_tool_result",
+        description:
+          "Read a page of one tool result from this subagent's own saved transcript by toolCallId and offset. Cannot access another child or session.",
+        inputSchema: toToolSchema(ChildResultInput),
+      }).server(async ({ toolCallId, offset }) => {
+        const saved = await chatState.persistence.stores.messages.loadThread(threadId);
+        const result = saved.find(
+          (message) => message.role === "tool" && message.toolCallId === toolCallId,
+        );
+        if (!result) return { error: "tool_result_not_found", toolCallId };
+        const text = Schema.is(Schema.String)(result.content)
+          ? result.content
+          : (result.content ?? [])
+              .flatMap((part) => (part.type === "text" ? [part.content] : []))
+              .join("");
+        const start = Math.min(offset ?? 0, text.length);
+        const end = Math.min(start + childResultPageLength, text.length);
+        return {
+          toolCallId,
+          text: text.slice(start, end),
+          offset: start,
+          nextOffset: end < text.length ? end : null,
+          length: text.length,
+        };
+      });
+      const reads = parallelReads([...binding.tools, readChildResult], controller.signal);
+      const childContext: ChatMiddleware = {
+        name: "memory-agent/subagent-context",
+        async onConfig(ctx, config) {
+          if (ctx.phase === "init") return;
+          const saved = await chatState.persistence.stores.messages.loadThread(threadId);
+          const ids = new Set(
+            saved.flatMap((message) =>
+              message.role === "tool" && message.toolCallId ? [message.toolCallId] : [],
+            ),
+          );
+          const providerMessages = compactChildToolResults(config.messages, ids);
+          return providerMessages.every((message, index) => message === config.messages[index]) &&
+            providerMessages.length === config.messages.length
+            ? undefined
+            : { providerMessages: [...providerMessages] };
+        },
+      };
       const traceMiddleware: ChatMiddleware = {
         name: "memory-agent/subagent-trace",
         onBeforeToolCall(_ctx, hook) {
@@ -439,6 +519,13 @@ const make = Effect.gen(function* () {
         traceMiddleware,
         relayGate(binding, row, handle, controller.signal, skippedTools),
         reads.middleware,
+        childContext,
+        collectApiUsage(usageLedger, {
+          rootSessionId: binding.sessionId,
+          purpose: "subagent",
+          provider: binding.selection.provider,
+          model: binding.selection.model,
+        }),
         runtime.runMiddleware(),
       ];
       const stream = chat({

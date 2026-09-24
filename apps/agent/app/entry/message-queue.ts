@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, ApiError, type QueuedMessage, type QueueEdit } from "./api";
+import { api, ApiError, type QueuedMessage, type QueueEdit, type QueueSnapshot } from "./api";
 import { useSessionEventScope } from "./events/context";
 import { appQueryKeys } from "./events/query-keys";
 
@@ -55,5 +55,17 @@ export function useMessageQueue(sessionId: string, holder: string, _generating: 
     return refresh();
   };
 
-  return { items: query.data ?? [], refresh, add, change };
+  return {
+    items: query.data?.items ?? [],
+    nextDelivery: query.data?.nextDelivery ?? { kind: "empty" as const },
+    refresh,
+    add,
+    change,
+  } satisfies {
+    items: readonly QueuedMessage[];
+    nextDelivery: QueueSnapshot["nextDelivery"];
+    refresh: typeof refresh;
+    add: typeof add;
+    change: typeof change;
+  };
 }

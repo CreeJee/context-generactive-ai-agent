@@ -302,6 +302,15 @@ export {
 } from "./projects/projects.ts";
 export { Session, Sessions } from "./sessions/sessions.ts";
 export {
+  evaluateWorkflowAction,
+  workflowActions,
+  type WorkflowActions,
+  type WorkflowActionDecision,
+  type WorkflowActionReason,
+  type WorkflowActionRequest,
+  type WorkflowActionContext,
+} from "./workflow/actions.ts";
+export {
   GoalArtifact,
   PlanArtifact,
   WorkflowAction,

@@ -1,15 +1,20 @@
 import type { ChatMiddleware, MetadataStore } from "@tanstack/ai";
+import { randomUUID } from "node:crypto";
 import { Option, Schema } from "effect";
 import { budgetFor } from "./compaction.ts";
 import { contextUsageEvent, type CompactionStage, type ContextView } from "./run-state.ts";
 
 /** Where a session's latest model request size is kept. */
 export const contextUsageNamespace = "memory-agent/context-usage";
+/** Last provider observation for which a cache-cold compact was attempted. */
+export const consumedColdUsageNamespace = "memory-agent/consumed-cold-usage";
 
 const CompactionStageSchema = Schema.Literal("none", "clear-answered", "summarize", "leave-out");
 const ContextUsage = Schema.Struct({
   inputTokens: Schema.Number,
   cachedTokens: Schema.optionalWith(Schema.NullOr(Schema.Number), { default: () => null }),
+  /** Absent on usage persisted before cache-cold tracking was introduced. */
+  observationId: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
   compactionStage: Schema.optionalWith(Schema.NullOr(CompactionStageSchema), {
     default: () => null,
   }),
@@ -41,6 +46,35 @@ export const lastContextUsage = async (
 ): Promise<StoredContextUsage | null> =>
   Option.getOrNull(decodeContextUsage(await metadata.get(contextUsageNamespace, threadId)));
 
+/** A provider-reported zero is distinct from no report; each observation may trigger only once. */
+export const coldObservationId = (
+  usage: StoredContextUsage | null,
+  consumedId: string | null,
+): string | null =>
+  usage?.cachedTokens === 0 && usage.observationId && usage.observationId !== consumedId
+    ? usage.observationId
+    : null;
+
+/** Read the pending observation without treating legacy/unknown usage as a cache miss. */
+export async function pendingColdObservation(
+  metadata: MetadataStore,
+  threadId: string,
+): Promise<string | null> {
+  const [usage, consumed] = await Promise.all([
+    lastContextUsage(metadata, threadId),
+    metadata.get(consumedColdUsageNamespace, threadId),
+  ]);
+  const consumedId = Option.getOrNull(Schema.decodeUnknownOption(Schema.String)(consumed));
+  return coldObservationId(usage, consumedId);
+}
+
+/** Consume an observation when the request has attempted its early compact. */
+export const consumeColdObservation = (
+  metadata: MetadataStore,
+  threadId: string,
+  observationId: string,
+): Promise<void> => metadata.set(consumedColdUsageNamespace, threadId, observationId);
+
 /** The tokens the model read in its latest request in a session, if it has made one. */
 export const lastInputTokens = async (metadata: MetadataStore, threadId: string) =>
   (await lastContextUsage(metadata, threadId))?.inputTokens ?? null;
@@ -61,6 +95,7 @@ export function recordContextUsage(
       const stored: StoredContextUsage = {
         inputTokens: usage.promptTokens,
         cachedTokens,
+        observationId: randomUUID(),
         compactionStage: compactionStage(),
       };
       await metadata.set(contextUsageNamespace, ctx.threadId, stored);

@@ -3,6 +3,7 @@ import type { SQLOutputValue } from "node:sqlite";
 import { chat } from "@tanstack/ai";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import { ActiveProvider } from "../providers/active-provider.ts";
+import { ApiUsage, collectApiUsage } from "../agent/api-usage.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
 import { Database } from "../db/database.ts";
 import { Interpretations } from "./interpretations.ts";
@@ -69,6 +70,7 @@ const make = Effect.gen(function* () {
   const search = yield* MemorySearch;
   const interpretations = yield* Interpretations;
   const active = yield* ActiveProvider;
+  const usageLedger = yield* ApiUsage;
   const oneRunAtATime = yield* Effect.makeSemaphore(1);
 
   // A process that stopped mid-batch left jobs running; nothing is working on them now.
@@ -180,6 +182,16 @@ const make = Effect.gen(function* () {
           messages: [{ role: "user", content: `Input (JSON): ${JSON.stringify(input)}` }],
           systemPrompts: [interpretInstructions],
           threadId: randomUUID(),
+          middleware: batch[0]?.sessionId
+            ? [
+                collectApiUsage(usageLedger, {
+                  rootSessionId: batch[0].sessionId,
+                  purpose: "memory-interpretation",
+                  provider: cheap.provider,
+                  model: cheap.model,
+                }),
+              ]
+            : [],
           abortController,
           stream: false,
         }).finally(() => clearTimeout(timer));

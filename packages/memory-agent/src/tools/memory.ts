@@ -10,6 +10,7 @@ import { toToolSchema } from "./schema.ts";
 export const memoryToolNames = [
   "find_memory",
   "read_evidence",
+  "read_tool_result",
   "trace_evidence",
   "promote_memory_candidate",
   "use_promoted_memory",
@@ -26,6 +27,14 @@ const readEvidenceInput = Schema.Struct({
   offset: Schema.optional(
     Schema.Number.annotations({ description: "nextOffset from the previous page, if any." }),
   ),
+});
+const readToolResultInput = Schema.Struct({
+  id: Schema.NonEmptyString.annotations({
+    description: "Recorded tool-result node ID from a result summary in this session.",
+  }),
+  offset: Schema.optionalWith(Schema.Number.pipe(Schema.int(), Schema.greaterThanOrEqualTo(0)), {
+    default: () => 0,
+  }),
 });
 const traceEvidenceInput = Schema.Struct({
   id: Schema.String.annotations({ description: "Node id to trace back to its cause." }),
@@ -78,7 +87,7 @@ const make = Effect.gen(function* () {
     const findMemory = toolDefinition({
       name: "find_memory",
       description:
-        "Search every earlier message, tool call, tool result and promoted project memory across sessions, including other projects unless they opted out (projectName, fromOtherProject). Results are leads, not facts: read the original with read_evidence before relying on one, and use trace_evidence to see who said it and whether it was corrected. supersededBy lists later user statements that correct or retract a match; unconfirmedChallenges counts possible corrections that need the user's confirmation. uninterpreted counts statements with no topics or correction links yet. A missing result or missing correction does not mean something never happened or was approved.",
+        "Search earlier conversations and promoted memory across allowed projects. Matches are leads: read_evidence for original text and trace_evidence for provenance/corrections. supersededBy marks corrections/retractions; ask about unconfirmedChallenges; uninterpreted has no topics yet. Missing results never imply approval.",
       inputSchema: toToolSchema(findMemoryInput),
     }).server(async ({ query }) => {
       const result = await run(
@@ -175,6 +184,24 @@ const make = Effect.gen(function* () {
     const base = [findMemory, readEvidence, traceEvidence] as const;
     if (!binding) return { tools: base, middleware: null };
 
+    const readToolResult = toolDefinition({
+      name: "read_tool_result",
+      description:
+        "Read a bounded page of the saved, redacted original result behind a compact tool summary. Only tool results from this project and conversation are accessible; use nextOffset for later pages.",
+      inputSchema: toToolSchema(readToolResultInput),
+    }).server(async ({ id, offset }) => {
+      const nodes = await run(Nodes);
+      const node = nodes.get(id);
+      if (
+        !node ||
+        node.kind !== "tool_result" ||
+        node.projectId !== projectId ||
+        node.sessionId !== binding.sessionId
+      )
+        return notFound(id);
+      return nodes.read(id, offset ?? 0);
+    });
+
     const promote = toolDefinition({
       name: "promote_memory_candidate",
       description:
@@ -224,7 +251,7 @@ const make = Effect.gen(function* () {
         );
       },
     };
-    return { tools: [...base, promote, useMemory] as const, middleware };
+    return { tools: [...base, readToolResult, promote, useMemory] as const, middleware };
   };
 
   type ReadTools = Extract<ReturnType<typeof toolsFor>["tools"], { readonly length: 3 }>;

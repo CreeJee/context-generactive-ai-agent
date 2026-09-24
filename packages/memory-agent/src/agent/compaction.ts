@@ -2,6 +2,7 @@ import type { ChatMiddleware, MetadataStore, ModelMessage } from "@tanstack/ai";
 import { evictOldest } from "@tanstack/ai-compaction";
 import { Option, Schema } from "effect";
 import { recentRawUserTurns } from "./compaction-policy.ts";
+import { consumeColdObservation, pendingColdObservation } from "./context-usage.ts";
 import type { CompactResult, CompactionStage } from "./run-state.ts";
 
 /**
@@ -244,6 +245,7 @@ export async function compact(
   state: CompactionState,
   sources: CompactionSources,
   budget: Budget,
+  early = false,
 ): Promise<Compacted> {
   // A record for a longer conversation was made for another one.
   const manual = state.manual.clearedThrough <= messages.length ? state.manual : noManualCompaction;
@@ -265,7 +267,9 @@ export async function compact(
   const turns = userTurns(messages);
   const fitting = linedUp(messages, state.blocks, sources.nodeText);
   let through = Math.max(manual.summarizedTurns, fitting.at(-1)?.end ?? 0);
-  if (estimateConversation(sent) > budget.compactAt)
+  // A reported cache-cold request makes one early attempt even below the normal threshold.
+  // Only stored, validated summary blocks can replace raw turns; no content is discarded blindly.
+  if (early || estimateConversation(sent) > budget.compactAt)
     through = Math.max(through, turns.length - recentRawUserTurns);
   const summaries = fitting.filter((block) => block.end <= through);
   const summarizedTurns = summaries.at(-1)?.end ?? 0;
@@ -273,6 +277,19 @@ export async function compact(
   if (summarizedTurns > 0 && firstKept !== undefined) {
     sent = [...summaryMessages(summaries), ...sent.slice(firstKept)];
     stage = "summarize";
+  }
+
+  // Without a ready summary, a one-shot cold hint can still make the next request smaller.
+  // Leave the latest two complete user turns intact and point back to the saved conversation.
+  if (early && summarizedTurns === 0 && turns.length > recentRawUserTurns) {
+    const firstKeptTurn = turns[turns.length - recentRawUserTurns];
+    if (firstKeptTurn !== undefined && firstKeptTurn > 0) {
+      sent = [
+        { role: "assistant", content: droppedMarker(firstKeptTurn) },
+        ...sent.slice(firstKeptTurn),
+      ];
+      stage = "leave-out";
+    }
   }
 
   if (estimateConversation(sent) > budget.leaveOutAt) {
@@ -310,6 +327,138 @@ export async function compact(
   return { messages: sent, stage, summarizedTurns };
 }
 
+const largeShellResult = Schema.parseJson(
+  Schema.Struct({
+    status: Schema.String,
+    exitCode: Schema.NullOr(Schema.Number),
+    signal: Schema.NullOr(Schema.String),
+    durationMs: Schema.Number,
+    stdoutTruncated: Schema.Boolean,
+    stderrTruncated: Schema.Boolean,
+    stdout: Schema.String,
+    stderr: Schema.String,
+  }),
+);
+const largeListResult = Schema.parseJson(
+  Schema.Struct({
+    total: Schema.Number,
+    paths: Schema.Array(Schema.String),
+    nextOffset: Schema.NullOr(Schema.Number),
+    snapshot: Schema.String,
+    truncated: Schema.Boolean,
+    excludedCredentialFiles: Schema.Number,
+  }),
+);
+const largeSearchResult = Schema.parseJson(
+  Schema.Struct({
+    matches: Schema.Array(
+      Schema.Struct({ path: Schema.String, line: Schema.Number, text: Schema.String }),
+    ),
+    skipped: Schema.Array(Schema.Struct({ path: Schema.String, reason: Schema.String })),
+    filesInView: Schema.Number,
+    nextCursor: Schema.NullOr(Schema.String),
+    complete: Schema.Boolean,
+  }),
+);
+const largeReportResult = Schema.parseJson(
+  Schema.Struct({
+    status: Schema.String,
+    subagentId: Schema.String,
+    taskId: Schema.String,
+    attemptId: Schema.String,
+    agent: Schema.NullOr(Schema.String),
+    answer: Schema.String,
+    evidenceRefIds: Schema.Array(Schema.String),
+    error: Schema.NullOr(Schema.String),
+  }),
+);
+
+/** Purpose-specific provider previews for recorded results; original history stays unchanged. */
+export function lightweightToolResults(
+  messages: readonly ModelMessage[],
+  ids: () => ReadonlyMap<string, string>,
+): readonly ModelMessage[] {
+  const names = new Map(
+    messages.flatMap((message) =>
+      message.role === "assistant"
+        ? (message.toolCalls ?? []).map((call) => [call.id, call.function.name] as const)
+        : [],
+    ),
+  );
+  let recorded: ReadonlyMap<string, string> | null = null;
+  return messages.map((message) => {
+    if (
+      message.role !== "tool" ||
+      !message.toolCallId ||
+      !Schema.is(Schema.String)(message.content)
+    )
+      return message;
+    const name = names.get(message.toolCallId);
+    if (!name || !["run_shell", "list_files", "search_files", "get_subagent_report"].includes(name))
+      return message;
+    const preview = (text: string, length = 800) => {
+      if (text.length <= length) return text;
+      const head = Math.ceil(length / 2);
+      return `${text.slice(0, head)}… (${text.length - length} omitted characters; full result available by ID) …${text.slice(-Math.floor(length / 2))}`;
+    };
+    let summary;
+    if (name === "run_shell") {
+      const result = Option.getOrUndefined(
+        Schema.decodeUnknownOption(largeShellResult)(message.content),
+      );
+      if (!result) return message;
+      summary = {
+        ...result,
+        // Successful commands mainly need their outcome; failures retain more diagnostics.
+        stdout: preview(result.stdout, result.status === "succeeded" ? 600 : 1_000),
+        stderr: preview(result.stderr, result.status === "succeeded" ? 600 : 1_500),
+      };
+    } else if (name === "list_files") {
+      const result = Option.getOrUndefined(
+        Schema.decodeUnknownOption(largeListResult)(message.content),
+      );
+      if (!result) return message;
+      summary = {
+        ...result,
+        paths: result.paths.slice(0, 20),
+        shown: Math.min(20, result.paths.length),
+      };
+    } else if (name === "search_files") {
+      const result = Option.getOrUndefined(
+        Schema.decodeUnknownOption(largeSearchResult)(message.content),
+      );
+      if (!result) return message;
+      summary = {
+        ...result,
+        matches: result.matches.slice(0, 8).map((match) => ({
+          ...match,
+          text: preview(match.text, 180),
+        })),
+        shown: Math.min(8, result.matches.length),
+        skipped: result.skipped.slice(0, 5),
+      };
+    } else {
+      const result = Option.getOrUndefined(
+        Schema.decodeUnknownOption(largeReportResult)(message.content),
+      );
+      if (!result) return message;
+      summary = {
+        ...result,
+        answer: preview(result.answer, 1_200),
+        error: result.error === null ? null : preview(result.error, 1_500),
+        evidenceRefIds: result.evidenceRefIds.slice(0, 12),
+      };
+    }
+    const serialized = JSON.stringify(summary);
+    if (serialized.length >= message.content.length) return message;
+    recorded ??= ids();
+    const nodeId = recorded.get(message.toolCallId);
+    if (!nodeId) return message; // Never promise an ID that has not been recorded.
+    const shortened = `[${name} preview; full result: read_tool_result ID ${nodeId}, page by offset. Check omitted entries before relying on them.]\n${serialized}`;
+    return shortened.length < message.content.length ? { ...message, content: shortened } : message;
+  });
+}
+
 /**
  * Compacts what one session sends to the model (see {@link compact}), before every model call of
  * a run. Goes last among the middleware that shape the conversation.
@@ -326,9 +475,21 @@ export function compaction(
       // Only the model-bound phases shape what is sent.
       if (ctx.phase === "init") return;
       const state = await compactionState(metadata, ctx.threadId);
-      const { messages, stage } = await compact(config.messages, state, sources, budget);
+      const coldId = await pendingColdObservation(metadata, ctx.threadId);
+      const { messages, stage } = await compact(
+        config.messages,
+        state,
+        sources,
+        budget,
+        coldId !== null,
+      );
+      if (coldId !== null) await consumeColdObservation(metadata, ctx.threadId, coldId);
       observed(stage);
-      return messages === config.messages ? undefined : { providerMessages: [...messages] };
+      const providerMessages = lightweightToolResults(messages, sources.toolResultIds);
+      return providerMessages.every((message, index) => message === config.messages[index]) &&
+        providerMessages.length === config.messages.length
+        ? undefined
+        : { providerMessages: [...providerMessages] };
     },
   };
 }

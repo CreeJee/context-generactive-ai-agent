@@ -96,6 +96,12 @@ describe("list_files", () => {
       directory: "src",
       paths: ["src/app.ts"],
     });
+    // An empty optional snapshot in model-generated arguments means the first page.
+    expect(
+      await run(listFiles, { directory: "src", glob: "*.ts", snapshot: "", offset: 0 }),
+    ).toMatchObject({
+      paths: ["src/app.ts"],
+    });
   });
 
   test("walks projects without Git, skipping node_modules, and pages one snapshot", async () => {
@@ -139,6 +145,11 @@ describe("search_files", () => {
     expect(await run(searchFiles, { query: "first" })).toMatchObject({
       matches: [{ path: "src/a.ts", line: 1 }],
       skipped: [],
+      complete: true,
+    });
+    // An empty optional cursor in model-generated arguments also starts a fresh search.
+    expect(await run(searchFiles, { query: "first", cursor: "" })).toMatchObject({
+      matches: [{ path: "src/a.ts", line: 1 }],
       complete: true,
     });
 

@@ -8,6 +8,16 @@ import { testRuntime } from "./support/runtime.ts";
 type Runtime = Awaited<ReturnType<typeof testRuntime>>["runtime"];
 
 const Status = Schema.Struct({
+  actions: Schema.Struct({
+    phases: Schema.Record({
+      key: Schema.String,
+      value: Schema.Struct({ allowed: Schema.Boolean, reason: Schema.optional(Schema.String) }),
+    }),
+    controls: Schema.Record({
+      key: Schema.String,
+      value: Schema.Struct({ allowed: Schema.Boolean, reason: Schema.optional(Schema.String) }),
+    }),
+  }),
   running: Schema.NullOr(Schema.Struct({ runId: Schema.String })),
   lastRun: Schema.NullOr(
     Schema.Struct({
@@ -100,7 +110,16 @@ describe("runs across reloads, cancels and restarts", () => {
     const tab = openTab(runtime, session.id);
     void tab.client.sendMessage("please be slow");
     await until(() => provider!.adapter.invocations.length === 1, "the provider run to start");
-    expect((await statusOf(runtime, session.id)).running).not.toBeNull();
+    const running = await statusOf(runtime, session.id);
+    expect(running.running).not.toBeNull();
+    for (const decision of Object.values(running.actions.phases))
+      expect(decision).toEqual({ allowed: false, reason: "run_in_progress" });
+    expect(running.actions.controls.resume).toEqual({ allowed: false, reason: "run_in_progress" });
+    const refused = await runtime.runPromise(
+      Effect.flatMap(AgentChat, (agent) => agent.setWorkflowPhase(session.id, null, "plan")),
+    );
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: "run_in_progress" });
 
     const response = await runtime.runPromise(
       Effect.flatMap(AgentChat, (agent) => agent.cancel(session.id, null)),

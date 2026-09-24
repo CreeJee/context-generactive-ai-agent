@@ -6,6 +6,7 @@ import { ActiveProvider } from "../providers/active-provider.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
 import { Nodes, type Node, type NodeKind } from "../memory/nodes.ts";
 import { recentRawUserTurns, summaryBlockTurns } from "./compaction-policy.ts";
+import { ApiUsage, collectApiUsage } from "./api-usage.ts";
 import {
   compactionState,
   linedUp,
@@ -51,10 +52,11 @@ const make = (automatic: boolean) =>
     const nodes = yield* Nodes;
     const chatState = yield* ChatState;
     const active = yield* ActiveProvider;
+    const usageLedger = yield* ApiUsage;
     const oneAtATime = yield* Effect.makeSemaphore(1);
     const { messages: messageStore, metadata } = chatState.persistence.stores;
 
-    const summarize = (part: readonly Node[], selection: ModelSelection) =>
+    const summarize = (sessionId: string, part: readonly Node[], selection: ModelSelection) =>
       Effect.gen(function* () {
         const { services } = yield* active.resolve(selection);
         const cheap = yield* services.models.cheapestEffort(selection);
@@ -71,6 +73,14 @@ const make = (automatic: boolean) =>
             messages: [{ role: "user", content: `Nodes:\n\n${input}` }],
             systemPrompts: [summaryInstructions],
             threadId: randomUUID(),
+            middleware: [
+              collectApiUsage(usageLedger, {
+                rootSessionId: sessionId,
+                purpose: "summary",
+                provider: cheap.provider,
+                model: cheap.model,
+              }),
+            ],
             abortController,
             stream: false,
           }).finally(() => clearTimeout(timer));
@@ -116,7 +126,7 @@ const make = (automatic: boolean) =>
           const next = turnNodes[end];
           if (!first || !next || !lines(start) || !lines(end)) break;
           const part = sessionNodes.filter((node) => node.seq >= first.seq && node.seq < next.seq);
-          const text = yield* summarize(part, selection);
+          const text = yield* summarize(sessionId, part, selection);
           blocks.push({ end, nextTurnNodeId: next.id, text });
           yield* Effect.promise(() => metadata.set(turnSummariesNamespace, sessionId, { blocks }));
         }

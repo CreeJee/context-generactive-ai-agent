@@ -35,6 +35,15 @@ export interface QueuedMessage {
   readonly createdAt: number;
 }
 
+/** The server's advisory view of the next delivery point. Delivery reselects current state. */
+export interface QueueSnapshot {
+  readonly items: QueuedMessage[];
+  readonly nextDelivery:
+    | { readonly kind: "ready" }
+    | { readonly kind: "blocked"; readonly messageId: string; readonly reason: "editing" | "held" }
+    | { readonly kind: "empty" };
+}
+
 /** A change a page asks for on one queued message. */
 export type QueueEdit =
   /** Opens (or keeps) the message for editing and stores the unsaved text. */

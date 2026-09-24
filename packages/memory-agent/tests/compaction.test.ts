@@ -3,17 +3,27 @@ import { chat, type ChatMiddleware, type ModelMessage } from "@tanstack/ai";
 import { Effect, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
+import { ApiUsage } from "../src/agent/api-usage.ts";
+import {
+  coldObservationId,
+  consumeColdObservation,
+  contextUsageNamespace,
+  pendingColdObservation,
+  type StoredContextUsage,
+} from "../src/agent/context-usage.ts";
 import {
   clearedOutput,
   compact,
   compaction,
   estimateTokens,
+  lightweightToolResults,
   turnSummariesNamespace,
   type Budget,
   type CompactionSources,
 } from "../src/agent/compaction.ts";
 import { ChatState } from "../src/chat-state/chat-state.ts";
 import { Nodes, type Node } from "../src/memory/nodes.ts";
+import { Sessions } from "../src/sessions/sessions.ts";
 import { ScriptedTextAdapter } from "../src/testing/scripted-adapter.ts";
 import { MemoryTools } from "../src/tools/memory.ts";
 import { testRuntime } from "./support/runtime.ts";
@@ -140,7 +150,271 @@ function conversation(
   return { userNodes, messages, toolOutput, toolResult: toolResult! };
 }
 
+describe("cache-cold observation", () => {
+  const usage = (
+    cachedTokens: number | null,
+    observationId: string | null,
+  ): StoredContextUsage => ({
+    inputTokens: 100,
+    cachedTokens,
+    observationId,
+    compactionStage: "none",
+  });
+
+  test("only explicit identifiable zero triggers, once per provider observation", () => {
+    expect(coldObservationId(null, null)).toBeNull();
+    expect(coldObservationId(usage(null, "first"), null)).toBeNull();
+    expect(coldObservationId(usage(12, "first"), null)).toBeNull();
+    expect(coldObservationId(usage(0, null), null)).toBeNull();
+    expect(coldObservationId(usage(0, "first"), null)).toBe("first");
+    expect(coldObservationId(usage(0, "first"), "first")).toBeNull();
+    expect(coldObservationId(usage(0, "second"), "first")).toBe("second");
+  });
+
+  test("persists consumption while legacy/missing usage keeps its existing behavior", async () => {
+    const { runtime, session } = await testRuntime();
+    const metadata = await runtime.runPromise(
+      Effect.map(ChatState, (state) => state.persistence.stores.metadata),
+    );
+    expect(await pendingColdObservation(metadata, session.id)).toBeNull();
+    await metadata.set(contextUsageNamespace, session.id, { inputTokens: 100, cachedTokens: 0 });
+    expect(await pendingColdObservation(metadata, session.id)).toBeNull();
+    await metadata.set(contextUsageNamespace, session.id, usage(0, "first"));
+    expect(await pendingColdObservation(metadata, session.id)).toBe("first");
+    await consumeColdObservation(metadata, session.id, "first");
+    expect(await pendingColdObservation(metadata, session.id)).toBeNull();
+    await metadata.set(contextUsageNamespace, session.id, usage(0, "second"));
+    expect(await pendingColdObservation(metadata, session.id)).toBe("second");
+    await metadata.set(contextUsageNamespace, session.id, { inputTokens: 100 });
+    expect(await pendingColdObservation(metadata, session.id)).toBeNull();
+  });
+});
+
 describe("compaction", () => {
+  test("shortens recorded tool outputs in provider copy while preserving status and evidence ID", () => {
+    const output = JSON.stringify({
+      status: "failed",
+      exitCode: 2,
+      signal: null,
+      durationMs: 9,
+      stdout: "log".repeat(3_000),
+      stderr: `${"error".repeat(1_000)}FINAL DIAGNOSTIC`,
+      stdoutTruncated: false,
+      stderrTruncated: false,
+    });
+    const messages: ModelMessage[] = [
+      {
+        role: "assistant",
+        content: null,
+        toolCalls: [
+          { id: "call-1", type: "function", function: { name: "run_shell", arguments: "{}" } },
+        ],
+      },
+      { role: "tool", toolCallId: "call-1", content: output },
+    ];
+    const provider = lightweightToolResults(messages, () => new Map([["call-1", "node-1"]]));
+    expect(provider[1]?.content).toContain("status");
+    expect(provider[1]?.content).toContain("failed");
+    expect(provider[1]?.content).toContain("exitCode");
+    expect(provider[1]?.content).toContain("FINAL DIAGNOSTIC");
+    expect(provider[1]?.content).toContain("read_tool_result ID node-1");
+    expect(JSON.stringify(provider).length).toBeLessThan(output.length / 2);
+    expect(messages[1]?.content).toBe(output);
+    expect(lightweightToolResults(messages, () => new Map())[1]?.content).toBe(output);
+    const malformed: ModelMessage[] = [
+      messages[0]!,
+      {
+        role: "tool",
+        toolCallId: "call-1",
+        content: JSON.stringify({ error: "denied".repeat(1_000) }),
+      },
+    ];
+    expect(
+      lightweightToolResults(malformed, () => new Map([["call-1", "node-1"]]))[1]?.content,
+    ).toBe(malformed[1]?.content);
+  });
+
+  test("list/search and reviewed child reports keep navigation and outcome while omitting bulk", () => {
+    const cases = [
+      {
+        name: "list_files",
+        result: {
+          total: 500,
+          paths: Array.from({ length: 500 }, (_, index) => `folder/really-long-file-${index}.ts`),
+          nextOffset: 500,
+          snapshot: "snap",
+          truncated: false,
+          excludedCredentialFiles: 0,
+        },
+        essential: '"nextOffset":500',
+      },
+      {
+        name: "search_files",
+        result: {
+          matches: Array.from({ length: 100 }, (_, index) => ({
+            path: `very-long-folder/name-${index}.ts`,
+            line: index + 1,
+            text: "snippet".repeat(20),
+          })),
+          skipped: [],
+          filesInView: 100,
+          nextCursor: "cursor",
+          complete: false,
+        },
+        essential: '"nextCursor":"cursor"',
+      },
+      {
+        name: "get_subagent_report",
+        result: {
+          status: "completed",
+          subagentId: "child",
+          taskId: "task",
+          attemptId: "attempt",
+          agent: null,
+          answer: "final".repeat(4_000),
+          error: null,
+          evidenceRefIds: ["evidence-1"],
+        },
+        essential: '"evidenceRefIds":["evidence-1"]',
+      },
+    ];
+    for (const { name, result, essential } of cases) {
+      const original = JSON.stringify(result);
+      const messages: ModelMessage[] = [
+        {
+          role: "assistant",
+          content: null,
+          toolCalls: [{ id: "call-1", type: "function", function: { name, arguments: "{}" } }],
+        },
+        { role: "tool", toolCallId: "call-1", content: original },
+      ];
+      const sent = lightweightToolResults(messages, () => new Map([["call-1", "node-1"]]));
+      expect(sent[1]?.content).toContain(essential);
+      expect(sent[1]?.content).toContain("read_tool_result ID node-1");
+      expect(JSON.stringify(sent).length).toBeLessThan(original.length / 2);
+      expect(messages[1]?.content).toBe(original);
+    }
+  });
+
+  test("shortens a sub-4000-character directory listing by default, without losing navigation", () => {
+    const paths = Array.from({ length: 40 }, (_, index) => `src/module-${index}.ts`);
+    const original = JSON.stringify({
+      total: 80,
+      paths,
+      snapshot: "fixed-snapshot",
+      nextOffset: 40,
+      truncated: false,
+      excludedCredentialFiles: 0,
+    });
+    expect(original.length).toBeLessThan(4_000);
+    const messages: ModelMessage[] = [
+      {
+        role: "assistant",
+        content: null,
+        toolCalls: [
+          { id: "call-1", type: "function", function: { name: "list_files", arguments: "{}" } },
+        ],
+      },
+      { role: "tool", toolCallId: "call-1", content: original },
+    ];
+    const result = lightweightToolResults(messages, () => new Map([["call-1", "node-1"]]));
+    expect(result[1]?.content).toContain('"snapshot":"fixed-snapshot"');
+    expect(result[1]?.content).toContain('"nextOffset":40');
+    expect(result[1]?.content).toContain("src/module-0.ts");
+    expect(result[1]?.content).not.toContain("src/module-39.ts");
+    expect(result[1]?.content).toContain("read_tool_result ID node-1");
+    expect(JSON.stringify(result[1]?.content).length).toBeLessThan(original.length);
+    expect(messages[1]?.content).toBe(original);
+  });
+
+  test("read_tool_result pages the saved original but refuses another conversation and other kinds", async () => {
+    const { runtime, project, session } = await testRuntime();
+    const nodes = await runtime.runPromise(Nodes);
+    const other = await runtime.runPromise(
+      Effect.flatMap(Sessions, (sessions) => sessions.create(project.id)),
+    );
+    const text = "saved original".repeat(500);
+    const own = nodes.append({
+      projectId: project.id,
+      sessionId: session.id,
+      kind: "tool_result",
+      text,
+    });
+    const foreign = nodes.append({
+      projectId: project.id,
+      sessionId: other.id,
+      kind: "tool_result",
+      text,
+    });
+    const wrongKind = nodes.append({
+      projectId: project.id,
+      sessionId: session.id,
+      kind: "assistant",
+      text,
+    });
+    const memory = await runtime.runPromise(MemoryTools);
+    const tools = memory.forRun({
+      projectId: project.id,
+      sessionId: session.id,
+      runId: "r1",
+      userNodeId: wrongKind.id,
+    }).tools;
+    const execute = tools[3]?.execute;
+    if (!execute) throw new Error("read_tool_result unavailable");
+    const first = await execute({ id: own.id, offset: 0 });
+    expect(first).toMatchObject({ id: own.id, text: text.slice(0, 4_000), nextOffset: 4_000 });
+    expect(await execute({ id: own.id, offset: 4_000 })).toMatchObject({
+      text: text.slice(4_000),
+      nextOffset: null,
+    });
+    expect(await execute({ id: foreign.id })).toEqual({ error: "not_found", id: foreign.id });
+    expect(await execute({ id: wrongKind.id })).toEqual({ error: "not_found", id: wrongKind.id });
+  });
+
+  test("cold usage compacts below the normal threshold on the next request only", async () => {
+    const { runtime, project, session } = await testRuntime();
+    const { nodes, metadata } = await runtime.runPromise(
+      Effect.all({
+        nodes: Nodes,
+        metadata: Effect.map(ChatState, (state) => state.persistence.stores.metadata),
+      }),
+    );
+    const { messages } = conversation(nodes, { projectId: project.id, sessionId: session.id }, [
+      "one",
+      "two",
+      "three",
+      "four",
+    ]);
+    const middleware = compaction(metadata, sourcesOf(nodes, session.id), {
+      compactAt: noLimit,
+      leaveOutAt: noLimit,
+    });
+    const sent = () => firstSent(messages, middleware, session.id);
+    expect((await sent())[0]).toEqual({ role: "user", content: "질문 1" });
+    await metadata.set(contextUsageNamespace, session.id, { inputTokens: 100, cachedTokens: null });
+    expect((await sent())[0]).toEqual({ role: "user", content: "질문 1" });
+    await metadata.set(contextUsageNamespace, session.id, {
+      inputTokens: 100,
+      cachedTokens: 0,
+      observationId: "cold-1",
+    });
+    const early = await sent();
+    expect(early[0]?.content).toContain("earlier messages of this conversation were left out");
+    expect(early).toContainEqual({ role: "user", content: "질문 4" });
+    expect(early.at(-1)).toEqual({ role: "user", content: "질문 5" });
+    expect(await pendingColdObservation(metadata, session.id)).toBeNull();
+    // Consumption is durable: the same observation does not trigger again after the first attempt.
+    expect((await sent())[0]).toEqual({ role: "user", content: "질문 1" });
+    await metadata.set(contextUsageNamespace, session.id, {
+      inputTokens: 100,
+      cachedTokens: 0,
+      observationId: "cold-2",
+    });
+    expect((await sent())[0]?.content).toContain(
+      "earlier messages of this conversation were left out",
+    );
+  });
+
   test("drops a tool result when compaction has removed its matching tool call", async () => {
     const messages: ModelMessage[] = [
       { role: "assistant", content: "earlier call was compacted" },
@@ -565,6 +839,14 @@ describe("compaction", () => {
       cachedTokens: 0,
       cacheRatio: 0,
       compactionStage: "none",
+    });
+    const ledger = await runtime.runPromise(ApiUsage);
+    expect(ledger.byRootSession(session.id)).toMatchObject({
+      responses: 2,
+      inputTokens: 240,
+      outputTokens: 10,
+      cacheReadTokens: 30,
+      uncachedInputTokens: 210,
     });
   });
 

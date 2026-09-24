@@ -5,7 +5,7 @@ import { Database } from "../src/db/database.ts";
 import { PermissionReviews } from "../src/permissions/reviews.ts";
 import { Projects } from "../src/projects/projects.ts";
 import { RelayedApprovals } from "../src/approvals/relayed.ts";
-import { Subagents } from "../src/subagents/subagents.ts";
+import { compactChildToolResults, Subagents } from "../src/subagents/subagents.ts";
 import { WorkTraceStore } from "../src/work-trace/store.ts";
 import { testRuntime } from "./support/runtime.ts";
 
@@ -95,6 +95,21 @@ async function subagentSetup(mode: "ask" | "auto" | "full" = "ask") {
 }
 
 describe("subagents", () => {
+  test("older saved child results are references only in the provider copy", () => {
+    const content = "output".repeat(1_000);
+    const messages = [
+      { role: "tool" as const, toolCallId: "old", content },
+      { role: "assistant" as const, content: "finished" },
+      { role: "tool" as const, toolCallId: "current", content },
+    ];
+    const sent = compactChildToolResults(messages, new Set(["old", "current"]));
+    expect(sent[0]?.content).toContain("read_subagent_tool_result");
+    expect(JSON.stringify(sent[0]?.content).length).toBeLessThan(content.length / 10);
+    expect(sent[2]?.content).toBe(content);
+    expect(messages[0]?.content).toBe(content);
+    expect(compactChildToolResults(messages, new Set())[0]?.content).toBe(content);
+  });
+
   test("a one-off child gets only the task, the parent's tools minus subagents, and reports back", async () => {
     const { send, subagents, session, state, provider, runtime } = await subagentSetup();
 
@@ -118,7 +133,13 @@ describe("subagents", () => {
     // No nesting, and nothing the parent does not have.
     expect(childStart?.toolNames).not.toContain("run_subagent");
     expect(childStart?.toolNames).not.toContain("message_subagent");
-    expect(childStart?.toolNames.every((name) => parentStart?.toolNames.includes(name))).toBe(true);
+    expect(childStart?.toolNames).toContain("read_subagent_tool_result");
+    // The only child-specific tool reads bounded pages of that child's own persisted results.
+    expect(
+      childStart?.toolNames
+        .filter((name) => name !== "read_subagent_tool_result")
+        .every((name) => parentStart?.toolNames.includes(name)),
+    ).toBe(true);
     // The parent's conversation is not copied into the child.
     expect(
       childStart?.messages.some(

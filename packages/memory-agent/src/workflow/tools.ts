@@ -1,5 +1,6 @@
 import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
 import { Context, Effect, Layer, Runtime } from "effect";
+import { AppEvents } from "../events/app-events.ts";
 import {
   UpdateGoal,
   UpdatePlan,
@@ -23,6 +24,7 @@ const exposeProgressRefusal = <A, R>(effect: Effect.Effect<A, WorkflowProgressRe
   );
 
 const make = Effect.gen(function* () {
+  const events = yield* AppEvents;
   const runtime = yield* Effect.runtime<Workflows>();
   const run = Runtime.runPromise(runtime);
 
@@ -36,6 +38,7 @@ const make = Effect.gen(function* () {
       }).server((input) =>
         run(
           Effect.flatMap(Workflows, (workflows) => workflows.updateGoal(sessionId, input)).pipe(
+            Effect.tap(() => Effect.sync(() => events.publishSession(sessionId, "run-state"))),
             Effect.map((state) => ({ phase: state.phase, goal: state.goal })),
           ),
         ),
@@ -49,6 +52,7 @@ const make = Effect.gen(function* () {
       }).server((input) =>
         run(
           Effect.flatMap(Workflows, (workflows) => workflows.updatePlan(sessionId, input)).pipe(
+            Effect.tap(() => Effect.sync(() => events.publishSession(sessionId, "run-state"))),
             Effect.map((state) => ({ phase: state.phase, plan: state.plan })),
           ),
         ),
@@ -73,6 +77,7 @@ const make = Effect.gen(function* () {
                 planEvidence: input.planEvidence ?? [],
               }),
             ).pipe(
+              Effect.tap(() => Effect.sync(() => events.publishSession(sessionId, "run-state"))),
               Effect.map((state) => ({
                 phase: state.phase,
                 goal: state.goal,

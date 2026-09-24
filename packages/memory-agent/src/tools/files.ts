@@ -192,10 +192,9 @@ const make = Effect.sync(() => {
         inputSchema: toToolSchema(listFilesInput),
       }).server(({ directory, glob, snapshot, offset }) =>
         guarded(directory ?? ".", async () => {
-          const view =
-            snapshot === undefined
-              ? await snapshotFor(root, directory, glob)
-              : snapshots.get(snapshot, root);
+          const view = !snapshot
+            ? await snapshotFor(root, directory, glob)
+            : snapshots.get(snapshot, root);
           if (!view) throw new Error("snapshot_expired: start again without snapshot and offset.");
           const start = Math.max(0, offset ?? 0);
           const paths = view.paths.slice(start, start + listPageSize);
@@ -221,11 +220,8 @@ const make = Effect.sync(() => {
         inputSchema: toToolSchema(searchFilesInput),
       }).server(({ query, directory, glob, caseSensitive = true, cursor }) =>
         guarded(directory ?? ".", async () => {
-          const position = cursor === undefined ? undefined : decodeSearchCursor(cursor);
-          if (
-            cursor !== undefined &&
-            (position?.query !== query || position.caseSensitive !== caseSensitive)
-          )
+          const position = cursor ? decodeSearchCursor(cursor) : undefined;
+          if (cursor && (position?.query !== query || position.caseSensitive !== caseSensitive))
             throw new Error(
               "invalid_cursor: pass the same query and caseSensitive as the first page.",
             );

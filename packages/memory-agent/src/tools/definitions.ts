@@ -27,11 +27,12 @@ export {
   type QueueEdit,
   type QueueItemState,
   type QueuedMessage,
+  type QueueSnapshot,
 } from "../queue/queue-state.ts";
 
 export const RunShellInput = Schema.Struct({
   command: Schema.NonEmptyString.annotations({
-    description: "Shell command line, run with the user's shell on the host (not sandboxed).",
+    description: "Shell command line for the host.",
   }),
   workdir: Schema.optional(
     Schema.String.annotations({

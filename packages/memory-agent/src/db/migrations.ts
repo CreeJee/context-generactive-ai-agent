@@ -1000,4 +1000,24 @@ export const migrations: readonly string[] = [
   ALTER TABLE work_tasks ADD COLUMN purge_receipt_id TEXT REFERENCES purge_receipts(id);
   CREATE INDEX work_tasks_lifecycle ON work_tasks(project_id, deleted_at, archived_at, updated_at, id);
   `,
+  `
+  -- One row per provider response, including auxiliary calls. Counts only; never prompt content.
+  -- Cache reads are a subset of input for OpenAI, but separate from input for Anthropic.
+  CREATE TABLE api_usage_responses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    root_session_id TEXT NOT NULL,
+    run_id TEXT,
+    thread_id TEXT,
+    purpose TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    input_tokens INTEGER CHECK (input_tokens IS NULL OR input_tokens >= 0),
+    output_tokens INTEGER CHECK (output_tokens IS NULL OR output_tokens >= 0),
+    cache_read_tokens INTEGER CHECK (cache_read_tokens IS NULL OR cache_read_tokens >= 0),
+    cache_write_tokens INTEGER CHECK (cache_write_tokens IS NULL OR cache_write_tokens >= 0),
+    cache_mode TEXT NOT NULL CHECK (cache_mode IN ('included', 'separate')),
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX api_usage_responses_session ON api_usage_responses(root_session_id, id);
+  `,
 ];

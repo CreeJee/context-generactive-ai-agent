@@ -1,5 +1,6 @@
 import { Effect, Either } from "effect";
-import { describe, expect, test } from "vite-plus/test";
+import { describe, expect, test, vi } from "vite-plus/test";
+import { AppEvents } from "../src/events/app-events.ts";
 import { Database } from "../src/db/database.ts";
 import { WorkflowTools } from "../src/workflow/tools.ts";
 import { Workflows } from "../src/workflow/workflow.ts";
@@ -31,6 +32,100 @@ const plan = {
   openQuestions: [],
   status: "ready" as const,
 };
+
+describe("WorkflowTools live refresh", () => {
+  test.each(["update_goal", "update_plan", "update_workflow_progress"])(
+    "%s publishes run-state after persisting the artifact",
+    async (name) => {
+      const { runtime, session, project } = await testRuntime();
+      const workflows = await runtime.runPromise(Workflows);
+      await runtime.runPromise(
+        Effect.gen(function* () {
+          yield* workflows.updateGoal(session.id, goal);
+          yield* workflows.updatePlan(session.id, plan);
+          yield* workflows.setPhase(session.id, "execute");
+        }),
+      );
+      const events = await runtime.runPromise(AppEvents);
+      const beforeRevision = events.revision();
+      const persistedAtPublish: unknown[] = [];
+      const publishSession = events.publishSession;
+      const publish = vi.spyOn(events, "publishSession").mockImplementation((id, topic) => {
+        persistedAtPublish.push(Effect.runSync(workflows.get(id)));
+        return publishSession(id, topic);
+      });
+      const tools = (await runtime.runPromise(WorkflowTools)).forSession(
+        session.id,
+        name === "update_goal" ? "goal" : "execute",
+      );
+      const tool = tools.find((candidate) => candidate.name === name);
+      if (!tool?.execute) throw new Error(`Missing server tool: ${name}`);
+      const input =
+        name === "update_goal"
+          ? { ...goal, statement: "Revised goal" }
+          : name === "update_plan"
+            ? { ...plan, summary: "Revised plan" }
+            : {
+                steps: [{ id: "store", status: "in_progress", evidence: [] }],
+                goalEvidence: [],
+                planEvidence: [],
+                detail: "Started implementation",
+              };
+
+      const result = await tool.execute(input);
+      const state = await runtime.runPromise(workflows.get(session.id));
+
+      expect(publish).toHaveBeenCalledExactlyOnceWith(session.id, "run-state");
+      expect(publish.mock.results[0]?.value).toEqual({
+        scope: "session",
+        projectId: project.id,
+        sessionId: session.id,
+        topic: "run-state",
+        revision: beforeRevision + 1,
+      });
+      expect(persistedAtPublish).toEqual([state]);
+      expect(result).toMatchObject({ phase: state.phase });
+      expect(state.goal?.version).toBe(name === "update_goal" ? 2 : 1);
+      expect(state.plan?.version).toBe(name === "update_plan" ? 2 : 1);
+      if (name === "update_goal") expect(state.goal?.statement).toBe("Revised goal");
+      if (name === "update_plan") expect(state.plan?.summary).toBe("Revised plan");
+      if (name === "update_workflow_progress")
+        expect(state.plan?.steps[0]?.status).toBe("in_progress");
+    },
+  );
+
+  test("rejected progress does not publish a successful mutation event", async () => {
+    const { runtime, session } = await testRuntime();
+    const workflows = await runtime.runPromise(Workflows);
+    await runtime.runPromise(
+      Effect.gen(function* () {
+        yield* workflows.updateGoal(session.id, goal);
+        yield* workflows.updatePlan(session.id, plan);
+        yield* workflows.setPhase(session.id, "plan");
+      }),
+    );
+    const before = await runtime.runPromise(workflows.get(session.id));
+    const events = await runtime.runPromise(AppEvents);
+    const beforeRevision = events.revision();
+    const publish = vi.spyOn(events, "publishSession");
+    const tools = (await runtime.runPromise(WorkflowTools)).forSession(session.id, "execute");
+    const progress = tools.find((tool) => tool.name === "update_workflow_progress");
+    if (!progress?.execute) throw new Error("Missing progress tool");
+
+    expect(
+      await progress.execute({
+        planStatus: "executing",
+        steps: [],
+        goalEvidence: [],
+        planEvidence: [],
+        detail: "Stale progress",
+      }),
+    ).toEqual({ error: "workflow_progress_refused", reason: "phase_not_executable" });
+    expect(publish).not.toHaveBeenCalled();
+    expect(events.revision()).toBe(beforeRevision);
+    expect(await runtime.runPromise(workflows.get(session.id))).toEqual(before);
+  });
+});
 
 describe("Workflows", () => {
   test("versions artifacts and starts a ready Plan on Execute", async () => {

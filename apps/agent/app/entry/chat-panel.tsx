@@ -2,7 +2,6 @@ import { fetchServerSentEvents, useChat } from "@tanstack/ai-react";
 import {
   ArrowUpIcon,
   CheckIcon,
-  ChevronRightIcon,
   ImagePlusIcon,
   MessageSquareIcon,
   RefreshCwIcon,
@@ -38,7 +37,6 @@ import {
   PromptInputTextarea,
 } from "~/components/ui/prompt-input";
 import { Button } from "~/components/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
 import { Command } from "~/components/ui/command";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { Spinner } from "~/components/ui/spinner";
@@ -58,6 +56,7 @@ import {
   type GeneratedImageAsset,
   type ImageFeatureStatus,
   type QueuedMessage,
+  type QueueSnapshot,
   type WorkflowPhase,
   type WorkflowState,
 } from "./api";
@@ -65,7 +64,7 @@ import { appFetch } from "./backend-restart";
 import { ContextMeter } from "./context-meter";
 import { ComposerShortcuts, ComposerStatus, type ComposerMode } from "./composer-status";
 import { DeliveredMessageView, MessageView } from "./message";
-import { isPending, isTakenIn, useMessageQueue } from "./message-queue";
+import { isTakenIn, useMessageQueue } from "./message-queue";
 import { QueuePanel } from "./queue-panel";
 import { SubagentPanel } from "./subagent-panel";
 import { ReadOnlyBar } from "./read-only-bar";
@@ -77,6 +76,12 @@ import { SlashPalette } from "./slash-palette";
 import { useWorkTrace } from "./work-trace";
 import { useBackendRestartRequired } from "./use-backend-restart";
 import { useRunState } from "./use-run-state";
+import {
+  WorkflowArtifactPanel,
+  phaseLabels,
+  goalStatusLabels,
+  planStatusLabels,
+} from "./workflow-panel";
 import {
   parseSlash,
   promptOf,
@@ -122,53 +127,6 @@ interface Notice {
 const problem = (text: string): Notice => ({ tone: "problem", text });
 const done = (text: string): Notice => ({ tone: "done", text });
 
-const phaseLabels: Readonly<Record<WorkflowPhase, string>> = {
-  chat: "Chat",
-  goal: "Goal",
-  plan: "Plan",
-  execute: "Execute",
-  verify: "Verify",
-};
-
-const goalStatusLabels: Record<NonNullable<WorkflowState["goal"]>["status"], string> = {
-  draft: "준비 중",
-  active: "진행 중",
-  paused: "일시 중지",
-  completed: "완료",
-  failed: "중단됨",
-};
-
-const planStatusLabels: Record<NonNullable<WorkflowState["plan"]>["status"], string> = {
-  draft: "작성 중",
-  ready: "준비 완료",
-  executing: "실행 중",
-  completed: "완료",
-  blocked: "막힘",
-};
-
-const stepStatusLabels: Record<
-  NonNullable<WorkflowState["plan"]>["steps"][number]["status"],
-  string
-> = {
-  pending: "대기",
-  in_progress: "진행 중",
-  completed: "완료",
-  blocked: "막힘",
-};
-
-const verificationStatusLabels: Record<
-  NonNullable<WorkflowState["plan"]>["verification"]["status"],
-  string
-> = {
-  not_run: "미실행",
-  passed: "통과",
-  failed: "구현 실패",
-  invalid_hypothesis: "가설 무효",
-  invalid_criterion: "검증 조건 무효",
-  inconclusive: "판정 불가",
-  blocked: "외부 요인으로 막힘",
-};
-
 function workflowStatus(state: WorkflowState | null): Notice {
   if (!state) return problem("워크플로 상태를 아직 불러오지 못했어요.");
   const goal = state.goal
@@ -178,200 +136,6 @@ function workflowStatus(state: WorkflowState | null): Notice {
     ? `Plan v${state.plan.version} · ${planStatusLabels[state.plan.status]}${state.goal && state.plan.goalVersion !== state.goal.version ? " · Goal 변경으로 오래됨" : ""}`
     : "Plan 없음";
   return done(`${phaseLabels[state.phase]} 모드 · ${goal} · ${plan}`);
-}
-
-function WorkflowArtifactPanel({
-  state,
-  busy,
-  disabled,
-  controlling,
-  onPause,
-  onResume,
-  onStop,
-  onRevise,
-  onExecute,
-}: {
-  readonly state: WorkflowState | null;
-  readonly busy: boolean;
-  readonly disabled: boolean;
-  readonly controlling: boolean;
-  readonly onPause: () => void;
-  readonly onResume: () => void;
-  readonly onStop: () => void;
-  readonly onRevise: () => void;
-  readonly onExecute: () => void;
-}) {
-  if (!state || state.phase === "chat") return null;
-  if (state.phase === "goal") {
-    return (
-      <Alert>
-        <AlertTitle>
-          {state.goal
-            ? `Goal v${state.goal.version} · ${goalStatusLabels[state.goal.status]}`
-            : "Goal"}
-        </AlertTitle>
-        <AlertDescription>
-          <p>
-            {state.goal?.statement ??
-              "달성할 결과를 입력하면 조사부터 수정과 검증까지 자율적으로 진행해요."}
-          </p>
-          {state.goal && state.goal.evidence.length > 0 && (
-            <ul className="mt-3 list-disc space-y-1 pl-5">
-              {state.goal.evidence.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-          )}
-          {state.goal && state.goal.verification.status !== "not_run" && (
-            <p className="mt-3">
-              검증 {verificationStatusLabels[state.goal.verification.status]} ·{" "}
-              {state.goal.verification.summary}
-            </p>
-          )}
-          {state.goal && !["completed", "failed"].includes(state.goal.status) && (
-            <div className="mt-4 flex flex-wrap gap-2">
-              {state.goal.status === "paused" ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={disabled || controlling || busy}
-                  onClick={onResume}
-                >
-                  계속
-                </Button>
-              ) : (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled={disabled || controlling}
-                  onClick={onPause}
-                >
-                  일시 중지
-                </Button>
-              )}
-              <Button
-                type="button"
-                size="sm"
-                variant="destructive"
-                disabled={disabled || controlling}
-                onClick={onStop}
-              >
-                중단
-              </Button>
-            </div>
-          )}
-        </AlertDescription>
-      </Alert>
-    );
-  }
-
-  const plan = state.plan;
-  if (!plan) {
-    if (state.phase !== "plan") return null;
-    return (
-      <Alert>
-        <AlertTitle>Plan</AlertTitle>
-        <AlertDescription>
-          요청을 입력하면 프로젝트를 변경하지 않고 조사해서 실행 계획을 만들어요.
-        </AlertDescription>
-      </Alert>
-    );
-  }
-
-  const current = state.goal !== null && plan.goalVersion === state.goal.version;
-  const continuingImplementation =
-    current &&
-    plan.status === "executing" &&
-    ((state.phase === "verify" &&
-      (plan.verification.status === "not_run" || plan.verification.status === "failed")) ||
-      (state.phase === "execute" && plan.verification.status === "failed"));
-  const executable =
-    (current && state.phase === "plan" && plan.status === "ready") || continuingImplementation;
-  const completedSteps = plan.steps.filter((step) => step.status === "completed").length;
-  const activeStep =
-    plan.steps.find((step) => step.status === "in_progress") ??
-    plan.steps.find((step) => step.status === "blocked") ??
-    plan.steps.find((step) => step.status === "pending");
-  const activeStepLabel =
-    activeStep?.status === "in_progress"
-      ? "현재"
-      : activeStep?.status === "blocked"
-        ? "막힘"
-        : "다음";
-  return (
-    <Alert>
-      <AlertTitle>
-        Plan v{plan.version} ·{" "}
-        {state.phase === "verify" ? "검증 중" : planStatusLabels[plan.status]}
-      </AlertTitle>
-      <AlertDescription>
-        <Collapsible className="rounded-md border bg-background/50">
-          <CollapsibleTrigger className="group flex w-full items-center gap-2 px-3 py-2 text-left">
-            <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground group-data-[panel-open]:rotate-90" />
-            <span className="shrink-0 font-medium">
-              단계 {completedSteps}/{plan.steps.length}
-            </span>
-            {activeStep && (
-              <span className="min-w-0 truncate text-muted-foreground">
-                {activeStepLabel}: {activeStep.title}
-              </span>
-            )}
-            <span className="ml-auto shrink-0 text-xs text-muted-foreground">계획 내용</span>
-          </CollapsibleTrigger>
-          <CollapsibleContent className="max-h-80 space-y-3 overflow-y-auto border-t px-3 py-3">
-            <p className="whitespace-pre-wrap">{plan.summary}</p>
-            {plan.steps.length > 0 && (
-              <ol className="list-decimal space-y-1.5 pl-5">
-                {plan.steps.map((step) => (
-                  <li key={step.id}>
-                    {step.title} · {stepStatusLabels[step.status]}
-                    {step.evidence.length > 0 && (
-                      <ul className="list-disc pl-5 text-muted-foreground">
-                        {step.evidence.map((item) => (
-                          <li key={item}>{item}</li>
-                        ))}
-                      </ul>
-                    )}
-                  </li>
-                ))}
-              </ol>
-            )}
-            {plan.verification.status !== "not_run" && (
-              <p>
-                검증 {verificationStatusLabels[plan.verification.status]} ·{" "}
-                {plan.verification.summary}
-              </p>
-            )}
-          </CollapsibleContent>
-        </Collapsible>
-        {!current && (
-          <p className="mt-3 text-destructive">Goal이 변경되어 이 계획을 다시 확인해야 해요.</p>
-        )}
-        <div className="mt-4 flex flex-wrap gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={busy || disabled}
-            onClick={onRevise}
-          >
-            수정 요청
-          </Button>
-          {(state.phase === "plan" || continuingImplementation) && (
-            <Button
-              type="button"
-              size="sm"
-              disabled={!executable || busy || disabled}
-              onClick={onExecute}
-            >
-              {continuingImplementation ? "구현 계속" : "계획 실행"}
-            </Button>
-          )}
-        </div>
-      </AlertDescription>
-    </Alert>
-  );
 }
 
 const tokenCount = new Intl.NumberFormat("ko-KR", {
@@ -409,11 +173,6 @@ const contentOf = (text: string, attachmentIds: readonly string[]) => ({
 });
 
 /** The queued message that goes next, if the one at the front is simply waiting. */
-const nextInLine = (items: readonly QueuedMessage[]) => {
-  const front = items.find((message) => isPending(message) && message.state.kind !== "failed");
-  return front?.state.kind === "waiting" ? front : undefined;
-};
-
 const isEditable = (message: QueuedMessage) => {
   switch (message.state.kind) {
     case "waiting":
@@ -653,7 +412,8 @@ function ChatPanel({
       return state;
     } catch (failure) {
       const message =
-        failure instanceof ApiError && failure.code === "plan_not_ready"
+        failure instanceof ApiError &&
+        (failure.code === "plan_not_ready" || failure.code === "plan_outdated")
           ? "실행하려면 먼저 준비된 Plan이 필요해요."
           : failure instanceof ApiError && failure.code === "run_in_progress"
             ? "답변이 끝난 뒤 모드를 바꿀 수 있어요."
@@ -673,7 +433,8 @@ function ChatPanel({
     const retryingFailedVerification =
       run.workflow?.plan?.status === "executing" &&
       run.workflow.plan.verification.status === "failed";
-    if (run.workflow?.phase !== "execute" && !(await changeWorkflowPhase("execute"))) return;
+    // Even a continuation rechecks the current server policy before dispatching another turn.
+    if (!(await changeWorkflowPhase("execute"))) return;
     setNotice(null);
     void sendMessage(
       contentOf(
@@ -725,7 +486,10 @@ function ChatPanel({
 
   const cancel = async () => {
     // Stopping only the local stream would leave the run going on the server, so ask it first.
-    if (await run.cancel()) stop();
+    const result = await run.cancel();
+    if (result !== "failed") stop();
+    if (result === "idle") setNotice(problem("멈출 답변이 없어요."));
+    if (result === "failed") setNotice(problem("명령을 실행하지 못했어요."));
   };
 
   const resumeTask = async (task: TraceTaskView, confirmUncertain: boolean) => {
@@ -814,14 +578,11 @@ function ChatPanel({
     !waitingForApproval &&
     !mutationBlocked;
 
-  /** Sends the first waiting message as a new turn, if it is next in line. */
-  const sendNextQueued = (items: readonly QueuedMessage[]) => {
-    const next = nextInLine(items);
-    if (!next) return;
-    // The id tells the server which queued message this turn delivers.
-    void sendMessage(contentOf(next.text, next.attachmentIds), {
-      body: { queuedMessageId: next.id },
-    });
+  /** The snapshot only hints when to start; the server selects the current queued turn. */
+  const sendNextQueued = (snapshot: QueueSnapshot) => {
+    if (snapshot.nextDelivery.kind !== "ready") return;
+    // A content-less placeholder is replaced by the server's current queued turn.
+    void sendMessage(contentOf("", []), { body: { queuedNext: true } });
   };
 
   // When this page's run stops: catch up with messages the run took in along the way, then, after
@@ -832,13 +593,12 @@ function ChatPanel({
   const handleRunSettled = useEffectEvent(async (finishedPhase: WorkflowPhase | null) => {
     setCatchingUp(true);
     try {
-      const [items, state] = await Promise.all([queue.refresh(), run.refresh().catch(() => null)]);
-      if (!items || !state || state.running || state.lastRun?.status === "interrupted") return;
-      if (items.some(isTakenIn)) setMessages((await api.transcript(sessionId)).messages);
+      const [snapshot, state] = await Promise.all([queue.refresh(), run.refresh()]);
+      if (!snapshot || !state || state.running || state.lastRun?.status === "interrupted") return;
+      if (snapshot.items.some(isTakenIn)) setMessages((await api.transcript(sessionId)).messages);
       if (state.lastRun?.status !== "completed") return;
-      const waiting = nextInLine(items);
-      if (waiting) {
-        sendNextQueued(items);
+      if (snapshot.nextDelivery.kind === "ready") {
+        sendNextQueued(snapshot);
         return;
       }
       if (
@@ -874,8 +634,8 @@ function ChatPanel({
     const key = `${sessionId}:${planVersion}`;
     if (automaticVerification.current === key) return;
     automaticVerification.current = key;
-    const items = await queue.refresh();
-    if (!items || nextInLine(items)) {
+    const snapshot = await queue.refresh();
+    if (!snapshot || snapshot.nextDelivery.kind === "ready") {
       automaticVerification.current = null;
       return;
     }
@@ -928,17 +688,17 @@ function ChatPanel({
     if (!editing) return;
     setComposer({ kind: "compose" });
     const text = draft.trim();
-    const items = await queue.change(
+    const snapshot = await queue.change(
       editing.id,
       outcome === "save" && text.length > 0 ? { action: "save", text } : { action: "remove" },
     );
     // Saved while nothing runs: the queue may be free to go now.
-    if (items && !generating && !waitingForApproval) sendNextQueued(items);
+    if (snapshot && !generating && !waitingForApproval) sendNextQueued(snapshot);
   };
 
   const confirmQueued = async (message: QueuedMessage) => {
-    const items = await queue.change(message.id, { action: "confirm" });
-    if (items && !generating && !waitingForApproval) sendNextQueued(items);
+    const snapshot = await queue.change(message.id, { action: "confirm" });
+    if (snapshot && !generating && !waitingForApproval) sendNextQueued(snapshot);
   };
 
   const removeQueued = async (message: QueuedMessage) => {
@@ -1044,8 +804,8 @@ function ChatPanel({
           }
           case "cancel":
             setDraft("");
-            setNotice(generating ? null : problem("멈출 답변이 없어요."));
-            if (generating) void cancel();
+            setNotice(null);
+            void cancel();
             return;
           case "compact":
             setDraft("");
@@ -1225,8 +985,9 @@ function ChatPanel({
           ))}
           <WorkflowArtifactPanel
             state={run.workflow}
+            actions={run.actions}
             busy={generating}
-            disabled={readOnly}
+            disabled={mutationBlocked}
             controlling={run.controlling}
             onPause={() => void controlGoal("pause")}
             onResume={() => void controlGoal("resume")}
@@ -1571,7 +1332,12 @@ function ChatPanel({
                             (run.workflow?.phase ?? "chat") === phase ? "secondary" : "ghost"
                           }
                           disabled={
-                            mutationBlocked || generating || generatingImage || editing !== null
+                            !run.actions?.phases[phase].allowed ||
+                            run.controlling ||
+                            mutationBlocked ||
+                            generating ||
+                            generatingImage ||
+                            editing !== null
                           }
                           aria-pressed={(run.workflow?.phase ?? "chat") === phase}
                           title={

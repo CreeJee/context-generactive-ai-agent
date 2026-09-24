@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { Layer } from "effect";
 import { AgentChat } from "./agent/chat.ts";
+import { ApiUsage } from "./agent/api-usage.ts";
 import { TurnSummaries } from "./agent/turn-summaries.ts";
 import { ChatState } from "./chat-state/chat-state.ts";
 import { RelayedApprovals } from "./approvals/relayed.ts";
@@ -155,6 +156,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     );
   const stores = Layer.mergeAll(
     AppEvents.layer,
+    ApiUsage.layer,
     Projects.layer,
     Nodes.layer,
     PermissionReviews.layer,

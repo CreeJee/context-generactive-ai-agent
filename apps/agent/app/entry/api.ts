@@ -41,6 +41,7 @@ import {
   type LeaseView,
   type QueueEdit,
   type QueuedMessage,
+  type QueueSnapshot,
   type SessionRunState,
   type ApprovalRequester,
   type RelayedApprovalView,
@@ -99,6 +100,7 @@ export type {
   ProviderId,
   QueueEdit,
   QueuedMessage,
+  QueueSnapshot,
   Session,
   SessionRunState,
   SkillCatalog,
@@ -122,6 +124,9 @@ export const ApiErrorCode = Schema.Literal(
   "empty_message",
   "external_agent_unavailable",
   "goal_missing",
+  "goal_not_active",
+  "goal_not_paused",
+  "goal_terminal",
   "images_not_supported",
   "image_approval_required",
   "image_direct_workflow_required",
@@ -160,6 +165,7 @@ export const ApiErrorCode = Schema.Literal(
   "no_user_turn",
   "not_running",
   "plan_not_ready",
+  "plan_outdated",
   "project_not_found",
   "project_rejected",
   "project_required",
@@ -240,6 +246,35 @@ const ArchiveTaskResult = Schema.Union(
 const decodeArchiveTaskResult = Schema.decodeUnknownOption(ArchiveTaskResult);
 type ArchiveTaskResult = typeof ArchiveTaskResult.Type;
 
+const SessionSnapshot = Schema.Struct({
+  id: Schema.String,
+  projectId: Schema.String,
+  title: Schema.NullOr(Schema.String),
+  createdAt: Schema.String,
+  agent: Schema.NullOr(Schema.String),
+  archivedAt: Schema.NullOr(Schema.String),
+  importedFrom: Schema.NullOr(Schema.String),
+});
+const decodeSessionSnapshot = Schema.decodeUnknownOption(SessionSnapshot);
+type PendingSessionLifecycle = Exclude<ArchiveTaskResult, { status: "completed" }>;
+type SessionArchiveResult = { status: "completed"; session: Session } | PendingSessionLifecycle;
+
+async function changeSessionLifecycle(sessionId: string, holder: string, change: JsonBody) {
+  const response = await appFetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "POST",
+    headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
+    body: JSON.stringify({ ...change, idempotencyKey: crypto.randomUUID() }),
+  });
+  const body: unknown = await response.json();
+  const result = Option.getOrUndefined(decodeArchiveTaskResult(body));
+  if (response.status === 409 && result?.status === "blocked") return { response, body, result };
+  if (!response.ok) throw apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
+  // Accepted is not completed, even if a malformed response claims otherwise.
+  if (response.status === 202 && (!result || result.status === "completed"))
+    throw apiError(502, undefined);
+  return { response, body, result };
+}
+
 function apiError(
   status: number,
   body: ErrorBody | undefined,
@@ -315,21 +350,27 @@ export const api = {
   archivedSessions: (projectId: string) =>
     call<Session[]>("GET", `/api/sessions?project=${encodeURIComponent(projectId)}&archived=1`),
   /** Active parent/child runs are checkpointed and stopped before the conversation is archived. */
-  setArchived: (sessionId: string, holder: string, archived: boolean) =>
-    call<Session>(
-      "POST",
-      `/api/sessions/${encodeURIComponent(sessionId)}`,
-      { archived, idempotencyKey: crypto.randomUUID() },
-      { [sessionHolderHeader]: holder },
-    ),
-  deleteSession: (sessionId: string, holder: string) =>
-    call<{ status: "completed"; targetId: string }>(
-      "POST",
-      `/api/sessions/${encodeURIComponent(sessionId)}`,
-      { delete: true, idempotencyKey: crypto.randomUUID() },
-      { [sessionHolderHeader]: holder },
-    ),
-  /** Refused while a run is active; execute also requires a ready Plan. */
+  setArchived: async (
+    sessionId: string,
+    holder: string,
+    archived: boolean,
+  ): Promise<SessionArchiveResult> => {
+    const { response, body, result } = await changeSessionLifecycle(sessionId, holder, {
+      archived,
+    });
+    if (result && result.status !== "completed") return result;
+    const session = Option.getOrUndefined(decodeSessionSnapshot(body));
+    if (response.status !== 200 || !session || session.id !== sessionId)
+      throw apiError(502, undefined);
+    return { status: "completed", session };
+  },
+  deleteSession: async (sessionId: string, holder: string): Promise<ArchiveTaskResult> => {
+    const { response, result } = await changeSessionLifecycle(sessionId, holder, { delete: true });
+    if (!result || (result.status === "completed" && response.status !== 200))
+      throw apiError(502, undefined);
+    return result;
+  },
+  /** Refused while a run is active; execute requires a current Plan that is ready or executing. */
   setWorkflowPhase: (sessionId: string, holder: string, phase: WorkflowPhase) =>
     call<WorkflowState>(
       "POST",
@@ -381,7 +422,7 @@ export const api = {
     }),
 
   queue: (sessionId: string) =>
-    call<QueuedMessage[]>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/queue`),
+    call<QueueSnapshot>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/queue`),
   enqueue: (
     sessionId: string,
     holder: string,

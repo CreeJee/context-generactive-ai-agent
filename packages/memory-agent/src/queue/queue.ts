@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { SQLOutputValue } from "node:sqlite";
 import { Context, Data, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
-import type { DeliveryVia, QueueItemState, QueuedMessage } from "./queue-state.ts";
+import type { DeliveryVia, QueueItemState, QueuedMessage, QueueSnapshot } from "./queue-state.ts";
 
 const Row = Schema.Struct({
   id: Schema.String,
@@ -52,12 +52,15 @@ function toMessage(raw: Record<string, SQLOutputValue>): QueuedMessage {
 /** The message is gone, already delivered, or not in a state that allows the change. */
 export class QueueChangeRefused extends Data.TaggedError("QueueChangeRefused")<{
   readonly id: string;
-  readonly reason: "not_found" | "delivered" | "not_held";
+  readonly reason: "not_found" | "delivered" | "not_held" | "reserved";
 }> {}
 
 const make = Effect.gen(function* () {
   const { sqlite } = yield* Database;
   const now = () => Date.now();
+  // All queue methods and SQLite statements here are synchronous within this service instance.
+  const reservations = new Map<string, string>();
+  const holdOnRelease = new Set<string>();
   const get = (sessionId: string, id: string) => {
     const row = sqlite
       .prepare("SELECT * FROM queued_messages WHERE session_id = ? AND id = ?")
@@ -65,13 +68,16 @@ const make = Effect.gen(function* () {
     return row ? toMessage(row) : null;
   };
   /** The message, if it may still change (not delivered). */
-  const pending = (sessionId: string, id: string) => {
-    const message = get(sessionId, id);
-    if (!message) return Effect.fail(new QueueChangeRefused({ id, reason: "not_found" }));
-    if (message.state.kind === "delivered")
-      return Effect.fail(new QueueChangeRefused({ id, reason: "delivered" }));
-    return Effect.succeed(message);
-  };
+  const pending = (sessionId: string, id: string) =>
+    Effect.suspend(() => {
+      const message = get(sessionId, id);
+      if (!message) return Effect.fail(new QueueChangeRefused({ id, reason: "not_found" }));
+      if (reservations.get(sessionId) === id)
+        return Effect.fail(new QueueChangeRefused({ id, reason: "reserved" }));
+      if (message.state.kind === "delivered")
+        return Effect.fail(new QueueChangeRefused({ id, reason: "delivered" }));
+      return Effect.succeed(message);
+    });
   const setState = (
     id: string,
     state: "waiting" | "editing" | "held" | "failed",
@@ -103,6 +109,29 @@ const make = Effect.gen(function* () {
         )
         .all(sessionId, recentRunId)
         .map(toMessage);
+    },
+
+    /** Advisory snapshot; the delivery path always selects again from current queue state. */
+    snapshot(sessionId: string, recentRunId: string | null = null): QueueSnapshot {
+      const items = this.list(sessionId, recentRunId);
+      // Only the first nonterminal entry determines whether the page may request the next turn.
+      // Batch selection for a tool boundary happens separately against the latest queue state.
+      for (const item of items) {
+        switch (item.state.kind) {
+          case "failed":
+          case "delivered":
+            continue;
+          case "waiting":
+            return { items, nextDelivery: { kind: "ready" } };
+          case "editing":
+          case "held":
+            return {
+              items,
+              nextDelivery: { kind: "blocked", messageId: item.id, reason: item.state.kind },
+            };
+        }
+      }
+      return { items, nextDelivery: { kind: "empty" } };
     },
 
     add(sessionId: string, text: string, attachmentIds: readonly string[]): QueuedMessage {
@@ -157,13 +186,39 @@ const make = Effect.gen(function* () {
      * held message stops delivery at its place, so the order is never changed.
      */
     deliverable(sessionId: string): QueuedMessage[] {
+      // A tool boundary needs the whole waiting prefix. Stream pending rows in sequence order,
+      // stopping at the first edit/hold without decoding any later messages or terminal rows.
       const ready: QueuedMessage[] = [];
-      for (const message of this.list(sessionId, null)) {
-        if (message.state.kind === "failed") continue;
-        if (message.state.kind !== "waiting") break;
-        ready.push(message);
+      const rows = sqlite
+        .prepare(
+          "SELECT * FROM queued_messages WHERE session_id = ? AND state IN ('waiting', 'editing', 'held') ORDER BY seq",
+        )
+        .iterate(sessionId);
+      for (const row of rows) {
+        if (row.state !== "waiting") break;
+        ready.push(toMessage(row));
       }
       return ready;
+    },
+
+    /** Atomically select and reserve the current head until delivery or explicit release. */
+    claimNext(sessionId: string): QueuedMessage | null {
+      if (reservations.has(sessionId)) return null;
+      // Only one row is needed for a next turn; do not materialize the whole waiting prefix.
+      const row = sqlite
+        .prepare(
+          "SELECT * FROM queued_messages WHERE session_id = ? AND state IN ('waiting', 'editing', 'held') ORDER BY seq LIMIT 1",
+        )
+        .get(sessionId);
+      const message = row && row.state === "waiting" ? toMessage(row) : null;
+      if (message) reservations.set(sessionId, message.id);
+      return message;
+    },
+
+    releaseNext(sessionId: string, id: string) {
+      if (reservations.get(sessionId) !== id) return;
+      reservations.delete(sessionId);
+      if (holdOnRelease.delete(sessionId)) setState(id, "held");
     },
 
     markDelivered(id: string, via: DeliveryVia, runId: string | null, inTranscript: boolean) {
@@ -172,6 +227,11 @@ const make = Effect.gen(function* () {
           "UPDATE queued_messages SET state = 'delivered', delivered_via = ?, run_id = ?, in_transcript = ?, draft = NULL, updated_at = ? WHERE id = ?",
         )
         .run(via, runId, inTranscript ? 1 : 0, now(), id);
+      for (const [sessionId, reservedId] of reservations)
+        if (reservedId === id) {
+          reservations.delete(sessionId);
+          holdOnRelease.delete(sessionId);
+        }
     },
 
     markFailed(id: string, reason: string) {
@@ -198,11 +258,15 @@ const make = Effect.gen(function* () {
      * any more: they wait for the user to confirm them.
      */
     holdWaiting(sessionId: string) {
+      // A selected next turn is locked until committed or released. Holding it here would allow a
+      // different state to be delivered from the content already selected for this request.
+      const reserved = reservations.get(sessionId);
+      if (reserved) holdOnRelease.add(sessionId);
       sqlite
         .prepare(
-          "UPDATE queued_messages SET state = 'held', updated_at = ? WHERE session_id = ? AND state = 'waiting'",
+          "UPDATE queued_messages SET state = 'held', updated_at = ? WHERE session_id = ? AND state = 'waiting' AND id != ?",
         )
-        .run(now(), sessionId);
+        .run(now(), sessionId, reserved ?? "");
     },
   };
 });

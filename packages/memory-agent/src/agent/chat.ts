@@ -1,3 +1,4 @@
+import { workflowActions } from "../workflow/actions.ts";
 import {
   RUN_CANCEL_REASON,
   chat,
@@ -69,6 +70,7 @@ import {
   type CompactionSources,
 } from "./compaction.ts";
 import { contextView, lastContextUsage, recordContextUsage } from "./context-usage.ts";
+import { ApiUsage, collectApiUsage } from "./api-usage.ts";
 import { TurnSummaries } from "./turn-summaries.ts";
 import { promptLayout } from "./prompt-layout.ts";
 import { LiveRuns } from "./live-runs.ts";
@@ -242,8 +244,11 @@ const IncomingUserTurn = Schema.Union(
 );
 const decodeUserTurn = Schema.decodeUnknownOption(IncomingUserTurn);
 
-const decodeQueuedTurn = Schema.decodeUnknownOption(
-  Schema.Struct({ queuedMessageId: Schema.NonEmptyString }),
+const decodeQueuedNext = Schema.decodeUnknownOption(
+  Schema.Struct({ queuedNext: Schema.Literal(true) }),
+);
+const decodeUnsupportedQueuedId = Schema.decodeUnknownOption(
+  Schema.Struct({ queuedMessageId: Schema.String }),
 );
 const decodeImageTurnIntent = Schema.decodeUnknownOption(
   Schema.Struct({ imageIntent: Schema.Literal("generate_image") }),
@@ -299,6 +304,7 @@ const isStreamJoin = (request: Request) =>
 
 const make = Effect.gen(function* () {
   const active = yield* ActiveProvider;
+  const usageLedger = yield* ApiUsage;
   const events = yield* AppEvents;
   const config = yield* GlobalConfig;
   const workTraceExposed = Effect.map(
@@ -781,8 +787,9 @@ const make = Effect.gen(function* () {
      * POST handler for one chat run in a session. Stores the user turn, runs the model through
      * the ChatGPT account with memory tools, records every message, then indexes it.
      */
-    handle: (request: Request, sessionId: string, notificationFollowup = false) =>
-      Effect.gen(function* () {
+    handle: (request: Request, sessionId: string, notificationFollowup = false) => {
+      let claimedNext: string | null = null;
+      return Effect.gen(function* () {
         const { projectId, agent: external, title } = yield* sessions.get(sessionId);
         // Sending, approving and answering all come here; a read-only page may do none of them.
         if (
@@ -821,14 +828,21 @@ const make = Effect.gen(function* () {
           forwardedProps,
         } = params.value;
         // Internal completion turns carry operational context only, never a synthetic user turn.
+        // Resolve at request time, not from the page's stale queue snapshot. Ignore the client's
+        // placeholder turn altogether, including its text and attachments.
+        const queuedNext = Option.isSome(decodeQueuedNext(forwardedProps));
+        if (Option.isSome(decodeUnsupportedQueuedId(forwardedProps)))
+          return json(400, { error: "invalid_chat_request" });
+        const next = queuedNext ? queue.claimNext(sessionId) : null;
+        if (queuedNext && !next) return json(409, { error: "queued_message_not_next" });
+        claimedNext = next?.id ?? null;
+        const queuedId = next?.id;
         const messages = notificationFollowup
           ? yield* Effect.promise(() => chatState.persistence.stores.messages.loadThread(sessionId))
-          : incomingMessages;
+          : next
+            ? [...incomingMessages.slice(0, -1), delivery.toUserMessage(next)]
+            : incomingMessages;
         const threadId = sessionId;
-        // A page sending the next queued message as a new turn names it, so it is marked delivered.
-        const queued = Option.getOrNull(decodeQueuedTurn(forwardedProps));
-        if (queued && queue.deliverable(sessionId)[0]?.id !== queued.queuedMessageId)
-          return json(409, { error: "queued_message_not_next" });
 
         // A new user turn ends the list; a continuation (tool result, approval) does not.
         const turn = notificationFollowup
@@ -874,8 +888,8 @@ const make = Effect.gen(function* () {
           );
           if (!claim) return json(409, { error: "run_in_progress" });
           events.publishSession(sessionId, "run-state");
-          if (queued) {
-            queue.markDelivered(queued.queuedMessageId, "next_turn", runId, true);
+          if (queuedId) {
+            queue.markDelivered(queuedId, "next_turn", runId, true);
             events.publishSession(sessionId, "queue");
           }
           const answeredBy = external;
@@ -997,8 +1011,8 @@ const make = Effect.gen(function* () {
         );
         if (!claim) return json(409, { error: "run_in_progress" });
         events.publishSession(sessionId, "run-state");
-        if (queued) {
-          queue.markDelivered(queued.queuedMessageId, "next_turn", runId, true);
+        if (queuedId) {
+          queue.markDelivered(queuedId, "next_turn", runId, true);
           events.publishSession(sessionId, "queue");
         }
         const middleware: Array<ChatMiddleware<unknown, typeof permissionReviewInterrupt>> = [
@@ -1171,6 +1185,12 @@ const make = Effect.gen(function* () {
           ),
           modelImages(),
           recordContextUsage(metadata, window, () => compactionStage),
+          collectApiUsage(usageLedger, {
+            rootSessionId: sessionId,
+            purpose: "main",
+            provider: selection.provider,
+            model: selection.model,
+          }),
           runtime.runMiddleware(),
         );
         const providerTools = injectImageProviderTool
@@ -1229,7 +1249,15 @@ const make = Effect.gen(function* () {
           // never trails what the server has recorded.
           durability: { adapter: memoryStream({ runId }), batch: 1 },
         });
-      }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (claimedNext) queue.releaseNext(sessionId, claimedNext);
+          }),
+        ),
+        Effect.catchTag("SessionNotFound", sessionNotFound),
+      );
+    },
 
     /**
      * GET handler for a reloaded page. With `?threadId=` it hydrates: the stored transcript, a run
@@ -1338,17 +1366,22 @@ const make = Effect.gen(function* () {
         const live = liveRuns.get(sessionId);
         const last = yield* Effect.promise(() => chatState.lastRun(sessionId));
         const usage = yield* Effect.promise(() => lastContextUsage(metadata, sessionId));
+        const workflow = live
+          ? yield* workflows.get(sessionId)
+          : yield* workflows.reconcile(sessionId);
+        const lease = leases.view(sessionId, holder);
         const state: SessionRunState = {
           running: live ? { runId: live.runId } : null,
           lastRun: last && { runId: last.runId, status: last.status, error: last.error ?? null },
-          lease: leases.view(sessionId, holder),
+          lease,
           context: contextView(
             usage?.inputTokens ?? null,
             yield* windowFor(yield* active.selected),
             usage?.cachedTokens ?? null,
             usage?.compactionStage ?? null,
           ),
-          workflow: live ? yield* workflows.get(sessionId) : yield* workflows.reconcile(sessionId),
+          workflow,
+          actions: workflowActions(workflow, { running: Boolean(live), lease }),
         };
         return json(200, state);
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
@@ -1475,7 +1508,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
         const last = yield* Effect.promise(() => chatState.lastRun(sessionId));
-        return json(200, queue.list(sessionId, last?.runId ?? null));
+        return json(200, queue.snapshot(sessionId, last?.runId ?? null));
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
 
     /**

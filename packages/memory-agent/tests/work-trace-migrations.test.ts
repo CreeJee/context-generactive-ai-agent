@@ -289,9 +289,13 @@ describe("Work Trace migration", () => {
     legacy.exec("PRAGMA foreign_keys = ON");
     // Stop before typed locators, answer provenance, knowledge promotion, and lifecycle receipts.
     // Reproduce the shipped schema, before the composite key was added to old CREATE TABLEs.
-    for (const step of migrations.slice(0, -4))
+    const typedLocatorIndex = migrations.findIndex((step) =>
+      step.includes("-- Evidence stores typed locators"),
+    );
+    expect(typedLocatorIndex).toBeGreaterThan(0);
+    for (const step of migrations.slice(0, typedLocatorIndex))
       legacy.exec(step.replaceAll("    UNIQUE (id, task_id),\n", ""));
-    legacy.exec(`PRAGMA user_version = ${migrations.length - 4}`);
+    legacy.exec(`PRAGMA user_version = ${typedLocatorIndex}`);
     seedProjectSessionAndAgent(legacy);
     seedTask(legacy);
     legacy
