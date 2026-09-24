@@ -11,7 +11,7 @@ import { messageText } from "../messages/text.ts";
 import { Database } from "../db/database.ts";
 import { Nodes } from "../memory/nodes.ts";
 import { interruptContinuationLostCode, serverRestartedCode } from "../agent/run-state.ts";
-import { migrateLegacyChatThreads, sqliteChatPersistence } from "./persistence.ts";
+import { latestChatRun, migrateLegacyChatThreads, sqliteChatPersistence } from "./persistence.ts";
 
 const make = Effect.gen(function* () {
   const { sqlite } = yield* Database;
@@ -24,6 +24,7 @@ const make = Effect.gen(function* () {
     convertMessagesToModelMessages(sessionMessages(nodes.session(threadId), attachments.forNode));
   migrateLegacyChatThreads(sqlite, fallbackThread);
   const persistence = sqliteChatPersistence(sqlite);
+  const lastRun = latestChatRun(sqlite);
 
   // One process owns the database, so running and approval-interrupted runs belonged to the old
   // process after a restart. The provider continuation they depended on is gone: leaving their
@@ -142,8 +143,7 @@ const make = Effect.gen(function* () {
     },
 
     /** The session's most recent run, if any. */
-    lastRun: async (sessionId: string) =>
-      (await persistence.stores.runs.listByThread?.(sessionId))?.at(-1) ?? null,
+    lastRun: async (sessionId: string) => lastRun(sessionId),
   };
 });
 

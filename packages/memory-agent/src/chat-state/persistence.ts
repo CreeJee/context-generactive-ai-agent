@@ -111,6 +111,17 @@ function toRun(row: Record<string, SQLOutputValue>): RunRecord {
   return record;
 }
 
+/** Session status needs the newest run, not the complete run history. */
+export function latestChatRun(sqlite: DatabaseSync) {
+  const statement = sqlite.prepare(
+    "SELECT * FROM chat_runs WHERE thread_id = ? ORDER BY started_at DESC, run_id DESC LIMIT 1",
+  );
+  return (threadId: string): RunRecord | null => {
+    const row = statement.get(threadId);
+    return row ? toRun(row) : null;
+  };
+}
+
 function toInterrupt(row: Record<string, SQLOutputValue>): InterruptRecord {
   const interrupt = decodeInterruptRow(row);
   const record: InterruptRecord = {
