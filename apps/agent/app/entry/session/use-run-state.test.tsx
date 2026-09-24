@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { allowedWorkflowActions } from "./workflow-test-fixtures";
 import { api, ApiError } from "../api";
 import { SessionEventScopeContext } from "../events/context";
-import { createInvalidationBatch } from "../events/invalidation";
+import { createEventInvalidator } from "../events/invalidation";
 import { appQueryKeys } from "../events/query-keys";
 import { useRunState } from "./use-run-state";
 
@@ -168,7 +168,7 @@ describe("durable workflow refresh", () => {
       // active-query invalidation without requiring a browser DOM or mocking useQuery.
       const observer = new QueryObserver(client, { ...query.options, queryKey });
       const unsubscribe = observer.subscribe(() => {});
-      const batch = createInvalidationBatch(
+      const invalidator = createEventInvalidator(
         (key) => {
           void client.invalidateQueries({ queryKey: key });
         },
@@ -178,15 +178,20 @@ describe("durable workflow refresh", () => {
         await vi.advanceTimersByTimeAsync(0);
         fetchState.mockClear();
         fetchState.mockResolvedValue(snapshot(2));
-        batch.changed({ scope: "session", projectId, sessionId, topic: "run-state", revision: 1 });
-        await vi.advanceTimersByTimeAsync(50);
+        invalidator.changed({
+          scope: "session",
+          projectId,
+          sessionId,
+          topic: "run-state",
+          revision: 1,
+        });
+        await vi.advanceTimersByTimeAsync(0);
         expect(fetchState).toHaveBeenCalledOnce();
         expect(fetchState).toHaveBeenCalledWith(sessionId, "holder-1");
         expect(client.getQueryData<SessionRunState>(queryKey)?.workflow.goal?.version).toBe(2);
         expect(client.getQueryData<SessionRunState>(queryKey)?.running).not.toBeNull();
         expect(render(client, generating)).toContain("2");
       } finally {
-        batch.close();
         unsubscribe();
         client.clear();
       }

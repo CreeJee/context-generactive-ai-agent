@@ -1,23 +1,20 @@
-import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { createInvalidationBatch } from "./invalidation";
+import { describe, expect, test, vi } from "vite-plus/test";
+import { createEventInvalidator } from "./invalidation";
 import { appQueryKeys } from "./query-keys";
 
-afterEach(() => vi.useRealTimers());
-
-describe("createInvalidationBatch", () => {
+describe("createEventInvalidator", () => {
   test("ready immediately repairs the snapshot/open race", () => {
     const invalidate = vi.fn();
     const root = appQueryKeys.session.root("p1", "s1");
-    const batch = createInvalidationBatch(invalidate, root);
-    batch.ready();
+    const invalidator = createEventInvalidator(invalidate, root);
+    invalidator.ready(0);
     expect(invalidate).toHaveBeenCalledOnce();
     expect(invalidate).toHaveBeenCalledWith(root);
   });
 
-  test("coalesces a burst by topic and ignores duplicate revisions", () => {
-    vi.useFakeTimers();
+  test("invalidates changed keys immediately and ignores duplicate revisions", () => {
     const invalidate = vi.fn();
-    const batch = createInvalidationBatch(invalidate, appQueryKeys.session.root("p1", "s1"));
+    const invalidator = createEventInvalidator(invalidate, appQueryKeys.session.root("p1", "s1"));
     const queue = {
       scope: "session" as const,
       projectId: "p1",
@@ -25,13 +22,13 @@ describe("createInvalidationBatch", () => {
       topic: "queue" as const,
       revision: 7,
     };
-    batch.changed(queue);
-    batch.changed(queue);
-    batch.changed({ ...queue, revision: 8 });
-    expect(invalidate).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(50);
+    invalidator.changed(queue);
+    invalidator.changed(queue);
     expect(invalidate).toHaveBeenCalledOnce();
     expect(invalidate).toHaveBeenCalledWith(appQueryKeys.session.queue("p1", "s1"));
-    batch.close();
+    invalidator.ready(7);
+    expect(invalidate).toHaveBeenCalledOnce();
+    invalidator.ready(8);
+    expect(invalidate).toHaveBeenCalledTimes(2);
   });
 });

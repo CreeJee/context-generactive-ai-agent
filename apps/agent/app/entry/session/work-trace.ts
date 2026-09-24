@@ -22,14 +22,23 @@ export function useWorkTrace(sessionId: string) {
 
   useEffect(() => {
     let active = true;
-    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let refreshing = false;
+    let dirty = false;
     let source: EventSource | null = null;
     const refresh = () => {
-      if (refreshTimer !== null) return;
-      refreshTimer = setTimeout(() => {
-        refreshTimer = null;
-        void queryClient.invalidateQueries({ queryKey: options.queryKey });
-      }, 50);
+      dirty = true;
+      if (refreshing) return;
+      refreshing = true;
+      void (async () => {
+        try {
+          while (active && dirty) {
+            dirty = false;
+            await queryClient.invalidateQueries({ queryKey: options.queryKey, exact: true });
+          }
+        } finally {
+          refreshing = false;
+        }
+      })();
     };
     const connect = () => {
       if (!active || document.hidden || source) return;
@@ -46,7 +55,9 @@ export function useWorkTrace(sessionId: string) {
         source = null;
         setConnection("connecting");
       } else {
-        void queryClient.invalidateQueries({ queryKey: options.queryKey }).finally(connect);
+        void queryClient
+          .invalidateQueries({ queryKey: options.queryKey, exact: true })
+          .finally(connect);
       }
     };
     window.addEventListener("work-trace:changed", refresh);
@@ -57,7 +68,6 @@ export function useWorkTrace(sessionId: string) {
       window.removeEventListener("work-trace:changed", refresh);
       document.removeEventListener("visibilitychange", visibilityChanged);
       source?.close();
-      if (refreshTimer !== null) clearTimeout(refreshTimer);
     };
   }, [projectId, sessionId, queryClient]);
 

@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import type { PropsWithChildren } from "react";
 import { EventConnectionContext, SessionEventScopeContext } from "./context";
 import { connectAppEvents, type EventConnectionState } from "./event-source";
-import { createInvalidationBatch } from "./invalidation";
+import { createEventInvalidator } from "./invalidation";
 import { appQueryKeys } from "./query-keys";
 
 function useScopedEvents(
@@ -14,7 +14,7 @@ function useScopedEvents(
   const queryClient = useQueryClient();
   useEffect(() => {
     if (!url) return;
-    const invalidations = createInvalidationBatch(
+    const invalidations = createEventInvalidator(
       (queryKey) => void queryClient.invalidateQueries({ queryKey }),
       readyKey,
     );
@@ -26,9 +26,9 @@ function useScopedEvents(
       disconnect = connectAppEvents({
         url: () => url,
         onChanged: (event) => invalidations.changed(event),
-        onReady: () => {
+        onReady: (event) => {
           onStatus?.("live");
-          invalidations.ready();
+          invalidations.ready(event.revision);
         },
         onStatus,
       });
@@ -38,7 +38,6 @@ function useScopedEvents(
     return () => {
       document.removeEventListener("visibilitychange", visibilityChanged);
       disconnect?.();
-      invalidations.close();
     };
   }, [onStatus, queryClient, readyKey, url]);
 }
