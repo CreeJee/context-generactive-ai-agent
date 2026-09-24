@@ -1,34 +1,7 @@
 import type { AppChangedEvent } from "./contracts";
 
-export type AppQueryKey = readonly unknown[];
-
-export const appQueryKeys = {
-  root: ["app"] as const,
-  global: {
-    root: ["app", "global"] as const,
-    auth: ["app", "global", "auth"] as const,
-    imports: ["app", "global", "imports"] as const,
-    embedding: ["app", "global", "embedding"] as const,
-    imageSettings: ["app", "global", "image-settings"] as const,
-    projects: ["app", "global", "projects"] as const,
-  },
-  project: {
-    root: (projectId: string) => ["app", "project", projectId] as const,
-    sessions: (projectId: string) => ["app", "project", projectId, "sessions"] as const,
-  },
-  session: {
-    root: (projectId: string, sessionId: string) =>
-      ["app", "project", projectId, "session", sessionId] as const,
-    runState: (projectId: string, sessionId: string) =>
-      [...appQueryKeys.session.root(projectId, sessionId), "run-state"] as const,
-    queue: (projectId: string, sessionId: string) =>
-      [...appQueryKeys.session.root(projectId, sessionId), "queue"] as const,
-    subagents: (projectId: string, sessionId: string) =>
-      [...appQueryKeys.session.root(projectId, sessionId), "subagents"] as const,
-    approvals: (projectId: string, sessionId: string) =>
-      [...appQueryKeys.session.root(projectId, sessionId), "relayed-approvals"] as const,
-  },
-};
+import { appQueryKeys, type AppQueryKey } from "../queries/keys";
+export { appQueryKeys, type AppQueryKey } from "../queries/keys";
 
 export function invalidationKeys(event: AppChangedEvent): readonly AppQueryKey[] {
   if (event.scope === "global") {

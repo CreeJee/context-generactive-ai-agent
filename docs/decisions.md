@@ -669,3 +669,18 @@
 - HMR frontend와 안정 backend의 build id가 다르면 모든 browser fetch가 `backend_restart_required`와 `backend_restarting` 응답을 감지한다. 일반 JSON API뿐 아니라 채팅 SSE도 같은 전역 상태를 올린다.
 - Fast Refresh 대상인 `app/entry/*.tsx`는 런타임에 React 컴포넌트만 export한다. 훅, context, 변환 함수, 초기 실행 스크립트는 `.ts` 모듈로 분리하고 `react/only-export-components`를 오류로 검사한다. 타입 전용 export와 React Router가 요구하는 route export는 예외다.
 - 재시작 필요 상태에서는 대화 초안을 보존한 채 입력, 첨부, workflow 변경과 전송을 비활성화한다. 화면 위 경고는 유지하며, backend는 차단한 method, path, backend build id와 browser build id를 터미널에 기록한다.
+
+## 화면 데이터와 이미지 생성 흐름 (2026-09-24)
+
+- 서버 조회는 `entry/queries`의 계층형 키와 `queryOptions`로 정의하고 도메인 훅에서 읽는다. 프로젝트와 세션에 딸린 조회는 부모 키 아래에 둬 설정 변경, 작업 추적 갱신, 세션 변경 시 필요한 범위를 무효화할 수 있게 한다. 변경 요청이 성공하면 관련 키를 무효화해 서버 스냅샷을 다시 읽는다. 낙관적 변경을 하지 않는 한 `setQueryData`로 조회 결과를 직접 덮어쓰지 않는다.
+- 프로젝트 선택, 세션 소유권처럼 조회가 조건부인 화면은 `useQuery`를 쓴다. 항상 조회할 수 있는 설정 페이지는 `useSuspenseQuery`를 쓰고 페이지마다 로딩과 오류 재시도 경계를 둔다.
+- 이미지 생성 요청은 mutation이 진행 상태와 결과를 소유한다. 공급자 간 실행 승인이 필요하면 한 창에서 이번 요청 승인, 항상 승인, 취소를 선택한다. 승인 취소나 요청 실패 때 작성 중인 프롬프트를 보존한다.
+- 화면 파일은 `chat`, `session`, `settings`, `navigation`, `media`, `queries`, `events`, `shared`로 묶는다. URL 진입점과 HTTP 클라이언트는 `entry` 루트에 둔다.
+- 설정 창은 `overlay-kit`으로 연다. 창의 `open` 상태는 overlay가 소유하고, 사이드바 버튼과 대화 명령은 같은 열기 함수를 사용한다. 설정 변경으로 낡아진 조회는 각 mutation의 `onSuccess`에서 무효화한다.
+- 메인 화면의 로그인·모델·프로젝트·세션 조건은 `ts-pattern`의 완전 매칭으로 렌더링한다. JSX를 임시 변수에 대입하는 분기를 두지 않는다.
+
+## Effect 오류와 내부 흐름 (2026-09-24)
+
+- 에이전트 내부 흐름은 `Effect.gen`과 서비스의 Effect를 직접 조합한다. 이미 Effect인 작업을 Promise로 실행했다가 다시 Effect로 감싸지 않는다. 외부 SDK, 파일 시스템, 영속 저장소처럼 실제 Promise를 반환하는 경계에만 `Effect.tryPromise`를 둔다.
+- 예상 가능한 실패는 작업과 원인을 가진 tagged error로 오류 채널에 넣는다. 입력 거절은 별도 도메인 오류로 표현한다. 불변식 위반은 defect로 남기고, 중단은 실패 복구가 소비하지 않도록 전파한다. 비밀 가리기 실패는 원문을 통과시키지 않는다.
+- 이 저장소는 Effect v3.22.2를 사용한다. 여기에는 `Effect.raise`가 없으므로 generator 안에서는 tagged error를 `yield*`하거나 `Effect.fail`을 사용한다. v4 API와 RC 버전 설치 지침은 현재 구현의 근거로 쓰지 않는다.

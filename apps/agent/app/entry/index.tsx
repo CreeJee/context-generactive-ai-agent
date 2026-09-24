@@ -1,5 +1,24 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { FolderIcon, LogInIcon } from "lucide-react";
+import { useAuthQuery, useModelsQuery, useProjectsQuery } from "./queries/global";
+import {
+  useAddProjectMutation,
+  useAuthActionMutation,
+  useSelectModelMutation,
+} from "./queries/mutations/global";
+import {
+  useCreateSessionMutation,
+  useCrossRecallMutation,
+  useHideProjectMutation,
+  usePermissionModeMutation,
+  useSessionLifecycleMutation,
+} from "./queries/mutations/project";
+import {
+  useAgentsQuery,
+  useProjectSessionsQuery,
+  useSkillsQuery,
+  usableAgents,
+} from "./queries/project";
+import { FolderIcon, LogInIcon, SettingsIcon } from "lucide-react";
+import { match, P } from "ts-pattern";
 import { parseAsString, useQueryStates } from "nuqs";
 import { useEffect, useState } from "react";
 import {
@@ -10,28 +29,21 @@ import {
   EmptyTitle,
 } from "~/components/ui/empty";
 import { Separator } from "~/components/ui/separator";
+import { Button } from "~/components/ui/button";
 import {
-  api,
   archiveErrorMessage,
   projectErrorMessage,
-  type ProviderModel,
   type ModelSelection,
-  type Project,
   type ProviderId,
-  type Session,
 } from "./api";
-import { SessionView, type SlashSupport } from "./chat-panel";
+import { SessionView, type SlashSupport } from "./chat/chat-panel";
 import { AppEventsProvider, SessionEventsProvider } from "./events/providers";
-import { appQueryKeys } from "./events/query-keys";
-import { ThemeSelect } from "./theme";
-import { pageHolder } from "./session-lease";
-import type { SlashContext } from "./slash-commands";
-import { SettingsDialog } from "./settings-dialog";
-import { AccountSection, ModelSection, ProjectSection, SessionSection } from "./sidebar";
-import { WorkTracePanel } from "./work-trace-panel";
+import { ThemeSelect } from "./shared/theme";
+import { pageHolder } from "./session/session-lease";
+import { openSettingsOverlay } from "./settings/open-settings";
+import { AccountSection, ModelSection, ProjectSection, SessionSection } from "./navigation/sidebar";
+import { WorkTracePanel } from "./chat/work-trace-panel";
 
-const providers: readonly ProviderId[] = ["openai", "anthropic"];
-const authRefetchIntervalMs = 60_000;
 const locationParsers = {
   project: parseAsString,
   session: parseAsString,
@@ -58,57 +70,34 @@ function Placeholder({
 }
 
 export function App() {
-  const queryClient = useQueryClient();
-  const openAIAuth = useQuery({
-    queryKey: [...appQueryKeys.global.auth, "openai"],
-    queryFn: () => api.auth("openai"),
-    refetchInterval: authRefetchIntervalMs,
-  });
-  const anthropicAuth = useQuery({
-    queryKey: [...appQueryKeys.global.auth, "anthropic"],
-    queryFn: () => api.auth("anthropic"),
-    refetchInterval: authRefetchIntervalMs,
-  });
+  const openAIAuth = useAuthQuery("openai");
+  const anthropicAuth = useAuthQuery("anthropic");
   const auth = { openai: openAIAuth.data ?? null, anthropic: anthropicAuth.data ?? null };
   const [provider, setProvider] = useState<ProviderId>("openai");
-  const [catalogs, setCatalogs] = useState<Record<ProviderId, ProviderModel[]>>({
-    openai: [],
-    anthropic: [],
-  });
-  const models = catalogs[provider];
+  const openAIModels = useModelsQuery("openai", auth.openai?.status === "signed-in");
+  const anthropicModels = useModelsQuery("anthropic", auth.anthropic?.status === "signed-in");
+  const models = (provider === "openai" ? openAIModels.data : anthropicModels.data)?.models ?? [];
   const [selection, setSelection] = useState<ModelSelection | null>(null);
-  const projectsQuery = useQuery({
-    queryKey: appQueryKeys.global.projects,
-    queryFn: api.projects,
-  });
+  const projectsQuery = useProjectsQuery();
   const projects = projectsQuery.data ?? [];
   const [{ project: projectId, session: sessionId }, setLocation] = useQueryStates(locationParsers);
-  const sessionsQuery = useQuery({
-    queryKey: projectId ? appQueryKeys.project.sessions(projectId) : ["app", "project", null],
-    queryFn: async () => ({
-      active: await api.sessions(projectId!),
-      archived: await api.archivedSessions(projectId!),
-    }),
-    enabled: projectId !== null,
-  });
+  const authMutation = useAuthActionMutation(provider);
+  const addProjectMutation = useAddProjectMutation();
+  const modelMutation = useSelectModelMutation(provider);
+  const permissionMutation = usePermissionModeMutation(projectId ?? "");
+  const crossRecallMutation = useCrossRecallMutation(projectId ?? "");
+  const hideProjectMutation = useHideProjectMutation();
+  const createSessionMutation = useCreateSessionMutation(projectId ?? "");
+  const lifecycleMutation = useSessionLifecycleMutation(projectId ?? "", pageHolder);
+  const sessionsQuery = useProjectSessionsQuery(projectId);
   const sessions = sessionsQuery.data?.active ?? [];
   const archived = sessionsQuery.data?.archived ?? [];
-  const setSessionLists = (
-    update: (current: { active: Session[]; archived: Session[] }) => {
-      active: Session[];
-      archived: Session[];
-    },
-  ) => {
-    if (!projectId) return;
-    queryClient.setQueryData<{ active: Session[]; archived: Session[] }>(
-      appQueryKeys.project.sessions(projectId),
-      (current = { active: [], archived: [] }) => update(current),
-    );
-  };
   const [archiveError, setArchiveError] = useState<string | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [slashAgents, setSlashAgents] = useState<string[]>([]);
-  const [slashSkills, setSlashSkills] = useState<SlashContext["skills"]>([]);
+  const agentsQuery = useAgentsQuery(projectId);
+  const skillsQuery = useSkillsQuery(projectId ?? "", projectId !== null);
+  const slashAgents = agentsQuery.data ? usableAgents(agentsQuery.data) : [];
+  const slashSkills =
+    skillsQuery.data?.skills.map(({ name, description }) => ({ name, description })) ?? [];
 
   useEffect(() => {
     if (!projectsQuery.data) return;
@@ -126,33 +115,15 @@ export function App() {
   const signedIn = auth[provider]?.status === "signed-in";
   const selectedSignedIn = selection !== null && auth[selection.provider]?.status === "signed-in";
   useEffect(() => {
-    for (const candidate of providers) {
-      if (auth[candidate]?.status !== "signed-in") {
-        setCatalogs((current) => ({ ...current, [candidate]: [] }));
-        continue;
-      }
-      void api.models(candidate).then(({ models, selected }) => {
-        setCatalogs((current) => ({ ...current, [candidate]: models }));
-        if (selected) {
-          setSelection(selected);
-          setProvider(selected.provider);
-        }
-      });
+    const selected =
+      provider === "openai"
+        ? (openAIModels.data?.selected ?? anthropicModels.data?.selected)
+        : (anthropicModels.data?.selected ?? openAIModels.data?.selected);
+    if (selected) {
+      setSelection(selected);
+      setProvider(selected.provider);
     }
-  }, [anthropicAuth.data, openAIAuth.data]);
-
-  // What slash commands can offer in this project; settings may change it, so reload on close.
-  useEffect(() => {
-    if (!projectId || settingsOpen) return;
-    void api.usableExternalAgents(projectId).then(setSlashAgents, () => setSlashAgents([]));
-    void api.skills(projectId).then(
-      (catalog) =>
-        setSlashSkills(
-          catalog.skills.map((skill) => ({ name: skill.name, description: skill.description })),
-        ),
-      () => setSlashSkills([]),
-    );
-  }, [projectId, settingsOpen]);
+  }, [openAIModels.data?.selected, anthropicModels.data?.selected]);
 
   useEffect(() => {
     if (!projectId || !sessionsQuery.data) return;
@@ -177,20 +148,15 @@ export function App() {
         ? "실행이 멈추기를 기다리고 있어요. 아직 대화를 바꾸지 않았어요."
         : "지금은 대화를 바꿀 수 없어요. 실행 상태를 확인한 뒤 다시 시도하세요.",
     );
-    void sessionsQuery.refetch();
   };
 
   const archiveSession = async (id: string) => {
+    if (!projectId) return;
     try {
-      const result = await api.setArchived(id, pageHolder(), true);
+      const result = await lifecycleMutation.mutateAsync({ kind: "archive", sessionId: id });
       if (result.status !== "completed") return refreshPendingLifecycle(result.status);
-      const { session } = result;
       setArchiveError(null);
       const remaining = sessions.filter((item) => item.id !== id);
-      setSessionLists((current) => ({
-        active: remaining,
-        archived: [session, ...current.archived],
-      }));
       if (sessionId === id) void setLocation({ session: remaining[0]?.id ?? null });
     } catch (error) {
       setArchiveError(
@@ -200,15 +166,12 @@ export function App() {
   };
 
   const deleteSession = async (id: string) => {
+    if (!projectId) return;
     try {
-      const result = await api.deleteSession(id, pageHolder());
+      const result = await lifecycleMutation.mutateAsync({ kind: "delete", sessionId: id });
       if (result.status !== "completed") return refreshPendingLifecycle(result.status);
       setArchiveError(null);
       const remaining = sessions.filter((item) => item.id !== id);
-      setSessionLists((current) => ({
-        active: remaining,
-        archived: current.archived.filter((item) => item.id !== id),
-      }));
       if (sessionId === id) void setLocation({ session: remaining[0]?.id ?? null });
     } catch (error) {
       setArchiveError(
@@ -218,15 +181,11 @@ export function App() {
   };
 
   const restoreSession = async (id: string) => {
+    if (!projectId) return;
     try {
-      const result = await api.setArchived(id, pageHolder(), false);
+      const result = await lifecycleMutation.mutateAsync({ kind: "restore", sessionId: id });
       if (result.status !== "completed") return refreshPendingLifecycle(result.status);
-      const { session } = result;
       setArchiveError(null);
-      setSessionLists((current) => ({
-        active: [session, ...current.active].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
-        archived: current.archived.filter((item) => item.id !== id),
-      }));
     } catch (error) {
       setArchiveError(
         archiveErrorMessage(error instanceof Error ? error : new Error(String(error))),
@@ -235,18 +194,13 @@ export function App() {
   };
 
   const authAction = async (intent: "login" | "cancel" | "logout") => {
-    const state = await api.authAction(intent, provider);
-    queryClient.setQueryData([...appQueryKeys.global.auth, provider], state);
+    const state = await authMutation.mutateAsync(intent);
     if (state.status === "pending") window.open(state.authUrl, "_blank", "noopener");
   };
 
   const addProject = async (root: string) => {
     try {
-      const project = await api.addProject(root);
-      queryClient.setQueryData<Project[]>(appQueryKeys.global.projects, (list = []) => [
-        ...list,
-        project,
-      ]);
+      const project = await addProjectMutation.mutateAsync(root);
       void setLocation({ project: project.id, session: null }, { history: "push" });
       return null;
     } catch (error) {
@@ -254,24 +208,17 @@ export function App() {
     }
   };
 
-  // Closing settings drops its global stream; one final snapshot catches any event-open race.
-  const changeSettingsOpen = (open: boolean) => {
-    setSettingsOpen(open);
-    if (open) return;
-    void queryClient.invalidateQueries({ queryKey: appQueryKeys.global.root });
-    if (projectId)
-      void queryClient.invalidateQueries({ queryKey: appQueryKeys.project.sessions(projectId) });
-  };
+  const openSettings = () =>
+    openSettingsOverlay(projects.find((item) => item.id === projectId) ?? null);
 
-  const replaceProject = (updated: Project) =>
-    queryClient.setQueryData<Project[]>(appQueryKeys.global.projects, (list = []) =>
-      list.map((project) => (project.id === updated.id ? updated : project)),
-    );
+  const selectModel = async (model: string, effort?: string) => {
+    const selected = await modelMutation.mutateAsync({ model, effort });
+    setSelection(selected);
+  };
 
   const createSession = async (agent?: string) => {
     if (!projectId) return;
-    const session = await api.createSession(projectId, agent);
-    setSessionLists((current) => ({ ...current, active: [session, ...current.active] }));
+    const session = await createSessionMutation.mutateAsync(agent);
     void setLocation({ session: session.id }, { history: "push" });
   };
 
@@ -288,73 +235,74 @@ export function App() {
         case "agent":
           return await createSession(command.agent);
         case "settings":
-          return setSettingsOpen(true);
+          return openSettings();
         case "mode":
-          if (projectId) replaceProject(await api.setPermissionMode(projectId, command.mode));
+          if (projectId) await permissionMutation.mutateAsync(command.mode);
           return;
         case "model":
-          setSelection(await api.selectModel(command.model, undefined, provider));
+          await selectModel(command.model);
           return;
       }
     },
   };
 
-  let main: React.ReactNode;
-  if (!selection && !signedIn)
-    main = (
+  const main = match({ selection, signedIn, selectedSignedIn, projectId, sessionId })
+    .with({ selection: null, signedIn: false }, () => (
       <Placeholder
         icon={<LogInIcon />}
         title="구독 계정에 로그인하세요"
         description="왼쪽에서 ChatGPT 또는 Claude에 연결하면 대화를 시작할 수 있어요."
       />
-    );
-  else if (!selection)
-    main = (
+    ))
+    .with({ selection: null }, () => (
       <Placeholder
         icon={<LogInIcon />}
         title="모델을 선택하세요"
         description="계정에서 쓸 수 있는 모델 중 하나를 고르세요."
       />
-    );
-  else if (!selectedSignedIn)
-    main = (
+    ))
+    .with({ selection: P.nonNullable, selectedSignedIn: false }, ({ selection: selected }) => (
       <Placeholder
         icon={<LogInIcon />}
         title="선택한 공급자에 로그인하세요"
-        description={`${selection.provider === "openai" ? "ChatGPT" : "Claude"} 연결이 필요해요.`}
+        description={`${selected.provider === "openai" ? "ChatGPT" : "Claude"} 연결이 필요해요.`}
       />
-    );
-  else if (!projectId)
-    main = (
+    ))
+    .with({ projectId: null }, () => (
       <Placeholder
         icon={<FolderIcon />}
         title="프로젝트를 추가하세요"
         description="대화와 기억은 프로젝트 단위로 저장돼요."
       />
-    );
-  else if (!sessionId)
-    main = (
+    ))
+    .with({ sessionId: null }, () => (
       <Placeholder
         icon={<FolderIcon />}
         title="새 대화를 시작하세요"
         description="왼쪽의 새 대화 버튼을 누르세요."
       />
-    );
-  else
-    main = (
-      <SessionView
-        key={sessionId}
-        sessionId={sessionId}
-        slash={slash}
-        imagesSupported={
-          sessions.find((session) => session.id === sessionId)?.agent == null &&
-          (catalogs[selection.provider]
-            .find((model) => model.id === selection.model)
-            ?.capabilities.inputModalities.includes("image") ??
-            false)
-        }
-      />
-    );
+    ))
+    .with(
+      { selection: P.nonNullable, sessionId: P.string },
+      ({ selection: selected, sessionId: id }) => (
+        <SessionView
+          key={id}
+          sessionId={id}
+          slash={slash}
+          imagesSupported={
+            sessions.find((session) => session.id === id)?.agent == null &&
+            ((
+              (selected.provider === "openai" ? openAIModels.data : anthropicModels.data)?.models ??
+              []
+            )
+              .find((model) => model.id === selected.model)
+              ?.capabilities.inputModalities.includes("image") ??
+              false)
+          }
+        />
+      ),
+    )
+    .exhaustive();
 
   return (
     <AppEventsProvider>
@@ -363,11 +311,9 @@ export function App() {
           <aside className="flex w-72 shrink-0 flex-col border-r">
             <div className="flex items-center justify-between py-2 pr-2 pl-4">
               <span className="text-sm font-semibold">Context Agent</span>
-              <SettingsDialog
-                project={projects.find((project) => project.id === projectId) ?? null}
-                open={settingsOpen}
-                onOpenChange={changeSettingsOpen}
-              />
+              <Button variant="ghost" size="icon-sm" aria-label="설정" onClick={openSettings}>
+                <SettingsIcon />
+              </Button>
             </div>
             <Separator />
             <div className="px-4 py-2">
@@ -383,9 +329,7 @@ export function App() {
               <ModelSection
                 models={models}
                 selection={selection?.provider === provider ? selection : null}
-                onSelect={(model, effort) =>
-                  void api.selectModel(model, effort, provider).then(setSelection)
-                }
+                onSelect={(model, effort) => void selectModel(model, effort)}
               />
             )}
             <Separator />
@@ -396,16 +340,15 @@ export function App() {
               onAdd={addProject}
               onPermissionMode={(mode) => {
                 if (!projectId) return;
-                void api.setPermissionMode(projectId, mode).then(replaceProject);
+                void permissionMutation.mutateAsync(mode);
               }}
               onCrossRecall={(allowed) => {
                 if (!projectId) return;
-                void api.setCrossRecallExcluded(projectId, !allowed).then(replaceProject);
+                void crossRecallMutation.mutateAsync(!allowed);
               }}
               onHide={(hiddenId) => {
-                void api.hideProject(hiddenId).then(() => {
+                void hideProjectMutation.mutateAsync(hiddenId).then(() => {
                   const left = projects.filter((project) => project.id !== hiddenId);
-                  queryClient.setQueryData(appQueryKeys.global.projects, left);
                   void setLocation({ project: left.at(0)?.id ?? null, session: null });
                 });
               }}
@@ -422,7 +365,7 @@ export function App() {
                 onArchive={(id) => void archiveSession(id)}
                 onDelete={(id) => void deleteSession(id)}
                 onRestore={(id) => void restoreSession(id)}
-                loadAgents={() => api.usableExternalAgents(projectId)}
+                agents={slashAgents}
               />
             )}
           </aside>

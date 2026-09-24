@@ -56,6 +56,8 @@ catalog:
   "@tanstack/react-query": ^5.103.1
   "@tanstack/react-virtual": ^3.14.13
   react-simplikit: ^0.3.1
+  overlay-kit: ^1.9.0
+  ts-pattern: ^5.9.0
 overrides:
   vite@*: "catalog:"
 peerDependencyRules:

@@ -32,7 +32,7 @@ import type {
 import type { ModelMessage } from "@tanstack/ai";
 import type { UIMessage } from "@tanstack/ai-react";
 import { Option, Schema } from "effect";
-import { appFetch } from "./backend-restart";
+import { appFetch } from "./shared/backend-restart";
 import {
   sessionHolderHeader,
   type CancelResult,
@@ -513,11 +513,6 @@ export const api = {
       name,
       trusted,
     }),
-  /** Names of external agents a new conversation in this project can talk to directly. */
-  usableExternalAgents: async (projectId: string) =>
-    (await api.externalAgents(projectId)).agents
-      .filter((agent) => !agent.shadowed && agent.state.status === "trusted")
-      .map((agent) => agent.name),
   reconnectExternalAgent: (projectId: string, name: string) =>
     call<ExternalAgentsOverview>("POST", `/api/projects/${encodeURIComponent(projectId)}/agents`, {
       action: "reconnect",

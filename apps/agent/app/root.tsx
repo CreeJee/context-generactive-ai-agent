@@ -9,9 +9,10 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { NuqsAdapter } from "nuqs/adapters/react-router/v8";
 import { useState } from "react";
+import { OverlayProvider } from "overlay-kit";
 
-import { useBackendRestartRequired } from "./entry/use-backend-restart";
-import { themeScript } from "./entry/theme-script";
+import { useBackendRestartRequired } from "./entry/shared/use-backend-restart";
+import { themeScript } from "./entry/shared/theme-script";
 import { TooltipProvider } from "~/components/ui/tooltip";
 import type { Route } from "./+types/root";
 import "./app.css";
@@ -63,7 +64,9 @@ export default function App() {
             에이전트 코드가 변경되어 새 작업을 차단했어요. 터미널에서 개발 서버를 다시 시작하세요.
           </div>
         )}
-        <Outlet />
+        <OverlayProvider>
+          <Outlet />
+        </OverlayProvider>
       </NuqsAdapter>
     </QueryClientProvider>
   );
