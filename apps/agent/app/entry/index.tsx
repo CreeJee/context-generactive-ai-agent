@@ -175,8 +175,6 @@ export function App() {
 
   const selectProject = (id: string) =>
     void setLocation({ project: id, session: null }, { history: "push" });
-  const selectSession = (id: string) => void setLocation({ session: id }, { history: "push" });
-
   useEffect(() => setArchiveError(null), [projectId]);
 
   const refreshPendingLifecycle = (status: "waiting_for_stop" | "blocked") => {
@@ -424,9 +422,9 @@ export function App() {
                 <SessionSection
                   sessions={sessions}
                   archived={archived}
+                  projectId={projectId}
                   sessionId={sessionId}
                   archiveError={archiveError}
-                  onSelect={selectSession}
                   onCreate={(agent) => void createSession(agent)}
                   onArchive={(id) => void archiveSession(id)}
                   onDelete={(id) => void deleteSession(id)}

@@ -419,9 +419,9 @@ const sessionLabel = (session: Session) => session.title ?? dayAndTime(session.c
 export function SessionSection({
   sessions,
   archived,
+  projectId,
   sessionId,
   archiveError,
-  onSelect,
   onCreate,
   onArchive,
   onDelete,
@@ -430,10 +430,10 @@ export function SessionSection({
 }: {
   sessions: Session[];
   archived: Session[];
+  projectId: string;
   sessionId: string | null;
   /** Why the last archive or restore was refused, if it was. */
   archiveError: string | null;
-  onSelect: (sessionId: string) => void;
   /** Without an agent the conversation uses the app's model. */
   onCreate: (agent?: string) => void;
   onArchive: (sessionId: string) => void;
@@ -498,9 +498,9 @@ export function SessionSection({
                 session.id === sessionId && "bg-muted font-medium",
               )}
             >
-              <button
-                type="button"
-                onClick={() => onSelect(session.id)}
+              <a
+                href={`/?project=${encodeURIComponent(projectId)}&session=${encodeURIComponent(session.id)}`}
+                aria-current={session.id === sessionId ? "page" : undefined}
                 className="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1.5 text-left text-xs"
               >
                 <span className="min-w-0 flex-1 truncate">{sessionLabel(session)}</span>
@@ -509,7 +509,7 @@ export function SessionSection({
                     <BotIcon /> {session.agent}
                   </Badge>
                 )}
-              </button>
+              </a>
               {/* The row shows its action on hover, or while the action has keyboard focus. */}
               <div className="mr-1 flex opacity-0 group-hover:opacity-100 has-focus-visible:opacity-100">
                 <Button
