@@ -58,6 +58,7 @@ catalog:
   react-simplikit: ^0.3.1
   overlay-kit: ^1.9.0
   ts-pattern: ^5.9.0
+  "@effect/tsgo": 0.45.0
 overrides:
   vite@*: "catalog:"
 peerDependencyRules:

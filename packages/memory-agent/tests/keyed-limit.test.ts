@@ -50,7 +50,7 @@ describe("keyedSerialLimit", () => {
             "agent",
             Effect.gen(function* () {
               yield* Deferred.succeed(started, undefined);
-              yield* Effect.never;
+              return yield* Effect.never;
             }),
           ),
         );

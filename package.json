@@ -11,9 +11,10 @@
     "dev": "vp run agent#dev",
     "dev:agent": "pnpm --filter agent dev:agent",
     "dev:web": "pnpm --filter agent dev:web",
-    "prepare": "vp config"
+    "prepare": "vp config && effect-tsgo patch --typescript"
   },
   "devDependencies": {
+    "@effect/tsgo": "catalog:",
     "@oxlint/plugins": "catalog:",
     "@shadcn/lint": "catalog:",
     "typescript": "catalog:",

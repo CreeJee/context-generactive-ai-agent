@@ -17,6 +17,7 @@
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
-    "strict": true
+    "strict": true,
+    "plugins": [{ "name": "@effect/language-service" }]
   }
 }

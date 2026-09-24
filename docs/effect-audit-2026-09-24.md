@@ -55,3 +55,9 @@
 - ACP·MCP 연결과 worker의 요청 ID별 콜백은 프로세스가 소유하는 소켓·프로세스 핸들이다. 재시작 시 연결은 새로 열 수 있지만, 요청 자체를 재시도할지와 중복 도구 실행을 어떻게 피할지는 영속 작업 원장에 적어야 한다. 임시 상수·함수 지역 Map과 이런 실행 핸들을 동일하게 취급하지 않는다.
 - Effect의 거부 가능한 Promise 경계는 `tryPromise`에서 tagged error로 바꿨다. 남은 `Effect.promise`는 worker·연결 종료 finalizer와 서브에이전트 checkpoint 대기 경계다. 이 정리 작업의 실패를 로그·재시도·defect 중 무엇으로 처리할지 서비스 종료 계약에 명시해야 한다.
 - `KnowledgePromotions.promote`의 사용자 승인·근거 거절은 `MemoryPromotionRejected` 오류 채널로 옮겼다. `WorkTraceStore`의 사용자 거절 조건, SDK 도구 진입점과 provider stream parser에는 여전히 동기 `throw new Error`가 있다. 이 중 사용자 입력 거절은 도메인 tagged error를 반환하는 Effect API로 바꾸고, 저장소 불변식 위반만 defect로 남기는 후속 API 변경이 필요하다. 겉의 `Error` 클래스만 tagged error로 바꾸는 것은 오류 채널을 만들지 않는다.
+
+## v4 이전 준비: Effect tsgo
+
+- 기준 변경을 `6b03ea6`으로 커밋한 뒤 `@effect/tsgo` 0.45.0을 설치했다. TypeScript 7.0.2의 `tsc`를 설치 시 패치하고 memory-agent와 앱의 `tsconfig`에 Effect 언어 서비스를 연결했다.
+- Effect 진단의 오류 1건은 generator의 `return yield*`로, 경고 2건은 Kagi 도구와 JSON 요청 파서의 typed Schema 오류 경계로 정리했다. 전체 타입 검사는 통과하며 남은 출력은 제안 수준이다.
+- v4 이전에서는 `Context.Tag` 서비스 66곳과 호출부를 함께 옮기고, Schema 생성·디코딩과 tagged error를 v4 계약으로 바꾼다. 그 뒤 fiber·scope·런타임 경계와 앱·테스트를 이전한다. 의존성만 v4로 바꾼 상태는 빌드되지 않으므로 각 단계마다 타입 검사, 관련 테스트, 전체 테스트와 빌드를 확인한다.

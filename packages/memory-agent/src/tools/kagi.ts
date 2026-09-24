@@ -38,8 +38,7 @@ const isWebUrl = (value: string) => {
 const make = Effect.gen(function* () {
   const kagi = yield* Kagi;
   // The tool fails with the `kagi_<reason>: ...` message, which is what the model sees.
-  const run = <A>(effect: Effect.Effect<A, KagiFailed>) =>
-    Effect.runPromise(Effect.mapError(effect, (failure) => new Error(failure.message)));
+  const run = <A>(effect: Effect.Effect<A, KagiFailed>) => Effect.runPromise(effect);
 
   const search = toolDefinition({
     name: "kagi_search",

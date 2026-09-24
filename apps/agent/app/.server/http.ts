@@ -1,4 +1,4 @@
-import { Either, Schema } from "effect";
+import { Schema } from "effect";
 
 /**
  * Refuses state-changing requests from other sites (PRD R14). The app is local, but any web page
@@ -18,9 +18,5 @@ export function rejectCrossSite(request: Request): Response | null {
 /** Decodes a JSON body; an empty body decodes as `{}` so optional-only schemas accept it. */
 export async function readJson<A, I>(request: Request, schema: Schema.Schema<A, I>) {
   const text = await request.text();
-  try {
-    return Schema.decodeUnknownEither(schema)(text.trim() === "" ? {} : JSON.parse(text));
-  } catch {
-    return Either.left(new Error("invalid_json"));
-  }
+  return Schema.decodeUnknownEither(Schema.parseJson(schema))(text.trim() === "" ? "{}" : text);
 }

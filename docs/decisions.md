@@ -690,6 +690,7 @@
 - 에이전트 내부 흐름은 `Effect.gen`과 서비스의 Effect를 직접 조합한다. 이미 Effect인 작업을 Promise로 실행했다가 다시 Effect로 감싸지 않는다. 외부 SDK, 파일 시스템, 영속 저장소처럼 실제 Promise를 반환하는 경계에만 `Effect.tryPromise`를 둔다.
 - 예상 가능한 실패는 작업과 원인을 가진 tagged error로 오류 채널에 넣는다. 입력 거절은 별도 도메인 오류로 표현한다. 불변식 위반은 defect로 남기고, 중단은 실패 복구가 소비하지 않도록 전파한다. 비밀 가리기 실패는 원문을 통과시키지 않는다.
 - 현재 실행 가능한 기준 버전은 Effect v3.22.2다. v4 RC로 이전해 저장소의 `effect-ts` 스킬을 적용하는 것을 목표로 한다. 이전이 완료되기 전에는 v3와 v4 API를 한 패키지 안에 섞지 않는다. v3에는 `Effect.raise`가 없으므로 현재 구현에서는 tagged error를 `yield*`하거나 `Effect.fail`을 사용한다.
+- v4 이전 준비로 `@effect/tsgo` 0.45.0의 Effect 언어 서비스를 memory-agent와 앱 타입 검사에 연결한다. 설치 시 TypeScript Go 패치를 적용하고 Effect 오류·경고는 타입 검사 실패로 취급하며 제안은 보고만 한다. v4 의존성 전환은 서비스와 Schema 계약을 함께 이전할 때 수행한다.
 - 비동기 작업의 순서와 완료는 Effect semaphore, Deferred, Queue와 scoped fiber로 표현한다. `Map`은 세션·연결 같은 키로 현재 자원을 찾을 때, `Set`은 순수 멤버십 또는 구독자 목록에 쓴다. 같은 상태를 Map과 Set에 나눠 보관하지 않고, registry 항목은 작업 완료·중단·설정 변경 시 회수한다.
 - 병렬 작업의 실행 중·재요청 플래그를 AgentChat의 서비스 전역 Map·Set에 보관하지 않는다. 완료 알림은 Effect Queue와 세션별 직렬화로 처리하고, 취소 뒤 자동 재개 금지는 Work Trace의 `parent_notification_holds`에 영속화한다. 다음 명시적 사용자 턴이 실행 권한을 얻으면 hold를 지운다.
 - 압축이 필요한 도구 결과는 `toolCallId`로 단건 조회한다. 세션의 모든 결과 ID를 Map으로 만들어 다른 함수에 넘기지 않는다. SQLite는 `(session_id, toolCallId, seq)` 부분 인덱스로 첫 결과를 찾는다.
