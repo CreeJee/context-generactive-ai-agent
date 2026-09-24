@@ -234,6 +234,43 @@ describe("compaction", () => {
     ).toBe(malformed[1]?.content);
   });
 
+  test("shell preview avoids echoing the command while preserving original and diagnostics", () => {
+    const command = "unique-command-".repeat(80);
+    const original = JSON.stringify({
+      command,
+      shell: "/bin/zsh",
+      status: "succeeded",
+      exitCode: 0,
+      signal: null,
+      durationMs: 12,
+      stdout: "result".repeat(200),
+      stderr: "",
+      stdoutTruncated: false,
+      stderrTruncated: false,
+    });
+    const messages: ModelMessage[] = [
+      {
+        role: "assistant",
+        content: null,
+        toolCalls: [
+          {
+            id: "call-1",
+            type: "function",
+            function: { name: "run_shell", arguments: JSON.stringify({ command }) },
+          },
+        ],
+      },
+      { role: "tool", toolCallId: "call-1", content: original },
+    ];
+    const sent = lightweightToolResults(messages, () => new Map([["call-1", "node-1"]]));
+    expect(sent[1]?.content).toContain('"status":"succeeded"');
+    expect(sent[1]?.content).toContain('"exitCode":0');
+    expect(sent[1]?.content).toContain("read_tool_result ID node-1");
+    expect(sent[1]?.content).not.toContain(command);
+    expect(sent[1]?.content).not.toContain('"shell":');
+    expect(messages[1]?.content).toBe(original);
+  });
+
   test("list/search and reviewed child reports keep navigation and outcome while omitting bulk", () => {
     const cases = [
       {

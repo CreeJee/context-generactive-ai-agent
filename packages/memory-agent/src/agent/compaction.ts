@@ -408,7 +408,14 @@ export function lightweightToolResults(
       );
       if (!result) return message;
       summary = {
-        ...result,
+        // The command is already present in the tool call. Avoid echoing it (and the shell path)
+        // on every model request; the recorded original remains available by ID.
+        status: result.status,
+        exitCode: result.exitCode,
+        signal: result.signal,
+        durationMs: result.durationMs,
+        stdoutTruncated: result.stdoutTruncated,
+        stderrTruncated: result.stderrTruncated,
         // Successful commands mainly need their outcome; failures retain more diagnostics.
         stdout: preview(result.stdout, result.status === "succeeded" ? 600 : 1_000),
         stderr: preview(result.stderr, result.status === "succeeded" ? 600 : 1_500),
