@@ -345,13 +345,12 @@ export function makeRouteCatalog(
   });
 }
 
-export class RouteCatalog extends Context.Tag("memory-agent/RouteCatalog")<
-  RouteCatalog,
-  RouteCatalogApi
->() {
+export class RouteCatalog extends Context.Service<RouteCatalog, RouteCatalogApi>()(
+  "memory-agent/RouteCatalog",
+) {
   static readonly layer = Layer.effect(
     RouteCatalog,
-    Effect.flatMap(sourceFromServices, makeRouteCatalog),
+    Effect.flatMap(sourceFromServices, (source) => makeRouteCatalog(source)),
   );
   static readonly layerFrom = (source: RouteCatalogSource, now?: () => number) =>
     Layer.effect(RouteCatalog, makeRouteCatalog(source, now));

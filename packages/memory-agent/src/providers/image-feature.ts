@@ -66,14 +66,13 @@ export function makeImageFeature(config: GlobalConfigApi): ImageFeatureApi {
   return {
     status,
     setImageGenerationEnabled: (enabled) =>
-      Effect.zipRight(config.update({ imageGenerationEnabled: enabled }), status),
+      Effect.andThen(config.update({ imageGenerationEnabled: enabled }), status),
   };
 }
 
-export class ImageFeature extends Context.Tag("memory-agent/ImageFeature")<
-  ImageFeature,
-  ImageFeatureApi
->() {
+export class ImageFeature extends Context.Service<ImageFeature, ImageFeatureApi>()(
+  "memory-agent/ImageFeature",
+) {
   static readonly layer = Layer.effect(
     ImageFeature,
     Effect.gen(function* () {

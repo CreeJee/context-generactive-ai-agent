@@ -139,7 +139,7 @@ const make = (options: KagiOptions) =>
     const post = <A, I>(
       path: string,
       body: KagiRequestBody,
-      schema: Schema.Schema<A, I>,
+      schema: Schema.Codec<A, I>,
       signal?: AbortSignal,
     ) =>
       Effect.gen(function* () {
@@ -211,9 +211,8 @@ const make = (options: KagiOptions) =>
   });
 
 /** Optional Kagi Search and Extract (R19): off until the user registers a key and turns it on. */
-export class Kagi extends Context.Tag("memory-agent/Kagi")<
-  Kagi,
-  Effect.Effect.Success<ReturnType<typeof make>>
->() {
+export class Kagi extends Context.Service<Kagi, Effect.Success<ReturnType<typeof make>>>()(
+  "memory-agent/Kagi",
+) {
   static readonly layer = (options: KagiOptions = {}) => Layer.effect(Kagi, make(options));
 }

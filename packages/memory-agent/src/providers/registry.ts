@@ -35,10 +35,9 @@ export const providerRegistryFrom = (
   };
 };
 
-export class ProviderRegistry extends Context.Tag("memory-agent/ProviderRegistry")<
-  ProviderRegistry,
-  ProviderRegistryApi
->() {
+export class ProviderRegistry extends Context.Service<ProviderRegistry, ProviderRegistryApi>()(
+  "memory-agent/ProviderRegistry",
+) {
   static layer(
     configurations: ReadonlyArray<ProviderConfiguration>,
     runtimes?: ReadonlyArray<AgentModelRuntime>,

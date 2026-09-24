@@ -6,11 +6,11 @@ import { Database } from "../db/database.ts";
  * - `allow` / `ask` / `block`: the classifier's (or fallback's) verdict on a call.
  * - `approved` / `denied`: the user's answer to an `ask`.
  */
-export const ReviewDecision = Schema.Literal("allow", "ask", "block", "approved", "denied");
+export const ReviewDecision = Schema.Literals(["allow", "ask", "block", "approved", "denied"]);
 export type ReviewDecision = typeof ReviewDecision.Type;
 
 /** `fallback` means the classifier failed and the call went to the user. */
-export const ReviewDecider = Schema.Literal("classifier", "fallback", "user");
+export const ReviewDecider = Schema.Literals(["classifier", "fallback", "user"]);
 export type ReviewDecider = typeof ReviewDecider.Type;
 
 export const PermissionReview = Schema.Struct({
@@ -91,9 +91,9 @@ const make = Effect.gen(function* () {
  * Append-only log of who allowed or refused each approval-gated call and why. It is both the
  * state a resumed run reads and the evidence behind a tool result.
  */
-export class PermissionReviews extends Context.Tag("memory-agent/PermissionReviews")<
+export class PermissionReviews extends Context.Service<
   PermissionReviews,
-  Effect.Effect.Success<typeof make>
->() {
+  Effect.Success<typeof make>
+>()("memory-agent/PermissionReviews") {
   static readonly layer = Layer.effect(PermissionReviews, make);
 }

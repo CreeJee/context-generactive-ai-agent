@@ -56,9 +56,8 @@ const make = Effect.gen(function* () {
 });
 
 /** Resolves the saved provider/model pair without silently falling back to another provider. */
-export class ActiveProvider extends Context.Tag("memory-agent/ActiveProvider")<
-  ActiveProvider,
-  Effect.Effect.Success<typeof make>
->() {
+export class ActiveProvider extends Context.Service<ActiveProvider, Effect.Success<typeof make>>()(
+  "memory-agent/ActiveProvider",
+) {
   static readonly layer = Layer.effect(ActiveProvider, make);
 }

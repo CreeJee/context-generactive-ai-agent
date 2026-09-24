@@ -59,9 +59,9 @@ const make = Effect.gen(function* () {
 });
 
 /** Approval requests relayed to the page from work that runs inside a tool call. */
-export class RelayedApprovals extends Context.Tag("memory-agent/RelayedApprovals")<
+export class RelayedApprovals extends Context.Service<
   RelayedApprovals,
-  Effect.Effect.Success<typeof make>
->() {
-  static readonly layer = Layer.scoped(RelayedApprovals, make);
+  Effect.Success<typeof make>
+>()("memory-agent/RelayedApprovals") {
+  static readonly layer = Layer.effect(RelayedApprovals, make);
 }

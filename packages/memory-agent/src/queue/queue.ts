@@ -8,10 +8,10 @@ const Row = Schema.Struct({
   id: Schema.String,
   seq: Schema.Number,
   text: Schema.String,
-  attachment_ids: Schema.parseJson(Schema.Array(Schema.String)),
-  state: Schema.Literal("waiting", "editing", "held", "delivered", "failed"),
+  attachment_ids: Schema.fromJsonString(Schema.Array(Schema.String)),
+  state: Schema.Literals(["waiting", "editing", "held", "delivered", "failed"]),
   draft: Schema.NullOr(Schema.String),
-  delivered_via: Schema.NullOr(Schema.Literal("tool_boundary", "steer", "next_turn")),
+  delivered_via: Schema.NullOr(Schema.Literals(["tool_boundary", "steer", "next_turn"])),
   run_id: Schema.NullOr(Schema.String),
   failure: Schema.NullOr(Schema.String),
   created_at: Schema.Number,
@@ -271,9 +271,8 @@ const make = Effect.gen(function* () {
 });
 
 /** Follow-up messages sent while a run answers, kept in order until they reach the agent. */
-export class MessageQueue extends Context.Tag("memory-agent/MessageQueue")<
-  MessageQueue,
-  Effect.Effect.Success<typeof make>
->() {
+export class MessageQueue extends Context.Service<MessageQueue, Effect.Success<typeof make>>()(
+  "memory-agent/MessageQueue",
+) {
   static readonly layer = Layer.effect(MessageQueue, make);
 }

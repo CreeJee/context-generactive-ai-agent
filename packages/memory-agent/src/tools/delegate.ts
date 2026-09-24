@@ -8,8 +8,8 @@ import { toToolSchema } from "./schema.ts";
 export const delegateToolName = "delegate_to_agent";
 
 const DelegateInput = Schema.Struct({
-  agent: Schema.NonEmptyString.annotations({ description: "Name of a configured external agent." }),
-  task: Schema.NonEmptyString.annotations({
+  agent: Schema.NonEmptyString.annotate({ description: "Name of a configured external agent." }),
+  task: Schema.NonEmptyString.annotate({
     description:
       "The task, with the facts and remembered evidence it needs (say where each came from). The agent sees nothing else from this conversation.",
   }),
@@ -89,9 +89,8 @@ const make = Effect.gen(function* () {
   };
 });
 
-export class DelegateTools extends Context.Tag("memory-agent/DelegateTools")<
-  DelegateTools,
-  Effect.Effect.Success<typeof make>
->() {
+export class DelegateTools extends Context.Service<DelegateTools, Effect.Success<typeof make>>()(
+  "memory-agent/DelegateTools",
+) {
   static readonly layer = Layer.effect(DelegateTools, make);
 }

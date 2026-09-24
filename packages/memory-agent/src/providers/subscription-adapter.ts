@@ -56,7 +56,7 @@ const decodeOpenAiReasoning = (signature: string) => {
   if (!signature.startsWith(openAiReasoningPrefix)) return null;
   try {
     return Option.getOrNull(
-      Schema.decodeUnknownOption(Schema.parseJson(OpenAiReasoning))(
+      Schema.decodeUnknownOption(Schema.fromJsonString(OpenAiReasoning))(
         Buffer.from(signature.slice(openAiReasoningPrefix.length), "base64url").toString("utf8"),
       ),
     );
@@ -109,7 +109,7 @@ const anthropicContent = (content: ModelMessage["content"]): WireContent => {
   return blocks;
 };
 
-const decodeToolInput = Schema.decodeUnknownOption(Schema.parseJson(ToolArguments));
+const decodeToolInput = Schema.decodeUnknownOption(Schema.fromJsonString(ToolArguments));
 const toolInput = (serialized: string): typeof ToolArguments.Type =>
   Option.getOrElse(decodeToolInput(serialized), () => ({}));
 

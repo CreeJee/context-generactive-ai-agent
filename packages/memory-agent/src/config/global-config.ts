@@ -8,40 +8,37 @@ import { StorageRoot } from "./storage-root.ts";
  * How the embedding model runs. `auto` picks `gpu` on a machine with enough memory where WebGPU
  * was found to work, and `cpu` otherwise.
  */
-export const EmbeddingChoice = Schema.Literal("auto", "cpu", "gpu");
+export const EmbeddingChoice = Schema.Literals(["auto", "cpu", "gpu"]);
 export type EmbeddingChoice = typeof EmbeddingChoice.Type;
 
 /** Whether the full-precision model ran on WebGPU when this machine was last checked. */
-export const GpuCheck = Schema.Union(
+export const GpuCheck = Schema.Union([
   Schema.Struct({ status: Schema.Literal("available"), checkedAt: Schema.String }),
   Schema.Struct({
     status: Schema.Literal("unavailable"),
     checkedAt: Schema.String,
     reason: Schema.String,
   }),
-);
+]);
 export type GpuCheck = typeof GpuCheck.Type;
 
 /** Persisted, versioned policy for model-dependent capabilities. Missing entries deny access. */
 export const ModelFeatureFlagSettings = Schema.Struct({
   version: Schema.Literal(1),
   global: Schema.Boolean,
-  providers: Schema.Record({ key: Schema.String, value: Schema.Boolean }),
-  capabilities: Schema.Record({ key: Schema.String, value: Schema.Boolean }),
-  models: Schema.Record({
-    key: Schema.String,
-    value: Schema.Record({ key: Schema.String, value: Schema.Boolean }),
-  }),
-  routes: Schema.Record({ key: Schema.String, value: Schema.Boolean }),
+  providers: Schema.Record(Schema.String, Schema.Boolean),
+  capabilities: Schema.Record(Schema.String, Schema.Boolean),
+  models: Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Boolean)),
+  routes: Schema.Record(Schema.String, Schema.Boolean),
 });
 export type ModelFeatureFlagSettings = typeof ModelFeatureFlagSettings.Type;
 
-export const CrossProviderMediaConsentMode = Schema.Literal("disabled", "ask", "always");
+export const CrossProviderMediaConsentMode = Schema.Literals(["disabled", "ask", "always"]);
 export type CrossProviderMediaConsentMode = typeof CrossProviderMediaConsentMode.Type;
 /** Explicit provider-pair consent. Login or entitlement never creates an entry automatically. */
 export const CrossProviderMediaConsentSettings = Schema.Struct({
   version: Schema.Literal(1),
-  pairs: Schema.Record({ key: Schema.String, value: CrossProviderMediaConsentMode }),
+  pairs: Schema.Record(Schema.String, CrossProviderMediaConsentMode),
 });
 export type CrossProviderMediaConsentSettings = typeof CrossProviderMediaConsentSettings.Type;
 
@@ -73,7 +70,7 @@ export const Settings = Schema.Struct({
 });
 export type Settings = typeof Settings.Type;
 
-const decodeSettings = Schema.decodeUnknownSync(Schema.parseJson(Settings));
+const decodeSettings = Schema.decodeUnknownSync(Schema.fromJsonString(Settings));
 
 const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
@@ -109,12 +106,11 @@ const make = Effect.gen(function* () {
   };
 });
 
-export type GlobalConfigApi = Effect.Effect.Success<typeof make>;
+export type GlobalConfigApi = Effect.Success<typeof make>;
 
 /** `<storage>/config.json`. */
-export class GlobalConfig extends Context.Tag("memory-agent/GlobalConfig")<
-  GlobalConfig,
-  GlobalConfigApi
->() {
+export class GlobalConfig extends Context.Service<GlobalConfig, GlobalConfigApi>()(
+  "memory-agent/GlobalConfig",
+) {
   static readonly layer = Layer.effect(GlobalConfig, make);
 }

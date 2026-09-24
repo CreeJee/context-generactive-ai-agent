@@ -1,5 +1,5 @@
 import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
-import { Context, Effect, Layer, Runtime } from "effect";
+import { Context, Effect, Layer } from "effect";
 import { AppEvents } from "../events/app-events.ts";
 import {
   UpdateGoal,
@@ -25,8 +25,8 @@ const exposeProgressRefusal = <A, R>(effect: Effect.Effect<A, WorkflowProgressRe
 
 const make = Effect.gen(function* () {
   const events = yield* AppEvents;
-  const runtime = yield* Effect.runtime<Workflows>();
-  const run = Runtime.runPromise(runtime);
+  const runtime = yield* Effect.context<Workflows>();
+  const run = Effect.runPromiseWith(runtime);
 
   return {
     forSession(sessionId: string, phase: WorkflowPhase): AnyServerTool[] {
@@ -105,10 +105,9 @@ const make = Effect.gen(function* () {
 });
 
 /** Tools that write only workflow artifacts, never project files. */
-export class WorkflowTools extends Context.Tag("memory-agent/WorkflowTools")<
-  WorkflowTools,
-  Effect.Effect.Success<typeof make>
->() {
+export class WorkflowTools extends Context.Service<WorkflowTools, Effect.Success<typeof make>>()(
+  "memory-agent/WorkflowTools",
+) {
   static readonly layer = Layer.effect(WorkflowTools, make);
 }
 

@@ -31,13 +31,13 @@ import { errorMessage, PageHeader, PageError, shortPath } from "../shared";
 const sourceNames = { "claude-code": "Claude Code", codex: "Codex CLI" } as const;
 
 /** Why registering a recorded working directory as a project did not work. */
-const UnplacedReason = Schema.Literal(
+const UnplacedReason = Schema.Literals([
   "not_found",
   "not_directory",
   "overlaps_storage",
   "no_session_line",
   "no_project",
-);
+]);
 const unplacedReasons = {
   not_found: "폴더가 없어졌어요",
   not_directory: "폴더가 아니에요",

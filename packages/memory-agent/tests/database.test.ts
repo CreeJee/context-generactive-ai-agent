@@ -17,12 +17,12 @@ afterEach(() => {
     rmSync(directory, { recursive: true, force: true });
 });
 
-const withDatabase = <A>(file: string, use: (db: Database["Type"]) => A) =>
+const withDatabase = <A>(file: string, use: (db: Database["Service"]) => A) =>
   Effect.runPromise(
     Effect.scoped(Effect.map(Database, use)).pipe(Effect.provide(Database.layer(file))),
   );
 
-function seed(db: Database["Type"]) {
+function seed(db: Database["Service"]) {
   const now = new Date().toISOString();
   db.sqlite
     .prepare(

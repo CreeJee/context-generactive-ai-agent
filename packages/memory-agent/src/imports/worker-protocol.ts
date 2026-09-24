@@ -12,7 +12,7 @@ export type ImportWorkerSetup = typeof ImportWorkerSetup.Type;
 
 export const ImportWorkerRequest = Schema.Struct({
   id: Schema.Number,
-  kind: Schema.Literal("count", "run"),
+  kind: Schema.Literals(["count", "run"]),
 });
 export type ImportWorkerRequest = typeof ImportWorkerRequest.Type;
 
@@ -27,7 +27,7 @@ const progressFields = {
   failed: Schema.Number,
 };
 
-export const ImportWorkerReply = Schema.Union(
+export const ImportWorkerReply = Schema.Union([
   Schema.Struct({ id: Schema.Number, kind: Schema.Literal("counts"), counts: TranscriptCounts }),
   Schema.Struct({ id: Schema.Number, kind: Schema.Literal("progress"), ...progressFields }),
   Schema.Struct({
@@ -37,5 +37,5 @@ export const ImportWorkerReply = Schema.Union(
     counts: TranscriptCounts,
   }),
   Schema.Struct({ id: Schema.Number, kind: Schema.Literal("failed"), reason: Schema.String }),
-);
+]);
 export type ImportWorkerReply = typeof ImportWorkerReply.Type;

@@ -104,10 +104,9 @@ export interface ImageRouteFactsApi {
   ) => Effect.Effect<readonly ImageRouteFact[], ImageRouteFactsFailed>;
 }
 
-export class ImageRouteFacts extends Context.Tag("memory-agent/ImageRouteFacts")<
-  ImageRouteFacts,
-  ImageRouteFactsApi
->() {
+export class ImageRouteFacts extends Context.Service<ImageRouteFacts, ImageRouteFactsApi>()(
+  "memory-agent/ImageRouteFacts",
+) {
   static readonly layerFrom = (api: ImageRouteFactsApi) => Layer.succeed(ImageRouteFacts, api);
   static readonly unavailableLayer = Layer.succeed(ImageRouteFacts, {
     forRoutes: (routes) =>
@@ -330,7 +329,7 @@ export function makeImageRouter(
                     consentByRoute.set(route.id, decision.mode);
                     return !decision.crossProvider || decision.mode !== "disabled";
                   }),
-                  Effect.catchAll(() => Effect.succeed(false)),
+                  Effect.catch(() => Effect.succeed(false)),
                 ),
             );
       const facts = yield* factsService.forRoutes(routes);
@@ -447,10 +446,9 @@ export function makeImageRouter(
   };
 }
 
-export class ImageRouter extends Context.Tag("memory-agent/ImageRouter")<
-  ImageRouter,
-  ImageRouterApi
->() {
+export class ImageRouter extends Context.Service<ImageRouter, ImageRouterApi>()(
+  "memory-agent/ImageRouter",
+) {
   static readonly layer = Layer.effect(
     ImageRouter,
     Effect.gen(function* () {

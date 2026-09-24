@@ -48,7 +48,7 @@ async function setup() {
   const interpret = () =>
     context.runtime.runPromise(
       Effect.flatMap(Indexer, (indexer) => indexer.indexAll()).pipe(
-        Effect.zipRight(Effect.flatMap(Interpreter, (interpreter) => interpreter.runPending)),
+        Effect.andThen(Effect.flatMap(Interpreter, (interpreter) => interpreter.runPending)),
       ),
     );
   const edges = (kind: string) =>

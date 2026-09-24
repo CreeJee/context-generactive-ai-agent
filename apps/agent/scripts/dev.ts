@@ -11,14 +11,14 @@ const webPort = Number(process.env.CONTEXT_AGENT_DEV_WEB_PORT ?? "5173");
 const backendUrl = `http://127.0.0.1:${backendPort}`;
 const manifestFile = join(app, "build", "dev-backend.json");
 
-const Mode = Schema.Literal("all", "agent", "web");
+const Mode = Schema.Literals(["all", "agent", "web"]);
 const mode = Schema.decodeUnknownSync(Mode)(process.argv[2] ?? "all");
 
 const Manifest = Schema.Struct({
   backendUrl: Schema.String,
   buildId: Schema.String,
 });
-const decodeManifest = Schema.decodeUnknownOption(Schema.parseJson(Manifest));
+const decodeManifest = Schema.decodeUnknownOption(Schema.fromJsonString(Manifest));
 
 function packageCommand(args: readonly string[], env: NodeJS.ProcessEnv = {}) {
   const npmExecPath = process.env.npm_execpath;
@@ -61,7 +61,7 @@ async function waitForBackend(url: string, expectedBuildId: string) {
       const body: unknown = await response.json();
       const Health = Schema.Struct({
         buildId: Schema.String,
-        status: Schema.Literal("ready", "draining"),
+        status: Schema.Literals(["ready", "draining"]),
       });
       if (response.ok && Schema.is(Health)(body) && body.buildId === expectedBuildId) return;
     } catch {

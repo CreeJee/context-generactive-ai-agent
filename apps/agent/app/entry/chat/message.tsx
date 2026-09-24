@@ -1,3 +1,4 @@
+import { SchemaTransformation } from "effect";
 import type { UIMessage } from "@tanstack/ai-react";
 import { Option, Schema } from "effect";
 import { BotIcon, ChevronRightIcon, Clock3Icon, WrenchIcon } from "lucide-react";
@@ -77,31 +78,35 @@ type CallStatus =
  * What a result says happened. A declined approval and a call the permission review refused are
  * returned as ordinary results, so their content decides, not the transport state.
  */
-const RefusedResult = Schema.Union(
-  Schema.transform(
-    Schema.parseJson(Schema.Struct({ approved: Schema.Literal(false) })),
-    Schema.Literal("denied"),
-    { strict: true, decode: () => "denied" as const, encode: () => ({ approved: false as const }) },
-  ),
-  Schema.transform(
-    Schema.parseJson(
-      Schema.Struct({
-        error: Schema.String.pipe(Schema.startsWith("blocked_by_permission_review")),
+const RefusedResult = Schema.Union([
+  Schema.fromJsonString(Schema.Struct({ approved: Schema.Literal(false) })).pipe(
+    Schema.decodeTo(
+      Schema.Literal("denied"),
+      SchemaTransformation.transform({
+        decode: () => "denied" as const,
+        encode: () => ({ approved: false as const }),
       }),
     ),
-    Schema.Literal("blocked"),
-    {
-      strict: true,
-      decode: () => "blocked" as const,
-      encode: () => ({ error: "blocked_by_permission_review" }),
-    },
   ),
-);
+  Schema.fromJsonString(
+    Schema.Struct({
+      error: Schema.String.pipe(Schema.check(Schema.isStartsWith("blocked_by_permission_review"))),
+    }),
+  ).pipe(
+    Schema.decodeTo(
+      Schema.Literal("blocked"),
+      SchemaTransformation.transform({
+        decode: () => "blocked" as const,
+        encode: () => ({ error: "blocked_by_permission_review" }),
+      }),
+    ),
+  ),
+]);
 const decodeRefusal = Schema.decodeUnknownOption(RefusedResult);
 
 /** A write_file / edit_file result that carries a picture of the SVG it wrote. */
 const decodeDrawing = Schema.decodeUnknownOption(
-  Schema.parseJson(
+  Schema.fromJsonString(
     Schema.Struct({
       path: Schema.String,
       preview: Schema.Struct({ attachmentId: Schema.String }),

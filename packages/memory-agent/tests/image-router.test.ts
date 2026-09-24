@@ -1,4 +1,4 @@
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import {
   ImageRouteFacts,
   makeImageRouter,
@@ -146,7 +146,7 @@ describe("image router", () => {
       intent,
       policy: { mode: "auto" as const },
     };
-    expect(Either.isLeft(await Effect.runPromise(Effect.either(service.select(request))))).toBe(
+    expect(Result.isFailure(await Effect.runPromise(Effect.result(service.select(request))))).toBe(
       true,
     );
     mode = "ask";
@@ -202,7 +202,7 @@ describe("image router", () => {
     );
     expect(selected.executorMediaRouteId).toBe(quality.id);
     const rejected = await Effect.runPromise(
-      Effect.either(
+      Effect.result(
         service.select({
           initiatorChatRouteId: chat.id,
           intent: { operation: "edit", sourceImageCount: 1, requiresMask: true },
@@ -210,7 +210,7 @@ describe("image router", () => {
         }),
       ),
     );
-    expect(Either.isLeft(rejected) && rejected.left._tag).toBe("FixedImageRouteRejected");
+    expect(Result.isFailure(rejected) && rejected.failure._tag).toBe("FixedImageRouteRejected");
   });
 
   it("excludes unknown cost under a strict ceiling unless explicitly allowed", async () => {
@@ -289,11 +289,11 @@ describe("image router", () => {
   it("returns typed failure with complete ranking when no route is eligible", async () => {
     const service = await router(facts.map((fact) => ({ ...fact, available: false })));
     const result = await Effect.runPromise(
-      Effect.either(
+      Effect.result(
         service.select({ initiatorChatRouteId: chat.id, intent, policy: { mode: "auto" } }),
       ),
     );
-    expect(Either.isLeft(result) && result.left).toMatchObject({
+    expect(Result.isFailure(result) && result.failure).toMatchObject({
       _tag: "ImageRouteUnavailable",
       reasons: ["no eligible image route"],
     });
@@ -314,7 +314,7 @@ describe("image router", () => {
 
   it("rejects malformed intent and scoring facts", async () => {
     const invalidIntent = await Effect.runPromise(
-      Effect.either(
+      Effect.result(
         rankImageRoutes({
           routes,
           facts,
@@ -323,11 +323,11 @@ describe("image router", () => {
         }),
       ),
     );
-    expect(Either.isLeft(invalidIntent) && invalidIntent.left._tag).toBe(
+    expect(Result.isFailure(invalidIntent) && invalidIntent.failure._tag).toBe(
       "ImageRoutingInvalidRequest",
     );
     const invalidFact = await Effect.runPromise(
-      Effect.either(
+      Effect.result(
         rankImageRoutes({
           routes,
           facts: [{ ...facts[0]!, quality: 2 }],
@@ -336,6 +336,8 @@ describe("image router", () => {
         }),
       ),
     );
-    expect(Either.isLeft(invalidFact) && invalidFact.left._tag).toBe("ImageRoutingInvalidRequest");
+    expect(Result.isFailure(invalidFact) && invalidFact.failure._tag).toBe(
+      "ImageRoutingInvalidRequest",
+    );
   });
 });

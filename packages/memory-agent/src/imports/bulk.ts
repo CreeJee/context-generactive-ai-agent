@@ -187,9 +187,8 @@ const make = Effect.gen(function* () {
  * Writes a migrated conversation straight into the node tables. Nodes stay immutable evidence and
  * get the same structural edges live ones do; only the clock differs.
  */
-export class BulkNodes extends Context.Tag("memory-agent/BulkNodes")<
-  BulkNodes,
-  Effect.Effect.Success<typeof make>
->() {
+export class BulkNodes extends Context.Service<BulkNodes, Effect.Success<typeof make>>()(
+  "memory-agent/BulkNodes",
+) {
   static readonly layer = Layer.effect(BulkNodes, make);
 }

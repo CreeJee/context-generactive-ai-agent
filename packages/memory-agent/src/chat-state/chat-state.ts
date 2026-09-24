@@ -151,9 +151,8 @@ const make = Effect.gen(function* () {
  * Server-authoritative chat state (TanStack AI persistence) keyed by session id. It is what makes
  * a reload show the same conversation and the same pending approval card.
  */
-export class ChatState extends Context.Tag("memory-agent/ChatState")<
-  ChatState,
-  Effect.Effect.Success<typeof make>
->() {
+export class ChatState extends Context.Service<ChatState, Effect.Success<typeof make>>()(
+  "memory-agent/ChatState",
+) {
   static readonly layer = Layer.effect(ChatState, make);
 }

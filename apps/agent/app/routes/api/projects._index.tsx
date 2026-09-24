@@ -1,4 +1,4 @@
-import { Effect, Either, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 import { AppEvents, Projects } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
@@ -21,10 +21,10 @@ export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected) return rejected;
   const body = await readJson(request, AddProject);
-  if (Either.isLeft(body)) return Response.json({ error: "invalid_project" }, { status: 400 });
+  if (Result.isFailure(body)) return Response.json({ error: "invalid_project" }, { status: 400 });
 
   const response = Effect.gen(function* () {
-    const project = yield* (yield* Projects).add(body.right.root);
+    const project = yield* (yield* Projects).add(body.success.root);
     (yield* AppEvents).publishGlobal("projects");
     return Response.json(project, { status: 201 });
   }).pipe(

@@ -22,9 +22,9 @@ export interface ServeOptions {
 }
 
 /** Only the loopback names; any other Host means a rebinding page is talking to this server (R14). */
-const LoopbackHost = Schema.Literal("127.0.0.1", "localhost", "[::1]");
+const LoopbackHost = Schema.Literals(["127.0.0.1", "localhost", "[::1]"]);
 
-const ClientExtension = Schema.Literal(
+const ClientExtension = Schema.Literals([
   ".js",
   ".css",
   ".json",
@@ -34,7 +34,7 @@ const ClientExtension = Schema.Literal(
   ".woff2",
   ".wasm",
   ".map",
-);
+]);
 const contentTypes = {
   ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",

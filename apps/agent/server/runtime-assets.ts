@@ -24,7 +24,7 @@ const completeMarker = ".complete";
  */
 export function unpackRuntime(storageRoot: string): string | null {
   if (!isSea()) return null;
-  const manifest = Schema.decodeUnknownSync(Schema.parseJson(RuntimeManifest))(
+  const manifest = Schema.decodeUnknownSync(Schema.fromJsonString(RuntimeManifest))(
     getAsset(runtimeManifestAsset, "utf8"),
   );
   const runtimeFolder = join(storageRoot, "runtime");

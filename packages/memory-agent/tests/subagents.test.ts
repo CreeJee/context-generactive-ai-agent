@@ -17,7 +17,7 @@ async function until(condition: () => boolean, what: string) {
   throw new Error(`timed out waiting for ${what}`);
 }
 
-const Delta = Schema.parseJson(
+const Delta = Schema.fromJsonString(
   Schema.Struct({ type: Schema.String, delta: Schema.optional(Schema.String) }),
 );
 const JobStatus = Schema.Struct({ status: Schema.String });
@@ -337,7 +337,7 @@ describe("subagents", () => {
       );
       for (const { locator } of locators) {
         const toolCallId = Schema.decodeUnknownSync(
-          Schema.parseJson(Schema.Struct({ toolCallId: Schema.String })),
+          Schema.fromJsonString(Schema.Struct({ toolCallId: Schema.String })),
         )(locator).toolCallId;
         expect(persisted).toContain(toolCallId);
       }

@@ -19,19 +19,18 @@ interface Lease {
  * Leases live in memory: after a restart the page that still has the session open claims it again
  * with its next renewal, and a read-only page never takes over on its own.
  */
-export class SessionLeases extends Context.Tag("memory-agent/SessionLeases")<
-  SessionLeases,
-  ReturnType<typeof makeLeases>
->() {
+export class SessionLeases extends Context.Service<SessionLeases, ReturnType<typeof makeLeases>>()(
+  "memory-agent/SessionLeases",
+) {
   static readonly layer = (ttlMs = defaultLeaseTtlMs) =>
-    Layer.scoped(
+    Layer.effect(
       SessionLeases,
       Effect.gen(function* () {
         const leases = makeLeases(ttlMs);
         yield* Effect.forkScoped(
           Effect.forever(
             Effect.sleep(Math.max(1_000, ttlMs)).pipe(
-              Effect.zipRight(Effect.sync(() => leases.sweepExpired())),
+              Effect.andThen(Effect.sync(() => leases.sweepExpired())),
             ),
           ),
         );

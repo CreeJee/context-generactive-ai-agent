@@ -204,11 +204,11 @@ describe("subscription provider product services", () => {
     });
 
     const invalid = await Effect.runPromise(
-      Effect.either(provider.models.select("gpt-6-astra", "medium")),
+      Effect.result(provider.models.select("gpt-6-astra", "medium")),
     );
-    expect(invalid._tag).toBe("Left");
-    if (invalid._tag === "Left")
-      expect(invalid.left).toMatchObject({
+    expect(invalid._tag).toBe("Failure");
+    if (invalid._tag === "Failure")
+      expect(invalid.failure).toMatchObject({
         _tag: "ModelUnavailable",
         provider: "openai",
         model: "gpt-6-astra",

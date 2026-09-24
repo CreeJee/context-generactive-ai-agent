@@ -40,7 +40,7 @@ const EffortObject = Schema.Struct({
   effort: Schema.optional(Schema.String),
   value: Schema.optional(Schema.String),
 });
-const EffortValue = Schema.Union(Schema.String, EffortObject);
+const EffortValue = Schema.Union([Schema.String, EffortObject]);
 const CatalogModel = Schema.Struct({
   slug: Schema.optional(Schema.String),
   id: Schema.optional(Schema.String),
@@ -55,12 +55,12 @@ const CatalogModel = Schema.Struct({
 });
 type CatalogModel = typeof CatalogModel.Type;
 const CatalogModels = Schema.Array(CatalogModel);
-const CatalogPage = Schema.Union(
+const CatalogPage = Schema.Union([
   CatalogModels,
   Schema.Struct({ models: CatalogModels }),
   Schema.Struct({ data: CatalogModels }),
   Schema.Struct({ data: Schema.Struct({ models: CatalogModels }) }),
-);
+]);
 const decodeCatalogPage = Schema.decodeUnknownOption(CatalogPage);
 
 const canonicalEffort = (value: string | undefined) => {

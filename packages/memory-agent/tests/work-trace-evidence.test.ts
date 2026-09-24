@@ -9,7 +9,7 @@ const testLayer = () => {
 };
 const run = <A>(effect: Effect.Effect<A, never, Database | WorkTraceStore>) =>
   Effect.runPromise(Effect.scoped(effect.pipe(Effect.provide(testLayer()))));
-const seed = (db: Database["Type"]) => {
+const seed = (db: Database["Service"]) => {
   const iso = new Date(0).toISOString();
   db.sqlite
     .prepare("INSERT INTO projects (id, root, name, created_at) VALUES ('p1', '/tmp/p1', 'p1', ?)")
@@ -25,7 +25,7 @@ const seed = (db: Database["Type"]) => {
     VALUES ('agent-1', 's1', 'researcher', 'research', 'interrupted', 'parent-1', 'task', 1, 1)`)
     .run();
 };
-const start = (trace: WorkTraceStore["Type"]) =>
+const start = (trace: WorkTraceStore["Service"]) =>
   trace.startAttempt({
     sessionId: "s1",
     parentRunId: "parent-1",

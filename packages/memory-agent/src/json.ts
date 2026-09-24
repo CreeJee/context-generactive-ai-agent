@@ -9,13 +9,13 @@ export type JsonValue =
   | readonly JsonValue[]
   | { readonly [key: string]: JsonValue };
 
-export const JsonValue: Schema.Schema<JsonValue> = Schema.suspend(() =>
-  Schema.Union(
+export const JsonValue: Schema.Codec<JsonValue> = Schema.suspend(() =>
+  Schema.Union([
     Schema.String,
     Schema.Number,
     Schema.Boolean,
     Schema.Null,
     Schema.Array(JsonValue),
-    Schema.Record({ key: Schema.String, value: JsonValue }),
-  ),
+    Schema.Record(Schema.String, JsonValue),
+  ]),
 );

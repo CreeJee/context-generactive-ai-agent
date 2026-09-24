@@ -1,3 +1,4 @@
+import { Semaphore } from "effect";
 import { randomUUID } from "node:crypto";
 import { chat, type ChatMiddleware } from "@tanstack/ai";
 import { Context, Data, Effect, Layer } from "effect";
@@ -67,7 +68,7 @@ const make = (automatic: boolean) =>
     const chatState = yield* ChatState;
     const active = yield* ActiveProvider;
     const usageLedger = yield* ApiUsage;
-    const oneAtATime = yield* Effect.makeSemaphore(1);
+    const oneAtATime = yield* Semaphore.make(1);
     const { messages: messageStore, metadata } = chatState.persistence.stores;
 
     const summarize = (sessionId: string, part: readonly Node[], selection: ModelSelection) =>
@@ -166,18 +167,16 @@ const make = (automatic: boolean) =>
         onFinish: () => {
           if (!automatic) return;
           // Retried after the next run; a failure here never reaches the conversation.
-          void Effect.runPromise(
-            Effect.catchAllCause(catchUp(sessionId, false), () => Effect.void),
-          );
+          void Effect.runPromise(Effect.catchCause(catchUp(sessionId, false), () => Effect.void));
         },
       }),
     };
   });
 
 /** Summaries of earlier turns, for compaction to send in their place. */
-export class TurnSummaries extends Context.Tag("memory-agent/TurnSummaries")<
+export class TurnSummaries extends Context.Service<
   TurnSummaries,
-  Effect.Effect.Success<ReturnType<typeof make>>
->() {
+  Effect.Success<ReturnType<typeof make>>
+>()("memory-agent/TurnSummaries") {
   static readonly layer = (automatic = true) => Layer.effect(TurnSummaries, make(automatic));
 }

@@ -30,7 +30,9 @@ export interface StoredCredential {
   readonly expiresAt: number;
 }
 
-const decodeStoredCredential = Schema.decodeUnknownOption(Schema.parseJson(StoredCredentialSchema));
+const decodeStoredCredential = Schema.decodeUnknownOption(
+  Schema.fromJsonString(StoredCredentialSchema),
+);
 
 export interface CredentialStore {
   read(provider: OAuthProvider): Promise<StoredCredential | null>;
@@ -129,7 +131,9 @@ const ProviderErrorBody = Schema.Struct({
   error: Schema.optional(Schema.Struct({ message: Schema.String })),
   message: Schema.optional(Schema.String),
 });
-const decodeProviderErrorBody = Schema.decodeUnknownOption(Schema.parseJson(ProviderErrorBody));
+const decodeProviderErrorBody = Schema.decodeUnknownOption(
+  Schema.fromJsonString(ProviderErrorBody),
+);
 
 const providerReason = (body: string): string | undefined => {
   const parsed = Option.getOrUndefined(decodeProviderErrorBody(body));
@@ -220,7 +224,7 @@ const decodeCatalogPage = Schema.decodeUnknownOption(CatalogPage);
 const OpenAiIdClaims = Schema.Struct({
   "https://api.openai.com/auth": Schema.Struct({ chatgpt_account_id: Schema.String }),
 });
-const decodeOpenAiIdClaims = Schema.decodeUnknownOption(Schema.parseJson(OpenAiIdClaims));
+const decodeOpenAiIdClaims = Schema.decodeUnknownOption(Schema.fromJsonString(OpenAiIdClaims));
 
 const openAiAccountId = (idToken: string) => {
   const payload = idToken.split(".")[1];

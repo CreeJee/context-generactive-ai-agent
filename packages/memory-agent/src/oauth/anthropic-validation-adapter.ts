@@ -8,14 +8,14 @@ const AnthropicValidationRequestSchema = Schema.Struct({
   model: Schema.optional(Schema.String),
   max_tokens: Schema.optional(Schema.Number),
   stream: Schema.optional(Schema.Boolean),
-  system: Schema.optional(Schema.Union(Schema.String, Schema.Array(Schema.Unknown))),
+  system: Schema.optional(Schema.Union([Schema.String, Schema.Array(Schema.Unknown)])),
   messages: Schema.optional(Schema.Array(Schema.Unknown)),
   tools: Schema.optional(Schema.Array(Schema.Unknown)),
   tool_choice: Schema.optional(Schema.Unknown),
 });
 
 const decodeRequest = Schema.decodeUnknownOption(
-  Schema.parseJson(AnthropicValidationRequestSchema),
+  Schema.fromJsonString(AnthropicValidationRequestSchema),
 );
 
 export const prepareAnthropicValidationBody = (

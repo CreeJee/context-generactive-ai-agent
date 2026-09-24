@@ -10,7 +10,7 @@ import { runtimeRequire, runtimeRoot } from "../runtime/resources.ts";
  * Where a skill comes from. `builtin` ships with this app; the user's own (`global`) and the
  * project's replace a built-in skill of the same name, so any of them can be overridden.
  */
-export const SkillScope = Schema.Literal("builtin", "global", "project");
+export const SkillScope = Schema.Literals(["builtin", "global", "project"]);
 export type SkillScope = typeof SkillScope.Type;
 
 /**
@@ -236,9 +236,8 @@ const make = (options: SkillsOptions) =>
   });
 
 /** Agent skills (SKILL.md folders) from the user's shared directory and the project (R18). */
-export class Skills extends Context.Tag("memory-agent/Skills")<
-  Skills,
-  Effect.Effect.Success<ReturnType<typeof make>>
->() {
+export class Skills extends Context.Service<Skills, Effect.Success<ReturnType<typeof make>>>()(
+  "memory-agent/Skills",
+) {
   static readonly layer = (options: SkillsOptions = {}) => Layer.effect(Skills, make(options));
 }

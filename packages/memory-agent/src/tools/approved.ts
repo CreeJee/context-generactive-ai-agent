@@ -1,7 +1,7 @@
 import type { ToolExecutionContext } from "@tanstack/ai";
 import { tmpdir } from "node:os";
 import { isAbsolute, relative, sep } from "node:path";
-import { Context, Effect, Either, Layer } from "effect";
+import { Context, Effect, Result, Layer } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
 import {
   canonicalPath,
@@ -35,14 +35,14 @@ export function resolveShellWorkingDirectory(
   if (!isAbsolute(workdir)) return resolveProjectPath(projectRoot, workdir, "directory");
   const resolved = resolveOutsidePath(projectRoot, storageRoot, workdir, "directory");
   const tempRoots = [canonicalPath("/tmp"), canonicalPath(tmpdir())];
-  return Either.flatMap(resolved, (directory) =>
+  return Result.flatMap(resolved, (directory) =>
     tempRoots.some((root) => isSameOrBelow(root, directory.absolute))
-      ? Either.right({
+      ? Result.succeed({
           absolute: directory.absolute,
           relative: directory.absolute,
           stats: directory.stats,
         })
-      : Either.left(new PathRejected({ path: workdir, reason: "invalid_path" })),
+      : Result.fail(new PathRejected({ path: workdir, reason: "invalid_path" })),
   );
 }
 
@@ -124,9 +124,8 @@ const make = Effect.gen(function* () {
 });
 
 /** Shell and outside-write tools, each run gated by an approval. */
-export class ApprovedTools extends Context.Tag("memory-agent/ApprovedTools")<
-  ApprovedTools,
-  Effect.Effect.Success<typeof make>
->() {
+export class ApprovedTools extends Context.Service<ApprovedTools, Effect.Success<typeof make>>()(
+  "memory-agent/ApprovedTools",
+) {
   static readonly layer = Layer.effect(ApprovedTools, make);
 }

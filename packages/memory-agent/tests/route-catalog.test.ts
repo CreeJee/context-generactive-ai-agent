@@ -1,4 +1,4 @@
-import { Effect, Either, Layer, ManagedRuntime } from "effect";
+import { Effect, Result, Layer, ManagedRuntime } from "effect";
 import {
   ProviderRegistry,
   ProviderToolCapabilityRegistry,
@@ -166,8 +166,8 @@ describe("RouteCatalog", () => {
     };
     const catalog = await Effect.runPromise(makeRouteCatalog(changing, () => attempt));
     const first = await Effect.runPromise(catalog.refresh);
-    const failure = await Effect.runPromise(Effect.either(catalog.refresh));
-    expect(Either.isLeft(failure) && failure.left._tag).toBe("RouteCatalogRefreshFailed");
+    const failure = await Effect.runPromise(Effect.result(catalog.refresh));
+    expect(Result.isFailure(failure) && failure.failure._tag).toBe("RouteCatalogRefreshFailed");
     expect(await Effect.runPromise(catalog.snapshot)).toBe(first);
   });
 
@@ -175,9 +175,9 @@ describe("RouteCatalog", () => {
     const catalog = await Effect.runPromise(makeRouteCatalog(source()));
     await Effect.runPromise(catalog.refresh);
     const result = await Effect.runPromise(
-      Effect.either(catalog.media("media:openai:direct_adapter:missing")),
+      Effect.result(catalog.media("media:openai:direct_adapter:missing")),
     );
-    expect(Either.isLeft(result) && result.left).toMatchObject({
+    expect(Result.isFailure(result) && result.failure).toMatchObject({
       _tag: "UnknownCatalogRoute",
       routeType: "media",
     });

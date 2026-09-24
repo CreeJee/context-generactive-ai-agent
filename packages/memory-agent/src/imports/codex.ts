@@ -25,7 +25,7 @@ const ContentParts = Schema.Array(
 );
 
 const MessagePayload = Schema.Struct({
-  type: Schema.Literal("message", "agent_message"),
+  type: Schema.Literals(["message", "agent_message"]),
   role: Schema.optional(Schema.String),
   content: ContentParts,
 });
@@ -44,12 +44,12 @@ const CustomCallPayload = Schema.Struct({
   call_id: Schema.String,
 });
 const OutputPayload = Schema.Struct({
-  type: Schema.Literal("function_call_output", "custom_tool_call_output"),
+  type: Schema.Literals(["function_call_output", "custom_tool_call_output"]),
   call_id: Schema.String,
-  output: Schema.Union(Schema.String, Schema.Unknown),
+  output: Schema.Union([Schema.String, Schema.Unknown]),
 });
 const decodePayload = Schema.decodeUnknownOption(
-  Schema.Union(MessagePayload, FunctionCallPayload, CustomCallPayload, OutputPayload),
+  Schema.Union([MessagePayload, FunctionCallPayload, CustomCallPayload, OutputPayload]),
 );
 
 const SessionLine = Schema.Struct({
@@ -64,7 +64,7 @@ const ItemLine = Schema.Struct({
   payload: Schema.Unknown,
 });
 const decodeLine = Schema.decodeUnknownOption(
-  Schema.parseJson(Schema.Union(SessionLine, ItemLine)),
+  Schema.fromJsonString(Schema.Union([SessionLine, ItemLine])),
 );
 
 const isText = Schema.is(Schema.String);

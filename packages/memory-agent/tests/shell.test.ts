@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Either } from "effect";
+import { Result } from "effect";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import { commandEnvironment, runCommand, stopAllCommands } from "../src/shell/run.ts";
 import { resolveShellWorkingDirectory } from "../src/tools/approved.ts";
@@ -43,12 +43,12 @@ describe("runCommand", () => {
     const storage = workdir();
     const scratch = workdir();
     const allowed = resolveShellWorkingDirectory(project, storage, scratch);
-    expect(Either.isRight(allowed)).toBe(true);
-    if (Either.isRight(allowed)) expect(allowed.right.absolute).toBe(scratch);
+    expect(Result.isSuccess(allowed)).toBe(true);
+    if (Result.isSuccess(allowed)) expect(allowed.success.absolute).toBe(scratch);
 
     const refused = resolveShellWorkingDirectory(project, storage, "/usr");
-    expect(Either.isLeft(refused)).toBe(true);
-    if (Either.isLeft(refused)) expect(refused.left.reason).toBe("invalid_path");
+    expect(Result.isFailure(refused)).toBe(true);
+    if (Result.isFailure(refused)) expect(refused.failure.reason).toBe("invalid_path");
   });
 
   test("reports output, exit code and the working directory", async () => {

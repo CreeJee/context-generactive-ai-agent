@@ -1,4 +1,4 @@
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import {
   DirectImageExecutionFailed,
   makeImageMediaWorkflow,
@@ -77,9 +77,9 @@ describe("ImageMediaWorkflow", () => {
       attachmentStore([]),
     );
     const result = await Effect.runPromise(
-      Effect.either(workflow.generate({ ...request, approved: false })),
+      Effect.result(workflow.generate({ ...request, approved: false })),
     );
-    expect(Either.isLeft(result) && result.left._tag).toBe("ImageMediaApprovalRequired");
+    expect(Result.isFailure(result) && result.failure._tag).toBe("ImageMediaApprovalRequired");
     expect(executions).toBe(0);
   });
 
@@ -150,19 +150,19 @@ describe("ImageMediaWorkflow", () => {
         set: () => Effect.die("unused"),
       },
     );
-    const first = await Effect.runPromise(Effect.either(workflow.generate(request)));
-    expect(Either.isLeft(first) && first.left).toMatchObject({
+    const first = await Effect.runPromise(Effect.result(workflow.generate(request)));
+    expect(Result.isFailure(first) && first.failure).toMatchObject({
       _tag: "ImageMediaApprovalRequired",
       reason: "cross_provider",
     });
-    if (!Either.isLeft(first) || first.left._tag !== "ImageMediaApprovalRequired") return;
-    const approval = first.left.approval!;
+    if (!Result.isFailure(first) || first.failure._tag !== "ImageMediaApprovalRequired") return;
+    const approval = first.failure.approval!;
     await Effect.runPromise(
       workflow.generate({ ...request, runId: approval.runId, crossProviderApproval: approval }),
     );
     expect(executions).toBe(1);
     const wrong = await Effect.runPromise(
-      Effect.either(
+      Effect.result(
         workflow.generate({
           ...request,
           runId: approval.runId,
@@ -170,14 +170,14 @@ describe("ImageMediaWorkflow", () => {
         }),
       ),
     );
-    expect(Either.isLeft(wrong) && wrong.left._tag).toBe("ImageMediaApprovalRequired");
+    expect(Result.isFailure(wrong) && wrong.failure._tag).toBe("ImageMediaApprovalRequired");
     mode = "disabled";
     const revoked = await Effect.runPromise(
-      Effect.either(
+      Effect.result(
         workflow.generate({ ...request, runId: approval.runId, crossProviderApproval: approval }),
       ),
     );
-    expect(Either.isLeft(revoked) && revoked.left).toMatchObject({
+    expect(Result.isFailure(revoked) && revoked.failure).toMatchObject({
       _tag: "ImageMediaUnavailable",
       reason: "cross-provider consent disabled",
     });
@@ -194,8 +194,8 @@ describe("ImageMediaWorkflow", () => {
       },
       attachmentStore([]),
     );
-    const result = await Effect.runPromise(Effect.either(workflow.generate(request)));
-    expect(Either.isLeft(result) && result.left).toMatchObject({
+    const result = await Effect.runPromise(Effect.result(workflow.generate(request)));
+    expect(Result.isFailure(result) && result.failure).toMatchObject({
       _tag: "ImageMediaExecutionFailed",
       reroute: { type: "confirmation_required", alternatives: [] },
     });

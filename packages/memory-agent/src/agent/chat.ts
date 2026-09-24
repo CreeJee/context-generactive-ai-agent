@@ -1,3 +1,4 @@
+import { SchemaTransformation } from "effect";
 import { workflowActions } from "../workflow/actions.ts";
 import {
   RUN_CANCEL_REASON,
@@ -175,11 +176,10 @@ ${settingsInstructions(project, places)}`;
 export const attachmentInstructions = `Images the user attached arrive with their message, in order. "#1" in the user's text means the first attached image, "#2" the second, and so on. If an image did not arrive or cannot be read, say so instead of guessing its contents.`;
 
 /** One part of a user message, reduced to what the agent keeps. */
-const TurnPart = Schema.Union(
-  Schema.TaggedStruct("text", { text: Schema.String }),
-  Schema.TaggedStruct("image", { url: Schema.String }),
-  Schema.TaggedStruct("other", {}),
-);
+const TextTurnPart = Schema.TaggedStruct("text", { text: Schema.String });
+const ImageTurnPart = Schema.TaggedStruct("image", { url: Schema.String });
+const OtherTurnPart = Schema.TaggedStruct("other", {});
+const TurnPart = Schema.Union([TextTurnPart, ImageTurnPart, OtherTurnPart]);
 type TurnPart = typeof TurnPart.Type;
 
 /**
@@ -187,45 +187,53 @@ type TurnPart = typeof TurnPart.Type;
  * URL, or anything else (inline data, audio) that the agent does not keep — so decoding picks the
  * member and no field probing is needed.
  */
-const IncomingPart = Schema.Union(
-  Schema.transform(Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }), TurnPart, {
-    strict: true,
-    decode: (part) => ({ _tag: "text" as const, text: part.text }),
-    encode: (part) => ({ type: "text" as const, text: part._tag === "text" ? part.text : "" }),
-  }),
-  Schema.transform(
-    Schema.Struct({ type: Schema.Literal("text"), content: Schema.String }),
-    TurnPart,
-    {
-      strict: true,
-      decode: (part) => ({ _tag: "text" as const, text: part.content }),
-      encode: (part) => ({
-        type: "text" as const,
-        content: part._tag === "text" ? part.text : "",
+const IncomingPart = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }).pipe(
+    Schema.decodeTo(
+      TextTurnPart,
+      SchemaTransformation.transform({
+        decode: (part) => ({ _tag: "text" as const, text: part.text }),
+        encode: (part) => ({ type: "text" as const, text: part._tag === "text" ? part.text : "" }),
       }),
-    },
+    ),
   ),
-  Schema.transform(
-    Schema.Struct({
-      type: Schema.Literal("image"),
-      source: Schema.Struct({ type: Schema.Literal("url"), value: Schema.String }),
-    }),
-    TurnPart,
-    {
-      strict: true,
-      decode: (part) => ({ _tag: "image" as const, url: part.source.value }),
-      encode: (part) => ({
-        type: "image" as const,
-        source: { type: "url" as const, value: part._tag === "image" ? part.url : "" },
+  Schema.Struct({ type: Schema.Literal("text"), content: Schema.String }).pipe(
+    Schema.decodeTo(
+      TextTurnPart,
+      SchemaTransformation.transform({
+        decode: (part) => ({ _tag: "text" as const, text: part.content }),
+        encode: (part) => ({
+          type: "text" as const,
+          content: part._tag === "text" ? part.text : "",
+        }),
       }),
-    },
+    ),
   ),
-  Schema.transform(Schema.Struct({ type: Schema.String }), TurnPart, {
-    strict: true,
-    decode: () => ({ _tag: "other" as const }),
-    encode: () => ({ type: "other" }),
-  }),
-);
+  Schema.Struct({
+    type: Schema.Literal("image"),
+    source: Schema.Struct({ type: Schema.Literal("url"), value: Schema.String }),
+  }).pipe(
+    Schema.decodeTo(
+      ImageTurnPart,
+      SchemaTransformation.transform({
+        decode: (part) => ({ _tag: "image" as const, url: part.source.value }),
+        encode: (part) => ({
+          type: "image" as const,
+          source: { type: "url" as const, value: part._tag === "image" ? part.url : "" },
+        }),
+      }),
+    ),
+  ),
+  Schema.Struct({ type: Schema.String }).pipe(
+    Schema.decodeTo(
+      OtherTurnPart,
+      SchemaTransformation.transform({
+        decode: () => ({ _tag: "other" as const }),
+        encode: () => ({ type: "other" }),
+      }),
+    ),
+  ),
+]);
 
 interface UserTurn {
   readonly text: string;
@@ -237,36 +245,40 @@ const toTurn = (parts: readonly TurnPart[]): UserTurn => ({
   imageUrls: parts.flatMap((part) => (part._tag === "image" ? [part.url] : [])),
 });
 
-const Content = Schema.Union(
-  Schema.transform(Schema.String, Schema.Array(TurnPart), {
-    strict: true,
-    decode: (text) => [{ _tag: "text" as const, text }],
-    encode: (parts) => toTurn(parts).text,
-  }),
+const Content = Schema.Union([
+  Schema.String.pipe(
+    Schema.decodeTo(
+      Schema.Array(TextTurnPart),
+      SchemaTransformation.transform({
+        decode: (text): readonly (typeof TextTurnPart.Type)[] => [{ _tag: "text" as const, text }],
+        encode: (parts) => toTurn(parts).text,
+      }),
+    ),
+  ),
   Schema.Array(IncomingPart),
-);
+]);
 
 /** A new user turn ends the message list: a ModelMessage carries `content`, a UIMessage `parts`. */
-const IncomingUserTurn = Schema.Union(
-  Schema.transform(
-    Schema.Struct({ role: Schema.Literal("user"), content: Content }),
-    Schema.Array(TurnPart),
-    {
-      strict: true,
-      decode: (message) => message.content,
-      encode: (parts) => ({ role: "user" as const, content: parts }),
-    },
+const IncomingUserTurn = Schema.Union([
+  Schema.Struct({ role: Schema.Literal("user"), content: Content }).pipe(
+    Schema.decodeTo(
+      Schema.Array(TurnPart),
+      SchemaTransformation.transform({
+        decode: (message) => message.content,
+        encode: (parts) => ({ role: "user" as const, content: parts }),
+      }),
+    ),
   ),
-  Schema.transform(
-    Schema.Struct({ role: Schema.Literal("user"), parts: Content }),
-    Schema.Array(TurnPart),
-    {
-      strict: true,
-      decode: (message) => message.parts,
-      encode: (parts) => ({ role: "user" as const, parts }),
-    },
+  Schema.Struct({ role: Schema.Literal("user"), parts: Content }).pipe(
+    Schema.decodeTo(
+      Schema.Array(TurnPart),
+      SchemaTransformation.transform({
+        decode: (message) => message.parts,
+        encode: (parts) => ({ role: "user" as const, parts }),
+      }),
+    ),
   ),
-);
+]);
 const decodeUserTurn = Schema.decodeUnknownOption(IncomingUserTurn);
 
 const decodeQueuedNext = Schema.decodeUnknownOption(
@@ -283,7 +295,7 @@ export const QueueRequest = Schema.Struct({
   text: Schema.String,
   attachmentIds: Schema.Array(Schema.String),
   /** queue: deliver at the next tool-call boundary. steer: into the answering turn now. */
-  mode: Schema.Literal("queue", "steer"),
+  mode: Schema.Literals(["queue", "steer"]),
 });
 export type QueueRequest = typeof QueueRequest.Type;
 
@@ -612,12 +624,12 @@ const make = Effect.gen(function* () {
     // Background work that dies with the process (database closed mid-batch) is simply redone next
     // time, so even defects are dropped here rather than surfacing as unhandled rejections.
     const quietly = <A, E>(effect: Effect.Effect<A, E>) =>
-      Effect.catchAllCause(Effect.asVoid(effect), () => Effect.void);
+      Effect.catchCause(Effect.asVoid(effect), () => Effect.void);
     const index = () =>
       void Effect.runPromise(
         quietly(indexer.indexUpTo(afterRunBudget)).pipe(
-          Effect.zipRight(quietly(indexer.analyzeUpTo(afterRunBudget))),
-          Effect.zipRight(interpreter.automatic ? quietly(interpreter.runPending) : Effect.void),
+          Effect.andThen(quietly(indexer.analyzeUpTo(afterRunBudget))),
+          Effect.andThen(interpreter.automatic ? quietly(interpreter.runPending) : Effect.void),
         ),
       );
     return { name: "memory-agent/index", onFinish: index, onAbort: index, onError: index };
@@ -1692,7 +1704,7 @@ const make = Effect.gen(function* () {
           }
         });
     }).pipe(
-      Effect.catchAllCause((cause) =>
+      Effect.catchCause((cause) =>
         Effect.logWarning("Subagent notification follow-up deferred", cause),
       ),
       Effect.onInterrupt(() =>
@@ -1717,9 +1729,8 @@ const make = Effect.gen(function* () {
 });
 
 /** The chat endpoint behind `POST /api/chat`: memory, tools and the ChatGPT model together. */
-export class AgentChat extends Context.Tag("memory-agent/AgentChat")<
-  AgentChat,
-  Effect.Effect.Success<typeof make>
->() {
-  static readonly layer = Layer.scoped(AgentChat, make);
+export class AgentChat extends Context.Service<AgentChat, Effect.Success<typeof make>>()(
+  "memory-agent/AgentChat",
+) {
+  static readonly layer = Layer.effect(AgentChat, make);
 }

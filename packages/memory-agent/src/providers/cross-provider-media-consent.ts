@@ -86,7 +86,7 @@ export function makeCrossProviderMediaConsent(
 ): CrossProviderMediaConsentApi {
   const read = config.read.pipe(
     Effect.map((settings) => settings.crossProviderMediaConsent ?? emptySettings()),
-    Effect.catchAllCause((cause) => Effect.fail(storeFailure("read")(cause))),
+    Effect.catchCause((cause) => Effect.fail(storeFailure("read")(cause))),
   );
   return {
     read,
@@ -95,7 +95,7 @@ export function makeCrossProviderMediaConsent(
         Effect.map((settings) =>
           decideCrossProviderMediaConsent(settings.crossProviderMediaConsent, pair),
         ),
-        Effect.catchAllCause((cause) => Effect.fail(storeFailure("read")(cause))),
+        Effect.catchCause((cause) => Effect.fail(storeFailure("read")(cause))),
       ),
     set: (pair, mode) =>
       Effect.flatMap(read, (current) => {
@@ -105,15 +105,16 @@ export function makeCrossProviderMediaConsent(
         };
         return config.update({ crossProviderMediaConsent: next }).pipe(
           Effect.as(next),
-          Effect.catchAllCause((cause) => Effect.fail(storeFailure("write")(cause))),
+          Effect.catchCause((cause) => Effect.fail(storeFailure("write")(cause))),
         );
       }),
   };
 }
 
-export class CrossProviderMediaConsent extends Context.Tag(
-  "memory-agent/CrossProviderMediaConsent",
-)<CrossProviderMediaConsent, CrossProviderMediaConsentApi>() {
+export class CrossProviderMediaConsent extends Context.Service<
+  CrossProviderMediaConsent,
+  CrossProviderMediaConsentApi
+>()("memory-agent/CrossProviderMediaConsent") {
   static readonly layer = Layer.effect(
     CrossProviderMediaConsent,
     Effect.map(GlobalConfig, makeCrossProviderMediaConsent),

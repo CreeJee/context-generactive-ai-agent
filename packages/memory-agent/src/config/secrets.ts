@@ -46,10 +46,9 @@ const keychain: SecretStoreApi = {
  * Credential Manager, Secret Service) and are only read right before the request that needs them;
  * they never reach config files, the conversation, tool output or logs.
  */
-export class SecretStore extends Context.Tag("memory-agent/SecretStore")<
-  SecretStore,
-  SecretStoreApi
->() {
+export class SecretStore extends Context.Service<SecretStore, SecretStoreApi>()(
+  "memory-agent/SecretStore",
+) {
   static readonly keychain = Layer.succeed(SecretStore, keychain);
 
   /** Kept in memory only, for tests. */

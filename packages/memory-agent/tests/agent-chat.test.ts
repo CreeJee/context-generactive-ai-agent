@@ -51,7 +51,7 @@ describe("AgentChat.handle", () => {
     );
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Type")).toContain("text/event-stream");
-    const Delta = Schema.parseJson(
+    const Delta = Schema.fromJsonString(
       Schema.Struct({ type: Schema.String, delta: Schema.optional(Schema.String) }),
     );
     const answer = (await response.text())

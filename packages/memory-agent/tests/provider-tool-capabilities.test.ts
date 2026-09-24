@@ -1,6 +1,6 @@
 import { memoryTool } from "@tanstack/ai-anthropic/tools";
 import { OPENAI_CHAT_MODELS } from "@tanstack/ai-openai";
-import { Effect, Either, Layer } from "effect";
+import { Effect, Result, Layer } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import {
   ProviderToolCapabilityRegistry,
@@ -17,8 +17,8 @@ const runDefault = <A, E>(program: Effect.Effect<A, E, ProviderToolCapabilityReg
 const failure = <A, E>(effect: Effect.Effect<A, E>) =>
   Effect.runPromise(
     effect.pipe(
-      Effect.either,
-      Effect.map((result) => (Either.isLeft(result) ? result.left : null)),
+      Effect.result,
+      Effect.map((result) => (Result.isFailure(result) ? result.failure : null)),
     ),
   );
 
@@ -55,8 +55,8 @@ describe("ProviderToolCapabilityRegistry", () => {
     const result = await runDefault(
       Effect.gen(function* () {
         const registry = yield* ProviderToolCapabilityRegistry;
-        const unknownTool = yield* Effect.either(registry.get("openai:not_real"));
-        const unknownModel = yield* Effect.either(
+        const unknownTool = yield* Effect.result(registry.get("openai:not_real"));
+        const unknownModel = yield* Effect.result(
           registry.resolve({ provider: "anthropic", model: "claude-not-real" }),
         );
         const empty = yield* registry.resolve({ provider: "anthropic", model: "claude-opus-5" });
@@ -64,12 +64,12 @@ describe("ProviderToolCapabilityRegistry", () => {
       }),
     );
     expect(result.unknownTool).toMatchObject({
-      _tag: "Left",
-      left: { _tag: "UnknownProviderTool" },
+      _tag: "Failure",
+      failure: { _tag: "UnknownProviderTool" },
     });
     expect(result.unknownModel).toMatchObject({
-      _tag: "Left",
-      left: { _tag: "UnknownProviderToolModel" },
+      _tag: "Failure",
+      failure: { _tag: "UnknownProviderToolModel" },
     });
     expect(result.empty).toEqual([]);
   });
@@ -161,7 +161,7 @@ describe("ProviderToolCapabilityRegistry", () => {
       get: (id) =>
         providerToolDescriptors.length > 0
           ? Effect.succeed(providerToolDescriptors[0])
-          : Effect.dieMessage(id),
+          : Effect.die(id),
       filter: () => [],
       resolve: () => Effect.succeed([]),
     };

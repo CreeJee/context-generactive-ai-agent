@@ -496,9 +496,10 @@ export function makeProviderToolCapabilityRegistry(
     };
   });
 }
-export class ProviderToolCapabilityRegistry extends Context.Tag(
-  "memory-agent/ProviderToolCapabilityRegistry",
-)<ProviderToolCapabilityRegistry, ProviderToolCapabilityRegistryApi>() {
+export class ProviderToolCapabilityRegistry extends Context.Service<
+  ProviderToolCapabilityRegistry,
+  ProviderToolCapabilityRegistryApi
+>()("memory-agent/ProviderToolCapabilityRegistry") {
   static readonly layer = Layer.effect(
     ProviderToolCapabilityRegistry,
     makeProviderToolCapabilityRegistry(),

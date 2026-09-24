@@ -131,9 +131,8 @@ export const collectApiUsage = (
   },
 });
 
-export class ApiUsage extends Context.Tag("memory-agent/ApiUsage")<
-  ApiUsage,
-  Effect.Effect.Success<typeof make>
->() {
+export class ApiUsage extends Context.Service<ApiUsage, Effect.Success<typeof make>>()(
+  "memory-agent/ApiUsage",
+) {
   static readonly layer = Layer.effect(ApiUsage, make);
 }

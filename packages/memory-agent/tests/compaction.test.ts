@@ -56,14 +56,14 @@ const decodeStatus = Schema.decodeUnknownSync(
       cachedTokens: Schema.NullOr(Schema.Number),
       cacheRatio: Schema.NullOr(Schema.Number),
       compactionStage: Schema.NullOr(
-        Schema.Literal("none", "clear-answered", "summarize", "leave-out"),
+        Schema.Literals(["none", "clear-answered", "summarize", "leave-out"]),
       ),
       windowTokens: Schema.Number,
       compactAtTokens: Schema.Number,
     }),
   }),
 );
-const StreamEvent = Schema.parseJson(
+const StreamEvent = Schema.fromJsonString(
   Schema.Struct({
     type: Schema.String,
     name: Schema.optional(Schema.String),
@@ -79,7 +79,7 @@ async function drain(stream: AsyncIterable<unknown>) {
 
 const noLimit = 1_000_000;
 
-const sourcesOf = (nodes: Effect.Effect.Success<typeof Nodes>, sessionId: string) =>
+const sourcesOf = (nodes: Effect.Success<typeof Nodes>, sessionId: string) =>
   ({
     toolResultId: (toolCallId) => nodes.toolResultId(sessionId, toolCallId),
     nodeText: (id) => nodes.get(id)?.text ?? null,
@@ -122,7 +122,7 @@ async function firstSent(
  * The first answer used a tool.
  */
 function conversation(
-  nodes: Effect.Effect.Success<typeof Nodes>,
+  nodes: Effect.Success<typeof Nodes>,
   at: { readonly projectId: string; readonly sessionId: string },
   answers: readonly string[],
 ) {

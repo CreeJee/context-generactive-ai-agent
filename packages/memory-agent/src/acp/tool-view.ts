@@ -39,7 +39,7 @@ export function toolView(name: string): ToolView {
   return { title: mcp ? `MCP ${mcp[1]} · ${mcp[2]}` : name, kind: "other" };
 }
 
-const PathArguments = Schema.parseJson(
+const PathArguments = Schema.fromJsonString(
   Schema.Struct({
     path: Schema.optional(Schema.String),
     command: Schema.optional(Schema.String),

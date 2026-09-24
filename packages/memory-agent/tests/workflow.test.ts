@@ -1,4 +1,4 @@
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import { describe, expect, test, vi } from "vite-plus/test";
 import { AppEvents } from "../src/events/app-events.ts";
 import { Database } from "../src/db/database.ts";
@@ -198,7 +198,7 @@ describe("Workflows", () => {
           ...plan,
           summary: "Revised execution scope",
         });
-        const progress = yield* Effect.either(
+        const progress = yield* Effect.result(
           workflows.updateProgress(session.id, {
             goalEvidence: [],
             planEvidence: [],
@@ -211,9 +211,9 @@ describe("Workflows", () => {
       }),
     );
 
-    expect(Either.isLeft(result.progress)).toBe(true);
-    if (Either.isLeft(result.progress))
-      expect(result.progress.left).toMatchObject({ reason: "phase_not_executable" });
+    expect(Result.isFailure(result.progress)).toBe(true);
+    if (Result.isFailure(result.progress))
+      expect(result.progress.failure).toMatchObject({ reason: "phase_not_executable" });
     expect(result.state).toMatchObject({
       phase: "plan",
       plan: { version: 2, status: "ready" },
@@ -270,10 +270,10 @@ describe("Workflows", () => {
 
     const execute = await runtime.runPromise(
       Effect.gen(function* () {
-        return yield* Effect.either((yield* Workflows).setPhase(session.id, "execute"));
+        return yield* Effect.result((yield* Workflows).setPhase(session.id, "execute"));
       }),
     );
-    expect(Either.isLeft(execute)).toBe(true);
+    expect(Result.isFailure(execute)).toBe(true);
   });
 
   test("upgrades persisted legacy statuses and missing evidence fields", async () => {
@@ -406,7 +406,7 @@ describe("Workflows", () => {
       Effect.gen(function* () {
         const workflows = yield* Workflows;
         yield* workflows.updateGoal(session.id, goal);
-        return yield* Effect.either(
+        return yield* Effect.result(
           workflows.updateProgress(session.id, {
             goalStatus: "completed",
             steps: [],
@@ -423,8 +423,8 @@ describe("Workflows", () => {
       }),
     );
 
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) expect(result.left.reason).toBe("verification_required");
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) expect(result.failure.reason).toBe("verification_required");
   });
 
   test("refuses a completed step without evidence", async () => {
@@ -434,7 +434,7 @@ describe("Workflows", () => {
         const workflows = yield* Workflows;
         yield* workflows.updateGoal(session.id, goal);
         yield* workflows.updatePlan(session.id, plan);
-        return yield* Effect.either(
+        return yield* Effect.result(
           workflows.updateProgress(session.id, {
             steps: [{ id: "store", status: "completed", evidence: [] }],
             goalEvidence: [],
@@ -445,8 +445,8 @@ describe("Workflows", () => {
       }),
     );
 
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) expect(result.left.reason).toBe("step_evidence_required");
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) expect(result.failure.reason).toBe("step_evidence_required");
   });
 
   test("records pause and resume as durable Goal lifecycle events", async () => {
@@ -769,11 +769,11 @@ describe("Workflows", () => {
     const { runtime, session } = await testRuntime();
     const result = await runtime.runPromise(
       Effect.gen(function* () {
-        return yield* Effect.either((yield* Workflows).setPhase(session.id, "execute"));
+        return yield* Effect.result((yield* Workflows).setPhase(session.id, "execute"));
       }),
     );
 
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) expect(result.left.reason).toBe("plan_not_ready");
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) expect(result.failure.reason).toBe("plan_not_ready");
   });
 });

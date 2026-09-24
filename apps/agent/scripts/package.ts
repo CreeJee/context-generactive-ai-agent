@@ -36,25 +36,25 @@ const output = join(app, "dist", `context-agent-${target}`);
 const PackageJson = Schema.Struct({
   name: Schema.String,
   version: Schema.String,
-  dependencies: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })),
-  optionalDependencies: Schema.optional(
-    Schema.Record({ key: Schema.String, value: Schema.String }),
-  ),
+  dependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  optionalDependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
 });
 const readPackage = (directory: string) =>
-  Schema.decodeUnknownSync(Schema.parseJson(PackageJson))(
+  Schema.decodeUnknownSync(Schema.fromJsonString(PackageJson))(
     readFileSync(join(directory, "package.json"), "utf8"),
   );
 
 const ReleaseVersion = Schema.String.pipe(
-  Schema.pattern(
-    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/,
+  Schema.check(
+    Schema.isPattern(
+      /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/,
+    ),
   ),
 );
 const releaseVersion = Schema.decodeUnknownSync(ReleaseVersion)(
   (process.env.CONTEXT_AGENT_VERSION ?? readPackage(repo).version).replace(/^v/, ""),
 );
-const releaseChannel = Schema.decodeUnknownSync(Schema.Literal("stable", "prerelease"))(
+const releaseChannel = Schema.decodeUnknownSync(Schema.Literals(["stable", "prerelease"]))(
   process.env.CONTEXT_AGENT_RELEASE_CHANNEL ??
     (process.env.CONTEXT_AGENT_VERSION && !releaseVersion.includes("-") ? "stable" : "prerelease"),
 );

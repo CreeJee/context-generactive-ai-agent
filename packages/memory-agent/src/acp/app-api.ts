@@ -1,5 +1,5 @@
 import type { UIMessage } from "@tanstack/ai-client";
-import { Data, Either, ParseResult, Schema } from "effect";
+import { Data, Result, Schema } from "effect";
 import { sessionHolderHeader } from "../sessions/lease-state.ts";
 
 /** Where the running app is, unless `CONTEXT_AGENT_URL` says otherwise. */
@@ -12,7 +12,7 @@ const ProjectSummary = Schema.Struct({
 });
 const SessionSummary = Schema.Struct({ id: Schema.String, projectId: Schema.String });
 const AuthSummary = Schema.Struct({ status: Schema.String });
-const LeaseSummary = Schema.Struct({ state: Schema.Literal("mine", "other", "free") });
+const LeaseSummary = Schema.Struct({ state: Schema.Literals(["mine", "other", "free"]) });
 const RunSummary = Schema.Struct({
   running: Schema.NullOr(Schema.Struct({ runId: Schema.String })),
   lease: LeaseSummary,
@@ -43,7 +43,7 @@ export class AppRequestFailed extends Data.TaggedError("AppRequestFailed")<{
  */
 export function createAppApi(baseUrl: string, fetcher: typeof fetch = fetch) {
   const call = async <A, I>(
-    schema: Schema.Schema<A, I>,
+    schema: Schema.Codec<A, I>,
     path: string,
     init: RequestInit = {},
   ): Promise<A> => {
@@ -55,19 +55,19 @@ export function createAppApi(baseUrl: string, fetcher: typeof fetch = fetch) {
     }
     const json: unknown = await response.json().catch(() => null);
     if (!response.ok) {
-      const code = Schema.decodeUnknownEither(ErrorBody)(json);
+      const code = Schema.decodeUnknownResult(ErrorBody)(json);
       throw new AppRequestFailed(
         response.status,
-        Either.match(code, {
-          onLeft: () => "request_failed",
-          onRight: (body) => body.error,
+        Result.match(code, {
+          onFailure: () => "request_failed",
+          onSuccess: (body) => body.error,
         }),
       );
     }
-    return Either.getOrElse(Schema.decodeUnknownEither(schema)(json), (error) => {
+    return Result.getOrElse(Schema.decodeUnknownResult(schema)(json), (error) => {
       throw new AppRequestFailed(
         response.status,
-        `unexpected_response: ${ParseResult.TreeFormatter.formatErrorSync(error).split("\n")[0]}`,
+        `unexpected_response: ${String(error).split("\n")[0]}`,
       );
     });
   };
@@ -126,14 +126,14 @@ export function createAppApi(baseUrl: string, fetcher: typeof fetch = fetch) {
         Schema.Array(
           Schema.Struct({
             id: Schema.String,
-            requester: Schema.Union(
+            requester: Schema.Union([
               Schema.Struct({
                 kind: Schema.Literal("subagent"),
                 subagentId: Schema.String,
                 name: Schema.NullOr(Schema.String),
               }),
               Schema.Struct({ kind: Schema.Literal("external_agent"), agent: Schema.String }),
-            ),
+            ]),
             toolName: Schema.String,
             argumentsJson: Schema.String,
           }),

@@ -5,14 +5,14 @@ import { firstMessageTitle } from "../sessions/title.ts";
 import { Database } from "../db/database.ts";
 import { EdgeKind, EdgeOrigin, edgeWeights, type Edge, type NodeLink } from "./edges.ts";
 
-export const NodeKind = Schema.Literal(
+export const NodeKind = Schema.Literals([
   "user",
   "assistant",
   "tool_call",
   "tool_result",
   "file_observation",
   "topic",
-);
+]);
 export type NodeKind = typeof NodeKind.Type;
 
 /** Facts about a node that are not its text. Every field is optional because kinds use different ones. */
@@ -87,7 +87,7 @@ const NodeRow = Schema.Struct({
   run_id: Schema.NullOr(Schema.String),
   kind: NodeKind,
   text: Schema.String,
-  detail: Schema.parseJson(NodeDetail),
+  detail: Schema.fromJsonString(NodeDetail),
   created_at: Schema.String,
 });
 const decodeNodeRow = Schema.decodeUnknownSync(NodeRow);
@@ -285,9 +285,8 @@ const make = Effect.gen(function* () {
 });
 
 /** Append-only store of every message, with the structural edges derived at write time. */
-export class Nodes extends Context.Tag("memory-agent/Nodes")<
-  Nodes,
-  Effect.Effect.Success<typeof make>
->() {
+export class Nodes extends Context.Service<Nodes, Effect.Success<typeof make>>()(
+  "memory-agent/Nodes",
+) {
   static readonly layer = Layer.effect(Nodes, make);
 }

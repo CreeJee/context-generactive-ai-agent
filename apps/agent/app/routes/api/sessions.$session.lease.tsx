@@ -1,4 +1,4 @@
-import { Effect, Either, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 import { AgentChat, AppEvents } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
@@ -6,7 +6,7 @@ import type { Route } from "./+types/sessions.$session.lease";
 
 const LeaseRequest = Schema.Struct({
   holder: Schema.NonEmptyString,
-  action: Schema.Literal("claim", "release"),
+  action: Schema.Literals(["claim", "release"]),
 });
 
 /** A lease is changed through POST only. Return a clear response for accidental GETs. */
@@ -26,11 +26,11 @@ export async function action({ request, params }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected) return rejected;
   const body = await readJson(request, LeaseRequest);
-  if (Either.isLeft(body))
+  if (Result.isFailure(body))
     return Response.json({ error: "invalid_lease_request" }, { status: 400 });
   return agent.runPromise(
     Effect.flatMap(AgentChat, (chat) =>
-      chat.lease(params.session, body.right.holder, body.right.action),
+      chat.lease(params.session, body.success.holder, body.success.action),
     ).pipe(
       Effect.tap(() =>
         Effect.map(AppEvents, (events) => events.publishSession(params.session, "run-state")),

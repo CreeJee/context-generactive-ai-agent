@@ -1,14 +1,14 @@
-import { Effect, Either, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 import { Importer } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/settings.imports";
 
-const ImportAction = Schema.Union(
+const ImportAction = Schema.Union([
   Schema.Struct({ action: Schema.Literal("run") }),
-  Schema.Struct({ action: Schema.Literal("enable", "disable") }),
+  Schema.Struct({ action: Schema.Literals(["enable", "disable"]) }),
   Schema.Struct({ action: Schema.Literal("interpret"), interpret: Schema.Boolean }),
-);
+]);
 
 /**
  * GET /api/settings/imports: what can be migrated from other coding agents' local transcripts —
@@ -34,13 +34,13 @@ export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected) return rejected;
   const body = await readJson(request, ImportAction);
-  if (Either.isLeft(body))
+  if (Result.isFailure(body))
     return Response.json({ error: "invalid_import_action" }, { status: 400 });
 
   return agent.runPromise(
     Effect.gen(function* () {
       const importer = yield* Importer;
-      const command = body.right;
+      const command = body.success;
       switch (command.action) {
         case "run":
           // Answered at once; the page follows the pass through `activity`.

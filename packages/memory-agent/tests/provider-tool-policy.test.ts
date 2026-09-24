@@ -1,7 +1,7 @@
 import { mkdtempSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Either, Fiber, Layer } from "effect";
+import { Effect, Result, Fiber, Layer } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { makeModelFeatureFlags } from "../src/providers/model-feature-flags.ts";
 import {
@@ -34,8 +34,8 @@ const run = <A, E>(
 ) => Effect.runPromise(effect.pipe(Effect.provide(layer)));
 const errorOf = <A, E>(effect: Effect.Effect<A, E>) =>
   effect.pipe(
-    Effect.either,
-    Effect.map((either) => (Either.isLeft(either) ? either.left : null)),
+    Effect.result,
+    Effect.map((either) => (Result.isFailure(either) ? either.failure : null)),
   );
 const basePolicy = (
   overrides: Partial<ProviderToolPolicyContext> = {},
@@ -408,7 +408,7 @@ describe("ProviderToolPolicy", () => {
   test("supports a deterministic test Layer override", async () => {
     const override: ProviderToolPolicyApi = {
       expose: () => Effect.succeed({ tools: [] }),
-      revalidateExecution: () => Effect.dieMessage("unused"),
+      revalidateExecution: () => Effect.die("unused"),
     };
     const value = await Effect.runPromise(
       Effect.map(ProviderToolPolicy, (service) => service).pipe(
@@ -569,7 +569,7 @@ describe("ProviderToolRuntime", () => {
             },
           ],
         }),
-      revalidateExecution: () => Effect.dieMessage("unused"),
+      revalidateExecution: () => Effect.die("unused"),
     };
     const error = await Effect.runPromise(
       errorOf(
@@ -711,7 +711,7 @@ describe("ProviderToolRuntime", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const runtime = yield* ProviderToolRuntime;
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           runtime.execute({
             policy: basePolicy({ accountToolKinds: ["web_search"] }),
             toolId: "openai:web_search",
@@ -844,7 +844,7 @@ describe("ProviderToolRuntime", () => {
   test("supports a runtime Layer override", async () => {
     const override: ProviderToolRuntimeApi = {
       compose: () => Effect.succeed([]),
-      execute: () => Effect.dieMessage("unused"),
+      execute: () => Effect.die("unused"),
     };
     const value = await Effect.runPromise(
       Effect.map(ProviderToolRuntime, (runtime) => runtime).pipe(

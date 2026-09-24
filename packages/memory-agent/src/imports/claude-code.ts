@@ -25,10 +25,10 @@ const ToolUsePart = Schema.Struct({
   input: Schema.Unknown,
 });
 /** A tool result body: a plain string, or content parts of which only the text ones matter. */
-const ResultBody = Schema.Union(
+const ResultBody = Schema.Union([
   Schema.String,
   Schema.Array(Schema.Struct({ type: Schema.String, text: Schema.optional(Schema.String) })),
-);
+]);
 type ResultBody = typeof ResultBody.Type;
 const ToolResultPart = Schema.Struct({
   type: Schema.Literal("tool_result"),
@@ -36,10 +36,12 @@ const ToolResultPart = Schema.Struct({
   is_error: Schema.optional(Schema.Boolean),
   content: Schema.optional(ResultBody),
 });
-const decodePart = Schema.decodeUnknownOption(Schema.Union(TextPart, ToolUsePart, ToolResultPart));
+const decodePart = Schema.decodeUnknownOption(
+  Schema.Union([TextPart, ToolUsePart, ToolResultPart]),
+);
 
 const Line = Schema.Struct({
-  type: Schema.Literal("user", "assistant"),
+  type: Schema.Literals(["user", "assistant"]),
   uuid: Schema.String,
   timestamp: Schema.String,
   cwd: Schema.optional(Schema.String),
@@ -49,11 +51,11 @@ const Line = Schema.Struct({
   /** Context the CLI wrote as if the user had said it. */
   isMeta: Schema.optional(Schema.Boolean),
   message: Schema.Struct({
-    role: Schema.Literal("user", "assistant"),
-    content: Schema.Union(Schema.String, Schema.Array(Schema.Unknown)),
+    role: Schema.Literals(["user", "assistant"]),
+    content: Schema.Union([Schema.String, Schema.Array(Schema.Unknown)]),
   }),
 });
-const decodeLine = Schema.decodeUnknownOption(Schema.parseJson(Line));
+const decodeLine = Schema.decodeUnknownOption(Schema.fromJsonString(Line));
 
 const isText = Schema.is(Schema.String);
 

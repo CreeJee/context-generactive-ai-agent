@@ -2,7 +2,7 @@ import type { AgentLoopStrategy, AnyTextAdapter, ChatMiddleware, ModelMessage } 
 import { Data, Effect, Schema } from "effect";
 
 /** Subscription providers supported by the product runtime. */
-export const ProviderId = Schema.Literal("openai", "anthropic");
+export const ProviderId = Schema.Literals(["openai", "anthropic"]);
 export type ProviderId = typeof ProviderId.Type;
 
 /** A model is never identified without its provider. */
@@ -14,7 +14,7 @@ export const ModelSelection = Schema.Struct({
 export type ModelSelection = typeof ModelSelection.Type;
 
 export const ModelCapabilities = Schema.Struct({
-  inputModalities: Schema.Array(Schema.Literal("text", "image")),
+  inputModalities: Schema.Array(Schema.Literals(["text", "image"])),
   toolCalling: Schema.Boolean,
   reasoning: Schema.Boolean,
 });

@@ -16,7 +16,9 @@ export function rejectCrossSite(request: Request): Response | null {
 }
 
 /** Decodes a JSON body; an empty body decodes as `{}` so optional-only schemas accept it. */
-export async function readJson<A, I>(request: Request, schema: Schema.Schema<A, I>) {
+export async function readJson<A, I>(request: Request, schema: Schema.Codec<A, I>) {
   const text = await request.text();
-  return Schema.decodeUnknownEither(Schema.parseJson(schema))(text.trim() === "" ? "{}" : text);
+  return Schema.decodeUnknownResult(Schema.fromJsonString(schema))(
+    text.trim() === "" ? "{}" : text,
+  );
 }

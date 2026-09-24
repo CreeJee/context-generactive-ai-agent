@@ -1,5 +1,5 @@
 import { toolDefinition, type ChatMiddleware } from "@tanstack/ai";
-import { Context, Effect, Layer, Runtime, Schema } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
 import { Graph } from "../memory/graph.ts";
 import { Interpretations } from "../memory/interpretations.ts";
 import { KnowledgePromotions } from "../memory/knowledge.ts";
@@ -17,48 +17,49 @@ export const memoryToolNames = [
 ] as const;
 
 const findMemoryInput = Schema.Struct({
-  query: Schema.String.annotations({
+  query: Schema.String.annotate({
     description:
       "What to look for. Phrase it as you would ask it; wording does not need to match the original.",
   }),
 });
 const readEvidenceInput = Schema.Struct({
-  id: Schema.String.annotations({ description: "Node id from find_memory or trace_evidence." }),
-  offset: Schema.optional(
-    Schema.Number.annotations({ description: "nextOffset from the previous page, if any." }),
+  id: Schema.String.annotate({ description: "Node id from find_memory or trace_evidence." }),
+  offset: Schema.optionalKey(
+    Schema.Number.annotate({ description: "nextOffset from the previous page, if any." }),
   ),
 });
 const readToolResultInput = Schema.Struct({
-  id: Schema.NonEmptyString.annotations({
+  id: Schema.NonEmptyString.annotate({
     description: "Recorded tool-result node ID from a result summary in this session.",
   }),
-  offset: Schema.optionalWith(Schema.Number.pipe(Schema.int(), Schema.greaterThanOrEqualTo(0)), {
-    default: () => 0,
-  }),
+  offset: Schema.Number.pipe(
+    Schema.check(Schema.isInt()),
+    Schema.check(Schema.isGreaterThanOrEqualTo(0)),
+  ).pipe(Schema.withDecodingDefaultTypeKey(Effect.sync(() => 0))),
 });
 const traceEvidenceInput = Schema.Struct({
-  id: Schema.String.annotations({ description: "Node id to trace back to its cause." }),
+  id: Schema.String.annotate({ description: "Node id to trace back to its cause." }),
 });
 const PromoteMemoryCandidateInput = Schema.Struct({
-  claimId: Schema.String.annotations({
+  claimId: Schema.String.annotate({
     description: "Final-answer claim that adopted this source.",
   }),
   taskId: Schema.String,
   attemptId: Schema.String,
-  evidenceRefIds: Schema.Array(Schema.String).annotations({
+  evidenceRefIds: Schema.Array(Schema.String).annotate({
     description:
       "Verified evidence ids adopted by the claim; use [] only when the adopted report had no evidence.",
   }),
-  proposedText: Schema.String.annotations({
+  proposedText: Schema.String.annotate({
     description: "The candidate wording presented to the user.",
   }),
-  resolvedText: Schema.String.annotations({
+  resolvedText: Schema.String.annotate({
     description: "The exact wording selected or edited by the user.",
   }),
-  disposition: Schema.Literal("save", "conversation_only", "reject"),
+  disposition: Schema.Literals(["save", "conversation_only", "reject"]),
 });
 const UsePromotedMemoryInput = Schema.Struct({
-  memoryNodeIds: Schema.Array(Schema.String).annotations({
+  memoryNodeIds: Schema.Array(Schema.String).annotate({
     description:
       "Promoted-memory node ids returned by find_memory and actually used in the upcoming answer.",
   }),
@@ -73,10 +74,10 @@ interface RunBinding {
 }
 
 const make = Effect.gen(function* () {
-  const runtime = yield* Effect.runtime<
+  const runtime = yield* Effect.context<
     MemorySearch | Nodes | Graph | Interpretations | KnowledgePromotions
   >();
-  const run = Runtime.runPromise(runtime);
+  const run = Effect.runPromiseWith(runtime);
 
   const toolsFor = (projectId: string, binding?: RunBinding) => {
     const retrieved = new Set<string>();
@@ -268,9 +269,8 @@ const make = Effect.gen(function* () {
   };
 });
 
-export class MemoryTools extends Context.Tag("memory-agent/MemoryTools")<
-  MemoryTools,
-  Effect.Effect.Success<typeof make>
->() {
+export class MemoryTools extends Context.Service<MemoryTools, Effect.Success<typeof make>>()(
+  "memory-agent/MemoryTools",
+) {
   static readonly layer = Layer.effect(MemoryTools, make);
 }

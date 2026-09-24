@@ -108,7 +108,7 @@ const Count = Schema.Struct({ count: Schema.Number });
 const decodeCount = Schema.decodeUnknownSync(Count);
 const decodeName = Schema.decodeUnknownSync(Schema.Struct({ name: Schema.String }));
 const decodeChallenge = Schema.decodeUnknownSync(
-  Schema.Struct({ from_id: Schema.String, kind: Schema.Literal("corrects", "retracts") }),
+  Schema.Struct({ from_id: Schema.String, kind: Schema.Literals(["corrects", "retracts"]) }),
 );
 
 /** Splits a question into search terms; trigram FTS needs 3+ characters, shorter terms use LIKE. */
@@ -247,14 +247,14 @@ const make = (tuning: SearchTuning) =>
         const degraded: ("vector" | "morph")[] = [];
 
         const byVector = yield* vectorRanking(input.query, new Set(allowed), limit * 4).pipe(
-          Effect.catchAll(() => {
+          Effect.catch(() => {
             degraded.push("vector");
             return Effect.succeed([]);
           }),
         );
         const byText = textRanking(input.query, allowed, limit * 2);
         const byMorph = yield* morphRanking(input.query, allowed, limit * 2).pipe(
-          Effect.catchAll(() => {
+          Effect.catch(() => {
             if (analyzer.identity !== "none") degraded.push("morph");
             return Effect.succeed([]);
           }),
@@ -328,10 +328,10 @@ const make = (tuning: SearchTuning) =>
   });
 
 /** Finds prior messages: vector and text matches seed a graph walk over the memory. */
-export class MemorySearch extends Context.Tag("memory-agent/MemorySearch")<
+export class MemorySearch extends Context.Service<
   MemorySearch,
-  Effect.Effect.Success<ReturnType<typeof make>>
->() {
+  Effect.Success<ReturnType<typeof make>>
+>()("memory-agent/MemorySearch") {
   static readonly layer = Layer.effect(MemorySearch, make(searchTuning));
   /** The search with some settings changed, for the recall evaluation. */
   static readonly tuned = (tuning: Partial<SearchTuning>) =>

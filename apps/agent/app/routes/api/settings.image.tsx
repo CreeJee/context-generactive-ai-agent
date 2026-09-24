@@ -1,4 +1,4 @@
-import { Effect, Either, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 import {
   CrossProviderMediaConsent,
   CrossProviderMediaConsentMode,
@@ -8,13 +8,13 @@ import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/settings.image";
 
-const ImageSettingsAction = Schema.Union(
+const ImageSettingsAction = Schema.Union([
   Schema.Struct({ action: Schema.Literal("image_generation"), enabled: Schema.Boolean }),
   Schema.Struct({
     action: Schema.Literal("cross_provider_media"),
     mode: CrossProviderMediaConsentMode,
   }),
-);
+]);
 
 const imageSettingsView = Effect.gen(function* () {
   const feature = yield* ImageFeature;
@@ -35,13 +35,13 @@ export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected) return rejected;
   const body = await readJson(request, ImageSettingsAction);
-  if (Either.isLeft(body))
+  if (Result.isFailure(body))
     return Response.json({ error: "invalid_image_settings_action" }, { status: 400 });
 
   const response = Effect.gen(function* () {
     const feature = yield* ImageFeature;
     const crossProviderMediaConsent = yield* CrossProviderMediaConsent;
-    const command = body.right;
+    const command = body.success;
     switch (command.action) {
       case "image_generation":
         yield* feature.setImageGenerationEnabled(command.enabled);

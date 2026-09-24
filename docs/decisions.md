@@ -31,6 +31,12 @@
 이 저장소의 제품과 설계 결정을 날짜와 함께 기록합니다. 결정이 바뀌면 해당 내용을 현재 결정으로 교체하고 날짜를 갱신합니다. 이전 결정은 git 기록에서 확인할 수 있습니다.
 요구사항의 원본은 이전 프로젝트(`topic-generactive-ai-agent`)의 PRD R01-R19이며, 여기서는 그중 이 저장소에서 바꾸거나 구체화한 부분만 적습니다.
 
+## Effect v4 전환 (2026-09-24)
+
+- Effect는 `4.0.0-rc.117`을 사용한다. 서비스는 `Context.Service`, 복구 가능한 실패는 tagged typed error, 순차적인 내부 흐름은 `Effect.gen`으로 표현한다.
+- 도구 입력에서 생략 가능한 키는 `Schema.optionalKey`로 선언한다. v4의 `Schema.optional`은 값의 `undefined`도 허용해 모델에 전달되는 JSON Schema에 nullable 값으로 나타난다.
+- Effect의 `Result`는 `Failure`/`Success`로 판별한다. 서비스 밖의 SDK 콜백에서 Effect를 실행할 때는 현재 컨텍스트를 전달하는 `Effect.runPromiseWith`를 쓴다.
+
 ## Work Trace 실행 경계 (2026-09-20)
 
 - TanStack `chat_runs`는 SDK의 run·interrupt·durable-run 계약에 그대로 사용한다. Task의 여러 실행과 재개 계보는 별도 앱 소유 `agent_run_attempts`로 저장하고 `chat_run_id`로 연결한다.

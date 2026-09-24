@@ -95,7 +95,7 @@ export function makeModelFeatureFlags(
   const known = new Set(capabilities);
   const read = config.read.pipe(
     Effect.map((settings) => settings.modelFeatureFlags ?? emptySettings()),
-    Effect.catchAllCause((cause) => Effect.fail(storeFailure("read")(cause))),
+    Effect.catchCause((cause) => Effect.fail(storeFailure("read")(cause))),
   );
   return {
     read,
@@ -132,15 +132,14 @@ export function makeModelFeatureFlags(
         })();
         return config.update({ modelFeatureFlags: next }).pipe(
           Effect.as(next),
-          Effect.catchAllCause((cause) => Effect.fail(storeFailure("write")(cause))),
+          Effect.catchCause((cause) => Effect.fail(storeFailure("write")(cause))),
         );
       }),
   };
 }
-export class ModelFeatureFlags extends Context.Tag("memory-agent/ModelFeatureFlags")<
-  ModelFeatureFlags,
-  ModelFeatureFlagsApi
->() {
+export class ModelFeatureFlags extends Context.Service<ModelFeatureFlags, ModelFeatureFlagsApi>()(
+  "memory-agent/ModelFeatureFlags",
+) {
   static readonly layer = (capabilities: Iterable<string>) =>
     Layer.effect(
       ModelFeatureFlags,

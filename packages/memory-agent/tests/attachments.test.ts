@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import {
   Attachments,
@@ -30,12 +30,12 @@ test("a storage write failure is a typed attachment error", async () => {
   const result = await runtime.runPromise(
     Effect.gen(function* () {
       const attachments = yield* Attachments;
-      return yield* Effect.either(attachments.save(tinyPng));
+      return yield* Effect.result(attachments.save(tinyPng));
     }),
   );
   expect(
-    Either.match(result, {
-      onLeft: (error) => {
+    Result.match(result, {
+      onFailure: (error) => {
         switch (error._tag) {
           case "AttachmentStorageFailed":
             return { tag: error._tag, operation: error.operation };
@@ -43,7 +43,7 @@ test("a storage write failure is a typed attachment error", async () => {
             return { tag: error._tag, operation: null };
         }
       },
-      onRight: () => null,
+      onSuccess: () => null,
     }),
   ).toEqual({ tag: "AttachmentStorageFailed", operation: "save" });
 });
@@ -157,17 +157,17 @@ describe("Attachments", () => {
       Effect.gen(function* () {
         const attachments = yield* Attachments;
         return {
-          empty: yield* Effect.either(attachments.save(new Uint8Array())),
-          svg: yield* Effect.either(attachments.save(Buffer.from("<svg/>"))),
+          empty: yield* Effect.result(attachments.save(new Uint8Array())),
+          svg: yield* Effect.result(attachments.save(Buffer.from("<svg/>"))),
           traversal: attachments.get("../agent.db"),
           missing: attachments.get("0".repeat(64)),
         };
       }),
     );
     const reason = (result: typeof outcome.empty) =>
-      Either.match(result, {
-        onLeft: (error) => (error._tag === "AttachmentRejected" ? error.reason : error._tag),
-        onRight: () => "saved",
+      Result.match(result, {
+        onFailure: (error) => (error._tag === "AttachmentRejected" ? error.reason : error._tag),
+        onSuccess: () => "saved",
       });
     expect(reason(outcome.empty)).toBe("empty");
     expect(reason(outcome.svg)).toBe("unsupported_type");

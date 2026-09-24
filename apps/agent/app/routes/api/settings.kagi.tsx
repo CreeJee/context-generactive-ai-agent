@@ -1,16 +1,16 @@
-import { Effect, Either, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 import { Kagi } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/settings.kagi";
 
-const KagiAction = Schema.Union(
+const KagiAction = Schema.Union([
   Schema.Struct({
     action: Schema.Literal("register"),
-    key: Schema.Trim.pipe(Schema.nonEmptyString()),
+    key: Schema.Trim.pipe(Schema.check(Schema.isNonEmpty())),
   }),
-  Schema.Struct({ action: Schema.Literal("remove", "enable", "disable") }),
-);
+  Schema.Struct({ action: Schema.Literals(["remove", "enable", "disable"]) }),
+]);
 
 const keychainFailed = (operation: string) =>
   Response.json({ error: "keychain_failed", reason: operation }, { status: 500 });
@@ -37,11 +37,12 @@ export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected) return rejected;
   const body = await readJson(request, KagiAction);
-  if (Either.isLeft(body)) return Response.json({ error: "invalid_kagi_action" }, { status: 400 });
+  if (Result.isFailure(body))
+    return Response.json({ error: "invalid_kagi_action" }, { status: 400 });
 
   const response = Effect.gen(function* () {
     const kagi = yield* Kagi;
-    const command = body.right;
+    const command = body.success;
     switch (command.action) {
       case "register":
         yield* kagi.registerKey(command.key);

@@ -1,4 +1,4 @@
-import { Effect, Either, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 import { AppEvents, PermissionMode, Projects } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
@@ -21,8 +21,8 @@ export async function action({ request, params }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected) return rejected;
   const body = await readJson(request, ProjectSettings);
-  if (Either.isLeft(body)) return Response.json({ error: "invalid_settings" }, { status: 400 });
-  const { crossRecallExcluded, permissionMode, hidden } = body.right;
+  if (Result.isFailure(body)) return Response.json({ error: "invalid_settings" }, { status: 400 });
+  const { crossRecallExcluded, permissionMode, hidden } = body.success;
 
   const response = Effect.gen(function* () {
     const projects = yield* Projects;

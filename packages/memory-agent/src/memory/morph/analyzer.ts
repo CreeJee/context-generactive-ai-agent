@@ -37,14 +37,14 @@ const batchSize = 64;
 /** Longest text analyzed; the rest of a long tool output adds little to search terms. */
 const maxCharacters = 20_000;
 
-const Reply = Schema.Union(
+const Reply = Schema.Union([
   Schema.Struct({
     id: Schema.Number,
     kind: Schema.Literal("terms"),
     terms: Schema.Array(Schema.Array(Schema.String)),
   }),
   Schema.Struct({ id: Schema.Number, kind: Schema.Literal("error"), error: Schema.String }),
-);
+]);
 const decodeReply = Schema.decodeUnknownSync(Reply);
 
 /** Downloads and extracts the model once, into `<storage>/models/kiwi-<version>`. */
@@ -158,12 +158,11 @@ const makeKiwi = Effect.gen(function* () {
 });
 
 /** Korean morphological analysis for search terms. */
-export class MorphAnalyzer extends Context.Tag("memory-agent/MorphAnalyzer")<
-  MorphAnalyzer,
-  MorphAnalyzerApi
->() {
+export class MorphAnalyzer extends Context.Service<MorphAnalyzer, MorphAnalyzerApi>()(
+  "memory-agent/MorphAnalyzer",
+) {
   /** Kiwi in a worker thread, with its model downloaded to `<storage>/models` on first use. */
-  static readonly kiwi = Layer.scoped(MorphAnalyzer, makeKiwi);
+  static readonly kiwi = Layer.effect(MorphAnalyzer, makeKiwi);
 
   /** No analyzer: search runs without morpheme terms. */
   static readonly disabled = Layer.succeed(MorphAnalyzer, {

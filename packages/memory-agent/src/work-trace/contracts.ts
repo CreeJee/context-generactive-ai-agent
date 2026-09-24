@@ -1,25 +1,25 @@
 import { Schema } from "effect";
 
 /** Stable identity of a child agent. One-off agents have no reusable name. */
-export const AgentIdentityKind = Schema.Literal("one_off", "named");
+export const AgentIdentityKind = Schema.Literals(["one_off", "named"]);
 export type AgentIdentityKind = typeof AgentIdentityKind.Type;
 
 /** Why the parent addressed an agent. A steer joins the current attempt; resume creates a new one. */
-export const InvocationKind = Schema.Literal("start", "continue", "steer", "resume");
+export const InvocationKind = Schema.Literals(["start", "continue", "steer", "resume"]);
 export type InvocationKind = typeof InvocationKind.Type;
 
-export const InvocationStatus = Schema.Literal(
+export const InvocationStatus = Schema.Literals([
   "accepted",
   "steered",
   "running",
   "completed",
   "failed",
   "cancelled",
-);
+]);
 export type InvocationStatus = typeof InvocationStatus.Type;
 
 /** Logical state shown for a Task across all of its physical attempts. */
-export const TaskStatus = Schema.Literal(
+export const TaskStatus = Schema.Literals([
   "queued",
   "running",
   "waiting",
@@ -32,11 +32,11 @@ export const TaskStatus = Schema.Literal(
   "cancelled",
   "archived",
   "deleted",
-);
+]);
 export type TaskStatus = typeof TaskStatus.Type;
 
 /** Physical lifecycle of one provider run. Resumability is a separate derived decision. */
-export const AttemptStatus = Schema.Literal(
+export const AttemptStatus = Schema.Literals([
   "queued",
   "running",
   "waiting",
@@ -45,20 +45,20 @@ export const AttemptStatus = Schema.Literal(
   "completed",
   "failed",
   "cancelled",
-);
+]);
 export type AttemptStatus = typeof AttemptStatus.Type;
 
-export const ResumeReason = Schema.Literal(
+export const ResumeReason = Schema.Literals([
   "server_restarted",
   "connection_lost",
   "provider_failed",
   "user_cancelled",
   "approval_expired",
   "unknown",
-);
+]);
 export type ResumeReason = typeof ResumeReason.Type;
 
-export const ResumeBlocker = Schema.Literal(
+export const ResumeBlocker = Schema.Literals([
   "attempt_alive",
   "task_terminal",
   "active_attempt_exists",
@@ -67,10 +67,10 @@ export const ResumeBlocker = Schema.Literal(
   "pending_approval",
   "legacy_record",
   "not_authorized",
-);
+]);
 export type ResumeBlocker = typeof ResumeBlocker.Type;
 
-export const Resumability = Schema.Union(
+export const Resumability = Schema.Union([
   Schema.Struct({ state: Schema.Literal("not_needed") }),
   Schema.Struct({
     state: Schema.Literal("available"),
@@ -83,20 +83,20 @@ export const Resumability = Schema.Union(
     reason: ResumeReason,
     blockers: Schema.Array(ResumeBlocker),
   }),
-);
+]);
 export type Resumability = typeof Resumability.Type;
 
 /** A report returning is not evidence that the parent reviewed or used it. */
-export const ReportDisposition = Schema.Literal(
+export const ReportDisposition = Schema.Literals([
   "returned",
   "reviewed",
   "used",
   "not_used",
   "superseded",
-);
+]);
 export type ReportDisposition = typeof ReportDisposition.Type;
 
-export const EvidenceSourceKind = Schema.Literal(
+export const EvidenceSourceKind = Schema.Literals([
   "message",
   "tool_call",
   "tool_result",
@@ -104,27 +104,27 @@ export const EvidenceSourceKind = Schema.Literal(
   "artifact",
   "checkpoint",
   "memory",
-);
+]);
 export type EvidenceSourceKind = typeof EvidenceSourceKind.Type;
 
-export const EvidenceVerification = Schema.Literal(
+export const EvidenceVerification = Schema.Literals([
   "unverified",
   "verified",
   "invalidated",
   "unavailable",
   "source_deleted",
-);
+]);
 export type EvidenceVerification = typeof EvidenceVerification.Type;
 
 /** A durable pointer to source material. It identifies content without copying that content. */
-export const EvidenceLocator = Schema.Union(
+export const EvidenceLocator = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("message"),
     threadId: Schema.String,
     messageId: Schema.String,
   }),
   Schema.Struct({
-    kind: Schema.Literal("tool_call", "tool_result"),
+    kind: Schema.Literals(["tool_call", "tool_result"]),
     threadId: Schema.String,
     toolCallId: Schema.String,
   }),
@@ -138,27 +138,27 @@ export const EvidenceLocator = Schema.Union(
   Schema.Struct({ kind: Schema.Literal("artifact"), artifactId: Schema.String }),
   Schema.Struct({ kind: Schema.Literal("checkpoint"), checkpointId: Schema.String }),
   Schema.Struct({ kind: Schema.Literal("memory"), memoryId: Schema.String }),
-);
+]);
 export type EvidenceLocator = typeof EvidenceLocator.Type;
 
-export const ArtifactKind = Schema.Literal("file", "generated", "external");
+export const ArtifactKind = Schema.Literals(["file", "generated", "external"]);
 export type ArtifactKind = typeof ArtifactKind.Type;
 
 /** Artifact metadata points at a result; generated contents remain in their owning store. */
-export const ArtifactLocator = Schema.Union(
+export const ArtifactLocator = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("file"), path: Schema.String, sha256: Schema.String }),
   Schema.Struct({ kind: Schema.Literal("generated"), reference: Schema.String }),
   Schema.Struct({ kind: Schema.Literal("external"), reference: Schema.String }),
-);
+]);
 export type ArtifactLocator = typeof ArtifactLocator.Type;
 
 /** User-visible trace never exposes internal reasoning. */
-export const TraceVisibility = Schema.Literal("public", "summary", "internal");
+export const TraceVisibility = Schema.Literals(["public", "summary", "internal"]);
 export type TraceVisibility = typeof TraceVisibility.Type;
-export const RedactionState = Schema.Literal("clear", "redacted", "omitted");
+export const RedactionState = Schema.Literals(["clear", "redacted", "omitted"]);
 export type RedactionState = typeof RedactionState.Type;
 
-export const ToolExecutionState = Schema.Literal(
+export const ToolExecutionState = Schema.Literals([
   "requested",
   "waiting_approval",
   "approved",
@@ -167,10 +167,10 @@ export const ToolExecutionState = Schema.Literal(
   "completed",
   "failed",
   "uncertain",
-);
+]);
 export type ToolExecutionState = typeof ToolExecutionState.Type;
 
-export const RunEventKind = Schema.Literal(
+export const RunEventKind = Schema.Literals([
   "attempt_queued",
   "attempt_started",
   "activity",
@@ -198,7 +198,7 @@ export const RunEventKind = Schema.Literal(
   "recovery_blocked",
   "parent_notified",
   "task_archived",
-);
+]);
 export type RunEventKind = typeof RunEventKind.Type;
 
 export const AgentIdentity = Schema.Struct({
@@ -327,14 +327,14 @@ export const ReportAdoption = Schema.Struct({
 });
 export type ReportAdoption = typeof ReportAdoption.Type;
 
-export const MemoryCandidateStatus = Schema.Literal(
+export const MemoryCandidateStatus = Schema.Literals([
   "proposed",
   "confirmed",
   "conversation_only",
   "rejected",
   "promoted",
   "superseded",
-);
+]);
 export type MemoryCandidateStatus = typeof MemoryCandidateStatus.Type;
 
 export const MemoryCandidate = Schema.Struct({
@@ -349,14 +349,14 @@ export const MemoryCandidate = Schema.Struct({
 });
 export type MemoryCandidate = typeof MemoryCandidate.Type;
 
-export const DecisionStatus = Schema.Literal("proposed", "confirmed", "rejected", "superseded");
+export const DecisionStatus = Schema.Literals(["proposed", "confirmed", "rejected", "superseded"]);
 export type DecisionStatus = typeof DecisionStatus.Type;
 export const WorkDecision = Schema.Struct({
   id: Schema.String,
   taskId: Schema.String,
   evidenceRefIds: Schema.Array(Schema.String),
   status: DecisionStatus,
-  decidedBy: Schema.Literal("user", "assistant"),
+  decidedBy: Schema.Literals(["user", "assistant"]),
   createdAt: Schema.Number,
   updatedAt: Schema.Number,
 });

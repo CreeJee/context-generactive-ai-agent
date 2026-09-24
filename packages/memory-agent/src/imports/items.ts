@@ -4,7 +4,7 @@ import { Schema } from "effect";
  * A coding agent whose local transcripts can be migrated into this app's memory.
  * A new tool is one more tag here plus one adapter file next to this one.
  */
-export const ImportSourceName = Schema.Literal("claude-code", "codex");
+export const ImportSourceName = Schema.Literals(["claude-code", "codex"]);
 export type ImportSourceName = typeof ImportSourceName.Type;
 
 /** Which conversation a transcript holds and where it was held. */

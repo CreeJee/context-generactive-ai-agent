@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Either, Layer } from "effect";
+import { Effect, Result, Layer } from "effect";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { Database } from "../src/db/database.ts";
@@ -36,8 +36,8 @@ const run = <A, E>(storage: string, program: Effect.Effect<A, E, Projects>) =>
 
 const rejection = <A, E>(effect: Effect.Effect<A, E>) =>
   effect.pipe(
-    Effect.either,
-    Effect.map((result) => (Either.isLeft(result) ? result.left : null)),
+    Effect.result,
+    Effect.map((result) => (Result.isFailure(result) ? result.failure : null)),
   );
 
 describe("Projects", () => {

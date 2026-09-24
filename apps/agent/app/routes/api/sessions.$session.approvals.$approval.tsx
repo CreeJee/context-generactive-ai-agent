@@ -1,4 +1,4 @@
-import { Effect, Either, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 import { AgentChat, AppEvents, sessionHolderHeader } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
@@ -14,11 +14,11 @@ export async function action({ request, params }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected) return rejected;
   const body = await readJson(request, Answer);
-  if (Either.isLeft(body)) return Response.json({ error: "invalid_answer" }, { status: 400 });
+  if (Result.isFailure(body)) return Response.json({ error: "invalid_answer" }, { status: 400 });
   const holder = request.headers.get(sessionHolderHeader);
   return agent.runPromise(
     Effect.flatMap(AgentChat, (chat) =>
-      chat.answerApproval(params.session, holder, params.approval, body.right.approved),
+      chat.answerApproval(params.session, holder, params.approval, body.success.approved),
     ).pipe(
       Effect.tap(() =>
         Effect.map(AppEvents, (events) =>

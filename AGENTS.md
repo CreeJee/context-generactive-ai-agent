@@ -34,6 +34,12 @@ release. Add a tool name to select part of the graph. For example, run
 
 ## common Rules
 
+## Learning more about Effect
+
+This repository uses the Effect TypeScript library. Before writing Effect code, read
+`node_modules/effect/AGENTS.md` completely and follow its links when relevant. For
+APIs not covered there, inspect `node_modules/effect/src`.
+
 - 코드를 탐색할 때는 codegraph 등의 도구를 사용하시오.
 - 변형은 리터럴 태그를 가진 서로소 유니온으로 표현하고 `switch`로 분기하시오. `"key" in obj` 식 판별은 쓰지 마시오.
 - 확정한 제품과 설계 결정은 [docs/decisions.md](docs/decisions.md)에 날짜와 함께 남기시오.

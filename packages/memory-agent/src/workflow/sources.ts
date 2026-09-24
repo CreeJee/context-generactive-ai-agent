@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { Schema } from "effect";
+import { Schema, Struct } from "effect";
 import type { Project } from "../projects/projects.ts";
 import type { Skill } from "../skills/skills.ts";
 import {
@@ -12,8 +12,10 @@ import {
 
 export const projectWorkflowRulesPath = ".agents/workflow-rules.json";
 const maxProjectRuleBytes = 256 * 1024;
-const ProjectRuleFile = Schema.Struct({ rules: Schema.Array(WorkflowRule.omit("source")) });
-const decodeProjectRules = Schema.decodeUnknownSync(Schema.parseJson(ProjectRuleFile));
+const ProjectRuleFile = Schema.Struct({
+  rules: Schema.Array(WorkflowRule.mapFields(Struct.omit(["source"]))),
+});
+const decodeProjectRules = Schema.decodeUnknownSync(Schema.fromJsonString(ProjectRuleFile));
 
 export interface RuleSourceProblem {
   readonly source: string;

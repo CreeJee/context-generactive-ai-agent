@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { AnyServerTool } from "@tanstack/ai";
-import { Context, Data, Effect, Either, Layer, Option, Schema } from "effect";
+import { Context, Data, Effect, Result, Layer, Option, Schema } from "effect";
 import { resolveProjectPath } from "../files/paths.ts";
 import type { Project } from "../projects/projects.ts";
 import { Attachments } from "./attachments.ts";
@@ -10,7 +10,7 @@ const writingToolNames: ReadonlySet<string> = new Set(["write_file", "edit_file"
 
 /** The result's other fields are kept as they are, so the preview is only added, never swapped in. */
 const decodeWritten = Schema.decodeUnknownOption(Schema.Struct({ path: Schema.String }), {
-  onExcessProperty: "preserve",
+  onExcessProperty: "ignore",
 });
 
 /**
@@ -40,9 +40,9 @@ const make = Effect.gen(function* () {
    */
   const previewOf = (project: Project, path: string) =>
     Effect.gen(function* () {
-      const absolute = Either.match(resolveProjectPath(project.root, path, "file"), {
-        onLeft: () => null,
-        onRight: (resolved) => resolved.absolute,
+      const absolute = Result.match(resolveProjectPath(project.root, path, "file"), {
+        onFailure: () => null,
+        onSuccess: (resolved) => resolved.absolute,
       });
       if (absolute === null) return Option.none<DrawingPreview>();
       const svg = yield* Effect.tryPromise({
@@ -74,7 +74,7 @@ const make = Effect.gen(function* () {
             const preview = await Effect.runPromise(previewOf(project, written.path));
             return Option.match(preview, {
               onNone: () => result,
-              onSome: (picture) => ({ ...written, preview: picture }),
+              onSome: (picture) => ({ ...result, preview: picture }),
             });
           },
         };
@@ -84,9 +84,9 @@ const make = Effect.gen(function* () {
 });
 
 /** Pictures of the drawings the model writes, for showing them in the conversation. */
-export class DrawingPreviews extends Context.Tag("memory-agent/DrawingPreviews")<
+export class DrawingPreviews extends Context.Service<
   DrawingPreviews,
-  Effect.Effect.Success<typeof make>
->() {
+  Effect.Success<typeof make>
+>()("memory-agent/DrawingPreviews") {
   static readonly layer = Layer.effect(DrawingPreviews, make);
 }

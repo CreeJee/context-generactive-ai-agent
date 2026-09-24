@@ -1,4 +1,4 @@
-import { Effect, Either, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 import { AppEvents, ExternalAgents, Projects, Sessions } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
@@ -35,9 +35,9 @@ export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected) return rejected;
   const body = await readJson(request, CreateSession);
-  if (Either.isLeft(body)) return Response.json({ error: "invalid_session" }, { status: 400 });
+  if (Result.isFailure(body)) return Response.json({ error: "invalid_session" }, { status: 400 });
 
-  const { projectId, title, agent: external } = body.right;
+  const { projectId, title, agent: external } = body.success;
   const response = Effect.gen(function* () {
     if (external) {
       const project = yield* (yield* Projects).get(projectId);

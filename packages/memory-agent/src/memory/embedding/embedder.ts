@@ -11,7 +11,7 @@ export class EmbeddingError extends Data.TaggedError("EmbeddingError")<{
 }> {}
 
 /** Where the model runs. */
-export const EmbeddingDevice = Schema.Literal("cpu", "webgpu");
+export const EmbeddingDevice = Schema.Literals(["cpu", "webgpu"]);
 export type EmbeddingDevice = typeof EmbeddingDevice.Type;
 
 /**
@@ -119,7 +119,7 @@ export function planBatches(
 }
 
 /** Replies from `embed-worker.mjs`. */
-const Reply = Schema.Union(
+const Reply = Schema.Union([
   Schema.Struct({
     id: Schema.Number,
     kind: Schema.Literal("counts"),
@@ -134,12 +134,12 @@ const Reply = Schema.Union(
     id: Schema.Number,
     kind: Schema.Literal("failed"),
     /** `load`: the model never loaded, so the next request starts a new worker to try again. */
-    stage: Schema.Literal("load", "run"),
+    stage: Schema.Literals(["load", "run"]),
     reason: Schema.String,
   }),
   /** Sent unasked once the model runs, with the device it runs on. */
   Schema.Struct({ id: Schema.Number, kind: Schema.Literal("loaded"), device: EmbeddingDevice }),
-);
+]);
 type Reply = typeof Reply.Type;
 const decodeReply = Schema.decodeUnknownSync(Reply);
 
@@ -353,9 +353,9 @@ export const checkGpu = (storageRoot: string) =>
     catch: (cause) => new EmbeddingError({ cause }),
   });
 
-export class Embedder extends Context.Tag("memory-agent/Embedder")<Embedder, EmbedderApi>() {
+export class Embedder extends Context.Service<Embedder, EmbedderApi>()("memory-agent/Embedder") {
   /** The local granite model, cached under `<storage>/models`, run the way the settings say. */
-  static readonly local = Layer.scoped(
+  static readonly local = Layer.effect(
     Embedder,
     Effect.gen(function* () {
       const mode = embeddingModeFor(yield* (yield* GlobalConfig).read);
@@ -364,5 +364,5 @@ export class Embedder extends Context.Tag("memory-agent/Embedder")<Embedder, Emb
   );
   /** Another published file on the CPU, to compare quality and memory. */
   static readonly localVariant = (variant: ModelVariant) =>
-    Layer.scoped(Embedder, makeLocal({ variant, devices: ["cpu"] }, { kind: "evaluation" }));
+    Layer.effect(Embedder, makeLocal({ variant, devices: ["cpu"] }, { kind: "evaluation" }));
 }

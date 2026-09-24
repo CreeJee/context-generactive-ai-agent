@@ -85,6 +85,6 @@ const make = (file: string) =>
   );
 
 /** The single local SQLite database shared by every memory-agent module. */
-export class Database extends Context.Tag("memory-agent/Database")<Database, DatabaseApi>() {
-  static readonly layer = (file: string) => Layer.scoped(Database, make(file));
+export class Database extends Context.Service<Database, DatabaseApi>()("memory-agent/Database") {
+  static readonly layer = (file: string) => Layer.effect(Database, make(file));
 }

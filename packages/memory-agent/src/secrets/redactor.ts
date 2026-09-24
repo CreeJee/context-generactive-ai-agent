@@ -225,9 +225,8 @@ const make = Effect.sync(() => {
 });
 
 /** Hides secrets in what the model reads and in what memory keeps. */
-export class SecretRedactor extends Context.Tag("memory-agent/SecretRedactor")<
-  SecretRedactor,
-  Effect.Effect.Success<typeof make>
->() {
+export class SecretRedactor extends Context.Service<SecretRedactor, Effect.Success<typeof make>>()(
+  "memory-agent/SecretRedactor",
+) {
   static readonly layer = Layer.effect(SecretRedactor, make);
 }

@@ -1,10 +1,10 @@
-import { Effect, Either, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 import { AgentScope, ExternalAgents, Projects } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/projects.$project.agents";
 
-const AgentChange = Schema.Union(
+const AgentChange = Schema.Union([
   Schema.Struct({
     action: Schema.Literal("trust"),
     scope: AgentScope,
@@ -12,7 +12,7 @@ const AgentChange = Schema.Union(
     trusted: Schema.Boolean,
   }),
   Schema.Struct({ action: Schema.Literal("reconnect"), name: Schema.NonEmptyString }),
-);
+]);
 
 const projectNotFound = () =>
   Effect.succeed(Response.json({ error: "project_not_found" }, { status: 404 }));
@@ -39,8 +39,9 @@ export async function action({ request, params }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected) return rejected;
   const body = await readJson(request, AgentChange);
-  if (Either.isLeft(body)) return Response.json({ error: "invalid_agent_change" }, { status: 400 });
-  const change = body.right;
+  if (Result.isFailure(body))
+    return Response.json({ error: "invalid_agent_change" }, { status: 400 });
+  const change = body.success;
   return agent.runPromise(
     Effect.gen(function* () {
       const project = yield* (yield* Projects).get(params.project);

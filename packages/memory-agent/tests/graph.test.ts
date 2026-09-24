@@ -44,7 +44,7 @@ async function conversation() {
 }
 
 function addLlmEdge(
-  db: Database["Type"],
+  db: Database["Service"],
   fromId: string,
   toId: string,
   kind: string,

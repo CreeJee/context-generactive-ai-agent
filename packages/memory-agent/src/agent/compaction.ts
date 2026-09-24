@@ -163,7 +163,7 @@ export const manualCompactionNamespace = "memory-agent/manual-compaction";
  */
 const ManualCompaction = Schema.Struct({
   clearedThrough: Schema.Number,
-  summarizedTurns: Schema.optionalWith(Schema.Number, { default: () => 0 }),
+  summarizedTurns: Schema.Number.pipe(Schema.withDecodingDefaultTypeKey(Effect.sync(() => 0))),
 });
 type ManualCompaction = typeof ManualCompaction.Type;
 const decodeManualCompaction = Schema.decodeUnknownOption(ManualCompaction);
@@ -325,7 +325,7 @@ export async function compact(
   return { messages: sent, stage, summarizedTurns };
 }
 
-const largeShellResult = Schema.parseJson(
+const largeShellResult = Schema.fromJsonString(
   Schema.Struct({
     status: Schema.String,
     exitCode: Schema.NullOr(Schema.Number),
@@ -337,7 +337,7 @@ const largeShellResult = Schema.parseJson(
     stderr: Schema.String,
   }),
 );
-const largeListResult = Schema.parseJson(
+const largeListResult = Schema.fromJsonString(
   Schema.Struct({
     total: Schema.Number,
     paths: Schema.Array(Schema.String),
@@ -347,7 +347,7 @@ const largeListResult = Schema.parseJson(
     excludedCredentialFiles: Schema.Number,
   }),
 );
-const largeSearchResult = Schema.parseJson(
+const largeSearchResult = Schema.fromJsonString(
   Schema.Struct({
     matches: Schema.Array(
       Schema.Struct({ path: Schema.String, line: Schema.Number, text: Schema.String }),
@@ -358,7 +358,7 @@ const largeSearchResult = Schema.parseJson(
     complete: Schema.Boolean,
   }),
 );
-const largeReportResult = Schema.parseJson(
+const largeReportResult = Schema.fromJsonString(
   Schema.Struct({
     status: Schema.String,
     subagentId: Schema.String,

@@ -1,4 +1,4 @@
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import type { SessionRunState } from "../src/agent/run-state.ts";
@@ -61,24 +61,24 @@ describe("server workflow action policy", () => {
       for (const phase of ["chat", "goal", "plan", "execute", "verify"] as const) {
         reset(current);
         const result = await runtime.runPromise(
-          Effect.either(workflows.setPhase(session.id, phase)),
+          Effect.result(workflows.setPhase(session.id, phase)),
         );
         const decision = advertised.phases[phase];
-        expect(Either.isRight(result)).toBe(decision.allowed);
-        if (!decision.allowed && Either.isLeft(result))
-          expect(result.left.reason).toBe(decision.reason);
+        expect(Result.isSuccess(result)).toBe(decision.allowed);
+        if (!decision.allowed && Result.isFailure(result))
+          expect(result.failure.reason).toBe(decision.reason);
         if (!decision.allowed)
           expect(await runtime.runPromise(workflows.get(session.id))).toEqual(current);
       }
       for (const action of ["pause", "resume", "stop"] as const) {
         reset(current);
         const result = await runtime.runPromise(
-          Effect.either(workflows.controlGoal(session.id, action)),
+          Effect.result(workflows.controlGoal(session.id, action)),
         );
         const decision = advertised.controls[action];
-        expect(Either.isRight(result)).toBe(decision.allowed);
-        if (!decision.allowed && Either.isLeft(result))
-          expect(result.left.reason).toBe(decision.reason);
+        expect(Result.isSuccess(result)).toBe(decision.allowed);
+        if (!decision.allowed && Result.isFailure(result))
+          expect(result.failure.reason).toBe(decision.reason);
         if (!decision.allowed)
           expect(await runtime.runPromise(workflows.get(session.id))).toEqual(current);
       }
@@ -90,10 +90,10 @@ describe("server workflow action policy", () => {
     expect(workflowActions(state).phases.execute).toEqual({ allowed: true, intent: "start" });
     await runtime.runPromise(workflows.updateGoal(session.id, { ...goal, statement: "Changed" }));
     const result = await runtime.runPromise(
-      Effect.either(workflows.setPhase(session.id, "execute")),
+      Effect.result(workflows.setPhase(session.id, "execute")),
     );
-    expect(Either.isLeft(result)).toBe(true);
-    if (Either.isLeft(result)) expect(result.left.reason).toBe("plan_outdated");
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result)) expect(result.failure.reason).toBe("plan_outdated");
   });
 
   test("keeps Plan + executing resumable without resetting progress", async () => {

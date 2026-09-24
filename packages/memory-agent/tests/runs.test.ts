@@ -9,14 +9,14 @@ type Runtime = Awaited<ReturnType<typeof testRuntime>>["runtime"];
 
 const Status = Schema.Struct({
   actions: Schema.Struct({
-    phases: Schema.Record({
-      key: Schema.String,
-      value: Schema.Struct({ allowed: Schema.Boolean, reason: Schema.optional(Schema.String) }),
-    }),
-    controls: Schema.Record({
-      key: Schema.String,
-      value: Schema.Struct({ allowed: Schema.Boolean, reason: Schema.optional(Schema.String) }),
-    }),
+    phases: Schema.Record(
+      Schema.String,
+      Schema.Struct({ allowed: Schema.Boolean, reason: Schema.optional(Schema.String) }),
+    ),
+    controls: Schema.Record(
+      Schema.String,
+      Schema.Struct({ allowed: Schema.Boolean, reason: Schema.optional(Schema.String) }),
+    ),
   }),
   running: Schema.NullOr(Schema.Struct({ runId: Schema.String })),
   lastRun: Schema.NullOr(

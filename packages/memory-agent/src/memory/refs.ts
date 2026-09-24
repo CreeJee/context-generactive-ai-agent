@@ -5,7 +5,7 @@ import { Option, Schema } from "effect";
  * are here because the app's own tools use `path`, while Claude Code and many MCP servers send
  * `file_path`; a transcript from either should produce the same `touches` edges.
  */
-const RefArguments = Schema.parseJson(
+const RefArguments = Schema.fromJsonString(
   Schema.Struct({
     path: Schema.optional(Schema.String),
     file: Schema.optional(Schema.String),

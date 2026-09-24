@@ -43,10 +43,10 @@ export interface DirectImageExecutorApi {
   ) => Effect.Effect<DirectImageExecutionResult, DirectImageExecutionFailed>;
 }
 
-export class DirectImageExecutor extends Context.Tag("memory-agent/DirectImageExecutor")<
+export class DirectImageExecutor extends Context.Service<
   DirectImageExecutor,
   DirectImageExecutorApi
->() {
+>()("memory-agent/DirectImageExecutor") {
   static readonly layerFrom = (api: DirectImageExecutorApi) =>
     Layer.succeed(DirectImageExecutor, api);
   static readonly unavailableLayer = DirectImageExecutor.layerFrom({
@@ -266,7 +266,7 @@ export function makeImageMediaWorkflow(
         const output = yield* executor
           .generate(executionRequest)
           .pipe(
-            Effect.catchAll((cause) =>
+            Effect.catch((cause) =>
               Effect.flatMap(reroute(cause.reason), (confirmation) =>
                 Effect.fail(new ImageMediaExecutionFailed({ cause, reroute: confirmation })),
               ),
@@ -304,10 +304,10 @@ export function makeImageMediaWorkflow(
   };
 }
 
-export class ImageMediaWorkflow extends Context.Tag("memory-agent/ImageMediaWorkflow")<
+export class ImageMediaWorkflow extends Context.Service<
   ImageMediaWorkflow,
   ImageMediaWorkflowApi
->() {
+>()("memory-agent/ImageMediaWorkflow") {
   static readonly layer = Layer.effect(
     ImageMediaWorkflow,
     Effect.gen(function* () {

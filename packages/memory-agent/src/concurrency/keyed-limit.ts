@@ -1,3 +1,4 @@
+import { Semaphore } from "effect";
 import { Effect } from "effect";
 
 /**
@@ -9,14 +10,14 @@ import { Effect } from "effect";
  * reference too, so historical session ids do not accumulate for the lifetime of the process.
  */
 export function keyedSerialLimit() {
-  const slots = new Map<string, { semaphore: Effect.Semaphore; users: number }>();
+  const slots = new Map<string, { semaphore: Semaphore.Semaphore; users: number }>();
 
   return <A, E, R>(key: string, work: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
     Effect.acquireUseRelease(
       Effect.sync(() => {
         let slot = slots.get(key);
         if (!slot) {
-          slot = { semaphore: Effect.unsafeMakeSemaphore(1), users: 0 };
+          slot = { semaphore: Semaphore.makeUnsafe(1), users: 0 };
           slots.set(key, slot);
         }
         slot.users += 1;

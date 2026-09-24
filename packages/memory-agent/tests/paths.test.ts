@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Either } from "effect";
+import { Result } from "effect";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import { isCredentialPath, resolveOutsidePath, resolveProjectPath } from "../src/files/paths.ts";
 
@@ -35,8 +35,8 @@ function layout() {
   return { base, project, outside, storage };
 }
 
-const reason = <A>(result: Either.Either<A, { reason: string }>) =>
-  Either.isLeft(result) ? result.left.reason : "ok";
+const reason = <A>(result: Result.Result<A, { reason: string }>) =>
+  Result.isFailure(result) ? result.failure.reason : "ok";
 
 describe("isCredentialPath", () => {
   test.each([
@@ -69,10 +69,10 @@ describe("resolveProjectPath", () => {
   test("resolves files, directories and new files below the root", () => {
     const { project } = layout();
     const file = resolveProjectPath(project, "src/app.ts", "file");
-    expect(Either.getOrThrow(file).absolute).toBe(join(project, "src", "app.ts"));
+    expect(Result.getOrThrow(file).absolute).toBe(join(project, "src", "app.ts"));
     expect(reason(resolveProjectPath(project, ".", "directory"))).toBe("ok");
     expect(reason(resolveProjectPath(project, ".gitignore", "file"))).toBe("ok");
-    const created = Either.getOrThrow(
+    const created = Result.getOrThrow(
       resolveProjectPath(project, "docs/new/plan.md", "new-or-file"),
     );
     expect(created).toMatchObject({
@@ -117,11 +117,11 @@ describe("resolveProjectPath", () => {
 describe("resolveOutsidePath", () => {
   test("resolves outside files and new files to canonical paths", () => {
     const { project, outside, storage } = layout();
-    const read = Either.getOrThrow(
+    const read = Result.getOrThrow(
       resolveOutsidePath(project, storage, join(outside, "notes.md"), "file"),
     );
     expect(read.absolute).toBe(join(outside, "notes.md"));
-    const created = Either.getOrThrow(
+    const created = Result.getOrThrow(
       resolveOutsidePath(project, storage, join(outside, "a", "b.txt"), "new-or-file"),
     );
     expect(created).toMatchObject({ absolute: join(outside, "a", "b.txt"), stats: undefined });

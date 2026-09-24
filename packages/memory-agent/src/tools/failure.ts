@@ -1,4 +1,4 @@
-import { Either, Option, Schema } from "effect";
+import { Result, Option, Schema } from "effect";
 import { PathRejected } from "../files/paths.ts";
 import { TextFileRejected } from "../files/text.ts";
 
@@ -50,7 +50,7 @@ export async function guarded<A>(path: string, operation: () => Promise<A>): Pro
 }
 
 /** Unwraps a path resolution inside {@link guarded}, throwing the rejection. */
-export const orThrow = <A>(result: Either.Either<A, PathRejected>) =>
-  Either.getOrElse(result, (rejection) => {
+export const orThrow = <A>(result: Result.Result<A, PathRejected>) =>
+  Result.getOrElse(result, (rejection) => {
     throw rejection;
   });

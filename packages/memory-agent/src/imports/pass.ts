@@ -234,7 +234,7 @@ const make = (home: string) =>
             interpret,
           }).written;
           // Lets other work in the worker (a count for settings) in between pieces.
-          yield* Effect.yieldNow();
+          yield* Effect.yieldNow;
         }
         // A conversation is named by what the person opened it with.
         if (session.title === null) {
@@ -286,8 +286,8 @@ const make = (home: string) =>
           for (const transcript of found) {
             const outcome = yield* migrate(transcript, interpret).pipe(
               Effect.map((written) => ({ written, failed: 0 })),
-              Effect.catchAllCause((cause) =>
-                Cause.isInterruptedOnly(cause)
+              Effect.catchCause((cause) =>
+                Cause.hasInterruptsOnly(cause)
                   ? Effect.failCause(cause)
                   : Effect.as(recordFailure(transcript, cause), { written: 0, failed: 1 }),
               ),
@@ -309,9 +309,9 @@ const make = (home: string) =>
  * One pass over other coding agents' transcripts: what the import worker runs. It needs only the
  * database and the services that write to it, so the worker opens its own connection.
  */
-export class TranscriptPass extends Context.Tag("memory-agent/TranscriptPass")<
+export class TranscriptPass extends Context.Service<
   TranscriptPass,
-  Effect.Effect.Success<ReturnType<typeof make>>
->() {
+  Effect.Success<ReturnType<typeof make>>
+>()("memory-agent/TranscriptPass") {
   static readonly layer = (home: string) => Layer.effect(TranscriptPass, make(home));
 }

@@ -17,7 +17,7 @@ type Json = string | number | boolean | null | Json[] | { readonly [key: string]
 const RunRow = Schema.Struct({
   run_id: Schema.String,
   thread_id: Schema.String,
-  status: Schema.Literal("running", "interrupted", "completed", "failed", "aborted"),
+  status: Schema.Literals(["running", "interrupted", "completed", "failed", "aborted"]),
   started_at: Schema.Number,
   finished_at: Schema.NullOr(Schema.Number),
   error: Schema.NullOr(Schema.String),
@@ -25,7 +25,7 @@ const RunRow = Schema.Struct({
   usage: Schema.NullOr(Schema.String),
   sandbox_key: Schema.NullOr(Schema.String),
   detached_since: Schema.NullOr(Schema.Number),
-  cancel_requested: Schema.NullOr(Schema.Literal(0, 1)),
+  cancel_requested: Schema.NullOr(Schema.Literals([0, 1])),
   driver_epoch: Schema.NullOr(Schema.Number),
 });
 const decodeRunRow = Schema.decodeUnknownSync(RunRow);
@@ -34,7 +34,7 @@ const InterruptRow = Schema.Struct({
   interrupt_id: Schema.String,
   run_id: Schema.String,
   thread_id: Schema.String,
-  status: Schema.Literal("pending", "resolved", "cancelled"),
+  status: Schema.Literals(["pending", "resolved", "cancelled"]),
   requested_at: Schema.Number,
   resolved_at: Schema.NullOr(Schema.Number),
   payload: Schema.String,

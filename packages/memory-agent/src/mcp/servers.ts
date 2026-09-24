@@ -371,9 +371,8 @@ const make = Effect.gen(function* () {
 });
 
 /** MCP servers from `<storage>/mcp.json` and `<project>/.mcp.json` (R18). */
-export class McpServers extends Context.Tag("memory-agent/McpServers")<
-  McpServers,
-  Effect.Effect.Success<typeof make>
->() {
-  static readonly layer = Layer.scoped(McpServers, make);
+export class McpServers extends Context.Service<McpServers, Effect.Success<typeof make>>()(
+  "memory-agent/McpServers",
+) {
+  static readonly layer = Layer.effect(McpServers, make);
 }

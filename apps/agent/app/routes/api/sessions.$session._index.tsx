@@ -1,4 +1,4 @@
-import { Effect, Either, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 import {
   AgentChat,
   AppEvents,
@@ -11,12 +11,12 @@ import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/sessions.$session._index";
 
-const ChangeSession = Schema.Union(
+const ChangeSession = Schema.Union([
   Schema.Struct({ archived: Schema.Boolean, idempotencyKey: Schema.optional(Schema.String) }),
   Schema.Struct({ delete: Schema.Literal(true), idempotencyKey: Schema.String }),
   Schema.Struct({ phase: WorkflowPhase }),
   Schema.Struct({ workflowAction: WorkflowAction }),
-);
+]);
 
 /**
  * GET /api/sessions/:session?holder= — run state the transcript does not carry: whether a run is
@@ -36,7 +36,7 @@ export async function action({ request, params }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected) return rejected;
   const body = await readJson(request, ChangeSession);
-  if (Either.isLeft(body))
+  if (Result.isFailure(body))
     return Response.json({ error: "invalid_session_change" }, { status: 400 });
   const holder = request.headers.get(sessionHolderHeader);
   return agent.runPromise(
@@ -45,7 +45,7 @@ export async function action({ request, params }: Route.ActionArgs) {
       const events = yield* AppEvents;
       const sessions = yield* Sessions;
       const session = yield* sessions.get(params.session);
-      const change = body.right;
+      const change = body.success;
       if ("archived" in change) {
         const result = yield* chat.archive(
           params.session,

@@ -1,3 +1,4 @@
+import { Semaphore } from "effect";
 import { Worker } from "node:worker_threads";
 import { Context, Data, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
@@ -27,14 +28,14 @@ interface Column {
  * Where text is kept besides the nodes: the page's saved conversation, approval requests and the
  * arguments reviewed for them, queued messages, and subagent tasks and answers.
  */
-const ColumnTable = Schema.Literal(
+const ColumnTable = Schema.Literals([
   "chat_threads",
   "chat_interrupts",
   "permission_reviews",
   "queued_messages",
   "subagents",
   "interpretations",
-);
+]);
 type ColumnTable = typeof ColumnTable.Type;
 
 const columnTables = {
@@ -80,7 +81,7 @@ const targetName = (target: Target) => {
 const Progress = Schema.Struct({
   version: Schema.Number,
   after: Schema.Number,
-  done: Schema.Literal(0, 1),
+  done: Schema.Literals([0, 1]),
   hidden: Schema.Number,
 });
 const decodeProgress = Schema.decodeUnknownSync(Progress);
@@ -137,7 +138,7 @@ const redactionWorker = Effect.map(
     worker.on("exit", () => lost("the redaction worker stopped"));
 
     return (kind, texts) =>
-      Effect.async((resume) => {
+      Effect.callback((resume) => {
         if (texts.length === 0) return resume(Effect.succeed([]));
         const id = nextId++;
         waiting.set(id, (reply) => {
@@ -185,7 +186,7 @@ const make = (running: boolean) =>
     const { sqlite, atomic } = yield* Database;
     const indexer = yield* Indexer;
     const vectors = yield* VectorIndex;
-    const onePassAtATime = yield* Effect.makeSemaphore(1);
+    const onePassAtATime = yield* Semaphore.make(1);
 
     const readProgress = sqlite.prepare(
       "SELECT version, after, done, hidden FROM secret_sweeps WHERE target = ?",
@@ -394,13 +395,13 @@ const make = (running: boolean) =>
         }),
       );
       if (changedNodes > 0)
-        yield* Effect.zipRight(indexer.indexAll(), indexer.analyzeAll()).pipe(
-          Effect.catchAllCause(() => Effect.void),
+        yield* Effect.andThen(indexer.indexAll(), indexer.analyzeAll()).pipe(
+          Effect.catchCause(() => Effect.void),
         );
       return changedNodes;
     }).pipe(onePassAtATime.withPermits(1));
 
-    if (running) yield* Effect.forkScoped(Effect.catchAllCause(run, () => Effect.void));
+    if (running) yield* Effect.forkScoped(Effect.catchCause(run, () => Effect.void));
 
     return {
       run,
@@ -417,9 +418,9 @@ const make = (running: boolean) =>
  * morpheme terms and vectors made from them), references, the saved conversation, approvals,
  * queued messages and subagent records. Runs in the background on every start.
  */
-export class SecretSweep extends Context.Tag("memory-agent/SecretSweep")<
+export class SecretSweep extends Context.Service<
   SecretSweep,
-  Effect.Effect.Success<ReturnType<typeof make>>
->() {
-  static readonly layer = (running: boolean = true) => Layer.scoped(SecretSweep, make(running));
+  Effect.Success<ReturnType<typeof make>>
+>()("memory-agent/SecretSweep") {
+  static readonly layer = (running: boolean = true) => Layer.effect(SecretSweep, make(running));
 }

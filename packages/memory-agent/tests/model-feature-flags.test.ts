@@ -1,4 +1,4 @@
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import {
   decideModelFeatureFlag,
   makeModelFeatureFlags,
@@ -76,14 +76,14 @@ describe("ModelFeatureFlags service", () => {
 
   it("returns typed failures for unknown capabilities and storage defects", async () => {
     const unknown = await Effect.runPromise(
-      Effect.either(fixture().service.decide({ ...query, capability: "unknown" })),
+      Effect.result(fixture().service.decide({ ...query, capability: "unknown" })),
     );
-    expect(Either.isLeft(unknown) && unknown.left._tag).toBe("UnknownModelFeatureCapability");
+    expect(Result.isFailure(unknown) && unknown.failure._tag).toBe("UnknownModelFeatureCapability");
     const failed = makeModelFeatureFlags(
       { read: Effect.die("broken"), update: () => Effect.die("broken") },
       [capability],
     );
-    const result = await Effect.runPromise(Effect.either(failed.read));
-    expect(Either.isLeft(result) && result.left._tag).toBe("ModelFeatureFlagStoreFailed");
+    const result = await Effect.runPromise(Effect.result(failed.read));
+    expect(Result.isFailure(result) && result.failure._tag).toBe("ModelFeatureFlagStoreFailed");
   });
 });

@@ -183,7 +183,7 @@ export async function searchTextFiles(
   return { matches, skipped, next: null };
 }
 
-const Cursor = Schema.parseJson(
+const Cursor = Schema.fromJsonString(
   Schema.Struct({
     snapshot: Schema.String,
     query: Schema.String,

@@ -75,7 +75,7 @@ const LockRecord = Schema.Struct({
   instanceId: Schema.String,
   port: Schema.Number,
 });
-const decodeLock = Schema.decodeUnknownOption(Schema.parseJson(LockRecord));
+const decodeLock = Schema.decodeUnknownOption(Schema.fromJsonString(LockRecord));
 
 export interface DevelopmentBoundary {
   readonly buildId: string;

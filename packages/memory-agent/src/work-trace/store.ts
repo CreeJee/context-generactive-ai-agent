@@ -72,10 +72,10 @@ const LifecycleOperationRow = Schema.Struct({
   id: Schema.String,
   project_id: Schema.String,
   origin_session_id: Schema.NullOr(Schema.String),
-  target_kind: Schema.Literal("task", "session"),
+  target_kind: Schema.Literals(["task", "session"]),
   target_id: Schema.String,
-  intent: Schema.Literal("archive", "restore", "delete"),
-  status: Schema.Literal(
+  intent: Schema.Literals(["archive", "restore", "delete"]),
+  status: Schema.Literals([
     "requested",
     "cancelling",
     "waiting_for_stop",
@@ -83,7 +83,7 @@ const LifecycleOperationRow = Schema.Struct({
     "completed",
     "blocked",
     "failed",
-  ),
+  ]),
   idempotency_key: Schema.String,
   blocker: Schema.NullOr(Schema.String),
   requested_at: Schema.Number,
@@ -276,10 +276,12 @@ const decodeFinalAnswerSourceRows = Schema.decodeUnknownSync(Schema.Array(FinalA
 const decodeFinalAnswerNotificationRows = Schema.decodeUnknownSync(
   Schema.Array(FinalAnswerNotificationRow),
 );
-const decodeEvidenceLocator = Schema.decodeUnknownSync(Schema.parseJson(EvidenceLocator));
-const decodeArtifactLocator = Schema.decodeUnknownSync(Schema.parseJson(ArtifactLocator));
-const decodeStringArray = Schema.decodeUnknownSync(Schema.parseJson(Schema.Array(Schema.String)));
-const decodePayload = Schema.decodeUnknownSync(Schema.parseJson(JsonValue));
+const decodeEvidenceLocator = Schema.decodeUnknownSync(Schema.fromJsonString(EvidenceLocator));
+const decodeArtifactLocator = Schema.decodeUnknownSync(Schema.fromJsonString(ArtifactLocator));
+const decodeStringArray = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Array(Schema.String)),
+);
+const decodePayload = Schema.decodeUnknownSync(Schema.fromJsonString(JsonValue));
 
 export interface TraceTaskView {
   readonly id: string;
@@ -2840,9 +2842,8 @@ const make = Effect.gen(function* () {
   };
 });
 
-export class WorkTraceStore extends Context.Tag("memory-agent/WorkTraceStore")<
-  WorkTraceStore,
-  Effect.Effect.Success<typeof make>
->() {
+export class WorkTraceStore extends Context.Service<WorkTraceStore, Effect.Success<typeof make>>()(
+  "memory-agent/WorkTraceStore",
+) {
   static readonly layer = Layer.effect(WorkTraceStore, make);
 }

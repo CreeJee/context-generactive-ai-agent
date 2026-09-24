@@ -1,4 +1,4 @@
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import { AgentChat, AppEvents, QueueRequest, sessionHolderHeader } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
@@ -18,11 +18,11 @@ export async function action({ request, params }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected) return rejected;
   const body = await readJson(request, QueueRequest);
-  if (Either.isLeft(body))
+  if (Result.isFailure(body))
     return Response.json({ error: "invalid_queue_request" }, { status: 400 });
   const holder = request.headers.get(sessionHolderHeader);
   return agent.runPromise(
-    Effect.flatMap(AgentChat, (chat) => chat.enqueue(params.session, holder, body.right)).pipe(
+    Effect.flatMap(AgentChat, (chat) => chat.enqueue(params.session, holder, body.success)).pipe(
       Effect.tap(() =>
         Effect.map(AppEvents, (events) => events.publishSession(params.session, "queue")),
       ),

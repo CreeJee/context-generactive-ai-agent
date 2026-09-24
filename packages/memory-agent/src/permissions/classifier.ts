@@ -25,12 +25,12 @@ Reply with a single JSON object and nothing else:
 {"decision":"allow"|"ask"|"block","reason":"<one short sentence in Korean>"}`;
 
 const Verdict = Schema.Struct({
-  decision: Schema.Literal("allow", "ask", "block"),
+  decision: Schema.Literals(["allow", "ask", "block"]),
   reason: Schema.NonEmptyString,
 });
 export type Verdict = typeof Verdict.Type & { readonly decidedBy: "classifier" | "fallback" };
 
-const decodeVerdict = Schema.decodeUnknownOption(Schema.parseJson(Verdict));
+const decodeVerdict = Schema.decodeUnknownOption(Schema.fromJsonString(Verdict));
 
 /** User turns shown to the reviewer, and how much of each. */
 const userTurns = 12;
@@ -51,7 +51,7 @@ const routineGitCommand =
   /^git\s+(?:status|diff|log|show|branch|rev-parse|ls-files|fetch|pull)(?:\s|$)/u;
 const downloadCapablePackageRunner = /^(?:npx|pnpx)(?:\s|$)/u;
 const decodeShellArguments = Schema.decodeUnknownOption(
-  Schema.parseJson(Schema.Struct({ command: Schema.String })),
+  Schema.fromJsonString(Schema.Struct({ command: Schema.String })),
 );
 
 /**
@@ -158,9 +158,9 @@ const make = Effect.gen(function* () {
 });
 
 /** The `auto` permission mode's reviewer: one short model call per gated tool call. */
-export class PermissionClassifier extends Context.Tag("memory-agent/PermissionClassifier")<
+export class PermissionClassifier extends Context.Service<
   PermissionClassifier,
-  Effect.Effect.Success<typeof make>
->() {
+  Effect.Success<typeof make>
+>()("memory-agent/PermissionClassifier") {
   static readonly layer = Layer.effect(PermissionClassifier, make);
 }

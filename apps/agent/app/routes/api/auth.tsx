@@ -1,11 +1,11 @@
-import { Effect, Either, Option, Schema } from "effect";
+import { Effect, Result, Option, Schema } from "effect";
 import { AppEvents, ProviderId, ProviderRegistry } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/auth";
 
 const Intent = Schema.Struct({
-  intent: Schema.Literal("login", "cancel", "logout"),
+  intent: Schema.Literals(["login", "cancel", "logout"]),
   provider: Schema.optional(ProviderId),
 });
 
@@ -57,8 +57,8 @@ export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected) return rejected;
   const body = await readJson(request, Intent);
-  if (Either.isLeft(body)) return Response.json({ error: "invalid_intent" }, { status: 400 });
-  const { intent, provider } = body.right;
+  if (Result.isFailure(body)) return Response.json({ error: "invalid_intent" }, { status: 400 });
+  const { intent, provider } = body.success;
   if (provider === undefined) return Response.json({ error: "invalid_provider" }, { status: 400 });
 
   const response = Effect.gen(function* () {
@@ -73,7 +73,7 @@ export async function action({ request }: Route.ActionArgs) {
     const events = yield* AppEvents;
     events.publishGlobal("auth");
     if (state.status === "pending")
-      yield* Effect.forkDaemon(
+      yield* Effect.forkDetach(
         Effect.gen(function* () {
           for (;;) {
             yield* Effect.sleep("250 millis");
@@ -81,7 +81,7 @@ export async function action({ request }: Route.ActionArgs) {
           }
           events.publishGlobal("auth");
         }).pipe(
-          Effect.catchAllCause(() =>
+          Effect.catchCause(() =>
             Effect.sync(() => {
               events.publishGlobal("auth");
             }),

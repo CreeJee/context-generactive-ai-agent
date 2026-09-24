@@ -31,11 +31,11 @@ type GatedCall =
     }
   | { readonly tool: "unrecognized"; readonly name: string; readonly argumentsJson: string };
 
-const decodeShell = Schema.decodeUnknownOption(Schema.parseJson(RunShellInput));
-const decodeWrite = Schema.decodeUnknownOption(Schema.parseJson(WriteOutsideFileInput));
-const decodeDelete = Schema.decodeUnknownOption(Schema.parseJson(DeleteOutsideFileInput));
+const decodeShell = Schema.decodeUnknownOption(Schema.fromJsonString(RunShellInput));
+const decodeWrite = Schema.decodeUnknownOption(Schema.fromJsonString(WriteOutsideFileInput));
+const decodeDelete = Schema.decodeUnknownOption(Schema.fromJsonString(DeleteOutsideFileInput));
 const decodeDelegation = Schema.decodeUnknownOption(
-  Schema.parseJson(Schema.Struct({ agent: Schema.String, task: Schema.String })),
+  Schema.fromJsonString(Schema.Struct({ agent: Schema.String, task: Schema.String })),
 );
 
 function decodeCall(toolName: string, argumentsJson: string): GatedCall {

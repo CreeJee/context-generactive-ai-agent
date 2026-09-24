@@ -10,7 +10,7 @@ import { SecretRedactor, type Redaction, type SecretRedactionFailed } from "./re
 const port = parentPort;
 if (!port) throw new Error("the redaction worker runs only as a worker thread");
 const decodeRequest = Schema.decodeUnknownSync(RedactRequest);
-const decodeJsonText = Schema.decodeUnknownOption(Schema.parseJson());
+const decodeJsonText = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 
 const redactor = Effect.runSync(Effect.provide(SecretRedactor, SecretRedactor.layer));
 

@@ -175,9 +175,8 @@ const make = Effect.gen(function* () {
 });
 
 /** Walks the memory graph: outward to explore around a match, backward to prove where it came from. */
-export class Graph extends Context.Tag("memory-agent/Graph")<
-  Graph,
-  Effect.Effect.Success<typeof make>
->() {
+export class Graph extends Context.Service<Graph, Effect.Success<typeof make>>()(
+  "memory-agent/Graph",
+) {
   static readonly layer = Layer.effect(Graph, make);
 }

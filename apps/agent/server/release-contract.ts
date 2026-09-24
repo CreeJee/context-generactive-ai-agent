@@ -2,20 +2,22 @@ import { sign, verify } from "node:crypto";
 import { Schema } from "effect";
 
 export const releaseManifestSchemaVersion = 1;
-export const ReleaseChannel = Schema.Literal("stable", "prerelease");
+export const ReleaseChannel = Schema.Literals(["stable", "prerelease"]);
 export type ReleaseChannel = typeof ReleaseChannel.Type;
 
-const Sha256 = Schema.String.pipe(Schema.pattern(/^[0-9a-f]{64}$/));
+const Sha256 = Schema.String.pipe(Schema.check(Schema.isPattern(/^[0-9a-f]{64}$/)));
 const SemVer = Schema.String.pipe(
-  Schema.pattern(
-    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/,
+  Schema.check(
+    Schema.isPattern(
+      /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/,
+    ),
   ),
 );
 
 export const ReleaseAsset = Schema.Struct({
   name: Schema.String,
   url: Schema.String,
-  size: Schema.Number.pipe(Schema.int(), Schema.positive()),
+  size: Schema.Number.pipe(Schema.check(Schema.isInt()), Schema.check(Schema.isGreaterThan(0))),
   sha256: Sha256,
 });
 export type ReleaseAsset = typeof ReleaseAsset.Type;
@@ -27,11 +29,20 @@ export const ReleaseManifest = Schema.Struct({
   publishedAt: Schema.String,
   minUpdaterVersion: SemVer,
   database: Schema.Struct({
-    target: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
-    minimumReadable: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
-    rollbackReadableThrough: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
+    target: Schema.Number.pipe(
+      Schema.check(Schema.isInt()),
+      Schema.check(Schema.isGreaterThanOrEqualTo(0)),
+    ),
+    minimumReadable: Schema.Number.pipe(
+      Schema.check(Schema.isInt()),
+      Schema.check(Schema.isGreaterThanOrEqualTo(0)),
+    ),
+    rollbackReadableThrough: Schema.Number.pipe(
+      Schema.check(Schema.isInt()),
+      Schema.check(Schema.isGreaterThanOrEqualTo(0)),
+    ),
   }),
-  assets: Schema.Record({ key: Schema.String, value: ReleaseAsset }),
+  assets: Schema.Record(Schema.String, ReleaseAsset),
 });
 export type ReleaseManifest = typeof ReleaseManifest.Type;
 

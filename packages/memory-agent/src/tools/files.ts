@@ -1,7 +1,7 @@
 import { lstat } from "node:fs/promises";
 import { join, posix } from "node:path";
 import { toolDefinition } from "@tanstack/ai";
-import { Context, Effect, Either, Layer, Schema } from "effect";
+import { Context, Effect, Result, Layer, Schema } from "effect";
 import { gitGrepFiles } from "../files/git-grep.ts";
 import { listProjectFiles, createSnapshots, type Snapshot } from "../files/listing.ts";
 import { PathRejected, resolveProjectPath } from "../files/paths.ts";
@@ -29,75 +29,75 @@ export const fileToolNames = [
   "delete_file",
 ] as const;
 
-const directoryField = Schema.optional(
-  Schema.String.annotations({
+const directoryField = Schema.optionalKey(
+  Schema.String.annotate({
     description: 'Project-relative directory to look in. Defaults to the project root (".").',
   }),
 );
-const globField = Schema.optional(
-  Schema.String.annotations({
+const globField = Schema.optionalKey(
+  Schema.String.annotate({
     description: 'Glob relative to the directory, like "**/*.ts" or "src/*.md".',
   }),
 );
-const sha256Field = Schema.String.annotations({
+const sha256Field = Schema.String.annotate({
   description: "sha256 returned by the read that this change is based on.",
 });
 
 const listFilesInput = Schema.Struct({
   directory: directoryField,
   glob: globField,
-  snapshot: Schema.optional(
-    Schema.String.annotations({ description: "snapshot from the previous page when paging." }),
+  snapshot: Schema.optionalKey(
+    Schema.String.annotate({ description: "snapshot from the previous page when paging." }),
   ),
-  offset: Schema.optional(
-    Schema.Int.annotations({ description: "nextOffset from the previous page when paging." }),
+  offset: Schema.optionalKey(
+    Schema.Int.annotate({ description: "nextOffset from the previous page when paging." }),
   ),
 });
 
 const searchFilesInput = Schema.Struct({
-  query: Schema.NonEmptyString.annotations({
+  query: Schema.NonEmptyString.annotate({
     description: "Literal text to find (not a regular expression).",
   }),
   directory: directoryField,
   glob: globField,
-  caseSensitive: Schema.optional(Schema.Boolean.annotations({ description: "Defaults to true." })),
-  cursor: Schema.optional(
-    Schema.String.annotations({ description: "nextCursor from the previous page when paging." }),
+  caseSensitive: Schema.optionalKey(Schema.Boolean.annotate({ description: "Defaults to true." })),
+  cursor: Schema.optionalKey(
+    Schema.String.annotate({ description: "nextCursor from the previous page when paging." }),
   ),
 });
 
 const readFileInput = Schema.Struct({
-  path: Schema.String.annotations({ description: "Project-relative file path." }),
-  startLine: Schema.optional(Schema.Int.annotations({ description: "1-based. Defaults to 1." })),
-  maxLines: Schema.optional(
-    Schema.Int.annotations({ description: "Lines per page, up to 2000. Defaults to 400." }),
+  path: Schema.String.annotate({ description: "Project-relative file path." }),
+  startLine: Schema.optionalKey(Schema.Int.annotate({ description: "1-based. Defaults to 1." })),
+  maxLines: Schema.optionalKey(
+    Schema.Int.annotate({ description: "Lines per page, up to 2000. Defaults to 400." }),
   ),
 });
 
 const writeFileInput = Schema.Struct({
-  path: Schema.String.annotations({ description: "Project-relative file path." }),
-  content: Schema.String.annotations({ description: "The complete new file content." }),
-  expectedSha256: Schema.optional(
-    sha256Field.annotations({
+  path: Schema.String.annotate({ description: "Project-relative file path." }),
+  content: Schema.String.annotate({ description: "The complete new file content." }),
+  expectedSha256: Schema.optionalKey(
+    sha256Field.annotate({
       description: "Required to replace an existing file: the sha256 from read_file.",
     }),
   ),
 });
 
 const editFileInput = Schema.Struct({
-  path: Schema.String.annotations({ description: "Project-relative file path." }),
-  oldText: Schema.NonEmptyString.annotations({
+  path: Schema.String.annotate({ description: "Project-relative file path." }),
+  oldText: Schema.NonEmptyString.annotate({
     description: "Exact text to replace, including indentation. Must occur exactly once.",
   }),
-  newText: Schema.String.annotations({ description: "Replacement text." }),
-  replaceAll: Schema.optional(
-    Schema.Boolean.annotations({ description: "Replace every occurrence instead of exactly one." }),
+  newText: Schema.String.annotate({ description: "Replacement text." }),
+  replaceAll: Schema.optionalKey(
+    Schema.Boolean.annotate({ description: "Replace every occurrence instead of exactly one." }),
   ),
-  expectedSha256: Schema.optional(sha256Field),
+  expectedSha256: Schema.optionalKey(sha256Field),
 });
 
 const deleteFileInput = Schema.Struct({
-  path: Schema.String.annotations({ description: "Project-relative file path." }),
+  path: Schema.String.annotate({ description: "Project-relative file path." }),
   expectedSha256: sha256Field,
 });
 
@@ -242,7 +242,7 @@ const make = Effect.gen(function* () {
           // Each directory is checked once per page (no links, still inside the project); the file
           // itself is checked on the opened handle, so thousands of files do not mean thousands of
           // synchronous path walks.
-          const directories = new Map<string, Either.Either<unknown, PathRejected>>();
+          const directories = new Map<string, Result.Result<unknown, PathRejected>>();
           const page = await searchTextFiles(
             view.paths,
             async (path) => {
@@ -252,7 +252,7 @@ const make = Effect.gen(function* () {
                 checked = resolveProjectPath(root, directory, "directory");
                 directories.set(directory, checked);
               }
-              Either.getOrElse(checked, (rejection) => {
+              Result.getOrElse(checked, (rejection) => {
                 throw new PathRejected({ path, reason: rejection.reason });
               });
               return (await readFileBytes(join(root, path), path, true)).bytes;
@@ -352,9 +352,8 @@ const make = Effect.gen(function* () {
 });
 
 /** Project file tools. Keeps recent listing snapshots so paging stays consistent across requests. */
-export class FileTools extends Context.Tag("memory-agent/FileTools")<
-  FileTools,
-  Effect.Effect.Success<typeof make>
->() {
+export class FileTools extends Context.Service<FileTools, Effect.Success<typeof make>>()(
+  "memory-agent/FileTools",
+) {
   static readonly layer = Layer.effect(FileTools, make);
 }

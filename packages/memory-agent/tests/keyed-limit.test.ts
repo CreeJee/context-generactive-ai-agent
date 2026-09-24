@@ -45,7 +45,7 @@ describe("keyedSerialLimit", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const started = yield* Deferred.make<void>();
-        const first = yield* Effect.fork(
+        const first = yield* Effect.forkChild(
           limit(
             "agent",
             Effect.gen(function* () {
@@ -55,7 +55,7 @@ describe("keyedSerialLimit", () => {
           ),
         );
         yield* Deferred.await(started);
-        const second = yield* Effect.fork(limit("agent", Effect.succeed("continued")));
+        const second = yield* Effect.forkChild(limit("agent", Effect.succeed("continued")));
         yield* Fiber.interrupt(first);
         return yield* Fiber.join(second);
       }),

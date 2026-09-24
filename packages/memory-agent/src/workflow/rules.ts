@@ -3,7 +3,7 @@ import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { Embedder } from "../memory/embedding/embedder.ts";
 import { WorkflowPhase } from "./workflow.ts";
 
-export const RuleSource = Schema.Union(
+export const RuleSource = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("builtin"), name: Schema.String }),
   Schema.Struct({
     kind: Schema.Literal("project"),
@@ -13,24 +13,24 @@ export const RuleSource = Schema.Union(
   Schema.Struct({
     kind: Schema.Literal("skill"),
     name: Schema.String,
-    scope: Schema.Literal("builtin", "global", "project"),
+    scope: Schema.Literals(["builtin", "global", "project"]),
     contentHash: Schema.String,
   }),
   Schema.Struct({
-    kind: Schema.Literal("mcp-resource", "mcp-prompt"),
+    kind: Schema.Literals(["mcp-resource", "mcp-prompt"]),
     serverId: Schema.String,
     name: Schema.String,
     contentHash: Schema.String,
   }),
-);
+]);
 export type RuleSource = typeof RuleSource.Type;
 
 export const WorkflowRule = Schema.Struct({
-  id: Schema.String.pipe(Schema.pattern(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/)),
+  id: Schema.String.pipe(Schema.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/))),
   version: Schema.Int,
   title: Schema.NonEmptyString,
   phases: Schema.Array(WorkflowPhase),
-  priority: Schema.Literal("required", "recommended"),
+  priority: Schema.Literals(["required", "recommended"]),
   terms: Schema.Array(Schema.String),
   instruction: Schema.NonEmptyString,
   requiredEvidence: Schema.Array(Schema.String),
@@ -218,7 +218,7 @@ const make = Effect.gen(function* () {
         .sort((left, right) => right.score - left.score);
 
       return Effect.gen(function* () {
-        const semantic = yield* Effect.either(
+        const semantic = yield* Effect.result(
           Effect.all([vectors(optional), embedder.embed([text])]).pipe(
             Effect.map(([byId, [queryVector]]) =>
               queryVector
@@ -238,7 +238,7 @@ const make = Effect.gen(function* () {
             ranks.set(rule.id, (ranks.get(rule.id) ?? 0) + 1 / (60 + index + 1)),
           );
         addRanks(lexical);
-        if (semantic._tag === "Right") addRanks(semantic.right);
+        if (semantic._tag === "Success") addRanks(semantic.success);
 
         const selected = optional
           .filter((rule) => lexicalScore(queryTerms, rule) > 0 || ranks.has(rule.id))
@@ -246,7 +246,7 @@ const make = Effect.gen(function* () {
           .slice(0, limit);
         return {
           rules: [...required, ...selected],
-          degraded: semantic._tag === "Left" ? (["embedding"] as const) : [],
+          degraded: semantic._tag === "Failure" ? (["embedding"] as const) : [],
         };
       });
     },
@@ -254,9 +254,8 @@ const make = Effect.gen(function* () {
 });
 
 /** Phase-filtered workflow rules with lexical + embedding ranking for optional rules. */
-export class WorkflowRules extends Context.Tag("memory-agent/WorkflowRules")<
-  WorkflowRules,
-  Effect.Effect.Success<typeof make>
->() {
+export class WorkflowRules extends Context.Service<WorkflowRules, Effect.Success<typeof make>>()(
+  "memory-agent/WorkflowRules",
+) {
   static readonly layer = Layer.effect(WorkflowRules, make);
 }

@@ -1,3 +1,4 @@
+import { Semaphore } from "effect";
 import { homedir } from "node:os";
 import { Worker } from "node:worker_threads";
 import { Context, Data, Deferred, Effect, Layer, Schedule, Schema } from "effect";
@@ -109,7 +110,7 @@ const make = (watching: boolean, home: string) =>
     const events = yield* AppEvents;
     const indexer = yield* Indexer;
     const projects = yield* Projects;
-    const oneDrainAtATime = yield* Effect.makeSemaphore(1);
+    const oneDrainAtATime = yield* Semaphore.make(1);
 
     const sourceTotals = sqlite.prepare(`
       SELECT
@@ -181,7 +182,7 @@ const make = (watching: boolean, home: string) =>
 
     /** Transcripts on disk per source, counted by the worker so the folders are walked there. */
     let latestCounts: TranscriptCounts | null = null;
-    const countTranscripts = Effect.async<TranscriptCounts, ImportWorkerFailed>((resume) =>
+    const countTranscripts = Effect.callback<TranscriptCounts, ImportWorkerFailed>((resume) =>
       ask("count", (reply) => {
         switch (reply.kind) {
           case "counts":
@@ -200,7 +201,7 @@ const make = (watching: boolean, home: string) =>
     let running: Deferred.Deferred<number, ImportWorkerFailed> | null = null;
 
     const pass = (startedAt: string) =>
-      Effect.async<PassProgress, ImportWorkerFailed>((resume) =>
+      Effect.callback<PassProgress, ImportWorkerFailed>((resume) =>
         ask("run", (reply) => {
           switch (reply.kind) {
             case "progress":
@@ -266,7 +267,7 @@ const make = (watching: boolean, home: string) =>
           ),
           Effect.map((progress) => progress.written),
           Effect.onExit((exit) =>
-            Effect.zipRight(
+            Effect.andThen(
               Effect.sync(() => {
                 running = null;
               }),
@@ -287,8 +288,8 @@ const make = (watching: boolean, home: string) =>
      * its permit between batches, so a conversation held meanwhile is still indexed first: its
      * nodes are the newest by time, and that is the order pending nodes come out in.
      */
-    const backfill = Effect.zipRight(indexer.indexAll(), indexer.analyzeAll()).pipe(
-      Effect.catchAllCause(() => Effect.void),
+    const backfill = Effect.andThen(indexer.indexAll(), indexer.analyzeAll()).pipe(
+      Effect.catchCause(() => Effect.void),
       oneDrainAtATime.withPermits(1),
     );
 
@@ -297,7 +298,7 @@ const make = (watching: boolean, home: string) =>
       Effect.forkIn(
         Deferred.await(done).pipe(
           Effect.flatMap((written) => (written > 0 ? backfill : Effect.void)),
-          Effect.catchAllCause(() => Effect.void),
+          Effect.catchCause(() => Effect.void),
         ),
         layerScope,
       ),
@@ -310,7 +311,7 @@ const make = (watching: boolean, home: string) =>
             const settings = yield* config.read;
             if (settings.importsEnabled !== true) return;
             if ((yield* runOnce) > 0) yield* backfill;
-          }).pipe(Effect.catchAllCause(() => Effect.void)),
+          }).pipe(Effect.catchCause(() => Effect.void)),
           Schedule.spaced(pollEvery),
         ),
       );
@@ -351,7 +352,7 @@ const make = (watching: boolean, home: string) =>
       overview,
       /** Turns migration on or off and, when turning it on, starts reading what is there now. */
       setEnabled: (enabled: boolean) =>
-        Effect.zipRight(
+        Effect.andThen(
           config.update({ importsEnabled: enabled }),
           enabled ? startPass : Effect.void,
         ),
@@ -365,10 +366,9 @@ const make = (watching: boolean, home: string) =>
  * as they grow. Reads only; the transcripts stay where their tool wrote them. The reading runs in a
  * worker thread; this service starts passes, reports on them and embeds what they wrote.
  */
-export class Importer extends Context.Tag("memory-agent/Importer")<
-  Importer,
-  Effect.Effect.Success<ReturnType<typeof make>>
->() {
+export class Importer extends Context.Service<Importer, Effect.Success<ReturnType<typeof make>>>()(
+  "memory-agent/Importer",
+) {
   static readonly layer = (watching: boolean = true, home: string = homedir()) =>
-    Layer.scoped(Importer, make(watching, home));
+    Layer.effect(Importer, make(watching, home));
 }

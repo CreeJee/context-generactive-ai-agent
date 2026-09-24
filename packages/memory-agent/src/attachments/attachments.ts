@@ -1,3 +1,4 @@
+import { Semaphore } from "effect";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -11,12 +12,12 @@ import { requireRuntime } from "../runtime/resources.ts";
 /** Largest image accepted for upload. */
 export const maxAttachmentBytes = 20 * 1024 * 1024;
 
-export const AttachmentMimeType = Schema.Literal(
+export const AttachmentMimeType = Schema.Literals([
   "image/png",
   "image/jpeg",
   "image/gif",
   "image/webp",
-);
+]);
 export type AttachmentMimeType = typeof AttachmentMimeType.Type;
 
 export const Attachment = Schema.Struct({
@@ -123,7 +124,7 @@ const make = Effect.gen(function* () {
     return row ? toAttachment(row) : null;
   };
 
-  const conversionPermits = yield* Effect.makeSemaphore(maxConcurrentImageConversions);
+  const conversionPermits = yield* Semaphore.make(maxConcurrentImageConversions);
 
   /**
    * Fits an image into an adaptive WebP budget. A disk marker remembers that conversion brought no
@@ -317,12 +318,11 @@ const make = Effect.gen(function* () {
   };
 });
 
-export type AttachmentsApi = Effect.Effect.Success<typeof make>;
+export type AttachmentsApi = Effect.Success<typeof make>;
 
 /** Images uploaded into conversations. Kept like the rest of the evidence: never expired. */
-export class Attachments extends Context.Tag("memory-agent/Attachments")<
-  Attachments,
-  AttachmentsApi
->() {
+export class Attachments extends Context.Service<Attachments, AttachmentsApi>()(
+  "memory-agent/Attachments",
+) {
   static readonly layer = Layer.effect(Attachments, make);
 }

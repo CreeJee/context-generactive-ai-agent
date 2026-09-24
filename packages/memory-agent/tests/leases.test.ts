@@ -7,11 +7,11 @@ import { makeLeases } from "../src/sessions/leases.ts";
 import { approvalToolDefinitions } from "../src/tools/definitions.ts";
 import { testRuntime } from "./support/runtime.ts";
 
-const Lease = Schema.Union(
+const Lease = Schema.Union([
   Schema.Struct({ state: Schema.Literal("mine") }),
   Schema.Struct({ state: Schema.Literal("other"), since: Schema.Number }),
   Schema.Struct({ state: Schema.Literal("free") }),
-);
+]);
 const StatusLease = Schema.Struct({ lease: Lease });
 
 async function until(condition: () => boolean, what: string) {

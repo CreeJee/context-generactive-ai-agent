@@ -123,9 +123,8 @@ const make = Effect.gen(function* () {
 });
 
 /** Conversations inside a project. Ownership and resume rules arrive with the session phase. */
-export class Sessions extends Context.Tag("memory-agent/Sessions")<
-  Sessions,
-  Effect.Effect.Success<typeof make>
->() {
+export class Sessions extends Context.Service<Sessions, Effect.Success<typeof make>>()(
+  "memory-agent/Sessions",
+) {
   static readonly layer = Layer.effect(Sessions, make);
 }

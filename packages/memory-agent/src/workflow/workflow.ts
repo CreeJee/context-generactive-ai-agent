@@ -4,10 +4,10 @@ import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { Database } from "../db/database.ts";
 import { evaluateWorkflowAction, type WorkflowActionReason } from "./actions.ts";
 
-export const WorkflowPhase = Schema.Literal("chat", "goal", "plan", "execute", "verify");
+export const WorkflowPhase = Schema.Literals(["chat", "goal", "plan", "execute", "verify"]);
 export type WorkflowPhase = typeof WorkflowPhase.Type;
 
-export const WorkflowAction = Schema.Literal("pause", "resume", "stop");
+export const WorkflowAction = Schema.Literals(["pause", "resume", "stop"]);
 export type WorkflowAction = typeof WorkflowAction.Type;
 
 const GoalQuestion = Schema.Struct({
@@ -16,7 +16,7 @@ const GoalQuestion = Schema.Struct({
   blocking: Schema.Boolean,
 });
 
-export const VerificationStatus = Schema.Literal(
+export const VerificationStatus = Schema.Literals([
   "not_run",
   "passed",
   "failed",
@@ -24,16 +24,16 @@ export const VerificationStatus = Schema.Literal(
   "invalid_criterion",
   "inconclusive",
   "blocked",
-);
+]);
 export type VerificationStatus = typeof VerificationStatus.Type;
 
 const Verification = Schema.Struct({
   status: VerificationStatus,
   summary: Schema.String,
   evidence: Schema.Array(Schema.String),
-  recoveryPhase: Schema.optionalWith(Schema.NullOr(Schema.Literal("goal", "plan")), {
-    default: () => null,
-  }),
+  recoveryPhase: Schema.NullOr(Schema.Literals(["goal", "plan"])).pipe(
+    Schema.withDecodingDefaultTypeKey(Effect.sync(() => null)),
+  ),
   updatedAt: Schema.NullOr(Schema.String),
 });
 export type Verification = typeof Verification.Type;
@@ -54,14 +54,18 @@ const goalFields = {
   nonGoals: Schema.Array(Schema.String),
   assumptions: Schema.Array(Schema.String),
   openQuestions: Schema.Array(GoalQuestion),
-  evidence: Schema.optionalWith(Schema.Array(Schema.String), { default: () => [] }),
-  verification: Schema.optionalWith(Verification, { default: verificationDefault }),
+  evidence: Schema.Array(Schema.String).pipe(
+    Schema.withDecodingDefaultTypeKey(Effect.sync(() => [])),
+  ),
+  verification: Verification.pipe(
+    Schema.withDecodingDefaultTypeKey(Effect.sync(verificationDefault)),
+  ),
   updatedAt: Schema.String,
 } as const;
 
 export const GoalArtifact = Schema.Struct({
   ...goalFields,
-  status: Schema.Literal("draft", "active", "paused", "completed", "failed"),
+  status: Schema.Literals(["draft", "active", "paused", "completed", "failed"]),
 });
 export type GoalArtifact = typeof GoalArtifact.Type;
 
@@ -76,8 +80,10 @@ const planStepFields = {
 
 export const PlanStep = Schema.Struct({
   ...planStepFields,
-  status: Schema.Literal("pending", "in_progress", "completed", "blocked"),
-  evidence: Schema.optionalWith(Schema.Array(Schema.String), { default: () => [] }),
+  status: Schema.Literals(["pending", "in_progress", "completed", "blocked"]),
+  evidence: Schema.Array(Schema.String).pipe(
+    Schema.withDecodingDefaultTypeKey(Effect.sync(() => [])),
+  ),
 });
 export type PlanStep = typeof PlanStep.Type;
 
@@ -88,21 +94,25 @@ const planFields = {
   steps: Schema.Array(PlanStep),
   risks: Schema.Array(Schema.String),
   openQuestions: Schema.Array(Schema.String),
-  evidence: Schema.optionalWith(Schema.Array(Schema.String), { default: () => [] }),
-  verification: Schema.optionalWith(Verification, { default: verificationDefault }),
+  evidence: Schema.Array(Schema.String).pipe(
+    Schema.withDecodingDefaultTypeKey(Effect.sync(() => [])),
+  ),
+  verification: Verification.pipe(
+    Schema.withDecodingDefaultTypeKey(Effect.sync(verificationDefault)),
+  ),
   updatedAt: Schema.String,
 } as const;
 
 export const PlanArtifact = Schema.Struct({
   ...planFields,
-  status: Schema.Literal("draft", "ready", "executing", "completed", "blocked"),
+  status: Schema.Literals(["draft", "ready", "executing", "completed", "blocked"]),
 });
 export type PlanArtifact = typeof PlanArtifact.Type;
 
 const LedgerEvent = Schema.Struct({
   sequence: Schema.Int,
   at: Schema.String,
-  kind: Schema.Literal(
+  kind: Schema.Literals([
     "phase_changed",
     "goal_updated",
     "plan_updated",
@@ -113,7 +123,7 @@ const LedgerEvent = Schema.Struct({
     "workflow_stopped",
     "verification_recorded",
     "verification_invalidated",
-  ),
+  ]),
   detail: Schema.String,
 });
 
@@ -132,7 +142,7 @@ export const UpdateGoal = Schema.Struct({
   nonGoals: Schema.Array(Schema.String),
   assumptions: Schema.Array(Schema.String),
   openQuestions: Schema.Array(GoalQuestion),
-  status: Schema.Literal("draft", "active"),
+  status: Schema.Literals(["draft", "active"]),
 });
 export type UpdateGoal = typeof UpdateGoal.Type;
 
@@ -141,30 +151,36 @@ export const UpdatePlan = Schema.Struct({
   steps: Schema.Array(Schema.Struct(planStepFields)),
   risks: Schema.Array(Schema.String),
   openQuestions: Schema.Array(Schema.String),
-  status: Schema.Literal("draft", "ready"),
+  status: Schema.Literals(["draft", "ready"]),
 });
 export type UpdatePlan = typeof UpdatePlan.Type;
 
 const StepProgress = Schema.Struct({
   id: Schema.String,
-  status: Schema.Literal("pending", "in_progress", "completed", "blocked"),
-  evidence: Schema.optionalWith(Schema.Array(Schema.String), { default: () => [] }),
+  status: Schema.Literals(["pending", "in_progress", "completed", "blocked"]),
+  evidence: Schema.Array(Schema.String).pipe(
+    Schema.withDecodingDefaultTypeKey(Effect.sync(() => [])),
+  ),
 });
 
 const VerificationUpdate = Schema.Struct({
   status: VerificationStatus,
   summary: Schema.String,
   evidence: Schema.Array(Schema.String),
-  recoveryPhase: Schema.optional(Schema.NullOr(Schema.Literal("goal", "plan"))),
+  recoveryPhase: Schema.optionalKey(Schema.NullOr(Schema.Literals(["goal", "plan"]))),
 });
 
 export const UpdateWorkflowProgress = Schema.Struct({
-  goalStatus: Schema.optional(Schema.Literal("active", "paused", "completed", "failed")),
-  planStatus: Schema.optional(Schema.Literal("executing", "completed", "blocked")),
-  steps: Schema.optionalWith(Schema.Array(StepProgress), { default: () => [] }),
-  goalEvidence: Schema.optionalWith(Schema.Array(Schema.String), { default: () => [] }),
-  planEvidence: Schema.optionalWith(Schema.Array(Schema.String), { default: () => [] }),
-  verification: Schema.optional(VerificationUpdate),
+  goalStatus: Schema.optionalKey(Schema.Literals(["active", "paused", "completed", "failed"])),
+  planStatus: Schema.optionalKey(Schema.Literals(["executing", "completed", "blocked"])),
+  steps: Schema.Array(StepProgress).pipe(Schema.withDecodingDefaultTypeKey(Effect.sync(() => []))),
+  goalEvidence: Schema.Array(Schema.String).pipe(
+    Schema.withDecodingDefaultTypeKey(Effect.sync(() => [])),
+  ),
+  planEvidence: Schema.Array(Schema.String).pipe(
+    Schema.withDecodingDefaultTypeKey(Effect.sync(() => [])),
+  ),
+  verification: Schema.optionalKey(VerificationUpdate),
   detail: Schema.String,
 });
 export type UpdateWorkflowProgress = typeof UpdateWorkflowProgress.Type;
@@ -174,11 +190,19 @@ const emptyState = (): WorkflowState => ({ phase: "chat", goal: null, plan: null
 // Read workflow rows written before execution state and evidence became durable fields.
 const PersistedGoalArtifact = Schema.Struct({
   ...goalFields,
-  status: Schema.Literal("draft", "ready", "confirmed", "active", "paused", "completed", "failed"),
+  status: Schema.Literals([
+    "draft",
+    "ready",
+    "confirmed",
+    "active",
+    "paused",
+    "completed",
+    "failed",
+  ]),
 });
 const PersistedPlanArtifact = Schema.Struct({
   ...planFields,
-  status: Schema.Literal("draft", "ready", "approved", "executing", "completed", "blocked"),
+  status: Schema.Literals(["draft", "ready", "approved", "executing", "completed", "blocked"]),
 });
 const PersistedWorkflowState = Schema.Struct({
   phase: WorkflowPhase,
@@ -186,7 +210,9 @@ const PersistedWorkflowState = Schema.Struct({
   plan: Schema.NullOr(PersistedPlanArtifact),
   ledger: Schema.Array(LedgerEvent),
 });
-const decodePersistedState = Schema.decodeUnknownSync(Schema.parseJson(PersistedWorkflowState));
+const decodePersistedState = Schema.decodeUnknownSync(
+  Schema.fromJsonString(PersistedWorkflowState),
+);
 const decodeState = (json: string): WorkflowState => {
   const state = decodePersistedState(json);
   return {
@@ -210,7 +236,7 @@ const decodeState = (json: string): WorkflowState => {
           },
   };
 };
-const encodeState = Schema.encodeSync(Schema.parseJson(WorkflowState));
+const encodeState = Schema.encodeSync(Schema.fromJsonString(WorkflowState));
 const decodeRow = Schema.decodeUnknownSync(Schema.Struct({ state_json: Schema.String }));
 
 export class WorkflowTransitionRefused extends Data.TaggedError("WorkflowTransitionRefused")<{
@@ -648,9 +674,8 @@ const make = Effect.gen(function* () {
 });
 
 /** Versioned Goal/Plan artifacts and their execution ledger, scoped to a session. */
-export class Workflows extends Context.Tag("memory-agent/Workflows")<
-  Workflows,
-  Effect.Effect.Success<typeof make>
->() {
+export class Workflows extends Context.Service<Workflows, Effect.Success<typeof make>>()(
+  "memory-agent/Workflows",
+) {
   static readonly layer = Layer.effect(Workflows, make);
 }

@@ -1,10 +1,11 @@
+import { SchemaTransformation } from "effect";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { Data, Either, ParseResult, Schema } from "effect";
+import { Data, Result, Schema } from "effect";
 
 /** Where MCP servers are configured: user-wide in the storage root, or in a project. */
-export const McpScope = Schema.Literal("global", "project");
+export const McpScope = Schema.Literals(["global", "project"]);
 export type McpScope = typeof McpScope.Type;
 
 export const globalMcpFile = (storageRoot: string) => join(storageRoot, "mcp.json");
@@ -15,64 +16,70 @@ export const projectMcpFile = (projectRoot: string) => join(projectRoot, ".mcp.j
 const StdioServer = Schema.TaggedStruct("stdio", {
   command: Schema.NonEmptyString,
   args: Schema.Array(Schema.String),
-  env: Schema.Record({ key: Schema.String, value: Schema.String }),
+  env: Schema.Record(Schema.String, Schema.String),
 });
 
 /** A server already running somewhere, reached over Streamable HTTP. */
 const HttpServer = Schema.TaggedStruct("http", {
   url: Schema.NonEmptyString,
-  headers: Schema.Record({ key: Schema.String, value: Schema.String }),
+  headers: Schema.Record(Schema.String, Schema.String),
 });
 
-export const McpServerConfig = Schema.Union(StdioServer, HttpServer);
+export const McpServerConfig = Schema.Union([StdioServer, HttpServer]);
 export type McpServerConfig = typeof McpServerConfig.Type;
 
-const StringMap = Schema.Record({ key: Schema.String, value: Schema.String });
+const StringMap = Schema.Record(Schema.String, Schema.String);
 
 /** `.mcp.json` entries: `{ command, args?, env? }` (type absent or "stdio") or `{ type: "http", url, headers? }`. */
-const FileEntry = Schema.Union(
-  Schema.transform(
-    Schema.Struct({
-      type: Schema.optional(Schema.Literal("stdio")),
-      command: Schema.NonEmptyString,
-      args: Schema.optional(Schema.Array(Schema.String)),
-      env: Schema.optional(StringMap),
-    }),
-    StdioServer,
-    {
-      strict: true,
-      decode: (entry) => ({
-        _tag: "stdio" as const,
-        command: entry.command,
-        args: entry.args ?? [],
-        env: entry.env ?? {},
+const FileEntry = Schema.Union([
+  Schema.Struct({
+    type: Schema.optional(Schema.Literal("stdio")),
+    command: Schema.NonEmptyString,
+    args: Schema.optional(Schema.Array(Schema.String)),
+    env: Schema.optional(StringMap),
+  }).pipe(
+    Schema.decodeTo(
+      StdioServer,
+      SchemaTransformation.transform({
+        decode: (entry) => ({
+          _tag: "stdio" as const,
+          command: entry.command,
+          args: entry.args ?? [],
+          env: entry.env ?? {},
+        }),
+        encode: (server) => ({ command: server.command, args: server.args, env: server.env }),
       }),
-      encode: (server) => ({ command: server.command, args: server.args, env: server.env }),
-    },
+    ),
   ),
-  Schema.transform(
-    Schema.Struct({
-      type: Schema.Literal("http"),
-      url: Schema.NonEmptyString,
-      headers: Schema.optional(StringMap),
-    }),
-    HttpServer,
-    {
-      strict: true,
-      decode: (entry) => ({ _tag: "http" as const, url: entry.url, headers: entry.headers ?? {} }),
-      encode: (server) => ({ type: "http" as const, url: server.url, headers: server.headers }),
-    },
+  Schema.Struct({
+    type: Schema.Literal("http"),
+    url: Schema.NonEmptyString,
+    headers: Schema.optional(StringMap),
+  }).pipe(
+    Schema.decodeTo(
+      HttpServer,
+      SchemaTransformation.transform({
+        decode: (entry) => ({
+          _tag: "http" as const,
+          url: entry.url,
+          headers: entry.headers ?? {},
+        }),
+        encode: (server) => ({ type: "http" as const, url: server.url, headers: server.headers }),
+      }),
+    ),
   ),
-);
+]);
 
 /** Server names become part of tool names, so they are kept short and plain. */
-export const McpServerName = Schema.String.pipe(Schema.pattern(/^[A-Za-z0-9_-]{1,32}$/));
+export const McpServerName = Schema.String.pipe(
+  Schema.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,32}$/)),
+);
 const isServerName = Schema.is(McpServerName);
 
 const McpFile = Schema.Struct({
-  mcpServers: Schema.Record({ key: Schema.String, value: FileEntry }),
+  mcpServers: Schema.Record(Schema.String, FileEntry),
 });
-const decodeMcpFile = Schema.decodeUnknownEither(Schema.parseJson(McpFile));
+const decodeMcpFile = Schema.decodeUnknownResult(Schema.fromJsonString(McpFile));
 
 export interface ConfiguredServer {
   readonly scope: McpScope;
@@ -102,13 +109,13 @@ export function readMcpFile(path: string, scope: McpScope): McpFileRead {
   } catch {
     return { path, servers: [], error: "unreadable" };
   }
-  return Either.match(decodeMcpFile(text), {
-    onLeft: (error) => ({
+  return Result.match(decodeMcpFile(text), {
+    onFailure: (error) => ({
       path,
       servers: [],
-      error: ParseResult.TreeFormatter.formatErrorSync(error).split("\n").slice(0, 4).join("\n"),
+      error: String(error).split("\n").slice(0, 4).join("\n"),
     }),
-    onRight: (file) => {
+    onSuccess: (file) => {
       const entries = Object.entries(file.mcpServers);
       const invalid = entries.filter(([name]) => !isServerName(name)).map(([name]) => name);
       return {

@@ -5,7 +5,7 @@ import { Skills, maxListedSkills, type Skill } from "../skills/skills.ts";
 import { toToolSchema } from "./schema.ts";
 
 const ReadSkillInput = Schema.Struct({
-  name: Schema.NonEmptyString.annotations({ description: "Skill name from the list of skills." }),
+  name: Schema.NonEmptyString.annotate({ description: "Skill name from the list of skills." }),
 });
 
 /** The skills the model may use in this project, and how to treat them. */
@@ -64,9 +64,8 @@ const make = Effect.gen(function* () {
   };
 });
 
-export class SkillTools extends Context.Tag("memory-agent/SkillTools")<
-  SkillTools,
-  Effect.Effect.Success<typeof make>
->() {
+export class SkillTools extends Context.Service<SkillTools, Effect.Success<typeof make>>()(
+  "memory-agent/SkillTools",
+) {
   static readonly layer = Layer.effect(SkillTools, make);
 }

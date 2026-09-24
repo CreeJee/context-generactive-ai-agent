@@ -1,6 +1,6 @@
 import { lstatSync, realpathSync, type Stats } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { Data, Either } from "effect";
+import { Data, Result } from "effect";
 
 /**
  * Why a path was refused. Messages the model sees name the reason, never file contents.
@@ -27,7 +27,7 @@ export class PathRejected extends Data.TaggedError("PathRejected")<{
 }> {}
 
 type Reason = PathRejected["reason"];
-const reject = (path: string, reason: Reason) => Either.left(new PathRejected({ path, reason }));
+const reject = (path: string, reason: Reason) => Result.fail(new PathRejected({ path, reason }));
 
 /** Directories whose whole contents are credential material, matched as consecutive segments. */
 const credentialDirectories = [
@@ -189,7 +189,7 @@ export function resolveProjectPath(
   root: string,
   path: string,
   kind: "file" | "directory" | "new-or-file",
-): Either.Either<ProjectPath, PathRejected> {
+): Result.Result<ProjectPath, PathRejected> {
   const spelled = path === "" ? "." : path;
   if (isAbsolute(spelled) || spelled.includes("\\") || hasControlCharacter(spelled))
     return reject(path, "invalid_path");
@@ -214,7 +214,7 @@ export function resolveProjectPath(
     stats = lstat(current);
     if (!stats) {
       if (kind === "new-or-file")
-        return Either.right({ absolute: join(root, ...segments), relative: spelled, stats });
+        return Result.succeed({ absolute: join(root, ...segments), relative: spelled, stats });
       return reject(path, "not_found");
     }
     if (stats.isSymbolicLink()) return reject(path, "symlink");
@@ -227,7 +227,7 @@ export function resolveProjectPath(
     if (!stats?.isFile()) return reject(path, "not_file");
     if (stats.nlink !== 1) return reject(path, "hard_link");
   }
-  return Either.right({ absolute: current, relative: spelled, stats });
+  return Result.succeed({ absolute: current, relative: spelled, stats });
 }
 
 export interface OutsidePath {
@@ -249,7 +249,7 @@ export function resolveOutsidePath(
   storageRoot: string,
   path: string,
   kind: "file" | "directory" | "new-or-file",
-): Either.Either<OutsidePath, PathRejected> {
+): Result.Result<OutsidePath, PathRejected> {
   if (!isAbsolute(path) || hasControlCharacter(path)) return reject(path, "invalid_path");
   const spelled = resolve(path);
   if (isCredentialPath(spelled)) return reject(path, "credential");
@@ -263,12 +263,12 @@ export function resolveOutsidePath(
   if (isSameOrBelow(projectRoot, canonical)) return reject(path, "inside_project");
   if (isSameOrBelow(storageRoot, canonical)) return reject(path, "credential");
 
-  if (!stats) return Either.right({ absolute: canonical, stats });
+  if (!stats) return Result.succeed({ absolute: canonical, stats });
   if (kind === "directory") {
     if (!stats.isDirectory()) return reject(path, "not_directory");
   } else {
     if (!stats.isFile()) return reject(path, "not_file");
     if (stats.nlink !== 1) return reject(path, "hard_link");
   }
-  return Either.right({ absolute: canonical, stats });
+  return Result.succeed({ absolute: canonical, stats });
 }

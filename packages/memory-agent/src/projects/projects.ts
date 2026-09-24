@@ -12,7 +12,7 @@ import { canonicalPath, pathsOverlap } from "../files/paths.ts";
  * `ask`: the user answers every call. `auto`: a classifier allows, asks or blocks each call first.
  * `full`: approval-gated calls run immediately under the app's path and credential restrictions.
  */
-export const PermissionMode = Schema.Literal("ask", "auto", "full");
+export const PermissionMode = Schema.Literals(["ask", "auto", "full"]);
 export type PermissionMode = typeof PermissionMode.Type;
 
 export const Project = Schema.Struct({
@@ -31,9 +31,9 @@ const ProjectRow = Schema.Struct({
   id: Schema.String,
   root: Schema.String,
   name: Schema.String,
-  cross_recall_excluded: Schema.Literal(0, 1),
-  permission_mode: Schema.Literal("ask", "auto"),
-  permission_full: Schema.Literal(0, 1),
+  cross_recall_excluded: Schema.Literals([0, 1]),
+  permission_mode: Schema.Literals(["ask", "auto"]),
+  permission_full: Schema.Literals([0, 1]),
   created_at: Schema.String,
   hidden_at: Schema.NullOr(Schema.String),
 });
@@ -162,9 +162,8 @@ const make = Effect.gen(function* () {
 });
 
 /** Project roots registered from the UI. Sessions, memory and grants belong to one project. */
-export class Projects extends Context.Tag("memory-agent/Projects")<
-  Projects,
-  Effect.Effect.Success<typeof make>
->() {
+export class Projects extends Context.Service<Projects, Effect.Success<typeof make>>()(
+  "memory-agent/Projects",
+) {
   static readonly layer = Layer.effect(Projects, make);
 }

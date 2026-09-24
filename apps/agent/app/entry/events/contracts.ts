@@ -1,23 +1,29 @@
 import { Schema } from "effect";
 
-export const SessionEventTopic = Schema.Literal(
+export const SessionEventTopic = Schema.Literals([
   "all",
   "run-state",
   "queue",
   "subagents",
   "relayed-approvals",
-);
+]);
 export type SessionEventTopic = typeof SessionEventTopic.Type;
 
-export const ProjectEventTopic = Schema.Literal("all", "sessions");
+export const ProjectEventTopic = Schema.Literals(["all", "sessions"]);
 export type ProjectEventTopic = typeof ProjectEventTopic.Type;
 
-export const GlobalEventTopic = Schema.Literal("all", "auth", "imports", "embedding", "projects");
+export const GlobalEventTopic = Schema.Literals([
+  "all",
+  "auth",
+  "imports",
+  "embedding",
+  "projects",
+]);
 export type GlobalEventTopic = typeof GlobalEventTopic.Type;
 
-const Revision = Schema.Int.pipe(Schema.nonNegative());
+const Revision = Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0)));
 
-export const AppChangedEvent = Schema.Union(
+export const AppChangedEvent = Schema.Union([
   Schema.Struct({
     scope: Schema.Literal("session"),
     projectId: Schema.String,
@@ -36,7 +42,7 @@ export const AppChangedEvent = Schema.Union(
     topic: GlobalEventTopic,
     revision: Revision,
   }),
-);
+]);
 export type AppChangedEvent = typeof AppChangedEvent.Type;
 
 export const AppReadyEvent = Schema.Struct({
@@ -45,6 +51,6 @@ export const AppReadyEvent = Schema.Struct({
 export type AppReadyEvent = typeof AppReadyEvent.Type;
 
 export const AppHeartbeatEvent = Schema.Struct({
-  at: Schema.Int.pipe(Schema.nonNegative()),
+  at: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
 });
 export type AppHeartbeatEvent = typeof AppHeartbeatEvent.Type;

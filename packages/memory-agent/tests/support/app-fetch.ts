@@ -18,9 +18,8 @@ export function appFetch(runtime: Runtime): typeof fetch {
   const run = <A, E>(
     effect: Effect.Effect<A, E, AgentChat | Projects | ProviderRegistry | Sessions>,
   ) => runtime.runPromise(effect);
-  const chat = <A, E>(
-    use: (agent: Effect.Effect.Success<typeof AgentChat>) => Effect.Effect<A, E>,
-  ) => run(Effect.flatMap(AgentChat, use));
+  const chat = <A, E>(use: (agent: Effect.Success<typeof AgentChat>) => Effect.Effect<A, E>) =>
+    run(Effect.flatMap(AgentChat, use));
 
   return async (input, init) => {
     const request = new Request(input, init);

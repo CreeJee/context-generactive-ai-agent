@@ -18,7 +18,7 @@ export const edgeWeights = {
   related: 0.6, // semantically related, no structural link
 } as const;
 
-export const EdgeKind = Schema.Literal(
+export const EdgeKind = Schema.Literals([
   "calls",
   "returns",
   "reply",
@@ -28,10 +28,10 @@ export const EdgeKind = Schema.Literal(
   "retracts",
   "about",
   "related",
-);
+]);
 export type EdgeKind = typeof EdgeKind.Type;
 
-export const EdgeOrigin = Schema.Literal("structure", "llm");
+export const EdgeOrigin = Schema.Literals(["structure", "llm"]);
 export type EdgeOrigin = typeof EdgeOrigin.Type;
 
 export const Edge = Schema.Struct({

@@ -13,17 +13,17 @@ type Runtime = Awaited<ReturnType<typeof testRuntime>>["runtime"];
 const Queued = Schema.Struct({
   id: Schema.String,
   text: Schema.String,
-  state: Schema.Union(
+  state: Schema.Union([
     Schema.Struct({ kind: Schema.Literal("waiting") }),
     Schema.Struct({ kind: Schema.Literal("editing"), draft: Schema.String }),
     Schema.Struct({ kind: Schema.Literal("held"), draft: Schema.NullOr(Schema.String) }),
     Schema.Struct({
       kind: Schema.Literal("delivered"),
-      via: Schema.Literal("tool_boundary", "steer", "next_turn"),
+      via: Schema.Literals(["tool_boundary", "steer", "next_turn"]),
       runId: Schema.NullOr(Schema.String),
     }),
     Schema.Struct({ kind: Schema.Literal("failed"), reason: Schema.String }),
-  ),
+  ]),
 });
 const decodeQueued = Schema.decodeUnknownSync(Queued);
 
@@ -194,15 +194,15 @@ describe("message queue", () => {
       Schema.decodeUnknownSync(
         Schema.Struct({
           items: Schema.Array(Queued),
-          nextDelivery: Schema.Union(
+          nextDelivery: Schema.Union([
             Schema.Struct({ kind: Schema.Literal("ready") }),
             Schema.Struct({
               kind: Schema.Literal("blocked"),
               messageId: Schema.String,
-              reason: Schema.Literal("editing", "held"),
+              reason: Schema.Literals(["editing", "held"]),
             }),
             Schema.Struct({ kind: Schema.Literal("empty") }),
-          ),
+          ]),
         }),
       )(await (await context.run(context.agent.queued(sessionId))).json());
     expect(await read()).toMatchObject({ items: [], nextDelivery: { kind: "empty" } });

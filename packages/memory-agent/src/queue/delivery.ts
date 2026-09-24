@@ -153,9 +153,8 @@ const make = Effect.gen(function* () {
 });
 
 /** Gets queued follow-up messages to the agent: at tool-call boundaries, or steered at once. */
-export class QueueDelivery extends Context.Tag("memory-agent/QueueDelivery")<
-  QueueDelivery,
-  Effect.Effect.Success<typeof make>
->() {
+export class QueueDelivery extends Context.Service<QueueDelivery, Effect.Success<typeof make>>()(
+  "memory-agent/QueueDelivery",
+) {
   static readonly layer = Layer.effect(QueueDelivery, make);
 }

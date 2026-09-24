@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage } from "node:http";
 import type { AnyServerTool } from "@tanstack/ai";
 import type { AddressInfo } from "node:net";
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { Kagi } from "../src/kagi/kagi.ts";
@@ -86,8 +86,8 @@ describe("Kagi settings", () => {
     const kagi = await runtime.runPromise(Kagi);
 
     expect(await runtime.runPromise(kagi.status)).toEqual({ keyRegistered: false, enabled: false });
-    const refused = await runtime.runPromise(Effect.either(kagi.setEnabled(true)));
-    expect(Either.isLeft(refused) && refused.left._tag).toBe("KagiKeyMissing");
+    const refused = await runtime.runPromise(Effect.result(kagi.setEnabled(true)));
+    expect(Result.isFailure(refused) && refused.failure._tag).toBe("KagiKeyMissing");
 
     await runtime.runPromise(kagi.registerKey("  sk-test-key  "));
     expect(await runtime.runPromise(kagi.status)).toEqual({ keyRegistered: true, enabled: false });

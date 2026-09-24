@@ -77,7 +77,7 @@ const make = Effect.gen(function* () {
       Effect.forkIn(
         checkGpu(storage.path).pipe(
           Effect.flatMap((result) => config.update({ gpuCheck: result })),
-          Effect.catchAllCause(() => Effect.void),
+          Effect.catchCause(() => Effect.void),
           Effect.ensuring(
             Effect.sync(() => {
               checking = false;
@@ -119,14 +119,13 @@ const make = Effect.gen(function* () {
         return yield* overview;
       }),
     /** Checks WebGPU again, for a machine whose drivers or hardware changed. */
-    recheck: Effect.zipRight(startCheck, overview),
+    recheck: Effect.andThen(startCheck, overview),
   };
 });
 
 /** How the embedding model runs: the setting, what it resolves to, and whether WebGPU works. */
-export class EmbeddingSetup extends Context.Tag("memory-agent/EmbeddingSetup")<
-  EmbeddingSetup,
-  Effect.Effect.Success<typeof make>
->() {
-  static readonly layer = Layer.scoped(EmbeddingSetup, make);
+export class EmbeddingSetup extends Context.Service<EmbeddingSetup, Effect.Success<typeof make>>()(
+  "memory-agent/EmbeddingSetup",
+) {
+  static readonly layer = Layer.effect(EmbeddingSetup, make);
 }

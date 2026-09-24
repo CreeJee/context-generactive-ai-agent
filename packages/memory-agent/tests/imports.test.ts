@@ -106,7 +106,7 @@ const decodeIndexed = Schema.decodeUnknownSync(
   Schema.Array(Schema.Struct({ text: Schema.String })),
 );
 
-const nodeRows = (sqlite: Database["Type"]["sqlite"], sessionId: string) =>
+const nodeRows = (sqlite: Database["Service"]["sqlite"], sessionId: string) =>
   decodeNodes(
     sqlite
       .prepare("SELECT kind, text, created_at, run_id FROM nodes WHERE session_id = ? ORDER BY seq")
@@ -311,8 +311,8 @@ describe("migrating other agents' transcripts", () => {
       Effect.gen(function* () {
         yield* importer.start;
         // Joining the running pass waits for it rather than starting a second one.
-        const joined = yield* Effect.fork(importer.runOnce);
-        yield* Effect.yieldNow();
+        const joined = yield* Effect.forkChild(importer.runOnce);
+        yield* Effect.yieldNow;
         const started = yield* importer.overview;
         return { status: started.activity?.status, written: yield* Fiber.join(joined) };
       }),

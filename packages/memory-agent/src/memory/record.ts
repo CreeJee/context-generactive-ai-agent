@@ -26,13 +26,13 @@ interface ToolOutcome {
 }
 
 const isString = Schema.is(Schema.String);
-const decodeJson = Schema.decodeUnknownOption(Schema.parseJson());
+const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 /** A thrown tool (`{ error }`) or a declined approval (`{ approved: false }` from the client). */
 const isErrorResult = Schema.is(
-  Schema.Union(
+  Schema.Union([
     Schema.Struct({ error: Schema.String }),
     Schema.Struct({ approved: Schema.Literal(false) }),
-  ),
+  ]),
 );
 
 /** Tool results are stored as the text the model saw: strings as-is, everything else as JSON. */
@@ -230,9 +230,8 @@ const make = Effect.gen(function* () {
 });
 
 /** Turns a chat run into memory nodes. The caller appends the user turn before starting the run. */
-export class Recorder extends Context.Tag("memory-agent/Recorder")<
-  Recorder,
-  Effect.Effect.Success<typeof make>
->() {
+export class Recorder extends Context.Service<Recorder, Effect.Success<typeof make>>()(
+  "memory-agent/Recorder",
+) {
   static readonly layer = Layer.effect(Recorder, make);
 }

@@ -1,5 +1,5 @@
 import { isAbsolute, resolve } from "node:path";
-import { Cause, Context, Data, Effect, Either, Exit, Layer } from "effect";
+import { Cause, Context, Data, Effect, Result, Exit, Layer } from "effect";
 import { canonicalPath, isCredentialPath, resolveProjectPath } from "../files/paths.ts";
 import {
   ModelFeatureFlags,
@@ -295,9 +295,9 @@ function validateSandbox(
   tool: AnyProviderToolDescriptor,
   options: ProviderToolExecutionOptions,
   sandbox: ProviderToolSandboxPolicy | undefined,
-): Either.Either<string | null, ValidationFailure> {
+): Result.Result<string | null, ValidationFailure> {
   if (Object.keys(options).some((key) => !executionOptionKeys.has(key)))
-    return Either.left(
+    return Result.fail(
       new ProviderToolOptionsViolation({ toolId: tool.id, reason: "unknown_policy_option" }),
     );
   const appManaged = tool.sandbox.some(
@@ -308,16 +308,16 @@ function validateSandbox(
       requirement === "principal_storage_required",
   );
   if (appManaged && sandbox === undefined)
-    return Either.left(
+    return Result.fail(
       new ProviderToolSandboxViolation({ toolId: tool.id, reason: "trusted_profile_required" }),
     );
   const root = sandbox?.workspaceRoot;
   if (tool.sandbox.includes("isolated_compute_required") && sandbox?.isolatedCompute !== true)
-    return Either.left(
+    return Result.fail(
       new ProviderToolSandboxViolation({ toolId: tool.id, reason: "isolated_compute_required" }),
     );
   if (tool.sandbox.includes("isolated_desktop_required") && sandbox?.isolatedDesktop !== true)
-    return Either.left(
+    return Result.fail(
       new ProviderToolSandboxViolation({ toolId: tool.id, reason: "isolated_desktop_required" }),
     );
   if (
@@ -325,7 +325,7 @@ function validateSandbox(
     tool.sandbox.includes("provider_hosted") === false &&
     sandbox?.network !== "restricted"
   )
-    return Either.left(
+    return Result.fail(
       new ProviderToolSandboxViolation({ toolId: tool.id, reason: "network_denied" }),
     );
   const environment = options.environmentNames ?? [];
@@ -334,7 +334,7 @@ function validateSandbox(
     (sandbox?.environment !== "allowlisted_names" ||
       environment.some((name) => !sandbox.allowedEnvironmentNames.includes(name)))
   )
-    return Either.left(
+    return Result.fail(
       new ProviderToolSandboxViolation({ toolId: tool.id, reason: "environment_denied" }),
     );
   const limits = sandbox?.limits;
@@ -349,24 +349,24 @@ function validateSandbox(
       value !== undefined &&
       (!Number.isSafeInteger(value) || value <= 0 || maximum === undefined || value > maximum)
     )
-      return Either.left(
+      return Result.fail(
         new ProviderToolOptionsViolation({ toolId: tool.id, reason: `${name}_limit_invalid` }),
       );
   if ((options.paths?.length ?? 0) > 0 && !appManaged)
-    return Either.left(
+    return Result.fail(
       new ProviderToolSandboxViolation({ toolId: tool.id, reason: "local_access_not_applicable" }),
     );
   for (const request of options.paths ?? []) {
     if (Object.keys(request).some((key) => !pathRequestKeys.has(key)))
-      return Either.left(
+      return Result.fail(
         new ProviderToolOptionsViolation({ toolId: tool.id, reason: "path_request_invalid" }),
       );
     if (root === undefined)
-      return Either.left(
+      return Result.fail(
         new ProviderToolSandboxViolation({ toolId: tool.id, reason: "trusted_profile_required" }),
       );
     if (isAbsolute(request.path))
-      return Either.left(
+      return Result.fail(
         new ProviderToolPathViolation({
           toolId: tool.id,
           path: request.path,
@@ -374,25 +374,25 @@ function validateSandbox(
         }),
       );
     if (isCredentialPath(request.path))
-      return Either.left(
+      return Result.fail(
         new ProviderToolPathViolation({
           toolId: tool.id,
           path: request.path,
           reason: "credential_path",
         }),
       );
-    const violation = Either.match(resolveProjectPath(root, request.path, request.target), {
-      onLeft: (rejection) =>
+    const violation = Result.match(resolveProjectPath(root, request.path, request.target), {
+      onFailure: (rejection) =>
         new ProviderToolPathViolation({
           toolId: tool.id,
           path: request.path,
           reason: rejection.reason,
         }),
-      onRight: () => null,
+      onSuccess: () => null,
     });
-    if (violation) return Either.left(violation);
+    if (violation) return Result.fail(violation);
   }
-  return Either.right(appManaged ? (root ?? null) : null);
+  return Result.succeed(appManaged ? (root ?? null) : null);
 }
 
 export interface ProviderToolPolicyApi {
@@ -416,7 +416,7 @@ const trustedSandbox = (
   });
 };
 export function makeProviderToolPolicy(
-  registry: Context.Tag.Service<ProviderToolCapabilityRegistry>,
+  registry: ProviderToolCapabilityRegistry["Service"],
   config: ProviderToolPolicyConfig = {},
   featureFlags?: ModelFeatureFlagsApi,
 ): ProviderToolPolicyApi {
@@ -535,15 +535,18 @@ export function makeProviderToolPolicy(
           if (input.approval === "cancelled")
             return yield* Effect.fail(new ProviderToolApprovalCancelled({ toolId: input.toolId }));
         }
-        const workspaceRoot = yield* validateSandbox(tool, input.options, sandbox);
+        const workspaceRoot = yield* Result.match(validateSandbox(tool, input.options, sandbox), {
+          onFailure: Effect.fail,
+          onSuccess: Effect.succeed,
+        });
         return Object.freeze({ tool: exposed, workspaceRoot });
       }),
   };
 }
-export class ProviderToolPolicy extends Context.Tag("memory-agent/ProviderToolPolicy")<
+export class ProviderToolPolicy extends Context.Service<
   ProviderToolPolicy,
   ProviderToolPolicyApi
->() {
+>()("memory-agent/ProviderToolPolicy") {
   /** Production default: provider-hosted tools only; no local authority is granted. */
   static readonly layer = Layer.effect(
     ProviderToolPolicy,
@@ -1007,8 +1010,8 @@ const invokeProviderFactory = (
 };
 /* oxlint-enable anti-slop/no-unknown-parameters */
 export function makeProviderToolRuntime(
-  registry: Context.Tag.Service<ProviderToolCapabilityRegistry>,
-  policyService: Context.Tag.Service<ProviderToolPolicy>,
+  registry: ProviderToolCapabilityRegistry["Service"],
+  policyService: ProviderToolPolicy["Service"],
 ): ProviderToolRuntimeApi {
   return {
     compose: (context, requests = []) =>
@@ -1149,7 +1152,7 @@ export function makeProviderToolRuntime(
             const lease = yield* restore(acquire);
             const useExit = yield* restore(use).pipe(Effect.exit);
             if (Exit.isFailure(useExit)) {
-              const terminal = Cause.isInterruptedOnly(useExit.cause) ? "cancelled" : "failed";
+              const terminal = Cause.hasInterruptsOnly(useExit.cause) ? "cancelled" : "failed";
               yield* lifecycle(terminal, { raw: undefined });
             }
             yield* Effect.tryPromise({
@@ -1165,10 +1168,10 @@ export function makeProviderToolRuntime(
       }),
   };
 }
-export class ProviderToolRuntime extends Context.Tag("memory-agent/ProviderToolRuntime")<
+export class ProviderToolRuntime extends Context.Service<
   ProviderToolRuntime,
   ProviderToolRuntimeApi
->() {
+>()("memory-agent/ProviderToolRuntime") {
   static readonly layer = Layer.effect(
     ProviderToolRuntime,
     Effect.gen(function* () {

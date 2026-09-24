@@ -88,7 +88,7 @@ const smokeToken = `${"gh"}p_${"S1m2O3k4E5t6O7k8E9n0A1b2C3d4E5f6G7h8"}`;
 const Catalog = Schema.Struct({
   skills: Schema.Array(Schema.Struct({ name: Schema.String, scope: Schema.String })),
 });
-const json = <A, I>(schema: Schema.Schema<A, I>, response: Response) =>
+const json = <A, I>(schema: Schema.Codec<A, I>, response: Response) =>
   response.json().then((body) => Schema.decodeUnknownSync(schema)(body));
 
 /** A request with a Host header fetch() does not allow setting. */

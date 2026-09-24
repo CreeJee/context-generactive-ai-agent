@@ -1,6 +1,6 @@
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Effect, Either, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { sessionMessages } from "../src/agent/history.ts";
@@ -82,10 +82,11 @@ describe("Attachments.saveDrawing", () => {
       Effect.gen(function* () {
         const attachments = yield* Attachments;
         const reasonOf = (bytes: Uint8Array) =>
-          Effect.map(Effect.either(attachments.saveDrawing(bytes)), (outcome) =>
-            Either.match(outcome, {
-              onLeft: (error) => (error._tag === "AttachmentRejected" ? error.reason : error._tag),
-              onRight: () => "saved",
+          Effect.map(Effect.result(attachments.saveDrawing(bytes)), (outcome) =>
+            Result.match(outcome, {
+              onFailure: (error) =>
+                error._tag === "AttachmentRejected" ? error.reason : error._tag,
+              onSuccess: () => "saved",
             }),
           );
         return [

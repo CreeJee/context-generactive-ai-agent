@@ -1,5 +1,5 @@
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
-import { Effect, Either, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { Nodes } from "../src/memory/nodes.ts";
@@ -44,7 +44,7 @@ describe("archived conversations", () => {
         });
         const restored = yield* sessions.setArchived(session.id, false);
         const afterRestore = yield* sessions.list(project.id);
-        const missing = yield* Effect.either(sessions.setArchived("no-such-session", true));
+        const missing = yield* Effect.result(sessions.setArchived("no-such-session", true));
         return { kept, node, archived, listed, inArchive, found, restored, afterRestore, missing };
       }),
     );
@@ -57,7 +57,7 @@ describe("archived conversations", () => {
     expect(result.afterRestore.map((item) => item.id).sort()).toEqual(
       [result.kept.id, session.id].sort(),
     );
-    expect(Either.isLeft(result.missing) && result.missing.left._tag).toBe("SessionNotFound");
+    expect(Result.isFailure(result.missing) && result.missing.failure._tag).toBe("SessionNotFound");
   });
 
   test("respect another page's lease and safely stop a running answer before archive", async () => {

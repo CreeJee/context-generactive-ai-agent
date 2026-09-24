@@ -52,4 +52,4 @@ export const createLiveRuns = Effect.sync(() => {
   };
 });
 
-export type LiveRuns = Effect.Effect.Success<typeof createLiveRuns>;
+export type LiveRuns = Effect.Success<typeof createLiveRuns>;

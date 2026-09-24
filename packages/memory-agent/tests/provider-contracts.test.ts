@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Either, Layer, ManagedRuntime } from "effect";
+import { Effect, Result, Layer, ManagedRuntime } from "effect";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import { GlobalConfig } from "../src/config/global-config.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
@@ -83,8 +83,8 @@ describe("provider-neutral contracts", () => {
 
     expect(registry.providers).toEqual(["openai"]);
     expect(await Effect.runPromise(registry.get("openai"))).toBe(openai);
-    const missing = await Effect.runPromise(Effect.either(registry.get("anthropic")));
-    expect(Either.isLeft(missing) && missing.left).toMatchObject({
+    const missing = await Effect.runPromise(Effect.result(registry.get("anthropic")));
+    expect(Result.isFailure(missing) && missing.failure).toMatchObject({
       _tag: "ProviderUnavailable",
       provider: "anthropic",
     });
@@ -96,8 +96,8 @@ describe("provider-neutral contracts", () => {
     const registry = providerRegistryFrom([openai, anthropic], [openai.runtime]);
 
     expect(await Effect.runPromise(registry.runtime("openai"))).toBe(openai.runtime);
-    const missing = await Effect.runPromise(Effect.either(registry.runtime("anthropic")));
-    expect(Either.isLeft(missing) && missing.left).toMatchObject({
+    const missing = await Effect.runPromise(Effect.result(registry.runtime("anthropic")));
+    expect(Result.isFailure(missing) && missing.failure).toMatchObject({
       _tag: "ProviderUnavailable",
       provider: "anthropic",
     });

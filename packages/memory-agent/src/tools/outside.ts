@@ -1,5 +1,5 @@
 import { toolDefinition } from "@tanstack/ai";
-import { Context, Effect, Either, Layer, Schema } from "effect";
+import { Context, Effect, Result, Layer, Schema } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
 import { listOutsideFiles, createSnapshots } from "../files/listing.ts";
 import { resolveOutsidePath } from "../files/paths.ts";
@@ -16,40 +16,40 @@ export const outsideReadToolNames = [
   "search_outside_file",
 ] as const;
 
-const absolutePath = (description: string) => Schema.String.annotations({ description });
+const absolutePath = (description: string) => Schema.String.annotate({ description });
 
 const listOutsideInput = Schema.Struct({
   directory: absolutePath("Absolute directory outside the project."),
-  glob: Schema.optional(
-    Schema.String.annotations({ description: 'Glob relative to the directory, like "**/*.md".' }),
+  glob: Schema.optionalKey(
+    Schema.String.annotate({ description: 'Glob relative to the directory, like "**/*.md".' }),
   ),
-  snapshot: Schema.optional(
-    Schema.String.annotations({ description: "snapshot from the previous page when paging." }),
+  snapshot: Schema.optionalKey(
+    Schema.String.annotate({ description: "snapshot from the previous page when paging." }),
   ),
-  offset: Schema.optional(
-    Schema.Int.annotations({ description: "nextOffset from the previous page when paging." }),
+  offset: Schema.optionalKey(
+    Schema.Int.annotate({ description: "nextOffset from the previous page when paging." }),
   ),
 });
 
 const readOutsideInput = Schema.Struct({
   path: absolutePath("Absolute path of a text file outside the project."),
-  startLine: Schema.optional(Schema.Int.annotations({ description: "1-based. Defaults to 1." })),
-  maxLines: Schema.optional(
-    Schema.Int.annotations({ description: "Lines per page, up to 2000. Defaults to 400." }),
+  startLine: Schema.optionalKey(Schema.Int.annotate({ description: "1-based. Defaults to 1." })),
+  maxLines: Schema.optionalKey(
+    Schema.Int.annotate({ description: "Lines per page, up to 2000. Defaults to 400." }),
   ),
 });
 
 const searchOutsideInput = Schema.Struct({
   path: absolutePath("Absolute path of a file, or a directory to search recursively."),
-  query: Schema.NonEmptyString.annotations({
+  query: Schema.NonEmptyString.annotate({
     description: "Literal text to find (not a regular expression).",
   }),
-  glob: Schema.optional(
-    Schema.String.annotations({ description: "When path is a directory, a glob relative to it." }),
+  glob: Schema.optionalKey(
+    Schema.String.annotate({ description: "When path is a directory, a glob relative to it." }),
   ),
-  caseSensitive: Schema.optional(Schema.Boolean.annotations({ description: "Defaults to true." })),
-  cursor: Schema.optional(
-    Schema.String.annotations({ description: "nextCursor from the previous page when paging." }),
+  caseSensitive: Schema.optionalKey(Schema.Boolean.annotate({ description: "Defaults to true." })),
+  cursor: Schema.optionalKey(
+    Schema.String.annotate({ description: "nextCursor from the previous page when paging." }),
   ),
 });
 
@@ -142,10 +142,10 @@ const make = Effect.gen(function* () {
           let view = position ? snapshots.get(position.snapshot, snapshotKey) : undefined;
           if (!position) {
             const directory = resolveOutsidePath(project.root, storage.path, path, "directory");
-            view = await Either.match(directory, {
-              onRight: async ({ absolute }) =>
+            view = await Result.match(directory, {
+              onSuccess: async ({ absolute }) =>
                 snapshots.add(snapshotKey, absolute, glob, await listOutsideFiles(absolute, glob)),
-              onLeft: (rejection) => {
+              onFailure: (rejection) => {
                 // Not a directory: search the one file, with the file rules applied.
                 if (rejection.reason !== "not_directory") throw rejection;
                 const file = resolve(path, "file");
@@ -186,9 +186,8 @@ const make = Effect.gen(function* () {
 });
 
 /** Read-only access to files outside the project, credentials excluded. */
-export class OutsideTools extends Context.Tag("memory-agent/OutsideTools")<
-  OutsideTools,
-  Effect.Effect.Success<typeof make>
->() {
+export class OutsideTools extends Context.Service<OutsideTools, Effect.Success<typeof make>>()(
+  "memory-agent/OutsideTools",
+) {
   static readonly layer = Layer.effect(OutsideTools, make);
 }

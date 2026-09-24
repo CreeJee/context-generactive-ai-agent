@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import type { ChatMiddleware, MetadataStore } from "@tanstack/ai";
 import { randomUUID } from "node:crypto";
 import { Option, Schema } from "effect";
@@ -9,15 +10,19 @@ export const contextUsageNamespace = "memory-agent/context-usage";
 /** Last provider observation for which a cache-cold compact was attempted. */
 export const consumedColdUsageNamespace = "memory-agent/consumed-cold-usage";
 
-const CompactionStageSchema = Schema.Literal("none", "clear-answered", "summarize", "leave-out");
+const CompactionStageSchema = Schema.Literals(["none", "clear-answered", "summarize", "leave-out"]);
 const ContextUsage = Schema.Struct({
   inputTokens: Schema.Number,
-  cachedTokens: Schema.optionalWith(Schema.NullOr(Schema.Number), { default: () => null }),
+  cachedTokens: Schema.NullOr(Schema.Number).pipe(
+    Schema.withDecodingDefaultTypeKey(Effect.sync(() => null)),
+  ),
   /** Absent on usage persisted before cache-cold tracking was introduced. */
-  observationId: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
-  compactionStage: Schema.optionalWith(Schema.NullOr(CompactionStageSchema), {
-    default: () => null,
-  }),
+  observationId: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefaultTypeKey(Effect.sync(() => null)),
+  ),
+  compactionStage: Schema.NullOr(CompactionStageSchema).pipe(
+    Schema.withDecodingDefaultTypeKey(Effect.sync(() => null)),
+  ),
 });
 const decodeContextUsage = Schema.decodeUnknownOption(ContextUsage);
 export type StoredContextUsage = typeof ContextUsage.Type;

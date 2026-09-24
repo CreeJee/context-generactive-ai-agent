@@ -10,11 +10,11 @@ import { toToolSchema } from "../src/tools/schema.ts";
 
 // Mirrors a real memory tool: optional cursor, literal union, array, Korean descriptions.
 const findMemoryInput = Schema.Struct({
-  query: Schema.String.annotations({ description: "찾을 내용. 과거 발언과 다른 표현이어도 된다." }),
-  kinds: Schema.Array(Schema.Literal("user", "assistant", "tool_call", "tool_result")).annotations({
+  query: Schema.String.annotate({ description: "찾을 내용. 과거 발언과 다른 표현이어도 된다." }),
+  kinds: Schema.Array(Schema.Literals(["user", "assistant", "tool_call", "tool_result"])).annotate({
     description: "검색할 노드 종류",
   }),
-  cursor: Schema.optional(Schema.String),
+  cursor: Schema.optionalKey(Schema.String),
 });
 
 describe("toToolSchema", () => {
@@ -70,7 +70,7 @@ describe("toToolSchema", () => {
 
   test("rejects JSON Schema targets Effect cannot produce", () => {
     expect(() => schema["~standard"].jsonSchema.input({ target: "openapi-3.0" })).toThrow(
-      "Unsupported JSON Schema target",
+      "Unsupported target",
     );
   });
 });

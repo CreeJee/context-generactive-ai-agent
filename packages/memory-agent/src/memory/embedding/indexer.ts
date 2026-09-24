@@ -1,3 +1,4 @@
+import { Semaphore } from "effect";
 import { Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../../db/database.ts";
 import { AppEvents } from "../../events/app-events.ts";
@@ -50,9 +51,9 @@ const make = Effect.gen(function* () {
   const markAnalyzed = sqlite.prepare(
     "INSERT INTO node_morphs (node_seq, analyzer) VALUES (?, ?) ON CONFLICT (node_seq) DO UPDATE SET analyzer = excluded.analyzer",
   );
-  const oneMorphBatchAtATime = yield* Effect.makeSemaphore(1);
+  const oneMorphBatchAtATime = yield* Semaphore.make(1);
   // Runs end concurrently; two batches picking the same pending nodes would index them twice.
-  const oneBatchAtATime = yield* Effect.makeSemaphore(1);
+  const oneBatchAtATime = yield* Semaphore.make(1);
 
   /** Embeds one batch of not-yet-indexed nodes. Returns how many were indexed. */
   const indexBatch = (limit: number) =>
@@ -96,17 +97,15 @@ const make = Effect.gen(function* () {
     budget: number,
     batchSize: number,
   ) =>
-    Effect.iterate(
-      { total: 0, last: -1 },
-      {
-        while: (state) => state.last !== 0 && state.total < budget,
-        body: (state) =>
-          Effect.map(work(Math.min(batchSize, budget - state.total)), (count) => ({
-            total: state.total + count,
-            last: count,
-          })),
-      },
-    ).pipe(Effect.map((state) => state.total));
+    Effect.gen(function* () {
+      let total = 0;
+      let last = -1;
+      while (last !== 0 && total < budget) {
+        last = yield* work(Math.min(batchSize, budget - total));
+        total += last;
+      }
+      return total;
+    });
 
   return {
     /**
@@ -142,9 +141,8 @@ const make = Effect.gen(function* () {
 });
 
 /** Keeps the vector index in step with the nodes table. */
-export class Indexer extends Context.Tag("memory-agent/Indexer")<
-  Indexer,
-  Effect.Effect.Success<typeof make>
->() {
+export class Indexer extends Context.Service<Indexer, Effect.Success<typeof make>>()(
+  "memory-agent/Indexer",
+) {
   static readonly layer = Layer.effect(Indexer, make);
 }

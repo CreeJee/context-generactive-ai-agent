@@ -112,7 +112,7 @@ export default defineConfig(({ command }) => {
               // --conditions) cannot change or break it.
               execArgvExtension: "none",
               assets: Schema.decodeUnknownSync(
-                Schema.parseJson(Schema.Record({ key: Schema.String, value: Schema.String })),
+                Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)),
               )(readFileSync(process.env.CONTEXT_AGENT_EXE_ASSETS, "utf8")),
             },
           }

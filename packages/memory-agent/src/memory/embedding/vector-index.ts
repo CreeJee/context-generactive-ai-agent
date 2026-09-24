@@ -147,9 +147,8 @@ const make = Effect.gen(function* () {
 });
 
 /** turbovec index of node embeddings for the active embedder. One writer process at a time. */
-export class VectorIndex extends Context.Tag("memory-agent/VectorIndex")<
-  VectorIndex,
-  Effect.Effect.Success<typeof make>
->() {
-  static readonly layer = Layer.scoped(VectorIndex, make);
+export class VectorIndex extends Context.Service<VectorIndex, Effect.Success<typeof make>>()(
+  "memory-agent/VectorIndex",
+) {
+  static readonly layer = Layer.effect(VectorIndex, make);
 }

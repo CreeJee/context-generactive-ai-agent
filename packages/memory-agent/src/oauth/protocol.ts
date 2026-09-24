@@ -116,7 +116,7 @@ export function createPkce(): Pkce {
 
 export const createOAuthState = () => base64Url(randomBytes(32));
 
-export const ToolArguments = Schema.Record({ key: Schema.String, value: JsonValue });
+export const ToolArguments = Schema.Record(Schema.String, JsonValue);
 export type ToolArguments = typeof ToolArguments.Type;
 
 export interface StreamTextEvent {
@@ -198,7 +198,7 @@ export type NormalizedStreamEvent =
   | StreamUsageEvent
   | StreamErrorEvent;
 
-const OpenAiWireEvent = Schema.Union(
+const OpenAiWireEvent = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("response.output_text.delta"),
     delta: Schema.String,
@@ -246,9 +246,9 @@ const OpenAiWireEvent = Schema.Union(
     code: Schema.optional(Schema.String),
     message: Schema.String,
   }),
-);
+]);
 
-const AnthropicWireEvent = Schema.Union(
+const AnthropicWireEvent = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("content_block_delta"),
     index: Schema.Number,
@@ -318,9 +318,9 @@ const AnthropicWireEvent = Schema.Union(
     type: Schema.Literal("error"),
     error: Schema.Struct({ type: Schema.String, message: Schema.String }),
   }),
-);
+]);
 
-const decodeToolArguments = Schema.decodeUnknownOption(Schema.parseJson(ToolArguments));
+const decodeToolArguments = Schema.decodeUnknownOption(Schema.fromJsonString(ToolArguments));
 
 /** Parses one provider SSE data value into the provider-neutral stream contract. */
 export function decodeProviderEvent(

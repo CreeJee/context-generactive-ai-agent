@@ -9,14 +9,14 @@ export const kagiToolNames = ["kagi_search", "kagi_extract"] as const;
 export const maxPageCharacters = 40_000;
 
 const KagiSearchInput = Schema.Struct({
-  query: Schema.NonEmptyString.annotations({ description: "What to search the web for." }),
-  limit: Schema.optional(
-    Schema.Int.annotations({ description: "How many results, 1 to 20. 10 by default." }),
+  query: Schema.NonEmptyString.annotate({ description: "What to search the web for." }),
+  limit: Schema.optionalKey(
+    Schema.Int.annotate({ description: "How many results, 1 to 20. 10 by default." }),
   ),
 });
 
 const KagiExtractInput = Schema.Struct({
-  urls: Schema.Array(Schema.String).annotations({
+  urls: Schema.Array(Schema.String).annotate({
     description: `http(s) URLs to read, at most ${maxExtractUrls}.`,
   }),
 });
@@ -107,9 +107,8 @@ const make = Effect.gen(function* () {
   };
 });
 
-export class KagiTools extends Context.Tag("memory-agent/KagiTools")<
-  KagiTools,
-  Effect.Effect.Success<typeof make>
->() {
+export class KagiTools extends Context.Service<KagiTools, Effect.Success<typeof make>>()(
+  "memory-agent/KagiTools",
+) {
   static readonly layer = Layer.effect(KagiTools, make);
 }

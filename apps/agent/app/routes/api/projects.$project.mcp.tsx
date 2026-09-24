@@ -1,4 +1,4 @@
-import { Effect, Either, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 import { McpScope, McpServers, Projects } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
@@ -34,8 +34,9 @@ export async function action({ request, params }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected) return rejected;
   const body = await readJson(request, TrustChange);
-  if (Either.isLeft(body)) return Response.json({ error: "invalid_mcp_change" }, { status: 400 });
-  const { scope, name, trusted } = body.right;
+  if (Result.isFailure(body))
+    return Response.json({ error: "invalid_mcp_change" }, { status: 400 });
+  const { scope, name, trusted } = body.success;
   return agent.runPromise(
     Effect.gen(function* () {
       const project = yield* (yield* Projects).get(params.project);

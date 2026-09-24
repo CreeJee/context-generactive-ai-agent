@@ -59,21 +59,21 @@ export function childInstructions(name: string | null, instructions: string | nu
 }
 
 const RunSubagentInput = Schema.Struct({
-  task: Schema.NonEmptyString.annotations({
+  task: Schema.NonEmptyString.annotate({
     description: "The complete task. The subagent sees nothing else from this conversation.",
   }),
-  instructions: Schema.optional(
-    Schema.String.annotations({ description: "Extra standing instructions for this subagent." }),
+  instructions: Schema.optionalKey(
+    Schema.String.annotate({ description: "Extra standing instructions for this subagent." }),
   ),
 });
 
 const MessageSubagentInput = Schema.Struct({
-  agent: Schema.String.pipe(Schema.pattern(/^[A-Za-z0-9_-]{1,40}$/)).annotations({
+  agent: Schema.String.pipe(Schema.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,40}$/))).annotate({
     description: "Name of the subagent. A new name creates it; an existing one continues it.",
   }),
-  message: Schema.NonEmptyString.annotations({ description: "The task or follow-up message." }),
-  instructions: Schema.optional(
-    Schema.String.annotations({
+  message: Schema.NonEmptyString.annotate({ description: "The task or follow-up message." }),
+  instructions: Schema.optionalKey(
+    Schema.String.annotate({
       description: "Replaces the subagent's extra instructions. Omit to keep the previous ones.",
     }),
   ),
@@ -84,18 +84,25 @@ const AttemptInput = Schema.Struct({
   attemptId: Schema.NonEmptyString,
 });
 const WaitSubagentsInput = Schema.Struct({
-  attempts: Schema.Array(AttemptInput).pipe(Schema.minItems(1), Schema.maxItems(100)),
-  mode: Schema.optionalWith(Schema.Literal("any", "all"), { default: () => "all" as const }),
-  timeoutMs: Schema.optionalWith(Schema.Number.pipe(Schema.int(), Schema.between(0, 120_000)), {
-    default: () => 30_000,
-  }),
+  attempts: Schema.Array(AttemptInput).pipe(
+    Schema.check(Schema.isMinLength(1)),
+    Schema.check(Schema.isMaxLength(100)),
+  ),
+  mode: Schema.Literals(["any", "all"]).pipe(
+    Schema.withDecodingDefaultTypeKey(Effect.sync(() => "all" as const)),
+  ),
+  timeoutMs: Schema.Number.pipe(
+    Schema.check(Schema.isInt()),
+    Schema.check(Schema.isBetween({ minimum: 0, maximum: 120_000 })),
+  ).pipe(Schema.withDecodingDefaultTypeKey(Effect.sync(() => 30_000))),
 });
 
 const ChildResultInput = Schema.Struct({
   toolCallId: Schema.NonEmptyString,
-  offset: Schema.optionalWith(Schema.Number.pipe(Schema.int(), Schema.greaterThanOrEqualTo(0)), {
-    default: () => 0,
-  }),
+  offset: Schema.Number.pipe(
+    Schema.check(Schema.isInt()),
+    Schema.check(Schema.isGreaterThanOrEqualTo(0)),
+  ).pipe(Schema.withDecodingDefaultTypeKey(Effect.sync(() => 0))),
 });
 const childResultPageLength = 4_000;
 
@@ -128,11 +135,13 @@ export function compactChildToolResults(
 const FileArtifactResult = Schema.Struct({ path: Schema.String, sha256: Schema.String });
 
 const ResumeSubagentInput = Schema.Struct({
-  taskId: Schema.String.annotations({ description: "The durable Work Trace task id." }),
-  expectedAttemptId: Schema.String.annotations({
+  taskId: Schema.String.annotate({ description: "The durable Work Trace task id." }),
+  expectedAttemptId: Schema.String.annotate({
     description: "The latest interrupted/failed attempt shown by Work Trace.",
   }),
-  confirmUncertain: Schema.optionalWith(Schema.Boolean, { default: () => false }).annotations({
+  confirmUncertain: Schema.Boolean.pipe(
+    Schema.withDecodingDefaultTypeKey(Effect.sync(() => false)),
+  ).annotate({
     description:
       "True only after the user accepts possible duplicate side effects from uncertain tool calls.",
   }),
@@ -143,16 +152,16 @@ const AdoptSubagentReportsInput = Schema.Struct({
     Schema.Struct({
       taskId: Schema.String,
       attemptId: Schema.String,
-      evidenceRefIds: Schema.Array(Schema.String).annotations({
+      evidenceRefIds: Schema.Array(Schema.String).annotate({
         description: "Only evidence ids actually used in the final answer.",
       }),
     }),
   ),
-  reflectedNotificationIds: Schema.optionalWith(Schema.Array(Schema.String), {
-    default: () => [],
-  }).annotations({
-    description: "Delivered status notification ids that affected the final answer.",
-  }),
+  reflectedNotificationIds: Schema.Array(Schema.String)
+    .pipe(Schema.withDecodingDefaultTypeKey(Effect.sync(() => [])))
+    .annotate({
+      description: "Delivered status notification ids that affected the final answer.",
+    }),
 });
 
 type AdoptionDraft = typeof AdoptSubagentReportsInput.Type;
@@ -162,7 +171,7 @@ const SubagentRow = Schema.Struct({
   session_id: Schema.String,
   name: Schema.NullOr(Schema.String),
   instructions: Schema.NullOr(Schema.String),
-  status: Schema.Literal("running", "completed", "failed", "cancelled", "interrupted"),
+  status: Schema.Literals(["running", "completed", "failed", "cancelled", "interrupted"]),
   last_task: Schema.String,
   last_answer: Schema.NullOr(Schema.String),
   error: Schema.NullOr(Schema.String),
@@ -694,7 +703,7 @@ const make = Effect.gen(function* () {
       },
       catch: (cause) => new SubagentOperationFailed({ operation: "run", cause }),
     }).pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         Effect.sync(() => {
           const detail = String(error.cause);
           trace.transitionAttempt(
@@ -719,7 +728,7 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
-    const cancelled = Effect.async<never>((resume) => {
+    const cancelled = Effect.callback<never>((resume) => {
       const abort = () => resume(Effect.interrupt);
       if (controller.signal.aborted) abort();
       else controller.signal.addEventListener("abort", abort, { once: true });
@@ -1183,7 +1192,7 @@ const make = Effect.gen(function* () {
                 try: () => recoverForRun(binding),
                 catch: (cause) => new SubagentOperationFailed({ operation: "recover", cause }),
               }).pipe(
-                Effect.catchAll((error) => Effect.logWarning("Subagent recovery deferred", error)),
+                Effect.catch((error) => Effect.logWarning("Subagent recovery deferred", error)),
               ),
               scope,
             ),
@@ -1304,9 +1313,8 @@ const make = Effect.gen(function* () {
 });
 
 /** Child agents a run delegates to (R18): one-off and named, never nested. */
-export class Subagents extends Context.Tag("memory-agent/Subagents")<
-  Subagents,
-  Effect.Effect.Success<typeof make>
->() {
-  static readonly layer = Layer.scoped(Subagents, make);
+export class Subagents extends Context.Service<Subagents, Effect.Success<typeof make>>()(
+  "memory-agent/Subagents",
+) {
+  static readonly layer = Layer.effect(Subagents, make);
 }

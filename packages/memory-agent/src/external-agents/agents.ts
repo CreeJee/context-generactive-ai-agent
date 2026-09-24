@@ -567,9 +567,8 @@ const make = Effect.gen(function* () {
 });
 
 /** External ACP agents the app calls as a client (R17): Codex and others. */
-export class ExternalAgents extends Context.Tag("memory-agent/ExternalAgents")<
-  ExternalAgents,
-  Effect.Effect.Success<typeof make>
->() {
-  static readonly layer = Layer.scoped(ExternalAgents, make);
+export class ExternalAgents extends Context.Service<ExternalAgents, Effect.Success<typeof make>>()(
+  "memory-agent/ExternalAgents",
+) {
+  static readonly layer = Layer.effect(ExternalAgents, make);
 }

@@ -142,9 +142,8 @@ const make = Effect.gen(function* () {
 });
 
 /** `auto` permission mode: classify each gated call, ask only when the verdict says so. */
-export class PermissionGate extends Context.Tag("memory-agent/PermissionGate")<
-  PermissionGate,
-  Effect.Effect.Success<typeof make>
->() {
+export class PermissionGate extends Context.Service<PermissionGate, Effect.Success<typeof make>>()(
+  "memory-agent/PermissionGate",
+) {
   static readonly layer = Layer.effect(PermissionGate, make);
 }

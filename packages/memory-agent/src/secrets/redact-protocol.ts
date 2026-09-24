@@ -5,12 +5,12 @@ import { Schema } from "effect";
 export const RedactRequest = Schema.Struct({
   id: Schema.Number,
   /** `json`: texts from a JSON column; secrets are hidden in its strings and the structure kept. */
-  kind: Schema.Literal("text", "json"),
+  kind: Schema.Literals(["text", "json"]),
   texts: Schema.Array(Schema.String),
 });
 export type RedactRequest = typeof RedactRequest.Type;
 
-export const RedactReply = Schema.Union(
+export const RedactReply = Schema.Union([
   Schema.Struct({
     id: Schema.Number,
     kind: Schema.Literal("redacted"),
@@ -18,5 +18,5 @@ export const RedactReply = Schema.Union(
     redactions: Schema.Array(Schema.Struct({ text: Schema.String, hidden: Schema.Number })),
   }),
   Schema.Struct({ id: Schema.Number, kind: Schema.Literal("failed"), reason: Schema.String }),
-);
+]);
 export type RedactReply = typeof RedactReply.Type;

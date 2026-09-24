@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import type {
   Attachment,
   ProviderModel,
@@ -113,7 +114,7 @@ export type {
 };
 
 /** Every error code the browser API currently understands, including local fallbacks. */
-export const ApiErrorCode = Schema.Literal(
+export const ApiErrorCode = Schema.Literals([
   "approval_not_pending",
   "attachment_not_found",
   "attachment_rejected",
@@ -185,7 +186,7 @@ export const ApiErrorCode = Schema.Literal(
   "subagent_not_found",
   "unknown_attachment",
   "upload_failed",
-);
+]);
 export type ApiErrorCode = typeof ApiErrorCode.Type;
 
 export class ApiError extends Error {
@@ -201,12 +202,12 @@ export class ApiError extends Error {
 
 const CrossProviderMediaRunApproval = Schema.Struct({
   runId: Schema.String,
-  initiatorChatRouteId: Schema.TemplateLiteral(
+  initiatorChatRouteId: Schema.TemplateLiteral([
     "chat:",
-    Schema.Literal("openai", "anthropic"),
+    Schema.Literals(["openai", "anthropic"]),
     ":",
     Schema.String,
-  ),
+  ]),
   executorMediaRouteId: Schema.String,
   capability: Schema.Literal("media.image.generate"),
 });
@@ -217,7 +218,7 @@ const ErrorBody = Schema.Struct({
 });
 const decodeErrorBody = Schema.decodeUnknownOption(ErrorBody);
 type ErrorBody = typeof ErrorBody.Type;
-const ResumeTaskResult = Schema.Union(
+const ResumeTaskResult = Schema.Union([
   Schema.Struct({
     status: Schema.Literal("queued"),
     jobId: Schema.String,
@@ -225,15 +226,15 @@ const ResumeTaskResult = Schema.Union(
     expectedAttemptId: Schema.String,
   }),
   Schema.Struct({ status: Schema.Literal("blocked"), reason: Schema.String }),
-);
+]);
 const decodeResumeTaskResult = Schema.decodeUnknownOption(ResumeTaskResult);
 type ResumeTaskResult = typeof ResumeTaskResult.Type;
-const ArchiveTaskResult = Schema.Union(
+const ArchiveTaskResult = Schema.Union([
   Schema.Struct({
     status: Schema.Literal("completed"),
     operationId: Schema.optional(Schema.String),
     targetId: Schema.String,
-    intent: Schema.optional(Schema.Literal("archive", "restore", "delete")),
+    intent: Schema.optional(Schema.Literals(["archive", "restore", "delete"])),
     receiptId: Schema.optional(Schema.NullOr(Schema.String)),
   }),
   Schema.Struct({ status: Schema.Literal("blocked"), blocker: Schema.String }),
@@ -242,7 +243,7 @@ const ArchiveTaskResult = Schema.Union(
     operationId: Schema.String,
     targetId: Schema.String,
   }),
-);
+]);
 const decodeArchiveTaskResult = Schema.decodeUnknownOption(ArchiveTaskResult);
 type ArchiveTaskResult = typeof ArchiveTaskResult.Type;
 
@@ -640,7 +641,7 @@ export const api = {
   },
 };
 
-const AttachmentRejection = Schema.Literal("too_large", "unsupported_type", "empty");
+const AttachmentRejection = Schema.Literals(["too_large", "unsupported_type", "empty"]);
 const attachmentRejections = {
   too_large: "20MB보다 큰 이미지는 올릴 수 없어요.",
   unsupported_type: "PNG, JPEG, GIF, WebP 이미지만 올릴 수 있어요.",
@@ -654,12 +655,12 @@ export function attachmentErrorMessage(error: Error) {
     : error.reason;
 }
 
-const ProjectRejection = Schema.Literal(
+const ProjectRejection = Schema.Literals([
   "not_found",
   "not_directory",
   "overlaps_storage",
   "already_registered",
-);
+]);
 const projectRejections = {
   not_found: "경로를 찾을 수 없어요.",
   not_directory: "폴더 경로가 아니에요.",
@@ -672,7 +673,11 @@ export function projectErrorMessage(error: Error) {
   return Schema.is(ProjectRejection)(error.reason) ? projectRejections[error.reason] : error.reason;
 }
 
-const ArchiveRejection = Schema.Literal("run_in_progress", "session_in_use", "session_not_found");
+const ArchiveRejection = Schema.Literals([
+  "run_in_progress",
+  "session_in_use",
+  "session_not_found",
+]);
 const archiveRejections = {
   run_in_progress: "답변 중인 대화는 보관할 수 없어요. 끝나거나 멈춘 뒤 다시 시도하세요.",
   session_in_use: "다른 탭에서 쓰고 있는 대화예요. 그 탭을 닫은 뒤 다시 시도하세요.",
@@ -694,18 +699,25 @@ export const decodeDeliveredEvent = Schema.decodeUnknownOption(
 export const decodeContextEvent = Schema.decodeUnknownOption(
   Schema.Struct({
     usedTokens: Schema.NullOr(Schema.Number),
-    cachedTokens: Schema.optionalWith(Schema.NullOr(Schema.Number), { default: () => null }),
-    cacheRatio: Schema.optionalWith(Schema.NullOr(Schema.Number), { default: () => null }),
-    compactionStage: Schema.optionalWith(
-      Schema.NullOr(Schema.Literal("none", "clear-answered", "summarize", "leave-out")),
-      { default: () => null },
+    cachedTokens: Schema.NullOr(Schema.Number).pipe(
+      Schema.withDecodingDefaultTypeKey(Effect.sync(() => null)),
     ),
+    cacheRatio: Schema.NullOr(Schema.Number).pipe(
+      Schema.withDecodingDefaultTypeKey(Effect.sync(() => null)),
+    ),
+    compactionStage: Schema.NullOr(
+      Schema.Literals(["none", "clear-answered", "summarize", "leave-out"]),
+    ).pipe(Schema.withDecodingDefaultTypeKey(Effect.sync(() => null))),
     windowTokens: Schema.Number,
     compactAtTokens: Schema.Number,
   }),
 );
 
-const CompactRejection = Schema.Literal("run_in_progress", "session_in_use", "session_not_found");
+const CompactRejection = Schema.Literals([
+  "run_in_progress",
+  "session_in_use",
+  "session_not_found",
+]);
 const compactRejections = {
   run_in_progress: "답변이 끝난 뒤에 비울 수 있어요.",
   session_in_use: "다른 탭에서 쓰고 있는 대화예요. 그 탭에서 다시 시도하세요.",

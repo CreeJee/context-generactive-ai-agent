@@ -23,13 +23,13 @@ const Report = Schema.Struct({
   evidenceRefIds: Schema.Array(Schema.String),
 });
 const Count = Schema.Struct({ count: Schema.Number });
-const Chunk = Schema.parseJson(
+const Chunk = Schema.fromJsonString(
   Schema.Struct({ type: Schema.String, delta: Schema.optional(Schema.String) }),
 );
 const receiptFrom = (answer: string) =>
-  Schema.decodeUnknownSync(Schema.parseJson(Receipt))(answer.slice(answer.indexOf("{")));
+  Schema.decodeUnknownSync(Schema.fromJsonString(Receipt))(answer.slice(answer.indexOf("{")));
 const reportFrom = (answer: string) =>
-  Schema.decodeUnknownSync(Schema.parseJson(Report))(answer.slice(answer.indexOf("{")));
+  Schema.decodeUnknownSync(Schema.fromJsonString(Report))(answer.slice(answer.indexOf("{")));
 const idsOf = ({ taskId, attemptId }: typeof Ids.Type) => ({ taskId, attemptId });
 async function until(condition: () => boolean, description: string) {
   for (let i = 0; i < 300; i++) {
@@ -67,12 +67,14 @@ async function setup() {
           };
         }
         if (!internal && user.startsWith("review-and-adopt ")) {
-          const ids = Schema.decodeUnknownSync(Schema.parseJson(Ids))(
+          const ids = Schema.decodeUnknownSync(Schema.fromJsonString(Ids))(
             user.slice("review-and-adopt ".length),
           );
           const last = invocation.messages.at(-1);
           if (last?.role === "tool" && last.toolCallId === "call-review-report") {
-            const report = Schema.decodeUnknownSync(Schema.parseJson(Report))(messageText(last));
+            const report = Schema.decodeUnknownSync(Schema.fromJsonString(Report))(
+              messageText(last),
+            );
             return {
               toolCalls: [
                 {

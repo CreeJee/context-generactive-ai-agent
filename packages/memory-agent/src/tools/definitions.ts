@@ -31,49 +31,49 @@ export {
 } from "../queue/queue-state.ts";
 
 export const RunShellInput = Schema.Struct({
-  command: Schema.NonEmptyString.annotations({
+  command: Schema.NonEmptyString.annotate({
     description: "Shell command line for the host.",
   }),
-  workdir: Schema.optional(
-    Schema.String.annotations({
+  workdir: Schema.optionalKey(
+    Schema.String.annotate({
       description:
         'Project-relative directory or absolute directory below /tmp to run in. Defaults to the project root (".").',
     }),
   ),
-  timeoutSeconds: Schema.optional(
-    Schema.Int.annotations({
+  timeoutSeconds: Schema.optionalKey(
+    Schema.Int.annotate({
       description: "Stop the command after this long. 120 by default, at most 1800.",
     }),
   ),
-  reason: Schema.optional(
-    Schema.String.annotations({
+  reason: Schema.optionalKey(
+    Schema.String.annotate({
       description: "One sentence on why, shown to the user when asking.",
     }),
   ),
 });
 
 export const WriteOutsideFileInput = Schema.Struct({
-  path: Schema.String.annotations({ description: "Absolute path outside the project." }),
-  content: Schema.String.annotations({ description: "The complete new file content." }),
-  expectedSha256: Schema.optional(
-    Schema.String.annotations({
+  path: Schema.String.annotate({ description: "Absolute path outside the project." }),
+  content: Schema.String.annotate({ description: "The complete new file content." }),
+  expectedSha256: Schema.optionalKey(
+    Schema.String.annotate({
       description: "Required to replace an existing file: the sha256 from read_outside_file.",
     }),
   ),
-  reason: Schema.optional(
-    Schema.String.annotations({
+  reason: Schema.optionalKey(
+    Schema.String.annotate({
       description: "One sentence on why, shown to the user when asking.",
     }),
   ),
 });
 
 export const DeleteOutsideFileInput = Schema.Struct({
-  path: Schema.String.annotations({ description: "Absolute path outside the project." }),
-  expectedSha256: Schema.String.annotations({
+  path: Schema.String.annotate({ description: "Absolute path outside the project." }),
+  expectedSha256: Schema.String.annotate({
     description: "sha256 from read_outside_file; the file is only deleted if it still matches.",
   }),
-  reason: Schema.optional(
-    Schema.String.annotations({
+  reason: Schema.optionalKey(
+    Schema.String.annotate({
       description: "One sentence on why, shown to the user when asking.",
     }),
   ),
@@ -148,7 +148,7 @@ export const PermissionReviewPayload = Schema.Struct({
    * `review`: the permission review was unsure. `every_call`: the tool asks on every call (MCP
    * tools in `ask` mode). Absent on requests stored before this existed, which were all reviews.
    */
-  askedBy: Schema.optional(Schema.Literal("review", "every_call")),
+  askedBy: Schema.optionalKey(Schema.Literals(["review", "every_call"])),
 });
 
 export const PermissionReviewResponse = Schema.Struct({ approved: Schema.Boolean });

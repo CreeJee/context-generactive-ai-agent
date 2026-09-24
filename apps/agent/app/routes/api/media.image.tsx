@@ -1,4 +1,4 @@
-import { Effect, Either, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 import { ActiveProvider, ImageMediaWorkflow, type ImageMediaRequest } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
@@ -6,12 +6,12 @@ import type { Route } from "./+types/media.image";
 
 const CrossProviderApproval = Schema.Struct({
   runId: Schema.String,
-  initiatorChatRouteId: Schema.TemplateLiteral(
+  initiatorChatRouteId: Schema.TemplateLiteral([
     "chat:",
-    Schema.Literal("openai", "anthropic"),
+    Schema.Literals(["openai", "anthropic"]),
     ":",
     Schema.String,
-  ),
+  ]),
   executorMediaRouteId: Schema.String,
   capability: Schema.Literal("media.image.generate"),
 });
@@ -28,7 +28,7 @@ export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected) return rejected;
   const body = await readJson(request, ImageMediaRequest);
-  if (Either.isLeft(body))
+  if (Result.isFailure(body))
     return Response.json({ error: "invalid_image_request" }, { status: 400 });
 
   const response = Effect.gen(function* () {
@@ -42,20 +42,21 @@ export async function action({ request }: Route.ActionArgs) {
     const workflow = yield* ImageMediaWorkflow;
     let baseRequest: ImageMediaRequest = {
       initiatorChatRouteId: `chat:${selected.provider}:${selected.model}`,
-      prompt: body.right.prompt,
-      approved: body.right.approved,
+      prompt: body.success.prompt,
+      approved: body.success.approved,
       signal: request.signal,
     };
-    if (body.right.runId !== undefined) baseRequest = { ...baseRequest, runId: body.right.runId };
-    if (body.right.crossProviderApproval !== undefined)
+    if (body.success.runId !== undefined)
+      baseRequest = { ...baseRequest, runId: body.success.runId };
+    if (body.success.crossProviderApproval !== undefined)
       baseRequest = {
         ...baseRequest,
-        crossProviderApproval: body.right.crossProviderApproval,
+        crossProviderApproval: body.success.crossProviderApproval,
       };
     const mediaRequest: ImageMediaRequest =
-      body.right.maximumEstimatedCostUsd === undefined
+      body.success.maximumEstimatedCostUsd === undefined
         ? baseRequest
-        : { ...baseRequest, maximumEstimatedCostUsd: body.right.maximumEstimatedCostUsd };
+        : { ...baseRequest, maximumEstimatedCostUsd: body.success.maximumEstimatedCostUsd };
     const asset = yield* workflow.generate(mediaRequest);
     return Response.json({
       ...asset,

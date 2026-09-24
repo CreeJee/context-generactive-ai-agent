@@ -1,3 +1,4 @@
+import { Semaphore } from "effect";
 import { randomUUID } from "node:crypto";
 import type { SQLOutputValue } from "node:sqlite";
 import { chat } from "@tanstack/ai";
@@ -29,17 +30,19 @@ Reply with a single JSON object and nothing else:
 
 const Link = Schema.Struct({
   target: Schema.String,
-  relation: Schema.Literal("corrects", "retracts", "related"),
-  certainty: Schema.Literal("clear", "ambiguous"),
+  relation: Schema.Literals(["corrects", "retracts", "related"]),
+  certainty: Schema.Literals(["clear", "ambiguous"]),
   reason: Schema.String,
 });
 const Labelled = Schema.Struct({
   id: Schema.String,
-  topics: Schema.optionalWith(Schema.Array(Schema.String), { default: () => [] }),
-  links: Schema.optionalWith(Schema.Array(Link), { default: () => [] }),
+  topics: Schema.Array(Schema.String).pipe(
+    Schema.withDecodingDefaultTypeKey(Effect.sync(() => [])),
+  ),
+  links: Schema.Array(Link).pipe(Schema.withDecodingDefaultTypeKey(Effect.sync(() => []))),
 });
 const decodeAnswer = Schema.decodeUnknownOption(
-  Schema.parseJson(Schema.Struct({ statements: Schema.Array(Labelled) })),
+  Schema.fromJsonString(Schema.Struct({ statements: Schema.Array(Labelled) })),
 );
 
 export class InterpretationFailed extends Data.TaggedError("InterpretationFailed")<{
@@ -75,7 +78,7 @@ const make = Effect.gen(function* () {
   const interpretations = yield* Interpretations;
   const active = yield* ActiveProvider;
   const usageLedger = yield* ApiUsage;
-  const oneRunAtATime = yield* Effect.makeSemaphore(1);
+  const oneRunAtATime = yield* Semaphore.make(1);
 
   // A process that stopped mid-batch left jobs running; nothing is working on them now.
   sqlite.prepare("UPDATE interpret_jobs SET status = 'pending' WHERE status = 'running'").run();
@@ -288,7 +291,7 @@ const make = Effect.gen(function* () {
         const now = new Date().toISOString();
         for (const statement of batch) markRunning.run(now, statement.id);
         interpreted += yield* interpretBatch(batch, selection).pipe(
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             Effect.sync(() => {
               const reason =
                 error instanceof InterpretationFailed ? error.reason : "interpret_failed";
@@ -305,13 +308,13 @@ const make = Effect.gen(function* () {
 });
 
 /** llm-interpret: turns stored statements into topic, correction and relation edges, afterwards. */
-export class Interpreter extends Context.Tag("memory-agent/Interpreter")<
+export class Interpreter extends Context.Service<
   Interpreter,
-  Effect.Effect.Success<typeof make> & {
+  Effect.Success<typeof make> & {
     /** Whether finished runs start interpretation on their own. Tests run it by hand instead. */
     readonly automatic: boolean;
   }
->() {
+>()("memory-agent/Interpreter") {
   static readonly layer = (automatic = true) =>
     Layer.effect(
       Interpreter,

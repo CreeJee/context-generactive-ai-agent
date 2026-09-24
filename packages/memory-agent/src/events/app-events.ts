@@ -134,6 +134,8 @@ const liveAppEvents = Effect.map(Database, ({ sqlite }) => {
   });
 });
 
-export class AppEvents extends Context.Tag("memory-agent/AppEvents")<AppEvents, AppEventsApi>() {
+export class AppEvents extends Context.Service<AppEvents, AppEventsApi>()(
+  "memory-agent/AppEvents",
+) {
   static readonly layer = Layer.effect(AppEvents, liveAppEvents);
 }

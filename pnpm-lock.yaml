@@ -264,8 +264,8 @@ catalogs:
       specifier: ^1.11.23
       version: 1.11.23
     effect:
-      specifier: 3.22.2
-      version: 3.22.2
+      specifier: 4.0.0-rc.117
+      version: 4.0.0-rc.117
     jotai:
       specifier: ^3.0.0
       version: 3.0.0
@@ -325,6 +325,9 @@ importers:
       '@shadcn/lint':
         specifier: 'catalog:'
         version: 0.1.0(eslint@10.10.0(jiti@2.7.0))(typescript@7.0.2)
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0-rc.117
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -387,7 +390,7 @@ importers:
         version: 1.11.23
       effect:
         specifier: 'catalog:'
-        version: 3.22.2
+        version: 4.0.0-rc.117
       isbot:
         specifier: ^5.1.36
         version: 5.2.2
@@ -532,7 +535,7 @@ importers:
         version: 1.11.23
       effect:
         specifier: 'catalog:'
-        version: 3.22.2
+        version: 4.0.0-rc.117
       kiwi-nlp:
         specifier: 'catalog:'
         version: 0.24.0
@@ -3209,8 +3212,8 @@ packages:
   ee-first@1.1.1:
     resolution: {integrity: sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==}
 
-  effect@3.22.2:
-    resolution: {integrity: sha512-fm1CQXCs7GTMwpadZxwU5rnAb2bN6mbQpknq/pXBGCzSKkosNYb9k0wsoL0TfB10rSa5xOEZJjo77u/KLXSANg==}
+  effect@4.0.0-rc.117:
+    resolution: {integrity: sha512-UUyi9QiOW4nySFIBM3KnYbNMd9EZliOdKfBcyLD0mPMPheO2fkuXS5y0opjWc9oqzlJxPQICEGm8gGw3kh9j/w==}
 
   electron-to-chromium@1.5.427:
     resolution: {integrity: sha512-n14zb3FdsChZ2BNobqNHAJMcP3ifFv4paox2LvCrfVAQcqGiSURgbJl+PfMpHVCNFkStnNc+RRVtPBTVW5PDgw==}
@@ -3370,10 +3373,6 @@ packages:
 
   extend@3.0.2:
     resolution: {integrity: sha512-fjquC59cD7CyW6urNXK0FBufkZcoiGG80wTuPujX590cB5Ttln20E2UB4S/WARVqhXffZl2LNgS+gQdPIIim/g==}
-
-  fast-check@3.23.2:
-    resolution: {integrity: sha512-h5+1OzzfCC3Ef7VbtKdcv7zsstUQwUDlYpUTvjeUsJAssPgLn7QzbboPtL5ro04Mq0rPOsMzl7q5hIbRs2wD1A==}
-    engines: {node: '>=8.0.0'}
 
   fast-deep-equal@3.1.3:
     resolution: {integrity: sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q==}
@@ -4609,9 +4608,6 @@ packages:
   punycode@2.3.1:
     resolution: {integrity: sha512-vYt7UD1U9Wg6138shLtLOvdAu+8DsC/ilFtEVHcH+wydcSpNE20AfSOduf6MkRFahL5FY7X1oU7nKVZFtfq8Fg==}
     engines: {node: '>=6'}
-
-  pure-rand@6.1.0:
-    resolution: {integrity: sha512-bVWawvoZoBYpp6yIoQtQXHZjmz35RSVHnUOTefl8Vcjr8snTPY1wnpSPMWekcFwbxI6gtmT7rSYPFvz71ldiOA==}
 
   qified@0.10.1:
     resolution: {integrity: sha512-+Owyggi9IxT1ePKGafcI87ubSmxol6smwJ+RAHDQlx9+9cPwFWDiKFFCPuWhr9ignlGpZ9vDQLw67N4dcTVFEA==}
@@ -7519,10 +7515,7 @@ snapshots:
 
   ee-first@1.1.1: {}
 
-  effect@3.22.2:
-    dependencies:
-      '@standard-schema/spec': 1.1.0
-      fast-check: 3.23.2
+  effect@4.0.0-rc.117: {}
 
   electron-to-chromium@1.5.427: {}
 
@@ -7725,10 +7718,6 @@ snapshots:
   exsolve@1.1.1: {}
 
   extend@3.0.2: {}
-
-  fast-check@3.23.2:
-    dependencies:
-      pure-rand: 6.1.0
 
   fast-deep-equal@3.1.3: {}
 
@@ -9171,8 +9160,6 @@ snapshots:
       ipaddr.js: 1.9.1
 
   punycode@2.3.1: {}
-
-  pure-rand@6.1.0: {}
 
   qified@0.10.1:
     dependencies:

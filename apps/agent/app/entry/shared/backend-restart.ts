@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 
 const BackendRestartBody = Schema.Struct({
-  error: Schema.Literal("backend_restart_required", "backend_restarting"),
+  error: Schema.Literals(["backend_restart_required", "backend_restarting"]),
 });
 
 let restartRequired = false;

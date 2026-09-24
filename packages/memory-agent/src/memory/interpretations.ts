@@ -3,7 +3,7 @@ import { Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import { edgeWeights } from "./edges.ts";
 
-export const InterpretedKind = Schema.Literal("about", "corrects", "retracts", "related");
+export const InterpretedKind = Schema.Literals(["about", "corrects", "retracts", "related"]);
 export type InterpretedKind = typeof InterpretedKind.Type;
 
 /** A conclusion of llm-interpret about one statement. */
@@ -12,7 +12,7 @@ export const Interpretation = Schema.Struct({
   kind: InterpretedKind,
   targetId: Schema.String,
   /** applied: also an llm edge. unconfirmed: the target was unclear; a question, not a fact. */
-  status: Schema.Literal("applied", "unconfirmed"),
+  status: Schema.Literals(["applied", "unconfirmed"]),
   reason: Schema.String,
   model: Schema.String,
   createdAt: Schema.String,
@@ -23,7 +23,7 @@ const Row = Schema.Struct({
   node_id: Schema.String,
   kind: InterpretedKind,
   target_id: Schema.String,
-  status: Schema.Literal("applied", "unconfirmed"),
+  status: Schema.Literals(["applied", "unconfirmed"]),
   reason: Schema.String,
   model: Schema.String,
   created_at: Schema.String,
@@ -91,9 +91,9 @@ const make = Effect.gen(function* () {
 });
 
 /** Why llm-interpret linked statements, and the corrections it could not attribute for sure. */
-export class Interpretations extends Context.Tag("memory-agent/Interpretations")<
+export class Interpretations extends Context.Service<
   Interpretations,
-  Effect.Effect.Success<typeof make>
->() {
+  Effect.Success<typeof make>
+>()("memory-agent/Interpretations") {
   static readonly layer = Layer.effect(Interpretations, make);
 }

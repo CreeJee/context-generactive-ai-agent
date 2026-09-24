@@ -65,7 +65,7 @@ const CandidateRow = Schema.Struct({
   authorized_by_user_node_id: Schema.String,
   proposed_text: Schema.String,
   resolved_text: Schema.String,
-  disposition: Schema.Literal("saved", "edited_saved", "conversation_only", "rejected"),
+  disposition: Schema.Literals(["saved", "edited_saved", "conversation_only", "rejected"]),
   memory_node_id: Schema.NullOr(Schema.String),
   created_at: Schema.Number,
 });
@@ -81,7 +81,7 @@ const UsageRow = Schema.Struct({
   origin_session_id: Schema.NullOr(Schema.String),
   parent_run_id: Schema.String,
   parent_message_id: Schema.NullOr(Schema.String),
-  kind: Schema.Literal("retrieved", "used"),
+  kind: Schema.Literals(["retrieved", "used"]),
   created_at: Schema.Number,
 });
 const decodeClaimSource = Schema.decodeUnknownSync(ClaimSourceRow);
@@ -359,9 +359,9 @@ const make = Effect.gen(function* () {
 });
 
 /** User-governed bridge from adopted Work Trace evidence into durable project memory. */
-export class KnowledgePromotions extends Context.Tag("memory-agent/KnowledgePromotions")<
+export class KnowledgePromotions extends Context.Service<
   KnowledgePromotions,
-  Effect.Effect.Success<typeof make>
->() {
+  Effect.Success<typeof make>
+>()("memory-agent/KnowledgePromotions") {
   static readonly layer = Layer.effect(KnowledgePromotions, make);
 }
