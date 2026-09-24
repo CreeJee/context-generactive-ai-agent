@@ -1,7 +1,6 @@
 import type { UIMessage } from "@tanstack/ai-react";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import { MessageSquareIcon } from "lucide-react";
-import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import {
   Empty,
@@ -28,48 +27,100 @@ export function ChatHistory({
   children: ReactNode;
 }) {
   const viewport = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  const topSentinel = useRef<HTMLDivElement>(null);
+  const pinnedToBottom = useRef(true);
+  const pendingPrepend = useRef<{
+    count: number;
+    scrollTop: number;
+    scrollHeight: number;
+  } | null>(null);
   const [initialScrollDone, setInitialScrollDone] = useState(false);
   const [olderLoadFailed, setOlderLoadFailed] = useState(false);
-  const virtualizer = useVirtualizer({
-    count: messages.length,
-    getScrollElement: () => viewport.current,
-    getItemKey: (index) => messages[index]?.id ?? index,
-    estimateSize: () => 180,
-    gap: 20,
-    overscan: 5,
-    anchorTo: "end",
-    followOnAppend: "auto",
-    scrollEndThreshold: 120,
-  });
-
-  const loadPreviousMessages = async () => {
-    if (!hasOlderMessages) return;
-    setOlderLoadFailed(false);
-    try {
-      await loadOlderMessages();
-    } catch {
-      setOlderLoadFailed(true);
-    }
-  };
+  const loadPreviousMessages = useCallback(
+    async (retry = false) => {
+      const scroll = viewport.current;
+      if (!scroll || !hasOlderMessages || pendingPrepend.current || (olderLoadFailed && !retry))
+        return;
+      pendingPrepend.current = {
+        count: messages.length,
+        scrollTop: scroll.scrollTop,
+        scrollHeight: scroll.scrollHeight,
+      };
+      pinnedToBottom.current = false;
+      setOlderLoadFailed(false);
+      try {
+        await loadOlderMessages();
+      } catch {
+        pendingPrepend.current = null;
+        setOlderLoadFailed(true);
+      }
+    },
+    [hasOlderMessages, loadOlderMessages, messages.length, olderLoadFailed],
+  );
 
   useLayoutEffect(() => {
-    if (messages.length === 0 || initialScrollDone) return;
-    virtualizer.scrollToEnd();
-    setInitialScrollDone(true);
-  }, [messages.length, initialScrollDone, virtualizer]);
+    const scroll = viewport.current;
+    if (!scroll || messages.length === 0) return;
+    if (!initialScrollDone) {
+      scroll.scrollTop = scroll.scrollHeight;
+      pinnedToBottom.current = true;
+      setInitialScrollDone(true);
+      return;
+    }
+    const prepend = pendingPrepend.current;
+    if (prepend) {
+      if (messages.length > prepend.count) {
+        // Keep the old viewport content in place when a page is inserted above it.
+        scroll.scrollTop = prepend.scrollTop + scroll.scrollHeight - prepend.scrollHeight;
+        pendingPrepend.current = null;
+      } else if (!hasOlderMessages) {
+        pendingPrepend.current = null;
+      }
+      return;
+    }
+    if (pinnedToBottom.current) scroll.scrollTop = scroll.scrollHeight;
+  }, [messages, hasOlderMessages, initialScrollDone]);
+
+  useEffect(() => {
+    const scroll = viewport.current;
+    const target = content.current;
+    if (!scroll || !target) return;
+    const observer = new ResizeObserver(() => {
+      if (initialScrollDone && pinnedToBottom.current && !pendingPrepend.current)
+        scroll.scrollTop = scroll.scrollHeight;
+    });
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [initialScrollDone]);
+
+  useEffect(() => {
+    const scroll = viewport.current;
+    const target = topSentinel.current;
+    if (!initialScrollDone || !hasOlderMessages || olderLoadFailed || !scroll || !target) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) void loadPreviousMessages();
+      },
+      { root: scroll, rootMargin: "200px 0px 0px 0px" },
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [hasOlderMessages, initialScrollDone, loadPreviousMessages, olderLoadFailed]);
 
   return (
     <ScrollArea
       className="min-h-0 flex-1"
       viewportRef={viewport}
       onViewportScroll={(event) => {
-        if (initialScrollDone && !olderLoadFailed && event.currentTarget.scrollTop < 200)
-          void loadPreviousMessages();
+        const scroll = event.currentTarget;
+        pinnedToBottom.current = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 120;
       }}
     >
       <div
+        ref={content}
         className={cn(
-          "mx-auto flex max-w-3xl flex-col gap-5 px-6 pb-6",
+          "relative mx-auto flex max-w-3xl flex-col gap-5 px-6 pb-6",
           messages.length > 0 && "pt-6",
         )}
       >
@@ -87,32 +138,16 @@ export function ChatHistory({
           </Empty>
         )}
         {olderLoadFailed && (
-          <Button type="button" variant="outline" onClick={() => void loadPreviousMessages()}>
+          <Button type="button" variant="outline" onClick={() => void loadPreviousMessages(true)}>
             이전 메시지를 불러오지 못했어요. 다시 시도
           </Button>
         )}
-        <div
-          className="relative h-(--virtual-height) w-full"
-          // SAFETY: This style only sets a CSS custom property consumed by the height utility.
-          style={{ "--virtual-height": `${virtualizer.getTotalSize()}px` } as React.CSSProperties}
-        >
-          {virtualizer.getVirtualItems().map((item) => {
-            const message = messages[item.index];
-            if (!message) return null;
-            return (
-              <div
-                key={item.key}
-                data-index={item.index}
-                ref={virtualizer.measureElement}
-                className="absolute top-(--virtual-start) left-0 w-full"
-                // SAFETY: This style only sets a CSS custom property consumed by the top utility.
-                style={{ "--virtual-start": `${item.start}px` } as React.CSSProperties}
-              >
-                {renderMessage(message, item.index)}
-              </div>
-            );
-          })}
-        </div>
+        <div ref={topSentinel} aria-hidden className="absolute top-0 h-px w-full" />
+        {messages.map((message, index) => (
+          <div key={message.id} data-chat-message>
+            {renderMessage(message, index)}
+          </div>
+        ))}
         {children}
       </div>
     </ScrollArea>
