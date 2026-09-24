@@ -181,7 +181,10 @@ function FieldError({
       return null;
     }
 
-    const uniqueErrors = [...new Map(errors.map((error) => [error?.message, error])).values()];
+    const uniqueErrors = errors.filter(
+      (error, index) =>
+        errors.findIndex((candidate) => candidate?.message === error?.message) === index,
+    );
 
     if (uniqueErrors?.length == 1) {
       return uniqueErrors[0]?.message;

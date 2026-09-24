@@ -1,15 +1,15 @@
 import { useQueryClient } from "@tanstack/react-query";
 import type { TraceTaskView } from "memory-agent";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useSessionEventScope } from "../events/context";
 import { sessionQueries, useSessionTraceQuery } from "../queries/session";
 
 export type TraceConnection = "connecting" | "live" | "reconnecting";
 
-/** Stable placement: parallel child calls keep their own parent tool-call card. */
-export const indexTasksByToolCall = (tasks: readonly TraceTaskView[]) =>
-  new Map(tasks.map((task) => [task.parentToolCallId, task] as const));
+/** Match a call to its latest durable task, including after a resumed attempt. */
+export const taskForToolCall = (tasks: readonly TraceTaskView[], toolCallId: string) =>
+  tasks.findLast((task) => task.parentToolCallId === toolCallId);
 
 /** One session-level subscription shared by every in-conversation task card. */
 export function useWorkTrace(sessionId: string) {
@@ -72,6 +72,5 @@ export function useWorkTrace(sessionId: string) {
   }, [projectId, sessionId, queryClient]);
 
   const tasks = query.data?.tasks ?? [];
-  const tasksByToolCall = useMemo(() => indexTasksByToolCall(tasks), [tasks]);
-  return { tasks, tasksByToolCall, connection };
+  return { tasks, connection };
 }

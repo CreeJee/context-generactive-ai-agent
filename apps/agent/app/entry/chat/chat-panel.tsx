@@ -249,11 +249,14 @@ function ChatPanel({
   const media = useImageGeneration((message) => setNotice(problem(message)));
   // What the run in progress reports; the server's record covers the time before and after it.
   const [liveContext, setLiveContext] = useState<ContextView | null>(null);
-  const [placements, setPlacements] = useState<ReadonlyMap<string, Placement>>(new Map());
+  const [placements, setPlacements] = useState<Readonly<Record<string, Placement>>>({});
   // Set while the conversation is read again after a run, so taken-in messages do not blink out.
   const [catchingUp, setCatchingUp] = useState(false);
   const place = (ids: readonly string[], placement: Placement) =>
-    setPlacements((current) => new Map([...current, ...ids.map((id) => [id, placement] as const)]));
+    setPlacements((current) => ({
+      ...current,
+      ...Object.fromEntries(ids.map((id) => [id, placement])),
+    }));
   const draftImages = useDraftImages();
   const composerInput = useRef<ChatComposerHandle>(null);
   const {
@@ -308,7 +311,7 @@ function ChatPanel({
   const approvals = interrupts.flatMap((interrupt) => toPendingApproval(interrupt) ?? []);
   const approvalBatchKey = approvals.map((approval) => approval.id).join("\u0000");
   const waitingForApproval = interrupts.length > 0;
-  const awaitingApproval = new Set(approvals.map((approval) => approval.toolCallId));
+  const awaitingApproval = approvals.map((approval) => approval.toolCallId);
   const incompleteApprovalBatch = approvals.length !== interrupts.length;
   const staleApprovalBatch = interruptErrors.some((interruptError) =>
     ["incomplete-batch", "unknown-interrupt", "stale", "conflict", "expired"].includes(
@@ -401,11 +404,11 @@ function ChatPanel({
     generating || waitingForApproval || catchingUp ? queue.items.filter(isTakenIn) : [];
   const takenIn = (side: Placement["side"], messageId: string) =>
     inFlight.filter((taken) => {
-      const placement = placements.get(taken.id);
+      const placement = placements[taken.id];
       return placement?.side === side && placement.messageId === messageId;
     });
   const unplaced = inFlight.filter((taken) => {
-    const placement = placements.get(taken.id);
+    const placement = placements[taken.id];
     return !placement || !messages.some((message) => message.id === placement.messageId);
   });
 
@@ -542,7 +545,7 @@ function ChatPanel({
       }
     } finally {
       setCatchingUp(false);
-      setPlacements(new Map());
+      setPlacements({});
     }
   });
   useEffect(() => {
@@ -813,7 +816,7 @@ function ChatPanel({
               message={message}
               streaming={generating && index === messages.length - 1}
               awaitingApproval={awaitingApproval}
-              tasksByToolCall={workTrace.tasksByToolCall}
+              tasks={workTrace.tasks}
               traceConnection={workTrace.connection}
               readOnly={readOnly}
               onResumeTask={resumeTask}

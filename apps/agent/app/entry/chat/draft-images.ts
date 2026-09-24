@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { api, attachmentErrorMessage, type Attachment } from "../api";
 
 /** Types the server accepts; anything else fails before uploading. */
-const acceptedTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
-export const acceptedImageTypes = [...acceptedTypes].join(",");
+const acceptedTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
+export const acceptedImageTypes = acceptedTypes.join(",");
 
 interface DraftImageBase {
   readonly key: string;
@@ -59,7 +59,7 @@ export function useDraftImages() {
         previewUrl: URL.createObjectURL(file),
         name: file.name,
       };
-      if (!acceptedTypes.has(file.type)) {
+      if (!acceptedTypes.some((type) => type === file.type)) {
         setImages((current) => [
           ...current,
           { ...base, status: "failed", reason: "PNG, JPEG, GIF, WebP 이미지만 올릴 수 있어요." },
@@ -102,9 +102,8 @@ export function useDraftImages() {
  * written after removing `#2` still points at the right image.
  */
 export function renumberReferences(text: string, sentNumbers: readonly number[]) {
-  const positions = new Map(sentNumbers.map((number, index) => [number, index + 1]));
   return text.replace(/#(\d+)/g, (token, digits: string) => {
-    const position = positions.get(Number(digits));
-    return position === undefined ? token : `#${position}`;
+    const index = sentNumbers.indexOf(Number(digits));
+    return index < 0 ? token : `#${index + 1}`;
   });
 }

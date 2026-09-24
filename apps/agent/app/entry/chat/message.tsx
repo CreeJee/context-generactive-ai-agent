@@ -9,40 +9,43 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/component
 import { attachmentIdOf, attachmentUrl, type QueuedMessage } from "memory-agent/definitions";
 import { DrawingPicture, UserMessageBody } from "./images";
 import { Markdown } from "./markdown";
-import type { TraceConnection } from "../session/work-trace";
+import { taskForToolCall, type TraceConnection } from "../session/work-trace";
 
 type Part = UIMessage["parts"][number];
 type ToolCall = Extract<Part, { type: "tool-call" }>;
 type ToolResult = Extract<Part, { type: "tool-result" }>;
 
-const toolLabels = new Map([
-  ["find_memory", "기억 검색"],
-  ["read_evidence", "원문 읽기"],
-  ["trace_evidence", "근거 추적"],
-  ["list_files", "파일 목록"],
-  ["search_files", "파일 내용 검색"],
-  ["read_file", "파일 읽기"],
-  ["write_file", "파일 쓰기"],
-  ["edit_file", "파일 편집"],
-  ["delete_file", "파일 삭제"],
-  ["list_outside_files", "프로젝트 밖 파일 목록"],
-  ["read_outside_file", "프로젝트 밖 파일 읽기"],
-  ["search_outside_file", "프로젝트 밖 파일 검색"],
-  ["run_shell", "셸 실행"],
-  ["write_outside_file", "프로젝트 밖 파일 쓰기"],
-  ["delete_outside_file", "프로젝트 밖 파일 삭제"],
-  ["kagi_search", "웹 검색"],
-  ["kagi_extract", "웹 페이지 읽기"],
-  ["read_skill", "skill 읽기"],
-  ["run_subagent", "서브에이전트 실행"],
-  ["message_subagent", "서브에이전트에게 메시지 보내기"],
-  ["delegate_to_agent", "외부 에이전트에게 맡기기"],
-]);
+const toolLabels = {
+  find_memory: "기억 검색",
+  read_evidence: "원문 읽기",
+  trace_evidence: "근거 추적",
+  list_files: "파일 목록",
+  search_files: "파일 내용 검색",
+  read_file: "파일 읽기",
+  write_file: "파일 쓰기",
+  edit_file: "파일 편집",
+  delete_file: "파일 삭제",
+  list_outside_files: "프로젝트 밖 파일 목록",
+  read_outside_file: "프로젝트 밖 파일 읽기",
+  search_outside_file: "프로젝트 밖 파일 검색",
+  run_shell: "셸 실행",
+  write_outside_file: "프로젝트 밖 파일 쓰기",
+  delete_outside_file: "프로젝트 밖 파일 삭제",
+  kagi_search: "웹 검색",
+  kagi_extract: "웹 페이지 읽기",
+  read_skill: "skill 읽기",
+  run_subagent: "서브에이전트 실행",
+  message_subagent: "서브에이전트에게 메시지 보내기",
+  delegate_to_agent: "외부 에이전트에게 맡기기",
+} satisfies Record<string, string>;
 
 /** Built-in tools by their label; MCP tools (`mcp_<server>__<tool>`) as "MCP server · tool". */
 function toolLabel(name: string) {
   const mcp = /^mcp_([A-Za-z0-9_-]+?)__(.+)$/.exec(name);
-  return toolLabels.get(name) ?? (mcp ? `MCP ${mcp[1]} · ${mcp[2]}` : name);
+  return (
+    Object.entries(toolLabels).find(([tool]) => tool === name)?.[1] ??
+    (mcp ? `MCP ${mcp[1]} · ${mcp[2]}` : name)
+  );
 }
 
 function pretty(text: string) {
@@ -144,12 +147,18 @@ function StatusBadge({ status }: { status: CallStatus }) {
   }
 }
 
-const activeTaskStatuses = new Set(["queued", "running", "waiting", "blocked", "resuming"]);
+const activeTaskStatuses: readonly TraceTaskView["status"][] = [
+  "queued",
+  "running",
+  "waiting",
+  "blocked",
+  "resuming",
+];
 
 function elapsed(task: TraceTaskView) {
   const milliseconds = Math.max(
     0,
-    (activeTaskStatuses.has(task.status) ? Date.now() : task.updatedAt) - task.createdAt,
+    (activeTaskStatuses.includes(task.status) ? Date.now() : task.updatedAt) - task.createdAt,
   );
   const seconds = Math.round(milliseconds / 1_000);
   if (seconds < 60) return `${Math.max(1, seconds)}초`;
@@ -198,7 +207,7 @@ type DeleteActionResult =
   | { readonly status: "deleted" }
   | { readonly status: "blocked"; readonly reason: string }
   | { readonly status: "failed" };
-const archivableTaskStatuses = new Set([
+const archivableTaskStatuses: readonly TraceTaskView["status"][] = [
   "queued",
   "running",
   "waiting",
@@ -209,7 +218,7 @@ const archivableTaskStatuses = new Set([
   "completed",
   "failed",
   "cancelled",
-]);
+];
 
 function TaskSummaryCard({
   task,
@@ -227,7 +236,7 @@ function TaskSummaryCard({
   onDelete: (task: TraceTaskView) => Promise<DeleteActionResult>;
 }) {
   const status = taskStatus(task);
-  const active = activeTaskStatuses.has(task.status);
+  const active = activeTaskStatuses.includes(task.status);
   const [resumeState, setResumeState] = useState<
     "idle" | "requesting" | "confirm-uncertain" | "queued" | "failed"
   >("idle");
@@ -316,7 +325,7 @@ function TaskSummaryCard({
                   : "재개"}
           </Button>
         )}
-        {archivableTaskStatuses.has(task.status) && (
+        {archivableTaskStatuses.includes(task.status) && (
           <Button
             type="button"
             size="xs"
@@ -465,7 +474,7 @@ export function MessageView({
   message,
   streaming,
   awaitingApproval,
-  tasksByToolCall,
+  tasks,
   traceConnection,
   readOnly,
   onResumeTask,
@@ -475,19 +484,14 @@ export function MessageView({
   message: UIMessage;
   streaming: boolean;
   /** Tool call ids with an approval card open. */
-  awaitingApproval: ReadonlySet<string>;
-  tasksByToolCall: ReadonlyMap<string, TraceTaskView>;
+  awaitingApproval: readonly string[];
+  tasks: readonly TraceTaskView[];
   traceConnection: TraceConnection;
   readOnly: boolean;
   onResumeTask: (task: TraceTaskView, confirmUncertain: boolean) => Promise<ResumeActionResult>;
   onArchiveTask: (task: TraceTaskView) => Promise<ArchiveActionResult>;
   onDeleteTask: (task: TraceTaskView) => Promise<DeleteActionResult>;
 }) {
-  const results = new Map(
-    message.parts.flatMap((part) =>
-      part.type === "tool-result" ? [[part.toolCallId, part] as const] : [],
-    ),
-  );
   const isUser = message.role === "user";
 
   if (isUser) {
@@ -518,9 +522,12 @@ export function MessageView({
               <ToolCallView
                 key={`tool-${part.id}`}
                 call={part}
-                result={results.get(part.id)}
-                awaitingApproval={awaitingApproval.has(part.id)}
-                task={tasksByToolCall.get(part.id)}
+                result={message.parts.findLast(
+                  (result): result is ToolResult =>
+                    result.type === "tool-result" && result.toolCallId === part.id,
+                )}
+                awaitingApproval={awaitingApproval.includes(part.id)}
+                task={taskForToolCall(tasks, part.id)}
                 traceConnection={traceConnection}
                 readOnly={readOnly}
                 onResumeTask={onResumeTask}

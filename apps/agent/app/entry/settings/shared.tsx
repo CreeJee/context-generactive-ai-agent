@@ -14,13 +14,17 @@ import {
 } from "~/components/ui/item";
 import { ApiError, type Project } from "../api";
 
-const kagiErrors = new Map([
-  ["keychain_failed", "OS 키체인에 접근하지 못했어요. 키를 다른 곳에 대신 저장하지 않아요."],
-  ["kagi_key_required", "먼저 API 키를 등록하세요."],
-]);
-
-export const errorMessage = (error: Error) =>
-  (error instanceof ApiError && kagiErrors.get(error.code)) || "설정을 바꾸지 못했어요.";
+export function errorMessage(error: Error) {
+  if (!(error instanceof ApiError)) return "설정을 바꾸지 못했어요.";
+  switch (error.code) {
+    case "keychain_failed":
+      return "OS 키체인에 접근하지 못했어요. 키를 다른 곳에 대신 저장하지 않아요.";
+    case "kagi_key_required":
+      return "먼저 API 키를 등록하세요.";
+    default:
+      return "설정을 바꾸지 못했어요.";
+  }
+}
 
 /**
  * The top of every settings page: what it is, the project it applies to when it depends on one,

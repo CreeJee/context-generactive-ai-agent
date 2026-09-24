@@ -10,7 +10,7 @@ import {
   RefreshCwIcon,
   ShieldAlertIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { ScrollArea } from "~/components/ui/scroll-area";
@@ -100,47 +100,42 @@ function TaskTree({
   selectedTaskId: string | null;
   onSelect: (taskId: string) => void;
 }) {
-  const children = useMemo(() => {
-    const index = new Map<string | null, TraceTaskView[]>();
-    for (const task of tasks) {
-      const parent =
-        task.parentTaskId && tasks.some(({ id }) => id === task.parentTaskId)
-          ? task.parentTaskId
-          : null;
-      index.set(parent, [...(index.get(parent) ?? []), task]);
-    }
-    return index;
-  }, [tasks]);
   const branch = (parentId: string | null, depth: number): React.ReactNode =>
-    (children.get(parentId) ?? []).map((task) => (
-      <div key={task.id} className="min-w-0">
-        <button
-          type="button"
-          className={`flex w-full min-w-0 items-start gap-2 rounded-md py-2 pr-2 text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${depthPadding[Math.min(depth, depthPadding.length - 1)]}`}
-          aria-current={selectedTaskId === task.id ? "true" : undefined}
-          onClick={() => onSelect(task.id)}
-        >
-          <ChevronRightIcon
-            className="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
-            aria-hidden
-          />
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-sm font-medium">{task.title}</span>
-            <span className="block truncate text-xs text-muted-foreground">
-              {task.agentName} · {task.latestActivity ?? task.request}
-            </span>
-          </span>
-          <Badge
-            variant={
-              task.status === "blocked" || task.status === "failed" ? "destructive" : "secondary"
-            }
+    tasks
+      .filter((task) =>
+        parentId === null
+          ? task.parentTaskId === null || !tasks.some(({ id }) => id === task.parentTaskId)
+          : task.parentTaskId === parentId,
+      )
+      .map((task) => (
+        <div key={task.id} className="min-w-0">
+          <button
+            type="button"
+            className={`flex w-full min-w-0 items-start gap-2 rounded-md py-2 pr-2 text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${depthPadding[Math.min(depth, depthPadding.length - 1)]}`}
+            aria-current={selectedTaskId === task.id ? "true" : undefined}
+            onClick={() => onSelect(task.id)}
           >
-            {statusLabel[task.status]}
-          </Badge>
-        </button>
-        {branch(task.id, depth + 1)}
-      </div>
-    ));
+            <ChevronRightIcon
+              className="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
+              aria-hidden
+            />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium">{task.title}</span>
+              <span className="block truncate text-xs text-muted-foreground">
+                {task.agentName} · {task.latestActivity ?? task.request}
+              </span>
+            </span>
+            <Badge
+              variant={
+                task.status === "blocked" || task.status === "failed" ? "destructive" : "secondary"
+              }
+            >
+              {statusLabel[task.status]}
+            </Badge>
+          </button>
+          {branch(task.id, depth + 1)}
+        </div>
+      ));
   return (
     <nav className="min-w-0" aria-label="작업 트리">
       {branch(null, 0)}

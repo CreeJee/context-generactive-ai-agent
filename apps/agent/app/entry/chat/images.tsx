@@ -79,11 +79,10 @@ type TextRun =
   | { readonly kind: "reference"; readonly token: string; readonly image: MessageImage };
 
 function splitReferences(text: string, images: readonly MessageImage[]): TextRun[] {
-  const byNumber = new Map(images.map((image) => [image.number, image]));
   const runs: TextRun[] = [];
   let last = 0;
   for (const match of text.matchAll(/#(\d+)/g)) {
-    const image = byNumber.get(Number(match[1]));
+    const image = images.find((candidate) => candidate.number === Number(match[1]));
     if (!image) continue;
     if (match.index > last) runs.push({ kind: "text", text: text.slice(last, match.index) });
     runs.push({ kind: "reference", token: match[0], image });

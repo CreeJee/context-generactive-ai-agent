@@ -1,6 +1,6 @@
 import type { TraceTaskView } from "memory-agent";
 import { describe, expect, test } from "vite-plus/test";
-import { indexTasksByToolCall } from "./work-trace";
+import { taskForToolCall } from "./work-trace";
 
 const task = (id: string, parentToolCallId: string): TraceTaskView => ({
   id,
@@ -33,16 +33,16 @@ describe("Work Trace task-card placement", () => {
   test("parallel child calls resolve to distinct durable tasks and attempts", () => {
     const first = task("first", "tool-call-a");
     const second = task("second", "tool-call-b");
-    const index = indexTasksByToolCall([first, second]);
+    const tasks = [first, second];
 
-    expect(index.get("tool-call-a")).toMatchObject({
+    expect(taskForToolCall(tasks, "tool-call-a")).toMatchObject({
       id: "first",
       latestAttemptId: "attempt-first",
     });
-    expect(index.get("tool-call-b")).toMatchObject({
+    expect(taskForToolCall(tasks, "tool-call-b")).toMatchObject({
       id: "second",
       latestAttemptId: "attempt-second",
     });
-    expect(index.get("tool-call-a")).not.toBe(index.get("tool-call-b"));
+    expect(taskForToolCall(tasks, "tool-call-a")).not.toBe(taskForToolCall(tasks, "tool-call-b"));
   });
 });
