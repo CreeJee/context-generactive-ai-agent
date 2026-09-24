@@ -8,6 +8,7 @@ import {
   defineRunStore,
   type ChatPersistence,
   type InterruptRecord,
+  type MessagePage,
   type RunRecord,
 } from "@tanstack/ai-persistence";
 import { Schema } from "effect";
@@ -153,11 +154,30 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
     "INSERT INTO chat_threads VALUES (?, ?, ?) ON CONFLICT(thread_id) DO UPDATE SET messages = excluded.messages, updated_at = excluded.updated_at",
   );
 
+  async function loadThread(threadId: string): Promise<ModelMessage[]>;
+  async function loadThread(
+    threadId: string,
+    options: { limit?: number; before?: string },
+  ): Promise<ModelMessage[] | MessagePage>;
+  async function loadThread(threadId: string, options?: { limit?: number; before?: string }) {
+    const row = selectThread.get(threadId);
+    const stored = row ? parseMessages(decodeJsonText(row).value) : [];
+    if (options?.limit === undefined) return stored;
+    // Old imported transcripts may lack ids. Paging needs a cursor that survives each GET.
+    const messages = stored.map((message, index) =>
+      message.id === undefined ? { ...message, id: `stored:${threadId}:${index}` } : message,
+    );
+    const before = options.before;
+    if (before === undefined) return { messages, truncated: false } satisfies MessagePage;
+    const end = messages.findIndex((message) => message.id === before);
+    return {
+      messages: end < 0 ? [] : messages.slice(0, end),
+      truncated: false,
+    } satisfies MessagePage;
+  }
+
   const messages = defineMessageStore({
-    async loadThread(threadId) {
-      const row = selectThread.get(threadId);
-      return row ? parseMessages(decodeJsonText(row).value) : [];
-    },
+    loadThread,
     async saveThread(threadId, next) {
       upsertThread.run(threadId, JSON.stringify(next), Date.now());
     },

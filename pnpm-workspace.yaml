@@ -54,6 +54,7 @@ catalog:
   jotai: ^3.0.0
   nuqs: ^2.10.1
   "@tanstack/react-query": ^5.103.1
+  "@tanstack/react-virtual": ^3.14.13
 overrides:
   vite@*: "catalog:"
 peerDependencyRules:

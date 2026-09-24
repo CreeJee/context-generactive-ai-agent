@@ -1,4 +1,5 @@
 import { fetchServerSentEvents, useChat } from "@tanstack/ai-react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowUpIcon,
   CheckIcon,
@@ -20,7 +21,7 @@ import { cn } from "cn";
 import type { TraceTaskView } from "memory-agent";
 import { Option } from "effect";
 import { useAtom } from "jotai";
-import { Fragment, useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import {
   Empty,
@@ -288,9 +289,19 @@ function ChatPanel({
   const caretAfterRender = useRef<number | null>(null);
   const filePicker = useRef<HTMLInputElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
+  const scrollViewport = useRef<HTMLDivElement>(null);
+  const followBottom = useRef(true);
+  const positioned = useRef(false);
+  const loadingOlder = useRef(false);
+  const restoreScroll = useRef<{ scrollHeight: number; scrollTop: number; count: number } | null>(
+    null,
+  );
+  const [olderLoadFailed, setOlderLoadFailed] = useState(false);
   const {
     messages,
     setMessages,
+    hasOlderMessages,
+    loadOlderMessages,
     sendMessage,
     stop,
     isLoading,
@@ -312,7 +323,7 @@ function ChatPanel({
     persistence: true,
     // Enables TanStack's server-authoritative delta protocol: hydrated and completed message ids are
     // remembered, so the next turn sends only messages the server has not persisted already.
-    history: { pageSize: 10_000 },
+    history: { pageSize: 50 },
     // The same definitions the server uses, so approval requests can be matched and answered:
     // tool approvals in `ask` mode, permission reviews in `auto` mode.
     tools: approvalToolDefinitions,
@@ -334,6 +345,13 @@ function ChatPanel({
         }
       }
     },
+  });
+  const messageVirtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => scrollViewport.current,
+    getItemKey: (index) => messages[index]?.id ?? index,
+    estimateSize: () => 180,
+    overscan: 5,
   });
   const approvals = interrupts.flatMap((interrupt) => toPendingApproval(interrupt) ?? []);
   const approvalBatchKey = approvals.map((approval) => approval.id).join("\u0000");
@@ -717,9 +735,58 @@ function ChatPanel({
     if (message) startEdit(message);
   };
 
-  useEffect(() => {
-    bottom.current?.scrollIntoView({ block: "end" });
+  const loadPreviousMessages = async () => {
+    const viewport = scrollViewport.current;
+    if (!viewport || !hasOlderMessages || loadingOlder.current) return;
+    loadingOlder.current = true;
+    restoreScroll.current = {
+      scrollHeight: viewport.scrollHeight,
+      scrollTop: viewport.scrollTop,
+      count: messages.length,
+    };
+    setOlderLoadFailed(false);
+    try {
+      await loadOlderMessages();
+    } catch {
+      restoreScroll.current = null;
+      setOlderLoadFailed(true);
+    } finally {
+      loadingOlder.current = false;
+    }
+  };
+
+  useLayoutEffect(() => {
+    const viewport = scrollViewport.current;
+    if (!viewport) return;
+    const restoring = restoreScroll.current;
+    if (restoring && messages.length > restoring.count) {
+      viewport.scrollTop = restoring.scrollTop + viewport.scrollHeight - restoring.scrollHeight;
+      restoreScroll.current = null;
+      followBottom.current = false;
+      return;
+    }
+    if (restoring) return;
+    if (messages.length > 0 && !positioned.current) {
+      positioned.current = true;
+      bottom.current?.scrollIntoView({ block: "end" });
+      return;
+    }
+    if (followBottom.current) bottom.current?.scrollIntoView({ block: "end" });
   }, [messages]);
+
+  const onConversationScroll = (event: React.UIEvent<HTMLDivElement>) => {
+    const viewport = event.currentTarget;
+    if (restoreScroll.current === null)
+      followBottom.current =
+        viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 120;
+    if (
+      positioned.current &&
+      restoreScroll.current === null &&
+      !olderLoadFailed &&
+      viewport.scrollTop < 200
+    )
+      void loadPreviousMessages();
+  };
 
   const attach = (files: readonly File[]) => {
     if (files.length === 0) return;
@@ -944,8 +1011,12 @@ function ChatPanel({
           {imagesSupported ? "이미지를 놓으면 첨부돼요" : "선택한 모델은 이미지를 읽지 못해요"}
         </div>
       )}
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="mx-auto flex max-w-3xl flex-col gap-5 px-6 py-6">
+      <ScrollArea
+        className="min-h-0 flex-1"
+        viewportRef={scrollViewport}
+        onViewportScroll={onConversationScroll}
+      >
+        <div className="mx-auto flex max-w-3xl flex-col gap-5 px-6 pb-6">
           {messages.length === 0 && (
             <Empty className="mt-24">
               <EmptyHeader>
@@ -959,27 +1030,56 @@ function ChatPanel({
               </EmptyHeader>
             </Empty>
           )}
-          {messages.map((message, index) => (
-            <Fragment key={`panel-${message.id}`}>
-              {takenIn("before", message.id).map((taken) => (
-                <DeliveredMessageView key={taken.id} message={taken} />
-              ))}
-              <MessageView
-                message={message}
-                streaming={generating && index === messages.length - 1}
-                awaitingApproval={awaitingApproval}
-                tasksByToolCall={workTrace.tasksByToolCall}
-                traceConnection={workTrace.connection}
-                readOnly={readOnly}
-                onResumeTask={resumeTask}
-                onArchiveTask={archiveTask}
-                onDeleteTask={deleteTask}
-              />
-              {takenIn("after", message.id).map((taken) => (
-                <DeliveredMessageView key={taken.id} message={taken} />
-              ))}
-            </Fragment>
-          ))}
+          {olderLoadFailed && (
+            <Button type="button" variant="outline" onClick={() => void loadPreviousMessages()}>
+              이전 메시지를 불러오지 못했어요. 다시 시도
+            </Button>
+          )}
+          <div
+            className="relative h-(--virtual-height) w-full"
+            // SAFETY: This style only sets a CSS custom property consumed by the height utility.
+            style={
+              {
+                "--virtual-height": `${messageVirtualizer.getTotalSize()}px`,
+              } as React.CSSProperties
+            }
+          >
+            {messageVirtualizer.getVirtualItems().map((item) => {
+              const message = messages[item.index];
+              if (!message) return null;
+              return (
+                <div
+                  key={item.key}
+                  data-index={item.index}
+                  ref={messageVirtualizer.measureElement}
+                  className={cn(
+                    "absolute top-(--virtual-start) left-0 w-full",
+                    item.index === 0 ? "pt-6" : "pt-5",
+                  )}
+                  // SAFETY: This style only sets a CSS custom property consumed by the top utility.
+                  style={{ "--virtual-start": `${item.start}px` } as React.CSSProperties}
+                >
+                  {takenIn("before", message.id).map((taken) => (
+                    <DeliveredMessageView key={taken.id} message={taken} />
+                  ))}
+                  <MessageView
+                    message={message}
+                    streaming={generating && item.index === messages.length - 1}
+                    awaitingApproval={awaitingApproval}
+                    tasksByToolCall={workTrace.tasksByToolCall}
+                    traceConnection={workTrace.connection}
+                    readOnly={readOnly}
+                    onResumeTask={resumeTask}
+                    onArchiveTask={archiveTask}
+                    onDeleteTask={deleteTask}
+                  />
+                  {takenIn("after", message.id).map((taken) => (
+                    <DeliveredMessageView key={taken.id} message={taken} />
+                  ))}
+                </div>
+              );
+            })}
+          </div>
           {unplaced.map((taken) => (
             <DeliveredMessageView key={taken.id} message={taken} />
           ))}

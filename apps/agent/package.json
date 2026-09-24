@@ -23,6 +23,7 @@
     "@tanstack/ai-openai": "catalog:",
     "@tanstack/ai-react": "catalog:",
     "@tanstack/react-query": "catalog:",
+    "@tanstack/react-virtual": "catalog:",
     "class-variance-authority": "catalog:",
     "cmdk": "catalog:",
     "cn": "catalog:",
