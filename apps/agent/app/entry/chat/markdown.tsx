@@ -16,7 +16,7 @@ export function Markdown({ text, streaming }: { text: string; streaming: boolean
       animated
       // Links open only after the user confirms the destination.
       linkSafety={linkSafety}
-      className="min-w-0 break-words"
+      className="min-w-0 wrap-break-word"
     >
       {text}
     </Streamdown>
