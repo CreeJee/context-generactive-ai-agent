@@ -19,6 +19,13 @@ export default defineConfig(({ command }) => {
   let presentedBuildId = developmentBuildId(appRoot);
 
   return {
+    test: {
+      // Vitest v4 compatibility: preserve mock call history.
+      // Remove after tests no longer rely on calls from setup or earlier tests.
+      // https://viteplus.dev/guide/vitest-v5#remove-unneeded-compatibility-settings
+      // https://vitest.dev/guide/migration/#clearmocks-is-enabled-by-default
+      clearMocks: false,
+    },
     server: developmentBackend
       ? {
           proxy: {
@@ -98,7 +105,15 @@ export default defineConfig(({ command }) => {
       platform: "node",
       outDir: "dist",
       dts: false,
-      deps: { alwaysBundle: [/.*/], onlyBundle: false, onlyImport: [] },
+      deps: {
+        // tsdown <0.23 compatibility: resolve external dependency subpaths.
+        // Remove to preserve subpath imports as written (the new default).
+        // https://tsdown.dev/options/dependencies#deps-resolvedepsubpath
+        resolveDepSubpath: true,
+        alwaysBundle: [/.*/],
+        onlyBundle: false,
+        onlyImport: [],
+      },
       // A Node SEA holds one script, so dynamic imports are inlined too.
       outputOptions: { codeSplitting: false },
       // `vp run package` (scripts/package.ts) sets these to also build the executable with the

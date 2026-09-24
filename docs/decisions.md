@@ -709,4 +709,4 @@
 - 사용자에게 복구 방법을 제시할 수 있는 provider 실패에는 `Effect.orDie`를 쓰지 않는다. `ProviderUnavailable`은 HTTP 503 `provider_unavailable`로, 인증 상태 조회 실패는 HTTP 503 `provider_auth_unavailable`로 바꾸고 채팅 UI까지 오류 코드를 보존한다. 존재하지 않는 프로젝트는 HTTP 404로 반환한다.
 - 워크플로 규칙의 벡터는 Effect Cache가 요청 중복과 만료를 관리한다. 동일 규칙 조회를 공유하고 실패는 보관하지 않는다. 함수 안에서 끝나는 임시 Map은 조회 인덱스로 허용한다.
 - 외부 계약의 숫자는 `Schema.Finite`로 검증해 `NaN`과 무한대를 거부한다. 실제 `unknown` 경계에서는 `decodeUnknownEffect`를 사용하고, 이미 타입이 정해진 값은 해당 타입의 디코더를 사용한다.
-- `@effect/vitest@4.0.0-rc.117`은 Vitest 5를 요구하고 현재 Vite Plus는 Vitest 4.1.11을 사용한다. 테스트 실행기의 버전이 맞을 때 Effect 테스트의 layer 공유와 `it.effect`를 제한된 범위에서 시험한다.
+- Vite Plus 1.0.0-rc.0과 Vitest 5.0.1로 올리고 `@effect/vitest@4.0.0-rc.117`을 도입한다. Vitest를 workspace override로 고정하고 Node 타입 버전을 통일해 `@effect/vitest`와 Vite Plus가 같은 실행기 인스턴스를 사용하게 한다. 서비스 layer를 공유하는 테스트부터 `layer`와 `it.effect`로 옮긴다. SDK·브라우저 Promise 경계는 일반 Vitest 테스트를 유지할 수 있다.

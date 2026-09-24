@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AnyServerTool } from "@tanstack/ai";
 import { Effect, ManagedRuntime } from "effect";
-import { bench, describe } from "vite-plus/test";
+import { test, describe } from "vite-plus/test";
 import { SecretStore } from "../src/config/secrets.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
 import { MorphAnalyzer } from "../src/memory/morph/analyzer.ts";
@@ -132,18 +132,42 @@ async function readAll(read: (input: ReadInput) => Promise<{ nextStartLine?: num
 }
 
 describe("file tools (3,000 files)", () => {
-  bench("list_files, plain directory", () => listAll(tools.plain.list));
-  bench("list_files, Git work tree", () => listAll(tools.git.list));
-  bench("search_files all pages, plain (600 matches)", () =>
-    searchAll(tools.plain.search, "needle"));
-  bench("search_files all pages, Git (600 matches)", () => searchAll(tools.git.search, "needle"));
-  bench("search_files no match, plain", () => searchAll(tools.plain.search, "absent-text-xyz"));
-  bench("search_files no match, Git", () => searchAll(tools.git.search, "absent-text-xyz"));
-  bench("search_files one directory, plain", () =>
-    searchAll((input) => tools.plain.search({ ...input, directory: "src/module-3" }), "needle"));
-  bench("read_file 6,000 lines, all pages", () => readAll(tools.plain.read));
+  test("list_files, plain directory", async ({ bench }) => {
+    await bench("list_files, plain directory", () => listAll(tools.plain.list)).run();
+  });
+  test("list_files, Git work tree", async ({ bench }) => {
+    await bench("list_files, Git work tree", () => listAll(tools.git.list)).run();
+  });
+  test("search_files all pages, plain (600 matches)", async ({ bench }) => {
+    await bench("search_files all pages, plain (600 matches)", () =>
+      searchAll(tools.plain.search, "needle")).run();
+  });
+  test("search_files all pages, Git (600 matches)", async ({ bench }) => {
+    await bench("search_files all pages, Git (600 matches)", () =>
+      searchAll(tools.git.search, "needle")).run();
+  });
+  test("search_files no match, plain", async ({ bench }) => {
+    await bench("search_files no match, plain", () =>
+      searchAll(tools.plain.search, "absent-text-xyz")).run();
+  });
+  test("search_files no match, Git", async ({ bench }) => {
+    await bench("search_files no match, Git", () =>
+      searchAll(tools.git.search, "absent-text-xyz")).run();
+  });
+  test("search_files one directory, plain", async ({ bench }) => {
+    await bench("search_files one directory, plain", () =>
+      searchAll(
+        (input) => tools.plain.search({ ...input, directory: "src/module-3" }),
+        "needle",
+      )).run();
+  });
+  test("read_file 6,000 lines, all pages", async ({ bench }) => {
+    await bench("read_file 6,000 lines, all pages", () => readAll(tools.plain.read)).run();
+  });
 });
 
 describe("shell", () => {
-  bench("run_shell printf", () => tools.shell({ command: "printf ok" }));
+  test("run_shell printf", async ({ bench }) => {
+    await bench("run_shell printf", () => tools.shell({ command: "printf ok" })).run();
+  });
 });

@@ -134,7 +134,9 @@ const redactionWorker = Effect.map(
       waiting.delete(reply.id);
       answer?.(reply);
     });
-    worker.on("error", (error) => lost(error.message));
+    worker.on("error", (error) =>
+      lost(error instanceof Error ? error.message : "the redaction worker failed"),
+    );
     worker.on("exit", () => lost("the redaction worker stopped"));
 
     return (kind, texts) =>

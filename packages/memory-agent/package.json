@@ -65,6 +65,7 @@
     "turbovec": "workspace:*"
   },
   "devDependencies": {
+    "@effect/vitest": "catalog:",
     "@types/cross-spawn": "catalog:",
     "@types/node": "catalog:",
     "bumpp": "^11.1.0",

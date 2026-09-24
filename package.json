@@ -15,7 +15,6 @@
   },
   "devDependencies": {
     "@effect/tsgo": "catalog:",
-    "@oxlint/plugins": "catalog:",
     "@shadcn/lint": "catalog:",
     "effect": "catalog:",
     "typescript": "catalog:",
