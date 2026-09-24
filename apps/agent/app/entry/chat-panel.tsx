@@ -288,14 +288,10 @@ function ChatPanel({
   const textarea = useRef<HTMLTextAreaElement>(null);
   const caretAfterRender = useRef<number | null>(null);
   const filePicker = useRef<HTMLInputElement>(null);
-  const bottom = useRef<HTMLDivElement>(null);
   const scrollViewport = useRef<HTMLDivElement>(null);
-  const followBottom = useRef(true);
   const positioned = useRef(false);
   const loadingOlder = useRef(false);
-  const restoreScroll = useRef<{ scrollHeight: number; scrollTop: number; count: number } | null>(
-    null,
-  );
+  const olderFirstMessageId = useRef<string | null>(null);
   const [olderLoadFailed, setOlderLoadFailed] = useState(false);
   const {
     messages,
@@ -352,6 +348,9 @@ function ChatPanel({
     getItemKey: (index) => messages[index]?.id ?? index,
     estimateSize: () => 180,
     overscan: 5,
+    anchorTo: "end",
+    followOnAppend: "auto",
+    scrollEndThreshold: 120,
   });
   const approvals = interrupts.flatMap((interrupt) => toPendingApproval(interrupt) ?? []);
   const approvalBatchKey = approvals.map((approval) => approval.id).join("\u0000");
@@ -736,55 +735,33 @@ function ChatPanel({
   };
 
   const loadPreviousMessages = async () => {
-    const viewport = scrollViewport.current;
-    if (!viewport || !hasOlderMessages || loadingOlder.current) return;
+    if (!hasOlderMessages || loadingOlder.current) return;
     loadingOlder.current = true;
-    restoreScroll.current = {
-      scrollHeight: viewport.scrollHeight,
-      scrollTop: viewport.scrollTop,
-      count: messages.length,
-    };
+    olderFirstMessageId.current = messages[0]?.id ?? null;
     setOlderLoadFailed(false);
     try {
       await loadOlderMessages();
     } catch {
-      restoreScroll.current = null;
-      setOlderLoadFailed(true);
-    } finally {
       loadingOlder.current = false;
+      olderFirstMessageId.current = null;
+      setOlderLoadFailed(true);
     }
   };
 
   useLayoutEffect(() => {
-    const viewport = scrollViewport.current;
-    if (!viewport) return;
-    const restoring = restoreScroll.current;
-    if (restoring && messages.length > restoring.count) {
-      viewport.scrollTop = restoring.scrollTop + viewport.scrollHeight - restoring.scrollHeight;
-      restoreScroll.current = null;
-      followBottom.current = false;
-      return;
+    if (loadingOlder.current && messages[0]?.id !== olderFirstMessageId.current) {
+      loadingOlder.current = false;
+      olderFirstMessageId.current = null;
     }
-    if (restoring) return;
     if (messages.length > 0 && !positioned.current) {
       positioned.current = true;
-      bottom.current?.scrollIntoView({ block: "end" });
-      return;
+      messageVirtualizer.scrollToEnd();
     }
-    if (followBottom.current) bottom.current?.scrollIntoView({ block: "end" });
-  }, [messages]);
+  }, [messages, messageVirtualizer]);
 
   const onConversationScroll = (event: React.UIEvent<HTMLDivElement>) => {
     const viewport = event.currentTarget;
-    if (restoreScroll.current === null)
-      followBottom.current =
-        viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 120;
-    if (
-      positioned.current &&
-      restoreScroll.current === null &&
-      !olderLoadFailed &&
-      viewport.scrollTop < 200
-    )
+    if (positioned.current && !loadingOlder.current && !olderLoadFailed && viewport.scrollTop < 200)
       void loadPreviousMessages();
   };
 
@@ -1181,7 +1158,6 @@ function ChatPanel({
           {!generating && !waitingForApproval && run.notice && (
             <RunNoticeView notice={run.notice} />
           )}
-          <div ref={bottom} />
         </div>
       </ScrollArea>
 
