@@ -61,3 +61,11 @@
 - 기준 변경을 `6b03ea6`으로 커밋한 뒤 `@effect/tsgo` 0.45.0을 설치했다. TypeScript 7.0.2의 `tsc`를 설치 시 패치하고 memory-agent와 앱의 `tsconfig`에 Effect 언어 서비스를 연결했다.
 - Effect 진단의 오류 1건은 generator의 `return yield*`로, 경고 2건은 Kagi 도구와 JSON 요청 파서의 typed Schema 오류 경계로 정리했다. 전체 타입 검사는 통과하며 남은 출력은 제안 수준이다.
 - v4 이전에서는 `Context.Tag` 서비스 66곳과 호출부를 함께 옮기고, Schema 생성·디코딩과 tagged error를 v4 계약으로 바꾼다. 그 뒤 fiber·scope·런타임 경계와 앱·테스트를 이전한다. 의존성만 v4로 바꾼 상태는 빌드되지 않으므로 각 단계마다 타입 검사, 관련 테스트, 전체 테스트와 빌드를 확인한다.
+
+## v4 적용 후 남은 수명 스펙 (2026-09-25)
+
+- 위의 v4 이전 계획은 완료됐다. 현재는 Effect v4 RC와 권장 tsconfig 옵션을 사용한다. `Effect.orDie`가 예상 가능한 provider 오류를 defect로 보내던 경로를 제거했고, 채팅 UI는 503 오류 코드를 받아 안내한다. 워크플로 규칙의 벡터 캐시는 Effect Cache가 동시 조회와 만료를 관리한다.
+- `createSnapshots`의 파일 목록 snapshot은 최대 32개를 서버 메모리에 보관한다. 재시작 뒤 기존 페이지 토큰은 복구되지 않으므로 “고정된 목록을 페이지마다 본다”는 현재 설명에는 수명 조건이 빠졌다. 재시작 뒤에도 같은 목록을 보장할 제품 요구가 있다면 snapshot 행과 파일 경로를 SQLite에 저장하고 생성 시각과 만료 시각을 둔다. 재시작 뒤 복구가 불필요하다면 API 계약에 토큰 만료를 명시하고 클라이언트가 첫 페이지부터 다시 읽도록 한다.
+- `RelayedApprovals.pending`은 진행 중인 Promise와 브라우저의 응답을 연결한다. 재시작 시 기다리던 실행 자체가 없어진다. 승인 요청을 복구하려면 요청 ID, 대상 작업, 만료, 승인 결과를 Work Trace에 먼저 기록하고, 재개 가능한 작업의 체크포인트에서 승인 결과를 읽게 해야 한다. Map만 DB로 옮기면 기다리던 실행은 살아나지 않는다.
+- MCP·ACP 연결, importer/embedder worker 콜백, keyed semaphore의 Map은 열린 프로세스 자원을 찾는 색인이다. 종료 시 항목을 회수하거나 scope를 닫는다. 재시작 뒤 동일 작업을 자동 재개하려면 각 작업의 재시도 가능 여부와 중복 실행 방지 키를 영속 원장에 먼저 정의해야 한다.
+- 타입 검사에 남은 `AbortController` 제안은 요청 fiber보다 오래 사는 stream과 SDK 취소 경계에 해당한다. 벡터 인덱스의 동기 Schema 디코드는 `Effect.try`에서 `VectorIndexError`로 변환한다. 이 경계는 Effect 범위 안의 일반 실패와 달리 실행 시점 및 자원 소유권을 확인한 뒤 바꿔야 한다.
