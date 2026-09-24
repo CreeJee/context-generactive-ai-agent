@@ -18,7 +18,10 @@ export default defineConfig({
     tasks: {
       // turbovec's addon is built first: the vector index and its tests load it.
       build: { command: "vp pack", dependsOn: [{ task: "build", from: "dependencies" }] },
-      test: { command: "vp test", dependsOn: [{ task: "build", from: "dependencies" }] },
+      test: {
+        command: "vp test --maxWorkers=4",
+        dependsOn: [{ task: "build", from: "dependencies" }],
+      },
       // Never cached: Vite Task does not see the files TypeScript 7's native tsc reads, so a cached
       // pass would hide new errors.
       typecheck: { command: "tsc", cache: false },
