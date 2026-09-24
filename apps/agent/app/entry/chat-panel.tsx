@@ -106,7 +106,9 @@ const imageFiles = (files: FileList | null) =>
   Array.from(files ?? []).filter((file) => file.type.startsWith("image/"));
 
 /** The input box either writes a new message or edits one that is waiting in the queue. */
-type Composer = { readonly kind: "compose" } | { readonly kind: "editing"; readonly id: string };
+type Composer =
+  | { readonly kind: "compose" }
+  | { readonly kind: "editing"; readonly id: string; readonly draft: string };
 
 /**
  * Where a message the running answer took in shows, next to a message of the conversation, until
@@ -246,12 +248,13 @@ function ChatPanel({
   const workTrace = useWorkTrace(sessionId);
   const [composer, setComposer] = useState<Composer>({ kind: "compose" });
   const [sessionDrafts, setSessionDrafts] = useAtom(sessionDraftsAtom);
-  const [editingDraft, setEditingDraft] = useState("");
   const composeDraft = sessionDrafts[sessionId] ?? "";
-  const draft = composer.kind === "editing" ? editingDraft : composeDraft;
+  const draft = composer.kind === "editing" ? composer.draft : composeDraft;
   const setDraft = (next: string) => {
     if (composer.kind === "editing") {
-      setEditingDraft(next);
+      setComposer((current) =>
+        current.kind === "editing" ? { ...current, draft: next } : current,
+      );
       return;
     }
     setSessionDrafts((current) => {
@@ -289,9 +292,7 @@ function ChatPanel({
   const caretAfterRender = useRef<number | null>(null);
   const filePicker = useRef<HTMLInputElement>(null);
   const scrollViewport = useRef<HTMLDivElement>(null);
-  const positioned = useRef(false);
-  const loadingOlder = useRef(false);
-  const olderFirstMessageId = useRef<string | null>(null);
+  const [initialScrollDone, setInitialScrollDone] = useState(false);
   const [olderLoadFailed, setOlderLoadFailed] = useState(false);
   const {
     messages,
@@ -694,9 +695,8 @@ function ChatPanel({
         : message.state.kind === "held" && message.state.draft !== null
           ? message.state.draft
           : message.text;
-    setComposer({ kind: "editing", id: message.id });
+    setComposer({ kind: "editing", id: message.id, draft: text });
     caretAfterRender.current = text.length;
-    setEditingDraft(text);
     setNotice(null);
     void queue.change(message.id, { action: "edit", draft: text });
   };
@@ -735,33 +735,24 @@ function ChatPanel({
   };
 
   const loadPreviousMessages = async () => {
-    if (!hasOlderMessages || loadingOlder.current) return;
-    loadingOlder.current = true;
-    olderFirstMessageId.current = messages[0]?.id ?? null;
+    if (!hasOlderMessages) return;
     setOlderLoadFailed(false);
     try {
       await loadOlderMessages();
     } catch {
-      loadingOlder.current = false;
-      olderFirstMessageId.current = null;
       setOlderLoadFailed(true);
     }
   };
 
   useLayoutEffect(() => {
-    if (loadingOlder.current && messages[0]?.id !== olderFirstMessageId.current) {
-      loadingOlder.current = false;
-      olderFirstMessageId.current = null;
-    }
-    if (messages.length > 0 && !positioned.current) {
-      positioned.current = true;
-      messageVirtualizer.scrollToEnd();
-    }
-  }, [messages, messageVirtualizer]);
+    if (messages.length === 0 || initialScrollDone) return;
+    messageVirtualizer.scrollToEnd();
+    setInitialScrollDone(true);
+  }, [messages.length, initialScrollDone, messageVirtualizer]);
 
   const onConversationScroll = (event: React.UIEvent<HTMLDivElement>) => {
     const viewport = event.currentTarget;
-    if (positioned.current && !loadingOlder.current && !olderLoadFailed && viewport.scrollTop < 200)
+    if (initialScrollDone && !olderLoadFailed && viewport.scrollTop < 200)
       void loadPreviousMessages();
   };
 
