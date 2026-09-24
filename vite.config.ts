@@ -17,6 +17,9 @@ const agentAndVendoredIgnorePatterns = [
 ];
 
 export default defineConfig({
+  resolve: {
+    tsconfigPaths: true,
+  },
   staged: {
     "*": "vp check --fix",
   },

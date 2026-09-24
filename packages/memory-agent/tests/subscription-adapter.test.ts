@@ -618,6 +618,44 @@ describe("subscription model adapters", () => {
     expect(receivedSignal).toBe(controller.signal);
   });
 
+  test("forwards Anthropic abort and drops provider chunks emitted after cancellation", async () => {
+    let receivedSignal: AbortSignal | undefined;
+    let releaseProvider!: () => void;
+    const providerReady = new Promise<void>((resolve) => {
+      releaseProvider = resolve;
+    });
+    const client = {
+      async *stream(_body: string, signal?: AbortSignal) {
+        receivedSignal = signal;
+        yield { type: "text" as const, text: "before abort" };
+        await providerReady;
+        yield { type: "text" as const, text: "after abort" };
+      },
+    };
+    const controller = new AbortController();
+    const adapter = new SubscriptionTextAdapter(client, {
+      provider: "anthropic",
+      model: "model-1",
+      reasoningEffort: "medium",
+    });
+    const stream = adapter
+      .chatStream({ ...options, model: "model-1", logger, abortController: controller })
+      [Symbol.asyncIterator]();
+
+    expect((await stream.next()).value).toMatchObject({ type: EventType.RUN_STARTED });
+    expect((await stream.next()).value).toMatchObject({ type: EventType.TEXT_MESSAGE_START });
+    expect((await stream.next()).value).toMatchObject({
+      type: EventType.TEXT_MESSAGE_CONTENT,
+      delta: "before abort",
+    });
+    expect(receivedSignal).toBe(controller.signal);
+    const pending = stream.next();
+    controller.abort();
+    releaseProvider();
+    expect(await pending).toEqual({ done: true, value: undefined });
+    expect(await stream.next()).toEqual({ done: true, value: undefined });
+  });
+
   test("emits streaming tool deltas and combined usage without provider secrets", async () => {
     const client = {
       async *stream() {

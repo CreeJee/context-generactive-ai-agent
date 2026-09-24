@@ -3,6 +3,7 @@ import { Effect, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { approvalToolDefinitions } from "../src/tools/definitions.ts";
+import { Workflows } from "../src/workflow/workflow.ts";
 import { testRuntime } from "./support/runtime.ts";
 
 type Runtime = Awaited<ReturnType<typeof testRuntime>>["runtime"];
@@ -147,6 +148,35 @@ describe("runs across reloads, cancels and restarts", () => {
     expect(reloaded.text()).toBe(seen);
     expect(provider!.adapter.invocations).toHaveLength(1);
     reloaded.client.dispose();
+  });
+
+  test("cancel stops a running Plan-phase run without changing its workflow phase", async () => {
+    const { runtime, session, provider } = await setup();
+    const agent = await runtime.runPromise(AgentChat);
+    const phase = await runtime.runPromise(agent.setWorkflowPhase(session.id, null, "plan"));
+    expect(phase.status).toBe(200);
+
+    const tab = openTab(runtime, session.id);
+    void tab.client.sendMessage("please be slow");
+    await until(() => provider!.adapter.invocations.length === 1, "the Plan run to start");
+    const running = await statusOf(runtime, session.id);
+    expect(running.running).not.toBeNull();
+    expect(running.actions.phases.plan).toEqual({ allowed: false, reason: "run_in_progress" });
+
+    const response = await runtime.runPromise(agent.cancel(session.id, null));
+    expect(response.status).toBe(200);
+    expect(Schema.decodeUnknownSync(Cancelled)(await response.json())).toMatchObject({
+      runId: running.running!.runId,
+      stopped: true,
+      status: "aborted",
+    });
+    const stopped = await statusOf(runtime, session.id);
+    expect(stopped.running).toBeNull();
+    expect(stopped.lastRun).toMatchObject({ runId: running.running!.runId, status: "aborted" });
+    expect(stopped.actions.phases.plan).toEqual({ allowed: true });
+    const workflows = await runtime.runPromise(Workflows);
+    expect((await runtime.runPromise(workflows.get(session.id))).phase).toBe("plan");
+    tab.client.dispose();
   });
 
   test("a second run in the same session is refused while the first is answering", async () => {
