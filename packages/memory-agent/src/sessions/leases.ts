@@ -1,4 +1,4 @@
-import { Context, Layer } from "effect";
+import { Context, Effect, Layer } from "effect";
 import type { ClaimResult, LeaseView } from "./lease-state.ts";
 
 /**
@@ -24,17 +24,45 @@ export class SessionLeases extends Context.Tag("memory-agent/SessionLeases")<
   ReturnType<typeof makeLeases>
 >() {
   static readonly layer = (ttlMs = defaultLeaseTtlMs) =>
-    Layer.sync(SessionLeases, () => makeLeases(ttlMs));
+    Layer.scoped(
+      SessionLeases,
+      Effect.gen(function* () {
+        const leases = makeLeases(ttlMs);
+        yield* Effect.forkScoped(
+          Effect.forever(
+            Effect.sleep(Math.max(1_000, ttlMs)).pipe(
+              Effect.zipRight(Effect.sync(() => leases.sweepExpired())),
+            ),
+          ),
+        );
+        return leases;
+      }),
+    );
 }
 
 export function makeLeases(ttlMs: number, now: () => number = Date.now) {
   const leases = new Map<string, Lease>();
   const live = (sessionId: string) => {
     const lease = leases.get(sessionId);
-    return lease && now() - lease.renewedAt < ttlMs ? lease : null;
+    if (!lease) return null;
+    if (now() - lease.renewedAt < ttlMs) return lease;
+    leases.delete(sessionId);
+    return null;
   };
 
   return {
+    /** Remove leases whose pages stopped renewing, including sessions nobody asks about again. */
+    sweepExpired() {
+      const current = now();
+      let removed = 0;
+      for (const [sessionId, lease] of leases)
+        if (current - lease.renewedAt >= ttlMs) {
+          leases.delete(sessionId);
+          removed += 1;
+        }
+      return removed;
+    },
+
     view(sessionId: string, holder: string | null): LeaseView {
       const lease = live(sessionId);
       if (!lease) return { state: "free" };

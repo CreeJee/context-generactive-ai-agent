@@ -6,7 +6,7 @@ import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
 import { canonicalPath } from "../files/paths.ts";
 import { Projects } from "../projects/projects.ts";
-import { SecretRedactor } from "../secrets/redactor.ts";
+import { SecretRedactor, type SecretRedactionFailed } from "../secrets/redactor.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { BulkNodes } from "./bulk.ts";
 import type { ImportSourceName, TranscriptItem, TranscriptStart } from "./items.ts";
@@ -73,7 +73,9 @@ const make = (home: string) =>
       Effect.map(redactor.redactText(text), (redaction) => redaction.text);
 
     /** An item as memory may keep it: its text and the files or URLs it names, secrets hidden. */
-    const hideSecrets = (item: TranscriptItem): Effect.Effect<TranscriptItem> => {
+    const hideSecrets = (
+      item: TranscriptItem,
+    ): Effect.Effect<TranscriptItem, SecretRedactionFailed> => {
       switch (item.kind) {
         case "session":
         case "ignored":
@@ -285,7 +287,9 @@ const make = (home: string) =>
             const outcome = yield* migrate(transcript, interpret).pipe(
               Effect.map((written) => ({ written, failed: 0 })),
               Effect.catchAllCause((cause) =>
-                Effect.as(recordFailure(transcript, cause), { written: 0, failed: 1 }),
+                Cause.isInterruptedOnly(cause)
+                  ? Effect.failCause(cause)
+                  : Effect.as(recordFailure(transcript, cause), { written: 0, failed: 1 }),
               ),
             );
             progress = {

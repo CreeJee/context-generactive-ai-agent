@@ -22,6 +22,15 @@ async function until(condition: () => boolean, what: string) {
   throw new Error(`timed out waiting for ${what}`);
 }
 
+const processAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 /** An `mcp.json` / `.mcp.json` file as tests write it, including entries the app must reject. */
 interface McpJson {
   readonly mcpServers: Readonly<
@@ -52,11 +61,42 @@ async function mcpSetup() {
     env: { FAKE_MCP_LOG: log, ...extraEnv },
   });
   const servers = await context.runtime.runPromise(McpServers);
-  const run = <A>(effect: Effect.Effect<A>) => context.runtime.runPromise(effect);
+  const run = <A, E>(effect: Effect.Effect<A, E>) => context.runtime.runPromise(effect);
   return { ...context, log, starts, fakeEntry, servers, run };
 }
 
 describe("MCP servers", () => {
+  test("concurrent discovery shares one tools/list request", async () => {
+    const { project, fakeEntry, servers, run } = await mcpSetup();
+    const listLog = join(project.root, "mcp-lists.log");
+    writeJson(join(project.root, ".mcp.json"), {
+      mcpServers: { fake: fakeEntry({ FAKE_MCP_LIST_LOG: listLog }) },
+    });
+    await run(servers.setTrusted(project, "project", "fake", true));
+    const before = readFileSync(listLog, "utf8").trim().split("\n").length;
+
+    const [left, right] = await Promise.all([
+      run(servers.tools(project)),
+      run(servers.tools(project)),
+    ]);
+
+    expect(left.map((tool) => tool.name)).toEqual(right.map((tool) => tool.name));
+    expect(readFileSync(listLog, "utf8").trim().split("\n")).toHaveLength(before + 1);
+  });
+
+  test("removing a configured server closes its live process", async () => {
+    const { project, log, fakeEntry, servers, run } = await mcpSetup();
+    const config = join(project.root, ".mcp.json");
+    writeJson(config, { mcpServers: { fake: fakeEntry() } });
+    await run(servers.setTrusted(project, "project", "fake", true));
+    const pid = Number(readFileSync(log, "utf8").trim().split(" ")[1]);
+    writeJson(config, { mcpServers: {} });
+
+    expect((await run(servers.overview(project))).servers).toEqual([]);
+    await until(() => !processAlive(pid), "the removed MCP server to stop");
+    expect(await run(servers.tools(project))).toEqual([]);
+  });
+
   test("configured servers start only after the user trusts that exact configuration", async () => {
     const { project, storage, starts, fakeEntry, servers, run } = await mcpSetup();
     writeJson(join(storage, "mcp.json"), {

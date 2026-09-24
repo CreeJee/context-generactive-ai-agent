@@ -45,7 +45,7 @@ const toolRequest = JSON.stringify({
   store: false,
 });
 
-const harness = new OAuthValidationHarness({ protocol: providerProtocols.openai });
+const harness = OAuthValidationHarness({ protocol: providerProtocols.openai });
 let attempt: Awaited<ReturnType<typeof harness.startLogin>> | null = null;
 
 const cancel = () => attempt?.cancel();

@@ -7,7 +7,7 @@ export {
   workspaceInstructions,
 } from "./agent/chat.ts";
 export { sessionMessages } from "./agent/history.ts";
-export { LiveRuns, type LiveRun } from "./agent/live-runs.ts";
+export { createLiveRuns, type LiveRun, type LiveRuns } from "./agent/live-runs.ts";
 export {
   contextUsageEvent,
   serverRestartedCode,

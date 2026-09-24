@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Context, Data, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import { Nodes } from "./nodes.ts";
 
@@ -91,11 +91,29 @@ const decodeCandidateEvidence = Schema.decodeUnknownSync(Schema.Array(CandidateE
 const decodeCandidateIdentities = Schema.decodeUnknownSync(Schema.Array(CandidateIdentityRow));
 const decodeUsage = Schema.decodeUnknownSync(Schema.Array(UsageRow));
 
-const cleanText = (text: string, field: string) => {
-  const value = text.trim();
-  if (!value) throw new Error(`${field} must not be empty`);
-  return value;
+type MemoryPromotionReason =
+  | "empty_proposed_text"
+  | "empty_resolved_text"
+  | "missing_user_authorization"
+  | "claim_not_adopted"
+  | "evidence_not_adopted";
+
+const promotionMessages: Readonly<Record<MemoryPromotionReason, string>> = {
+  empty_proposed_text: "proposedText must not be empty",
+  empty_resolved_text: "resolvedText must not be empty",
+  missing_user_authorization: "Memory promotion requires the current user turn as authorization",
+  claim_not_adopted: "Memory promotion source is not an adopted final-answer claim",
+  evidence_not_adopted: "Memory promotion evidence must be verified and adopted by the claim",
 };
+
+export class MemoryPromotionRejected extends Data.TaggedError("MemoryPromotionRejected")<{
+  readonly reason: MemoryPromotionReason;
+  readonly message: string;
+}> {
+  constructor(input: { readonly reason: MemoryPromotionReason }) {
+    super({ reason: input.reason, message: promotionMessages[input.reason] });
+  }
+}
 
 const make = Effect.gen(function* () {
   const { sqlite, atomic } = yield* Database;
@@ -153,88 +171,103 @@ const make = Effect.gen(function* () {
     return toView(row);
   };
 
-  function promote(input: PromoteMemoryInput): MemoryCandidateView {
-    const proposedText = cleanText(input.proposedText, "proposedText");
-    const resolvedText = cleanText(input.resolvedText, "resolvedText");
-    const userNode = nodes.get(input.authorizedByUserNodeId);
-    if (
-      !userNode ||
-      userNode.kind !== "user" ||
-      userNode.projectId !== input.projectId ||
-      userNode.sessionId !== input.sessionId
-    )
-      throw new Error("Memory promotion requires the current user turn as authorization");
-    const claimRow = claimSource.get(input.claimId, input.projectId, input.taskId, input.attemptId);
-    if (!claimRow) throw new Error("Memory promotion source is not an adopted final-answer claim");
-    const claim = decodeClaimSource(claimRow);
-    for (const evidenceRefId of new Set(input.evidenceRefIds))
-      if (!evidenceSource.get(input.claimId, input.taskId, input.attemptId, evidenceRefId))
-        throw new Error("Memory promotion evidence must be verified and adopted by the claim");
-    const status: MemoryDisposition =
-      input.disposition === "reject"
-        ? "rejected"
-        : input.disposition === "conversation_only"
-          ? "conversation_only"
-          : proposedText === resolvedText
-            ? "saved"
-            : "edited_saved";
+  const promote = (input: PromoteMemoryInput) =>
+    Effect.gen(function* () {
+      const proposedText = input.proposedText.trim();
+      if (!proposedText)
+        return yield* new MemoryPromotionRejected({ reason: "empty_proposed_text" });
+      const resolvedText = input.resolvedText.trim();
+      if (!resolvedText)
+        return yield* new MemoryPromotionRejected({ reason: "empty_resolved_text" });
+      const userNode = nodes.get(input.authorizedByUserNodeId);
+      if (
+        !userNode ||
+        userNode.kind !== "user" ||
+        userNode.projectId !== input.projectId ||
+        userNode.sessionId !== input.sessionId
+      )
+        return yield* new MemoryPromotionRejected({ reason: "missing_user_authorization" });
+      const claimRow = claimSource.get(
+        input.claimId,
+        input.projectId,
+        input.taskId,
+        input.attemptId,
+      );
+      if (!claimRow) return yield* new MemoryPromotionRejected({ reason: "claim_not_adopted" });
+      const claim = decodeClaimSource(claimRow);
+      for (const evidenceRefId of new Set(input.evidenceRefIds))
+        if (!evidenceSource.get(input.claimId, input.taskId, input.attemptId, evidenceRefId))
+          return yield* new MemoryPromotionRejected({ reason: "evidence_not_adopted" });
+      const status: MemoryDisposition =
+        input.disposition === "reject"
+          ? "rejected"
+          : input.disposition === "conversation_only"
+            ? "conversation_only"
+            : proposedText === resolvedText
+              ? "saved"
+              : "edited_saved";
 
-    return atomic(() => {
-      const found = existing.get(input.claimId, input.authorizedByUserNodeId, resolvedText, status);
-      if (found) return candidateByDecision(decodeExisting(found).id);
-      const decisionId = randomUUID();
-      const candidateId = randomUUID();
-      const createdAt = Date.now();
-      const memoryNode =
-        status === "saved" || status === "edited_saved"
-          ? nodes.append({
-              projectId: input.projectId,
-              sessionId: null,
-              kind: "topic",
-              text: resolvedText,
-              detail: { memoryCandidateId: candidateId, authorizedByUserNodeId: userNode.id },
-            })
-          : null;
-      sqlite
-        .prepare(`INSERT INTO knowledge_decisions
+      return atomic(() => {
+        const found = existing.get(
+          input.claimId,
+          input.authorizedByUserNodeId,
+          resolvedText,
+          status,
+        );
+        if (found) return candidateByDecision(decodeExisting(found).id);
+        const decisionId = randomUUID();
+        const candidateId = randomUUID();
+        const createdAt = Date.now();
+        const memoryNode =
+          status === "saved" || status === "edited_saved"
+            ? nodes.append({
+                projectId: input.projectId,
+                sessionId: null,
+                kind: "topic",
+                text: resolvedText,
+                detail: { memoryCandidateId: candidateId, authorizedByUserNodeId: userNode.id },
+              })
+            : null;
+        sqlite
+          .prepare(`INSERT INTO knowledge_decisions
         (id, project_id, task_id, attempt_id, claim_id, origin_session_id,
          authorized_by_user_node_id, authorized_by_user_node_id_snapshot, text, status, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(
-          decisionId,
-          input.projectId,
-          input.taskId,
-          input.attemptId,
-          input.claimId,
-          claim.origin_session_id,
-          userNode.id,
-          userNode.id,
-          resolvedText,
-          status,
-          createdAt,
-        );
-      sqlite
-        .prepare(`INSERT INTO memory_candidates
+          .run(
+            decisionId,
+            input.projectId,
+            input.taskId,
+            input.attemptId,
+            input.claimId,
+            claim.origin_session_id,
+            userNode.id,
+            userNode.id,
+            resolvedText,
+            status,
+            createdAt,
+          );
+        sqlite
+          .prepare(`INSERT INTO memory_candidates
         (id, decision_id, project_id, proposed_text, resolved_text, disposition, memory_node_id, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(
-          candidateId,
-          decisionId,
-          input.projectId,
-          proposedText,
-          resolvedText,
-          status,
-          memoryNode?.id ?? null,
-          createdAt,
-        );
-      const addEvidence = sqlite.prepare(`INSERT INTO memory_candidate_evidence
+          .run(
+            candidateId,
+            decisionId,
+            input.projectId,
+            proposedText,
+            resolvedText,
+            status,
+            memoryNode?.id ?? null,
+            createdAt,
+          );
+        const addEvidence = sqlite.prepare(`INSERT INTO memory_candidate_evidence
         (candidate_id, evidence_ref_id, evidence_ref_id_snapshot, source_deleted_at)
         VALUES (?, ?, ?, NULL)`);
-      for (const evidenceRefId of new Set(input.evidenceRefIds))
-        addEvidence.run(candidateId, evidenceRefId, evidenceRefId);
-      return candidateByDecision(decisionId);
+        for (const evidenceRefId of new Set(input.evidenceRefIds))
+          addEvidence.run(candidateId, evidenceRefId, evidenceRefId);
+        return candidateByDecision(decisionId);
+      });
     });
-  }
 
   const recordRetrieval = (input: {
     readonly projectId: string;

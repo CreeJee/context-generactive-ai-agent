@@ -32,6 +32,11 @@ export class AttachmentRejected extends Data.TaggedError("AttachmentRejected")<{
   readonly reason: "empty" | "too_large" | "unsupported_type";
 }> {}
 
+export class AttachmentStorageFailed extends Data.TaggedError("AttachmentStorageFailed")<{
+  readonly operation: "save" | "purge" | "convert";
+  readonly cause: unknown;
+}> {}
+
 const AttachmentRow = Schema.Struct({
   id: Schema.String,
   mime_type: AttachmentMimeType,
@@ -92,26 +97,6 @@ const extensions = new Map<AttachmentMimeType, string>([
   ["image/webp", "webp"],
 ]);
 
-/** Minimal FIFO semaphore: queued closures hold no image buffers, only their attachment metadata. */
-function conversionQueue(limit: number) {
-  let active = 0;
-  const waiting: Array<() => void> = [];
-  const release = () => {
-    const next = waiting.shift();
-    if (next) next();
-    else active -= 1;
-  };
-  return async <Value>(task: () => Promise<Value>): Promise<Value> => {
-    if (active >= limit) await new Promise<void>((resolve) => waiting.push(resolve));
-    else active += 1;
-    try {
-      return await task();
-    } finally {
-      release();
-    }
-  };
-}
-
 const make = Effect.gen(function* () {
   const { sqlite } = yield* Database;
   const storage = yield* StorageRoot;
@@ -138,12 +123,12 @@ const make = Effect.gen(function* () {
     return row ? toAttachment(row) : null;
   };
 
-  const runConversion = conversionQueue(maxConcurrentImageConversions);
-  const inFlightConversions = new Map<string, Promise<ModelImage>>();
+  const conversionPermits = yield* Effect.makeSemaphore(maxConcurrentImageConversions);
 
   /**
    * Fits an image into an adaptive WebP budget. A disk marker remembers that conversion brought no
-   * benefit; memory retains only conversions that are currently running. GIFs keep their animation.
+   * benefit. GIFs keep their animation. Concurrent conversions use distinct temporary files and
+   * atomically publish the same content-addressed copy.
    */
   const encodeForModel = async (attachment: Attachment): Promise<ModelImage> => {
     const upload: ModelImage = { path: fileOf(attachment), mimeType: attachment.mimeType };
@@ -156,30 +141,37 @@ const make = Effect.gen(function* () {
     if (existingCopy) await rm(copy, { force: true });
     if (await stat(noCopy).catch(() => undefined)) return upload;
     try {
-      const encoded = await runConversion(async () => {
-        const sharp = requireRuntime("sharp");
-        const attempts = [
-          { edge: modelImageEdge, quality: 86 },
-          { edge: 1600, quality: 78 },
-          { edge: 1280, quality: 70 },
-          { edge: 1024, quality: 64 },
-        ] as const;
-        let candidate: Uint8Array = new Uint8Array();
-        for (const attempt of attempts) {
-          candidate = await sharp(upload.path)
-            .rotate()
-            .resize({
-              width: attempt.edge,
-              height: attempt.edge,
-              fit: "inside",
-              withoutEnlargement: true,
-            })
-            .webp({ quality: attempt.quality, smartSubsample: true })
-            .toBuffer();
-          if (candidate.length <= maxModelImageBytes) break;
-        }
-        return candidate;
-      });
+      const encoded = await Effect.runPromise(
+        conversionPermits.withPermits(1)(
+          Effect.tryPromise({
+            try: async () => {
+              const sharp = requireRuntime("sharp");
+              const attempts = [
+                { edge: modelImageEdge, quality: 86 },
+                { edge: 1600, quality: 78 },
+                { edge: 1280, quality: 70 },
+                { edge: 1024, quality: 64 },
+              ] as const;
+              let candidate: Uint8Array = new Uint8Array();
+              for (const attempt of attempts) {
+                candidate = await sharp(upload.path)
+                  .rotate()
+                  .resize({
+                    width: attempt.edge,
+                    height: attempt.edge,
+                    fit: "inside",
+                    withoutEnlargement: true,
+                  })
+                  .webp({ quality: attempt.quality, smartSubsample: true })
+                  .toBuffer();
+                if (candidate.length <= maxModelImageBytes) break;
+              }
+              return candidate;
+            },
+            catch: (cause) => new AttachmentStorageFailed({ operation: "convert", cause }),
+          }),
+        ),
+      );
       if (encoded.length >= attachment.bytes) {
         await writeFile(noCopy, "", { mode: 0o600 });
         return upload;
@@ -197,18 +189,7 @@ const make = Effect.gen(function* () {
     }
   };
 
-  const forModel = (attachment: Attachment) => {
-    const known = inFlightConversions.get(attachment.id);
-    if (known) return known;
-    const made = encodeForModel(attachment);
-    inFlightConversions.set(attachment.id, made);
-    const forget = () => {
-      if (inFlightConversions.get(attachment.id) === made)
-        inFlightConversions.delete(attachment.id);
-    };
-    void made.then(forget, forget);
-    return made;
-  };
+  const forModel = encodeForModel;
 
   /**
    * Stores an image by content hash (storing the same image twice keeps one copy). The type comes
@@ -229,16 +210,19 @@ const make = Effect.gen(function* () {
         createdAt: new Date().toISOString(),
       };
       const path = fileOf(attachment);
-      yield* Effect.promise(async () => {
-        const existing = await stat(path).catch(() => undefined);
-        if (existing?.size === bytes.length) return;
-        const temporary = `${path}.${randomUUID()}.tmp`;
-        try {
-          await writeFile(temporary, bytes, { mode: 0o600, flag: "wx" });
-          await rename(temporary, path);
-        } finally {
-          await rm(temporary, { force: true });
-        }
+      yield* Effect.tryPromise({
+        try: async () => {
+          const existing = await stat(path).catch(() => undefined);
+          if (existing?.size === bytes.length) return;
+          const temporary = `${path}.${randomUUID()}.tmp`;
+          try {
+            await writeFile(temporary, bytes, { mode: 0o600, flag: "wx" });
+            await rename(temporary, path);
+          } finally {
+            await rm(temporary, { force: true });
+          }
+        },
+        catch: (cause) => new AttachmentStorageFailed({ operation: "save", cause }),
       });
       insertAttachment.run(
         attachment.id,
@@ -309,23 +293,26 @@ const make = Effect.gen(function* () {
     forNode: (nodeId: string): Attachment[] => selectForNode.all(nodeId).map(toAttachment),
 
     /** Removes content-addressed blobs only after their last message reference is gone. */
-    purgeOrphans: Effect.promise(async () => {
-      const orphaned = sqlite
-        .prepare(
-          `SELECT a.* FROM attachments a
+    purgeOrphans: Effect.tryPromise({
+      try: async () => {
+        const orphaned = sqlite
+          .prepare(
+            `SELECT a.* FROM attachments a
            WHERE NOT EXISTS (SELECT 1 FROM node_attachments n WHERE n.attachment_id = a.id)`,
-        )
-        .all()
-        .map(toAttachment);
-      for (const attachment of orphaned) {
-        sqlite.prepare("DELETE FROM attachments WHERE id = ?").run(attachment.id);
-        await Promise.all([
-          rm(fileOf(attachment), { force: true }),
-          rm(join(directory, `${attachment.id}.model.webp`), { force: true }),
-          rm(join(directory, `${attachment.id}.model-original`), { force: true }),
-        ]);
-      }
-      return orphaned.length;
+          )
+          .all()
+          .map(toAttachment);
+        for (const attachment of orphaned) {
+          sqlite.prepare("DELETE FROM attachments WHERE id = ?").run(attachment.id);
+          await Promise.all([
+            rm(fileOf(attachment), { force: true }),
+            rm(join(directory, `${attachment.id}.model.webp`), { force: true }),
+            rm(join(directory, `${attachment.id}.model-original`), { force: true }),
+          ]);
+        }
+        return orphaned.length;
+      },
+      catch: (cause) => new AttachmentStorageFailed({ operation: "purge", cause }),
     }),
   };
 });

@@ -12,8 +12,8 @@ const testLayer = () => {
   const knowledge = KnowledgePromotions.layer.pipe(Layer.provide(nodes), Layer.provide(database));
   return Layer.mergeAll(database, nodes, trace, knowledge);
 };
-const run = <A>(
-  effect: Effect.Effect<A, never, Database | Nodes | WorkTraceStore | KnowledgePromotions>,
+const run = <A, E>(
+  effect: Effect.Effect<A, E, Database | Nodes | WorkTraceStore | KnowledgePromotions>,
 ) => Effect.runPromise(Effect.scoped(effect.pipe(Effect.provide(testLayer()))));
 
 const seed = (db: Database["Type"]) => {
@@ -84,7 +84,7 @@ describe("Work Trace knowledge promotion", () => {
           reflectedNotificationIds: [],
         });
 
-        expect(() =>
+        const rejected = yield* Effect.flip(
           knowledge.promote({
             projectId: "p1",
             sessionId: "s1",
@@ -97,9 +97,13 @@ describe("Work Trace knowledge promotion", () => {
             resolvedText: "Use SQLite.",
             disposition: "save",
           }),
-        ).toThrow("verified and adopted");
+        );
+        expect(rejected).toMatchObject({
+          _tag: "MemoryPromotionRejected",
+          reason: "evidence_not_adopted",
+        });
 
-        const candidate = knowledge.promote({
+        const candidate = yield* knowledge.promote({
           projectId: "p1",
           sessionId: "s1",
           authorizedByUserNodeId: user.id,
@@ -212,9 +216,11 @@ describe("Work Trace knowledge promotion", () => {
           resolvedText: "Temporary conclusion",
         };
         expect(
-          knowledge.promote({ ...common, disposition: "conversation_only" }).memoryNodeId,
+          (yield* knowledge.promote({ ...common, disposition: "conversation_only" })).memoryNodeId,
         ).toBeNull();
-        expect(knowledge.promote({ ...common, disposition: "reject" }).memoryNodeId).toBeNull();
+        expect(
+          (yield* knowledge.promote({ ...common, disposition: "reject" })).memoryNodeId,
+        ).toBeNull();
         expect(
           db.sqlite.prepare("SELECT count(*) AS count FROM nodes WHERE kind = 'topic'").get(),
         ).toEqual({ count: 0 });

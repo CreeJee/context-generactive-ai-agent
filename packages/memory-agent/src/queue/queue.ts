@@ -59,8 +59,7 @@ const make = Effect.gen(function* () {
   const { sqlite } = yield* Database;
   const now = () => Date.now();
   // All queue methods and SQLite statements here are synchronous within this service instance.
-  const reservations = new Map<string, string>();
-  const holdOnRelease = new Set<string>();
+  const reservations = new Map<string, { readonly id: string; readonly holdOnRelease: boolean }>();
   const get = (sessionId: string, id: string) => {
     const row = sqlite
       .prepare("SELECT * FROM queued_messages WHERE session_id = ? AND id = ?")
@@ -72,7 +71,7 @@ const make = Effect.gen(function* () {
     Effect.suspend(() => {
       const message = get(sessionId, id);
       if (!message) return Effect.fail(new QueueChangeRefused({ id, reason: "not_found" }));
-      if (reservations.get(sessionId) === id)
+      if (reservations.get(sessionId)?.id === id)
         return Effect.fail(new QueueChangeRefused({ id, reason: "reserved" }));
       if (message.state.kind === "delivered")
         return Effect.fail(new QueueChangeRefused({ id, reason: "delivered" }));
@@ -211,14 +210,15 @@ const make = Effect.gen(function* () {
         )
         .get(sessionId);
       const message = row && row.state === "waiting" ? toMessage(row) : null;
-      if (message) reservations.set(sessionId, message.id);
+      if (message) reservations.set(sessionId, { id: message.id, holdOnRelease: false });
       return message;
     },
 
     releaseNext(sessionId: string, id: string) {
-      if (reservations.get(sessionId) !== id) return;
+      const reservation = reservations.get(sessionId);
+      if (reservation?.id !== id) return;
       reservations.delete(sessionId);
-      if (holdOnRelease.delete(sessionId)) setState(id, "held");
+      if (reservation.holdOnRelease) setState(id, "held");
     },
 
     markDelivered(id: string, via: DeliveryVia, runId: string | null, inTranscript: boolean) {
@@ -227,10 +227,9 @@ const make = Effect.gen(function* () {
           "UPDATE queued_messages SET state = 'delivered', delivered_via = ?, run_id = ?, in_transcript = ?, draft = NULL, updated_at = ? WHERE id = ?",
         )
         .run(via, runId, inTranscript ? 1 : 0, now(), id);
-      for (const [sessionId, reservedId] of reservations)
-        if (reservedId === id) {
+      for (const [sessionId, reservation] of reservations)
+        if (reservation.id === id) {
           reservations.delete(sessionId);
-          holdOnRelease.delete(sessionId);
         }
     },
 
@@ -261,12 +260,12 @@ const make = Effect.gen(function* () {
       // A selected next turn is locked until committed or released. Holding it here would allow a
       // different state to be delivered from the content already selected for this request.
       const reserved = reservations.get(sessionId);
-      if (reserved) holdOnRelease.add(sessionId);
+      if (reserved) reservations.set(sessionId, { ...reserved, holdOnRelease: true });
       sqlite
         .prepare(
           "UPDATE queued_messages SET state = 'held', updated_at = ? WHERE session_id = ? AND state = 'waiting' AND id != ?",
         )
-        .run(now(), sessionId, reserved ?? "");
+        .run(now(), sessionId, reserved?.id ?? "");
     },
   };
 });

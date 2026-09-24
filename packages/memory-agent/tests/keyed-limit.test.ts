@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Deferred, Effect, Fiber } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { keyedSerialLimit } from "../src/concurrency/keyed-limit.ts";
 
@@ -38,5 +38,28 @@ describe("keyedSerialLimit", () => {
     expect(peak.get("a")).toBe(1);
     expect(peak.get("b")).toBe(1);
     expect(globalPeak).toBeGreaterThan(1);
+  });
+
+  test("an interrupted holder releases its key for a waiting job", async () => {
+    const limit = keyedSerialLimit();
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const first = yield* Effect.fork(
+          limit(
+            "agent",
+            Effect.gen(function* () {
+              yield* Deferred.succeed(started, undefined);
+              yield* Effect.never;
+            }),
+          ),
+        );
+        yield* Deferred.await(started);
+        const second = yield* Effect.fork(limit("agent", Effect.succeed("continued")));
+        yield* Fiber.interrupt(first);
+        return yield* Fiber.join(second);
+      }),
+    );
+    expect(result).toBe("continued");
   });
 });

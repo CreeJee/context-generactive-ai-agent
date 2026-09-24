@@ -1,5 +1,5 @@
 import type { ChatMiddleware, ContentPart, ModelMessage } from "@tanstack/ai";
-import { Context, Effect, Layer } from "effect";
+import { Context, Data, Effect, Layer } from "effect";
 import { Attachments } from "../attachments/attachments.ts";
 import { attachmentUrl } from "../attachments/urls.ts";
 import { ChatState } from "../chat-state/chat-state.ts";
@@ -18,6 +18,11 @@ export interface DeliveryBinding {
 }
 
 export { queueDeliveredEvent };
+
+export class QueueSteerFailed extends Data.TaggedError("QueueSteerFailed")<{
+  readonly sessionId: string;
+  readonly cause: unknown;
+}> {}
 
 const make = Effect.gen(function* () {
   const queue = yield* MessageQueue;
@@ -87,7 +92,10 @@ const make = Effect.gen(function* () {
      */
     steer: (binding: DeliveryBinding, message: QueuedMessage) =>
       Effect.flatMap(active.runtime(binding.selection), (runtime) =>
-        Effect.tryPromise(() => runtime.steer(binding.sessionId, toUserMessage(message))),
+        Effect.tryPromise({
+          try: () => runtime.steer(binding.sessionId, toUserMessage(message)),
+          catch: (cause) => new QueueSteerFailed({ sessionId: binding.sessionId, cause }),
+        }),
       ).pipe(
         Effect.tap((outcome) => {
           if (outcome !== "steered") return Effect.void;

@@ -1020,4 +1020,18 @@ export const migrations: readonly string[] = [
   );
   CREATE INDEX api_usage_responses_session ON api_usage_responses(root_session_id, id);
   `,
+  `
+  -- A cancelled or stopped session keeps child notifications for the next explicit user turn.
+  -- This is workflow policy, so it survives a server restart without a process-wide Set.
+  CREATE TABLE parent_notification_holds (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    held_at INTEGER NOT NULL
+  );
+  `,
+  `
+  -- Compaction asks for individual tool results; avoid scanning a session's full result history.
+  CREATE INDEX nodes_tool_result_call
+    ON nodes(session_id, json_extract(detail, '$.toolCallId'), seq)
+    WHERE kind = 'tool_result';
+  `,
 ];

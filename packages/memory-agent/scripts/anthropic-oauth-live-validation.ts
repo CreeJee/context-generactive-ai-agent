@@ -35,7 +35,7 @@ const toolRequest = JSON.stringify({
   tool_choice: { type: "tool", name: "echo_probe" },
 });
 
-const harness = new OAuthValidationHarness({ protocol: providerProtocols.anthropic });
+const harness = OAuthValidationHarness({ protocol: providerProtocols.anthropic });
 let attempt: Awaited<ReturnType<typeof harness.startLogin>> | null = null;
 
 const cancel = () => attempt?.cancel();

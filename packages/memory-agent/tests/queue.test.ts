@@ -68,7 +68,7 @@ async function setup() {
   const context = await testRuntime({ testProvider: {} });
   await context.provider!.select(context.runtime);
   const agent = await context.runtime.runPromise(AgentChat);
-  const run = <A>(effect: Effect.Effect<A>) => context.runtime.runPromise(effect);
+  const run = <A, E>(effect: Effect.Effect<A, E>) => context.runtime.runPromise(effect);
   const enqueue = async (text: string, mode: "queue" | "steer", holder: string | null = null) => {
     const response = await run(
       agent.enqueue(context.session.id, holder, { text, attachmentIds: [], mode }),

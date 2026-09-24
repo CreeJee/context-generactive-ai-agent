@@ -325,29 +325,32 @@ const makeLocal = (setup: ModelSetup, purpose: LocalPurpose) =>
  * afterwards. Downloads that model file first when it is not cached yet.
  */
 export const checkGpu = (storageRoot: string) =>
-  Effect.promise(async (): Promise<GpuCheck> => {
-    const model = modelWorker(join(storageRoot, "models"), {
-      variant: "fp32",
-      devices: ["webgpu"],
-    });
-    try {
-      await model.embed(["준비"]);
-      return model.device() === "webgpu"
-        ? { status: "available", checkedAt: new Date().toISOString() }
-        : {
-            status: "unavailable",
-            checkedAt: new Date().toISOString(),
-            reason: "no WebGPU device",
-          };
-    } catch (error) {
-      return {
-        status: "unavailable",
-        checkedAt: new Date().toISOString(),
-        reason: (error instanceof Error ? error.message : String(error)).slice(0, 300),
-      };
-    } finally {
-      await model.stop("GPU check done");
-    }
+  Effect.tryPromise({
+    try: async (): Promise<GpuCheck> => {
+      const model = modelWorker(join(storageRoot, "models"), {
+        variant: "fp32",
+        devices: ["webgpu"],
+      });
+      try {
+        await model.embed(["준비"]);
+        return model.device() === "webgpu"
+          ? { status: "available", checkedAt: new Date().toISOString() }
+          : {
+              status: "unavailable",
+              checkedAt: new Date().toISOString(),
+              reason: "no WebGPU device",
+            };
+      } catch (error) {
+        return {
+          status: "unavailable",
+          checkedAt: new Date().toISOString(),
+          reason: (error instanceof Error ? error.message : String(error)).slice(0, 300),
+        };
+      } finally {
+        await model.stop("GPU check done");
+      }
+    },
+    catch: (cause) => new EmbeddingError({ cause }),
   });
 
 export class Embedder extends Context.Tag("memory-agent/Embedder")<Embedder, EmbedderApi>() {

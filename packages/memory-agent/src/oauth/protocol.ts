@@ -1,22 +1,24 @@
 import { createHash, randomBytes } from "node:crypto";
-import { Option, Schema } from "effect";
+import { Data, Option, Schema } from "effect";
 import { JsonValue } from "../json.ts";
 
 export { JsonValue } from "../json.ts";
 
 export type OAuthProvider = "openai" | "anthropic";
 
-export class ProviderFeatureRejectedError extends Error {
+export class ProviderFeatureRejectedError extends Data.TaggedError("ProviderFeatureRejectedError")<{
   readonly provider: OAuthProvider;
   readonly feature: "prompt-cache";
   readonly status: number | null;
-
+  readonly message: string;
+}> {
   constructor(provider: OAuthProvider, feature: "prompt-cache", status: number | null = null) {
-    super(`${provider} rejected the ${feature} request feature.`);
-    this.name = "ProviderFeatureRejectedError";
-    this.provider = provider;
-    this.feature = feature;
-    this.status = status;
+    super({
+      provider,
+      feature,
+      status,
+      message: `${provider} rejected the ${feature} request feature.`,
+    });
   }
 }
 

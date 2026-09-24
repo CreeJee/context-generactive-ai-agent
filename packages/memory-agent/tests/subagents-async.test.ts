@@ -367,6 +367,27 @@ describe("asynchronous subagents", () => {
     expect(after).toEqual(before);
   });
 
+  test("a held parent notification stays out of automatic follow-up after restart", async () => {
+    const { send, reopen, trace, session } = await setup();
+    const receipt = receiptFrom(await send("dispatch only"));
+    trace.holdParentNotifications(session.id);
+    const notificationId = trace.notifyParent({
+      taskId: receipt.taskId,
+      kind: "completed",
+      summary: "Wait for an explicit user turn",
+      idempotencyKey: "held-notification",
+    });
+    expect(notificationId).not.toBeNull();
+    expect(trace.pendingParentNotificationSessions()).not.toContain(session.id);
+
+    const reopened = await reopen();
+    const reopenedTrace = await reopened.runPromise(WorkTraceStore);
+    expect(reopenedTrace.parentNotificationsHeld(session.id)).toBe(true);
+    expect(reopenedTrace.pendingParentNotificationSessions()).not.toContain(session.id);
+    reopenedTrace.resumeParentNotifications(session.id);
+    expect(reopenedTrace.pendingParentNotificationSessions()).toContain(session.id);
+  });
+
   test("service disposal aborts and checkpoints background children", async () => {
     const { send, reopen, session } = await setup();
     const receipt = receiptFrom(await send("dispatch only"));

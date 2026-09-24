@@ -1,5 +1,5 @@
 import type { UIMessage } from "@tanstack/ai-client";
-import { Either, ParseResult, Schema } from "effect";
+import { Data, Either, ParseResult, Schema } from "effect";
 import { sessionHolderHeader } from "../sessions/lease-state.ts";
 
 /** Where the running app is, unless `CONTEXT_AGENT_URL` says otherwise. */
@@ -26,14 +26,13 @@ export type ProjectSummary = typeof ProjectSummary.Type;
 export type SessionSummary = typeof SessionSummary.Type;
 
 /** The app answered with an error, or could not be reached (`unreachable`). */
-export class AppRequestFailed extends Error {
+export class AppRequestFailed extends Data.TaggedError("AppRequestFailed")<{
   readonly status: number;
   readonly code: string;
-
+  readonly message: string;
+}> {
   constructor(status: number, code: string) {
-    super(`${code} (${status})`);
-    this.status = status;
-    this.code = code;
+    super({ status, code, message: `${code} (${status})` });
   }
 }
 
@@ -42,20 +41,15 @@ export class AppRequestFailed extends Error {
  * keeps the database, the vector index and the ChatGPT connection, so sessions started from an
  * editor are the same sessions the web page shows.
  */
-export class AppApi {
-  readonly baseUrl: string;
-  readonly #fetcher: typeof fetch;
-
-  // Plain fields, not parameter properties: the bin runs this file with Node's type stripping.
-  constructor(baseUrl: string, fetcher: typeof fetch = fetch) {
-    this.baseUrl = baseUrl;
-    this.#fetcher = fetcher;
-  }
-
-  async #call<A, I>(schema: Schema.Schema<A, I>, path: string, init: RequestInit = {}): Promise<A> {
+export function createAppApi(baseUrl: string, fetcher: typeof fetch = fetch) {
+  const call = async <A, I>(
+    schema: Schema.Schema<A, I>,
+    path: string,
+    init: RequestInit = {},
+  ): Promise<A> => {
     let response: Response;
     try {
-      response = await this.#fetcher(`${this.baseUrl}${path}`, init);
+      response = await fetcher(`${baseUrl}${path}`, init);
     } catch {
       throw new AppRequestFailed(0, "unreachable");
     }
@@ -64,7 +58,10 @@ export class AppApi {
       const code = Schema.decodeUnknownEither(ErrorBody)(json);
       throw new AppRequestFailed(
         response.status,
-        Either.isRight(code) ? code.right.error : "request_failed",
+        Either.match(code, {
+          onLeft: () => "request_failed",
+          onRight: (body) => body.error,
+        }),
       );
     }
     return Either.getOrElse(Schema.decodeUnknownEither(schema)(json), (error) => {
@@ -73,96 +70,86 @@ export class AppApi {
         `unexpected_response: ${ParseResult.TreeFormatter.formatErrorSync(error).split("\n")[0]}`,
       );
     });
-  }
+  };
 
-  #post(body: JsonBody, holder?: string): RequestInit {
+  const post = (body: JsonBody, holder?: string): RequestInit => {
     const headers = new Headers({ "Content-Type": "application/json" });
     if (holder) headers.set(sessionHolderHeader, holder);
     return { method: "POST", headers, body: JSON.stringify(body) };
-  }
+  };
 
-  auth() {
-    return this.#call(AuthSummary, "/api/auth");
-  }
+  return {
+    baseUrl,
+    fetcher,
 
-  projects() {
-    return this.#call(Schema.Array(ProjectSummary), "/api/projects");
-  }
+    auth: () => call(AuthSummary, "/api/auth"),
 
-  createSession(projectId: string, title: string) {
-    return this.#call(SessionSummary, "/api/sessions", this.#post({ projectId, title }));
-  }
+    projects: () => call(Schema.Array(ProjectSummary), "/api/projects"),
 
-  sessionState(sessionId: string, holder: string) {
-    return this.#call(
-      RunSummary,
-      `/api/sessions/${encodeURIComponent(sessionId)}?holder=${encodeURIComponent(holder)}`,
-    );
-  }
+    createSession: (projectId: string, title: string) =>
+      call(SessionSummary, "/api/sessions", post({ projectId, title })),
 
-  lease(sessionId: string, holder: string, action: "claim" | "release") {
-    return this.#call(
-      LeaseSummary,
-      `/api/sessions/${encodeURIComponent(sessionId)}/lease`,
-      this.#post({ holder, action }),
-    );
-  }
-
-  cancel(sessionId: string, holder: string) {
-    return this.#call(
-      Schema.Unknown,
-      `/api/sessions/${encodeURIComponent(sessionId)}/cancel`,
-      this.#post({}, holder),
-    );
-  }
-
-  /** The saved conversation, as a reloaded page gets it. */
-  async transcript(sessionId: string): Promise<UIMessage[]> {
-    const body = await this.#call(
-      Schema.Struct({ messages: Schema.Array(Schema.Unknown) }),
-      `/api/chat?session=${encodeURIComponent(sessionId)}&threadId=${encodeURIComponent(sessionId)}`,
-    );
-    // SAFETY: the app serializes UIMessage values it built itself; the bridge only reads roles,
-    // text and tool parts from them and ignores anything else.
-    return body.messages as UIMessage[];
-  }
-
-  /** Calls of subagents and external agents waiting for the user. */
-  approvals(sessionId: string) {
-    return this.#call(
-      Schema.Array(
-        Schema.Struct({
-          id: Schema.String,
-          requester: Schema.Union(
-            Schema.Struct({
-              kind: Schema.Literal("subagent"),
-              subagentId: Schema.String,
-              name: Schema.NullOr(Schema.String),
-            }),
-            Schema.Struct({ kind: Schema.Literal("external_agent"), agent: Schema.String }),
-          ),
-          toolName: Schema.String,
-          argumentsJson: Schema.String,
-        }),
+    sessionState: (sessionId: string, holder: string) =>
+      call(
+        RunSummary,
+        `/api/sessions/${encodeURIComponent(sessionId)}?holder=${encodeURIComponent(holder)}`,
       ),
-      `/api/sessions/${encodeURIComponent(sessionId)}/approvals`,
-    );
-  }
 
-  answerApproval(sessionId: string, holder: string, approvalId: string, approved: boolean) {
-    return this.#call(
-      Schema.Unknown,
-      `/api/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`,
-      this.#post({ approved }, holder),
-    );
-  }
+    lease: (sessionId: string, holder: string, action: "claim" | "release") =>
+      call(
+        LeaseSummary,
+        `/api/sessions/${encodeURIComponent(sessionId)}/lease`,
+        post({ holder, action }),
+      ),
 
-  /** The fetch every request goes through, also used for the chat stream. */
-  get fetcher() {
-    return this.#fetcher;
-  }
+    cancel: (sessionId: string, holder: string) =>
+      call(
+        Schema.Unknown,
+        `/api/sessions/${encodeURIComponent(sessionId)}/cancel`,
+        post({}, holder),
+      ),
 
-  chatUrl(sessionId: string) {
-    return `${this.baseUrl}/api/chat?session=${encodeURIComponent(sessionId)}`;
-  }
+    /** The saved conversation, as a reloaded page gets it. */
+    transcript: async (sessionId: string): Promise<UIMessage[]> => {
+      const body = await call(
+        Schema.Struct({ messages: Schema.Array(Schema.Unknown) }),
+        `/api/chat?session=${encodeURIComponent(sessionId)}&threadId=${encodeURIComponent(sessionId)}`,
+      );
+      // SAFETY: the app serializes UIMessage values it built itself; the bridge only reads roles,
+      // text and tool parts from them and ignores anything else.
+      return body.messages as UIMessage[];
+    },
+
+    /** Calls of subagents and external agents waiting for the user. */
+    approvals: (sessionId: string) =>
+      call(
+        Schema.Array(
+          Schema.Struct({
+            id: Schema.String,
+            requester: Schema.Union(
+              Schema.Struct({
+                kind: Schema.Literal("subagent"),
+                subagentId: Schema.String,
+                name: Schema.NullOr(Schema.String),
+              }),
+              Schema.Struct({ kind: Schema.Literal("external_agent"), agent: Schema.String }),
+            ),
+            toolName: Schema.String,
+            argumentsJson: Schema.String,
+          }),
+        ),
+        `/api/sessions/${encodeURIComponent(sessionId)}/approvals`,
+      ),
+
+    answerApproval: (sessionId: string, holder: string, approvalId: string, approved: boolean) =>
+      call(
+        Schema.Unknown,
+        `/api/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`,
+        post({ approved }, holder),
+      ),
+
+    chatUrl: (sessionId: string) => `${baseUrl}/api/chat?session=${encodeURIComponent(sessionId)}`,
+  };
 }
+
+export type AppApi = ReturnType<typeof createAppApi>;

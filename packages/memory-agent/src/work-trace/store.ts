@@ -2764,12 +2764,30 @@ const make = Effect.gen(function* () {
     appendEvent,
     notifyParent,
     consumeParentNotifications,
+    holdParentNotifications: (sessionId: string) =>
+      sqlite
+        .prepare(
+          `INSERT INTO parent_notification_holds (session_id, held_at)
+           SELECT id, ? FROM sessions WHERE id = ?
+           ON CONFLICT(session_id) DO UPDATE SET held_at = excluded.held_at`,
+        )
+        .run(Date.now(), sessionId),
+    resumeParentNotifications: (sessionId: string) =>
+      sqlite.prepare("DELETE FROM parent_notification_holds WHERE session_id = ?").run(sessionId),
+    parentNotificationsHeld: (sessionId: string) =>
+      sqlite
+        .prepare("SELECT 1 FROM parent_notification_holds WHERE session_id = ?")
+        .get(sessionId) !== undefined,
     /** Durable wake-up source. Reading does not mark a notification delivered. */
     pendingParentNotificationSessions: () =>
       Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ origin_session_id: Schema.String })))(
         sqlite
           .prepare(
-            "SELECT DISTINCT origin_session_id FROM parent_notifications WHERE delivered_at IS NULL AND origin_session_id IS NOT NULL",
+            `SELECT DISTINCT origin_session_id FROM parent_notifications n
+             WHERE delivered_at IS NULL AND origin_session_id IS NOT NULL
+               AND NOT EXISTS (
+                 SELECT 1 FROM parent_notification_holds h WHERE h.session_id = n.origin_session_id
+               )`,
           )
           .all(),
       ).map((row) => row.origin_session_id),

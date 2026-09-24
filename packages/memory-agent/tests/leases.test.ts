@@ -52,6 +52,18 @@ describe("session leases", () => {
     expect(leases.view("s", "tab-a")).toEqual({ state: "free" });
   });
 
+  test("expired leases are reclaimed even when their sessions are not requested again", () => {
+    let clock = 0;
+    const leases = makeLeases(100, () => clock);
+    leases.claim("old", "tab-a");
+    clock = 50;
+    leases.claim("fresh", "tab-b");
+    clock = 110;
+    expect(leases.sweepExpired()).toBe(1);
+    expect(leases.view("old", "tab-a")).toEqual({ state: "free" });
+    expect(leases.view("fresh", "tab-b")).toEqual({ state: "mine" });
+  });
+
   test("a page that does not hold the session can read it but not send, approve or cancel", async () => {
     const context = await testRuntime({ testProvider: {} });
     const { runtime, session } = context;

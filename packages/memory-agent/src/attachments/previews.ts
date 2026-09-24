@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { AnyServerTool } from "@tanstack/ai";
-import { Context, Effect, Either, Layer, Option, Schema } from "effect";
+import { Context, Data, Effect, Either, Layer, Option, Schema } from "effect";
 import { resolveProjectPath } from "../files/paths.ts";
 import type { Project } from "../projects/projects.ts";
 import { Attachments } from "./attachments.ts";
@@ -23,6 +23,11 @@ export interface DrawingPreview {
   readonly mimeType: string;
 }
 
+export class DrawingPreviewReadFailed extends Data.TaggedError("DrawingPreviewReadFailed")<{
+  readonly path: string;
+  readonly cause: unknown;
+}> {}
+
 const isDrawing = (path: string) => path.toLowerCase().endsWith(".svg");
 
 const make = Effect.gen(function* () {
@@ -35,9 +40,15 @@ const make = Effect.gen(function* () {
    */
   const previewOf = (project: Project, path: string) =>
     Effect.gen(function* () {
-      const resolved = resolveProjectPath(project.root, path, "file");
-      if (Either.isLeft(resolved)) return Option.none<DrawingPreview>();
-      const svg = yield* Effect.tryPromise(() => readFile(resolved.right.absolute));
+      const absolute = Either.match(resolveProjectPath(project.root, path, "file"), {
+        onLeft: () => null,
+        onRight: (resolved) => resolved.absolute,
+      });
+      if (absolute === null) return Option.none<DrawingPreview>();
+      const svg = yield* Effect.tryPromise({
+        try: () => readFile(absolute),
+        catch: (cause) => new DrawingPreviewReadFailed({ path, cause }),
+      });
       const picture = yield* attachments.saveDrawing(svg);
       return Option.some<DrawingPreview>({
         attachmentId: picture.id,

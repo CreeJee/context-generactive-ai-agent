@@ -129,10 +129,6 @@ export function toEdge(row: Record<string, SQLOutputValue>): Edge {
   };
 }
 
-const decodeToolResultId = Schema.decodeUnknownSync(
-  Schema.Struct({ call: Schema.String, id: Schema.String }),
-);
-
 /** Characters of original text returned per read_evidence page. */
 export const evidencePageLength = 4000;
 
@@ -158,6 +154,12 @@ const make = Effect.gen(function* () {
     "INSERT INTO interpret_jobs (node_id, status, updated_at) VALUES (?, 'pending', ?)",
   );
   const selectNode = sqlite.prepare("SELECT * FROM nodes WHERE id = ?");
+  const selectToolResultId = sqlite.prepare(
+    `SELECT id FROM nodes
+     WHERE session_id = ? AND kind = 'tool_result'
+       AND json_extract(detail, '$.toolCallId') = ?
+     ORDER BY seq LIMIT 1`,
+  );
 
   const idOf = (row: Record<string, SQLOutputValue> | undefined) =>
     row ? Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(row).id : null;
@@ -245,22 +247,9 @@ const make = Effect.gen(function* () {
       return row ? toNode(row) : null;
     },
 
-    /**
-     * A session's tool_result node ids, by the tool call id each one answers; the first one recorded,
-     * as in `toolNode`.
-     */
-    toolResultIds: (sessionId: string): ReadonlyMap<string, string> =>
-      new Map(
-        sqlite
-          .prepare(
-            "SELECT json_extract(detail, '$.toolCallId') AS call, id FROM nodes WHERE session_id = ? AND kind = 'tool_result' AND call IS NOT NULL ORDER BY seq DESC",
-          )
-          .all(sessionId)
-          .map((row) => {
-            const { call, id } = decodeToolResultId(row);
-            return [call, id] as const;
-          }),
-      ),
+    /** The first recorded result for this call, without loading every result in the session. */
+    toolResultId: (sessionId: string, toolCallId: string): string | null =>
+      idOf(selectToolResultId.get(sessionId, toolCallId)),
 
     session: (sessionId: string): Node[] =>
       sqlite

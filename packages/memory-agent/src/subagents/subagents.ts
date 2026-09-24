@@ -7,8 +7,9 @@ import {
   type ChatMiddleware,
   type ModelMessage,
 } from "@tanstack/ai";
-import { Context, Deferred, Effect, Layer, Schema } from "effect";
+import { Context, Data, Deferred, Effect, FiberMap, Layer, Schema } from "effect";
 import { ChatState } from "../chat-state/chat-state.ts";
+import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { ApiUsage, collectApiUsage } from "../agent/api-usage.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
@@ -30,6 +31,11 @@ export const subagentToolNames = [
   "get_subagent_report",
   "wait_subagents",
 ] as const;
+
+export class SubagentOperationFailed extends Data.TaggedError("SubagentOperationFailed")<{
+  readonly operation: "run" | "wait" | "recover";
+  readonly cause: unknown;
+}> {}
 
 export const subagentInstructions = `You can delegate with run_subagent (a one-off task), message_subagent (a named helper that keeps its own conversation in this session), and resume_subagent (a new attempt for a durable interrupted task).
 - A subagent starts with none of this conversation: put everything it needs in the task. It uses the same model, project, tools and permissions as you; delegating never widens them.
@@ -268,22 +274,34 @@ const make = Effect.gen(function* () {
     "SELECT * FROM subagents WHERE session_id = ? ORDER BY created_at, rowid",
   );
 
-  /** Named children busy in this process: the next message waits for the one before it. */
-  const busy = new Map<string, SubagentReceipt>();
-  const runningHandles = new Map<string, AttemptHandle>();
-  const serial = new Map<string, Effect.Semaphore>();
+  const serializeNamed = keyedSerialLimit();
   let completionListener: ((sessionId: string) => void) | undefined;
   /** Controllers indexed independently so archive/delete stops one child, not its parent or peers. */
-  const activeChildren = new Map<
-    string,
-    {
-      readonly taskId: string;
-      readonly sessionId: string;
-      readonly receipt: SubagentReceipt;
-      readonly controller: AbortController;
-      readonly settled: Effect.Effect<void>;
-    }
-  >();
+  type ActiveChild = {
+    readonly taskId: string;
+    readonly sessionId: string;
+    readonly receipt: SubagentReceipt;
+    readonly handle: AttemptHandle;
+    readonly controller: AbortController;
+    readonly settled: Effect.Effect<void>;
+    started: boolean;
+  };
+  const activeChildren = yield* FiberMap.make<ActiveChild>();
+  const activeFor = (
+    subagentId: string,
+    startedOnly = false,
+    exceptAttemptId?: string,
+  ): ActiveChild | undefined => {
+    let latest: ActiveChild | undefined;
+    for (const [child] of activeChildren)
+      if (
+        child.handle.id !== exceptAttemptId &&
+        child.receipt.subagentId === subagentId &&
+        (!startedOnly || child.started)
+      )
+        latest = child;
+    return latest;
+  };
 
   /**
    * A child cannot pause its parent's run for a TanStack approval, so its gated calls wait here
@@ -654,23 +672,19 @@ const make = Effect.gen(function* () {
     const stop = () => controller.abort(binding.abortSignal.reason);
     binding.abortSignal.addEventListener("abort", stop, { once: true });
     if (binding.abortSignal.aborted) stop();
-    activeChildren.set(handle.id, {
+    const child: ActiveChild = {
       taskId: handle.taskId,
       sessionId: binding.sessionId,
       receipt,
+      handle,
       controller,
       settled: Deferred.await(done),
-    });
-    busy.set(row.id, receipt);
-    let semaphore = serial.get(row.id);
-    if (!semaphore) {
-      semaphore = Effect.runSync(Effect.makeSemaphore(1));
-      serial.set(row.id, semaphore);
-    }
+      started: false,
+    };
     let pending: Promise<ChildOutcome> | undefined;
     const work = Effect.tryPromise({
       try: (signal) => {
-        runningHandles.set(row.id, handle);
+        child.started = true;
         const interrupted = () => controller.abort(signal.reason);
         signal.addEventListener("abort", interrupted, { once: true });
         pending = runChild(binding, row, task, handle, controller).finally(() =>
@@ -678,21 +692,22 @@ const make = Effect.gen(function* () {
         );
         return pending;
       },
-      catch: (error) => error,
+      catch: (cause) => new SubagentOperationFailed({ operation: "run", cause }),
     }).pipe(
       Effect.catchAll((error) =>
         Effect.sync(() => {
+          const detail = String(error.cause);
           trace.transitionAttempt(
             handle,
             binding.sessionId,
             "failed",
             "attempt_failed",
             "Subagent failed",
-            String(error),
+            detail,
             false,
             binding.runId,
           );
-          finish.run("failed", "", String(error), Date.now(), row.id);
+          finish.run("failed", "", detail, Date.now(), row.id);
         }),
       ),
       // Keep the named-agent permit until the SDK has stopped and persisted its checkpoint.
@@ -700,7 +715,7 @@ const make = Effect.gen(function* () {
       Effect.ensuring(
         Effect.promise(async () => {
           await pending?.catch(() => undefined);
-          if (runningHandles.get(row.id)?.id === handle.id) runningHandles.delete(row.id);
+          child.started = false;
         }),
       ),
     );
@@ -710,7 +725,7 @@ const make = Effect.gen(function* () {
       else controller.signal.addEventListener("abort", abort, { once: true });
       return Effect.sync(() => controller.signal.removeEventListener("abort", abort));
     });
-    const job = Effect.raceFirst(semaphore.withPermits(1)(work), cancelled).pipe(
+    const job = Effect.raceFirst(serializeNamed(row.id, work), cancelled).pipe(
       Effect.ensuring(
         Effect.promise(async () => {
           // Interruption aborts the SDK signal; retain the service until the checkpoint settles.
@@ -740,17 +755,8 @@ const make = Effect.gen(function* () {
             }
           } finally {
             binding.abortSignal.removeEventListener("abort", stop);
-            activeChildren.delete(handle.id);
-            const remaining = [...activeChildren.values()].filter(
-              (entry) => entry.receipt.subagentId === row.id,
-            );
-            const latest = remaining.at(-1);
-            if (latest) busy.set(row.id, latest.receipt);
-            else {
-              busy.delete(row.id);
-              serial.delete(row.id);
-              if (!pending) finish.run("cancelled", "", null, Date.now(), row.id);
-            }
+            if (!activeFor(row.id, false, handle.id) && !pending)
+              finish.run("cancelled", "", null, Date.now(), row.id);
             Effect.runSync(Deferred.succeed(done, undefined));
             events.publishSession(binding.sessionId, "subagents");
             completionListener?.(binding.sessionId);
@@ -758,7 +764,7 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
-    await Effect.runPromise(Effect.forkIn(job, scope));
+    await Effect.runPromise(FiberMap.run(activeChildren, child, job));
     return receipt;
   };
 
@@ -1029,14 +1035,14 @@ const make = Effect.gen(function* () {
           const input = Schema.decodeUnknownSync(MessageSubagentInput)(parsed);
           // A named child already answering hears the message now, in its running turn.
           const busyChild = byName.get(binding.sessionId, input.agent);
-          if (busyChild && busy.has(decodeRow(busyChild).id)) {
+          if (busyChild && activeFor(decodeRow(busyChild).id)) {
             const row = decodeRow(busyChild);
             const runtime = await Effect.runPromise(active.runtime(binding.selection));
             const steered = await runtime
               .steer(subagentThreadId(row.id), { role: "user", content: input.message })
               .catch(() => "no_turn" as const);
             if (steered === "steered") {
-              const handle = runningHandles.get(row.id);
+              const handle = activeFor(row.id, true)?.handle;
               if (handle)
                 trace.recordSteer({
                   handle,
@@ -1125,9 +1131,10 @@ const make = Effect.gen(function* () {
             const cursor = trace.latestCursor(binding.sessionId);
             const states = snapshot();
             if (ready(states)) return { status: "completed" as const, attempts: states };
-            yield* Effect.tryPromise((signal) =>
-              trace.waitForChange(binding.sessionId, cursor, signal),
-            );
+            yield* Effect.tryPromise({
+              try: (signal) => trace.waitForChange(binding.sessionId, cursor, signal),
+              catch: (cause) => new SubagentOperationFailed({ operation: "wait", cause }),
+            });
           }
         });
         return Effect.runPromise(
@@ -1172,7 +1179,10 @@ const make = Effect.gen(function* () {
         async onStart() {
           await Effect.runPromise(
             Effect.forkIn(
-              Effect.tryPromise(() => recoverForRun(binding)).pipe(
+              Effect.tryPromise({
+                try: () => recoverForRun(binding),
+                catch: (cause) => new SubagentOperationFailed({ operation: "recover", cause }),
+              }).pipe(
                 Effect.catchAll((error) => Effect.logWarning("Subagent recovery deferred", error)),
               ),
               scope,
@@ -1251,7 +1261,9 @@ const make = Effect.gen(function* () {
 
     /** Stop all session children, including those whose parent finished normally. */
     async stopSession(sessionId: string) {
-      const entries = [...activeChildren.values()].filter((child) => child.sessionId === sessionId);
+      const entries = [...activeChildren]
+        .map(([child]) => child)
+        .filter((child) => child.sessionId === sessionId);
       for (const entry of entries) entry.controller.abort(new Error("session_cancel_requested"));
       await Effect.runPromise(
         Effect.all(
@@ -1263,7 +1275,9 @@ const make = Effect.gen(function* () {
 
     /** Stop exactly one live child and wait until its checkpoint and terminal transition settle. */
     async stopTask(taskId: string) {
-      const entry = [...activeChildren.values()].find((child) => child.taskId === taskId);
+      const entry = [...activeChildren]
+        .map(([child]) => child)
+        .find((child) => child.taskId === taskId);
       if (!entry) return "not_running" as const;
       entry.controller.abort(new Error("task_lifecycle_requested"));
       await Effect.runPromise(entry.settled);

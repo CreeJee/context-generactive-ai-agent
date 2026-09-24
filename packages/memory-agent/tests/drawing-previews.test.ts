@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Effect, Either, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
@@ -83,7 +83,10 @@ describe("Attachments.saveDrawing", () => {
         const attachments = yield* Attachments;
         const reasonOf = (bytes: Uint8Array) =>
           Effect.map(Effect.either(attachments.saveDrawing(bytes)), (outcome) =>
-            Either.isLeft(outcome) ? outcome.left.reason : "saved",
+            Either.match(outcome, {
+              onLeft: (error) => (error._tag === "AttachmentRejected" ? error.reason : error._tag),
+              onRight: () => "saved",
+            }),
           );
         return [
           yield* reasonOf(new Uint8Array()),
@@ -217,5 +220,22 @@ describe("DrawingPreviews", () => {
       "read.svg",
     );
     expect(JSON.stringify(read)).not.toContain("preview");
+  });
+
+  test("a failed preview storage write does not turn a successful file write into a tool failure", async () => {
+    const { call, project, storage } = await toolsFor();
+    renameSync(join(storage, "attachments"), join(storage, "attachments.old"));
+    writeFileSync(join(storage, "attachments"), "blocked");
+
+    const result = decodeWritten(
+      await call("write_file", {
+        path: "drawing.svg",
+        content: svg('<rect width="64" height="64" fill="#ff0000"/>'),
+      }),
+    );
+    expect(result.path).toBe("drawing.svg");
+    expect(result.preview).toBeUndefined();
+    expect(result.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(readFileSync(join(project.root, result.path), "utf8")).toContain("#ff0000");
   });
 });

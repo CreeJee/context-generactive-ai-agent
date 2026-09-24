@@ -209,7 +209,7 @@ const make = Effect.gen(function* () {
       inputSchema: toToolSchema(PromoteMemoryCandidateInput),
     }).server((input) =>
       run(
-        Effect.map(KnowledgePromotions, (knowledge) =>
+        Effect.flatMap(KnowledgePromotions, (knowledge) =>
           knowledge.promote({
             ...Schema.decodeUnknownSync(PromoteMemoryCandidateInput)(input),
             projectId,

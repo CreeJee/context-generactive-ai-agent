@@ -141,7 +141,7 @@ async function currentRequest(messages: readonly ModelMessage[]): Promise<ModelM
     messages,
     state,
     {
-      toolResultIds: () => new Map([["long-tool", "node-tool-result"]]),
+      toolResultId: (toolCallId) => (toolCallId === "long-tool" ? "node-tool-result" : null),
       nodeText,
       retrievalAppendix: async () => retrieval,
     },

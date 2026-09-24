@@ -81,9 +81,30 @@ const noLimit = 1_000_000;
 
 const sourcesOf = (nodes: Effect.Effect.Success<typeof Nodes>, sessionId: string) =>
   ({
-    toolResultIds: () => nodes.toolResultIds(sessionId),
+    toolResultId: (toolCallId) => nodes.toolResultId(sessionId, toolCallId),
     nodeText: (id) => nodes.get(id)?.text ?? null,
   }) satisfies CompactionSources;
+
+test("tool result lookup returns the first recorded node without materializing the session", async () => {
+  const { runtime, project, session } = await testRuntime();
+  const nodes = await runtime.runPromise(Nodes);
+  const at = { projectId: project.id, sessionId: session.id };
+  const first = nodes.append({
+    ...at,
+    kind: "tool_result",
+    text: "first",
+    detail: { toolCallId: "same-call" },
+  });
+  nodes.append({
+    ...at,
+    kind: "tool_result",
+    text: "second",
+    detail: { toolCallId: "same-call" },
+  });
+
+  expect(nodes.toolResultId(session.id, "same-call")).toBe(first.id);
+  expect(nodes.toolResultId(session.id, "missing")).toBeNull();
+});
 
 /** What the model is sent on the first call of a run over `messages`. */
 async function firstSent(
@@ -212,7 +233,7 @@ describe("compaction", () => {
       },
       { role: "tool", toolCallId: "call-1", content: output },
     ];
-    const provider = lightweightToolResults(messages, () => new Map([["call-1", "node-1"]]));
+    const provider = lightweightToolResults(messages, (id) => (id === "call-1" ? "node-1" : null));
     expect(provider[1]?.content).toContain("status");
     expect(provider[1]?.content).toContain("failed");
     expect(provider[1]?.content).toContain("exitCode");
@@ -220,7 +241,7 @@ describe("compaction", () => {
     expect(provider[1]?.content).toContain("read_tool_result ID node-1");
     expect(JSON.stringify(provider).length).toBeLessThan(output.length / 2);
     expect(messages[1]?.content).toBe(output);
-    expect(lightweightToolResults(messages, () => new Map())[1]?.content).toBe(output);
+    expect(lightweightToolResults(messages, () => null)[1]?.content).toBe(output);
     const malformed: ModelMessage[] = [
       messages[0]!,
       {
@@ -230,7 +251,7 @@ describe("compaction", () => {
       },
     ];
     expect(
-      lightweightToolResults(malformed, () => new Map([["call-1", "node-1"]]))[1]?.content,
+      lightweightToolResults(malformed, (id) => (id === "call-1" ? "node-1" : null))[1]?.content,
     ).toBe(malformed[1]?.content);
   });
 
@@ -262,7 +283,7 @@ describe("compaction", () => {
       },
       { role: "tool", toolCallId: "call-1", content: original },
     ];
-    const sent = lightweightToolResults(messages, () => new Map([["call-1", "node-1"]]));
+    const sent = lightweightToolResults(messages, (id) => (id === "call-1" ? "node-1" : null));
     expect(sent[1]?.content).toContain('"status":"succeeded"');
     expect(sent[1]?.content).toContain('"exitCode":0');
     expect(sent[1]?.content).toContain("read_tool_result ID node-1");
@@ -325,7 +346,7 @@ describe("compaction", () => {
         },
         { role: "tool", toolCallId: "call-1", content: original },
       ];
-      const sent = lightweightToolResults(messages, () => new Map([["call-1", "node-1"]]));
+      const sent = lightweightToolResults(messages, (id) => (id === "call-1" ? "node-1" : null));
       expect(sent[1]?.content).toContain(essential);
       expect(sent[1]?.content).toContain("read_tool_result ID node-1");
       expect(JSON.stringify(sent).length).toBeLessThan(original.length / 2);
@@ -354,7 +375,7 @@ describe("compaction", () => {
       },
       { role: "tool", toolCallId: "call-1", content: original },
     ];
-    const result = lightweightToolResults(messages, () => new Map([["call-1", "node-1"]]));
+    const result = lightweightToolResults(messages, (id) => (id === "call-1" ? "node-1" : null));
     expect(result[1]?.content).toContain('"snapshot":"fixed-snapshot"');
     expect(result[1]?.content).toContain('"nextOffset":40');
     expect(result[1]?.content).toContain("src/module-0.ts");
@@ -473,7 +494,7 @@ describe("compaction", () => {
     const result = await compact(
       messages,
       { manual: { clearedThrough: 0, summarizedTurns: 0 }, blocks: [] },
-      { toolResultIds: () => new Map(), nodeText: () => null },
+      { toolResultId: () => null, nodeText: () => null },
       { compactAt: noLimit, leaveOutAt: noLimit },
     );
 
@@ -632,7 +653,7 @@ describe("compaction", () => {
       { role: "assistant" as const, content: `답 ${index}: ${long}` },
     ]).flat();
     messages.push({ role: "user", content: "마지막 질문" });
-    const sources: CompactionSources = { toolResultIds: () => new Map(), nodeText: () => null };
+    const sources: CompactionSources = { toolResultId: () => null, nodeText: () => null };
 
     const sent = await firstSent(
       messages,
@@ -663,7 +684,7 @@ describe("compaction", () => {
     ];
     let appendixCalls = 0;
     const sources: CompactionSources = {
-      toolResultIds: () => new Map([["old-1", "omitted-node"]]),
+      toolResultId: (toolCallId) => (toolCallId === "old-1" ? "omitted-node" : null),
       nodeText: () => null,
       retrievalAppendix: async () => {
         appendixCalls += 1;
@@ -734,7 +755,7 @@ describe("compaction", () => {
       compaction(
         metadata,
         {
-          toolResultIds: () => new Map([["old-1", "omitted-node"]]),
+          toolResultId: (toolCallId) => (toolCallId === "old-1" ? "omitted-node" : null),
           nodeText: () => null,
           retrievalAppendix: async () => ({
             role: "assistant",

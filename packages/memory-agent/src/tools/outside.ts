@@ -1,7 +1,7 @@
 import { toolDefinition } from "@tanstack/ai";
 import { Context, Effect, Either, Layer, Schema } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
-import { listOutsideFiles, Snapshots } from "../files/listing.ts";
+import { listOutsideFiles, createSnapshots } from "../files/listing.ts";
 import { resolveOutsidePath } from "../files/paths.ts";
 import { decodeSearchCursor, encodeSearchCursor, searchTextFiles } from "../files/search.ts";
 import { linePage, readFileBytes, readTextFile } from "../files/text.ts";
@@ -55,7 +55,7 @@ const searchOutsideInput = Schema.Struct({
 
 const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
-  const snapshots = new Snapshots();
+  const snapshots = yield* createSnapshots();
 
   return {
     /**
@@ -142,27 +142,21 @@ const make = Effect.gen(function* () {
           let view = position ? snapshots.get(position.snapshot, snapshotKey) : undefined;
           if (!position) {
             const directory = resolveOutsidePath(project.root, storage.path, path, "directory");
-            if (Either.isRight(directory)) {
-              const { absolute } = directory.right;
-              view = snapshots.add(
-                snapshotKey,
-                absolute,
-                glob,
-                await listOutsideFiles(absolute, glob),
-              );
-            } else {
-              // Not a directory: search the one file, with the file rules applied.
-              const file =
-                directory.left.reason === "not_directory"
-                  ? resolve(path, "file")
-                  : orThrow(directory);
-              view = snapshots.add(snapshotKey, file.absolute, undefined, {
-                paths: [file.absolute],
-                source: "walk",
-                excluded: 0,
-                truncated: false,
-              });
-            }
+            view = await Either.match(directory, {
+              onRight: async ({ absolute }) =>
+                snapshots.add(snapshotKey, absolute, glob, await listOutsideFiles(absolute, glob)),
+              onLeft: (rejection) => {
+                // Not a directory: search the one file, with the file rules applied.
+                if (rejection.reason !== "not_directory") throw rejection;
+                const file = resolve(path, "file");
+                return snapshots.add(snapshotKey, file.absolute, undefined, {
+                  paths: [file.absolute],
+                  source: "walk",
+                  excluded: 0,
+                  truncated: false,
+                });
+              },
+            });
           }
           if (!view) throw new Error("snapshot_expired: start the search again without cursor.");
 

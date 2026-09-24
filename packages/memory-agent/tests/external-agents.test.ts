@@ -23,6 +23,15 @@ async function until(condition: () => boolean, what: string) {
   throw new Error(`timed out waiting for ${what}`);
 }
 
+const processAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 async function agentSetup() {
   const context = await testRuntime({ testProvider: {} });
   const log = join(context.base, "acp-starts.log");
@@ -41,7 +50,7 @@ async function agentSetup() {
     }),
   );
   const agents = await context.runtime.runPromise(ExternalAgents);
-  const run = <A>(effect: Effect.Effect<A>) => context.runtime.runPromise(effect);
+  const run = <A, E>(effect: Effect.Effect<A, E>) => context.runtime.runPromise(effect);
   const starts = () =>
     existsSync(log)
       ? readFileSync(log, "utf8")
@@ -62,6 +71,18 @@ async function agentSetup() {
 }
 
 describe("external ACP agents", () => {
+  test("removing a configured agent closes its live process", async () => {
+    const { agents, run, project, starts, prompt } = await agentSetup();
+    await run(agents.setTrusted(project, "project", "fake", true));
+    expect(await prompt("hi")).toMatchObject({ status: "completed" });
+    const pid = Number(starts()[0]?.pid);
+    writeFileSync(join(project.root, ".agents", "agents.json"), JSON.stringify({ agents: {} }));
+
+    expect((await run(agents.overview(project))).agents).toEqual([]);
+    await until(() => !processAlive(pid), "the removed agent to stop");
+    expect(await prompt("again")).toEqual({ status: "unavailable", reason: "not_trusted" });
+  });
+
   test("an agent starts only once trusted, in the project, without the app's environment", async () => {
     const { agents, run, project, starts, prompt } = await agentSetup();
     process.env.SHOULD_NOT_LEAK = "app-secret";

@@ -381,15 +381,16 @@ function validateSandbox(
           reason: "credential_path",
         }),
       );
-    const resolved = resolveProjectPath(root, request.path, request.target);
-    if (Either.isLeft(resolved))
-      return Either.left(
+    const violation = Either.match(resolveProjectPath(root, request.path, request.target), {
+      onLeft: (rejection) =>
         new ProviderToolPathViolation({
           toolId: tool.id,
           path: request.path,
-          reason: resolved.left.reason,
+          reason: rejection.reason,
         }),
-      );
+      onRight: () => null,
+    });
+    if (violation) return Either.left(violation);
   }
   return Either.right(appManaged ? (root ?? null) : null);
 }

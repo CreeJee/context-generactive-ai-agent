@@ -18,7 +18,7 @@ import {
   approvalToolDefinitions,
   permissionReviewInterrupt,
 } from "../tools/definitions.ts";
-import { AppApi, AppRequestFailed, type ProjectSummary } from "./app-api.ts";
+import { AppRequestFailed, type AppApi, type ProjectSummary } from "./app-api.ts";
 import { toolDetail, toolLocations, toolView } from "./tool-view.ts";
 
 /** How often a bridged session renews its lease; the app drops a lease after 90 seconds. */
@@ -438,6 +438,7 @@ export function startAcpAgent(options: {
       clearInterval(session.renew);
       void api.lease(session.id, session.holder, "release").catch(() => undefined);
     }
+    sessions.clear();
   });
   return connection;
 }

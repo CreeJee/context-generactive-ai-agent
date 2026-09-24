@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { Option, Schema } from "effect";
+import { Data, Option, Schema } from "effect";
 import { requireRuntime } from "../runtime/resources.ts";
 import { prepareAnthropicValidationBody } from "./anthropic-validation-adapter.ts";
 import {
@@ -41,7 +41,7 @@ export interface CredentialStore {
 export const providerKeychainService = (provider: OAuthProvider) =>
   `com.context-agent.oauth.${provider}`;
 
-export class KeychainCredentialStore implements CredentialStore {
+export const createKeychainCredentialStore = (): CredentialStore => ({
   async read(provider: OAuthProvider): Promise<StoredCredential | null> {
     try {
       const { AsyncEntry } = requireRuntime("@napi-rs/keyring");
@@ -58,7 +58,7 @@ export class KeychainCredentialStore implements CredentialStore {
       if (error instanceof OAuthHarnessError) throw error;
       throw new OAuthHarnessError("credential_store_unavailable");
     }
-  }
+  },
 
   async write(provider: OAuthProvider, credential: StoredCredential): Promise<void> {
     try {
@@ -69,7 +69,7 @@ export class KeychainCredentialStore implements CredentialStore {
     } catch {
       throw new OAuthHarnessError("credential_store_unavailable");
     }
-  }
+  },
 
   async remove(provider: OAuthProvider): Promise<void> {
     try {
@@ -80,8 +80,8 @@ export class KeychainCredentialStore implements CredentialStore {
     } catch {
       throw new OAuthHarnessError("credential_store_unavailable");
     }
-  }
-}
+  },
+});
 
 export type OAuthHarnessFailure =
   | "cancelled"
@@ -138,12 +138,13 @@ const providerReason = (body: string): string | undefined => {
   return bounded.length > 0 ? bounded : undefined;
 };
 
-export class OAuthHarnessError extends Error {
+export class OAuthHarnessError extends Data.TaggedError("OAuthHarnessError")<{
   readonly code: OAuthHarnessFailure;
   readonly status: number | null;
   readonly provider: OAuthProvider | null;
   readonly operation: OAuthHarnessOperation | null;
-
+  readonly message: string;
+}> {
   constructor(
     code: OAuthHarnessFailure,
     status: number | null = null,
@@ -154,14 +155,13 @@ export class OAuthHarnessError extends Error {
       context.operation === undefined ? null : `operation=${context.operation}`,
       status === null ? null : `status=${status}`,
     ].filter((detail) => detail !== null);
-    super(
-      `oauth_${code}${details.length === 0 ? "" : ` [${details.join(", ")}]`}: ${failureMessages[code]}${context.reason === undefined ? "" : ` ${context.reason}`}`,
-    );
-    this.name = "OAuthHarnessError";
-    this.code = code;
-    this.status = status;
-    this.provider = context.provider ?? null;
-    this.operation = context.operation ?? null;
+    super({
+      code,
+      status,
+      provider: context.provider ?? null,
+      operation: context.operation ?? null,
+      message: `oauth_${code}${details.length === 0 ? "" : ` [${details.join(", ")}]`}: ${failureMessages[code]}${context.reason === undefined ? "" : ` ${context.reason}`}`,
+    });
   }
 }
 
@@ -314,27 +314,20 @@ async function* sseEvents(
   }
 }
 
-export class SubscriptionOAuthClient {
-  readonly #protocol: ProviderProtocol;
-  readonly #store: CredentialStore;
-  readonly #fetch: typeof fetch;
-  readonly #now: () => number;
-  readonly #anthropicSessionId = randomUUID();
-  #loginActive = false;
-  #refreshing: Promise<StoredCredential> | null = null;
+export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOptions) {
+  const protocol = options.protocol;
+  const store = options.store ?? createKeychainCredentialStore();
+  const fetcher = options.fetch ?? fetch;
+  const now = options.now ?? Date.now;
+  const anthropicSessionId = randomUUID();
+  let loginActive = false;
+  let refreshing: Promise<StoredCredential> | null = null;
 
-  constructor(options: SubscriptionOAuthClientOptions) {
-    this.#protocol = options.protocol;
-    this.#store = options.store ?? new KeychainCredentialStore();
-    this.#fetch = options.fetch ?? fetch;
-    this.#now = options.now ?? Date.now;
-  }
-
-  async status(): Promise<OAuthConnectionStatus> {
-    let credential = await this.#store.read(this.#protocol.provider);
-    if (credential !== null && credential.expiresAt <= this.#now() + 30_000) {
+  async function status(): Promise<OAuthConnectionStatus> {
+    let credential = await store.read(protocol.provider);
+    if (credential !== null && credential.expiresAt <= now() + 30_000) {
       try {
-        credential = await this.#refresh(credential);
+        credential = await refresh(credential);
       } catch (error) {
         if (error instanceof OAuthHarnessError && invalidatesStoredCredential(error))
           credential = null;
@@ -342,26 +335,25 @@ export class SubscriptionOAuthClient {
       }
     }
     return {
-      provider: this.#protocol.provider,
+      provider: protocol.provider,
       connected: credential !== null,
       expiresAt: credential?.expiresAt ?? null,
     };
   }
 
-  async disconnect(): Promise<OAuthConnectionStatus> {
-    await this.#store.remove(this.#protocol.provider);
-    return this.status();
+  async function disconnect(): Promise<OAuthConnectionStatus> {
+    await store.remove(protocol.provider);
+    return status();
   }
 
-  async startLogin(
+  async function startLogin(
     options: {
       readonly timeoutMs?: number;
       readonly signal?: AbortSignal;
     } = {},
   ): Promise<LoginAttempt> {
-    if (this.#loginActive) throw new OAuthHarnessError("login_in_progress");
-    this.#loginActive = true;
-    const protocol = this.#protocol;
+    if (loginActive) throw new OAuthHarnessError("login_in_progress");
+    loginActive = true;
     const pkce = createPkce();
     let verifier: string | null = pkce.verifier;
     // Claude's CLI OAuth contract uses the PKCE verifier as state and returns it on callback.
@@ -376,13 +368,13 @@ export class SubscriptionOAuthClient {
         server.listen(protocol.callbackPort ?? 0, protocol.callbackRedirectHost, () => resolve());
       });
     } catch {
-      this.#loginActive = false;
+      loginActive = false;
       throw new OAuthHarnessError("transport_unavailable");
     }
     const listeningAddress = server.address();
     if (listeningAddress === null) {
       await close(server);
-      this.#loginActive = false;
+      loginActive = false;
       throw new OAuthHarnessError("transport_unavailable");
     }
     // SAFETY: this server was bound to a TCP host/port, never to an IPC pipe.
@@ -417,7 +409,7 @@ export class SubscriptionOAuthClient {
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", abort);
       verifier = null;
-      this.#loginActive = false;
+      loginActive = false;
       await close(server);
       if ("status" in result) settle(result.status);
       else reject(result.error);
@@ -463,11 +455,11 @@ export class SubscriptionOAuthClient {
           } as const;
           const grant: AuthorizationCodeGrant =
             protocol.provider === "anthropic" ? { ...commonGrant, state } : commonGrant;
-          const credential = await this.#exchange(grant);
-          await this.#store.write(protocol.provider, credential);
+          const credential = await exchange(grant);
+          await store.write(protocol.provider, credential);
           response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
           response.end("Connected. You may close this window.");
-          await finish({ status: await this.status() });
+          await finish({ status: await status() });
         } catch (error) {
           response.writeHead(502).end("OAuth provider rejected the request.");
           await finish({
@@ -491,15 +483,18 @@ export class SubscriptionOAuthClient {
     };
   }
 
-  async #exchange(values: TokenGrant, previous?: StoredCredential): Promise<StoredCredential> {
+  async function exchange(
+    values: TokenGrant,
+    previous?: StoredCredential,
+  ): Promise<StoredCredential> {
     const context: OAuthHarnessErrorContext = {
-      provider: this.#protocol.provider,
+      provider: protocol.provider,
       operation: values.grant_type === "refresh_token" ? "token_refresh" : "token_exchange",
     };
-    const encoded = tokenBody(this.#protocol, values);
+    const encoded = tokenBody(protocol, values);
     let response: Response;
     try {
-      response = await this.#fetch(this.#protocol.tokenUrl, {
+      response = await fetcher(protocol.tokenUrl, {
         method: "POST",
         headers: { Accept: "application/json", "Content-Type": encoded.contentType },
         body: encoded.body,
@@ -516,7 +511,7 @@ export class SubscriptionOAuthClient {
         () => new OAuthHarnessError("invalid_token_response", response.status, context),
       );
       const parsed = parseTokens(token, previous);
-      return { ...parsed, expiresAt: this.#now() + (parsed.expiresAt - Date.now()) };
+      return { ...parsed, expiresAt: now() + (parsed.expiresAt - Date.now()) };
     } catch (error) {
       if (error instanceof OAuthHarnessError) throw error;
       throw new OAuthHarnessError("invalid_token_response", response.status, context);
@@ -524,97 +519,97 @@ export class SubscriptionOAuthClient {
   }
 
   /** Forces one refresh for an explicit live protocol check and returns no credentials. */
-  async refreshForValidation(): Promise<OAuthConnectionStatus> {
-    const credential = await this.#store.read(this.#protocol.provider);
+  async function refreshForValidation(): Promise<OAuthConnectionStatus> {
+    const credential = await store.read(protocol.provider);
     if (!credential) throw new OAuthHarnessError("not_connected");
-    await this.#refresh(credential);
-    return this.status();
+    await refresh(credential);
+    return status();
   }
 
-  async #refresh(credential: StoredCredential): Promise<StoredCredential> {
-    if (this.#refreshing) return this.#refreshing;
-    this.#refreshing = (async () => {
+  async function refresh(credential: StoredCredential): Promise<StoredCredential> {
+    if (refreshing) return refreshing;
+    refreshing = (async () => {
       const commonGrant = {
         grant_type: "refresh_token",
         refresh_token: credential.refreshToken,
-        client_id: this.#protocol.clientId,
+        client_id: protocol.clientId,
       } as const;
       const grant: RefreshTokenGrant =
-        this.#protocol.provider === "anthropic"
+        protocol.provider === "anthropic"
           ? {
               ...commonGrant,
-              scope: this.#protocol.scopes.replace("org:create_api_key ", ""),
+              scope: protocol.scopes.replace("org:create_api_key ", ""),
             }
           : commonGrant;
       try {
-        const next = await this.#exchange(grant, credential);
-        await this.#store.write(this.#protocol.provider, next);
+        const next = await exchange(grant, credential);
+        await store.write(protocol.provider, next);
         return next;
       } catch (error) {
         if (error instanceof OAuthHarnessError && invalidatesStoredCredential(error))
-          await this.#store.remove(this.#protocol.provider);
+          await store.remove(protocol.provider);
         throw error;
       }
     })();
     try {
-      return await this.#refreshing;
+      return await refreshing;
     } finally {
-      this.#refreshing = null;
+      refreshing = null;
     }
   }
 
-  async #authorizedCatalogRequest(
+  async function authorizedCatalogRequest(
     url: URL,
     credential: StoredCredential,
     signal: AbortSignal,
   ): Promise<Response> {
-    const headers = new Headers(this.#protocol.modelHeaders);
+    const headers = new Headers(protocol.modelHeaders);
     headers.set("Accept", "application/json");
     headers.delete("Content-Type");
     headers.set("Authorization", `Bearer ${credential.accessToken}`);
-    if (this.#protocol.provider === "openai" && credential.accountId !== undefined)
+    if (protocol.provider === "openai" && credential.accountId !== undefined)
       headers.set("chatgpt-account-id", credential.accountId);
-    if (this.#protocol.provider === "anthropic") {
+    if (protocol.provider === "anthropic") {
       headers.set("x-client-request-id", randomUUID());
-      headers.set("X-Claude-Code-Session-Id", this.#anthropicSessionId);
+      headers.set("X-Claude-Code-Session-Id", anthropicSessionId);
     }
-    return this.#fetch(url, {
+    return fetcher(url, {
       method: "GET",
       headers,
       redirect: "error",
       signal,
     }).catch(() => {
       throw new OAuthHarnessError("transport_unavailable", null, {
-        provider: this.#protocol.provider,
+        provider: protocol.provider,
         operation: "model_catalog",
       });
     });
   }
 
   /** Fetches only the provider's fixed model-catalog endpoint and never returns credentials. */
-  async modelCatalog(): Promise<ReadonlyArray<unknown>> {
+  async function modelCatalog(): Promise<ReadonlyArray<unknown>> {
     const context: OAuthHarnessErrorContext = {
-      provider: this.#protocol.provider,
+      provider: protocol.provider,
       operation: "model_catalog",
     };
-    let credential = await this.#store.read(this.#protocol.provider);
+    let credential = await store.read(protocol.provider);
     if (!credential) throw new OAuthHarnessError("not_connected", null, context);
-    if (credential.expiresAt <= this.#now() + 30_000) credential = await this.#refresh(credential);
+    if (credential.expiresAt <= now() + 30_000) credential = await refresh(credential);
 
     const pages: unknown[] = [];
     const signal = AbortSignal.timeout(30_000);
     const seenCursors = new Set<string>();
     let afterId: string | undefined;
     for (;;) {
-      const url = new URL(this.#protocol.catalogUrl);
-      if (this.#protocol.provider === "anthropic") {
+      const url = new URL(protocol.catalogUrl);
+      if (protocol.provider === "anthropic") {
         url.searchParams.set("limit", "1000");
         if (afterId !== undefined) url.searchParams.set("after_id", afterId);
       }
-      let response = await this.#authorizedCatalogRequest(url, credential, signal);
-      if (this.#protocol.refreshStatuses.includes(response.status)) {
-        credential = await this.#refresh(credential);
-        response = await this.#authorizedCatalogRequest(url, credential, signal);
+      let response = await authorizedCatalogRequest(url, credential, signal);
+      if (protocol.refreshStatuses.includes(response.status)) {
+        credential = await refresh(credential);
+        response = await authorizedCatalogRequest(url, credential, signal);
       }
       if (!response.ok) throw new OAuthHarnessError("provider_rejected", response.status, context);
       let page: unknown;
@@ -624,7 +619,7 @@ export class SubscriptionOAuthClient {
         throw new OAuthHarnessError("provider_rejected", response.status, context);
       }
       pages.push(page);
-      if (this.#protocol.provider !== "anthropic") break;
+      if (protocol.provider !== "anthropic") break;
       const pagination = Option.getOrUndefined(decodeCatalogPage(page));
       if (pagination?.has_more !== true || pagination.last_id === undefined) break;
       if (pages.length >= 10 || seenCursors.has(pagination.last_id))
@@ -638,31 +633,31 @@ export class SubscriptionOAuthClient {
     return pages;
   }
 
-  async *stream(
+  async function* stream(
     serializedBody: string,
     signal?: AbortSignal,
   ): AsyncGenerator<NormalizedStreamEvent> {
     const context: OAuthHarnessErrorContext = {
-      provider: this.#protocol.provider,
+      provider: protocol.provider,
       operation: "model_stream",
     };
-    let credential = await this.#store.read(this.#protocol.provider);
+    let credential = await store.read(protocol.provider);
     if (!credential) throw new OAuthHarnessError("not_connected", null, context);
-    if (credential.expiresAt <= this.#now() + 30_000) credential = await this.#refresh(credential);
+    if (credential.expiresAt <= now() + 30_000) credential = await refresh(credential);
 
     const providerBody =
-      this.#protocol.provider === "anthropic"
-        ? prepareAnthropicValidationBody(serializedBody, this.#anthropicSessionId)
+      protocol.provider === "anthropic"
+        ? prepareAnthropicValidationBody(serializedBody, anthropicSessionId)
         : serializedBody;
 
     const request = (current: StoredCredential) => {
-      const headers = new Headers(this.#protocol.modelHeaders);
+      const headers = new Headers(protocol.modelHeaders);
       headers.set("Authorization", `Bearer ${current.accessToken}`);
-      if (this.#protocol.provider === "openai" && current.accountId !== undefined)
+      if (protocol.provider === "openai" && current.accountId !== undefined)
         headers.set("chatgpt-account-id", current.accountId);
-      if (this.#protocol.provider === "anthropic") {
+      if (protocol.provider === "anthropic") {
         headers.set("x-client-request-id", randomUUID());
-        headers.set("X-Claude-Code-Session-Id", this.#anthropicSessionId);
+        headers.set("X-Claude-Code-Session-Id", anthropicSessionId);
         headers.set("X-Stainless-Arch", process.arch === "x64" ? "x64" : process.arch);
         headers.set(
           "X-Stainless-OS",
@@ -675,7 +670,7 @@ export class SubscriptionOAuthClient {
                 : process.platform,
         );
       }
-      return this.#fetch(this.#protocol.modelUrl, {
+      return fetcher(protocol.modelUrl, {
         method: "POST",
         headers,
         body: providerBody,
@@ -687,8 +682,8 @@ export class SubscriptionOAuthClient {
     };
 
     let response = await request(credential);
-    if (this.#protocol.refreshStatuses.includes(response.status)) {
-      credential = await this.#refresh(credential);
+    if (protocol.refreshStatuses.includes(response.status)) {
+      credential = await refresh(credential);
       response = await request(credential);
     }
     if (!response.ok) {
@@ -697,7 +692,7 @@ export class SubscriptionOAuthClient {
         .text()
         .catch(() => "");
       if (
-        this.#protocol.provider === "anthropic" &&
+        protocol.provider === "anthropic" &&
         (response.status === 400 || response.status === 422) &&
         /cache[_ -]?control|prompt[_ -]?cach/i.test(responseText)
       )
@@ -707,9 +702,13 @@ export class SubscriptionOAuthClient {
         reason: providerReason(responseText),
       });
     }
-    yield* sseEvents(this.#protocol.provider, response);
+    yield* sseEvents(protocol.provider, response);
   }
+  return { status, disconnect, startLogin, refreshForValidation, modelCatalog, stream };
 }
 
-/** @deprecated Use SubscriptionOAuthClient. Retained for validation scripts and tests. */
-export { SubscriptionOAuthClient as OAuthValidationHarness };
+export type SubscriptionOAuthClient = ReturnType<typeof createSubscriptionOAuthClient>;
+
+/** @deprecated Use createSubscriptionOAuthClient. Retained for validation scripts and tests. */
+export const OAuthValidationHarness = createSubscriptionOAuthClient;
+export type OAuthValidationHarness = SubscriptionOAuthClient;

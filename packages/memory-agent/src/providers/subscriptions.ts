@@ -1,17 +1,17 @@
 import { Effect, Layer } from "effect";
 import { GlobalConfig } from "../config/global-config.ts";
 import { providerProtocols } from "../oauth/protocol.ts";
-import { SubscriptionOAuthClient } from "../oauth/subscription-oauth.ts";
+import { createSubscriptionOAuthClient } from "../oauth/subscription-oauth.ts";
 import { createSubscriptionProvider } from "./subscription-provider.ts";
 import { ProviderRegistry, providerRegistryFrom } from "./registry.ts";
 import { createSubscriptionRuntime } from "./subscription-runtime.ts";
 
 const make = Effect.gen(function* () {
   const config = yield* GlobalConfig;
-  const openaiClient = new SubscriptionOAuthClient({
+  const openaiClient = createSubscriptionOAuthClient({
     protocol: providerProtocols.openai,
   });
-  const anthropicClient = new SubscriptionOAuthClient({
+  const anthropicClient = createSubscriptionOAuthClient({
     protocol: providerProtocols.anthropic,
   });
   const openai = createSubscriptionProvider({

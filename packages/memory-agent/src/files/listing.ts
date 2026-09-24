@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { lstat, readdir } from "node:fs/promises";
 import { join, posix } from "node:path";
 import { promisify } from "node:util";
+import { Effect } from "effect";
 import { findExecutable } from "../runtime/host.ts";
 import { gitEnvironment } from "./git-grep.ts";
 import { isCredentialPath } from "./paths.ts";
@@ -167,28 +168,24 @@ export interface Snapshot extends FileListing {
  * Recent listings, so paging through `list_files` or `search_files` walks one fixed set of files
  * instead of a tree that shifts between pages. Old snapshots are dropped first.
  */
-export class Snapshots {
-  readonly #entries = new Map<string, Snapshot>();
+export const createSnapshots = (capacity = 32) =>
+  Effect.sync(() => {
+    const entries = new Map<string, Snapshot>();
+    return {
+      add(root: string, directory: string, glob: string | undefined, listing: FileListing) {
+        const snapshot: Snapshot = { id: randomUUID(), root, directory, glob, ...listing };
+        entries.set(snapshot.id, snapshot);
+        for (const id of entries.keys()) {
+          if (entries.size <= capacity) break;
+          entries.delete(id);
+        }
+        return snapshot;
+      },
 
-  readonly capacity: number;
-
-  constructor(capacity = 32) {
-    this.capacity = capacity;
-  }
-
-  add(root: string, directory: string, glob: string | undefined, listing: FileListing) {
-    const snapshot: Snapshot = { id: randomUUID(), root, directory, glob, ...listing };
-    this.#entries.set(snapshot.id, snapshot);
-    for (const id of this.#entries.keys()) {
-      if (this.#entries.size <= this.capacity) break;
-      this.#entries.delete(id);
-    }
-    return snapshot;
-  }
-
-  /** A snapshot taken for this project root, or undefined when unknown or evicted. */
-  get(id: string, root: string) {
-    const snapshot = this.#entries.get(id);
-    return snapshot?.root === root ? snapshot : undefined;
-  }
-}
+      /** A snapshot taken for this project root, or undefined when unknown or evicted. */
+      get(id: string, root: string) {
+        const snapshot = entries.get(id);
+        return snapshot?.root === root ? snapshot : undefined;
+      },
+    };
+  });

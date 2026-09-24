@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { SQLOutputValue } from "node:sqlite";
 import { chat } from "@tanstack/ai";
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Context, Data, Effect, Layer, Option, Schema } from "effect";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { ApiUsage, collectApiUsage } from "../agent/api-usage.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
@@ -41,6 +41,10 @@ const Labelled = Schema.Struct({
 const decodeAnswer = Schema.decodeUnknownOption(
   Schema.parseJson(Schema.Struct({ statements: Schema.Array(Labelled) })),
 );
+
+export class InterpretationFailed extends Data.TaggedError("InterpretationFailed")<{
+  readonly reason: "model_call_failed" | "unreadable_answer";
+}> {}
 
 const Job = Schema.Struct({ node_id: Schema.String, session_id: Schema.NullOr(Schema.String) });
 const decodeJob = Schema.decodeUnknownSync(Job);
@@ -174,30 +178,33 @@ const make = Effect.gen(function* () {
 
       const { services } = yield* active.resolve(selection);
       const cheap = yield* services.models.cheapestEffort(selection);
-      const answer = yield* Effect.tryPromise(() => {
-        const abortController = new AbortController();
-        const timer = setTimeout(() => abortController.abort(), interpretTimeoutMs);
-        return chat({
-          adapter: services.runtime.adapter(cheap),
-          messages: [{ role: "user", content: `Input (JSON): ${JSON.stringify(input)}` }],
-          systemPrompts: [interpretInstructions],
-          threadId: randomUUID(),
-          middleware: batch[0]?.sessionId
-            ? [
-                collectApiUsage(usageLedger, {
-                  rootSessionId: batch[0].sessionId,
-                  purpose: "memory-interpretation",
-                  provider: cheap.provider,
-                  model: cheap.model,
-                }),
-              ]
-            : [],
-          abortController,
-          stream: false,
-        }).finally(() => clearTimeout(timer));
+      const answer = yield* Effect.tryPromise({
+        try: () => {
+          const abortController = new AbortController();
+          const timer = setTimeout(() => abortController.abort(), interpretTimeoutMs);
+          return chat({
+            adapter: services.runtime.adapter(cheap),
+            messages: [{ role: "user", content: `Input (JSON): ${JSON.stringify(input)}` }],
+            systemPrompts: [interpretInstructions],
+            threadId: randomUUID(),
+            middleware: batch[0]?.sessionId
+              ? [
+                  collectApiUsage(usageLedger, {
+                    rootSessionId: batch[0].sessionId,
+                    purpose: "memory-interpretation",
+                    provider: cheap.provider,
+                    model: cheap.model,
+                  }),
+                ]
+              : [],
+            abortController,
+            stream: false,
+          }).finally(() => clearTimeout(timer));
+        },
+        catch: () => new InterpretationFailed({ reason: "model_call_failed" }),
       });
       const labelled = Option.getOrUndefined(decodeAnswer(answer.match(/\{[\s\S]*\}/)?.[0] ?? ""));
-      if (!labelled) return yield* Effect.fail(new Error("unreadable_answer"));
+      if (!labelled) return yield* new InterpretationFailed({ reason: "unreadable_answer" });
 
       atomic(() => {
         for (const statement of batch) {
@@ -283,7 +290,8 @@ const make = Effect.gen(function* () {
         interpreted += yield* interpretBatch(batch, selection).pipe(
           Effect.catchAll((error) =>
             Effect.sync(() => {
-              const reason = error instanceof Error ? error.message : "interpret_failed";
+              const reason =
+                error instanceof InterpretationFailed ? error.reason : "interpret_failed";
               for (const statement of batch)
                 markFailed.run(maxAttempts, reason, new Date().toISOString(), statement.id);
               return 0;

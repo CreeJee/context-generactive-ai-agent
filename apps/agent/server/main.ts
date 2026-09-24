@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { ndJsonStream } from "@agentclientprotocol/sdk";
 import { defaultStorageRoot } from "memory-agent";
-import { AppApi, startAcpAgent } from "memory-agent/acp";
+import { createAppApi, startAcpAgent } from "memory-agent/acp";
 import * as build from "#server-build";
 import { isThisApp, launchFolder, openProject, type LaunchFolder } from "./launch-project.ts";
 import { readReleaseInfo } from "./release-info.ts";
@@ -76,7 +76,7 @@ async function pageFor(folder: LaunchFolder) {
 
 if (positionals[0] === "acp") {
   // stdout is the protocol channel: nothing else may be written to it.
-  const api = new AppApi(baseUrl);
+  const api = createAppApi(baseUrl);
   // SAFETY: stdin without an encoding set emits Buffer chunks, which are Uint8Arrays.
   const input = Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>;
   const connection = startAcpAgent({

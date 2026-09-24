@@ -9,7 +9,7 @@ import type {
 } from "@agentclientprotocol/sdk";
 import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import spawn from "cross-spawn";
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Context, Data, Effect, Layer, Option, Schema } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
 import { expandVariables } from "../mcp/config.ts";
@@ -25,6 +25,11 @@ import {
 
 /** After this many failed connection attempts in a row, reconnecting waits for the user (R17). */
 export const maxConsecutiveFailures = 2;
+
+export class ExternalAgentOperationFailed extends Data.TaggedError("ExternalAgentOperationFailed")<{
+  readonly operation: "reconnect";
+  readonly cause: unknown;
+}> {}
 const connectTimeoutMs = 30_000;
 const retryDelayMs = 500;
 
@@ -111,6 +116,7 @@ interface Live {
 
 interface Link {
   readonly fingerprint: string;
+  retired: boolean;
   state: AgentLinkState;
   live: Live | null;
   attempt: Promise<Live> | null;
@@ -175,19 +181,31 @@ const make = Effect.gen(function* () {
     const local = readAgentsFile(projectAgentsFile(project.root), "project");
     const trust = decodeTrustRows(selectTrust.all(project.id));
     const localNames = new Set(local.agents.map((agent) => agent.name));
+    const agents = [...global.agents, ...local.agents].map((agent) => ({
+      agent,
+      trusted:
+        trust.find((row) => row.scope === agent.scope && row.name === agent.name)?.fingerprint ??
+        null,
+      shadowed: agent.scope === "global" && localNames.has(agent.name),
+    }));
+    const usableFingerprints = new Map(
+      agents
+        .filter((entry) => !entry.shadowed && entry.trusted === entry.agent.fingerprint)
+        .map((entry) => [linkKey(project, entry.agent), entry.agent.fingerprint]),
+    );
+    for (const [key, link] of links) {
+      if (!key.startsWith(`${project.id}/`)) continue;
+      if (usableFingerprints.get(key) === link.fingerprint) continue;
+      retire(link);
+      links.delete(key);
+    }
     return {
       files: [global, local].map((file, index) => ({
         scope: index === 0 ? ("global" as const) : ("project" as const),
         path: file.path,
         error: file.error,
       })),
-      agents: [...global.agents, ...local.agents].map((agent) => ({
-        agent,
-        trusted:
-          trust.find((row) => row.scope === agent.scope && row.name === agent.name)?.fingerprint ??
-          null,
-        shadowed: agent.scope === "global" && localNames.has(agent.name),
-      })),
+      agents,
     };
   };
 
@@ -197,6 +215,11 @@ const make = Effect.gen(function* () {
     if (!live) return;
     live.connection.close();
     endChild(live.child);
+  };
+
+  const retire = (link: Link) => {
+    link.retired = true;
+    shutdown(link);
   };
 
   const startProcess = async (
@@ -247,8 +270,9 @@ const make = Effect.gen(function* () {
       );
 
     try {
+      let timer: NodeJS.Timeout | undefined;
       const timeout = new Promise<never>((_, reject) => {
-        const timer = setTimeout(() => reject(new Error("initialize timed out")), connectTimeoutMs);
+        timer = setTimeout(() => reject(new Error("initialize timed out")), connectTimeoutMs);
         timer.unref();
       });
       const initialized = await Promise.race([
@@ -262,7 +286,9 @@ const make = Effect.gen(function* () {
           clientInfo: { name: "context-generactive-agent", version: "0.0.0" },
         }),
         timeout,
-      ]);
+      ]).finally(() => {
+        if (timer) clearTimeout(timer);
+      });
       const live: Live = {
         child,
         connection,
@@ -288,6 +314,11 @@ const make = Effect.gen(function* () {
     const pending = startProcess(project, agent, link).then(
       (live) => {
         link.attempt = null;
+        if (link.retired) {
+          live.connection.close();
+          endChild(live.child);
+          return live;
+        }
         link.live = live;
         link.failures = 0;
         link.state = { status: "connected", agent: live.agentName, loadSession: live.loadSession };
@@ -313,11 +344,11 @@ const make = Effect.gen(function* () {
    * restores the connection only: nothing that was being asked is sent again.
    */
   const onLost = (project: Project, agent: ConfiguredAgent, link: Link, live: Live) => {
-    if (link.live !== live) return;
+    if (link.retired || link.live !== live) return;
     link.live = null;
     endChild(live.child);
     const retry = (): void => {
-      if (link.live || link.failures >= maxConsecutiveFailures) return;
+      if (link.retired || link.live || link.failures >= maxConsecutiveFailures) return;
       void attempt(project, agent, link).catch(() => {
         if (link.failures < maxConsecutiveFailures) setTimeout(retry, retryDelayMs).unref();
       });
@@ -329,9 +360,10 @@ const make = Effect.gen(function* () {
     const key = linkKey(project, agent);
     const existing = links.get(key);
     if (existing?.fingerprint === agent.fingerprint) return existing;
-    if (existing) shutdown(existing);
+    if (existing) retire(existing);
     const link: Link = {
       fingerprint: agent.fingerprint,
+      retired: false,
       state: { status: "idle" },
       live: null,
       attempt: null,
@@ -373,7 +405,7 @@ const make = Effect.gen(function* () {
 
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
-      for (const link of links.values()) shutdown(link);
+      for (const link of links.values()) retire(link);
     }),
   );
 
@@ -405,7 +437,7 @@ const make = Effect.gen(function* () {
           deleteTrust.run(scope, projectId, name);
           for (const [key, link] of links)
             if (key.endsWith(`/${scope}/${name}`)) {
-              shutdown(link);
+              retire(link);
               links.delete(key);
             }
         }
@@ -414,14 +446,16 @@ const make = Effect.gen(function* () {
 
     /** Manual reconnect: clears the failure count and tries once more. */
     reconnect: (project: Project, name: string) =>
-      Effect.promise(async () => {
+      Effect.gen(function* () {
         const agent = usable(project, name);
-        if (agent) {
-          const link = linkFor(project, agent);
-          shutdown(link);
-          link.failures = 0;
-          await attempt(project, agent, link).catch(() => undefined);
-        }
+        if (!agent) return overview(project);
+        const link = linkFor(project, agent);
+        shutdown(link);
+        link.failures = 0;
+        yield* Effect.tryPromise({
+          try: () => attempt(project, agent, link),
+          catch: (cause) => new ExternalAgentOperationFailed({ operation: "reconnect", cause }),
+        }).pipe(Effect.catchTag("ExternalAgentOperationFailed", () => Effect.void));
         return overview(project);
       }),
 

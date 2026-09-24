@@ -10,8 +10,14 @@ interface Pending {
 
 export type RelayedRequest = Omit<RelayedApprovalView, "id" | "createdAt">;
 
-const make = Effect.sync(() => {
+const make = Effect.gen(function* () {
   const pending = new Map<string, Pending>();
+
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      for (const entry of pending.values()) entry.resolve(false);
+    }),
+  );
 
   return {
     /**
@@ -57,5 +63,5 @@ export class RelayedApprovals extends Context.Tag("memory-agent/RelayedApprovals
   RelayedApprovals,
   Effect.Effect.Success<typeof make>
 >() {
-  static readonly layer = Layer.effect(RelayedApprovals, make);
+  static readonly layer = Layer.scoped(RelayedApprovals, make);
 }

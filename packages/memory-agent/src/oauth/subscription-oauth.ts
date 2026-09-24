@@ -1,7 +1,8 @@
 export {
-  KeychainCredentialStore,
+  createKeychainCredentialStore,
   OAuthHarnessError,
-  SubscriptionOAuthClient,
+  createSubscriptionOAuthClient,
+  type SubscriptionOAuthClient,
   type CredentialStore,
   type LoginAttempt,
   type OAuthConnectionStatus,

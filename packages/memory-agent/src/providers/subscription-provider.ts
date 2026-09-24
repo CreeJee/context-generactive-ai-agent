@@ -2,7 +2,7 @@ import { ANTHROPIC_MODELS } from "@tanstack/ai-anthropic";
 import { Effect, Option, Schema } from "effect";
 import type { Settings } from "../config/global-config.ts";
 import {
-  SubscriptionOAuthClient,
+  createSubscriptionOAuthClient,
   type LoginAttempt,
   type OAuthConnectionStatus,
 } from "../oauth/subscription-oauth.ts";
@@ -212,7 +212,7 @@ export function createSubscriptionProvider(
   options: SubscriptionProviderOptions,
 ): ProviderConfiguration {
   const provider = options.protocol.provider;
-  const client = options.client ?? new SubscriptionOAuthClient({ protocol: options.protocol });
+  const client = options.client ?? createSubscriptionOAuthClient({ protocol: options.protocol });
   let pending: LoginAttempt | null = null;
   let loginFailed = false;
   let catalogCache: {

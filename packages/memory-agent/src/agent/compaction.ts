@@ -1,6 +1,6 @@
 import type { ChatMiddleware, MetadataStore, ModelMessage } from "@tanstack/ai";
 import { evictOldest } from "@tanstack/ai-compaction";
-import { Option, Schema } from "effect";
+import { Data, Effect, Option, Schema } from "effect";
 import { recentRawUserTurns } from "./compaction-policy.ts";
 import { consumeColdObservation, pendingColdObservation } from "./context-usage.ts";
 import type { CompactResult, CompactionStage } from "./run-state.ts";
@@ -73,18 +73,16 @@ const wholeToolOutputs = (messages: readonly ModelMessage[]) =>
  */
 function clearAnswered(
   messages: readonly ModelMessage[],
-  toolResultIds: () => ReadonlyMap<string, string>,
+  toolResultId: (toolCallId: string) => string | null,
 ): ModelMessage[] | null {
   const answered = messages
     .map((message) => message.role === "assistant" && (message.toolCalls ?? []).length === 0)
     .lastIndexOf(true);
   if (answered < 0) return null;
-  let ids: ReadonlyMap<string, string> | null = null;
   let changed = false;
   const next = messages.map((message, index) => {
     if (message.role !== "tool" || index > answered || !message.toolCallId) return message;
-    ids ??= toolResultIds();
-    const cleared = clearedOutput(ids.get(message.toolCallId) ?? null);
+    const cleared = clearedOutput(toolResultId(message.toolCallId));
     if (message.content === cleared) return message;
     changed = true;
     return { ...message, content: cleared };
@@ -196,8 +194,8 @@ export async function compactionState(
 
 /** How the session's memory answers what compaction asks. */
 export interface CompactionSources {
-  /** The session's tool_result node ids, by tool call id. */
-  readonly toolResultIds: () => ReadonlyMap<string, string>;
+  /** The first recorded tool_result node id for one tool call, if present. */
+  readonly toolResultId: (toolCallId: string) => string | null;
   readonly nodeText: (id: string) => string | null;
   /**
    * Bounded, variable-tail leads for content this request left out. It must fail closed: compaction
@@ -253,12 +251,12 @@ export async function compact(
   let stage: CompactionStage = "none";
   const clearedByHand = clearAnswered(
     messages.slice(0, manual.clearedThrough),
-    sources.toolResultIds,
+    sources.toolResultId,
   );
   if (clearedByHand) sent = [...clearedByHand, ...messages.slice(manual.clearedThrough)];
   // A completed run no longer needs its tool payload in the next request. This transition happens
   // once; clearAnswered leaves pointers unchanged and never touches the run still in progress.
-  const cleared = clearAnswered(sent, sources.toolResultIds);
+  const cleared = clearAnswered(sent, sources.toolResultId);
   if (cleared) sent = cleared;
   if (clearedByHand || cleared) stage = "clear-answered";
 
@@ -376,7 +374,7 @@ const largeReportResult = Schema.parseJson(
 /** Purpose-specific provider previews for recorded results; original history stays unchanged. */
 export function lightweightToolResults(
   messages: readonly ModelMessage[],
-  ids: () => ReadonlyMap<string, string>,
+  toolResultId: (toolCallId: string) => string | null,
 ): readonly ModelMessage[] {
   const names = new Map(
     messages.flatMap((message) =>
@@ -385,7 +383,6 @@ export function lightweightToolResults(
         : [],
     ),
   );
-  let recorded: ReadonlyMap<string, string> | null = null;
   return messages.map((message) => {
     if (
       message.role !== "tool" ||
@@ -458,8 +455,7 @@ export function lightweightToolResults(
     }
     const serialized = JSON.stringify(summary);
     if (serialized.length >= message.content.length) return message;
-    recorded ??= ids();
-    const nodeId = recorded.get(message.toolCallId);
+    const nodeId = toolResultId(message.toolCallId);
     if (!nodeId) return message; // Never promise an ID that has not been recorded.
     const shortened = `[${name} preview; full result: read_tool_result ID ${nodeId}, page by offset. Check omitted entries before relying on them.]\n${serialized}`;
     return shortened.length < message.content.length ? { ...message, content: shortened } : message;
@@ -492,7 +488,7 @@ export function compaction(
       );
       if (coldId !== null) await consumeColdObservation(metadata, ctx.threadId, coldId);
       observed(stage);
-      const providerMessages = lightweightToolResults(messages, sources.toolResultIds);
+      const providerMessages = lightweightToolResults(messages, sources.toolResultId);
       return providerMessages.every((message, index) => message === config.messages[index]) &&
         providerMessages.length === config.messages.length
         ? undefined
@@ -504,41 +500,60 @@ export function compaction(
 /** How summarizing went before `/compact`. */
 export type SummaryOutcome = "done" | "failed" | "unavailable";
 
+export class CompactionFailed extends Data.TaggedError("CompactionFailed")<{
+  readonly operation: "prepare-before" | "read-state" | "persist" | "prepare-after";
+  readonly cause: unknown;
+}> {}
+
+const compactionPromise = <A>(
+  operation: CompactionFailed["operation"],
+  evaluate: () => PromiseLike<A>,
+) =>
+  Effect.tryPromise({
+    try: evaluate,
+    catch: (cause) => new CompactionFailed({ operation, cause }),
+  });
+
 /**
  * `/compact`: summarizes what has not been yet (`summarize`), then clears the output of every tool
  * call the model has answered from and sends the turns before the latest few as their summaries,
  * whatever the budget, for this and every later run.
  */
-export async function compactByHand(
+export const compactByHand = <E>(
   metadata: MetadataStore,
   threadId: string,
   messages: readonly ModelMessage[],
   sources: CompactionSources,
   budget: Budget,
-  summarize: () => Promise<SummaryOutcome>,
-): Promise<CompactResult> {
-  const before = await compact(
-    messages,
-    await compactionState(metadata, threadId),
-    sources,
-    budget,
-  );
-  const outcome = await summarize();
-  const state = await compactionState(metadata, threadId);
-  const summaries = linedUp(messages, state.blocks, sources.nodeText).filter(
-    (block) => block.end <= userTurns(messages).length - recentRawUserTurns,
-  );
-  const manual: ManualCompaction = {
-    clearedThrough: messages.length,
-    summarizedTurns: summaries.at(-1)?.end ?? 0,
-  };
-  await metadata.set(manualCompactionNamespace, threadId, manual);
-  const after = await compact(messages, { ...state, manual }, sources, budget);
-  return {
-    cleared: Math.max(0, wholeToolOutputs(before.messages) - wholeToolOutputs(after.messages)),
-    summarizedTurns: Math.max(0, after.summarizedTurns - before.summarizedTurns),
-    summaryFailed: outcome !== "done",
-    tokensBefore: estimateConversation(before.messages),
-    tokensAfter: estimateConversation(after.messages),
-  };
-}
+  summarize: () => Effect.Effect<SummaryOutcome, E>,
+): Effect.Effect<CompactResult, CompactionFailed | E> =>
+  Effect.gen(function* () {
+    const initial = yield* compactionPromise("read-state", () =>
+      compactionState(metadata, threadId),
+    );
+    const before = yield* compactionPromise("prepare-before", () =>
+      compact(messages, initial, sources, budget),
+    );
+    const outcome = yield* summarize();
+    const state = yield* compactionPromise("read-state", () => compactionState(metadata, threadId));
+    const summaries = linedUp(messages, state.blocks, sources.nodeText).filter(
+      (block) => block.end <= userTurns(messages).length - recentRawUserTurns,
+    );
+    const manual: ManualCompaction = {
+      clearedThrough: messages.length,
+      summarizedTurns: summaries.at(-1)?.end ?? 0,
+    };
+    yield* compactionPromise("persist", () =>
+      metadata.set(manualCompactionNamespace, threadId, manual),
+    );
+    const after = yield* compactionPromise("prepare-after", () =>
+      compact(messages, { ...state, manual }, sources, budget),
+    );
+    return {
+      cleared: Math.max(0, wholeToolOutputs(before.messages) - wholeToolOutputs(after.messages)),
+      summarizedTurns: Math.max(0, after.summarizedTurns - before.summarizedTurns),
+      summaryFailed: outcome !== "done",
+      tokensBefore: estimateConversation(before.messages),
+      tokensAfter: estimateConversation(after.messages),
+    };
+  });

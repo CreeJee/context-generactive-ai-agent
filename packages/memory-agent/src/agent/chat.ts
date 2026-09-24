@@ -13,10 +13,11 @@ import {
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import dayjs from "dayjs";
-import { Context, Effect, Layer, Option, Queue, Schema } from "effect";
+import { Context, Data, Effect, Layer, Option, Queue, Schema } from "effect";
 import { Attachments } from "../attachments/attachments.ts";
 import { attachmentIdOf } from "../attachments/urls.ts";
 import { ChatState } from "../chat-state/chat-state.ts";
+import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { GlobalConfig } from "../config/global-config.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import {
@@ -73,7 +74,7 @@ import { contextView, lastContextUsage, recordContextUsage } from "./context-usa
 import { ApiUsage, collectApiUsage } from "./api-usage.ts";
 import { TurnSummaries } from "./turn-summaries.ts";
 import { promptLayout } from "./prompt-layout.ts";
-import { LiveRuns } from "./live-runs.ts";
+import { createLiveRuns } from "./live-runs.ts";
 import type { CancelResult, CompactResult, CompactionStage, SessionRunState } from "./run-state.ts";
 import { sessionHolderHeader } from "../sessions/lease-state.ts";
 import { SessionLeases } from "../sessions/leases.ts";
@@ -104,6 +105,30 @@ export interface SettingsPlaces {
   readonly storageRoot: string;
   readonly globalSkills: string;
 }
+
+type AgentOperation =
+  | "stop-subagent"
+  | "load-messages"
+  | "load-run"
+  | "hydrate-chat"
+  | "stop-session"
+  | "cancel-run"
+  | "discard-interrupts"
+  | "load-usage"
+  | "load-transcript"
+  | "list-approvals"
+  | "drain-followup";
+
+export class AgentOperationFailed extends Data.TaggedError("AgentOperationFailed")<{
+  readonly operation: AgentOperation;
+  readonly cause: unknown;
+}> {}
+
+const agentPromise = <A>(operation: AgentOperation, evaluate: () => PromiseLike<A>) =>
+  Effect.tryPromise({
+    try: evaluate,
+    catch: (cause) => new AgentOperationFailed({ operation, cause }),
+  });
 
 /** The app's own settings files, and how the model may (and may not) reach them. */
 function settingsInstructions(project: Project, places: SettingsPlaces) {
@@ -352,12 +377,10 @@ const make = Effect.gen(function* () {
     storageRoot: (yield* StorageRoot).path,
     globalSkills: (yield* Skills).globalDirectory,
   };
-  const liveRuns = new LiveRuns();
+  const liveRuns = yield* createLiveRuns;
   const scope = yield* Effect.scope;
   const notificationWakeups = yield* Queue.unbounded<string>();
-  const notificationWorkers = new Set<string>();
-  const notificationAgain = new Set<string>();
-  const notificationPaused = new Set<string>();
+  const serializeNotification = keyedSerialLimit();
   const wakeNotifications = (sessionId: string) => {
     Effect.runSync(Queue.offer(notificationWakeups, sessionId));
   };
@@ -374,7 +397,7 @@ const make = Effect.gen(function* () {
     project?: Project,
     retrievalSeed: readonly string[] = [],
   ): CompactionSources => ({
-    toolResultIds: () => nodes.toolResultIds(sessionId),
+    toolResultId: (toolCallId) => nodes.toolResultId(sessionId, toolCallId),
     nodeText: (id) => nodes.get(id)?.text ?? null,
     retrievalAppendix: project
       ? async (sent) => {
@@ -609,19 +632,24 @@ const make = Effect.gen(function* () {
   const traceFrame = (event: string, dataJson: string, cursor?: number) =>
     `${cursor === undefined ? "" : `id: ${cursor}\n`}event: ${event}\ndata: ${dataJson}\n\n`;
 
-  const stopSessionRuns = async (sessionId: string) => {
-    notificationPaused.add(sessionId);
-    const parent = liveRuns.get(sessionId);
-    if (parent) {
-      parent.controller.abort(new Error("session_lifecycle_requested"));
-      await parent.ended;
-    }
-    const activeTasks = workTrace
-      .taskTree(sessionId)
-      .filter((task) => task.activeAttemptId !== null)
-      .map((task) => task.id);
-    await Promise.all(activeTasks.map((taskId) => subagents.stopTask(taskId)));
-  };
+  const stopSessionRuns = (sessionId: string) =>
+    Effect.gen(function* () {
+      workTrace.holdParentNotifications(sessionId);
+      const parent = liveRuns.get(sessionId);
+      if (parent) {
+        parent.controller.abort(new Error("session_lifecycle_requested"));
+        yield* parent.ended;
+      }
+      const activeTasks = workTrace
+        .taskTree(sessionId)
+        .filter((task) => task.activeAttemptId !== null)
+        .map((task) => task.id);
+      yield* Effect.forEach(
+        activeTasks,
+        (taskId) => agentPromise("stop-session", () => subagents.stopTask(taskId)),
+        { concurrency: "unbounded", discard: true },
+      );
+    });
 
   const api = {
     /** Persisted Work Trace tree for live and review views. */
@@ -686,7 +714,7 @@ const make = Effect.gen(function* () {
         if (requested.status === "blocked") return json(409, requested);
         if (requested.status === "completed") return json(200, requested);
         if ("activeAttemptId" in requested && requested.activeAttemptId !== null)
-          yield* Effect.promise(() => subagents.stopTask(taskId)).pipe(
+          yield* agentPromise("stop-subagent", () => subagents.stopTask(taskId)).pipe(
             Effect.timeoutOption(cancelWaitMs),
           );
         if (!("operationId" in requested) || requested.operationId === undefined)
@@ -840,7 +868,9 @@ const make = Effect.gen(function* () {
         claimedNext = next?.id ?? null;
         const queuedId = next?.id;
         const messages = notificationFollowup
-          ? yield* Effect.promise(() => chatState.persistence.stores.messages.loadThread(sessionId))
+          ? yield* agentPromise("load-messages", () =>
+              chatState.persistence.stores.messages.loadThread(sessionId),
+            )
           : next
             ? [...incomingMessages.slice(0, -1), delivery.toUserMessage(next)]
             : incomingMessages;
@@ -871,7 +901,6 @@ const make = Effect.gen(function* () {
 
         let userNode = turn ? null : nodes.latestOfKind(sessionId, "user");
         if (turn) {
-          notificationPaused.delete(sessionId);
           // The model still reads the message as sent; memory keeps it without a pasted key.
           const kept = yield* redactor.redactText(turn.text);
           userNode = nodes.append({ projectId, sessionId, kind: "user", text: kept.text });
@@ -882,13 +911,14 @@ const make = Effect.gen(function* () {
 
         if (external !== null) {
           const abortController = new AbortController();
-          const claim = liveRuns.claim(
+          const claim = yield* liveRuns.claim(
             sessionId,
             runId,
             abortController,
             () => void settleQueue(sessionId, runId),
           );
           if (!claim) return json(409, { error: "run_in_progress" });
+          if (turn) workTrace.resumeParentNotifications(sessionId);
           events.publishSession(sessionId, "run-state");
           if (queuedId) {
             queue.markDelivered(queuedId, "next_turn", runId, true);
@@ -997,21 +1027,22 @@ const make = Effect.gen(function* () {
         const abortController = new AbortController();
         if (notificationFollowup) {
           const current = yield* sessions.get(sessionId);
-          const last = yield* Effect.promise(() => chatState.lastRun(sessionId));
+          const last = yield* agentPromise("load-run", () => chatState.lastRun(sessionId));
           if (
             current.archivedAt !== null ||
-            notificationPaused.has(sessionId) ||
+            workTrace.parentNotificationsHeld(sessionId) ||
             last?.status !== "completed"
           )
             return json(409, { error: "notification_followup_deferred" });
         }
-        const claim = liveRuns.claim(
+        const claim = yield* liveRuns.claim(
           sessionId,
           runId,
           abortController,
           () => void settleQueue(sessionId, runId),
         );
         if (!claim) return json(409, { error: "run_in_progress" });
+        if (turn) workTrace.resumeParentNotifications(sessionId);
         events.publishSession(sessionId, "run-state");
         if (queuedId) {
           queue.markDelivered(queuedId, "next_turn", runId, true);
@@ -1270,12 +1301,14 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
         if (!isStreamJoin(request))
-          return yield* Effect.promise(() => chatState.hydrate(request, sessionId));
+          return yield* agentPromise("hydrate-chat", () => chatState.hydrate(request, sessionId));
 
         const adapter = yield* Effect.try(() => memoryStream(request)).pipe(Effect.option);
         if (Option.isNone(adapter)) return json(400, { error: "invalid_stream_offset" });
         const runId = new URL(request.url).searchParams.get("runId");
-        const run = runId ? yield* Effect.promise(() => chatState.run(sessionId, runId)) : null;
+        const run = runId
+          ? yield* agentPromise("load-run", () => chatState.run(sessionId, runId))
+          : null;
         if (!run) return json(404, { error: "run_not_found" });
         return resumeServerSentEventsResponse({ adapter: adapter.value });
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
@@ -1288,29 +1321,30 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         if (!leases.permits(sessionId, holder)) return inUse();
         const live = liveRuns.get(sessionId);
-        notificationPaused.add(sessionId);
         if (!live) {
           const children = subagents.list(sessionId).some((child) => child.status === "running");
           if (!children) return json(409, { error: "no_running_run" });
-          const stopped = yield* Effect.promise(() => subagents.stopSession(sessionId)).pipe(
-            Effect.timeoutOption(cancelWaitMs),
-            Effect.map(Option.isSome),
-          );
-          const last = yield* Effect.promise(() => chatState.lastRun(sessionId));
+          workTrace.holdParentNotifications(sessionId);
+          const stopped = yield* agentPromise("stop-session", () =>
+            subagents.stopSession(sessionId),
+          ).pipe(Effect.timeoutOption(cancelWaitMs), Effect.map(Option.isSome));
+          const last = yield* agentPromise("load-run", () => chatState.lastRun(sessionId));
           return json(200, {
             runId: last?.runId ?? "",
             stopped,
             status: last?.status ?? null,
           });
         }
-        yield* Effect.promise(() =>
+        yield* agentPromise("cancel-run", () =>
           requestRunCancel(chatState.persistence.stores.runs, live.runId),
         );
+        workTrace.holdParentNotifications(sessionId);
         live.controller.abort(RUN_CANCEL_REASON);
-        const stopped = yield* Effect.promise(() =>
-          Promise.all([live.ended, subagents.stopSession(sessionId)]),
+        const stopped = yield* Effect.all(
+          [live.ended, agentPromise("stop-session", () => subagents.stopSession(sessionId))],
+          { concurrency: "unbounded", discard: true },
         ).pipe(Effect.timeoutOption(cancelWaitMs), Effect.map(Option.isSome));
-        const run = yield* Effect.promise(() => chatState.run(sessionId, live.runId));
+        const run = yield* agentPromise("load-run", () => chatState.run(sessionId, live.runId));
         const result: CancelResult = { runId: live.runId, stopped, status: run?.status ?? null };
         return json(200, result);
       }),
@@ -1324,7 +1358,7 @@ const make = Effect.gen(function* () {
         if (!leases.permits(sessionId, holder)) return inUse();
         yield* sessions.get(sessionId);
         if (liveRuns.get(sessionId)) return json(409, { error: "run_in_progress" });
-        const discarded = yield* Effect.promise(() =>
+        const discarded = yield* agentPromise("discard-interrupts", () =>
           chatState.discardPendingInterrupts(sessionId),
         );
         const workflow = yield* workflows.get(sessionId);
@@ -1344,15 +1378,14 @@ const make = Effect.gen(function* () {
         if (liveRuns.get(sessionId)) return json(409, { error: "run_in_progress" });
         const budget = budgetFor(yield* windowFor(yield* active.selected));
         const { messages } = chatState.persistence.stores;
-        const result: CompactResult = yield* Effect.promise(async () =>
-          compactByHand(
-            metadata,
-            sessionId,
-            await messages.loadThread(sessionId),
-            compactionSources(sessionId),
-            budget,
-            () => Effect.runPromise(summaries.catchUp(sessionId, true)),
-          ),
+        const stored = yield* agentPromise("load-messages", () => messages.loadThread(sessionId));
+        const result: CompactResult = yield* compactByHand(
+          metadata,
+          sessionId,
+          stored,
+          compactionSources(sessionId),
+          budget,
+          () => summaries.catchUp(sessionId, true),
         );
         return json(200, result);
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
@@ -1365,8 +1398,10 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
         const live = liveRuns.get(sessionId);
-        const last = yield* Effect.promise(() => chatState.lastRun(sessionId));
-        const usage = yield* Effect.promise(() => lastContextUsage(metadata, sessionId));
+        const last = yield* agentPromise("load-run", () => chatState.lastRun(sessionId));
+        const usage = yield* agentPromise("load-usage", () =>
+          lastContextUsage(metadata, sessionId),
+        );
         const workflow = live
           ? yield* workflows.get(sessionId)
           : yield* workflows.reconcile(sessionId);
@@ -1410,7 +1445,7 @@ const make = Effect.gen(function* () {
         if (action === "resume" && live) return json(409, { error: "run_in_progress" });
         const state = yield* workflows.controlGoal(sessionId, action);
         if (action !== "resume" && live) {
-          yield* Effect.promise(() =>
+          yield* agentPromise("cancel-run", () =>
             requestRunCancel(chatState.persistence.stores.runs, live.runId),
           );
           live.controller.abort(RUN_CANCEL_REASON);
@@ -1460,8 +1495,10 @@ const make = Effect.gen(function* () {
           idempotencyKey,
         });
         if (requested.status === "blocked") return json(409, requested);
-        if (requested.status === "completed") return json(200, yield* sessions.get(sessionId));
-        yield* Effect.promise(() => stopSessionRuns(sessionId));
+        if (requested.status === "completed") {
+          return json(200, yield* sessions.get(sessionId));
+        }
+        yield* stopSessionRuns(sessionId);
         const completed = workTrace.finalizeSessionLifecycle(requested.operationId);
         if (completed.status !== "completed") return json(202, completed);
         return json(200, yield* sessions.get(sessionId));
@@ -1478,8 +1515,10 @@ const make = Effect.gen(function* () {
           idempotencyKey,
         });
         if (requested.status === "blocked") return json(409, requested);
-        if (requested.status === "completed") return json(200, requested);
-        yield* Effect.promise(() => stopSessionRuns(sessionId));
+        if (requested.status === "completed") {
+          return json(200, requested);
+        }
+        yield* stopSessionRuns(sessionId);
         for (const task of workTrace.taskTree(sessionId)) {
           if (task.deletedAt !== null) continue;
           const taskRequest = workTrace.requestTaskLifecycle({
@@ -1508,7 +1547,7 @@ const make = Effect.gen(function* () {
     queued: (sessionId: string) =>
       Effect.gen(function* () {
         yield* sessions.get(sessionId);
-        const last = yield* Effect.promise(() => chatState.lastRun(sessionId));
+        const last = yield* agentPromise("load-run", () => chatState.lastRun(sessionId));
         return json(200, queue.snapshot(sessionId, last?.runId ?? null));
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
 
@@ -1564,7 +1603,9 @@ const make = Effect.gen(function* () {
     /** One subagent's saved conversation. */
     subagentTranscript: (sessionId: string, subagentId: string) =>
       Effect.gen(function* () {
-        const transcript = yield* Effect.promise(() => subagents.transcript(sessionId, subagentId));
+        const transcript = yield* agentPromise("load-transcript", () =>
+          subagents.transcript(sessionId, subagentId),
+        );
         return transcript ? json(200, transcript) : json(404, { error: "subagent_not_found" });
       }),
 
@@ -1610,14 +1651,14 @@ const make = Effect.gen(function* () {
     const followupRunId = randomUUID();
     return Effect.gen(function* () {
       yield* Effect.sleep("25 millis");
-      if (liveRuns.get(sessionId) || notificationPaused.has(sessionId)) return;
+      if (liveRuns.get(sessionId) || workTrace.parentNotificationsHeld(sessionId)) return;
       if (!workTrace.pendingParentNotificationSessions().includes(sessionId)) return;
       const session = yield* sessions.get(sessionId);
       if (session.archivedAt !== null || session.agent !== null) return;
-      const last = yield* Effect.promise(() => chatState.lastRun(sessionId));
+      const last = yield* agentPromise("load-run", () => chatState.lastRun(sessionId));
       // Never resume approval waits, cancelled runs, or failed parent turns automatically.
       if (last?.status !== "completed") return;
-      const pendingApprovals = yield* Effect.promise(() =>
+      const pendingApprovals = yield* agentPromise("list-approvals", () =>
         chatState.persistence.stores.interrupts.listPending(sessionId),
       );
       if (pendingApprovals.length > 0) return;
@@ -1639,7 +1680,7 @@ const make = Effect.gen(function* () {
       // The response producer persists and publishes the normal durable stream. Drain it without
       // retaining a second copy, so background updates hydrate exactly like browser-started turns.
       if (response.ok)
-        yield* Effect.promise(async () => {
+        yield* agentPromise("drain-followup", async () => {
           const reader = response.body?.getReader();
           if (!reader) return;
           try {
@@ -1655,17 +1696,11 @@ const make = Effect.gen(function* () {
         Effect.logWarning("Subagent notification follow-up deferred", cause),
       ),
       Effect.onInterrupt(() =>
-        Effect.promise(async () => {
+        Effect.gen(function* () {
           const live = liveRuns.get(sessionId);
           if (live?.runId !== followupRunId) return;
           live.controller.abort(new Error("service_shutdown"));
-          await live.ended;
-        }),
-      ),
-      Effect.ensuring(
-        Effect.sync(() => {
-          notificationWorkers.delete(sessionId);
-          if (notificationAgain.delete(sessionId)) wakeNotifications(sessionId);
+          yield* live.ended;
         }),
       ),
     );
@@ -1674,12 +1709,7 @@ const make = Effect.gen(function* () {
     Effect.forever(
       Effect.gen(function* () {
         const sessionId = yield* Queue.take(notificationWakeups);
-        if (notificationWorkers.has(sessionId)) {
-          notificationAgain.add(sessionId);
-          return;
-        }
-        notificationWorkers.add(sessionId);
-        yield* Effect.forkIn(followup(sessionId), scope);
+        yield* Effect.forkIn(serializeNotification(sessionId, followup(sessionId)), scope);
       }),
     ),
   );

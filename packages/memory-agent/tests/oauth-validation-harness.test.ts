@@ -213,7 +213,7 @@ for (const provider of ["openai", "anthropic"] as const) {
     test("uses PKCE/state, exchanges the callback internally, and exposes only status", async () => {
       const fake = await fakeProvider(provider);
       const store = new MemoryCredentialStore();
-      const harness = new OAuthValidationHarness({ protocol: fake.protocol, store });
+      const harness = OAuthValidationHarness({ protocol: fake.protocol, store });
       const status = await login(harness);
 
       expect(status).toMatchObject({ provider, connected: true });
@@ -237,7 +237,7 @@ for (const provider of ["openai", "anthropic"] as const) {
 
     test("streams text and one tool call with provider headers", async () => {
       const fake = await fakeProvider(provider);
-      const harness = new OAuthValidationHarness({
+      const harness = OAuthValidationHarness({
         protocol: fake.protocol,
         store: new MemoryCredentialStore(),
       });
@@ -293,7 +293,7 @@ for (const provider of ["openai", "anthropic"] as const) {
 
     test("fetches the fixed catalog, paginates, and returns no credentials", async () => {
       const fake = await fakeProvider(provider);
-      const harness = new OAuthValidationHarness({
+      const harness = OAuthValidationHarness({
         protocol: fake.protocol,
         store: new MemoryCredentialStore(),
       });
@@ -313,7 +313,7 @@ for (const provider of ["openai", "anthropic"] as const) {
 
     test("refreshes once when the fixed catalog rejects the current token", async () => {
       const fake = await fakeProvider(provider);
-      const harness = new OAuthValidationHarness({
+      const harness = OAuthValidationHarness({
         protocol: fake.protocol,
         store: new MemoryCredentialStore(),
       });
@@ -328,7 +328,7 @@ for (const provider of ["openai", "anthropic"] as const) {
     test("rotates refresh tokens once for concurrent 401/403 retries", async () => {
       const fake = await fakeProvider(provider);
       const store = new MemoryCredentialStore();
-      const harness = new OAuthValidationHarness({ protocol: fake.protocol, store });
+      const harness = OAuthValidationHarness({ protocol: fake.protocol, store });
       await login(harness);
       fake.requireRefresh();
 
@@ -349,7 +349,7 @@ for (const provider of ["openai", "anthropic"] as const) {
     test("refreshes an expiring credential while checking connection status", async () => {
       const fake = await fakeProvider(provider);
       const store = new MemoryCredentialStore();
-      const harness = new OAuthValidationHarness({ protocol: fake.protocol, store });
+      const harness = OAuthValidationHarness({ protocol: fake.protocol, store });
       await login(harness);
       const credential = store.values.get(provider)!;
       store.values.set(provider, { ...credential, expiresAt: Date.now() + 20_000 });
@@ -362,7 +362,7 @@ for (const provider of ["openai", "anthropic"] as const) {
     test("signs out after the provider permanently rejects an expired credential", async () => {
       const fake = await fakeProvider(provider);
       const store = new MemoryCredentialStore();
-      const harness = new OAuthValidationHarness({ protocol: fake.protocol, store });
+      const harness = OAuthValidationHarness({ protocol: fake.protocol, store });
       await login(harness);
       const credential = store.values.get(provider)!;
       store.values.set(provider, { ...credential, expiresAt: Date.now() - 1 });
@@ -404,13 +404,13 @@ describe("provider wire contracts", () => {
       refreshToken: "refresh-secret",
       expiresAt: Date.now() + 60_000,
     });
-    const cacheRejected = new OAuthValidationHarness({
+    const cacheRejected = OAuthValidationHarness({
       protocol: providerProtocols.anthropic,
       store,
       fetch: async () =>
         new Response('{"error":{"message":"cache_control is unsupported"}}', { status: 400 }),
     });
-    const unrelated = new OAuthValidationHarness({
+    const unrelated = OAuthValidationHarness({
       protocol: providerProtocols.anthropic,
       store,
       fetch: async () => new Response('{"error":{"message":"invalid model"}}', { status: 400 }),
@@ -432,7 +432,7 @@ describe("provider wire contracts", () => {
 describe("OAuth callback safety", () => {
   test("rejects a mismatched state without including code, state, or tokens in the error", async () => {
     const fake = await fakeProvider("openai");
-    const harness = new OAuthValidationHarness({
+    const harness = OAuthValidationHarness({
       protocol: fake.protocol,
       store: new MemoryCredentialStore(),
     });
@@ -457,14 +457,14 @@ describe("OAuth callback safety", () => {
 
   test("supports timeout and explicit cancellation with sanitized errors", async () => {
     const fake = await fakeProvider("openai");
-    const timeoutHarness = new OAuthValidationHarness({
+    const timeoutHarness = OAuthValidationHarness({
       protocol: fake.protocol,
       store: new MemoryCredentialStore(),
     });
     const timed = await timeoutHarness.startLogin({ timeoutMs: 10 });
     await expect(timed.completed).rejects.toMatchObject({ code: "callback_timeout" });
 
-    const cancelHarness = new OAuthValidationHarness({
+    const cancelHarness = OAuthValidationHarness({
       protocol: fake.protocol,
       store: new MemoryCredentialStore(),
     });

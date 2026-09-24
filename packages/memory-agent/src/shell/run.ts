@@ -75,38 +75,40 @@ export function hostShell(source: NodeJS.ProcessEnv): string {
 }
 
 /** Keeps the first and last bytes of a stream and counts what was dropped in between. */
-class Capture {
-  #head = Buffer.alloc(0);
-  #tail: Buffer[] = [];
-  #tailLength = 0;
-  #total = 0;
+const makeCapture = () => {
+  let head = Buffer.alloc(0);
+  const tailChunks: Buffer[] = [];
+  let tailLength = 0;
+  let total = 0;
 
-  push(chunk: Buffer) {
-    this.#total += chunk.length;
-    if (this.#head.length < headBytes) {
-      const room = headBytes - this.#head.length;
-      this.#head = Buffer.concat([this.#head, chunk.subarray(0, room)]);
+  const push = (input: Buffer) => {
+    let chunk = input;
+    total += chunk.length;
+    if (head.length < headBytes) {
+      const room = headBytes - head.length;
+      head = Buffer.concat([head, chunk.subarray(0, room)]);
       chunk = chunk.subarray(room);
     }
     if (chunk.length === 0) return;
-    this.#tail.push(chunk);
-    this.#tailLength += chunk.length;
-    while (this.#tailLength - (this.#tail[0]?.length ?? 0) >= tailBytes) {
-      this.#tailLength -= this.#tail.shift()!.length;
+    tailChunks.push(chunk);
+    tailLength += chunk.length;
+    while (tailLength - (tailChunks[0]?.length ?? 0) >= tailBytes) {
+      tailLength -= tailChunks.shift()!.length;
     }
-  }
+  };
 
-  result() {
-    let tail = Buffer.concat(this.#tail);
+  const result = () => {
+    let tail = Buffer.concat(tailChunks);
     if (tail.length > tailBytes) tail = tail.subarray(tail.length - tailBytes);
-    const omitted = this.#total - this.#head.length - tail.length;
+    const omitted = total - head.length - tail.length;
     const text =
       omitted > 0
-        ? `${this.#head.toString("utf8")}\n… ${omitted} bytes omitted …\n${tail.toString("utf8")}`
-        : Buffer.concat([this.#head, tail]).toString("utf8");
-    return { text, truncated: omitted > 0, bytes: this.#total };
-  }
-}
+        ? `${head.toString("utf8")}\n… ${omitted} bytes omitted …\n${tail.toString("utf8")}`
+        : Buffer.concat([head, tail]).toString("utf8");
+    return { text, truncated: omitted > 0, bytes: total };
+  };
+  return { push, result };
+};
 
 export interface CommandResult {
   readonly command: string;
@@ -139,8 +141,8 @@ export function runCommand(command: string, options: CommandOptions): Promise<Co
   const shell = invocation.file;
   const windows = process.platform === "win32";
   const started = Date.now();
-  const stdout = new Capture();
-  const stderr = new Capture();
+  const stdout = makeCapture();
+  const stderr = makeCapture();
 
   return new Promise((resolve, reject) => {
     if (options.signal?.aborted) {

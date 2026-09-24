@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Effect, Either } from "effect";
 import { describe, expect, test } from "vite-plus/test";
@@ -21,6 +21,31 @@ describe("sniffImageType", () => {
     expect(sniffImageType(Buffer.from("RIFF\0\0\0\0WEBPVP8 "))).toBe("image/webp");
     expect(sniffImageType(Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'/>"))).toBeNull();
   });
+});
+
+test("a storage write failure is a typed attachment error", async () => {
+  const { runtime, storage } = await testRuntime();
+  renameSync(join(storage, "attachments"), join(storage, "attachments.old"));
+  writeFileSync(join(storage, "attachments"), "blocked");
+  const result = await runtime.runPromise(
+    Effect.gen(function* () {
+      const attachments = yield* Attachments;
+      return yield* Effect.either(attachments.save(tinyPng));
+    }),
+  );
+  expect(
+    Either.match(result, {
+      onLeft: (error) => {
+        switch (error._tag) {
+          case "AttachmentStorageFailed":
+            return { tag: error._tag, operation: error.operation };
+          case "AttachmentRejected":
+            return { tag: error._tag, operation: null };
+        }
+      },
+      onRight: () => null,
+    }),
+  ).toEqual({ tag: "AttachmentStorageFailed", operation: "save" });
 });
 
 describe("Attachments", () => {
@@ -139,8 +164,13 @@ describe("Attachments", () => {
         };
       }),
     );
-    expect(Either.isLeft(outcome.empty) && outcome.empty.left.reason).toBe("empty");
-    expect(Either.isLeft(outcome.svg) && outcome.svg.left.reason).toBe("unsupported_type");
+    const reason = (result: typeof outcome.empty) =>
+      Either.match(result, {
+        onLeft: (error) => (error._tag === "AttachmentRejected" ? error.reason : error._tag),
+        onRight: () => "saved",
+      });
+    expect(reason(outcome.empty)).toBe("empty");
+    expect(reason(outcome.svg)).toBe("unsupported_type");
     expect(outcome.traversal).toBeNull();
     expect(outcome.missing).toBeNull();
     expect(existsSync(join(storage, "attachments"))).toBe(true);

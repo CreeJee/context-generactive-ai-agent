@@ -8,24 +8,27 @@ if (process.env.FAKE_MCP_LOG) appendFileSync(process.env.FAKE_MCP_LOG, `start ${
 
 const server = new Server({ name: "fake", version: "1.0.0" }, { capabilities: { tools: {} } });
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
-    {
-      name: "echo",
-      description: "Repeats text.",
-      inputSchema: {
-        type: "object",
-        properties: { text: { type: "string" } },
-        required: ["text"],
+server.setRequestHandler(ListToolsRequestSchema, async () => {
+  if (process.env.FAKE_MCP_LIST_LOG) appendFileSync(process.env.FAKE_MCP_LIST_LOG, "list\n");
+  return {
+    tools: [
+      {
+        name: "echo",
+        description: "Repeats text.",
+        inputSchema: {
+          type: "object",
+          properties: { text: { type: "string" } },
+          required: ["text"],
+        },
       },
-    },
-    {
-      name: "where",
-      description: "Working directory and whether the configured secret arrived.",
-      inputSchema: { type: "object", properties: {} },
-    },
-  ],
-}));
+      {
+        name: "where",
+        description: "Working directory and whether the configured secret arrived.",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ],
+  };
+});
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   switch (request.params.name) {

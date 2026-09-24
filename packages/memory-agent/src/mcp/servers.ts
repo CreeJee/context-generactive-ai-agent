@@ -3,7 +3,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { AnyServerTool } from "@tanstack/ai";
 import { createMCPClient, type MCPClient } from "@tanstack/ai-mcp";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Context, Data, Effect, Layer, Schema } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
 import type { Project } from "../projects/projects.ts";
@@ -51,6 +51,11 @@ export interface McpOverview {
  */
 export const mcpToolPrefix = "mcp_";
 
+export class McpOperationFailed extends Data.TaggedError("McpOperationFailed")<{
+  readonly operation: "trust" | "tools";
+  readonly cause: unknown;
+}> {}
+
 /** OpenAI function names allow at most 64 characters of [A-Za-z0-9_-]. */
 export function mcpToolName(server: string, tool: string) {
   const plain = `${mcpToolPrefix}${server}__${tool.replace(/[^A-Za-z0-9_-]/g, "_")}`;
@@ -81,6 +86,7 @@ interface Connection {
   readonly fingerprint: string;
   readonly client: Promise<MCPClient>;
   state: McpServerState;
+  discovering: Promise<AnyServerTool[]> | null;
 }
 
 const describeFailure = (error: Error) => {
@@ -88,14 +94,16 @@ const describeFailure = (error: Error) => {
   return `${error.message}${cause}`.slice(0, 300);
 };
 
-const withTimeout = <A>(promise: Promise<A>, ms: number, what: string) =>
-  Promise.race([
-    promise,
-    new Promise<never>((_, reject) => {
-      const timer = setTimeout(() => reject(new Error(`${what} timed out`)), ms);
-      timer.unref();
-    }),
-  ]);
+const withTimeout = <A>(promise: Promise<A>, ms: number, what: string) => {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} timed out`)), ms);
+    timer.unref();
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+};
 
 const isText = Schema.is(Schema.String);
 
@@ -132,17 +140,27 @@ const make = Effect.gen(function* () {
       trust.find((row) => row.scope === server.scope && row.name === server.name)?.fingerprint ??
       null;
     const localNames = new Set(local.servers.map((server) => server.name));
+    const servers = [...global.servers, ...local.servers].map((server) => ({
+      server,
+      trusted: trustedFingerprint(server),
+      shadowed: server.scope === "global" && localNames.has(server.name),
+    }));
+    const usableFingerprints = new Map(
+      servers
+        .filter((entry) => !entry.shadowed && entry.trusted === entry.server.fingerprint)
+        .map((entry) => [connectionKey(project, entry.server), entry.server.fingerprint]),
+    );
+    for (const [key, connection] of connections) {
+      if (!key.startsWith(`${project.id}/`)) continue;
+      if (usableFingerprints.get(key) !== connection.fingerprint) close(key);
+    }
     return {
       files: [global, local].map((file, index) => ({
         scope: index === 0 ? ("global" as const) : ("project" as const),
         path: file.path,
         error: file.error,
       })),
-      servers: [...global.servers, ...local.servers].map((server) => ({
-        server,
-        trusted: trustedFingerprint(server),
-        shadowed: server.scope === "global" && localNames.has(server.name),
-      })),
+      servers,
     };
   };
 
@@ -204,43 +222,57 @@ const make = Effect.gen(function* () {
       fingerprint: server.fingerprint,
       client,
       state: { status: "trusted" },
+      discovering: null,
     };
     connections.set(key, connection);
     return connection;
   };
 
   /** Lists a server's tools as agent tools. A failure is remembered and retried next time. */
-  const discover = async (project: Project, server: ConfiguredServer) => {
+  const discover = (project: Project, server: ConfiguredServer): Promise<AnyServerTool[]> => {
     const connection = connect(project, server);
-    try {
-      const client = await withTimeout(connection.client, connectTimeoutMs, "connect");
-      const tools = await withTimeout(client.tools(), connectTimeoutMs, "tools/list");
-      connection.state = { status: "connected", tools: tools.map((tool) => tool.name) };
-      return tools.flatMap((tool): AnyServerTool[] => {
-        const execute = tool.execute;
-        if (!execute) return [];
-        return [
-          {
-            ...tool,
-            name: mcpToolName(server.name, tool.name),
-            description: `[MCP ${server.name}] ${tool.description}`.trim(),
-            needsApproval: false,
-            execute: async (args, context) => {
-              const result = await execute(args, context);
-              return truncated(isText(result) ? result : (JSON.stringify(result) ?? "")) ?? result;
+    if (connection.discovering) return connection.discovering;
+    const key = connectionKey(project, server);
+    const pending = (async () => {
+      try {
+        const client = await withTimeout(connection.client, connectTimeoutMs, "connect");
+        const tools = await withTimeout(client.tools(), connectTimeoutMs, "tools/list");
+        if (connections.get(key) !== connection) return [];
+        connection.state = { status: "connected", tools: tools.map((tool) => tool.name) };
+        return tools.flatMap((tool): AnyServerTool[] => {
+          const execute = tool.execute;
+          if (!execute) return [];
+          return [
+            {
+              ...tool,
+              name: mcpToolName(server.name, tool.name),
+              description: `[MCP ${server.name}] ${tool.description}`.trim(),
+              needsApproval: false,
+              execute: async (args, context) => {
+                const result = await execute(args, context);
+                return (
+                  truncated(isText(result) ? result : (JSON.stringify(result) ?? "")) ?? result
+                );
+              },
             },
-          },
-        ];
-      });
-    } catch (error) {
-      // Stop whatever did start; the next run starts it again.
-      void connection.client.then((client) => client.close()).catch(() => undefined);
-      connection.state = {
-        status: "failed",
-        error: describeFailure(error instanceof Error ? error : new Error(String(error))),
-      };
-      return [];
-    }
+          ];
+        });
+      } catch (error) {
+        // Stop whatever did start; the next run starts it again.
+        void connection.client.then((client) => client.close()).catch(() => undefined);
+        if (connections.get(key) === connection)
+          connection.state = {
+            status: "failed",
+            error: describeFailure(error instanceof Error ? error : new Error(String(error))),
+          };
+        return [];
+      }
+    })();
+    connection.discovering = pending;
+    void pending.finally(() => {
+      if (connection.discovering === pending) connection.discovering = null;
+    });
+    return pending;
   };
 
   const stateOf = (
@@ -294,7 +326,7 @@ const make = Effect.gen(function* () {
      * call. Distrusting stops it. Unknown names are ignored.
      */
     setTrusted: (project: Project, scope: McpScope, name: string, trusted: boolean) =>
-      Effect.promise(async () => {
+      Effect.gen(function* () {
         const entry = configured(project).servers.find(
           (candidate) => candidate.server.scope === scope && candidate.server.name === name,
         );
@@ -307,7 +339,11 @@ const make = Effect.gen(function* () {
         }
         if (!entry) return overview(project);
         upsertTrust.run(scope, projectId, name, entry.server.fingerprint, new Date().toISOString());
-        if (!entry.shadowed) await discover(project, entry.server);
+        if (!entry.shadowed)
+          yield* Effect.tryPromise({
+            try: () => discover(project, entry.server),
+            catch: (cause) => new McpOperationFailed({ operation: "trust", cause }),
+          });
         return overview(project);
       }),
 
@@ -316,11 +352,19 @@ const make = Effect.gen(function* () {
      * start are skipped (and shown as failed in settings); the run goes on without them.
      */
     tools: (project: Project) =>
-      Effect.promise(async () => {
+      Effect.gen(function* () {
         const usable = configured(project).servers.filter(
           (entry) => !entry.shadowed && entry.trusted === entry.server.fingerprint,
         );
-        const lists = await Promise.all(usable.map((entry) => discover(project, entry.server)));
+        const lists = yield* Effect.forEach(
+          usable,
+          (entry) =>
+            Effect.tryPromise({
+              try: () => discover(project, entry.server),
+              catch: (cause) => new McpOperationFailed({ operation: "tools", cause }),
+            }),
+          { concurrency: "unbounded" },
+        );
         return lists.flat();
       }),
   };

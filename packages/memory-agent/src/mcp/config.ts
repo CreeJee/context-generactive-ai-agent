@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { Either, ParseResult, Schema } from "effect";
+import { Data, Either, ParseResult, Schema } from "effect";
 
 /** Where MCP servers are configured: user-wide in the storage root, or in a project. */
 export const McpScope = Schema.Literal("global", "project");
@@ -126,12 +126,12 @@ export function readMcpFile(path: string, scope: McpScope): McpFileRead {
   });
 }
 
-export class MissingVariable extends Error {
+export class MissingVariable extends Data.TaggedError("MissingVariable")<{
   readonly variable: string;
-
+  readonly message: string;
+}> {
   constructor(variable: string) {
-    super(`missing_env: ${variable}`);
-    this.variable = variable;
+    super({ variable, message: `missing_env: ${variable}` });
   }
 }
 

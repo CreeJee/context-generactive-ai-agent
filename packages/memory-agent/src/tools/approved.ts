@@ -34,15 +34,16 @@ export function resolveShellWorkingDirectory(
 ) {
   if (!isAbsolute(workdir)) return resolveProjectPath(projectRoot, workdir, "directory");
   const resolved = resolveOutsidePath(projectRoot, storageRoot, workdir, "directory");
-  if (Either.isLeft(resolved)) return Either.left(resolved.left);
   const tempRoots = [canonicalPath("/tmp"), canonicalPath(tmpdir())];
-  if (!tempRoots.some((root) => isSameOrBelow(root, resolved.right.absolute)))
-    return Either.left(new PathRejected({ path: workdir, reason: "invalid_path" }));
-  return Either.right({
-    absolute: resolved.right.absolute,
-    relative: resolved.right.absolute,
-    stats: resolved.right.stats,
-  });
+  return Either.flatMap(resolved, (directory) =>
+    tempRoots.some((root) => isSameOrBelow(root, directory.absolute))
+      ? Either.right({
+          absolute: directory.absolute,
+          relative: directory.absolute,
+          stats: directory.stats,
+        })
+      : Either.left(new PathRejected({ path: workdir, reason: "invalid_path" })),
+  );
 }
 
 const make = Effect.gen(function* () {

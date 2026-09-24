@@ -5,7 +5,7 @@
 import { parentPort } from "node:worker_threads";
 import { Cause, Effect, Exit, Option, Schema } from "effect";
 import { RedactRequest, type RedactReply } from "./redact-protocol.ts";
-import { SecretRedactor, type Redaction } from "./redactor.ts";
+import { SecretRedactor, type Redaction, type SecretRedactionFailed } from "./redactor.ts";
 
 const port = parentPort;
 if (!port) throw new Error("the redaction worker runs only as a worker thread");
@@ -15,7 +15,7 @@ const decodeJsonText = Schema.decodeUnknownOption(Schema.parseJson());
 const redactor = Effect.runSync(Effect.provide(SecretRedactor, SecretRedactor.layer));
 
 /** A JSON column's text with secrets hidden in its strings, or the text as it was. */
-const hideJson = (text: string): Effect.Effect<Redaction> =>
+const hideJson = (text: string): Effect.Effect<Redaction, SecretRedactionFailed> =>
   Option.match(decodeJsonText(text), {
     // Not JSON after all: treat it as text rather than leave it unswept.
     onNone: () => redactor.redactText(text),

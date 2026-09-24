@@ -4,7 +4,7 @@ import { join } from "node:path";
 import * as acp from "@agentclientprotocol/sdk";
 import type { AnyMessage, SessionNotification } from "@agentclientprotocol/sdk";
 import { describe, expect, test } from "vite-plus/test";
-import { AppApi } from "../src/acp/app-api.ts";
+import { createAppApi } from "../src/acp/app-api.ts";
 import { startAcpAgent } from "../src/acp/agent-bridge.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { appFetch } from "./support/app-fetch.ts";
@@ -27,7 +27,7 @@ async function acpSetup(answerPermission: "allow" | "reject" = "allow") {
   const fetcher = appFetch(context.runtime);
   const agentConnection = startAcpAgent({
     stream: streams.agent,
-    api: new AppApi("http://app.test", (input, init) =>
+    api: createAppApi("http://app.test", (input, init) =>
       new URL(input instanceof Request ? input.url : input).pathname === "/api/auth"
         ? Promise.resolve(Response.json({ status: "signed-in" }))
         : fetcher(input, init),

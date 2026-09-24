@@ -3,7 +3,7 @@ import { join, posix } from "node:path";
 import { toolDefinition } from "@tanstack/ai";
 import { Context, Effect, Either, Layer, Schema } from "effect";
 import { gitGrepFiles } from "../files/git-grep.ts";
-import { listProjectFiles, Snapshots, type Snapshot } from "../files/listing.ts";
+import { listProjectFiles, createSnapshots, type Snapshot } from "../files/listing.ts";
 import { PathRejected, resolveProjectPath } from "../files/paths.ts";
 import { decodeSearchCursor, encodeSearchCursor, searchTextFiles } from "../files/search.ts";
 import {
@@ -115,8 +115,8 @@ interface CachedRead {
   readonly lines: readonly string[];
 }
 
-const make = Effect.sync(() => {
-  const snapshots = new Snapshots();
+const make = Effect.gen(function* () {
+  const snapshots = yield* createSnapshots();
   const candidateCache = new Map<string, Promise<ReadonlySet<string> | null>>();
   const readCache = new Map<string, CachedRead>();
 
@@ -252,8 +252,9 @@ const make = Effect.sync(() => {
                 checked = resolveProjectPath(root, directory, "directory");
                 directories.set(directory, checked);
               }
-              if (Either.isLeft(checked))
-                throw new PathRejected({ path, reason: checked.left.reason });
+              Either.getOrElse(checked, (rejection) => {
+                throw new PathRejected({ path, reason: rejection.reason });
+              });
               return (await readFileBytes(join(root, path), path, true)).bytes;
             },
             query,

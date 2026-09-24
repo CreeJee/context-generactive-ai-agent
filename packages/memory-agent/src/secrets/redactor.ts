@@ -2,7 +2,7 @@ import type { AnyServerTool } from "@tanstack/ai";
 import { lintSource } from "@secretlint/core";
 import { secretLintProfiler } from "@secretlint/profiler";
 import { creator as recommendedRules } from "@secretlint/secretlint-rule-preset-recommend";
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Context, Data, Effect, Layer, Option, Schema } from "effect";
 import { JsonValue, type JsonValue as Json } from "../json.ts";
 
 /**
@@ -32,6 +32,10 @@ export interface Redaction {
   /** How many secrets were hidden; 0 means the text came back unchanged. */
   readonly hidden: number;
 }
+
+export class SecretRedactionFailed extends Data.TaggedError("SecretRedactionFailed")<{
+  readonly cause: unknown;
+}> {}
 
 const credentialName =
   "(?:TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIALS?|SESSION_?KEY|AUTH)";
@@ -148,17 +152,18 @@ const make = Effect.sync(() => {
   secretLintProfiler.setEnabled(false);
 
   const redactText = (text: string) =>
-    Effect.promise(async (): Promise<Redaction> => {
+    Effect.gen(function* () {
       if (text.length === 0) return { text, hidden: 0 };
-      const findings = mergeFindings([
-        ...(await formatFindings(text)),
-        ...assignmentFindings(text),
-      ]);
+      const detected = yield* Effect.tryPromise({
+        try: () => formatFindings(text),
+        catch: (cause) => new SecretRedactionFailed({ cause }),
+      });
+      const findings = mergeFindings([...detected, ...assignmentFindings(text)]);
       if (findings.length === 0) return { text, hidden: 0 };
       return { text: replaceFindings(text, findings), hidden: findings.length };
     });
 
-  const redactJson = (value: Json): Effect.Effect<Json> => {
+  const redactJson = (value: Json): Effect.Effect<Json, SecretRedactionFailed> => {
     if (isString(value)) return Effect.map(redactText(value), (redaction) => redaction.text);
     if (value === null || isNumber(value) || isBoolean(value)) return Effect.succeed(value);
     if (Array.isArray(value)) return Effect.all(value.map(redactJson));
