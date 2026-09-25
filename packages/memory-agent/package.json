@@ -60,6 +60,7 @@
     "cross-spawn": "catalog:",
     "dayjs": "catalog:",
     "effect": "catalog:",
+    "js-tiktoken": "catalog:",
     "kiwi-nlp": "catalog:",
     "sharp": "catalog:",
     "turbovec": "workspace:*"

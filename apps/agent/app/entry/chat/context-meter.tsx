@@ -14,8 +14,7 @@ const crowdedShare = 0.6;
  * conversation took, with what that means on hover.
  */
 export function ContextMeter({ context }: { context: ContextView }) {
-  const { usedTokens, cachedTokens, cacheRatio, compactionStage, windowTokens, compactAtTokens } =
-    context;
+  const { usedTokens, cachedTokens, cacheRatio, compactionStage, windowTokens } = context;
   const share = usedTokens === null ? 0 : Math.min(1, usedTokens / windowTokens);
   const crowded = share >= crowdedShare;
   return (
@@ -68,8 +67,9 @@ export function ContextMeter({ context }: { context: ContextView }) {
           </p>
         )}
         <p>
-          대화가 약 {tokens.format(compactAtTokens)} 토큰을 넘으면 지난 도구 출력부터 비우고, 앞
-          대화는 요약으로 보내요. /compact로 바로 줄일 수도 있어요.
+          답변이 끝난 도구 출력은 다음 요청부터 참조로 바꾸고, 준비된 과거 요약은 대화 크기와
+          관계없이 사용해요. 긴 대화는 오래된 메시지를 더 줄일 수 있고, /compact로 직접 줄일 수도
+          있어요.
         </p>
       </TooltipContent>
     </Tooltip>

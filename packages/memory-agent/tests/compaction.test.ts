@@ -12,9 +12,11 @@ import {
   type StoredContextUsage,
 } from "../src/agent/context-usage.ts";
 import {
+  budgetFor,
   clearedOutput,
   compact,
   compaction,
+  estimateConversation,
   estimateTokens,
   lightweightToolResults,
   turnSummariesNamespace,
@@ -627,7 +629,13 @@ describe("compaction", () => {
     expect(twoBlocks[1]?.content).toContain("user turns 3-4");
     expect(twoBlocks[2]).toEqual({ role: "user", content: "질문 5" });
 
-    // Stored blocks are the monotonic watermark: falling under budget never restores raw turns.
+    // Ready blocks already applied below the former 25% gate; removing that dead gate must not
+    // resummarize or restore raw turns. The live request keeps the latest user message last.
+    const lowUsage = budgetFor(200_000);
+    expect(estimateConversation(messages)).toBeLessThan(200_000 * 0.25);
+    expect(lowUsage.compactAt).toBe(0);
+    expect(await sent(lowUsage, messages)).toEqual(twoBlocks);
+    expect(twoBlocks.at(-1)).toEqual({ role: "user", content: "질문 6" });
     expect(await sent({ compactAt: noLimit, leaveOutAt: noLimit }, messages)).toEqual(twoBlocks);
 
     // A conversation whose turn 3 is not the one summarized gets no summary.
@@ -797,6 +805,8 @@ describe("compaction", () => {
     expect((await runtime.runPromise(agent.compact("no-such-session", "tab-a"))).status).toBe(404);
     const first = await compact("tab-a");
     expect(first.status).toBe(200);
+    // Explicit /compact is not gated by the old 25%-of-window threshold.
+    expect(first.body.tokensBefore).toBeLessThan(258_400 * 0.25);
     // The latest two stay raw. Answered tool output is already pointerized by automatic compaction.
     expect(first.body).toMatchObject({ cleared: 0, summarizedTurns: 4, summaryFailed: false });
     expect(first.body.tokensAfter).toBeLessThan(first.body.tokensBefore);
@@ -826,6 +836,44 @@ describe("compaction", () => {
     // The saved conversation still has everything.
     const kept = await stores.messages.loadThread(session.id);
     expect(kept.find((message) => message.role === "tool")?.content).toBe(toolOutput);
+  });
+
+  test("/compact after automatic summary catch-up adds no reduction to the pilot's next request", async () => {
+    const { runtime, project, session, provider } = await testRuntime({ testProvider: {} });
+    await provider!.select(runtime);
+    const { agent, nodes, stores } = await runtime.runPromise(
+      Effect.all({
+        agent: AgentChat,
+        nodes: Nodes,
+        stores: Effect.map(ChatState, (state) => state.persistence.stores),
+      }),
+    );
+    const { userNodes, messages } = conversation(
+      nodes,
+      { projectId: project.id, sessionId: session.id },
+      ["네", "네", "네", "네", "네"],
+    );
+    await stores.messages.saveThread(session.id, messages);
+    // The pilot forces automatic catch-up before B's manual call: four older user turns
+    // are already summarized and the two most recent user turns must stay raw.
+    await stores.metadata.set(turnSummariesNamespace, session.id, {
+      blocks: [{ end: 4, nextTurnNodeId: userNodes[4]!.id, text: "- 결정 보존" }],
+    });
+    const sent = () =>
+      firstSent(
+        messages,
+        compaction(stores.metadata, sourcesOf(nodes, session.id), budgetFor(200_000)),
+        session.id,
+      );
+    const before = await sent();
+    const response = await runtime.runPromise(agent.compact(session.id, null));
+    expect(response.status).toBe(200);
+    expect(decodeCompact(await response.json())).toMatchObject({
+      cleared: 0,
+      summarizedTurns: 0,
+      summaryFailed: false,
+    });
+    expect(await sent()).toEqual(before);
   });
 
   test("reports prompt cache usage across consecutive requests and distinguishes zero", async () => {
@@ -877,7 +925,7 @@ describe("compaction", () => {
       cacheRatio: null,
       compactionStage: null,
       windowTokens: 200_000,
-      compactAtTokens: 50_000,
+      compactAtTokens: 0,
     });
 
     const firstEvents = await run("run-1");

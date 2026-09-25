@@ -5,22 +5,18 @@ import { recentRawUserTurns } from "./compaction-policy.ts";
 import { consumeColdObservation, pendingColdObservation } from "./context-usage.ts";
 import type { CompactResult, CompactionStage } from "./run-state.ts";
 
-/**
- * Share of the model's context the conversation may take before it is compacted: answered tool
- * output is cleared first, then earlier turns go as their summaries.
- */
-export const compactAtShare = 0.25;
 /** Share past which the oldest messages are left out, whatever else was done. */
 export const leaveOutAtShare = 0.55;
 
-/** Estimated conversation tokens at which each step starts. */
+/** Estimated leave-out ceiling; compactAt is retained as a zero-valued compatibility field. */
 export interface Budget {
+  /** @deprecated Validated summaries and answered tools compact without a minimum threshold. */
   readonly compactAt: number;
   readonly leaveOutAt: number;
 }
 
 export const budgetFor = (contextWindow: number): Budget => ({
-  compactAt: Math.floor(contextWindow * compactAtShare),
+  compactAt: 0,
   leaveOutAt: Math.floor(contextWindow * leaveOutAtShare),
 });
 
@@ -233,10 +229,9 @@ export interface Compacted {
 }
 
 /**
- * The conversation as the model is sent it. What `/compact` did always applies. Past
- * `compactAt` the answered tool output is cleared, and if that is not enough, the turns before
- * the latest few go as their summaries, as far as summaries exist. Past `leaveOutAt` the oldest
- * messages are left out. The saved conversation itself is never changed.
+ * The conversation as the model is sent it. Answered tool outputs become pointers after a run,
+ * and validated older summary blocks replace raw turns regardless of conversation size. Past
+ * `leaveOutAt` the oldest messages are left out. The saved conversation is never changed.
  */
 export async function compact(
   messages: readonly ModelMessage[],
@@ -260,16 +255,11 @@ export async function compact(
   if (cleared) sent = cleared;
   if (clearedByHand || cleared) stage = "clear-answered";
 
-  // A valid stored block is a monotonic watermark: once summarized, those turns never come back as
-  // raw messages merely because the shorter request fell below the compact threshold.
+  // Stored, validated blocks are monotonic: even a small request keeps earlier turns summarized.
+  // The previous 25% gate could not change the chosen blocks: through always started at the end
+  // of fitting, so filtering fitting by through always returned every validated block.
   const turns = userTurns(messages);
-  const fitting = linedUp(messages, state.blocks, sources.nodeText);
-  let through = Math.max(manual.summarizedTurns, fitting.at(-1)?.end ?? 0);
-  // A reported cache-cold request makes one early attempt even below the normal threshold.
-  // Only stored, validated summary blocks can replace raw turns; no content is discarded blindly.
-  if (early || estimateConversation(sent) > budget.compactAt)
-    through = Math.max(through, turns.length - recentRawUserTurns);
-  const summaries = fitting.filter((block) => block.end <= through);
+  const summaries = linedUp(messages, state.blocks, sources.nodeText);
   const summarizedTurns = summaries.at(-1)?.end ?? 0;
   const firstKept = turns[summarizedTurns];
   if (summarizedTurns > 0 && firstKept !== undefined) {
