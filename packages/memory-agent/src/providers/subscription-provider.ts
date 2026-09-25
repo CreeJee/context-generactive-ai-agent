@@ -242,6 +242,7 @@ export function createSubscriptionProvider(
       ...optionalProperty("httpStatus", error.status ?? undefined),
       ...optionalProperty("providerCode", error.providerCode ?? undefined),
       ...optionalProperty("credentialStage", error.credentialStage ?? undefined),
+      ...optionalProperty("transportCode", error.transportCode ?? undefined),
     };
   };
   let catalogCache: {

@@ -259,6 +259,30 @@ test("reports credential write failure without blaming the provider or exposing 
   await completion;
 });
 
+test("classifies token exchange transport failures without exposing native error text", async () => {
+  const fake = await fakeProvider("openai");
+  const harness = OAuthValidationHarness({
+    protocol: fake.protocol,
+    store: new MemoryCredentialStore(),
+    fetch: async () => {
+      throw new TypeError("private network detail", {
+        cause: Object.assign(new Error("private host detail"), { code: "ENETUNREACH" }),
+      });
+    },
+  });
+  const attempt = await harness.startLogin({ timeoutMs: 1_000 });
+  const completion = attempt.completed.catch((error: OAuthHarnessError) => error);
+  expect((await fetch(attempt.authorizationUrl)).status).toBe(502);
+  const failure = await completion;
+  expect(failure).toMatchObject({
+    code: "transport_unavailable",
+    operation: "token_exchange",
+    transportCode: "ENETUNREACH",
+  });
+  expect(JSON.stringify(failure)).not.toContain("private network detail");
+  expect(JSON.stringify(failure)).not.toContain("private host detail");
+});
+
 test("exposes only a validated provider error code from a failed token exchange", async () => {
   const fake = await fakeProvider("openai");
   const harness = OAuthValidationHarness({

@@ -162,6 +162,7 @@ export function AccountSection({
                       {auth.httpStatus && <div>HTTP: {auth.httpStatus}</div>}
                       {auth.providerCode && <div>provider code: {auth.providerCode}</div>}
                       {auth.credentialStage && <div>credential stage: {auth.credentialStage}</div>}
+                      {auth.transportCode && <div>transport code: {auth.transportCode}</div>}
                     </dl>
                   </details>
                 )}

@@ -157,7 +157,34 @@ export interface OAuthHarnessErrorContext {
   readonly providerCode?: string;
   /** Fixed stage only; never a native exception message or credential. */
   readonly credentialStage?: CredentialStoreStage;
+  /** Allowlisted network/TLS code or a fixed category; never the native exception text. */
+  readonly transportCode?: string;
 }
+
+const safeTransportCodes = new Set([
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+  "ENOTFOUND",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_SOCKET",
+  "CERT_HAS_EXPIRED",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
+]);
+const NativeCause = Schema.Struct({ code: Schema.String });
+const decodeNativeCause = Schema.decodeUnknownOption(NativeCause);
+const safeTransportCode = (error: Error): string => {
+  if (error.name === "TimeoutError") return "timeout";
+  const code = Option.getOrUndefined(decodeNativeCause(error.cause))?.code;
+  return code !== undefined && safeTransportCodes.has(code) ? code : "other";
+};
 
 const providerName = (provider: OAuthProvider) => (provider === "openai" ? "OpenAI" : "Anthropic");
 const maxProviderReasonCharacters = 1_000;
@@ -205,6 +232,7 @@ export class OAuthHarnessError extends Data.TaggedError("OAuthHarnessError")<{
   readonly operation: OAuthHarnessOperation | null;
   readonly providerCode: string | null;
   readonly credentialStage: CredentialStoreStage | null;
+  readonly transportCode: string | null;
   readonly message: string;
 }> {
   constructor(
@@ -224,6 +252,7 @@ export class OAuthHarnessError extends Data.TaggedError("OAuthHarnessError")<{
       operation: context.operation ?? null,
       providerCode: context.providerCode ?? null,
       credentialStage: context.credentialStage ?? null,
+      transportCode: context.transportCode ?? null,
       message: `oauth_${code}${details.length === 0 ? "" : ` [${details.join(", ")}]`}: ${failureMessages[code]}${context.reason === undefined ? "" : ` ${context.reason}`}`,
     });
   }
@@ -582,8 +611,11 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
         redirect: "error",
         signal: AbortSignal.timeout(30_000),
       });
-    } catch {
-      throw new OAuthHarnessError("transport_unavailable", null, context);
+    } catch (error) {
+      throw new OAuthHarnessError("transport_unavailable", null, {
+        ...context,
+        transportCode: error instanceof Error ? safeTransportCode(error) : "other",
+      });
     }
     if (!response.ok) {
       const body = await response.text().catch(() => "");
