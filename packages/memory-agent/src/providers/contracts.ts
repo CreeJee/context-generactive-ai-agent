@@ -27,6 +27,8 @@ export const ProviderModel = Schema.Struct({
   isDefault: Schema.Boolean,
   defaultReasoningEffort: Schema.String,
   supportedReasoningEfforts: Schema.Array(Schema.String),
+  /** Model-advertised input context size, when the provider catalog supplies one. */
+  contextWindow: Schema.optional(Schema.Number),
   capabilities: ModelCapabilities,
 });
 export type ProviderModel = typeof ProviderModel.Type;
@@ -96,6 +98,8 @@ export interface AgentModelRuntime {
   readonly provider: ProviderId;
   readonly adapter: (selection: ModelSelection) => AnyTextAdapter;
   readonly contextWindow: (model: string) => number;
+  /** False when contextWindow is only a conservative fallback, not model metadata. */
+  readonly contextWindowKnown?: (model: string) => boolean;
   readonly agentLoop: AgentLoopStrategy;
   readonly runMiddleware: () => ChatMiddleware;
   readonly steer: (threadId: string, message: ModelMessage) => Promise<"steered" | "no_turn">;

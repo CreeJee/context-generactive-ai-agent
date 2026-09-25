@@ -17,6 +17,7 @@ const record = (
     cacheRatio: null,
     compactionStage: null,
     windowTokens: 258_400,
+    windowKnown: false,
     compactAtTokens: 64_600,
   },
   workflow: { phase: "chat", goal: null, plan: null, ledger: [] },

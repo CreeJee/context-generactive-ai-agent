@@ -23,6 +23,7 @@ const contextWindows: Readonly<Record<ProviderId, number>> = {
 export function createSubscriptionRuntime(
   provider: ProviderId,
   client: SubscriptionOAuthClient | StreamingOAuthClient,
+  catalogWindow: (model: string) => number | null = () => null,
 ): AgentModelRuntime {
   return {
     provider,
@@ -33,7 +34,8 @@ export function createSubscriptionRuntime(
         );
       return new SubscriptionTextAdapter(client, selection);
     },
-    contextWindow: () => contextWindows[provider],
+    contextWindow: (model) => catalogWindow(model) ?? contextWindows[provider],
+    contextWindowKnown: (model) => catalogWindow(model) !== null,
     agentLoop: subscriptionAgentLoop,
     runMiddleware: () => runMiddleware(provider),
     // Subscription APIs do not expose live-turn steering. Returning no_turn keeps the queued

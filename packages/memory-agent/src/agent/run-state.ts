@@ -66,8 +66,10 @@ export interface ContextView {
   readonly cacheRatio: number | null;
   /** The strongest compaction operation applied to the latest model request. */
   readonly compactionStage: CompactionStage | null;
-  /** Tokens the selected model may read. */
+  /** Model-advertised input window, or a fallback used only for compaction. */
   readonly windowTokens: number;
+  /** Whether windowTokens came from the selected model's catalog metadata. */
+  readonly windowKnown: boolean;
   /** Estimated conversation size past which earlier parts are compacted. */
   readonly compactAtTokens: number;
 }

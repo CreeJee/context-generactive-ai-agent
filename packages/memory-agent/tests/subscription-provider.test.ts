@@ -11,6 +11,7 @@ import {
   createSubscriptionProvider,
   parseSubscriptionCatalog,
 } from "../src/providers/subscription-provider.ts";
+import { createSubscriptionRuntime } from "../src/providers/subscription-runtime.ts";
 
 const settingsStore = () => {
   let settings: Settings = {};
@@ -55,6 +56,7 @@ const fakeClient = (provider: "openai" | "anthropic", pages: ReadonlyArray<unkno
         catalogRequests += 1;
         return pages;
       },
+      async *stream() {},
     },
     complete: () => {
       connected = true;
@@ -94,6 +96,7 @@ describe("subscription provider product services", () => {
         isDefault: true,
         defaultReasoningEffort: "high",
         supportedReasoningEfforts: ["low", "high", "xhigh"],
+        contextWindow: 400_000,
         capabilities: {
           inputModalities: ["text", "image"],
           toolCalling: true,
@@ -103,6 +106,32 @@ describe("subscription provider product services", () => {
     ]);
     expect(JSON.stringify(models)).not.toContain("context_window");
     expect(JSON.stringify(models)).not.toContain("Authorization");
+  });
+
+  test("uses each model's catalog window and labels an unknown window as a fallback", async () => {
+    const fake = fakeClient("openai", [
+      {
+        models: [
+          { slug: "gpt-6-sol", context_window: 400_000 },
+          { slug: "gpt-6-astra", context_window: 300_000 },
+          { slug: "unknown-window", context_window: -1 },
+        ],
+      },
+    ]);
+    const provider = createSubscriptionProvider({
+      protocol: providerProtocols.openai,
+      config: settingsStore(),
+      client: fake.client,
+    });
+    const runtime = createSubscriptionRuntime("openai", fake.client, provider.contextWindow);
+    expect(runtime.contextWindowKnown?.("gpt-6-sol")).toBe(false);
+    expect(runtime.contextWindow("gpt-6-sol")).toBe(258_400);
+    await Effect.runPromise(provider.models.list);
+    expect(runtime.contextWindow("gpt-6-sol")).toBe(400_000);
+    expect(runtime.contextWindow("gpt-6-astra")).toBe(300_000);
+    expect(runtime.contextWindowKnown?.("gpt-6-sol")).toBe(true);
+    expect(runtime.contextWindowKnown?.("unknown-window")).toBe(false);
+    expect(runtime.contextWindow("unknown-window")).toBe(258_400);
   });
 
   test("merges Anthropic pages, removes duplicates, and derives reasoning capabilities", () => {

@@ -32,6 +32,7 @@ export const contextView = (
   windowTokens: number,
   cachedTokens: number | null = null,
   compactionStage: CompactionStage | null = null,
+  windowKnown = false,
 ): ContextView => ({
   usedTokens,
   cachedTokens,
@@ -41,6 +42,7 @@ export const contextView = (
       : cachedTokens / usedTokens,
   compactionStage,
   windowTokens,
+  windowKnown,
   compactAtTokens: budgetFor(windowTokens).compactAt,
 });
 
@@ -86,12 +88,13 @@ export const lastInputTokens = async (metadata: MetadataStore, threadId: string)
 
 /**
  * Keeps how much each model request of a run read, and tells the page as it happens.
- * `windowTokens` is asked each time, since the window is learned from the model's reports.
+ * The window and its provenance are read on each request from the current model catalog.
  */
 export function recordContextUsage(
   metadata: MetadataStore,
   windowTokens: () => number,
   compactionStage: () => CompactionStage = () => "none",
+  windowKnown: () => boolean = () => false,
 ): ChatMiddleware {
   return {
     name: "memory-agent/context-usage",
@@ -106,7 +109,13 @@ export function recordContextUsage(
       await metadata.set(contextUsageNamespace, ctx.threadId, stored);
       ctx.emitCustomEvent(
         contextUsageEvent,
-        contextView(usage.promptTokens, windowTokens(), cachedTokens, stored.compactionStage),
+        contextView(
+          usage.promptTokens,
+          windowTokens(),
+          cachedTokens,
+          stored.compactionStage,
+          windowKnown(),
+        ),
       );
     },
   };

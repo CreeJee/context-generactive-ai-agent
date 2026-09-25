@@ -28,8 +28,8 @@ const make = Effect.gen(function* () {
   return providerRegistryFrom(
     [openai, anthropic],
     [
-      createSubscriptionRuntime("openai", openaiClient),
-      createSubscriptionRuntime("anthropic", anthropicClient),
+      createSubscriptionRuntime("openai", openaiClient, openai.contextWindow),
+      createSubscriptionRuntime("anthropic", anthropicClient, anthropic.contextWindow),
     ],
   );
 });

@@ -54,6 +54,8 @@ const CatalogModel = Schema.Struct({
   supported_reasoning_levels: Schema.optional(Schema.Array(EffortValue)),
   supported_reasoning_efforts: Schema.optional(Schema.Array(EffortValue)),
   input_modalities: Schema.optional(Schema.Array(Schema.String)),
+  // Ignore malformed/unknown limits without discarding an otherwise usable model.
+  context_window: Schema.optional(Schema.Unknown),
 });
 type CatalogModel = typeof CatalogModel.Type;
 const CatalogModels = Schema.Array(CatalogModel);
@@ -165,22 +167,27 @@ export function parseSubscriptionCatalog(
     const image =
       entry.input_modalities?.some((modality) => modality === "image" || modality === "vision") ??
       false;
-    return [
-      {
-        provider,
-        id,
-        displayName: entry.display_name ?? entry.name ?? id,
-        isDefault:
-          id === preferred || (index === 0 && !entries.some((item) => item.id === preferred)),
-        defaultReasoningEffort,
-        supportedReasoningEfforts: efforts,
-        capabilities: {
-          inputModalities: image || provider === "anthropic" ? ["text", "image"] : ["text"],
-          toolCalling: true,
-          reasoning: efforts.some((effort) => effort !== "none"),
-        },
-      } satisfies ProviderModel,
-    ];
+    const contextWindow = Option.getOrNull(
+      Option.filter(
+        Schema.decodeUnknownOption(Schema.Int)(entry.context_window),
+        (limit) => Number.isSafeInteger(limit) && limit > 0,
+      ),
+    );
+    const model: ProviderModel = {
+      provider,
+      id,
+      displayName: entry.display_name ?? entry.name ?? id,
+      isDefault:
+        id === preferred || (index === 0 && !entries.some((item) => item.id === preferred)),
+      defaultReasoningEffort,
+      supportedReasoningEfforts: efforts,
+      capabilities: {
+        inputModalities: image || provider === "anthropic" ? ["text", "image"] : ["text"],
+        toolCalling: true,
+        reasoning: efforts.some((effort) => effort !== "none"),
+      },
+    };
+    return [contextWindow === null ? model : { ...model, contextWindow }];
   });
 }
 
@@ -212,7 +219,7 @@ const fromPromise = <A>(
 
 export function createSubscriptionProvider(
   options: SubscriptionProviderOptions,
-): ProviderConfiguration {
+): ProviderConfiguration & { readonly contextWindow: (model: string) => number | null } {
   const provider = options.protocol.provider;
   const client = options.client ?? createSubscriptionOAuthClient({ protocol: options.protocol });
   let pending: LoginAttempt | null = null;
@@ -333,6 +340,8 @@ export function createSubscriptionProvider(
 
   return {
     provider,
+    contextWindow: (model) =>
+      catalogCache?.models.find((candidate) => candidate.id === model)?.contextWindow ?? null,
     auth: { provider, status, connect, cancel, disconnect },
     models: {
       provider,

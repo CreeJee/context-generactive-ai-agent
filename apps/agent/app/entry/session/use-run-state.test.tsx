@@ -23,6 +23,7 @@ const snapshot = (version: number): SessionRunState => ({
     cacheRatio: null,
     compactionStage: null,
     windowTokens: 258400,
+    windowKnown: false,
     compactAtTokens: 64600,
   },
   workflow: {

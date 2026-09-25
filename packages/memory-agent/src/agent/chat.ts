@@ -405,8 +405,11 @@ const make = Effect.gen(function* () {
   const workTraceUnavailable = () => json(404, { error: "work_trace_disabled" });
   const windowFor = (selection: ModelSelection | null) =>
     selection
-      ? Effect.map(active.runtime(selection), (runtime) => runtime.contextWindow(selection.model))
-      : Effect.succeed(200_000);
+      ? Effect.map(active.runtime(selection), (runtime) => ({
+          tokens: runtime.contextWindow(selection.model),
+          known: runtime.contextWindowKnown?.(selection.model) ?? false,
+        }))
+      : Effect.succeed({ tokens: 200_000, known: false });
   const compactionSources = (
     sessionId: string,
     project?: Project,
@@ -1000,6 +1003,11 @@ const make = Effect.gen(function* () {
         }
         if (!selection) return json(412, { error: "model_selection_required" });
         const runtime = yield* active.runtime(selection);
+        // Refresh model-advertised limits before choosing this run's compaction budget. A catalog
+        // failure must not prevent an otherwise valid request; the runtime has a safe fallback.
+        yield* Effect.flatMap(active.models(selection), (models) => models.list).pipe(
+          Effect.catch(() => Effect.succeed([])),
+        );
         const requestedImage = Option.isSome(decodeImageTurnIntent(forwardedProps));
         const imageStatus = yield* imageFeature.status;
         const imageRoute =
@@ -1239,7 +1247,12 @@ const make = Effect.gen(function* () {
             },
           ),
           modelImages(),
-          recordContextUsage(metadata, window, () => compactionStage),
+          recordContextUsage(
+            metadata,
+            window,
+            () => compactionStage,
+            () => runtime.contextWindowKnown?.(selection.model) ?? false,
+          ),
           collectApiUsage(usageLedger, {
             rootSessionId: sessionId,
             purpose: "main",
@@ -1402,7 +1415,7 @@ const make = Effect.gen(function* () {
         if (!leases.permits(sessionId, holder)) return inUse();
         yield* sessions.get(sessionId);
         if (liveRuns.get(sessionId)) return json(409, { error: "run_in_progress" });
-        const budget = budgetFor(yield* windowFor(yield* active.selected));
+        const budget = budgetFor((yield* windowFor(yield* active.selected)).tokens);
         const { messages } = chatState.persistence.stores;
         const stored = yield* agentPromise("load-messages", () => messages.loadThread(sessionId));
         const result: CompactResult = yield* compactByHand(
@@ -1437,15 +1450,17 @@ const make = Effect.gen(function* () {
           ? yield* workflows.get(sessionId)
           : yield* workflows.reconcile(sessionId);
         const lease = leases.view(sessionId, holder);
+        const window = yield* windowFor(yield* active.selected);
         const state: SessionRunState = {
           running: live ? { runId: live.runId } : null,
           lastRun: last && { runId: last.runId, status: last.status, error: last.error ?? null },
           lease,
           context: contextView(
             usage?.inputTokens ?? null,
-            yield* windowFor(yield* active.selected),
+            window.tokens,
             usage?.cachedTokens ?? null,
             usage?.compactionStage ?? null,
+            window.known,
           ),
           workflow,
           actions: workflowActions(workflow, { running: Boolean(live), lease }),

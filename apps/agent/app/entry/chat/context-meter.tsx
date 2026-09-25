@@ -14,9 +14,10 @@ const crowdedShare = 0.6;
  * conversation took, with what that means on hover.
  */
 export function ContextMeter({ context }: { context: ContextView }) {
-  const { usedTokens, cachedTokens, cacheRatio, compactionStage, windowTokens } = context;
-  const share = usedTokens === null ? 0 : Math.min(1, usedTokens / windowTokens);
-  const crowded = share >= crowdedShare;
+  const { usedTokens, cachedTokens, cacheRatio, compactionStage, windowTokens, windowKnown } =
+    context;
+  const share = usedTokens === null || !windowKnown ? 0 : usedTokens / windowTokens;
+  const crowded = windowKnown && share >= crowdedShare;
   return (
     <Tooltip>
       <TooltipTrigger
@@ -30,24 +31,28 @@ export function ContextMeter({ context }: { context: ContextView }) {
           />
         }
       >
-        <span className="h-1 w-16 overflow-hidden rounded-full bg-muted">
-          <motion.span
-            className={cn(
-              "block h-full rounded-full bg-muted-foreground/60",
-              crowded && "bg-warning",
-            )}
-            initial={false}
-            animate={{ width: `${share * 100}%` }}
-          />
-        </span>
+        {windowKnown && (
+          <span className="h-1 w-16 overflow-hidden rounded-full bg-muted">
+            <motion.span
+              className={cn(
+                "block h-full rounded-full bg-muted-foreground/60",
+                crowded && "bg-warning",
+              )}
+              initial={false}
+              animate={{ width: `${Math.min(share, 1) * 100}%` }}
+            />
+          </span>
+        )}
         <span>
           컨텍스트{" "}
           {usedTokens === null ? (
             "-"
-          ) : (
+          ) : windowKnown ? (
             <>
               <AnimatedNumber value={Math.round(share * 100)} />%
             </>
+          ) : (
+            `${tokens.format(usedTokens)} 토큰`
           )}
         </span>
       </TooltipTrigger>
@@ -56,7 +61,9 @@ export function ContextMeter({ context }: { context: ContextView }) {
           {usedTokens === null
             ? "이 대화로 아직 모델에 요청하지 않았어요."
             : `마지막 요청에서 모델이 ${tokens.format(usedTokens)} 토큰을 읽었어요(지침과 도구 포함).`}{" "}
-          모델은 최대 {tokens.format(windowTokens)} 토큰을 읽어요.
+          {windowKnown
+            ? `선택한 모델의 카탈로그에 표시된 컨텍스트 한도는 ${tokens.format(windowTokens)} 토큰이에요.`
+            : "선택한 모델의 컨텍스트 한도를 확인할 수 없어 사용률은 표시하지 않아요."}
         </p>
         {usedTokens !== null && (
           <p>

@@ -729,6 +729,7 @@ export const decodeContextEvent = Schema.decodeUnknownOption(
       Schema.Literals(["none", "clear-answered", "summarize", "leave-out"]),
     ).pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed(null))),
     windowTokens: Schema.Finite,
+    windowKnown: Schema.Boolean.pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed(false))),
     compactAtTokens: Schema.Finite,
   }),
 );
