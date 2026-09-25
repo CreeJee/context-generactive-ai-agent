@@ -60,7 +60,10 @@ describe("ProviderToolCapabilityRegistry", () => {
         const unknownModel = yield* Effect.result(
           registry.resolve({ provider: "anthropic", model: "claude-not-real" }),
         );
-        const empty = yield* registry.resolve({ provider: "anthropic", model: "claude-opus-5" });
+        const empty = yield* registry.resolve({
+          provider: "anthropic",
+          model: "claude-opus-5-fast",
+        });
         return { unknownTool, unknownModel, empty };
       }),
     );

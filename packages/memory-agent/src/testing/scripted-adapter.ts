@@ -8,6 +8,7 @@ import type {
   TokenUsage,
 } from "@tanstack/ai";
 import { BaseTextAdapter } from "@tanstack/ai/adapters";
+import { optionalProperty } from "../optional-property.ts";
 import type { StructuredOutputOptions, StructuredOutputResult } from "@tanstack/ai/adapters";
 
 /**
@@ -145,7 +146,7 @@ export class ScriptedTextAdapter extends BaseTextAdapter<
       model,
       timestamp,
       finishReason: toolCalls.length > 0 ? "tool_calls" : "stop",
-      usage: turn.usage,
+      ...optionalProperty("usage", turn.usage),
     };
   }
 

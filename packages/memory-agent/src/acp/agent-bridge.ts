@@ -168,7 +168,19 @@ export function startAcpAgent(options: {
           sessionUpdate: "tool_call_update",
           toolCallId: chunk.toolCallId,
           status: "completed",
-          content: [{ type: "content", content: { type: "text", text: cut(chunk.content) } }],
+          content: [
+            {
+              type: "content",
+              content: {
+                type: "text",
+                text: cut(
+                  Schema.is(Schema.String)(chunk.content)
+                    ? chunk.content
+                    : JSON.stringify(chunk.content),
+                ),
+              },
+            },
+          ],
         });
         return;
       case "RUN_ERROR":

@@ -2,7 +2,7 @@ import type { AnthropicChatModelToolCapabilitiesByName } from "@tanstack/ai-anth
 import type { OpenAIChatModel, OpenAIChatModelToolCapabilitiesByName } from "@tanstack/ai-openai";
 
 /**
- * The installed OpenAI adapter omits three empty-tool models from its capability map type. Preserve
+ * The installed OpenAI adapter omits some empty-tool models from its capability map type. Preserve
  * those exact empty tuples while requiring every runtime chat model to be represented.
  */
 type OpenAIExactToolCapabilitiesByName = {
@@ -11,7 +11,7 @@ type OpenAIExactToolCapabilitiesByName = {
     : readonly [];
 };
 
-/** Runtime counterpart of @tanstack/ai-openai 0.22.8's type-only model tool metadata. */
+/** Runtime counterpart of @tanstack/ai-openai 0.24.1's type-only model tool metadata. */
 export const openAIModelToolCapabilities = {
   "gpt-5.2": [
     "web_search",
@@ -401,9 +401,13 @@ export const openAIModelToolCapabilities = {
   "gpt-5.6-terra-pro": [],
   "gpt-6-astra": [],
   "gpt-6-astra-pro": [],
+  "gpt-6-luna": [],
+  "gpt-6-luna-pro": [],
+  "gpt-6-sol": [],
+  "gpt-6-sol-pro": [],
 } as const satisfies OpenAIExactToolCapabilitiesByName;
 
-/** Runtime counterpart of @tanstack/ai-anthropic 0.18.7's type-only model tool metadata. */
+/** Runtime counterpart of @tanstack/ai-anthropic 0.19.1's type-only model tool metadata. */
 export const anthropicModelToolCapabilities = {
   "claude-opus-4-6": [
     "web_search",
@@ -495,7 +499,24 @@ export const anthropicModelToolCapabilities = {
     "text_editor",
     "memory",
   ],
-  "claude-opus-5": [],
+  "claude-opus-5": [
+    "web_search",
+    "web_fetch",
+    "code_execution",
+    "computer_use",
+    "bash",
+    "text_editor",
+    "memory",
+  ],
   "claude-opus-5-fast": [],
-  "claude-fable-5-1": [],
+  "claude-opus-5-5": ["web_search", "web_fetch", "code_execution", "bash", "text_editor", "memory"],
+  "claude-fable-5-1": [
+    "web_search",
+    "web_fetch",
+    "code_execution",
+    "computer_use",
+    "bash",
+    "text_editor",
+    "memory",
+  ],
 } as const satisfies AnthropicChatModelToolCapabilitiesByName;
