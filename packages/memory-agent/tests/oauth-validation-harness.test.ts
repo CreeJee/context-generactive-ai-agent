@@ -163,8 +163,8 @@ async function fakeProvider(provider: OAuthProvider) {
     modelUrl: `${base}/model`,
     catalogUrl: `${base}/catalog`,
     callbackPort: null,
-    // Exercise the production hostname instead of bypassing localhost resolution with IPv4.
-    callbackRedirectHost: "localhost",
+    // Keep each provider's production hostname while using an ephemeral callback port.
+    callbackRedirectHost: original.callbackRedirectHost,
   };
   return {
     protocol,
@@ -267,6 +267,12 @@ for (const provider of ["openai", "anthropic"] as const) {
       expect(status).toMatchObject({ provider, connected: true });
       expect(JSON.stringify(status)).not.toContain("secret");
       const auth = new URLSearchParams(fake.authorizations[0]);
+      const redirect = new URL(auth.get("redirect_uri")!);
+      expect(redirect.hostname).toBe(provider === "openai" ? "127.0.0.1" : "localhost");
+      expect(redirect.pathname).toBe(fake.protocol.callbackPath);
+      expect(fake.tokenBodies[0]).toContain(
+        provider === "openai" ? encodeURIComponent(redirect.toString()) : redirect.toString(),
+      );
       expect(auth.get("code_challenge_method")).toBe("S256");
       expect(auth.get("code_challenge")).toMatch(/^[A-Za-z0-9_-]{43}$/);
       expect(auth.get("state")).toMatch(/^[A-Za-z0-9_-]{40,}$/);
@@ -430,7 +436,7 @@ for (const provider of ["openai", "anthropic"] as const) {
 describe("provider wire contracts", () => {
   test("matches the registered OpenAI Codex loopback redirect and login prompt", () => {
     expect(providerProtocols.openai.callbackPort).toBe(1455);
-    expect(providerProtocols.openai.callbackRedirectHost).toBe("localhost");
+    expect(providerProtocols.openai.callbackRedirectHost).toBe("127.0.0.1");
     expect(providerProtocols.openai.callbackPath).toBe("/auth/callback");
     expect(providerProtocols.openai.authorizeParameters?.["prompt"]).toBe("login");
   });

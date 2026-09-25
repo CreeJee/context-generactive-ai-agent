@@ -51,7 +51,8 @@ export const providerProtocols: Readonly<Record<OAuthProvider, ProviderProtocol>
     catalogUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
     callbackPath: "/auth/callback",
     callbackPort: 1455,
-    callbackRedirectHost: "localhost",
+    // Match Codex's registered IPv4 loopback redirect; localhost may resolve to ::1 on Windows.
+    callbackRedirectHost: "127.0.0.1",
     tokenEncoding: "form",
     refreshStatuses: [401],
     modelHeaders: {
