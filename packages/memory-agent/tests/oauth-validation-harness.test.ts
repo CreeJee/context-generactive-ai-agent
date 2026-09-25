@@ -229,6 +229,36 @@ test("reports a browser denial without exposing OAuth callback parameters", asyn
   await completion;
 });
 
+test("reports credential write failure without blaming the provider or exposing tokens", async () => {
+  const fake = await fakeProvider("openai");
+  const store: CredentialStore = {
+    read: async () => null,
+    write: async () => {
+      throw new OAuthHarnessError("credential_store_unavailable", null, {
+        provider: "openai",
+        operation: "credential_store",
+        credentialStage: "write",
+        reason: "private-native-error",
+      });
+    },
+    remove: async () => {},
+  };
+  const harness = OAuthValidationHarness({ protocol: fake.protocol, store });
+  const attempt = await harness.startLogin({ timeoutMs: 1_000 });
+  const completion = expect(attempt.completed).rejects.toMatchObject({
+    code: "credential_store_unavailable",
+    operation: "credential_store",
+    credentialStage: "write",
+  });
+  const browser = await fetch(attempt.authorizationUrl);
+  expect(browser.status).toBe(502);
+  const text = await browser.text();
+  expect(text).toContain("credential store is unavailable");
+  expect(text).not.toContain("private-native-error");
+  expect(text).not.toContain("access-secret");
+  await completion;
+});
+
 test("exposes only a validated provider error code from a failed token exchange", async () => {
   const fake = await fakeProvider("openai");
   const harness = OAuthValidationHarness({

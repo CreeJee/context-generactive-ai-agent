@@ -74,6 +74,7 @@ export type ProviderAuthState =
       readonly operation?: string;
       readonly httpStatus?: number;
       readonly providerCode?: string;
+      readonly credentialStage?: string;
     };
 
 export type {

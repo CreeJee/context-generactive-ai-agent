@@ -161,6 +161,7 @@ export function AccountSection({
                       {auth.operation && <div>operation: {auth.operation}</div>}
                       {auth.httpStatus && <div>HTTP: {auth.httpStatus}</div>}
                       {auth.providerCode && <div>provider code: {auth.providerCode}</div>}
+                      {auth.credentialStage && <div>credential stage: {auth.credentialStage}</div>}
                     </dl>
                   </details>
                 )}

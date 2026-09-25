@@ -66,6 +66,7 @@ export type AuthConnectionState =
       readonly operation?: string;
       readonly httpStatus?: number;
       readonly providerCode?: string;
+      readonly credentialStage?: string;
     };
 
 /** Authentication lifecycle only. Deliberately has no token or credential getter. */

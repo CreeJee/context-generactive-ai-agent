@@ -213,6 +213,52 @@ describe("subscription provider product services", () => {
     expect(JSON.stringify(state)).not.toContain("secret-from-provider");
   });
 
+  test("shows a safe credential-store stage even when status reads also fail", async () => {
+    let rejectLogin!: (error: OAuthHarnessError) => void;
+    const completed = new Promise<OAuthConnectionStatus>((_resolve, reject) => {
+      rejectLogin = reject;
+    });
+    const provider = createSubscriptionProvider({
+      protocol: providerProtocols.openai,
+      config: settingsStore(),
+      client: {
+        status: async () => {
+          throw new OAuthHarnessError("credential_store_unavailable", null, {
+            provider: "openai",
+            operation: "credential_store",
+            credentialStage: "read",
+          });
+        },
+        startLogin: async (): Promise<LoginAttempt> => ({
+          provider: "openai",
+          authorizationUrl: "https://example.test/authorize",
+          completed,
+          cancel: () => {},
+        }),
+        disconnect: async () => ({ provider: "openai", connected: false, expiresAt: null }),
+        modelCatalog: async () => [],
+      },
+    });
+    expect(await Effect.runPromise(provider.auth.status)).toMatchObject({
+      status: "error",
+      credentialStage: "read",
+    });
+    expect((await Effect.runPromise(provider.auth.connect)).status).toBe("pending");
+    rejectLogin(
+      new OAuthHarnessError("credential_store_unavailable", null, {
+        provider: "openai",
+        operation: "credential_store",
+        credentialStage: "write",
+      }),
+    );
+    await Promise.resolve();
+    expect(await Effect.runPromise(provider.auth.status)).toMatchObject({
+      status: "error",
+      code: "credential_store_unavailable",
+      credentialStage: "write",
+    });
+  });
+
   test("cancels an in-flight login and validates provider/model/effort together", async () => {
     const config = settingsStore();
     const fake = fakeClient("openai", [

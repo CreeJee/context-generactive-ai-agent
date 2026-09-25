@@ -44,51 +44,73 @@ export interface CredentialStore {
 export const providerKeychainService = (provider: OAuthProvider) =>
   `com.context-agent.oauth.${provider}`;
 
+export type CredentialStoreStage =
+  | "module_load"
+  | "entry_open"
+  | "read"
+  | "decode"
+  | "write"
+  | "delete";
+
+const credentialStoreFailure = (provider: OAuthProvider, stage: CredentialStoreStage) =>
+  new OAuthHarnessError("credential_store_unavailable", null, {
+    provider,
+    operation: "credential_store",
+    credentialStage: stage,
+  });
+
+const keychainEntry = (provider: OAuthProvider) => {
+  let AsyncEntry: typeof import("@napi-rs/keyring").AsyncEntry;
+  try {
+    ({ AsyncEntry } = requireRuntime("@napi-rs/keyring"));
+  } catch {
+    throw credentialStoreFailure(provider, "module_load");
+  }
+  try {
+    return new AsyncEntry(providerKeychainService(provider), "subscription-oauth");
+  } catch {
+    throw credentialStoreFailure(provider, "entry_open");
+  }
+};
+
 export const createKeychainCredentialStore = (): CredentialStore => ({
   async read(provider: OAuthProvider): Promise<StoredCredential | null> {
+    const entry = keychainEntry(provider);
+    let encoded: string | undefined;
     try {
-      const { AsyncEntry } = requireRuntime("@napi-rs/keyring");
-      const encoded: unknown = await new AsyncEntry(
-        providerKeychainService(provider),
-        "subscription-oauth",
-      ).getPassword();
-      if (encoded === undefined || encoded === null) return null;
-      const credential = Option.getOrThrowWith(
-        decodeStoredCredential(encoded),
-        () => new OAuthHarnessError("credential_store_unavailable"),
-      );
-      return {
-        accessToken: credential.accessToken,
-        refreshToken: credential.refreshToken,
-        expiresAt: credential.expiresAt,
-        ...optionalProperty("idToken", credential.idToken),
-        ...optionalProperty("accountId", credential.accountId),
-      };
-    } catch (error) {
-      if (error instanceof OAuthHarnessError) throw error;
-      throw new OAuthHarnessError("credential_store_unavailable");
+      encoded = await entry.getPassword();
+    } catch {
+      throw credentialStoreFailure(provider, "read");
     }
+    if (encoded === undefined) return null;
+    const credential = Option.getOrThrowWith(decodeStoredCredential(encoded), () =>
+      credentialStoreFailure(provider, "decode"),
+    );
+    return {
+      accessToken: credential.accessToken,
+      refreshToken: credential.refreshToken,
+      expiresAt: credential.expiresAt,
+      ...optionalProperty("idToken", credential.idToken),
+      ...optionalProperty("accountId", credential.accountId),
+    };
   },
 
   async write(provider: OAuthProvider, credential: StoredCredential): Promise<void> {
+    const entry = keychainEntry(provider);
     try {
-      const { AsyncEntry } = requireRuntime("@napi-rs/keyring");
-      await new AsyncEntry(providerKeychainService(provider), "subscription-oauth").setPassword(
-        JSON.stringify(credential),
-      );
+      await entry.setPassword(JSON.stringify(credential));
     } catch {
-      throw new OAuthHarnessError("credential_store_unavailable");
+      throw credentialStoreFailure(provider, "write");
     }
   },
 
   async remove(provider: OAuthProvider): Promise<void> {
+    const entry = keychainEntry(provider);
     try {
-      const { AsyncEntry } = requireRuntime("@napi-rs/keyring");
-      const entry = new AsyncEntry(providerKeychainService(provider), "subscription-oauth");
       // Native backends make deletion idempotent: false means the credential is already absent.
       await entry.deleteCredential();
     } catch {
-      throw new OAuthHarnessError("credential_store_unavailable");
+      throw credentialStoreFailure(provider, "delete");
     }
   },
 });
@@ -133,6 +155,8 @@ export interface OAuthHarnessErrorContext {
   readonly reason?: string;
   /** A short machine-readable provider code, never a raw response body. */
   readonly providerCode?: string;
+  /** Fixed stage only; never a native exception message or credential. */
+  readonly credentialStage?: CredentialStoreStage;
 }
 
 const providerName = (provider: OAuthProvider) => (provider === "openai" ? "OpenAI" : "Anthropic");
@@ -180,6 +204,7 @@ export class OAuthHarnessError extends Data.TaggedError("OAuthHarnessError")<{
   readonly provider: OAuthProvider | null;
   readonly operation: OAuthHarnessOperation | null;
   readonly providerCode: string | null;
+  readonly credentialStage: CredentialStoreStage | null;
   readonly message: string;
 }> {
   constructor(
@@ -198,6 +223,7 @@ export class OAuthHarnessError extends Data.TaggedError("OAuthHarnessError")<{
       provider: context.provider ?? null,
       operation: context.operation ?? null,
       providerCode: context.providerCode ?? null,
+      credentialStage: context.credentialStage ?? null,
       message: `oauth_${code}${details.length === 0 ? "" : ` [${details.join(", ")}]`}: ${failureMessages[code]}${context.reason === undefined ? "" : ` ${context.reason}`}`,
     });
   }
@@ -505,11 +531,18 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
             protocol.provider === "anthropic" ? { ...commonGrant, state } : commonGrant;
           const credential = await exchange(grant);
           await store.write(protocol.provider, credential);
+          const connection = await status();
           response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
           response.end("Connected. You may close this window.");
-          await finish({ status: await status() });
+          await finish({ status: connection });
         } catch (error) {
-          response.writeHead(502).end("OAuth provider rejected the request.");
+          response
+            .writeHead(502)
+            .end(
+              error instanceof OAuthHarnessError && error.code === "credential_store_unavailable"
+                ? "Login succeeded, but the system credential store is unavailable. Return to the app for diagnostic details."
+                : "Login could not be completed. Return to the app for diagnostic details.",
+            );
           await finish({
             error:
               error instanceof OAuthHarnessError

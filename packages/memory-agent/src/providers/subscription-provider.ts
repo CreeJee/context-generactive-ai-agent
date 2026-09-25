@@ -241,6 +241,7 @@ export function createSubscriptionProvider(
       ...optionalProperty("operation", error.operation ?? undefined),
       ...optionalProperty("httpStatus", error.status ?? undefined),
       ...optionalProperty("providerCode", error.providerCode ?? undefined),
+      ...optionalProperty("credentialStage", error.credentialStage ?? undefined),
     };
   };
   let catalogCache: {
@@ -250,9 +251,15 @@ export function createSubscriptionProvider(
 
   const authState = async (): Promise<AuthConnectionState> => {
     if (pending) return { provider, status: "pending", authorizationUrl: pending.authorizationUrl };
-    const connection = await client.status();
-    if (connection.connected) return { provider, status: "signed-in" };
     if (loginError) return loginError;
+    try {
+      const connection = await client.status();
+      if (connection.connected) return { provider, status: "signed-in" };
+    } catch (error) {
+      if (error instanceof OAuthHarnessError && error.code === "credential_store_unavailable")
+        return failureState(error);
+      throw error;
+    }
     return { provider, status: "signed-out" };
   };
 
