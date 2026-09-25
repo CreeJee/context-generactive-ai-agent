@@ -62,6 +62,10 @@ export type AuthConnectionState =
       readonly provider: ProviderId;
       readonly status: "error";
       readonly message: string;
+      readonly code?: string;
+      readonly operation?: string;
+      readonly httpStatus?: number;
+      readonly providerCode?: string;
     };
 
 /** Authentication lifecycle only. Deliberately has no token or credential getter. */

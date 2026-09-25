@@ -131,6 +131,8 @@ export interface OAuthHarnessErrorContext {
   readonly operation?: OAuthHarnessOperation;
   /** A bounded provider error message. Never include response headers or request bodies here. */
   readonly reason?: string;
+  /** A short machine-readable provider code, never a raw response body. */
+  readonly providerCode?: string;
 }
 
 const providerName = (provider: OAuthProvider) => (provider === "openai" ? "OpenAI" : "Anthropic");
@@ -142,6 +144,28 @@ const ProviderErrorBody = Schema.Struct({
 const decodeProviderErrorBody = Schema.decodeUnknownOption(
   Schema.fromJsonString(ProviderErrorBody),
 );
+
+const safeOAuthCodes = new Set([
+  "access_denied",
+  "invalid_client",
+  "invalid_grant",
+  "invalid_request",
+  "invalid_scope",
+  "server_error",
+  "temporarily_unavailable",
+  "unauthorized_client",
+  "unsupported_grant_type",
+]);
+const TokenErrorBody = Schema.Struct({
+  error: Schema.Union([Schema.String, Schema.Struct({ code: Schema.String })]),
+});
+const decodeTokenErrorBody = Schema.decodeUnknownOption(Schema.fromJsonString(TokenErrorBody));
+const providerCode = (body: string): string | undefined => {
+  const parsed = Option.getOrUndefined(decodeTokenErrorBody(body));
+  if (!parsed) return undefined;
+  const code = Schema.is(Schema.String)(parsed.error) ? parsed.error : parsed.error.code;
+  return safeOAuthCodes.has(code) ? code : undefined;
+};
 
 const providerReason = (body: string): string | undefined => {
   const parsed = Option.getOrUndefined(decodeProviderErrorBody(body));
@@ -155,6 +179,7 @@ export class OAuthHarnessError extends Data.TaggedError("OAuthHarnessError")<{
   readonly status: number | null;
   readonly provider: OAuthProvider | null;
   readonly operation: OAuthHarnessOperation | null;
+  readonly providerCode: string | null;
   readonly message: string;
 }> {
   constructor(
@@ -172,6 +197,7 @@ export class OAuthHarnessError extends Data.TaggedError("OAuthHarnessError")<{
       status,
       provider: context.provider ?? null,
       operation: context.operation ?? null,
+      providerCode: context.providerCode ?? null,
       message: `oauth_${code}${details.length === 0 ? "" : ` [${details.join(", ")}]`}: ${failureMessages[code]}${context.reason === undefined ? "" : ` ${context.reason}`}`,
     });
   }
@@ -453,8 +479,18 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
           return;
         }
         if (code === null || code.length === 0 || verifier === null) {
+          const callbackCode = callback.searchParams.get("error");
           response.writeHead(400).end("Invalid OAuth callback.");
-          await finish({ error: new OAuthHarnessError("callback_invalid") });
+          await finish({
+            error:
+              callbackCode !== null && safeOAuthCodes.has(callbackCode)
+                ? new OAuthHarnessError("provider_rejected", null, {
+                    provider: protocol.provider,
+                    operation: "login_callback",
+                    providerCode: callbackCode,
+                  })
+                : new OAuthHarnessError("callback_invalid"),
+          });
           return;
         }
         try {
@@ -516,7 +552,13 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
     } catch {
       throw new OAuthHarnessError("transport_unavailable", null, context);
     }
-    if (!response.ok) throw new OAuthHarnessError("provider_rejected", response.status, context);
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new OAuthHarnessError("provider_rejected", response.status, {
+        ...context,
+        ...optionalProperty("providerCode", providerCode(body)),
+      });
+    }
     try {
       const token = Option.getOrThrowWith(
         decodeTokenResponse(await response.json()),

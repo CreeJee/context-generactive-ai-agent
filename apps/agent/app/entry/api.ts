@@ -70,6 +70,10 @@ export type ProviderAuthState =
       readonly provider: ProviderId;
       readonly status: "error";
       readonly message: string;
+      readonly code?: string;
+      readonly operation?: string;
+      readonly httpStatus?: number;
+      readonly providerCode?: string;
     };
 
 export type {

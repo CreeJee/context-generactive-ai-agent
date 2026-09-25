@@ -208,6 +208,54 @@ test("identifies the provider, operation and HTTP status without exposing respon
   );
 });
 
+test("reports a browser denial without exposing OAuth callback parameters", async () => {
+  const fake = await fakeProvider("openai");
+  const harness = OAuthValidationHarness({
+    protocol: fake.protocol,
+    store: new MemoryCredentialStore(),
+  });
+  const attempt = await harness.startLogin({ timeoutMs: 1_000 });
+  const completion = expect(attempt.completed).rejects.toMatchObject({
+    code: "provider_rejected",
+    operation: "login_callback",
+    providerCode: "access_denied",
+  });
+  const authorize = new URL(attempt.authorizationUrl);
+  const callback = new URL(authorize.searchParams.get("redirect_uri")!);
+  callback.searchParams.set("state", authorize.searchParams.get("state")!);
+  callback.searchParams.set("error", "access_denied");
+  callback.searchParams.set("error_description", "secret-from-browser");
+  expect((await fetch(callback)).status).toBe(400);
+  await completion;
+});
+
+test("exposes only a validated provider error code from a failed token exchange", async () => {
+  const fake = await fakeProvider("openai");
+  const harness = OAuthValidationHarness({
+    protocol: fake.protocol,
+    store: new MemoryCredentialStore(),
+    fetch: async (input, init) =>
+      input === fake.protocol.tokenUrl
+        ? new Response(
+            JSON.stringify({
+              error: { code: "access_denied", message: "private-user-data" },
+              access_token: "secret-token",
+            }),
+            { status: 403 },
+          )
+        : fetch(input, init),
+  });
+  const attempt = await harness.startLogin({ timeoutMs: 1_000 });
+  const completion = expect(attempt.completed).rejects.toMatchObject({
+    code: "provider_rejected",
+    operation: "token_exchange",
+    status: 403,
+    providerCode: "access_denied",
+  });
+  expect((await fetch(attempt.authorizationUrl)).status).toBe(502);
+  await completion;
+});
+
 for (const provider of ["openai", "anthropic"] as const) {
   describe(`${provider} OAuth validation harness`, () => {
     test("uses PKCE/state, exchanges the callback internally, and exposes only status", async () => {

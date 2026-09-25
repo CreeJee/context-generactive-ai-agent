@@ -308,7 +308,7 @@ export function App() {
     <AppEventsProvider>
       <SessionEventsProvider projectId={projectId} sessionId={sessionId}>
         <div className="flex h-dvh bg-background text-foreground">
-          <aside className="flex w-72 shrink-0 flex-col border-r">
+          <aside className="flex min-h-0 w-72 shrink-0 flex-col overflow-hidden border-r">
             <div className="flex items-center justify-between py-2 pr-2 pl-4">
               <span className="text-sm font-semibold">Context Agent</span>
               <Button variant="ghost" size="icon-sm" aria-label="설정" onClick={openSettings}>
@@ -316,43 +316,45 @@ export function App() {
               </Button>
             </div>
             <Separator />
-            <div className="px-4 py-2">
-              <ThemeSelect />
-            </div>
-            <AccountSection
-              auth={auth[provider]}
-              provider={provider}
-              onProviderChange={setProvider}
-              onAction={(intent) => void authAction(intent)}
-            />
-            {signedIn && (
-              <ModelSection
-                models={models}
-                selection={selection?.provider === provider ? selection : null}
-                onSelect={(model, effort) => void selectModel(model, effort)}
+            <div className="min-h-0 shrink overflow-y-auto overscroll-contain">
+              <div className="px-4 py-2">
+                <ThemeSelect />
+              </div>
+              <AccountSection
+                auth={auth[provider]}
+                provider={provider}
+                onProviderChange={setProvider}
+                onAction={(intent) => void authAction(intent)}
               />
-            )}
-            <Separator />
-            <ProjectSection
-              projects={projects}
-              projectId={projectId}
-              onSelect={selectProject}
-              onAdd={addProject}
-              onPermissionMode={(mode) => {
-                if (!projectId) return;
-                void permissionMutation.mutateAsync(mode);
-              }}
-              onCrossRecall={(allowed) => {
-                if (!projectId) return;
-                void crossRecallMutation.mutateAsync(!allowed);
-              }}
-              onHide={(hiddenId) => {
-                void hideProjectMutation.mutateAsync(hiddenId).then(() => {
-                  const left = projects.filter((project) => project.id !== hiddenId);
-                  void setLocation({ project: left.at(0)?.id ?? null, session: null });
-                });
-              }}
-            />
+              {signedIn && (
+                <ModelSection
+                  models={models}
+                  selection={selection?.provider === provider ? selection : null}
+                  onSelect={(model, effort) => void selectModel(model, effort)}
+                />
+              )}
+              <Separator />
+              <ProjectSection
+                projects={projects}
+                projectId={projectId}
+                onSelect={selectProject}
+                onAdd={addProject}
+                onPermissionMode={(mode) => {
+                  if (!projectId) return;
+                  void permissionMutation.mutateAsync(mode);
+                }}
+                onCrossRecall={(allowed) => {
+                  if (!projectId) return;
+                  void crossRecallMutation.mutateAsync(!allowed);
+                }}
+                onHide={(hiddenId) => {
+                  void hideProjectMutation.mutateAsync(hiddenId).then(() => {
+                    const left = projects.filter((project) => project.id !== hiddenId);
+                    void setLocation({ project: left.at(0)?.id ?? null, session: null });
+                  });
+                }}
+              />
+            </div>
             <Separator />
             {projectId && (
               <SessionSection

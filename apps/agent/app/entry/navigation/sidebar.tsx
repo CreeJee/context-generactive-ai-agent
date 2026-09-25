@@ -150,8 +150,21 @@ export function AccountSection({
       {(auth?.status === "signed-out" || auth?.status === "error") && (
         <div className="flex flex-col gap-2">
           {auth.status === "error" && (
-            <Alert variant="destructive">
-              <AlertDescription>{auth.message}</AlertDescription>
+            <Alert variant="destructive" className="min-w-0">
+              <AlertDescription className="min-w-0 break-words">
+                {auth.message}
+                {(auth.code || auth.httpStatus || auth.providerCode) && (
+                  <details className="mt-2 text-2xs">
+                    <summary className="cursor-pointer">진단 정보</summary>
+                    <dl className="mt-1 space-y-0.5 break-all font-mono">
+                      {auth.code && <div>code: {auth.code}</div>}
+                      {auth.operation && <div>operation: {auth.operation}</div>}
+                      {auth.httpStatus && <div>HTTP: {auth.httpStatus}</div>}
+                      {auth.providerCode && <div>provider code: {auth.providerCode}</div>}
+                    </dl>
+                  </details>
+                )}
+              </AlertDescription>
             </Alert>
           )}
           <Button onClick={() => onAction("login")}>{providerLabels[provider]}로 로그인</Button>

@@ -1,8 +1,10 @@
 import { ANTHROPIC_MODELS } from "@tanstack/ai-anthropic";
 import { Effect, Option, Schema } from "effect";
 import type { Settings } from "../config/global-config.ts";
+import { optionalProperty } from "../optional-property.ts";
 import {
   createSubscriptionOAuthClient,
+  OAuthHarnessError,
   type LoginAttempt,
   type OAuthConnectionStatus,
 } from "../oauth/subscription-oauth.ts";
@@ -214,7 +216,33 @@ export function createSubscriptionProvider(
   const provider = options.protocol.provider;
   const client = options.client ?? createSubscriptionOAuthClient({ protocol: options.protocol });
   let pending: LoginAttempt | null = null;
-  let loginFailed = false;
+  let loginError: Extract<AuthConnectionState, { status: "error" }> | null = null;
+  const failureState = (
+    error: OAuthHarnessError | null,
+  ): Extract<AuthConnectionState, { status: "error" }> => {
+    if (error === null) return { provider, status: "error", message: "Login did not complete." };
+    const message = {
+      cancelled: "Login was cancelled.",
+      callback_invalid: "The browser returned an invalid login callback.",
+      callback_state_mismatch: "Login verification failed. Please retry.",
+      callback_timeout: "The browser did not return to this app in time.",
+      credential_store_unavailable: "The system credential store is unavailable.",
+      invalid_token_response: "The provider returned an invalid login response.",
+      login_in_progress: "A login is already in progress.",
+      not_connected: "The provider is not connected.",
+      provider_rejected: "The provider rejected the login request.",
+      transport_unavailable: "The login server or provider could not be reached.",
+    } satisfies Record<OAuthHarnessError["code"], string>;
+    return {
+      provider,
+      status: "error",
+      message: message[error.code] ?? "Login did not complete.",
+      code: error.code,
+      ...optionalProperty("operation", error.operation ?? undefined),
+      ...optionalProperty("httpStatus", error.status ?? undefined),
+      ...optionalProperty("providerCode", error.providerCode ?? undefined),
+    };
+  };
   let catalogCache: {
     readonly loadedAt: number;
     readonly models: ReadonlyArray<ProviderModel>;
@@ -224,12 +252,7 @@ export function createSubscriptionProvider(
     if (pending) return { provider, status: "pending", authorizationUrl: pending.authorizationUrl };
     const connection = await client.status();
     if (connection.connected) return { provider, status: "signed-in" };
-    if (loginFailed)
-      return {
-        provider,
-        status: "error",
-        message: `${provider === "openai" ? "OpenAI" : "Anthropic"} login did not complete.`,
-      };
+    if (loginError) return loginError;
     return { provider, status: "signed-out" };
   };
 
@@ -237,16 +260,23 @@ export function createSubscriptionProvider(
   const connect = fromPromise(provider, "auth", async () => {
     const current = await authState();
     if (current.status === "signed-in" || current.status === "pending") return current;
-    const attempt = await client.startLogin();
+    loginError = null;
+    let attempt: LoginAttempt;
+    try {
+      attempt = await client.startLogin();
+    } catch (error) {
+      loginError = failureState(error instanceof OAuthHarnessError ? error : null);
+      return loginError;
+    }
     pending = attempt;
-    loginFailed = false;
     void attempt.completed.then(
       () => {
         if (pending === attempt) pending = null;
       },
-      () => {
-        if (pending === attempt) pending = null;
-        loginFailed = true;
+      (error) => {
+        if (pending !== attempt) return;
+        pending = null;
+        loginError = failureState(error instanceof OAuthHarnessError ? error : null);
       },
     );
     return {
@@ -258,14 +288,14 @@ export function createSubscriptionProvider(
   const cancel = fromPromise(provider, "auth", async () => {
     const attempt = pending;
     pending = null;
-    loginFailed = false;
+    loginError = null;
     attempt?.cancel();
     return authState();
   });
   const disconnect = fromPromise(provider, "auth", async () => {
     const attempt = pending;
     pending = null;
-    loginFailed = false;
+    loginError = null;
     attempt?.cancel();
     await client.disconnect();
     catalogCache = null;

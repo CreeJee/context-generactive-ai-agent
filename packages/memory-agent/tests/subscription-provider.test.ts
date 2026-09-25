@@ -1,7 +1,11 @@
 import { Effect } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import type { Settings } from "../src/config/global-config.ts";
-import type { LoginAttempt, OAuthConnectionStatus } from "../src/oauth/validation-harness.ts";
+import {
+  OAuthHarnessError,
+  type LoginAttempt,
+  type OAuthConnectionStatus,
+} from "../src/oauth/validation-harness.ts";
 import { providerProtocols } from "../src/oauth/protocol.ts";
 import {
   createSubscriptionProvider,
@@ -164,6 +168,49 @@ describe("subscription provider product services", () => {
       provider: "anthropic",
       status: "signed-in",
     });
+  });
+
+  test("reports safe login diagnostics and does not surface raw provider text", async () => {
+    let rejectLogin!: (error: OAuthHarnessError) => void;
+    const completed = new Promise<OAuthConnectionStatus>((_resolve, reject) => {
+      rejectLogin = reject;
+    });
+    const client = {
+      status: async () => ({ provider: "openai" as const, connected: false, expiresAt: null }),
+      startLogin: async (): Promise<LoginAttempt> => ({
+        provider: "openai",
+        authorizationUrl: "https://example.test/authorize",
+        completed,
+        cancel: () => {},
+      }),
+      disconnect: async () => ({ provider: "openai" as const, connected: false, expiresAt: null }),
+      modelCatalog: async () => [],
+    };
+    const provider = createSubscriptionProvider({
+      protocol: providerProtocols.openai,
+      config: settingsStore(),
+      client,
+    });
+    expect((await Effect.runPromise(provider.auth.connect)).status).toBe("pending");
+    rejectLogin(
+      new OAuthHarnessError("provider_rejected", 403, {
+        provider: "openai",
+        operation: "token_exchange",
+        providerCode: "access_denied",
+        reason: "secret-from-provider",
+      }),
+    );
+    await Promise.resolve();
+    const state = await Effect.runPromise(provider.auth.status);
+    expect(state).toMatchObject({
+      provider: "openai",
+      status: "error",
+      code: "provider_rejected",
+      operation: "token_exchange",
+      httpStatus: 403,
+      providerCode: "access_denied",
+    });
+    expect(JSON.stringify(state)).not.toContain("secret-from-provider");
   });
 
   test("cancels an in-flight login and validates provider/model/effort together", async () => {
