@@ -17,6 +17,7 @@ import { useLoading } from "react-simplikit";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Spinner } from "~/components/ui/spinner";
 import { renumberReferences, useDraftImages } from "./draft-images";
+import { missingDeliveredMessages } from "./delivered-messages";
 import { interruptContinuationState } from "../session/interrupt-recovery";
 import {
   ApiError,
@@ -401,7 +402,9 @@ function ChatPanel({
 
   // Messages the run took in, shown in the conversation until it is read again with them.
   const inFlight =
-    generating || waitingForApproval || catchingUp ? queue.items.filter(isTakenIn) : [];
+    generating || waitingForApproval || catchingUp
+      ? missingDeliveredMessages(queue.items.filter(isTakenIn), messages)
+      : [];
   const takenIn = (side: Placement["side"], messageId: string) =>
     inFlight.filter((taken) => {
       const placement = placements[taken.id];

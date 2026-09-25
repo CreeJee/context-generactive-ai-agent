@@ -1,5 +1,5 @@
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { ChatState } from "../src/chat-state/chat-state.ts";
@@ -85,9 +85,28 @@ describe("server-selected queued next turn", () => {
     const chatState = await context.runtime.runPromise(ChatState);
     const stored = await chatState.persistence.stores.messages.loadThread(context.session.id);
     expect(
-      stored.some((message) => message.role === "user" && message.content === "edited on server"),
+      stored.some(
+        (message) =>
+          message.id === stale.id &&
+          message.role === "user" &&
+          message.content === "edited on server",
+      ),
     ).toBe(true);
     expect(JSON.stringify(stored)).not.toContain("original");
+    const hydrated = await context.runtime.runPromise(
+      Effect.flatMap(AgentChat, (chat) =>
+        chat.hydrate(
+          new Request(
+            `http://127.0.0.1/api/chat?session=${context.session.id}&threadId=${context.session.id}`,
+          ),
+          context.session.id,
+        ),
+      ),
+    );
+    const history = Schema.decodeUnknownSync(
+      Schema.Struct({ messages: Schema.Array(Schema.Struct({ id: Schema.String })) }),
+    )(await hydrated.json());
+    expect(history.messages.some((message) => message.id === stale.id)).toBe(true);
     client.dispose();
   });
 });

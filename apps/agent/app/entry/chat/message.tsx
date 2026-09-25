@@ -463,16 +463,7 @@ export function DeliveredMessageView({ message }: { message: QueuedMessage }) {
     number: index + 1,
     url: attachmentUrl(id),
   }));
-  return (
-    <div className="flex flex-col items-end gap-1">
-      <UserMessageBody text={message.text} images={images} />
-      <span className="text-2xs text-muted-foreground">
-        {message.state.kind === "delivered" && message.state.via === "steer"
-          ? "답변 중에 바로 전달했어요"
-          : "도구 호출 뒤에 전달했어요"}
-      </span>
-    </div>
-  );
+  return <UserMessageBody text={message.text} images={images} />;
 }
 
 export function MessageView({

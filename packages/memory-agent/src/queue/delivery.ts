@@ -39,7 +39,7 @@ const make = Effect.gen(function* () {
       const attachment = attachments.get(id);
       return attachment ? [attachment] : [];
     });
-    if (images.length === 0) return { role: "user", content: message.text };
+    if (images.length === 0) return { id: message.id, role: "user", content: message.text };
     const content: ContentPart[] = [
       ...(message.text.length > 0 ? [{ type: "text" as const, content: message.text }] : []),
       ...images.map((image) => ({
@@ -47,7 +47,7 @@ const make = Effect.gen(function* () {
         source: { type: "url" as const, value: attachmentUrl(image.id), mimeType: image.mimeType },
       })),
     ];
-    return { role: "user", content };
+    return { id: message.id, role: "user", content };
   };
 
   /** Every delivered message is evidence, like any user turn, and kept without a pasted key. */
