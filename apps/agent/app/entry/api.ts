@@ -76,6 +76,7 @@ export type ProviderAuthState =
       readonly providerCode?: string;
       readonly credentialStage?: string;
       readonly transportCode?: string;
+      readonly proxyRoute?: "direct" | "unavailable" | "attempted";
     };
 
 export type {

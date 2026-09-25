@@ -226,6 +226,7 @@ describe("subscription provider product services", () => {
         provider: "openai",
         operation: "token_exchange",
         providerCode: "access_denied",
+        proxyRoute: "attempted",
         reason: "secret-from-provider",
       }),
     );
@@ -238,6 +239,7 @@ describe("subscription provider product services", () => {
       operation: "token_exchange",
       httpStatus: 403,
       providerCode: "access_denied",
+      proxyRoute: "attempted",
     });
     expect(JSON.stringify(state)).not.toContain("secret-from-provider");
   });

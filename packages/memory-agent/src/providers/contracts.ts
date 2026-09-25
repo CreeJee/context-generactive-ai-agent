@@ -70,6 +70,7 @@ export type AuthConnectionState =
       readonly providerCode?: string;
       readonly credentialStage?: string;
       readonly transportCode?: string;
+      readonly proxyRoute?: "direct" | "unavailable" | "attempted";
     };
 
 /** Authentication lifecycle only. Deliberately has no token or credential getter. */

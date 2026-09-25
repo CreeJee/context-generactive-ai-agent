@@ -5,7 +5,11 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { Data, Option, Schema } from "effect";
 import { requireRuntime } from "../runtime/resources.ts";
 import { prepareAnthropicValidationBody } from "./anthropic-validation-adapter.ts";
-import { fetchOpenAiTokenViaSystemProxy } from "./windows-token-proxy.ts";
+import {
+  fetchOpenAiTokenViaSystemProxy,
+  type ProxyRoute,
+  type TokenProxyResult,
+} from "./windows-token-proxy.ts";
 import {
   createOAuthState,
   createPkce,
@@ -160,6 +164,8 @@ export interface OAuthHarnessErrorContext {
   readonly credentialStage?: CredentialStoreStage;
   /** Allowlisted network/TLS code or a fixed category; never the native exception text. */
   readonly transportCode?: string;
+  /** Fixed route outcome only; never a proxy URL or credentials. */
+  readonly proxyRoute?: ProxyRoute;
 }
 
 const safeTransportCodes = new Set([
@@ -234,6 +240,7 @@ export class OAuthHarnessError extends Data.TaggedError("OAuthHarnessError")<{
   readonly providerCode: string | null;
   readonly credentialStage: CredentialStoreStage | null;
   readonly transportCode: string | null;
+  readonly proxyRoute: ProxyRoute | null;
   readonly message: string;
 }> {
   constructor(
@@ -254,6 +261,7 @@ export class OAuthHarnessError extends Data.TaggedError("OAuthHarnessError")<{
       providerCode: context.providerCode ?? null,
       credentialStage: context.credentialStage ?? null,
       transportCode: context.transportCode ?? null,
+      proxyRoute: context.proxyRoute ?? null,
       message: `oauth_${code}${details.length === 0 ? "" : ` [${details.join(", ")}]`}: ${failureMessages[code]}${context.reason === undefined ? "" : ` ${context.reason}`}`,
     });
   }
@@ -288,7 +296,7 @@ export interface SubscriptionOAuthClientOptions {
     url: string,
     body: string,
     contentType: string,
-  ) => Promise<Response | null>;
+  ) => Promise<TokenProxyResult>;
   readonly now?: () => number;
 }
 
@@ -609,6 +617,9 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       operation: values.grant_type === "refresh_token" ? "token_refresh" : "token_exchange",
     };
     const encoded = tokenBody(protocol, values);
+    let proxyRoute: ProxyRoute | null = null;
+    const withProxyRoute = (details: OAuthHarnessErrorContext): OAuthHarnessErrorContext =>
+      proxyRoute === null ? details : { ...details, proxyRoute };
     const request = async (): Promise<Response> => {
       try {
         return await fetcher(protocol.tokenUrl, {
@@ -633,27 +644,31 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
         ) {
           try {
             const retry = await proxyFetch(protocol.tokenUrl, encoded.body, encoded.contentType);
-            if (retry !== null) return retry;
+            proxyRoute = retry.route;
+            if (retry.response !== null) return retry.response;
           } catch (proxyError) {
             throw new OAuthHarnessError("transport_unavailable", null, {
               ...context,
               transportCode: proxyError instanceof Error ? safeTransportCode(proxyError) : "other",
+              proxyRoute: "attempted",
             });
           }
         }
-        throw new OAuthHarnessError("transport_unavailable", null, {
-          ...context,
-          transportCode,
-        });
+        throw new OAuthHarnessError(
+          "transport_unavailable",
+          null,
+          withProxyRoute({ ...context, transportCode }),
+        );
       }
     };
     const response = await request();
     if (!response.ok) {
       const body = await response.text().catch(() => "");
-      throw new OAuthHarnessError("provider_rejected", response.status, {
-        ...context,
-        ...optionalProperty("providerCode", providerCode(body)),
-      });
+      throw new OAuthHarnessError(
+        "provider_rejected",
+        response.status,
+        withProxyRoute({ ...context, ...optionalProperty("providerCode", providerCode(body)) }),
+      );
     }
     try {
       const token = Option.getOrThrowWith(

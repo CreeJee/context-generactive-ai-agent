@@ -163,6 +163,7 @@ export function AccountSection({
                       {auth.providerCode && <div>provider code: {auth.providerCode}</div>}
                       {auth.credentialStage && <div>credential stage: {auth.credentialStage}</div>}
                       {auth.transportCode && <div>transport code: {auth.transportCode}</div>}
+                      {auth.proxyRoute && <div>proxy route: {auth.proxyRoute}</div>}
                     </dl>
                   </details>
                 )}

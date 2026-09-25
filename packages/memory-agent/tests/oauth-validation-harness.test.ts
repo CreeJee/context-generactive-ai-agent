@@ -297,17 +297,54 @@ test("retries an OpenAI pre-connect timeout once on a scoped proxy route", async
     tokenProxyFetch: async (url, body, contentType) => {
       proxyCalls += 1;
       expect(url).toBe(fake.protocol.tokenUrl);
-      return fetch(url, {
-        method: "POST",
-        body,
-        headers: { "Content-Type": contentType },
-      });
+      return {
+        route: "attempted",
+        response: await fetch(url, {
+          method: "POST",
+          body,
+          headers: { "Content-Type": contentType },
+        }),
+      };
     },
   });
   expect(await login(harness)).toMatchObject({ provider: "openai", connected: true });
   expect(proxyCalls).toBe(1);
   expect(fake.counts().tokenRequests).toBe(1);
 });
+
+for (const route of ["direct", "unavailable", "attempted"] as const) {
+  test(`reports proxy route ${route} without exposing the proxy address`, async () => {
+    const fake = await fakeProvider("openai");
+    const harness = OAuthValidationHarness({
+      protocol: fake.protocol,
+      store: new MemoryCredentialStore(),
+      fetch: async () => {
+        throw new TypeError("fetch failed", {
+          cause: Object.assign(new Error("connect timeout"), { code: "UND_ERR_CONNECT_TIMEOUT" }),
+        });
+      },
+      tokenProxyFetch: async () => {
+        if (route === "attempted")
+          throw new TypeError("http://private-proxy.example", {
+            cause: Object.assign(new Error("connect timeout"), {
+              code: "UND_ERR_CONNECT_TIMEOUT",
+            }),
+          });
+        return { route, response: null };
+      },
+    });
+    const attempt = await harness.startLogin({ timeoutMs: 1_000 });
+    const completion = attempt.completed.catch((error: OAuthHarnessError) => error);
+    expect((await fetch(attempt.authorizationUrl)).status).toBe(502);
+    const failure = await completion;
+    expect(failure).toMatchObject({
+      code: "transport_unavailable",
+      transportCode: "UND_ERR_CONNECT_TIMEOUT",
+      proxyRoute: route,
+    });
+    expect(JSON.stringify(failure)).not.toContain("private-proxy.example");
+  });
+}
 
 test("does not replay an authorization code after a non-connect failure", async () => {
   const fake = await fakeProvider("openai");
@@ -320,7 +357,7 @@ test("does not replay an authorization code after a non-connect failure", async 
     },
     tokenProxyFetch: async () => {
       proxyCalls += 1;
-      return null;
+      return { route: "unavailable", response: null };
     },
   });
   const attempt = await harness.startLogin({ timeoutMs: 1_000 });

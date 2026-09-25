@@ -250,6 +250,7 @@ export function createSubscriptionProvider(
       ...optionalProperty("providerCode", error.providerCode ?? undefined),
       ...optionalProperty("credentialStage", error.credentialStage ?? undefined),
       ...optionalProperty("transportCode", error.transportCode ?? undefined),
+      ...optionalProperty("proxyRoute", error.proxyRoute ?? undefined),
     };
   };
   let catalogCache: {
