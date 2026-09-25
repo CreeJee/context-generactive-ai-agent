@@ -302,6 +302,9 @@ catalogs:
     typescript:
       specifier: ^7.0.2
       version: 7.0.2
+    undici:
+      specifier: ^7.29.1
+      version: 7.29.1
     vite:
       specifier: npm:@voidzero-dev/vite-plus-core@1.0.0-rc.0
       version: 1.0.0-rc.0
@@ -543,6 +546,9 @@ importers:
       turbovec:
         specifier: workspace:*
         version: link:../turbovec
+      undici:
+        specifier: 'catalog:'
+        version: 7.29.1
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'

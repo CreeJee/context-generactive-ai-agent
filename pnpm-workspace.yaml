@@ -61,6 +61,7 @@ catalog:
   ts-pattern: ^5.9.0
   "@effect/tsgo": 0.45.0
   js-tiktoken: ^1.0.21
+  undici: ^7.29.1
 overrides:
   vite@*: "catalog:"
   vitest: 5.0.1

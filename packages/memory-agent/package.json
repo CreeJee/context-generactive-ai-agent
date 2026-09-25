@@ -63,7 +63,8 @@
     "js-tiktoken": "catalog:",
     "kiwi-nlp": "catalog:",
     "sharp": "catalog:",
-    "turbovec": "workspace:*"
+    "turbovec": "workspace:*",
+    "undici": "catalog:"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",

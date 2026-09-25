@@ -283,6 +283,56 @@ test("classifies token exchange transport failures without exposing native error
   expect(JSON.stringify(failure)).not.toContain("private host detail");
 });
 
+test("retries an OpenAI pre-connect timeout once on a scoped proxy route", async () => {
+  const fake = await fakeProvider("openai");
+  let proxyCalls = 0;
+  const harness = OAuthValidationHarness({
+    protocol: fake.protocol,
+    store: new MemoryCredentialStore(),
+    fetch: async () => {
+      throw new TypeError("fetch failed", {
+        cause: Object.assign(new Error("connect timeout"), { code: "UND_ERR_CONNECT_TIMEOUT" }),
+      });
+    },
+    tokenProxyFetch: async (url, body, contentType) => {
+      proxyCalls += 1;
+      expect(url).toBe(fake.protocol.tokenUrl);
+      return fetch(url, {
+        method: "POST",
+        body,
+        headers: { "Content-Type": contentType },
+      });
+    },
+  });
+  expect(await login(harness)).toMatchObject({ provider: "openai", connected: true });
+  expect(proxyCalls).toBe(1);
+  expect(fake.counts().tokenRequests).toBe(1);
+});
+
+test("does not replay an authorization code after a non-connect failure", async () => {
+  const fake = await fakeProvider("openai");
+  let proxyCalls = 0;
+  const harness = OAuthValidationHarness({
+    protocol: fake.protocol,
+    store: new MemoryCredentialStore(),
+    fetch: async () => {
+      throw new DOMException("timed out", "TimeoutError");
+    },
+    tokenProxyFetch: async () => {
+      proxyCalls += 1;
+      return null;
+    },
+  });
+  const attempt = await harness.startLogin({ timeoutMs: 1_000 });
+  const completion = expect(attempt.completed).rejects.toMatchObject({
+    code: "transport_unavailable",
+    transportCode: "timeout",
+  });
+  expect((await fetch(attempt.authorizationUrl)).status).toBe(502);
+  await completion;
+  expect(proxyCalls).toBe(0);
+});
+
 test("exposes only a validated provider error code from a failed token exchange", async () => {
   const fake = await fakeProvider("openai");
   const harness = OAuthValidationHarness({

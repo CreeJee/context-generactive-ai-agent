@@ -5,6 +5,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { Data, Option, Schema } from "effect";
 import { requireRuntime } from "../runtime/resources.ts";
 import { prepareAnthropicValidationBody } from "./anthropic-validation-adapter.ts";
+import { fetchOpenAiTokenViaSystemProxy } from "./windows-token-proxy.ts";
 import {
   createOAuthState,
   createPkce,
@@ -282,6 +283,12 @@ export interface SubscriptionOAuthClientOptions {
   readonly protocol: ProviderProtocol;
   readonly store?: CredentialStore;
   readonly fetch?: typeof fetch;
+  /** Injectable one-shot proxy route for tests; production uses Windows user proxy policy. */
+  readonly tokenProxyFetch?: (
+    url: string,
+    body: string,
+    contentType: string,
+  ) => Promise<Response | null>;
   readonly now?: () => number;
 }
 
@@ -602,21 +609,45 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       operation: values.grant_type === "refresh_token" ? "token_refresh" : "token_exchange",
     };
     const encoded = tokenBody(protocol, values);
-    let response: Response;
-    try {
-      response = await fetcher(protocol.tokenUrl, {
-        method: "POST",
-        headers: { Accept: "application/json", "Content-Type": encoded.contentType },
-        body: encoded.body,
-        redirect: "error",
-        signal: AbortSignal.timeout(30_000),
-      });
-    } catch (error) {
-      throw new OAuthHarnessError("transport_unavailable", null, {
-        ...context,
-        transportCode: error instanceof Error ? safeTransportCode(error) : "other",
-      });
-    }
+    const request = async (): Promise<Response> => {
+      try {
+        return await fetcher(protocol.tokenUrl, {
+          method: "POST",
+          headers: { Accept: "application/json", "Content-Type": encoded.contentType },
+          body: encoded.body,
+          redirect: "error",
+          signal: AbortSignal.timeout(30_000),
+        });
+      } catch (error) {
+        const transportCode = error instanceof Error ? safeTransportCode(error) : "other";
+        // A pre-connect timeout cannot consume an authorization code. Never retry after a
+        // response, redirect, TLS failure, or ambiguous timeout; never proxy injected fetches.
+        const proxyFetch =
+          options.tokenProxyFetch ??
+          (options.fetch === undefined ? fetchOpenAiTokenViaSystemProxy : undefined);
+        if (
+          protocol.provider === "openai" &&
+          values.grant_type === "authorization_code" &&
+          transportCode === "UND_ERR_CONNECT_TIMEOUT" &&
+          proxyFetch !== undefined
+        ) {
+          try {
+            const retry = await proxyFetch(protocol.tokenUrl, encoded.body, encoded.contentType);
+            if (retry !== null) return retry;
+          } catch (proxyError) {
+            throw new OAuthHarnessError("transport_unavailable", null, {
+              ...context,
+              transportCode: proxyError instanceof Error ? safeTransportCode(proxyError) : "other",
+            });
+          }
+        }
+        throw new OAuthHarnessError("transport_unavailable", null, {
+          ...context,
+          transportCode,
+        });
+      }
+    };
+    const response = await request();
     if (!response.ok) {
       const body = await response.text().catch(() => "");
       throw new OAuthHarnessError("provider_rejected", response.status, {
