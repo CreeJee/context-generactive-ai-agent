@@ -20,6 +20,8 @@ pnpm dev
 
 개발 모드에서는 에이전트 backend(`127.0.0.1:5180`)를 한 번 build한 뒤 HMR 없이 실행하고, UI(`127.0.0.1:5173`)만 React Router HMR로 실행합니다. `/api`는 UI 서버가 backend로 전달합니다.
 
+`pnpm dev`와 `pnpm dev:agent`는 backend 빌드 전에 `turbovec` 네이티브 애드온을 빌드하거나 캐시에서 복원합니다. 첫 빌드에는 Rust의 `cargo`가 PATH에 있어야 하며, Windows에서는 Visual Studio의 C++ 빌드 도구도 필요합니다. 준비물은 [빌드 가이드](../../docs/building.md)를 참고하세요.
+
 - UI 코드 변경은 HMR로 바로 반영됩니다.
 - `memory-agent`, API route, OAuth/provider 또는 server 코드가 바뀌면 새 mutation과 OAuth callback을 차단하고 화면 상단에 재시작 안내를 표시합니다. 실행 중 요청을 새 코드로 자동 재전송하지 않습니다. 터미널에서 `pnpm dev`를 다시 시작하세요.
 - 두 터미널로 나누려면 먼저 `pnpm dev:agent`, 이어서 `pnpm dev:web`을 실행합니다.

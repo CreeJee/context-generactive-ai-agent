@@ -713,6 +713,16 @@
 - 외부 계약의 숫자는 `Schema.Finite`로 검증해 `NaN`과 무한대를 거부한다. 실제 `unknown` 경계에서는 `decodeUnknownEffect`를 사용하고, 이미 타입이 정해진 값은 해당 타입의 디코더를 사용한다.
 - Vite Plus 1.0.0-rc.0과 Vitest 5.0.1로 올리고 `@effect/vitest@4.0.0-rc.117`을 도입한다. Vitest를 workspace override로 고정하고 Node 타입 버전을 통일해 `@effect/vitest`와 Vite Plus가 같은 실행기 인스턴스를 사용하게 한다. 서비스 layer를 공유하는 테스트부터 `layer`와 `it.effect`로 옮긴다. SDK·브라우저 Promise 경계는 일반 Vitest 테스트를 유지할 수 있다.
 
+## 개발 서버의 네이티브 빌드 (2026-09-26)
+
+- `pnpm dev`와 `pnpm dev:agent`는 안정 backend를 빌드하기 전에 `vp run turbovec#build`를 실행한다. 네이티브 빌드 실패 시 backend와 frontend를 시작하지 않는다. 기존의 React Router 직접 빌드 경로는 Vite Task의 의존 빌드를 거치지 않아 새 checkout에서 `memory-turbovec.node` 없이 시작하려 했다.
+
+## Windows OAuth 자격 증명 저장 (2026-09-26)
+
+- 네이티브 Windows 키링에서 빈 항목이 타입 선언과 달리 `null`로 반환되는 경우도 로그인하지 않은 상태로 처리한다. `null`과 `undefined` 모두 빈 항목이며 저장소 오류가 아니다.
+- Windows Credential Manager의 한 항목은 2,560바이트까지 저장할 수 있고, `@napi-rs/keyring`의 비밀번호는 UTF-16으로 저장된다. OpenAI의 access token, refresh token과 ID token을 묶은 JSON이 이 한도를 넘으므로 Windows에서는 base64로 인코딩한 값을 1,280자씩 OS 저장소의 별도 항목으로 나눈다.
+- 모든 조각을 쓴 뒤 기존 `subscription-oauth` 항목에 세대 ID, 조각 수와 무결성 해시를 게시한다. 갱신 실패 시 기존 로그인은 유지하고, 갱신 성공과 로그아웃 시 이전 조각을 지운다. 기존 단일 JSON 항목도 그대로 읽는다. macOS와 Linux의 저장 형식은 유지하며 토큰을 파일에 저장하지 않는다.
+
 ## 일반 compact 최소 진입 제한 정리 (2026-09-25)
 
 - 위 2026-09-17의 25% 기준 설명은 현행 구현에 더는 적용되지 않는다. 답변이 끝난 도구 출력은 크기에 관계없이 포인터로 전환하고, 검증된 요약 블록은 준비되는 즉시 이전 원문 턴을 대신한다. 최근 2턴은 원문으로 남기며, 55%를 넘는 오래된 메시지 leave-out과 명시적 cache-cold one-shot은 별개로 유지한다.

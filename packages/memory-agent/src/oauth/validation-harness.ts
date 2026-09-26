@@ -5,6 +5,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { Data, Option, Schema } from "effect";
 import { requireRuntime } from "../runtime/resources.ts";
 import { prepareAnthropicValidationBody } from "./anthropic-validation-adapter.ts";
+import { createChunkedPasswordEntry, type PasswordEntry } from "./chunked-password-entry.ts";
 import {
   fetchOpenAiTokenViaSystemProxy,
   type ProxyRoute,
@@ -71,23 +72,30 @@ const keychainEntry = (provider: OAuthProvider) => {
   } catch {
     throw credentialStoreFailure(provider, "module_load");
   }
-  try {
-    return new AsyncEntry(providerKeychainService(provider), "subscription-oauth");
-  } catch {
-    throw credentialStoreFailure(provider, "entry_open");
-  }
+  const open = (account: string) => {
+    try {
+      return new AsyncEntry(providerKeychainService(provider), account);
+    } catch {
+      throw credentialStoreFailure(provider, "entry_open");
+    }
+  };
+  return process.platform === "win32"
+    ? createChunkedPasswordEntry(open, "subscription-oauth")
+    : open("subscription-oauth");
 };
 
-export const createKeychainCredentialStore = (): CredentialStore => ({
+export const createKeychainCredentialStore = (
+  open: (provider: OAuthProvider) => PasswordEntry = keychainEntry,
+): CredentialStore => ({
   async read(provider: OAuthProvider): Promise<StoredCredential | null> {
-    const entry = keychainEntry(provider);
-    let encoded: string | undefined;
+    const entry = open(provider);
+    let encoded: string | null | undefined;
     try {
       encoded = await entry.getPassword();
     } catch {
       throw credentialStoreFailure(provider, "read");
     }
-    if (encoded === undefined) return null;
+    if (encoded == null) return null;
     const credential = Option.getOrThrowWith(decodeStoredCredential(encoded), () =>
       credentialStoreFailure(provider, "decode"),
     );
@@ -101,7 +109,7 @@ export const createKeychainCredentialStore = (): CredentialStore => ({
   },
 
   async write(provider: OAuthProvider, credential: StoredCredential): Promise<void> {
-    const entry = keychainEntry(provider);
+    const entry = open(provider);
     try {
       await entry.setPassword(JSON.stringify(credential));
     } catch {
@@ -110,7 +118,7 @@ export const createKeychainCredentialStore = (): CredentialStore => ({
   },
 
   async remove(provider: OAuthProvider): Promise<void> {
-    const entry = keychainEntry(provider);
+    const entry = open(provider);
     try {
       // Native backends make deletion idempotent: false means the credential is already absent.
       await entry.deleteCredential();

@@ -123,6 +123,7 @@ function webFrontend(manifest: typeof Manifest.Type) {
 async function buildBackend(buildId: string) {
   const env = { CONTEXT_AGENT_BUILD_ID: buildId };
   console.log("Building the stable agent backend (HMR disabled)...");
+  await run(["exec", "vp", "run", "turbovec#build"], env, "turbovec native build");
   await run(["exec", "react-router", "build"], env, "react-router build");
   await run(["exec", "vp", "pack"], env, "vp pack");
 }
