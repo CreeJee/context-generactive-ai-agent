@@ -16,8 +16,11 @@ const crowdedShare = 0.6;
 export function ContextMeter({ context }: { context: ContextView }) {
   const { usedTokens, cachedTokens, cacheRatio, compactionStage, windowTokens, windowKnown } =
     context;
-  const share = usedTokens === null || !windowKnown ? 0 : usedTokens / windowTokens;
-  const crowded = windowKnown && share >= crowdedShare;
+  // Historical requests can exceed a catalog limit (including when older middleware sent the
+  // un-compacted transcript). In that case a percentage is not a meaningful context gauge.
+  const comparable = windowKnown && (usedTokens === null || usedTokens <= windowTokens);
+  const share = usedTokens === null || !comparable ? 0 : usedTokens / windowTokens;
+  const crowded = comparable && share >= crowdedShare;
   return (
     <Tooltip>
       <TooltipTrigger
@@ -31,7 +34,7 @@ export function ContextMeter({ context }: { context: ContextView }) {
           />
         }
       >
-        {windowKnown && (
+        {comparable && (
           <span className="h-1 w-16 overflow-hidden rounded-full bg-muted">
             <motion.span
               className={cn(
@@ -47,7 +50,7 @@ export function ContextMeter({ context }: { context: ContextView }) {
           컨텍스트{" "}
           {usedTokens === null ? (
             "-"
-          ) : windowKnown ? (
+          ) : comparable ? (
             <>
               <AnimatedNumber value={Math.round(share * 100)} />%
             </>
@@ -61,9 +64,11 @@ export function ContextMeter({ context }: { context: ContextView }) {
           {usedTokens === null
             ? "이 대화로 아직 모델에 요청하지 않았어요."
             : `마지막 요청에서 모델이 ${tokens.format(usedTokens)} 토큰을 읽었어요(지침과 도구 포함).`}{" "}
-          {windowKnown
-            ? `선택한 모델의 카탈로그에 표시된 컨텍스트 한도는 ${tokens.format(windowTokens)} 토큰이에요.`
-            : "선택한 모델의 컨텍스트 한도를 확인할 수 없어 사용률은 표시하지 않아요."}
+          {!windowKnown
+            ? "선택한 모델의 컨텍스트 한도를 확인할 수 없어 사용률은 표시하지 않아요."
+            : !comparable
+              ? `모델 카탈로그의 한도는 ${tokens.format(windowTokens)} 토큰이지만 보고된 사용량이 이를 넘어 사용률은 표시하지 않아요. 이 수치는 마지막 요청의 기록이며, 다음 요청부터 새 압축 결과를 확인할 수 있어요.`
+              : `선택한 모델의 카탈로그에 표시된 컨텍스트 한도는 ${tokens.format(windowTokens)} 토큰이에요.`}
         </p>
         {usedTokens !== null && (
           <p>

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { chat, type ChatMiddleware, type ModelMessage } from "@tanstack/ai";
 import { Effect, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
-import { AgentChat } from "../src/agent/chat.ts";
+import { AgentChat, modelBoundMessages } from "../src/agent/chat.ts";
 import { ApiUsage } from "../src/agent/api-usage.ts";
 import {
   coldObservationId,
@@ -80,6 +80,29 @@ async function drain(stream: AsyncIterable<unknown>) {
 }
 
 const noLimit = 1_000_000;
+
+test("image inlining uses the compacted provider history, not an older image in the transcript", async () => {
+  const image = { type: "image" as const, source: { type: "url" as const, value: "/old-image" } };
+  const messages: ModelMessage[] = [
+    { role: "user", content: [image] },
+    { role: "assistant", content: "previous answer" },
+    { role: "user", content: "current question" },
+  ];
+  const result = await compact(
+    messages,
+    {
+      manual: { clearedThrough: 0, summarizedTurns: 0 },
+      blocks: [{ end: 1, nextTurnNodeId: "next", text: "Earlier image discussed." }],
+    },
+    { toolResultId: () => null, nodeText: () => "current question" },
+    budgetFor(noLimit),
+  );
+  expect(result.stage).toBe("summarize");
+  const providerMessages = modelBoundMessages({ messages, providerMessages: [...result.messages] });
+  expect(providerMessages).toEqual(result.messages);
+  expect(providerMessages.some((message) => Array.isArray(message.content))).toBe(false);
+  expect(modelBoundMessages({ messages })).toBe(messages);
+});
 
 const sourcesOf = (nodes: Effect.Success<typeof Nodes>, sessionId: string) =>
   ({

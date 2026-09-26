@@ -10,6 +10,8 @@ import {
   toServerSentEventsResponse,
   type AnyServerTool,
   type ChatMiddleware,
+  type ChatMiddlewareConfig,
+  type ModelMessage,
 } from "@tanstack/ai";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -339,6 +341,11 @@ const verificationToolNames: ReadonlySet<string> = new Set(["run_shell"]);
 const isStreamJoin = (request: Request) =>
   request.headers.has("Last-Event-ID") || new URL(request.url).searchParams.has("offset");
 
+/** Image inlining must never replace the already-compacted provider view with transcript history. */
+export const modelBoundMessages = (
+  config: Pick<ChatMiddlewareConfig, "messages" | "providerMessages">,
+): readonly ModelMessage[] => config.providerMessages ?? config.messages;
+
 const make = Effect.gen(function* () {
   const context = yield* Effect.context();
   const runEffect = Effect.runPromiseWith(context);
@@ -505,7 +512,7 @@ const make = Effect.gen(function* () {
         }>
       >();
       const providerMessages = await Promise.all(
-        config.messages.map(async (message) => {
+        modelBoundMessages(config).map(async (message) => {
           if (!Array.isArray(message.content)) return message;
           const content = await Promise.all(
             message.content.map(async (part) => {
