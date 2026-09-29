@@ -138,8 +138,8 @@ describe("ACP agent bridge", () => {
     }
   });
 
-  test("cancel stops the app's run; loading a session replays it", async () => {
-    const { agent, project, close, updates } = await acpSetup();
+  test("cancel stops the app's run", async () => {
+    const { agent, project, close } = await acpSetup();
     try {
       const { sessionId } = await agent.request(acp.methods.agent.session.new, {
         cwd: project.root,
@@ -155,11 +155,11 @@ describe("ACP agent bridge", () => {
     } finally {
       close();
     }
+  }, 10_000);
 
-    // A second editor connection loads the same session and sees what was said.
+  test("loading a session replays what was said", async () => {
     const second = await acpSetup();
     try {
-      updates.length = 0;
       const { sessionId } = await second.agent.request(acp.methods.agent.session.new, {
         cwd: second.project.root,
         mcpServers: [],

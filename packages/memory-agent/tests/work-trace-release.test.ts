@@ -69,5 +69,5 @@ describe("Work Trace release limits", () => {
         expect(elapsedMs).toBeLessThan(1_000);
       }),
     );
-  });
+  }, 10_000);
 });

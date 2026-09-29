@@ -253,6 +253,16 @@ export const defaultTestResponder: ScriptedResponder = async (invocation) => {
 export interface TestProviderOptions {
   readonly signedIn?: boolean;
   readonly responder?: ScriptedResponder;
+  /** Replace scripted delays with a test-controlled gate. */
+  readonly delayedTurnGate?: Promise<void>;
+}
+
+export function turnGate() {
+  let release = () => {};
+  const waitFor = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { waitFor, release: () => release() };
 }
 
 export interface TestProvider {
@@ -270,7 +280,13 @@ export function testProvider(options: TestProviderOptions = {}): TestProvider {
     provider: "openai",
     status: options.signedIn === false ? "signed-out" : "signed-in",
   };
-  const adapter = new ScriptedTextAdapter(options.responder ?? defaultTestResponder);
+  const responder = options.responder ?? defaultTestResponder;
+  const adapter = new ScriptedTextAdapter(async (invocation) => {
+    const turn = await responder(invocation);
+    if (!options.delayedTurnGate || turn.delayMs === undefined) return turn;
+    const { delayMs: _delayMs, ...gatedTurn } = turn;
+    return { ...gatedTurn, waitFor: options.delayedTurnGate };
+  });
   const layer = Layer.effect(
     ProviderRegistry,
     Effect.gen(function* () {

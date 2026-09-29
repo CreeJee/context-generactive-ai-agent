@@ -27,6 +27,8 @@ export interface ScriptedTurn {
   readonly toolCalls?: readonly ScriptedToolCall[];
   /** Wait before emitting this turn. Useful for cancellation and concurrency tests. */
   readonly delayMs?: number;
+  /** Wait for a test-controlled release, or stop when the run is aborted. */
+  readonly waitFor?: Promise<void>;
   /** Stream `text`, then fail the model call. */
   readonly failAfterText?: string;
   /** Optional provider usage for middleware and context-meter tests. */
@@ -87,6 +89,18 @@ export class ScriptedTextAdapter extends BaseTextAdapter<
     };
     this.invocations.push(invocation);
     const turn = await this.#respond(invocation);
+    const signal = options.abortController?.signal ?? options.request?.signal;
+    if (turn.waitFor) {
+      if (!signal?.aborted)
+        await new Promise<void>((resolve, reject) => {
+          const onAbort = () => resolve();
+          signal?.addEventListener("abort", onAbort, { once: true });
+          if (signal?.aborted) onAbort();
+          void turn
+            .waitFor!.finally(() => signal?.removeEventListener("abort", onAbort))
+            .then(resolve, reject);
+        });
+    }
     if (turn.delayMs !== undefined)
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(resolve, turn.delayMs);

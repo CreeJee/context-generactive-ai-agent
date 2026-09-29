@@ -7,6 +7,7 @@ import { Indexer } from "../src/memory/embedding/indexer.ts";
 import { MemorySearch } from "../src/memory/search.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
 import { approvalToolDefinitions } from "../src/tools/definitions.ts";
+import { turnGate } from "./support/provider.ts";
 import { testRuntime } from "./support/runtime.ts";
 
 const Archived = Schema.Struct({ id: Schema.String, archivedAt: Schema.NullOr(Schema.String) });
@@ -61,7 +62,8 @@ describe("archived conversations", () => {
   });
 
   test("respect another page's lease and safely stop a running answer before archive", async () => {
-    const context = await testRuntime({ testProvider: {} });
+    const gate = turnGate();
+    const context = await testRuntime({ testProvider: { delayedTurnGate: gate.waitFor } });
     const { runtime, session } = context;
     await context.provider!.select(runtime);
     const agent = await runtime.runPromise(AgentChat);

@@ -6,6 +6,7 @@ import { Nodes } from "../src/memory/nodes.ts";
 import { MessageQueue } from "../src/queue/queue.ts";
 import { sessionHolderHeader } from "../src/sessions/lease-state.ts";
 import { approvalToolDefinitions } from "../src/tools/definitions.ts";
+import { turnGate } from "./support/provider.ts";
 import { testRuntime } from "./support/runtime.ts";
 
 type Runtime = Awaited<ReturnType<typeof testRuntime>>["runtime"];
@@ -64,8 +65,11 @@ function openTab(runtime: Runtime, sessionId: string, holder: string | null = nu
   return { client, texts, answer: () => texts("assistant").join("") };
 }
 
-async function setup() {
-  const context = await testRuntime({ testProvider: {} });
+async function setup(gateDelayedTurns = true) {
+  const gate = turnGate();
+  const context = await testRuntime({
+    testProvider: gateDelayedTurns ? { delayedTurnGate: gate.waitFor } : {},
+  });
   await context.provider!.select(context.runtime);
   const agent = await context.runtime.runPromise(AgentChat);
   const run = <A, E>(effect: Effect.Effect<A, E>) => context.runtime.runPromise(effect);
@@ -85,7 +89,7 @@ async function setup() {
       Schema.Struct({ running: Schema.NullOr(Schema.Struct({ runId: Schema.String })) }),
     )(status).running;
   };
-  return { ...context, agent, run, enqueue, list, running };
+  return { ...context, agent, run, enqueue, list, running, releaseDelayedTurn: gate.release };
 }
 
 describe("message queue", () => {
@@ -303,6 +307,7 @@ describe("message queue", () => {
     const queued = await context.enqueue("look in the tests folder", "queue");
     expect(queued.status).toBe(201);
     expect(decodeQueued(queued.body).state).toEqual({ kind: "waiting" });
+    context.releaseDelayedTurn();
 
     await until(
       () => context.provider!.adapter.invocations.length === 2,
@@ -348,6 +353,7 @@ describe("message queue", () => {
     const queued = await context.enqueue("shorter please", "queue");
     expect(queued.status).toBe(201);
     expect(decodeQueued(queued.body).state).toEqual({ kind: "waiting" });
+    context.releaseDelayedTurn();
 
     await until(() => tab.answer().includes("done"), "the answer to finish");
     await until(() => !tab.client.getIsLoading(), "the run to finish");
@@ -370,6 +376,7 @@ describe("message queue", () => {
     await until(() => context.provider!.adapter.invocations.length === 1, "the answer to start");
     const first = decodeQueued((await context.enqueue("hello again", "queue", "tab")).body);
     const second = decodeQueued((await context.enqueue("and once more", "queue", "tab")).body);
+    context.releaseDelayedTurn();
     await until(() => tab.answer().includes("done"), "the first answer");
     await until(() => !tab.client.getIsLoading(), "the run to finish");
     // No tool call happened, so both are still waiting for the page.
@@ -424,7 +431,7 @@ describe("message queue", () => {
   });
 
   test("a cancel holds what was waiting until the user confirms it", async () => {
-    const context = await setup();
+    const context = await setup(false);
     const tab = openTab(context.runtime, context.session.id);
     void tab.client.sendMessage("please be slow");
     await until(() => context.provider!.adapter.invocations.length === 1, "the answer to start");

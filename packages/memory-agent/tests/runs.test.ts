@@ -4,6 +4,7 @@ import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { approvalToolDefinitions } from "../src/tools/definitions.ts";
 import { Workflows } from "../src/workflow/workflow.ts";
+import { turnGate } from "./support/provider.ts";
 import { testRuntime } from "./support/runtime.ts";
 
 type Runtime = Awaited<ReturnType<typeof testRuntime>>["runtime"];
@@ -75,9 +76,10 @@ function openTab(runtime: Runtime, sessionId: string) {
 }
 
 async function setup() {
-  const context = await testRuntime({ testProvider: {} });
+  const gate = turnGate();
+  const context = await testRuntime({ testProvider: { delayedTurnGate: gate.waitFor } });
   await context.provider!.select(context.runtime);
-  return context;
+  return { ...context, releaseDelayedTurn: gate.release };
 }
 
 const statusOf = async (runtime: Runtime, sessionId: string) => {
@@ -89,7 +91,7 @@ const statusOf = async (runtime: Runtime, sessionId: string) => {
 
 describe("runs across reloads, cancels and restarts", () => {
   test("a reloaded page rejoins a durable app run without invoking the provider again", async () => {
-    const { runtime, session, provider } = await setup();
+    const { runtime, session, provider, releaseDelayedTurn } = await setup();
     const first = openTab(runtime, session.id);
     void first.client.sendMessage("please be slow");
     await until(() => provider!.adapter.invocations.length === 1, "the provider run to start");
@@ -97,6 +99,7 @@ describe("runs across reloads, cancels and restarts", () => {
     first.client.dispose();
 
     const second = openTab(runtime, session.id);
+    releaseDelayedTurn();
     await until(() => second.text().endsWith("done"), "the rest of the answer");
     expect(second.text()).toBe("done");
     await until(() => !second.client.getSessionGenerating(), "the rejoined run to settle");
