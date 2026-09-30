@@ -101,18 +101,17 @@ export class ScriptedTextAdapter extends BaseTextAdapter<
             .then(resolve, reject);
         });
     }
-    if (turn.delayMs !== undefined)
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(resolve, turn.delayMs);
-        options.abortController?.signal.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            reject(options.abortController?.signal.reason ?? new Error("aborted"));
-          },
-          { once: true },
-        );
+    if (turn.delayMs !== undefined && !signal?.aborted)
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer);
+          signal?.removeEventListener("abort", done);
+          resolve();
+        };
+        const timer = setTimeout(done, turn.delayMs);
+        signal?.addEventListener("abort", done, { once: true });
       });
+    if (signal?.aborted) return;
 
     const runId = options.runId ?? `scripted-run-${index}`;
     const threadId = options.threadId ?? "scripted-thread";

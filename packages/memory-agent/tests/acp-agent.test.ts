@@ -8,6 +8,7 @@ import { createAppApi } from "../src/acp/app-api.ts";
 import { startAcpAgent } from "../src/acp/agent-bridge.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { appFetch } from "./support/app-fetch.ts";
+import { turnGate } from "./support/provider.ts";
 import { testRuntime } from "./support/runtime.ts";
 
 /** Two ends of an in-memory ACP connection. */
@@ -20,8 +21,13 @@ function linkedStreams() {
   };
 }
 
-async function acpSetup(answerPermission: "allow" | "reject" = "allow") {
-  const context = await testRuntime({ testProvider: {} });
+async function acpSetup(
+  answerPermission: "allow" | "reject" = "allow",
+  delayedTurnGate?: Promise<void>,
+) {
+  const context = await testRuntime({
+    testProvider: delayedTurnGate ? { delayedTurnGate } : {},
+  });
   await context.provider!.select(context.runtime);
   const streams = linkedStreams();
   const fetcher = appFetch(context.runtime);
@@ -139,7 +145,8 @@ describe("ACP agent bridge", () => {
   });
 
   test("cancel stops the app's run", async () => {
-    const { agent, project, close } = await acpSetup();
+    const gate = turnGate();
+    const { agent, project, provider, close } = await acpSetup("allow", gate.waitFor);
     try {
       const { sessionId } = await agent.request(acp.methods.agent.session.new, {
         cwd: project.root,
@@ -149,9 +156,12 @@ describe("ACP agent bridge", () => {
         sessionId,
         prompt: [{ type: "text", text: "slow" }],
       });
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      for (let attempt = 0; attempt < 100 && provider!.adapter.invocations.length === 0; attempt++)
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(provider!.adapter.invocations).toHaveLength(1);
       await agent.notify(acp.methods.agent.session.cancel, { sessionId });
       expect((await prompt).stopReason).toBe("cancelled");
+      expect(provider!.adapter.invocations).toHaveLength(1);
     } finally {
       close();
     }

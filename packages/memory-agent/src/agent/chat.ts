@@ -889,6 +889,9 @@ const make = Effect.gen(function* () {
           resume,
           forwardedProps,
         } = params.value;
+        const previousRun = yield* agentPromise("load-run", () => chatState.run(sessionId, runId));
+        if (previousRun?.status === "aborted")
+          return resumeServerSentEventsResponse({ adapter: memoryStream({ runId, offset: "-1" }) });
         // Internal completion turns carry operational context only, never a synthetic user turn.
         // Resolve at request time, not from the page's stale queue snapshot. Ignore the client's
         // placeholder turn altogether, including its text and attachments.

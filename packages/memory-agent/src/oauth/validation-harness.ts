@@ -540,6 +540,8 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
 
     server.on("request", (request, response) => {
       void (async () => {
+        // A one-shot callback must release its socket before finish closes the server.
+        response.setHeader("Connection", "close");
         const callback = new URL(request.url ?? "/", redirectUri);
         if (
           request.method !== "GET" ||

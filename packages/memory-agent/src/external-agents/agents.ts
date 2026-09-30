@@ -31,7 +31,7 @@ export class ExternalAgentOperationFailed extends Data.TaggedError("ExternalAgen
   readonly cause: unknown;
 }> {}
 const connectTimeoutMs = 30_000;
-const retryDelayMs = 500;
+const retryDelayMs = 100;
 
 /** Connection state of one external agent, as settings show it. */
 export type AgentLinkState =

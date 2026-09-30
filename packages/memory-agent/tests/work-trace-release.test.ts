@@ -26,17 +26,19 @@ describe("Work Trace release limits", () => {
             VALUES ('scale-agent', ?, 'scale-agent', 'test', 'running', 'scale-parent', 'test', 1, 1)`)
           .run(session.id);
 
-        for (let index = 0; index < 1_000; index += 1)
-          trace.startAttempt({
-            sessionId: session.id,
-            parentRunId: "scale-parent",
-            parentToolCallId: `scale-call-${index}`,
-            agentId: "scale-agent",
-            title: `Task ${index}`,
-            request: "Measure indexed projection",
-            kind: "start",
-            threadId: `scale-thread-${index}`,
-          });
+        db.atomic(() => {
+          for (let index = 0; index < 1_000; index += 1)
+            trace.startAttempt({
+              sessionId: session.id,
+              parentRunId: "scale-parent",
+              parentToolCallId: `scale-call-${index}`,
+              agentId: "scale-agent",
+              title: `Task ${index}`,
+              request: "Measure indexed projection",
+              kind: "start",
+              threadId: `scale-thread-${index}`,
+            });
+        });
 
         const projectPlan = planDetails(
           db.sqlite

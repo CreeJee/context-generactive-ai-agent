@@ -39,6 +39,7 @@ async function until(condition: () => boolean, description: string) {
   throw new Error(`Timed out: ${description}`);
 }
 async function setup() {
+  const delayed: Array<{ user: string; release: () => void }> = [];
   const context = await testRuntime({
     testProvider: {
       responder: async (invocation) => {
@@ -97,7 +98,15 @@ async function setup() {
             ],
           };
         }
-        return defaultTestResponder(invocation);
+        const turn = await defaultTestResponder(invocation);
+        if (turn.delayMs === undefined) return turn;
+        const { delayMs: _delayMs, ...ready } = turn;
+        let release = () => {};
+        const waitFor = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        delayed.push({ user, release });
+        return { ...ready, waitFor };
       },
     },
   });
@@ -141,16 +150,30 @@ async function setup() {
       )
       .join("");
   };
-  return { ...context, agent, children, trace, db, count, idle, send };
+  const releaseDelayed = async (text: string, count = 1) => {
+    await until(
+      () => delayed.filter((entry) => entry.user.includes(text)).length >= count,
+      `delayed ${text}`,
+    );
+    for (let index = delayed.length - 1; index >= 0; index--) {
+      const entry = delayed[index]!;
+      if (!entry.user.includes(text)) continue;
+      delayed.splice(index, 1);
+      entry.release();
+    }
+  };
+  return { ...context, agent, children, trace, db, count, idle, send, releaseDelayed };
 }
 
 describe("asynchronous subagents", () => {
   test("immediate receipt, parent-end survival, and durable idle follow-up without a synthetic user", async () => {
-    const { send, children, session, provider, trace, count, idle, runtime } = await setup();
+    const { send, children, session, provider, trace, count, idle, runtime, releaseDelayed } =
+      await setup();
     const receipt = receiptFrom(await send("dispatch only"));
     expect(children.list(session.id)[0]?.status).toBe("running");
     expect(trace.taskDetail(session.id, receipt.taskId)?.adoptions).toEqual([]);
     expect(await send("unrelated parent work")).toContain("Hello");
+    await releaseDelayed("nap");
     await until(
       () => children.list(session.id)[0]?.status === "completed",
       "child survives parent end",
@@ -183,11 +206,12 @@ describe("asynchronous subagents", () => {
     expect(messages.filter((message) => message.role === "user")).toHaveLength(2);
   });
   test("concurrent children cannot cause overlapping parent turns", async () => {
-    const { send, children, session, provider, count, idle, db } = await setup();
+    const { send, children, session, provider, count, idle, db, releaseDelayed } = await setup();
     const answer = await send("delegate twice dispatch only");
     expect(answer.match(/"status":"running"/g)).toHaveLength(2);
     expect(children.list(session.id).map((child) => child.status)).toEqual(["running", "running"]);
     const parent = send("slow parent work");
+    await releaseDelayed("nap", 2);
     await until(
       () => children.list(session.id).every((child) => child.status === "completed"),
       "both children finish",
@@ -200,6 +224,7 @@ describe("asynchronous subagents", () => {
         ),
       ),
     ).toBe(false);
+    await releaseDelayed("slow parent work");
     await parent;
     await until(
       () =>
@@ -222,7 +247,7 @@ describe("asynchronous subagents", () => {
     expect(count("SELECT count(*) AS count FROM nodes WHERE kind = 'user'")).toBe(2);
   });
   test("bounded wait is not review; adoption requires retrieval in the same run", async () => {
-    const { send, session, trace } = await setup();
+    const { send, session, trace, releaseDelayed } = await setup();
     const ids = idsOf(receiptFrom(await send("dispatch only")));
     expect(await send(`call get_subagent_report ${JSON.stringify(ids)}`)).toContain(
       '"status":"running"',
@@ -231,6 +256,7 @@ describe("asynchronous subagents", () => {
       await send(`call wait_subagents ${JSON.stringify({ attempts: [ids], timeoutMs: 0 })}`),
     ).toContain('"status":"timed_out"');
     expect(trace.taskDetail(session.id, ids.taskId)?.adoptions).toEqual([]);
+    await releaseDelayed("nap");
     expect(
       await send(`call wait_subagents ${JSON.stringify({ attempts: [ids], timeoutMs: 5000 })}`),
     ).toContain('"status":"completed"');
@@ -250,11 +276,12 @@ describe("asynchronous subagents", () => {
     expect(await send(adopt)).toContain("Only reports reviewed in this run");
   });
   test("any wait returns a terminal child without cancelling its peer", async () => {
-    const { send, children, session } = await setup();
+    const { send, children, session, releaseDelayed } = await setup();
     const first = receiptFrom(await send('call run_subagent {"task":"nap first dispatch only"}'));
     const second = receiptFrom(
       await send('call run_subagent {"task":"slow second dispatch only"}'),
     );
+    await releaseDelayed("nap first");
     expect(
       await send(
         `call wait_subagents ${JSON.stringify({ attempts: [idsOf(first), idsOf(second)], mode: "any", timeoutMs: 5000 })}`,
@@ -286,7 +313,7 @@ describe("asynchronous subagents", () => {
     );
   });
   test("queued named attempts cancel separately and reports use exact attempts", async () => {
-    const { send, children, session, trace } = await setup();
+    const { send, children, session, trace, releaseDelayed } = await setup();
     const first = receiptFrom(
       await send('call message_subagent {"agent":"helper","message":"nap first dispatch only"}'),
     );
@@ -298,6 +325,7 @@ describe("asynchronous subagents", () => {
     expect(await children.stopTask(second.taskId)).toBe("stopped");
     expect(trace.taskDetail(session.id, second.taskId)?.attempts[0]?.status).toBe("cancelled");
     expect(trace.taskDetail(session.id, first.taskId)?.attempts[0]?.status).toBe("running");
+    await releaseDelayed("nap first");
     await send(
       `call wait_subagents ${JSON.stringify({ attempts: [idsOf(first)], timeoutMs: 5000 })}`,
     );
@@ -312,8 +340,9 @@ describe("asynchronous subagents", () => {
     expect(secondReport.answer).toBe("");
   });
   test("resume returns a new running attempt receipt without awaiting its report", async () => {
-    const { send, db, children, session } = await setup();
+    const { send, db, children, session, releaseDelayed } = await setup();
     const first = receiptFrom(await send("dispatch only"));
+    await releaseDelayed("nap");
     await send(
       `call wait_subagents ${JSON.stringify({ attempts: [idsOf(first)], timeoutMs: 5000 })}`,
     );
@@ -331,14 +360,16 @@ describe("asynchronous subagents", () => {
     expect(resumed.taskId).toBe(first.taskId);
     expect(resumed.attemptId).not.toBe(first.attemptId);
     expect(children.list(session.id)[0]?.status).toBe("running");
+    await releaseDelayed("nap");
     await send(
       `call wait_subagents ${JSON.stringify({ attempts: [idsOf(resumed)], timeoutMs: 5000 })}`,
     );
   });
 
   test("reports survive restart and incomplete notification deliveries are replayable", async () => {
-    const { send, reopen, trace, session } = await setup();
+    const { send, reopen, trace, session, releaseDelayed } = await setup();
     const receipt = receiptFrom(await send("dispatch only"));
+    await releaseDelayed("nap");
     await send(
       `call wait_subagents ${JSON.stringify({ attempts: [idsOf(receipt)], timeoutMs: 5000 })}`,
     );

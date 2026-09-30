@@ -83,7 +83,7 @@ describe("runCommand", () => {
     const cwd = workdir();
     const timedOut = await runCommand("sleep 30 & sleep 30; wait", {
       ...options(cwd),
-      timeoutSeconds: 1,
+      timeoutSeconds: 0.25,
     });
     expect(timedOut.status).toBe("timed_out");
     expect(timedOut.durationMs).toBeLessThan(5_000);

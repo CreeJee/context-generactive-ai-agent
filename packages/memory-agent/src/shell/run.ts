@@ -8,7 +8,7 @@ const tailBytes = 56 * 1024;
 /** Grace period between SIGTERM and SIGKILL when stopping a command. */
 const killGraceMs = 3_000;
 /** Final wait for Node's close event after SIGKILL before detached pipes are abandoned. */
-const closeGraceMs = 500;
+const closeGraceMs = 100;
 
 interface ActiveCommand {
   readonly cancel: () => void;
@@ -173,6 +173,7 @@ export function runCommand(command: string, options: CommandOptions): Promise<Co
     let stopReason: "timed_out" | "cancelled" | null = null;
     let killTimer: NodeJS.Timeout | undefined;
     let closeTimer: NodeJS.Timeout | undefined;
+    let forced = false;
     let settled = false;
     let active: ActiveCommand | undefined;
 
@@ -211,6 +212,9 @@ export function runCommand(command: string, options: CommandOptions): Promise<Co
       finish(child.exitCode, child.signalCode);
     };
     const force = (pid: number) => {
+      if (forced || settled) return;
+      forced = true;
+      if (killTimer) clearTimeout(killTimer);
       stopProcessTree(pid, true);
       closeTimer = setTimeout(abandonPipes, closeGraceMs);
     };
@@ -221,7 +225,8 @@ export function runCommand(command: string, options: CommandOptions): Promise<Co
       // The shell leader may already have exited while a detached descendant still owns its pipes.
       // Signal the original group anyway, then stop waiting for pipes that escaped that group.
       stopProcessTree(pid, false);
-      killTimer = setTimeout(() => force(pid), killGraceMs);
+      if (child.exitCode !== null || child.signalCode !== null) force(pid);
+      else killTimer = setTimeout(() => force(pid), killGraceMs);
     }
 
     active = {
@@ -237,6 +242,9 @@ export function runCommand(command: string, options: CommandOptions): Promise<Co
       settled = true;
       cleanup();
       reject(error);
+    });
+    child.once("exit", () => {
+      if (stopReason && child.pid !== undefined) force(child.pid);
     });
     child.once("close", finish);
   });

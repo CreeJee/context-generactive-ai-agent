@@ -431,13 +431,14 @@ describe("message queue", () => {
   });
 
   test("a cancel holds what was waiting until the user confirms it", async () => {
-    const context = await setup(false);
+    const context = await setup();
     const tab = openTab(context.runtime, context.session.id);
     void tab.client.sendMessage("please be slow");
     await until(() => context.provider!.adapter.invocations.length === 1, "the answer to start");
     await context.enqueue("never mind", "queue");
     await context.run(context.agent.cancel(context.session.id, null));
     await until(() => !tab.client.getIsLoading(), "the run to stop");
+    expect(context.provider!.adapter.invocations).toHaveLength(1);
     tab.client.stop();
 
     const [held] = await context.list();

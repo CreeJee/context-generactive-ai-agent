@@ -632,22 +632,19 @@ describe("OAuth callback safety", () => {
       store: new MemoryCredentialStore(),
     });
     const attempt = await harness.startLogin({ timeoutMs: 1_000 });
+    const completion = attempt.completed.catch((error: OAuthHarnessError) => error);
     const authorization = new URL(attempt.authorizationUrl);
     const callback = new URL(authorization.searchParams.get("redirect_uri") ?? "");
     callback.searchParams.set("code", "authorization-code-secret");
     callback.searchParams.set("state", "attacker-state-secret");
     await fetch(callback);
 
-    let thrown: OAuthHarnessError | null = null;
-    try {
-      await attempt.completed;
-    } catch (error) {
-      if (error instanceof OAuthHarnessError) thrown = error;
-    }
+    const thrown = await completion;
     expect(thrown).toBeInstanceOf(OAuthHarnessError);
-    expect(String(thrown)).toContain("state_mismatch");
-    expect(String(thrown)).not.toContain("authorization-code-secret");
-    expect(String(thrown)).not.toContain("attacker-state-secret");
+    const message = thrown instanceof OAuthHarnessError ? String(thrown) : "";
+    expect(message).toContain("state_mismatch");
+    expect(message).not.toContain("authorization-code-secret");
+    expect(message).not.toContain("attacker-state-secret");
   });
 
   test("supports timeout and explicit cancellation with sanitized errors", async () => {
