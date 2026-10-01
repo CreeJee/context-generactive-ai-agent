@@ -6,6 +6,7 @@
   "scripts": {
     "build": "vp run --no-cache agent#package",
     "start": "node apps/agent/dist/context-agent.mjs",
+    "test:browser": "vp test --config apps/agent/vite.browser.config.ts --run",
     "typecheck": "vp run -r typecheck",
     "ready": "vp check && vp run -r typecheck && vp run -r test && vp run -r build",
     "dev": "vp run agent#dev",
@@ -16,10 +17,13 @@
   "devDependencies": {
     "@effect/tsgo": "catalog:",
     "@shadcn/lint": "catalog:",
+    "@vitest/browser-playwright": "catalog:",
     "effect": "catalog:",
+    "playwright": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
-    "vite-plus": "catalog:"
+    "vite-plus": "catalog:",
+    "vitest-browser-react": "catalog:"
   },
   "devEngines": {
     "packageManager": {

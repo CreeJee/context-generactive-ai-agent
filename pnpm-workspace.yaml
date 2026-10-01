@@ -62,6 +62,9 @@ catalog:
   "@effect/tsgo": 0.45.0
   js-tiktoken: ^1.0.21
   undici: ^7.29.1
+  "@vitest/browser-playwright": 5.0.1
+  playwright: ^1.63.0
+  vitest-browser-react: ^2.3.0
 overrides:
   vite@*: "catalog:"
   vitest: 5.0.1

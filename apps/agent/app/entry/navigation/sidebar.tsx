@@ -60,6 +60,7 @@ import type {
   Project,
   Session,
 } from "../api";
+import { DataList, DataListItem } from "~/components/ui/data-list";
 import { SidebarDisclosureTrigger } from "./sidebar-disclosure-trigger";
 
 const providerLabels = { openai: "ChatGPT", anthropic: "Claude" } satisfies Record<
@@ -75,9 +76,8 @@ const isProviderId = (value: string): value is ProviderId =>
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="flex flex-col gap-1.5 px-3 py-2 not-last:border-b">
-      <h2 className="text-xs font-medium">{title}</h2>
-      {children}
+    <section aria-label={title} className="px-3 py-2 not-last:border-b">
+      <DataList className="grid-cols-[3.5rem_minmax(0,1fr)]">{children}</DataList>
     </section>
   );
 }
@@ -95,88 +95,106 @@ export function AccountSection({
 }) {
   return (
     <Section title="구독 계정">
-      <Select
-        value={provider}
-        items={providerOptions}
-        onValueChange={(value) => value && isProviderId(value) && onProviderChange(value)}
-      >
-        <SelectTrigger className="w-full" size="sm" aria-label="구독 계정">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {providerOptions.map(({ value, label }) => (
-            <SelectItem key={value} value={value}>
-              {label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      {!auth && <Spinner />}
+      <DataListItem term="계정">
+        <Select
+          value={provider}
+          items={providerOptions}
+          onValueChange={(value) => value && isProviderId(value) && onProviderChange(value)}
+        >
+          <SelectTrigger className="w-full" size="sm" aria-label="구독 계정">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {providerOptions.map(({ value, label }) => (
+              <SelectItem key={value} value={value}>
+                {label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </DataListItem>
+      {!auth && (
+        <DataListItem term="연결">
+          <Spinner />
+        </DataListItem>
+      )}
       {auth?.status === "signed-in" && (
-        <div className="flex items-center gap-1.5">
-          <Badge variant="secondary">연결됨</Badge>
-          {auth.planType && <span className="text-xs text-muted-foreground">{auth.planType}</span>}
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="ml-auto"
-            onClick={() => onAction("logout")}
-            aria-label="연결 해제"
-          >
-            <LogOutIcon />
-          </Button>
-        </div>
+        <DataListItem term="연결">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <Badge variant="secondary">연결됨</Badge>
+            {auth.planType && (
+              <span className="min-w-0 truncate text-xs text-muted-foreground">
+                {auth.planType}
+              </span>
+            )}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="ml-auto shrink-0"
+              onClick={() => onAction("logout")}
+              aria-label="연결 해제"
+            >
+              <LogOutIcon />
+            </Button>
+          </div>
+        </DataListItem>
       )}
       {auth?.status === "pending" && (
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-2 text-xs">
-            <Spinner /> 브라우저에서 로그인을 완료하세요
+        <DataListItem term="연결">
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2 text-xs">
+              <Spinner /> 브라우저에서 로그인을 완료하세요
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => window.open(auth.authUrl, "_blank", "noopener")}
+              >
+                로그인 창 다시 열기
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => onAction("cancel")}>
+                취소
+              </Button>
+            </div>
           </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => window.open(auth.authUrl, "_blank", "noopener")}
-            >
-              로그인 창 다시 열기
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => onAction("cancel")}>
-              취소
-            </Button>
-          </div>
-        </div>
+        </DataListItem>
       )}
       {(auth?.status === "signed-out" || auth?.status === "error") && (
-        <div className="flex flex-col gap-2">
-          {auth.status === "error" && (
-            <Alert variant="destructive" className="min-w-0">
-              <AlertDescription className="min-w-0 break-words">
-                {auth.message}
-                {(auth.code || auth.httpStatus || auth.providerCode) && (
-                  <Collapsible className="mt-2 text-2xs">
-                    <CollapsibleTrigger className="group flex items-center gap-1 text-left">
-                      <ChevronRightIcon
-                        aria-hidden="true"
-                        className="size-3 transition-transform group-data-[panel-open]:rotate-90"
-                      />
-                      진단 정보
-                    </CollapsibleTrigger>
-                    <CollapsibleContent className="mt-1 space-y-0.5 break-all font-mono">
-                      {auth.code && <div>code: {auth.code}</div>}
-                      {auth.operation && <div>operation: {auth.operation}</div>}
-                      {auth.httpStatus && <div>HTTP: {auth.httpStatus}</div>}
-                      {auth.providerCode && <div>provider code: {auth.providerCode}</div>}
-                      {auth.credentialStage && <div>credential stage: {auth.credentialStage}</div>}
-                      {auth.transportCode && <div>transport code: {auth.transportCode}</div>}
-                      {auth.proxyRoute && <div>proxy route: {auth.proxyRoute}</div>}
-                    </CollapsibleContent>
-                  </Collapsible>
-                )}
-              </AlertDescription>
-            </Alert>
-          )}
-          <Button onClick={() => onAction("login")}>{providerLabels[provider]}로 로그인</Button>
-        </div>
+        <DataListItem term="연결">
+          <div className="flex flex-col gap-2">
+            {auth.status === "error" && (
+              <Alert variant="destructive" className="min-w-0">
+                <AlertDescription className="min-w-0 break-words">
+                  {auth.message}
+                  {(auth.code || auth.httpStatus || auth.providerCode) && (
+                    <Collapsible className="mt-2 text-2xs">
+                      <CollapsibleTrigger className="group flex items-center gap-1 text-left">
+                        <ChevronRightIcon
+                          aria-hidden="true"
+                          className="size-3 transition-transform group-data-[panel-open]:rotate-90"
+                        />
+                        진단 정보
+                      </CollapsibleTrigger>
+                      <CollapsibleContent className="mt-1 space-y-0.5 break-all font-mono">
+                        {auth.code && <div>code: {auth.code}</div>}
+                        {auth.operation && <div>operation: {auth.operation}</div>}
+                        {auth.httpStatus && <div>HTTP: {auth.httpStatus}</div>}
+                        {auth.providerCode && <div>provider code: {auth.providerCode}</div>}
+                        {auth.credentialStage && (
+                          <div>credential stage: {auth.credentialStage}</div>
+                        )}
+                        {auth.transportCode && <div>transport code: {auth.transportCode}</div>}
+                        {auth.proxyRoute && <div>proxy route: {auth.proxyRoute}</div>}
+                      </CollapsibleContent>
+                    </Collapsible>
+                  )}
+                </AlertDescription>
+              </Alert>
+            )}
+            <Button onClick={() => onAction("login")}>{providerLabels[provider]}로 로그인</Button>
+          </div>
+        </DataListItem>
       )}
     </Section>
   );
@@ -194,25 +212,26 @@ export function ModelSection({
   const current = models.find((model) => model.id === selection?.model);
   return (
     <Section title="모델">
-      <Select
-        value={selection?.model ?? null}
-        items={models.map((model) => ({ value: model.id, label: model.displayName }))}
-        onValueChange={(value) => value && onSelect(value)}
-      >
-        <SelectTrigger className="w-full" size="sm" aria-label="모델">
-          <SelectValue placeholder="모델을 선택하세요" />
-        </SelectTrigger>
-        <SelectContent>
-          {models.map((model) => (
-            <SelectItem key={model.id} value={model.id}>
-              {model.displayName}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <DataListItem term="모델">
+        <Select
+          value={selection?.model ?? null}
+          items={models.map((model) => ({ value: model.id, label: model.displayName }))}
+          onValueChange={(value) => value && onSelect(value)}
+        >
+          <SelectTrigger className="w-full" size="sm" aria-label="모델">
+            <SelectValue placeholder="모델을 선택하세요" />
+          </SelectTrigger>
+          <SelectContent>
+            {models.map((model) => (
+              <SelectItem key={model.id} value={model.id}>
+                {model.displayName}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </DataListItem>
       {current && selection && (
-        <div className="flex items-center gap-2">
-          <span className="shrink-0 text-xs text-muted-foreground">추론</span>
+        <DataListItem term="추론">
           <Select
             value={selection.reasoningEffort}
             items={current.supportedReasoningEfforts.map((effort) => ({
@@ -221,7 +240,7 @@ export function ModelSection({
             }))}
             onValueChange={(value) => value && onSelect(current.id, value)}
           >
-            <SelectTrigger className="min-w-0 flex-1" size="sm" aria-label="추론 강도">
+            <SelectTrigger className="w-full" size="sm" aria-label="추론 강도">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -232,10 +251,12 @@ export function ModelSection({
               ))}
             </SelectContent>
           </Select>
-        </div>
+        </DataListItem>
       )}
       {!selection && (
-        <p className="text-xs text-muted-foreground">대화를 시작하려면 모델을 선택하세요.</p>
+        <DataListItem term="추론">
+          <p className="pt-1.5 text-xs text-muted-foreground">모델을 선택하세요.</p>
+        </DataListItem>
       )}
     </Section>
   );
@@ -284,75 +305,83 @@ export function ProjectSection({
           <span className="font-medium">프로젝트</span>
           {current && <span className="text-muted-foreground"> · {current.name}</span>}
         </SidebarDisclosureTrigger>
-        <CollapsibleContent className="flex flex-col gap-2 px-3 pb-2">
-          <div className="flex items-center gap-2">
-            {projects.length > 0 ? (
-              <Select
-                value={projectId}
-                items={projects.map((project) => ({ value: project.id, label: project.name }))}
-                onValueChange={(value) => value && onSelect(value)}
-              >
-                <SelectTrigger className="min-w-0 flex-1" size="sm" aria-label="프로젝트 선택">
-                  <SelectValue placeholder="프로젝트를 선택하세요" />
-                </SelectTrigger>
-                <SelectContent>
-                  {projects.map((project) => (
-                    <SelectItem key={project.id} value={project.id}>
-                      {project.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            ) : (
-              <p className="flex-1 text-xs text-muted-foreground">등록된 프로젝트가 없어요.</p>
-            )}
-            <AddProjectDialog onAdd={onAdd} />
-          </div>
-          {current && (
-            <div className="flex flex-col gap-2 border-t pt-2">
-              <div className="flex items-center gap-2">
-                <span className="shrink-0 text-xs text-muted-foreground">권한</span>
-                <Select
-                  value={current.permissionMode}
-                  items={permissionModes}
-                  onValueChange={(value) => {
-                    const mode = permissionModes.find((option) => option.value === value);
-                    if (mode) onPermissionMode(mode.value);
-                  }}
-                >
-                  <SelectTrigger className="min-w-0 flex-1" size="sm" aria-label="권한 모드">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {permissionModes.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+        <CollapsibleContent className="px-3 pb-2">
+          <DataList className="grid-cols-[3.5rem_minmax(0,1fr)]">
+            <DataListItem term="프로젝트">
+              <div className="flex min-w-0 items-center gap-2">
+                {projects.length > 0 ? (
+                  <Select
+                    value={projectId}
+                    items={projects.map((project) => ({ value: project.id, label: project.name }))}
+                    onValueChange={(value) => value && onSelect(value)}
+                  >
+                    <SelectTrigger className="min-w-0 flex-1" size="sm" aria-label="프로젝트 선택">
+                      <SelectValue placeholder="프로젝트를 선택하세요" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {projects.map((project) => (
+                        <SelectItem key={project.id} value={project.id}>
+                          {project.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+                    등록된 프로젝트가 없어요.
+                  </p>
+                )}
+                <AddProjectDialog onAdd={onAdd} />
               </div>
-              <p className="text-2xs text-muted-foreground">
-                {permissionHints[current.permissionMode]}
-              </p>
-              <label className="flex cursor-pointer items-center justify-between gap-2">
-                <span className="text-xs">다른 프로젝트에서도 기억 찾기</span>
-                <Switch
-                  checked={!current.crossRecallExcluded}
-                  onCheckedChange={(checked) => onCrossRecall(checked)}
-                />
-              </label>
-              <Button
-                variant="ghost-muted"
-                size="sm"
-                className="self-start"
-                title="목록에서 빼기(대화와 기억은 그대로)"
-                onClick={() => onHide(current.id)}
-              >
-                <EyeOffIcon /> 목록에서 빼기
-              </Button>
-            </div>
-          )}
+            </DataListItem>
+            {current && (
+              <>
+                <DataListItem term="권한">
+                  <Select
+                    value={current.permissionMode}
+                    items={permissionModes}
+                    onValueChange={(value) => {
+                      const mode = permissionModes.find((option) => option.value === value);
+                      if (mode) onPermissionMode(mode.value);
+                    }}
+                  >
+                    <SelectTrigger className="w-full" size="sm" aria-label="권한 모드">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {permissionModes.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="mt-1 text-2xs text-muted-foreground">
+                    {permissionHints[current.permissionMode]}
+                  </p>
+                </DataListItem>
+                <DataListItem term="기억">
+                  <label className="flex min-h-8 cursor-pointer items-center justify-between gap-2">
+                    <span className="text-xs">다른 프로젝트에서도 찾기</span>
+                    <Switch
+                      checked={!current.crossRecallExcluded}
+                      onCheckedChange={(checked) => onCrossRecall(checked)}
+                    />
+                  </label>
+                </DataListItem>
+                <DataListItem term="목록">
+                  <Button
+                    variant="ghost-muted"
+                    size="sm"
+                    title="목록에서 빼기(대화와 기억은 그대로)"
+                    onClick={() => onHide(current.id)}
+                  >
+                    <EyeOffIcon /> 목록에서 빼기
+                  </Button>
+                </DataListItem>
+              </>
+            )}
+          </DataList>
         </CollapsibleContent>
       </Collapsible>
     </section>
