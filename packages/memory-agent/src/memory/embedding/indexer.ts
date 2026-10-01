@@ -3,6 +3,7 @@ import { Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../../db/database.ts";
 import { AppEvents } from "../../events/app-events.ts";
 import { MorphAnalyzer } from "../morph/analyzer.ts";
+import { meaningfulNodeFilter } from "../quality.ts";
 import type { NodeKind } from "../nodes.ts";
 import { Embedder } from "./embedder.ts";
 import { VectorIndex } from "./vector-index.ts";
@@ -34,17 +35,17 @@ const make = Effect.gen(function* () {
   const selectPending = sqlite.prepare(`
     SELECT n.seq, n.text FROM nodes n
     LEFT JOIN node_vectors v ON v.node_seq = n.seq AND v.embedder = ?
-    WHERE v.node_seq IS NULL AND length(n.text) > 0 AND ${embeddedKindFilter}
+    WHERE v.node_seq IS NULL AND ${meaningfulNodeFilter} AND ${embeddedKindFilter}
     ORDER BY n.created_at DESC, n.seq DESC LIMIT ?`);
   const markIndexed = sqlite.prepare("INSERT INTO node_vectors VALUES (?, ?)");
   const countPending = sqlite.prepare(`
     SELECT count(*) AS count FROM nodes n
     LEFT JOIN node_vectors v ON v.node_seq = n.seq AND v.embedder = ?
-    WHERE v.node_seq IS NULL AND length(n.text) > 0 AND ${embeddedKindFilter}`);
+    WHERE v.node_seq IS NULL AND ${meaningfulNodeFilter} AND ${embeddedKindFilter}`);
   const selectUnanalyzed = sqlite.prepare(`
     SELECT n.seq, n.text FROM nodes n
     LEFT JOIN node_morphs m ON m.node_seq = n.seq AND m.analyzer = ?
-    WHERE m.node_seq IS NULL AND length(n.text) > 0
+    WHERE m.node_seq IS NULL AND ${meaningfulNodeFilter}
     ORDER BY n.created_at DESC, n.seq DESC LIMIT ?`);
   const deleteTerms = sqlite.prepare("DELETE FROM nodes_morph WHERE rowid = ?");
   const insertTerms = sqlite.prepare("INSERT INTO nodes_morph (rowid, terms) VALUES (?, ?)");

@@ -1034,4 +1034,50 @@ export const migrations: readonly string[] = [
     ON nodes(session_id, json_extract(detail, '$.toolCallId'), seq)
     WHERE kind = 'tool_result';
   `,
+  `
+  -- Per-storage, resumable semantic repairs. Original nodes are never deleted or rewritten.
+  CREATE TABLE memory_graph_maintenance (
+    version INTEGER PRIMARY KEY,
+    through_seq INTEGER NOT NULL,
+    after_seq INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'completed', 'failed')),
+    scanned INTEGER NOT NULL DEFAULT 0,
+    repaired_edges INTEGER NOT NULL DEFAULT 0,
+    suppressed_edges INTEGER NOT NULL DEFAULT 0,
+    retired_topics INTEGER NOT NULL DEFAULT 0,
+    error TEXT
+  );
+  CREATE TABLE memory_graph_edge_repairs (
+    version INTEGER NOT NULL,
+    from_id TEXT NOT NULL,
+    to_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    weight REAL NOT NULL,
+    created_at TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('reverse', 'suppress')),
+    replacement_added INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (version, from_id, to_id, kind)
+  );
+  CREATE TABLE memory_graph_interpretation_repairs (
+    version INTEGER NOT NULL,
+    interpretation_id INTEGER NOT NULL,
+    previous_status TEXT NOT NULL,
+    PRIMARY KEY (version, interpretation_id)
+  );
+  CREATE TABLE memory_graph_topic_candidates (
+    node_seq INTEGER PRIMARY KEY REFERENCES nodes(seq)
+  );
+  CREATE TABLE memory_graph_suppressed_nodes (
+    node_seq INTEGER PRIMARY KEY REFERENCES nodes(seq),
+    version INTEGER NOT NULL,
+    reason TEXT NOT NULL
+  );
+  -- Durable removal intent: saving an index and updating SQLite cannot be one transaction.
+  CREATE TABLE memory_graph_vector_removals (
+    node_seq INTEGER NOT NULL,
+    embedder TEXT NOT NULL,
+    PRIMARY KEY (node_seq, embedder)
+  );
+  `,
 ];

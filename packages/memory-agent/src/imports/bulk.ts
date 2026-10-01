@@ -3,6 +3,7 @@ import type { SQLOutputValue } from "node:sqlite";
 import { Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import { edgeWeights, type EdgeKind } from "../memory/edges.ts";
+import { hasStatementText } from "../memory/quality.ts";
 import type { NodeDetail, NodeKind } from "../memory/nodes.ts";
 import type { ImportSourceName, TranscriptItem } from "./items.ts";
 
@@ -113,7 +114,7 @@ const make = Effect.gen(function* () {
         if (previousId) link(previousId, id, "next", at);
         previousId = id;
         // An empty answer is not a statement; interpreting it would cost a model call for nothing.
-        if (migration.interpret && interpretedKinds.has(kind) && text.length > 0)
+        if (migration.interpret && interpretedKinds.has(kind) && hasStatementText(text))
           insertJob.run(id, at);
         if (externalId !== null) markImported.run(source, externalId, id);
         written += 1;
@@ -173,7 +174,7 @@ const make = Effect.gen(function* () {
               toolCallId: item.toolCallId,
               ok: item.ok,
             });
-            if (called) link(id, called.id, "returns", item.at);
+            if (called) link(called.id, id, "returns", item.at);
           }
         }
       }

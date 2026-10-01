@@ -5,6 +5,7 @@ import { embeddedKindFilter } from "./embedding/indexer.ts";
 import { VectorIndex } from "./embedding/vector-index.ts";
 import { MorphAnalysisFailed, MorphAnalyzer } from "./morph/analyzer.ts";
 import { Graph, type Hop } from "./graph.ts";
+import { meaningfulNodeFilter } from "./quality.ts";
 import type { NodeKind } from "./nodes.ts";
 
 export interface FindInput {
@@ -180,7 +181,7 @@ const make = (tuning: SearchTuning) =>
         const allowedSeqs = sqlite
           .prepare(`
             SELECT n.seq FROM node_vectors v JOIN nodes n ON n.seq = v.node_seq
-            WHERE v.embedder = ? AND n.project_id IN (${projects})`)
+            WHERE ${meaningfulNodeFilter} AND v.embedder = ? AND n.project_id IN (${projects})`)
           .all(embedder.identity, ...allowed)
           .map((row) => decodeSeq(row).seq);
         if (allowedSeqs.length === 0) return [];
@@ -210,7 +211,7 @@ const make = (tuning: SearchTuning) =>
         return sqlite
           .prepare(`
           SELECT n.id, n.project_id FROM nodes_morph f JOIN nodes n ON n.seq = f.rowid
-          WHERE nodes_morph MATCH ? AND n.project_id IN (${projects})
+          WHERE ${meaningfulNodeFilter} AND nodes_morph MATCH ? AND n.project_id IN (${projects})
           ORDER BY bm25(nodes_morph) LIMIT ?`)
           .all(match, ...allowed, k)
           .map((row) => decodeIdProject(row).id);
@@ -227,7 +228,7 @@ const make = (tuning: SearchTuning) =>
         const rows = sqlite
           .prepare(`
           SELECT n.id, n.project_id FROM nodes_fts f JOIN nodes n ON n.seq = f.rowid
-          WHERE nodes_fts MATCH ? AND n.project_id IN (${projects})
+          WHERE ${meaningfulNodeFilter} AND nodes_fts MATCH ? AND n.project_id IN (${projects})
           ORDER BY bm25(nodes_fts) LIMIT ?`)
           .all(match, ...allowed, k);
         for (const row of rows) ranked.push(decodeIdProject(row).id);
@@ -235,8 +236,8 @@ const make = (tuning: SearchTuning) =>
       for (const term of short) {
         const rows = sqlite
           .prepare(`
-          SELECT id, project_id FROM nodes
-          WHERE instr(text, ?) > 0 AND project_id IN (${projects})
+          SELECT n.id, n.project_id FROM nodes n
+          WHERE ${meaningfulNodeFilter} AND instr(n.text, ?) > 0 AND project_id IN (${projects})
           ORDER BY seq DESC LIMIT ?`)
           .all(term, ...allowed, k);
         for (const row of rows) {
@@ -282,13 +283,14 @@ const make = (tuning: SearchTuning) =>
           budget: limit * 4,
           minUtility: 0.2,
           projectIds: allowed,
+          includeEmpty: false,
         });
         const unindexed = (yield* Schema.decodeUnknownEffect(Count)(
           sqlite
             .prepare(`
             SELECT count(*) AS count FROM nodes n
             LEFT JOIN node_vectors v ON v.node_seq = n.seq AND v.embedder = ?
-            WHERE v.node_seq IS NULL AND length(n.text) > 0 AND ${embeddedKindFilter}`)
+            WHERE v.node_seq IS NULL AND ${meaningfulNodeFilter} AND ${embeddedKindFilter}`)
             .get(embedder.identity),
         )).count;
 
@@ -296,14 +298,16 @@ const make = (tuning: SearchTuning) =>
           sqlite
             .prepare(`
             SELECT count(*) AS count FROM interpret_jobs j JOIN nodes n ON n.id = j.node_id
-            WHERE j.status != 'done' AND n.project_id IN (${allowed.map(() => "?").join(", ")})`)
+            WHERE j.status != 'done' AND ${meaningfulNodeFilter} AND n.project_id IN (${allowed.map(() => "?").join(", ")})`)
             .get(...allowed),
         )).count;
 
-        const matches = walk.visits.slice(0, limit).map((visit): Match => {
+        const matches: Match[] = [];
+        for (const visit of walk.visits) {
+          if (matches.length === limit) break;
           let foundBy: Match["foundBy"] = "graph";
           if (visit.path.length === 0) foundBy = vectorIds.has(visit.node.id) ? "vector" : "text";
-          return {
+          matches.push({
             id: visit.node.id,
             kind: visit.node.kind,
             projectId: visit.node.projectId,
@@ -315,13 +319,13 @@ const make = (tuning: SearchTuning) =>
             path: visit.path,
             projectName: projectName(visit.node.projectId),
             fromOtherProject: visit.node.projectId !== input.projectId,
-            supersededBy: supersededBy
-              .all(visit.node.id)
-              .map((row) => decodeChallenge(row))
-              .map((challenge) => ({ id: challenge.from_id, relation: challenge.kind })),
+            supersededBy: supersededBy.all(visit.node.id).map((row) => {
+              const challenge = decodeChallenge(row);
+              return { id: challenge.from_id, relation: challenge.kind };
+            }),
             unconfirmedChallenges: decodeCount(unconfirmedOf.get(visit.node.id)).count,
-          };
-        });
+          });
+        }
         return {
           matches,
           complete: walk.complete && walk.visits.length <= limit,

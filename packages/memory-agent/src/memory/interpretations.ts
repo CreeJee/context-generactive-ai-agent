@@ -1,6 +1,7 @@
 import type { SQLOutputValue } from "node:sqlite";
 import { Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
+import { meaningfulNodeFilter } from "./quality.ts";
 import { edgeWeights } from "./edges.ts";
 
 export const InterpretedKind = Schema.Literals(["about", "corrects", "retracts", "related"]);
@@ -51,12 +52,20 @@ const make = Effect.gen(function* () {
     "INSERT INTO edges VALUES (?, ?, ?, 'llm', ?, ?) ON CONFLICT DO NOTHING",
   );
 
+  const validEndpoints = sqlite.prepare(`
+    SELECT count(*) AS count FROM nodes n WHERE n.id IN (?, ?) AND ${meaningfulNodeFilter}`);
+  const decodeCount = Schema.decodeUnknownSync(Schema.Struct({ count: Schema.Finite }));
+
   return {
     /**
      * Records a conclusion. An applied one also becomes an llm edge from the statement to its target,
      * so graph walks and traces follow it; an unconfirmed one stays a question.
      */
     record(interpretation: Omit<Interpretation, "createdAt">) {
+      if (
+        decodeCount(validEndpoints.get(interpretation.nodeId, interpretation.targetId)).count !== 2
+      )
+        return;
       const createdAt = new Date().toISOString();
       insert.run(
         interpretation.nodeId,

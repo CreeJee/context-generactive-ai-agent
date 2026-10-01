@@ -1,6 +1,7 @@
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
-import type { EdgeKind } from "./edges.ts";
+import { EdgeKind } from "./edges.ts";
+import { hasStatementText } from "./quality.ts";
 import { toEdge, toNode, type Node } from "./nodes.ts";
 
 export interface Hop {
@@ -19,12 +20,14 @@ export interface Visit {
 }
 
 export interface TraverseOptions {
-  /** Stop after this many nodes are visited. */
+  /** Stop after this many nodes are expanded, including empty structural bridge nodes. */
   readonly budget: number;
   /** Do not expand nodes below this utility. */
   readonly minUtility: number;
   /** Only visit nodes owned by these projects. */
   readonly projectIds: readonly string[];
+  /** Keep empty nodes as traversal bridges without returning them as search matches. */
+  readonly includeEmpty?: boolean;
 }
 
 export interface TraverseResult {
@@ -60,35 +63,34 @@ const causeOf: Partial<Record<Node["kind"], { kind: EdgeKind; direction: Hop["di
 
 const make = Effect.gen(function* () {
   const { sqlite } = yield* Database;
-  const selectNode = sqlite.prepare("SELECT * FROM nodes WHERE id = ?");
-  const outgoing = sqlite.prepare("SELECT * FROM edges WHERE from_id = ?");
-  const incoming = sqlite.prepare("SELECT * FROM edges WHERE to_id = ?");
+  const selectNode = sqlite.prepare(
+    "SELECT n.* FROM nodes n WHERE n.id = ? AND NOT EXISTS (SELECT 1 FROM memory_graph_suppressed_nodes s WHERE s.node_seq = n.seq)",
+  );
+  const causeOutgoing = sqlite.prepare(
+    "SELECT * FROM edges WHERE from_id = ? AND kind = ? LIMIT 1",
+  );
+  const causeIncoming = sqlite.prepare("SELECT * FROM edges WHERE to_id = ? AND kind = ? LIMIT 1");
+  const challenges = sqlite.prepare(
+    "SELECT * FROM edges WHERE to_id = ? AND kind IN ('corrects', 'retracts')",
+  );
 
   const nodeById = (id: string) => {
     const row = selectNode.get(id);
     return row ? toNode(row) : null;
   };
 
-  function neighbors(id: string) {
-    return [
-      ...outgoing.all(id).map((row) => {
-        const edge = toEdge(row);
-        return {
-          nodeId: edge.toId,
-          hop: { nodeId: edge.toId, kind: edge.kind, direction: "out" as const },
-          weight: edge.weight,
-        };
-      }),
-      ...incoming.all(id).map((row) => {
-        const edge = toEdge(row);
-        return {
-          nodeId: edge.fromId,
-          hop: { nodeId: edge.fromId, kind: edge.kind, direction: "in" as const },
-          weight: edge.weight,
-        };
-      }),
-    ];
-  }
+  const adjacent = sqlite.prepare(`
+    SELECT to_id AS nodeId, kind, 'out' AS direction, weight FROM edges WHERE from_id = ?
+    UNION ALL
+    SELECT from_id AS nodeId, kind, 'in' AS direction, weight FROM edges WHERE to_id = ?`);
+  const decodeNeighbor = Schema.decodeUnknownSync(
+    Schema.Struct({
+      nodeId: Schema.String,
+      kind: EdgeKind,
+      direction: Schema.Literals(["out", "in"]),
+      weight: Schema.Finite,
+    }),
+  );
 
   function traverse(seeds: ReadonlyMap<string, number>, options: TraverseOptions): TraverseResult {
     const allowed = new Set(options.projectIds);
@@ -109,19 +111,21 @@ const make = Effect.gen(function* () {
         if (frontier[i]!.utility > frontier[top]!.utility) top = i;
       const candidate = frontier.splice(top, 1)[0]!;
       if (visited.has(candidate.nodeId) || candidate.utility < options.minUtility) continue;
-      if (visits.length >= options.budget) return { visits, complete: false };
+      if (visited.size >= options.budget) return { visits, complete: false };
 
       const node = nodeById(candidate.nodeId);
       if (!node || !allowed.has(node.projectId)) continue;
       visited.add(node.id);
-      visits.push({
-        node,
-        utility: candidate.utility,
-        seedId: candidate.seedId,
-        path: candidate.path,
-      });
+      if (options.includeEmpty !== false || hasStatementText(node.text))
+        visits.push({
+          node,
+          utility: candidate.utility,
+          seedId: candidate.seedId,
+          path: candidate.path,
+        });
 
-      for (const next of neighbors(node.id)) {
+      for (const row of adjacent.all(node.id, node.id)) {
+        const next = decodeNeighbor(row);
         const utility = candidate.utility * next.weight;
         if (
           visited.has(next.nodeId) ||
@@ -134,7 +138,10 @@ const make = Effect.gen(function* () {
           nodeId: next.nodeId,
           utility,
           seedId: candidate.seedId,
-          path: [...candidate.path, next.hop],
+          path: [
+            ...candidate.path,
+            { nodeId: next.nodeId, kind: next.kind, direction: next.direction },
+          ],
         });
       }
     }
@@ -149,25 +156,28 @@ const make = Effect.gen(function* () {
     for (;;) {
       const rule = causeOf[current.kind];
       if (!rule) break;
-      const rows = rule.direction === "in" ? incoming.all(current.id) : outgoing.all(current.id);
-      const edge = rows.map(toEdge).find((candidate) => candidate.kind === rule.kind);
-      if (!edge) break;
+      const row = (rule.direction === "in" ? causeIncoming : causeOutgoing).get(
+        current.id,
+        rule.kind,
+      );
+      if (!row) break;
+      const edge = toEdge(row);
       const cause = nodeById(rule.direction === "in" ? edge.fromId : edge.toId);
       if (!cause || chain.some((node) => node.id === cause.id)) break;
       chain.push(cause);
       current = cause;
     }
 
-    const challengedBy = chain.flatMap((target) =>
-      incoming
-        .all(target.id)
-        .map(toEdge)
-        .flatMap((edge) => {
-          if (edge.kind !== "corrects" && edge.kind !== "retracts") return [];
-          const node = nodeById(edge.fromId);
-          return node ? [{ node, kind: edge.kind, target: target.id }] : [];
-        }),
-    );
+    const challengedBy: Provenance["challengedBy"][number][] = [];
+    for (const target of chain) {
+      for (const row of challenges.all(target.id)) {
+        const edge = toEdge(row);
+        if (edge.kind !== "corrects" && edge.kind !== "retracts") continue;
+        const node = nodeById(edge.fromId);
+        if (node) challengedBy.push({ node, kind: edge.kind, target: target.id });
+      }
+    }
+
     return { chain, challengedBy };
   }
 

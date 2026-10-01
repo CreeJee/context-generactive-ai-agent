@@ -56,6 +56,50 @@ function addLlmEdge(
 }
 
 describe("Graph.traverse", () => {
+  test("empty nodes bridge evidence paths without filling search results or bypassing the budget", async () => {
+    const { runtime, project, nodes, assistant, call, result, user } = await conversation();
+    const empty = nodes.append({
+      projectId: project.id,
+      sessionId: assistant.sessionId,
+      kind: "assistant",
+      text: "\n ",
+      links: [{ kind: "reply", nodeId: user.id }],
+    });
+    const { sqlite } = await runtime.runPromise(Database);
+    sqlite
+      .prepare("DELETE FROM edges WHERE from_id = ? AND to_id = ? AND kind = 'calls'")
+      .run(assistant.id, call.id);
+    sqlite
+      .prepare("INSERT INTO edges VALUES (?, ?, 'calls', 'structure', 0.95, ?)")
+      .run(empty.id, call.id, empty.createdAt);
+    const graph = await runtime.runPromise(Graph);
+    const walk = graph.traverse(new Map([[result.id, 1]]), {
+      budget: 20,
+      minUtility: 0.1,
+      projectIds: [project.id],
+      includeEmpty: false,
+    });
+    expect(walk.visits.some((visit) => visit.node.id === empty.id)).toBe(false);
+    expect(walk.visits.find((visit) => visit.node.id === user.id)?.path).toContainEqual({
+      nodeId: empty.id,
+      kind: "calls",
+      direction: "in",
+    });
+    const bounded = graph.traverse(new Map([[empty.id, 1]]), {
+      budget: 1,
+      minUtility: 0.1,
+      projectIds: [project.id],
+      includeEmpty: false,
+    });
+    expect(bounded).toEqual({ visits: [], complete: false });
+    expect(graph.trace(result.id)?.chain.map((node) => node.id)).toEqual([
+      result.id,
+      call.id,
+      empty.id,
+      user.id,
+    ]);
+  });
+
   test("expands from a seed with decaying utility and explains each path", async () => {
     const { runtime, project, user, assistant, call, result } = await conversation();
     const graph = await runtime.runPromise(Graph);

@@ -162,7 +162,7 @@ describe("migrating other agents' transcripts", () => {
     );
 
     expect(edges).toContainEqual({ kind: "calls", from_kind: "assistant" });
-    expect(edges).toContainEqual({ kind: "returns", from_kind: "tool_result" });
+    expect(edges).toContainEqual({ kind: "returns", from_kind: "tool_call" });
     expect(edges).toContainEqual({ kind: "reply", from_kind: "assistant" });
     expect(edges.filter((edge) => edge.kind === "next")).toHaveLength(3);
   });

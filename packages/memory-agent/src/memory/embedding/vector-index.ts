@@ -49,7 +49,7 @@ function write(index: { save(path: string): void }, file: string) {
 
 const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
-  const { sqlite } = yield* Database;
+  const { sqlite, atomic } = yield* Database;
   const embedder = yield* Embedder;
 
   const directory = join(
@@ -59,6 +59,26 @@ const make = Effect.gen(function* () {
   );
   const file = join(directory, "index.tvim");
 
+  const pendingRemovals = sqlite.prepare(
+    "SELECT node_seq AS seq FROM memory_graph_vector_removals WHERE embedder = ? ORDER BY node_seq",
+  );
+  const flush = (current: { remove(id: string): void; save(path: string): void }) => {
+    const pending = pendingRemovals.all(embedder.identity).map((row) => decodeSeq(row));
+    if (pending.length === 0) return;
+    for (const row of pending) current.remove(String(row.seq));
+    write(current, file);
+    atomic(() => {
+      const forget = sqlite.prepare("DELETE FROM node_vectors WHERE node_seq = ? AND embedder = ?");
+      const done = sqlite.prepare(
+        "DELETE FROM memory_graph_vector_removals WHERE node_seq = ? AND embedder = ?",
+      );
+      for (const row of pending) {
+        forget.run(row.seq, embedder.identity);
+        done.run(row.seq, embedder.identity);
+      }
+    });
+  };
+
   const { index } = yield* Effect.acquireRelease(
     Effect.try({
       try: () => {
@@ -66,12 +86,13 @@ const make = Effect.gen(function* () {
         const { CacheLease, VectorIndex } = requireRuntime("turbovec").loadTurbovec();
         const lease = new CacheLease(join(directory, "writer.lock"));
         try {
+          const saved = existsSync(file) ? VectorIndex.load(file) : null;
+          if (saved && saved.dimensions() === embedder.dimensions) flush(saved);
           const indexed = Schema.decodeUnknownSync(Count)(
             sqlite
               .prepare("SELECT count(*) AS count FROM node_vectors WHERE embedder = ?")
               .get(embedder.identity),
           ).count;
-          const saved = existsSync(file) ? VectorIndex.load(file) : null;
           if (saved && saved.dimensions() === embedder.dimensions) {
             // Ahead of the database: vectors whose record never landed (a crash between save and
             // commit) or was dropped on purpose (tool nodes, since only statements are embedded).
@@ -90,6 +111,9 @@ const make = Effect.gen(function* () {
           }
           // Missing, behind the database or otherwise out of step with it: rebuild.
           sqlite.prepare("DELETE FROM node_vectors WHERE embedder = ?").run(embedder.identity);
+          sqlite
+            .prepare("DELETE FROM memory_graph_vector_removals WHERE embedder = ?")
+            .run(embedder.identity);
           return { index: new VectorIndex(embedder.dimensions, quantizationBits), lease };
         } catch (error) {
           lease.close();
@@ -103,6 +127,12 @@ const make = Effect.gen(function* () {
 
   return {
     size: () => index.size(),
+
+    /** Resume targeted removals after a failed save or a crash, before comparing index sizes. */
+    flushRemovals: Effect.try({
+      try: () => flush(index),
+      catch: (cause) => new VectorIndexError({ operation: "remove", cause }),
+    }),
 
     add: (seqs: readonly number[], vectors: readonly Float32Array[]) =>
       Effect.try({

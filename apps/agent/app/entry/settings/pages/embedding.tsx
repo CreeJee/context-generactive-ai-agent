@@ -189,6 +189,25 @@ export function EmbeddingSettings() {
         </FieldDescription>
       )}
 
+      <Field>
+        <FieldTitle>기억 그래프 정리</FieldTitle>
+        <FieldDescription>
+          실행 방식을 직접 선택하면 저장된 기억의 연결을 자동으로 점검해요. 원문과 정상 벡터는
+          보존하고, 빈 응답의 의미 연결과 근거 연결 오류를 정리해요.
+        </FieldDescription>
+        {overview.maintenance.enabled && (
+          <FieldDescription>
+            {overview.maintenance.status === "running"
+              ? "저장된 기억을 점검하고 있어요."
+              : overview.maintenance.status === "completed"
+                ? `근거 연결 ${overview.maintenance.repairedEdges}개, 의미 연결 ${overview.maintenance.suppressedEdges}개, 불필요한 주제 ${overview.maintenance.retiredTopics}개를 정리했어요.`
+                : overview.maintenance.status === "failed"
+                  ? overview.maintenance.error
+                  : "저장된 기억을 자동으로 점검할 예정이에요."}
+          </FieldDescription>
+        )}
+      </Field>
+
       <PageError error={error} />
     </FieldGroup>
   );

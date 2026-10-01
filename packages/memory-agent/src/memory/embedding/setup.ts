@@ -16,6 +16,7 @@ import {
   type EmbedderRuntime,
   type EmbeddingMode,
 } from "./embedder.ts";
+import { MemoryGraphMaintenance } from "../maintenance.ts";
 import { Indexer } from "./indexer.ts";
 
 /** Whether WebGPU was found to work here, or is being checked now. */
@@ -35,6 +36,7 @@ export interface EmbeddingOverview {
   readonly gpu: GpuState;
   /** Nodes the running embedder has not embedded yet. */
   readonly unindexed: number;
+  readonly maintenance: Effect.Success<MemoryGraphMaintenance["Service"]["overview"]>;
 }
 
 /**
@@ -60,6 +62,7 @@ const make = Effect.gen(function* () {
   const events = yield* AppEvents;
   const embedder = yield* Embedder;
   const indexer = yield* Indexer;
+  const maintenance = yield* MemoryGraphMaintenance;
   const memoryBytes = totalmem();
   const layerScope = yield* Effect.scope;
   let checking = false;
@@ -105,6 +108,7 @@ const make = Effect.gen(function* () {
       gpuMemoryThreshold,
       gpu,
       unindexed: yield* indexer.pending,
+      maintenance: yield* maintenance.overview,
     } satisfies EmbeddingOverview;
   });
 
@@ -115,6 +119,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const settings = yield* config.update({ embeddingDevice: choice });
         events.publishGlobal("embedding");
+        yield* maintenance.start;
         if (wantsCheck(settings, memoryBytes)) yield* startCheck;
         return yield* overview;
       }),
@@ -127,5 +132,7 @@ const make = Effect.gen(function* () {
 export class EmbeddingSetup extends Context.Service<EmbeddingSetup, Effect.Success<typeof make>>()(
   "memory-agent/EmbeddingSetup",
 ) {
-  static readonly layer = Layer.effect(EmbeddingSetup, make);
+  static readonly layer = Layer.effect(EmbeddingSetup, make).pipe(
+    Layer.provideMerge(MemoryGraphMaintenance.layer),
+  );
 }

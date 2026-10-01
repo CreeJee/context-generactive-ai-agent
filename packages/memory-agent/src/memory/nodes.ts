@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { SQLOutputValue } from "node:sqlite";
 import { Context, Effect, Layer, Schema } from "effect";
+import { hasStatementText } from "./quality.ts";
 import { firstMessageTitle } from "../sessions/title.ts";
 import { Database } from "../db/database.ts";
 import { EdgeKind, EdgeOrigin, edgeWeights, type Edge, type NodeLink } from "./edges.ts";
@@ -205,7 +206,8 @@ const make = Effect.gen(function* () {
         insertRef.run(node.id, ref);
         if (earlier) link(node.id, earlier, "touches", createdAt);
       }
-      if (interpretedKinds.has(node.kind)) insertJob.run(node.id, createdAt);
+      if (interpretedKinds.has(node.kind) && hasStatementText(node.text))
+        insertJob.run(node.id, createdAt);
       return node;
     });
   }
