@@ -1,12 +1,17 @@
 import { RefreshCwIcon } from "lucide-react";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
+import { Marker, MarkerContent } from "~/components/ui/marker";
 import type { RunNotice } from "./run-notice";
 
 export function RunNoticeView({ notice }: { notice: RunNotice }) {
   switch (notice.kind) {
     case "cancelled":
-      return <p className="text-xs text-muted-foreground">답변을 멈췄어요.</p>;
+      return (
+        <Marker>
+          <MarkerContent>답변을 멈췄어요.</MarkerContent>
+        </Marker>
+      );
     case "cancel-pending":
       return (
         <Alert>

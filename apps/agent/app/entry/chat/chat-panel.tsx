@@ -15,6 +15,7 @@ import { useAtom } from "jotai";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { useLoading } from "react-simplikit";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
+import { Marker, MarkerContent, MarkerIcon } from "~/components/ui/marker";
 import { Spinner } from "~/components/ui/spinner";
 import { renumberReferences, useDraftImages } from "./draft-images";
 import { missingDeliveredMessages } from "./delivered-messages";
@@ -878,15 +879,21 @@ function ChatPanel({
           readOnly={readOnly}
         />
         {status === "submitted" && (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Spinner /> 생각하는 중…
-          </div>
+          <Marker role="status">
+            <MarkerIcon>
+              <Spinner />
+            </MarkerIcon>
+            <MarkerContent>생각하는 중…</MarkerContent>
+          </Marker>
         )}
         {/* Between tool calls nothing streams, so the thread itself says the answer goes on. */}
         {generating && status !== "submitted" && !waitingForApproval && !endsWithText && (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Spinner /> 작업 중…
-          </div>
+          <Marker role="status">
+            <MarkerIcon>
+              <Spinner />
+            </MarkerIcon>
+            <MarkerContent>작업 중…</MarkerContent>
+          </Marker>
         )}
         {error &&
           !continuationStartFailed &&
