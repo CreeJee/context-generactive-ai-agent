@@ -65,6 +65,7 @@ import { MemoryTools } from "./tools/memory.ts";
 import { OutsideTools } from "./tools/outside.ts";
 import { WorkTraceStore } from "./work-trace/store.ts";
 import { Workflows } from "./workflow/workflow.ts";
+import { WorkflowExecution } from "./workflow/execution.ts";
 import { WorkflowTools } from "./workflow/tools.ts";
 import { WorkflowRules } from "./workflow/rules.ts";
 
@@ -169,6 +170,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     BulkNodes.layer,
     SecretRedactor.layer,
     Workflows.layer,
+    WorkflowExecution.layer,
     WorkTraceStore.layer,
     providerToolRegistry,
     modelFeatureFlags,

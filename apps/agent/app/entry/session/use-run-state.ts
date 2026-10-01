@@ -56,6 +56,7 @@ export function useRunState(
     refresh,
     context: state?.context ?? null,
     workflow: state?.workflow ?? null,
+    execution: state?.execution ?? null,
     actions: state?.actions ?? null,
     setWorkflowPhase,
     notice: cancelPending

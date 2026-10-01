@@ -2,6 +2,7 @@ import type { RunStatus } from "@tanstack/ai-persistence";
 import type { LeaseView } from "../sessions/lease-state.ts";
 import type { WorkflowActions } from "../workflow/actions.ts";
 import type { WorkflowState } from "../workflow/workflow.ts";
+import type { WorkflowExecutionState } from "../workflow/execution.ts";
 
 /** Browser-safe shapes of the session run endpoints. */
 
@@ -24,6 +25,7 @@ export interface SessionRunState {
   readonly context: ContextView;
   /** Durable Goal/Plan phase and artifacts for this conversation. */
   readonly workflow: WorkflowState;
+  readonly execution?: WorkflowExecutionState;
   /** Server decisions for this snapshot and requesting page; mutations recheck latest state. */
   readonly actions: WorkflowActions;
 }

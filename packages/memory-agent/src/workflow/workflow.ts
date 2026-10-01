@@ -272,6 +272,8 @@ export function reconciledWorkflowPhase(state: WorkflowState): WorkflowPhase {
       : "plan";
 
   const complete = implementationComplete(state.plan);
+  if (state.plan.verification.status === "failed" && state.plan.verification.evidence.length > 0)
+    return "execute";
   if (state.phase === "execute") return complete ? "verify" : "execute";
   if (!complete) return "execute";
 
@@ -442,6 +444,7 @@ const make = Effect.gen(function* () {
           const readyToVerify =
             current.plan !== null &&
             current.plan.status === "executing" &&
+            current.plan.verification.status !== "failed" &&
             current.plan.steps.every(
               (step) => step.status === "completed" && step.evidence.length > 0,
             );

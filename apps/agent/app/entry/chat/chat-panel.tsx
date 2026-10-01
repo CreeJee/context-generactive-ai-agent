@@ -518,9 +518,7 @@ function ChatPanel({
   // When this page's run stops: catch up with messages the run took in along the way, then, after
   // a normal finish, send what is waiting as the next turn (R03). Not after a cancel or failure.
   const wasGenerating = useRef(generating);
-  const startedWorkflowPhase = useRef<WorkflowPhase | null>(null);
-  const automaticVerification = useRef<string | null>(null);
-  const handleRunSettled = useEffectEvent(async (finishedPhase: WorkflowPhase | null) => {
+  const handleRunSettled = useEffectEvent(async () => {
     setCatchingUp(true);
     try {
       const [snapshot, state] = await Promise.all([queue.refresh(), run.refresh()]);
@@ -529,68 +527,19 @@ function ChatPanel({
         setMessages(
           (await queryClient.fetchQuery(sessionQueries.transcript(projectId, sessionId))).messages,
         );
-      if (state.lastRun?.status !== "completed") return;
-      if (snapshot.nextDelivery.kind === "ready") {
+      if (state.lastRun?.status === "completed" && snapshot.nextDelivery.kind === "ready")
         sendNextQueued(snapshot);
-        return;
-      }
-      if (
-        finishedPhase === "execute" &&
-        state.workflow.phase === "verify" &&
-        state.workflow.plan?.status === "executing"
-      ) {
-        automaticVerification.current = `${sessionId}:${state.workflow.plan.version}`;
-        void sendMessage(
-          contentOf(
-            "실행 결과를 Goal과 Plan의 acceptance criteria에 맞춰 읽기 전용으로 검증하고, evidence와 최종 상태를 기록해 줘.",
-            [],
-          ),
-        );
-      }
     } finally {
       setCatchingUp(false);
       setPlacements({});
     }
   });
   useEffect(() => {
-    if (!wasGenerating.current && generating)
-      startedWorkflowPhase.current = run.workflow?.phase ?? null;
     const settled = wasGenerating.current && !generating;
-    const finishedPhase = startedWorkflowPhase.current;
     wasGenerating.current = generating;
     if (!settled || readOnly) return;
-    void handleRunSettled(finishedPhase);
-  }, [generating, readOnly, run.workflow?.phase]);
-
-  // A reload may happen after Execute finished but before its verification turn started.
-  const recoverAutomaticVerification = useEffectEvent(async (planVersion: number) => {
-    const key = `${sessionId}:${planVersion}`;
-    if (automaticVerification.current === key) return;
-    automaticVerification.current = key;
-    const snapshot = await queue.refresh();
-    if (!snapshot || snapshot.nextDelivery.kind === "ready") {
-      automaticVerification.current = null;
-      return;
-    }
-    void sendMessage(
-      contentOf(
-        "실행 결과를 Goal과 Plan의 acceptance criteria에 맞춰 읽기 전용으로 검증하고, evidence와 최종 상태를 기록해 줘.",
-        [],
-      ),
-    );
-  });
-  useEffect(() => {
-    const plan = run.workflow?.plan;
-    if (
-      generating ||
-      readOnly ||
-      run.workflow?.phase !== "verify" ||
-      plan?.status !== "executing" ||
-      plan.verification.status !== "not_run"
-    )
-      return;
-    void recoverAutomaticVerification(plan.version);
-  }, [generating, readOnly, run.workflow]);
+    void handleRunSettled();
+  }, [generating, readOnly]);
 
   // Unsaved edit text is stored as it is typed, so a restart restores it as a draft.
   const saveEditDraft = useEffectEvent((id: string, text: string) =>
@@ -838,6 +787,7 @@ function ChatPanel({
         ))}
         <WorkflowArtifactPanel
           state={run.workflow}
+          execution={run.execution}
           actions={run.actions}
           busy={generating}
           disabled={mutationBlocked}

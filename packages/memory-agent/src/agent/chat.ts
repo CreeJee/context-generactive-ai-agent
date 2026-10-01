@@ -83,6 +83,7 @@ import { sessionHolderHeader } from "../sessions/lease-state.ts";
 import { SessionLeases } from "../sessions/leases.ts";
 import { Workflows, type WorkflowAction, type WorkflowPhase } from "../workflow/workflow.ts";
 import { WorkflowTools, workflowInstructions } from "../workflow/tools.ts";
+import { WorkflowExecution } from "../workflow/execution.ts";
 import { WorkflowRules } from "../workflow/rules.ts";
 import { localWorkflowRules } from "../workflow/sources.ts";
 import { WorkTraceStore } from "../work-trace/store.ts";
@@ -333,9 +334,14 @@ const workflowReadToolNames: ReadonlySet<string> = new Set([
   "update_goal",
   "update_plan",
   "update_workflow_progress",
+  "record_workflow_blocker",
 ]);
 /** Verify can execute checks, but cannot mutate source files or install dependencies. */
 const verificationToolNames: ReadonlySet<string> = new Set(["run_shell"]);
+
+type InternalFollowup =
+  | { readonly kind: "notification" }
+  | { readonly kind: "workflow"; readonly afterRunId: string };
 
 /** A reconnect names where to continue: `Last-Event-ID`, or `?offset=` for a join from the start. */
 const isStreamJoin = (request: Request) =>
@@ -389,6 +395,7 @@ const make = Effect.gen(function* () {
   const delivery = yield* QueueDelivery;
   const summaries = yield* TurnSummaries;
   const workflows = yield* Workflows;
+  const execution = yield* WorkflowExecution;
   const workflowTools = yield* WorkflowTools;
   const workflowRules = yield* WorkflowRules;
   const workTrace = yield* WorkTraceStore;
@@ -623,16 +630,28 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const workflowAfterRun = (sessionId: string, phase: WorkflowPhase): ChatMiddleware => {
+  const workflowAfterRun = (
+    sessionId: string,
+    phase: WorkflowPhase,
+    runId: string,
+  ): ChatMiddleware => {
     // Verification may record a failed result immediately before the provider or its continuation
     // errors. Settle from the durable artifact on every terminal path, not only a clean finish, so
     // the session returns to Execute instead of remaining trapped in read-only Verify.
-    const settle = () => runEffect(Effect.asVoid(workflows.finishRun(sessionId, phase)));
+    const settle = (completed: boolean) =>
+      runEffect(
+        Effect.gen(function* () {
+          const state = yield* workflows.finishRun(sessionId, phase);
+          if (completed) yield* execution.finish(sessionId, runId, state);
+          else yield* execution.stop(sessionId, "run_failed", runId);
+          events.publishSession(sessionId, "run-state");
+        }),
+      );
     return {
       name: "memory-agent/workflow-lifecycle",
-      onFinish: settle,
-      onAbort: settle,
-      onError: settle,
+      onFinish: () => settle(true),
+      onAbort: () => settle(false),
+      onError: () => settle(false),
     };
   };
 
@@ -664,6 +683,7 @@ const make = Effect.gen(function* () {
 
   const stopSessionRuns = (sessionId: string) =>
     Effect.gen(function* () {
+      yield* execution.stop(sessionId);
       workTrace.holdParentNotifications(sessionId);
       const parent = liveRuns.get(sessionId);
       if (parent) {
@@ -847,13 +867,18 @@ const make = Effect.gen(function* () {
      * POST handler for one chat run in a session. Stores the user turn, runs the model through
      * the ChatGPT account with memory tools, records every message, then indexes it.
      */
-    handle: (request: Request, sessionId: string, notificationFollowup = false) => {
+    handle: (
+      request: Request,
+      sessionId: string,
+      internalFollowup: InternalFollowup | null = null,
+    ) => {
+      const notificationFollowup = internalFollowup?.kind === "notification";
       let claimedNext: string | null = null;
       return Effect.gen(function* () {
         const { projectId, agent: external, title } = yield* sessions.get(sessionId);
         // Sending, approving and answering all come here; a read-only page may do none of them.
         if (
-          !notificationFollowup &&
+          internalFollowup === null &&
           !leases.permits(sessionId, request.headers.get(sessionHolderHeader))
         )
           return inUse();
@@ -902,19 +927,21 @@ const make = Effect.gen(function* () {
         if (queuedNext && !next) return json(409, { error: "queued_message_not_next" });
         claimedNext = next?.id ?? null;
         const queuedId = next?.id;
-        const messages = notificationFollowup
-          ? yield* agentPromise("load-messages", () =>
-              chatState.persistence.stores.messages.loadThread(sessionId),
-            )
-          : next
-            ? [...incomingMessages.slice(0, -1), delivery.toUserMessage(next)]
-            : incomingMessages;
+        const messages =
+          internalFollowup !== null
+            ? yield* agentPromise("load-messages", () =>
+                chatState.persistence.stores.messages.loadThread(sessionId),
+              )
+            : next
+              ? [...incomingMessages.slice(0, -1), delivery.toUserMessage(next)]
+              : incomingMessages;
         const threadId = sessionId;
 
         // A new user turn ends the list; a continuation (tool result, approval) does not.
-        const turn = notificationFollowup
-          ? null
-          : Option.getOrNull(Option.map(decodeUserTurn(messages.at(-1)), toTurn));
+        const turn =
+          internalFollowup !== null
+            ? null
+            : Option.getOrNull(Option.map(decodeUserTurn(messages.at(-1)), toTurn));
         const images = (turn?.imageUrls ?? []).map((url) => {
           const id = attachmentIdOf(url);
           return id ? attachments.get(id) : null;
@@ -1075,6 +1102,22 @@ const make = Effect.gen(function* () {
           )
             return json(409, { error: "notification_followup_deferred" });
         }
+        if (internalFollowup?.kind === "workflow") {
+          const current = yield* sessions.get(sessionId);
+          const last = yield* agentPromise("load-run", () => chatState.lastRun(sessionId));
+          const state = yield* workflows.get(sessionId);
+          if (
+            current.archivedAt !== null ||
+            last?.status !== "completed" ||
+            last.runId !== internalFollowup.afterRunId ||
+            !(yield* execution.canContinue(sessionId, last.runId, state)) ||
+            state.phase !== workflow.phase ||
+            state.plan?.version !== workflow.plan?.version ||
+            queue.snapshot(sessionId).nextDelivery.kind !== "empty" ||
+            relayed.pending(sessionId).length > 0
+          )
+            return json(409, { error: "workflow_followup_deferred" });
+        }
         const claim = yield* liveRuns.claim(
           sessionId,
           runId,
@@ -1082,6 +1125,8 @@ const make = Effect.gen(function* () {
           () => void settleQueue(sessionId, runId),
         );
         if (!claim) return json(409, { error: "run_in_progress" });
+        if (!notificationFollowup)
+          yield* execution.start(sessionId, runId, workflow, turn !== null);
         if (turn) workTrace.resumeParentNotifications(sessionId);
         events.publishSession(sessionId, "run-state");
         if (queuedId) {
@@ -1148,7 +1193,7 @@ const make = Effect.gen(function* () {
           ...mcpTools,
           ...skills.tools,
           ...delegation.tools,
-          ...workflowTools.forSession(sessionId, workflow.phase),
+          ...workflowTools.forSession(sessionId, workflow.phase, runId),
         ]);
         const sharedTools = workflowReadOnly
           ? allSharedTools.filter((tool) => workflowReadToolNames.has(tool.name))
@@ -1192,6 +1237,11 @@ const make = Effect.gen(function* () {
           workspaceInstructions(project, places),
           ...(workflowPrompt ? [workflowPrompt] : []),
           ...(parentNotificationPrompt ? [parentNotificationPrompt] : []),
+          ...(internalFollowup?.kind === "workflow"
+            ? [
+                "This is an automatic continuation of the already approved Plan, not a new user request or approval. Continue the first unfinished step, performing the investigation, preparation, implementation and review yourself. Persist new progress evidence. If all implementation steps are complete, perform verification and persist its result. Do not repeat a promise to work later; record_workflow_blocker only when a confirmed dependency prevents all useful independent work.",
+              ]
+            : []),
           ...(notificationFollowup
             ? [
                 "This is an automatic subagent completion follow-up, not a new user request or approval. Review the operational notifications, retrieve relevant reports with get_subagent_report, and briefly update the user if useful. Do not repeat the original delegation merely because it appears in the history.",
@@ -1240,7 +1290,7 @@ const make = Effect.gen(function* () {
           ...(memoryRun.middleware ? [memoryRun.middleware] : []),
           reads.middleware,
           recorder.forRun({ projectId, sessionId, runId, userNodeId: userNode.id }),
-          workflowAfterRun(sessionId, workflow.phase),
+          workflowAfterRun(sessionId, workflow.phase, runId),
           indexInBackground(),
           summaries.afterRun(sessionId),
           // Last to choose the history sent to the model; only retained local images are inlined.
@@ -1369,10 +1419,16 @@ const make = Effect.gen(function* () {
     cancel: (sessionId: string, holder: string | null) =>
       Effect.gen(function* () {
         if (!leases.permits(sessionId, holder)) return inUse();
+        const pendingExecution = (yield* execution.get(sessionId)).kind === "ready";
+        yield* execution.stop(sessionId);
+        events.publishSession(sessionId, "run-state");
         const live = liveRuns.get(sessionId);
         if (!live) {
           const children = subagents.list(sessionId).some((child) => child.status === "running");
-          if (!children) return json(409, { error: "no_running_run" });
+          if (!children)
+            return pendingExecution
+              ? json(200, { runId: "", stopped: true, status: "completed" })
+              : json(409, { error: "no_running_run" });
           workTrace.holdParentNotifications(sessionId);
           const stopped = yield* agentPromise("stop-session", () =>
             subagents.stopSession(sessionId),
@@ -1473,6 +1529,7 @@ const make = Effect.gen(function* () {
             window.known,
           ),
           workflow,
+          execution: yield* execution.get(sessionId),
           actions: workflowActions(workflow, { running: Boolean(live), lease }),
         };
         return json(200, state);
@@ -1489,7 +1546,9 @@ const make = Effect.gen(function* () {
         if (!leases.permits(sessionId, holder)) return inUse();
         yield* sessions.get(sessionId);
         if (liveRuns.get(sessionId)) return json(409, { error: "run_in_progress" });
-        return json(200, yield* workflows.setPhase(sessionId, phase));
+        const state = yield* workflows.setPhase(sessionId, phase);
+        yield* execution.stop(sessionId);
+        return json(200, state);
       }).pipe(
         Effect.catchTags({
           WorkflowTransitionRefused: (failure) =>
@@ -1506,6 +1565,7 @@ const make = Effect.gen(function* () {
         const live = liveRuns.get(sessionId);
         if (action === "resume" && live) return json(409, { error: "run_in_progress" });
         const state = yield* workflows.controlGoal(sessionId, action);
+        yield* execution.stop(sessionId);
         if (action !== "resume" && live) {
           yield* agentPromise("cancel-run", () =>
             requestRunCancel(chatState.persistence.stores.runs, live.runId),
@@ -1715,12 +1775,21 @@ const make = Effect.gen(function* () {
     return Effect.gen(function* () {
       yield* Effect.sleep("25 millis");
       if (liveRuns.get(sessionId) || workTrace.parentNotificationsHeld(sessionId)) return;
-      if (!workTrace.pendingParentNotificationSessions().includes(sessionId)) return;
       const session = yield* sessions.get(sessionId);
       if (session.archivedAt !== null || session.agent !== null) return;
       const last = yield* agentPromise("load-run", () => chatState.lastRun(sessionId));
       // Never resume approval waits, cancelled runs, or failed parent turns automatically.
       if (last?.status !== "completed") return;
+      const workflow = yield* workflows.reconcile(sessionId);
+      const continuing = yield* execution.canContinue(sessionId, last.runId, workflow);
+      if (!continuing && !workTrace.pendingParentNotificationSessions().includes(sessionId)) return;
+      // A user's queued request or pending approval takes precedence over automatic work.
+      if (
+        continuing &&
+        (queue.snapshot(sessionId).nextDelivery.kind !== "empty" ||
+          relayed.pending(sessionId).length > 0)
+      )
+        return;
       const pendingApprovals = yield* agentPromise("list-approvals", () =>
         chatState.persistence.stores.interrupts.listPending(sessionId),
       );
@@ -1738,10 +1807,18 @@ const make = Effect.gen(function* () {
           }),
         }),
         sessionId,
-        true,
+        continuing ? { kind: "workflow", afterRunId: last.runId } : { kind: "notification" },
       );
       // The response producer persists and publishes the normal durable stream. Drain it without
       // retaining a second copy, so background updates hydrate exactly like browser-started turns.
+      if (!response.ok && continuing) {
+        yield* execution.blockPending(sessionId, last.runId, {
+          reason: "external_dependency",
+          detail: "자동 진행 요청을 시작하지 못했어요. 로그인 상태와 실행 조건을 확인해 주세요.",
+          evidence: [`HTTP ${response.status}`],
+        });
+        events.publishSession(sessionId, "run-state");
+      }
       if (response.ok)
         yield* agentPromise("drain-followup", async () => {
           const reader = response.body?.getReader();
@@ -1776,6 +1853,8 @@ const make = Effect.gen(function* () {
       }),
     ),
   );
+  // Only a persisted clean finish is eligible. Interrupted or failed runs are never replayed.
+  for (const sessionId of yield* execution.readySessions()) wakeNotifications(sessionId);
   return api;
 });
 

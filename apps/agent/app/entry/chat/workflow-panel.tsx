@@ -58,6 +58,7 @@ const verificationStatusLabels: Record<
 
 export function WorkflowArtifactPanel({
   state,
+  execution,
   actions,
   busy,
   disabled,
@@ -69,6 +70,7 @@ export function WorkflowArtifactPanel({
   onExecute,
 }: {
   readonly state: WorkflowState | null;
+  readonly execution?: SessionRunState["execution"] | null;
   readonly actions: SessionRunState["actions"] | null;
   readonly busy: boolean;
   readonly disabled: boolean;
@@ -173,6 +175,11 @@ export function WorkflowArtifactPanel({
         {state.phase === "verify" ? "검증 중" : planStatusLabels[plan.status]}
       </AlertTitle>
       <AlertDescription>
+        {execution?.kind === "blocked" && (
+          <p className="mb-3 whitespace-pre-wrap" role="status">
+            자동 진행 중단: {execution.detail}
+          </p>
+        )}
         <Collapsible className="rounded-md border bg-background/50">
           <CollapsibleTrigger className="group flex w-full items-center gap-2 px-3 py-2 text-left">
             <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground group-data-[panel-open]:rotate-90" />

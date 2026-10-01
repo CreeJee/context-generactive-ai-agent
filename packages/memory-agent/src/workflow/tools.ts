@@ -12,6 +12,7 @@ import {
 } from "./workflow.ts";
 import { toToolSchema } from "../tools/schema.ts";
 import type { ResolvedRules } from "./rules.ts";
+import { WorkflowBlocker, WorkflowExecution } from "./execution.ts";
 
 const exposeProgressRefusal = <A, R>(effect: Effect.Effect<A, WorkflowProgressRefused, R>) =>
   effect.pipe(
@@ -25,11 +26,25 @@ const exposeProgressRefusal = <A, R>(effect: Effect.Effect<A, WorkflowProgressRe
 
 const make = Effect.gen(function* () {
   const events = yield* AppEvents;
-  const runtime = yield* Effect.context<Workflows>();
+  const runtime = yield* Effect.context<Workflows | WorkflowExecution>();
   const run = Effect.runPromiseWith(runtime);
 
   return {
-    forSession(sessionId: string, phase: WorkflowPhase): AnyServerTool[] {
+    forSession(sessionId: string, phase: WorkflowPhase, runId = ""): AnyServerTool[] {
+      const recordBlocker = toolDefinition({
+        name: "record_workflow_blocker",
+        description:
+          "Stop automatic Plan execution only for a confirmed user decision, permission wait, external dependency or repeated failed approach. Record the concrete missing requirement and actual evidence. Unfinished investigation, review, preparation or verification that you can perform is remaining work, not a blocker. Continue all independent work before recording a blocker.",
+        inputSchema: toToolSchema(WorkflowBlocker),
+      }).server((input) =>
+        run(
+          Effect.gen(function* () {
+            const result = yield* (yield* WorkflowExecution).block(sessionId, runId, input);
+            events.publishSession(sessionId, "run-state");
+            return result;
+          }),
+        ),
+      );
       const updateGoal = toolDefinition({
         name: "update_goal",
         description:
@@ -94,9 +109,9 @@ const make = Effect.gen(function* () {
         case "plan":
           return [updateGoal, updatePlan];
         case "execute":
-          return [updatePlan, updateProgress];
+          return [updatePlan, updateProgress, recordBlocker];
         case "verify":
-          return [updateProgress];
+          return [updateProgress, recordBlocker];
         case "chat":
           return [];
       }
@@ -177,6 +192,8 @@ ${plan}`;
     case "execute":
       return `${common}
 Execute only the current Plan. Before each step, record it as in_progress. Record completed steps with actual evidence using update_workflow_progress; never mark work complete from intention alone. If the user materially changes the scope, design or acceptance criteria, revise the Plan with update_plan; this returns the workflow to Plan so the revised version can be confirmed before execution resumes. The workflow advances to Verify only when every step is completed with evidence.
+Continue the approved work through implementation, preparation, review and verification that you can perform. Do not end a turn merely promising to investigate or review next. After partial progress, persist new evidence with update_workflow_progress and continue. If progress genuinely requires a user decision, permission, an external dependency or recovery from a repeated failed approach, finish all independent work and record_workflow_blocker with the concrete reason and evidence before answering. Unverified work is remaining work to perform, not itself a reason to stop. The server continues unfinished execution automatically and stops after two consecutive turns without new workflow evidence or completed steps.
+When repairing failed verification, use the recorded failure evidence, perform the repair, and persist the repair evidence plus verification status not_run before returning to Verify.
 
 ${goal}
 
@@ -190,6 +207,7 @@ ${state.plan.steps.map((step) => `- ${step.id} [${step.status}]: ${step.title}`)
     case "verify":
       return `${common}
 Verify the implementation against the Goal, Plan acceptance criteria and applicable rules. You have read/search tools and run_shell for builds, tests, linters and other non-mutating checks; actually run applicable checks instead of claiming this phase lacks tools. Do not edit files or install packages in Verify. First check whether the hypothesis and each criterion can actually distinguish the claimed cause. Record passed only with supporting evidence. Record failed only when valid criteria show an implementation defect; after you persist that failure the workflow automatically returns to Execute for repair. Use invalid_hypothesis when the premise is wrong (set recoveryPhase to goal or plan), invalid_criterion when the check itself is unsound, inconclusive when evidence cannot decide, and blocked only for a confirmed external dependency. Persist the result and evidence with update_workflow_progress. Do not invent settings, silently repair, waive a criterion, or ask the user to change workflow phases.
+Perform applicable review and checks now instead of ending with a promise to do them later. If a confirmed dependency prevents all independent verification, record_workflow_blocker with its reason and evidence.
 
 ${goal}`;
   }
