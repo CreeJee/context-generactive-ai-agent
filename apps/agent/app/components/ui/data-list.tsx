@@ -17,8 +17,11 @@ export function DataListItem({
   ...props
 }: ComponentProps<"div"> & { term: ReactNode }) {
   return (
-    <div className={cn("col-span-2 grid grid-cols-subgrid gap-x-2", className)} {...props}>
-      <dt className="pt-2 text-xs text-muted-foreground">{term}</dt>
+    <div
+      className={cn("col-span-2 grid grid-cols-subgrid gap-x-2 items-center", className)}
+      {...props}
+    >
+      <dt className="text-xs text-muted-foreground">{term}</dt>
       <dd className="min-w-0">{children}</dd>
     </div>
   );

@@ -268,12 +268,6 @@ const permissionModes = [
   { value: "full", label: "전체 권한 (full)" },
 ] satisfies ReadonlyArray<{ value: PermissionMode; label: string }>;
 
-const permissionHints = {
-  ask: "셸 실행·프로젝트 밖 쓰기마다 승인받아요.",
-  auto: "안전하면 실행하고 애매하면 물어요. 판단마다 모델을 호출해요.",
-  full: "승인 없이 실행해요. 경로·자격 증명·Git 보호는 유지돼요.",
-} satisfies Record<PermissionMode, string>;
-
 const projectSectionOpenAtom = atomWithStorage("context-agent-project-section-open", true);
 
 export function ProjectSection({
@@ -356,9 +350,6 @@ export function ProjectSection({
                       ))}
                     </SelectContent>
                   </Select>
-                  <p className="mt-1 text-2xs text-muted-foreground">
-                    {permissionHints[current.permissionMode]}
-                  </p>
                 </DataListItem>
                 <DataListItem term="기억">
                   <label className="flex min-h-8 cursor-pointer items-center justify-between gap-2">
@@ -373,10 +364,10 @@ export function ProjectSection({
                   <Button
                     variant="ghost-muted"
                     size="sm"
-                    title="목록에서 빼기(대화와 기억은 그대로)"
+                    title="보관하기"
                     onClick={() => onHide(current.id)}
                   >
-                    <EyeOffIcon /> 목록에서 빼기
+                    <EyeOffIcon /> 보관하기
                   </Button>
                 </DataListItem>
               </>
