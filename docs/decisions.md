@@ -4,6 +4,9 @@
 
 - 한 섹션을 여닫는 UI는 Base UI 기반 `components/ui/collapsible.tsx`의 `Collapsible`, `CollapsibleTrigger`, `CollapsibleContent`로 구성한다. 계정 설정, 진단 정보, 증거 원문처럼 직접 만든 `<details>/<summary>`도 같은 접근성 동작과 키보드 포커스 스타일을 사용한다.
 - 사이드바 그룹은 [shadcn Base UI Sidebar](https://ui.shadcn.com/docs/components/base/sidebar)의 `SidebarGroup` + `Collapsible` 조합을 기준으로 삼는다. 여러 항목이 하나의 집합으로 열리고 닫혀야 할 때만 Accordion을 사용한다.
+- 채팅 사이드바의 계정/모델과 프로젝트 접힘 버튼은 동일한 높이·여백과 오른쪽 ChevronDown 아이콘을 사용한다. 열리면 아이콘을 180도 회전한다.
+- 펼친 내용에서는 계정과 모델을 각각 이름 붙인 구역으로 보여주고, 프로젝트 선택과 현재 프로젝트의 설정을 분리한다. 추론 강도와 권한 모드는 선택 목적이 보이도록 라벨을 붙이며, 중복 설명은 반복하지 않는다.
+- 채팅 사이드바의 펼친 내용은 작은 선택 컨트롤과 짧은 간격을 쓰고, 추론 강도와 권한 모드는 라벨과 컨트롤을 한 줄에 둔다. 프로젝트 설정에 중첩 카드나 반복 설명을 추가하지 않는다.
 
 ## 채팅 기록 표시 (2026-09-24)
 

@@ -42,6 +42,7 @@ import { ThemeSelect } from "./shared/theme";
 import { pageHolder } from "./session/session-lease";
 import { openSettingsOverlay } from "./settings/open-settings";
 import { AccountSection, ModelSection, ProjectSection, SessionSection } from "./navigation/sidebar";
+import { AccountModelPanel } from "./navigation/account-model-panel";
 import { WorkTracePanel } from "./chat/work-trace-panel";
 
 const locationParsers = {
@@ -320,20 +321,31 @@ export function App() {
               <div className="px-4 py-2">
                 <ThemeSelect />
               </div>
-              <AccountSection
-                auth={auth[provider]}
+              <AccountModelPanel
                 provider={provider}
-                onProviderChange={setProvider}
-                onAction={(intent) => void authAction(intent)}
-              />
-              {signedIn && (
-                <ModelSection
-                  models={models}
-                  selection={selection?.provider === provider ? selection : null}
-                  onSelect={(model, effort) => void selectModel(model, effort)}
+                auth={auth[provider]}
+                selection={selection}
+                modelName={
+                  (selection?.provider === "openai"
+                    ? openAIModels.data
+                    : anthropicModels.data
+                  )?.models.find((model) => model.id === selection?.model)?.displayName
+                }
+              >
+                <AccountSection
+                  auth={auth[provider]}
+                  provider={provider}
+                  onProviderChange={setProvider}
+                  onAction={(intent) => void authAction(intent)}
                 />
-              )}
-              <Separator />
+                {signedIn && (
+                  <ModelSection
+                    models={models}
+                    selection={selection?.provider === provider ? selection : null}
+                    onSelect={(model, effort) => void selectModel(model, effort)}
+                  />
+                )}
+              </AccountModelPanel>
               <ProjectSection
                 projects={projects}
                 projectId={projectId}

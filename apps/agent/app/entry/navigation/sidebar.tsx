@@ -60,6 +60,7 @@ import type {
   Project,
   Session,
 } from "../api";
+import { SidebarDisclosureTrigger } from "./sidebar-disclosure-trigger";
 
 const providerLabels = { openai: "ChatGPT", anthropic: "Claude" } satisfies Record<
   ProviderId,
@@ -74,10 +75,8 @@ const isProviderId = (value: string): value is ProviderId =>
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="flex flex-col gap-2 px-4 py-3">
-      <h2 className="text-2xs font-medium tracking-wide text-muted-foreground uppercase">
-        {title}
-      </h2>
+    <section className="flex flex-col gap-1.5 px-3 py-2 not-last:border-b">
+      <h2 className="text-xs font-medium">{title}</h2>
       {children}
     </section>
   );
@@ -101,7 +100,7 @@ export function AccountSection({
         items={providerOptions}
         onValueChange={(value) => value && isProviderId(value) && onProviderChange(value)}
       >
-        <SelectTrigger className="w-full">
+        <SelectTrigger className="w-full" size="sm" aria-label="구독 계정">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -114,7 +113,7 @@ export function AccountSection({
       </Select>
       {!auth && <Spinner />}
       {auth?.status === "signed-in" && (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           <Badge variant="secondary">연결됨</Badge>
           {auth.planType && <span className="text-xs text-muted-foreground">{auth.planType}</span>}
           <Button
@@ -200,7 +199,7 @@ export function ModelSection({
         items={models.map((model) => ({ value: model.id, label: model.displayName }))}
         onValueChange={(value) => value && onSelect(value)}
       >
-        <SelectTrigger className="w-full">
+        <SelectTrigger className="w-full" size="sm" aria-label="모델">
           <SelectValue placeholder="모델을 선택하세요" />
         </SelectTrigger>
         <SelectContent>
@@ -212,30 +211,31 @@ export function ModelSection({
         </SelectContent>
       </Select>
       {current && selection && (
-        <Select
-          value={selection.reasoningEffort}
-          items={current.supportedReasoningEfforts.map((effort) => ({
-            value: effort,
-            label: `추론 ${effort}`,
-          }))}
-          onValueChange={(value) => value && onSelect(current.id, value)}
-        >
-          <SelectTrigger className="w-full" size="sm">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {current.supportedReasoningEfforts.map((effort) => (
-              <SelectItem key={effort} value={effort}>
-                추론 {effort}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="flex items-center gap-2">
+          <span className="shrink-0 text-xs text-muted-foreground">추론</span>
+          <Select
+            value={selection.reasoningEffort}
+            items={current.supportedReasoningEfforts.map((effort) => ({
+              value: effort,
+              label: `추론 ${effort}`,
+            }))}
+            onValueChange={(value) => value && onSelect(current.id, value)}
+          >
+            <SelectTrigger className="min-w-0 flex-1" size="sm" aria-label="추론 강도">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {current.supportedReasoningEfforts.map((effort) => (
+                <SelectItem key={effort} value={effort}>
+                  추론 {effort}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       )}
       {!selection && (
-        <p className="text-xs text-muted-foreground">
-          선택한 모델이 없으면 대화를 시작할 수 없어요. 다른 모델로 자동 대체하지 않아요.
-        </p>
+        <p className="text-xs text-muted-foreground">대화를 시작하려면 모델을 선택하세요.</p>
       )}
     </Section>
   );
@@ -248,9 +248,9 @@ const permissionModes = [
 ] satisfies ReadonlyArray<{ value: PermissionMode; label: string }>;
 
 const permissionHints = {
-  ask: "셸 실행과 프로젝트 밖 쓰기는 호출마다 승인을 받아요.",
-  auto: "분류 모델이 호출마다 판단해서 안전하면 바로 실행하고, 애매하면 묻고, 위험하면 막아요. 판단할 때마다 모델 호출이 추가돼요.",
-  full: "호출별 승인 없이 실행해요. 프로젝트 경로, 자격 증명, .git 보호 규칙은 계속 적용돼요.",
+  ask: "셸 실행·프로젝트 밖 쓰기마다 승인받아요.",
+  auto: "안전하면 실행하고 애매하면 물어요. 판단마다 모델을 호출해요.",
+  full: "승인 없이 실행해요. 경로·자격 증명·Git 보호는 유지돼요.",
 } satisfies Record<PermissionMode, string>;
 
 const projectSectionOpenAtom = atomWithStorage("context-agent-project-section-open", true);
@@ -278,13 +278,13 @@ export function ProjectSection({
   const [open, setOpen] = useAtom(projectSectionOpenAtom);
 
   return (
-    <section className="px-4 py-3">
+    <section>
       <Collapsible open={open} onOpenChange={setOpen}>
-        <CollapsibleTrigger className="flex w-full items-center gap-1 text-2xs font-medium tracking-wide text-muted-foreground uppercase">
-          {open ? <ChevronDownIcon className="size-3" /> : <ChevronRightIcon className="size-3" />}
-          프로젝트
-        </CollapsibleTrigger>
-        <CollapsibleContent className="mt-2 flex flex-col gap-2">
+        <SidebarDisclosureTrigger>
+          <span className="font-medium">프로젝트</span>
+          {current && <span className="text-muted-foreground"> · {current.name}</span>}
+        </SidebarDisclosureTrigger>
+        <CollapsibleContent className="flex flex-col gap-2 px-3 pb-2">
           <div className="flex items-center gap-2">
             {projects.length > 0 ? (
               <Select
@@ -292,7 +292,7 @@ export function ProjectSection({
                 items={projects.map((project) => ({ value: project.id, label: project.name }))}
                 onValueChange={(value) => value && onSelect(value)}
               >
-                <SelectTrigger className="min-w-0 flex-1">
+                <SelectTrigger className="min-w-0 flex-1" size="sm" aria-label="프로젝트 선택">
                   <SelectValue placeholder="프로젝트를 선택하세요" />
                 </SelectTrigger>
                 <SelectContent>
@@ -309,43 +309,35 @@ export function ProjectSection({
             <AddProjectDialog onAdd={onAdd} />
           </div>
           {current && (
-            <div className="mt-1 flex flex-col gap-1.5 border-l-2 pl-2.5">
-              <span className="text-2xs font-medium text-muted-foreground">
-                {current.name} 설정
-              </span>
-              <Select
-                value={current.permissionMode}
-                items={permissionModes}
-                onValueChange={(value) => {
-                  const mode = permissionModes.find((option) => option.value === value);
-                  if (mode) onPermissionMode(mode.value);
-                }}
-              >
-                <SelectTrigger className="w-full" size="sm" aria-label="권한 모드">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {permissionModes.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
+            <div className="flex flex-col gap-2 border-t pt-2">
+              <div className="flex items-center gap-2">
+                <span className="shrink-0 text-xs text-muted-foreground">권한</span>
+                <Select
+                  value={current.permissionMode}
+                  items={permissionModes}
+                  onValueChange={(value) => {
+                    const mode = permissionModes.find((option) => option.value === value);
+                    if (mode) onPermissionMode(mode.value);
+                  }}
+                >
+                  <SelectTrigger className="min-w-0 flex-1" size="sm" aria-label="권한 모드">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {permissionModes.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <p className="text-2xs text-muted-foreground">
                 {permissionHints[current.permissionMode]}
               </p>
-              <label className="mt-1.5 flex cursor-pointer items-start justify-between gap-3">
-                <span className="flex flex-col gap-0.5">
-                  <span className="text-xs font-medium">다른 프로젝트에서 이 기억 찾기</span>
-                  <span className="text-xs text-muted-foreground">
-                    {current.crossRecallExcluded
-                      ? "다른 프로젝트 대화에서는 이 프로젝트의 기억을 찾지 않아요."
-                      : "다른 프로젝트 대화에서도 찾아서 출처 프로젝트와 함께 보여줘요."}
-                  </span>
-                </span>
+              <label className="flex cursor-pointer items-center justify-between gap-2">
+                <span className="text-xs">다른 프로젝트에서도 기억 찾기</span>
                 <Switch
-                  className="mt-0.5"
                   checked={!current.crossRecallExcluded}
                   onCheckedChange={(checked) => onCrossRecall(checked)}
                 />
@@ -353,15 +345,12 @@ export function ProjectSection({
               <Button
                 variant="ghost-muted"
                 size="sm"
-                className="mt-1 self-start"
+                className="self-start"
                 title="목록에서 빼기(대화와 기억은 그대로)"
                 onClick={() => onHide(current.id)}
               >
                 <EyeOffIcon /> 목록에서 빼기
               </Button>
-              <p className="text-xs text-muted-foreground">
-                대화와 기억, 검색은 그대로 남아요. 같은 폴더를 다시 추가하면 돌아와요.
-              </p>
             </div>
           )}
         </CollapsibleContent>
