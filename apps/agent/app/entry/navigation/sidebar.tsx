@@ -154,9 +154,15 @@ export function AccountSection({
               <AlertDescription className="min-w-0 break-words">
                 {auth.message}
                 {(auth.code || auth.httpStatus || auth.providerCode) && (
-                  <details className="mt-2 text-2xs">
-                    <summary className="cursor-pointer">진단 정보</summary>
-                    <dl className="mt-1 space-y-0.5 break-all font-mono">
+                  <Collapsible className="mt-2 text-2xs">
+                    <CollapsibleTrigger className="group flex items-center gap-1 text-left">
+                      <ChevronRightIcon
+                        aria-hidden="true"
+                        className="size-3 transition-transform group-data-[panel-open]:rotate-90"
+                      />
+                      진단 정보
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="mt-1 space-y-0.5 break-all font-mono">
                       {auth.code && <div>code: {auth.code}</div>}
                       {auth.operation && <div>operation: {auth.operation}</div>}
                       {auth.httpStatus && <div>HTTP: {auth.httpStatus}</div>}
@@ -164,8 +170,8 @@ export function AccountSection({
                       {auth.credentialStage && <div>credential stage: {auth.credentialStage}</div>}
                       {auth.transportCode && <div>transport code: {auth.transportCode}</div>}
                       {auth.proxyRoute && <div>proxy route: {auth.proxyRoute}</div>}
-                    </dl>
-                  </details>
+                    </CollapsibleContent>
+                  </Collapsible>
                 )}
               </AlertDescription>
             </Alert>

@@ -1,5 +1,10 @@
 # 결정 기록
 
+## 접힘 UI 구성 (2026-10-01)
+
+- 한 섹션을 여닫는 UI는 Base UI 기반 `components/ui/collapsible.tsx`의 `Collapsible`, `CollapsibleTrigger`, `CollapsibleContent`로 구성한다. 계정 설정, 진단 정보, 증거 원문처럼 직접 만든 `<details>/<summary>`도 같은 접근성 동작과 키보드 포커스 스타일을 사용한다.
+- 사이드바 그룹은 [shadcn Base UI Sidebar](https://ui.shadcn.com/docs/components/base/sidebar)의 `SidebarGroup` + `Collapsible` 조합을 기준으로 삼는다. 여러 항목이 하나의 집합으로 열리고 닫혀야 할 때만 Accordion을 사용한다.
+
 ## 채팅 기록 표시 (2026-09-24)
 
 - 채팅은 서버에 저장된 기록을 처음에 최근 50개만 복원하고, 목록 위쪽으로 스크롤하면 커서로 이전 페이지를 가져온다. 활성 run과 승인 상태는 기록 페이지와 별도로 기존 TanStack AI 복원 계약을 따른다.
