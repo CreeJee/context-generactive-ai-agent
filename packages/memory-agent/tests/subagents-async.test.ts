@@ -52,6 +52,46 @@ async function setup() {
         const internal = invocation.systemPrompts.some((prompt) =>
           prompt.includes("This is an automatic subagent completion follow-up"),
         );
+        if (!internal && user === "delegate and keep working") {
+          const last = invocation.messages.at(-1);
+          switch (last?.role === "tool" ? last.toolCallId : undefined) {
+            case "call-background": {
+              const receipt = Schema.decodeSync(Schema.fromJsonString(Receipt))(messageText(last!));
+              return {
+                toolCalls: [
+                  {
+                    id: "call-check-children",
+                    name: "wait_subagents",
+                    arguments: JSON.stringify({ attempts: [idsOf(receipt)] }),
+                  },
+                ],
+              };
+            }
+            case "call-check-children":
+              expect(messageText(last!)).toContain('"status":"pending"');
+              return {
+                toolCalls: [
+                  {
+                    id: "call-independent-work",
+                    name: "find_memory",
+                    arguments: JSON.stringify({ query: "SQLite 결정" }),
+                  },
+                ],
+              };
+            case "call-independent-work":
+              return { text: "Independent parent work finished." };
+            default:
+              return {
+                toolCalls: [
+                  {
+                    id: "call-background",
+                    name: "run_subagent",
+                    arguments: JSON.stringify({ task: "nap background" }),
+                  },
+                ],
+              };
+          }
+        }
         if (
           !internal &&
           user.startsWith("dispatch only resume ") &&
@@ -166,6 +206,29 @@ async function setup() {
 }
 
 describe("asynchronous subagents", () => {
+  test("default wait lets the parent execute independent tools in the same turn before the child finishes", async () => {
+    const { send, children, session, provider, releaseDelayed, idle } = await setup();
+    expect(await send("delegate and keep working")).toBe("Independent parent work finished.");
+    expect(children.list(session.id)[0]?.status).toBe("running");
+    const parentSteps = provider!.adapter.invocations.filter((invocation) =>
+      invocation.messages.some(
+        (message) =>
+          message.role === "user" && messageText(message) === "delegate and keep working",
+      ),
+    );
+    expect(
+      parentSteps.some((invocation) =>
+        invocation.messages.some(
+          (message) => message.role === "tool" && message.toolCallId === "call-independent-work",
+        ),
+      ),
+    ).toBe(true);
+    await releaseDelayed("nap");
+    await until(
+      () => children.list(session.id)[0]?.status === "completed" && idle(),
+      "child finishes after parent work",
+    );
+  });
   test("immediate receipt, parent-end survival, and durable idle follow-up without a synthetic user", async () => {
     const { send, children, session, provider, trace, count, idle, runtime, releaseDelayed } =
       await setup();
@@ -254,12 +317,18 @@ describe("asynchronous subagents", () => {
     );
     expect(
       await send(`call wait_subagents ${JSON.stringify({ attempts: [ids], timeoutMs: 0 })}`),
+    ).toContain('"status":"pending"');
+    expect(
+      await send(`call wait_subagents ${JSON.stringify({ attempts: [ids], timeoutMs: 1 })}`),
     ).toContain('"status":"timed_out"');
     expect(trace.taskDetail(session.id, ids.taskId)?.adoptions).toEqual([]);
     await releaseDelayed("nap");
     expect(
       await send(`call wait_subagents ${JSON.stringify({ attempts: [ids], timeoutMs: 5000 })}`),
     ).toContain('"status":"completed"');
+    expect(await send(`call wait_subagents ${JSON.stringify({ attempts: [ids] })}`)).toContain(
+      '"status":"completed"',
+    );
     expect(trace.taskDetail(session.id, ids.taskId)?.adoptions).toEqual([]);
     const adopt = `call adopt_subagent_reports ${JSON.stringify({ reports: [{ ...ids, evidenceRefIds: [] }] })}`;
     expect(await send(adopt)).toContain("Only reports reviewed in this run");

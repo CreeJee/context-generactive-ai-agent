@@ -152,7 +152,10 @@ export const defaultTestResponder: ScriptedResponder = async (invocation) => {
         }
       });
       if (receipts.length > 0)
-        return call("call-wait-children", "wait_subagents", { attempts: receipts });
+        return call("call-wait-children", "wait_subagents", {
+          attempts: receipts,
+          timeoutMs: 30_000,
+        });
       if (byId.has("call-wait-children")) {
         const result = Schema.decodeSync(
           Schema.fromJsonString(

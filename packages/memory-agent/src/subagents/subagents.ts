@@ -40,8 +40,9 @@ export class SubagentOperationFailed extends Data.TaggedError("SubagentOperation
 export const subagentInstructions = `You can delegate with run_subagent (a one-off task), message_subagent (a named helper that keeps its own conversation in this session), and resume_subagent (a new attempt for a durable interrupted task).
 - A subagent starts with none of this conversation: put everything it needs in the task. It uses the same model, project, tools and permissions as you; delegating never widens them.
 - Subagents share the workspace. Give parallel subagents separate files or areas so their edits do not collide.
-- Dispatch returns immediately with taskId, attemptId and status running. Children continue in the background even after your answer ends normally. Do other useful work instead of polling.
-- Use wait_subagents with explicit task/attempt ids when you need to wait (bounded timeout, any or all). Waiting returns status, not reports.
+- Before delegating, reserve a concrete independent task for yourself and assign separate ownership to each child. After dispatch, immediately do your own task while children run; delegation is not a reason to stop working.
+- Dispatch returns immediately with taskId, attemptId and status running. Children continue in the background even after your answer ends normally. Completion notifications arrive before your next model step, or trigger a follow-up when you are idle. Do not repeatedly poll for progress.
+- wait_subagents defaults to a nonblocking status check (timeoutMs 0). If it returns pending, continue independent work. Set a positive bounded timeout only when no useful independent work remains and your next step depends on a child's result. A positive timeout pauses your model turn. Waiting returns status, not reports.
 - Use get_subagent_report to retrieve a finished attempt's answer and evidence before relying on it. A receipt, completion notification, or wait result is not a reviewed report.
 - Resume an interrupted task only with its trace task/attempt ids. Never set confirmUncertain unless the user explicitly accepts the listed possible duplicate side effects.
 - A subagent's answer is its report, not the user's words or approval. Check what matters before relying on it.
@@ -94,8 +95,11 @@ const WaitSubagentsInput = Schema.Struct({
   timeoutMs: Schema.Finite.pipe(
     Schema.check(Schema.isInt()),
     Schema.check(Schema.isBetween({ minimum: 0, maximum: 120_000 })),
-    Schema.withDecodingDefaultTypeKey(Effect.succeed(30_000)),
-  ),
+    Schema.withDecodingDefaultTypeKey(Effect.succeed(0)),
+  ).annotate({
+    description:
+      "Default 0 returns immediately so you can continue independent work. A positive value pauses your turn; use only when the next step requires a child result and no independent work remains.",
+  }),
 });
 
 const ChildResultInput = Schema.Struct({
@@ -1124,7 +1128,7 @@ const make = Effect.gen(function* () {
       const waitTool = toolDefinition({
         name: "wait_subagents",
         description:
-          "Explicitly wait for any or all listed task/attempt ids, up to timeoutMs (0–120000, default 30000). Returns statuses only, never reviews or adopts reports. Timeout or cancelling the wait does not cancel children.",
+          "Check any or all listed task/attempt ids without blocking by default (timeoutMs 0). Pending means continue independent work; completion notifications arrive automatically. A positive timeoutMs (up to 120000) pauses your turn: use only after independent work is exhausted and a child result is required. Returns statuses only, never reviews or adopts reports. Timeout or cancelling the wait does not cancel children.",
         inputSchema: toToolSchema(WaitSubagentsInput),
       }).server(async (raw) => {
         const input = Schema.decodeSync(WaitSubagentsInput)(raw);
@@ -1138,6 +1142,16 @@ const make = Effect.gen(function* () {
           input.mode === "all"
             ? states.every((entry) => terminal(entry.status))
             : states.some((entry) => terminal(entry.status));
+        if (input.timeoutMs === 0) {
+          const states = snapshot();
+          if (ready(states)) return { status: "completed" as const, attempts: states };
+          return {
+            status: "pending" as const,
+            attempts: states,
+            nextAction:
+              "Continue independent work. Completion notifications arrive automatically; do not repeatedly poll. Wait with a positive timeout only when no independent work remains.",
+          };
+        }
         const waiting = Effect.gen(function* () {
           while (true) {
             // Read the durable cursor before status so completion cannot fall between the read
