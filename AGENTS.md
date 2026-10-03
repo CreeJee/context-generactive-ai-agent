@@ -34,6 +34,9 @@ release. Add a tool name to select part of the graph. For example, run
 
 ## common Rules
 
+- 테스트를 추가할때 명확히 필요한 부분만 테스트하고, 과하게 테스트를 만들거나 검증하지 않도록하기 (ex: rust 를 사용하는데 cargo가 있는지 확인하기)
+- 하위호환성의 기준점은 github 릴리즈 기준으로만 잡기
+
 ## Learning more about Effect
 
 This repository uses the Effect TypeScript library. Before writing Effect code, read

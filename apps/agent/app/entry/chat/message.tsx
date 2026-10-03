@@ -90,7 +90,9 @@ const RefusedResult = Schema.Union([
   ),
   Schema.fromJsonString(
     Schema.Struct({
-      error: Schema.String.pipe(Schema.check(Schema.isStartsWith("blocked_by_permission_review"))),
+      error: Schema.String.pipe(
+        Schema.check(Schema.isStartingWith("blocked_by_permission_review")),
+      ),
     }),
   ).pipe(
     Schema.decodeTo(

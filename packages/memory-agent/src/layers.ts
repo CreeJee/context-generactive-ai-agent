@@ -41,7 +41,7 @@ import { Projects } from "./projects/projects.ts";
 import { ActiveProvider } from "./providers/active-provider.ts";
 import { CrossProviderMediaConsent } from "./providers/cross-provider-media-consent.ts";
 import { ProviderRegistry } from "./providers/registry.ts";
-import { SubscriptionProviderRegistry } from "./providers/subscriptions.ts";
+import { AccountSubscriptionProviderRegistry } from "./providers/subscriptions.ts";
 import {
   ProviderToolCapabilityRegistry,
   providerToolDescriptors,
@@ -134,7 +134,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
       Layer.merge(StorageRoot.layer(storageRoot), Database.layer(join(storageRoot, "agent.db"))),
     ),
   );
-  const providerRegistry = options.providerRegistry ?? SubscriptionProviderRegistry;
+  const providerRegistry = options.providerRegistry ?? AccountSubscriptionProviderRegistry;
   const providerToolRegistry = options.providerToolRegistry ?? ProviderToolCapabilityRegistry.layer;
   const modelFeatureFlags =
     options.modelFeatureFlags ??

@@ -4,6 +4,13 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { exit } from "node:process";
 
+
+interface PageInfo { hasNextPage: boolean; endCursor: string | null }
+interface ReviewComment { author?: { login: string }; body: string; createdAt: string; url: string; isMinimized: boolean; minimizedReason: string | null }
+interface ReviewThread { id: string; isResolved: boolean; isOutdated: boolean; path: string; line: number | null; originalLine: number | null; startLine: number | null; originalStartLine: number | null; comments?: { nodes: ReviewComment[]; pageInfo?: PageInfo } }
+interface CheckItem { name: string; workflow: string; state: string; bucket: string; link: string; description: string; startedAt: string; completedAt: string }
+interface StatusReport { pullRequest: { number: number; title: string; url: string; baseRefName: string; headRefName: string; mergeStateStatus: string; reviewDecision: string; isDraft: boolean }; reviewAuthor: string; unresolvedReviewThreads: ReturnType<typeof formatThread>[]; checks: { error: string | null; failing: ReturnType<typeof formatCheck>[]; total: number } }
+
 const REVIEW_AUTHOR = "chatgpt-codex-connector[bot]";
 
 const args = process.argv.slice(2);
@@ -24,7 +31,7 @@ if (command === "status") {
   fail(`Unknown command: ${command}`);
 }
 
-function statusCommand(rawArgs) {
+function statusCommand(rawArgs: string[]) {
   const options = parseStatusArgs(rawArgs);
 
   if (options.help) {
@@ -70,7 +77,7 @@ function statusCommand(rawArgs) {
   }
 }
 
-function replyThreadCommand(rawArgs) {
+function replyThreadCommand(rawArgs: string[]) {
   const options = parseReplyThreadArgs(rawArgs);
 
   if (options.help) {
@@ -92,7 +99,7 @@ function replyThreadCommand(rawArgs) {
     try {
       body = readFileSync(options.bodyFile, "utf8");
     } catch (error) {
-      fail(`Could not read reply body file ${options.bodyFile}: ${error.message}`);
+      fail(`Could not read reply body file ${options.bodyFile}: ${String(error)}`);
     }
   }
 
@@ -136,7 +143,7 @@ mutation($threadId: ID!, $body: String!) {
   }
 }
 
-function resolveThreadCommand(rawArgs) {
+function resolveThreadCommand(rawArgs: string[]) {
   const options = parseResolveThreadArgs(rawArgs);
 
   if (options.help) {
@@ -176,8 +183,8 @@ mutation($threadId: ID!) {
   process.stdout.write(`Resolved review thread ${thread.id}\n`);
 }
 
-function parseReplyThreadArgs(rawArgs) {
-  const parsed = {
+function parseReplyThreadArgs(rawArgs: string[]) {
+  const parsed: { body: string | null; bodyFile: string | null; help: boolean; threadId: string | null } = {
     body: null,
     bodyFile: null,
     help: false,
@@ -221,8 +228,8 @@ function parseReplyThreadArgs(rawArgs) {
   return parsed;
 }
 
-function parseStatusArgs(rawArgs) {
-  const parsed = {
+function parseStatusArgs(rawArgs: string[]) {
+  const parsed: { help: boolean; json: boolean; pr: string | null } = {
     help: false,
     json: false,
     pr: null,
@@ -247,8 +254,8 @@ function parseStatusArgs(rawArgs) {
   return parsed;
 }
 
-function parseResolveThreadArgs(rawArgs) {
-  const parsed = {
+function parseResolveThreadArgs(rawArgs: string[]) {
+  const parsed: { help: boolean; threadId: string | null } = {
     help: false,
     threadId: null,
   };
@@ -268,7 +275,7 @@ function parseResolveThreadArgs(rawArgs) {
   return parsed;
 }
 
-function requireValue(rawArgs, index, flag) {
+function requireValue(rawArgs: string[], index: number, flag: string) {
   const value = rawArgs[index];
 
   if (!value || value.startsWith("--")) {
@@ -278,7 +285,7 @@ function requireValue(rawArgs, index, flag) {
   return value;
 }
 
-function readPullRequest(prArg) {
+function readPullRequest(prArg: string | null) {
   const ghArgs = ["pr", "view"];
 
   if (prArg) {
@@ -313,7 +320,7 @@ function readCurrentRepo() {
   return { owner, name };
 }
 
-function parsePullRequestUrl(url) {
+function parsePullRequestUrl(url: string) {
   const match = String(url).match(
     /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/[0-9]+/,
   );
@@ -328,7 +335,7 @@ function parsePullRequestUrl(url) {
   };
 }
 
-function readReviewThreads(repo, number) {
+function readReviewThreads(repo: { owner: string; name: string }, number: number) {
   const query = `
 query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
   repository(owner: $owner, name: $name) {
@@ -369,8 +376,8 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
     }
   }
 }`;
-  const threads = [];
-  let cursor = null;
+  const threads: ReviewThread[] = [];
+  let cursor: string | null = null;
 
   for (;;) {
     const args = [
@@ -411,7 +418,7 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
   return threads.map(readAllThreadComments);
 }
 
-function readAllThreadComments(thread) {
+function readAllThreadComments(thread: ReviewThread) {
   const comments = thread.comments?.nodes ?? [];
   let pageInfo = thread.comments?.pageInfo;
 
@@ -429,7 +436,7 @@ function readAllThreadComments(thread) {
   };
 }
 
-function readThreadCommentsPage(threadId, cursor) {
+function readThreadCommentsPage(threadId: string, cursor: string | null) {
   const query = `
 query($threadId: ID!, $cursor: String) {
   node(id: $threadId) {
@@ -475,7 +482,7 @@ query($threadId: ID!, $cursor: String) {
   return comments;
 }
 
-function readChecks(prArg) {
+function readChecks(prArg: string) {
   const result = run(
     "gh",
     [
@@ -498,17 +505,17 @@ function readChecks(prArg) {
   try {
     return {
       error: null,
-      items: JSON.parse(result.stdout),
+      items: JSON.parse(result.stdout) as CheckItem[],
     };
   } catch (error) {
     return {
-      error: `Could not parse gh pr checks JSON: ${error.message}`,
+      error: `Could not parse gh pr checks JSON: ${String(error)}`,
       items: [],
     };
   }
 }
 
-function isRelevantBotThread(thread) {
+function isRelevantBotThread(thread: ReviewThread) {
   if (thread.isResolved || thread.isOutdated) {
     return false;
   }
@@ -518,7 +525,7 @@ function isRelevantBotThread(thread) {
   );
 }
 
-function authorLoginMatches(actual, expected) {
+function authorLoginMatches(actual: string | undefined, expected: string) {
   if (actual === expected) {
     return true;
   }
@@ -526,11 +533,11 @@ function authorLoginMatches(actual, expected) {
   return stripBotSuffix(actual) === stripBotSuffix(expected);
 }
 
-function stripBotSuffix(login) {
+function stripBotSuffix(login: string | undefined) {
   return String(login ?? "").replace(/\[bot\]$/, "");
 }
 
-function isFailingCheck(check) {
+function isFailingCheck(check: CheckItem) {
   const bucket = String(check.bucket ?? "").toLowerCase();
   const state = String(check.state ?? "").toLowerCase();
 
@@ -545,7 +552,7 @@ function isFailingCheck(check) {
   );
 }
 
-function formatThread(thread) {
+function formatThread(thread: ReviewThread) {
   const comments = thread.comments?.nodes ?? [];
   const selectedComment = comments.find((comment) =>
     authorLoginMatches(comment.author?.login, REVIEW_AUTHOR),
@@ -568,7 +575,7 @@ function formatThread(thread) {
   };
 }
 
-function formatCheck(check) {
+function formatCheck(check: CheckItem) {
   return {
     name: check.name,
     workflow: check.workflow,
@@ -581,7 +588,7 @@ function formatCheck(check) {
   };
 }
 
-function printStatusReport(report) {
+function printStatusReport(report: StatusReport) {
   const pr = report.pullRequest;
 
   process.stdout.write(`PR #${pr.number}: ${pr.title}\n`);
@@ -627,19 +634,19 @@ function printStatusReport(report) {
 }
 
 function printGlobalHelp() {
-  process.stdout.write(`Usage: repair-pr.mjs <command> [options]
+  process.stdout.write(`Usage: repair-pr.ts <command> [options]
 
 Commands:
   status          Show PR merge state, unresolved bot review threads, and failing checks.
   reply-thread    Reply to a GitHub review thread by node id.
   resolve-thread  Resolve a GitHub review thread by node id.
 
-Run "repair-pr.mjs <command> --help" for command-specific options.
+Run "repair-pr.ts <command> --help" for command-specific options.
 `);
 }
 
 function printReplyThreadHelp() {
-  process.stdout.write(`Usage: repair-pr.mjs reply-thread <thread-id> (--body <text> | --body-file <path>)
+  process.stdout.write(`Usage: repair-pr.ts reply-thread <thread-id> (--body <text> | --body-file <path>)
 
 Arguments:
   thread-id                      GitHub review thread GraphQL node id.
@@ -652,7 +659,7 @@ Options:
 }
 
 function printStatusHelp() {
-  process.stdout.write(`Usage: repair-pr.mjs status [options]
+  process.stdout.write(`Usage: repair-pr.ts status [options]
 
 Options:
   --pr <number-or-url>           PR to inspect. Defaults to the current branch's PR.
@@ -662,7 +669,7 @@ Options:
 }
 
 function printResolveThreadHelp() {
-  process.stdout.write(`Usage: repair-pr.mjs resolve-thread <thread-id>
+  process.stdout.write(`Usage: repair-pr.ts resolve-thread <thread-id>
 
 Arguments:
   thread-id                      GitHub review thread GraphQL node id.
@@ -672,25 +679,25 @@ Options:
 `);
 }
 
-function runJson(commandName, commandArgs) {
+function runJson(commandName: string, commandArgs: string[]) {
   const result = run(commandName, commandArgs);
 
   try {
     return JSON.parse(result.stdout);
   } catch (error) {
     fail(
-      `Could not parse JSON from ${commandName} ${commandArgs.join(" ")}: ${error.message}`,
+      `Could not parse JSON from ${commandName} ${commandArgs.join(" ")}: ${String(error)}`,
     );
   }
 }
 
-function failOnGraphQLErrors(result, operation) {
+function failOnGraphQLErrors(result: { errors?: unknown[] }, operation: string) {
   if (Array.isArray(result?.errors) && result.errors.length > 0) {
     fail(`GraphQL errors while trying to ${operation}: ${JSON.stringify(result.errors)}`);
   }
 }
 
-function run(commandName, commandArgs, options = {}) {
+function run(commandName: string, commandArgs: string[], options: { allowFailure?: boolean } = {}) {
   const result = spawnSync(commandName, commandArgs, {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
@@ -719,7 +726,7 @@ function run(commandName, commandArgs, options = {}) {
   };
 }
 
-function fail(message) {
+function fail(message: string): never {
   process.stderr.write(`repair-pr: ${message}\n`);
   exit(1);
 }

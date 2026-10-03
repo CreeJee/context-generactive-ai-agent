@@ -95,9 +95,11 @@ export interface ModelCatalog {
 }
 
 /** Provider-native transport behind the provider-neutral orchestration boundary. */
+export type RunTextAdapter = AnyTextAdapter & { readonly releaseRun?: () => void };
+
 export interface AgentModelRuntime {
   readonly provider: ProviderId;
-  readonly adapter: (selection: ModelSelection) => AnyTextAdapter;
+  readonly adapter: (selection: ModelSelection) => RunTextAdapter;
   readonly contextWindow: (model: string) => number;
   /** False when contextWindow is only a conservative fallback, not model metadata. */
   readonly contextWindowKnown?: (model: string) => boolean;

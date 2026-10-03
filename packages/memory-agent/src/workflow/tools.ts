@@ -2,6 +2,7 @@ import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
 import { Context, Effect, Layer } from "effect";
 import { AppEvents } from "../events/app-events.ts";
 import {
+  StartNewGoal,
   UpdateGoal,
   UpdatePlan,
   UpdateWorkflowProgress,
@@ -45,6 +46,34 @@ const make = Effect.gen(function* () {
           }),
         ),
       );
+      const startNewGoal = toolDefinition({
+        name: "start_new_goal",
+        description:
+          "Explicitly start a separate independent-success Goal in this session, only at a quiescent owner boundary in Goal or Plan. Requires the current Goal ID (null only for legacy/unbound). Preserves prior Goal/Plan/run evidence without inheriting verification. Purpose revisions use update_goal; method changes use update_plan. Never use this to bypass an active/failed run or uncertain side effect.",
+        inputSchema: toToolSchema(StartNewGoal),
+      }).server((input) =>
+        run(
+          Effect.flatMap(Workflows, (workflows) => workflows.startNewGoal(sessionId, input)).pipe(
+            Effect.tap(() => Effect.sync(() => events.publishSession(sessionId, "run-state"))),
+            Effect.flatMap((state) =>
+              Effect.flatMap(Workflows, (workflows) =>
+                Effect.map(workflows.goalInstanceId(sessionId), (goalInstanceId) => ({
+                  phase: state.phase,
+                  goal: state.goal,
+                  plan: state.plan,
+                  goalInstanceId,
+                })),
+              ),
+            ),
+            Effect.catchTag("NewGoalTransitionRefused", (failure) =>
+              Effect.succeed({
+                error: "new_goal_transition_refused" as const,
+                reason: failure.reason,
+              }),
+            ),
+          ),
+        ),
+      );
       const updateGoal = toolDefinition({
         name: "update_goal",
         description:
@@ -54,7 +83,15 @@ const make = Effect.gen(function* () {
         run(
           Effect.flatMap(Workflows, (workflows) => workflows.updateGoal(sessionId, input)).pipe(
             Effect.tap(() => Effect.sync(() => events.publishSession(sessionId, "run-state"))),
-            Effect.map((state) => ({ phase: state.phase, goal: state.goal })),
+            Effect.flatMap((state) =>
+              Effect.flatMap(Workflows, (workflows) =>
+                Effect.map(workflows.goalInstanceId(sessionId), (goalInstanceId) => ({
+                  phase: state.phase,
+                  goal: state.goal,
+                  goalInstanceId,
+                })),
+              ),
+            ),
           ),
         ),
       );
@@ -76,21 +113,25 @@ const make = Effect.gen(function* () {
       const updateProgress = toolDefinition({
         name: "update_workflow_progress",
         description:
-          "Record durable Goal/Plan/step progress, evidence and verification. Plan and step progress is executable only while the workflow is in Execute or Verify; after update_plan returns the workflow to Plan, wait for Execute to be confirmed before recording it. Never call this in parallel with update_plan. Classify verification as passed, failed, invalid_hypothesis, invalid_criterion, inconclusive, or blocked instead of treating every non-pass as an implementation failure. Set recoveryPhase to goal or plan for invalid_hypothesis. A completed step needs evidence; a completed Goal or Plan needs passed verification with evidence; a completed Plan also needs every step completed.",
+          "Record durable Goal/Plan/step progress, evidence and verification. Plan and step progress is executable only while the workflow is in Execute or Verify; after update_plan returns the workflow to Plan, wait for Execute to be confirmed before recording it. Never call this in parallel with update_plan. Classify verification as passed, failed, invalid_hypothesis, invalid_criterion, inconclusive, or blocked instead of treating every non-pass as an implementation failure. Set recoveryPhase to goal or plan for invalid_hypothesis. A completed step needs evidence; a completed Goal or Plan needs passed verification with evidence; a completed Plan also needs every step completed. Provenance-bound Goals also require criterionMappings covering every current outcome: freeze outcomeIndex/outcomeText and stepId/acceptanceIndex/acceptanceText from the current Plan, with actual runId and successful verification tool-result evidenceNodeIds. Only current Goal/Plan versions are supported; registration is execution authorization, not passed proof. The owner derives provenance and recorder identity, never accept those from input.",
         inputSchema: toToolSchema(UpdateWorkflowProgress),
       }).server((input) =>
         run(
           exposeProgressRefusal(
             Effect.flatMap(Workflows, (workflows) =>
-              workflows.updateProgress(sessionId, {
-                ...input,
-                steps: (input.steps ?? []).map((step) => ({
-                  ...step,
-                  evidence: step.evidence ?? [],
-                })),
-                goalEvidence: input.goalEvidence ?? [],
-                planEvidence: input.planEvidence ?? [],
-              }),
+              workflows.updateProgress(
+                sessionId,
+                {
+                  ...input,
+                  steps: (input.steps ?? []).map((step) => ({
+                    ...step,
+                    evidence: step.evidence ?? [],
+                  })),
+                  goalEvidence: input.goalEvidence ?? [],
+                  planEvidence: input.planEvidence ?? [],
+                },
+                runId,
+              ),
             ).pipe(
               Effect.tap(() => Effect.sync(() => events.publishSession(sessionId, "run-state"))),
               Effect.map((state) => ({
@@ -105,9 +146,9 @@ const make = Effect.gen(function* () {
 
       switch (phase) {
         case "goal":
-          return [updateGoal, updateProgress];
+          return [updateGoal, updateProgress, startNewGoal];
         case "plan":
-          return [updateGoal, updatePlan];
+          return [updateGoal, updatePlan, startNewGoal];
         case "execute":
           return [updatePlan, updateProgress, recordBlocker];
         case "verify":
@@ -166,6 +207,10 @@ ${applicableRules || "(none)"}${resolved.degraded.includes("embedding") ? "\nOpt
     ? `Goal v${state.goal.version} (${state.goal.status}): ${state.goal.statement}
 Outcomes:
 ${compactList(state.goal.outcomes)}
+Constraints (apply across every continuation; a new turn does not reset limits):
+${compactList(state.goal.constraints, state.goal.constraints.length)}
+Non-goals:
+${compactList(state.goal.nonGoals, state.goal.nonGoals.length)}
 Blocking questions:
 ${compactList(state.goal.openQuestions.filter((question) => question.blocking).map((question) => question.question))}`
     : "Goal: not recorded yet.";
@@ -183,7 +228,7 @@ ${goal}`;
         ? `Plan v${state.plan.version} (${state.plan.status}, based on Goal v${state.plan.goalVersion}): ${state.plan.summary}`
         : "Plan: not recorded yet.";
       return `${common}
-You are planning, not executing. Project tools are restricted to read-only investigation. If no Goal is recorded, infer the smallest useful Goal from the user's request and save it before the Plan; the user does not need to enter Goal mode first. Produce ordered steps with stable ids, dependencies, acceptance criteria, risks and applicable rule ids. Do not modify files, run commands, delegate work or present investigation as implementation.
+You are planning, not executing. Project tools are restricted to read-only investigation. If no Goal is recorded, infer the smallest useful Goal from the user's request and save it before the Plan; the user does not need to enter Goal mode first. Produce ordered steps with stable ids, dependencies, acceptance criteria, risks and applicable rule ids. When a contradiction or unanswered question arises, record what is uncertain and which decisions depend on it; continue all independent read-only investigation and planning before asking. Narrow questions with evidence and ask only when no useful independent planning remains and the decision truly blocks progress. A non-blocking open question does not by itself require a draft Plan: save a ready Plan when its steps can proceed, and leave the unresolved decision for the step it actually affects. Never assume an answer to a blocking question or mark a Plan ready if the unresolved decision prevents safe execution of its next step. Do not modify files, run commands, delegate work or present investigation as implementation.
 
 ${goal}
 
@@ -191,8 +236,8 @@ ${plan}`;
     }
     case "execute":
       return `${common}
-Execute only the current Plan. Before each step, record it as in_progress. Record completed steps with actual evidence using update_workflow_progress; never mark work complete from intention alone. If the user materially changes the scope, design or acceptance criteria, revise the Plan with update_plan; this returns the workflow to Plan so the revised version can be confirmed before execution resumes. The workflow advances to Verify only when every step is completed with evidence.
-Continue the approved work through implementation, preparation, review and verification that you can perform. Do not end a turn merely promising to investigate or review next. After partial progress, persist new evidence with update_workflow_progress and continue. If progress genuinely requires a user decision, permission, an external dependency or recovery from a repeated failed approach, finish all independent work and record_workflow_blocker with the concrete reason and evidence before answering. Unverified work is remaining work to perform, not itself a reason to stop. The server continues unfinished execution automatically and stops after two consecutive turns without new workflow evidence or completed steps.
+Execute only the current Plan. On a request to resume the approved work, continue an existing in_progress step from its recorded evidence rather than merely listing remaining tasks or restarting completed work. A request to continue an answer, explain status or discuss the Plan is not by itself execution intent or new approval; answer that request without claiming work was performed. When the wording is ambiguous, use the surrounding conversation and ask if execution intent remains unclear. Resume requests never waive Goal constraints, failed-approach limits, pending permissions or a confirmed blocker. Before each step, record it as in_progress. Record completed steps with actual evidence using update_workflow_progress; never mark work complete from intention alone. If the user materially changes the scope, design or acceptance criteria, revise the Plan with update_plan; this returns the workflow to Plan so the revised version can be confirmed before execution resumes. The workflow advances to Verify only when every step is completed with evidence.
+Continue the approved work through implementation, preparation, review and verification that you can perform. Do not end a turn merely promising to investigate or review next. After partial progress, persist new evidence with update_workflow_progress and continue. If progress genuinely requires a user decision, permission, an external dependency or recovery from a repeated failed approach, finish all independent work and record_workflow_blocker with the concrete reason and evidence before answering. Unverified work is remaining work to perform, not itself a reason to stop. The server continues unfinished approved execution automatically while executable; ending your answer does not pause the Plan. Successful file modifications and new substantive successful tool results also count as progress before a step completes. Identical repeated reads, no-op writes, failed calls and permission refusals do not reset the two-consecutive-turn no-progress limit. Automatic continuation never grants new permission or bypasses a pending approval, confirmed blocker, user stop or failed run.
 When repairing failed verification, use the recorded failure evidence, perform the repair, and persist the repair evidence plus verification status not_run before returning to Verify.
 
 ${goal}
@@ -201,7 +246,7 @@ ${
   state.plan
     ? `Approved Plan v${state.plan.version}: ${state.plan.summary}
 Current steps:
-${state.plan.steps.map((step) => `- ${step.id} [${step.status}]: ${step.title}`).join("\n")}`
+${state.plan.steps.map((step) => `- ${step.id} [${step.status}]: ${step.title}${step.status === "completed" ? "" : `\n  Description: ${step.description}\n  Depends on: ${step.dependsOn.join(", ") || "(none)"}\n  Acceptance criteria:\n${compactList(step.acceptanceCriteria, step.acceptanceCriteria.length)}\n  Rule refs: ${step.ruleRefs.join(", ") || "(none)"}\n  Recent evidence (historical evidence is not fresh verification):\n${compactList(step.evidence.slice(-6))}`}`).join("\n")}`
     : "Approved Plan: missing."
 }`;
     case "verify":

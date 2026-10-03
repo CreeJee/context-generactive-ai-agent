@@ -94,6 +94,97 @@ describe("WorkflowTools live refresh", () => {
     },
   );
 
+  test("records immutable full-state revisions instead of overwriting old Goal and Plan evidence", async () => {
+    const { runtime, session } = await testRuntime();
+    const workflows = await runtime.runPromise(Workflows);
+    const { sqlite } = await runtime.runPromise(Database);
+    const revisions = () =>
+      sqlite
+        .prepare("SELECT * FROM workflow_state_revisions WHERE session_id = ? ORDER BY id")
+        .all(session.id);
+
+    await runtime.runPromise(workflows.updateGoal(session.id, goal));
+    await runtime.runPromise(workflows.updatePlan(session.id, plan));
+    const original = revisions();
+    expect(original).toHaveLength(2);
+    const goalId = original[0]?.goal_instance_id;
+    expect(goalId).toEqual(expect.any(String));
+    expect(original[1]?.goal_instance_id).toBe(goalId);
+    const previous = String(original[1]?.state_json);
+    await runtime.runPromise(
+      workflows.updateProgress(session.id, {
+        steps: [],
+        goalEvidence: ["observed old criterion"],
+        planEvidence: ["old approach"],
+        detail: "Document baseline",
+      }),
+    );
+    await runtime.runPromise(
+      workflows.updateGoal(session.id, { ...goal, outcomes: ["New outcome"] }),
+    );
+    await runtime.runPromise(workflows.updatePlan(session.id, { ...plan, summary: "New method" }));
+    const rows = revisions();
+    expect(rows).toHaveLength(5);
+    expect(rows.every((row) => row.goal_instance_id === goalId)).toBe(true);
+    expect(rows[1]?.state_json).toBe(previous);
+    expect(JSON.parse(String(rows[2]?.state_json)).goal.evidence).toEqual([
+      "observed old criterion",
+    ]);
+    const latest = JSON.parse(String(rows[4]?.state_json));
+    expect(latest.goal.version).toBe(2);
+    expect(latest.goal.outcomes).toEqual(["New outcome"]);
+    expect(latest.goal.evidence).toEqual([]);
+    expect(latest.plan.version).toBe(2);
+    expect(latest.plan.goalVersion).toBe(2);
+    expect(() =>
+      sqlite
+        .prepare("UPDATE workflow_state_revisions SET state_json = '{}' WHERE id = ?")
+        .run(rows[0]?.id),
+    ).toThrow("workflow revisions are immutable");
+  });
+
+  test("method-only Plan revisions keep the same Goal identity and version", async () => {
+    const { runtime, session } = await testRuntime();
+    const workflows = await runtime.runPromise(Workflows);
+    const { sqlite } = await runtime.runPromise(Database);
+    await runtime.runPromise(workflows.updateGoal(session.id, goal));
+    await runtime.runPromise(workflows.updatePlan(session.id, plan));
+    await runtime.runPromise(
+      workflows.updatePlan(session.id, { ...plan, summary: "Another method" }),
+    );
+    const rows = sqlite
+      .prepare(
+        "SELECT goal_instance_id, goal_version, plan_version FROM workflow_state_revisions WHERE session_id = ? ORDER BY id",
+      )
+      .all(session.id);
+    expect(rows.map(({ goal_version, plan_version }) => [goal_version, plan_version])).toEqual([
+      [1, null],
+      [1, 1],
+      [1, 2],
+    ]);
+    expect(rows.every((row) => row.goal_instance_id === rows[0]?.goal_instance_id)).toBe(true);
+    expect(rows[0]?.goal_instance_id).toEqual(expect.any(String));
+  });
+
+  test("rolls back a new Goal identity and current state if its evidence snapshot fails", async () => {
+    const { runtime, session } = await testRuntime();
+    const workflows = await runtime.runPromise(Workflows);
+    const { sqlite } = await runtime.runPromise(Database);
+    sqlite.exec(`
+      CREATE TRIGGER reject_workflow_revision BEFORE INSERT ON workflow_state_revisions
+      BEGIN SELECT RAISE(ABORT, 'snapshot unavailable'); END;
+    `);
+    await expect(runtime.runPromise(workflows.updateGoal(session.id, goal))).rejects.toThrow(
+      "snapshot unavailable",
+    );
+    expect(
+      sqlite.prepare("SELECT * FROM workflow_goal_identities WHERE session_id = ?").all(session.id),
+    ).toEqual([]);
+    expect(
+      sqlite.prepare("SELECT * FROM session_workflows WHERE session_id = ?").all(session.id),
+    ).toEqual([]);
+  });
+
   test("rejected progress does not publish a successful mutation event", async () => {
     const { runtime, session } = await testRuntime();
     const workflows = await runtime.runPromise(Workflows);

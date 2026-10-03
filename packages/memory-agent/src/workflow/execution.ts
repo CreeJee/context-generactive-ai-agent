@@ -17,6 +17,9 @@ export type WorkflowBlocker = typeof WorkflowBlocker.Type;
 const Progress = Schema.Struct({
   completedSteps: Schema.Array(Schema.String),
   evidence: Schema.Array(Schema.String),
+  toolResults: Schema.Array(Schema.String).pipe(
+    Schema.withDecodingDefaultTypeKey(Effect.sync(() => [])),
+  ),
 });
 const executionFields = {
   runId: Schema.String,
@@ -61,7 +64,11 @@ const encode = Schema.encodeSync(Schema.fromJsonString(WorkflowExecutionState));
 const decode = Schema.decodeUnknownSync(
   Schema.Struct({ value: Schema.fromJsonString(WorkflowExecutionState) }),
 );
-const progressOf = (state: WorkflowState): typeof Progress.Type => ({
+const progressOf = (
+  state: WorkflowState,
+  toolResults: readonly string[] = [],
+): typeof Progress.Type => ({
+  toolResults,
   completedSteps:
     state.plan?.steps.filter((step) => step.status === "completed").map((step) => step.id) ?? [],
   evidence: [
@@ -136,13 +143,21 @@ const make = Effect.gen(function* () {
             goalVersion: state.goal.version,
             planVersion: state.plan.version,
             noProgressRuns: !userTurn && previous.kind === "ready" ? previous.noProgressRuns : 0,
-            progress: progressOf(state),
+            progress: progressOf(
+              state,
+              !userTurn && previous.kind === "ready" ? previous.progress.toolResults : [],
+            ),
           });
         }),
     ),
 
     finish: Effect.fn("WorkflowExecution.finish")(
-      (sessionId: string, runId: string, state: WorkflowState) =>
+      (
+        sessionId: string,
+        runId: string,
+        state: WorkflowState,
+        toolResults: readonly string[] = [],
+      ) =>
         storage("write", () => {
           const previous = read(sessionId);
           if (previous.kind !== "running" || previous.runId !== runId) return;
@@ -157,8 +172,11 @@ const make = Effect.gen(function* () {
             });
             return;
           }
-          const progress = progressOf(state);
+          const progress = progressOf(state, [
+            ...new Set([...previous.progress.toolResults, ...toolResults]),
+          ]);
           const advanced =
+            progress.toolResults.some((item) => !previous.progress.toolResults.includes(item)) ||
             progress.completedSteps.some((id) => !previous.progress.completedSteps.includes(id)) ||
             progress.evidence.some((item) => !previous.progress.evidence.includes(item));
           const noProgressRuns = advanced ? 0 : previous.noProgressRuns + 1;
@@ -169,10 +187,11 @@ const make = Effect.gen(function* () {
                   kind: "blocked",
                   runId,
                   reason: "repeated_failure",
-                  detail: "두 턴 연속 완료된 단계나 새로운 진행 근거가 없어 자동 진행을 멈췄어요.",
+                  detail:
+                    "두 턴 연속 완료된 단계, 새로운 진행 근거 또는 유의미한 도구 결과가 없어 자동 진행을 멈췄어요.",
                   evidence: [
                     previous.runId,
-                    "Two consecutive runs without new workflow evidence or completed steps",
+                    "Two consecutive runs without new workflow evidence, completed steps or substantive successful tool results",
                   ],
                 }
               : { ...previous, kind: "ready", progress, noProgressRuns },

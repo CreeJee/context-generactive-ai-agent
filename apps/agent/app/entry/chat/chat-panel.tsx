@@ -70,7 +70,10 @@ import { parseSlash, promptOf, type SlashCommand, type SlashContext } from "./sl
 export interface SlashSupport {
   readonly context: SlashContext;
   readonly run: (
-    command: Extract<SlashCommand, { kind: "new" | "agent" | "mode" | "model" | "settings" }>,
+    command: Extract<
+      SlashCommand,
+      { kind: "new" | "agent" | "mode" | "model" | "settings" | "report" }
+    >,
   ) => Promise<void>;
 }
 
@@ -679,6 +682,7 @@ function ChatPanel({
           case "mode":
           case "model":
           case "settings":
+          case "report":
             setDraft("");
             setNotice(null);
             return slash.run(command).catch(() => setNotice(problem("명령을 실행하지 못했어요.")));

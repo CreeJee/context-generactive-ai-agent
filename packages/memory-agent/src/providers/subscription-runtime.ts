@@ -1,7 +1,7 @@
+import { Predicate } from "effect";
 import type { AgentLoopStrategy, ChatMiddleware } from "@tanstack/ai";
-import type { SubscriptionOAuthClient } from "../oauth/subscription-oauth.ts";
 import { SubscriptionTextAdapter, type StreamingOAuthClient } from "./subscription-adapter.ts";
-import type { AgentModelRuntime, ModelSelection, ProviderId } from "./contracts.ts";
+import type { AgentModelRuntime, ModelSelection, ProviderId, RunTextAdapter } from "./contracts.ts";
 
 /**
  * Continue until the provider answers instead of ending after an arbitrary number of tool steps.
@@ -20,27 +20,58 @@ const contextWindows: Readonly<Record<ProviderId, number>> = {
   anthropic: 200_000,
 };
 
+export function releaseSubscriptionRun(adapter: RunTextAdapter | null): void {
+  adapter?.releaseRun?.();
+}
+
+export interface SubscriptionRuntimeDependencies {
+  readonly client: StreamingOAuthClient | (() => StreamingOAuthClient);
+  readonly catalogWindow?: (model: string) => number | null;
+}
+
+/**
+ * Retain code, not a runtime bound to an account or run. The central owner supplies dependencies
+ * anew at bind time; account selection still happens once per adapter through client.forRun.
+ * This SDK boundary owns no auth, broker, active-run registry, or application resources.
+ */
+export function createSubscriptionRuntimeImplementation(provider: ProviderId) {
+  const Adapter = SubscriptionTextAdapter;
+  const agentLoop = subscriptionAgentLoop;
+  const middleware = runMiddleware;
+  const fallbackWindow = contextWindows[provider];
+  return Object.freeze({
+    bind({
+      client,
+      catalogWindow = () => null,
+    }: SubscriptionRuntimeDependencies): AgentModelRuntime {
+      return {
+        provider,
+        adapter: (selection: ModelSelection) => {
+          if (selection.provider !== provider)
+            throw new Error(
+              `Provider mismatch: ${provider} runtime cannot run ${selection.provider}/${selection.model}.`,
+            );
+          const pinned = Predicate.isFunction(client) ? client() : client;
+          const adapter = new Adapter(pinned, selection);
+          const releaseRun = pinned.releaseRun;
+          return releaseRun ? Object.assign(adapter, { releaseRun }) : adapter;
+        },
+        contextWindow: (model) => catalogWindow(model) ?? fallbackWindow,
+        contextWindowKnown: (model) => catalogWindow(model) !== null,
+        agentLoop,
+        runMiddleware: () => middleware(provider),
+        // Subscription APIs do not expose live-turn steering. The central transcript middleware
+        // retains queued messages; do not create a per-Goal steering registry here.
+        steer: async () => "no_turn",
+      };
+    },
+  });
+}
+
 export function createSubscriptionRuntime(
   provider: ProviderId,
-  client: SubscriptionOAuthClient | StreamingOAuthClient,
+  client: StreamingOAuthClient | (() => StreamingOAuthClient),
   catalogWindow: (model: string) => number | null = () => null,
 ): AgentModelRuntime {
-  return {
-    provider,
-    adapter: (selection: ModelSelection) => {
-      if (selection.provider !== provider)
-        throw new Error(
-          `Provider mismatch: ${provider} runtime cannot run ${selection.provider}/${selection.model}.`,
-        );
-      return new SubscriptionTextAdapter(client, selection);
-    },
-    contextWindow: (model) => catalogWindow(model) ?? contextWindows[provider],
-    contextWindowKnown: (model) => catalogWindow(model) !== null,
-    agentLoop: subscriptionAgentLoop,
-    runMiddleware: () => runMiddleware(provider),
-    // Subscription APIs do not expose live-turn steering. Returning no_turn keeps the queued
-    // message pending for the provider-neutral transcript middleware instead of pretending it was
-    // injected.
-    steer: async () => "no_turn",
-  };
+  return createSubscriptionRuntimeImplementation(provider).bind({ client, catalogWindow });
 }

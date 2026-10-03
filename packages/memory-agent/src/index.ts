@@ -18,6 +18,18 @@ export {
 } from "./agent/run-state.ts";
 export { ChatState } from "./chat-state/chat-state.ts";
 export { sqliteChatPersistence } from "./chat-state/persistence.ts";
+export {
+  importLegacyOAuthProfile,
+  listOAuthProfiles,
+  createProfileCredentialStore,
+  publishOAuthProfile,
+  selectOAuthProfile,
+  removeOAuthProfile,
+  renameOAuthProfile,
+  type OAuthProfile,
+  type ProfileCredentialStore,
+} from "./oauth/accounts.ts";
+export { createOAuthAccountLoginManager, type AccountLoginState } from "./oauth/account-login.ts";
 
 export { StorageRoot, defaultStorageRoot } from "./config/storage-root.ts";
 export {

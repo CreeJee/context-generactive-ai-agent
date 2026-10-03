@@ -1,7 +1,6 @@
 packages:
   - apps/*
   - packages/*
-  - tools/*
 
 catalogMode: prefer
 
@@ -25,8 +24,8 @@ catalog:
   "@types/react-dom": ^19.3.0
   class-variance-authority: ^0.7.1
   cn: ^0.3.0
-  effect: 4.0.0-rc.117
-  "@effect/vitest": 4.0.0-rc.117
+  effect: 4.0.0
+  "@effect/vitest": 4.0.0
   lucide-react: ^1.45.0
   react: ^19.3.0
   react-dom: ^19.3.0

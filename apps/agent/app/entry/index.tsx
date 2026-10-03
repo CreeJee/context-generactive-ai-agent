@@ -44,6 +44,7 @@ import { openSettingsOverlay } from "./settings/open-settings";
 import { AccountSection, ModelSection, ProjectSection, SessionSection } from "./navigation/sidebar";
 import { AccountModelPanel } from "./navigation/account-model-panel";
 import { WorkTracePanel } from "./chat/work-trace-panel";
+import { ReportLink, reportHref } from "./report/report-link";
 
 const locationParsers = {
   project: parseAsString,
@@ -237,6 +238,9 @@ export function App() {
           return await createSession(command.agent);
         case "settings":
           return openSettings();
+        case "report":
+          window.location.assign(reportHref(projectId, sessionId));
+          return;
         case "mode":
           if (projectId) await permissionMutation.mutateAsync(command.mode);
           return;
@@ -310,17 +314,22 @@ export function App() {
       <SessionEventsProvider projectId={projectId} sessionId={sessionId}>
         <div className="flex h-dvh bg-background text-foreground">
           <aside className="flex min-h-0 w-72 shrink-0 flex-col overflow-hidden border-r">
-            <div className="flex items-center justify-between py-2 pr-2 pl-4">
-              <span className="text-sm font-semibold">Context Agent</span>
-              <Button variant="ghost" size="icon-sm" aria-label="설정" onClick={openSettings}>
+            <div className="flex items-center gap-1 py-1 pr-2 pl-3">
+              <span className="min-w-0 flex-1 truncate text-sm font-semibold">Context Agent</span>
+              <ReportLink projectId={projectId} sessionId={sessionId} />
+              <ThemeSelect />
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="설정"
+                title="설정"
+                onClick={openSettings}
+              >
                 <SettingsIcon />
               </Button>
             </div>
             <Separator />
             <div className="min-h-0 shrink overflow-y-auto overscroll-contain">
-              <div className="px-4 py-2">
-                <ThemeSelect />
-              </div>
               <AccountModelPanel
                 provider={provider}
                 auth={auth[provider]}

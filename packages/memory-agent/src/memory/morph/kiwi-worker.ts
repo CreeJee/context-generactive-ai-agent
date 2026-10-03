@@ -4,7 +4,10 @@ import { readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
-import { KiwiBuilder } from "kiwi-nlp";
+import { KiwiBuilder, type Kiwi } from "kiwi-nlp";
+
+if (!parentPort) throw new Error("Kiwi entry requires a worker parent port");
+const parent = parentPort;
 
 // Resolved here, next to this file's own dependency, so it works when the caller is bundled.
 const wasmPath = join(
@@ -47,12 +50,12 @@ async function load() {
   return builder.build({ modelFiles, modelType: "cong" });
 }
 
-function termsOf(kiwi, input) {
+function termsOf(kiwi: Kiwi, input: string) {
   const text = input.normalize("NFKC");
-  const terms = [];
+  const terms: string[] = [];
   // Compound nouns are split inconsistently ("데이터베이스" vs "데이터 베이스"), so a run of nouns
   // written without spaces also counts as one term.
-  let run = [];
+  let run: string[] = [];
   let runEnd = -1;
   const closeRun = () => {
     if (run.length > 1) terms.push(run.join(""));
@@ -74,17 +77,17 @@ function termsOf(kiwi, input) {
 }
 
 const ready = load().then(
-  (kiwi) => ({ kiwi }),
-  (error) => ({ error: String(error) }),
+  (kiwi) => ({ kind: "ready" as const, kiwi }),
+  (error) => ({ kind: "failed" as const, error: String(error) }),
 );
 
-parentPort.on("message", async ({ id, texts }) => {
+parent.on("message", async ({ id, texts }: { id: number; texts: string[] }) => {
   const state = await ready;
-  if (state.error) return parentPort.postMessage({ id, kind: "error", error: state.error });
+  if (state.kind === "failed") return parent.postMessage({ id, kind: "error", error: state.error });
   try {
     const terms = texts.map((text) => termsOf(state.kiwi, text));
-    parentPort.postMessage({ id, kind: "terms", terms });
+    parent.postMessage({ id, kind: "terms", terms });
   } catch (error) {
-    parentPort.postMessage({ id, kind: "error", error: String(error) });
+    parent.postMessage({ id, kind: "error", error: String(error) });
   }
 });

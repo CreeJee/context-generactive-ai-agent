@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.json",
+  "include": ["./**/*.ts", "../../.react-router/types/**/*"],
+  "exclude": [],
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false
+  }
+}

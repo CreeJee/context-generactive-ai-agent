@@ -35,6 +35,8 @@ export interface SubscriptionProviderOptions {
   readonly protocol: ProviderProtocol;
   readonly config: SettingsStore;
   readonly client?: ProductOAuthClient;
+  /** Prevent one local account's catalogue from being served after provider selection changes. */
+  readonly catalogKey?: () => string;
 }
 
 const EffortObject = Schema.Struct({
@@ -254,6 +256,7 @@ export function createSubscriptionProvider(
     };
   };
   let catalogCache: {
+    readonly key: string;
     readonly loadedAt: number;
     readonly models: ReadonlyArray<ProviderModel>;
   } | null = null;
@@ -313,18 +316,24 @@ export function createSubscriptionProvider(
     pending = null;
     loginError = null;
     attempt?.cancel();
-    await client.disconnect();
+    const connection = await client.disconnect();
     catalogCache = null;
-    return { provider, status: "signed-out" } satisfies AuthConnectionState;
+    return {
+      provider,
+      status: connection.connected ? "signed-in" : "signed-out",
+    } satisfies AuthConnectionState;
   });
 
   const load = async () => {
-    if (catalogCache && Date.now() - catalogCache.loadedAt < 30_000) return catalogCache.models;
+    const key = options.catalogKey?.() ?? "__default__";
+    if (catalogCache?.key === key && Date.now() - catalogCache.loadedAt < 30_000)
+      return catalogCache.models;
     const pages =
       provider === "anthropic" ? anthropicInstalledCatalog : await client.modelCatalog();
     const models = parseSubscriptionCatalog(provider, pages);
     if (models.length === 0) throw new Error("empty_model_catalog");
-    catalogCache = { loadedAt: Date.now(), models };
+    if ((options.catalogKey?.() ?? "__default__") === key)
+      catalogCache = { key, loadedAt: Date.now(), models };
     return models;
   };
 
@@ -342,7 +351,9 @@ export function createSubscriptionProvider(
   return {
     provider,
     contextWindow: (model) =>
-      catalogCache?.models.find((candidate) => candidate.id === model)?.contextWindow ?? null,
+      catalogCache?.key === (options.catalogKey?.() ?? "__default__")
+        ? (catalogCache.models.find((candidate) => candidate.id === model)?.contextWindow ?? null)
+        : null,
     auth: { provider, status, connect, cancel, disconnect },
     models: {
       provider,

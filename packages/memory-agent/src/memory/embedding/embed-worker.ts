@@ -3,11 +3,14 @@
 import { createRequire } from "node:module";
 import { parentPort, workerData } from "node:worker_threads";
 
+if (!parentPort) throw new Error("Embedding entry requires a worker parent port");
+const parent = parentPort;
+
 // The CommonJS build, resolved next to this file: in the package in a checkout, in the runtime
 // folder in the executable.
-const { AutoModel, AutoTokenizer, env } = createRequire(import.meta.url)(
-  "@huggingface/transformers",
-);
+const { AutoModel, AutoTokenizer, env }: typeof import("@huggingface/transformers") = createRequire(
+  import.meta.url,
+)("@huggingface/transformers");
 
 // `devices` in order of preference: the first that loads and runs a short text is used.
 const { cacheDir, modelId, modelFileName, maxTokens, devices } = workerData;
@@ -16,7 +19,7 @@ async function load() {
   env.cacheDir = cacheDir;
   env.allowLocalModels = false;
   const tokenizer = await AutoTokenizer.from_pretrained(modelId);
-  const failures = [];
+  const failures: string[] = [];
   for (const device of devices) {
     let model = null;
     try {
@@ -41,17 +44,18 @@ async function load() {
 const ready = load().then(
   (loaded) => {
     // Unasked: tells the server which device the model runs on.
-    parentPort.postMessage({ id: 0, kind: "loaded", device: loaded.device });
-    return { loaded };
+    parent.postMessage({ id: 0, kind: "loaded", device: loaded.device });
+    return { kind: "ready" as const, loaded };
   },
-  (error) => ({ error: String(error) }),
+  (error) => ({ kind: "failed" as const, error: String(error) }),
 );
 
-const tokenCount = ({ tokenizer }, text) =>
+type LoadedModel = Awaited<ReturnType<typeof load>>;
+const tokenCount = ({ tokenizer }: LoadedModel, text: string) =>
   tokenizer(text, { truncation: true, max_length: maxTokens }).input_ids.dims.at(-1) ?? 0;
 
 /** The batch's sentence vectors, one row per text, not yet normalized. */
-async function embed({ tokenizer, model }, texts) {
+async function embed({ tokenizer, model }: LoadedModel, texts: string[]) {
   const inputs = tokenizer(texts, { padding: true, truncation: true, max_length: maxTokens });
   const { last_hidden_state: hidden } = await model(inputs);
   const [batch, tokens, dimensions] = hidden.dims;
@@ -64,24 +68,27 @@ async function embed({ tokenizer, model }, texts) {
   return rows;
 }
 
-parentPort.on("message", async ({ id, kind, texts }) => {
-  const state = await ready;
-  if (state.error)
-    return parentPort.postMessage({ id, kind: "failed", stage: "load", reason: state.error });
-  try {
-    switch (kind) {
-      case "count":
-        return parentPort.postMessage({
-          id,
-          kind: "counts",
-          counts: texts.map((text) => tokenCount(state.loaded, text)),
-        });
-      case "embed": {
-        const rows = await embed(state.loaded, texts);
-        return parentPort.postMessage({ id, kind: "rows", rows }, [rows.buffer]);
+parent.on(
+  "message",
+  async ({ id, kind, texts }: { id: number; kind: "count" | "embed"; texts: string[] }) => {
+    const state = await ready;
+    if (state.kind === "failed")
+      return parent.postMessage({ id, kind: "failed", stage: "load", reason: state.error });
+    try {
+      switch (kind) {
+        case "count":
+          return parent.postMessage({
+            id,
+            kind: "counts",
+            counts: texts.map((text) => tokenCount(state.loaded, text)),
+          });
+        case "embed": {
+          const rows = await embed(state.loaded, texts);
+          return parent.postMessage({ id, kind: "rows", rows }, [rows.buffer]);
+        }
       }
+    } catch (error) {
+      parent.postMessage({ id, kind: "failed", stage: "run", reason: String(error) });
     }
-  } catch (error) {
-    parentPort.postMessage({ id, kind: "failed", stage: "run", reason: String(error) });
-  }
-});
+  },
+);

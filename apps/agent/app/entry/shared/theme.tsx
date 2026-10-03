@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { MonitorIcon, MoonIcon, SunIcon } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -7,7 +8,7 @@ import {
   SelectValue,
 } from "~/components/ui/select";
 
-const themes = [
+export const themes = [
   { value: "system", label: "시스템 테마" },
   { value: "light", label: "라이트 모드" },
   { value: "dark", label: "다크 모드" },
@@ -42,6 +43,9 @@ export function ThemeSelect() {
     return () => media.removeEventListener("change", apply);
   }, [theme]);
 
+  const current = themes.find((item) => item.value === theme) ?? themes[0];
+  const Icon =
+    current.value === "light" ? SunIcon : current.value === "dark" ? MoonIcon : MonitorIcon;
   return (
     <Select
       value={theme}
@@ -57,8 +61,16 @@ export function ThemeSelect() {
         }
       }}
     >
-      <SelectTrigger size="sm" aria-label="화면 테마">
-        <SelectValue />
+      <SelectTrigger
+        size="sm"
+        variant="ghost"
+        className="h-8 min-w-9 justify-center [&_[data-slot=select-value]]:flex-none"
+        aria-label={`화면 테마: ${current.label}`}
+        title={`화면 테마: ${current.label}`}
+      >
+        <SelectValue>
+          <Icon aria-hidden="true" className="size-4" />
+        </SelectValue>
       </SelectTrigger>
       <SelectContent>
         {themes.map((item) => (

@@ -151,6 +151,8 @@ function collectPackages() {
     "@huggingface/transformers",
     "sharp",
     "kiwi-nlp",
+    // Full-loop Goal workers import their own file-backed SDK, not the owner's bundle.
+    "@tanstack/ai",
   ]) {
     const found = findPackage(memoryAgent, root);
     if (!found) throw new Error(`${root} is not installed; run vp install`);
@@ -253,11 +255,14 @@ mkdirSync(stage, { recursive: true });
 cpSync(join(app, "build", "client"), join(stage, "client"), { recursive: true });
 // Worker scripts; `runtimeWorker()` looks for them next to the runtime files.
 const workerScripts = {
-  "kiwi-worker.mjs": "morph",
-  "embed-worker.mjs": "embedding",
+  "kiwi-worker.ts": "morph",
+  "embed-worker.ts": "embedding",
 } as const;
 for (const [file, folder] of Object.entries(workerScripts))
   cpSync(join(memoryAgent, "src", "memory", folder, file), join(stage, file));
+// Preserve sibling imports and raw source hashes for Goal-specific immutable snapshots.
+for (const file of ["full-loop-worker.ts", "full-loop-codec.ts", "full-loop-rpc-client.ts"])
+  cpSync(join(memoryAgent, "src", "agent", file), join(stage, file));
 // The import and redaction workers are TypeScript with their own dependencies (Effect, secretlint),
 // so each is bundled into one file instead; a checkout runs the source.
 const bundledWorkers = {

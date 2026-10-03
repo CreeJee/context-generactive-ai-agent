@@ -12,11 +12,11 @@ if (process.env.FAKE_ACP_LOG)
     `${JSON.stringify({ pid: process.pid, cwd: process.cwd(), secret: process.env.SHOULD_NOT_LEAK ?? null })}\n`,
   );
 
-const history = new Map();
-const cancelled = new Set();
+const history = new Map<string, string[]>();
+const cancelled = new Set<string>();
 let nextSession = 1;
 
-const say = (client, sessionId, text) =>
+const say = (client: acp.AgentContext, sessionId: string, text: string) =>
   client.notify(acp.methods.client.session.update, {
     sessionId,
     update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },

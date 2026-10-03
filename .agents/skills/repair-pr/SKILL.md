@@ -17,7 +17,7 @@ Repair the current or specified GitHub PR once, then stop. Handle merge conflict
    - If the user provided a PR number or URL, use it; otherwise use `gh pr view --json number,url,baseRefName,headRefName`.
    - Before making repair commits, confirm the worktree is clean with `git status --short`. If it is dirty, stop and ask how to handle the pre-existing changes.
    - If the user provided a PR number or URL, check out the PR branch with `gh pr checkout <pr>` before making commits. Otherwise, assert that the current branch matches the PR `headRefName`; if it does not, stop before changing files.
-   - Resolve the bundled helper relative to this `SKILL.md`, not relative to the target repository. Run `node "<skill-directory>/scripts/repair-pr.mjs" status --pr <pr>` to collect merge state, unresolved `chatgpt-codex-connector[bot]` review threads, and failing checks.
+   - Resolve the bundled helper relative to this `SKILL.md`, not relative to the target repository. Run `node "<skill-directory>/scripts/repair-pr.ts" status --pr <pr>` to collect merge state, unresolved `chatgpt-codex-connector[bot]` review threads, and failing checks.
 
 2. Resolve merge conflicts first.
    - Treat `mergeStateStatus: DIRTY` or GitHub reporting conflicts as the conflict signal.
@@ -58,11 +58,11 @@ Repair the current or specified GitHub PR once, then stop. Handle merge conflict
 Resolve `<skill-directory>` as the directory containing this `SKILL.md`. The target repository does not need its own copy of the helper.
 
 ```bash
-node "<skill-directory>/scripts/repair-pr.mjs" status
-node "<skill-directory>/scripts/repair-pr.mjs" status --pr 123 --json
-node "<skill-directory>/scripts/repair-pr.mjs" reply-thread PRRT_kwDO... --body "The review assumes ..., but ..."
-node "<skill-directory>/scripts/repair-pr.mjs" reply-thread PRRT_kwDO... --body-file /path/to/reply.md
-node "<skill-directory>/scripts/repair-pr.mjs" resolve-thread PRRT_kwDO...
+node "<skill-directory>/scripts/repair-pr.ts" status
+node "<skill-directory>/scripts/repair-pr.ts" status --pr 123 --json
+node "<skill-directory>/scripts/repair-pr.ts" reply-thread PRRT_kwDO... --body "The review assumes ..., but ..."
+node "<skill-directory>/scripts/repair-pr.ts" reply-thread PRRT_kwDO... --body-file /path/to/reply.md
+node "<skill-directory>/scripts/repair-pr.ts" resolve-thread PRRT_kwDO...
 ```
 
 The helper is an inventory and review-thread mutation aid. It does not implement code fixes, stage changes, commit, push, or decide whether a review comment is correct.

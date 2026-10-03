@@ -174,8 +174,8 @@ catalogs:
       specifier: 0.45.0
       version: 0.45.0
     '@effect/vitest':
-      specifier: 4.0.0-rc.117
-      version: 4.0.0-rc.117
+      specifier: 4.0.0
+      version: 4.0.0
     '@fontsource-variable/inter':
       specifier: ^5.3.0
       version: 5.3.0
@@ -264,8 +264,8 @@ catalogs:
       specifier: ^1.11.23
       version: 1.11.23
     effect:
-      specifier: 4.0.0-rc.117
-      version: 4.0.0-rc.117
+      specifier: 4.0.0
+      version: 4.0.0
     jotai:
       specifier: ^3.0.0
       version: 3.0.0
@@ -340,7 +340,7 @@ importers:
         version: 5.0.1(@voidzero-dev/vite-plus-core@1.0.0-rc.0(@types/node@26.5.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))(playwright@1.63.0)(vitest@5.0.1)
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.117
+        version: 4.0.0
       playwright:
         specifier: 'catalog:'
         version: 1.63.0
@@ -361,7 +361,7 @@ importers:
     dependencies:
       '@agentclientprotocol/sdk':
         specifier: 'catalog:'
-        version: 1.4.0(zod@3.25.76)
+        version: 1.4.0(zod@4.6.5)
       '@base-ui/react':
         specifier: 'catalog:'
         version: 1.8.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -382,13 +382,13 @@ importers:
         version: 1.1.1(react@19.3.0)
       '@tanstack/ai':
         specifier: 'catalog:'
-        version: 0.61.0(zod@3.25.76)
+        version: 0.61.0(zod@4.6.5)
       '@tanstack/ai-openai':
         specifier: 'catalog:'
-        version: 0.24.1(@tanstack/ai@0.61.0(zod@3.25.76))(ws@8.21.3)(zod@3.25.76)
+        version: 0.24.1(@tanstack/ai@0.61.0(zod@4.6.5))(ws@8.21.3)(zod@4.6.5)
       '@tanstack/ai-react':
         specifier: 'catalog:'
-        version: 0.29.1(@tanstack/ai@0.61.0(zod@3.25.76))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@3.25.76)
+        version: 0.29.1(@tanstack/ai@0.61.0(zod@4.6.5))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.5)
       '@tanstack/react-query':
         specifier: 'catalog:'
         version: 5.103.1(react@19.3.0)
@@ -406,7 +406,7 @@ importers:
         version: 1.11.23
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.117
+        version: 4.0.0
       isbot:
         specifier: ^5.1.36
         version: 5.2.2
@@ -500,13 +500,13 @@ importers:
     dependencies:
       '@agentclientprotocol/sdk':
         specifier: 'catalog:'
-        version: 1.4.0(zod@3.25.76)
+        version: 1.4.0(zod@4.6.5)
       '@huggingface/transformers':
         specifier: 'catalog:'
         version: 4.2.0
       '@modelcontextprotocol/sdk':
         specifier: 'catalog:'
-        version: 1.30.0(zod@3.25.76)
+        version: 1.30.0(zod@4.6.5)
       '@napi-rs/keyring':
         specifier: 'catalog:'
         version: 2.1.0
@@ -524,25 +524,25 @@ importers:
         version: 1.1.0
       '@tanstack/ai':
         specifier: 'catalog:'
-        version: 0.61.0(zod@3.25.76)
+        version: 0.61.0(zod@4.6.5)
       '@tanstack/ai-anthropic':
         specifier: 'catalog:'
-        version: 0.19.1(@tanstack/ai@0.61.0(zod@3.25.76))(zod@3.25.76)
+        version: 0.19.1(@tanstack/ai@0.61.0(zod@4.6.5))(zod@4.6.5)
       '@tanstack/ai-client':
         specifier: 'catalog:'
-        version: 0.35.1(zod@3.25.76)
+        version: 0.35.1(zod@4.6.5)
       '@tanstack/ai-compaction':
         specifier: 'catalog:'
-        version: 0.1.9(@tanstack/ai@0.61.0(zod@3.25.76))
+        version: 0.1.9(@tanstack/ai@0.61.0(zod@4.6.5))
       '@tanstack/ai-mcp':
         specifier: 'catalog:'
-        version: 0.4.6(zod@3.25.76)
+        version: 0.4.6(zod@4.6.5)
       '@tanstack/ai-openai':
         specifier: 'catalog:'
-        version: 0.24.1(@tanstack/ai@0.61.0(zod@3.25.76))(ws@8.21.3)(zod@3.25.76)
+        version: 0.24.1(@tanstack/ai@0.61.0(zod@4.6.5))(ws@8.21.3)(zod@4.6.5)
       '@tanstack/ai-persistence':
         specifier: 'catalog:'
-        version: 0.6.7(@tanstack/ai@0.61.0(zod@3.25.76))(vitest@5.0.1)
+        version: 0.6.7(@tanstack/ai@0.61.0(zod@4.6.5))(vitest@5.0.1)
       cross-spawn:
         specifier: 'catalog:'
         version: 7.0.6
@@ -551,7 +551,7 @@ importers:
         version: 1.11.23
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.117
+        version: 4.0.0
       js-tiktoken:
         specifier: 'catalog:'
         version: 1.0.21
@@ -570,7 +570,7 @@ importers:
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.117(effect@4.0.0-rc.117)(vitest@5.0.1)
+        version: 4.0.0(effect@4.0.0)(vitest@5.0.1)
       '@types/cross-spawn':
         specifier: 'catalog:'
         version: 6.0.6
@@ -853,10 +853,10 @@ packages:
     resolution: {integrity: sha512-gPG0ixVHgtYBUe5DbKX9vzHlhqd9+ZEfs4m/XWy0808av0A2XqMzaG3F5rnPBN7EUJRPlo9TluIi8WHx/pBV+A==}
     hasBin: true
 
-  '@effect/vitest@4.0.0-rc.117':
-    resolution: {integrity: sha512-jJg9M7T3OhTcvoD9Zi28S5+0H+axlSHAYjXM8TYeLJy/FVlPe0B/Vc3ZfaqUF0rwkfQ6ziyCdjiBS46+182H1Q==}
+  '@effect/vitest@4.0.0':
+    resolution: {integrity: sha512-kGElCPFGtP+CgMCwV/HjJWqtE3zYo6I1+8MSA54l+EI24lPU9p2Efa+TBp1jfkg9j711KKzEqgSAy3VzTsb76Q==}
     peerDependencies:
-      effect: ^4.0.0-rc.117
+      effect: ^4.0.0
       vitest: 5.0.1
 
   '@emnapi/runtime@1.11.3':
@@ -3242,8 +3242,8 @@ packages:
   ee-first@1.1.1:
     resolution: {integrity: sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==}
 
-  effect@4.0.0-rc.117:
-    resolution: {integrity: sha512-UUyi9QiOW4nySFIBM3KnYbNMd9EZliOdKfBcyLD0mPMPheO2fkuXS5y0opjWc9oqzlJxPQICEGm8gGw3kh9j/w==}
+  effect@4.0.0:
+    resolution: {integrity: sha512-ooc1TG5t+FfzgYnFz2ff6BBKyZ7EwBRVXC7c4RhQUAD6/TZ2gTXXMeb4WX7a19ozQo4J73/QW+S00YAIresoMQ==}
 
   electron-to-chromium@1.5.427:
     resolution: {integrity: sha512-n14zb3FdsChZ2BNobqNHAJMcP3ifFv4paox2LvCrfVAQcqGiSURgbJl+PfMpHVCNFkStnNc+RRVtPBTVW5PDgw==}
@@ -5375,25 +5375,28 @@ packages:
   zod@3.25.76:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
+  zod@4.6.5:
+    resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
+
   zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
 snapshots:
 
-  '@ag-ui/core@1.0.0(zod@3.25.76)':
+  '@ag-ui/core@1.0.0(zod@4.6.5)':
     optionalDependencies:
-      zod: 3.25.76
+      zod: 4.6.5
 
-  '@agentclientprotocol/sdk@1.4.0(zod@3.25.76)':
+  '@agentclientprotocol/sdk@1.4.0(zod@4.6.5)':
     dependencies:
-      zod: 3.25.76
+      zod: 4.6.5
 
-  '@anthropic-ai/sdk@0.97.1(zod@3.25.76)':
+  '@anthropic-ai/sdk@0.97.1(zod@4.6.5)':
     dependencies:
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.1.1
     optionalDependencies:
-      zod: 3.25.76
+      zod: 4.6.5
 
   '@babel/code-frame@7.29.7':
     dependencies:
@@ -5672,9 +5675,9 @@ snapshots:
       '@effect/tsgo-win32-arm64': 0.45.0
       '@effect/tsgo-win32-x64': 0.45.0
 
-  '@effect/vitest@4.0.0-rc.117(effect@4.0.0-rc.117)(vitest@5.0.1)':
+  '@effect/vitest@4.0.0(effect@4.0.0)(vitest@5.0.1)':
     dependencies:
-      effect: 4.0.0-rc.117
+      effect: 4.0.0
       vitest: 5.0.1(@types/node@26.5.1)(@vitest/browser-playwright@5.0.1)(@vitest/browser-preview@5.0.1)(@vitest/ui@5.0.1)(@voidzero-dev/vite-plus-core@1.0.0-rc.0(@types/node@26.5.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))
 
   '@emnapi/runtime@1.11.3':
@@ -5909,6 +5912,28 @@ snapshots:
       raw-body: 3.0.2
       zod: 3.25.76
       zod-to-json-schema: 3.25.2(zod@3.25.76)
+    transitivePeerDependencies:
+      - supports-color
+
+  '@modelcontextprotocol/sdk@1.30.0(zod@4.6.5)':
+    dependencies:
+      '@hono/node-server': 2.1.1(hono@4.13.7)
+      ajv: 8.20.0
+      ajv-formats: 3.0.1(ajv@8.20.0)
+      content-type: 1.0.5
+      cors: 2.8.6
+      cross-spawn: 7.0.6
+      eventsource: 3.0.7
+      eventsource-parser: 3.1.1
+      express: 5.2.1
+      express-rate-limit: 8.7.0(express@5.2.1)
+      hono: 4.13.7
+      jose: 6.2.12
+      json-schema-typed: 8.0.2
+      pkce-challenge: 5.0.1
+      raw-body: 3.0.2
+      zod: 4.6.5
+      zod-to-json-schema: 3.25.2(zod@4.6.5)
     transitivePeerDependencies:
       - supports-color
 
@@ -6622,47 +6647,47 @@ snapshots:
       tailwindcss: 4.3.3
       vite: '@voidzero-dev/vite-plus-core@1.0.0-rc.0(@types/node@26.5.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)'
 
-  '@tanstack/ai-anthropic@0.19.1(@tanstack/ai@0.61.0(zod@3.25.76))(zod@3.25.76)':
+  '@tanstack/ai-anthropic@0.19.1(@tanstack/ai@0.61.0(zod@4.6.5))(zod@4.6.5)':
     dependencies:
-      '@anthropic-ai/sdk': 0.97.1(zod@3.25.76)
-      '@tanstack/ai': 0.61.0(zod@3.25.76)
+      '@anthropic-ai/sdk': 0.97.1(zod@4.6.5)
+      '@tanstack/ai': 0.61.0(zod@4.6.5)
       '@tanstack/ai-utils': 0.4.1
     transitivePeerDependencies:
       - zod
 
-  '@tanstack/ai-client@0.35.1(zod@3.25.76)':
+  '@tanstack/ai-client@0.35.1(zod@4.6.5)':
     dependencies:
-      '@tanstack/ai': 0.61.0(zod@3.25.76)
+      '@tanstack/ai': 0.61.0(zod@4.6.5)
       '@tanstack/ai-event-client': 0.13.0
       '@tanstack/ai-utils': 0.4.1
     transitivePeerDependencies:
       - '@opentelemetry/api'
       - zod
 
-  '@tanstack/ai-compaction@0.1.9(@tanstack/ai@0.61.0(zod@3.25.76))':
+  '@tanstack/ai-compaction@0.1.9(@tanstack/ai@0.61.0(zod@4.6.5))':
     dependencies:
-      '@tanstack/ai': 0.61.0(zod@3.25.76)
+      '@tanstack/ai': 0.61.0(zod@4.6.5)
 
   '@tanstack/ai-event-client@0.13.0':
     dependencies:
       '@tanstack/devtools-event-client': 0.4.4
 
-  '@tanstack/ai-mcp@0.4.6(zod@3.25.76)':
+  '@tanstack/ai-mcp@0.4.6(zod@4.6.5)':
     dependencies:
-      '@modelcontextprotocol/sdk': 1.30.0(zod@3.25.76)
-      '@tanstack/ai': 0.61.0(zod@3.25.76)
+      '@modelcontextprotocol/sdk': 1.30.0(zod@4.6.5)
+      '@tanstack/ai': 0.61.0(zod@4.6.5)
     transitivePeerDependencies:
       - '@cfworker/json-schema'
       - '@opentelemetry/api'
       - supports-color
       - zod
 
-  '@tanstack/ai-openai@0.24.1(@tanstack/ai@0.61.0(zod@3.25.76))(ws@8.21.3)(zod@3.25.76)':
+  '@tanstack/ai-openai@0.24.1(@tanstack/ai@0.61.0(zod@4.6.5))(ws@8.21.3)(zod@4.6.5)':
     dependencies:
-      '@tanstack/ai': 0.61.0(zod@3.25.76)
+      '@tanstack/ai': 0.61.0(zod@4.6.5)
       '@tanstack/ai-utils': 0.4.1
-      '@tanstack/openai-base': 0.11.1(@tanstack/ai@0.61.0(zod@3.25.76))(ws@8.21.3)(zod@3.25.76)
-      openai: 6.49.0(ws@8.21.3)(zod@3.25.76)
+      '@tanstack/openai-base': 0.11.1(@tanstack/ai@0.61.0(zod@4.6.5))(ws@8.21.3)(zod@4.6.5)
+      openai: 6.49.0(ws@8.21.3)(zod@4.6.5)
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
       - '@smithy/hash-node'
@@ -6670,17 +6695,17 @@ snapshots:
       - ws
       - zod
 
-  '@tanstack/ai-persistence@0.6.7(@tanstack/ai@0.61.0(zod@3.25.76))(vitest@5.0.1)':
+  '@tanstack/ai-persistence@0.6.7(@tanstack/ai@0.61.0(zod@4.6.5))(vitest@5.0.1)':
     dependencies:
-      '@tanstack/ai': 0.61.0(zod@3.25.76)
+      '@tanstack/ai': 0.61.0(zod@4.6.5)
       '@tanstack/ai-utils': 0.4.1
     optionalDependencies:
       vitest: 5.0.1(@types/node@26.5.1)(@vitest/browser-playwright@5.0.1)(@vitest/browser-preview@5.0.1)(@vitest/ui@5.0.1)(@voidzero-dev/vite-plus-core@1.0.0-rc.0(@types/node@26.5.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))
 
-  '@tanstack/ai-react@0.29.1(@tanstack/ai@0.61.0(zod@3.25.76))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@3.25.76)':
+  '@tanstack/ai-react@0.29.1(@tanstack/ai@0.61.0(zod@4.6.5))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.5)':
     dependencies:
-      '@tanstack/ai': 0.61.0(zod@3.25.76)
-      '@tanstack/ai-client': 0.35.1(zod@3.25.76)
+      '@tanstack/ai': 0.61.0(zod@4.6.5)
+      '@tanstack/ai-client': 0.35.1(zod@4.6.5)
       '@tanstack/markdown': 0.0.13(react@19.3.0)
       '@types/react': 19.3.0
       react: 19.3.0
@@ -6693,9 +6718,9 @@ snapshots:
 
   '@tanstack/ai-utils@0.4.1': {}
 
-  '@tanstack/ai@0.61.0(zod@3.25.76)':
+  '@tanstack/ai@0.61.0(zod@4.6.5)':
     dependencies:
-      '@ag-ui/core': 1.0.0(zod@3.25.76)
+      '@ag-ui/core': 1.0.0(zod@4.6.5)
       '@standard-schema/spec': 1.1.0
       '@tanstack/ai-event-client': 0.13.0
       '@tanstack/ai-utils': 0.4.1
@@ -6709,11 +6734,11 @@ snapshots:
     optionalDependencies:
       react: 19.3.0
 
-  '@tanstack/openai-base@0.11.1(@tanstack/ai@0.61.0(zod@3.25.76))(ws@8.21.3)(zod@3.25.76)':
+  '@tanstack/openai-base@0.11.1(@tanstack/ai@0.61.0(zod@4.6.5))(ws@8.21.3)(zod@4.6.5)':
     dependencies:
-      '@tanstack/ai': 0.61.0(zod@3.25.76)
+      '@tanstack/ai': 0.61.0(zod@4.6.5)
       '@tanstack/ai-utils': 0.4.1
-      openai: 6.49.0(ws@8.21.3)(zod@3.25.76)
+      openai: 6.49.0(ws@8.21.3)(zod@4.6.5)
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
       - '@smithy/hash-node'
@@ -7528,7 +7553,7 @@ snapshots:
 
   ee-first@1.1.1: {}
 
-  effect@4.0.0-rc.117: {}
+  effect@4.0.0: {}
 
   electron-to-chromium@1.5.427: {}
 
@@ -8878,10 +8903,10 @@ snapshots:
       is-docker: 2.2.1
       is-wsl: 2.2.0
 
-  openai@6.49.0(ws@8.21.3)(zod@3.25.76):
+  openai@6.49.0(ws@8.21.3)(zod@4.6.5):
     optionalDependencies:
       ws: 8.21.3
-      zod: 3.25.76
+      zod: 4.6.5
 
   optionator@0.9.4:
     dependencies:
@@ -10017,6 +10042,12 @@ snapshots:
     dependencies:
       zod: 3.25.76
 
+  zod-to-json-schema@3.25.2(zod@4.6.5):
+    dependencies:
+      zod: 4.6.5
+
   zod@3.25.76: {}
+
+  zod@4.6.5: {}
 
   zwitch@2.0.4: {}

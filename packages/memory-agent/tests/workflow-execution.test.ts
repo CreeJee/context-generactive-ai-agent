@@ -1,3 +1,5 @@
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { Effect } from "effect";
 import { expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
@@ -157,6 +159,77 @@ test("new evidence resets the consecutive no-progress limit even before a step c
     { text: "Next I will check implementation." },
     call("implementation", "update_workflow_progress", completed()),
     { text: "Implementation checked." },
+    call("verification", "update_workflow_progress", passed),
+    { text: "Verified." },
+  ]);
+  await context.run();
+  await expect
+    .poll(
+      async () =>
+        (await context.runtime.runPromise(context.workflows.get(context.session.id))).goal?.status,
+    )
+    .toBe("completed");
+  expect(context.provider!.adapter.invocations).toHaveLength(8);
+});
+
+test("a successful read investigation resets no-progress without a workflow progress call", async () => {
+  const context = await setup([
+    { text: "Next I will inspect the contract." },
+    call("read-contract", "read_file", { path: "contract.txt" }),
+    { text: "The contract is inspected." },
+    { text: "Next I will implement." },
+    call("implementation", "update_workflow_progress", completed()),
+    { text: "Implemented." },
+    call("verification", "update_workflow_progress", passed),
+    { text: "Verified." },
+  ]);
+  writeFileSync(join(context.base, "project", "contract.txt"), "Acceptance contract\n");
+  await context.run();
+  await expect
+    .poll(
+      async () =>
+        (await context.runtime.runPromise(context.workflows.get(context.session.id))).goal?.status,
+    )
+    .toBe("completed");
+  expect(context.provider!.adapter.invocations).toHaveLength(8);
+});
+
+test("identical successful read results cannot keep automatic execution alive", async () => {
+  const context = await setup([
+    call("read-1", "read_file", { path: "contract.txt" }),
+    { text: "Read the contract." },
+    call("read-2", "read_file", { path: "contract.txt" }),
+    { text: "Read it again." },
+    call("read-3", "read_file", { path: "contract.txt" }),
+    { text: "Read the same contract again." },
+  ]);
+  writeFileSync(join(context.base, "project", "contract.txt"), "Acceptance contract\n");
+  await context.run();
+  await expect.poll(async () => (await context.readExecution()).kind).toBe("blocked");
+  expect(await context.readExecution()).toMatchObject({ reason: "repeated_failure" });
+  expect(context.provider!.adapter.invocations).toHaveLength(6);
+});
+
+test("failed read investigations do not reset the no-progress limit", async () => {
+  const context = await setup([
+    call("missing-1", "read_file", { path: "missing-one.txt" }),
+    { text: "The first file was missing." },
+    call("missing-2", "read_file", { path: "missing-two.txt" }),
+    { text: "The second file was missing." },
+  ]);
+  await context.run();
+  await expect.poll(async () => (await context.readExecution()).kind).toBe("blocked");
+  expect(context.provider!.adapter.invocations).toHaveLength(4);
+});
+
+test("successful file creation counts before any workflow step is completed", async () => {
+  const context = await setup([
+    { text: "Next I will implement." },
+    call("write", "write_file", { path: "implementation.txt", content: "Implemented\n" }),
+    { text: "File written." },
+    { text: "Next I will check." },
+    call("implementation", "update_workflow_progress", completed()),
+    { text: "Implemented." },
     call("verification", "update_workflow_progress", passed),
     { text: "Verified." },
   ]);

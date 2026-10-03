@@ -36,9 +36,67 @@ describe("stable development backend safety", () => {
 
     const initial = developmentBuildId(app);
     writeFileSync(join(uiSource, "chat-panel.tsx"), "export const ui = 2;");
-    expect(developmentBuildId(app)).toBe(initial);
+    const uiBuildId = developmentBuildId(app);
+    expect(uiBuildId).toBe(initial);
+    // A UI-only HMR update must not block an otherwise valid mutation.
+    expect(
+      developmentRequestDecision(
+        createDevelopmentBoundary(initial),
+        "POST",
+        "/api/projects",
+        uiBuildId,
+      ),
+    ).toEqual({ kind: "allow" });
     writeFileSync(join(backendSource, "index.ts"), "export const runtime = 2;");
-    expect(developmentBuildId(app)).not.toBe(initial);
+    const changedBackendId = developmentBuildId(app);
+    expect(changedBackendId).not.toBe(initial);
+    // Editing disk sources does not change the running backend's identity.
+    expect(
+      developmentRequestDecision(createDevelopmentBoundary(initial), "POST", "/api/chat", initial),
+    ).toEqual({ kind: "allow" });
+    // An unvalidated UI/backend contract must not silently mutate the old backend.
+    expect(
+      developmentRequestDecision(
+        createDevelopmentBoundary(initial),
+        "POST",
+        "/api/projects",
+        changedBackendId,
+      ),
+    ).toMatchObject({ kind: "reject", status: 409 });
+  });
+
+  test("Goal worker source changes retain the current global gate and read/replay path", () => {
+    const root = mkdtempSync(join(tmpdir(), "context-agent-goal-source-gate-"));
+    cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+    const app = join(root, "apps", "agent");
+    const source = join(root, "packages", "memory-agent", "src", "agent");
+    mkdirSync(source, { recursive: true });
+    writeFileSync(join(source, "full-loop-worker.ts"), "export const worker = 'v1';");
+    writeFileSync(join(source, "full-loop-codec.ts"), "export const codec = 'v1';");
+    const initial = developmentBuildId(app);
+    const boundary = createDevelopmentBoundary(initial);
+    writeFileSync(join(source, "full-loop-worker.ts"), "export const worker = 'v2';");
+    const changedWorker = developmentBuildId(app);
+    expect(changedWorker).not.toBe(initial);
+    writeFileSync(join(source, "full-loop-codec.ts"), "export const codec = 'v2';");
+    const changedCodec = developmentBuildId(app);
+    expect(changedCodec).not.toBe(changedWorker);
+    expect(affectsDevelopmentBackend(join(source, "full-loop-worker.ts"))).toBe(true);
+    expect(affectsDevelopmentBackend(join(source, "full-loop-codec.ts"))).toBe(true);
+    expect(developmentRequestDecision(boundary, "POST", "/api/chat", changedCodec)).toMatchObject({
+      kind: "reject",
+      status: 409,
+      error: "backend_restart_required",
+    });
+    // Source-pinned SDK tests do not authorize bypassing the actual dev request gate.
+    expect(developmentRequestDecision(boundary, "GET", "/api/chat", changedCodec)).toEqual({
+      kind: "allow",
+    });
+    expect(developmentRequestDecision(boundary, "GET", "/api/health", changedCodec)).toMatchObject({
+      kind: "health",
+      status: 200,
+    });
+    expect(boundary.draining()).toBe(false);
   });
 
   test("reports its build and rejects stale or draining mutations", () => {
@@ -50,9 +108,12 @@ describe("stable development backend safety", () => {
     expect(developmentRequestDecision(boundary, "GET", "/api/models", undefined)).toEqual({
       kind: "allow",
     });
-    expect(
-      developmentRequestDecision(boundary, "GET", "/api/auth/anthropic/callback", "build-b"),
-    ).toMatchObject({
+    // OAuth callbacks use a separate loopback listener at /auth/callback or /callback,
+    // not the app's /api route. The build-id gate does not protect that listener.
+    expect(developmentRequestDecision(boundary, "GET", "/auth/callback", "build-b")).toEqual({
+      kind: "allow",
+    });
+    expect(developmentRequestDecision(boundary, "POST", "/api/auth", "build-b")).toMatchObject({
       kind: "reject",
       status: 409,
       error: "backend_restart_required",

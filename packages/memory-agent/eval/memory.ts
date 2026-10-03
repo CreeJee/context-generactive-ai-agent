@@ -8,7 +8,6 @@ import { readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Worker } from "node:worker_threads";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { KiwiBuilder } from "kiwi-nlp";
 import { StorageRoot } from "../src/config/storage-root.ts";
@@ -63,35 +62,6 @@ async function embed(variant: ModelVariant, texts: readonly string[]) {
   return { afterEmbedMB, afterReleaseMB: await settle() };
 }
 
-/** The same model in a worker thread that is ended afterwards: what an idle stop gives back. */
-async function embedInWorker(file: string, texts: readonly string[]) {
-  const worker = new Worker(new URL("./embed-worker-probe.mjs", import.meta.url), {
-    workerData: { file, texts },
-  });
-  await new Promise((resolve, reject) => {
-    worker.once("message", resolve);
-    worker.once("error", reject);
-  });
-  const afterEmbedMB = await settle();
-  await worker.terminate();
-  return { afterEmbedMB, afterTerminateMB: await settle() };
-}
-
-/** Kiwi in a worker thread that is ended afterwards, as the analyzer's idle stop does. */
-async function kiwiInWorker() {
-  const directory = join(home, "models", `kiwi-${kiwiModel.version}`, kiwiModel.directory);
-  const worker = new Worker(new URL("./kiwi-worker-probe.mjs", import.meta.url), {
-    workerData: { directory },
-  });
-  await new Promise((resolve, reject) => {
-    worker.once("message", resolve);
-    worker.once("error", reject);
-  });
-  const afterLoadMB = await settle();
-  await worker.terminate();
-  return { afterLoadMB, afterTerminateMB: await settle() };
-}
-
 const mixed = [textOfTokens(8000), ...Array.from({ length: 15 }, () => textOfTokens(60))];
 const short = Array.from({ length: 16 }, () => textOfTokens(60));
 
@@ -103,19 +73,11 @@ const scenarios = {
   "embedder fp32, 1 long + 15 short": () => embed("fp32", mixed),
   "embedder quint8, 16 short": () => embed("quint8", short),
   "embedder quint8, 1 long + 15 short": () => embed("quint8", mixed),
-  "kiwi worker, terminated": () => kiwiInWorker(),
-  "kiwi worker, three restarts": async () => {
-    const rounds = [];
-    for (let round = 0; round < 3; round++) rounds.push(await kiwiInWorker());
-    return { rounds };
-  },
   "embedder quint8, three reloads": async () => {
     const rounds = [];
     for (let round = 0; round < 3; round++) rounds.push(await embed("quint8", short));
     return { rounds };
   },
-  "worker fp32, 16 short": () => embedInWorker("model", short),
-  "worker quint8, 16 short": () => embedInWorker("model_quint8_avx2", short),
 } satisfies Record<string, () => Promise<object>>;
 
 const only = process.argv[2];

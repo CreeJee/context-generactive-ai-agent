@@ -85,6 +85,19 @@ const builtInRuleInputs: readonly Omit<WorkflowRule, "source">[] = [
     requiredEvidence: ["A saved Plan artifact tied to the current Goal version"],
   },
   {
+    id: "workflow.plan.blockers",
+    version: 1,
+    title: "Defer questions until independent planning is exhausted",
+    phases: ["plan"],
+    priority: "required",
+    terms: ["question", "contradiction", "blocker", "independent", "investigation"],
+    instruction:
+      "Record unresolved decisions and their dependencies, complete independent read-only investigation and planning first, then ask only about decisions that actually block further progress. Non-blocking questions alone do not prevent a ready Plan; never guess an answer needed for safe execution.",
+    requiredEvidence: [
+      "Independent investigation and steps were completed before a blocker was raised",
+    ],
+  },
+  {
     id: "workflow.execute.approved",
     version: 1,
     title: "Execute only an approved current Plan",

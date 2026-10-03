@@ -2,8 +2,9 @@ import {
   convertMessagesToModelMessages,
   type ChatMiddleware,
   type ChatMiddlewareContext,
+  type ModelMessage,
 } from "@tanstack/ai";
-import { reconstructChat, withPersistence } from "@tanstack/ai-persistence";
+import { reconstructChat, withPersistence, type MessagePage } from "@tanstack/ai-persistence";
 import { Context, Effect, Layer } from "effect";
 import { sessionMessages } from "../agent/history.ts";
 import { Attachments } from "../attachments/attachments.ts";
@@ -30,6 +31,34 @@ const make = Effect.gen(function* () {
   migrateLegacyChatThreads(sqlite, fallbackThread);
   const persistence = sqliteChatPersistence(sqlite);
   const lastRun = latestChatRun(sqlite);
+
+  // Reconstruction otherwise gives id-less stored messages random IDs on every GET. Use the
+  // central store's existing full-thread index IDs for both paged and unpaged hydration. Keep
+  // persisted SDK IDs (including assistant segments) untouched so their live-stream identity
+  // survives. This is a read-only view: no transcript rewrite, provider input or SSE ID changes.
+  async function loadHydrationThread(threadId: string): Promise<ModelMessage[]>;
+  async function loadHydrationThread(
+    threadId: string,
+    options: { limit?: number; before?: string },
+  ): Promise<ModelMessage[] | MessagePage>;
+  async function loadHydrationThread(
+    threadId: string,
+    options?: { limit?: number; before?: string },
+  ) {
+    if (options?.limit !== undefined)
+      return persistence.stores.messages.loadThread(threadId, options);
+    const stored = await persistence.stores.messages.loadThread(threadId);
+    return stored.map((message, index) =>
+      message.id === undefined ? { ...message, id: `stored:${threadId}:${index}` } : message,
+    );
+  }
+  const hydrationPersistence = {
+    ...persistence,
+    stores: {
+      ...persistence.stores,
+      messages: { ...persistence.stores.messages, loadThread: loadHydrationThread },
+    },
+  };
 
   // One process owns the database, so running and approval-interrupted runs belonged to the old
   // process after a restart. The provider continuation they depended on is gone: leaving their
@@ -96,7 +125,7 @@ const make = Effect.gen(function* () {
     hydrate: (request: Request, sessionId: string) => {
       // Imports may create sessions after this service's startup migration has already run.
       migrateMissingChatThread(sqlite, sessionId, fallbackThread);
-      return reconstructChat(persistence, request, {
+      return reconstructChat(hydrationPersistence, request, {
         authorize: async (threadId) => threadId === sessionId,
       });
     },

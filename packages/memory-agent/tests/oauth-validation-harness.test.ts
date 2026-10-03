@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import {
+  createSubscriptionOAuthClient,
   OAuthHarnessError,
   OAuthValidationHarness,
   providerKeychainService,
@@ -29,6 +30,66 @@ class MemoryCredentialStore implements CredentialStore {
     this.values.delete(provider);
   }
 }
+
+test.each(["cancel", "timeout"] as const)(
+  "%s after callback admission never writes late token results",
+  async (mode) => {
+    const store = new MemoryCredentialStore();
+    const previous = {
+      accessToken: "previous",
+      refreshToken: "previous-refresh",
+      expiresAt: Date.now() + 3600_000,
+    };
+    await store.write("openai", previous);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const exchanging = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const client = createSubscriptionOAuthClient({
+      protocol: { ...providerProtocols.openai, callbackPort: null },
+      store,
+      fetch: async () => {
+        entered();
+        await gate;
+        return Response.json({
+          access_token: "late",
+          refresh_token: "late-refresh",
+          expires_in: 3600,
+        });
+      },
+    });
+    const login = await client.startLogin({ timeoutMs: mode === "timeout" ? 100 : 5000 });
+    const completed = login.completed.catch((error: OAuthHarnessError) => error);
+    const authorize = new URL(login.authorizationUrl);
+    const callback = new URL(authorize.searchParams.get("redirect_uri")!);
+    callback.searchParams.set("code", "accepted-code");
+    callback.searchParams.set("state", authorize.searchParams.get("state")!);
+    const response = fetch(callback);
+    try {
+      await exchanging;
+      if (mode === "cancel") login.cancel();
+      else await new Promise((resolve) => setTimeout(resolve, 150));
+      release();
+      const rejected = await response;
+      expect(rejected.status).toBe(410);
+      await rejected.text();
+      expect(await completed).toMatchObject({
+        code: mode === "cancel" ? "cancelled" : "callback_timeout",
+      });
+      expect(await store.read("openai")).toEqual(previous);
+      expect(store.writes).toBe(1);
+    } finally {
+      release();
+      login.cancel();
+      await response.then((result) => result.text()).catch(() => {});
+      await completed;
+    }
+  },
+);
 
 const closers: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -663,6 +724,43 @@ describe("OAuth callback safety", () => {
     const cancelled = await cancelHarness.startLogin({ timeoutMs: 1_000 });
     cancelled.cancel();
     await expect(cancelled.completed).rejects.toMatchObject({ code: "cancelled" });
+  });
+
+  test("cancelling while a callback writes restores the prior credential, not the cancelled login", async () => {
+    const fake = await fakeProvider("anthropic");
+    let entered!: () => void;
+    const writing = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const prior: StoredCredential = {
+      accessToken: "prior-access",
+      refreshToken: "prior-refresh",
+      expiresAt: Date.now() + 300_000,
+    };
+    const store = new MemoryCredentialStore();
+    store.values.set("anthropic", prior);
+    const deferred: CredentialStore = {
+      read: (provider) => store.read(provider),
+      write: async (provider, value) => {
+        await store.write(provider, value);
+        entered();
+        await held;
+      },
+      remove: (provider) => store.remove(provider),
+    };
+    const harness = OAuthValidationHarness({ protocol: fake.protocol, store: deferred });
+    const attempt = await harness.startLogin({ timeoutMs: 5_000 });
+    const browser = fetch(attempt.authorizationUrl);
+    await writing;
+    attempt.cancel();
+    release();
+    await expect(attempt.completed).rejects.toMatchObject({ code: "cancelled" });
+    await browser;
+    expect(store.values.get("anthropic")).toEqual(prior);
   });
 
   test("uses separate OS-keychain namespaces and has no file fallback contract", () => {

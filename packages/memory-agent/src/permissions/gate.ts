@@ -50,93 +50,121 @@ function refusal(review: PermissionReview | null) {
   return { error: "permission_review_missing: the call was not reviewed, so it did not run." };
 }
 
-const make = Effect.gen(function* () {
+/**
+ * The implementation factory carries no owner services or first-run binding. A Goal may retain
+ * this function reference and provide the current central services separately for every run.
+ * SDK callbacks below remain the existing Promise/callback interoperability boundary.
+ */
+export const makePermissionGateMiddleware = Effect.fnUntraced(function* (
+  binding: GateBinding,
+): Effect.fn.Return<
+  ChatMiddleware<unknown, typeof permissionReviewInterrupt>,
+  never,
+  PermissionClassifier | PermissionReviews
+> {
   const classifier = yield* PermissionClassifier;
   const reviews = yield* PermissionReviews;
+  const { sessionId, gated } = binding;
 
   return {
+    name: "memory-agent/permission-gate",
+
+    async onInterruptBoundary(ctx) {
+      if (ctx.phase !== "beforeTools") return undefined;
+      const asks = [];
+      const ask = (call: ToolCall, reason: string, askedBy: "review" | "every_call") =>
+        permissionReviewInterrupt.interrupt({
+          key: call.id,
+          reason: "permission_review",
+          message: reason,
+          payload: {
+            toolCallId: call.id,
+            toolName: call.function.name,
+            arguments: call.function.arguments,
+            reason,
+            askedBy,
+          },
+        });
+      for (const call of pendingGatedCalls(ctx.messages, gated)) {
+        const latest = reviews.latest(sessionId, call.id);
+        let review =
+          latest?.toolName === call.function.name && latest.input === call.function.arguments
+            ? latest
+            : null;
+        if (!review && binding.decider === "user") {
+          asks.push(ask(call, askEveryCallReason, "every_call"));
+          continue;
+        }
+        if (!review) {
+          const verdict = await classifier.classify({
+            project: binding.project,
+            sessionId,
+            selection: binding.selection,
+            toolName: call.function.name,
+            argumentsJson: call.function.arguments,
+          });
+          review = reviews.record({
+            sessionId,
+            toolCallId: call.id,
+            toolName: call.function.name,
+            input: call.function.arguments,
+            decision: verdict.decision,
+            decidedBy: verdict.decidedBy,
+            reason: verdict.reason,
+          });
+        }
+        if (review.decision === "ask") asks.push(ask(call, review.reason, "review"));
+      }
+      return asks.length > 0 ? { interrupts: asks } : undefined;
+    },
+
+    onInterruptResolution(_ctx, resolutions) {
+      for (const resolution of resolutions.for(permissionReviewInterrupt)) {
+        const { payload } = resolution.request;
+        if (!payload) continue;
+        const approved = resolution.status === "resolved" && resolution.response.approved;
+        reviews.record({
+          sessionId,
+          toolCallId: payload.toolCallId,
+          toolName: payload.toolName,
+          input: payload.arguments,
+          decision: approved ? "approved" : "denied",
+          decidedBy: "user",
+          reason: approved ? "사용자가 승인했어요." : "사용자가 거부했어요.",
+        });
+      }
+    },
+
+    onBeforeToolCall(ctx, hook) {
+      if (!gated.has(hook.toolName)) return undefined;
+      const call = ctx.messages
+        .flatMap((message) => (message.role === "assistant" ? (message.toolCalls ?? []) : []))
+        .findLast((entry) => entry.id === hook.toolCallId);
+      const latest = reviews.latest(sessionId, hook.toolCallId);
+      const review =
+        call &&
+        call.function.name === hook.toolName &&
+        latest?.toolName === hook.toolName &&
+        latest.input === call.function.arguments
+          ? latest
+          : null;
+      if (review?.decision === "allow" || review?.decision === "approved") return undefined;
+      return { type: "skip", result: refusal(review) };
+    },
+  };
+});
+
+const make = Effect.gen(function* () {
+  const run = Effect.runSyncWith(yield* Effect.context<PermissionClassifier | PermissionReviews>());
+  return {
+    /** Native factory for implementation pinning with a fresh central Context on every run. */
+    factory: makePermissionGateMiddleware,
     /**
-     * Before tools run, every gated call gets a decision. With the classifier, each call gets a
-     * verdict (kept in `permission_reviews`, so a resumed run does not review again) and only `ask`
-     * verdicts pause the run; with the user as decider every call pauses. Pauses are
-     * permission-review interrupts; the user's answer is recorded when the run resumes. Right
-     * before each gated call executes, only `allow` and `approved` let it through.
+     * Compatibility boundary for existing SDK callers. This service-bound method is not the
+     * implementation-only factory and must not be cached as a Goal's current authority.
      */
     forRun(binding: GateBinding): ChatMiddleware<unknown, typeof permissionReviewInterrupt> {
-      const { sessionId, gated } = binding;
-
-      return {
-        name: "memory-agent/permission-gate",
-
-        async onInterruptBoundary(ctx) {
-          if (ctx.phase !== "beforeTools") return undefined;
-          const asks = [];
-          const ask = (call: ToolCall, reason: string, askedBy: "review" | "every_call") =>
-            permissionReviewInterrupt.interrupt({
-              key: call.id,
-              reason: "permission_review",
-              message: reason,
-              payload: {
-                toolCallId: call.id,
-                toolName: call.function.name,
-                arguments: call.function.arguments,
-                reason,
-                askedBy,
-              },
-            });
-          for (const call of pendingGatedCalls(ctx.messages, gated)) {
-            let review = reviews.latest(sessionId, call.id);
-            if (!review && binding.decider === "user") {
-              asks.push(ask(call, askEveryCallReason, "every_call"));
-              continue;
-            }
-            if (!review) {
-              const verdict = await classifier.classify({
-                project: binding.project,
-                sessionId,
-                selection: binding.selection,
-                toolName: call.function.name,
-                argumentsJson: call.function.arguments,
-              });
-              review = reviews.record({
-                sessionId,
-                toolCallId: call.id,
-                toolName: call.function.name,
-                input: call.function.arguments,
-                decision: verdict.decision,
-                decidedBy: verdict.decidedBy,
-                reason: verdict.reason,
-              });
-            }
-            if (review.decision === "ask") asks.push(ask(call, review.reason, "review"));
-          }
-          return asks.length > 0 ? { interrupts: asks } : undefined;
-        },
-
-        onInterruptResolution(_ctx, resolutions) {
-          for (const resolution of resolutions.for(permissionReviewInterrupt)) {
-            const { payload } = resolution.request;
-            if (!payload) continue;
-            const approved = resolution.status === "resolved" && resolution.response.approved;
-            reviews.record({
-              sessionId,
-              toolCallId: payload.toolCallId,
-              toolName: payload.toolName,
-              input: payload.arguments,
-              decision: approved ? "approved" : "denied",
-              decidedBy: "user",
-              reason: approved ? "사용자가 승인했어요." : "사용자가 거부했어요.",
-            });
-          }
-        },
-
-        onBeforeToolCall(_ctx, hook) {
-          if (!gated.has(hook.toolName)) return undefined;
-          const review = reviews.latest(sessionId, hook.toolCallId);
-          if (review?.decision === "allow" || review?.decision === "approved") return undefined;
-          return { type: "skip", result: refusal(review) };
-        },
-      };
+      return run(makePermissionGateMiddleware(binding));
     },
   };
 });

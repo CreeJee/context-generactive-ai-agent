@@ -65,7 +65,7 @@ const credentialStoreFailure = (provider: OAuthProvider, stage: CredentialStoreS
     credentialStage: stage,
   });
 
-const keychainEntry = (provider: OAuthProvider) => {
+const keychainEntry = (provider: OAuthProvider, account = "subscription-oauth") => {
   let AsyncEntry: typeof import("@napi-rs/keyring").AsyncEntry;
   try {
     ({ AsyncEntry } = requireRuntime("@napi-rs/keyring"));
@@ -79,9 +79,7 @@ const keychainEntry = (provider: OAuthProvider) => {
       throw credentialStoreFailure(provider, "entry_open");
     }
   };
-  return process.platform === "win32"
-    ? createChunkedPasswordEntry(open, "subscription-oauth")
-    : open("subscription-oauth");
+  return process.platform === "win32" ? createChunkedPasswordEntry(open, account) : open(account);
 };
 
 export const createKeychainCredentialStore = (
@@ -127,6 +125,19 @@ export const createKeychainCredentialStore = (
     }
   },
 });
+
+export const createKeychainProfileCredentialStore = (profileId: string): CredentialStore => {
+  if (
+    !/^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|legacy-(?:openai|anthropic))$/.test(
+      profileId,
+    )
+  )
+    throw new Error("invalid_oauth_profile_id");
+  // Preserve the original 'subscription-oauth' entry for rollback until migration is verified.
+  return createKeychainCredentialStore((provider) =>
+    keychainEntry(provider, `subscription-oauth-${profileId}`),
+  );
+};
 
 export type OAuthHarnessFailure =
   | "cancelled"
@@ -517,6 +528,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       reject = fail;
     });
     let finished = false;
+    let callbackClaimed = false;
     const finish = async (
       result: { readonly status: OAuthConnectionStatus } | { readonly error: OAuthHarnessError },
     ) => {
@@ -542,6 +554,11 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       void (async () => {
         // A one-shot callback must release its socket before finish closes the server.
         response.setHeader("Connection", "close");
+        // Admission is synchronous: replays cannot exchange twice or cancel the accepted callback.
+        if (callbackClaimed || finished) {
+          response.writeHead(410).end("OAuth callback already consumed.");
+          return;
+        }
         const callback = new URL(request.url ?? "/", redirectUri);
         if (
           request.method !== "GET" ||
@@ -573,7 +590,11 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
           });
           return;
         }
+        callbackClaimed = true;
+        let previous: StoredCredential | null = null;
+        let written = false;
         try {
+          if (finished) throw new OAuthHarnessError("cancelled");
           const commonGrant = {
             grant_type: "authorization_code",
             code,
@@ -584,14 +605,28 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
           const grant: AuthorizationCodeGrant =
             protocol.provider === "anthropic" ? { ...commonGrant, state } : commonGrant;
           const credential = await exchange(grant);
+          if (finished) throw new OAuthHarnessError("cancelled");
+          previous = await store.read(protocol.provider);
+          if (finished) throw new OAuthHarnessError("cancelled");
+          written = true;
           await store.write(protocol.provider, credential);
+          if (finished) throw new OAuthHarnessError("cancelled");
           const connection = await status();
+          if (finished) throw new OAuthHarnessError("cancelled");
           response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
           response.end("Connected. You may close this window.");
           await finish({ status: connection });
         } catch (error) {
+          if (written) {
+            try {
+              if (previous === null) await store.remove(protocol.provider);
+              else await store.write(protocol.provider, previous);
+            } catch {
+              // Do not leak native keychain errors through the OAuth callback response.
+            }
+          }
           response
-            .writeHead(502)
+            .writeHead(error instanceof OAuthHarnessError && error.code === "cancelled" ? 410 : 502)
             .end(
               error instanceof OAuthHarnessError && error.code === "credential_store_unavailable"
                 ? "Login succeeded, but the system credential store is unavailable. Return to the app for diagnostic details."

@@ -12,7 +12,7 @@ import { Projects } from "../src/projects/projects.ts";
 import { approvalToolDefinitions, permissionReviewInterrupt } from "../src/tools/definitions.ts";
 import { testRuntime } from "./support/runtime.ts";
 
-const fakeMcp = fileURLToPath(new URL("./support/fake-mcp-server.mjs", import.meta.url));
+const fakeMcp = fileURLToPath(new URL("./support/fake-mcp-server.ts", import.meta.url));
 
 async function until(condition: () => boolean, what: string) {
   for (let attempt = 0; attempt < 300; attempt++) {

@@ -46,8 +46,13 @@ function failureText(info: AfterToolCallInfo | ErrorInfo): string {
   return isString(info.error) ? info.error : JSON.stringify(info.error);
 }
 
-const make = Effect.gen(function* () {
-  const run = Effect.runPromiseWith(yield* Effect.context());
+/** Actual recording implementation; each invocation uses current central services and run state. */
+export const makeRecordingMiddleware = Effect.fnUntraced(function* (
+  binding: RunBinding,
+): Effect.fn.Return<ChatMiddleware, never, Nodes | PermissionReviews | SecretRedactor> {
+  const run = Effect.runPromiseWith(
+    yield* Effect.context<Nodes | PermissionReviews | SecretRedactor>(),
+  );
   const nodes = yield* Nodes;
   const reviews = yield* PermissionReviews;
   const redactor = yield* SecretRedactor;
@@ -68,164 +73,164 @@ const make = Effect.gen(function* () {
       : undefined;
   };
 
+  const base = {
+    projectId: binding.projectId,
+    sessionId: binding.sessionId,
+    runId: binding.runId,
+  };
+  const outcomes = new Map<string, ToolOutcome>();
+
+  /** Who answered, when it was an external agent in a direct conversation. */
+  const source: NodeDetail = binding.externalAgent ? { externalAgent: binding.externalAgent } : {};
+
+  /** The text has been through `hide` already. */
+  const appendAssistant = (text: string, partial?: { reason: string }) =>
+    nodes.append({
+      ...base,
+      kind: "assistant",
+      text,
+      detail: partial ? { ...source, partial: true, reason: partial.reason } : source,
+      links: [{ kind: "reply", nodeId: binding.userNodeId }],
+    });
+
   return {
-    /**
-     * Middleware that writes every assistant message, tool call and tool result of one run
-     * as it happens, so evidence survives an abort or a crashed process.
-     */
-    forRun(binding: RunBinding): ChatMiddleware {
-      const base = {
-        projectId: binding.projectId,
-        sessionId: binding.sessionId,
-        runId: binding.runId,
-      };
-      const outcomes = new Map<string, ToolOutcome>();
+    name: "memory-agent/record",
 
-      /** Who answered, when it was an external agent in a direct conversation. */
-      const source: NodeDetail = binding.externalAgent
-        ? { externalAgent: binding.externalAgent }
-        : {};
+    // Every hook first hides what it will write, then checks and appends with no await in
+    // between, so two hooks never both decide a node is still missing.
 
-      /** The text has been through `hide` already. */
-      const appendAssistant = (text: string, partial?: { reason: string }) =>
+    async onIteration(ctx) {
+      // Results the client wrote itself (a declined approval) never pass a server tool phase.
+      const written = ctx.messages.flatMap((message) => {
+        if (message.role !== "tool" || !message.toolCallId) return [];
+        const text = Array.isArray(message.content)
+          ? message.content.flatMap((part) => (part.type === "text" ? [part.content] : [])).join("")
+          : (message.content ?? "");
+        return [{ toolCallId: message.toolCallId, text }];
+      });
+      const hidden = await Promise.all(written.map((entry) => hide(entry.text)));
+      written.forEach(({ toolCallId, text }, index) => {
+        const call = nodes.toolNode(binding.sessionId, "tool_call", toolCallId);
+        if (!call || nodes.toolNode(binding.sessionId, "tool_result", toolCallId)) return;
+        const parsed = Option.getOrUndefined(decodeJson(text));
         nodes.append({
           ...base,
-          kind: "assistant",
-          text,
-          detail: partial ? { ...source, partial: true, reason: partial.reason } : source,
-          links: [{ kind: "reply", nodeId: binding.userNodeId }],
+          runId: call.runId ?? binding.runId,
+          kind: "tool_result",
+          text: hidden[index] ?? "",
+          detail: {
+            toolName: call.detail.toolName,
+            toolCallId,
+            ok: !isErrorResult(parsed),
+            permission: permissionOf(binding.sessionId, toolCallId),
+          },
+          links: [{ kind: "returns", nodeId: call.id }],
         });
+      });
+    },
 
-      return {
-        name: "memory-agent/record",
+    onAfterToolCall(_ctx, info) {
+      const outcome: ToolOutcome = { ok: info.ok };
+      if (!info.ok) outcome.error = failureText(info);
+      outcomes.set(info.toolCallId, outcome);
+    },
 
-        // Every hook first hides what it will write, then checks and appends with no await in
-        // between, so two hooks never both decide a node is still missing.
+    async onToolPhaseComplete(ctx, info) {
+      // A declined approval fires no after-call hook, and a call skipped by middleware reports
+      // ok; the result itself says whether the tool really ran.
+      const calls = info.toolCalls.map((call) => {
+        const result = info.results.find((entry) => entry.toolCallId === call.id);
+        if (!result) return { call, result, ok: true, resultText: "" };
+        const reported = outcomes.get(call.id);
+        const ok = (reported?.ok ?? true) && !isErrorResult(result.result);
+        // A failure is recorded as its error message when there is one.
+        const text = ok ? resultText(result) : (reported?.error ?? resultText(result));
+        return { call, result, ok, resultText: text };
+      });
+      outcomes.clear();
+      const [assistantText, callTexts, callRefs, resultTexts] = await Promise.all([
+        hide(ctx.accumulatedContent),
+        Promise.all(
+          calls.map(({ call }) => hide(`${call.function.name} ${call.function.arguments}`)),
+        ),
+        // A URL a call names can carry a token in its query.
+        Promise.all(
+          calls.map(({ call }) => Promise.all(refsInArguments(call.function.arguments).map(hide))),
+        ),
+        Promise.all(calls.map((entry) => hide(entry.resultText))),
+      ]);
 
-        async onIteration(ctx) {
-          // Results the client wrote itself (a declined approval) never pass a server tool phase.
-          const written = ctx.messages.flatMap((message) => {
-            if (message.role !== "tool" || !message.toolCallId) return [];
-            const text = Array.isArray(message.content)
-              ? message.content
-                  .flatMap((part) => (part.type === "text" ? [part.content] : []))
-                  .join("")
-              : (message.content ?? "");
-            return [{ toolCallId: message.toolCallId, text }];
+      // A run resumed after an approval replays calls recorded by the interrupted run.
+      const recorded = new Map(
+        info.toolCalls.flatMap((call) => {
+          const node = nodes.toolNode(binding.sessionId, "tool_call", call.id);
+          return node ? [[call.id, node] as const] : [];
+        }),
+      );
+      const needsAssistant =
+        ctx.accumulatedContent.length > 0 || recorded.size < info.toolCalls.length;
+      const assistant = needsAssistant ? appendAssistant(assistantText) : null;
+
+      calls.forEach(({ call, result, ok }, index) => {
+        const callNode =
+          recorded.get(call.id) ??
+          nodes.append({
+            ...base,
+            kind: "tool_call",
+            text: callTexts[index] ?? "",
+            detail: { toolName: call.function.name, toolCallId: call.id },
+            links: assistant ? [{ kind: "calls", nodeId: assistant.id }] : [],
+            refs: callRefs[index] ?? [],
           });
-          const hidden = await Promise.all(written.map((entry) => hide(entry.text)));
-          written.forEach(({ toolCallId, text }, index) => {
-            const call = nodes.toolNode(binding.sessionId, "tool_call", toolCallId);
-            if (!call || nodes.toolNode(binding.sessionId, "tool_result", toolCallId)) return;
-            const parsed = Option.getOrUndefined(decodeJson(text));
-            nodes.append({
-              ...base,
-              runId: call.runId ?? binding.runId,
-              kind: "tool_result",
-              text: hidden[index] ?? "",
-              detail: {
-                toolName: call.detail.toolName,
-                toolCallId,
-                ok: !isErrorResult(parsed),
-                permission: permissionOf(binding.sessionId, toolCallId),
-              },
-              links: [{ kind: "returns", nodeId: call.id }],
-            });
-          });
-        },
+        if (!result) return; // awaiting approval or client execution
+        if (nodes.toolNode(binding.sessionId, "tool_result", call.id)) return;
+        nodes.append({
+          ...base,
+          // Keep the result in the run that made the call, so history shows them together.
+          runId: callNode.runId ?? binding.runId,
+          kind: "tool_result",
+          text: resultTexts[index] ?? "",
+          detail: {
+            toolName: call.function.name,
+            toolCallId: call.id,
+            ok,
+            permission: permissionOf(binding.sessionId, call.id),
+          },
+          links: [{ kind: "returns", nodeId: callNode.id }],
+        });
+      });
+    },
 
-        onAfterToolCall(_ctx, info) {
-          const outcome: ToolOutcome = { ok: info.ok };
-          if (!info.ok) outcome.error = failureText(info);
-          outcomes.set(info.toolCallId, outcome);
-        },
+    async onFinish(_ctx, info) {
+      if (info.content.length > 0) appendAssistant(await hide(info.content));
+    },
 
-        async onToolPhaseComplete(ctx, info) {
-          // A declined approval fires no after-call hook, and a call skipped by middleware reports
-          // ok; the result itself says whether the tool really ran.
-          const calls = info.toolCalls.map((call) => {
-            const result = info.results.find((entry) => entry.toolCallId === call.id);
-            if (!result) return { call, result, ok: true, resultText: "" };
-            const reported = outcomes.get(call.id);
-            const ok = (reported?.ok ?? true) && !isErrorResult(result.result);
-            // A failure is recorded as its error message when there is one.
-            const text = ok ? resultText(result) : (reported?.error ?? resultText(result));
-            return { call, result, ok, resultText: text };
-          });
-          outcomes.clear();
-          const [assistantText, callTexts, callRefs, resultTexts] = await Promise.all([
-            hide(ctx.accumulatedContent),
-            Promise.all(
-              calls.map(({ call }) => hide(`${call.function.name} ${call.function.arguments}`)),
-            ),
-            // A URL a call names can carry a token in its query.
-            Promise.all(
-              calls.map(({ call }) =>
-                Promise.all(refsInArguments(call.function.arguments).map(hide)),
-              ),
-            ),
-            Promise.all(calls.map((entry) => hide(entry.resultText))),
-          ]);
+    async onAbort(ctx, info) {
+      if (ctx.accumulatedContent.length > 0)
+        appendAssistant(await hide(ctx.accumulatedContent), {
+          reason: info.reason ?? "aborted",
+        });
+    },
 
-          // A run resumed after an approval replays calls recorded by the interrupted run.
-          const recorded = new Map(
-            info.toolCalls.flatMap((call) => {
-              const node = nodes.toolNode(binding.sessionId, "tool_call", call.id);
-              return node ? [[call.id, node] as const] : [];
-            }),
-          );
-          const needsAssistant =
-            ctx.accumulatedContent.length > 0 || recorded.size < info.toolCalls.length;
-          const assistant = needsAssistant ? appendAssistant(assistantText) : null;
+    async onError(ctx, info) {
+      if (ctx.accumulatedContent.length > 0)
+        appendAssistant(await hide(ctx.accumulatedContent), {
+          reason: await hide(failureText(info)),
+        });
+    },
+  };
+});
 
-          calls.forEach(({ call, result, ok }, index) => {
-            const callNode =
-              recorded.get(call.id) ??
-              nodes.append({
-                ...base,
-                kind: "tool_call",
-                text: callTexts[index] ?? "",
-                detail: { toolName: call.function.name, toolCallId: call.id },
-                links: assistant ? [{ kind: "calls", nodeId: assistant.id }] : [],
-                refs: callRefs[index] ?? [],
-              });
-            if (!result) return; // awaiting approval or client execution
-            if (nodes.toolNode(binding.sessionId, "tool_result", call.id)) return;
-            nodes.append({
-              ...base,
-              // Keep the result in the run that made the call, so history shows them together.
-              runId: callNode.runId ?? binding.runId,
-              kind: "tool_result",
-              text: resultTexts[index] ?? "",
-              detail: {
-                toolName: call.function.name,
-                toolCallId: call.id,
-                ok,
-                permission: permissionOf(binding.sessionId, call.id),
-              },
-              links: [{ kind: "returns", nodeId: callNode.id }],
-            });
-          });
-        },
-
-        async onFinish(_ctx, info) {
-          if (info.content.length > 0) appendAssistant(await hide(info.content));
-        },
-
-        async onAbort(ctx, info) {
-          if (ctx.accumulatedContent.length > 0)
-            appendAssistant(await hide(ctx.accumulatedContent), {
-              reason: info.reason ?? "aborted",
-            });
-        },
-
-        async onError(ctx, info) {
-          if (ctx.accumulatedContent.length > 0)
-            appendAssistant(await hide(ctx.accumulatedContent), {
-              reason: await hide(failureText(info)),
-            });
-        },
-      };
+const make = Effect.gen(function* () {
+  const run = Effect.runSyncWith(
+    yield* Effect.context<Nodes | PermissionReviews | SecretRedactor>(),
+  );
+  return {
+    /** Implementation-only seam; provide the current central Context for each invocation. */
+    factory: makeRecordingMiddleware,
+    /** Synchronous SDK compatibility boundary, not a Goal's implementation-only authority. */
+    forRun(binding: RunBinding): ChatMiddleware {
+      return run(makeRecordingMiddleware(binding));
     },
   };
 });

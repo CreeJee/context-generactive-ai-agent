@@ -13,7 +13,7 @@ import { Sessions } from "../src/sessions/sessions.ts";
 import { approvalToolDefinitions, permissionReviewInterrupt } from "../src/tools/definitions.ts";
 import { testRuntime } from "./support/runtime.ts";
 
-const fakeAgent = fileURLToPath(new URL("./support/fake-acp-agent.mjs", import.meta.url));
+const fakeAgent = fileURLToPath(new URL("./support/fake-acp-agent.ts", import.meta.url));
 
 async function until(condition: () => boolean, what: string) {
   for (let attempt = 0; attempt < 300; attempt++) {

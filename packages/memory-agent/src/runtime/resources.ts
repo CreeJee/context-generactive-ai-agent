@@ -1,5 +1,6 @@
-import { createRequire } from "node:module";
+import { createRequire, findPackageJSON } from "node:module";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 /**
  * Packages this app loads from disk at run time rather than bundling: native addons (vector index,
@@ -43,7 +44,24 @@ export function requireRuntime<Name extends keyof RuntimePackages>(
  * import and redaction workers are TypeScript in a checkout and bundled into one `.mjs` each for
  * the executable.
  */
-export type RuntimeWorker = "kiwi-worker" | "embed-worker" | "import-worker" | "redact-worker";
+export type RuntimeWorker =
+  | "kiwi-worker"
+  | "embed-worker"
+  | "import-worker"
+  | "redact-worker"
+  | "full-loop-worker";
+
+/** File-backed SDK metadata, resolved with ESM conditions without importing owner code. */
+export function runtimeGoalSdkMetadata(): string {
+  const root = runtimeRoot();
+  const anchor =
+    root === null
+      ? createRequire(import.meta.url).resolve("memory-agent/package.json")
+      : join(root, "package.json");
+  const metadata = findPackageJSON("@tanstack/ai", pathToFileURL(anchor));
+  if (metadata === undefined) throw new Error("Unavailable Goal SDK package metadata");
+  return metadata;
+}
 
 /**
  * A worker script's file. In a checkout it is found through the package exports rather than next to
@@ -55,5 +73,5 @@ export function runtimeWorker(name: RuntimeWorker) {
   const root = runtimeRoot();
   return root === null
     ? runtimeRequire().resolve(`memory-agent/${name}`)
-    : join(root, `${name}.mjs`);
+    : join(root, `${name}.${name === "import-worker" || name === "redact-worker" ? "mjs" : "ts"}`);
 }

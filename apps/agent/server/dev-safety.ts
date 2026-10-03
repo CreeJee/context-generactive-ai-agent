@@ -131,8 +131,8 @@ export function developmentRequestDecision(
       }),
     };
   }
-  const oauthCallback = pathname.startsWith("/api/auth/") && pathname.endsWith("/callback");
-  const mutates = oauthCallback || (method !== "GET" && method !== "HEAD" && method !== "OPTIONS");
+  // OAuth callbacks use a separate loopback listener, not an app /api route.
+  const mutates = method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
   if (!pathname.startsWith("/api/") || !mutates) return { kind: "allow" };
   if (boundary.draining()) {
     const error = "backend_restarting" as const;

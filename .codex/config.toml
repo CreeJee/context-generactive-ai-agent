@@ -1,0 +1,9 @@
+[mcp_servers.motion]
+url = "https://mcp.motion.dev"
+
+[mcp_servers.shadcn]
+command = "pnpx"
+args = [
+    "shadcn@latest",
+    "mcp",
+]

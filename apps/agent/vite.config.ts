@@ -3,22 +3,33 @@ import { reactCompilerPreset } from "@vitejs/plugin-react";
 import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { Schema } from "effect";
-import { lazyPlugins, defineConfig, type HmrContext, type ViteDevServer } from "vite-plus";
-import {
-  affectsDevelopmentBackend,
-  developmentBackendWatchPaths,
-  developmentBuildId,
-} from "./server/dev-safety.ts";
+import { lazyPlugins, defineConfig } from "vite-plus";
+
+/** Preserve an explicit browser contract; only legacy/headerless requests borrow startup ID. */
+export const developmentApiProxy = (
+  target: string,
+  backendBuildId: string,
+): import("vite-plus").ProxyOptions => ({
+  target,
+  configure(proxy) {
+    proxy.on("proxyReq", (request) => {
+      if (!request.hasHeader("x-context-agent-build-id"))
+        request.setHeader("x-context-agent-build-id", backendBuildId);
+    });
+  },
+});
 
 export default defineConfig(({ command }) => {
-  const appRoot = fileURLToPath(new URL(".", import.meta.url));
   const developmentBackend = process.env.CONTEXT_AGENT_DEV_BACKEND;
   const backendBuildId = process.env.CONTEXT_AGENT_BUILD_ID ?? "missing";
-  let presentedBuildId = developmentBuildId(appRoot);
 
   return {
+    define: {
+      "import.meta.env.VITE_CONTEXT_AGENT_BUILD_ID": JSON.stringify(
+        process.env.CONTEXT_AGENT_BUILD_ID ?? "",
+      ),
+    },
     test: {
       // Vitest v4 compatibility: preserve mock call history.
       // Remove after tests no longer rely on calls from setup or earlier tests.
@@ -29,14 +40,7 @@ export default defineConfig(({ command }) => {
     server: developmentBackend
       ? {
           proxy: {
-            "/api": {
-              target: developmentBackend,
-              configure(proxy) {
-                proxy.on("proxyReq", (request) => {
-                  request.setHeader("x-context-agent-build-id", presentedBuildId);
-                });
-              },
-            },
+            "/api": developmentApiProxy(developmentBackend, backendBuildId),
           },
         }
       : undefined,
@@ -64,24 +68,6 @@ export default defineConfig(({ command }) => {
       ],
     },
     plugins: lazyPlugins(() => [
-      ...(developmentBackend
-        ? [
-            {
-              name: "context-agent-stable-backend-boundary",
-              configureServer(server: ViteDevServer) {
-                server.watcher.add(developmentBackendWatchPaths(appRoot));
-              },
-              handleHotUpdate(context: HmrContext) {
-                if (!affectsDevelopmentBackend(context.file)) return;
-                presentedBuildId = developmentBuildId(appRoot);
-                if (presentedBuildId === backendBuildId) return;
-                context.server.config.logger.warn(
-                  "\nAgent/backend code changed. Mutations are blocked; restart pnpm dev to apply it safely.\n",
-                );
-              },
-            },
-          ]
-        : []),
       tailwindcss(),
       reactRouter(),
       babel({ presets: [reactCompilerPreset()] }),
@@ -143,7 +129,10 @@ export default defineConfig(({ command }) => {
         bundle: { command: "vp pack", dependsOn: ["build"] },
         // Never cached: Vite Task does not see the files TypeScript 7's native tsc reads, so a cached
         // pass would hide new errors.
-        typecheck: { command: "react-router typegen && tsc", cache: false },
+        typecheck: {
+          command: "react-router typegen && tsc && tsc -p server/tests/tsconfig.json",
+          cache: false,
+        },
         // Never cached: each run builds or starts a fresh executable, and Vite Task's file tracking
         // around the started executable keeps it from serving.
         package: { command: "node scripts/package.ts", dependsOn: ["build"], cache: false },

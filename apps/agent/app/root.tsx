@@ -61,7 +61,7 @@ export default function App() {
             className="fixed inset-x-0 top-0 z-100 border-b border-warning/40 bg-background px-4 py-2 text-center text-sm text-foreground shadow-sm"
             role="alert"
           >
-            에이전트 코드가 변경되어 새 작업을 차단했어요. 터미널에서 개발 서버를 다시 시작하세요.
+            서버 연결이 변경되었어요. 페이지를 새로고침한 뒤 작업을 이어가세요.
           </div>
         )}
         <OverlayProvider>

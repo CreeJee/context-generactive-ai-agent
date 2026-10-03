@@ -28,9 +28,34 @@ const observeBackendRestart = async (response: Response) => {
   return response;
 };
 
-/** Every browser request, including the chat SSE transport, reports a stale development backend. */
-export const appFetch: typeof fetch = async (...arguments_) =>
-  observeBackendRestart(await fetch(...arguments_));
+/** Pin requests to the backend used to build this client; never retry a rejected mutation. */
+export function backendFetch(
+  buildId: string,
+  origin: string,
+  transport: typeof fetch,
+): typeof fetch {
+  return async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), origin);
+    if (buildId && url.origin === origin && url.pathname.startsWith("/api/")) {
+      const headers = new Headers(
+        init?.headers ?? (input instanceof Request ? input.headers : undefined),
+      );
+      headers.set("x-context-agent-build-id", buildId);
+      return observeBackendRestart(await transport(input, { ...init, headers }));
+    }
+    return observeBackendRestart(await transport(input, init));
+  };
+}
+
+/** Includes direct backend browsing and the chat SSE transport. */
+export const appFetch: typeof fetch = (...arguments_) =>
+  typeof window === "undefined"
+    ? fetch(...arguments_)
+    : backendFetch(
+        import.meta.env.VITE_CONTEXT_AGENT_BUILD_ID ?? "",
+        window.location.origin,
+        fetch,
+      )(...arguments_);
 
 export const subscribeBackendRestart = (listener: () => void) => {
   listeners.add(listener);

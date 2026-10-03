@@ -25,6 +25,7 @@ describe("slash command suggestions", () => {
         text: "/recall ",
         runnable: false,
       }),
+      expect.objectContaining({ kind: "command", label: "/report", runnable: true }),
       expect.objectContaining({
         kind: "skill",
         label: "/review",
@@ -55,7 +56,11 @@ describe("slash command suggestions", () => {
 describe("slash command parsing", () => {
   test("reads complete commands and explains incomplete ones", () => {
     expect(parseSlash("그냥 메시지", context)).toEqual({ kind: "not_command" });
-    expect(parseSlash("/new", context)).toEqual({ kind: "command", command: { kind: "new" } });
+    expect(parseSlash("/report", context)).toEqual({
+      kind: "command",
+      command: { kind: "report" },
+    });
+    expect(suggest("/report", context)[0]).toMatchObject({ runnable: true, label: "/report" });
     expect(parseSlash("/mode auto", context)).toEqual({
       kind: "command",
       command: { kind: "mode", mode: "auto" },

@@ -1035,6 +1035,123 @@ export const migrations: readonly string[] = [
     WHERE kind = 'tool_result';
   `,
   `
+  -- Dedicated local report conversations are bound to one source; repeat opens reuse the same report.
+  CREATE TABLE report_sessions (
+    report_session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    source_session_id TEXT NOT NULL UNIQUE REFERENCES sessions(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL REFERENCES projects(id),
+    created_at TEXT NOT NULL,
+    CHECK (report_session_id <> source_session_id)
+  );
+  `,
+  `
+  -- Secret-free local OAuth profiles. Tokens live only in per-profile OS keychain entries.
+  CREATE TABLE oauth_profiles (
+    id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL CHECK (provider IN ('openai', 'anthropic')),
+    label TEXT NOT NULL,
+    selected INTEGER NOT NULL DEFAULT 0 CHECK (selected IN (0, 1)),
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX oauth_profiles_provider ON oauth_profiles(provider, created_at);
+  CREATE UNIQUE INDEX oauth_profiles_one_selected ON oauth_profiles(provider) WHERE selected = 1;
+  `,
+  `
+  -- Explicit account removal must not be reversed by legacy auto-import on the next auth poll.
+  CREATE TABLE oauth_legacy_removed (
+    provider TEXT PRIMARY KEY CHECK (provider IN ('openai', 'anthropic')),
+    removed_at INTEGER NOT NULL
+  );
+  `,
+  `
+  -- Preserve workflow evidence as full immutable revisions, without guessing historical Goals.
+  -- Legacy rows contribute only their last known state; earlier versions cannot be reconstructed.
+  CREATE TABLE workflow_state_revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    state_json TEXT NOT NULL CHECK (json_valid(state_json)),
+    goal_version INTEGER,
+    plan_version INTEGER,
+    provenance TEXT NOT NULL CHECK (provenance IN ('legacy_current', 'recorded')),
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX workflow_state_revisions_session ON workflow_state_revisions(session_id, id);
+  CREATE TRIGGER workflow_state_revisions_no_update BEFORE UPDATE ON workflow_state_revisions
+    BEGIN SELECT RAISE(ABORT, 'workflow revisions are immutable'); END;
+  INSERT INTO workflow_state_revisions (session_id, state_json, goal_version, plan_version, provenance, created_at)
+    SELECT session_id, state_json,
+      json_extract(state_json, '$.goal.version'), json_extract(state_json, '$.plan.version'),
+      'legacy_current', updated_at
+    FROM session_workflows;
+  `,
+  `
+  -- Newly created Goals get a durable identity independent of their version or worker.
+  -- Existing sessions are deliberately unbound until an explicit verified transition.
+  CREATE TABLE workflow_goal_identities (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    goal_instance_id TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+  );
+  ALTER TABLE workflow_state_revisions ADD COLUMN goal_instance_id TEXT;
+  CREATE INDEX workflow_revisions_goal ON workflow_state_revisions(goal_instance_id, id);
+  `,
+  `
+  -- A run's Goal/Plan identity is immutable even if the current workflow later changes.
+  -- Old runs remain unbound; only newly authorized Goals may be bound by the owner.
+  CREATE TABLE workflow_run_bindings (
+    run_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    goal_instance_id TEXT NOT NULL REFERENCES workflow_goal_identities(goal_instance_id),
+    goal_version INTEGER NOT NULL CHECK (goal_version > 0),
+    plan_version INTEGER,
+    workflow_revision_id INTEGER NOT NULL REFERENCES workflow_state_revisions(id),
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX workflow_run_bindings_session ON workflow_run_bindings(session_id, run_id);
+  CREATE TRIGGER workflow_run_bindings_no_update BEFORE UPDATE ON workflow_run_bindings
+    BEGIN SELECT RAISE(ABORT, 'run binding is immutable'); END;
+  `,
+  `
+  -- Owner-only receipt log for bound run output. Legacy in-memory SSE is not backfilled.
+  CREATE TABLE workflow_run_events (
+    cursor INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL REFERENCES workflow_run_bindings(run_id) ON DELETE CASCADE,
+    event_key TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('chunk', 'run_error', 'run_completed')),
+    payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+    created_at TEXT NOT NULL,
+    UNIQUE (run_id, event_key)
+  );
+  CREATE INDEX workflow_run_events_replay ON workflow_run_events(run_id, cursor);
+  CREATE TRIGGER workflow_run_events_no_update BEFORE UPDATE ON workflow_run_events
+    BEGIN SELECT RAISE(ABORT, 'run event is immutable'); END;
+  `,
+  `
+  -- Earlier owner writes are checked before tightening the insert boundary. Never silently
+  -- relabel or discard a bad binding: a failed migration leaves the old DB intact.
+  CREATE TEMP TABLE workflow_binding_check (valid INTEGER NOT NULL CHECK (valid = 1));
+  INSERT INTO workflow_binding_check (valid)
+    SELECT 0 FROM workflow_run_bindings b
+    LEFT JOIN workflow_goal_identities g
+      ON g.session_id = b.session_id AND g.goal_instance_id = b.goal_instance_id
+    LEFT JOIN workflow_state_revisions r
+      ON r.id = b.workflow_revision_id AND r.session_id = b.session_id
+      AND r.goal_instance_id = b.goal_instance_id AND r.goal_version = b.goal_version
+      AND r.plan_version IS b.plan_version
+    WHERE g.session_id IS NULL OR r.id IS NULL;
+  DROP TABLE workflow_binding_check;
+  CREATE TRIGGER workflow_run_bindings_owner_insert BEFORE INSERT ON workflow_run_bindings
+    WHEN NOT EXISTS (
+      SELECT 1 FROM workflow_goal_identities g
+      JOIN workflow_state_revisions r
+        ON r.id = NEW.workflow_revision_id AND r.session_id = NEW.session_id
+        AND r.goal_instance_id = NEW.goal_instance_id AND r.goal_version = NEW.goal_version
+        AND r.plan_version IS NEW.plan_version
+      WHERE g.session_id = NEW.session_id AND g.goal_instance_id = NEW.goal_instance_id
+    )
+    BEGIN SELECT RAISE(ABORT, 'run binding session mismatch'); END;
+  `,
+  `
   -- Per-storage, resumable semantic repairs. Original nodes are never deleted or rewritten.
   CREATE TABLE memory_graph_maintenance (
     version INTEGER PRIMARY KEY,
@@ -1080,4 +1197,135 @@ export const migrations: readonly string[] = [
     PRIMARY KEY (node_seq, embedder)
   );
   `,
+  `
+  -- A dispatch is reserved once in the central DB before the owner issues an ephemeral worker
+  -- capability. Neither worker death nor owner restart may silently dispatch the same run again.
+  CREATE TABLE workflow_worker_dispatches (
+    run_id TEXT PRIMARY KEY REFERENCES workflow_run_bindings(run_id) ON DELETE CASCADE,
+    generation TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE TRIGGER workflow_worker_dispatches_no_update BEFORE UPDATE ON workflow_worker_dispatches
+    BEGIN SELECT RAISE(ABORT, 'worker dispatch is immutable'); END;
+  `,
+  `
+  -- Owner-only operation receipts. No legacy backfill: an old run has no provable reservation.
+  -- Deploy this schema before using the durable adapter. Roll back code only with a compatible
+  -- build; older builds reject the newer user_version. Never drop receipts or lower user_version
+  -- to resume uncertain effects. Restore a pre-upgrade backup only in an offline, reconciled DB.
+  CREATE TABLE owner_rpc_operations (
+    run_id TEXT NOT NULL REFERENCES workflow_run_bindings(run_id),
+    run_key TEXT NOT NULL,
+    operation_id INTEGER NOT NULL CHECK (operation_id > 0 AND operation_id <= 9007199254740991),
+    fingerprint TEXT NOT NULL,
+    side_effect INTEGER NOT NULL CHECK (side_effect IN (0, 1)),
+    reply_json TEXT NOT NULL CHECK (json_valid(reply_json)),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'succeeded', 'uncertain', 'rejected')),
+    PRIMARY KEY (run_id, operation_id)
+  );
+  CREATE INDEX owner_rpc_effects ON owner_rpc_operations(run_id, side_effect, status);
+  `,
+  `
+  -- Immutable catalog plus the unchanged, single-current legacy reader table.
+  -- Run bindings keep every column/receipt; only their FK target changes.
+  CREATE TABLE workflow_goal_instances (
+    goal_instance_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL
+  );
+  INSERT INTO workflow_goal_instances (goal_instance_id, session_id, created_at)
+    SELECT goal_instance_id, session_id, created_at FROM workflow_goal_identities;
+  CREATE TRIGGER workflow_goal_instances_no_update BEFORE UPDATE ON workflow_goal_instances
+    BEGIN SELECT RAISE(ABORT, 'goal instance is immutable'); END;
+  CREATE TRIGGER workflow_goal_instances_no_delete BEFORE DELETE ON workflow_goal_instances
+    BEGIN SELECT RAISE(ABORT, 'goal instance is immutable'); END;
+  CREATE TRIGGER workflow_goal_identity_catalog AFTER INSERT ON workflow_goal_identities
+    BEGIN INSERT INTO workflow_goal_instances (goal_instance_id, session_id, created_at)
+      VALUES (NEW.goal_instance_id, NEW.session_id, NEW.created_at); END;
+  CREATE TRIGGER workflow_goal_identity_owner_update BEFORE UPDATE ON workflow_goal_identities
+    WHEN NEW.session_id <> OLD.session_id OR NOT EXISTS (
+      SELECT 1 FROM workflow_goal_instances g
+      WHERE g.goal_instance_id = NEW.goal_instance_id AND g.session_id = NEW.session_id
+        AND g.created_at = NEW.created_at
+    )
+    BEGIN SELECT RAISE(ABORT, 'goal pointer session mismatch'); END;
+
+  CREATE TABLE workflow_run_bindings_copy (
+    run_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    goal_instance_id TEXT NOT NULL REFERENCES workflow_goal_instances(goal_instance_id),
+    goal_version INTEGER NOT NULL CHECK (goal_version > 0),
+    plan_version INTEGER,
+    workflow_revision_id INTEGER NOT NULL REFERENCES workflow_state_revisions(id),
+    created_at TEXT NOT NULL
+  );
+  INSERT INTO workflow_run_bindings_copy SELECT * FROM workflow_run_bindings;
+  DROP TABLE workflow_run_bindings;
+  ALTER TABLE workflow_run_bindings_copy RENAME TO workflow_run_bindings;
+  CREATE INDEX workflow_run_bindings_session ON workflow_run_bindings(session_id, run_id);
+  CREATE TRIGGER workflow_run_bindings_no_update BEFORE UPDATE ON workflow_run_bindings
+    BEGIN SELECT RAISE(ABORT, 'run binding is immutable'); END;
+  CREATE TRIGGER workflow_run_bindings_owner_insert BEFORE INSERT ON workflow_run_bindings
+    WHEN NOT EXISTS (
+      SELECT 1 FROM workflow_goal_identities g
+      JOIN workflow_goal_instances i
+        ON i.goal_instance_id = g.goal_instance_id AND i.session_id = g.session_id
+      JOIN workflow_state_revisions r
+        ON r.id = NEW.workflow_revision_id AND r.session_id = NEW.session_id
+        AND r.goal_instance_id = NEW.goal_instance_id AND r.goal_version = NEW.goal_version
+        AND r.plan_version IS NEW.plan_version
+      WHERE g.session_id = NEW.session_id AND g.goal_instance_id = NEW.goal_instance_id
+    )
+    BEGIN SELECT RAISE(ABORT, 'run binding session mismatch'); END;
+  `,
+  `
+  -- Source pins are separate from per-run dispatch generations. No legacy backfill:
+  -- a historical dispatch cannot prove which execution assets it loaded.
+  -- Rollback disables new admission without deleting source/effect evidence; compatible
+  -- readers retain this table and never lower user_version to restart an uncertain run.
+  CREATE TABLE workflow_goal_worker_generations (
+    goal_instance_id TEXT PRIMARY KEY REFERENCES workflow_goal_instances(goal_instance_id),
+    source_generation TEXT NOT NULL UNIQUE CHECK (length(source_generation) > 0),
+    manifest_hash TEXT NOT NULL CHECK (length(manifest_hash) = 64 AND manifest_hash NOT GLOB '*[^0-9a-f]*'),
+    worker_url TEXT NOT NULL CHECK (substr(worker_url, 1, 5) = 'file:'),
+    created_at TEXT NOT NULL
+  );
+  CREATE TRIGGER workflow_goal_worker_generations_no_update BEFORE UPDATE ON workflow_goal_worker_generations
+    BEGIN SELECT RAISE(ABORT, 'goal source generation is immutable'); END;
+  CREATE TRIGGER workflow_goal_worker_generations_no_delete BEFORE DELETE ON workflow_goal_worker_generations
+    BEGIN SELECT RAISE(ABORT, 'goal source generation is immutable'); END;
+  `,
+  `
+  -- Additive owner-generated native registrations. No SDK-only pin backfill.
+  -- Rollback retains evidence; disabling native execution never adopts replacement code.
+  CREATE TABLE workflow_goal_native_artifacts (
+    goal_instance_id TEXT PRIMARY KEY REFERENCES workflow_goal_instances(goal_instance_id),
+    artifact_url TEXT NOT NULL,
+    artifact_hash TEXT NOT NULL,
+    contract_version TEXT NOT NULL,
+    source_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE TRIGGER workflow_goal_native_artifacts_no_update BEFORE UPDATE ON workflow_goal_native_artifacts
+    BEGIN SELECT RAISE(ABORT, 'native registration is immutable'); END;
+  CREATE TRIGGER workflow_goal_native_artifacts_no_delete BEFORE DELETE ON workflow_goal_native_artifacts
+    BEGIN SELECT RAISE(ABORT, 'native registration is immutable'); END;
+  `,
 ];
+
+/** Only this startup migration may rebuild a referenced table with FK checks suspended.
+ * Older steps remain ordinary SQL transactions; never infer special handling from SQL text.
+ */
+export const goalHistoryMigration = {
+  version: 42,
+  kind: "goal-history-binding-fk-rebuild" as const,
+  preservedTables: [
+    "workflow_goal_identities",
+    "workflow_state_revisions",
+    "session_workflows",
+    "workflow_run_bindings",
+    "workflow_run_events",
+    "workflow_worker_dispatches",
+    "owner_rpc_operations",
+  ],
+};

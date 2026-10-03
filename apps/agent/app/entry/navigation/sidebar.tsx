@@ -165,7 +165,7 @@ export function AccountSection({
           <div className="flex flex-col gap-2">
             {auth.status === "error" && (
               <Alert variant="destructive" className="min-w-0">
-                <AlertDescription className="min-w-0 break-words">
+                <AlertDescription className="min-w-0 wrap-break-word">
                   {auth.message}
                   {(auth.code || auth.httpStatus || auth.providerCode) && (
                     <Collapsible className="mt-2 text-2xs">
@@ -268,7 +268,7 @@ const permissionModes = [
   { value: "full", label: "전체 권한 (full)" },
 ] satisfies ReadonlyArray<{ value: PermissionMode; label: string }>;
 
-const projectSectionOpenAtom = atomWithStorage("context-agent-project-section-open", true);
+const projectSectionOpenAtom = atomWithStorage("context-agent-project-section-open-v2", false);
 
 export function ProjectSection({
   projects,

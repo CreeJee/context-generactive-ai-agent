@@ -7,7 +7,7 @@ import { afterEach, describe, expect, test } from "vite-plus/test";
 import { commandEnvironment, runCommand, stopAllCommands } from "../src/shell/run.ts";
 import { resolveShellWorkingDirectory } from "../src/tools/approved.ts";
 
-const holdStdio = fileURLToPath(new URL("./support/hold-stdio.mjs", import.meta.url));
+const holdStdio = fileURLToPath(new URL("./support/hold-stdio.ts", import.meta.url));
 const directories: string[] = [];
 afterEach(() => {
   for (const directory of directories.splice(0))

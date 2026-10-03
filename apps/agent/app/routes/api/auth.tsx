@@ -1,5 +1,11 @@
 import { Effect, Result, Option, Schema } from "effect";
-import { AppEvents, ProviderId, ProviderRegistry } from "memory-agent";
+import {
+  AppEvents,
+  Database,
+  importLegacyOAuthProfile,
+  ProviderId,
+  ProviderRegistry,
+} from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/auth";
@@ -34,6 +40,10 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   const response = Effect.gen(function* () {
     const configured = yield* (yield* ProviderRegistry).get(provider);
+    const { sqlite } = yield* Database;
+    // Migrate when the sidebar first checks this provider. If the vault is unavailable,
+    // keep the legacy connection usable; the next status request can retry the copy.
+    yield* Effect.promise(() => importLegacyOAuthProfile(sqlite, provider).catch(() => null));
     return Response.json(browserState(yield* configured.auth.status));
   }).pipe(
     Effect.catchTags({

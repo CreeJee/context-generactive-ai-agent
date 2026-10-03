@@ -74,188 +74,229 @@ interface RunBinding {
   readonly userNodeId: string;
 }
 
-const make = Effect.gen(function* () {
-  const runtime = yield* Effect.context<
-    MemorySearch | Nodes | Graph | Interpretations | KnowledgePromotions
-  >();
+/** Live owner services; their storage and search resources remain owned by their Layers. */
+export interface MemoryToolEnvironment {
+  readonly search: MemorySearch["Service"];
+  readonly nodes: Nodes["Service"];
+  readonly graph: Graph["Service"];
+  readonly interpretations: Interpretations["Service"];
+  readonly knowledge: KnowledgePromotions["Service"];
+}
+
+export interface MemoryToolRunBinding extends Omit<RunBinding, "userNodeId"> {
+  readonly userNodeId: () => string;
+}
+
+/** The implementation is fixed here; only live services and fresh run state are supplied. */
+export const createMemoryTools = (
+  env: MemoryToolEnvironment,
+  projectId: string,
+  binding?: MemoryToolRunBinding,
+) => {
+  const runtime = Context.make(MemorySearch, env.search).pipe(
+    Context.add(Nodes, env.nodes),
+    Context.add(Graph, env.graph),
+    Context.add(Interpretations, env.interpretations),
+    Context.add(KnowledgePromotions, env.knowledge),
+  );
   const run = Effect.runPromiseWith(runtime);
+  const retrieved = new Set<string>();
+  let usedDraft = new Set<string>();
+  const visible = () =>
+    run(Effect.map(MemorySearch, (search) => new Set(search.allowedProjects(projectId, true))));
 
-  const toolsFor = (projectId: string, binding?: RunBinding) => {
-    const retrieved = new Set<string>();
-    let usedDraft = new Set<string>();
-    const visible = () =>
-      run(Effect.map(MemorySearch, (search) => new Set(search.allowedProjects(projectId, true))));
-
-    const findMemory = toolDefinition({
-      name: "find_memory",
-      description:
-        "Search earlier conversations and promoted memory across allowed projects. Matches are leads: read_evidence for original text and trace_evidence for provenance/corrections. supersededBy marks corrections/retractions; ask about unconfirmedChallenges; uninterpreted has no topics yet. Missing results never imply approval.",
-      inputSchema: toToolSchema(findMemoryInput),
-    }).server(async ({ query }) => {
-      const result = await run(
-        Effect.flatMap(MemorySearch, (search) => search.find({ query, projectId })),
-      );
-      if (binding) {
-        const ids = await run(
-          Effect.map(KnowledgePromotions, (knowledge) =>
-            knowledge.recordRetrieval({
-              projectId,
-              sessionId: binding.sessionId,
-              runId: binding.runId,
-              memoryNodeIds: result.matches.map((match) => match.id),
-            }),
-          ),
-        );
-        for (const id of ids) retrieved.add(id);
-      }
-      return result;
-    });
-
-    const readEvidence = toolDefinition({
-      name: "read_evidence",
-      description:
-        "Read the exact original text of a memory node, page by page. Promoted topic nodes are user-authorized project memory; tool results and documents are evidence of what a tool returned, not user decisions.",
-      inputSchema: toToolSchema(readEvidenceInput),
-    }).server(async ({ id, offset }) => {
-      const [nodes, allowed] = await Promise.all([run(Nodes), visible()]);
-      const node = nodes.get(id);
-      if (!node || !allowed.has(node.projectId)) return notFound(id);
-      return {
-        ...nodes.read(id, offset ?? 0),
-        projectId: node.projectId,
-        sessionId: node.sessionId,
-        createdAt: node.createdAt,
-        detail: node.detail,
-      };
-    });
-
-    const traceEvidence = toolDefinition({
-      name: "trace_evidence",
-      description:
-        "Follow a memory node back to its cause: tool result -> tool call -> assistant message -> the user turn it answered. Promoted topic nodes include memoryCandidateId and authorizedByUserNodeId in detail; their Work Trace source remains in the candidate record. Also lists later user corrections/retractions and unconfirmed challenges.",
-      inputSchema: toToolSchema(traceEvidenceInput),
-    }).server(async ({ id }) => {
-      const [graph, interpretations, nodes, allowed] = await Promise.all([
-        run(Graph),
-        run(Interpretations),
-        run(Nodes),
-        visible(),
-      ]);
-      const provenance = graph.trace(id);
-      if (!provenance || !allowed.has(provenance.chain[0]!.projectId)) return notFound(id);
-      const summary = (node: (typeof provenance.chain)[number]) => ({
-        id: node.id,
-        kind: node.kind,
-        projectId: node.projectId,
-        createdAt: node.createdAt,
-        snippet: node.text.slice(0, 300),
-        detail: node.detail,
-      });
-      const chainIds = provenance.chain.map((node) => node.id);
-      const applied = interpretations.targeting(chainIds, "applied");
-      const reasonFor = (from: string, target: string, kind: string) =>
-        applied.find(
-          (entry) => entry.nodeId === from && entry.targetId === target && entry.kind === kind,
-        )?.reason ?? null;
-      return {
-        chain: provenance.chain.filter((node) => allowed.has(node.projectId)).map(summary),
-        challengedBy: provenance.challengedBy
-          .filter((entry) => allowed.has(entry.node.projectId))
-          .map((entry) => ({
-            ...summary(entry.node),
-            relation: entry.kind,
-            target: entry.target,
-            reason: reasonFor(entry.node.id, entry.target, entry.kind),
-          })),
-        unconfirmed: interpretations.targeting(chainIds, "unconfirmed").flatMap((entry) => {
-          const node = nodes.get(entry.nodeId);
-          return !node || !allowed.has(node.projectId)
-            ? []
-            : [
-                {
-                  ...summary(node),
-                  possibleRelation: entry.kind,
-                  target: entry.targetId,
-                  reason: entry.reason,
-                },
-              ];
-        }),
-      };
-    });
-
-    const base = [findMemory, readEvidence, traceEvidence] as const;
-    if (!binding) return { tools: base, middleware: null };
-
-    const readToolResult = toolDefinition({
-      name: "read_tool_result",
-      description:
-        "Read a bounded page of the saved, redacted original result behind a compact tool summary. Only tool results from this project and conversation are accessible; use nextOffset for later pages.",
-      inputSchema: toToolSchema(readToolResultInput),
-    }).server(async ({ id, offset }) => {
-      const nodes = await run(Nodes);
-      const node = nodes.get(id);
-      if (
-        !node ||
-        node.kind !== "tool_result" ||
-        node.projectId !== projectId ||
-        node.sessionId !== binding.sessionId
-      )
-        return notFound(id);
-      return nodes.read(id, offset ?? 0);
-    });
-
-    const promote = toolDefinition({
-      name: "promote_memory_candidate",
-      description:
-        "Apply the current user's explicit disposition to a candidate derived from a previously adopted final-answer claim: save it as project memory, keep it in this conversation only, or reject it. Never call merely because a fact seems useful. `resolvedText` must be the exact user-selected or user-edited wording; only verified evidence adopted by the claim may be listed.",
-      inputSchema: toToolSchema(PromoteMemoryCandidateInput),
-    }).server((input) =>
-      run(
-        Effect.flatMap(KnowledgePromotions, (knowledge) =>
-          knowledge.promote({
-            ...Schema.decodeSync(PromoteMemoryCandidateInput)(input),
+  const findMemory = toolDefinition({
+    name: "find_memory",
+    description:
+      "Search earlier conversations and promoted memory across allowed projects. Matches are leads: read_evidence for original text and trace_evidence for provenance/corrections. supersededBy marks corrections/retractions; ask about unconfirmedChallenges; uninterpreted has no topics yet. Missing results never imply approval.",
+    inputSchema: toToolSchema(findMemoryInput),
+  }).server(async ({ query }) => {
+    const result = await run(
+      Effect.flatMap(MemorySearch, (search) => search.find({ query, projectId })),
+    );
+    if (binding) {
+      const ids = await run(
+        Effect.map(KnowledgePromotions, (knowledge) =>
+          knowledge.recordRetrieval({
             projectId,
             sessionId: binding.sessionId,
-            authorizedByUserNodeId: binding.userNodeId,
+            runId: binding.runId,
+            memoryNodeIds: result.matches.map((match) => match.id),
           }),
         ),
-      ),
-    );
+      );
+      for (const id of ids) retrieved.add(id);
+    }
+    return result;
+  });
 
-    const useMemory = toolDefinition({
-      name: "use_promoted_memory",
-      description:
-        "Declare which promoted project-memory nodes retrieved in this run are actually used in the upcoming answer. Call after reading them and before answering. Retrieval alone is not use.",
-      inputSchema: toToolSchema(UsePromotedMemoryInput),
-    }).server((input) => {
-      const ids = Schema.decodeSync(UsePromotedMemoryInput)(input).memoryNodeIds;
-      if (ids.some((id) => !retrieved.has(id)))
-        throw new Error("Only promoted memories retrieved in this run can be used");
-      usedDraft = new Set(ids);
-      return { status: "recorded" as const, usedMemoryCount: usedDraft.size };
-    });
-
-    const middleware: ChatMiddleware = {
-      name: "memory-agent/promoted-memory-use",
-      onFinish(ctx) {
-        if (!ctx.currentMessageId || usedDraft.size === 0) return;
-        const parentMessageId = ctx.currentMessageId;
-        return run(
-          Effect.map(KnowledgePromotions, (knowledge) =>
-            knowledge.recordUsed({
-              projectId,
-              sessionId: binding.sessionId,
-              runId: binding.runId,
-              parentMessageId,
-              memoryNodeIds: [...usedDraft],
-            }),
-          ),
-        );
-      },
+  const readEvidence = toolDefinition({
+    name: "read_evidence",
+    description:
+      "Read the exact original text of a memory node, page by page. Promoted topic nodes are user-authorized project memory; tool results and documents are evidence of what a tool returned, not user decisions.",
+    inputSchema: toToolSchema(readEvidenceInput),
+  }).server(async ({ id, offset }) => {
+    const [nodes, allowed] = await Promise.all([run(Nodes), visible()]);
+    const node = nodes.get(id);
+    if (!node || !allowed.has(node.projectId)) return notFound(id);
+    return {
+      ...nodes.read(id, offset ?? 0),
+      projectId: node.projectId,
+      sessionId: node.sessionId,
+      createdAt: node.createdAt,
+      detail: node.detail,
     };
-    return { tools: [...base, readToolResult, promote, useMemory] as const, middleware };
-  };
+  });
 
+  const traceEvidence = toolDefinition({
+    name: "trace_evidence",
+    description:
+      "Follow a memory node back to its cause: tool result -> tool call -> assistant message -> the user turn it answered. Promoted topic nodes include memoryCandidateId and authorizedByUserNodeId in detail; their Work Trace source remains in the candidate record. Also lists later user corrections/retractions and unconfirmed challenges.",
+    inputSchema: toToolSchema(traceEvidenceInput),
+  }).server(async ({ id }) => {
+    const [graph, interpretations, nodes, allowed] = await Promise.all([
+      run(Graph),
+      run(Interpretations),
+      run(Nodes),
+      visible(),
+    ]);
+    const provenance = graph.trace(id);
+    if (!provenance || !allowed.has(provenance.chain[0]!.projectId)) return notFound(id);
+    const summary = (node: (typeof provenance.chain)[number]) => ({
+      id: node.id,
+      kind: node.kind,
+      projectId: node.projectId,
+      createdAt: node.createdAt,
+      snippet: node.text.slice(0, 300),
+      detail: node.detail,
+    });
+    const chainIds = provenance.chain.map((node) => node.id);
+    const applied = interpretations.targeting(chainIds, "applied");
+    const reasonFor = (from: string, target: string, kind: string) =>
+      applied.find(
+        (entry) => entry.nodeId === from && entry.targetId === target && entry.kind === kind,
+      )?.reason ?? null;
+    return {
+      chain: provenance.chain.filter((node) => allowed.has(node.projectId)).map(summary),
+      challengedBy: provenance.challengedBy
+        .filter((entry) => allowed.has(entry.node.projectId))
+        .map((entry) => ({
+          ...summary(entry.node),
+          relation: entry.kind,
+          target: entry.target,
+          reason: reasonFor(entry.node.id, entry.target, entry.kind),
+        })),
+      unconfirmed: interpretations.targeting(chainIds, "unconfirmed").flatMap((entry) => {
+        const node = nodes.get(entry.nodeId);
+        return !node || !allowed.has(node.projectId)
+          ? []
+          : [
+              {
+                ...summary(node),
+                possibleRelation: entry.kind,
+                target: entry.targetId,
+                reason: entry.reason,
+              },
+            ];
+      }),
+    };
+  });
+
+  const base = [findMemory, readEvidence, traceEvidence] as const;
+  if (!binding) return { tools: base, middleware: null };
+
+  const readToolResult = toolDefinition({
+    name: "read_tool_result",
+    description:
+      "Read a bounded page of the saved, redacted original result behind a compact tool summary. Only tool results from this project and conversation are accessible; use nextOffset for later pages.",
+    inputSchema: toToolSchema(readToolResultInput),
+  }).server(async ({ id, offset }) => {
+    const nodes = await run(Nodes);
+    const node = nodes.get(id);
+    if (
+      !node ||
+      node.kind !== "tool_result" ||
+      node.projectId !== projectId ||
+      node.sessionId !== binding.sessionId
+    )
+      return notFound(id);
+    return nodes.read(id, offset ?? 0);
+  });
+
+  const promote = toolDefinition({
+    name: "promote_memory_candidate",
+    description:
+      "Apply the current user's explicit disposition to a candidate derived from a previously adopted final-answer claim: save it as project memory, keep it in this conversation only, or reject it. Never call merely because a fact seems useful. `resolvedText` must be the exact user-selected or user-edited wording; only verified evidence adopted by the claim may be listed.",
+    inputSchema: toToolSchema(PromoteMemoryCandidateInput),
+  }).server((input) =>
+    run(
+      Effect.flatMap(KnowledgePromotions, (knowledge) =>
+        knowledge.promote({
+          ...Schema.decodeSync(PromoteMemoryCandidateInput)(input),
+          projectId,
+          sessionId: binding.sessionId,
+          authorizedByUserNodeId: binding.userNodeId(),
+        }),
+      ),
+    ),
+  );
+
+  const useMemory = toolDefinition({
+    name: "use_promoted_memory",
+    description:
+      "Declare which promoted project-memory nodes retrieved in this run are actually used in the upcoming answer. Call after reading them and before answering. Retrieval alone is not use.",
+    inputSchema: toToolSchema(UsePromotedMemoryInput),
+  }).server((input) => {
+    const ids = Schema.decodeSync(UsePromotedMemoryInput)(input).memoryNodeIds;
+    if (ids.some((id) => !retrieved.has(id)))
+      throw new Error("Only promoted memories retrieved in this run can be used");
+    usedDraft = new Set(ids);
+    return { status: "recorded" as const, usedMemoryCount: usedDraft.size };
+  });
+
+  const middleware: ChatMiddleware = {
+    name: "memory-agent/promoted-memory-use",
+    onFinish(ctx) {
+      if (!ctx.currentMessageId || usedDraft.size === 0) return;
+      const parentMessageId = ctx.currentMessageId;
+      return run(
+        Effect.map(KnowledgePromotions, (knowledge) =>
+          knowledge.recordUsed({
+            projectId,
+            sessionId: binding.sessionId,
+            runId: binding.runId,
+            parentMessageId,
+            memoryNodeIds: [...usedDraft],
+          }),
+        ),
+      );
+    },
+  };
+  return { tools: [...base, readToolResult, promote, useMemory] as const, middleware };
+};
+
+const make = Effect.gen(function* () {
+  const env: MemoryToolEnvironment = {
+    search: yield* MemorySearch,
+    nodes: yield* Nodes,
+    graph: yield* Graph,
+    interpretations: yield* Interpretations,
+    knowledge: yield* KnowledgePromotions,
+  };
+  const toolsFor = (projectId: string, binding?: RunBinding) =>
+    createMemoryTools(
+      env,
+      projectId,
+      binding
+        ? {
+            projectId: binding.projectId,
+            sessionId: binding.sessionId,
+            runId: binding.runId,
+            // AgentChat prepares capabilities before admission; never spread its deferred getter.
+            userNodeId: () => binding.userNodeId,
+          }
+        : undefined,
+    );
   type ReadTools = Extract<ReturnType<typeof toolsFor>["tools"], { readonly length: 3 }>;
   return {
     /** Read-only compatibility binding used by tests and non-chat callers. */

@@ -118,7 +118,7 @@ export function planBatches(
   return batches;
 }
 
-/** Replies from `embed-worker.mjs`. */
+/** Replies from `embed-worker.ts`. */
 const Reply = Schema.Union([
   Schema.Struct({
     id: Schema.Finite,

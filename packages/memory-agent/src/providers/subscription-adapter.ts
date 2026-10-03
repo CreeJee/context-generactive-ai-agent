@@ -24,6 +24,7 @@ import {
 import type { ModelSelection } from "./contracts.ts";
 
 export interface StreamingOAuthClient {
+  readonly releaseRun?: () => void;
   stream(body: string, signal?: AbortSignal): AsyncGenerator<NormalizedStreamEvent>;
 }
 

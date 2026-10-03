@@ -6,15 +6,24 @@ import {
   type ProviderId,
 } from "./contracts.ts";
 
+import type { SubscriptionRuntimeDependencies } from "./subscription-runtime.ts";
+
+export type SubscriptionDependencyResolver = (
+  provider: ProviderId,
+) => Effect.Effect<SubscriptionRuntimeDependencies, ProviderUnavailable>;
+
 export interface ProviderRegistryApi {
   readonly providers: ReadonlyArray<ProviderId>;
   readonly get: (provider: ProviderId) => Effect.Effect<ProviderConfiguration, ProviderUnavailable>;
   readonly runtime: (provider: ProviderId) => Effect.Effect<AgentModelRuntime, ProviderUnavailable>;
+  /** Central dependencies only: resolving does not select an account or acquire a run lease. */
+  readonly subscriptionDependencies?: SubscriptionDependencyResolver;
 }
 
 export const providerRegistryFrom = (
   configurations: ReadonlyArray<ProviderConfiguration>,
   runtimes: ReadonlyArray<AgentModelRuntime> = [],
+  subscriptionDependencies?: SubscriptionDependencyResolver,
 ): ProviderRegistryApi => {
   const byProvider = new Map(
     configurations.map((configuration) => [configuration.provider, configuration]),
@@ -22,6 +31,10 @@ export const providerRegistryFrom = (
   const runtimeByProvider = new Map(runtimes.map((runtime) => [runtime.provider, runtime]));
   return {
     providers: [...byProvider.keys()],
+    subscriptionDependencies: (provider) =>
+      byProvider.has(provider) && subscriptionDependencies
+        ? subscriptionDependencies(provider)
+        : Effect.fail(new ProviderUnavailable({ provider })),
     get: (provider) => {
       const configuration = byProvider.get(provider);
       return configuration
@@ -41,7 +54,11 @@ export class ProviderRegistry extends Context.Service<ProviderRegistry, Provider
   static layer(
     configurations: ReadonlyArray<ProviderConfiguration>,
     runtimes?: ReadonlyArray<AgentModelRuntime>,
+    subscriptionDependencies?: SubscriptionDependencyResolver,
   ) {
-    return Layer.succeed(ProviderRegistry, providerRegistryFrom(configurations, runtimes));
+    return Layer.succeed(
+      ProviderRegistry,
+      providerRegistryFrom(configurations, runtimes, subscriptionDependencies),
+    );
   }
 }

@@ -27,6 +27,45 @@ function chatRequest(text: string) {
 const Count = Schema.Struct({ count: Schema.Finite });
 
 describe("AgentChat.handle", () => {
+  test("releases a pinned account only after the durable SSE stream finishes", async () => {
+    const context = await testRuntime({ testProvider: {} });
+    await context.provider!.select(context.runtime);
+    let released = 0;
+    Object.assign(context.provider!.adapter, {
+      releaseRun: () => {
+        released++;
+      },
+    });
+    const response = await context.runtime.runPromise(
+      Effect.flatMap(AgentChat, (agent) => agent.handle(chatRequest("hello"), context.session.id)),
+    );
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(released).toBe(1);
+  });
+
+  test("releases a pinned account on early model mismatch before streaming", async () => {
+    const context = await testRuntime({ testProvider: {} });
+    await context.provider!.select(context.runtime);
+    await context.runtime.runPromise(
+      Effect.flatMap(GlobalConfig, (config) =>
+        config.update({ provider: "openai", model: "not-in-new-account", reasoningEffort: "low" }),
+      ),
+    );
+    let released = 0;
+    Object.assign(context.provider!.adapter, {
+      releaseRun: () => {
+        released++;
+      },
+    });
+    const response = await context.runtime.runPromise(
+      Effect.flatMap(AgentChat, (agent) => agent.handle(chatRequest("hello"), context.session.id)),
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "model_unavailable_for_account" });
+    expect(released).toBe(1);
+  });
+
   test("answers from memory through provider tools, records the run and indexes it", async () => {
     const context = await testRuntime({ testProvider: {} });
     const { runtime, project, session } = context;

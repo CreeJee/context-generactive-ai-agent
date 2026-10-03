@@ -7,6 +7,7 @@ export type SlashCommand =
   | { readonly kind: "mode"; readonly mode: PermissionMode }
   | { readonly kind: "model"; readonly model: string }
   | { readonly kind: "settings" }
+  | { readonly kind: "report" }
   | { readonly kind: "cancel" }
   /** Stops sending the model tool output it has already answered from. */
   | { readonly kind: "compact" }
@@ -61,6 +62,11 @@ export const commandSpecs: readonly CommandSpec[] = [
   { name: "mode", description: "권한 모드 바꾸기", argument: { kind: "choice", from: "modes" } },
   { name: "model", description: "모델 바꾸기", argument: { kind: "choice", from: "models" } },
   { name: "settings", description: "설정 열기", argument: { kind: "none" } },
+  {
+    name: "report",
+    description: "독립 문제 제보 화면 열기 (모델 호출 없음)",
+    argument: { kind: "none" },
+  },
   { name: "cancel", description: "답변 멈추기", argument: { kind: "none" } },
   { name: "compact", description: "이미 답한 도구 출력 비우기", argument: { kind: "none" } },
 ];
@@ -208,6 +214,8 @@ export function parseSlash(draft: string, context: SlashContext): SlashParse {
       return { kind: "command", command: { kind: "new" } };
     case "settings":
       return { kind: "command", command: { kind: "settings" } };
+    case "report":
+      return { kind: "command", command: { kind: "report" } };
     case "cancel":
       return { kind: "command", command: { kind: "cancel" } };
     case "compact":

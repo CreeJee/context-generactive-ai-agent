@@ -47,7 +47,7 @@ skills/
 
 앱 기본 skill은 `SKILL.md` 하나로 완결해야 합니다. 실행 파일에서는 저장 루트 아래에 풀리고 파일 도구가 저장 루트를 읽지 않아서, 옆에 둔 파일은 모델이 읽을 수 없습니다. 같은 이름의 공통 및 프로젝트 skill이 기본 skill을 덮어씁니다.
 
-네이티브 패키지(turbovec, `@napi-rs/keyring`, sharp)는 정적 import하지 않고 `runtime/resources.ts`의 `requireRuntime`으로 불러옵니다. 실행 파일(Node SEA)은 디스크 파일을 `import()`하지 못하고, 이 패키지들을 `CONTEXT_AGENT_RUNTIME` 폴더에 풀어 두기 때문입니다. 임베딩 모델(`@huggingface/transformers`)과 Kiwi는 worker thread에서 돌고, worker 스크립트(`embed-worker.mjs`, `kiwi-worker.mjs`)가 옆의 패키지를 직접 불러옵니다. 가져오기(`imports/worker.ts`)와 비밀 소급 정리의 탐지(`secrets/redact-worker.ts`)도 worker thread에서 돕니다. 이 둘은 TypeScript라 저장소에서는 그대로 돌고, 실행 파일에는 한 파일로 묶여 들어갑니다. 스크립트 위치는 `runtimeWorker`가 정합니다(저장소에서는 package exports, 실행 파일에서는 runtime 폴더).
+네이티브 패키지(turbovec, `@napi-rs/keyring`, sharp)는 정적 import하지 않고 `runtime/resources.ts`의 `requireRuntime`으로 불러옵니다. 실행 파일(Node SEA)은 디스크 파일을 `import()`하지 못하고, 이 패키지들을 `CONTEXT_AGENT_RUNTIME` 폴더에 풀어 두기 때문입니다. 임베딩 모델(`@huggingface/transformers`)과 Kiwi는 worker thread에서 돌고, worker 스크립트(`embed-worker.ts`, `kiwi-worker.ts`)가 옆의 패키지를 직접 불러옵니다. 가져오기(`imports/worker.ts`)와 비밀 소급 정리의 탐지(`secrets/redact-worker.ts`)도 worker thread에서 돕니다. 이 둘은 TypeScript라 저장소에서는 그대로 돌고, 실행 파일에는 한 파일로 묶여 들어갑니다. 스크립트 위치는 `runtimeWorker`가 정합니다(저장소에서는 package exports, 실행 파일에서는 runtime 폴더).
 
 서비스는 Effect `Context.Tag` + `Layer`로 만들고, 앱은 `ManagedRuntime` 하나로 씁니다.
 도구 입력 스키마는 Effect Schema이며 `toToolSchema`로 TanStack이 요구하는 Standard JSON Schema로 바꿉니다.
@@ -103,7 +103,7 @@ Claude Code(`~/.claude/projects/**/*.jsonl`)와 Codex CLI(`~/.codex/sessions/**/
   - 판정과 사용자 답은 `permission_reviews`에 쌓이고, tool result 노드 `detail.permission`에 근거로 남습니다.
 
 MCP 도구는 실행 중에 생기므로 브라우저가 정의를 모릅니다. 그래서 `ask` 모드에서도 `PermissionGate`(decider `user`)가 호출마다 `permission-review` interrupt로 묻고, `auto` 모드에서는 내장 승인 도구와 함께 분류 모델이 판정합니다.
-`McpServers`는 `<storage>/mcp.json`과 `<project>/.mcp.json`을 읽고, 사용자가 신뢰한 설정(fingerprint)만 시작합니다. 테스트는 `tests/mcp.test.ts`(가짜 stdio MCP 서버 `tests/support/fake-mcp-server.mjs`).
+`McpServers`는 `<storage>/mcp.json`과 `<project>/.mcp.json`을 읽고, 사용자가 신뢰한 설정(fingerprint)만 시작합니다. 테스트는 `tests/mcp.test.ts`(가짜 stdio MCP 서버 `tests/support/fake-mcp-server.ts`).
 
 `Subagents`는 자식을 부모와 같은 모델, 도구(서브에이전트 도구 제외)로 실행합니다. 자식의 승인 필요 호출은 부모 run을 멈추지 않고 `onBeforeToolCall`에서 기다리며, 페이지가 `AgentChat.approvals`/`answerApproval`(`RelayedApprovals`)로 보고 답합니다. 테스트는 `tests/subagents.test.ts`.
 
@@ -182,7 +182,7 @@ Zed 예시(`settings.json`):
 }
 ```
 
-설정 화면 "에이전트" 탭에서 신뢰하면 모델이 `delegate_to_agent`로 작업을 맡길 수 있고, `agent`를 지정해 만든 대화는 `ExternalAgentAdapter`로 그 에이전트와 직접 나눕니다(관련 기억 머리말, 답 노드에 `detail.externalAgent`). 에이전트는 자기 로그인(`codex login`)을 씁니다. 테스트는 `tests/external-agents.test.ts`(가짜 ACP 에이전트 `tests/support/fake-acp-agent.mjs`).
+설정 화면 "에이전트" 탭에서 신뢰하면 모델이 `delegate_to_agent`로 작업을 맡길 수 있고, `agent`를 지정해 만든 대화는 `ExternalAgentAdapter`로 그 에이전트와 직접 나눕니다(관련 기억 머리말, 답 노드에 `detail.externalAgent`). 에이전트는 자기 로그인(`codex login`)을 씁니다. 테스트는 `tests/external-agents.test.ts`(가짜 ACP 에이전트 `tests/support/fake-acp-agent.ts`).
 
 ## 개발
 
