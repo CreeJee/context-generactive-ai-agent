@@ -29,11 +29,7 @@ const Queued = Schema.Struct({
 const decodeQueued = Schema.decodeUnknownSync(Queued);
 
 async function until(condition: () => boolean, what: string) {
-  for (let attempt = 0; attempt < 300; attempt++) {
-    if (condition()) return;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error(`timed out waiting for ${what}`);
+  await expect.poll(condition, { message: what, timeout: 6_000, interval: 20 }).toBe(true);
 }
 
 function openTab(runtime: Runtime, sessionId: string, holder: string | null = null) {
@@ -301,8 +297,7 @@ describe("message queue", () => {
     const tab = openTab(context.runtime, context.session.id);
     void tab.client.sendMessage("please check files");
     await until(() => tab.client.getIsLoading(), "the run to start");
-    for (let attempt = 0; attempt < 50 && !(await context.running()); attempt++)
-      await new Promise((resolve) => setTimeout(resolve, 10));
+    await expect.poll(() => context.running(), { timeout: 1_000, interval: 20 }).toBeTruthy();
 
     const queued = await context.enqueue("look in the tests folder", "queue");
     expect(queued.status).toBe(201);

@@ -13,13 +13,14 @@ import { createServer, type Server } from "node:http";
 import { type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "vite-plus/test";
+import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { installArchive, npmIntegrity, type PinnedArchive } from "../src/runtime/archive.ts";
 import { requireRuntime } from "../src/runtime/resources.ts";
 import { tgz, type TarEntry } from "./support/tgz.ts";
 
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
+  vi.unstubAllEnvs();
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
@@ -65,10 +66,7 @@ describe("runtime packages", () => {
     const real = requireRuntime("turbovec").loadTurbovec();
     expect(real.VectorIndex).toBeTypeOf("function");
 
-    process.env.CONTEXT_AGENT_RUNTIME = runtime;
-    cleanups.push(() => {
-      Reflect.deleteProperty(process.env, "CONTEXT_AGENT_RUNTIME");
-    });
+    vi.stubEnv("CONTEXT_AGENT_RUNTIME", runtime);
     // The stand-in returns a marker string where the real addon returns its classes.
     expect(requireRuntime("turbovec").loadTurbovec()).toEqual("from the runtime folder");
   });

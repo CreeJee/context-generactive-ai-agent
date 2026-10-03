@@ -7,14 +7,11 @@ import { Projects } from "../src/projects/projects.ts";
 import { RelayedApprovals } from "../src/approvals/relayed.ts";
 import { compactChildToolResults, Subagents } from "../src/subagents/subagents.ts";
 import { WorkTraceStore } from "../src/work-trace/store.ts";
+import { defaultTestResponder, turnGate, type TestProviderOptions } from "./support/provider.ts";
 import { testRuntime } from "./support/runtime.ts";
 
 async function until(condition: () => boolean, what: string) {
-  for (let attempt = 0; attempt < 300; attempt++) {
-    if (condition()) return;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error(`timed out waiting for ${what}`);
+  await expect.poll(condition, { message: what, timeout: 6_000, interval: 20 }).toBe(true);
 }
 
 const Delta = Schema.fromJsonString(
@@ -55,8 +52,11 @@ const answerOf = (events: string) =>
     .flatMap((event) => (event.type === "TEXT_MESSAGE_CONTENT" && event.delta ? [event.delta] : []))
     .join("");
 
-async function subagentSetup(mode: "ask" | "auto" | "full" = "ask") {
-  const context = await testRuntime({ testProvider: {} });
+async function subagentSetup(
+  mode: "ask" | "auto" | "full" = "ask",
+  testProvider: TestProviderOptions = {},
+) {
+  const context = await testRuntime({ testProvider });
   await context.provider!.select(context.runtime);
   await context.runtime.runPromise(
     Effect.flatMap(Projects, (projects) => projects.setPermissionMode(context.project.id, mode)),
@@ -246,15 +246,28 @@ describe("subagents", () => {
   });
 
   test("subagent calls of one step run at the same time and answer in call order", async () => {
-    const { send, state } = await subagentSetup();
-
-    const started = Date.now();
-    const answer = await send("delegate twice");
-    const elapsed = Date.now() - started;
+    const gate = turnGate();
+    const started: string[] = [];
+    const { send, state } = await subagentSetup("ask", {
+      delayedTurnGate: gate.waitFor,
+      responder: async (invocation) => {
+        const turn = await defaultTestResponder(invocation);
+        if (turn.text?.startsWith("napped: nap ")) started.push(turn.text);
+        return turn;
+      },
+    });
+    const pending = send("delegate twice");
+    try {
+      // Both model calls must start while neither child can finish.
+      await expect.poll(() => started, { timeout: 6_000, interval: 20 }).toHaveLength(2);
+      expect(started).toEqual(expect.arrayContaining(["napped: nap A", "napped: nap B"]));
+    } finally {
+      gate.release();
+      await pending;
+    }
+    const answer = await pending;
     expect(answer.indexOf("napped: nap A")).toBeGreaterThan(-1);
     expect(answer.indexOf("napped: nap A")).toBeLessThan(answer.indexOf("napped: nap B"));
-    // Each child naps 700ms; one after another would take at least 1400ms.
-    expect(elapsed).toBeLessThan(1350);
     expect(state().subagents.map((child) => child.status)).toEqual(["completed", "completed"]);
   });
 

@@ -996,15 +996,18 @@ test("worker death during owner effect rejects stream and never replays tool", a
     await rejected;
     expect(calls).toBe(1);
     release();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await expect
+      .poll(
+        () =>
+          f.sqlite
+            .prepare(
+              `SELECT status FROM owner_rpc_operations WHERE side_effect = 1 AND fingerprint LIKE '%"operation":"tool"%'`,
+            )
+            .all(),
+        { timeout: 1_000, interval: 20 },
+      )
+      .toMatchObject([{ status: "succeeded" }]);
     expect(calls).toBe(1);
-    expect(
-      f.sqlite
-        .prepare(
-          `SELECT status FROM owner_rpc_operations WHERE side_effect = 1 AND fingerprint LIKE '%"operation":"tool"%'`,
-        )
-        .all(),
-    ).toMatchObject([{ status: "succeeded" }]);
   } finally {
     release();
     f.close();

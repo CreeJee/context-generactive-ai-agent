@@ -156,9 +156,9 @@ describe("ACP agent bridge", () => {
         sessionId,
         prompt: [{ type: "text", text: "slow" }],
       });
-      for (let attempt = 0; attempt < 100 && provider!.adapter.invocations.length === 0; attempt++)
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      expect(provider!.adapter.invocations).toHaveLength(1);
+      await expect
+        .poll(() => provider!.adapter.invocations, { timeout: 1_000, interval: 10 })
+        .toHaveLength(1);
       await agent.notify(acp.methods.agent.session.cancel, { sessionId });
       expect((await prompt).stopReason).toBe("cancelled");
       expect(provider!.adapter.invocations).toHaveLength(1);

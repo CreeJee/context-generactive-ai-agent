@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
 import { Effect } from "effect";
-import { describe, expect, test } from "vite-plus/test";
+import { describe, expect, test, vi } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { McpServers, mcpToolName } from "../src/mcp/servers.ts";
 import { Nodes } from "../src/memory/nodes.ts";
@@ -15,11 +15,7 @@ import { testRuntime } from "./support/runtime.ts";
 const fakeMcp = fileURLToPath(new URL("./support/fake-mcp-server.ts", import.meta.url));
 
 async function until(condition: () => boolean, what: string) {
-  for (let attempt = 0; attempt < 300; attempt++) {
-    if (condition()) return;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error(`timed out waiting for ${what}`);
+  await expect.poll(condition, { message: what, timeout: 6_000, interval: 20 }).toBe(true);
 }
 
 const processAlive = (pid: number) => {
@@ -159,8 +155,8 @@ describe("MCP servers", () => {
 
   test("a server runs in the project with only the configured environment", async () => {
     const { project, fakeEntry, servers, run } = await mcpSetup();
-    process.env.SHOULD_NOT_LEAK = "inherited";
-    process.env.FAKE_TOKEN_SOURCE = "expanded-token";
+    vi.stubEnv("SHOULD_NOT_LEAK", "inherited");
+    vi.stubEnv("FAKE_TOKEN_SOURCE", "expanded-token");
     try {
       writeJson(join(project.root, ".mcp.json"), {
         mcpServers: { fake: fakeEntry({ FAKE_MCP_TOKEN: "${FAKE_TOKEN_SOURCE}" }) },
@@ -176,8 +172,7 @@ describe("MCP servers", () => {
         inheritedSecret: null,
       });
     } finally {
-      delete process.env.SHOULD_NOT_LEAK;
-      delete process.env.FAKE_TOKEN_SOURCE;
+      vi.unstubAllEnvs();
     }
   });
 

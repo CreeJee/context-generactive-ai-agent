@@ -31,11 +31,7 @@ async function setup() {
 }
 
 async function waitForIdle(client: ChatClient) {
-  for (let attempt = 0; attempt < 300; attempt++) {
-    if (!client.getIsLoading()) return;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error("timed out waiting for the chat run");
+  await expect.poll(() => client.getIsLoading(), { timeout: 6_000, interval: 20 }).toBe(false);
 }
 
 describe("server-selected queued next turn", () => {

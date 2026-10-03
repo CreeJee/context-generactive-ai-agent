@@ -32,11 +32,7 @@ const reportFrom = (answer: string) =>
   Schema.decodeSync(Schema.fromJsonString(Report))(answer.slice(answer.indexOf("{")));
 const idsOf = ({ taskId, attemptId }: typeof Ids.Type) => ({ taskId, attemptId });
 async function until(condition: () => boolean, description: string) {
-  for (let i = 0; i < 300; i++) {
-    if (condition()) return;
-    await Effect.runPromise(Effect.sleep("20 millis"));
-  }
-  throw new Error(`Timed out: ${description}`);
+  await expect.poll(condition, { message: description, timeout: 6_000, interval: 20 }).toBe(true);
 }
 async function setup() {
   const delayed: Array<{ user: string; release: () => void }> = [];

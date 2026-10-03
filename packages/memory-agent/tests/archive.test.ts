@@ -14,11 +14,7 @@ const Archived = Schema.Struct({ id: Schema.String, archivedAt: Schema.NullOr(Sc
 const Running = Schema.Struct({ running: Schema.NullOr(Schema.Struct({ runId: Schema.String })) });
 
 async function until(condition: () => boolean | Promise<boolean>, what: string) {
-  for (let attempt = 0; attempt < 300; attempt++) {
-    if (await condition()) return;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error(`timed out waiting for ${what}`);
+  await expect.poll(condition, { message: what, timeout: 6_000, interval: 20 }).toBe(true);
 }
 
 describe("archived conversations", () => {

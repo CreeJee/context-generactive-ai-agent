@@ -40,13 +40,14 @@ test("SSR HMR replaces a module but leaves its old global owner alive", async ()
   const first = await server.ssrLoadModule("/entry.ts");
   expect(first.revision).toBe(1);
   writeFileSync(moduleFile, source(2));
-  const until = Date.now() + 8_000;
-  let next = await server.ssrLoadModule("/entry.ts");
-  while (next.revision !== 2 && Date.now() < until) {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    next = await server.ssrLoadModule("/entry.ts");
-  }
-  expect(next.revision).toBe(2);
+  const activeServer = server;
+  await expect
+    .poll(async () => (await activeServer.ssrLoadModule("/entry.ts")).revision, {
+      timeout: 8_000,
+      interval: 20,
+    })
+    .toBe(2);
+  const next = await server.ssrLoadModule("/entry.ts");
   expect(first.revision).toBe(1);
   expect(next.owner).toBe(first.owner);
   expect(next.owner.revision).toBe(1);
@@ -85,10 +86,7 @@ test("pending hotUpdate does not prevent concurrent SSR import of changed code",
   try {
     expect((await server.ssrLoadModule("/entry.ts")).revision).toBe(1);
     writeFileSync(moduleFile, "export const revision = 2;\n");
-    const until = Date.now() + 8_000;
-    while (!hookEntered && Date.now() < until)
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(hookEntered).toBe(true);
+    await expect.poll(() => hookEntered, { timeout: 8_000, interval: 20 }).toBe(true);
     // Actual Vite invalidates before the pending hook resolves; no proposed owner gate is needed.
     expect((await server.ssrLoadModule("/entry.ts")).revision).toBe(2);
   } finally {
@@ -109,9 +107,14 @@ test("watch.ignored alone does not isolate SSR modules from changed source", asy
   server = await createServer(config);
   expect((await server.ssrLoadModule("/entry.ts")).revision).toBe(1);
   writeFileSync(moduleFile, "export const revision = 2;\n");
-  await new Promise((resolve) => setTimeout(resolve, 300));
   // Vite's SSR module graph still invalidates despite Chokidar's ignored option.
-  expect((await server.ssrLoadModule("/entry.ts")).revision).toBe(2);
+  const activeServer = server;
+  await expect
+    .poll(async () => (await activeServer.ssrLoadModule("/entry.ts")).revision, {
+      timeout: 8_000,
+      interval: 20,
+    })
+    .toBe(2);
 }, 12_000);
 
 test("closing a Vite watcher keeps cached SSR code but does not freeze lazy imports", async () => {

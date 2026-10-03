@@ -15,11 +15,7 @@ const Lease = Schema.Union([
 const StatusLease = Schema.Struct({ lease: Lease });
 
 async function until(condition: () => boolean, what: string) {
-  for (let attempt = 0; attempt < 300; attempt++) {
-    if (condition()) return;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error(`timed out waiting for ${what}`);
+  await expect.poll(condition, { message: what, timeout: 6_000, interval: 20 }).toBe(true);
 }
 
 describe("session leases", () => {

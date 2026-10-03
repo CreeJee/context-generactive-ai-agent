@@ -12,11 +12,7 @@ import { approvalToolDefinitions, permissionReviewInterrupt } from "../src/tools
 import { testRuntime } from "./support/runtime.ts";
 
 async function until(condition: () => boolean, what: string) {
-  for (let attempt = 0; attempt < 300; attempt++) {
-    if (condition()) return;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error(`timed out waiting for ${what}`);
+  await expect.poll(condition, { message: what, timeout: 6_000, interval: 20 }).toBe(true);
 }
 
 /** A project in `auto` mode and a real chat client talking to AgentChat in-process. */

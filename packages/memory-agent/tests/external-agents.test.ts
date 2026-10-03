@@ -16,11 +16,7 @@ import { testRuntime } from "./support/runtime.ts";
 const fakeAgent = fileURLToPath(new URL("./support/fake-acp-agent.ts", import.meta.url));
 
 async function until(condition: () => boolean, what: string) {
-  for (let attempt = 0; attempt < 300; attempt++) {
-    if (condition()) return;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error(`timed out waiting for ${what}`);
+  await expect.poll(condition, { message: what, timeout: 6_000, interval: 20 }).toBe(true);
 }
 
 const processAlive = (pid: number) => {
@@ -143,12 +139,9 @@ describe("external ACP agents", () => {
       toolCalls: [],
     });
     await until(() => starts().length === 2, "the automatic reconnect");
-    let link = await linkOf();
-    for (let attempt = 0; attempt < 100 && link?.status !== "connected"; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      link = await linkOf();
-    }
-    expect(link).toMatchObject({ status: "connected" });
+    await expect
+      .poll(linkOf, { timeout: 2_000, interval: 20 })
+      .toMatchObject({ status: "connected" });
     // The crashed prompt was not sent again: the new process has seen no prompt.
     expect(await prompt("after reconnect")).toMatchObject({
       answer: "external: after reconnect (turn 1)",
@@ -156,12 +149,9 @@ describe("external ACP agents", () => {
 
     writeFileSync(refuse, "");
     await prompt("crash again");
-    link = await linkOf();
-    for (let attempt = 0; attempt < 100 && link?.status !== "stopped"; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      link = await linkOf();
-    }
-    expect(link).toMatchObject({ status: "stopped", failures: 2 });
+    await expect
+      .poll(linkOf, { timeout: 5_000, interval: 50 })
+      .toMatchObject({ status: "stopped", failures: 2 });
     expect(await prompt("while stopped")).toEqual({
       status: "unavailable",
       reason: "stopped_after_failures",

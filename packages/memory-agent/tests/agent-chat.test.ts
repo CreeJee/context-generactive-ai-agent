@@ -126,9 +126,7 @@ describe("AgentChat.handle", () => {
           )
           .get(),
       ).count;
-    for (let attempt = 0; attempt < 50 && unindexed() > 0; attempt++)
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(unindexed()).toBe(0);
+    await expect.poll(unindexed, { timeout: 1_000, interval: 20 }).toBe(0);
   });
 
   test("hides Work Trace behind a reversible exposure flag without deleting shadow data", async () => {

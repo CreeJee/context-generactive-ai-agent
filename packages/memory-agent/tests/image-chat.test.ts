@@ -10,11 +10,7 @@ import { tinyPng } from "./support/images.ts";
 import { testRuntime } from "./support/runtime.ts";
 
 async function until(condition: () => boolean, what: string) {
-  for (let attempt = 0; attempt < 200; attempt++) {
-    if (condition()) return;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error(`timed out waiting for ${what}`);
+  await expect.poll(condition, { message: what, timeout: 4_000, interval: 20 }).toBe(true);
 }
 
 async function imageSetup(model: string) {
