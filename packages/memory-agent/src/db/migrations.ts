@@ -1,3 +1,31 @@
+// Only the confirmed empty ModelMessage shape is disposable. Unknown payload fields
+// (including parts, attachments and tool calls) are deliberately preserved.
+export const emptyUserMessageMigration = `
+  WITH empty_user_messages AS (
+    SELECT thread.thread_id, message.key AS message_index
+    FROM chat_threads AS thread, json_each(thread.messages) AS message
+    WHERE json_extract(message.value, '$.role') = 'user'
+      AND json_type(message.value, '$.content') = 'text'
+      AND json_extract(message.value, '$.content') = ''
+      AND NOT EXISTS (
+        SELECT 1 FROM json_each(message.value) AS field
+        WHERE field.key NOT IN ('id', 'role', 'content', 'createdAt', 'metadata')
+      )
+  )
+  UPDATE chat_threads
+  SET messages = (
+    SELECT json_group_array(json(value)) FROM (
+      SELECT message.value FROM json_each(chat_threads.messages) AS message
+      WHERE message.key NOT IN (
+        SELECT message_index FROM empty_user_messages
+        WHERE thread_id = chat_threads.thread_id
+      )
+      ORDER BY CAST(message.key AS INTEGER)
+    )
+  )
+  WHERE thread_id IN (SELECT thread_id FROM empty_user_messages);
+`;
+
 /**
  * Ordered schema steps. `PRAGMA user_version` records how many have been applied.
  * Append new steps; never edit an applied one.
@@ -1330,6 +1358,7 @@ export const migrations: readonly string[] = [
   CREATE UNIQUE INDEX workflow_new_goal_requests_one_pending
     ON workflow_new_goal_requests(session_id) WHERE status = 'accepted';
   `,
+  emptyUserMessageMigration,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

@@ -898,3 +898,9 @@
 - `react-simplikit@0.3.1`의 root import는 storage 모듈을 초기화하며 `localStorage`·`sessionStorage`를 조회한다. Node 26 개발 서버의 첫 SSR 요청에서 `--localstorage-file` 없는 localStorage getter가 경고를 내는 것을 trace로 확인했다. 앱의 테마 hook effect가 원인은 아니다.
 - pnpm dependency patch로 ESM·CommonJS의 storage probe에 browser `window` 존재 검사를 추가한다. SSR에서는 기존 메모리 fallback을 사용하고, 브라우저에서는 기존 storage probe를 유지한다. Node storage 파일을 추가하거나 경고를 전역 억제하지 않는다.
 - Node의 storage getter를 접근 시 실패하도록 정의한 회귀 테스트에서 두 module 형식의 root import가 storage를 읽지 않는지 확인한다. 별도 개발 서버의 실제 SSR 200 응답에서도 trace 경고가 사라지는지 확인한다.
+
+## 저장된 빈 사용자 메시지 정리 (2026-10-04)
+
+- `chat_threads`에서 `role: user`, `content: ""`인 메시지 중 `id`·`role`·`content`·`createdAt`·`metadata` 외의 필드가 없는 항목만 일회성 마이그레이션으로 제거한다. 이미지·parts·첨부·도구 정보나 알 수 없는 payload 필드가 있으면 보존한다. null·배열·공백 content까지 삭제 범위를 확대하지 않는다.
+- 남은 메시지의 내용·순서와 thread의 `updated_at`을 보존한다. 불변 기억 evidence와 실패한 run 기록은 수정하지 않는다. 정리 SQL은 반복 적용해도 결과가 같다.
+- 실행 중인 구버전 서버의 DB에는 SQLite backup으로 복구본을 만든 뒤 같은 SQL을 트랜잭션으로 직접 적용한다. 새 빌드보다 앞서 DB 버전을 올려 구버전 재시작을 막지 않도록 `user_version`은 유지하며, 새 코드의 다음 시작에서 정규 마이그레이션이 버전을 갱신한다.
