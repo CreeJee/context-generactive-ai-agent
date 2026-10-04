@@ -205,14 +205,26 @@ const droppedMarker = (count: number) =>
   `[${count} earlier messages of this conversation were left out to save context. They are kept in memory: use find_memory, read_evidence and trace_evidence to recall them.]`;
 const leaveOutOldest = evictOldest({ marker: droppedMarker });
 
-/** OpenAI rejects a function_call_output when compaction removed its matching function_call. */
-function dropOrphanToolResults(messages: readonly ModelMessage[]): readonly ModelMessage[] {
+const decodeToolArguments = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+);
+
+/** Partial historical calls cannot be replayed; keep the stored transcript intact. */
+export function replayableToolHistory(messages: readonly ModelMessage[]): readonly ModelMessage[] {
+  const replayable = messages.map((message) => {
+    if (message.role !== "assistant" || !message.toolCalls?.length) return message;
+    const toolCalls = message.toolCalls.filter((call) =>
+      Option.isSome(decodeToolArguments(call.function.arguments)),
+    );
+    return toolCalls.length === message.toolCalls.length ? message : { ...message, toolCalls };
+  });
+  // A result cannot be sent without its replayable matching call.
   const callIds = new Set(
-    messages.flatMap((message) =>
+    replayable.flatMap((message) =>
       message.role === "assistant" ? (message.toolCalls ?? []).map((call) => call.id) : [],
     ),
   );
-  return messages.filter(
+  return replayable.filter(
     (message) =>
       message.role !== "tool" ||
       message.toolCallId === undefined ||
@@ -307,8 +319,8 @@ export async function compact(
       // Search may be warming or degraded; failure must not prevent the chat request.
     }
   }
-  const paired = dropOrphanToolResults(sent);
-  if (paired.length !== sent.length) {
+  const paired = replayableToolHistory(sent);
+  if (paired.length !== sent.length || paired.some((message, index) => message !== sent[index])) {
     sent = paired;
     if (stage === "none") stage = "clear-answered";
   }

@@ -532,6 +532,51 @@ describe("compaction", () => {
     expect(result.stage).toBe("clear-answered");
   });
 
+  test.each([true, false])(
+    "omits incomplete historical calls without rewriting the transcript (result: %s)",
+    async (hasResult) => {
+      const validCall = {
+        id: "valid",
+        type: "function" as const,
+        function: { name: "read_file", arguments: '{"path":"README.md"}' },
+      };
+      const messages: ModelMessage[] = [
+        {
+          role: "assistant",
+          content: "진행 상황을 기록합니다.",
+          toolCalls: [
+            {
+              id: "partial",
+              type: "function",
+              function: { name: "update_workflow_progress", arguments: '{"detail":"진행 중' },
+            },
+            validCall,
+          ],
+        },
+        ...(hasResult
+          ? [{ role: "tool" as const, toolCallId: "partial", content: "partial result" }]
+          : []),
+        { role: "tool", toolCallId: "valid", content: "valid result" },
+        { role: "user", content: "continue" },
+      ];
+      const original = structuredClone(messages);
+      const result = await compact(
+        messages,
+        { manual: { clearedThrough: 0, summarizedTurns: 0 }, blocks: [] },
+        { toolResultId: () => null, nodeText: () => null },
+        { compactAt: noLimit, leaveOutAt: noLimit },
+      );
+
+      expect(result.messages).toEqual([
+        { role: "assistant", content: "진행 상황을 기록합니다.", toolCalls: [validCall] },
+        { role: "tool", toolCallId: "valid", content: "valid result" },
+        { role: "user", content: "continue" },
+      ]);
+      expect(result.stage).toBe("clear-answered");
+      expect(messages).toEqual(original);
+    },
+  );
+
   test("clears tool output the model already answered from, and keeps the run's own whole", async () => {
     const { runtime, project, session } = await testRuntime();
     const { nodes, tools, metadata } = await runtime.runPromise(
