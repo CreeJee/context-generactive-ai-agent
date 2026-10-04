@@ -150,7 +150,18 @@ describe("provider-neutral contracts", () => {
     const storage = mkdtempSync(join(tmpdir(), "active-provider-"));
     cleanups.push(() => rmSync(storage, { recursive: true, force: true }));
     const openai = fakeProvider("openai");
-    const anthropic = fakeProvider("anthropic");
+    const baseAnthropic = fakeProvider("anthropic");
+    const anthropic = {
+      ...baseAnthropic,
+      models: {
+        ...baseAnthropic.models,
+        selected: Effect.succeed({
+          provider: "anthropic" as const,
+          model: "claude-test",
+          reasoningEffort: "high",
+        }),
+      },
+    };
     const foundation = GlobalConfig.layer.pipe(Layer.provide(StorageRoot.layer(storage)));
     const providers = ActiveProvider.layer.pipe(
       Layer.provideMerge(

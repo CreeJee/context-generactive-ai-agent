@@ -4,7 +4,10 @@ import { chat } from "@tanstack/ai";
 import { reconstructChat, withPersistence } from "@tanstack/ai-persistence";
 import { resolveDebugOption } from "@tanstack/ai/adapter-internals";
 import { once } from "node:events";
-import { Deferred, Effect, Fiber, Schema } from "effect";
+import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
+import { GlobalConfig } from "../src/config/global-config.ts";
+import { ActiveProvider } from "../src/providers/active-provider.ts";
+import { ProviderRegistry } from "../src/providers/registry.ts";
 import { describe, expect, it } from "vite-plus/test";
 import type { Settings } from "../src/config/global-config.ts";
 import { sqliteChatPersistence } from "../src/chat-state/persistence.ts";
@@ -39,12 +42,36 @@ function fixture(fetcher?: typeof fetch, initial: Settings = {}) {
     },
   };
   return {
+    config,
     api: makeOpenAICompatibleSettings(config, keys, fetcher),
     restore: () => makeOpenAICompatibleSettings(config, keys, fetcher),
     saved: () => saved,
   };
 }
 describe("OpenAI compatible settings", () => {
+  it("uses the provider-normalized effort for chat when the stored effort is unsupported", async () => {
+    const f = fixture(undefined, {
+      provider: "openai-compatible",
+      model: configuration.model,
+      reasoningEffort: "low",
+      openaiCompatible: configuration,
+    });
+    const layer = ActiveProvider.layer.pipe(
+      Layer.provide(ProviderRegistry.layer([f.api.services], [f.api.services.runtime])),
+      Layer.provide(Layer.succeed(GlobalConfig, f.config)),
+    );
+    const selection = await Effect.runPromise(
+      Effect.flatMap(ActiveProvider, (active) => active.selected).pipe(Effect.provide(layer)),
+    );
+    expect(selection).toEqual({
+      provider: "openai-compatible",
+      model: configuration.model,
+      reasoningEffort: "default",
+    });
+    expect(f.saved().reasoningEffort).toBe("low");
+    const adapter = f.api.services.runtime.adapter(selection!);
+    adapter.releaseRun?.();
+  });
   it("ignores and clears cached capabilities from the removed LM Studio probe", async () => {
     const f = fixture(
       async (url) => {

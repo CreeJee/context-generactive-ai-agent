@@ -13,14 +13,10 @@ const make = Effect.gen(function* () {
   const registry = yield* ProviderRegistry;
 
   const provider = Effect.map(config.read, (settings): ProviderId => settings.provider ?? "openai");
-  const selected = Effect.map(config.read, (settings): ModelSelection | null =>
-    settings.provider && settings.model && settings.reasoningEffort
-      ? {
-          provider: settings.provider,
-          model: settings.model,
-          reasoningEffort: settings.reasoningEffort,
-        }
-      : null,
+  const selected = Effect.flatMap(config.read, (settings) =>
+    settings.provider
+      ? Effect.flatMap(registry.get(settings.provider), ({ models }) => models.selected)
+      : Effect.succeed(null),
   );
 
   const resolve = (selection: ModelSelection) =>
