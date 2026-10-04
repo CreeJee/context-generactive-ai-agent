@@ -46,8 +46,44 @@ async function setup() {
           },
         );
         const internal = invocation.systemPrompts.some((prompt) =>
-          prompt.includes("This is an automatic subagent completion follow-up"),
+          prompt.includes("This is an automatic task completion follow-up"),
         );
+        if (!internal && user.startsWith("review-batch ")) {
+          const attempts = Schema.decodeSync(Schema.fromJsonString(Schema.Array(Ids)))(
+            user.slice("review-batch ".length),
+          );
+          const last = invocation.messages.at(-1);
+          if (last?.role === "tool" && last.toolCallId === "call-review-batch") {
+            const { reports } = Schema.decodeSync(
+              Schema.fromJsonString(Schema.Struct({ reports: Schema.Array(Report) })),
+            )(messageText(last));
+            return {
+              toolCalls: [
+                {
+                  id: "call-adopt-batch",
+                  name: "adopt_subagent_reports",
+                  arguments: JSON.stringify({
+                    reports: reports.map((report) => ({
+                      ...idsOf(report),
+                      evidenceRefIds: report.evidenceRefIds,
+                    })),
+                  }),
+                },
+              ],
+            };
+          }
+          if (last?.role === "tool" && last.toolCallId === "call-adopt-batch")
+            return { text: "Used both reviewed reports." };
+          return {
+            toolCalls: [
+              {
+                id: "call-review-batch",
+                name: "get_subagent_reports",
+                arguments: JSON.stringify({ attempts }),
+              },
+            ],
+          };
+        }
         if (!internal && user === "delegate and keep working") {
           const last = invocation.messages.at(-1);
           switch (last?.role === "tool" ? last.toolCallId : undefined) {
@@ -202,6 +238,21 @@ async function setup() {
 }
 
 describe("asynchronous subagents", () => {
+  test("batch retrieval reviews each attempt for adoption in the same run", async () => {
+    const { send, trace, session, releaseDelayed } = await setup();
+    const first = receiptFrom(await send('call run_subagent {"task":"nap first dispatch only"}'));
+    const second = receiptFrom(await send('call run_subagent {"task":"nap second dispatch only"}'));
+    await releaseDelayed("nap", 2);
+    const attempts = [idsOf(first), idsOf(second)];
+    await send(`call wait_subagents ${JSON.stringify({ attempts, timeoutMs: 5000 })}`);
+    expect(await send(`review-batch ${JSON.stringify(attempts)}`)).toBe(
+      "Used both reviewed reports.",
+    );
+    for (const attempt of attempts)
+      expect(
+        trace.taskDetail(session.id, attempt.taskId)?.adoptions.map((entry) => entry.disposition),
+      ).toEqual(["returned", "reviewed", "used"]);
+  });
   test("default wait lets the parent execute independent tools in the same turn before the child finishes", async () => {
     const { send, children, session, provider, releaseDelayed, idle } = await setup();
     expect(await send("delegate and keep working")).toBe("Independent parent work finished.");
@@ -241,7 +292,7 @@ describe("asynchronous subagents", () => {
       () =>
         provider!.adapter.invocations.some((invocation) =>
           invocation.systemPrompts.some((prompt) =>
-            prompt.includes("This is an automatic subagent completion follow-up"),
+            prompt.includes("This is an automatic task completion follow-up"),
           ),
         ) && idle(),
       "idle follow-up",
@@ -279,7 +330,7 @@ describe("asynchronous subagents", () => {
     expect(
       provider!.adapter.invocations.some((invocation) =>
         invocation.systemPrompts.some((prompt) =>
-          prompt.includes("This is an automatic subagent completion follow-up"),
+          prompt.includes("This is an automatic task completion follow-up"),
         ),
       ),
     ).toBe(false);

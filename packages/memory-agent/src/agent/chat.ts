@@ -43,7 +43,7 @@ import {
 } from "../providers/subscription-runtime.ts";
 import { ProviderRegistry } from "../providers/registry.ts";
 import { ProviderToolRuntime } from "../providers/tool-policy.ts";
-import { McpServers, mcpInstructions } from "../mcp/servers.ts";
+import { McpServers, mcpInstructionsForMode } from "../mcp/servers.ts";
 import { Indexer } from "../memory/embedding/indexer.ts";
 import { Interpreter } from "../memory/interpret.ts";
 import { KnowledgePromotions } from "../memory/knowledge.ts";
@@ -115,6 +115,7 @@ import { toolProgressFingerprint } from "../workflow/tool-progress.ts";
 import { WorkflowRules } from "../workflow/rules.ts";
 import { localWorkflowRules } from "../workflow/sources.ts";
 import { WorkTraceStore } from "../work-trace/store.ts";
+import { BackgroundTasks } from "../tools/background.ts";
 import { AppEvents } from "../events/app-events.ts";
 import { Database } from "../db/database.ts";
 import {
@@ -371,6 +372,7 @@ const workflowReadToolNames: ReadonlySet<string> = new Set([
   "search_files",
   "read_file",
   "read_skill",
+  "get_background_result",
   "kagi_search",
   "kagi_extract",
   "update_goal",
@@ -463,6 +465,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const skillTools = yield* SkillTools;
   const delegateTools = yield* DelegateTools;
   const subagents = yield* Subagents;
+  const background = yield* BackgroundTasks;
   const externalAgents = yield* ExternalAgents;
   const search = yield* MemorySearch;
   const relayed = yield* RelayedApprovals;
@@ -533,6 +536,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     runEffectSync(Queue.offer(notificationWakeups, sessionId));
   };
   subagents.onCompletion(wakeNotifications);
+  background.onCompletion(wakeNotifications);
   const { metadata } = chatState.persistence.stores;
   const inUse = () => json(423, { error: "session_in_use" });
   const workTraceUnavailable = () => json(404, { error: "work_trace_disabled" });
@@ -823,6 +827,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     Effect.gen(function* () {
       yield* execution.stop(sessionId);
       workTrace.holdParentNotifications(sessionId);
+      yield* background.stopSession(sessionId);
       const parent = liveRuns.get(sessionId);
       if (parent) {
         parent.controller.abort(new Error("session_lifecycle_requested"));
@@ -903,6 +908,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (requested.status === "completed") return json(200, requested);
         if ("activeAttemptId" in requested && requested.activeAttemptId !== null)
           yield* agentPromise("stop-subagent", () => subagents.stopTask(taskId)).pipe(
+            Effect.andThen(background.stopTask(taskId)),
             Effect.timeoutOption(cancelWaitMs),
           );
         if (!("operationId" in requested) || requested.operationId === undefined)
@@ -1450,7 +1456,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const delegation =
           workflowReadOnly || reportSource
             ? { tools: [], instructions: null }
-            : delegateTools.forRun(project, sessionId, abortController.signal);
+            : delegateTools.forRun(project, sessionId, abortController.signal, runId);
         // The gate runs right after chat state, so a refused call is skipped before tools run. In
         // `auto` mode it reviews every gated call; in `ask` mode the built-in tools use TanStack's
         // own approval and the gate asks about the calls the page has no definitions for (MCP tools,
@@ -1485,10 +1491,18 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           : workflowReadOnly
             ? workflow.phase === "verify"
               ? approvedTools
-                  .forProject(project)
+                  .forProject(project, undefined, {
+                    sessionId,
+                    runId,
+                    abortSignal: abortController.signal,
+                  })
                   .filter((tool) => verificationToolNames.has(tool.name))
               : []
-            : approvedTools.forProject(project);
+            : approvedTools.forProject(project, undefined, {
+                sessionId,
+                runId,
+                abortSignal: abortController.signal,
+              });
         const memoryRun = nativeGoal
           ? nativeGoal.createMemoryTools(
               {
@@ -1515,6 +1529,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           ...skills.tools,
           ...delegation.tools,
           ...workflowTools.forSession(sessionId, workflow.phase, runId),
+          ...background.forSession(sessionId),
         ]);
         const sharedTools = reportSource
           ? reportToolsForSession(
@@ -1530,7 +1545,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const standingPrompts = [
           ...(reportSource ? [reportAnalysisInstructions] : [memoryInstructions]),
           ...(webTools.length > 0 ? [kagiInstructions] : []),
-          ...(!workflowReadOnly && mcpTools.length > 0 ? [mcpInstructions] : []),
+          ...(!workflowReadOnly && mcpTools.length > 0
+            ? [mcpInstructionsForMode(project.permissionMode)]
+            : []),
           ...(injectImageProviderTool ? [imageProviderWorkflowPrompt] : []),
         ];
         const localRules = localWorkflowRules(project, skills.skills);
@@ -1588,11 +1605,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             : []),
           ...(notificationFollowup
             ? [
-                "This is an automatic subagent completion follow-up, not a new user request or approval. Review the operational notifications, retrieve relevant reports with get_subagent_report, and briefly update the user if useful. Do not repeat the original delegation merely because it appears in the history.",
+                "This is an automatic task completion follow-up, not a new user request or approval. Review operational notifications, retrieve subagent reports with get_subagent_reports or get_subagent_report and background operation results with get_background_result, and briefly update the user if useful. Do not repeat the original dispatch merely because it appears in the history.",
               ]
             : []),
         ];
-        const sharedPrompts = promptLayout(standingPrompts, contextPrompts);
         // Children get the same tools and rules, never more, and no subagent tools of their own.
         // Their approval-gated calls wait on the page instead of pausing this run (R18).
         const children = subagents.forRun({
@@ -1610,7 +1626,24 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               ? []
               : redactor.withHiddenResults(approvedTools.forProject(project, "gate"))),
           ],
-          systemPrompts: sharedPrompts,
+          systemPrompts: promptLayout(
+            standingPrompts.map((prompt) =>
+              prompt === memoryInstructions
+                ? prompt
+                    .split("\n")
+                    .filter(
+                      (line) =>
+                        !line.startsWith("- Promote an adopted Work Trace result") &&
+                        !line.includes("use_promoted_memory"),
+                    )
+                    .join("\n")
+                : prompt,
+            ),
+            [
+              ...(skills.instructions ? [skills.instructions] : []),
+              workspaceInstructions(project, places),
+            ],
+          ),
           deliveredParentNotificationIds: new Set(
             parentNotifications.map((notification) => notification.id),
           ),
@@ -2011,7 +2044,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         events.publishSession(sessionId, "run-state");
         const live = liveRuns.get(sessionId);
         if (!live) {
-          const children = subagents.list(sessionId).some((child) => child.status === "running");
+          const children =
+            subagents.list(sessionId).some((child) => child.status === "running") ||
+            background.hasSession(sessionId);
           if (!children)
             return pendingExecution
               ? json(200, { runId: "", stopped: true, status: "completed" })
@@ -2019,7 +2054,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           workTrace.holdParentNotifications(sessionId);
           const stopped = yield* agentPromise("stop-session", () =>
             subagents.stopSession(sessionId),
-          ).pipe(Effect.timeoutOption(cancelWaitMs), Effect.map(Option.isSome));
+          ).pipe(
+            Effect.andThen(background.stopSession(sessionId)),
+            Effect.timeoutOption(cancelWaitMs),
+            Effect.map(Option.isSome),
+          );
           const last = yield* agentPromise("load-run", () => chatState.lastRun(sessionId));
           return json(200, {
             runId: last?.runId ?? "",
@@ -2033,7 +2072,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         workTrace.holdParentNotifications(sessionId);
         live.controller.abort(RUN_CANCEL_REASON);
         const stopped = yield* Effect.all(
-          [live.ended, agentPromise("stop-session", () => subagents.stopSession(sessionId))],
+          [
+            live.ended,
+            agentPromise("stop-session", () => subagents.stopSession(sessionId)),
+            background.stopSession(sessionId),
+          ],
           { concurrency: "unbounded", discard: true },
         ).pipe(Effect.timeoutOption(cancelWaitMs), Effect.map(Option.isSome));
         const run = yield* agentPromise("load-run", () => chatState.run(sessionId, live.runId));

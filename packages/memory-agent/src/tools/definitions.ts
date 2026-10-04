@@ -45,6 +45,12 @@ export const RunShellInput = Schema.Struct({
       description: "Stop the command after this long. 120 by default, at most 1800.",
     }),
   ),
+  yieldMs: Schema.optionalKey(
+    Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 0, maximum: 30_000 }))).annotate({
+      description:
+        "Return a background task receipt if unfinished after this many milliseconds (default 1000). 0 dispatches immediately. This is separate from the command's timeoutSeconds. Retrieve with get_background_result; only finished results prove checks passed.",
+    }),
+  ),
   reason: Schema.optionalKey(
     Schema.String.annotate({
       description: "One sentence on why, shown to the user when asking.",
@@ -82,7 +88,7 @@ export const DeleteOutsideFileInput = Schema.Struct({
 const runShell = {
   name: "run_shell",
   description:
-    "Run a finite, unattended shell command in the project on the host, for builds, tests, git and other programs. Do not use it for browser sign-in, user input, servers, watchers or other interactive/background work: ask the user to run those in a terminal instead. Each run is approved first, by the user or by the permission review. Returns exit code, signal and output (long output keeps its start and end).",
+    "Run a finite, unattended command for builds, tests, git and other programs. Long commands return a running receipt after yieldMs (default 1000) so you can continue independent work; retrieve their completed result with get_background_result. timeoutSeconds still limits execution. Do not use for sign-in, user input, servers or watchers. The project's approval policy applies before execution. Only a completed result proves a check passed.",
   inputSchema: toToolSchema(RunShellInput),
 } as const;
 

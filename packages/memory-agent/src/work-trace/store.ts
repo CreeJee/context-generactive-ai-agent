@@ -484,7 +484,8 @@ export interface StartAttemptInput {
   readonly sessionId: string;
   readonly parentRunId: string;
   readonly parentToolCallId: string;
-  readonly agentId: string;
+  readonly agentId: string | null;
+  readonly agentName?: string;
   readonly title: string;
   readonly request: string;
   readonly kind: Exclude<InvocationKind, "steer">;
@@ -1015,19 +1016,21 @@ const make = Effect.gen(function* () {
           `INSERT INTO work_tasks
            (id, project_id, origin_session_id, parent_run_id, parent_tool_call_id, agent_id,
             agent_name, status, title, request, active_attempt_id, created_at, updated_at)
-           SELECT ?, s.project_id, s.id, ?, ?, a.id, coalesce(a.name, 'subagent'),
+           SELECT ?, s.project_id, s.id, ?, ?, a.id, coalesce(a.name, ?, 'subagent'),
                   'queued', ?, ?, NULL, ?, ?
-           FROM sessions s JOIN subagents a ON a.session_id = s.id
-           WHERE s.id = ? AND a.id = ?`,
+           FROM sessions s LEFT JOIN subagents a ON a.session_id = s.id AND a.id = ?
+           WHERE s.id = ? AND (? IS NULL OR a.id IS NOT NULL)`,
         )
         .run(
           taskId,
           input.parentRunId,
           input.parentToolCallId,
+          input.agentName ?? null,
           input.title,
           input.request,
           now,
           now,
+          input.agentId,
           input.sessionId,
           input.agentId,
         );
@@ -2110,6 +2113,11 @@ const make = Effect.gen(function* () {
           sqlite.prepare("DELETE FROM node_morphs WHERE node_seq = ?").run(node.seq);
         }
         sqlite.prepare("DELETE FROM nodes WHERE session_id = ?").run(operation.target_id);
+        sqlite
+          .prepare(
+            "DELETE FROM chat_metadata WHERE namespace = 'background-task-result' AND key IN (SELECT id FROM work_tasks WHERE origin_session_id = ?)",
+          )
+          .run(operation.target_id);
         const threadIds = [operation.target_id, ...subagentRows.map((row) => `subagent-${row.id}`)];
         for (const threadId of threadIds) {
           // SAFETY: this statement selects the string run identifier only.
@@ -2326,6 +2334,11 @@ const make = Effect.gen(function* () {
         const checkpoints = sqlite
           .prepare("DELETE FROM work_checkpoints WHERE task_id = ?")
           .run(operation.target_id).changes;
+        sqlite
+          .prepare(
+            "DELETE FROM chat_metadata WHERE namespace = 'background-task-result' AND key = ?",
+          )
+          .run(operation.target_id);
         const events = sqlite
           .prepare("DELETE FROM run_events WHERE task_id = ?")
           .run(operation.target_id).changes;

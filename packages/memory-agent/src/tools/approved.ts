@@ -1,7 +1,8 @@
 import type { ToolExecutionContext } from "@tanstack/ai";
 import { tmpdir } from "node:os";
 import { isAbsolute, relative, sep } from "node:path";
-import { Context, Effect, Result, Layer } from "effect";
+import { Context, Effect, Result, Layer, Schema } from "effect";
+import { BackgroundTasks, type BackgroundBinding } from "./background.ts";
 import { StorageRoot } from "../config/storage-root.ts";
 import {
   canonicalPath,
@@ -20,6 +21,20 @@ import {
   type WriteOutsideFileInput,
 } from "./definitions.ts";
 import { guarded, orThrow } from "./failure.ts";
+
+const ShellResult = Schema.Struct({
+  workdir: Schema.String,
+  command: Schema.String,
+  shell: Schema.String,
+  status: Schema.Literals(["succeeded", "failed", "timed_out", "cancelled"]),
+  exitCode: Schema.NullOr(Schema.Finite),
+  signal: Schema.NullOr(Schema.String),
+  durationMs: Schema.Finite,
+  stdout: Schema.String,
+  stderr: Schema.String,
+  stdoutTruncated: Schema.Boolean,
+  stderrTruncated: Schema.Boolean,
+});
 
 const isSameOrBelow = (root: string, candidate: string) => {
   const path = relative(root, candidate);
@@ -48,6 +63,9 @@ export function resolveShellWorkingDirectory(
 
 const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
+  const background = yield* BackgroundTasks;
+  const services = yield* Effect.context<never>();
+  const run = Effect.runPromiseWith(services);
 
   return {
     /**
@@ -58,9 +76,10 @@ const make = Effect.gen(function* () {
     forProject(
       project: Project,
       approval: "static" | "gate" = project.permissionMode === "ask" ? "static" : "gate",
+      binding?: BackgroundBinding,
     ) {
       const runShell = (
-        { command, workdir, timeoutSeconds }: typeof RunShellInput.Type,
+        { command, workdir, timeoutSeconds, yieldMs }: typeof RunShellInput.Type,
         context?: ToolExecutionContext,
       ) =>
         guarded(workdir ?? ".", async () => {
@@ -71,12 +90,33 @@ const make = Effect.gen(function* () {
             Math.max(1, timeoutSeconds ?? defaultTimeoutSeconds),
             maxTimeoutSeconds,
           );
-          const result = await runCommand(command, {
-            cwd: directory.absolute,
-            timeoutSeconds: seconds,
-            signal: context?.abortSignal,
-            env: process.env,
-          });
+          const execute = (signal: AbortSignal | undefined) =>
+            runCommand(command, {
+              cwd: directory.absolute,
+              timeoutSeconds: seconds,
+              signal,
+              env: process.env,
+            });
+          if (binding) {
+            const receipt = await run(
+              background.start(
+                binding,
+                context?.toolCallId ?? crypto.randomUUID(),
+                "shell",
+                command,
+                async (signal) =>
+                  JSON.stringify({ workdir: directory.relative, ...(await execute(signal)) }),
+              ),
+            );
+            const result = await run(
+              background.waitResult(binding.sessionId, receipt.taskId, yieldMs ?? 1000),
+            );
+            if (result?.status === "completed")
+              return Schema.decodeUnknownSync(Schema.fromJsonString(ShellResult))(result.result);
+            if (result) return { taskId: receipt.taskId, ...result };
+            return receipt;
+          }
+          const result = await execute(context?.abortSignal);
           return { workdir: directory.relative, ...result };
         });
 

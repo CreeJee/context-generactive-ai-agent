@@ -10,6 +10,8 @@ import { ExternalAgents } from "../src/external-agents/agents.ts";
 import { Indexer } from "../src/memory/embedding/indexer.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
+import { DelegateTools } from "../src/tools/delegate.ts";
+import { BackgroundTasks } from "../src/tools/background.ts";
 import { approvalToolDefinitions, permissionReviewInterrupt } from "../src/tools/definitions.ts";
 import { testRuntime } from "./support/runtime.ts";
 
@@ -67,6 +69,31 @@ async function agentSetup() {
 }
 
 describe("external ACP agents", () => {
+  test("slow delegation yields a receipt and cancellation reaches the live ACP agent", async () => {
+    const { runtime, agents, run, project, session, log } = await agentSetup();
+    await run(agents.setTrusted(project, "project", "fake", true));
+    const delegate = (await runtime.runPromise(DelegateTools)).forRun(
+      project,
+      session.id,
+      new AbortController().signal,
+    ).tools[0]!;
+    const receipt = await delegate.execute!({ agent: "fake", task: "slow task", yieldMs: 0 });
+    expect(receipt).toMatchObject({ status: "running" });
+    await until(() => existsSync(`${log}.slow`), "the background ACP prompt to arrive");
+    const tasks = await runtime.runPromise(BackgroundTasks);
+    await run(tasks.stopSession(session.id));
+    expect(tasks.hasSession(session.id)).toBe(false);
+    expect((await run(agents.overview(project))).agents[0]?.state).toMatchObject({
+      status: "trusted",
+      link: { status: "connected" },
+    });
+    expect(
+      await agents.prompt(project, "fake", session.id, "after cancellation", {
+        signal: new AbortController().signal,
+        askPermission: async () => false,
+      }),
+    ).toMatchObject({ status: "completed" });
+  });
   test("removing a configured agent closes its live process", async () => {
     const { agents, run, project, starts, prompt } = await agentSetup();
     await run(agents.setTrusted(project, "project", "fake", true));

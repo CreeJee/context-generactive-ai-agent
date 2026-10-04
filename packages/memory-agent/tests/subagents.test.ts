@@ -103,7 +103,10 @@ describe("subagents", () => {
     const sent = compactChildToolResults(messages, new Set(["old", "current"]));
     expect(sent[0]?.content).toContain("read_subagent_tool_result");
     expect(JSON.stringify(sent[0]?.content).length).toBeLessThan(content.length / 10);
-    expect(sent[2]?.content).toBe(content);
+    expect(sent[2]?.content).toContain("Child tool result preview");
+    expect(sent[2]?.content).toContain("read_subagent_tool_result");
+    expect(JSON.stringify(sent[2]?.content).length).toBeLessThan(content.length);
+    expect(messages[2]?.content).toBe(content);
     expect(messages[0]?.content).toBe(content);
     expect(compactChildToolResults(messages, new Set())[0]?.content).toBe(content);
   });
@@ -131,6 +134,14 @@ describe("subagents", () => {
     // No nesting, and nothing the parent does not have.
     expect(childStart?.toolNames).not.toContain("run_subagent");
     expect(childStart?.toolNames).not.toContain("message_subagent");
+    expect(childStart?.toolNames).not.toContain("update_goal");
+    expect(childStart?.toolNames).not.toContain("update_plan");
+    expect(childStart?.toolNames).not.toContain("update_workflow_progress");
+    expect(childStart?.toolNames).not.toContain("record_workflow_blocker");
+    expect(childStart?.toolNames).not.toContain("delegate_to_agent");
+    expect(childStart?.systemPrompts.some((prompt) => prompt.includes("Current workflow"))).toBe(
+      false,
+    );
     expect(childStart?.toolNames).toContain("read_subagent_tool_result");
     // The only child-specific tool reads bounded pages of that child's own persisted results.
     expect(

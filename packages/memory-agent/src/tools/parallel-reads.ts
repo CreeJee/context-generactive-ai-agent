@@ -18,6 +18,8 @@ export const readOnlyToolNames: ReadonlySet<string> = new Set([
   "read_outside_file",
   "search_outside_file",
   "read_skill",
+  "read_tool_result",
+  "read_subagent_tool_result",
   "kagi_search",
   "kagi_extract",
 ]);

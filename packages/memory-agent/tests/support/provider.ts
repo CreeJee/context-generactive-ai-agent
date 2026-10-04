@@ -205,7 +205,7 @@ export const defaultTestResponder: ScriptedResponder = async (invocation) => {
     if (generic) return { text: `${generic[0].slice(5)} said ${generic[1]}` };
   }
 
-  if (instructions.includes("This is an automatic subagent completion follow-up"))
+  if (instructions.includes("This is an automatic task completion follow-up"))
     return { text: "Background work completed." };
   if (user === "dispatch only")
     return call("call-background", "run_subagent", { task: "nap background" });

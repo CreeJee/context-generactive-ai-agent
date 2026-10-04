@@ -57,6 +57,7 @@ import { MessageQueue } from "./queue/queue.ts";
 import { SessionLeases } from "./sessions/leases.ts";
 import { Sessions } from "./sessions/sessions.ts";
 import { ApprovedTools } from "./tools/approved.ts";
+import { BackgroundTasks } from "./tools/background.ts";
 import { FileTools } from "./tools/files.ts";
 import { DelegateTools } from "./tools/delegate.ts";
 import { KagiTools } from "./tools/kagi.ts";
@@ -260,6 +261,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
       ),
     ),
     Layer.provideMerge(retrieval),
+    Layer.provideMerge(BackgroundTasks.layer),
     Layer.provideMerge(memory),
     Layer.provideMerge(stores),
     Layer.provideMerge(foundation),
