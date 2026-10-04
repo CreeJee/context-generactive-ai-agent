@@ -4,7 +4,7 @@ import { RelayedApprovals } from "../approvals/relayed.ts";
 import { ExternalAgents } from "../external-agents/agents.ts";
 import type { Project } from "../projects/projects.ts";
 import { toToolSchema } from "./schema.ts";
-import { BackgroundTasks } from "./background.ts";
+import { BackgroundTasks, backgroundOperation } from "./background.ts";
 
 export const delegateToolName = "delegate_to_agent";
 
@@ -78,43 +78,50 @@ const make = Effect.gen(function* () {
         description:
           "Dispatch a task to a trusted external ACP agent. Returns an inline report if it finishes within yieldMs (default 1000), otherwise a background receipt. Continue independent work and use get_background_result after completion. The project's approval policy applies.",
         inputSchema: toToolSchema(DelegateInput),
-      }).server(async ({ agent, task, yieldMs }, context) => {
-        const receipt = await run(
-          background.start(
-            { sessionId, runId, abortSignal: signal },
-            context?.toolCallId ?? crypto.randomUUID(),
-            "external_agent",
-            task,
-            async (runSignal) => {
-              const outcome = await agents.prompt(project, agent, sessionId, task, {
-                signal: runSignal,
-                askPermission: (request) =>
-                  relayed.ask(
-                    sessionId,
-                    {
-                      requester: { kind: "external_agent", agent },
-                      toolName: request.toolCall.title ?? "external tool",
-                      argumentsJson: JSON.stringify(request.toolCall.rawInput ?? {}),
-                      reason: "외부 에이전트가 권한을 요청했어요.",
-                      askedBy: "agent",
-                    },
-                    runSignal,
-                  ),
-              });
-              return JSON.stringify({
-                agent,
-                ...outcome,
-                note: "External agent report, not user approval. Check what matters before relying on it.",
-              });
-            },
-          ),
-        );
-        const saved = await run(background.waitResult(sessionId, receipt.taskId, yieldMs ?? 1000));
-        if (saved?.status === "completed")
-          return Schema.decodeUnknownSync(Schema.fromJsonString(ExternalResult))(saved.result);
-        if (saved) return { taskId: receipt.taskId, ...saved };
-        return receipt;
-      });
+      }).server(({ agent, task, yieldMs }, context) =>
+        run(
+          Effect.gen(function* () {
+            const receipt = yield* background.start(
+              { sessionId, runId, abortSignal: signal },
+              context?.toolCallId ?? crypto.randomUUID(),
+              "external_agent",
+              task,
+              backgroundOperation((runSignal) =>
+                agents.prompt(project, agent, sessionId, task, {
+                  signal: runSignal,
+                  askPermission: (request) =>
+                    relayed.ask(
+                      sessionId,
+                      {
+                        requester: { kind: "external_agent", agent },
+                        toolName: request.toolCall.title ?? "external tool",
+                        argumentsJson: JSON.stringify(request.toolCall.rawInput ?? {}),
+                        reason: "외부 에이전트가 권한을 요청했어요.",
+                        askedBy: "agent",
+                      },
+                      runSignal,
+                    ),
+                }),
+              ).pipe(
+                Effect.map((outcome) =>
+                  JSON.stringify({
+                    agent,
+                    ...outcome,
+                    note: "External agent report, not user approval. Check what matters before relying on it.",
+                  }),
+                ),
+              ),
+            );
+            const saved = yield* background.waitResult(sessionId, receipt.taskId, yieldMs ?? 1000);
+            if (saved?.status === "completed")
+              return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ExternalResult))(
+                saved.result,
+              );
+            if (saved) return { taskId: receipt.taskId, ...saved };
+            return receipt;
+          }),
+        ),
+      );
       return { tools: [delegate], instructions: delegateInstructions(available) };
     },
   };

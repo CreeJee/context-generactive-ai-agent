@@ -2,7 +2,7 @@ import type { ToolExecutionContext } from "@tanstack/ai";
 import { tmpdir } from "node:os";
 import { isAbsolute, relative, sep } from "node:path";
 import { Context, Effect, Result, Layer, Schema } from "effect";
-import { BackgroundTasks, type BackgroundBinding } from "./background.ts";
+import { BackgroundTasks, backgroundOperation, type BackgroundBinding } from "./background.ts";
 import { StorageRoot } from "../config/storage-root.ts";
 import {
   canonicalPath,
@@ -98,23 +98,32 @@ const make = Effect.gen(function* () {
               env: process.env,
             });
           if (binding) {
-            const receipt = await run(
-              background.start(
-                binding,
-                context?.toolCallId ?? crypto.randomUUID(),
-                "shell",
-                command,
-                async (signal) =>
-                  JSON.stringify({ workdir: directory.relative, ...(await execute(signal)) }),
-              ),
+            return run(
+              Effect.gen(function* () {
+                const receipt = yield* background.start(
+                  binding,
+                  context?.toolCallId ?? crypto.randomUUID(),
+                  "shell",
+                  command,
+                  backgroundOperation(execute).pipe(
+                    Effect.map((result) =>
+                      JSON.stringify({ workdir: directory.relative, ...result }),
+                    ),
+                  ),
+                );
+                const result = yield* background.waitResult(
+                  binding.sessionId,
+                  receipt.taskId,
+                  yieldMs ?? 1000,
+                );
+                if (result?.status === "completed")
+                  return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ShellResult))(
+                    result.result,
+                  );
+                if (result) return { taskId: receipt.taskId, ...result };
+                return receipt;
+              }),
             );
-            const result = await run(
-              background.waitResult(binding.sessionId, receipt.taskId, yieldMs ?? 1000),
-            );
-            if (result?.status === "completed")
-              return Schema.decodeUnknownSync(Schema.fromJsonString(ShellResult))(result.result);
-            if (result) return { taskId: receipt.taskId, ...result };
-            return receipt;
           }
           const result = await execute(context?.abortSignal);
           return { workdir: directory.relative, ...result };

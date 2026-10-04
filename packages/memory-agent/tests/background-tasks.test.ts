@@ -1,9 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Effect, Schema } from "effect";
-import { describe, expect, test } from "vite-plus/test";
-import { BackgroundTasks } from "../src/tools/background.ts";
+import { Cause, Deferred, Effect, Schema } from "effect";
+import { describe, expect, test, vi } from "vite-plus/test";
+import {
+  BackgroundTasks,
+  BackgroundOperationFailed,
+  BackgroundResultStoreFailed,
+} from "../src/tools/background.ts";
 import { ApprovedTools } from "../src/tools/approved.ts";
 import { ChatState } from "../src/chat-state/chat-state.ts";
 import { Database } from "../src/db/database.ts";
@@ -23,6 +27,156 @@ const Page = Schema.Struct({
 });
 
 describe("background task lifecycle", () => {
+  test("simultaneous replay dispatches only one operation", async () => {
+    const { runtime, session } = await testRuntime();
+    const tasks = await runtime.runPromise(BackgroundTasks);
+    const binding = {
+      sessionId: session.id,
+      runId: randomUUID(),
+      abortSignal: new AbortController().signal,
+    };
+    const callId = randomUUID();
+    let executions = 0;
+    const operation = Effect.sync(() => {
+      executions++;
+      return "done";
+    });
+    const receipts = await runtime.runPromise(
+      Effect.all(
+        [
+          tasks.start(binding, callId, "shell", "task", operation),
+          tasks.start(binding, callId, "shell", "task", operation),
+        ],
+        { concurrency: "unbounded" },
+      ),
+    );
+    expect(receipts[0]?.taskId).toBe(receipts[1]?.taskId);
+    await runtime.runPromise(tasks.waitResult(session.id, receipts[0]!.taskId, 2000));
+    expect(executions).toBe(1);
+  });
+  test("malformed persisted results fail in the typed storage channel", async () => {
+    const { runtime, session } = await testRuntime();
+    const tasks = await runtime.runPromise(BackgroundTasks);
+    const receipt = await runtime.runPromise(
+      tasks.start(
+        { sessionId: session.id, runId: randomUUID(), abortSignal: new AbortController().signal },
+        randomUUID(),
+        "shell",
+        "task",
+        Effect.succeed("done"),
+      ),
+    );
+    await runtime.runPromise(tasks.waitResult(session.id, receipt.taskId, 2000));
+    const state = await runtime.runPromise(ChatState);
+    await state.persistence.stores.metadata.set("background-task-result", receipt.taskId, {
+      status: "completed",
+    });
+    const exit = await runtime.runPromise(
+      Effect.exit(tasks.waitResult(session.id, receipt.taskId, 0)),
+    );
+    expect(exit._tag).toBe("Failure");
+    if (exit._tag !== "Failure") throw new Error("expected storage failure");
+    expect(Cause.hasDies(exit.cause)).toBe(false);
+    expect(Cause.squash(exit.cause)).toBeInstanceOf(BackgroundResultStoreFailed);
+  });
+  test("operation failure is stored once and finalizes the attempt as failed", async () => {
+    const { runtime, session } = await testRuntime();
+    const tasks = await runtime.runPromise(BackgroundTasks);
+    const receipt = await runtime.runPromise(
+      tasks.start(
+        { sessionId: session.id, runId: randomUUID(), abortSignal: new AbortController().signal },
+        randomUUID(),
+        "shell",
+        "failing task",
+        Effect.fail(new BackgroundOperationFailed({ cause: new Error("execution failed") })),
+      ),
+    );
+    const result = await runtime.runPromise(tasks.waitResult(session.id, receipt.taskId, 2000));
+    expect(result).toMatchObject({ status: "failed" });
+    expect(result?.result).toContain("execution failed");
+    const trace = await runtime.runPromise(WorkTraceStore);
+    expect(trace.taskDetail(session.id, receipt.taskId)?.task.status).toBe("failed");
+  });
+  test("persistent result write failure records a terminal failure without retry or false completion", async () => {
+    const { runtime, session } = await testRuntime();
+    const tasks = await runtime.runPromise(BackgroundTasks);
+    const state = await runtime.runPromise(ChatState);
+    const original = state.persistence.stores.metadata.set.bind(state.persistence.stores.metadata);
+    let resultWrites = 0;
+    const spy = vi
+      .spyOn(state.persistence.stores.metadata, "set")
+      .mockImplementation((namespace, key, value) => {
+        if (namespace === "background-task-result") {
+          resultWrites++;
+          return Promise.reject(new Error("storage offline"));
+        }
+        return original(namespace, key, value);
+      });
+    let notifications = 0;
+    tasks.onCompletion(() => {
+      notifications++;
+    });
+    try {
+      const receipt = await runtime.runPromise(
+        tasks.start(
+          { sessionId: session.id, runId: randomUUID(), abortSignal: new AbortController().signal },
+          randomUUID(),
+          "shell",
+          "task",
+          Effect.succeed("operation completed"),
+        ),
+      );
+      const result = await runtime.runPromise(tasks.waitResult(session.id, receipt.taskId, 2000));
+      expect(result).toMatchObject({ status: "failed" });
+      expect(result?.result).toContain("background_result_storage_failed");
+      const trace = await runtime.runPromise(WorkTraceStore);
+      expect(trace.taskDetail(session.id, receipt.taskId)?.task.status).toBe("failed");
+      expect(
+        await tasks.forSession(session.id)[0]!.execute!({ taskId: receipt.taskId }),
+      ).toMatchObject({ status: "failed" });
+      expect(resultWrites).toBe(1);
+      expect(notifications).toBe(1);
+      expect(tasks.hasSession(session.id)).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+  test("parent interruption awaits the operation finalizer before recording cancellation", async () => {
+    const { runtime, session } = await testRuntime();
+    const tasks = await runtime.runPromise(BackgroundTasks);
+    const gate = Deferred.makeUnsafe<void>();
+    let started = false;
+    let cleaning = false;
+    const controller = new AbortController();
+    const receipt = await runtime.runPromise(
+      tasks.start(
+        { sessionId: session.id, runId: randomUUID(), abortSignal: controller.signal },
+        randomUUID(),
+        "external_agent",
+        "task",
+        Effect.sync(() => {
+          started = true;
+        }).pipe(
+          Effect.andThen(Effect.never),
+          Effect.ensuring(
+            Effect.sync(() => {
+              cleaning = true;
+            }).pipe(Effect.andThen(Deferred.await(gate))),
+          ),
+        ),
+      ),
+    );
+    await expect.poll(() => started).toBe(true);
+    controller.abort();
+    await expect.poll(() => cleaning).toBe(true);
+    expect(
+      await tasks.forSession(session.id)[0]!.execute!({ taskId: receipt.taskId }),
+    ).toMatchObject({ status: "running" });
+    await runtime.runPromise(Deferred.succeed(gate, undefined));
+    expect(
+      await runtime.runPromise(tasks.waitResult(session.id, receipt.taskId, 2000)),
+    ).toMatchObject({ status: "cancelled" });
+  });
   test("replayed tool calls retrieve the original operation without repeating effects", async () => {
     const { runtime, session } = await testRuntime();
     const tasks = await runtime.runPromise(BackgroundTasks);
@@ -33,10 +187,10 @@ describe("background task lifecycle", () => {
     };
     const callId = randomUUID();
     let executions = 0;
-    const operation = async () => {
+    const operation = Effect.sync(() => {
       executions++;
       return "done";
-    };
+    });
     const first = await runtime.runPromise(
       tasks.start(binding, callId, "shell", "task", operation),
     );
@@ -111,18 +265,16 @@ describe("background task lifecycle", () => {
         randomUUID(),
         "external_agent",
         "synthetic task",
-        (signal) =>
-          new Promise((resolve) => {
-            started = true;
-            signal.addEventListener(
-              "abort",
-              () => {
-                aborted = true;
-                resolve("cancelled");
-              },
-              { once: true },
-            );
-          }),
+        Effect.sync(() => {
+          started = true;
+        }).pipe(
+          Effect.andThen(Effect.never),
+          Effect.ensuring(
+            Effect.sync(() => {
+              aborted = true;
+            }),
+          ),
+        ),
       ),
     );
     await expect.poll(() => started).toBe(true);
@@ -157,7 +309,7 @@ describe("background task lifecycle", () => {
         randomUUID(),
         "external_agent",
         "task",
-        async () => "x".repeat(6000),
+        Effect.succeed("x".repeat(6000)),
       ),
     );
     await runtime.runPromise(tasks.waitResult(session.id, receipt.taskId, 2000));
