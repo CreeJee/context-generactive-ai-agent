@@ -11,13 +11,13 @@ const Selection = Schema.Struct({
 
 interface ModelUnavailableBody {
   error: "model_unavailable";
-  provider: "openai" | "anthropic";
+  provider: ProviderId;
   model: string;
   reasoningEffort: string | null;
 }
 
 const modelUnavailable = (error: {
-  readonly provider: "openai" | "anthropic";
+  readonly provider: ProviderId;
   readonly model: string;
   readonly reasoningEffort?: string;
 }) => {

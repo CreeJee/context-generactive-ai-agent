@@ -698,13 +698,27 @@ describe("Workflows", () => {
           },
           detail: "Verification passed",
         });
-        return yield* workflows.finishRun(session.id, "verify");
+        const completed = yield* workflows.finishRun(session.id, "verify");
+        const repeated = yield* workflows.finishRun(session.id, "verify");
+        return { completed, repeated };
       }),
     );
 
-    expect(state.phase).toBe("verify");
-    expect(state.goal).toMatchObject({ status: "completed", verification: { status: "passed" } });
-    expect(state.plan).toMatchObject({ status: "completed", verification: { status: "passed" } });
+    expect(state.completed.phase).toBe("completed");
+    expect(state.completed.goal).toMatchObject({
+      status: "completed",
+      verification: { status: "passed" },
+    });
+    expect(state.completed.plan).toMatchObject({
+      status: "completed",
+      verification: { status: "passed" },
+    });
+    expect(state.repeated).toEqual(state.completed);
+    expect(
+      state.repeated.ledger.filter(
+        (event) => event.detail === "Verification completed the workflow",
+      ),
+    ).toHaveLength(1);
   });
 
   test.each([

@@ -22,7 +22,7 @@ const providerFrom = (request: Request) => {
 };
 
 const browserState = (state: {
-  readonly provider: "openai" | "anthropic";
+  readonly provider: ProviderId;
   readonly status: "signed-out" | "pending" | "signed-in" | "error";
   readonly authorizationUrl?: string;
   readonly planType?: string;
@@ -43,7 +43,8 @@ export async function loader({ request }: Route.LoaderArgs) {
     const { sqlite } = yield* Database;
     // Migrate when the sidebar first checks this provider. If the vault is unavailable,
     // keep the legacy connection usable; the next status request can retry the copy.
-    yield* Effect.promise(() => importLegacyOAuthProfile(sqlite, provider).catch(() => null));
+    if (provider !== "openai-compatible")
+      yield* Effect.promise(() => importLegacyOAuthProfile(sqlite, provider).catch(() => null));
     return Response.json(browserState(yield* configured.auth.status));
   }).pipe(
     Effect.catchTags({
@@ -69,7 +70,8 @@ export async function action({ request }: Route.ActionArgs) {
   const body = await readJson(request, Intent);
   if (Result.isFailure(body)) return Response.json({ error: "invalid_intent" }, { status: 400 });
   const { intent, provider } = body.success;
-  if (provider === undefined) return Response.json({ error: "invalid_provider" }, { status: 400 });
+  if (provider === undefined || provider === "openai-compatible")
+    return Response.json({ error: "invalid_provider" }, { status: 400 });
 
   const response = Effect.gen(function* () {
     const configured = yield* (yield* ProviderRegistry).get(provider);

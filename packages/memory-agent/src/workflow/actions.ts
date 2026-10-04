@@ -40,6 +40,8 @@ export function evaluateWorkflowAction(
     return { allowed: false, reason: "run_in_progress" };
   const { goal, plan } = state;
   if (request.kind === "phase") {
+    // Completion is a server-owned terminal phase, never a user navigation target.
+    if (request.phase === "completed") return { allowed: false, reason: "goal_terminal" };
     // Non-execution phase navigation does not approve or mutate artifacts.
     if (request.phase !== "execute") return { allowed: true };
     if (goal && plan && plan.goalVersion !== goal.version)
@@ -73,6 +75,7 @@ export function workflowActions(
       plan: phase("plan"),
       execute: phase("execute"),
       verify: phase("verify"),
+      completed: phase("completed"),
     },
     controls: { pause: control("pause"), resume: control("resume"), stop: control("stop") },
   };

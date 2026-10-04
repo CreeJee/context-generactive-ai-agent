@@ -176,13 +176,17 @@ for (const status of ["pending", "uncertain"] as const) {
   });
 }
 
-test("owner tool is exposed only in Goal/Plan and checks the latest phase, not captured availability", async () => {
+test("owner tool is exposed at potential source phases and checks latest state", async () => {
   const f = await fixture();
   const tools = await f.runtime.runPromise(WorkflowTools);
-  for (const phase of ["chat", "execute", "verify"] as const)
+  for (const phase of ["chat", "execute"] as const)
     expect(
       tools.forSession(f.sessionId, phase).some((tool) => tool.name === "start_new_goal"),
     ).toBe(false);
+  for (const phase of ["goal", "plan", "verify", "completed"] as const)
+    expect(
+      tools.forSession(f.sessionId, phase).some((tool) => tool.name === "start_new_goal"),
+    ).toBe(true);
   const action = tools
     .forSession(f.sessionId, "goal")
     .find((tool) => tool.name === "start_new_goal");
@@ -197,6 +201,23 @@ test("owner tool is exposed only in Goal/Plan and checks the latest phase, not c
     goal: { version: 1 },
     plan: null,
   });
+});
+
+test("correct Goal ID still refuses direct transition while the calling run is active", async () => {
+  const f = await fixture();
+  const tools = await f.runtime.runPromise(WorkflowTools);
+  const action = tools
+    .forSession(f.sessionId, "goal")
+    .find((tool) => tool.name === "start_new_goal");
+  if (!action?.execute) throw new Error("owner action missing");
+  f.db.sqlite.exec("UPDATE chat_runs SET status = 'running' WHERE run_id = 'old-run'");
+  const before = rows(f.db, "workflow_state_revisions");
+  expect(await action.execute(transition(f.old))).toMatchObject({
+    error: "new_goal_transition_refused",
+    reason: "run_outcome_uncertain",
+  });
+  expect(identity(f.db, f.sessionId)).toBe(f.old);
+  expect(rows(f.db, "workflow_state_revisions")).toEqual(before);
 });
 
 test("legacy historical Goal and revisions remain unbound after explicit new Goal", async () => {
@@ -260,11 +281,61 @@ test("Verify must be closed and active invoking run never receives an exemption"
   expect(rows(f.db, "workflow_state_revisions")).toEqual(before);
 });
 
+for (const scenario of [
+  { name: "goal with an existing Goal", phase: "goal", closed: false, allowed: true },
+  { name: "plan with an existing Goal", phase: "plan", closed: false, allowed: true },
+  { name: "closed verify", phase: "verify", closed: true, allowed: true },
+  { name: "completed workflow", phase: "completed", closed: true, allowed: true },
+  { name: "unclosed verify", phase: "verify", closed: false, allowed: false },
+  { name: "execute", phase: "execute", closed: false, allowed: false },
+  { name: "chat", phase: "chat", closed: false, allowed: false },
+] as const) {
+  test(`transition source: ${scenario.name}`, async () => {
+    const f = await fixture();
+    if (scenario.closed) {
+      await f.runtime.runPromise(f.workflows.setPhase(f.sessionId, "verify"));
+      await f.runtime.runPromise(
+        f.workflows.updateProgress(f.sessionId, {
+          goalStatus: "completed",
+          goalEvidence: ["verified"],
+          planEvidence: [],
+          steps: [],
+          verification: { status: "passed", summary: "verified", evidence: ["verified"] },
+          detail: "closed workflow",
+        }),
+      );
+      if (scenario.phase === "completed")
+        await f.runtime.runPromise(f.workflows.finishRun(f.sessionId, "verify"));
+    } else if (scenario.phase !== "goal") {
+      await f.runtime.runPromise(f.workflows.setPhase(f.sessionId, scenario.phase));
+    }
+    expect((await f.runtime.runPromise(f.workflows.get(f.sessionId))).phase).toBe(scenario.phase);
+    const before = rows(f.db, "workflow_state_revisions");
+    if (scenario.allowed) {
+      expect(
+        await f.runtime.runPromise(f.workflows.startNewGoal(f.sessionId, transition(f.old))),
+      ).toMatchObject({ goal: { version: 1 }, plan: null });
+      expect(identity(f.db, f.sessionId)).not.toBe(f.old);
+    } else {
+      await expect(
+        f.runtime.runPromise(f.workflows.startNewGoal(f.sessionId, transition(f.old))),
+      ).rejects.toMatchObject({ reason: "phase_not_authorized" });
+      expect(identity(f.db, f.sessionId)).toBe(f.old);
+      expect(rows(f.db, "workflow_state_revisions")).toEqual(before);
+    }
+  });
+}
+
 test("stale identity and execution phase cannot authorize new Goal", async () => {
   const f = await fixture();
-  await expect(
-    f.runtime.runPromise(f.workflows.startNewGoal(f.sessionId, transition("wrong"))),
-  ).rejects.toMatchObject({ reason: "workflow_changed" });
+  const before = rows(f.db, "workflow_state_revisions");
+  for (const stale of ["wrong", null]) {
+    await expect(
+      f.runtime.runPromise(f.workflows.startNewGoal(f.sessionId, transition(stale))),
+    ).rejects.toMatchObject({ reason: "workflow_changed" });
+    expect(identity(f.db, f.sessionId)).toBe(f.old);
+    expect(rows(f.db, "workflow_state_revisions")).toEqual(before);
+  }
   await f.runtime.runPromise(f.workflows.setPhase(f.sessionId, "execute"));
   await expect(
     f.runtime.runPromise(f.workflows.startNewGoal(f.sessionId, transition(f.old))),

@@ -4,10 +4,7 @@ import { Collapsible, CollapsibleContent } from "~/components/ui/collapsible";
 import type { ModelSelection, ProviderAuthState, ProviderId } from "../api";
 import { SidebarDisclosureTrigger } from "./sidebar-disclosure-trigger";
 
-const providerLabel = { openai: "ChatGPT", anthropic: "Claude" } satisfies Record<
-  ProviderId,
-  string
->;
+import { providerLabels as providerLabel } from "./providers";
 
 export function accountSummary(
   provider: ProviderId,
@@ -23,7 +20,9 @@ export function accountSummary(
         ? "로그인 대기"
         : auth.status === "error"
           ? "연결 오류"
-          : "로그인 필요";
+          : provider === "openai-compatible"
+            ? "설정 필요"
+            : "로그인 필요";
   const model = selection
     ? `${providerLabel[selection.provider]} · ${modelName ?? selection.model}`
     : "모델 미선택";

@@ -1311,6 +1311,25 @@ export const migrations: readonly string[] = [
   CREATE TRIGGER workflow_goal_native_artifacts_no_delete BEFORE DELETE ON workflow_goal_native_artifacts
     BEGIN SELECT RAISE(ABORT, 'native registration is immutable'); END;
   `,
+  `
+  -- A tool call records intent, not a new Goal. Only a completed run can consume it.
+  -- Additive migration: do not rewrite legacy phases, run outcomes or Goal history.
+  -- Compatible rollback leaves accepted requests inert until this code is restored.
+  CREATE TABLE workflow_new_goal_requests (
+    run_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    previous_goal_instance_id TEXT,
+    source_revision_id INTEGER NOT NULL REFERENCES workflow_state_revisions(id),
+    payload_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('accepted', 'applied', 'rejected')),
+    reason TEXT,
+    applied_goal_instance_id TEXT,
+    created_at TEXT NOT NULL,
+    settled_at TEXT
+  );
+  CREATE UNIQUE INDEX workflow_new_goal_requests_one_pending
+    ON workflow_new_goal_requests(session_id) WHERE status = 'accepted';
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

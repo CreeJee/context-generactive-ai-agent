@@ -211,12 +211,16 @@ const sourceFromServices = Effect.gen(function* () {
           });
           chat.push(chatRoute);
 
-          const resolved = yield* tools.resolve({ provider, model: model.id }).pipe(
-            Effect.catchTag("UnknownProviderToolModel", () => Effect.succeed([])),
-            Effect.mapError(
-              (cause) => new RouteCatalogRefreshFailed({ provider, operation: "tools", cause }),
-            ),
-          );
+          const resolved =
+            provider === "openai-compatible"
+              ? []
+              : yield* tools.resolve({ provider, model: model.id }).pipe(
+                  Effect.catchTag("UnknownProviderToolModel", () => Effect.succeed([])),
+                  Effect.mapError(
+                    (cause) =>
+                      new RouteCatalogRefreshFailed({ provider, operation: "tools", cause }),
+                  ),
+                );
           for (const descriptor of resolved) {
             execution.push(
               Object.freeze({

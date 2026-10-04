@@ -3,7 +3,7 @@ import { optionalProperty } from "../optional-property.ts";
 import { Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 
-export type ApiUsageProvider = "openai" | "anthropic";
+export type ApiUsageProvider = "openai" | "anthropic" | "openai-compatible";
 export interface ApiUsageResponse {
   readonly rootSessionId: string;
   readonly runId?: string | null;
@@ -78,9 +78,9 @@ const make = Effect.gen(function* () {
       const read = count(response.cacheReadTokens);
       const write = count(response.cacheWriteTokens);
       const output = count(response.outputTokens);
-      if (response.provider !== "openai" && response.provider !== "anthropic")
-        throw new Error("Unknown cache mode");
-      if (response.provider === "openai" && input !== null && read !== null && read > input)
+      const included = response.provider === "openai" || response.provider === "openai-compatible";
+      if (!included && response.provider !== "anthropic") throw new Error("Unknown cache mode");
+      if (included && input !== null && read !== null && read > input)
         throw new RangeError("Cache reads exceed included input tokens");
       const result = insert.run(
         response.rootSessionId,
@@ -93,7 +93,7 @@ const make = Effect.gen(function* () {
         output,
         read,
         write,
-        response.provider === "openai" ? "included" : "separate",
+        included ? "included" : "separate",
         Date.now(),
       );
       return Number(result.lastInsertRowid);

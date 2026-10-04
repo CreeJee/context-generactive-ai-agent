@@ -49,22 +49,26 @@ const make = Effect.gen(function* () {
       const startNewGoal = toolDefinition({
         name: "start_new_goal",
         description:
-          "Explicitly start a separate independent-success Goal in this session, only at a quiescent owner boundary in Goal or Plan. Requires the current Goal ID (null only for legacy/unbound). Preserves prior Goal/Plan/run evidence without inheriting verification. Purpose revisions use update_goal; method changes use update_plan. Never use this to bypass an active/failed run or uncertain side effect.",
+          "Request a separate independent-success Goal from Goal, Plan or a verified completed workflow. Requires the exact current Goal instance ID from the workflow prompt (null only for legacy/unbound); the owner rechecks it. A live calling run cannot apply the transition immediately. Preserves prior Goal/Plan/run evidence without inheriting verification. Purpose revisions use update_goal; method changes use update_plan. Never bypass an active/failed run or uncertain side effect.",
         inputSchema: toToolSchema(StartNewGoal),
       }).server((input) =>
         run(
-          Effect.flatMap(Workflows, (workflows) => workflows.startNewGoal(sessionId, input)).pipe(
+          Effect.gen(function* () {
+            const workflows = yield* Workflows;
+            if (runId) {
+              const request = yield* workflows.requestNewGoal(sessionId, runId, input);
+              return {
+                ...request,
+                applied: false as const,
+                message:
+                  "Request accepted; the new Goal is not saved. It will be applied only after this run completes and owner safety checks pass.",
+              };
+            }
+            const state = yield* workflows.startNewGoal(sessionId, input);
+            const goalInstanceId = yield* workflows.goalInstanceId(sessionId);
+            return { phase: state.phase, goal: state.goal, plan: state.plan, goalInstanceId };
+          }).pipe(
             Effect.tap(() => Effect.sync(() => events.publishSession(sessionId, "run-state"))),
-            Effect.flatMap((state) =>
-              Effect.flatMap(Workflows, (workflows) =>
-                Effect.map(workflows.goalInstanceId(sessionId), (goalInstanceId) => ({
-                  phase: state.phase,
-                  goal: state.goal,
-                  plan: state.plan,
-                  goalInstanceId,
-                })),
-              ),
-            ),
             Effect.catchTag("NewGoalTransitionRefused", (failure) =>
               Effect.succeed({
                 error: "new_goal_transition_refused" as const,
@@ -152,7 +156,9 @@ const make = Effect.gen(function* () {
         case "execute":
           return [updatePlan, updateProgress, recordBlocker];
         case "verify":
-          return [updateProgress, recordBlocker];
+          return [updateProgress, recordBlocker, startNewGoal];
+        case "completed":
+          return [startNewGoal];
         case "chat":
           return [];
       }
@@ -189,7 +195,11 @@ const ruleSource = (rule: ResolvedRules["rules"][number]) => {
   }
 };
 
-export function workflowInstructions(state: WorkflowState, resolved: ResolvedRules) {
+export function workflowInstructions(
+  state: WorkflowState,
+  resolved: ResolvedRules,
+  goalInstanceId: string | null = null,
+) {
   const applicableRules = resolved.rules
     .map(
       (rule) =>
@@ -197,6 +207,7 @@ export function workflowInstructions(state: WorkflowState, resolved: ResolvedRul
     )
     .join("\n");
   const common = `Workflow phase: ${state.phase}.
+Current Goal instance ID: ${goalInstanceId ?? "(none; legacy/unbound)"}. For start_new_goal, use this exact ID as previousGoalInstanceId (null only if none). This is a snapshot; the owner checks the current ID again at request time.
 Goal and Plan are durable artifacts, not substitutes for a conversational answer.
 Use only the workflow artifact tools available in this phase, and update an artifact when the user's decisions materially change it.
 Never claim an artifact was stored unless its update tool completed.
@@ -218,6 +229,8 @@ ${compactList(state.goal.openQuestions.filter((question) => question.blocking).m
   switch (state.phase) {
     case "chat":
       return null;
+    case "completed":
+      return `${common}\nThe Goal and Plan are complete. Do not resume verification or change their completed evidence. Answer follow-up questions conversationally. Start a new Goal only when the user explicitly requests new work.\n\n${goal}`;
     case "goal":
       return `${common}
 The user delegated an outcome, not merely a request to describe a goal. Save a concise active Goal artifact before material changes, then autonomously investigate, implement and verify the outcome in this run. Replan internally as needed without requiring a Plan artifact. Use update_workflow_progress to record pauses, failures, evidence and verification. Do not mark the Goal completed without passed verification evidence. Ask only genuinely blocking questions. Tool permissions still apply.

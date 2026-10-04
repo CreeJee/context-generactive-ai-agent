@@ -63,16 +63,8 @@ import type {
 import { DataList, DataListItem } from "~/components/ui/data-list";
 import { SidebarDisclosureTrigger } from "./sidebar-disclosure-trigger";
 
-const providerLabels = { openai: "ChatGPT", anthropic: "Claude" } satisfies Record<
-  ProviderId,
-  string
->;
-const providerOptions = [
-  { value: "openai", label: providerLabels.openai },
-  { value: "anthropic", label: providerLabels.anthropic },
-] satisfies ReadonlyArray<{ value: ProviderId; label: string }>;
-const isProviderId = (value: string): value is ProviderId =>
-  value === "openai" || value === "anthropic";
+import { providerLabels, providerOptions, isProviderId } from "./providers";
+import { openSettingsOverlay } from "../settings/open-settings";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -113,88 +105,107 @@ export function AccountSection({
           </SelectContent>
         </Select>
       </DataListItem>
-      {!auth && (
-        <DataListItem term="연결">
-          <Spinner />
-        </DataListItem>
-      )}
-      {auth?.status === "signed-in" && (
-        <DataListItem term="연결">
-          <div className="flex min-w-0 items-center gap-1.5">
-            <Badge variant="secondary">연결됨</Badge>
-            {auth.planType && (
-              <span className="min-w-0 truncate text-xs text-muted-foreground">
-                {auth.planType}
-              </span>
-            )}
+      {provider === "openai-compatible" ? (
+        <DataListItem term="설정">
+          <div className="flex flex-col gap-2">
+            <span className="text-xs">{auth?.status === "signed-in" ? "설정됨" : "설정 필요"}</span>
             <Button
-              variant="ghost"
-              size="icon-sm"
-              className="ml-auto shrink-0"
-              onClick={() => onAction("logout")}
-              aria-label="연결 해제"
+              variant="outline"
+              size="sm"
+              onClick={() => openSettingsOverlay(null, "compatible")}
             >
-              <LogOutIcon />
+              호환 공급자 설정
             </Button>
           </div>
         </DataListItem>
-      )}
-      {auth?.status === "pending" && (
-        <DataListItem term="연결">
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-2 text-xs">
-              <Spinner /> 브라우저에서 로그인을 완료하세요
-            </div>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => window.open(auth.authUrl, "_blank", "noopener")}
-              >
-                로그인 창 다시 열기
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => onAction("cancel")}>
-                취소
-              </Button>
-            </div>
-          </div>
-        </DataListItem>
-      )}
-      {(auth?.status === "signed-out" || auth?.status === "error") && (
-        <DataListItem term="연결">
-          <div className="flex flex-col gap-2">
-            {auth.status === "error" && (
-              <Alert variant="destructive" className="min-w-0">
-                <AlertDescription className="min-w-0 wrap-break-word">
-                  {auth.message}
-                  {(auth.code || auth.httpStatus || auth.providerCode) && (
-                    <Collapsible className="mt-2 text-2xs">
-                      <CollapsibleTrigger className="group flex items-center gap-1 text-left">
-                        <ChevronRightIcon
-                          aria-hidden="true"
-                          className="size-3 transition-transform group-data-[panel-open]:rotate-90"
-                        />
-                        진단 정보
-                      </CollapsibleTrigger>
-                      <CollapsibleContent className="mt-1 space-y-0.5 break-all font-mono">
-                        {auth.code && <div>code: {auth.code}</div>}
-                        {auth.operation && <div>operation: {auth.operation}</div>}
-                        {auth.httpStatus && <div>HTTP: {auth.httpStatus}</div>}
-                        {auth.providerCode && <div>provider code: {auth.providerCode}</div>}
-                        {auth.credentialStage && (
-                          <div>credential stage: {auth.credentialStage}</div>
-                        )}
-                        {auth.transportCode && <div>transport code: {auth.transportCode}</div>}
-                        {auth.proxyRoute && <div>proxy route: {auth.proxyRoute}</div>}
-                      </CollapsibleContent>
-                    </Collapsible>
-                  )}
-                </AlertDescription>
-              </Alert>
-            )}
-            <Button onClick={() => onAction("login")}>{providerLabels[provider]}로 로그인</Button>
-          </div>
-        </DataListItem>
+      ) : (
+        <>
+          {!auth && (
+            <DataListItem term="연결">
+              <Spinner />
+            </DataListItem>
+          )}
+          {auth?.status === "signed-in" && (
+            <DataListItem term="연결">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <Badge variant="secondary">연결됨</Badge>
+                {auth.planType && (
+                  <span className="min-w-0 truncate text-xs text-muted-foreground">
+                    {auth.planType}
+                  </span>
+                )}
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="ml-auto shrink-0"
+                  onClick={() => onAction("logout")}
+                  aria-label="연결 해제"
+                >
+                  <LogOutIcon />
+                </Button>
+              </div>
+            </DataListItem>
+          )}
+          {auth?.status === "pending" && (
+            <DataListItem term="연결">
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2 text-xs">
+                  <Spinner /> 브라우저에서 로그인을 완료하세요
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => window.open(auth.authUrl, "_blank", "noopener")}
+                  >
+                    로그인 창 다시 열기
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => onAction("cancel")}>
+                    취소
+                  </Button>
+                </div>
+              </div>
+            </DataListItem>
+          )}
+          {(auth?.status === "signed-out" || auth?.status === "error") && (
+            <DataListItem term="연결">
+              <div className="flex flex-col gap-2">
+                {auth.status === "error" && (
+                  <Alert variant="destructive" className="min-w-0">
+                    <AlertDescription className="min-w-0 wrap-break-word">
+                      {auth.message}
+                      {(auth.code || auth.httpStatus || auth.providerCode) && (
+                        <Collapsible className="mt-2 text-2xs">
+                          <CollapsibleTrigger className="group flex items-center gap-1 text-left">
+                            <ChevronRightIcon
+                              aria-hidden="true"
+                              className="size-3 transition-transform group-data-[panel-open]:rotate-90"
+                            />
+                            진단 정보
+                          </CollapsibleTrigger>
+                          <CollapsibleContent className="mt-1 space-y-0.5 break-all font-mono">
+                            {auth.code && <div>code: {auth.code}</div>}
+                            {auth.operation && <div>operation: {auth.operation}</div>}
+                            {auth.httpStatus && <div>HTTP: {auth.httpStatus}</div>}
+                            {auth.providerCode && <div>provider code: {auth.providerCode}</div>}
+                            {auth.credentialStage && (
+                              <div>credential stage: {auth.credentialStage}</div>
+                            )}
+                            {auth.transportCode && <div>transport code: {auth.transportCode}</div>}
+                            {auth.proxyRoute && <div>proxy route: {auth.proxyRoute}</div>}
+                          </CollapsibleContent>
+                        </Collapsible>
+                      )}
+                    </AlertDescription>
+                  </Alert>
+                )}
+                <Button onClick={() => onAction("login")}>
+                  {providerLabels[provider]}로 로그인
+                </Button>
+              </div>
+            </DataListItem>
+          )}
+        </>
       )}
     </Section>
   );

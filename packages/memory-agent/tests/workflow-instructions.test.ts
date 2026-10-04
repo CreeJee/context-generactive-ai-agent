@@ -19,6 +19,14 @@ const resolved = (phase: WorkflowPhase) => ({
 });
 
 describe("workflowInstructions", () => {
+  test("provides the owner-read Goal instance ID instead of inferring it from Goal version", () => {
+    const prompt = workflowInstructions(state("completed"), resolved("completed"), "owner-id-123");
+    expect(prompt).toContain("Current Goal instance ID: owner-id-123");
+    expect(prompt).toContain("use this exact ID as previousGoalInstanceId");
+    expect(workflowInstructions(state("goal"), resolved("goal"), null)).toContain(
+      "Current Goal instance ID: (none; legacy/unbound)",
+    );
+  });
   test("treats Goal as autonomous outcome delegation rather than a planning gate", () => {
     const prompt = workflowInstructions(state("goal"), resolved("goal"));
 

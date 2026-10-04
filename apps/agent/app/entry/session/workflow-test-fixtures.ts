@@ -9,6 +9,7 @@ export const allowedWorkflowActions: SessionRunState["actions"] = {
     plan: { allowed: true },
     execute: { allowed: true, intent: "start" },
     verify: { allowed: true },
+    completed: { allowed: false, reason: "goal_terminal" },
   },
   controls: { pause: { allowed: true }, resume: { allowed: true }, stop: { allowed: true } },
 };

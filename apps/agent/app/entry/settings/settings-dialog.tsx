@@ -24,11 +24,13 @@ import { EmbeddingSettings } from "./pages/embedding";
 import { McpSettings } from "./pages/mcp";
 import { AgentSettings } from "./pages/agents";
 import { SkillSettings } from "./pages/skills";
+import { CompatibleSettings } from "./pages/compatible";
 
 const settingsGroups = [
   {
     label: "연결",
     pages: [
+      { value: "compatible", label: "OpenAI 호환 공급자", icon: PlugIcon },
       { value: "web", label: "웹 검색", icon: GlobeIcon },
       { value: "image", label: "이미지 생성", icon: ImageIcon },
       { value: "mcp", label: "MCP 서버", icon: PlugIcon },
@@ -49,6 +51,12 @@ type SettingsPage = (typeof settingsGroups)[number]["pages"][number]["value"];
 
 function SettingsPageBody({ page, project }: { page: SettingsPage; project: Project | null }) {
   switch (page) {
+    case "compatible":
+      return (
+        <QuerySection>
+          <CompatibleSettings />
+        </QuerySection>
+      );
     case "web":
       return (
         <QuerySection>
@@ -102,8 +110,10 @@ export function SettingsOverlay({
   project,
   open,
   onClose,
+  initialPage = "web",
 }: {
   project: Project | null;
+  initialPage?: SettingsPage;
   open: boolean;
   onClose: () => void;
 }) {
@@ -119,7 +129,7 @@ export function SettingsOverlay({
           <DialogTitle>설정</DialogTitle>
           <DialogDescription>대화 밖에서 쓰는 도구와 연결을 관리해요.</DialogDescription>
         </DialogHeader>
-        <Tabs defaultValue="web" orientation="vertical" className="min-h-0 flex-1">
+        <Tabs defaultValue={initialPage} orientation="vertical" className="min-h-0 flex-1">
           <div className="mr-2 w-40 shrink-0 border-r pr-3">
             <TabsList variant="nav" className="w-full items-stretch justify-start">
               {settingsGroups.map((group) => (

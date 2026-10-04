@@ -1,5 +1,17 @@
 export { memoryAgentLayer, type MemoryAgentLayerOptions } from "./layers.ts";
 export {
+  OpenAICompatibleSettings,
+  OpenAICompatibleFailed,
+  makeOpenAICompatibleSettings,
+  type OpenAICompatibleSettingsApi,
+  type CompatibleKeyStore,
+} from "./providers/openai-compatible.ts";
+export {
+  OpenAICompatibleConfiguration,
+  OpenAICompatibleUpdate,
+  type OpenAICompatibleStatus,
+} from "./providers/openai-compatible-config.ts";
+export {
   AgentChat,
   QueueRequest,
   attachmentInstructions,

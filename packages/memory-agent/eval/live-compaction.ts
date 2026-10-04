@@ -36,7 +36,7 @@ const guardedRegistry = Layer.effect(
     return {
       providers: upstream.providers,
       get: upstream.get,
-      runtime: (provider: "openai" | "anthropic") =>
+      runtime: (provider: "openai" | "anthropic" | "openai-compatible") =>
         Effect.map(upstream.runtime(provider), (runtime) => ({
           ...runtime,
           agentLoop: maxIterations(2),
@@ -55,6 +55,8 @@ const guardedRegistry = Layer.effect(
                 return (options: Parameters<typeof adapter.chatStream>[0]) => {
                   // Estimate the entire serialized request including tool schemas. This local
                   // BPE count is only a preflight guard; billed/cached usage comes from provider.
+                  if (selection.provider === "openai-compatible")
+                    throw new Error("subscription_pilot_only");
                   const serialized = subscriptionRequest(selection.provider, selection, options);
                   const estimated = estimateRequestTokens(serialized, selection.model);
                   if (

@@ -15,7 +15,18 @@ export const phaseLabels: Readonly<Record<WorkflowPhase, string>> = {
   plan: "Plan",
   execute: "Execute",
   verify: "Verify",
+  completed: "완료",
 };
+
+/** A closed Verify phase is a completed workflow, not ongoing verification. */
+export function workflowModeLabel(state: WorkflowState): string {
+  return state.phase === "verify" &&
+    state.goal?.status === "completed" &&
+    state.plan?.status === "completed" &&
+    state.plan.verification.status === "passed"
+    ? "완료"
+    : phaseLabels[state.phase];
+}
 
 export const goalStatusLabels: Record<NonNullable<WorkflowState["goal"]>["status"], string> = {
   draft: "준비 중",
@@ -172,7 +183,9 @@ export function WorkflowArtifactPanel({
     <Alert>
       <AlertTitle>
         Plan v{plan.version} ·{" "}
-        {state.phase === "verify" ? "검증 중" : planStatusLabels[plan.status]}
+        {state.phase === "verify" && plan.status === "executing"
+          ? "검증 중"
+          : planStatusLabels[plan.status]}
       </AlertTitle>
       <AlertDescription>
         {execution?.kind === "blocked" && (

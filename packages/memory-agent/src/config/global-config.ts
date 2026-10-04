@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { join } from "node:path";
 import { Context, Effect, Layer, Schema } from "effect";
 import { ProviderId } from "../providers/contracts.ts";
+import { OpenAICompatibleConfiguration } from "../providers/openai-compatible-config.ts";
 import { StorageRoot } from "./storage-root.ts";
 
 /**
@@ -44,6 +45,7 @@ export type CrossProviderMediaConsentSettings = typeof CrossProviderMediaConsent
 
 /** User-wide settings. Secrets never go here; they belong in the OS keychain. */
 export const Settings = Schema.Struct({
+  openaiCompatible: Schema.optional(OpenAICompatibleConfiguration),
   /** Provider paired with the selected model. Legacy model-only settings migrate to OpenAI. */
   provider: Schema.optional(ProviderId),
   /** Model id chosen from the signed-in provider's model list. */

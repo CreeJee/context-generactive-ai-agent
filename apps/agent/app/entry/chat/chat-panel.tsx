@@ -61,6 +61,7 @@ import {
 import {
   WorkflowArtifactPanel,
   phaseLabels,
+  workflowModeLabel,
   goalStatusLabels,
   planStatusLabels,
 } from "./workflow-panel";
@@ -116,7 +117,8 @@ function workflowStatus(state: WorkflowState | null): Notice {
   const plan = state.plan
     ? `Plan v${state.plan.version} · ${planStatusLabels[state.plan.status]}${state.goal && state.plan.goalVersion !== state.goal.version ? " · Goal 변경으로 오래됨" : ""}`
     : "Plan 없음";
-  return done(`${phaseLabels[state.phase]} 모드 · ${goal} · ${plan}`);
+  const mode = workflowModeLabel(state);
+  return done(`${mode}${mode === "완료" ? "" : " 모드"} · ${goal} · ${plan}`);
 }
 
 const tokenCount = new Intl.NumberFormat("ko-KR", {

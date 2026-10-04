@@ -6,7 +6,14 @@ import { Database } from "../db/database.ts";
 import { evaluateWorkflowAction, type WorkflowActionReason } from "./actions.ts";
 import { completionEvidence, CompletionSnapshot, CriterionMapping } from "./completion-evidence.ts";
 
-export const WorkflowPhase = Schema.Literals(["chat", "goal", "plan", "execute", "verify"]);
+export const WorkflowPhase = Schema.Literals([
+  "chat",
+  "goal",
+  "plan",
+  "execute",
+  "verify",
+  "completed",
+]);
 export type WorkflowPhase = typeof WorkflowPhase.Type;
 
 export const WorkflowAction = Schema.Literals(["pause", "resume", "stop"]);
@@ -165,6 +172,7 @@ export class NewGoalTransitionRefused extends Data.TaggedError("NewGoalTransitio
     | "goal_missing"
     | "workflow_changed"
     | "run_outcome_uncertain"
+    | "transition_pending"
     | "owner_effect_uncertain"
     | "execution_outstanding";
 }> {}
@@ -288,6 +296,32 @@ function rowText(row: Record<string, SQLOutputValue> | undefined) {
 const implementationComplete = (plan: PlanArtifact) =>
   plan.steps.every((step) => step.status === "completed" && step.evidence.length > 0);
 
+/** Source-state authorization is distinct from the run/owner-effect quiescence checks. */
+function newGoalTransitionSource(
+  state: WorkflowState,
+):
+  | { allowed: true; closedVerification: boolean }
+  | { allowed: false; reason: "phase_not_authorized" | "goal_missing" } {
+  const closedVerification =
+    state.goal?.status === "completed" && state.goal.verification.status === "passed";
+  // Goal/Plan accept an explicitly independent task; execution and chat never do.
+  if (state.phase === "goal" || state.phase === "plan")
+    return state.goal === null
+      ? { allowed: false, reason: "goal_missing" }
+      : { allowed: true, closedVerification: false };
+  // Verify remains open unless its Goal's verification is complete. A completed
+  // phase must also have a completed Plan, not merely a mismatched persisted phase.
+  if (
+    closedVerification &&
+    (state.phase === "verify" ||
+      (state.phase === "completed" &&
+        state.plan?.status === "completed" &&
+        state.plan.verification.status === "passed"))
+  )
+    return { allowed: true, closedVerification: true };
+  return { allowed: false, reason: "phase_not_authorized" };
+}
+
 /** Derives the only phase that can make progress from the durable artifacts. */
 export function reconciledWorkflowPhase(state: WorkflowState): WorkflowPhase {
   if (state.phase !== "execute" && state.phase !== "verify") return state.phase;
@@ -363,7 +397,13 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
     const change = (sessionId: string, update: (current: WorkflowState) => WorkflowState) =>
       serialize(
         sessionId,
-        Effect.sync(() => atomic(() => save(sessionId, update(get(sessionId))))),
+        Effect.sync(() =>
+          atomic(() => {
+            const current = get(sessionId);
+            const next = update(current);
+            return next === current ? current : save(sessionId, next);
+          }),
+        ),
       );
     const event = (
       state: WorkflowState,
@@ -375,6 +415,93 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
       kind,
       detail,
     });
+
+    const refuseNewGoal = (reason: NewGoalTransitionRefused["reason"]): never => {
+      throw new NewGoalTransitionRefused({ reason });
+    };
+    // Used both at tool admission and again at the completed-run owner boundary.
+    // Only admission may exclude its own (still running) run; application excludes none.
+    const checkNewGoal = (sessionId: string, input: StartNewGoal, callingRunId?: string) => {
+      if (options.allowNewGoal === false) refuseNewGoal("disabled");
+      const current = get(sessionId);
+      const source = newGoalTransitionSource(current);
+      if (!source.allowed) return refuseNewGoal(source.reason);
+      const identity = sqlite
+        .prepare("SELECT goal_instance_id FROM workflow_goal_identities WHERE session_id = ?")
+        .get(sessionId);
+      if ((identity?.goal_instance_id ?? null) !== input.previousGoalInstanceId)
+        refuseNewGoal("workflow_changed");
+      if (
+        sqlite
+          .prepare(`
+          SELECT b.run_id FROM workflow_run_bindings b LEFT JOIN chat_runs r ON r.run_id = b.run_id
+          WHERE b.session_id = ? AND b.run_id <> ? AND (r.status IS NULL OR r.status <> 'completed') LIMIT 1
+        `)
+          .get(sessionId, callingRunId ?? "") ||
+        sqlite
+          .prepare(`
+          SELECT run_id FROM chat_runs WHERE thread_id = ? AND run_id <> ? AND status <> 'completed' LIMIT 1
+        `)
+          .get(sessionId, callingRunId ?? "")
+      )
+        refuseNewGoal("run_outcome_uncertain");
+      if (
+        sqlite
+          .prepare(`
+        SELECT o.run_id FROM owner_rpc_operations o JOIN workflow_run_bindings b ON b.run_id = o.run_id
+        WHERE b.session_id = ? AND (o.status = 'pending' OR (o.side_effect = 1 AND o.status = 'uncertain')) LIMIT 1
+      `)
+          .get(sessionId)
+      )
+        refuseNewGoal("owner_effect_uncertain");
+      if (
+        sqlite
+          .prepare(`
+        SELECT id FROM work_tasks WHERE origin_session_id = ? AND status NOT IN ('completed', 'archived') LIMIT 1
+      `)
+          .get(sessionId)
+      )
+        refuseNewGoal("execution_outstanding");
+      return { current, identity, closedVerification: source.closedVerification };
+    };
+    const commitNewGoal = (sessionId: string, input: StartNewGoal) => {
+      const { current, identity, closedVerification } = checkNewGoal(sessionId, input);
+      const now = new Date().toISOString();
+      const newId = randomUUID();
+      if (identity) {
+        sqlite
+          .prepare("INSERT INTO workflow_goal_instances VALUES (?, ?, ?)")
+          .run(newId, sessionId, now);
+        sqlite
+          .prepare(
+            "UPDATE workflow_goal_identities SET goal_instance_id = ?, created_at = ? WHERE session_id = ?",
+          )
+          .run(newId, now, sessionId);
+      } else {
+        // An unbound legacy Goal never receives a fabricated historical identity.
+        insertGoalIdentity.run(sessionId, newId, now);
+      }
+      const state = save(sessionId, {
+        phase: closedVerification ? "goal" : current.phase,
+        goal: {
+          ...input.goal,
+          version: 1,
+          evidence: [],
+          verification: verificationDefault(),
+          updatedAt: now,
+        },
+        plan: null,
+        ledger: [
+          ...current.ledger,
+          event(
+            current,
+            "goal_updated",
+            `explicit new Goal ${newId}; prior ${input.previousGoalInstanceId ?? "legacy/unbound"}; ${input.reason}`,
+          ),
+        ],
+      });
+      return { state, newId };
+    };
 
     return {
       get: (sessionId: string) => Effect.sync(() => get(sessionId)),
@@ -515,7 +642,12 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
               ledger: [...next.ledger, event(current, "phase_changed", "execute -> verify")],
             };
           }
-          if (startedPhase !== "verify" || current.phase !== "verify" || current.plan === null)
+          if (
+            startedPhase !== "verify" ||
+            current.phase !== "verify" ||
+            current.plan === null ||
+            current.plan.status === "completed"
+          )
             return current;
           const verification = current.plan.verification;
           if (verification.status === "not_run" || verification.evidence.length === 0)
@@ -573,6 +705,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
           const plan = { ...current.plan, status: "completed" as const, updatedAt: now };
           return {
             ...current,
+            phase: "completed" as const,
             goal,
             plan,
             ledger: [
@@ -582,105 +715,162 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
           };
         }),
 
-      /** Central-owner action. No run, dispatch or uncertain receipt is replaced or adopted. */
+      /** Direct owner transition requires a fully quiescent session. */
       startNewGoal: (sessionId: string, input: StartNewGoal) =>
         serialize(
           sessionId,
           Effect.try({
             try: () =>
               atomic(() => {
-                const refuse = (reason: NewGoalTransitionRefused["reason"]): never => {
-                  throw new NewGoalTransitionRefused({ reason });
-                };
-                if (options.allowNewGoal === false) refuse("disabled");
-                const current = get(sessionId);
-                const completedVerification =
-                  current.phase === "verify" &&
-                  current.goal?.status === "completed" &&
-                  current.goal.verification.status === "passed";
-                if (current.phase !== "goal" && current.phase !== "plan" && !completedVerification)
-                  refuse("phase_not_authorized");
-                if (current.goal === null) refuse("goal_missing");
-                const identity = sqlite
-                  .prepare(
-                    "SELECT goal_instance_id FROM workflow_goal_identities WHERE session_id = ?",
-                  )
-                  .get(sessionId);
-                if ((identity?.goal_instance_id ?? null) !== input.previousGoalInstanceId)
-                  refuse("workflow_changed");
-                // Missing/failed bound runs and legacy failed/active runs are not proof of quiescence.
                 if (
                   sqlite
-                    .prepare(`
-            SELECT b.run_id FROM workflow_run_bindings b LEFT JOIN chat_runs r ON r.run_id = b.run_id
-            WHERE b.session_id = ? AND (r.status IS NULL OR r.status <> 'completed') LIMIT 1
-          `)
-                    .get(sessionId) ||
-                  sqlite
                     .prepare(
-                      "SELECT run_id FROM chat_runs WHERE thread_id = ? AND status <> 'completed' LIMIT 1",
+                      "SELECT run_id FROM workflow_new_goal_requests WHERE session_id = ? AND status = 'accepted' LIMIT 1",
                     )
                     .get(sessionId)
                 )
-                  refuse("run_outcome_uncertain");
-                if (
-                  sqlite
-                    .prepare(`
-            SELECT o.run_id FROM owner_rpc_operations o JOIN workflow_run_bindings b ON b.run_id = o.run_id
-            WHERE b.session_id = ? AND (o.status = 'pending' OR (o.side_effect = 1 AND o.status = 'uncertain')) LIMIT 1
-          `)
-                    .get(sessionId)
-                )
-                  refuse("owner_effect_uncertain");
-                if (
-                  sqlite
-                    .prepare(`
-            SELECT id FROM work_tasks WHERE origin_session_id = ? AND status NOT IN ('completed', 'archived') LIMIT 1
-          `)
-                    .get(sessionId)
-                )
-                  refuse("execution_outstanding");
-                const now = new Date().toISOString();
-                const newId = randomUUID();
-                if (identity) {
-                  sqlite
-                    .prepare("INSERT INTO workflow_goal_instances VALUES (?, ?, ?)")
-                    .run(newId, sessionId, now);
-                  sqlite
-                    .prepare(
-                      "UPDATE workflow_goal_identities SET goal_instance_id = ?, created_at = ? WHERE session_id = ?",
-                    )
-                    .run(newId, now, sessionId);
-                } else {
-                  // Explicitly create a new identity; legacy historical revisions remain unbound.
-                  insertGoalIdentity.run(sessionId, newId, now);
-                }
-                return save(sessionId, {
-                  // Closed Verify belongs to the old Goal; the new task starts at Goal, not execution.
-                  phase: completedVerification ? "goal" : current.phase,
-                  goal: {
-                    ...input.goal,
-                    version: 1,
-                    evidence: [],
-                    verification: verificationDefault(),
-                    updatedAt: now,
-                  },
-                  plan: null,
-                  ledger: [
-                    ...current.ledger,
-                    event(
-                      current,
-                      "goal_updated",
-                      `explicit new Goal ${newId}; prior ${input.previousGoalInstanceId ?? "legacy/unbound"}; ${input.reason}`,
-                    ),
-                  ],
-                });
+                  refuseNewGoal("transition_pending");
+                return commitNewGoal(sessionId, input).state;
               }),
             catch: (cause) => {
               if (cause instanceof NewGoalTransitionRefused) return cause;
               throw cause;
             },
           }),
+        ),
+
+      /** Tool admission only records a durable request; never claims a new Goal was saved. */
+      requestNewGoal: (sessionId: string, runId: string, input: StartNewGoal) =>
+        serialize(
+          sessionId,
+          Effect.try({
+            try: () =>
+              atomic(() => {
+                const existing = sqlite
+                  .prepare(
+                    "SELECT run_id, payload_json, status FROM workflow_new_goal_requests WHERE run_id = ?",
+                  )
+                  .get(runId);
+                if (existing) {
+                  if (
+                    existing.run_id === runId &&
+                    existing.payload_json === JSON.stringify(input) &&
+                    existing.status === "accepted"
+                  )
+                    return { status: "accepted" as const, runId };
+                  refuseNewGoal("transition_pending");
+                }
+                const run = sqlite
+                  .prepare("SELECT thread_id, status FROM chat_runs WHERE run_id = ?")
+                  .get(runId);
+                if (!runId || run?.thread_id !== sessionId || run.status !== "running")
+                  refuseNewGoal("run_outcome_uncertain");
+                const pending = sqlite
+                  .prepare(
+                    "SELECT run_id FROM workflow_new_goal_requests WHERE session_id = ? AND status = 'accepted' LIMIT 1",
+                  )
+                  .get(sessionId);
+                if (pending) refuseNewGoal("transition_pending");
+                checkNewGoal(sessionId, input, runId);
+                const binding = sqlite
+                  .prepare(
+                    "SELECT session_id, goal_instance_id, workflow_revision_id FROM workflow_run_bindings WHERE run_id = ?",
+                  )
+                  .get(runId);
+                const revision = sqlite
+                  .prepare(
+                    "SELECT id FROM workflow_state_revisions WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+                  )
+                  .get(sessionId);
+                if (
+                  !revision ||
+                  (binding &&
+                    (binding.session_id !== sessionId ||
+                      binding.goal_instance_id !== input.previousGoalInstanceId ||
+                      binding.workflow_revision_id !== revision.id))
+                )
+                  return refuseNewGoal("workflow_changed");
+                sqlite
+                  .prepare(`
+              INSERT INTO workflow_new_goal_requests
+                (run_id, session_id, previous_goal_instance_id, source_revision_id,
+                 payload_json, status, created_at)
+              VALUES (?, ?, ?, ?, ?, 'accepted', ?)
+            `)
+                  .run(
+                    runId,
+                    sessionId,
+                    input.previousGoalInstanceId,
+                    revision.id,
+                    JSON.stringify(input),
+                    new Date().toISOString(),
+                  );
+                return { status: "accepted" as const, runId };
+              }),
+            catch: (cause) => {
+              if (cause instanceof NewGoalTransitionRefused) return cause;
+              throw cause;
+            },
+          }),
+        ),
+
+      /** Idempotent owner settlement. A failed or missing run can never apply its intent. */
+      settleNewGoalRequest: (sessionId: string, runId: string) =>
+        serialize(
+          sessionId,
+          Effect.sync(() =>
+            atomic(() => {
+              const row = sqlite
+                .prepare(`
+            SELECT session_id, payload_json, source_revision_id, status, reason, applied_goal_instance_id
+            FROM workflow_new_goal_requests WHERE run_id = ?
+          `)
+                .get(runId);
+              if (!row || row.session_id !== sessionId) return { status: "none" as const };
+              if (row.status === "applied")
+                return { status: "applied" as const, goalInstanceId: row.applied_goal_instance_id };
+              if (row.status === "rejected")
+                return { status: "rejected" as const, reason: row.reason };
+              const run = sqlite
+                .prepare("SELECT status FROM chat_runs WHERE run_id = ? AND thread_id = ?")
+                .get(runId, sessionId);
+              if (run?.status === "running" || run?.status === "interrupted")
+                return { status: "accepted" as const };
+              const reject = (reason: string) => {
+                sqlite
+                  .prepare(`
+              UPDATE workflow_new_goal_requests SET status = 'rejected', reason = ?, settled_at = ?
+              WHERE run_id = ? AND status = 'accepted'
+            `)
+                  .run(reason, new Date().toISOString(), runId);
+                return { status: "rejected" as const, reason };
+              };
+              if (run?.status !== "completed") return reject("run_outcome_uncertain");
+              const latest = sqlite
+                .prepare(
+                  "SELECT id FROM workflow_state_revisions WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+                )
+                .get(sessionId);
+              if (latest?.id !== row.source_revision_id) return reject("workflow_changed");
+              try {
+                const { newId } = commitNewGoal(
+                  sessionId,
+                  Schema.decodeUnknownSync(StartNewGoal)(JSON.parse(String(row.payload_json))),
+                );
+                sqlite
+                  .prepare(`
+              UPDATE workflow_new_goal_requests
+              SET status = 'applied', applied_goal_instance_id = ?, settled_at = ?
+              WHERE run_id = ? AND status = 'accepted'
+            `)
+                  .run(newId, new Date().toISOString(), runId);
+                return { status: "applied" as const, goalInstanceId: newId };
+              } catch (error) {
+                if (error instanceof NewGoalTransitionRefused) return reject(error.reason);
+                throw error;
+              }
+            }),
+          ),
         ),
 
       updateGoal: (sessionId: string, input: UpdateGoal) =>

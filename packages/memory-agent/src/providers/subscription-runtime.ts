@@ -18,6 +18,7 @@ const runMiddleware = (provider: ProviderId): ChatMiddleware => ({
 const contextWindows: Readonly<Record<ProviderId, number>> = {
   openai: 258_400,
   anthropic: 200_000,
+  "openai-compatible": 0,
 };
 
 export function releaseSubscriptionRun(adapter: RunTextAdapter | null): void {

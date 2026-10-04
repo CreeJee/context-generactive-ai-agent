@@ -15,6 +15,22 @@
 - 실제 모델 평가는 임시 프로젝트와 현재 선택된 OpenAI 계정·모델로 지침만 비교한다. 요청 횟수와 입력 추정 예산을 제한하며 사용자 설정은 바꾸지 않는다. 2026-10-04 `gpt-6-sol`/medium 1회씩에서 두 지침 모두 자식 실행 중 부모의 파일 읽기·보고서 검토·정답 반환을 확인했다. 실행 시간은 약 52.8초/49.8초, 응답은 각 9회였지만 표본 하나이며 구 런타임 대비 속도·비용 개선의 증거로 사용하지 않는다.
 - MCP 지연 스키마 탐색은 이번 변경에서 적용하지 않는다. 설치된 SDK의 discovery 도구가 승인·native owner·복구 경계를 통과하는 검증을 먼저 마련해야 한다. MCP/외부 위임의 승인 안내는 실제 프로젝트 모드에 맞춘다.
 
+## OpenAI 호환 연결의 Effect 경계와 수명 (2026-10-04)
+
+- 설정·키체인·HTTP는 Effect 서비스와 tagged error로 합성한다. 단일 fetch의 취소는 `Effect.tryPromise`가 전달한 신호와 `Effect.timeout`으로 처리하며, 별도의 `AbortSignal.timeout` 타이머는 만들지 않는다. 취소와 타임아웃의 mock 회귀를 구분해 확인한다.
+- 키체인과 설정 파일은 원자적 단일 저장소가 아니다. 같은 서비스의 동시 갱신·모델 선택과 설정·키 읽기는 한 permit에서 직렬화하고, 시작한 저장 작업은 완료 여부를 확인하기 전 중단하지 않는다. 키 쓰기가 결과 미확정으로 실패하거나 키 기록 뒤 설정 기록에 실패하면 부분 저장으로 보고하며 자동 재실행·임의 rollback은 하지 않는다. 키체인 항목의 새 형식은 서버 URL과 키를 함께 담아 해당 URL에서만 인증에 사용한다(기존 일반 키는 이전 서버에 한해 유지). 키가 있을 때 주소 변경에는 키 교체 또는 명시적 삭제가 필요하다.
+- compatible SDK의 동기 adapter 생성·Promise keyring·async iterable 스트림은 상호운용 경계로 남긴다. adapter마다 설정과 키를 고정하고, SDK 요청 취소 신호와 run 종료 `releaseRun`을 결합하여 진행 중 네트워크 요청을 중단한다. 중앙 owner·승인·run 보호 로직은 변경하지 않는다.
+- 설정 API의 JSON Promise는 React Router 바깥 경계에서 Effect로 변환하고 안전한 HTTP 오류만 응답한다. React UI에는 Effect를 들이지 않으며 모델 추천은 기존 shadcn 버튼으로 제공하되 직접 입력을 유지한다. 컨텍스트 용량 검사는 휴리스틱이며 실제 tokenizer 계산 또는 모든 로컬 서버 호환성을 보장하지 않는다.
+
+## OpenAI 호환 self-hosted 모델 연결 (2026-10-03)
+
+- 사용자가 지정한 지원 범위는 설치된 `@tanstack/ai-openai/compatible` adapter다. 기존 OpenAI·Anthropic 구독 로그인과 분리된 `openai-compatible` provider로 연결한다.
+- 첫 구현은 endpoint 하나와 Chat Completions 프로토콜만 사용한다. Responses API, Ollama 네이티브 adapter, 서버별 전용 옵션과 provider-hosted 도구는 포함하지 않는다.
+- Base URL, 수동 모델 ID, 서버의 실제 context window와 출력 한도를 설정한다. 모델 목록 조회는 보조 기능이며 `/models`를 제공하지 않는 서버도 수동 모델 등록으로 사용할 수 있어야 한다. API key는 선택 사항이고 OS keychain에만 저장한다.
+- 스트리밍과 취소는 기존 에이전트 실행 경계를 재사용한다. function calling을 지원하는 모델은 기존 호스트 도구·MCP·승인 흐름을 사용하고, tool calling을 끄면 도구를 실제 요청에서 제외한다.
+- 연결 실패 시 cloud provider로 자동 전환하지 않는다. 로컬 모델 연결은 앱 전체 오프라인 실행을 의미하지 않으며, 별도 MCP·검색·embedding의 외부 통신 정책은 그대로 적용된다.
+- adapter 호환 계약을 구현하고 mock 서버로 검증한다. 개별 서버·모델의 호환성은 실제 연결 테스트 전까지 보장하지 않는다.
+
 ## 에이전트 백엔드 Effect-first 원칙 (2026-10-03)
 
 - 사용자 지시에 따라 현재 작업과 이후의 에이전트 백엔드 구현·수리·리팩터링은 Effect다운 설계와 코드 스타일을 기본으로 한다. `packages/memory-agent`와 `apps/agent`의 백엔드 실행·라우터·생명주기 모듈에 적용한다.

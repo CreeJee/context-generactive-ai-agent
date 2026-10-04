@@ -1,0 +1,231 @@
+{
+  "schemaVersion": 1,
+  "description": "Synthetic turn-level recall-gating examples. Partitions and case order are fixed; no real user memories or identifiers.",
+  "partitions": {
+    "train": ["tr-ko-deictic", "tr-explicit-correction", "tr-self-contained", "tr-empty-search"],
+    "validation": ["va-project-boundary", "va-opt-out", "va-retraction"],
+    "holdout": ["ho-ko-correction", "ho-project-transition", "ho-unnecessary"]
+  },
+  "cases": [
+    {
+      "id": "tr-ko-deictic",
+      "project": "synthetic-orbit",
+      "priorEvidence": [
+        {
+          "id": "ev-tr-orbit-01",
+          "project": "synthetic-orbit",
+          "text": "User: 이 프로젝트의 샘플 보고서는 표 제목을 한국어로 써 주세요."
+        }
+      ],
+      "recentTurns": ["User: 아까 정한 표 제목 언어로 이번 샘플 보고서도 작성해 줘."],
+      "searchEvidenceIds": ["ev-tr-orbit-01"],
+      "recallNeeded": true,
+      "goldEvidenceIds": ["ev-tr-orbit-01"],
+      "expected": {
+        "handling": "current",
+        "currentEvidenceIds": ["ev-tr-orbit-01"],
+        "supersededEvidenceIds": []
+      }
+    },
+    {
+      "id": "tr-explicit-correction",
+      "project": "synthetic-lantern",
+      "priorEvidence": [
+        {
+          "id": "ev-tr-lantern-01",
+          "project": "synthetic-lantern",
+          "text": "User: Use blue for the sample banner."
+        },
+        {
+          "id": "ev-tr-lantern-02",
+          "project": "synthetic-lantern",
+          "text": "User: Correction: use amber, not blue, for the sample banner. The blue instruction is withdrawn."
+        }
+      ],
+      "recentTurns": ["User: Which color did I settle on for this sample banner?"],
+      "searchEvidenceIds": ["ev-tr-lantern-01", "ev-tr-lantern-02"],
+      "recallNeeded": true,
+      "goldEvidenceIds": ["ev-tr-lantern-01", "ev-tr-lantern-02"],
+      "expected": {
+        "handling": "supersession",
+        "currentEvidenceIds": ["ev-tr-lantern-02"],
+        "supersededEvidenceIds": ["ev-tr-lantern-01"]
+      }
+    },
+    {
+      "id": "tr-self-contained",
+      "project": "synthetic-copper",
+      "priorEvidence": [
+        {
+          "id": "ev-tr-copper-01",
+          "project": "synthetic-copper",
+          "text": "User: An earlier sample total was 17."
+        }
+      ],
+      "recentTurns": ["User: Add 4 and 5. Reply with the sum only."],
+      "searchEvidenceIds": [],
+      "recallNeeded": false,
+      "goldEvidenceIds": [],
+      "expected": {
+        "handling": "not_needed",
+        "currentEvidenceIds": [],
+        "supersededEvidenceIds": []
+      }
+    },
+    {
+      "id": "tr-empty-search",
+      "project": "synthetic-quartz",
+      "priorEvidence": [],
+      "recentTurns": ["User: What was the exact sample release phrase I gave you earlier?"],
+      "searchEvidenceIds": [],
+      "recallNeeded": true,
+      "goldEvidenceIds": [],
+      "expected": {
+        "handling": "unresolved_empty_search",
+        "currentEvidenceIds": [],
+        "supersededEvidenceIds": []
+      }
+    },
+    {
+      "id": "va-project-boundary",
+      "project": "synthetic-maple-new",
+      "priorEvidence": [
+        {
+          "id": "ev-va-maple-old-01",
+          "project": "synthetic-maple-old",
+          "text": "User: For the old project's sample card, use square corners."
+        },
+        {
+          "id": "ev-va-maple-new-01",
+          "project": "synthetic-maple-new",
+          "text": "User: In this new project, use round corners on the sample card."
+        }
+      ],
+      "recentTurns": ["User: For this project's sample card, which corners did I request?"],
+      "searchEvidenceIds": ["ev-va-maple-old-01", "ev-va-maple-new-01"],
+      "recallNeeded": true,
+      "goldEvidenceIds": ["ev-va-maple-new-01"],
+      "expected": {
+        "handling": "project_boundary",
+        "currentEvidenceIds": ["ev-va-maple-new-01"],
+        "supersededEvidenceIds": []
+      }
+    },
+    {
+      "id": "va-opt-out",
+      "project": "synthetic-river",
+      "priorEvidence": [
+        {
+          "id": "ev-va-river-01",
+          "project": "synthetic-river",
+          "text": "User: Previously I chose a long format for sample notes."
+        }
+      ],
+      "recentTurns": [
+        "User: Don't consult prior preferences or memory for this turn. Write a two-word sample title from scratch."
+      ],
+      "searchEvidenceIds": [],
+      "recallNeeded": false,
+      "goldEvidenceIds": [],
+      "expected": {
+        "handling": "not_needed",
+        "currentEvidenceIds": [],
+        "supersededEvidenceIds": []
+      }
+    },
+    {
+      "id": "va-retraction",
+      "project": "synthetic-willow",
+      "priorEvidence": [
+        {
+          "id": "ev-va-willow-01",
+          "project": "synthetic-willow",
+          "text": "User: Put a star icon on the sample cover."
+        },
+        {
+          "id": "ev-va-willow-02",
+          "project": "synthetic-willow",
+          "text": "User: I retract the star-icon request. There should be no icon on the sample cover."
+        }
+      ],
+      "recentTurns": ["User: Should this sample cover have the icon we discussed?"],
+      "searchEvidenceIds": ["ev-va-willow-01", "ev-va-willow-02"],
+      "recallNeeded": true,
+      "goldEvidenceIds": ["ev-va-willow-01", "ev-va-willow-02"],
+      "expected": {
+        "handling": "supersession",
+        "currentEvidenceIds": ["ev-va-willow-02"],
+        "supersededEvidenceIds": ["ev-va-willow-01"]
+      }
+    },
+    {
+      "id": "ho-ko-correction",
+      "project": "synthetic-pine",
+      "priorEvidence": [
+        {
+          "id": "ev-ho-pine-01",
+          "project": "synthetic-pine",
+          "text": "User: 샘플 카드의 버튼에는 '열기'라고 써 주세요."
+        },
+        {
+          "id": "ev-ho-pine-02",
+          "project": "synthetic-pine",
+          "text": "User: 정정할게요. '열기'는 취소하고 버튼에는 '보기'라고 써 주세요."
+        }
+      ],
+      "recentTurns": ["User: 그때 고친 버튼 문구로 샘플 카드를 만들어 줘."],
+      "searchEvidenceIds": ["ev-ho-pine-01", "ev-ho-pine-02"],
+      "recallNeeded": true,
+      "goldEvidenceIds": ["ev-ho-pine-01", "ev-ho-pine-02"],
+      "expected": {
+        "handling": "supersession",
+        "currentEvidenceIds": ["ev-ho-pine-02"],
+        "supersededEvidenceIds": ["ev-ho-pine-01"]
+      }
+    },
+    {
+      "id": "ho-project-transition",
+      "project": "synthetic-harbor-new",
+      "priorEvidence": [
+        {
+          "id": "ev-ho-harbor-old-01",
+          "project": "synthetic-harbor-old",
+          "text": "User: In the old project, sample labels were uppercase."
+        }
+      ],
+      "recentTurns": [
+        "User: This is a separate new project. For this sample, use lowercase labels. Do not carry over the old project's style."
+      ],
+      "searchEvidenceIds": [],
+      "recallNeeded": false,
+      "goldEvidenceIds": [],
+      "expected": {
+        "handling": "not_needed",
+        "currentEvidenceIds": [],
+        "supersededEvidenceIds": []
+      }
+    },
+    {
+      "id": "ho-unnecessary",
+      "project": "synthetic-cedar",
+      "priorEvidence": [
+        {
+          "id": "ev-ho-cedar-01",
+          "project": "synthetic-cedar",
+          "text": "User: I once asked for three sample rows."
+        }
+      ],
+      "recentTurns": [
+        "User: Explain what a row is in a table, without referring to any earlier examples."
+      ],
+      "searchEvidenceIds": [],
+      "recallNeeded": false,
+      "goldEvidenceIds": [],
+      "expected": {
+        "handling": "not_needed",
+        "currentEvidenceIds": [],
+        "supersededEvidenceIds": []
+      }
+    }
+  ]
+}

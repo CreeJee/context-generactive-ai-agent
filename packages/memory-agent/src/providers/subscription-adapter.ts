@@ -342,6 +342,8 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
 
   constructor(client: StreamingOAuthClient, selection: ModelSelection) {
     super({}, selection.model);
+    if (selection.provider === "openai-compatible")
+      throw new Error("Subscription provider required");
     this.name = selection.provider;
     this.#client = client;
     this.#selection = selection;

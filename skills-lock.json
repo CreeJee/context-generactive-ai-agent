@@ -67,6 +67,12 @@
       "skillPath": "skills/swc-plugin-compatibility/SKILL.md",
       "computedHash": "5ecf87404f4b22de5e68a4358a45298183c279f9c173bf8e971b22d0bbc7ace8"
     },
+    "vitest": {
+      "source": "antfu/skills",
+      "sourceType": "github",
+      "skillPath": "skills/vitest/SKILL.md",
+      "computedHash": "21af2b13d47d31f3094b61c0f41abc8d6a7eed0df3c9a4029ea671f6978b7209"
+    },
     "write-prd": {
       "source": "kdy1/kdy1-scripts",
       "sourceType": "github",

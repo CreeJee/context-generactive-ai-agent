@@ -45,6 +45,7 @@ import { AccountSection, ModelSection, ProjectSection, SessionSection } from "./
 import { AccountModelPanel } from "./navigation/account-model-panel";
 import { WorkTracePanel } from "./chat/work-trace-panel";
 import { ReportLink, reportHref } from "./report/report-link";
+import { providerLabels } from "./navigation/providers";
 
 const locationParsers = {
   project: parseAsString,
@@ -74,11 +75,25 @@ function Placeholder({
 export function App() {
   const openAIAuth = useAuthQuery("openai");
   const anthropicAuth = useAuthQuery("anthropic");
-  const auth = { openai: openAIAuth.data ?? null, anthropic: anthropicAuth.data ?? null };
+  const compatibleAuth = useAuthQuery("openai-compatible");
+  const auth = {
+    openai: openAIAuth.data ?? null,
+    anthropic: anthropicAuth.data ?? null,
+    "openai-compatible": compatibleAuth.data ?? null,
+  };
   const [provider, setProvider] = useState<ProviderId>("openai");
   const openAIModels = useModelsQuery("openai", auth.openai?.status === "signed-in");
   const anthropicModels = useModelsQuery("anthropic", auth.anthropic?.status === "signed-in");
-  const models = (provider === "openai" ? openAIModels.data : anthropicModels.data)?.models ?? [];
+  const compatibleModels = useModelsQuery(
+    "openai-compatible",
+    compatibleAuth.data?.status === "signed-in",
+  );
+  const modelQueries = {
+    openai: openAIModels,
+    anthropic: anthropicModels,
+    "openai-compatible": compatibleModels,
+  };
+  const models = modelQueries[provider].data?.models ?? [];
   const [selection, setSelection] = useState<ModelSelection | null>(null);
   const projectsQuery = useProjectsQuery();
   const projects = projectsQuery.data ?? [];
@@ -118,14 +133,17 @@ export function App() {
   const selectedSignedIn = selection !== null && auth[selection.provider]?.status === "signed-in";
   useEffect(() => {
     const selected =
-      provider === "openai"
-        ? (openAIModels.data?.selected ?? anthropicModels.data?.selected)
-        : (anthropicModels.data?.selected ?? openAIModels.data?.selected);
+      modelQueries[provider].data?.selected ??
+      Object.values(modelQueries).find((query) => query.data?.selected)?.data?.selected;
     if (selected) {
       setSelection(selected);
       setProvider(selected.provider);
     }
-  }, [openAIModels.data?.selected, anthropicModels.data?.selected]);
+  }, [
+    openAIModels.data?.selected,
+    anthropicModels.data?.selected,
+    compatibleModels.data?.selected,
+  ]);
 
   useEffect(() => {
     if (!projectId || !sessionsQuery.data) return;
@@ -255,8 +273,8 @@ export function App() {
     .with({ selection: null, signedIn: false }, () => (
       <Placeholder
         icon={<LogInIcon />}
-        title="구독 계정에 로그인하세요"
-        description="왼쪽에서 ChatGPT 또는 Claude에 연결하면 대화를 시작할 수 있어요."
+        title="공급자를 연결하세요"
+        description="왼쪽에서 구독 계정에 로그인하거나 OpenAI 호환 공급자를 설정하세요."
       />
     ))
     .with({ selection: null }, () => (
@@ -269,8 +287,12 @@ export function App() {
     .with({ selection: P.nonNullable, selectedSignedIn: false }, ({ selection: selected }) => (
       <Placeholder
         icon={<LogInIcon />}
-        title="선택한 공급자에 로그인하세요"
-        description={`${selected.provider === "openai" ? "ChatGPT" : "Claude"} 연결이 필요해요.`}
+        title={
+          selected.provider === "openai-compatible"
+            ? "호환 공급자를 설정하세요"
+            : "선택한 공급자에 로그인하세요"
+        }
+        description={`${providerLabels[selected.provider]} 연결이 필요해요.`}
       />
     ))
     .with({ projectId: null }, () => (
@@ -296,10 +318,7 @@ export function App() {
           slash={slash}
           imagesSupported={
             sessions.find((session) => session.id === id)?.agent == null &&
-            ((
-              (selected.provider === "openai" ? openAIModels.data : anthropicModels.data)?.models ??
-              []
-            )
+            ((modelQueries[selected.provider].data?.models ?? [])
               .find((model) => model.id === selected.model)
               ?.capabilities.inputModalities.includes("image") ??
               false)
@@ -335,10 +354,11 @@ export function App() {
                 auth={auth[provider]}
                 selection={selection}
                 modelName={
-                  (selection?.provider === "openai"
-                    ? openAIModels.data
-                    : anthropicModels.data
-                  )?.models.find((model) => model.id === selection?.model)?.displayName
+                  selection
+                    ? modelQueries[selection.provider].data?.models.find(
+                        (model) => model.id === selection.model,
+                      )?.displayName
+                    : undefined
                 }
               >
                 <AccountSection

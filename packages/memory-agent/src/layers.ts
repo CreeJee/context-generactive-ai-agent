@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { optionalProperty } from "./optional-property.ts";
-import { Layer } from "effect";
+import { Effect, Layer } from "effect";
+import type { ProviderId } from "./providers/contracts.ts";
 import { AgentChat } from "./agent/chat.ts";
 import { ApiUsage } from "./agent/api-usage.ts";
 import { TurnSummaries } from "./agent/turn-summaries.ts";
@@ -69,6 +70,7 @@ import { Workflows } from "./workflow/workflow.ts";
 import { WorkflowExecution } from "./workflow/execution.ts";
 import { WorkflowTools } from "./workflow/tools.ts";
 import { WorkflowRules } from "./workflow/rules.ts";
+import { OpenAICompatibleSettings } from "./providers/openai-compatible.ts";
 
 export interface MemoryAgentLayerOptions {
   /** Defaults to the local embedding model; tests pass a deterministic one. */
@@ -135,7 +137,28 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
       Layer.merge(StorageRoot.layer(storageRoot), Database.layer(join(storageRoot, "agent.db"))),
     ),
   );
-  const providerRegistry = options.providerRegistry ?? AccountSubscriptionProviderRegistry;
+  const compatibleSettings = OpenAICompatibleSettings.layer.pipe(Layer.provide(foundation));
+  const providerRegistry =
+    options.providerRegistry ??
+    Layer.effect(
+      ProviderRegistry,
+      Effect.gen(function* () {
+        const subscriptions = yield* ProviderRegistry;
+        const compatible = (yield* OpenAICompatibleSettings).services;
+        return {
+          ...subscriptions,
+          providers: [...subscriptions.providers, compatible.provider],
+          get: (provider: ProviderId) =>
+            provider === compatible.provider
+              ? Effect.succeed(compatible)
+              : subscriptions.get(provider),
+          runtime: (provider: ProviderId) =>
+            provider === compatible.provider
+              ? Effect.succeed(compatible.runtime)
+              : subscriptions.runtime(provider),
+        };
+      }),
+    ).pipe(Layer.provide(AccountSubscriptionProviderRegistry), Layer.provide(compatibleSettings));
   const providerToolRegistry = options.providerToolRegistry ?? ProviderToolCapabilityRegistry.layer;
   const modelFeatureFlags =
     options.modelFeatureFlags ??
@@ -223,6 +246,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
       Layer.provide(crossProviderMediaConsent),
     );
   const providers = Layer.mergeAll(
+    compatibleSettings,
     ActiveProvider.layer.pipe(Layer.provideMerge(providerRegistry)),
     routeCatalog,
     imageRouteFacts,

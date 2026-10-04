@@ -90,6 +90,7 @@ import {
   type CompactionSources,
 } from "./compaction.ts";
 import { contextView, lastContextUsage, recordContextUsage } from "./context-usage.ts";
+import type { createRecallSensor } from "./recall-sensor.ts";
 import { ApiUsage, collectApiUsage } from "./api-usage.ts";
 import { TurnSummaries } from "./turn-summaries.ts";
 import { promptLayout } from "./prompt-layout.ts";
@@ -363,7 +364,7 @@ const cancelWaitMs = 5_000;
 const afterRunBudget = 200;
 
 /** Plan/Verify never receive project mutation, outside access, MCP or delegation tools. */
-const readOnlyWorkflowPhases: ReadonlySet<WorkflowPhase> = new Set(["plan", "verify"]);
+const readOnlyWorkflowPhases: ReadonlySet<WorkflowPhase> = new Set(["plan", "verify", "completed"]);
 const workflowReadToolNames: ReadonlySet<string> = new Set([
   "find_memory",
   "read_evidence",
@@ -400,7 +401,10 @@ export const modelBoundMessages = (
 ): readonly ModelMessage[] => config.providerMessages ?? config.messages;
 
 /** Native implementation seam; central services are acquired anew for each construction. */
-export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
+/** Optional seam for isolated shadow tests; production passes no sensor and never calls Laya. */
+export const makeAgentChatImplementation = Effect.fnUntraced(function* (
+  recallSensor?: ReturnType<typeof createRecallSensor>,
+) {
   const context = yield* Effect.context();
   const runEffect = Effect.runPromiseWith(context);
   const runEffectSync = Effect.runSyncWith(context);
@@ -427,13 +431,13 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     knowledge: KnowledgePromotions,
   });
   const runtimeForAdapter = (selection: ModelSelection, goalInstanceId: string | null) =>
-    registry?.subscriptionDependencies
+    selection.provider !== "openai-compatible" && registry?.subscriptionDependencies
       ? Effect.map(registry.subscriptionDependencies(selection.provider), (dependencies) =>
           (goalInstanceId === null
             ? nativeImplementations
-            : goalNativeImplementations.forGoal(goalInstanceId))[selection.provider].bind(
-            dependencies,
-          ),
+            : goalNativeImplementations.forGoal(goalInstanceId))[
+            selection.provider === "anthropic" ? "anthropic" : "openai"
+          ].bind(dependencies),
         )
       : active.runtime(selection);
   const usageLedger = yield* ApiUsage;
@@ -711,11 +715,13 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       const run = await chatState.run(sessionId, runId);
       switch (run?.status) {
         case "completed":
+          await runEffect(workflows.settleNewGoalRequest(sessionId, runId));
           if (leases.view(sessionId, null).state === "free") queue.holdWaiting(sessionId);
           return;
         case "failed":
         case "aborted":
         case undefined:
+          await runEffect(workflows.settleNewGoalRequest(sessionId, runId));
           queue.holdWaiting(sessionId);
           return;
         case "interrupted":
@@ -1037,6 +1043,16 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // One run at a time per session: a second would race the first for persisted chat state.
         const live = liveRuns.get(sessionId);
         if (live) return json(409, { error: "run_in_progress", runId: live.runId });
+        // A process may exit after persistence commits a completed run but before its
+        // asynchronous end callback applies a queued Goal. Recover only terminal runs;
+        // running/interrupted ones remain pending and can never prove completion.
+        const pendingGoals = sqlite
+          .prepare(
+            "SELECT run_id FROM workflow_new_goal_requests WHERE session_id = ? AND status = 'accepted'",
+          )
+          .all(sessionId);
+        for (const pending of pendingGoals)
+          yield* workflows.settleNewGoalRequest(sessionId, String(pending.run_id));
         // Repair stale persisted phases before choosing tools for the next turn. In particular, an
         // old Verify row with unfinished implementation must regain Execute capabilities.
         const workflow = yield* workflows.reconcile(sessionId);
@@ -1372,6 +1388,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             provider: selection.provider,
           });
         const requestedImage = Option.isSome(decodeImageTurnIntent(forwardedProps));
+        if (requestedImage && selection.provider === "openai-compatible")
+          return json(422, { error: "provider_image_generation_unavailable" });
         if (reportSource && requestedImage)
           return json(422, { error: "report_image_generation_unavailable" });
         const imageStatus = yield* imageFeature.status;
@@ -1564,7 +1582,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           localRules.problems.length === 0
             ? resolved
             : { ...resolved, degraded: [...resolved.degraded, "source" as const] };
-        const workflowPrompt = workflowInstructions(workflow, resolvedRules);
+        const goalInstanceId = yield* workflows.goalInstanceId(sessionId);
+        const workflowPrompt = workflowInstructions(workflow, resolvedRules, goalInstanceId);
         const parentNotifications = workTrace.consumeParentNotifications(sessionId, runId);
         const parentNotificationPrompt =
           parentNotifications.length === 0
@@ -1731,10 +1750,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           : [];
         // SAFETY: ProviderToolRuntime only returns tools created by TanStack's installed Provider
         // Tool factories; those satisfy chat's server-tool contract but retain provider-specific types.
-        const tools: AnyServerTool[] = [
-          ...reads.tools,
-          ...providerTools.map((providerTool) => providerTool.tool as AnyServerTool),
-        ];
+        const tools: AnyServerTool[] =
+          selection.provider === "openai-compatible" &&
+          !(yield* config.read).openaiCompatible?.toolCalling
+            ? []
+            : [
+                ...reads.tools,
+                ...providerTools.map((providerTool) => providerTool.tool as AnyServerTool),
+              ];
         const executionTurn: ChatExecutionTurn<typeof runAdapter> = {
           messages,
           systemPrompts: promptLayout(standingPrompts, contextPrompts, [
@@ -1816,6 +1839,17 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (queuedId) {
           queue.markDelivered(queuedId, "next_turn", runId, true);
           events.publishSession(sessionId, "queue");
+        }
+        // Shadow-only: an explicitly supplied sensor sees one admitted, redacted user turn.
+        // Its score cannot change messages, tools, search, evidence or this run's response.
+        if (turn && keptTurn !== null && recallSensor && !reportSource) {
+          void recallSensor
+            .evaluate({
+              turnId: userNodeId(),
+              redactedText: keptTurn,
+              signal: abortController.signal,
+            })
+            .catch(() => undefined);
         }
         let workerLease:
           | ReturnType<ReturnType<typeof GoalWorkerAssets.makeGoalWorkerAssetsRegistry>["use"]>

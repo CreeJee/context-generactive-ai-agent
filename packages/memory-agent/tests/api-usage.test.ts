@@ -4,6 +4,62 @@ import { Effect, Layer } from "effect";
 import { ApiUsage } from "../src/agent/api-usage.ts";
 import { Database } from "../src/db/database.ts";
 
+test("OpenAI-compatible usage includes cache reads and preserves missing counters", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const usage = yield* ApiUsage;
+      usage.record({
+        rootSessionId: "compatible",
+        purpose: "main",
+        provider: "openai-compatible",
+        model: "local",
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheReadTokens: 60,
+        cacheWriteTokens: 0,
+      });
+      assert.deepEqual(usage.byRootSession("compatible"), {
+        responses: 1,
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheReadTokens: 60,
+        cacheWriteTokens: 0,
+        uncachedInputTokens: 40,
+        totalInputTokens: 100,
+      });
+      assert.throws(
+        () =>
+          usage.record({
+            rootSessionId: "compatible",
+            purpose: "main",
+            provider: "openai-compatible",
+            model: "local",
+            inputTokens: 1,
+            cacheReadTokens: 2,
+          }),
+        RangeError,
+      );
+      usage.record({
+        rootSessionId: "compatible",
+        purpose: "main",
+        provider: "openai-compatible",
+        model: "local",
+        inputTokens: 10,
+        outputTokens: 2,
+      });
+      assert.deepEqual(usage.byRootSession("compatible"), {
+        responses: 2,
+        inputTokens: 110,
+        outputTokens: 22,
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+        uncachedInputTokens: null,
+        totalInputTokens: null,
+      });
+    }).pipe(Effect.provide(layer)),
+  );
+});
+
 const database = Database.layer(":memory:");
 const layer = Layer.provideMerge(ApiUsage.layer, database);
 

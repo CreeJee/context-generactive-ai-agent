@@ -2,7 +2,7 @@ import type { AgentLoopStrategy, AnyTextAdapter, ChatMiddleware, ModelMessage } 
 import { Data, Effect, Schema } from "effect";
 
 /** Subscription providers supported by the product runtime. */
-export const ProviderId = Schema.Literals(["openai", "anthropic"]);
+export const ProviderId = Schema.Literals(["openai", "anthropic", "openai-compatible"]);
 export type ProviderId = typeof ProviderId.Type;
 
 /** A model is never identified without its provider. */

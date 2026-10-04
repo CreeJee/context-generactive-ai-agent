@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vite-plus/test";
-import { WorkflowArtifactPanel } from "./workflow-panel";
+import { WorkflowArtifactPanel, workflowModeLabel } from "./workflow-panel";
 import { allowedWorkflowActions, workflowFixture } from "../session/workflow-test-fixtures";
 
 const props = {
@@ -22,6 +22,53 @@ function button(html: string, label: string) {
 }
 
 describe("server-authoritative workflow UI", () => {
+  test("labels a passed, completed Verify workflow as finished, but not an active one", () => {
+    const verified = {
+      ...workflowFixture,
+      phase: "verify" as const,
+      goal: { ...workflowFixture.goal!, status: "completed" as const },
+      plan: {
+        ...workflowFixture.plan!,
+        status: "completed" as const,
+        verification: { ...workflowFixture.plan!.verification, status: "passed" as const },
+      },
+    };
+    expect(workflowModeLabel(verified)).toBe("완료");
+    expect(workflowModeLabel({ ...verified, phase: "completed" })).toBe("완료");
+    expect(
+      workflowModeLabel({ ...verified, plan: { ...verified.plan, status: "executing" } }),
+    ).toBe("Verify");
+    expect(
+      workflowModeLabel({
+        ...verified,
+        plan: {
+          ...verified.plan,
+          verification: { ...verified.plan.verification, status: "failed" },
+        },
+      }),
+    ).toBe("Verify");
+    expect(workflowModeLabel({ ...verified, goal: { ...verified.goal, status: "active" } })).toBe(
+      "Verify",
+    );
+    expect(workflowModeLabel({ ...verified, phase: "plan" })).toBe("Plan");
+  });
+  test("shows verification only while the plan is executing", () => {
+    const state = { ...workflowFixture, phase: "verify" as const };
+    const executing = renderToStaticMarkup(<WorkflowArtifactPanel {...props} state={state} />);
+    expect(executing).toContain("Plan v4 · 검증 중");
+
+    for (const [status, label] of [
+      ["blocked", "막힘"],
+      ["completed", "완료"],
+      ["ready", "준비 완료"],
+    ] as const) {
+      const html = renderToStaticMarkup(
+        <WorkflowArtifactPanel {...props} state={{ ...state, plan: { ...state.plan!, status } }} />,
+      );
+      expect(html).toContain(`Plan v4 · ${label}`);
+      expect(html).not.toContain("Plan v4 · 검증 중");
+    }
+  });
   test("uses server execute intent instead of inferring it from plan status", () => {
     // An executing artifact used to force the continue label. The server owns the decision.
     const html = renderToStaticMarkup(<WorkflowArtifactPanel {...props} />);
