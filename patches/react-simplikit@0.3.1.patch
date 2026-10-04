@@ -1,0 +1,40 @@
+diff --git a/dist/hooks/useStorageState/storage.cjs b/dist/hooks/useStorageState/storage.cjs
+index d5e0eef7405e2e2014d748a9744d20f97f152303..22d0f06b88ab8aff4343fc602fc678d5e232066f 100644
+--- a/dist/hooks/useStorageState/storage.cjs
++++ b/dist/hooks/useStorageState/storage.cjs
+@@ -17,6 +17,7 @@ var MemoStorage = class {
+ };
+ var LocalStorage = class {
+ 	static canUse() {
++		if (typeof window === "undefined") return false;
+ 		const TEST_KEY = generateTestKey();
+ 		try {
+ 			localStorage.setItem(TEST_KEY, "test");
+@@ -41,6 +42,7 @@ var LocalStorage = class {
+ };
+ var SessionStorage = class {
+ 	static canUse() {
++		if (typeof window === "undefined") return false;
+ 		const TEST_KEY = generateTestKey();
+ 		try {
+ 			sessionStorage.setItem(TEST_KEY, "test");
+diff --git a/dist/hooks/useStorageState/storage.mjs b/dist/hooks/useStorageState/storage.mjs
+index feb1f206a136592267ab426eb579de1c7dd5e42c..6d88a5d7652e6c166beb0b2b0a4168d9a27adcec 100644
+--- a/dist/hooks/useStorageState/storage.mjs
++++ b/dist/hooks/useStorageState/storage.mjs
+@@ -17,6 +17,7 @@ var MemoStorage = class {
+ };
+ var LocalStorage = class {
+ 	static canUse() {
++		if (typeof window === "undefined") return false;
+ 		const TEST_KEY = generateTestKey();
+ 		try {
+ 			localStorage.setItem(TEST_KEY, "test");
+@@ -41,6 +42,7 @@ var LocalStorage = class {
+ };
+ var SessionStorage = class {
+ 	static canUse() {
++		if (typeof window === "undefined") return false;
+ 		const TEST_KEY = generateTestKey();
+ 		try {
+ 			sessionStorage.setItem(TEST_KEY, "test");

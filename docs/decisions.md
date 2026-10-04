@@ -892,3 +892,9 @@
 - `pnpm build`는 수정 전후 모두 성공했다. 브라우저의 Node 모듈 externalization 경고는 564개에서 0개로 줄었고, 서버 worker URL에 대한 asset 경고도 없어졌다. 메인 route 청크는 3,011.83 kB에서 1,037.79 kB로 줄었다 (gzip 883.20 → 324.42 kB). 이 수치는 이번 checkout의 빌드 스냅샷이다.
 - 500 kB 초과 청크 경고는 남아 있다. 메인 route와 일부 syntax grammar·WASM 청크가 대상이며, 경고 제한을 올리거나 숨기지 않는다. 초기 로드·문법 로딩 정책의 별도 최적화 대상이다.
 - Node 실행 파일 번들에서는 React Router의 `use client` 지시문 보존 경고가 남고, Vite+ pack의 `exe` 실험적 옵션 안내도 출력된다. 이번 변경에서 RSC 동작이나 패키징 방식을 변경하지 않는다.
+
+## Node SSR에서 브라우저 storage 조회 방지 (2026-10-04)
+
+- `react-simplikit@0.3.1`의 root import는 storage 모듈을 초기화하며 `localStorage`·`sessionStorage`를 조회한다. Node 26 개발 서버의 첫 SSR 요청에서 `--localstorage-file` 없는 localStorage getter가 경고를 내는 것을 trace로 확인했다. 앱의 테마 hook effect가 원인은 아니다.
+- pnpm dependency patch로 ESM·CommonJS의 storage probe에 browser `window` 존재 검사를 추가한다. SSR에서는 기존 메모리 fallback을 사용하고, 브라우저에서는 기존 storage probe를 유지한다. Node storage 파일을 추가하거나 경고를 전역 억제하지 않는다.
+- Node의 storage getter를 접근 시 실패하도록 정의한 회귀 테스트에서 두 module 형식의 root import가 storage를 읽지 않는지 확인한다. 별도 개발 서버의 실제 SSR 200 응답에서도 trace 경고가 사라지는지 확인한다.

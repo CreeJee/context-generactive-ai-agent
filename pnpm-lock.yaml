@@ -325,6 +325,9 @@ overrides:
   vite@*: npm:@voidzero-dev/vite-plus-core@1.0.0-rc.0
   vitest: 5.0.1
 
+patchedDependencies:
+  react-simplikit@0.3.1: 9570e6c7166ad0f77aaecf872cff939621299620e91851ef97e2d4c60f8453f3
+
 importers:
 
   .:
@@ -439,7 +442,7 @@ importers:
         version: 8.3.1(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       react-simplikit:
         specifier: 'catalog:'
-        version: 0.3.1(react@19.3.0)
+        version: 0.3.1(patch_hash=9570e6c7166ad0f77aaecf872cff939621299620e91851ef97e2d4c60f8453f3)(react@19.3.0)
       shadcn:
         specifier: ^4.21.0
         version: 4.21.0(typescript@7.0.2)
@@ -9223,7 +9226,7 @@ snapshots:
     optionalDependencies:
       react-dom: 19.3.0(react@19.3.0)
 
-  react-simplikit@0.3.1(react@19.3.0):
+  react-simplikit@0.3.1(patch_hash=9570e6c7166ad0f77aaecf872cff939621299620e91851ef97e2d4c60f8453f3)(react@19.3.0):
     dependencies:
       react: 19.3.0
 
