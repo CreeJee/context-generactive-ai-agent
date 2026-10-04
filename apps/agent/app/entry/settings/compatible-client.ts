@@ -6,7 +6,12 @@ export interface CompatibleConfiguration {
   contextWindow: number;
   outputBudget: number;
   toolCalling: boolean;
-  reasoning?: { source: "lm-studio"; model: string; options: readonly string[]; default: string };
+  reasoning?: {
+    source: "models" | "lm-studio";
+    model: string;
+    options: readonly string[];
+    default?: string;
+  };
 }
 export interface CompatibleStatus {
   configuration: CompatibleConfiguration | null;

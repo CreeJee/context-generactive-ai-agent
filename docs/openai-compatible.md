@@ -58,3 +58,11 @@ LM Studio와 vLLM은 동일한 `openai-compatible` provider로 연결한다. 제
 [vLLM 추론 문서](https://docs.vllm.ai/en/latest/features/reasoning_outputs/)의 최신 필드는 `reasoning`이고 이전 필드는 `reasoning_content`다. 모델에 맞는 `--reasoning-parser`와 chat template 설정이 필요하다. LM Studio의 모델별 추론 활성화는 서버 설정을 따른다. LM Studio 0.4.8부터 지원하는 [모델 metadata API](https://lmstudio.ai/docs/developer/rest/list)의 `capabilities.reasoning.allowed_options`를 선택 모델 ID와 함께 저장해 사용한다. metadata가 없으면 강도 옵션을 추측하지 않는다. 실제 LM Studio·vLLM 서버 검증과 모의 SSE 계약 검증을 구분한다.
 
 실제 LM Studio의 공개 metadata 조회에서는 Qwen 모델이 `off / low / medium / xhigh / on`을 제공했고, `reasoning_effort: off` 요청은 HTTP 400으로 거절됐다. 따라서 UI의 추론 끄기는 `none`으로 변환하고, 강도에 정확히 대응하지 않는 `on`은 제외한다. 서버 기본값(`default`)과 추론 끄기(`none`)를 구분한다.
+
+### 서버 구현과 모델 지원 정보 탐지
+
+[OpenAI `/models` 표준](https://developers.openai.com/api/reference/resources/models/methods/list)은 추론 강도나 서버 구현을 열거하지 않는다. `owned_by`는 모델 소유자다. 따라서 포트·모델 이름·`organization_owner`로 서버를 추측하지 않는다.
+
+`/models` 응답을 먼저 확인하며, 비표준 확장 `capabilities.reasoning.allowed_options`가 있으면 알려진 Chat Completions 강도를 직접 사용한다. [OpenRouter처럼 `supported_parameters`를 제공하는 서버](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties)는 추론 지원 여부만 확인하고, 그 필드만으로 레벨이나 요청 파라미터 변환을 만들어내지 않는다.
+
+모델별 지원 정보가 없으면 별도 탐지 모듈이 서버 확장을 확인한다. vLLM 힌트와 공식 OpenRouter host는 LM Studio 조회를 생략한다. 알 수 없는 `/v1` 서버에 대한 LM Studio 탐지는 같은 서버의 `/api/v1/models` 응답 계약을 확인하는 2초 제한의 읽기 전용 조회다. HTTP 성공만으로 식별하지 않으며, 계약이 맞지 않거나 조회가 실패하면 서버 기본값을 유지한다. 다른 서버의 자동 강도 조회는 해당 서버의 공개 계약을 추가해야 한다.

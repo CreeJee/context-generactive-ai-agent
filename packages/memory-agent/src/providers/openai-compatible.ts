@@ -4,12 +4,12 @@ import { GlobalConfig, type GlobalConfigApi } from "../config/global-config.ts";
 import { requireRuntime } from "../runtime/resources.ts";
 import { ModelUnavailable, type ProviderServices, type ProviderModel } from "./contracts.ts";
 import {
-  CompatibleReasoning,
   OpenAICompatibleUpdate,
   type OpenAICompatibleConfiguration,
   type OpenAICompatibleStatus,
 } from "./openai-compatible-config.ts";
 import { subscriptionAgentLoop } from "./subscription-runtime.ts";
+import { CompatibleModelPage, discoverCompatibleReasoning } from "./compatible-model-discovery.ts";
 
 export class OpenAICompatibleFailed extends Data.TaggedError("OpenAICompatibleFailed")<{
   readonly operation: "validation" | "keychain" | "partial" | "test" | "models";
@@ -60,32 +60,6 @@ const credentialFor = (stored: string | null, baseUrl: string): string | null =>
     return null;
   }
 };
-const ModelPage = Schema.Struct({
-  data: Schema.Array(Schema.Struct({ id: Schema.NonEmptyString })),
-});
-const LMStudioModels = Schema.Struct({
-  models: Schema.Array(
-    Schema.Struct({
-      type: Schema.String,
-      key: Schema.NonEmptyString,
-      capabilities: Schema.optional(
-        Schema.NullOr(
-          Schema.Struct({
-            reasoning: Schema.optional(
-              Schema.Struct({
-                allowed_options: Schema.Array(Schema.NonEmptyString),
-                default: Schema.NonEmptyString,
-              }),
-            ),
-          }),
-        ),
-      ),
-    }),
-  ),
-});
-const isChatReasoningEffort = Schema.is(
-  Schema.Literals(["none", "minimal", "low", "medium", "high", "xhigh"]),
-);
 export function validateCompatibleConfiguration(
   input: OpenAICompatibleUpdate,
 ): OpenAICompatibleUpdate {
@@ -217,7 +191,7 @@ export function makeOpenAICompatibleSettings(
         );
         if (!response.ok) throw new Error("request_failed");
         const page: unknown = await response.json();
-        return page;
+        return { page, configuration: settings };
       },
       catch: () => new OpenAICompatibleFailed({ operation }),
     });
@@ -227,72 +201,58 @@ export function makeOpenAICompatibleSettings(
       Effect.timeout(15_000),
       Effect.mapError(() => new OpenAICompatibleFailed({ operation })),
     );
-  const listIds = Effect.flatMap(request("models"), (page) =>
-    Effect.try({
-      try: () => Schema.decodeUnknownSync(ModelPage)(page).data.map((entry) => entry.id),
-      catch: () => new OpenAICompatibleFailed({ operation: "models" }),
-    }),
-  );
-  const listModels = Effect.flatMap(listIds, (ids) =>
-    updates.withPermit(
-      Effect.gen(function* () {
-        const { configuration, key } = yield* snapshot;
-        if (!configuration || !configuration.baseUrl.endsWith("/v1")) return ids;
-        // Optional same-server metadata. Generic compatible servers may not expose it.
-        const metadata = yield* Effect.tryPromise({
-          try: async (signal) => {
-            const headers = new Headers();
-            if (key) headers.set("Authorization", `Bearer ${key}`);
-            const response = await fetcher(`${configuration.baseUrl.slice(0, -3)}/api/v1/models`, {
-              headers,
-              signal,
-              redirect: "error",
-            });
-            if (!response.ok) throw new Error("metadata_unavailable");
-            return Schema.decodeUnknownSync(LMStudioModels)(await response.json());
-          },
+  const listModels = Effect.flatMap(
+    request("models"),
+    ({ page: rawPage, configuration: requested }) =>
+      Effect.flatMap(
+        Effect.try({
+          try: () => Schema.decodeUnknownSync(CompatibleModelPage)(rawPage),
           catch: () => new OpenAICompatibleFailed({ operation: "models" }),
-        }).pipe(Effect.timeout(2000), Effect.option);
-        if (metadata._tag === "Some") {
-          const discovered = metadata.value.models.find(
-            (entry) => entry.type === "llm" && entry.key === configuration.model,
-          )?.capabilities?.reasoning;
-          const reasoning =
-            discovered && discovered.allowed_options.includes(discovered.default)
-              ? Schema.decodeSync(CompatibleReasoning)({
-                  source: "lm-studio",
-                  model: configuration.model,
-                  // REST/UI toggles differ from the Chat Completions wire vocabulary.
-                  // off has an exact equivalent; on does not specify a reasoning level.
-                  options: [
-                    ...new Set(
-                      discovered.allowed_options
-                        .map((option) => (option === "off" ? "none" : option))
-                        .filter(isChatReasoningEffort),
-                    ),
-                  ],
-                  default: discovered.default,
-                })
-              : undefined;
-          if (JSON.stringify(reasoning) !== JSON.stringify(configuration.reasoning)) {
-            const stored = yield* config.read;
-            // Before capability discovery, none meant to omit the wire parameter.
-            const legacyDefault =
-              configuration.reasoning === undefined &&
-              stored.provider === provider &&
-              stored.reasoningEffort === "none";
-            let patch: Parameters<GlobalConfigApi["update"]>[0] = {
-              openaiCompatible: { ...configuration, reasoning },
-            };
-            if (legacyDefault) patch = { ...patch, reasoningEffort: "default" };
-            yield* config.update(patch);
-          }
-        }
-        return ids;
-      }),
-    ),
+        }),
+        (page) =>
+          updates.withPermit(
+            Effect.gen(function* () {
+              const ids = page.data.map((entry) => entry.id);
+              const { configuration, key } = yield* snapshot;
+              if (!configuration) return ids;
+              if (
+                configuration.baseUrl !== requested.baseUrl ||
+                configuration.model !== requested.model
+              )
+                return yield* new OpenAICompatibleFailed({ operation: "models" });
+              const discovery = yield* discoverCompatibleReasoning(
+                configuration.baseUrl,
+                configuration.model,
+                page,
+                key,
+                fetcher,
+              );
+              switch (discovery._tag) {
+                case "Unavailable":
+                  return ids;
+                case "Available": {
+                  const { reasoning } = discovery;
+                  if (JSON.stringify(reasoning) !== JSON.stringify(configuration.reasoning)) {
+                    const stored = yield* config.read;
+                    // Before capability discovery, none meant to omit the wire parameter.
+                    const legacyDefault =
+                      configuration.reasoning === undefined &&
+                      stored.provider === provider &&
+                      stored.reasoningEffort === "none";
+                    let patch: Parameters<GlobalConfigApi["update"]>[0] = {
+                      openaiCompatible: { ...configuration, reasoning },
+                    };
+                    if (legacyDefault) patch = { ...patch, reasoningEffort: "default" };
+                    yield* config.update(patch);
+                  }
+                  return ids;
+                }
+              }
+            }),
+          ),
+      ),
   );
-  const test = Effect.flatMap(request("test"), (page) =>
+  const test = Effect.flatMap(request("test"), ({ page }) =>
     Effect.try({
       try: () => {
         const completion = Schema.decodeUnknownSync(

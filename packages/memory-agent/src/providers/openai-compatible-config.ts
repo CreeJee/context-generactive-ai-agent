@@ -11,10 +11,10 @@ export const OpenAICompatibleContextWindow = Schema.Int.check(
 ).pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed(OPENAI_COMPATIBLE_DEFAULT_CONTEXT_WINDOW)));
 
 export const CompatibleReasoning = Schema.Struct({
-  source: Schema.Literal("lm-studio"),
+  source: Schema.Literals(["models", "lm-studio"]),
   model: Schema.NonEmptyString,
   options: Schema.Array(Schema.NonEmptyString),
-  default: Schema.NonEmptyString,
+  default: Schema.optional(Schema.NonEmptyString),
 });
 
 const connectionFields = {

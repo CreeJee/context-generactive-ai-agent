@@ -911,3 +911,10 @@
 - 강도를 endpoint 전체의 수동 체크박스로 지정하지 않는다. 모델 목록 조회 시 같은 서버의 LM Studio `/api/v1/models` 공개 정보에서 선택 모델의 `capabilities.reasoning.allowed_options`·`default`를 확인한다. 고정된 세 레벨 대신 모델별 공개 옵션을 Chat Completions 계약에 맞춰 제공한다. 실제 LM Studio에서 `off` 전송은 400이고 `none`으로 변환해야 함을 확인했다. `on`은 정확한 강도를 지정하지 않으므로 제외한다.
 - 조회 결과는 endpoint 설정 안에 모델 ID·출처와 함께 저장한다. 선택 모델과 ID가 맞는 정보만 사용하고, endpoint·모델 변경 시 다시 조회한다. 인증 키는 같은 서버로만 전달하며 metadata 조회 실패·미지원은 일반 `/v1/models` 결과를 막지 않는다.
 - `default`는 서버 기본값을 뜻하며 `reasoning_effort`를 보내지 않는다. 공개된 다른 옵션을 선택할 때만 그 값을 전송한다. 기존 `none` 선택은 알려진 지원 정보가 없으면 서버 기본값으로 처리한다. metadata를 공개하지 않는 vLLM·일반 호환 서버의 강도는 이름으로 추측하지 않는다.
+
+## 호환 모델 metadata 탐지 순서 (2026-10-04)
+
+- OpenAI 호환 프로토콜과 서버 구현을 구분한다. 표준 `/models`는 서버 식별·추론 강도 열거를 보장하지 않는다. `owned_by`는 모델 소유자이며 `organization_owner`를 LM Studio 식별자로 사용하지 않는다.
+- 먼저 `/models` 응답의 명시적인 확장을 읽는다. 지원하는 확장 계약은 `capabilities.reasoning.allowed_options`와 선택적인 `default`이며, Chat Completions의 알려진 wire 값을 그대로 제공한다. 이 계약은 OpenAI 표준 필드라는 의미가 아니다. `supported_parameters`에 추론이 있으면 지원 여부만 반영하고 레벨은 추측하지 않는다.
+- 별도의 `compatible-model-discovery` 모듈이 서버 확장 탐지를 담당한다. vLLM의 `owned_by: vllm` 힌트나 OpenRouter의 공식 host, 이미 공개된 모델별 지원 정보가 있으면 LM Studio 경로를 조회하지 않는다. 알 수 없는 `/v1` 서버는 같은 서버의 `/api/v1/models`를 2초 제한으로 읽고 LM Studio 응답 계약을 확인한 경우에만 해당 변환을 적용한다. 힌트와 응답 계약은 인증·서버 신뢰의 근거로 사용하지 않는다.
+- 알 수 없는 확장·응답 형식·조회 실패는 모델 목록을 막지 않는다. 조회 중 endpoint·모델이 바뀌면 이전 응답을 새 설정에 적용하지 않는다. 새 서버 구현 지원은 탐지 모듈에 해당 서버의 공개 계약을 추가하는 방식으로 확장한다.

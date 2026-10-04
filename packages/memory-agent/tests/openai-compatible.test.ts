@@ -4,7 +4,7 @@ import { chat } from "@tanstack/ai";
 import { reconstructChat, withPersistence } from "@tanstack/ai-persistence";
 import { resolveDebugOption } from "@tanstack/ai/adapter-internals";
 import { once } from "node:events";
-import { Effect, Fiber, Schema } from "effect";
+import { Deferred, Effect, Fiber, Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 import type { Settings } from "../src/config/global-config.ts";
 import { sqliteChatPersistence } from "../src/chat-state/persistence.ts";
@@ -45,6 +45,111 @@ function fixture(fetcher?: typeof fetch, initial: Settings = {}) {
   };
 }
 describe("OpenAI compatible settings", () => {
+  it("does not apply an old server's model metadata after an endpoint change", async () => {
+    const started = Effect.runSync(Deferred.make<void>());
+    const response = Effect.runSync(Deferred.make<Response>());
+    const f = fixture(async () => {
+      await Effect.runPromise(Deferred.succeed(started, undefined));
+      return Effect.runPromise(Deferred.await(response));
+    });
+    await Effect.runPromise(f.api.update(configuration));
+    const listing = Effect.runPromise(f.api.listModels);
+    const rejected = expect(listing).rejects.toThrow();
+    await Effect.runPromise(Deferred.await(started));
+    await Effect.runPromise(f.api.update({ ...configuration, baseUrl: "http://other.test/v1" }));
+    await Effect.runPromise(
+      Deferred.succeed(
+        response,
+        Response.json({
+          data: [
+            {
+              id: configuration.model,
+              capabilities: { reasoning: { allowed_options: ["high"] } },
+            },
+          ],
+        }),
+      ),
+    );
+    await rejected;
+    expect(f.saved().openaiCompatible?.reasoning).toBeUndefined();
+  });
+  it("uses explicit model-list capabilities before probing server-specific endpoints", async () => {
+    const paths: string[] = [];
+    const f = fixture(async (url) => {
+      const address = url instanceof Request ? url.url : url instanceof URL ? url.href : url;
+      paths.push(new URL(address).pathname);
+      return Response.json({
+        data: [
+          {
+            id: configuration.model,
+            capabilities: {
+              reasoning: { allowed_options: ["low", "high", "unrecognized"], default: "high" },
+            },
+          },
+        ],
+      });
+    });
+    await Effect.runPromise(f.api.update(configuration));
+    expect(
+      (await Effect.runPromise(f.api.services.models.list))[0]?.supportedReasoningEfforts,
+    ).toEqual(["default", "low", "high"]);
+    expect(f.saved().openaiCompatible?.reasoning?.source).toBe("models");
+    expect(paths).toEqual(["/v1/models"]);
+    await Effect.runPromise(f.api.services.models.select(configuration.model, "high"));
+    await expect(
+      Effect.runPromise(f.api.services.models.select(configuration.model, "none")),
+    ).rejects.toThrow();
+  });
+  it("does not infer levels from a public supported-parameter list", async () => {
+    const paths: string[] = [];
+    const f = fixture(async (url) => {
+      const address = url instanceof Request ? url.url : url instanceof URL ? url.href : url;
+      paths.push(new URL(address).pathname);
+      return Response.json({
+        data: [{ id: configuration.model, supported_parameters: ["reasoning", "temperature"] }],
+      });
+    });
+    await Effect.runPromise(f.api.update(configuration));
+    const model = (await Effect.runPromise(f.api.services.models.list))[0];
+    expect(model?.capabilities.reasoning).toBe(true);
+    expect(model?.supportedReasoningEfforts).toEqual(["default"]);
+    expect(paths).toEqual(["/v1/models"]);
+  });
+  it("avoids LM Studio probes for a vLLM server hint", async () => {
+    const paths: string[] = [];
+    const f = fixture(async (url) => {
+      const address = url instanceof Request ? url.url : url instanceof URL ? url.href : url;
+      paths.push(new URL(address).pathname);
+      return Response.json({ data: [{ id: configuration.model, owned_by: "vllm" }] });
+    });
+    await Effect.runPromise(f.api.update(configuration));
+    expect(
+      (await Effect.runPromise(f.api.services.models.list))[0]?.supportedReasoningEfforts,
+    ).toEqual(["default"]);
+    expect(paths).toEqual(["/v1/models"]);
+  });
+  it("keeps model listing usable when extension fields and a native probe are unsupported", async () => {
+    const f = fixture(async (url) => {
+      const address = url instanceof Request ? url.url : url instanceof URL ? url.href : url;
+      if (address.endsWith("/api/v1/models"))
+        return Response.json({ models: [{ id: configuration.model, reasoning: true }] });
+      return Response.json({
+        data: [
+          {
+            id: configuration.model,
+            capabilities: { reasoning: true },
+            supported_parameters: null,
+          },
+        ],
+      });
+    });
+    await Effect.runPromise(f.api.update(configuration));
+    expect(await Effect.runPromise(f.api.listModels)).toEqual([configuration.model]);
+    expect(
+      (await Effect.runPromise(f.api.services.models.list))[0]?.supportedReasoningEfforts,
+    ).toEqual(["default"]);
+    expect(f.saved().openaiCompatible?.reasoning).toBeUndefined();
+  });
   it("keeps the legacy omitted effort as the server default when discovering off support", async () => {
     const f = fixture(
       async (url) => {
