@@ -45,6 +45,33 @@ function fixture(fetcher?: typeof fetch, initial: Settings = {}) {
   };
 }
 describe("OpenAI compatible settings", () => {
+  it("ignores and clears cached capabilities from the removed LM Studio probe", async () => {
+    const f = fixture(
+      async (url) => {
+        const address = url instanceof Request ? url.url : url instanceof URL ? url.href : url;
+        expect(new URL(address).pathname).toBe("/v1/models");
+        return Response.json({ data: [{ id: configuration.model }] });
+      },
+      {
+        provider: "openai-compatible",
+        model: configuration.model,
+        reasoningEffort: "xhigh",
+        openaiCompatible: {
+          ...configuration,
+          reasoning: { source: "lm-studio", model: configuration.model, options: ["xhigh"] },
+        },
+      },
+    );
+    expect((await Effect.runPromise(f.api.services.models.selected))?.reasoningEffort).toBe(
+      "default",
+    );
+    const model = (await Effect.runPromise(f.api.services.models.list))[0];
+    expect(model?.supportedReasoningEfforts).toEqual(["default"]);
+    expect(f.saved().openaiCompatible?.reasoning).toBeUndefined();
+    await expect(
+      Effect.runPromise(f.api.services.models.select(configuration.model, "xhigh")),
+    ).rejects.toThrow();
+  });
   it("does not apply an old server's model metadata after an endpoint change", async () => {
     const started = Effect.runSync(Deferred.make<void>());
     const response = Effect.runSync(Deferred.make<Response>());
@@ -115,24 +142,26 @@ describe("OpenAI compatible settings", () => {
     expect(model?.supportedReasoningEfforts).toEqual(["default"]);
     expect(paths).toEqual(["/v1/models"]);
   });
-  it("avoids LM Studio probes for a vLLM server hint", async () => {
-    const paths: string[] = [];
+  it.each(["vllm", "organization_owner", "unknown"])(
+    "only reads /models for owner %s without capabilities",
+    async (owner) => {
+      const paths: string[] = [];
+      const f = fixture(async (url) => {
+        const address = url instanceof Request ? url.url : url instanceof URL ? url.href : url;
+        paths.push(new URL(address).pathname);
+        return Response.json({ data: [{ id: configuration.model, owned_by: owner }] });
+      });
+      await Effect.runPromise(f.api.update(configuration));
+      expect(
+        (await Effect.runPromise(f.api.services.models.list))[0]?.supportedReasoningEfforts,
+      ).toEqual(["default"]);
+      expect(paths).toEqual(["/v1/models"]);
+    },
+  );
+  it("keeps model listing usable when extension fields are unsupported", async () => {
     const f = fixture(async (url) => {
       const address = url instanceof Request ? url.url : url instanceof URL ? url.href : url;
-      paths.push(new URL(address).pathname);
-      return Response.json({ data: [{ id: configuration.model, owned_by: "vllm" }] });
-    });
-    await Effect.runPromise(f.api.update(configuration));
-    expect(
-      (await Effect.runPromise(f.api.services.models.list))[0]?.supportedReasoningEfforts,
-    ).toEqual(["default"]);
-    expect(paths).toEqual(["/v1/models"]);
-  });
-  it("keeps model listing usable when extension fields and a native probe are unsupported", async () => {
-    const f = fixture(async (url) => {
-      const address = url instanceof Request ? url.url : url instanceof URL ? url.href : url;
-      if (address.endsWith("/api/v1/models"))
-        return Response.json({ models: [{ id: configuration.model, reasoning: true }] });
+      expect(new URL(address).pathname).toBe("/v1/models");
       return Response.json({
         data: [
           {
@@ -150,22 +179,17 @@ describe("OpenAI compatible settings", () => {
     ).toEqual(["default"]);
     expect(f.saved().openaiCompatible?.reasoning).toBeUndefined();
   });
-  it("keeps the legacy omitted effort as the server default when discovering off support", async () => {
+  it("keeps the legacy omitted effort as the server default when discovering none support", async () => {
     const f = fixture(
-      async (url) => {
-        const address = url instanceof Request ? url.url : url instanceof URL ? url.href : url;
-        return address.endsWith("/api/v1/models")
-          ? Response.json({
-              models: [
-                {
-                  type: "llm",
-                  key: configuration.model,
-                  capabilities: { reasoning: { allowed_options: ["off", "on"], default: "on" } },
-                },
-              ],
-            })
-          : Response.json({ data: [{ id: configuration.model }] });
-      },
+      async () =>
+        Response.json({
+          data: [
+            {
+              id: configuration.model,
+              capabilities: { reasoning: { allowed_options: ["none", "low"], default: "low" } },
+            },
+          ],
+        }),
       {
         provider: "openai-compatible",
         model: configuration.model,
@@ -186,20 +210,20 @@ describe("OpenAI compatible settings", () => {
     const bodies: (typeof Body.Type)[] = [];
     const f = fixture(async (url, init) => {
       const address = url instanceof Request ? url.url : url instanceof URL ? url.href : url;
-      if (address.endsWith("/api/v1/models"))
+      if (address.endsWith("/models"))
         return Response.json({
-          models: [
+          data: [
             {
-              type: "llm",
-              key: configuration.model,
+              id: configuration.model,
               capabilities: {
-                reasoning: { allowed_options: ["off", "low", "xhigh", "on"], default: "xhigh" },
+                reasoning: {
+                  allowed_options: ["none", "low", "xhigh", "unknown"],
+                  default: "xhigh",
+                },
               },
             },
           ],
         });
-      if (address.endsWith("/models"))
-        return Response.json({ data: [{ id: configuration.model }] });
       bodies.push(Schema.decodeUnknownSync(Body)(init?.body));
       return new Response(
         'data: {"id":"x","object":"chat.completion.chunk","created":1,"model":"manual-model","choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',

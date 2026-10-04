@@ -11,6 +11,8 @@ export const OpenAICompatibleContextWindow = Schema.Int.check(
 ).pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed(OPENAI_COMPATIBLE_DEFAULT_CONTEXT_WINDOW)));
 
 export const CompatibleReasoning = Schema.Struct({
+  // Decode previous probe caches so the config remains readable; runtime ignores
+  // lm-studio entries and the next successful model-list read removes them.
   source: Schema.Literals(["models", "lm-studio"]),
   model: Schema.NonEmptyString,
   options: Schema.Array(Schema.NonEmptyString),

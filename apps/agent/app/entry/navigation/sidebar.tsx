@@ -241,34 +241,37 @@ export function ModelSection({
           </SelectContent>
         </Select>
       </DataListItem>
-      {current && selection && (
-        <DataListItem term="추론">
-          <Select
-            value={selection.reasoningEffort}
-            items={current.supportedReasoningEfforts.map((effort) => ({
-              value: effort,
-              label:
-                selection.provider === "openai-compatible" && effort === "default"
-                  ? "서버 기본값"
-                  : `추론 ${effort}`,
-            }))}
-            onValueChange={(value) => value && onSelect(current.id, value)}
-          >
-            <SelectTrigger className="w-full" size="sm" aria-label="추론 강도">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {current.supportedReasoningEfforts.map((effort) => (
-                <SelectItem key={effort} value={effort}>
-                  {selection.provider === "openai-compatible" && effort === "default"
+      {current &&
+        selection &&
+        (selection.provider !== "openai-compatible" ||
+          current.supportedReasoningEfforts.length > 1) && (
+          <DataListItem term="추론">
+            <Select
+              value={selection.reasoningEffort}
+              items={current.supportedReasoningEfforts.map((effort) => ({
+                value: effort,
+                label:
+                  selection.provider === "openai-compatible" && effort === "default"
                     ? "서버 기본값"
-                    : `추론 ${effort}`}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </DataListItem>
-      )}
+                    : `추론 ${effort}`,
+              }))}
+              onValueChange={(value) => value && onSelect(current.id, value)}
+            >
+              <SelectTrigger className="w-full" size="sm" aria-label="추론 강도">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {current.supportedReasoningEfforts.map((effort) => (
+                  <SelectItem key={effort} value={effort}>
+                    {selection.provider === "openai-compatible" && effort === "default"
+                      ? "서버 기본값"
+                      : `추론 ${effort}`}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </DataListItem>
+        )}
       {!selection && (
         <DataListItem term="추론">
           <p className="pt-1.5 text-xs text-muted-foreground">모델을 선택하세요.</p>

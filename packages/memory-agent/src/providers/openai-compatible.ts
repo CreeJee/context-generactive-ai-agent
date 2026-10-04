@@ -9,7 +9,7 @@ import {
   type OpenAICompatibleStatus,
 } from "./openai-compatible-config.ts";
 import { subscriptionAgentLoop } from "./subscription-runtime.ts";
-import { CompatibleModelPage, discoverCompatibleReasoning } from "./compatible-model-discovery.ts";
+import { CompatibleModelPage, readCompatibleReasoning } from "./compatible-model-discovery.ts";
 
 export class OpenAICompatibleFailed extends Data.TaggedError("OpenAICompatibleFailed")<{
   readonly operation: "validation" | "keychain" | "partial" | "test" | "models";
@@ -213,41 +213,28 @@ export function makeOpenAICompatibleSettings(
           updates.withPermit(
             Effect.gen(function* () {
               const ids = page.data.map((entry) => entry.id);
-              const { configuration, key } = yield* snapshot;
+              const configuration = yield* read;
               if (!configuration) return ids;
               if (
                 configuration.baseUrl !== requested.baseUrl ||
                 configuration.model !== requested.model
               )
                 return yield* new OpenAICompatibleFailed({ operation: "models" });
-              const discovery = yield* discoverCompatibleReasoning(
-                configuration.baseUrl,
-                configuration.model,
-                page,
-                key,
-                fetcher,
-              );
-              switch (discovery._tag) {
-                case "Unavailable":
-                  return ids;
-                case "Available": {
-                  const { reasoning } = discovery;
-                  if (JSON.stringify(reasoning) !== JSON.stringify(configuration.reasoning)) {
-                    const stored = yield* config.read;
-                    // Before capability discovery, none meant to omit the wire parameter.
-                    const legacyDefault =
-                      configuration.reasoning === undefined &&
-                      stored.provider === provider &&
-                      stored.reasoningEffort === "none";
-                    let patch: Parameters<GlobalConfigApi["update"]>[0] = {
-                      openaiCompatible: { ...configuration, reasoning },
-                    };
-                    if (legacyDefault) patch = { ...patch, reasoningEffort: "default" };
-                    yield* config.update(patch);
-                  }
-                  return ids;
-                }
+              const reasoning = readCompatibleReasoning(configuration.model, page);
+              if (JSON.stringify(reasoning) !== JSON.stringify(configuration.reasoning)) {
+                const stored = yield* config.read;
+                // Before capability discovery, none meant to omit the wire parameter.
+                const legacyDefault =
+                  configuration.reasoning === undefined &&
+                  stored.provider === provider &&
+                  stored.reasoningEffort === "none";
+                let patch: Parameters<GlobalConfigApi["update"]>[0] = {
+                  openaiCompatible: { ...configuration, reasoning },
+                };
+                if (legacyDefault) patch = { ...patch, reasoningEffort: "default" };
+                yield* config.update(patch);
               }
+              return ids;
             }),
           ),
       ),
@@ -276,13 +263,16 @@ export function makeOpenAICompatibleSettings(
     defaultReasoningEffort: "default",
     supportedReasoningEfforts: [
       "default",
-      ...(settings.reasoning?.model === settings.model ? settings.reasoning.options : []),
+      ...(settings.reasoning?.source === "models" && settings.reasoning.model === settings.model
+        ? settings.reasoning.options
+        : []),
     ],
     contextWindow: settings.contextWindow,
     capabilities: {
       inputModalities: ["text"],
       toolCalling: settings.toolCalling,
-      reasoning: settings.reasoning?.model === settings.model,
+      reasoning:
+        settings.reasoning?.source === "models" && settings.reasoning.model === settings.model,
     },
   });
   const services: ProviderServices = {

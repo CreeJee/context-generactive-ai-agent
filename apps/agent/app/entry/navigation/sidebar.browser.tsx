@@ -17,6 +17,36 @@ const alignedTerms = (root: HTMLElement, expected: string[]) => {
 };
 
 describe("sidebar disclosures", () => {
+  test("compatible reasoning output does not require an effort selector", async () => {
+    const model = {
+      provider: "openai-compatible" as const,
+      id: "local-model",
+      displayName: "Local model",
+      isDefault: true,
+      defaultReasoningEffort: "default",
+      supportedReasoningEfforts: ["default"],
+      capabilities: { inputModalities: ["text" as const], toolCalling: true, reasoning: true },
+    };
+    const props = {
+      selection: {
+        provider: "openai-compatible" as const,
+        model: model.id,
+        reasoningEffort: "default",
+      },
+      onSelect: () => {},
+    };
+    const screen = await render(<ModelSection {...props} models={[model]} />);
+    await expect
+      .element(screen.getByRole("combobox", { name: "추론 강도" }))
+      .not.toBeInTheDocument();
+    await screen.rerender(
+      <ModelSection
+        {...props}
+        models={[{ ...model, supportedReasoningEfforts: ["default", "low"] }]}
+      />,
+    );
+    await expect.element(screen.getByRole("combobox", { name: "추론 강도" })).toBeVisible();
+  });
   test("account and model settings use the same data list columns", async () => {
     const screen = await render(
       <div className="w-72">
