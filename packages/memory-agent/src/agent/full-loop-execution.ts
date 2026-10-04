@@ -299,6 +299,16 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
         };
         const decisions = new Map<string, any>();
         const completedTools = new Map<string, any>();
+        const phaseCall = (call: any) => {
+          const observed = grants.toolCalls().find((entry) => isDeepStrictEqual(entry, call));
+          if (observed) return observed;
+          if (!ownerConfig.resumeToolState?.cancelledToolCallIds?.has(call.id)) return undefined;
+          return ownerContext.messages
+            .flatMap((message: any) => message.toolCalls ?? [])
+            .find((entry: any) => isDeepStrictEqual(entry, call));
+        };
+        const configuredMiddleware = new Set<number>();
+        const firstConfigMiddleware = middleware.findIndex((mw) => mw.hooks.includes("onConfig"));
         let modelIterations = 0;
         ownerContext.signal = controller.signal;
         ownerContext.abort = (reason = "owner middleware abort") => controller.abort(reason);
@@ -400,10 +410,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
             if (input.hook === "onToolPhaseComplete") {
               if (
                 !Array.isArray(input.info?.toolCalls) ||
-                input.info.toolCalls.some(
-                  (call: any) =>
-                    !grants.toolCalls().some((observed) => isDeepStrictEqual(observed, call)),
-                )
+                input.info.toolCalls.some((call: any) => !phaseCall(call))
               )
                 return false;
             }
@@ -443,7 +450,9 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                       ...input,
                       // Model configuration comes from the owner lifecycle, not
                       // a worker's claim about canonical messages or SDK services.
-                      messages: structuredClone(ownerContext.messages),
+                      messages: structuredClone(
+                        ownerConfig.providerMessages ?? ownerContext.messages,
+                      ),
                       systemPrompts: structuredClone(ownerContext.systemPrompts),
                       modelOptions: ownerConfig.modelOptions,
                       logger: ownerLogger,
@@ -717,10 +726,15 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                       onIteration: "beforeModel",
                       onBeforeToolCall: "beforeTools",
                       onAfterToolCall: "afterTools",
-                      onConfig: modelIterations === 0 ? "init" : "beforeModel",
+                      onConfig: configuredMiddleware.has(input.index) ? "beforeModel" : "init",
                     } satisfies Record<string, ChatMiddlewareContext["phase"]>),
                   );
                   ownerContext.phase = phases.get(input.hook) ?? ownerContext.phase;
+                  if (input.hook === "onConfig") {
+                    configuredMiddleware.add(input.index);
+                    if (input.index === firstConfigMiddleware)
+                      ownerConfig.providerMessages = ownerContext.messages;
+                  }
                   if (input.hook === "onInterruptBoundary") {
                     const answered = new Set(
                       ownerContext.messages
@@ -753,17 +767,42 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                   let info = input.info;
                   if (input.hook === "onAfterToolCall")
                     info = completedTools.get(input.info.toolCallId);
-                  if (input.hook === "onToolPhaseComplete")
+                  if (input.hook === "onToolPhaseComplete") {
+                    const toolCalls = input.info.toolCalls.map(phaseCall);
+                    for (const call of toolCalls) {
+                      if (!call) throw new Error("Unobserved owner tool phase call");
+                      if (completedTools.has(call.id)) continue;
+                      if (!ownerConfig.resumeToolState?.cancelledToolCallIds?.has(call.id))
+                        continue;
+                      const result = { error: "Tool execution cancelled" };
+                      completedTools.set(call.id, {
+                        toolCallId: call.id,
+                        toolName: call.function.name,
+                        toolCall: call,
+                        result,
+                        state: "output-error",
+                      });
+                      if (
+                        !ownerContext.messages.some(
+                          (message: any) =>
+                            message.role === "tool" && message.toolCallId === call.id,
+                        )
+                      )
+                        ownerContext.messages.push({
+                          role: "tool",
+                          toolCallId: call.id,
+                          content: JSON.stringify(result),
+                        });
+                    }
                     info = {
-                      toolCalls: input.info.toolCalls.map((call: any) =>
-                        grants.toolCalls().find((observed) => observed.id === call.id),
-                      ),
+                      toolCalls,
                       results: input.info.toolCalls.flatMap((call: any) =>
                         completedTools.has(call.id) ? [completedTools.get(call.id)] : [],
                       ),
                       needsApproval: [],
                       needsClientExecution: [],
                     };
+                  }
                   if (input.hook === "onIteration")
                     info = {
                       iteration: ownerContext.iteration,

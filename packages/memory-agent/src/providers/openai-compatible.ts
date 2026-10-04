@@ -1,4 +1,5 @@
 import { openaiCompatibleText } from "@tanstack/ai-openai/compatible";
+import { createHash } from "node:crypto";
 import { Context, Data, Effect, Layer, Option, Schema, Semaphore } from "effect";
 import { GlobalConfig, type GlobalConfigApi } from "../config/global-config.ts";
 import { requireRuntime } from "../runtime/resources.ts";
@@ -452,7 +453,10 @@ export function makeOpenAICompatibleSettings(
             throw cause;
           }
         };
-        return Object.assign(adapter, { releaseRun: () => runAbort.abort() });
+        return Object.assign(adapter, {
+          releaseRun: () => runAbort.abort(),
+          historyKey: createHash("sha256").update(settings.baseUrl).digest("hex"),
+        });
       },
       contextWindow: () => {
         const settings = Effect.runSync(read);

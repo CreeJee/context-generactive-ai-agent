@@ -237,6 +237,50 @@ describe("cache-cold observation", () => {
 });
 
 describe("compaction", () => {
+  test("AgentChat restores model changes from evidence without rewriting stored history", async () => {
+    const setup = await testRuntime({ testProvider: { responder: () => ({ text: "answer" }) } });
+    const { runtime, session } = setup;
+    await setup.provider!.select(runtime);
+    const agent = await runtime.runPromise(AgentChat);
+    const run = async (runId: string, text: string) => {
+      const response = await runtime.runPromise(
+        agent.handle(
+          new Request("http://127.0.0.1/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              threadId: session.id,
+              runId,
+              messages: [{ id: `${runId}-message`, role: "user", content: text }],
+              tools: [],
+              context: [],
+            }),
+          }),
+          session.id,
+        ),
+      );
+      expect(response.status).toBe(200);
+      expect(await response.text()).not.toContain('"type":"RUN_ERROR"');
+    };
+    await run("before-switch", "빌드 결과를 검증해 줘");
+    const state = await runtime.runPromise(ChatState);
+    const before = await state.persistence.stores.messages.loadThread(session.id);
+    await setup.provider!.select(runtime, "deep-1", "medium");
+    await run("after-switch", "이어서해줘");
+    const request = setup.provider!.adapter.invocations.at(-1)!.messages;
+    expect(request[0]?.content).toContain("Context restored after a model change");
+    expect(request[0]?.content).toContain("node ");
+    expect(request).toContainEqual(
+      expect.objectContaining({ role: "user", content: "이어서해줘" }),
+    );
+    const saved = await state.persistence.stores.messages.loadThread(session.id);
+    expect(saved.slice(0, before.length)).toEqual(before);
+    expect(saved.some((message) => message.content === request[0]?.content)).toBe(false);
+    await run("same-new-model", "계속 검증해 줘");
+    expect(setup.provider!.adapter.invocations.at(-1)?.messages[0]?.content).toContain(
+      "Context restored after a model change",
+    );
+  });
   test("shortens recorded tool outputs in provider copy while preserving status and evidence ID", () => {
     const output = JSON.stringify({
       status: "failed",

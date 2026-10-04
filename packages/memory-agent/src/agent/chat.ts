@@ -38,6 +38,7 @@ import {
 import { ImageRouter } from "../providers/image-router.ts";
 import {
   providerConnection,
+  ProviderId,
   type ModelSelection,
   type RunTextAdapter,
 } from "../providers/contracts.ts";
@@ -85,10 +86,13 @@ import { hostShell } from "../shell/run.ts";
 import { MessageQueue, type QueueChangeRefused } from "../queue/queue.ts";
 import type { QueueEdit, QueuedMessage } from "../queue/queue-state.ts";
 import { retrievalLeadLimit, retrievalTokenLimit } from "./compaction-policy.ts";
+import { handoffEvidenceContext, modelHandoffHistory } from "./model-handoff.ts";
 import {
   budgetFor,
   compactByHand,
   compaction,
+  compactionState,
+  linedUp,
   estimateTokens,
   messageText,
   type CompactionSources,
@@ -1384,6 +1388,46 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
         // Pin the profile-specific client before later async preparation and tool/model turns.
         const runAdapter = runtime.adapter(selection);
         runAdapterToRelease = runAdapter;
+        const restoreModelHistory = modelHandoffHistory({
+          metadata,
+          threadId: sessionId,
+          target: JSON.stringify([
+            selection.provider,
+            selection.model,
+            runAdapter.historyKey ?? null,
+          ]),
+          model: selection.model,
+          provider: selection.provider,
+          previous: Option.getOrUndefined(
+            Schema.decodeUnknownOption(
+              Schema.Struct({
+                provider: ProviderId,
+                model: Schema.String,
+              }),
+            )(
+              sqlite
+                .prepare(
+                  "SELECT provider, model FROM api_usage_responses WHERE root_session_id = ? AND thread_id = ? AND purpose = 'main' ORDER BY created_at DESC, id DESC LIMIT 1",
+                )
+                .get(sessionId, sessionId),
+            ),
+          ),
+          loadHistory: () => chatState.persistence.stores.messages.loadThread(sessionId),
+          evidenceContext: async (storedForHandoff) => {
+            const saved = await compactionState(metadata, sessionId);
+            const blocks = linedUp(
+              storedForHandoff,
+              saved.blocks,
+              (id) => nodes.get(id)?.text ?? null,
+            );
+            return handoffEvidenceContext(
+              blocks,
+              nodes
+                .session(sessionId)
+                .filter((node) => !turn || !userNode || node.seq < userNode.seq),
+            );
+          },
+        });
         // Refresh model-advertised limits before choosing this run's compaction budget. A catalog
         // failure must not prevent an otherwise valid request; the runtime has a safe fallback.
         // A successfully fetched catalogue, however, must not silently run a model absent from
@@ -1721,6 +1765,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
             (stage) => {
               compactionStage = stage;
             },
+            restoreModelHistory,
           ),
           modelImages(),
           recordContextUsage(

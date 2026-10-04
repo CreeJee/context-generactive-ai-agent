@@ -465,24 +465,82 @@ export function compaction(
   sources: CompactionSources,
   budget: Budget,
   observed: (stage: CompactionStage) => void = () => undefined,
+  historyForModel?: (messages: readonly ModelMessage[]) => Promise<readonly ModelMessage[] | null>,
 ): ChatMiddleware {
   return {
     name: "memory-agent/compaction",
     async onConfig(ctx, config) {
-      // Only the model-bound phases shape what is sent.
-      if (ctx.phase === "init") return;
+      if (ctx.phase === "init") {
+        const restored = await historyForModel?.(config.messages);
+        if (!restored) return;
+        const replayed = new Set(
+          restored.flatMap((message) => (message.toolCalls ?? []).map((call) => call.id)),
+        );
+        const answered = new Set(
+          config.messages
+            .filter((message) => message.role === "tool")
+            .map((message) => message.toolCallId),
+        );
+        const approvals = config.resumeToolState?.approvals;
+        const abandoned = config.messages.flatMap((message) =>
+          (message.toolCalls ?? [])
+            .filter(
+              (call) =>
+                !replayed.has(call.id) &&
+                !answered.has(call.id) &&
+                !approvals?.has(call.id) &&
+                !approvals?.has(`approval_${call.id}`),
+            )
+            .map((call) => call.id),
+        );
+        if (abandoned.length === 0) return;
+        return {
+          resumeToolState: {
+            ...config.resumeToolState,
+            cancelledToolCallIds: new Set([
+              ...(config.resumeToolState?.cancelledToolCallIds ?? []),
+              ...abandoned,
+            ]),
+          },
+        };
+      }
       const state = await compactionState(metadata, ctx.threadId);
       const coldId = await pendingColdObservation(metadata, ctx.threadId);
+      const restored = await historyForModel?.(config.messages);
+      const removedTurns = restored
+        ? userTurns(config.messages).length - userTurns(restored).length
+        : 0;
+      const restoredContext = restored?.[0];
       const { messages, stage } = await compact(
-        config.messages,
-        state,
+        restored ? restored.slice(1) : config.messages,
+        restored
+          ? {
+              manual: noManualCompaction,
+              blocks: state.blocks
+                .filter((block) => block.end > removedTurns)
+                .map((block) => ({ ...block, end: block.end - removedTurns })),
+            }
+          : state,
         sources,
-        budget,
+        restoredContext
+          ? {
+              ...budget,
+              leaveOutAt: Math.max(1, budget.leaveOutAt - estimateTokens(restoredContext)),
+            }
+          : budget,
         coldId !== null,
       );
       if (coldId !== null) await consumeColdObservation(metadata, ctx.threadId, coldId);
-      observed(stage);
-      const providerMessages = lightweightToolResults(messages, sources.toolResultId);
+      observed(restored && stage === "none" ? "summarize" : stage);
+      const question = restored?.findLast(
+        (message) => message.role === "user" && messageText(message).trim(),
+      );
+      const retained =
+        question && !messages.includes(question) ? [question, ...messages] : messages;
+      const providerMessages = lightweightToolResults(
+        restoredContext ? [restoredContext, ...retained] : messages,
+        sources.toolResultId,
+      );
       return providerMessages.every((message, index) => message === config.messages[index]) &&
         providerMessages.length === config.messages.length
         ? undefined

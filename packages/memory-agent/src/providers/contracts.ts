@@ -153,7 +153,11 @@ export interface ModelCatalog {
 }
 
 /** Provider-native transport behind the provider-neutral orchestration boundary. */
-export type RunTextAdapter = AnyTextAdapter & { readonly releaseRun?: () => void };
+export type RunTextAdapter = AnyTextAdapter & {
+  readonly releaseRun?: () => void;
+  /** Pinned connection identity for detecting a server change without retaining credentials. */
+  readonly historyKey?: string;
+};
 
 export interface AgentModelRuntime {
   readonly provider: ProviderId;

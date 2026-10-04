@@ -5,7 +5,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { toolDefinition, maxIterations, type AnyServerTool } from "@tanstack/ai";
+import {
+  toolDefinition,
+  maxIterations,
+  type AnyServerTool,
+  type MetadataStore,
+} from "@tanstack/ai";
 import { webSearchTool } from "@tanstack/ai-openai/tools";
 import { expect, test, vi } from "vite-plus/test";
 import { Effect, Layer } from "effect";
@@ -22,6 +27,8 @@ import { migrations } from "../src/db/migrations.ts";
 import type { OwnerRpcCapability } from "../src/agent/owner-rpc.ts";
 import { ScriptedTextAdapter } from "../src/testing/scripted-adapter.ts";
 import { parallelReads } from "../src/tools/parallel-reads.ts";
+import { compaction } from "../src/agent/compaction.ts";
+import { modelHandoffHistory } from "../src/agent/model-handoff.ts";
 
 function maliciousWorker(source: string) {
   const clientUrl = new URL("../src/agent/full-loop-rpc-client.ts", import.meta.url).href;
@@ -535,6 +542,7 @@ test("owner SDK services and UI-message normalization survive config/start/model
   let state: object | undefined;
   let started = false;
   let modelCalls = 0;
+  const configPhases: string[] = [];
   class NativeLikeAdapter extends ScriptedTextAdapter {
     override async *chatStream(options: Parameters<ScriptedTextAdapter["chatStream"]>[0]) {
       modelCalls++;
@@ -569,7 +577,7 @@ test("owner SDK services and UI-message normalization survive config/start/model
               state = ctx;
             },
             onConfig: (ctx, config) => {
-              expect(ctx.phase).toBe("init");
+              configPhases.push(ctx.phase);
               expect(ctx.runId).toBe("r");
               expect(ctx.messages).toEqual(canonical);
               expect(config.messages).toEqual(canonical);
@@ -589,6 +597,7 @@ test("owner SDK services and UI-message normalization survive config/start/model
       chunks.push(chunk);
     expect(started).toBe(true);
     expect(modelCalls).toBe(1);
+    expect(configPhases).toEqual(["init", "beforeModel"]);
     expect(chunks).toContainEqual(
       expect.objectContaining({ type: "TEXT_MESSAGE_CONTENT", delta: "normalized answer" }),
     );
@@ -845,6 +854,118 @@ test("run snapshot rejects unsupported config and hook accessors without invokin
     f.close();
   }
 });
+
+test.each([true, false])(
+  "worker model handoff retains execution without replaying old calls (result: %s)",
+  async (hasOldResult) => {
+    const f = fixture();
+    try {
+      const values = new Map<string, unknown>();
+      const metadata: MetadataStore = {
+        get: async (namespace, key) => values.get(`${namespace}:${key}`) ?? null,
+        set: async (namespace, key, value) => {
+          values.set(`${namespace}:${key}`, value);
+        },
+        delete: async (namespace, key) => {
+          values.delete(`${namespace}:${key}`);
+        },
+      };
+      const past = [
+        { role: "user" as const, content: "build the project" },
+        {
+          role: "assistant" as const,
+          content: null,
+          metadata: { tanstack: { model: "old" } },
+          toolCalls: [
+            {
+              id: "old",
+              type: "function" as const,
+              function: { name: "owner_tool", arguments: "{}" },
+            },
+          ],
+        },
+        ...(hasOldResult
+          ? [{ role: "tool" as const, toolCallId: "old", content: "old result" }]
+          : []),
+      ];
+      const adapter = new ScriptedTextAdapter([
+        { toolCalls: [{ id: "new", name: "owner_tool", arguments: "{}" }] },
+        { text: "done" },
+      ]);
+      let executions = 0;
+      let saved: readonly import("@tanstack/ai").ModelMessage[] = [];
+      for await (const _chunk of createFullLoopExecution<ScriptedTextAdapter>(f.owner).execute(
+        { messages: [...past, { role: "user", content: "continue" }], runId: "r", threadId: "s" },
+        {
+          model: { adapter, agentLoopStrategy: maxIterations(3) },
+          tools: [
+            toolDefinition({ name: "owner_tool", description: "owner" }).server(() => {
+              executions++;
+              return "new result";
+            }),
+          ],
+          middleware: [
+            compaction(
+              metadata,
+              { toolResultId: () => null, nodeText: () => null },
+              { compactAt: 0, leaveOutAt: 1_000_000 },
+              undefined,
+              modelHandoffHistory({
+                metadata,
+                threadId: "s",
+                target: "new",
+                model: "new",
+                provider: "openai",
+                loadHistory: async () => past,
+                evidenceContext: async () => "Evidence (node old-result)",
+              }),
+            ),
+            {
+              name: "canonical",
+              onToolPhaseComplete: (_ctx, info) => {
+                for (const call of info.toolCalls) {
+                  expect(call.function.name).toBe("owner_tool");
+                  expect(info.results.some((result) => result.toolCallId === call.id)).toBe(true);
+                }
+              },
+              onFinish: (ctx) => {
+                saved = [...ctx.messages];
+              },
+            },
+          ],
+          stream: { abortController: new AbortController() },
+        },
+      )) {
+        /* drain */
+      }
+      expect(executions).toBe(1);
+      const first = adapter.invocations[0]?.messages ?? [];
+      expect(
+        first.filter((message) => message.role !== "tool" && !message.toolCalls?.length),
+      ).toEqual([
+        { role: "assistant", content: "Evidence (node old-result)" },
+        past[0],
+        { role: "user", content: "continue" },
+      ]);
+      if (!hasOldResult)
+        expect(first).toContainEqual(
+          expect.objectContaining({
+            role: "tool",
+            toolCallId: "old",
+            content: JSON.stringify({ error: "Tool execution cancelled" }),
+          }),
+        );
+      expect(adapter.invocations[1]?.messages).toContainEqual(
+        expect.objectContaining({ role: "tool", toolCallId: "new", content: "new result" }),
+      );
+      if (hasOldResult) expect(saved).toContainEqual(past[2]);
+      expect(saved).toContainEqual(expect.objectContaining({ role: "tool", toolCallId: "new" }));
+    } finally {
+      f.close();
+    }
+  },
+  20000,
+);
 
 test("parallel reads use only owner observations and evaluate every permission before prefetch", async () => {
   const f = fixture();
