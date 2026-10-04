@@ -1,5 +1,5 @@
 import { openaiCompatibleText } from "@tanstack/ai-openai/compatible";
-import { Context, Data, Effect, Layer, Schema, Semaphore } from "effect";
+import { Context, Data, Effect, Layer, Option, Schema, Semaphore } from "effect";
 import { GlobalConfig, type GlobalConfigApi } from "../config/global-config.ts";
 import { requireRuntime } from "../runtime/resources.ts";
 import { ModelUnavailable, type ProviderServices, type ProviderModel } from "./contracts.ts";
@@ -44,6 +44,9 @@ export class CompatibleFetch extends Context.Service<CompatibleFetch, typeof fet
 const TransportErrorCode = Schema.String.check(Schema.isPattern(/^[A-Z0-9_]+$/));
 const isTransportErrorCode = Schema.is(TransportErrorCode);
 const provider = "openai-compatible" as const;
+const requestRoles = Schema.decodeUnknownOption(
+  Schema.Array(Schema.Struct({ role: Schema.String })),
+);
 const credentialPrefix = "context-generactive-agent/openai-compatible/v1:";
 const StoredCredential = Schema.Struct({ baseUrl: Schema.String, key: Schema.String });
 const credentialFor = (stored: string | null, baseUrl: string): string | null => {
@@ -357,6 +360,7 @@ export function makeOpenAICompatibleSettings(
           }),
           () => ({ value: null, failed: true }),
         );
+        let promptDiagnostic = "Compatible request message roles unavailable";
         const adapter = openaiCompatibleText(selection.model, {
           baseURL: settings.baseUrl,
           apiKey: "unused",
@@ -384,6 +388,8 @@ export function makeOpenAICompatibleSettings(
               delete payload.tool_choice;
             }
             const body = JSON.stringify(payload);
+            const messages = Option.getOrElse(requestRoles(payload.messages), () => []);
+            promptDiagnostic = `Compatible request messages: total=${messages.length}, user=${messages.filter((message) => message.role === "user").length}, assistant=${messages.filter((message) => message.role === "assistant").length}, tool=${messages.filter((message) => message.role === "tool").length}, first=${messages[0]?.role ?? "none"}, last=${messages.at(-1)?.role ?? "none"}`;
             // Conservative local guard also covers auxiliary structured-output calls and tool schemas.
             let estimatedInput = 0;
             for (const character of body)
@@ -426,10 +432,24 @@ export function makeOpenAICompatibleSettings(
             modelOptions: { ...options.modelOptions, max_tokens: settings.outputBudget },
           };
           if (!settings.toolCalling) request.tools = [];
-          for await (const chunk of original(request)) {
-            if (!settings.toolCalling && String(chunk.type).startsWith("TOOL_CALL"))
-              throw new Error("Compatible tool calling is disabled");
-            yield chunk;
+          try {
+            for await (const chunk of original(request)) {
+              if (!settings.toolCalling && String(chunk.type).startsWith("TOOL_CALL"))
+                throw new Error("Compatible tool calling is disabled");
+              switch (chunk.type) {
+                case "RUN_ERROR":
+                  yield chunk.message.includes("No user query found in messages")
+                    ? { ...chunk, message: `${chunk.message}\n${promptDiagnostic}` }
+                    : chunk;
+                  break;
+                default:
+                  yield chunk;
+              }
+            }
+          } catch (cause) {
+            if (cause instanceof Error && cause.message.includes("No user query found in messages"))
+              throw new Error(`${cause.message}\n${promptDiagnostic}`, { cause });
+            throw cause;
           }
         };
         return Object.assign(adapter, { releaseRun: () => runAbort.abort() });

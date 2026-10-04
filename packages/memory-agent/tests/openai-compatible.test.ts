@@ -49,6 +49,41 @@ function fixture(fetcher?: typeof fetch, initial: Settings = {}) {
   };
 }
 describe("OpenAI compatible settings", () => {
+  it("reports wire message counts on prompt-template failures without exposing content", async () => {
+    const f = fixture(async () =>
+      Response.json(
+        { error: { message: "No user query found in messages.", type: "invalid_request_error" } },
+        { status: 400 },
+      ),
+    );
+    await Effect.runPromise(f.api.update(configuration));
+    const adapter = f.api.services.runtime.adapter({
+      provider: "openai-compatible",
+      model: configuration.model,
+      reasoningEffort: "default",
+    });
+    try {
+      const errors: string[] = [];
+      for await (const chunk of adapter.chatStream({
+        logger: resolveDebugOption(false),
+        model: configuration.model,
+        messages: [{ role: "user", content: "private question" }],
+      })) {
+        switch (chunk.type) {
+          case "RUN_ERROR":
+            errors.push(chunk.message);
+            break;
+        }
+      }
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toContain(
+        "Compatible request messages: total=1, user=1, assistant=0, tool=0, first=user, last=user",
+      );
+      expect(errors[0]).not.toContain("private question");
+    } finally {
+      adapter.releaseRun?.();
+    }
+  });
   it("uses the provider-normalized effort for chat when the stored effort is unsupported", async () => {
     const f = fixture(undefined, {
       provider: "openai-compatible",
