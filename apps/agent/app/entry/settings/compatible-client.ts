@@ -6,13 +6,16 @@ export interface CompatibleConfiguration {
   contextWindow: number;
   outputBudget: number;
   toolCalling: boolean;
+  reasoning?: { source: "lm-studio"; model: string; options: readonly string[]; default: string };
 }
 export interface CompatibleStatus {
   configuration: CompatibleConfiguration | null;
   configured: boolean;
   hasApiKey: boolean;
 }
-export type CompatibleUpdate = CompatibleConfiguration & { apiKey?: string | null };
+export type CompatibleUpdate = Omit<CompatibleConfiguration, "reasoning"> & {
+  apiKey?: string | null;
+};
 
 type CompatibleCommand =
   | ({ action: "update" } & CompatibleUpdate)

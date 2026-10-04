@@ -4,6 +4,7 @@ import { GlobalConfig, type GlobalConfigApi } from "../config/global-config.ts";
 import { requireRuntime } from "../runtime/resources.ts";
 import { ModelUnavailable, type ProviderServices, type ProviderModel } from "./contracts.ts";
 import {
+  CompatibleReasoning,
   OpenAICompatibleUpdate,
   type OpenAICompatibleConfiguration,
   type OpenAICompatibleStatus,
@@ -62,6 +63,29 @@ const credentialFor = (stored: string | null, baseUrl: string): string | null =>
 const ModelPage = Schema.Struct({
   data: Schema.Array(Schema.Struct({ id: Schema.NonEmptyString })),
 });
+const LMStudioModels = Schema.Struct({
+  models: Schema.Array(
+    Schema.Struct({
+      type: Schema.String,
+      key: Schema.NonEmptyString,
+      capabilities: Schema.optional(
+        Schema.NullOr(
+          Schema.Struct({
+            reasoning: Schema.optional(
+              Schema.Struct({
+                allowed_options: Schema.Array(Schema.NonEmptyString),
+                default: Schema.NonEmptyString,
+              }),
+            ),
+          }),
+        ),
+      ),
+    }),
+  ),
+});
+const isChatReasoningEffort = Schema.is(
+  Schema.Literals(["none", "minimal", "low", "medium", "high", "xhigh"]),
+);
 export function validateCompatibleConfiguration(
   input: OpenAICompatibleUpdate,
 ): OpenAICompatibleUpdate {
@@ -122,6 +146,9 @@ export function makeOpenAICompatibleSettings(
         });
         const { apiKey, ...configuration } = decoded;
         const prior = yield* config.read;
+        const sameModel =
+          prior.openaiCompatible?.baseUrl === configuration.baseUrl &&
+          prior.openaiCompatible.model === configuration.model;
         const existing = yield* attempt("keychain", () => keys.get());
         // Never carry an old endpoint's credential to a different server implicitly.
         if (
@@ -144,10 +171,15 @@ export function makeOpenAICompatibleSettings(
                 ),
               );
             let patch: Parameters<GlobalConfigApi["update"]>[0] = {
-              openaiCompatible: configuration,
+              openaiCompatible: {
+                ...configuration,
+                reasoning: sameModel ? prior.openaiCompatible?.reasoning : undefined,
+              },
             };
             if (prior.provider === provider && prior.model)
               patch = { ...patch, model: configuration.model };
+            if (prior.provider === provider && !sameModel)
+              patch = { ...patch, reasoningEffort: "default" };
             yield* config
               .update(patch)
               .pipe(
@@ -195,11 +227,70 @@ export function makeOpenAICompatibleSettings(
       Effect.timeout(15_000),
       Effect.mapError(() => new OpenAICompatibleFailed({ operation })),
     );
-  const listModels = Effect.flatMap(request("models"), (page) =>
+  const listIds = Effect.flatMap(request("models"), (page) =>
     Effect.try({
       try: () => Schema.decodeUnknownSync(ModelPage)(page).data.map((entry) => entry.id),
       catch: () => new OpenAICompatibleFailed({ operation: "models" }),
     }),
+  );
+  const listModels = Effect.flatMap(listIds, (ids) =>
+    updates.withPermit(
+      Effect.gen(function* () {
+        const { configuration, key } = yield* snapshot;
+        if (!configuration || !configuration.baseUrl.endsWith("/v1")) return ids;
+        // Optional same-server metadata. Generic compatible servers may not expose it.
+        const metadata = yield* Effect.tryPromise({
+          try: async (signal) => {
+            const headers = new Headers();
+            if (key) headers.set("Authorization", `Bearer ${key}`);
+            const response = await fetcher(`${configuration.baseUrl.slice(0, -3)}/api/v1/models`, {
+              headers,
+              signal,
+              redirect: "error",
+            });
+            if (!response.ok) throw new Error("metadata_unavailable");
+            return Schema.decodeUnknownSync(LMStudioModels)(await response.json());
+          },
+          catch: () => new OpenAICompatibleFailed({ operation: "models" }),
+        }).pipe(Effect.timeout(2000), Effect.option);
+        if (metadata._tag === "Some") {
+          const discovered = metadata.value.models.find(
+            (entry) => entry.type === "llm" && entry.key === configuration.model,
+          )?.capabilities?.reasoning;
+          const reasoning =
+            discovered && discovered.allowed_options.includes(discovered.default)
+              ? Schema.decodeSync(CompatibleReasoning)({
+                  source: "lm-studio",
+                  model: configuration.model,
+                  // REST/UI toggles differ from the Chat Completions wire vocabulary.
+                  // off has an exact equivalent; on does not specify a reasoning level.
+                  options: [
+                    ...new Set(
+                      discovered.allowed_options
+                        .map((option) => (option === "off" ? "none" : option))
+                        .filter(isChatReasoningEffort),
+                    ),
+                  ],
+                  default: discovered.default,
+                })
+              : undefined;
+          if (JSON.stringify(reasoning) !== JSON.stringify(configuration.reasoning)) {
+            const stored = yield* config.read;
+            // Before capability discovery, none meant to omit the wire parameter.
+            const legacyDefault =
+              configuration.reasoning === undefined &&
+              stored.provider === provider &&
+              stored.reasoningEffort === "none";
+            let patch: Parameters<GlobalConfigApi["update"]>[0] = {
+              openaiCompatible: { ...configuration, reasoning },
+            };
+            if (legacyDefault) patch = { ...patch, reasoningEffort: "default" };
+            yield* config.update(patch);
+          }
+        }
+        return ids;
+      }),
+    ),
   );
   const test = Effect.flatMap(request("test"), (page) =>
     Effect.try({
@@ -222,13 +313,16 @@ export function makeOpenAICompatibleSettings(
     id: settings.model,
     displayName: settings.model,
     isDefault: true,
-    defaultReasoningEffort: "none",
-    supportedReasoningEfforts: ["none"],
+    defaultReasoningEffort: "default",
+    supportedReasoningEfforts: [
+      "default",
+      ...(settings.reasoning?.model === settings.model ? settings.reasoning.options : []),
+    ],
     contextWindow: settings.contextWindow,
     capabilities: {
       inputModalities: ["text"],
       toolCalling: settings.toolCalling,
-      reasoning: false,
+      reasoning: settings.reasoning?.model === settings.model,
     },
   });
   const services: ProviderServices = {
@@ -245,21 +339,39 @@ export function makeOpenAICompatibleSettings(
     },
     models: {
       provider,
-      list: Effect.map(read, (settings) => (settings ? [model(settings)] : [])),
+      list: Effect.gen(function* () {
+        yield* listModels.pipe(Effect.option);
+        const settings = yield* read;
+        return settings ? [model(settings)] : [];
+      }),
       selected: Effect.map(config.read, (settings) =>
         settings.provider === provider && settings.model
-          ? { provider, model: settings.model, reasoningEffort: "none" }
+          ? {
+              provider,
+              model: settings.model,
+              reasoningEffort:
+                settings.openaiCompatible &&
+                model(settings.openaiCompatible).supportedReasoningEfforts.includes(
+                  settings.reasoningEffort ?? "default",
+                )
+                  ? (settings.reasoningEffort ?? "default")
+                  : "default",
+            }
           : null,
       ),
       acceptsImages: () => Effect.succeed(false),
-      cheapestEffort: (selection) => Effect.succeed({ ...selection, reasoningEffort: "none" }),
-      select: (id: string, effort = "none") =>
+      cheapestEffort: (selection) => Effect.succeed({ ...selection, reasoningEffort: "default" }),
+      select: (id: string, effort = "default") =>
         updates.withPermit(
           Effect.gen(function* () {
             const settings = yield* read;
-            if (!settings || id !== settings.model || effort !== "none")
+            if (
+              !settings ||
+              id !== settings.model ||
+              !model(settings).supportedReasoningEfforts.includes(effort)
+            )
               return yield* new ModelUnavailable({ provider, model: id, reasoningEffort: effort });
-            const selection = { provider, model: id, reasoningEffort: "none" };
+            const selection = { provider, model: id, reasoningEffort: effort };
             yield* config.update(selection);
             return selection;
           }),
@@ -273,7 +385,7 @@ export function makeOpenAICompatibleSettings(
           !settings ||
           selection.model !== settings.model ||
           selection.provider !== provider ||
-          selection.reasoningEffort !== "none"
+          !model(settings).supportedReasoningEfforts.includes(selection.reasoningEffort)
         )
           throw new Error("Compatible model unavailable");
         // One adapter is one run. Release from the central stream's finally aborts any
@@ -290,7 +402,8 @@ export function makeOpenAICompatibleSettings(
               configuration.model !== settings.model ||
               configuration.contextWindow !== settings.contextWindow ||
               configuration.outputBudget !== settings.outputBudget ||
-              configuration.toolCalling !== settings.toolCalling,
+              configuration.toolCalling !== settings.toolCalling ||
+              JSON.stringify(configuration.reasoning) !== JSON.stringify(settings.reasoning),
           }),
           () => ({ value: null, failed: true }),
         );
@@ -314,7 +427,8 @@ export function makeOpenAICompatibleSettings(
               )(rawBody),
             };
             payload.max_tokens = settings.outputBudget;
-            delete payload.reasoning_effort;
+            if (selection.reasoningEffort === "default") delete payload.reasoning_effort;
+            else payload.reasoning_effort = selection.reasoningEffort;
             if (!settings.toolCalling) {
               delete payload.tools;
               delete payload.tool_choice;

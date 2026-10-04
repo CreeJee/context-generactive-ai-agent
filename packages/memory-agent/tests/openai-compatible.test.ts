@@ -1,9 +1,14 @@
 import { createServer } from "node:http";
+import { DatabaseSync } from "node:sqlite";
+import { chat } from "@tanstack/ai";
+import { reconstructChat, withPersistence } from "@tanstack/ai-persistence";
 import { resolveDebugOption } from "@tanstack/ai/adapter-internals";
 import { once } from "node:events";
 import { Effect, Fiber, Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 import type { Settings } from "../src/config/global-config.ts";
+import { sqliteChatPersistence } from "../src/chat-state/persistence.ts";
+import { migrations } from "../src/db/migrations.ts";
 import {
   makeOpenAICompatibleSettings,
   validateCompatibleConfiguration,
@@ -20,8 +25,8 @@ const ChatRequest = Schema.Struct({
   max_tokens: Schema.optional(Schema.Int),
   tools: Schema.optional(Schema.Array(Schema.Unknown)),
 });
-function fixture(fetcher?: typeof fetch) {
-  let saved: Settings = {};
+function fixture(fetcher?: typeof fetch, initial: Settings = {}) {
+  let saved: Settings = initial;
   let key: string | null = null;
   const config = {
     read: Effect.sync(() => saved),
@@ -40,6 +45,168 @@ function fixture(fetcher?: typeof fetch) {
   };
 }
 describe("OpenAI compatible settings", () => {
+  it("keeps the legacy omitted effort as the server default when discovering off support", async () => {
+    const f = fixture(
+      async (url) => {
+        const address = url instanceof Request ? url.url : url instanceof URL ? url.href : url;
+        return address.endsWith("/api/v1/models")
+          ? Response.json({
+              models: [
+                {
+                  type: "llm",
+                  key: configuration.model,
+                  capabilities: { reasoning: { allowed_options: ["off", "on"], default: "on" } },
+                },
+              ],
+            })
+          : Response.json({ data: [{ id: configuration.model }] });
+      },
+      {
+        provider: "openai-compatible",
+        model: configuration.model,
+        reasoningEffort: "none",
+        openaiCompatible: configuration,
+      },
+    );
+    await Effect.runPromise(f.api.services.models.list);
+    expect(f.saved().reasoningEffort).toBe("default");
+    await Effect.runPromise(f.api.services.models.select(configuration.model, "none"));
+    await Effect.runPromise(f.api.services.models.list);
+    expect(f.saved().reasoningEffort).toBe("none");
+  });
+  it("discovers model-specific reasoning levels, restores selection and sends only supported effort", async () => {
+    const Body = Schema.fromJsonString(
+      Schema.Struct({ reasoning_effort: Schema.optional(Schema.String) }),
+    );
+    const bodies: (typeof Body.Type)[] = [];
+    const f = fixture(async (url, init) => {
+      const address = url instanceof Request ? url.url : url instanceof URL ? url.href : url;
+      if (address.endsWith("/api/v1/models"))
+        return Response.json({
+          models: [
+            {
+              type: "llm",
+              key: configuration.model,
+              capabilities: {
+                reasoning: { allowed_options: ["off", "low", "xhigh", "on"], default: "xhigh" },
+              },
+            },
+          ],
+        });
+      if (address.endsWith("/models"))
+        return Response.json({ data: [{ id: configuration.model }] });
+      bodies.push(Schema.decodeUnknownSync(Body)(init?.body));
+      return new Response(
+        'data: {"id":"x","object":"chat.completion.chunk","created":1,"model":"manual-model","choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    });
+    await Effect.runPromise(f.api.update(configuration));
+    expect(
+      (await Effect.runPromise(f.api.services.models.list))[0]?.supportedReasoningEfforts,
+    ).toEqual(["default", "none", "low", "xhigh"]);
+    await expect(
+      Effect.runPromise(f.api.services.models.select(configuration.model, "medium")),
+    ).rejects.toThrow();
+    for (const effort of ["xhigh", "default"]) {
+      const selection = await Effect.runPromise(
+        f.api.services.models.select(configuration.model, effort),
+      );
+      expect(await Effect.runPromise(f.restore().services.models.selected)).toEqual(selection);
+      const adapter = f.api.services.runtime.adapter(selection);
+      try {
+        for await (const _chunk of adapter.chatStream({
+          logger: resolveDebugOption(false),
+          model: configuration.model,
+          messages: [{ role: "user", content: "hi" }],
+        })) {
+          /* consume */
+        }
+      } finally {
+        adapter.releaseRun?.();
+      }
+    }
+    expect(bodies[0]?.reasoning_effort).toBe("xhigh");
+    expect(bodies[1]).not.toHaveProperty("reasoning_effort");
+    await Effect.runPromise(f.api.services.models.select(configuration.model, "xhigh"));
+    await Effect.runPromise(f.api.update(configuration));
+    expect((await Effect.runPromise(f.restore().services.models.selected))?.reasoningEffort).toBe(
+      "xhigh",
+    );
+    await Effect.runPromise(f.api.update({ ...configuration, model: "other-model" }));
+    expect((await Effect.runPromise(f.restore().services.models.selected))?.reasoningEffort).toBe(
+      "default",
+    );
+  });
+  it.each(["reasoning_content", "reasoning"])(
+    "streams and restores %s separately from the final answer",
+    async (field) => {
+      const sqlite = new DatabaseSync(":memory:");
+      for (const step of migrations) sqlite.exec(step);
+      const persistence = sqliteChatPersistence(sqlite);
+      const f = fixture(async () => {
+        const chunks = [
+          ...[{ [field]: "Compare the values." }, { content: "The answer is 42." }].map(
+            (delta) => ({
+              id: "reasoning-test",
+              object: "chat.completion.chunk",
+              created: 1,
+              model: configuration.model,
+              choices: [{ index: 0, delta, finish_reason: null }],
+            }),
+          ),
+          {
+            id: "reasoning-test",
+            object: "chat.completion.chunk",
+            created: 1,
+            model: configuration.model,
+            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+          },
+        ];
+        return new Response(
+          chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n",
+          { headers: { "Content-Type": "text/event-stream" } },
+        );
+      });
+      await Effect.runPromise(f.api.update(configuration));
+      const adapter = f.api.services.runtime.adapter({
+        provider: "openai-compatible",
+        model: configuration.model,
+        reasoningEffort: "default",
+      });
+      try {
+        const events = [];
+        for await (const event of chat({
+          adapter,
+          messages: [{ role: "user", content: "Answer the question." }],
+          threadId: "reasoning",
+          runId: "reasoning-run",
+          middleware: [withPersistence(persistence)],
+        }))
+          events.push(event);
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: "REASONING_MESSAGE_CONTENT",
+            delta: "Compare the values.",
+          }),
+        );
+        expect(events).toContainEqual(
+          expect.objectContaining({ type: "TEXT_MESSAGE_CONTENT", delta: "The answer is 42." }),
+        );
+        const response = await reconstructChat(
+          persistence,
+          new Request("http://localhost/chat?threadId=reasoning"),
+        );
+        const restored = await response.json();
+        expect(JSON.stringify(restored)).toContain('"type":"thinking"');
+        expect(JSON.stringify(restored)).toContain("Compare the values.");
+        expect(JSON.stringify(restored)).toContain("The answer is 42.");
+      } finally {
+        adapter.releaseRun?.();
+        sqlite.close();
+      }
+    },
+  );
   it("validates endpoint, limits, and never persists keys", async () => {
     const f = fixture();
     const status = await Effect.runPromise(
@@ -76,7 +243,7 @@ describe("OpenAI compatible settings", () => {
     expect(await Effect.runPromise(f.restore().services.models.selected)).toEqual({
       provider: "openai-compatible",
       model: "manual-model",
-      reasoningEffort: "none",
+      reasoningEffort: "default",
     });
     await expect(Effect.runPromise(f.api.listModels)).rejects.toThrow();
     expect((await Effect.runPromise(f.api.services.models.list))[0]?.id).toBe("manual-model");
@@ -262,7 +429,7 @@ describe("OpenAI compatible settings", () => {
     expect(await Effect.runPromise(f.api.services.models.selected)).toEqual({
       provider: "openai-compatible",
       model: "changed-manual-model",
-      reasoningEffort: "none",
+      reasoningEffort: "default",
     });
   });
   it("serializes model selection with an in-flight settings update", async () => {
@@ -324,7 +491,7 @@ describe("OpenAI compatible settings", () => {
     const adapter = api.services.runtime.adapter({
       provider: "openai-compatible",
       model: configuration.model,
-      reasoningEffort: "none",
+      reasoningEffort: "default",
     });
     const consumed = (async () => {
       for await (const _chunk of adapter.chatStream({
@@ -362,7 +529,7 @@ describe("OpenAI compatible settings", () => {
     const adapter = f.api.services.runtime.adapter({
       provider: "openai-compatible",
       model: configuration.model,
-      reasoningEffort: "none",
+      reasoningEffort: "default",
     });
     const iterator = adapter
       .chatStream({
@@ -409,7 +576,7 @@ describe("OpenAI compatible settings", () => {
     const adapter = api.services.runtime.adapter({
       provider: "openai-compatible",
       model: configuration.model,
-      reasoningEffort: "none",
+      reasoningEffort: "default",
     });
     await Effect.runPromise(
       api.update({

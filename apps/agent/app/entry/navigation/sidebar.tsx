@@ -247,7 +247,10 @@ export function ModelSection({
             value={selection.reasoningEffort}
             items={current.supportedReasoningEfforts.map((effort) => ({
               value: effort,
-              label: `추론 ${effort}`,
+              label:
+                selection.provider === "openai-compatible" && effort === "default"
+                  ? "서버 기본값"
+                  : `추론 ${effort}`,
             }))}
             onValueChange={(value) => value && onSelect(current.id, value)}
           >
@@ -257,7 +260,9 @@ export function ModelSection({
             <SelectContent>
               {current.supportedReasoningEfforts.map((effort) => (
                 <SelectItem key={effort} value={effort}>
-                  추론 {effort}
+                  {selection.provider === "openai-compatible" && effort === "default"
+                    ? "서버 기본값"
+                    : `추론 ${effort}`}
                 </SelectItem>
               ))}
             </SelectContent>

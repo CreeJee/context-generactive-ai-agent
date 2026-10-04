@@ -10,16 +10,27 @@ export const OpenAICompatibleContextWindow = Schema.Int.check(
   Schema.isLessThanOrEqualTo(100_000_000),
 ).pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed(OPENAI_COMPATIBLE_DEFAULT_CONTEXT_WINDOW)));
 
-export const OpenAICompatibleConfiguration = Schema.Struct({
+export const CompatibleReasoning = Schema.Struct({
+  source: Schema.Literal("lm-studio"),
+  model: Schema.NonEmptyString,
+  options: Schema.Array(Schema.NonEmptyString),
+  default: Schema.NonEmptyString,
+});
+
+const connectionFields = {
   baseUrl: Schema.NonEmptyString,
   model: Schema.NonEmptyString,
   contextWindow: OpenAICompatibleContextWindow,
   outputBudget: Schema.Int,
   toolCalling: Schema.Boolean,
+};
+export const OpenAICompatibleConfiguration = Schema.Struct({
+  ...connectionFields,
+  reasoning: Schema.optional(CompatibleReasoning),
 });
 export type OpenAICompatibleConfiguration = typeof OpenAICompatibleConfiguration.Type;
 export const OpenAICompatibleUpdate = Schema.Struct({
-  ...OpenAICompatibleConfiguration.fields,
+  ...connectionFields,
   apiKey: Schema.optional(Schema.Union([Schema.String, Schema.Null])),
 });
 export type OpenAICompatibleUpdate = typeof OpenAICompatibleUpdate.Type;

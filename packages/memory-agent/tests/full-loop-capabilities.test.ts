@@ -1,4 +1,10 @@
-import { createCapability, defineInterrupt, toolDefinition } from "@tanstack/ai";
+import {
+  type AdapterYieldChunk,
+  EventType,
+  createCapability,
+  defineInterrupt,
+  toolDefinition,
+} from "@tanstack/ai";
 import { expect, test } from "vite-plus/test";
 import {
   createFullLoopExecution,
@@ -18,6 +24,70 @@ const capability = {
   generation: "one",
   token: "secret",
 };
+
+test("owner finalization retains worker reasoning separately from the answer", async () => {
+  class ReasoningAdapter extends ScriptedTextAdapter {
+    override async *chatStream(
+      options: Parameters<ScriptedTextAdapter["chatStream"]>[0],
+    ): AsyncIterable<AdapterYieldChunk> {
+      yield {
+        type: EventType.REASONING_MESSAGE_START,
+        messageId: "thinking",
+        model: options.model,
+        role: "reasoning" as const,
+        timestamp: 1,
+      };
+      yield {
+        type: EventType.REASONING_MESSAGE_CONTENT,
+        messageId: "thinking",
+        model: options.model,
+        delta: "Compare the values.",
+        timestamp: 2,
+      };
+      yield {
+        type: EventType.REASONING_MESSAGE_END,
+        messageId: "thinking",
+        model: options.model,
+        timestamp: 3,
+      };
+      yield* super.chatStream(options);
+    }
+  }
+  let finalized = false;
+  for await (const _chunk of createFullLoopExecution<ReasoningAdapter>({
+    capability,
+    ledger: makeInMemoryOwnerRpcLedger(),
+    permits: () => true,
+    permitsFinalization: () => true,
+    finalizationMiddleware: ["record-reasoning"],
+    lastOperationId: 0,
+  }).execute(
+    { messages: [], runId: "r", threadId: "s" },
+    {
+      model: { adapter: new ReasoningAdapter([{ text: "The answer is 42." }]) },
+      tools: [],
+      stream: { abortController: new AbortController() },
+      middleware: [
+        {
+          name: "record-reasoning",
+          onFinish: (ctx) => {
+            expect(ctx.messages).toContainEqual(
+              expect.objectContaining({
+                role: "assistant",
+                thinking: [{ content: "Compare the values." }],
+              }),
+            );
+            expect(ctx.accumulatedContent).toBe("The answer is 42.");
+            finalized = true;
+          },
+        },
+      ],
+    },
+  )) {
+    /* consume */
+  }
+  expect(finalized).toBe(true);
+});
 
 test("tagged codec retains Maps, Sets, undefined and errors without tag collisions", () => {
   const original = {

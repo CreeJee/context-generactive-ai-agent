@@ -904,3 +904,10 @@
 - `chat_threads`에서 `role: user`, `content: ""`인 메시지 중 `id`·`role`·`content`·`createdAt`·`metadata` 외의 필드가 없는 항목만 일회성 마이그레이션으로 제거한다. 이미지·parts·첨부·도구 정보나 알 수 없는 payload 필드가 있으면 보존한다. null·배열·공백 content까지 삭제 범위를 확대하지 않는다.
 - 남은 메시지의 내용·순서와 thread의 `updated_at`을 보존한다. 불변 기억 evidence와 실패한 run 기록은 수정하지 않는다. 정리 SQL은 반복 적용해도 결과가 같다.
 - 실행 중인 구버전 서버의 DB에는 SQLite backup으로 복구본을 만든 뒤 같은 SQL을 트랜잭션으로 직접 적용한다. 새 빌드보다 앞서 DB 버전을 올려 구버전 재시작을 막지 않도록 `user_version`은 유지하며, 새 코드의 다음 시작에서 정규 마이그레이션이 버전을 갱신한다.
+
+## 호환 모델 추론 출력과 강도 선택 (2026-10-04)
+
+- 호환 Chat Completions 어댑터가 제공하는 `reasoning_content`·`reasoning` 스트림은 SDK의 `thinking` 항목으로 표시한다. 추론은 기본으로 접고, 진행 중인 추론과 완료된 추론을 구분한다. 최종 답변이나 도구 결과로 취급하지 않는다.
+- 강도를 endpoint 전체의 수동 체크박스로 지정하지 않는다. 모델 목록 조회 시 같은 서버의 LM Studio `/api/v1/models` 공개 정보에서 선택 모델의 `capabilities.reasoning.allowed_options`·`default`를 확인한다. 고정된 세 레벨 대신 모델별 공개 옵션을 Chat Completions 계약에 맞춰 제공한다. 실제 LM Studio에서 `off` 전송은 400이고 `none`으로 변환해야 함을 확인했다. `on`은 정확한 강도를 지정하지 않으므로 제외한다.
+- 조회 결과는 endpoint 설정 안에 모델 ID·출처와 함께 저장한다. 선택 모델과 ID가 맞는 정보만 사용하고, endpoint·모델 변경 시 다시 조회한다. 인증 키는 같은 서버로만 전달하며 metadata 조회 실패·미지원은 일반 `/v1/models` 결과를 막지 않는다.
+- `default`는 서버 기본값을 뜻하며 `reasoning_effort`를 보내지 않는다. 공개된 다른 옵션을 선택할 때만 그 값을 전송한다. 기존 `none` 선택은 알려진 지원 정보가 없으면 서버 기본값으로 처리한다. metadata를 공개하지 않는 vLLM·일반 호환 서버의 강도는 이름으로 추측하지 않는다.

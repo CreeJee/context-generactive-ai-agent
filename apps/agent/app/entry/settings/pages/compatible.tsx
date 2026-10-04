@@ -19,7 +19,13 @@ export function CompatibleSettings() {
   });
   return (
     <CompatibleForm
-      key={JSON.stringify(data.configuration)}
+      key={JSON.stringify([
+        data.configuration?.baseUrl,
+        data.configuration?.model,
+        data.configuration?.contextWindow,
+        data.configuration?.outputBudget,
+        data.configuration?.toolCalling,
+      ])}
       configuration={data.configuration}
       hasApiKey={data.hasApiKey}
     />
@@ -64,6 +70,7 @@ function CompatibleForm({
       } else {
         const result = await compatibleClient.list();
         setModels(result.models);
+        await client.invalidateQueries({ queryKey: compatibleQueryKey });
         setMessage(
           `${result.models.length}개 모델을 불러왔어요. 목록에 없어도 모델 ID를 직접 입력할 수 있어요.`,
         );
@@ -195,6 +202,10 @@ function CompatibleForm({
           />
           <FieldDescription>모델과 서버가 도구 호출을 지원할 때만 켜세요.</FieldDescription>
         </Field>
+        <FieldDescription>
+          추론 강도는 모델 목록에서 공개된 지원 정보를 자동으로 확인해요. 정보가 없는 모델은 서버
+          기본값을 사용하고, 추론 내용은 서버가 보내면 표시해요.
+        </FieldDescription>
         <Button type="submit" disabled={busy}>
           저장
         </Button>

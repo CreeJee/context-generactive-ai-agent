@@ -490,6 +490,17 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                         });
                     }
                     ownerContext.chunkIndex++;
+                    if (next.value.type === "REASONING_MESSAGE_START") {
+                      ownerContext.messages.push({
+                        role: "assistant",
+                        content: "",
+                        thinking: [{ content: "" }],
+                      });
+                    }
+                    if (next.value.type === "REASONING_MESSAGE_CONTENT") {
+                      const thinking = ownerContext.messages.at(-1)?.thinking?.at(-1);
+                      if (thinking) thinking.content += next.value.delta;
+                    }
                     if (next.value.type === "TEXT_MESSAGE_START") {
                       ownerContext.currentMessageId = next.value.messageId;
                       ownerContext.messages.push({ role: "assistant", content: "" });

@@ -4,18 +4,20 @@ LM Studio와 vLLM은 동일한 `openai-compatible` provider로 연결한다. 제
 
 ## 연결 계약
 
-| 항목                  | 현재 구현                                                                                                                           |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| API base URL          | `/v1`을 포함한 URL. LM Studio 예: `http://localhost:1234/v1`, vLLM 예: `http://localhost:8000/v1` (실제 서버 포트·경로에 맞게 설정) |
-| 모델 조회             | `GET {baseUrl}/models`의 `data[].id`. 모델 ID 수동 입력도 가능                                                                      |
-| 연결 테스트           | 비스트리밍 `POST {baseUrl}/chat/completions`. 응답 choices가 있는지만 확인                                                          |
-| 채팅                  | TanStack AI의 OpenAI compatible Chat Completions 어댑터로 SSE 스트리밍                                                              |
-| 인증                  | 키가 있으면 Bearer 헤더, 없으면 Authorization 헤더를 생략. 키는 endpoint에 묶어 keychain에 저장                                     |
-| 일반 도구             | 설정의 `toolCalling`을 켰을 때 function tool schema 전달 및 tool-call 스트림 처리                                                   |
-| 제공자 전용 도구      | OpenAI·Anthropic의 native tool registry만 지원. 프로토콜 호환으로 web search·file search·hosted execution 권한을 추론하지 않음      |
-| context window        | 사용자 설정값. 모델 목록에서 서버의 실제 로드 context나 tokenizer를 자동 탐지하지 않음                                              |
-| 출력 예산             | `max_tokens`로 전송하고 입력 예산에서 차감                                                                                          |
-| reasoning·이미지 입력 | 현재 호환 provider의 모델 계약에서 비활성화. 서버 자체 지원 여부와 구분                                                             |
+| 항목             | 현재 구현                                                                                                                           |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| API base URL     | `/v1`을 포함한 URL. LM Studio 예: `http://localhost:1234/v1`, vLLM 예: `http://localhost:8000/v1` (실제 서버 포트·경로에 맞게 설정) |
+| 모델 조회        | `GET {baseUrl}/models`의 `data[].id`. 모델 ID 수동 입력도 가능                                                                      |
+| 연결 테스트      | 비스트리밍 `POST {baseUrl}/chat/completions`. 응답 choices가 있는지만 확인                                                          |
+| 채팅             | TanStack AI의 OpenAI compatible Chat Completions 어댑터로 SSE 스트리밍                                                              |
+| 인증             | 키가 있으면 Bearer 헤더, 없으면 Authorization 헤더를 생략. 키는 endpoint에 묶어 keychain에 저장                                     |
+| 일반 도구        | 설정의 `toolCalling`을 켰을 때 function tool schema 전달 및 tool-call 스트림 처리                                                   |
+| 제공자 전용 도구 | OpenAI·Anthropic의 native tool registry만 지원. 프로토콜 호환으로 web search·file search·hosted execution 권한을 추론하지 않음      |
+| context window   | 사용자 설정값. 모델 목록에서 서버의 실제 로드 context나 tokenizer를 자동 탐지하지 않음                                              |
+| 출력 예산        | `max_tokens`로 전송하고 입력 예산에서 차감                                                                                          |
+| reasoning 출력   | 서버의 `reasoning_content`·`reasoning` 스트림을 추론 내용으로 표시하고 저장·복원                                                    |
+| reasoning 강도   | 모델별 공개 metadata로 옵션 자동 조회. 서버 기본값은 `reasoning_effort` 생략                                                        |
+| 이미지 입력      | 현재 호환 provider의 모델 계약에서 비활성화                                                                                         |
 
 현재 연결 테스트 성공은 스트리밍·function calling·모델별 context window 검증을 뜻하지 않는다. `signed-in` 상태 역시 endpoint 설정이 존재한다는 의미이며 실제 서버 접속이나 인증 성공의 증거로 사용하지 않는다. Route catalog에서도 인증의 `verified`는 false이며 모델 접근 근거는 `endpoint_configuration`·`unverified`로 표시한다.
 
@@ -47,4 +49,12 @@ LM Studio와 vLLM은 동일한 `openai-compatible` provider로 연결한다. 제
 
 로컬 HTTP fixture에서 모델 조회, Chat Completions 요청 경로·출력 예산·헤더, SSE 텍스트 및 분할 function call 스트림, 도구 비활성화와 context 제한을 검증한다. 모델 provider와 OAuth/native tool provider의 타입·schema 경계, 호환 모델 ID가 OpenAI 모델과 같아도 native tool route가 생기지 않는 동작을 검증한다.
 
-실제 LM Studio·vLLM 서버에 대한 모델 로드, tool result를 포함한 왕복 호출, tokenizer 기준 context 제한, 긴 스트림 취소는 이번 검증에 포함하지 않았다. 서버 및 모델 설정을 지정한 실제 요청으로 확인해야 한다.
+실제 LM Studio에서는 공개 metadata 자동 조회와 `reasoning_effort: none`을 지정한 짧은 스트리밍 완료 응답을 확인했다. 모델 로드, tool result를 포함한 왕복 호출, tokenizer 기준 context 제한, 긴 스트림 취소와 실제 vLLM 서버 호출은 이번 검증에 포함하지 않았다.
+
+## 추론 지원 범위
+
+서버가 별도 reasoning 필드를 보내는 경우를 지원한다. 일반 content에 포함된 `<think>` 태그를 임의로 추론으로 파싱하지 않는다. 서버 기본값(`default`)은 추론 비활성화가 아니며, 추론 토큰도 최대 출력 예산을 사용한다.
+
+[vLLM 추론 문서](https://docs.vllm.ai/en/latest/features/reasoning_outputs/)의 최신 필드는 `reasoning`이고 이전 필드는 `reasoning_content`다. 모델에 맞는 `--reasoning-parser`와 chat template 설정이 필요하다. LM Studio의 모델별 추론 활성화는 서버 설정을 따른다. LM Studio 0.4.8부터 지원하는 [모델 metadata API](https://lmstudio.ai/docs/developer/rest/list)의 `capabilities.reasoning.allowed_options`를 선택 모델 ID와 함께 저장해 사용한다. metadata가 없으면 강도 옵션을 추측하지 않는다. 실제 LM Studio·vLLM 서버 검증과 모의 SSE 계약 검증을 구분한다.
+
+실제 LM Studio의 공개 metadata 조회에서는 Qwen 모델이 `off / low / medium / xhigh / on`을 제공했고, `reasoning_effort: off` 요청은 HTTP 400으로 거절됐다. 따라서 UI의 추론 끄기는 `none`으로 변환하고, 강도에 정확히 대응하지 않는 `on`은 제외한다. 서버 기본값(`default`)과 추론 끄기(`none`)를 구분한다.

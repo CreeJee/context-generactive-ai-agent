@@ -6,7 +6,10 @@ export default defineConfig({
   plugins: [tailwindcss()],
   resolve: { tsconfigPaths: true },
   test: {
-    include: ["apps/agent/app/entry/navigation/*.browser.tsx"],
+    include: [
+      "apps/agent/app/entry/navigation/*.browser.tsx",
+      "apps/agent/app/entry/chat/message.browser.tsx",
+    ],
     browser: {
       enabled: true,
       provider: playwright(),

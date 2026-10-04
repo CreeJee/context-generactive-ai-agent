@@ -511,6 +511,18 @@ export function MessageView({
     <div className="flex justify-start">
       <div className="flex max-w-[85%] flex-col gap-2 text-sm/relaxed">
         {message.parts.map((part, index) => {
+          if (part.type === "thinking")
+            return (
+              <Collapsible key={`thinking-${index}`}>
+                <CollapsibleTrigger className="group flex items-center gap-2 text-muted-foreground">
+                  <ChevronRightIcon className="size-4 transition-transform group-data-[panel-open]:rotate-90" />
+                  {streaming && index === message.parts.length - 1 ? "추론 중" : "추론 내용"}
+                </CollapsibleTrigger>
+                <CollapsibleContent className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words text-muted-foreground">
+                  {part.content}
+                </CollapsibleContent>
+              </Collapsible>
+            );
           if (part.type === "text")
             return <Markdown key={`text-${index}`} text={part.content} streaming={streaming} />;
           if (part.type === "tool-call")
