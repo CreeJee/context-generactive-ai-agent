@@ -15,7 +15,7 @@ import {
   type AuthConnectionState,
   type ModelSelection,
   type ProviderConfiguration,
-  type ProviderId,
+  type SubscriptionProviderId,
   type ProviderModel,
 } from "./contracts.ts";
 
@@ -95,7 +95,7 @@ const pageModels = (page: typeof CatalogPage.Type): ReadonlyArray<CatalogModel> 
   return Schema.is(CatalogModels)(page.data) ? page.data : page.data.models;
 };
 
-const catalogEntries = (provider: ProviderId, pages: ReadonlyArray<unknown>) =>
+const catalogEntries = (provider: SubscriptionProviderId, pages: ReadonlyArray<unknown>) =>
   pages
     .flatMap((page) =>
       Option.match(decodeCatalogPage(page), {
@@ -146,7 +146,7 @@ const anthropicEfforts = (model: string) => {
 };
 
 export function parseSubscriptionCatalog(
-  provider: ProviderId,
+  provider: SubscriptionProviderId,
   pages: ReadonlyArray<unknown>,
 ): ReadonlyArray<ProviderModel> {
   const entries = catalogEntries(provider, pages);
@@ -206,11 +206,13 @@ const anthropicInstalledCatalog = [
   },
 ] as const;
 
-const operationFailure = (provider: ProviderId, operation: "auth" | "catalog" | "model") =>
-  new ProviderOperationFailed({ provider, operation });
+const operationFailure = (
+  provider: SubscriptionProviderId,
+  operation: "auth" | "catalog" | "model",
+) => new ProviderOperationFailed({ provider, operation });
 
 const fromPromise = <A>(
-  provider: ProviderId,
+  provider: SubscriptionProviderId,
   operation: "auth" | "catalog" | "model",
   run: () => Promise<A>,
 ) =>

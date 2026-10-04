@@ -2,8 +2,9 @@ import type { ChatMiddleware } from "@tanstack/ai";
 import { optionalProperty } from "../optional-property.ts";
 import { Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
+import type { ProviderId } from "../providers/contracts.ts";
 
-export type ApiUsageProvider = "openai" | "anthropic" | "openai-compatible";
+export type ApiUsageProvider = ProviderId;
 export interface ApiUsageResponse {
   readonly rootSessionId: string;
   readonly runId?: string | null;

@@ -1,9 +1,17 @@
 import type { AgentLoopStrategy, AnyTextAdapter, ChatMiddleware, ModelMessage } from "@tanstack/ai";
 import { Data, Effect, Schema } from "effect";
 
-/** Subscription providers supported by the product runtime. */
+/** Model providers supported by the product runtime, independent of transport or authentication. */
 export const ProviderId = Schema.Literals(["openai", "anthropic", "openai-compatible"]);
 export type ProviderId = typeof ProviderId.Type;
+
+/** Providers whose accounts use the subscription OAuth lifecycle. */
+export const SubscriptionProviderId = ProviderId.pick(["openai", "anthropic"]);
+export type SubscriptionProviderId = typeof SubscriptionProviderId.Type;
+
+/** Providers with installed native tool descriptors; Chat Completions compatibility is insufficient. */
+export const NativeToolProviderId = ProviderId.pick(["openai", "anthropic"]);
+export type NativeToolProviderId = typeof NativeToolProviderId.Type;
 
 /** A model is never identified without its provider. */
 export const ModelSelection = Schema.Struct({
@@ -12,6 +20,12 @@ export const ModelSelection = Schema.Struct({
   reasoningEffort: Schema.String,
 });
 export type ModelSelection = typeof ModelSelection.Type;
+
+export const SubscriptionModelSelection = Schema.Struct({
+  ...ModelSelection.fields,
+  provider: SubscriptionProviderId,
+});
+export type SubscriptionModelSelection = typeof SubscriptionModelSelection.Type;
 
 export const ModelCapabilities = Schema.Struct({
   inputModalities: Schema.Array(Schema.Literals(["text", "image"])),

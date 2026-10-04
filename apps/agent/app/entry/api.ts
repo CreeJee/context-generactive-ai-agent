@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import { ProviderId } from "memory-agent";
 import type {
   Attachment,
   ProviderModel,
@@ -21,7 +22,6 @@ import type {
   ModelSelection,
   PermissionMode,
   Project,
-  ProviderId,
   Session,
   SkillCatalog,
   TraceTaskDetail,
@@ -210,12 +210,7 @@ export class ApiError extends Error {
 
 const CrossProviderMediaRunApproval = Schema.Struct({
   runId: Schema.String,
-  initiatorChatRouteId: Schema.TemplateLiteral([
-    "chat:",
-    Schema.Literals(["openai", "anthropic"]),
-    ":",
-    Schema.String,
-  ]),
+  initiatorChatRouteId: Schema.TemplateLiteral(["chat:", ProviderId, ":", Schema.String]),
   executorMediaRouteId: Schema.String,
   capability: Schema.Literal("media.image.generate"),
 });

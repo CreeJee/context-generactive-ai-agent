@@ -1,12 +1,21 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Result, Layer, ManagedRuntime } from "effect";
-import { afterEach, describe, expect, test } from "vite-plus/test";
+import { Effect, Result, Layer, ManagedRuntime, Schema } from "effect";
+import { afterEach, describe, expect, expectTypeOf, test } from "vite-plus/test";
 import { GlobalConfig } from "../src/config/global-config.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { ActiveProvider } from "../src/providers/active-provider.ts";
-import { type ProviderId, type ProviderServices } from "../src/providers/contracts.ts";
+import {
+  ProviderId,
+  SubscriptionProviderId,
+  NativeToolProviderId,
+  SubscriptionModelSelection,
+  type ProviderServices,
+} from "../src/providers/contracts.ts";
+import type { ProviderToolProvider } from "../src/providers/tool-capabilities.ts";
+import type { OAuthProvider } from "../src/oauth/protocol.ts";
+import type { ApiUsageProvider } from "../src/agent/api-usage.ts";
 import { ProviderRegistry, providerRegistryFrom } from "../src/providers/registry.ts";
 
 const cleanups: Array<() => Promise<void> | void> = [];
@@ -48,6 +57,20 @@ const fakeProvider = (provider: ProviderId): ProviderServices => ({
 });
 
 describe("provider-neutral contracts", () => {
+  test("accepts compatible models without treating them as OAuth or native tool providers", () => {
+    const selection = {
+      provider: "openai-compatible",
+      model: "local-model",
+      reasoningEffort: "none",
+    };
+    expect(Schema.is(ProviderId)(selection.provider)).toBe(true);
+    expect(Schema.is(SubscriptionProviderId)(selection.provider)).toBe(false);
+    expect(Schema.is(NativeToolProviderId)(selection.provider)).toBe(false);
+    expect(Schema.is(SubscriptionModelSelection)(selection)).toBe(false);
+    expectTypeOf<OAuthProvider>().toEqualTypeOf<SubscriptionProviderId>();
+    expectTypeOf<ProviderToolProvider>().toEqualTypeOf<NativeToolProviderId>();
+    expectTypeOf<ApiUsageProvider>().toEqualTypeOf<ProviderId>();
+  });
   test("migrates a legacy model selection to an explicit OpenAI provider", async () => {
     const storage = mkdtempSync(join(tmpdir(), "provider-config-"));
     cleanups.push(() => rmSync(storage, { recursive: true, force: true }));

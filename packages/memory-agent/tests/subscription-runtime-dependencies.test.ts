@@ -1,8 +1,9 @@
+import { SubscriptionProviderId } from "../src/providers/contracts.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { Effect, Layer, Result } from "effect";
+import { Effect, Layer, Result, Schema } from "effect";
 import { EventType } from "@tanstack/ai";
 import { InternalLogger } from "@tanstack/ai/adapter-internals";
 import { expect, test } from "vite-plus/test";
@@ -216,6 +217,7 @@ test("default layer stays unavailable and native subscription layer exports with
         yield* Effect.gen(function* () {
           const registry = yield* ProviderRegistry;
           for (const provider of registry.providers) {
+            if (!Schema.is(SubscriptionProviderId)(provider)) continue;
             const dependencies = yield* registry.subscriptionDependencies!(provider);
             const runtime = yield* registry.runtime(provider);
             expect(

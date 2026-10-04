@@ -1,7 +1,13 @@
-import { Predicate } from "effect";
+import { Predicate, Schema } from "effect";
 import type { AgentLoopStrategy, ChatMiddleware } from "@tanstack/ai";
 import { SubscriptionTextAdapter, type StreamingOAuthClient } from "./subscription-adapter.ts";
-import type { AgentModelRuntime, ModelSelection, ProviderId, RunTextAdapter } from "./contracts.ts";
+import {
+  SubscriptionModelSelection,
+  type AgentModelRuntime,
+  type ModelSelection,
+  type SubscriptionProviderId,
+  type RunTextAdapter,
+} from "./contracts.ts";
 
 /**
  * Continue until the provider answers instead of ending after an arbitrary number of tool steps.
@@ -11,14 +17,13 @@ import type { AgentModelRuntime, ModelSelection, ProviderId, RunTextAdapter } fr
 export const subscriptionAgentLoop: AgentLoopStrategy = ({ iterationCount, finishReason }) =>
   iterationCount === 0 || finishReason === "tool_calls";
 
-const runMiddleware = (provider: ProviderId): ChatMiddleware => ({
+const runMiddleware = (provider: SubscriptionProviderId): ChatMiddleware => ({
   name: `memory-agent/${provider}-subscription-run`,
 });
 
-const contextWindows: Readonly<Record<ProviderId, number>> = {
+const contextWindows: Readonly<Record<SubscriptionProviderId, number>> = {
   openai: 258_400,
   anthropic: 200_000,
-  "openai-compatible": 0,
 };
 
 export function releaseSubscriptionRun(adapter: RunTextAdapter | null): void {
@@ -35,7 +40,7 @@ export interface SubscriptionRuntimeDependencies {
  * anew at bind time; account selection still happens once per adapter through client.forRun.
  * This SDK boundary owns no auth, broker, active-run registry, or application resources.
  */
-export function createSubscriptionRuntimeImplementation(provider: ProviderId) {
+export function createSubscriptionRuntimeImplementation(provider: SubscriptionProviderId) {
   const Adapter = SubscriptionTextAdapter;
   const agentLoop = subscriptionAgentLoop;
   const middleware = runMiddleware;
@@ -48,7 +53,7 @@ export function createSubscriptionRuntimeImplementation(provider: ProviderId) {
       return {
         provider,
         adapter: (selection: ModelSelection) => {
-          if (selection.provider !== provider)
+          if (!Schema.is(SubscriptionModelSelection)(selection) || selection.provider !== provider)
             throw new Error(
               `Provider mismatch: ${provider} runtime cannot run ${selection.provider}/${selection.model}.`,
             );
@@ -70,7 +75,7 @@ export function createSubscriptionRuntimeImplementation(provider: ProviderId) {
 }
 
 export function createSubscriptionRuntime(
-  provider: ProviderId,
+  provider: SubscriptionProviderId,
   client: StreamingOAuthClient | (() => StreamingOAuthClient),
   catalogWindow: (model: string) => number | null = () => null,
 ): AgentModelRuntime {

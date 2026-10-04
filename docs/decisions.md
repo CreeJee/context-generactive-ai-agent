@@ -874,3 +874,10 @@
 - `wait_subagents`의 기본 `timeoutMs`는 0이다. 현재 상태를 즉시 반환하고 미완료이면 `pending`과 독립 작업을 계속하라는 안내를 반환한다. 이미 완료된 시도는 타이머 없이 `completed`로 반환한다.
 - 양수 timeout은 메인 모델 진행을 멈추므로 독립 작업이 모두 끝나고 다음 단계에 서브에이전트 결과가 필요한 경우에만 사용한다. 명시적 대기의 any/all·제한 시간·취소 동작은 유지한다.
 - 기존 완료 알림을 다음 모델 단계 또는 유휴 상태의 자동 후속 실행에 전달한다. 대기와 알림은 보고서 검토를 대신하지 않으며 결과 사용 전 `get_subagent_report` 조회와 채택 절차를 유지한다.
+
+## 모델 provider와 구독·전용 도구 타입 경계 (2026-10-04)
+
+- 전체 모델 provider 식별자는 `ProviderId` schema를 기준으로 한다. `SubscriptionProviderId`와 `NativeToolProviderId`는 그 schema에서 각각 지원 범위를 파생한다. OAuth·usage·native tool의 별칭에 리터럴 union을 중복 정의하지 않는다.
+- LM Studio·vLLM은 `openai-compatible` 모델 provider로 연결한다. Chat Completions 호환은 구독 OAuth나 제공자 전용 도구 지원의 근거가 아니다. 구독 모델 선택·catalog·runtime·dependency resolver와 native 실행 route는 각자의 좁은 타입을 사용한다.
+- 공통 chat route와 이미지 승인 initiator는 전체 모델 provider 범위를 사용한다. 구독 chat의 인증을 API key로 표시하거나 호환 endpoint를 OAuth로 표시하지 않는다. 직접 이미지 API의 인증 계약은 유지한다.
+- 서버별 조건과 연결 테스트의 검증 한계는 [OpenAI 호환 endpoint 검토](openai-compatible.md)에 기록한다. 연결 테스트 성공이나 endpoint 설정 존재만으로 스트리밍·도구 호출·인증 성공을 확정하지 않는다. 호환 chat route의 인증·모델 접근은 검증되지 않은 endpoint 설정으로 표시한다.

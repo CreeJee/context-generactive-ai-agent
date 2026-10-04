@@ -36,7 +36,11 @@ import {
   imageProviderWorkflowPrompt,
 } from "../providers/image-feature.ts";
 import { ImageRouter } from "../providers/image-router.ts";
-import type { ModelSelection, RunTextAdapter } from "../providers/contracts.ts";
+import {
+  SubscriptionModelSelection,
+  type ModelSelection,
+  type RunTextAdapter,
+} from "../providers/contracts.ts";
 import {
   createSubscriptionRuntimeImplementation,
   releaseSubscriptionRun,
@@ -431,13 +435,13 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
     knowledge: KnowledgePromotions,
   });
   const runtimeForAdapter = (selection: ModelSelection, goalInstanceId: string | null) =>
-    selection.provider !== "openai-compatible" && registry?.subscriptionDependencies
+    Schema.is(SubscriptionModelSelection)(selection) && registry?.subscriptionDependencies
       ? Effect.map(registry.subscriptionDependencies(selection.provider), (dependencies) =>
           (goalInstanceId === null
             ? nativeImplementations
-            : goalNativeImplementations.forGoal(goalInstanceId))[
-            selection.provider === "anthropic" ? "anthropic" : "openai"
-          ].bind(dependencies),
+            : goalNativeImplementations.forGoal(goalInstanceId))[selection.provider].bind(
+            dependencies,
+          ),
         )
       : active.runtime(selection);
   const usageLedger = yield* ApiUsage;

@@ -1,17 +1,17 @@
 import { Effect, Result, Schema } from "effect";
-import { ActiveProvider, ImageMediaWorkflow, type ImageMediaRequest } from "memory-agent";
+import {
+  ActiveProvider,
+  ImageMediaWorkflow,
+  ProviderId,
+  type ImageMediaRequest,
+} from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/media.image";
 
 const CrossProviderApproval = Schema.Struct({
   runId: Schema.String,
-  initiatorChatRouteId: Schema.TemplateLiteral([
-    "chat:",
-    Schema.Literals(["openai", "anthropic"]),
-    ":",
-    Schema.String,
-  ]),
+  initiatorChatRouteId: Schema.TemplateLiteral(["chat:", ProviderId, ":", Schema.String]),
   executorMediaRouteId: Schema.String,
   capability: Schema.Literal("media.image.generate"),
 });

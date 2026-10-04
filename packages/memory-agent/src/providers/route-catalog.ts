@@ -1,4 +1,5 @@
-import { Context, Data, Effect, Layer, Ref } from "effect";
+import { NativeToolProviderId } from "./contracts.ts";
+import { Context, Data, Effect, Layer, Schema, Ref } from "effect";
 import type { AuthConnectionState, ProviderId, ProviderModel } from "./contracts.ts";
 import type { ImageRouteContract } from "./image-contracts.ts";
 import { imageRouteContracts } from "./image-contracts.ts";
@@ -14,7 +15,7 @@ import {
 export type RouteEvidenceStatus = "verified" | "unverified" | "unsupported";
 
 export interface RouteAuthEvidence {
-  readonly mechanism: "subscription_oauth" | "openai_api_key";
+  readonly mechanism: "subscription_oauth" | "openai_api_key" | "openai_compatible";
   readonly status: AuthConnectionState["status"];
   readonly planType?: string;
   readonly verified: boolean;
@@ -24,6 +25,7 @@ export interface RouteEntitlementEvidence {
   readonly status: RouteEvidenceStatus;
   readonly source:
     | "provider_model_catalog"
+    | "endpoint_configuration"
     | "installed_model_metadata"
     | "account_capability"
     | "account_smoke_test_not_run";
@@ -58,8 +60,8 @@ export interface MediaRoute {
 
 export interface ExecutionRoute {
   readonly type: "execution";
-  readonly id: `execution:${ProviderId}:${string}:${ProviderToolId}`;
-  readonly provider: ProviderId;
+  readonly id: `execution:${NativeToolProviderId}:${string}:${ProviderToolId}`;
+  readonly provider: NativeToolProviderId;
   readonly model: string;
   readonly toolId: ProviderToolId;
   readonly category: ProviderToolCategory;
@@ -142,7 +144,10 @@ const authEvidence = (
   const evidence: RouteAuthEvidence = {
     mechanism,
     status: status.status,
-    verified: status.status === "signed-in" && status.provider === provider,
+    verified:
+      mechanism !== "openai_compatible" &&
+      status.status === "signed-in" &&
+      status.provider === provider,
   };
   return Object.freeze(
     status.status === "signed-in" && status.planType !== undefined
@@ -178,7 +183,7 @@ const sourceFromServices = Effect.gen(function* () {
         const authentication = authEvidence(
           provider,
           status,
-          provider === "openai" ? "openai_api_key" : "subscription_oauth",
+          provider === "openai-compatible" ? "openai_compatible" : "subscription_oauth",
         );
         authByProvider.set(provider, authentication);
         const models = yield* configuration.models.list.pipe(
@@ -205,28 +210,32 @@ const sourceFromServices = Effect.gen(function* () {
             authentication,
             entitlement: Object.freeze({
               status: authentication.verified ? "verified" : "unverified",
-              source: "provider_model_catalog",
-              detail: "Model was returned by the configured provider catalog.",
+              source:
+                provider === "openai-compatible"
+                  ? "endpoint_configuration"
+                  : "provider_model_catalog",
+              detail:
+                provider === "openai-compatible"
+                  ? "Model is configured locally; endpoint authentication and model access are unverified."
+                  : "Model was returned by the configured provider catalog.",
             }),
           });
           chat.push(chatRoute);
 
-          const resolved =
-            provider === "openai-compatible"
-              ? []
-              : yield* tools.resolve({ provider, model: model.id }).pipe(
-                  Effect.catchTag("UnknownProviderToolModel", () => Effect.succeed([])),
-                  Effect.mapError(
-                    (cause) =>
-                      new RouteCatalogRefreshFailed({ provider, operation: "tools", cause }),
-                  ),
-                );
+          const resolved = Schema.is(NativeToolProviderId)(provider)
+            ? yield* tools.resolve({ provider, model: model.id }).pipe(
+                Effect.catchTag("UnknownProviderToolModel", () => Effect.succeed([])),
+                Effect.mapError(
+                  (cause) => new RouteCatalogRefreshFailed({ provider, operation: "tools", cause }),
+                ),
+              )
+            : [];
           for (const descriptor of resolved) {
             execution.push(
               Object.freeze({
                 type: "execution",
-                id: `execution:${provider}:${model.id}:${descriptor.id}`,
-                provider,
+                id: `execution:${descriptor.provider}:${model.id}:${descriptor.id}`,
+                provider: descriptor.provider,
                 model: model.id,
                 toolId: descriptor.id,
                 category: descriptor.category,
@@ -247,7 +256,7 @@ const sourceFromServices = Effect.gen(function* () {
 
       const openAIAuth =
         authByProvider.get("openai") ??
-        authEvidence("openai", { provider: "openai", status: "signed-out" }, "openai_api_key");
+        authEvidence("openai", { provider: "openai", status: "signed-out" }, "subscription_oauth");
       for (const contract of imageRouteContracts) {
         const authentication =
           contract.executionMode === "direct_adapter"

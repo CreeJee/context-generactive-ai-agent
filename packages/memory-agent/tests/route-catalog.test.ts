@@ -183,48 +183,65 @@ describe("RouteCatalog", () => {
     });
   });
 
-  it("keeps an unknown provider-catalog model as chat while fail-closing its tools", async () => {
-    const provider: ProviderConfiguration = {
-      provider: "openai",
-      auth: {
-        provider: "openai",
-        status: Effect.succeed({ provider: "openai", status: "signed-in" }),
-        connect: Effect.succeed({ provider: "openai", status: "signed-in" }),
-        cancel: Effect.succeed({ provider: "openai", status: "signed-out" }),
-        disconnect: Effect.succeed({ provider: "openai", status: "signed-out" }),
-      },
-      models: {
-        provider: "openai",
-        list: Effect.succeed([
-          {
-            provider: "openai",
-            id: "future-model-not-in-installed-metadata",
-            displayName: "Future model",
-            isDefault: true,
-            defaultReasoningEffort: "medium",
-            supportedReasoningEfforts: ["medium"],
-            capabilities: { inputModalities: ["text"], toolCalling: true, reasoning: true },
-          },
-        ]),
-        selected: Effect.succeed(null),
-        acceptsImages: () => Effect.succeed(false),
-        cheapestEffort: (selection) => Effect.succeed(selection),
-        select: (model) => Effect.succeed({ provider: "openai", model, reasoningEffort: "medium" }),
-      },
-    };
-    const layer = RouteCatalog.layer.pipe(
-      Layer.provide(ProviderRegistry.layer([provider])),
-      Layer.provide(ProviderToolCapabilityRegistry.layer),
-    );
-    const runtime = ManagedRuntime.make(layer);
-    const catalog = await runtime.runPromise(RouteCatalog);
-    const snapshot = await runtime.runPromise(catalog.refresh);
-    expect(snapshot.chat.map((route) => route.model)).toEqual([
-      "future-model-not-in-installed-metadata",
-    ]);
-    expect(snapshot.execution).toEqual([]);
-    await runtime.dispose();
-  });
+  it.each([
+    {
+      providerId: "openai" as const,
+      modelId: "future-model-not-in-installed-metadata",
+      mechanism: "subscription_oauth",
+    },
+    { providerId: "openai-compatible" as const, modelId: "gpt-5", mechanism: "openai_compatible" },
+  ])(
+    "keeps $providerId models as chat without inventing native tools",
+    async ({ providerId, modelId, mechanism }) => {
+      const provider: ProviderConfiguration = {
+        provider: providerId,
+        auth: {
+          provider: providerId,
+          status: Effect.succeed({ provider: providerId, status: "signed-in" }),
+          connect: Effect.succeed({ provider: providerId, status: "signed-in" }),
+          cancel: Effect.succeed({ provider: providerId, status: "signed-out" }),
+          disconnect: Effect.succeed({ provider: providerId, status: "signed-out" }),
+        },
+        models: {
+          provider: providerId,
+          list: Effect.succeed([
+            {
+              provider: providerId,
+              id: modelId,
+              displayName: "Future model",
+              isDefault: true,
+              defaultReasoningEffort: "medium",
+              supportedReasoningEfforts: ["medium"],
+              capabilities: { inputModalities: ["text"], toolCalling: true, reasoning: true },
+            },
+          ]),
+          selected: Effect.succeed(null),
+          acceptsImages: () => Effect.succeed(false),
+          cheapestEffort: (selection) => Effect.succeed(selection),
+          select: (model) =>
+            Effect.succeed({ provider: providerId, model, reasoningEffort: "medium" }),
+        },
+      };
+      const layer = RouteCatalog.layer.pipe(
+        Layer.provide(ProviderRegistry.layer([provider])),
+        Layer.provide(ProviderToolCapabilityRegistry.layer),
+      );
+      const runtime = ManagedRuntime.make(layer);
+      const catalog = await runtime.runPromise(RouteCatalog);
+      const snapshot = await runtime.runPromise(catalog.refresh);
+      expect(snapshot.chat.map((route) => route.model)).toEqual([modelId]);
+      expect(snapshot.chat[0]?.authentication).toMatchObject({
+        mechanism,
+        verified: providerId === "openai",
+      });
+      expect(snapshot.chat[0]?.entitlement).toMatchObject({
+        status: providerId === "openai" ? "verified" : "unverified",
+        source: providerId === "openai" ? "provider_model_catalog" : "endpoint_configuration",
+      });
+      expect(snapshot.execution).toEqual([]);
+      await runtime.dispose();
+    },
+  );
 
   it("supports a deterministic Layer override", async () => {
     const runtime = ManagedRuntime.make(RouteCatalog.layerFrom(source(), () => 7));

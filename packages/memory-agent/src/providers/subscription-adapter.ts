@@ -21,7 +21,7 @@ import {
   type NormalizedStreamEvent,
   type OAuthProvider,
 } from "../oauth/protocol.ts";
-import type { ModelSelection } from "./contracts.ts";
+import type { ModelSelection, SubscriptionModelSelection } from "./contracts.ts";
 
 export interface StreamingOAuthClient {
   readonly releaseRun?: () => void;
@@ -338,12 +338,10 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
 > {
   readonly name: OAuthProvider;
   readonly #client: StreamingOAuthClient;
-  readonly #selection: ModelSelection;
+  readonly #selection: SubscriptionModelSelection;
 
-  constructor(client: StreamingOAuthClient, selection: ModelSelection) {
+  constructor(client: StreamingOAuthClient, selection: SubscriptionModelSelection) {
     super({}, selection.model);
-    if (selection.provider === "openai-compatible")
-      throw new Error("Subscription provider required");
     this.name = selection.provider;
     this.#client = client;
     this.#selection = selection;

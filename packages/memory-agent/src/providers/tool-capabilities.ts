@@ -3,12 +3,14 @@ import * as AnthropicTools from "@tanstack/ai-anthropic/tools";
 import { OPENAI_CHAT_MODELS, type OpenAIChatModel } from "@tanstack/ai-openai";
 import * as OpenAITools from "@tanstack/ai-openai/tools";
 import { Context, Data, Effect, Layer } from "effect";
+import type { NativeToolProviderId } from "./contracts.ts";
 import {
   anthropicModelToolCapabilities,
   openAIModelToolCapabilities,
 } from "./model-tool-capabilities.ts";
 
-export type ProviderToolProvider = "openai" | "anthropic";
+/** Native tool support is narrower than model-provider support. */
+export type ProviderToolProvider = NativeToolProviderId;
 export type ProviderToolCategory =
   | "network.search"
   | "network.fetch"

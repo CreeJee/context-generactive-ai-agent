@@ -452,8 +452,42 @@ describe("OpenAI compatible settings", () => {
         return;
       }
       response.setHeader("Content-Type", "text/event-stream");
+      const toolsEnabled = requests.at(-1)?.body.tools !== undefined;
+      const deltas = toolsEnabled
+        ? [
+            {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_lookup",
+                  type: "function",
+                  function: { name: "lookup", arguments: "{" },
+                },
+              ],
+            },
+            { tool_calls: [{ index: 0, function: { arguments: "}" } }] },
+          ]
+        : [{ role: "assistant", content: "OK" }];
+      const chunks = [
+        ...deltas.map((delta) => ({ delta, finish_reason: null })),
+        {
+          delta: {},
+          finish_reason: toolsEnabled ? "tool_calls" : "stop",
+        },
+      ];
       response.end(
-        'data: {"id":"test","object":"chat.completion.chunk","created":1,"model":"manual-model","choices":[{"index":0,"delta":{"role":"assistant","content":"OK"},"finish_reason":null}]}\n\ndata: {"id":"test","object":"chat.completion.chunk","created":1,"model":"manual-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+        chunks
+          .map(
+            (chunk) =>
+              `data: ${JSON.stringify({
+                id: "test",
+                object: "chat.completion.chunk",
+                created: 1,
+                model: "manual-model",
+                choices: [{ index: 0, ...chunk }],
+              })}\n\n`,
+          )
+          .join("") + "data: [DONE]\n\n",
       );
     });
     server.listen(0, "127.0.0.1");
@@ -483,7 +517,20 @@ describe("OpenAI compatible settings", () => {
           chunks.push(chunk);
         return chunks;
       };
-      expect((await consume()).length).toBeGreaterThan(0);
+      const toolChunks = await consume();
+      expect(toolChunks).toContainEqual(
+        expect.objectContaining({
+          type: "TOOL_CALL_START",
+          toolCallId: "call_lookup",
+          toolCallName: "lookup",
+        }),
+      );
+      expect(toolChunks).toContainEqual(
+        expect.objectContaining({ type: "TOOL_CALL_END", toolCallId: "call_lookup" }),
+      );
+      expect(toolChunks).toContainEqual(
+        expect.objectContaining({ type: "RUN_FINISHED", finishReason: "tool_calls" }),
+      );
       expect(requests.at(-1)?.path).toBe("/v1/chat/completions");
       expect(requests.at(-1)?.body.max_tokens).toBe(512);
       expect(requests.at(-1)?.body.tools).toBeDefined();
