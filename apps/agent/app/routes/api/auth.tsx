@@ -4,7 +4,7 @@ import {
   Database,
   importLegacyOAuthProfile,
   ProviderId,
-  SubscriptionProviderId,
+  providerConnection,
   ProviderRegistry,
 } from "memory-agent";
 import { agent } from "~/.server/agent";
@@ -44,8 +44,16 @@ export async function loader({ request }: Route.LoaderArgs) {
     const { sqlite } = yield* Database;
     // Migrate when the sidebar first checks this provider. If the vault is unavailable,
     // keep the legacy connection usable; the next status request can retry the copy.
-    if (Schema.is(SubscriptionProviderId)(provider))
-      yield* Effect.promise(() => importLegacyOAuthProfile(sqlite, provider).catch(() => null));
+    const connection = providerConnection(provider);
+    switch (connection.type) {
+      case "subscription":
+        yield* Effect.promise(() =>
+          importLegacyOAuthProfile(sqlite, connection.accountProvider).catch(() => null),
+        );
+        break;
+      case "compatible-endpoint":
+        break;
+    }
     return Response.json(browserState(yield* configured.auth.status));
   }).pipe(
     Effect.catchTags({
@@ -71,7 +79,7 @@ export async function action({ request }: Route.ActionArgs) {
   const body = await readJson(request, Intent);
   if (Result.isFailure(body)) return Response.json({ error: "invalid_intent" }, { status: 400 });
   const { intent, provider } = body.success;
-  if (!Schema.is(SubscriptionProviderId)(provider))
+  if (provider === undefined || providerConnection(provider).type !== "subscription")
     return Response.json({ error: "invalid_provider" }, { status: 400 });
 
   const response = Effect.gen(function* () {

@@ -1,7 +1,7 @@
 import { Effect, Result, Schema } from "effect";
 import {
   Database,
-  SubscriptionProviderId,
+  SubscriptionAccountProvider,
   importLegacyOAuthProfile,
   removeOAuthProfile,
   renameOAuthProfile,
@@ -14,7 +14,7 @@ import type { Route } from "./+types/accounts";
 
 const Action = Schema.Struct({
   intent: Schema.Literals(["add", "cancel", "select", "remove", "rename"]),
-  provider: SubscriptionProviderId,
+  provider: SubscriptionAccountProvider,
   label: Schema.optional(Schema.String),
   accountId: Schema.optional(Schema.String),
 });
@@ -26,7 +26,7 @@ const reply = <A,>(value: A, status = 200) =>
 
 export async function loader({ request }: Route.LoaderArgs) {
   const provider = new URL(request.url).searchParams.get("provider");
-  if (!Schema.is(SubscriptionProviderId)(provider))
+  if (!Schema.is(SubscriptionAccountProvider)(provider))
     return reply({ error: "invalid_provider" }, 400);
   try {
     return await agent.runPromise(

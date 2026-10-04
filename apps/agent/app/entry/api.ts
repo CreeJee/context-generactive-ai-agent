@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { ProviderId } from "memory-agent";
+import { ProviderId } from "memory-agent/provider-contracts";
 import type {
   Attachment,
   ProviderModel,

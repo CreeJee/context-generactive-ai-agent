@@ -1,5 +1,5 @@
-import { NativeToolProviderId } from "./contracts.ts";
-import { Context, Data, Effect, Layer, Schema, Ref } from "effect";
+import { providerConnection, type ProviderVendor } from "./contracts.ts";
+import { Context, Data, Effect, Layer, Ref } from "effect";
 import type { AuthConnectionState, ProviderId, ProviderModel } from "./contracts.ts";
 import type { ImageRouteContract } from "./image-contracts.ts";
 import { imageRouteContracts } from "./image-contracts.ts";
@@ -60,8 +60,8 @@ export interface MediaRoute {
 
 export interface ExecutionRoute {
   readonly type: "execution";
-  readonly id: `execution:${NativeToolProviderId}:${string}:${ProviderToolId}`;
-  readonly provider: NativeToolProviderId;
+  readonly id: `execution:${ProviderVendor}:${string}:${ProviderToolId}`;
+  readonly provider: ProviderVendor;
   readonly model: string;
   readonly toolId: ProviderToolId;
   readonly category: ProviderToolCategory;
@@ -180,10 +180,11 @@ const sourceFromServices = Effect.gen(function* () {
             (cause) => new RouteCatalogRefreshFailed({ provider, operation: "auth", cause }),
           ),
         );
+        const connection = providerConnection(provider);
         const authentication = authEvidence(
           provider,
           status,
-          provider === "openai-compatible" ? "openai_compatible" : "subscription_oauth",
+          connection.type === "compatible-endpoint" ? "openai_compatible" : "subscription_oauth",
         );
         authByProvider.set(provider, authentication);
         const models = yield* configuration.models.list.pipe(
@@ -211,25 +212,32 @@ const sourceFromServices = Effect.gen(function* () {
             entitlement: Object.freeze({
               status: authentication.verified ? "verified" : "unverified",
               source:
-                provider === "openai-compatible"
+                connection.type === "compatible-endpoint"
                   ? "endpoint_configuration"
                   : "provider_model_catalog",
               detail:
-                provider === "openai-compatible"
+                connection.type === "compatible-endpoint"
                   ? "Model is configured locally; endpoint authentication and model access are unverified."
                   : "Model was returned by the configured provider catalog.",
             }),
           });
           chat.push(chatRoute);
 
-          const resolved = Schema.is(NativeToolProviderId)(provider)
-            ? yield* tools.resolve({ provider, model: model.id }).pipe(
-                Effect.catchTag("UnknownProviderToolModel", () => Effect.succeed([])),
-                Effect.mapError(
-                  (cause) => new RouteCatalogRefreshFailed({ provider, operation: "tools", cause }),
-                ),
-              )
-            : [];
+          const support = connection.nativeTools;
+          const resolved = yield* (() => {
+            switch (support.type) {
+              case "unsupported":
+                return Effect.succeed([]);
+              case "vendor-native":
+                return tools.resolve({ provider: support.vendor, model: model.id }).pipe(
+                  Effect.catchTag("UnknownProviderToolModel", () => Effect.succeed([])),
+                  Effect.mapError(
+                    (cause) =>
+                      new RouteCatalogRefreshFailed({ provider, operation: "tools", cause }),
+                  ),
+                );
+            }
+          })();
           for (const descriptor of resolved) {
             execution.push(
               Object.freeze({

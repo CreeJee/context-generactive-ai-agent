@@ -27,13 +27,21 @@ LM Studio와 vLLM은 동일한 `openai-compatible` provider로 연결한다. 제
 
 ## 타입 경계
 
-`providers/contracts.ts`의 `ProviderId` schema가 전체 모델 provider의 기준이다. `SubscriptionProviderId`와 `NativeToolProviderId`는 각각 이 schema에서 지원 범위를 `pick`한다. 두 범위는 현재 OpenAI·Anthropic으로 같지만 인증과 도구 지원이라는 서로 다른 계약이다.
+`ProviderId`는 저장된 모델 연결을 찾는 식별자다. 세 문자열을 회사 이름의 집합으로 해석하지 않는다. 도메인 코드는 `providerConnection(id)`로 연결 정보를 해석한 뒤 태그에 따라 분기한다.
 
-- `OAuthProvider`는 `SubscriptionProviderId`의 별칭이다. 구독 catalog·runtime·dependency resolver는 이 범위만 받는다.
-- `SubscriptionModelSelection`은 구독 어댑터의 모델 선택 계약이다. 공통 runtime 경계에서 schema로 좁힌 뒤 구독 어댑터에 전달한다.
-- `ProviderToolProvider`는 `NativeToolProviderId`의 별칭이다. native 실행 route도 동일한 범위를 사용한다.
-- usage·공통 모델 선택·chat route·이미지 승인 요청의 initiator는 전체 `ProviderId`를 사용한다. 이미지 executor의 지원 범위를 넓히지는 않는다.
-- chat route의 인증 표시는 구독은 `subscription_oauth`, 호환 endpoint는 `openai_compatible`이다. 직접 이미지 API는 `openai_api_key`를 유지한다.
+| 개념                         | 표현                                                                   | 의미                                                                                  |
+| ---------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| 저장된 모델 연결             | `ProviderId`                                                           | 기존 설정·DB·API가 사용하는 연결 식별자                                               |
+| 구독 연결                    | `{ type: "subscription", accountProvider }`                            | OAuth account를 제공하는 vendor가 존재                                                |
+| 호환 endpoint 연결           | `{ type: "compatible-endpoint", protocol: "openai-chat-completions" }` | API 프로토콜만 알려져 있고 구독 account vendor는 없음                                 |
+| 회사·native schema namespace | `ProviderVendor`                                                       | `openai` 또는 `anthropic`. OpenAI 프로토콜을 쓰는 서버가 OpenAI 회사가 되는 것은 아님 |
+| 전용 도구 지원               | `{ type: "vendor-native", vendor }` 또는 `{ type: "unsupported" }`     | 연결 종류·일반 function calling과 별도로 결정                                         |
+
+`ProviderConnection`은 서로소 유니온이다. 호환 endpoint variant에 `accountProvider`가 없으므로 OAuth 계정으로 사용할 수 없다. 채팅 runtime은 연결 종류로, route catalog는 `nativeTools.type`으로 `switch` 분기한다. 현재 호환 endpoint의 전용 도구 지원은 `unsupported`다.
+
+`SubscriptionAccountProvider`는 구독 구현이 받는 account vendor namespace이며 `OAuthProvider`가 이를 사용한다. `ProviderToolVendor`는 native tool schema의 vendor namespace다. 기존의 `SubscriptionProviderId`·`NativeToolProviderId`라는 연결 ID 부분집합 이름은 제거했다.
+
+`SubscriptionModelSelection`은 구독 어댑터의 선택 계약이며 usage·공통 모델 선택·chat route·이미지 승인 initiator는 저장된 전체 연결 ID를 사용한다. chat route 인증 표시는 구독 `subscription_oauth`, 호환 endpoint `openai_compatible`, 직접 이미지 API `openai_api_key`다.
 
 ## 검증 범위
 

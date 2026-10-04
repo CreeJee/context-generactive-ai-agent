@@ -37,7 +37,7 @@ import {
 } from "../providers/image-feature.ts";
 import { ImageRouter } from "../providers/image-router.ts";
 import {
-  SubscriptionModelSelection,
+  providerConnection,
   type ModelSelection,
   type RunTextAdapter,
 } from "../providers/contracts.ts";
@@ -434,16 +434,25 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
     interpretations: Interpretations,
     knowledge: KnowledgePromotions,
   });
-  const runtimeForAdapter = (selection: ModelSelection, goalInstanceId: string | null) =>
-    Schema.is(SubscriptionModelSelection)(selection) && registry?.subscriptionDependencies
-      ? Effect.map(registry.subscriptionDependencies(selection.provider), (dependencies) =>
-          (goalInstanceId === null
-            ? nativeImplementations
-            : goalNativeImplementations.forGoal(goalInstanceId))[selection.provider].bind(
-            dependencies,
-          ),
-        )
-      : active.runtime(selection);
+  const runtimeForAdapter = (selection: ModelSelection, goalInstanceId: string | null) => {
+    const connection = providerConnection(selection.provider);
+    switch (connection.type) {
+      case "compatible-endpoint":
+        return active.runtime(selection);
+      case "subscription":
+        return registry?.subscriptionDependencies
+          ? Effect.map(
+              registry.subscriptionDependencies(connection.accountProvider),
+              (dependencies) =>
+                (goalInstanceId === null
+                  ? nativeImplementations
+                  : goalNativeImplementations.forGoal(goalInstanceId))[
+                  connection.accountProvider
+                ].bind(dependencies),
+            )
+          : active.runtime(selection);
+    }
+  };
   const usageLedger = yield* ApiUsage;
   const events = yield* AppEvents;
   const config = yield* GlobalConfig;

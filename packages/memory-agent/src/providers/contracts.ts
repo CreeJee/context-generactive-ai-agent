@@ -1,17 +1,61 @@
 import type { AgentLoopStrategy, AnyTextAdapter, ChatMiddleware, ModelMessage } from "@tanstack/ai";
 import { Data, Effect, Schema } from "effect";
 
-/** Model providers supported by the product runtime, independent of transport or authentication. */
+/** Persisted model connection ID. Compatible endpoints are not an OpenAI vendor identity. */
 export const ProviderId = Schema.Literals(["openai", "anthropic", "openai-compatible"]);
 export type ProviderId = typeof ProviderId.Type;
 
-/** Providers whose accounts use the subscription OAuth lifecycle. */
-export const SubscriptionProviderId = ProviderId.pick(["openai", "anthropic"]);
-export type SubscriptionProviderId = typeof SubscriptionProviderId.Type;
+/** Vendor namespaces for account protocols and native tool schemas. */
+export const ProviderVendor = Schema.Literals(["openai", "anthropic"]);
+export type ProviderVendor = typeof ProviderVendor.Type;
 
-/** Providers with installed native tool descriptors; Chat Completions compatibility is insufficient. */
-export const NativeToolProviderId = ProviderId.pick(["openai", "anthropic"]);
-export type NativeToolProviderId = typeof NativeToolProviderId.Type;
+/** Account providers supported by the subscription OAuth implementation. */
+export const SubscriptionAccountProvider = ProviderVendor;
+export type SubscriptionAccountProvider = typeof SubscriptionAccountProvider.Type;
+
+export const NativeToolSupport = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("vendor-native"), vendor: ProviderVendor }),
+  Schema.Struct({ type: Schema.Literal("unsupported") }),
+]);
+export type NativeToolSupport = typeof NativeToolSupport.Type;
+
+export const ProviderConnection = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("subscription"),
+    accountProvider: SubscriptionAccountProvider,
+    nativeTools: NativeToolSupport,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("compatible-endpoint"),
+    protocol: Schema.Literal("openai-chat-completions"),
+    nativeTools: NativeToolSupport,
+  }),
+]);
+export type ProviderConnection = typeof ProviderConnection.Type;
+
+/** Resolve persisted IDs once; consumers dispatch on connection kind and tool support. */
+export function providerConnection(provider: ProviderId): ProviderConnection {
+  switch (provider) {
+    case "openai":
+      return {
+        type: "subscription",
+        accountProvider: "openai",
+        nativeTools: { type: "vendor-native", vendor: "openai" },
+      };
+    case "anthropic":
+      return {
+        type: "subscription",
+        accountProvider: "anthropic",
+        nativeTools: { type: "vendor-native", vendor: "anthropic" },
+      };
+    case "openai-compatible":
+      return {
+        type: "compatible-endpoint",
+        protocol: "openai-chat-completions",
+        nativeTools: { type: "unsupported" },
+      };
+  }
+}
 
 /** A model is never identified without its provider. */
 export const ModelSelection = Schema.Struct({
@@ -23,7 +67,7 @@ export type ModelSelection = typeof ModelSelection.Type;
 
 export const SubscriptionModelSelection = Schema.Struct({
   ...ModelSelection.fields,
-  provider: SubscriptionProviderId,
+  provider: SubscriptionAccountProvider,
 });
 export type SubscriptionModelSelection = typeof SubscriptionModelSelection.Type;
 

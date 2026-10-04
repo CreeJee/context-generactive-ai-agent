@@ -875,9 +875,20 @@
 - 양수 timeout은 메인 모델 진행을 멈추므로 독립 작업이 모두 끝나고 다음 단계에 서브에이전트 결과가 필요한 경우에만 사용한다. 명시적 대기의 any/all·제한 시간·취소 동작은 유지한다.
 - 기존 완료 알림을 다음 모델 단계 또는 유휴 상태의 자동 후속 실행에 전달한다. 대기와 알림은 보고서 검토를 대신하지 않으며 결과 사용 전 `get_subagent_report` 조회와 채택 절차를 유지한다.
 
-## 모델 provider와 구독·전용 도구 타입 경계 (2026-10-04)
+## 모델 연결·vendor·전용 도구 지원의 분리 (2026-10-04)
 
-- 전체 모델 provider 식별자는 `ProviderId` schema를 기준으로 한다. `SubscriptionProviderId`와 `NativeToolProviderId`는 그 schema에서 각각 지원 범위를 파생한다. OAuth·usage·native tool의 별칭에 리터럴 union을 중복 정의하지 않는다.
-- LM Studio·vLLM은 `openai-compatible` 모델 provider로 연결한다. Chat Completions 호환은 구독 OAuth나 제공자 전용 도구 지원의 근거가 아니다. 구독 모델 선택·catalog·runtime·dependency resolver와 native 실행 route는 각자의 좁은 타입을 사용한다.
-- 공통 chat route와 이미지 승인 initiator는 전체 모델 provider 범위를 사용한다. 구독 chat의 인증을 API key로 표시하거나 호환 endpoint를 OAuth로 표시하지 않는다. 직접 이미지 API의 인증 계약은 유지한다.
-- 서버별 조건과 연결 테스트의 검증 한계는 [OpenAI 호환 endpoint 검토](openai-compatible.md)에 기록한다. 연결 테스트 성공이나 endpoint 설정 존재만으로 스트리밍·도구 호출·인증 성공을 확정하지 않는다. 호환 chat route의 인증·모델 접근은 검증되지 않은 endpoint 설정으로 표시한다.
+- `ProviderId`의 기존 문자열은 설정·DB·API의 모델 연결 식별자로 유지한다. `openai-compatible`은 회사 이름이 아니라 endpoint 연결 방식이다. 회사와 native tool schema namespace는 `ProviderVendor`로 표현한다.
+- 문자열 집합의 부분집합만으로 인증·도구 지원을 추론하지 않는다. `ProviderConnection`의 `subscription / compatible-endpoint` 태그로 연결 종류를 구분하고, 구독 연결만 `accountProvider`를 갖는다. `NativeToolSupport`의 `vendor-native / unsupported`는 별도로 표현한다.
+- runtime은 연결 종류로, native route 생성은 전용 도구 지원 태그로 `switch` 분기한다. 호환 프로토콜이 OpenAI라고 해서 OpenAI OAuth 계정이나 native tool 지원을 부여하지 않는다. `SubscriptionProviderId`·`NativeToolProviderId`는 제거하고 account·tool vendor 이름을 사용한다.
+- 공통 chat route와 이미지 승인 initiator는 전체 연결 ID 범위를 사용한다. 호환 chat route는 검증되지 않은 endpoint 설정으로 표시한다. 실제 서버 검증 범위는 [OpenAI 호환 endpoint 검토](openai-compatible.md)에 기록한다.
+
+## 브라우저 provider schema와 빌드 출력 경계 (2026-10-04)
+
+- 브라우저에서 사용하는 provider schema는 `memory-agent/provider-contracts` 전용 진입점에서 가져온다. 서버 서비스·worker·Node 모듈을 re-export하는 패키지 루트를 값 import로 사용하지 않는다.
+- 앱의 TypeScript 검사는 원본 코드와 React Router 생성 타입을 대상으로 한다. 패키징 산출물인 `build`·`dist`의 복사된 runtime TypeScript는 제외한다. `pnpm build` 이후에도 동일한 원본 타입 검사가 가능해야 한다.
+
+### 빌드 경고 재검증
+
+- `pnpm build`는 수정 전후 모두 성공했다. 브라우저의 Node 모듈 externalization 경고는 564개에서 0개로 줄었고, 서버 worker URL에 대한 asset 경고도 없어졌다. 메인 route 청크는 3,011.83 kB에서 1,037.79 kB로 줄었다 (gzip 883.20 → 324.42 kB). 이 수치는 이번 checkout의 빌드 스냅샷이다.
+- 500 kB 초과 청크 경고는 남아 있다. 메인 route와 일부 syntax grammar·WASM 청크가 대상이며, 경고 제한을 올리거나 숨기지 않는다. 초기 로드·문법 로딩 정책의 별도 최적화 대상이다.
+- Node 실행 파일 번들에서는 React Router의 `use client` 지시문 보존 경고가 남고, Vite+ pack의 `exe` 실험적 옵션 안내도 출력된다. 이번 변경에서 RSC 동작이나 패키징 방식을 변경하지 않는다.

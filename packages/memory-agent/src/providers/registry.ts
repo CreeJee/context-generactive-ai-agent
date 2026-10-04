@@ -4,13 +4,13 @@ import {
   type AgentModelRuntime,
   type ProviderConfiguration,
   type ProviderId,
-  type SubscriptionProviderId,
+  type SubscriptionAccountProvider,
 } from "./contracts.ts";
 
 import type { SubscriptionRuntimeDependencies } from "./subscription-runtime.ts";
 
 export type SubscriptionDependencyResolver = (
-  provider: SubscriptionProviderId,
+  provider: SubscriptionAccountProvider,
 ) => Effect.Effect<SubscriptionRuntimeDependencies, ProviderUnavailable>;
 
 export interface ProviderRegistryApi {

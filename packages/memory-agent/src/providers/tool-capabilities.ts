@@ -3,14 +3,14 @@ import * as AnthropicTools from "@tanstack/ai-anthropic/tools";
 import { OPENAI_CHAT_MODELS, type OpenAIChatModel } from "@tanstack/ai-openai";
 import * as OpenAITools from "@tanstack/ai-openai/tools";
 import { Context, Data, Effect, Layer } from "effect";
-import type { NativeToolProviderId } from "./contracts.ts";
+import type { ProviderVendor } from "./contracts.ts";
 import {
   anthropicModelToolCapabilities,
   openAIModelToolCapabilities,
 } from "./model-tool-capabilities.ts";
 
-/** Native tool support is narrower than model-provider support. */
-export type ProviderToolProvider = NativeToolProviderId;
+/** Vendor namespace of native tool schemas; availability is resolved separately. */
+export type ProviderToolVendor = ProviderVendor;
 export type ProviderToolCategory =
   | "network.search"
   | "network.fetch"
@@ -86,7 +86,7 @@ export interface ProviderToolResultNormalizerMetadata {
   readonly usage: "request_and_model_usage_when_reported";
 }
 export interface ProviderToolDescriptor<
-  TProvider extends ProviderToolProvider = ProviderToolProvider,
+  TProvider extends ProviderToolVendor = ProviderToolVendor,
   TKind extends ProviderToolKind = ProviderToolKind,
   TFactory extends (...args: never[]) => object = (...args: never[]) => object,
 > {
@@ -115,7 +115,7 @@ const normalizer = Object.freeze({
   usage: "request_and_model_usage_when_reported",
 } as const satisfies ProviderToolResultNormalizerMetadata);
 function descriptor<
-  const TProvider extends ProviderToolProvider,
+  const TProvider extends ProviderToolVendor,
   const TKind extends ProviderToolKind,
   TFactory extends (...args: never[]) => object,
 >(
@@ -381,24 +381,24 @@ export class UnknownProviderTool extends Data.TaggedError("UnknownProviderTool")
   readonly id: string;
 }> {}
 export class UnknownProviderToolModel extends Data.TaggedError("UnknownProviderToolModel")<{
-  readonly provider: ProviderToolProvider;
+  readonly provider: ProviderToolVendor;
   readonly model: string;
 }> {}
 export class ProviderToolMetadataFailure extends Data.TaggedError("ProviderToolMetadataFailure")<{
   readonly reason: string;
 }> {}
 export interface ProviderToolModelMetadata {
-  readonly provider: ProviderToolProvider;
+  readonly provider: ProviderToolVendor;
   readonly model: string;
   readonly tools: readonly string[];
 }
 export interface ProviderToolFilter {
-  readonly provider?: ProviderToolProvider;
+  readonly provider?: ProviderToolVendor;
   readonly categories?: readonly ProviderToolCategory[];
   readonly ids?: readonly ProviderToolId[];
 }
 export interface ProviderToolCapabilityQuery extends ProviderToolFilter {
-  readonly provider: ProviderToolProvider;
+  readonly provider: ProviderToolVendor;
   readonly model: string;
   readonly accountToolKinds?: readonly string[];
 }

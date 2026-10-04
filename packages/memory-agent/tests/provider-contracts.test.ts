@@ -8,12 +8,14 @@ import { StorageRoot } from "../src/config/storage-root.ts";
 import { ActiveProvider } from "../src/providers/active-provider.ts";
 import {
   ProviderId,
-  SubscriptionProviderId,
-  NativeToolProviderId,
+  ProviderConnection,
+  providerConnection,
+  SubscriptionAccountProvider,
+  ProviderVendor,
   SubscriptionModelSelection,
   type ProviderServices,
 } from "../src/providers/contracts.ts";
-import type { ProviderToolProvider } from "../src/providers/tool-capabilities.ts";
+import type { ProviderToolVendor } from "../src/providers/tool-capabilities.ts";
 import type { OAuthProvider } from "../src/oauth/protocol.ts";
 import type { ApiUsageProvider } from "../src/agent/api-usage.ts";
 import { ProviderRegistry, providerRegistryFrom } from "../src/providers/registry.ts";
@@ -57,6 +59,24 @@ const fakeProvider = (provider: ProviderId): ProviderServices => ({
 });
 
 describe("provider-neutral contracts", () => {
+  test("separates endpoint protocol, subscription account vendor and native tool support", () => {
+    const endpoint = providerConnection("openai-compatible");
+    expect(endpoint).toEqual({
+      type: "compatible-endpoint",
+      protocol: "openai-chat-completions",
+      nativeTools: { type: "unsupported" },
+    });
+    expect(providerConnection("openai")).toEqual({
+      type: "subscription",
+      accountProvider: "openai",
+      nativeTools: { type: "vendor-native", vendor: "openai" },
+    });
+    expectTypeOf<Extract<ProviderConnection, { type: "compatible-endpoint" }>>().not.toHaveProperty(
+      "accountProvider",
+    );
+    expect(Schema.is(ProviderConnection)({ ...endpoint, type: "subscription" })).toBe(false);
+  });
+
   test("accepts compatible models without treating them as OAuth or native tool providers", () => {
     const selection = {
       provider: "openai-compatible",
@@ -64,11 +84,11 @@ describe("provider-neutral contracts", () => {
       reasoningEffort: "none",
     };
     expect(Schema.is(ProviderId)(selection.provider)).toBe(true);
-    expect(Schema.is(SubscriptionProviderId)(selection.provider)).toBe(false);
-    expect(Schema.is(NativeToolProviderId)(selection.provider)).toBe(false);
+    expect(Schema.is(SubscriptionAccountProvider)(selection.provider)).toBe(false);
+    expect(Schema.is(ProviderVendor)(selection.provider)).toBe(false);
     expect(Schema.is(SubscriptionModelSelection)(selection)).toBe(false);
-    expectTypeOf<OAuthProvider>().toEqualTypeOf<SubscriptionProviderId>();
-    expectTypeOf<ProviderToolProvider>().toEqualTypeOf<NativeToolProviderId>();
+    expectTypeOf<OAuthProvider>().toEqualTypeOf<SubscriptionAccountProvider>();
+    expectTypeOf<ProviderToolVendor>().toEqualTypeOf<ProviderVendor>();
     expectTypeOf<ApiUsageProvider>().toEqualTypeOf<ProviderId>();
   });
   test("migrates a legacy model selection to an explicit OpenAI provider", async () => {

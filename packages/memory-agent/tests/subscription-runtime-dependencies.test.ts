@@ -1,4 +1,4 @@
-import { SubscriptionProviderId } from "../src/providers/contracts.ts";
+import { SubscriptionAccountProvider } from "../src/providers/contracts.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -217,7 +217,7 @@ test("default layer stays unavailable and native subscription layer exports with
         yield* Effect.gen(function* () {
           const registry = yield* ProviderRegistry;
           for (const provider of registry.providers) {
-            if (!Schema.is(SubscriptionProviderId)(provider)) continue;
+            if (!Schema.is(SubscriptionAccountProvider)(provider)) continue;
             const dependencies = yield* registry.subscriptionDependencies!(provider);
             const runtime = yield* registry.runtime(provider);
             expect(

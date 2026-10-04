@@ -2,11 +2,11 @@ import { createHash, randomBytes } from "node:crypto";
 import { optionalProperty } from "../optional-property.ts";
 import { Data, Option, Schema } from "effect";
 import { JsonValue } from "../json.ts";
-import type { SubscriptionProviderId } from "../providers/contracts.ts";
+import type { SubscriptionAccountProvider } from "../providers/contracts.ts";
 
 export { JsonValue } from "../json.ts";
 
-export type OAuthProvider = SubscriptionProviderId;
+export type OAuthProvider = SubscriptionAccountProvider;
 
 export class ProviderFeatureRejectedError extends Data.TaggedError("ProviderFeatureRejectedError")<{
   readonly provider: OAuthProvider;

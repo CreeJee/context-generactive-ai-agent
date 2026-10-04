@@ -1,4 +1,4 @@
-import { SubscriptionProviderId } from "../providers/contracts.ts";
+import { SubscriptionAccountProvider } from "../providers/contracts.ts";
 import { Schema } from "effect";
 import type { DatabaseSync } from "node:sqlite";
 import type { OAuthProvider } from "./protocol.ts";
@@ -169,7 +169,7 @@ export function listOAuthProfiles(sqlite: DatabaseSync, provider?: OAuthProvider
     Schema.Array(
       Schema.Struct({
         id: Schema.String,
-        provider: SubscriptionProviderId,
+        provider: SubscriptionAccountProvider,
         label: Schema.String,
         selected: Schema.Literals([0, 1]),
         created_at: Schema.Finite,

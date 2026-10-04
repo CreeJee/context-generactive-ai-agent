@@ -5,7 +5,7 @@ import {
   SubscriptionModelSelection,
   type AgentModelRuntime,
   type ModelSelection,
-  type SubscriptionProviderId,
+  type SubscriptionAccountProvider,
   type RunTextAdapter,
 } from "./contracts.ts";
 
@@ -17,11 +17,11 @@ import {
 export const subscriptionAgentLoop: AgentLoopStrategy = ({ iterationCount, finishReason }) =>
   iterationCount === 0 || finishReason === "tool_calls";
 
-const runMiddleware = (provider: SubscriptionProviderId): ChatMiddleware => ({
+const runMiddleware = (provider: SubscriptionAccountProvider): ChatMiddleware => ({
   name: `memory-agent/${provider}-subscription-run`,
 });
 
-const contextWindows: Readonly<Record<SubscriptionProviderId, number>> = {
+const contextWindows: Readonly<Record<SubscriptionAccountProvider, number>> = {
   openai: 258_400,
   anthropic: 200_000,
 };
@@ -40,7 +40,7 @@ export interface SubscriptionRuntimeDependencies {
  * anew at bind time; account selection still happens once per adapter through client.forRun.
  * This SDK boundary owns no auth, broker, active-run registry, or application resources.
  */
-export function createSubscriptionRuntimeImplementation(provider: SubscriptionProviderId) {
+export function createSubscriptionRuntimeImplementation(provider: SubscriptionAccountProvider) {
   const Adapter = SubscriptionTextAdapter;
   const agentLoop = subscriptionAgentLoop;
   const middleware = runMiddleware;
@@ -75,7 +75,7 @@ export function createSubscriptionRuntimeImplementation(provider: SubscriptionPr
 }
 
 export function createSubscriptionRuntime(
-  provider: SubscriptionProviderId,
+  provider: SubscriptionAccountProvider,
   client: StreamingOAuthClient | (() => StreamingOAuthClient),
   catalogWindow: (model: string) => number | null = () => null,
 ): AgentModelRuntime {

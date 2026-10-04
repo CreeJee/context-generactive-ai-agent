@@ -16,7 +16,7 @@ import {
   type ProviderToolExecution,
   type ProviderToolId,
   type ProviderToolKind,
-  type ProviderToolProvider,
+  type ProviderToolVendor,
 } from "./tool-capabilities.ts";
 
 export type ProviderToolRisk = "read_only" | "elevated" | "high";
@@ -30,7 +30,7 @@ export interface ProviderToolPrincipalPolicy {
   readonly allowHighRisk?: boolean;
 }
 export interface ProviderToolPolicyContext {
-  readonly provider: ProviderToolProvider;
+  readonly provider: ProviderToolVendor;
   readonly model: string;
   /** Account entitlements/capabilities only; never credentials. */
   readonly accountToolKinds: readonly string[];
@@ -41,7 +41,7 @@ export interface ProviderToolPolicyContext {
 }
 export interface ProviderToolPolicyDescriptor {
   readonly id: ProviderToolId;
-  readonly provider: ProviderToolProvider;
+  readonly provider: ProviderToolVendor;
   readonly kind: ProviderToolKind;
   readonly category: ProviderToolCategory;
   readonly risk: ProviderToolRisk;
@@ -98,7 +98,7 @@ export interface ProviderToolExecutionOptions {
 export interface ProviderToolExecutionRevalidationInput {
   readonly policy: ProviderToolPolicyContext;
   readonly toolId: string;
-  readonly provider: ProviderToolProvider;
+  readonly provider: ProviderToolVendor;
   readonly kind: string;
   readonly options: ProviderToolExecutionOptions;
   readonly approval: ProviderToolApprovalState;
@@ -116,7 +116,7 @@ export class ProviderToolUnsupported extends Data.TaggedError("ProviderToolUnsup
 }> {}
 export class ProviderToolCapabilityDenied extends Data.TaggedError("ProviderToolCapabilityDenied")<{
   readonly toolId: string;
-  readonly provider: ProviderToolProvider;
+  readonly provider: ProviderToolVendor;
   readonly model: string;
   readonly reason: "account_unsupported";
 }> {}
@@ -603,7 +603,7 @@ export interface ComposedProviderTool<Id extends ProviderToolId = ProviderToolId
 }
 export class ProviderToolNotExposed extends Data.TaggedError("ProviderToolNotExposed")<{
   readonly toolId: string;
-  readonly provider: ProviderToolProvider;
+  readonly provider: ProviderToolVendor;
   readonly model: string;
 }> {}
 export class ProviderToolFactoryFailure extends Data.TaggedError("ProviderToolFactoryFailure")<{
@@ -649,7 +649,7 @@ export type ProviderToolLifecycleStatus =
   | "failed"
   | "cancelled";
 export interface ProviderToolUsageAttribution {
-  readonly provider: ProviderToolProvider;
+  readonly provider: ProviderToolVendor;
   readonly model: string;
   readonly accountId: string;
   readonly toolId: ProviderToolId;
@@ -672,13 +672,13 @@ export interface ProviderToolCost {
 }
 export interface ProviderToolActionMetadata {
   readonly mode: "future_executor";
-  readonly provider: ProviderToolProvider;
+  readonly provider: ProviderToolVendor;
   readonly toolId: ProviderToolId;
   readonly kind: ProviderToolKind;
   readonly workspaceRoot: string | null;
 }
 export interface ProviderToolResultEnvelope<Raw = unknown> {
-  readonly provider: ProviderToolProvider;
+  readonly provider: ProviderToolVendor;
   readonly toolId: ProviderToolId;
   readonly model: string;
   /** Stable attribution only. This API deliberately has no credential/log metadata field. */
