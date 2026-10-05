@@ -24,6 +24,7 @@ import { EmbeddingSettings } from "./pages/embedding";
 import { McpSettings } from "./pages/mcp";
 import { AgentSettings } from "./pages/agents";
 import { SkillSettings } from "./pages/skills";
+import { RrsiSettings } from "./pages/rrsi";
 import { CompatibleSettings } from "./pages/compatible";
 
 const settingsGroups = [
@@ -44,6 +45,7 @@ const settingsGroups = [
       { value: "embedding", label: "임베딩", icon: CpuIcon },
     ],
   },
+  { label: "개선", pages: [{ value: "rrsi", label: "하네스 개선", icon: BotIcon }] },
   { label: "지침", pages: [{ value: "skills", label: "Skills", icon: BookOpenIcon }] },
 ] as const;
 
@@ -51,6 +53,12 @@ type SettingsPage = (typeof settingsGroups)[number]["pages"][number]["value"];
 
 function SettingsPageBody({ page, project }: { page: SettingsPage; project: Project | null }) {
   switch (page) {
+    case "rrsi":
+      return (
+        <QuerySection>
+          <RrsiSettings />
+        </QuerySection>
+      );
     case "compatible":
       return (
         <QuerySection>

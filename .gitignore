@@ -35,3 +35,6 @@ dist-ssr
 !.vscode/
 !.vscode/settings.json
 !.vscode/extensions.json
+
+# Isolated RRSI runtime and candidate worktrees
+.rrsi-local/

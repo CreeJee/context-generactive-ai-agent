@@ -3,6 +3,8 @@ import { optionalProperty } from "./optional-property.ts";
 import { Effect, Layer } from "effect";
 import type { ProviderId } from "./providers/contracts.ts";
 import { AgentChat } from "./agent/chat.ts";
+import { HarnessStore } from "./rrsi/store.ts";
+import { Rrsi } from "./rrsi/service.ts";
 import { ApiUsage } from "./agent/api-usage.ts";
 import { TurnSummaries } from "./agent/turn-summaries.ts";
 import { ChatState } from "./chat-state/chat-state.ts";
@@ -73,6 +75,8 @@ import { WorkflowRules } from "./workflow/rules.ts";
 import { OpenAICompatibleSettings } from "./providers/openai-compatible.ts";
 
 export interface MemoryAgentLayerOptions {
+  /** Isolated evaluation transport; production uses its endpoint-bound keyring. */
+  readonly compatibleSettings?: Layer.Layer<OpenAICompatibleSettings, never, GlobalConfig>;
   /** Defaults to the local embedding model; tests pass a deterministic one. */
   readonly embedder?: Layer.Layer<Embedder, never, StorageRoot | GlobalConfig>;
   /** Defaults to Kiwi (model downloaded on first use); tests pass a deterministic one. */
@@ -137,7 +141,10 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
       Layer.merge(StorageRoot.layer(storageRoot), Database.layer(join(storageRoot, "agent.db"))),
     ),
   );
-  const compatibleSettings = OpenAICompatibleSettings.layer.pipe(Layer.provide(foundation));
+  const harness = HarnessStore.layer.pipe(Layer.provide(foundation));
+  const compatibleSettings = (options.compatibleSettings ?? OpenAICompatibleSettings.layer).pipe(
+    Layer.provide(foundation),
+  );
   const providerRegistry =
     options.providerRegistry ??
     Layer.effect(
@@ -255,6 +262,11 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     directImageExecutor,
     imageMediaWorkflow,
   );
+  const rrsi = Rrsi.layer.pipe(
+    Layer.provide(harness),
+    Layer.provide(compatibleSettings),
+    Layer.provide(foundation),
+  );
   const retrieval = Layer.mergeAll(
     Indexer.layer,
     MemorySearch.layer,
@@ -284,6 +296,8 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
         SecretSweep.layer(options.sweepSecrets),
       ),
     ),
+    Layer.provideMerge(harness),
+    Layer.provideMerge(rrsi),
     Layer.provideMerge(retrieval),
     Layer.provideMerge(BackgroundTasks.layer),
     Layer.provideMerge(memory),
