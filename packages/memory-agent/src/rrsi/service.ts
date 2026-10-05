@@ -7,6 +7,9 @@ import { promisify } from "node:util";
 import { Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import { OpenAICompatibleSettings } from "../providers/openai-compatible.ts";
+import { GlobalConfig } from "../config/global-config.ts";
+import { ProviderRegistry } from "../providers/registry.ts";
+import { pinModelGateway, type ModelGateway } from "./model-gateway.ts";
 import { HarnessStore } from "./store.ts";
 import {
   Proposal,
@@ -19,7 +22,7 @@ import {
 } from "./contracts.ts";
 import { editBudget, exploration, noiseBand, selectCandidate } from "./selection.ts";
 import { codeContext, prepareCodeCandidate } from "./code-candidate.ts";
-import { evaluateSandbox, reportedTokens, type LocalClient } from "./sandbox.ts";
+import { evaluateSandbox, reportedTokens } from "./sandbox.ts";
 
 export class RrsiFailed extends Schema.TaggedError<RrsiFailed>()("RrsiFailed", {
   reason: Schema.String,
@@ -64,8 +67,9 @@ const mean = (measurements: readonly Measurement[]): Measurement => {
 const make = Effect.gen(function* () {
   const store = yield* HarnessStore;
   const { sqlite, atomic } = yield* Database;
-  const compatible = yield* OpenAICompatibleSettings;
-  const pin = Effect.runPromiseWith(yield* Effect.context<OpenAICompatibleSettings>());
+  const pin = Effect.runPromiseWith(
+    yield* Effect.context<OpenAICompatibleSettings | GlobalConfig | ProviderRegistry>(),
+  );
   let controller: AbortController | null = null;
   let task: Promise<void> | null = null;
   let lastActivity = Date.now();
@@ -113,32 +117,23 @@ const make = Effect.gen(function* () {
   };
   const execute = async (
     record: MutableExperiment,
-    client: LocalClient,
+    client: ModelGateway,
     abort: AbortController,
   ) => {
     const settings = store.settings();
     const deadline = Date.now() + settings.maxMinutes * 60000;
-    let usageComplete = true;
     const consume = (raw: string) => {
       const count = reportedTokens(raw);
       if (count === null) {
-        usageComplete = false;
         throw new Error("usage_unknown");
       }
       record.tokens += count;
       store.saveExperiment(record);
-      if (record.tokens >= settings.maxTokens) {
-        abort.abort();
-        throw new Error("token_budget_reached");
-      }
     };
-    const bounded: LocalClient = {
-      configuration: client.configuration,
+    const bounded: ModelGateway = {
+      ...client,
       complete: async (body, signal) => {
         if (signal.aborted || Date.now() >= deadline) throw new Error("experiment_stopped");
-        // Preflight is a conservative reservation, never reported usage or a success metric.
-        if (record.tokens + body.length + 2048 > settings.maxTokens)
-          throw new Error("token_budget_reservation");
         return client.complete(body, signal);
       },
     };
@@ -324,7 +319,7 @@ const make = Effect.gen(function* () {
         record.reason = "heldout_rejected";
         return;
       }
-      if (!usageComplete || abort.signal.aborted) throw new Error("experiment_stopped");
+      if (abort.signal.aborted) throw new Error("experiment_stopped");
       const winner = record.candidates.findLast(
         (candidate) => candidate.decision === "round_winner",
       );
@@ -412,9 +407,6 @@ const make = Effect.gen(function* () {
     if (controller !== null) return yield* new RrsiFailed({ reason: "experiment_running" });
     if (sqlite.prepare("SELECT 1 FROM rrsi_corpus_receipts WHERE version='v1'").get())
       return yield* new RrsiFailed({ reason: "sealed_corpus_exhausted" });
-    const client = yield* compatible.pinRrsiClient.pipe(
-      Effect.mapError(() => new RrsiFailed({ reason: "local_model_unavailable" })),
-    );
     const baselineImage = yield* Effect.tryPromise({
       try: async () => {
         const { stdout } = await run("docker", [
@@ -432,13 +424,20 @@ const make = Effect.gen(function* () {
     });
     // Pin immutable evaluator provenance before any requests or candidates are created.
     if (controller !== null) return yield* new RrsiFailed({ reason: "experiment_running" });
+    const client = yield* pinModelGateway().pipe(
+      Effect.mapError(() => new RrsiFailed({ reason: "model_unavailable" })),
+    );
+    if (controller !== null) {
+      client.release();
+      return yield* new RrsiFailed({ reason: "experiment_running" });
+    }
     const abort = new AbortController();
-    controller = abort;
     const record: MutableExperiment = {
       id: randomUUID(),
       status: "running",
       startedAt: Date.now(),
       finishedAt: null,
+      provider: client.configuration.provider,
       model: client.configuration.model,
       endpoint: client.configuration.baseUrl,
       baseVersion: store.current().id,
@@ -447,7 +446,11 @@ const make = Effect.gen(function* () {
       reason: "",
       candidates: [],
     };
-    store.saveExperiment(record);
+    yield* Effect.try({
+      try: () => store.saveExperiment(record),
+      catch: () => new RrsiFailed({ reason: "state_operation_failed" }),
+    }).pipe(Effect.onError(() => Effect.sync(client.release)));
+    controller = abort;
     task = execute(record, client, abort)
       .then(
         () => {
@@ -455,20 +458,19 @@ const make = Effect.gen(function* () {
         },
         (error: Error) => {
           record.status = abort.signal.aborted ? "cancelled" : "failed";
-          record.reason = [
-            "token_budget_reached",
-            "token_budget_reservation",
-            "usage_unknown",
-            "experiment_stopped",
-          ].includes(error.message)
+          record.reason = ["usage_unknown", "experiment_stopped"].includes(error.message)
             ? error.message
             : "evaluation_failed";
         },
       )
       .finally(() => {
         record.finishedAt = Date.now();
-        store.saveExperiment(record);
-        controller = null;
+        try {
+          store.saveExperiment(record);
+        } finally {
+          client.release();
+          controller = null;
+        }
       });
     return { experimentId: record.id };
   });

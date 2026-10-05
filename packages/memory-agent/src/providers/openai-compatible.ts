@@ -1,6 +1,5 @@
 import { openaiCompatibleText } from "@tanstack/ai-openai/compatible";
 import { createHash } from "node:crypto";
-import { isIP } from "node:net";
 import { Context, Data, Effect, Layer, Option, Schema, Semaphore } from "effect";
 import { GlobalConfig, type GlobalConfigApi } from "../config/global-config.ts";
 import { requireRuntime } from "../runtime/resources.ts";
@@ -283,19 +282,6 @@ export function makeOpenAICompatibleSettings(
   const pinRrsiClient = Effect.gen(function* () {
     const { configuration, key } = yield* updates.withPermit(snapshot);
     if (!configuration) return yield* new OpenAICompatibleFailed({ operation: "validation" });
-    const host = new URL(configuration.baseUrl).hostname;
-    if (
-      !(
-        host === "localhost" ||
-        host === "127.0.0.1" ||
-        host === "[::1]" ||
-        (isIP(host) === 4 &&
-          (host.startsWith("10.") ||
-            host.startsWith("192.168.") ||
-            /^172\.(1[6-9]|2[0-9]|3[01])\./.test(host)))
-      )
-    )
-      return yield* new OpenAICompatibleFailed({ operation: "validation" });
     return {
       configuration,
       complete: async (body: string, signal: AbortSignal) => {
@@ -312,7 +298,7 @@ export function makeOpenAICompatibleSettings(
           body: JSON.stringify({
             ...payload,
             model: configuration.model,
-            max_tokens: Math.min(configuration.outputBudget, 2048),
+            max_tokens: configuration.outputBudget,
             stream: false,
           }),
         });

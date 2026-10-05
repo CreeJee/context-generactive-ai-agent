@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { ProviderId } from "../providers/contracts.ts";
 
 const shortText = Schema.String.check(Schema.isMaxLength(4000));
 export const HarnessProfile = Schema.Struct({
@@ -38,11 +39,10 @@ export const Measurement = Schema.Struct({
 export type Measurement = typeof Measurement.Type;
 export const Settings = Schema.Struct({
   enabled: Schema.Boolean,
-  maxTokens: Schema.Int.check(Schema.isBetween({ minimum: 1000, maximum: 1000000 })),
   maxMinutes: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 120 })),
 });
 export type RrsiSettings = typeof Settings.Type;
-export const defaultSettings: RrsiSettings = { enabled: true, maxTokens: 200000, maxMinutes: 30 };
+export const defaultSettings: RrsiSettings = { enabled: true, maxMinutes: 30 };
 export const Version = Schema.Struct({
   id: Schema.String,
   parentId: Schema.NullOr(Schema.String),
@@ -72,6 +72,7 @@ export const Experiment = Schema.Struct({
   status: Schema.Literals(["running", "completed", "failed", "cancelled"]),
   startedAt: Schema.Finite,
   finishedAt: Schema.NullOr(Schema.Finite),
+  provider: Schema.optionalKey(ProviderId),
   model: Schema.String,
   endpoint: Schema.String,
   baseVersion: Schema.String,

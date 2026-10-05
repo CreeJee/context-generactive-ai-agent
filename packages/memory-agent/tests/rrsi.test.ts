@@ -159,3 +159,12 @@ test("code proposals reject protected paths and ambiguous anchors without partia
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("legacy persisted token budgets no longer constrain experiment settings", () => {
+  const { owner, store } = setup();
+  owner.sqlite
+    .prepare("UPDATE rrsi_state SET settings=? WHERE id=1")
+    .run(JSON.stringify({ enabled: true, maxTokens: 1000, maxMinutes: 30 }));
+  expect(store.settings()).toEqual({ enabled: true, maxMinutes: 30 });
+  expect(makeHarnessStore(owner).settings()).toEqual({ enabled: true, maxMinutes: 30 });
+});

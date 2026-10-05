@@ -33,9 +33,8 @@ const reasons = {
   no_admissible_candidate: "채택 기준을 통과한 후보가 없어요",
   evaluation_failed: "평가를 완료하지 못했어요",
   usage_unknown: "모델의 토큰 사용량이 누락됐어요",
-  token_budget_reached: "토큰 한도에 도달했어요",
-  token_budget_reservation: "다음 요청이 토큰 한도를 넘을 수 있어요",
   owner_restarted: "앱 재시작으로 중단됐어요",
+  model_unavailable: "선택한 모델의 연결과 로그인을 확인하세요",
   local_model_unavailable: "로컬 모델 연결을 확인하세요",
   sealed_corpus_exhausted: "최종 평가 과제를 새 버전으로 교체해야 해요",
   experiment_running: "이미 실험 중이에요",
@@ -84,13 +83,14 @@ export function RrsiSettings() {
       <PageHeader
         title="하네스 개선"
         badge={<Badge variant="secondary">{status.running ? "실험 중" : "대기"}</Badge>}
-        description="로컬 모델로 코딩과 기억 과제를 평가해요. 검증된 프롬프트·설정은 새 Goal에 적용하고, 코드 변경은 후보 브랜치에서 검토하고 수동으로 반영해요."
+        description="선택한 공급자·모델로 코딩과 기억 과제를 평가해요. 검증된 프롬프트·설정은 새 Goal에 적용하고, 코드 변경은 후보 브랜치에서 검토하고 수동으로 반영해요."
       />
       <Field orientation="horizontal">
         <FieldContent>
           <FieldLabel htmlFor="rrsi-enabled">유휴 시간에 자동 실행</FieldLabel>
           <FieldDescription>
-            10분 유휴 후 하루 최대 1회 · 20만 토큰 · 30분. 원본 앱에서 작업하면 중단해요.
+            10분 유휴 후 하루 최대 1회 · {status.settings.maxMinutes}분 · 토큰 상한 없음. 원본
+            앱에서 작업하면 중단해요.
           </FieldDescription>
         </FieldContent>
         <Switch
@@ -102,6 +102,9 @@ export function RrsiSettings() {
           }
         />
       </Field>
+      <FieldDescription>
+        토큰 사용량은 효율 비교를 위해 기록해요. 선택한 공급자의 요금과 사용 정책이 적용돼요.
+      </FieldDescription>
       <div className="flex gap-2">
         <Button
           variant="outline"

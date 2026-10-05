@@ -2,17 +2,18 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
 import { execFileSync } from "node:child_process";
 import { Effect, Layer, ManagedRuntime, Schema } from "effect";
 import { memoryAgentLayer } from "../src/layers.ts";
 import { HarnessStore } from "../src/rrsi/store.ts";
-import { HarnessProfile } from "../src/rrsi/contracts.ts";
 import { AgentChat } from "../src/agent/chat.ts";
 import { Projects } from "../src/projects/projects.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
 import { TurnSummaries } from "../src/agent/turn-summaries.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
+import { createSubscriptionRuntime } from "../src/providers/subscription-runtime.ts";
+import { WorkerGateway } from "../src/rrsi/worker-gateway.ts";
+import { SubscriptionResult } from "../src/rrsi/model-gateway.ts";
 import {
   OpenAICompatibleSettings,
   CompatibleFetch,
@@ -22,51 +23,35 @@ import { fakeEmbedderLayer } from "../src/testing/fake-embedder.ts";
 import { fakeMorphLayer } from "../src/testing/fake-morph.ts";
 import { corpus } from "./rrsi-corpus.ts";
 
-const Input = Schema.Struct({
-  profile: HarnessProfile,
-  model: Schema.String,
-  split: Schema.Literals(["evolve", "validation", "sealed", "smoke"]),
-});
-const Reply = Schema.Struct({
-  kind: Schema.Literal("response"),
-  id: Schema.String,
-  body: Schema.String,
-  ok: Schema.Boolean,
-});
 // Request metadata for direct AgentChat.handle calls; the worker has no HTTP server.
 const inProcessChatUrl = "http://rrsi-worker.invalid/api/chat";
-const lines = createInterface({ input: process.stdin });
-const pending = new Map<string, (reply: typeof Reply.Type) => void>();
-let initialize: (value: typeof Input.Type) => void;
-const initial = new Promise<typeof Input.Type>((resolve) => {
-  initialize = resolve;
-});
-lines.on("line", (line) => {
-  try {
-    initialize(Schema.decodeUnknownSync(Schema.fromJsonString(Input))(line));
-  } catch {
-    const reply = Schema.decodeUnknownSync(Schema.fromJsonString(Reply))(line);
-    pending.get(reply.id)?.(reply);
-    pending.delete(reply.id);
-  }
-});
 const emit = (
   value:
-    | { kind: "request"; id: string; body: string }
+    | { kind: "request" | "subscription-request"; id: string; body: string }
     | { kind: "result"; results: { id: string; domain: string; score: number }[] }
     | { kind: "failure"; reason: string },
 ) => process.stdout.write(`RRSI:${JSON.stringify(value)}\n`);
+const gateway = ManagedRuntime.make(WorkerGateway.layer(process.stdin, emit));
+const gatewayRequest = (
+  kind: "request" | "subscription-request",
+  body: string,
+  signal?: AbortSignal | null,
+) =>
+  gateway.runPromise(
+    Effect.flatMap(WorkerGateway, (service) => service.request(kind, body)),
+    signal ? { signal } : undefined,
+  );
 const transport: typeof fetch = async (_url, init) => {
-  const id = randomUUID();
-  const reply = new Promise<typeof Reply.Type>((resolve) => pending.set(id, resolve));
-  emit({ kind: "request", id, body: Schema.decodeUnknownSync(Schema.String)(init?.body) });
-  const result = await reply;
-  if (!result.ok) throw new Error("gateway_failed");
+  const body = await gatewayRequest(
+    "request",
+    Schema.decodeUnknownSync(Schema.String)(init?.body),
+    init?.signal,
+  );
   const request = Schema.decodeUnknownSync(
     Schema.fromJsonString(Schema.Struct({ stream: Schema.optionalKey(Schema.Boolean) })),
   )(Schema.decodeUnknownSync(Schema.String)(init?.body));
   if (!request.stream)
-    return new Response(result.body, { headers: { "content-type": "application/json" } });
+    return new Response(body, { headers: { "content-type": "application/json" } });
   const page = Schema.decodeUnknownSync(
     Schema.fromJsonString(
       Schema.Struct({
@@ -81,7 +66,7 @@ const transport: typeof fetch = async (_url, init) => {
         usage: Schema.optionalKey(Schema.Unknown),
       }),
     ),
-  )(result.body);
+  )(body);
   const chunks = page.choices
     .map((choice, index) => {
       const delta = { ...choice.message };
@@ -113,7 +98,12 @@ function answer(text: string) {
     .join("");
 }
 try {
-  const input = await initial;
+  const input = await gateway.runPromise(Effect.flatMap(WorkerGateway, (service) => service.input));
+  const selection = {
+    provider: input.provider ?? "openai-compatible",
+    model: input.model,
+    reasoningEffort: input.reasoningEffort ?? "default",
+  };
   const results: { id: string; domain: string; score: number }[] = [];
   for (const task of input.split === "smoke"
     ? corpus("validation").slice(0, 2)
@@ -137,9 +127,9 @@ try {
           outputBudget: 2048,
           toolCalling: true,
         },
-        provider: "openai-compatible",
+        provider: selection.provider,
         model: input.model,
-        reasoningEffort: "default",
+        reasoningEffort: selection.reasoningEffort,
       }),
     );
     const compatibleLayer = OpenAICompatibleSettings.layerWith(
@@ -150,10 +140,36 @@ try {
       ProviderRegistry,
       Effect.gen(function* () {
         const settings = yield* OpenAICompatibleSettings;
+        const base = settings.services;
+        const runtime =
+          selection.provider === "openai-compatible"
+            ? base.runtime
+            : createSubscriptionRuntime(
+                selection.provider,
+                {
+                  async *stream(body, signal) {
+                    const result = Schema.decodeUnknownSync(
+                      Schema.fromJsonString(SubscriptionResult),
+                    )(await gatewayRequest("subscription-request", body, signal));
+                    for (const event of result.events) yield event;
+                  },
+                },
+                () => 32000,
+              );
+        const services = {
+          ...base,
+          provider: selection.provider,
+          models: {
+            ...base.models,
+            provider: selection.provider,
+            selected: Effect.succeed(selection),
+          },
+          runtime,
+        };
         return {
-          providers: ["openai-compatible" as const],
-          get: () => Effect.succeed(settings.services),
-          runtime: () => Effect.succeed(settings.services.runtime),
+          providers: [selection.provider],
+          get: () => Effect.succeed(services),
+          runtime: () => Effect.succeed(runtime),
         };
       }),
     ).pipe(Layer.provide(compatibleLayer));
@@ -245,5 +261,6 @@ try {
 } catch {
   emit({ kind: "failure", reason: "worker_failed" });
   process.exitCode = 1;
+} finally {
+  await gateway.dispose();
 }
-lines.close();

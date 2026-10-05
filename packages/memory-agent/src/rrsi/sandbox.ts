@@ -2,10 +2,15 @@ import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { Schema } from "effect";
+import type { ModelGateway } from "./model-gateway.ts";
 import type { HarnessProfile, Measurement } from "./contracts.ts";
 
 const Frame = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal("request"), id: Schema.String, body: Schema.String }),
+  Schema.Struct({
+    kind: Schema.Literals(["request", "subscription-request"]),
+    id: Schema.String,
+    body: Schema.String,
+  }),
   Schema.Struct({
     kind: Schema.Literal("result"),
     results: Schema.Array(
@@ -18,12 +23,8 @@ const Frame = Schema.Union([
   }),
   Schema.Struct({ kind: Schema.Literal("failure"), reason: Schema.String }),
 ]);
-export interface LocalClient {
-  complete: (body: string, signal: AbortSignal) => Promise<string>;
-  configuration: { model: string; baseUrl: string };
-}
 export async function evaluateSandbox(
-  client: LocalClient,
+  client: ModelGateway,
   profile: HarnessProfile,
   split: "evolve" | "validation" | "sealed" | "smoke",
   signal: AbortSignal,
@@ -71,7 +72,9 @@ export async function evaluateSandbox(
   };
   signal.addEventListener("abort", abort, { once: true });
   if (signal.aborted) abort();
-  child.stdin.write(`${JSON.stringify({ profile, split, model: client.configuration.model })}\n`);
+  child.stdin.write(
+    `${JSON.stringify({ kind: "initialize", profile, split, model: client.configuration.model, provider: client.configuration.provider, reasoningEffort: client.configuration.reasoningEffort })}\n`,
+  );
   // Serialize requests at the host boundary. Candidate code has no network or credentials.
   let requests = Promise.resolve();
   reads.on("line", (line) => {
@@ -80,8 +83,14 @@ export async function evaluateSandbox(
       .then(async () => {
         const frame = Schema.decodeUnknownSync(Schema.fromJsonString(Frame))(line.slice(5));
         switch (frame.kind) {
-          case "request": {
-            const raw = await client.complete(frame.body, signal);
+          case "request":
+          case "subscription-request": {
+            if (frame.kind === "subscription-request" && client.protocol !== "subscription")
+              throw new Error("gateway_protocol_mismatch");
+            const raw =
+              frame.kind === "subscription-request" && client.protocol === "subscription"
+                ? await client.subscription(frame.body, signal)
+                : await client.complete(frame.body, signal);
             modelCalls++;
             consume(raw);
             const usage = reportedTokens(raw);

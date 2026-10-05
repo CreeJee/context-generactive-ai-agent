@@ -263,6 +263,7 @@ export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerO
     imageMediaWorkflow,
   );
   const rrsi = Rrsi.layer.pipe(
+    Layer.provide(providerRegistry),
     Layer.provide(harness),
     Layer.provide(compatibleSettings),
     Layer.provide(foundation),
