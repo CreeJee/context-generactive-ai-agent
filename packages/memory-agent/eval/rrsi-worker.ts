@@ -33,6 +33,8 @@ const Reply = Schema.Struct({
   body: Schema.String,
   ok: Schema.Boolean,
 });
+// Request metadata for direct AgentChat.handle calls; the worker has no HTTP server.
+const inProcessChatUrl = "http://rrsi-worker.invalid/api/chat";
 const lines = createInterface({ input: process.stdin });
 const pending = new Map<string, (reply: typeof Reply.Type) => void>();
 let initialize: (value: typeof Input.Type) => void;
@@ -189,7 +191,7 @@ try {
       for (const text of task.turns) {
         const response = await runtime.runPromise(
           services.agent.handle(
-            new Request("http://localhost/api/chat", {
+            new Request(inProcessChatUrl, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
