@@ -32,6 +32,20 @@ const reasons = {
   profile_adopted: "새 하네스를 채택했어요",
   no_admissible_candidate: "채택 기준을 통과한 후보가 없어요",
   evaluation_failed: "평가를 완료하지 못했어요",
+  gateway_request_failed: "모델 요청이 실패했어요. 선택한 모델과 서버 연결을 확인하세요",
+  gateway_memory_limit: "모델 서버의 메모리 한도가 부족해요. 서버 설정이나 모델을 확인하세요",
+  gateway_protocol_mismatch: "평가 연결의 공급자 형식이 맞지 않아요",
+  protocol_invalid: "평가 worker의 응답 형식이 올바르지 않아요",
+  worker_failed: "평가 worker가 실패했어요",
+  evaluation_container_failed: "평가용 Docker 컨테이너가 종료됐어요",
+  evaluation_incomplete: "평가 결과가 완전하지 않아 채택하지 않았어요",
+  user_activity: "원본 또는 평가 앱의 작업을 감지해 중단했어요",
+  time_limit: "설정한 평가 시간이 끝나 중단했어요",
+  manual_stop: "사용자가 평가를 중지했어요",
+  disabled: "자동 실행을 꺼서 진행 중인 평가를 중단했어요",
+  profile_restored: "프로필을 복원해 진행 중인 평가를 중단했어요",
+  app_shutdown: "앱 종료로 평가를 중단했어요",
+  activity_check_failed: "실행 중인 작업을 확인하지 못해 평가를 중단했어요",
   usage_unknown: "모델의 토큰 사용량이 누락됐어요",
   owner_restarted: "앱 재시작으로 중단됐어요",
   model_unavailable: "선택한 모델의 연결과 로그인을 확인하세요",
@@ -60,6 +74,10 @@ async function request(body?: {
       : undefined,
   );
   if (!response.ok) {
+    if (response.status === 404)
+      throw new Error(
+        "실행 중인 서버가 하네스 개선 설정을 지원하지 않아요. 앱 서버를 재시작한 뒤 다시 시도하세요.",
+      );
     const page: { error: string } = await response.json();
     throw new Error(reasonLabel(page.error) ?? "요청을 처리하지 못했어요");
   }
@@ -68,7 +86,17 @@ async function request(body?: {
 export function RrsiSettings() {
   const cache = useQueryClient();
   const [error, setError] = useState<string | null>(null);
-  const { data: status } = useQuery({ queryKey, queryFn: () => request(), refetchInterval: 5000 });
+  const {
+    data: status,
+    error: queryError,
+    isFetching,
+    refetch,
+  } = useQuery({
+    queryKey,
+    queryFn: () => request(),
+    refetchInterval: 5000,
+    retry: false,
+  });
   const mutation = useMutation({
     mutationFn: request,
     onSuccess: () => {
@@ -77,7 +105,25 @@ export function RrsiSettings() {
     },
     onError: (failure) => setError(failure.message),
   });
-  if (!status) return <PageError error={error} />;
+  if (!status)
+    return (
+      <FieldGroup>
+        <PageHeader
+          title="하네스 개선"
+          description="선택한 공급자·모델로 코딩과 기억 과제를 평가해요."
+        />
+        {queryError ? (
+          <>
+            <PageError error={queryError.message} />
+            <Button variant="outline" disabled={isFetching} onClick={() => void refetch()}>
+              다시 시도
+            </Button>
+          </>
+        ) : (
+          <FieldDescription role="status">하네스 설정을 불러오는 중이에요.</FieldDescription>
+        )}
+      </FieldGroup>
+    );
   return (
     <FieldGroup>
       <PageHeader
@@ -172,7 +218,7 @@ export function RrsiSettings() {
           </CollapsibleContent>
         </Collapsible>
       ))}
-      <PageError error={error} />
+      <PageError error={error ?? queryError?.message ?? null} />
     </FieldGroup>
   );
 }

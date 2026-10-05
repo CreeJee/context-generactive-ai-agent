@@ -23,6 +23,15 @@
 
 Effect 가이드문서: 설치된 `node_modules/effect/AGENTS.md`와 그 문서에서 연결하는 예시·소스. 다른 버전의 외부 가이드를 현재 설치본의 API 근거로 사용하지 않는다.
 
+## Typed error와 취소 계약
+
+- 예상 가능한 도메인·저장소·공급자·프로토콜·프로세스 실패는 `Schema.TaggedError`와 리터럴 태그를 가진 reason 모델로 정의한다. 공개 Effect의 오류 채널에 실제 실패 타입을 포함하고, `Error.message` 문자열을 오류 식별이나 분기 계약으로 사용하지 않는다.
+- 내부 로직에서 typed error를 `throw`하는 패턴도 사용하지 않는다. `Effect.fail` 또는 generator의 `return yield* new TypedError(...)`로 실패를 오류 채널에 전달한다. 오류 클래스만 바꾸고 throw/try-catch 비즈니스 흐름을 유지하는 것을 typed-error 전환으로 보지 않는다. 외부 라이브러리의 예외·Promise rejection은 입출력 경계의 `Effect.try`·`tryPromise`·`callback`에서 변환한다.
+- 외부 Promise·callback·파일·DB·HTTP 경계에서 실패를 타입이 있는 오류로 변환한다. `Effect.promise`나 `Effect.sync`로 예상 가능한 실패를 defect에 숨기지 않는다. 결함과 예상 실패를 구분하고, 실패를 `void`나 임의 기본값으로 삼켜 실행 성공으로 보이게 하지 않는다.
+- 오류 처리는 `Effect.catchTag`·`catchReason` 등 설치본의 합성 API로 작성한다. 실제 원인과 실패 단계를 유지하며, 취소 후 발생한 프로세스 종료·연결 오류가 먼저 발생한 원인을 덮어쓰지 않게 한다.
+- 취소와 timeout은 Fiber interruption과 소유자의 Scope 수명으로 처리한다. 사용자 중단·시간 제한 등 제품에 필요한 취소 사유는 명시적으로 기록하되, interruption을 일반 도메인 실패로 바꾸거나 종료 후 작업이 계속되게 하지 않는다.
+- 사용자·로그·영속 기록에는 검증된 오류 코드와 필요한 안전한 메타데이터만 전달한다. 공급자 오류 본문·프롬프트·모델 ID·endpoint·자격증명을 그대로 노출하지 않는다. 불확실한 오류를 메시지 키워드만으로 특정 도메인 원인이라고 추측하지 않는다.
+
 ## 리뷰 가능한 구조와 비동기 수명
 
 - 프로토콜 입출력·디코딩, 도메인 판단, 작업 실행·취소를 책임별로 분리한다. 각 함수와 서비스에서 상태의 소유자, 실패 경로, 자원 종료 경로를 읽을 수 있게 작성한다. 분리는 실제 책임 경계를 기준으로 하고 단순 전달용 계층은 추가하지 않는다.
