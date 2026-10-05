@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { Schema } from "effect";
+import { Option, Schema } from "effect";
 import type { ModelGateway } from "./model-gateway.ts";
 import type { HarnessProfile, Measurement } from "./contracts.ts";
+import { EvaluationFailed, WorkerFailureReason } from "./failure.ts";
+import { CompatibleCompletionRejected } from "../providers/openai-compatible.ts";
 
 const Frame = Schema.Union([
   Schema.Struct({
@@ -22,6 +24,11 @@ const Frame = Schema.Union([
     ),
   }),
   Schema.Struct({ kind: Schema.Literal("failure"), reason: Schema.String }),
+  Schema.Struct({
+    kind: Schema.Literal("progress"),
+    completed: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    total: Schema.Int.check(Schema.isGreaterThan(0)),
+  }),
 ]);
 export async function evaluateSandbox(
   client: ModelGateway,
@@ -30,6 +37,7 @@ export async function evaluateSandbox(
   signal: AbortSignal,
   consume: (raw: string) => void,
   image = "context-agent-rrsi:local",
+  onProgress?: (completed: number, total: number) => void,
 ): Promise<Measurement> {
   const name = `rrsi-${randomUUID()}`;
   const child = spawn(
@@ -63,8 +71,10 @@ export async function evaluateSandbox(
   );
   let totalTokens: number | null = 0;
   let modelCalls = 0;
+  let completedTasks = 0;
+  const expected = split === "evolve" ? 12 : split === "smoke" ? 2 : 6;
   let result: Measurement | null = null;
-  let protocolFailed = false;
+  let failure: EvaluationFailed | null = null;
   const reads = createInterface({ input: child.stdout });
   const abort = () => {
     spawn("docker", ["kill", name], { stdio: "ignore" });
@@ -81,16 +91,32 @@ export async function evaluateSandbox(
     if (!line.startsWith("RRSI:")) return;
     requests = requests
       .then(async () => {
-        const frame = Schema.decodeUnknownSync(Schema.fromJsonString(Frame))(line.slice(5));
+        let frame: typeof Frame.Type;
+        try {
+          frame = Schema.decodeUnknownSync(Schema.fromJsonString(Frame))(line.slice(5));
+        } catch {
+          throw new EvaluationFailed({ reason: "protocol_invalid" });
+        }
         switch (frame.kind) {
           case "request":
           case "subscription-request": {
             if (frame.kind === "subscription-request" && client.protocol !== "subscription")
-              throw new Error("gateway_protocol_mismatch");
-            const raw =
-              frame.kind === "subscription-request" && client.protocol === "subscription"
-                ? await client.subscription(frame.body, signal)
-                : await client.complete(frame.body, signal);
+              throw new EvaluationFailed({ reason: "gateway_protocol_mismatch" });
+            let raw: string;
+            try {
+              raw =
+                frame.kind === "subscription-request" && client.protocol === "subscription"
+                  ? await client.subscription(frame.body, signal)
+                  : await client.complete(frame.body, signal);
+            } catch (error) {
+              throw new EvaluationFailed({
+                reason:
+                  error instanceof CompatibleCompletionRejected &&
+                  error.reason === "memory_capacity_exceeded"
+                    ? "gateway_memory_limit"
+                    : "gateway_request_failed",
+              });
+            }
             modelCalls++;
             consume(raw);
             const usage = reportedTokens(raw);
@@ -100,16 +126,26 @@ export async function evaluateSandbox(
             );
             break;
           }
+          case "progress":
+            if (
+              frame.total !== expected ||
+              frame.completed > expected ||
+              frame.completed < completedTasks
+            )
+              throw new EvaluationFailed({ reason: "protocol_invalid" });
+            completedTasks = frame.completed;
+            onProgress?.(frame.completed, expected);
+            break;
           case "result": {
-            const expected = split === "evolve" ? 12 : split === "smoke" ? 2 : 6;
             if (
               frame.results.length !== expected ||
               new Set(frame.results.map((item) => item.id)).size !== expected
             )
-              throw new Error("incomplete_evaluation");
+              throw new EvaluationFailed({ reason: "evaluation_incomplete" });
             const score = (domain: "coding" | "memory") => {
               const items = frame.results.filter((item) => item.domain === domain);
-              if (items.length !== expected / 2) throw new Error("incomplete_domain");
+              if (items.length !== expected / 2)
+                throw new EvaluationFailed({ reason: "evaluation_incomplete" });
               return items.reduce((sum, item) => sum + item.score, 0) / items.length;
             };
             const coding = score("coding");
@@ -119,32 +155,37 @@ export async function evaluateSandbox(
             break;
           }
           case "failure":
-            throw new Error(frame.reason);
+            // Accept only evaluator categories; arbitrary candidate text never becomes a reason.
+            throw new EvaluationFailed({
+              reason: Option.getOrElse(
+                Schema.decodeUnknownOption(WorkerFailureReason)(frame.reason),
+                () => "worker_failed" as const,
+              ),
+            });
         }
       })
-      .catch(() => {
-        protocolFailed = true;
+      .catch((error: Error) => {
+        failure ??=
+          error instanceof EvaluationFailed
+            ? error
+            : new EvaluationFailed({
+                reason: "protocol_invalid",
+              });
         abort();
       });
   });
   // Do not echo candidate stderr, which may contain arbitrary workspace or request text.
   child.stderr.resume();
   try {
-    await new Promise<void>((resolve, reject) => {
+    const code = await new Promise<number | null>((resolve, reject) => {
       child.once("error", reject);
-      child.once("close", (code) =>
-        code === 0 ? resolve() : reject(new Error("evaluation_container_failed")),
-      );
+      child.once("close", resolve);
     });
     await requests;
-    if (
-      signal.aborted ||
-      protocolFailed ||
-      result === null ||
-      modelCalls === 0 ||
-      totalTokens === 0
-    )
-      throw new Error("evaluation_incomplete");
+    if (failure !== null) throw failure;
+    if (code !== 0) throw new EvaluationFailed({ reason: "evaluation_container_failed" });
+    if (signal.aborted || result === null || modelCalls === 0 || totalTokens === 0)
+      throw new EvaluationFailed({ reason: "evaluation_incomplete" });
     return result;
   } finally {
     signal.removeEventListener("abort", abort);

@@ -13,6 +13,7 @@ import { pinModelGateway, type ModelGateway } from "./model-gateway.ts";
 import { HarnessStore } from "./store.ts";
 import {
   Proposal,
+  type ExperimentProgress,
   CodeProposal,
   type ExperimentRecord,
   type CandidateRecord,
@@ -23,6 +24,8 @@ import {
 import { editBudget, exploration, noiseBand, selectCandidate } from "./selection.ts";
 import { codeContext, prepareCodeCandidate } from "./code-candidate.ts";
 import { evaluateSandbox, reportedTokens } from "./sandbox.ts";
+import { EvaluationFailed, experimentFailure } from "./failure.ts";
+import { activitySql } from "./activity.ts";
 
 export class RrsiFailed extends Schema.TaggedError<RrsiFailed>()("RrsiFailed", {
   reason: Schema.String,
@@ -43,14 +46,7 @@ const completionText = (raw: string) =>
 const Critique = Schema.Struct({ approved: Schema.Boolean });
 const Activity = Schema.Struct({ busy: Schema.Number, latest: Schema.NullOr(Schema.Number) });
 function activity(sqlite: DatabaseSync) {
-  return Schema.decodeUnknownSync(Activity)(
-    sqlite
-      .prepare(`SELECT
-    (SELECT count(*) FROM chat_runs WHERE status IN ('running','interrupted')) +
-    (SELECT count(*) FROM queued_messages WHERE state IN ('waiting','editing')) AS busy,
-    (SELECT max(updated_at) FROM chat_threads) AS latest`)
-      .get(),
-  );
+  return Schema.decodeUnknownSync(Activity)(sqlite.prepare(activitySql).get());
 }
 const mean = (measurements: readonly Measurement[]): Measurement => {
   const average = (field: "score" | "coding" | "memory") =>
@@ -84,7 +80,7 @@ const make = Effect.gen(function* () {
   const repo = process.env.CONTEXT_AGENT_RRSI_REPOSITORY ?? null;
   const touch = () => {
     lastActivity = Date.now();
-    controller?.abort();
+    controller?.abort("user_activity");
   };
   const status = () => ({
     settings: store.settings(),
@@ -122,10 +118,18 @@ const make = Effect.gen(function* () {
   ) => {
     const settings = store.settings();
     const deadline = Date.now() + settings.maxMinutes * 60000;
+    const progress = (
+      phase: (typeof ExperimentProgress.Type)["phase"],
+      completed: number,
+      total: number,
+    ) => {
+      record.progress = { phase, completed, total };
+      store.saveExperiment(record);
+    };
     const consume = (raw: string) => {
       const count = reportedTokens(raw);
       if (count === null) {
-        throw new Error("usage_unknown");
+        throw new EvaluationFailed({ reason: "usage_unknown" });
       }
       record.tokens += count;
       store.saveExperiment(record);
@@ -133,7 +137,9 @@ const make = Effect.gen(function* () {
     const bounded: ModelGateway = {
       ...client,
       complete: async (body, signal) => {
-        if (signal.aborted || Date.now() >= deadline) throw new Error("experiment_stopped");
+        if (Date.now() >= deadline) abort.abort("time_limit");
+        if (signal.aborted || abort.signal.aborted)
+          throw new EvaluationFailed({ reason: "evaluation_incomplete" });
         return client.complete(body, signal);
       },
     };
@@ -152,9 +158,14 @@ const make = Effect.gen(function* () {
       profile: HarnessProfile,
       split: "evolve" | "validation" | "sealed",
       trials = 2,
+      phase: (typeof ExperimentProgress.Type)["phase"] = "candidate_evaluation",
+      completedOffset = 0,
+      total = trials * (split === "evolve" ? 12 : 6),
     ) => {
       const measurements: Measurement[] = [];
-      for (let trial = 0; trial < trials; trial++)
+      const tasksPerTrial = split === "evolve" ? 12 : 6;
+      progress(phase, completedOffset, total);
+      for (let trial = 0; trial < trials; trial++) {
         measurements.push(
           await evaluateSandbox(
             bounded,
@@ -163,25 +174,28 @@ const make = Effect.gen(function* () {
             abort.signal,
             consume,
             record.baselineImage,
+            (completed) =>
+              progress(phase, completedOffset + trial * tasksPerTrial + completed, total),
           ),
         );
+        progress(phase, completedOffset + (trial + 1) * tasksPerTrial, total);
+      }
       return mean(measurements);
     };
-    const timer = setTimeout(() => abort.abort(), settings.maxMinutes * 60000);
+    const timer = setTimeout(() => abort.abort("time_limit"), settings.maxMinutes * 60000);
     try {
       const base = store.get(record.baseVersion);
       let profile = base.profile;
       const baselines: Measurement[] = [];
-      for (let repeat = 0; repeat < 3; repeat++)
-        baselines.push(await evaluate(profile, "evolve", 1));
-      record.baselines = baselines;
-      store.saveExperiment(record);
+      for (let repeat = 0; repeat < 3; repeat++) {
+        baselines.push(await evaluate(profile, "evolve", 1, "baseline", repeat * 12, 36));
+        record.baselines = [...baselines];
+        store.saveExperiment(record);
+      }
       const delta = noiseBand(baselines.map((m) => m.score));
       let incumbent = mean(baselines);
-      if (incumbent.coding === 0 || incumbent.memory === 0) {
-        record.reason = "baseline_quality_failed";
-        return;
-      }
+      // A completed zero-score baseline is precisely a domain that can need improvement.
+      // Infrastructure failures never reach selection; evaluateSandbox fails them explicitly.
       let best = incumbent.score;
       for (let round = 0; round < 2; round++) {
         const admissible: {
@@ -190,6 +204,7 @@ const make = Effect.gen(function* () {
           recordId: string;
         }[] = [];
         for (let index = 0; index < 2; index++) {
+          progress("proposal", 0, 1);
           const proposal = Schema.decodeUnknownSync(Schema.fromJsonString(Proposal))(
             await request(
               [
@@ -201,6 +216,7 @@ const make = Effect.gen(function* () {
               ].join("\n"),
             ),
           );
+          progress("proposal", 1, 1);
           const changed = Object.keys(profile).filter((key) => {
             // SAFETY: keys originate in the fixed decoded profile, not in arbitrary model output.
             const field = key as keyof HarnessProfile;
@@ -236,11 +252,13 @@ const make = Effect.gen(function* () {
           record.candidates.push(candidate);
           store.saveExperiment(record);
           if (decision !== "pending") continue;
+          progress("critique", 0, 1);
           const critique = Schema.decodeUnknownSync(Schema.fromJsonString(Critique))(
             await request(
               `Review candidate diff for task-specific logic, contradictory tool behavior, disabled verification or overridden permissions. Return only {"approved":true|false}. Diff: ${candidate.diff}`,
             ),
           );
+          progress("critique", 1, 1);
           if (!critique.approved) {
             candidate.decision = "critic_rejected";
             store.saveExperiment(record);
@@ -283,8 +301,8 @@ const make = Effect.gen(function* () {
         record.reason = "no_admissible_candidate";
         return;
       }
-      const validationBase = await evaluate(base.profile, "validation");
-      const validationNew = await evaluate(profile, "validation");
+      const validationBase = await evaluate(base.profile, "validation", 2, "validation", 0, 24);
+      const validationNew = await evaluate(profile, "validation", 2, "validation", 12, 24);
       record.validationBase = validationBase;
       record.validationNew = validationNew;
       store.saveExperiment(record);
@@ -303,8 +321,8 @@ const make = Effect.gen(function* () {
       atomic(() => {
         sqlite.prepare("INSERT INTO rrsi_corpus_receipts VALUES ('v1', ?)").run(record.id);
       });
-      const sealedBase = await evaluate(base.profile, "sealed");
-      const sealedNew = await evaluate(profile, "sealed");
+      const sealedBase = await evaluate(base.profile, "sealed", 2, "sealed", 0, 24);
+      const sealedNew = await evaluate(profile, "sealed", 2, "sealed", 12, 24);
       record.sealedBase = sealedBase;
       record.sealedNew = sealedNew;
       store.saveExperiment(record);
@@ -319,15 +337,17 @@ const make = Effect.gen(function* () {
         record.reason = "heldout_rejected";
         return;
       }
-      if (abort.signal.aborted) throw new Error("experiment_stopped");
+      if (abort.signal.aborted) throw new EvaluationFailed({ reason: "evaluation_incomplete" });
       const winner = record.candidates.findLast(
         (candidate) => candidate.decision === "round_winner",
       );
-      store.adopt(profile, record.baseVersion, winner?.commit ?? null);
+      record.adoptedVersionId = store.adopt(profile, record.baseVersion, winner?.commit ?? null).id;
       record.reason = "profile_adopted";
+      store.saveExperiment(record);
       if (repo) {
         // Code is still review-only. An approved profile remains installed if code exploration fails.
         try {
+          progress("code_proposal", 0, 1);
           const proposal = Schema.decodeUnknownSync(Schema.fromJsonString(CodeProposal))(
             await request(
               [
@@ -337,6 +357,7 @@ const make = Effect.gen(function* () {
               ].join("\n"),
             ),
           );
+          progress("code_proposal", 1, 1);
           const candidate: MutableCandidate = {
             kind: "code",
             imageId: null,
@@ -352,16 +373,21 @@ const make = Effect.gen(function* () {
           };
           record.candidates.push(candidate);
           store.saveExperiment(record);
+          progress("critique", 0, 1);
           const critique = Schema.decodeUnknownSync(Schema.fromJsonString(Critique))(
             await request(
               `Review the code replacements for benchmark leakage, altered verification, credentials, changed permissions or inert machinery. Return {"approved":true|false}. ${candidate.diff}`,
             ),
           );
+          progress("critique", 1, 1);
           if (!critique.approved) {
             candidate.decision = "critic_rejected";
             return;
           }
+          progress("code_build", 0, 1);
           const code = await prepareCodeCandidate(repo, record.id, proposal, abort.signal);
+          progress("code_build", 1, 1);
+          progress("code_validation", 0, 12);
           candidate.branch = code.branch;
           candidate.commit = code.commit;
           candidate.diff = code.diff;
@@ -374,6 +400,7 @@ const make = Effect.gen(function* () {
               abort.signal,
               consume,
               code.image,
+              (completed) => progress("code_validation", completed, 12),
             ),
             await evaluateSandbox(
               bounded,
@@ -382,8 +409,10 @@ const make = Effect.gen(function* () {
               abort.signal,
               consume,
               code.image,
+              (completed) => progress("code_validation", 6 + completed, 12),
             ),
           ]);
+          progress("code_validation", 12, 12);
           const selection = selectCandidate(validationNew, candidate.measurement, {
             delta,
             bestScore: validationNew.score,
@@ -417,7 +446,8 @@ const make = Effect.gen(function* () {
           "{{.Id}}",
         ]);
         const image = stdout.trim();
-        if (!/^sha256:[a-f0-9]{64}$/.test(image)) throw new Error("invalid_image");
+        if (!/^sha256:[a-f0-9]{64}$/.test(image))
+          throw new RrsiFailed({ reason: "evaluation_image_unavailable" });
         return image;
       },
       catch: () => new RrsiFailed({ reason: "evaluation_image_unavailable" }),
@@ -455,12 +485,11 @@ const make = Effect.gen(function* () {
       .then(
         () => {
           record.status = abort.signal.aborted ? "cancelled" : "completed";
+          if (abort.signal.aborted) record.reason = experimentFailure(null, abort.signal);
         },
         (error: Error) => {
           record.status = abort.signal.aborted ? "cancelled" : "failed";
-          record.reason = ["usage_unknown", "experiment_stopped"].includes(error.message)
-            ? error.message
-            : "evaluation_failed";
+          record.reason = experimentFailure(error, abort.signal);
         },
       )
       .finally(() => {
@@ -491,7 +520,7 @@ const make = Effect.gen(function* () {
     Effect.sync(() => {
       const interval = setInterval(() => {
         void tick().catch(() => {
-          controller?.abort();
+          controller?.abort("activity_check_failed");
         });
       }, 1000);
       interval.unref();
@@ -501,7 +530,7 @@ const make = Effect.gen(function* () {
       Effect.promise(async () => {
         disposed = true;
         clearInterval(interval);
-        controller?.abort();
+        controller?.abort("app_shutdown");
         await task;
         original?.close();
       }),
@@ -516,18 +545,18 @@ const make = Effect.gen(function* () {
     start,
     touch,
     stop: Effect.sync(() => {
-      controller?.abort();
+      controller?.abort("manual_stop");
       return { stopped: true };
     }),
     configure: (settings: RrsiSettings) =>
       wrap(() => {
         store.configure(settings);
-        if (!settings.enabled) controller?.abort();
+        if (!settings.enabled) controller?.abort("disabled");
         return status();
       }),
     restore: (id: string) =>
       wrap(() => {
-        controller?.abort();
+        controller?.abort("profile_restored");
         store.restore(id);
         return status();
       }),

@@ -67,6 +67,22 @@ export const Candidate = Schema.Struct({
   commit: Schema.NullOr(Schema.String),
 });
 export type CandidateRecord = typeof Candidate.Type;
+export const ExperimentProgress = Schema.Struct({
+  phase: Schema.Literals([
+    "baseline",
+    "proposal",
+    "critique",
+    "candidate_evaluation",
+    "validation",
+    "sealed",
+    "code_proposal",
+    "code_build",
+    "code_validation",
+    "finished",
+  ]),
+  completed: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  total: Schema.Int.check(Schema.isGreaterThan(0)),
+});
 export const Experiment = Schema.Struct({
   id: Schema.String,
   status: Schema.Literals(["running", "completed", "failed", "cancelled"]),
@@ -76,7 +92,9 @@ export const Experiment = Schema.Struct({
   model: Schema.String,
   endpoint: Schema.String,
   baseVersion: Schema.String,
+  adoptedVersionId: Schema.optionalKey(Schema.String),
   baselineImage: Schema.optionalKey(Schema.String),
+  progress: Schema.optionalKey(ExperimentProgress),
   baselines: Schema.optionalKey(Schema.Array(Measurement)),
   validationBase: Schema.optionalKey(Measurement),
   validationNew: Schema.optionalKey(Measurement),
