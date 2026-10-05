@@ -119,12 +119,15 @@ test("restarting an owner records uncertain experiments as cancelled", () => {
     candidates: [],
   };
   store.saveExperiment(record);
+  store.saveExperiment({ ...record, progress: { phase: "baseline", completed: 7, total: 36 } });
+  expect(store.experiments()[0].progress).toEqual({ phase: "baseline", completed: 7, total: 36 });
   expect(() => store.saveExperiment({ ...record, id: "duplicate" })).toThrow();
   const reopened = makeHarnessStore(owner);
   expect(reopened.experiments()[0]).toMatchObject({
     status: "cancelled",
     reason: "owner_restarted",
     tokens: 123,
+    progress: { phase: "baseline", completed: 7, total: 36 },
   });
   expect(reopened.current().id).toBe("baseline");
 });

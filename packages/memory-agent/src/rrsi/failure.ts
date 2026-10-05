@@ -15,6 +15,7 @@ export const EvaluationReason = Schema.Literals([
   "gateway_protocol_mismatch",
   "protocol_invalid",
   "worker_failed",
+  "trial_execution_failed",
   "evaluation_container_failed",
   "evaluation_incomplete",
   "usage_unknown",
@@ -29,6 +30,11 @@ export function experimentFailure(error: Error | null, signal: AbortSignal): str
   if (signal.aborted)
     return Schema.is(CancellationReason)(signal.reason) ? signal.reason : "experiment_stopped";
   if (error instanceof EvaluationFailed) return error.reason;
-  if (error instanceof Error && error.message === "usage_unknown") return "usage_unknown";
   return "evaluation_failed";
 }
+
+export const WorkerFailureReason = Schema.Literals([
+  "trial_execution_failed",
+  "evaluation_incomplete",
+  "protocol_invalid",
+]);

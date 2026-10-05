@@ -92,6 +92,7 @@ export const Experiment = Schema.Struct({
   model: Schema.String,
   endpoint: Schema.String,
   baseVersion: Schema.String,
+  adoptedVersionId: Schema.optionalKey(Schema.String),
   baselineImage: Schema.optionalKey(Schema.String),
   progress: Schema.optionalKey(ExperimentProgress),
   baselines: Schema.optionalKey(Schema.Array(Measurement)),

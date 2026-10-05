@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { Schema } from "effect";
+import { Option, Schema } from "effect";
 import type { ModelGateway } from "./model-gateway.ts";
 import type { HarnessProfile, Measurement } from "./contracts.ts";
-import { EvaluationFailed } from "./failure.ts";
+import { EvaluationFailed, WorkerFailureReason } from "./failure.ts";
 import { CompatibleCompletionRejected } from "../providers/openai-compatible.ts";
 
 const Frame = Schema.Union([
@@ -24,6 +24,11 @@ const Frame = Schema.Union([
     ),
   }),
   Schema.Struct({ kind: Schema.Literal("failure"), reason: Schema.String }),
+  Schema.Struct({
+    kind: Schema.Literal("progress"),
+    completed: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    total: Schema.Int.check(Schema.isGreaterThan(0)),
+  }),
 ]);
 export async function evaluateSandbox(
   client: ModelGateway,
@@ -32,6 +37,7 @@ export async function evaluateSandbox(
   signal: AbortSignal,
   consume: (raw: string) => void,
   image = "context-agent-rrsi:local",
+  onProgress?: (completed: number, total: number) => void,
 ): Promise<Measurement> {
   const name = `rrsi-${randomUUID()}`;
   const child = spawn(
@@ -65,6 +71,8 @@ export async function evaluateSandbox(
   );
   let totalTokens: number | null = 0;
   let modelCalls = 0;
+  let completedTasks = 0;
+  const expected = split === "evolve" ? 12 : split === "smoke" ? 2 : 6;
   let result: Measurement | null = null;
   let failure: EvaluationFailed | null = null;
   const reads = createInterface({ input: child.stdout });
@@ -118,8 +126,17 @@ export async function evaluateSandbox(
             );
             break;
           }
+          case "progress":
+            if (
+              frame.total !== expected ||
+              frame.completed > expected ||
+              frame.completed < completedTasks
+            )
+              throw new EvaluationFailed({ reason: "protocol_invalid" });
+            completedTasks = frame.completed;
+            onProgress?.(frame.completed, expected);
+            break;
           case "result": {
-            const expected = split === "evolve" ? 12 : split === "smoke" ? 2 : 6;
             if (
               frame.results.length !== expected ||
               new Set(frame.results.map((item) => item.id)).size !== expected
@@ -138,7 +155,13 @@ export async function evaluateSandbox(
             break;
           }
           case "failure":
-            throw new EvaluationFailed({ reason: "worker_failed" });
+            // Accept only evaluator categories; arbitrary candidate text never becomes a reason.
+            throw new EvaluationFailed({
+              reason: Option.getOrElse(
+                Schema.decodeUnknownOption(WorkerFailureReason)(frame.reason),
+                () => "worker_failed" as const,
+              ),
+            });
         }
       })
       .catch((error: Error) => {
@@ -146,10 +169,7 @@ export async function evaluateSandbox(
           error instanceof EvaluationFailed
             ? error
             : new EvaluationFailed({
-                reason:
-                  error instanceof Error && error.message === "usage_unknown"
-                    ? "usage_unknown"
-                    : "protocol_invalid",
+                reason: "protocol_invalid",
               });
         abort();
       });

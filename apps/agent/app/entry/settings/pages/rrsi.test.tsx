@@ -2,6 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ok } from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, expect, test, vi } from "vite-plus/test";
+import { AppliedSettings, ExperimentSummary } from "./rrsi-summary";
+import type { ExperimentRecord, HarnessVersion } from "memory-agent";
 import { RrsiSettings } from "./rrsi";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -52,10 +54,11 @@ test("high evaluation cost is not presented as an applied improvement", () => {
       </QueryClientProvider>,
     );
     expect(page).toContain("프로젝트 공통");
-    expect(page).toContain("별도의 코딩·기억 과제");
+    expect(page).toContain("별도로 만든 코딩·기억 과제");
     expect(page).toContain("500,000");
     expect(page).toContain("아직 적용된 개선이 없어요");
-    expect(page).toContain("현재 설정의 기본 동작을 평가");
+    expect(page).toContain("정확한 완료 개수를 알 수 없어요");
+    expect(page).toContain("이 평가에서 적용된 변경은 없어요");
     expect(page).toContain("토큰 사용량은 평가에 든 비용");
   } finally {
     client.clear();
@@ -99,4 +102,73 @@ test("a failed query can recover and display experiment controls", async () => {
   } finally {
     client.clear();
   }
+});
+
+const baseline: HarnessVersion = {
+  id: "baseline",
+  parentId: null,
+  kind: "profile",
+  sourceCommit: null,
+  artifactHash: "fixture",
+  createdAt: 0,
+  profile: {
+    rolePrompt: "",
+    memoryToolDescription: "",
+    retrievalLeadLimit: 5,
+    retrievalTokenLimit: 600,
+  },
+};
+
+test("adopted settings show concrete changes, previous instructions and Goal scope", () => {
+  const current: HarnessVersion = {
+    ...baseline,
+    id: "adopted",
+    parentId: "baseline",
+    profile: {
+      rolePrompt: "검증 결과를 확인하세요.",
+      memoryToolDescription: "출처를 함께 읽으세요.",
+      retrievalLeadLimit: 3,
+      retrievalTokenLimit: 400,
+    },
+  };
+  const page = renderToStaticMarkup(
+    <AppliedSettings current={current} versions={[current, baseline]} />,
+  );
+  expect(page).toContain("5개 → 3개");
+  expect(page).toContain("600토큰 → 400토큰");
+  expect(page).toContain("검증 결과를 확인하세요.");
+  expect(page).toContain("이전 설정과 지침 비교");
+  expect(page).toContain("진행 중인 Goal은 시작할 때의 설정");
+  expect(page).toContain("일반 채팅은 기본 설정");
+});
+
+test("a cancelled evaluation retains its last task checkpoint without implying adoption", () => {
+  const experiment: ExperimentRecord = {
+    id: "cancelled",
+    status: "cancelled",
+    startedAt: 0,
+    finishedAt: 1,
+    model: "fixture",
+    endpoint: "fixture",
+    baseVersion: "baseline",
+    tokens: 500000,
+    candidates: [],
+    reason: "time_limit",
+    progress: { phase: "baseline", completed: 7, total: 36 },
+  };
+  const page = renderToStaticMarkup(
+    <ExperimentSummary experiment={experiment} reason="설정한 평가 시간이 끝나 중단했어요" />,
+  );
+  expect(page).toContain("7/36 과제 완료");
+  expect(page).toContain("마지막 기록된 단계");
+  expect(page).toContain("이 평가에서 적용된 변경은 없어요");
+  expect(page).toContain("설정한 평가 시간이 끝나");
+  const adopted = renderToStaticMarkup(
+    <ExperimentSummary
+      experiment={{ ...experiment, adoptedVersionId: "adopted" }}
+      reason="설정한 평가 시간이 끝나 중단했어요"
+    />,
+  );
+  expect(adopted).toContain("검증된 설정을 채택했어요");
+  expect(adopted).not.toContain("적용된 변경은 없어요");
 });

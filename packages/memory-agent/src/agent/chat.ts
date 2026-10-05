@@ -1050,7 +1050,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
       let claimedNext: string | null = null;
       let runAdapterToRelease: RunTextAdapter | null = null;
       return Effect.gen(function* () {
-        rrsi.touch();
         const { projectId, agent: external, title } = yield* sessions.get(sessionId);
         // Sending, approving and answering all come here; a read-only page may do none of them.
         if (
@@ -1060,6 +1059,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
           return inUse();
         // Sessions reference projects by foreign key, so a missing project is a broken store.
         const project = yield* projects.get(projectId);
+        if (project.hiddenAt === null) rrsi.touch();
         const reportSource = reportBinding(sqlite, sessionId, projectId);
         // A reporting conversation is always local, using the user's selected model. An external
         // agent or its full project toolset must never be used to inspect the source session.

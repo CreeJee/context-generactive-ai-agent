@@ -12,7 +12,7 @@ uses different domains and models; its reported benchmark gains do not describe 
 - `vp run dev:rrsi` uses `.rrsi-local/runtime`, web 5174 and backend 5181.
   The authorized local connection config and endpoint-bound keyring are reused;
   conversation DBs and OAuth accounts are separate. Local files are ignored by Git.
-- Settings → 하네스 개선 exposes idle scheduling, start/stop, history, candidate
+- Settings → 동작 개선 실험 exposes idle scheduling, start/stop, history, candidate
   diffs/commits/artifact IDs and profile rollback.
 - Immutable profile versions are pinned to Goals. Adoption affects new Goals;
   restoring the current profile does not rewrite existing Goal pins.
@@ -65,8 +65,12 @@ The current model answered the connection probe, but the Docker smoke evaluation
 was rejected on its third request: the provider's structured response estimated
 56.5 GiB against a 52.5 GiB memory limit. Two replies reported 13,703 tokens before
 failure. A full evolve attempt also failed at the gateway before recording usage.
-No profile or code candidate was adopted. Further live evaluation was stopped at
-the user's request; changing the model or server limits remains an operator action.
+No profile or code candidate was adopted. The user subsequently resumed evaluation
+without parallel model work. The 30-minute run ended after 1,801 seconds with
+979,708 reported tokens, `time_limit`, zero proposals and no adopted version. The
+old executor persisted baselines only after all three repeats; the missing record
+does not identify how many individual tasks completed. Changing the model or
+server limits remains an operator action.
 
 Experiment records now distinguish user activity, deadlines, manual stop, disabled
 scheduling, profile restore and shutdown from gateway, protocol, worker and
@@ -110,3 +114,53 @@ not an authenticated paid-provider run or measured quality improvement.
 - Code candidates remain quarantined review artifacts. Reusable corpus renewal,
   production embedding evaluation and an end-to-end measured improvement are
   required before treating this as a validated automatic-improvement system.
+
+## Optimization-path audit
+
+The initial calibration is three repeats of 12 tasks (36 tasks / 90 user turns),
+before the first proposal. A deadline during this phase means that model inference
+ran but the optimization loop did not reach proposal/selection. Each completed
+trial and baseline repeat is now checkpointed, with phase and task counts; an
+adopted version is recorded independently of optional code exploration.
+
+The evaluator previously treated chat HTTP errors, streamed `RUN_ERROR`, and some
+infrastructure exceptions as zero-score trials. The stream now requires
+`RUN_FINISHED` and propagates execution/protocol/incomplete errors as typed suite
+failures. Completed coding verification may still legitimately score zero.
+
+Control-flow tests exercise the real RRSI service and version store with scripted
+models/measurements: proposal, critic, selection, validation, sealed evaluation,
+adoption, Goal pins and lease release. A memory regression at validation prevents
+adoption and sealed-corpus consumption. This verifies the pipeline, not live model
+quality. The updated real Docker worker also completed the scripted smoke protocol
+for all three providers (seven calls / 77 tokens each).
+
+After the user closed other model work, the updated real Docker evaluator was
+retried with a two-task / 240-second smoke deadline. Its first request was rejected
+with structured `memory_capacity_exceeded` / HTTP 400 after 2 seconds: one attempt,
+zero replies, zero reported tokens and zero completed tasks. The earlier retry
+had the same failure. No additional full evaluation or adoption was performed.
+
+A reproduced optimizer bug stopped proposal generation whenever either completed
+baseline domain scored zero. This rejected precisely the domain needing an
+improvement. The early exit was removed after a failing regression test; valid
+zero-score baselines now reach proposal/selection/validation, while infrastructure
+failures still invalidate the suite. Adoption thresholds and domain-regression
+guards remain in force. The verified improvement in this test is scripted, not a
+live-model performance claim.
+
+## Existing-memory boundary
+
+Cloning source does not populate the evaluator's memory. Every corpus task creates
+an empty temporary storage directory, registers a synthetic project/session, and
+records its own test conversation through AgentChat. The original DB is opened
+read-only solely for activity/idle checks; it is not queried by the evaluator.
+Docker's per-file ignore excludes `.rrsi-local`, so the independent app's runtime
+store is not baked into the image either.
+
+Memory tasks evaluate recording/correction/retrieval of freshly created synthetic
+conversation evidence with deterministic test embedding/morph implementations.
+They do not establish improvement on the user's accumulated project memory,
+cross-session history, real embeddings or production retrieval distribution. A
+separate, isolated existing-memory snapshot with held-out questions would be needed
+to validate that behavior; no such snapshot has been copied in this work.

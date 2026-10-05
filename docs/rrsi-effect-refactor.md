@@ -55,5 +55,6 @@ checks and the real scripted Docker protocol before any new authenticated trial.
 - [x] Diagnose settings blank page and expose loading/query errors/retry.
 - [ ] Convert model, process and store boundaries to typed Effects.
 - [ ] Extract evolution and replace service task/controller/timers with scoped Fibers.
-- [ ] Convert evaluator lifecycle; audit generic Error and arbitrary runtime calls.
+- [x] Convert evaluator trials to scoped Effects and preserve streamed/infrastructure failures.
+- [ ] Finish host model/store/sandbox/service migration and audit remaining generic Error/runtime calls.
 - [ ] Verify contracts, build worker image, update PR with measured outcomes.
