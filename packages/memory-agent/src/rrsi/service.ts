@@ -23,6 +23,7 @@ import {
 import { editBudget, exploration, noiseBand, selectCandidate } from "./selection.ts";
 import { codeContext, prepareCodeCandidate } from "./code-candidate.ts";
 import { evaluateSandbox, reportedTokens } from "./sandbox.ts";
+import { experimentFailure } from "./failure.ts";
 
 export class RrsiFailed extends Schema.TaggedError<RrsiFailed>()("RrsiFailed", {
   reason: Schema.String,
@@ -84,7 +85,7 @@ const make = Effect.gen(function* () {
   const repo = process.env.CONTEXT_AGENT_RRSI_REPOSITORY ?? null;
   const touch = () => {
     lastActivity = Date.now();
-    controller?.abort();
+    controller?.abort("user_activity");
   };
   const status = () => ({
     settings: store.settings(),
@@ -167,7 +168,7 @@ const make = Effect.gen(function* () {
         );
       return mean(measurements);
     };
-    const timer = setTimeout(() => abort.abort(), settings.maxMinutes * 60000);
+    const timer = setTimeout(() => abort.abort("time_limit"), settings.maxMinutes * 60000);
     try {
       const base = store.get(record.baseVersion);
       let profile = base.profile;
@@ -455,12 +456,11 @@ const make = Effect.gen(function* () {
       .then(
         () => {
           record.status = abort.signal.aborted ? "cancelled" : "completed";
+          if (abort.signal.aborted) record.reason = experimentFailure(null, abort.signal);
         },
         (error: Error) => {
           record.status = abort.signal.aborted ? "cancelled" : "failed";
-          record.reason = ["usage_unknown", "experiment_stopped"].includes(error.message)
-            ? error.message
-            : "evaluation_failed";
+          record.reason = experimentFailure(error, abort.signal);
         },
       )
       .finally(() => {
@@ -491,7 +491,7 @@ const make = Effect.gen(function* () {
     Effect.sync(() => {
       const interval = setInterval(() => {
         void tick().catch(() => {
-          controller?.abort();
+          controller?.abort("activity_check_failed");
         });
       }, 1000);
       interval.unref();
@@ -501,7 +501,7 @@ const make = Effect.gen(function* () {
       Effect.promise(async () => {
         disposed = true;
         clearInterval(interval);
-        controller?.abort();
+        controller?.abort("app_shutdown");
         await task;
         original?.close();
       }),
@@ -516,18 +516,18 @@ const make = Effect.gen(function* () {
     start,
     touch,
     stop: Effect.sync(() => {
-      controller?.abort();
+      controller?.abort("manual_stop");
       return { stopped: true };
     }),
     configure: (settings: RrsiSettings) =>
       wrap(() => {
         store.configure(settings);
-        if (!settings.enabled) controller?.abort();
+        if (!settings.enabled) controller?.abort("disabled");
         return status();
       }),
     restore: (id: string) =>
       wrap(() => {
-        controller?.abort();
+        controller?.abort("profile_restored");
         store.restore(id);
         return status();
       }),

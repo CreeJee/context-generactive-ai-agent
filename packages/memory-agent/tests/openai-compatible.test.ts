@@ -14,6 +14,7 @@ import { sqliteChatPersistence } from "../src/chat-state/persistence.ts";
 import { migrations } from "../src/db/migrations.ts";
 import {
   makeOpenAICompatibleSettings,
+  CompatibleCompletionRejected,
   validateCompatibleConfiguration,
 } from "../src/providers/openai-compatible.ts";
 
@@ -49,6 +50,47 @@ function fixture(fetcher?: typeof fetch, initial: Settings = {}) {
   };
 }
 describe("OpenAI compatible settings", () => {
+  it.each([
+    [100, 80, "memory_capacity_exceeded"],
+    [60, 80, "request_rejected"],
+    [-100, 80, "request_rejected"],
+  ] as const)(
+    "classifies structured capacity rejection (%s / %s) without response text",
+    async (estimated, limit, reason) => {
+      const privateText = "private endpoint, model, request and credential";
+      const f = fixture(
+        async () =>
+          Response.json(
+            {
+              error: {
+                message: privateText,
+                estimated_bytes: estimated,
+                limit_bytes: limit,
+              },
+            },
+            { status: 400 },
+          ),
+        { openaiCompatible: configuration },
+      );
+      const client = await Effect.runPromise(f.api.pinRrsiClient);
+      const failure = await client
+        .complete('{"messages":[]}', new AbortController().signal)
+        .catch((error: Error) => error);
+      expect(failure).toBeInstanceOf(CompatibleCompletionRejected);
+      expect(failure).toMatchObject({ status: 400, reason });
+      expect(JSON.stringify(failure)).not.toContain(privateText);
+    },
+  );
+
+  it("keeps unstructured provider rejections generic", async () => {
+    const f = fixture(async () => new Response("private provider traceback", { status: 502 }), {
+      openaiCompatible: configuration,
+    });
+    const client = await Effect.runPromise(f.api.pinRrsiClient);
+    await expect(
+      client.complete('{"messages":[]}', new AbortController().signal),
+    ).rejects.toMatchObject({ status: 502, reason: "request_rejected" });
+  });
   it("pins remote compatible endpoints and honors the configured output budget", async () => {
     const seen: string[] = [];
     const f = fixture(

@@ -59,6 +59,21 @@ Goal pins cover profiles, not separate executable versions of previously merged 
 
 ## Verification and current limits
 
+Post-merge live validation refreshed the independent clone's compatible settings
+from the authorized original configuration after the stale model returned HTTP 404.
+The current model answered the connection probe, but the Docker smoke evaluation
+was rejected on its third request: the provider's structured response estimated
+56.5 GiB against a 52.5 GiB memory limit. Two replies reported 13,703 tokens before
+failure. A full evolve attempt also failed at the gateway before recording usage.
+No profile or code candidate was adopted. Further live evaluation was stopped at
+the user's request; changing the model or server limits remains an operator action.
+
+Experiment records now distinguish user activity, deadlines, manual stop, disabled
+scheduling, profile restore and shutdown from gateway, protocol, worker and
+container failures. Valid structured memory-capacity rejection is recorded as
+`gateway_memory_limit`. Arbitrary provider error text is never persisted, and
+container termination preserves the preceding gateway/cancellation category.
+
 Provider expansion checks passed: `vp check`, app/package type checks, application
 bundle and Docker build. The full suite ran 175 files: 171 passed, with nine
 failures and three asynchronous errors in four worker-heavy files. Follow-up

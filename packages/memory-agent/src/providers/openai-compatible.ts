@@ -15,6 +15,20 @@ import { CompatibleModelPage, readCompatibleReasoning } from "./compatible-model
 export class OpenAICompatibleFailed extends Data.TaggedError("OpenAICompatibleFailed")<{
   readonly operation: "validation" | "keychain" | "partial" | "test" | "models";
 }> {}
+export class CompatibleCompletionRejected extends Data.TaggedError("CompatibleCompletionRejected")<{
+  readonly status: number;
+  readonly reason: "memory_capacity_exceeded" | "request_rejected";
+}> {}
+const decodeMemoryCapacity = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      error: Schema.Struct({
+        estimated_bytes: Schema.Finite.check(Schema.isGreaterThan(0)),
+        limit_bytes: Schema.Finite.check(Schema.isGreaterThan(0)),
+      }),
+    }),
+  ),
+);
 export interface CompatibleKeyStore {
   get(): Promise<string | null>;
   set(value: string | null): Promise<void>;
@@ -304,16 +318,14 @@ export function makeOpenAICompatibleSettings(
         });
         if (!response.ok) {
           const errorBody = await response.text();
-          const hints = [
-            "tool_choice",
-            "max_tokens",
-            "model",
-            "temperature",
-            "reasoning",
-            "chat_template",
-            "enable_thinking",
-          ].filter((field) => errorBody.includes(field));
-          throw new Error(`local_completion_failed:${response.status}:${hints.join(",")}`);
+          const capacity = Option.getOrUndefined(decodeMemoryCapacity(errorBody));
+          throw new CompatibleCompletionRejected({
+            status: response.status,
+            reason:
+              capacity && capacity.error.estimated_bytes > capacity.error.limit_bytes
+                ? "memory_capacity_exceeded"
+                : "request_rejected",
+          });
         }
         return response.text();
       },
