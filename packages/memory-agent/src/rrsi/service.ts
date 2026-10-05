@@ -24,6 +24,7 @@ import { editBudget, exploration, noiseBand, selectCandidate } from "./selection
 import { codeContext, prepareCodeCandidate } from "./code-candidate.ts";
 import { evaluateSandbox, reportedTokens } from "./sandbox.ts";
 import { experimentFailure } from "./failure.ts";
+import { activitySql } from "./activity.ts";
 
 export class RrsiFailed extends Schema.TaggedError<RrsiFailed>()("RrsiFailed", {
   reason: Schema.String,
@@ -44,14 +45,7 @@ const completionText = (raw: string) =>
 const Critique = Schema.Struct({ approved: Schema.Boolean });
 const Activity = Schema.Struct({ busy: Schema.Number, latest: Schema.NullOr(Schema.Number) });
 function activity(sqlite: DatabaseSync) {
-  return Schema.decodeUnknownSync(Activity)(
-    sqlite
-      .prepare(`SELECT
-    (SELECT count(*) FROM chat_runs WHERE status IN ('running','interrupted')) +
-    (SELECT count(*) FROM queued_messages WHERE state IN ('waiting','editing')) AS busy,
-    (SELECT max(updated_at) FROM chat_threads) AS latest`)
-      .get(),
-  );
+  return Schema.decodeUnknownSync(Activity)(sqlite.prepare(activitySql).get());
 }
 const mean = (measurements: readonly Measurement[]): Measurement => {
   const average = (field: "score" | "coding" | "memory") =>

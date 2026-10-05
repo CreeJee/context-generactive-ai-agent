@@ -45,7 +45,7 @@ const settingsGroups = [
       { value: "embedding", label: "임베딩", icon: CpuIcon },
     ],
   },
-  { label: "개선", pages: [{ value: "rrsi", label: "하네스 개선", icon: BotIcon }] },
+  { label: "개선", pages: [{ value: "rrsi", label: "동작 개선 실험", icon: BotIcon }] },
   { label: "지침", pages: [{ value: "skills", label: "Skills", icon: BookOpenIcon }] },
 ] as const;
 

@@ -22,6 +22,7 @@ export const EvaluationReason = Schema.Literals([
 export class EvaluationFailed extends Schema.TaggedError<EvaluationFailed>()("EvaluationFailed", {
   reason: EvaluationReason,
 }) {}
+export class ActivityFailed extends Schema.TaggedError<ActivityFailed>()("ActivityFailed", {}) {}
 
 // Persist only known categories. Provider errors and abort reasons may contain credentials or text.
 export function experimentFailure(error: Error | null, signal: AbortSignal): string {

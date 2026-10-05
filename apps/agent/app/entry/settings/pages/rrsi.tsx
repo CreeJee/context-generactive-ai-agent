@@ -24,6 +24,24 @@ interface Status {
   configuredRepository: boolean;
 }
 const queryKey = ["settings", "rrsi"];
+const phaseLabels = {
+  baseline: "현재 설정의 기본 동작 평가",
+  proposal: "개선 후보 생성",
+  critique: "후보의 적합성 검토",
+  candidate_evaluation: "개선 후보 평가",
+  validation: "별도 과제로 개선 효과 확인",
+  sealed: "최종 검증",
+  code_proposal: "코드 변경 후보 생성",
+  code_build: "코드 후보 빌드와 검사",
+  code_validation: "코드 후보 평가",
+  finished: "평가 종료",
+};
+const statusLabels = {
+  running: "평가 중",
+  completed: "평가 종료",
+  failed: "평가 실패",
+  cancelled: "평가 중단",
+};
 const reasons = {
   baseline_quality_failed: "기본 하네스가 코딩·기억 과제를 해결하지 못했어요",
   evaluation_image_unavailable: "평가용 Docker 이미지를 먼저 빌드하세요",
@@ -54,9 +72,46 @@ const reasons = {
   experiment_running: "이미 실험 중이에요",
   validation_rejected: "검증 과제를 통과하지 못했어요",
   heldout_rejected: "최종 평가를 통과하지 못했어요",
+  edit_budget: "변경 범위를 초과했어요",
+  task_leakage: "평가 답을 직접 포함하는 후보라 제외했어요",
+  critic_rejected: "적합성 검토를 통과하지 못했어요",
+  admissible: "채택 기준을 통과한 후보예요",
+  round_winner: "이번 비교에서 선택된 후보예요",
+  domain_regression: "코딩 또는 기억 성능이 낮아져 제외했어요",
+  within_noise_without_savings: "뚜렷한 성능 향상이나 비용 감소가 없어요",
+  below_best_floor: "기존 최고 성능보다 낮아 제외했어요",
+  cost_growth: "성능 향상에 비해 평가 비용이 많이 늘었어요",
+  code_validating: "코드 후보를 검사하고 있어요",
+  pending: "평가를 기다리고 있어요",
 };
 function reasonLabel(reason: string) {
   return Object.entries(reasons).find(([key]) => key === reason)?.[1];
+}
+function ExperimentSummary({ experiment }: { experiment: ExperimentRecord }) {
+  const { status, tokens, progress, baselines, reason } = experiment;
+  return (
+    <div className="flex flex-col gap-2">
+      <h4 className="text-sm font-medium">
+        {status === "running" ? "진행 중인 평가" : "최근 평가 결과"}
+      </h4>
+      <p className="text-sm">
+        {statusLabels[status]} · {tokens.toLocaleString()} 토큰 사용
+      </p>
+      <FieldDescription>
+        {status === "running"
+          ? progress
+            ? `${phaseLabels[progress.phase]} · ${progress.completed}/${progress.total} 완료`
+            : baselines?.length
+              ? "기본 평가를 마치고 개선 후보를 검토하고 있어요."
+              : "현재 설정의 기본 동작을 평가하고 있어요. 아직 개선이 적용되지 않았어요."
+          : (reasonLabel(reason) ?? reason)}
+      </FieldDescription>
+      <FieldDescription>
+        토큰 사용량은 평가에 든 비용이에요. 많이 사용했다는 것만으로 성능이 좋아졌다는 뜻은
+        아니에요. 검증을 통과한 후보가 있을 때만 설정이 바뀌어요.
+      </FieldDescription>
+    </div>
+  );
 }
 async function request(body?: {
   action: string;
@@ -109,8 +164,8 @@ export function RrsiSettings() {
     return (
       <FieldGroup>
         <PageHeader
-          title="하네스 개선"
-          description="선택한 공급자·모델로 코딩과 기억 과제를 평가해요."
+          title="동작 개선 실험"
+          description="에이전트의 작업 지침과 기억 검색 설정을 별도 과제로 평가해요."
         />
         {queryError ? (
           <>
@@ -120,17 +175,27 @@ export function RrsiSettings() {
             </Button>
           </>
         ) : (
-          <FieldDescription role="status">하네스 설정을 불러오는 중이에요.</FieldDescription>
+          <FieldDescription role="status">개선 실험 설정을 불러오는 중이에요.</FieldDescription>
         )}
       </FieldGroup>
     );
   return (
     <FieldGroup>
       <PageHeader
-        title="하네스 개선"
+        title="동작 개선 실험"
         badge={<Badge variant="secondary">{status.running ? "실험 중" : "대기"}</Badge>}
-        description="선택한 공급자·모델로 코딩과 기억 과제를 평가해요. 검증된 프롬프트·설정은 새 Goal에 적용하고, 코드 변경은 후보 브랜치에서 검토하고 수동으로 반영해요."
+        description="프로젝트 공통으로 쓰는 작업 지침과 기억 검색 설정의 개선 후보를 찾는 실험이에요. 별도의 코딩·기억 과제로 현재 설정과 비교하고, 검증을 통과한 설정을 새 Goal에 적용해요."
       />
+      <FieldDescription>
+        진행 중인 Goal은 시작할 때의 설정을 유지해요. 보관된 프로젝트는 작업 감지에서 제외해요. 코드
+        변경 후보는 검토 후 수동으로 반영해요.
+      </FieldDescription>
+      <FieldDescription>
+        {status.current.id === "baseline"
+          ? "현재 적용 상태: 아직 적용된 개선이 없어요. 기본 설정을 사용하고 있어요."
+          : `현재 적용 상태: 검증된 설정 ${status.current.id.slice(0, 8)}을 새 Goal에 사용해요.`}
+      </FieldDescription>
+      {status.experiments[0] && <ExperimentSummary experiment={status.experiments[0]} />}
       <Field orientation="horizontal">
         <FieldContent>
           <FieldLabel htmlFor="rrsi-enabled">유휴 시간에 자동 실행</FieldLabel>
@@ -157,7 +222,7 @@ export function RrsiSettings() {
           disabled={mutation.isPending || status.running}
           onClick={() => mutation.mutate({ action: "start" })}
         >
-          지금 실험
+          평가 시작
         </Button>
         <Button
           variant="outline"
@@ -168,15 +233,14 @@ export function RrsiSettings() {
         </Button>
       </div>
       <FieldDescription>
-        현재 버전:{" "}
-        {status.current.id === "baseline" ? "기본 하네스" : status.current.id.slice(0, 8)}. 기존
-        Goal은 고정된 버전을 유지해요.
+        현재 버전: {status.current.id === "baseline" ? "기본 설정" : status.current.id.slice(0, 8)}.
+        기존 Goal은 고정된 버전을 유지해요.
       </FieldDescription>
       {status.versions
         .filter((version) => version.id !== status.current.id)
         .map((version) => (
           <div key={version.id} className="flex items-center justify-between gap-2">
-            <span>{version.id === "baseline" ? "기본 하네스" : version.id.slice(0, 8)}</span>
+            <span>{version.id === "baseline" ? "기본 설정" : version.id.slice(0, 8)}</span>
             <Button
               variant="outline"
               size="sm"
@@ -190,7 +254,7 @@ export function RrsiSettings() {
       {status.experiments.map((experiment) => (
         <Collapsible key={experiment.id}>
           <CollapsibleTrigger render={<Button variant="ghost" />}>
-            {new Date(experiment.startedAt).toLocaleString()} · {experiment.status} ·{" "}
+            {new Date(experiment.startedAt).toLocaleString()} · {statusLabels[experiment.status]} ·{" "}
             {experiment.tokens.toLocaleString()} 토큰
           </CollapsibleTrigger>
           <CollapsibleContent>
