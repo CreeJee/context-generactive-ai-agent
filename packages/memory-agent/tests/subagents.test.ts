@@ -1,4 +1,6 @@
 import { Effect, Schema } from "effect";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { Database } from "../src/db/database.ts";
@@ -112,7 +114,8 @@ describe("subagents", () => {
   });
 
   test("a one-off child gets only the task, the parent's tools minus subagents, and reports back", async () => {
-    const { send, subagents, session, state, provider, runtime } = await subagentSetup();
+    const { send, subagents, session, state, provider, runtime, project } = await subagentSetup();
+    writeFileSync(join(project.root, "AGENTS.md"), "ROOT INSTRUCTIONS FOR EVERY AGENT");
 
     const answer = await send('call run_subagent {"task":"list what matters"}');
     expect(answer).toContain("child done: list what matters (earlier user messages: 0)");
@@ -131,6 +134,8 @@ describe("subagents", () => {
       ),
     );
     expect(parentStart?.toolNames).toContain("run_subagent");
+    expect(parentStart?.systemPrompts.join("\n")).toContain("ROOT INSTRUCTIONS FOR EVERY AGENT");
+    expect(childStart?.systemPrompts.join("\n")).toContain("ROOT INSTRUCTIONS FOR EVERY AGENT");
     // No nesting, and nothing the parent does not have.
     expect(childStart?.toolNames).not.toContain("run_subagent");
     expect(childStart?.toolNames).not.toContain("message_subagent");

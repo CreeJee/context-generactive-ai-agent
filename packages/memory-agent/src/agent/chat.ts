@@ -1,4 +1,5 @@
 import { SchemaTransformation } from "effect";
+import { projectInstructions } from "./project-instructions.ts";
 import { workflowActions } from "../workflow/actions.ts";
 import { createGoalNativeImplementations } from "./goal-native-implementation.ts";
 import { OwnerNativeArtifacts } from "./owner-native-artifacts.ts";
@@ -1536,6 +1537,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
           ...chatState.middleware(),
           // After chat state, so steered messages are added to the transcript it has just saved.
           delivery.forRun({ projectId, sessionId, runId, selection }),
+          ...(!reportSource ? [projectInstructions(project.root)] : []),
         ];
         // Trusted external ACP agents (R17); every delegation is gated below.
         const delegation =
