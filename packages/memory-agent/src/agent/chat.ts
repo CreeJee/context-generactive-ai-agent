@@ -24,6 +24,7 @@ import { Context, Data, Effect, Layer, Option, Queue, Schema } from "effect";
 import { Attachments } from "../attachments/attachments.ts";
 import { attachmentIdOf } from "../attachments/urls.ts";
 import { ChatState } from "../chat-state/chat-state.ts";
+import { isEmptyUserText } from "../messages/empty-user.ts";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { GlobalConfig } from "../config/global-config.ts";
 import { StorageRoot } from "../config/storage-root.ts";
@@ -1223,6 +1224,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
           internalFollowup !== null
             ? null
             : Option.getOrNull(Option.map(decodeUserTurn(messages.at(-1)), toTurn));
+        const lastMessage = messages.at(-1);
+        if (turn && lastMessage && isEmptyUserText(lastMessage))
+          return json(400, { error: "empty_message" });
         const images = (turn?.imageUrls ?? []).map((url) => {
           const id = attachmentIdOf(url);
           return id ? attachments.get(id) : null;

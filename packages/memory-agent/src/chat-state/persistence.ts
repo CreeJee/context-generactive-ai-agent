@@ -12,6 +12,7 @@ import {
   type RunRecord,
 } from "@tanstack/ai-persistence";
 import { Schema } from "effect";
+import { isEmptyUserText } from "../messages/empty-user.ts";
 type Json = string | number | boolean | null | Json[] | { readonly [key: string]: Json };
 
 const RunRow = Schema.Struct({
@@ -202,7 +203,11 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
   const messages = defineMessageStore({
     loadThread,
     async saveThread(threadId, next) {
-      upsertThread.run(threadId, JSON.stringify(next), Date.now());
+      upsertThread.run(
+        threadId,
+        JSON.stringify(next.filter((message) => !isEmptyUserText(message))),
+        Date.now(),
+      );
     },
   });
 

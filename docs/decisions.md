@@ -949,3 +949,8 @@
 - TanStack AI의 canonical `messages`와 persistence를 유지하고 `onConfig`의 `providerMessages`로 전송 이력만 조정한다. worker 실행도 owner middleware가 만든 `providerMessages`를 사용한다. 전환 경계와 인계 문맥은 기존 SDK MetadataStore에 저장해 실패·재시작 후에도 같은 전환을 유지한다. endpoint 식별에는 URL의 해시를 사용하며 인증 키는 저장하지 않는다.
 - 전환 전 결과가 없는 호출은 SDK `resumeToolState.cancelledToolCallIds`로 자동 재실행을 막는다. 현재 실행에 명시적인 승인 응답이 있는 호출은 SDK 승인 흐름을 따른다. 새 실행에서 완료한 호출·결과는 정상적으로 전달하며, 취소는 과거 호출의 실행 여부를 증명하지 않으므로 작업 반복 전 근거를 확인한다.
 - 원본 채팅·기억 evidence는 삭제하지 않는다. 사용자 DB에 별도 마이그레이션을 적용하지 않으며 다음 실행에서 전환 상태를 기록한다. 기존 이력에 endpoint 식별 상태가 없는 경우 같은 모델 이름의 과거 endpoint 변경은 추측하지 않는다.
+
+## 빈 사용자 텍스트의 재유입 방지 (2026-10-05)
+
+- 기존 일회성 마이그레이션만으로는 이후 저장된 빈 사용자 메시지를 막지 못한다. `role: user`, `content: ""`이고 id·createdAt·metadata 외의 추가 payload가 없는 메시지는 새 요청에서 거절하고, SQLite 저장과 매 모델 요청의 전송 이력에서도 제외한다.
+- 텍스트가 없는 assistant 도구 호출, tool 결과, 이미지·추가 payload가 있는 사용자 메시지는 보존한다. 저장 필터는 TanStack의 전체 이력 교체·메시지 ID·순서 계약을 유지하며, 전송 필터는 canonical 이력과 요약 인덱스를 변경하지 않는다.

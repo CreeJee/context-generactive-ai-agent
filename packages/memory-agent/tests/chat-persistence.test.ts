@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import type { ModelMessage } from "@tanstack/ai";
 import { runPersistenceConformance } from "@tanstack/ai-persistence/testkit";
 import { expect, test } from "vite-plus/test";
 import { migrations } from "../src/db/migrations.ts";
@@ -18,6 +19,32 @@ function freshPersistence() {
 // NULL clears for durable-run fields, composite metadata keys. Generation stores are not used.
 runPersistenceConformance("sqlite chat state", freshPersistence, {
   skip: ["generationRuns", "artifacts", "blobs"],
+});
+
+test("does not persist empty user text, preserving tool-only answers and media", async () => {
+  const persistence = freshPersistence();
+  const attachmentMessage = { role: "user" as const, content: "", attachments: ["attachment"] };
+  const retained: ModelMessage[] = [
+    { role: "user", content: "continue" },
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        { id: "call", type: "function", function: { name: "read_file", arguments: "{}" } },
+      ],
+    },
+    { role: "tool", content: "", toolCallId: "call" },
+    {
+      role: "user",
+      content: [{ type: "image", source: { type: "url", value: "https://example.com/image.png" } }],
+    },
+    attachmentMessage,
+  ];
+  await persistence.stores.messages.saveThread("thread", [
+    { id: "empty", role: "user", content: "", metadata: { tanstack: {} } },
+    ...retained,
+  ]);
+  await expect(persistence.stores.messages.loadThread("thread")).resolves.toEqual(retained);
 });
 
 test("materializes legacy session transcripts without overwriting persisted chat", async () => {

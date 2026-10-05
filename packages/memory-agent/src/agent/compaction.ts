@@ -4,6 +4,7 @@ import { Data, Effect, Option, Schema } from "effect";
 import { recentRawUserTurns } from "./compaction-policy.ts";
 import { consumeColdObservation, pendingColdObservation } from "./context-usage.ts";
 import type { CompactResult, CompactionStage } from "./run-state.ts";
+import { isEmptyUserText } from "../messages/empty-user.ts";
 
 /** Share past which the oldest messages are left out, whatever else was done. */
 export const leaveOutAtShare = 0.55;
@@ -540,7 +541,7 @@ export function compaction(
       const providerMessages = lightweightToolResults(
         restoredContext ? [restoredContext, ...retained] : messages,
         sources.toolResultId,
-      );
+      ).filter((message) => !isEmptyUserText(message));
       return providerMessages.every((message, index) => message === config.messages[index]) &&
         providerMessages.length === config.messages.length
         ? undefined

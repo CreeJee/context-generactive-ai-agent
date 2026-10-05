@@ -27,6 +27,23 @@ function chatRequest(text: string) {
 const Count = Schema.Struct({ count: Schema.Finite });
 
 describe("AgentChat.handle", () => {
+  test("rejects empty user text before creating evidence or a run", async () => {
+    const context = await testRuntime({ testProvider: {} });
+    await context.provider!.select(context.runtime);
+    const response = await context.runtime.runPromise(
+      Effect.flatMap(AgentChat, (agent) => agent.handle(chatRequest(""), context.session.id)),
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "empty_message" });
+    const counts = await context.runtime.runPromise(
+      Effect.map(Database, ({ sqlite }) => ({
+        runs: sqlite.prepare("SELECT count(*) AS count FROM chat_runs").get()?.count,
+        users: sqlite.prepare("SELECT count(*) AS count FROM nodes WHERE kind = 'user'").get()
+          ?.count,
+      })),
+    );
+    expect(counts).toEqual({ runs: 0, users: 0 });
+  });
   test("releases a pinned account only after the durable SSE stream finishes", async () => {
     const context = await testRuntime({ testProvider: {} });
     await context.provider!.select(context.runtime);

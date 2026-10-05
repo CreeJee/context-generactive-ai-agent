@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { chat, type ChatMiddleware, type ModelMessage } from "@tanstack/ai";
+import { memoryPersistence } from "@tanstack/ai-persistence";
 import { Effect, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat, modelBoundMessages } from "../src/agent/chat.ts";
@@ -141,6 +142,28 @@ async function firstSent(
   await drain(chat({ adapter, threadId, messages: [...messages], middleware: [middleware] }));
   return adapter.invocations[0]?.messages ?? [];
 }
+
+test("omits empty stored user text from provider input without erasing tool-only answers", async () => {
+  const messages: ModelMessage[] = [
+    { role: "user", content: "" },
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        { id: "call", type: "function", function: { name: "read_file", arguments: "{}" } },
+      ],
+    },
+    { role: "tool", toolCallId: "call", content: "result" },
+    { role: "user", content: "continue" },
+  ];
+  const middleware = compaction(
+    memoryPersistence().stores.metadata,
+    { toolResultId: () => null, nodeText: () => null },
+    budgetFor(noLimit),
+  );
+  expect(await firstSent(messages, middleware)).toEqual(messages.slice(1));
+  expect(messages[0]?.content).toBe("");
+});
 
 /**
  * A conversation of `answers.length + 1` user turns, recorded in memory the way runs record it.
