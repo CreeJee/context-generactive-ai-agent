@@ -1,6 +1,16 @@
-import type { MetadataStore, ModelMessage } from "@tanstack/ai";
+import {
+  convertMessagesToModelMessages,
+  modelMessagesToUIMessages,
+  type MetadataStore,
+  type ModelMessage,
+} from "@tanstack/ai";
+import { createHash } from "node:crypto";
 import { expect, test } from "vite-plus/test";
-import { handoffEvidenceContext, modelHandoffHistory } from "../src/agent/model-handoff.ts";
+import {
+  handoffEvidenceContext,
+  modelHandoffHistory,
+  modelHandoffNamespace,
+} from "../src/agent/model-handoff.ts";
 import type { Node } from "../src/memory/nodes.ts";
 
 function fixture(stored: readonly ModelMessage[]) {
@@ -24,7 +34,7 @@ function fixture(stored: readonly ModelMessage[]) {
       loadHistory: async () => history,
       evidenceContext: async () => "Evidence summary (node observed-result)",
     });
-  return { restore };
+  return { restore, metadata };
 }
 
 const oldCall = {
@@ -137,4 +147,51 @@ test("handoff context stays small and directs the model to retrieve evidence", (
   expect(context).toContain("read_evidence");
   expect(context).toContain("currently available skills");
   expect(context).not.toContain(nodes[99]!.text);
+});
+
+test("UI hydration preserves a handoff across tool fan-out and field reordering", async () => {
+  const stored = past.map((message, index) => ({ ...message, id: `message-${index}` }));
+  stored.push({
+    role: "assistant",
+    content: null,
+    id: "boundary",
+    thinking: [{ content: "reasoning" }],
+  });
+  const f = fixture(stored);
+  await f.restore("new", "new-model")(stored);
+  const tail: ModelMessage = { role: "user", content: "continue", id: "next" };
+  const hydrated = convertMessagesToModelMessages(modelMessagesToUIMessages([...stored, tail]));
+  const restored = await f.restore("new", "new-model")(hydrated);
+  expect(restored).toEqual([
+    { role: "assistant", content: "Evidence summary (node observed-result)" },
+    hydrated[0],
+    hydrated.at(-1),
+  ]);
+  const changed = hydrated.map((message) =>
+    message.id === "boundary" ? { ...message, content: "changed" } : message,
+  );
+  await expect(f.restore("new", "new-model")(changed)).rejects.toThrow("saved boundary");
+});
+
+test("migrates a verified legacy boundary before replaying hydrated history", async () => {
+  const stored = past.map((message, index) => ({ ...message, id: `message-${index}` }));
+  const f = fixture(stored);
+  await f.metadata.set(modelHandoffNamespace, "session", {
+    _tag: "handoff",
+    target: "new",
+    through: stored.length,
+    anchor: createHash("sha256")
+      .update(JSON.stringify(stored.at(-1)))
+      .digest("hex"),
+    context: "legacy evidence",
+  });
+  const hydrated = convertMessagesToModelMessages(modelMessagesToUIMessages(stored));
+  expect(await f.restore("new", "new-model")(hydrated)).toEqual([
+    { role: "assistant", content: "legacy evidence" },
+    hydrated[0],
+  ]);
+  expect(await f.metadata.get(modelHandoffNamespace, "session")).toMatchObject({
+    anchorId: "message-2",
+    anchor: expect.stringMatching(/^v2:/),
+  });
 });

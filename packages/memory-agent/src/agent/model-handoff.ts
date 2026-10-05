@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { MetadataStore, ModelMessage } from "@tanstack/ai";
-import { Option, Schema } from "effect";
+import { Option, Predicate, Schema } from "effect";
 import { messageText, replayableToolHistory } from "./compaction.ts";
 import type { SummaryBlock } from "./compaction.ts";
 import type { Node } from "../memory/nodes.ts";
@@ -51,6 +51,7 @@ const HandoffState = Schema.Union([
     target: Schema.String,
     through: Schema.Int.check(Schema.isGreaterThan(0)),
     anchor: Schema.String,
+    anchorId: Schema.optional(Schema.String),
     context: Schema.String,
   }),
 ]);
@@ -58,9 +59,25 @@ type HandoffState = typeof HandoffState.Type;
 const decodeState = Schema.decodeUnknownOption(HandoffState);
 const StoredModel = Schema.Struct({ tanstack: Schema.Struct({ model: Schema.String }) });
 const decodeModel = Schema.decodeUnknownOption(StoredModel);
-const fingerprint = (message: ModelMessage | undefined) =>
+const legacyFingerprint = (message: ModelMessage | undefined) =>
   createHash("sha256")
     .update(JSON.stringify(message) ?? "missing")
+    .digest("hex");
+
+// UI hydration can reorder object fields and fan out tool messages. Hash JSON values
+// canonically and locate identified boundaries independently of their array position.
+const fingerprint = (message: ModelMessage | undefined) =>
+  "v2:" +
+  createHash("sha256")
+    .update(
+      JSON.stringify(message, (_key, value) =>
+        Predicate.isObject(value) && !Array.isArray(value)
+          ? Object.fromEntries(
+              Object.entries(value).sort(([left], [right]) => left.localeCompare(right)),
+            )
+          : value,
+      ) ?? "missing",
+    )
     .digest("hex");
 
 /** A new model reads evidence context, never the old model's reasoning/tool protocol. */
@@ -68,10 +85,18 @@ export function handoffHistory(
   messages: readonly ModelMessage[],
   state: Extract<HandoffState, { _tag: "handoff" }>,
 ): readonly ModelMessage[] | null {
-  if (fingerprint(messages[state.through - 1]) !== state.anchor)
+  const through =
+    state.anchorId === undefined
+      ? state.through
+      : messages.findIndex((message) => message.id === state.anchorId) + 1;
+  const boundary = messages[through - 1];
+  const actual = state.anchor.startsWith("v2:")
+    ? fingerprint(boundary)
+    : legacyFingerprint(boundary);
+  if (through === 0 || actual !== state.anchor)
     throw new Error("Model handoff history changed; the saved boundary cannot be replayed");
-  const past = messages.slice(0, state.through);
-  const tail = messages.slice(state.through);
+  const past = messages.slice(0, through);
+  const tail = messages.slice(through);
   const question = past.findLast(
     (message) => message.role === "user" && messageText(message).trim(),
   );
@@ -108,7 +133,21 @@ export function modelHandoffHistory(options: {
     const saved = Option.getOrUndefined(
       decodeState(await options.metadata.get(modelHandoffNamespace, options.threadId)),
     );
-    if (saved?.target === options.target) return saved;
+    if (saved?.target === options.target) {
+      if (saved._tag === "baseline" || saved.anchor.startsWith("v2:")) return saved;
+      const stored = await options.loadHistory();
+      const index = stored.findIndex((message) => legacyFingerprint(message) === saved.anchor);
+      const boundary = stored[index];
+      if (!boundary) return saved;
+      const migrated: HandoffState = {
+        ...saved,
+        through: index + 1,
+        anchor: fingerprint(boundary),
+        anchorId: boundary.id,
+      };
+      await options.metadata.set(modelHandoffNamespace, options.threadId, migrated);
+      return migrated;
+    }
     const stored = await options.loadHistory();
     const previousModel = stored
       .filter((message) => message.role === "assistant")
@@ -126,6 +165,7 @@ export function modelHandoffHistory(options: {
             target: options.target,
             through: stored.length,
             anchor: fingerprint(stored.at(-1)),
+            anchorId: stored.at(-1)?.id,
             context: await options.evidenceContext(stored),
           }
         : { _tag: "baseline", target: options.target };
