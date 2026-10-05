@@ -32,7 +32,7 @@ export {
 
 export const RunShellInput = Schema.Struct({
   command: Schema.NonEmptyString.annotate({
-    description: "Shell command line for the host.",
+    description: "Shell script to execute on the host.",
   }),
   workdir: Schema.optionalKey(
     Schema.String.annotate({
@@ -88,7 +88,7 @@ export const DeleteOutsideFileInput = Schema.Struct({
 const runShell = {
   name: "run_shell",
   description:
-    "Run a finite, unattended command for builds, tests, git and other programs. Long commands return a running receipt after yieldMs (default 1000) so you can continue independent work; retrieve their completed result with get_background_result. timeoutSeconds still limits execution. Do not use for sign-in, user input, servers or watchers. The project's approval policy applies before execution. Only a completed result proves a check passed.",
+    "Execute a finite, non-interactive shell script in the working directory. Returns its output and exit status, or a taskId if still running after yieldMs (default 1000); retrieve the final result with get_background_result. timeoutSeconds limits execution. Not for interactive input, sign-in, servers or watchers. Execution follows the project's approval policy. A running receipt does not prove success.",
   inputSchema: toToolSchema(RunShellInput),
 } as const;
 

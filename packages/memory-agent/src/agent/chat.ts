@@ -221,7 +221,7 @@ export function workspaceInstructions(
         ? "run_shell, write_outside_file and delete_outside_file are reviewed before each call: routine requested work runs, uncertain calls wait for the user, harmful ones are blocked. Give a short reason. A blocked or declined call must not be retried in another form; ask the user or choose a different approach."
         : "run_shell, write_outside_file and delete_outside_file wait for the user's approval of each call. Give a short reason. If the user declines, do not retry the same thing; ask or choose another way."
   }
-- run_shell runs on the host, not in a sandbox. Prefer file tools for reading and editing; use the shell for builds, tests, git and other programs, and never to print secrets.
+- run_shell executes shell scripts on the host, not in a sandbox. Never print secrets.
 - Credential files and .git internals are off limits to the file tools; no approval changes that.
 - Report what you actually changed and verified. Do not claim a change or check that did not happen.
 
@@ -1488,7 +1488,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
             route: imageRoute?.executorMediaRouteId,
           });
 
-        const workflowActive = workflow.phase !== "chat";
         const workflowReadOnly = readOnlyWorkflowPhases.has(workflow.phase);
         // Present only while the user has Kagi turned on with a key (R19).
         const webTools = reportSource ? [] : yield* kagiTools.tools;
@@ -1673,7 +1672,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
           : null;
         const contextPrompts = [
           ...(reportSnapshot ? [reportSnapshot] : []),
-          ...(!workflowActive && skills.instructions ? [skills.instructions] : []),
+          ...(skills.instructions ? [skills.instructions] : []),
           ...(!workflowReadOnly && delegation.instructions ? [delegation.instructions] : []),
           ...(reportSource ? [] : [workspaceInstructions(project, places)]),
           ...(!reportSource && workflowPrompt ? [workflowPrompt] : []),

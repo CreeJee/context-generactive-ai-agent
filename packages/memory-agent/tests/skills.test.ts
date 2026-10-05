@@ -10,6 +10,7 @@ import {
   parseFrontMatter,
 } from "../src/skills/skills.ts";
 import { SkillTools } from "../src/tools/skills.ts";
+import { Workflows } from "../src/workflow/workflow.ts";
 import { testRuntime } from "./support/runtime.ts";
 
 function writeSkill(root: string, folder: string, frontMatter: string, body = "Do it well.") {
@@ -110,48 +111,66 @@ describe("Skills", () => {
     }
   });
 
-  test("a chat run lists skills and offers read_skill only when there are skills", async () => {
-    const context = await testRuntime({ testProvider: {} });
-    const { runtime, project, session } = context;
-    await context.provider!.select(runtime);
-    const send = async (text: string) => {
-      const invocationIndex = context.provider!.adapter.invocations.length;
-      const response = await runtime.runPromise(
-        Effect.flatMap(AgentChat, (agent) =>
-          agent.handle(
-            new Request("http://127.0.0.1/api/chat", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                threadId: session.id,
-                runId: `run-${Math.random().toString(36).slice(2)}`,
-                messages: [{ id: "m1", role: "user", content: text }],
-                tools: [],
-                context: [],
+  test.each(["chat", "goal"] as const)(
+    "a %s run lists skills and offers read_skill only when there are skills",
+    async (phase) => {
+      const context = await testRuntime({ testProvider: {} });
+      const { runtime, project, session } = context;
+      await context.provider!.select(runtime);
+      if (phase === "goal") {
+        const workflows = await runtime.runPromise(Workflows);
+        await runtime.runPromise(
+          workflows.updateGoal(session.id, {
+            statement: "Greet the user using the available skill",
+            outcomes: ["Say hello in Korean"],
+            constraints: [],
+            nonGoals: [],
+            assumptions: [],
+            openQuestions: [],
+            status: "active",
+          }),
+        );
+        await runtime.runPromise(workflows.setPhase(session.id, "goal"));
+      }
+      const send = async (text: string) => {
+        const invocationIndex = context.provider!.adapter.invocations.length;
+        const response = await runtime.runPromise(
+          Effect.flatMap(AgentChat, (agent) =>
+            agent.handle(
+              new Request("http://127.0.0.1/api/chat", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  threadId: session.id,
+                  runId: `run-${Math.random().toString(36).slice(2)}`,
+                  messages: [{ id: "m1", role: "user", content: text }],
+                  tools: [],
+                  context: [],
+                }),
               }),
-            }),
-            session.id,
+              session.id,
+            ),
           ),
-        ),
+        );
+        const events = await response.text();
+        return { events, invocation: context.provider!.adapter.invocations[invocationIndex] };
+      };
+
+      const without = await send("hello");
+      expect(without.invocation?.toolNames).not.toContain("read_skill");
+
+      writeSkill(
+        join(project.root, ".agents", "skills"),
+        "greet",
+        "name: greet\ndescription: Greet warmly.",
+        "Say hello in Korean.",
       );
-      const events = await response.text();
-      return { events, invocation: context.provider!.adapter.invocations[invocationIndex] };
-    };
-
-    const without = await send("hello");
-    expect(without.invocation?.toolNames).not.toContain("read_skill");
-
-    writeSkill(
-      join(project.root, ".agents", "skills"),
-      "greet",
-      "name: greet\ndescription: Greet warmly.",
-      "Say hello in Korean.",
-    );
-    const withSkill = await send('call read_skill {"name":"greet"}');
-    expect(withSkill.invocation?.toolNames).toContain("read_skill");
-    expect(withSkill.invocation?.systemPrompts.join("\n")).toContain(
-      "- greet (project): Greet warmly.",
-    );
-    expect(withSkill.events).toContain("Say hello in Korean.");
-  });
+      const withSkill = await send('call read_skill {"name":"greet"}');
+      expect(withSkill.invocation?.toolNames).toContain("read_skill");
+      expect(withSkill.invocation?.systemPrompts.join("\n")).toContain(
+        "- greet (project): Greet warmly.",
+      );
+      expect(withSkill.events).toContain("Say hello in Korean.");
+    },
+  );
 });
