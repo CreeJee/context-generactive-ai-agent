@@ -5,6 +5,7 @@
     "moduleResolution": "nodenext",
     "lib": ["ESNext"],
     "allowImportingTsExtensions": true,
-    "esModuleInterop": true
+    "esModuleInterop": true,
+    "noImplicitAny": true
   }
 }

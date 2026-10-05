@@ -24,6 +24,7 @@
     "declarationMap": true,
     "sourceMap": true,
     "skipLibCheck": true,
+    "noImplicitAny": true,
     "plugins": [{ "name": "@effect/language-service" }]
   }
 }

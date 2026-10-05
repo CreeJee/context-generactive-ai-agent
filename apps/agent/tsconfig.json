@@ -23,6 +23,7 @@
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "strict": true,
+    "noImplicitAny": true,
     "plugins": [{ "name": "@effect/language-service" }]
   }
 }
