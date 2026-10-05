@@ -86,7 +86,9 @@ import { QueueDelivery } from "../queue/delivery.ts";
 import { hostShell } from "../shell/run.ts";
 import { MessageQueue, type QueueChangeRefused } from "../queue/queue.ts";
 import type { QueueEdit, QueuedMessage } from "../queue/queue-state.ts";
-import { retrievalLeadLimit, retrievalTokenLimit } from "./compaction-policy.ts";
+import { baselineProfile, type HarnessProfile } from "../rrsi/contracts.ts";
+import { Rrsi } from "../rrsi/service.ts";
+import { HarnessStore } from "../rrsi/store.ts";
 import { handoffEvidenceContext, modelHandoffHistory } from "./model-handoff.ts";
 import {
   budgetFor,
@@ -461,6 +463,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
   const usageLedger = yield* ApiUsage;
   const events = yield* AppEvents;
   const config = yield* GlobalConfig;
+  const harnessStore = yield* HarnessStore;
+  const rrsi = yield* Rrsi;
   const workTraceExposed = Effect.map(
     config.read,
     (settings) => settings.workTraceEnabled !== false,
@@ -573,6 +577,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
     sessionId: string,
     project?: Project,
     retrievalSeed: readonly string[] = [],
+    profile: HarnessProfile = baselineProfile,
   ): CompactionSources => {
     const base: CompactionSources = {
       toolResultId: (toolCallId) => nodes.toolResultId(sessionId, toolCallId),
@@ -626,11 +631,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
         const lines: string[] = [];
         let tokens = estimateTokens({ role: "assistant", content: "" });
         for (const match of candidates) {
-          if (lines.length === retrievalLeadLimit) break;
+          if (lines.length === profile.retrievalLeadLimit) break;
           const provenance = `${match.createdAt.slice(0, 10)} · ${match.projectName} · ${match.kind} · ${match.foundBy}`;
           const line = `- node ${match.id} (${provenance}): ${match.snippet.replace(/\s+/g, " ")}`;
           const next = estimateTokens({ role: "assistant", content: line });
-          if (tokens + next > retrievalTokenLimit) continue;
+          if (tokens + next > profile.retrievalTokenLimit) continue;
           tokens += next;
           lines.push(line);
         }
@@ -1044,6 +1049,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
       let claimedNext: string | null = null;
       let runAdapterToRelease: RunTextAdapter | null = null;
       return Effect.gen(function* () {
+        rrsi.touch();
         const { projectId, agent: external, title } = yield* sessions.get(sessionId);
         // Sending, approving and answering all come here; a read-only page may do none of them.
         if (
@@ -1388,6 +1394,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
           nativeGoal
             ? runNativeFactory(nativeGoal.makeRecordingMiddleware(binding))
             : recorder.forRun(binding);
+        const harness = harnessStore.forGoal(implementationGoal);
         const runtime = yield* runtimeForAdapter(selection, implementationGoal);
         // Pin the profile-specific client before later async preparation and tool/model turns.
         const runAdapter = runtime.adapter(selection);
@@ -1609,6 +1616,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
           ...workflowTools.forSession(sessionId, workflow.phase, runId),
           ...background.forSession(sessionId),
         ]);
+        const profiledTools = allSharedTools.map((tool) =>
+          tool.name === "find_memory" && harness.profile.memoryToolDescription
+            ? {
+                ...tool,
+                description: `${tool.description}\n${harness.profile.memoryToolDescription}`,
+              }
+            : tool,
+        );
         const sharedTools = reportSource
           ? reportToolsForSession(
               sqlite,
@@ -1618,8 +1633,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
               () => workTrace.taskTree(reportSource.sourceSessionId),
             )
           : workflowReadOnly
-            ? allSharedTools.filter((tool) => workflowReadToolNames.has(tool.name))
-            : allSharedTools;
+            ? profiledTools.filter((tool) => workflowReadToolNames.has(tool.name))
+            : profiledTools;
         const standingPrompts = [
           ...(reportSource ? [reportAnalysisInstructions] : [memoryInstructions]),
           ...(webTools.length > 0 ? [kagiInstructions] : []),
@@ -1759,11 +1774,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
           // Last to choose the history sent to the model; only retained local images are inlined.
           compaction(
             metadata,
-            compactionSources(sessionId, reportSource ? undefined : project, [
-              turn?.text ?? "",
-              workflow.goal?.statement ?? "",
-              workflow.plan?.summary ?? "",
-            ]),
+            compactionSources(
+              sessionId,
+              reportSource ? undefined : project,
+              [turn?.text ?? "", workflow.goal?.statement ?? "", workflow.plan?.summary ?? ""],
+              harness.profile,
+            ),
             budgetFor(window()),
             (stage) => {
               compactionStage = stage;
@@ -1823,6 +1839,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
           messages,
           systemPrompts: promptLayout(standingPrompts, contextPrompts, [
             attachmentInstructions,
+            ...(harness.profile.rolePrompt ? [harness.profile.rolePrompt] : []),
             ...(!workflowReadOnly ? [subagentInstructions] : []),
           ]),
           threadId,

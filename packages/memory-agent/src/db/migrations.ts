@@ -1359,6 +1359,17 @@ export const migrations: readonly string[] = [
     ON workflow_new_goal_requests(session_id) WHERE status = 'accepted';
   `,
   emptyUserMessageMigration,
+  `
+  CREATE TABLE rrsi_corpus_receipts (version TEXT PRIMARY KEY, experiment_id TEXT NOT NULL);
+  CREATE TABLE rrsi_versions (id TEXT PRIMARY KEY, payload TEXT NOT NULL CHECK(json_valid(payload)));
+  CREATE TABLE rrsi_state (id INTEGER PRIMARY KEY CHECK(id=1), version_id TEXT NOT NULL REFERENCES rrsi_versions(id), settings TEXT NOT NULL CHECK(json_valid(settings)));
+  CREATE TABLE rrsi_goal_pins (goal_id TEXT PRIMARY KEY, version_id TEXT NOT NULL REFERENCES rrsi_versions(id));
+  CREATE TABLE rrsi_experiments (id TEXT PRIMARY KEY, payload TEXT NOT NULL CHECK(json_valid(payload)));
+  CREATE UNIQUE INDEX rrsi_one_running ON rrsi_experiments(json_extract(payload, '$.status')) WHERE json_extract(payload, '$.status') = 'running';
+  CREATE TRIGGER rrsi_versions_immutable BEFORE UPDATE ON rrsi_versions BEGIN SELECT RAISE(ABORT, 'immutable harness version'); END;
+  CREATE TRIGGER rrsi_versions_retained BEFORE DELETE ON rrsi_versions BEGIN SELECT RAISE(ABORT, 'harness history retained'); END;
+  CREATE TRIGGER rrsi_pins_immutable BEFORE UPDATE ON rrsi_goal_pins BEGIN SELECT RAISE(ABORT, 'immutable Goal harness pin'); END;
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

@@ -49,6 +49,42 @@ function fixture(fetcher?: typeof fetch, initial: Settings = {}) {
   };
 }
 describe("OpenAI compatible settings", () => {
+  it("pins remote compatible endpoints and honors the configured output budget", async () => {
+    const seen: string[] = [];
+    const f = fixture(
+      async (url, options) => {
+        expect(url).toBe("https://compatible.example/v1/chat/completions");
+        seen.push(Schema.decodeUnknownSync(Schema.String)(options?.body));
+        return Response.json({
+          choices: [{ message: { content: "OK" } }],
+          usage: { prompt_tokens: 2000000, completion_tokens: 1 },
+        });
+      },
+      {
+        provider: "openai-compatible",
+        model: "remote",
+        reasoningEffort: "default",
+        openaiCompatible: {
+          ...configuration,
+          baseUrl: "https://compatible.example/v1",
+          model: "remote",
+          outputBudget: 8192,
+          contextWindow: 32768,
+        },
+      },
+    );
+    const client = await Effect.runPromise(f.api.pinRrsiClient);
+    await client.complete(
+      JSON.stringify({
+        model: "candidate-model",
+        max_tokens: 1,
+        messages: [{ role: "user", content: "hello" }],
+      }),
+      new AbortController().signal,
+    );
+    expect(JSON.parse(seen[0]!)).toMatchObject({ model: "remote", max_tokens: 8192 });
+  });
+
   it.each([
     ["private question", "text:16:plain"],
     ["<tool_response>private result</tool_response>", "text:45:tool-response"],

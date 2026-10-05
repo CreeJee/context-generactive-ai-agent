@@ -6,8 +6,9 @@ import { emptyUserMessageMigration, migrations } from "../src/db/migrations.ts";
 test("migration removes only empty user text, preserving payloads, order and timestamps", () => {
   const db = new DatabaseSync(":memory:");
   try {
-    for (const step of migrations.slice(0, -1)) db.exec(step);
-    db.exec(`PRAGMA user_version = ${migrations.length - 1}`);
+    const migrationIndex = migrations.indexOf(emptyUserMessageMigration);
+    for (const step of migrations.slice(0, migrationIndex)) db.exec(step);
+    db.exec(`PRAGMA user_version = ${migrationIndex}`);
     const empty = { id: "empty", role: "user", content: "", metadata: { tanstack: {} } };
     const retained = [
       { role: "user", content: "hello", createdAt: "old" },

@@ -21,7 +21,7 @@ export interface CompatibleKeyStore {
 }
 const keyEntry = () =>
   new (requireRuntime("@napi-rs/keyring").AsyncEntry)(
-    "context-generactive-agent",
+    process.env.CONTEXT_AGENT_CREDENTIAL_NAMESPACE ?? "context-generactive-agent",
     "openai-compatible-api-key",
   );
 const keychain: CompatibleKeyStore = {
@@ -279,6 +279,46 @@ export function makeOpenAICompatibleSettings(
         settings.reasoning?.source === "models" && settings.reasoning.model === settings.model,
     },
   });
+  const pinRrsiClient = Effect.gen(function* () {
+    const { configuration, key } = yield* updates.withPermit(snapshot);
+    if (!configuration) return yield* new OpenAICompatibleFailed({ operation: "validation" });
+    return {
+      configuration,
+      complete: async (body: string, signal: AbortSignal) => {
+        const payload = Schema.decodeUnknownSync(
+          Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+        )(body);
+        const headers = new Headers({ "Content-Type": "application/json" });
+        if (key) headers.set("Authorization", `Bearer ${key}`);
+        const response = await fetcher(`${configuration.baseUrl}/chat/completions`, {
+          method: "POST",
+          headers,
+          redirect: "error",
+          signal,
+          body: JSON.stringify({
+            ...payload,
+            model: configuration.model,
+            max_tokens: configuration.outputBudget,
+            stream: false,
+          }),
+        });
+        if (!response.ok) {
+          const errorBody = await response.text();
+          const hints = [
+            "tool_choice",
+            "max_tokens",
+            "model",
+            "temperature",
+            "reasoning",
+            "chat_template",
+            "enable_thinking",
+          ].filter((field) => errorBody.includes(field));
+          throw new Error(`local_completion_failed:${response.status}:${hints.join(",")}`);
+        }
+        return response.text();
+      },
+    };
+  });
   const services: ProviderServices = {
     provider,
     auth: {
@@ -482,20 +522,30 @@ export function makeOpenAICompatibleSettings(
       steer: async () => "no_turn",
     },
   };
-  return { status, update, test, listModels, services };
+  return { pinRrsiClient, status, update, test, listModels, services };
 }
 export type OpenAICompatibleSettingsApi = ReturnType<typeof makeOpenAICompatibleSettings>;
 export class OpenAICompatibleSettings extends Context.Service<
   OpenAICompatibleSettings,
   OpenAICompatibleSettingsApi
 >()("memory-agent/OpenAICompatibleSettings") {
-  static readonly layer = Layer.effect(
-    OpenAICompatibleSettings,
-    Effect.gen(function* () {
-      const config = yield* GlobalConfig;
-      const keys = yield* CompatibleKeyring;
-      const fetcher = yield* CompatibleFetch;
-      return makeOpenAICompatibleSettings(config, keys, fetcher);
-    }),
-  ).pipe(Layer.provide(Layer.merge(CompatibleKeyring.layer, CompatibleFetch.layer)));
+  static readonly layerWith = (
+    keys: Layer.Layer<CompatibleKeyring>,
+    fetcher: Layer.Layer<CompatibleFetch>,
+  ) =>
+    Layer.effect(
+      OpenAICompatibleSettings,
+      Effect.gen(function* () {
+        const config = yield* GlobalConfig;
+        return makeOpenAICompatibleSettings(
+          config,
+          yield* CompatibleKeyring,
+          yield* CompatibleFetch,
+        );
+      }),
+    ).pipe(Layer.provide(Layer.merge(keys, fetcher)));
+  static readonly layer = OpenAICompatibleSettings.layerWith(
+    CompatibleKeyring.layer,
+    CompatibleFetch.layer,
+  );
 }

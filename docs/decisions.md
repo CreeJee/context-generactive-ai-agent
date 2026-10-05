@@ -1,3 +1,11 @@
+## RRSI local experiments (2026-10-05)
+
+- Develop in the independent `context-generactive-agent-rrsi` clone on `feat/rrsi-local`; web 5174, backend 5181 and `.rrsi-local/runtime` are isolated from the original checkout.
+- Reuse only the explicitly authorized local model connection and its endpoint-bound key. Do not copy conversation DBs or OAuth accounts. Experiments use the explicitly selected provider/model (OpenAI, Anthropic or any configured OpenAI-compatible endpoint), with no provider fallback. Subscription credentials remain in the host and are pinned for the experiment.
+- Profile candidates are automatically adopted only after repeated baseline, cost/quality selection, validation and a once-used sealed suite. Existing Goals keep immutable pins. Code candidates require normal Git/PR review and a restart before adoption; Goal pins version profile configuration, not executable code.
+- Evaluation runs the actual chat/memory path with deterministic embedding/morph fixtures in a network-disabled, credential-free Docker container. Host gateway pins the model/account, enforces the execution deadline and records token usage. This does not prove production embedding quality.
+- Default automatic budget: 10 min idle, one run/day, 2 rounds with 2 candidates each, 30 minutes with no total token cap. Token usage remains an efficiency metric. Missing usage or incomplete evaluation prevents adoption.
+
 # 결정 기록
 
 ## 백그라운드 실행의 Effect 수명과 종료 처리 (2026-10-04)

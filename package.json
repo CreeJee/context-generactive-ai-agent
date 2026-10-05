@@ -10,6 +10,7 @@
     "typecheck": "vp run -r typecheck",
     "ready": "vp check && vp run -r typecheck && vp run -r test && vp run -r build",
     "dev": "vp run agent#dev",
+    "dev:rrsi": "node apps/agent/scripts/dev-rrsi.ts",
     "dev:agent": "pnpm --filter agent dev:agent",
     "dev:web": "pnpm --filter agent dev:web",
     "prepare": "vp config && effect-tsgo patch --typescript"
