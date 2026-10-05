@@ -49,7 +49,10 @@ function fixture(fetcher?: typeof fetch, initial: Settings = {}) {
   };
 }
 describe("OpenAI compatible settings", () => {
-  it("reports wire message counts on prompt-template failures without exposing content", async () => {
+  it.each([
+    ["private question", "text:16:plain"],
+    ["<tool_response>private result</tool_response>", "text:45:tool-response"],
+  ])("reports wire query shapes without exposing content (%s)", async (content, diagnostic) => {
     const f = fixture(async () =>
       Response.json(
         { error: { message: "No user query found in messages.", type: "invalid_request_error" } },
@@ -67,7 +70,7 @@ describe("OpenAI compatible settings", () => {
       for await (const chunk of adapter.chatStream({
         logger: resolveDebugOption(false),
         model: configuration.model,
-        messages: [{ role: "user", content: "private question" }],
+        messages: [{ role: "user", content }],
       })) {
         switch (chunk.type) {
           case "RUN_ERROR":
@@ -79,7 +82,10 @@ describe("OpenAI compatible settings", () => {
       expect(errors[0]).toContain(
         "Compatible request messages: total=1, user=1, assistant=0, tool=0, first=user, last=user",
       );
-      expect(errors[0]).not.toContain("private question");
+      expect(errors[0]).toContain(
+        `model=manual-model, toolDefinitions=0, userContent=[${diagnostic}]`,
+      );
+      expect(errors[0]).not.toContain(content);
     } finally {
       adapter.releaseRun?.();
     }

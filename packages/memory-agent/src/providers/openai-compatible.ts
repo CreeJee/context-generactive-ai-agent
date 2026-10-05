@@ -46,7 +46,7 @@ const TransportErrorCode = Schema.String.check(Schema.isPattern(/^[A-Z0-9_]+$/))
 const isTransportErrorCode = Schema.is(TransportErrorCode);
 const provider = "openai-compatible" as const;
 const requestRoles = Schema.decodeUnknownOption(
-  Schema.Array(Schema.Struct({ role: Schema.String })),
+  Schema.Array(Schema.Struct({ role: Schema.String, content: Schema.optional(Schema.Unknown) })),
 );
 const credentialPrefix = "context-generactive-agent/openai-compatible/v1:";
 const StoredCredential = Schema.Struct({ baseUrl: Schema.String, key: Schema.String });
@@ -390,7 +390,21 @@ export function makeOpenAICompatibleSettings(
             }
             const body = JSON.stringify(payload);
             const messages = Option.getOrElse(requestRoles(payload.messages), () => []);
+            const userContent = messages
+              .filter((message) => message.role === "user")
+              .map((message) => {
+                const content = message.content;
+                if (Schema.is(Schema.String)(content)) {
+                  const text = content.trim();
+                  const wrapped =
+                    text.startsWith("<tool_response>") && text.endsWith("</tool_response>");
+                  return `text:${content.length}:${wrapped ? "tool-response" : "plain"}`;
+                }
+                if (Array.isArray(content)) return `parts:${content.length}`;
+                return content === null || content === undefined ? "empty" : "other";
+              });
             promptDiagnostic = `Compatible request messages: total=${messages.length}, user=${messages.filter((message) => message.role === "user").length}, assistant=${messages.filter((message) => message.role === "assistant").length}, tool=${messages.filter((message) => message.role === "tool").length}, first=${messages[0]?.role ?? "none"}, last=${messages.at(-1)?.role ?? "none"}`;
+            promptDiagnostic += `, model=${selection.model}, toolDefinitions=${Array.isArray(payload.tools) ? payload.tools.length : 0}, userContent=[${userContent.join(",")}]`;
             // Conservative local guard also covers auxiliary structured-output calls and tool schemas.
             let estimatedInput = 0;
             for (const character of body)
