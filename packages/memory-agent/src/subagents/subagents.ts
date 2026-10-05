@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { projectInstructions } from "../agent/project-instructions.ts";
 import {
   EventType,
   chat,
@@ -579,6 +580,7 @@ const make = Effect.gen(function* () {
       const middleware: ChatMiddleware[] = [
         ...chatState.middleware(),
         traceMiddleware,
+        projectInstructions(binding.project.root),
         relayGate(binding, row, handle, controller.signal, skippedTools),
         reads.middleware,
         childContext,
