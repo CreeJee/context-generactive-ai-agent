@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off
+import { isTruthy } from "../../truthy.ts";
 import { QueryClient, QueryClientProvider, QueryObserver } from "@tanstack/react-query";
 import type { SessionRunState } from "memory-agent/definitions";
 import { renderToString } from "react-dom/server";
@@ -89,7 +92,7 @@ describe("server mutation results", () => {
     const captured: Run[] = [];
     render(client, false, (run) => captured.push(run));
     const run = captured[0];
-    if (!run) throw new Error("Missing hook result");
+    if (!isTruthy(run)) throw new Error("Missing hook result");
     return { client, run };
   }
 
@@ -99,7 +102,7 @@ describe("server mutation results", () => {
       const { client, run } = mounted();
       const fetchState = vi.spyOn(api, "sessionRunState").mockResolvedValue(snapshot(1));
       const query = client.getQueryCache().find({ queryKey });
-      if (!query) throw new Error("Missing query");
+      if (!(query !== undefined)) throw new Error("Missing query");
       const observer = new QueryObserver(client, { ...query.options, queryKey });
       const unsubscribe = observer.subscribe(() => {});
       try {
@@ -164,7 +167,7 @@ describe("durable workflow refresh", () => {
       const fetchState = vi.spyOn(api, "sessionRunState").mockResolvedValue(snapshot(1));
       render(client, generating);
       const query = client.getQueryCache().find({ queryKey });
-      if (!query) throw new Error("useRunState did not register its query");
+      if (!(query !== undefined)) throw new Error("useRunState did not register its query");
       // SSR registers the hook's real options; subscribe with them to exercise React Query's
       // active-query invalidation without requiring a browser DOM or mocking useQuery.
       const observer = new QueryObserver(client, { ...query.options, queryKey });

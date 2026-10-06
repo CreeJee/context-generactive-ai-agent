@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off newPromise:off nodeBuiltinImport:off
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";

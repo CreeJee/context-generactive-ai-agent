@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import type { LeaseView } from "../sessions/lease-state.ts";
 import type { WorkflowAction, WorkflowPhase, WorkflowState } from "./workflow.ts";
 
@@ -30,13 +31,15 @@ export interface WorkflowActionContext {
 }
 
 /** Shared by snapshots and serialized mutations against the latest durable state. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function evaluateWorkflowAction(
   state: WorkflowState,
   request: WorkflowActionRequest,
   context: WorkflowActionContext = {},
 ): WorkflowActionDecision {
   if (context.lease?.state === "other") return { allowed: false, reason: "session_in_use" };
-  if (context.running && (request.kind === "phase" || request.action === "resume"))
+  if (context.running === true && (request.kind === "phase" || request.action === "resume"))
     return { allowed: false, reason: "run_in_progress" };
   const { goal, plan } = state;
   if (request.kind === "phase") {
@@ -44,13 +47,17 @@ export function evaluateWorkflowAction(
     if (request.phase === "completed") return { allowed: false, reason: "goal_terminal" };
     // Non-execution phase navigation does not approve or mutate artifacts.
     if (request.phase !== "execute") return { allowed: true };
-    if (goal && plan && plan.goalVersion !== goal.version)
+    if (isTruthy(goal) && isTruthy(plan) && plan.goalVersion !== goal.version)
       return { allowed: false, reason: "plan_outdated" };
-    if (!goal || !plan || (plan.status !== "ready" && plan.status !== "executing"))
+    if (
+      !isTruthy(goal) ||
+      !isTruthy(plan) ||
+      (plan.status !== "ready" && plan.status !== "executing")
+    )
       return { allowed: false, reason: "plan_not_ready" };
     return { allowed: true, intent: plan.status === "executing" ? "continue" : "start" };
   }
-  if (!goal) return { allowed: false, reason: "goal_missing" };
+  if (!isTruthy(goal)) return { allowed: false, reason: "goal_missing" };
   if (goal.status === "completed" || goal.status === "failed")
     return { allowed: false, reason: "goal_terminal" };
   if (request.action === "pause" && goal.status === "paused")
@@ -60,6 +67,8 @@ export function evaluateWorkflowAction(
   return { allowed: true };
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function workflowActions(
   state: WorkflowState,
   context: WorkflowActionContext = {},

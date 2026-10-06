@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off newPromise:off
 import { Cause, Context, Deferred, Effect, Exit, Fiber } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 import {
@@ -77,7 +79,7 @@ const nativeRequest: OwnerRpcRequest<Operations> = {
 };
 
 class OwnerValue extends Context.Service<OwnerValue, { readonly value: string }>()(
-  "test/OwnerValue",
+  "memory-agent/tests/owner-rpc.test/OwnerValue",
 ) {}
 
 describe("Effect-native owner RPC", () => {

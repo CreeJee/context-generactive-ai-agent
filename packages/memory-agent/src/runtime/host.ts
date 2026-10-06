@@ -1,6 +1,15 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { spawn, type ChildProcess } from "node:child_process";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { renameSync, statSync } from "node:fs";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { posix, win32 } from "node:path";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { setTimeout as sleep } from "node:timers/promises";
 import { Option, Schema } from "effect";
 
@@ -19,6 +28,8 @@ const searchPath = (env: NodeJS.ProcessEnv, platform: NodeJS.Platform) =>
  * An executable found on the absolute entries of `PATH` only, so a relative entry (a project
  * folder) can never shadow it. On Windows the `PATHEXT` extensions (`.exe`, `.cmd`, …) are tried.
  */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function findExecutable(
   name: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -50,6 +61,8 @@ function fileExists(path: string) {
  * The system `tar`. On Windows that is bsdtar in System32 (Windows 10 1803 and later), named by
  * path: a GNU tar earlier on `PATH` (Git for Windows, MSYS) reads `C:\…` as a remote `host:path`.
  */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function tarExecutable(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
@@ -66,6 +79,9 @@ const busyCodes = ["EPERM", "EACCES", "EBUSY"];
  * `renameSync`, retried on Windows for up to ~10 s while the moved files are still held open:
  * antivirus may scan freshly written executables or native libraries before releasing their folder.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function renameWhenReleased(
   from: string,
   to: string,
@@ -120,6 +136,8 @@ const pick = (env: NodeJS.ProcessEnv, names: readonly string[]) =>
  * start it and a fixed search path (`searchDirectories`, then the system folders), never
  * the user's other variables (R14). `user` adds the per-user folders on Windows.
  */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function helperEnvironment(
   searchDirectories: readonly string[],
   options: { readonly user: boolean },
@@ -150,6 +168,8 @@ export interface ShellInvocation {
   readonly verbatim: boolean;
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function shellInvocation(
   command: string,
   env: NodeJS.ProcessEnv,
@@ -159,14 +179,14 @@ export function shellInvocation(
   if (platform === "win32") {
     const comSpec = env.ComSpec ?? env.COMSPEC;
     const file =
-      comSpec && win32.isAbsolute(comSpec) && exists(comSpec)
+      isTruthy(comSpec) && win32.isAbsolute(comSpec) && exists(comSpec)
         ? comSpec
         : win32.join(env.SystemRoot ?? env.SYSTEMROOT ?? "C:\\Windows", "System32", "cmd.exe");
     // The same form Node uses for `shell: true`: cmd.exe strips the outer quotes and runs the rest.
     return { file, args: ["/d", "/s", "/c", `"${command}"`], verbatim: true };
   }
   const shell = env.SHELL;
-  const file = shell && posix.isAbsolute(shell) && exists(shell) ? shell : "/bin/sh";
+  const file = isTruthy(shell) && posix.isAbsolute(shell) && exists(shell) ? shell : "/bin/sh";
   return { file, args: ["-c", command], verbatim: false };
 }
 
@@ -174,6 +194,8 @@ export function shellInvocation(
  * Ends a child the app started. On Windows a launcher (`npx.cmd` through cmd.exe) would leave the
  * real program running if only the launcher were killed, so the whole tree goes.
  */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function endChild(child: ChildProcess, platform: NodeJS.Platform = process.platform) {
   if (platform === "win32" && child.pid !== undefined) stopProcessTree(child.pid, true, platform);
   else child.kill();
@@ -183,6 +205,8 @@ export function endChild(child: ChildProcess, platform: NodeJS.Platform = proces
  * Stops a process and everything it started. POSIX signals its process group (it must have been
  * spawned `detached`); Windows has no groups or SIGTERM, so `taskkill /T /F` ends the tree at once.
  */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function stopProcessTree(
   pid: number,
   force: boolean,

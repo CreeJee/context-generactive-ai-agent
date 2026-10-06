@@ -1,3 +1,4 @@
+import { isTruthy } from "../../truthy.ts";
 import { serverRestartedCode, type SessionRunState } from "memory-agent/definitions";
 import { describe, expect, test } from "vite-plus/test";
 import { allowedWorkflowActions } from "./workflow-test-fixtures";
@@ -26,7 +27,7 @@ const ended = (status: "completed" | "interrupted" | "failed" | "aborted", code?
   record({
     runId: "run-1",
     status,
-    error: code || status === "failed" ? { message: "boom", code } : null,
+    error: isTruthy(code) || status === "failed" ? { message: "boom", code } : null,
   });
 const page = { waitingForApproval: false, answered: true };
 

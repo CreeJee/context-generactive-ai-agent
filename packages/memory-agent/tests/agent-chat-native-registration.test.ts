@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off processEnv:off schemaSync:off
 import { Effect, Schema } from "effect";
 import { expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
@@ -85,9 +87,11 @@ test("real AgentChat workers link two Goal runs to separate native registrations
     expect(provenance(await runtime.runPromise(Database))).toEqual(before);
   } finally {
     await runtime.dispose();
-    if (previousNative === undefined) delete process.env.CONTEXT_AGENT_NATIVE_ARTIFACT;
+    if (previousNative === undefined)
+      Reflect.deleteProperty(process.env, "CONTEXT_AGENT_NATIVE_ARTIFACT");
     else process.env.CONTEXT_AGENT_NATIVE_ARTIFACT = previousNative;
-    if (previousWorker === undefined) delete process.env.CONTEXT_AGENT_GOAL_WORKER;
+    if (previousWorker === undefined)
+      Reflect.deleteProperty(process.env, "CONTEXT_AGENT_GOAL_WORKER");
     else process.env.CONTEXT_AGENT_GOAL_WORKER = previousWorker;
   }
 }, 60000);

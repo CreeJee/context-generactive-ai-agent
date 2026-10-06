@@ -1,15 +1,20 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off processEnv:off
+import { isTruthy } from "../../src/truthy.ts";
 // A small stdio MCP server for tests. Records each start in $FAKE_MCP_LOG when set.
 import { appendFileSync } from "node:fs";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
-if (process.env.FAKE_MCP_LOG) appendFileSync(process.env.FAKE_MCP_LOG, `start ${process.pid}\n`);
+if (isTruthy(process.env.FAKE_MCP_LOG))
+  appendFileSync(process.env.FAKE_MCP_LOG, `start ${process.pid}\n`);
 
 const server = new Server({ name: "fake", version: "1.0.0" }, { capabilities: { tools: {} } });
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  if (process.env.FAKE_MCP_LIST_LOG) appendFileSync(process.env.FAKE_MCP_LIST_LOG, "list\n");
+  if (isTruthy(process.env.FAKE_MCP_LIST_LOG))
+    appendFileSync(process.env.FAKE_MCP_LIST_LOG, "list\n");
   return {
     tools: [
       {

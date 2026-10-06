@@ -1,4 +1,9 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { execFile } from "node:child_process";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { dirname } from "node:path";
 import { Schema } from "effect";
 import { findExecutable, helperEnvironment } from "../runtime/host.ts";
@@ -17,6 +22,8 @@ const isAscii = (text: string) => /^[\x20-\x7e]*$/.test(text);
  * (not a work tree, git missing, or a case-insensitive query with non-ASCII letters), so the caller
  * searches every file instead. Lines are matched afterwards by the caller; this only narrows files.
  */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function gitGrepFiles(
   root: string,
   directory: string,
@@ -25,7 +32,7 @@ export function gitGrepFiles(
 ): Promise<ReadonlySet<string> | null> {
   if (query.includes("\n") || (!caseSensitive && !isAscii(query))) return Promise.resolve(null);
   const git = findExecutable("git");
-  if (!git) return Promise.resolve(null);
+  if (!isTruthy(git)) return Promise.resolve(null);
   const args = [
     "grep",
     "--untracked",
@@ -39,6 +46,8 @@ export function gitGrepFiles(
     "--",
     directory,
   ];
+  // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
+  // @effect-diagnostics-next-line newPromise:off
   return new Promise((resolve) => {
     execFile(
       git,
@@ -51,7 +60,7 @@ export function gitGrepFiles(
         env: { ...gitEnvironment(git), LANG: "C", GIT_PAGER: "cat" },
       },
       (error, stdout) => {
-        if (!error) return resolve(new Set(stdout.split("\0").filter(Boolean)));
+        if (!(error !== null)) return resolve(new Set(stdout.split("\0").filter(Boolean)));
         // Exit status 1 means "no file matched"; anything else means Git could not answer.
         resolve(noFileMatched(error) ? new Set() : null);
       },

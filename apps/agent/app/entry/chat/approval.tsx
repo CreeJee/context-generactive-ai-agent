@@ -1,3 +1,4 @@
+import { isTruthy } from "../../truthy.ts";
 import { Option, Schema } from "effect";
 import { FileWarningIcon, ShieldQuestionIcon, TerminalIcon } from "lucide-react";
 import {
@@ -64,7 +65,7 @@ function decodeCall(toolName: string, argumentsJson: string): GatedCall {
     default: {
       // MCP tools are named mcp_<server>__<tool>.
       const mcp = /^mcp_([A-Za-z0-9_-]+?)__(.+)$/.exec(toolName);
-      return mcp
+      return isTruthy(mcp)
         ? { tool: "mcp", server: mcp[1] ?? "", name: mcp[2] ?? toolName, argumentsJson }
         : unrecognized;
     }
@@ -101,7 +102,7 @@ function describe(call: GatedCall): CallView {
             <pre className={codeBlock}>{call.input.command}</pre>
             <div className="text-muted-foreground">
               실행 위치: <code>{call.input.workdir ?? "."}</code> (
-              {call.input.workdir?.startsWith("/") ? "임시 경로" : "프로젝트 기준"})
+              {isTruthy(call.input.workdir?.startsWith("/")) ? "임시 경로" : "프로젝트 기준"})
             </div>
           </div>
         ),
@@ -115,7 +116,9 @@ function describe(call: GatedCall): CallView {
           <div className="flex flex-col gap-2">
             <div>
               <code className="break-all">{call.input.path}</code>{" "}
-              <Badge variant="outline">{call.input.expectedSha256 ? "덮어쓰기" : "새 파일"}</Badge>
+              <Badge variant="outline">
+                {isTruthy(call.input.expectedSha256) ? "덮어쓰기" : "새 파일"}
+              </Badge>
             </div>
             <pre className={`max-h-60 ${codeBlock}`}>{preview(call.input.content)}</pre>
           </div>
@@ -189,18 +192,22 @@ export function ApprovalCard({
     approval.kind === "permission-review" && approval.askedBy === "review"
       ? approval.reviewReason
       : null;
-  const Icon = reviewReason ? ShieldQuestionIcon : view.shell ? TerminalIcon : FileWarningIcon;
+  const Icon = isTruthy(reviewReason)
+    ? ShieldQuestionIcon
+    : view.shell
+      ? TerminalIcon
+      : FileWarningIcon;
   return (
     <Card size="sm" variant="warning">
       <CardHeader>
         <CardTitle className="flex items-center">
           <Icon className="mr-2 size-4" />
-          {requester ? `${requester}: ${view.title}` : view.title}
+          {isTruthy(requester) ? `${requester}: ${view.title}` : view.title}
         </CardTitle>
         <CardDescription className="flex flex-col">
           {reviewReason && <span className="mb-0.5">자동 검토: {reviewReason}</span>}
           <span>
-            {view.modelReason
+            {isTruthy(view.modelReason)
               ? `모델이 밝힌 이유: ${view.modelReason}`
               : "모델이 이유를 적지 않았어요."}{" "}
             승인하면 이번 한 번만 실행돼요.

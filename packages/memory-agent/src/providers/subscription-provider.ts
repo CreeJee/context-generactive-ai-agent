@@ -1,5 +1,6 @@
+import { isTruthy } from "../truthy.ts";
 import { ANTHROPIC_MODELS } from "@tanstack/ai-anthropic";
-import { Effect, Option, Schema } from "effect";
+import { DateTime, Effect, Option, Schema } from "effect";
 import type { Settings } from "../config/global-config.ts";
 import { optionalProperty } from "../optional-property.ts";
 import {
@@ -145,6 +146,8 @@ const anthropicEfforts = (model: string) => {
   return ["none"];
 };
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function parseSubscriptionCatalog(
   provider: SubscriptionAccountProvider,
   pages: ReadonlyArray<unknown>,
@@ -263,9 +266,12 @@ export function createSubscriptionProvider(
     readonly models: ReadonlyArray<ProviderModel>;
   } | null = null;
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const authState = async (): Promise<AuthConnectionState> => {
-    if (pending) return { provider, status: "pending", authorizationUrl: pending.authorizationUrl };
-    if (loginError) return loginError;
+    if (pending !== null)
+      return { provider, status: "pending", authorizationUrl: pending.authorizationUrl };
+    if (isTruthy(loginError)) return loginError;
     try {
       const connection = await client.status();
       if (connection.connected) return { provider, status: "signed-in" };
@@ -278,6 +284,8 @@ export function createSubscriptionProvider(
   };
 
   const status = fromPromise(provider, "auth", authState);
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const connect = fromPromise(provider, "auth", async () => {
     const current = await authState();
     if (current.status === "signed-in" || current.status === "pending") return current;
@@ -306,6 +314,8 @@ export function createSubscriptionProvider(
       authorizationUrl: attempt.authorizationUrl,
     } satisfies AuthConnectionState;
   });
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const cancel = fromPromise(provider, "auth", async () => {
     const attempt = pending;
     pending = null;
@@ -313,6 +323,8 @@ export function createSubscriptionProvider(
     attempt?.cancel();
     return authState();
   });
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const disconnect = fromPromise(provider, "auth", async () => {
     const attempt = pending;
     pending = null;
@@ -326,22 +338,27 @@ export function createSubscriptionProvider(
     } satisfies AuthConnectionState;
   });
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const load = async () => {
     const key = options.catalogKey?.() ?? "__default__";
-    if (catalogCache?.key === key && Date.now() - catalogCache.loadedAt < 30_000)
+    if (
+      catalogCache?.key === key &&
+      DateTime.toEpochMillis(DateTime.nowUnsafe()) - catalogCache.loadedAt < 30_000
+    )
       return catalogCache.models;
     const pages =
       provider === "anthropic" ? anthropicInstalledCatalog : await client.modelCatalog();
     const models = parseSubscriptionCatalog(provider, pages);
     if (models.length === 0) throw new Error("empty_model_catalog");
     if ((options.catalogKey?.() ?? "__default__") === key)
-      catalogCache = { key, loadedAt: Date.now(), models };
+      catalogCache = { key, loadedAt: DateTime.toEpochMillis(DateTime.nowUnsafe()), models };
     return models;
   };
 
   const list = fromPromise(provider, "catalog", load);
   const selected = Effect.map(options.config.read, (settings): ModelSelection | null =>
-    settings.provider === provider && settings.model && settings.reasoningEffort
+    settings.provider === provider && isTruthy(settings.model) && isTruthy(settings.reasoningEffort)
       ? {
           provider,
           model: settings.model,
@@ -377,7 +394,7 @@ export function createSubscriptionProvider(
         Effect.gen(function* () {
           const models = yield* list;
           const found = models.find((candidate) => candidate.id === model);
-          if (!found) return yield* new ModelUnavailable({ provider, model });
+          if (!isTruthy(found)) return yield* new ModelUnavailable({ provider, model });
           const effort = reasoningEffort ?? found.defaultReasoningEffort;
           if (!found.supportedReasoningEfforts.includes(effort))
             return yield* new ModelUnavailable({

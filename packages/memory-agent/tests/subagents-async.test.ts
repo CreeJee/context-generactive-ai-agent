@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off newPromise:off nodeBuiltinImport:off schemaSync:off
+import { isTruthy } from "../src/truthy.ts";
 import { randomUUID } from "node:crypto";
 import { Effect, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
@@ -218,7 +221,7 @@ async function setup() {
         line.startsWith("data: ") ? [Schema.decodeSync(Chunk)(line.slice(6))] : [],
       )
       .flatMap((chunk) =>
-        chunk.type === "TEXT_MESSAGE_CONTENT" && chunk.delta ? [chunk.delta] : [],
+        chunk.type === "TEXT_MESSAGE_CONTENT" && isTruthy(chunk.delta) ? [chunk.delta] : [],
       )
       .join("");
   };

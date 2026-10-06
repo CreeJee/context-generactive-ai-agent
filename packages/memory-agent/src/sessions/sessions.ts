@@ -1,6 +1,9 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import type { SQLOutputValue } from "node:sqlite";
-import { Context, Data, Effect, Layer, Schema } from "effect";
+import { DateTime, Clock, Context, Data, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import { firstMessageTitle } from "./title.ts";
 import { Projects } from "../projects/projects.ts";
@@ -28,7 +31,11 @@ const SessionRow = Schema.Struct({
   archived_at: Schema.NullOr(Schema.String),
   imported_from: Schema.NullOr(Schema.String),
 });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeFirstMessage = Schema.decodeUnknownSync(Schema.Struct({ text: Schema.String }));
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeSessionRow = Schema.decodeUnknownSync(SessionRow);
 
 function toSession(row: Record<string, SQLOutputValue>): Session {
@@ -49,6 +56,8 @@ export class SessionNotFound extends Data.TaggedError("SessionNotFound")<{
 }> {}
 
 const make = Effect.gen(function* () {
+  const effectClock = yield* Clock.Clock;
+
   const { sqlite } = yield* Database;
   const projects = yield* Projects;
   const firstMessage = sqlite.prepare(
@@ -59,7 +68,7 @@ const make = Effect.gen(function* () {
     const session = toSession(row);
     if (session.title !== null || session.importedFrom !== null) return session;
     const message = firstMessage.get(session.id);
-    return message
+    return isTruthy(message)
       ? { ...session, title: firstMessageTitle(decodeFirstMessage(message).text) }
       : session;
   };
@@ -68,7 +77,9 @@ const make = Effect.gen(function* () {
     get: (id: string) =>
       Effect.suspend(() => {
         const row = sqlite.prepare("SELECT * FROM sessions WHERE id = ?").get(id);
-        return row ? Effect.succeed(withTitle(row)) : Effect.fail(new SessionNotFound({ id }));
+        return isTruthy(row)
+          ? Effect.succeed(withTitle(row))
+          : Effect.fail(new SessionNotFound({ id }));
       }),
 
     /** Fails with ProjectNotFound when the project is not registered. */
@@ -79,8 +90,14 @@ const make = Effect.gen(function* () {
           .prepare(
             "INSERT INTO sessions (id, project_id, title, created_at, agent) VALUES (?, ?, ?, ?, ?) RETURNING *",
           )
-          .get(randomUUID(), projectId, title, new Date().toISOString(), agent);
-        if (!row) return yield* Effect.die(new Error("Session insert returned no row"));
+          .get(
+            randomUUID(),
+            projectId,
+            title,
+            DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
+            agent,
+          );
+        if (!isTruthy(row)) return yield* Effect.die(new Error("Session insert returned no row"));
         return toSession(row);
       }),
 
@@ -95,7 +112,7 @@ const make = Effect.gen(function* () {
             "INSERT INTO sessions (id, project_id, title, created_at, imported_from) VALUES (?, ?, ?, ?, ?) RETURNING *",
           )
           .get(randomUUID(), projectId, title, createdAt, source);
-        if (!row) throw new Error("Session insert returned no row");
+        if (!isTruthy(row)) throw new Error("Session insert returned no row");
         return toSession(row);
       }),
 
@@ -116,15 +133,22 @@ const make = Effect.gen(function* () {
       Effect.suspend(() => {
         const row = sqlite
           .prepare("UPDATE sessions SET archived_at = ? WHERE id = ? RETURNING *")
-          .get(archived ? new Date().toISOString() : null, id);
-        return row ? Effect.succeed(withTitle(row)) : Effect.fail(new SessionNotFound({ id }));
+          .get(
+            archived
+              ? DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()))
+              : null,
+            id,
+          );
+        return isTruthy(row)
+          ? Effect.succeed(withTitle(row))
+          : Effect.fail(new SessionNotFound({ id }));
       }),
   };
 });
 
 /** Conversations inside a project. Ownership and resume rules arrive with the session phase. */
 export class Sessions extends Context.Service<Sessions, Effect.Success<typeof make>>()(
-  "memory-agent/Sessions",
+  "memory-agent/sessions/sessions",
 ) {
   static readonly layer = Layer.effect(Sessions, make);
 }

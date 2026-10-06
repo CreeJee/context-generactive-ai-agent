@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off schemaSync:off
 import { chat } from "@tanstack/ai";
 import { Effect, Schema } from "effect";
 import { expect, test } from "vite-plus/test";
@@ -202,8 +204,8 @@ test("populated promoted-memory retrieval and use state never leak into a fresh 
   if (
     first.tools.length !== 6 ||
     second.tools.length !== 6 ||
-    !first.middleware ||
-    !second.middleware
+    !(first.middleware !== null) ||
+    !(second.middleware !== null)
   )
     throw new Error("Expected run tools and middleware");
   const promoted = Schema.decodeUnknownSync(Schema.Struct({ memoryNodeId: Schema.NonEmptyString }))(

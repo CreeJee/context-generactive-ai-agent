@@ -1,4 +1,5 @@
 "use client";
+import { isTruthy } from "../../truthy.ts";
 
 import { useMemo } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
@@ -144,7 +145,7 @@ function FieldSeparator({
   return (
     <div
       data-slot="field-separator"
-      data-content={!!children}
+      data-content={!!isTruthy(children)}
       className={cn(
         "relative -my-2 h-5 text-xs/relaxed group-data-[variant=outline]/field-group:-mb-2",
         className,
@@ -173,11 +174,11 @@ function FieldError({
   errors?: Array<{ message?: string } | undefined>;
 }) {
   const content = useMemo(() => {
-    if (children) {
+    if (isTruthy(children)) {
       return children;
     }
 
-    if (!errors?.length) {
+    if (!isTruthy(errors?.length)) {
       return null;
     }
 
@@ -197,7 +198,7 @@ function FieldError({
     );
   }, [children, errors]);
 
-  if (!content) {
+  if (!isTruthy(content)) {
     return null;
   }
 

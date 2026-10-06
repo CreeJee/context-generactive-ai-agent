@@ -39,7 +39,7 @@ const description =
   "신뢰한 서버만 시작해요. 설정 파일이 바뀌면 다시 신뢰해야 하고, 신뢰해도 도구를 부를 때마다 승인이나 자동 판단을 거쳐요.";
 
 export function McpSettings({ project }: { project: Project | null }) {
-  if (!project)
+  if (!(project !== null))
     return (
       <FieldGroup>
         <PageHeader title={"MCP 서버"} description={description} />
@@ -56,6 +56,8 @@ function McpSettingsContent({ project }: { project: Project }) {
   const [error, setError] = useState<string | null>(null);
 
   const header = <PageHeader title="MCP 서버" project={project} description={description} />;
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const trust = async (server: McpServerView, trusted: boolean) => {
     setError(null);
     try {

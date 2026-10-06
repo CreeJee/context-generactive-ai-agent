@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off
+import { DateTime } from "effect";
 import { expect, test } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { Nodes } from "../src/memory/nodes.ts";
@@ -18,7 +21,7 @@ test("first user message names the session without replacing existing or importe
   append(named.id, "바꾸지 않음");
   expect((await runtime.runPromise(sessions.get(named.id))).title).toBe("직접 지정");
   const imported = await runtime.runPromise(
-    sessions.createImported(project.id, null, new Date().toISOString(), "codex"),
+    sessions.createImported(project.id, null, DateTime.formatIso(DateTime.nowUnsafe()), "codex"),
   );
   append(imported.id, "가져온 대화");
   expect((await runtime.runPromise(sessions.get(imported.id))).title).toBeNull();

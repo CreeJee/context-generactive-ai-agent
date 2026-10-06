@@ -1,9 +1,12 @@
+import { isTruthy } from "../../truthy.ts";
 import { FlagIcon } from "lucide-react";
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function reportHref(projectId: string | null, sessionId: string | null): string {
-  if (!projectId) return "/report";
+  if (!isTruthy(projectId)) return "/report";
   const query = new URLSearchParams({ project: projectId });
-  if (sessionId) query.set("session", sessionId);
+  if (isTruthy(sessionId)) query.set("session", sessionId);
   return `/report?${query}`;
 }
 

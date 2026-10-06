@@ -30,6 +30,8 @@ const emptySettings = (): CrossProviderMediaConsentSettings => ({ version: 1, pa
 export const crossProviderMediaConsentKey = (pair: CrossProviderMediaConsentPair) =>
   `${pair.initiatorProvider}->${pair.executorProvider}:${pair.capability}`;
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function decideCrossProviderMediaConsent(
   settings: CrossProviderMediaConsentSettings | undefined,
   pair: CrossProviderMediaConsentPair,
@@ -114,7 +116,7 @@ export function makeCrossProviderMediaConsent(
 export class CrossProviderMediaConsent extends Context.Service<
   CrossProviderMediaConsent,
   CrossProviderMediaConsentApi
->()("memory-agent/CrossProviderMediaConsent") {
+>()("memory-agent/providers/cross-provider-media-consent/CrossProviderMediaConsent") {
   static readonly layer = Layer.effect(
     CrossProviderMediaConsent,
     Effect.map(GlobalConfig, makeCrossProviderMediaConsent),

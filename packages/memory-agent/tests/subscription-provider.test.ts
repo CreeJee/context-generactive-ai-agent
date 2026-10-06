@@ -1,4 +1,6 @@
-import { Effect } from "effect";
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off newPromise:off
+import { DateTime, Effect } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import type { Settings } from "../src/config/global-config.ts";
 import {
@@ -60,7 +62,11 @@ const fakeClient = (provider: "openai" | "anthropic", pages: ReadonlyArray<unkno
     },
     complete: () => {
       connected = true;
-      finish({ provider, connected: true, expiresAt: Date.now() + 60_000 });
+      finish({
+        provider,
+        connected: true,
+        expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 60_000,
+      });
     },
     get cancelled() {
       return cancelled;

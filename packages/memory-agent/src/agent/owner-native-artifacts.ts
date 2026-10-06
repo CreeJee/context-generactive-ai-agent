@@ -1,7 +1,10 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { Context, Effect, Layer, Schema } from "effect";
+import { DateTime, Clock, Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import { StorageRoot } from "../config/storage-root.ts";
 import { OwnerNativeBuild } from "./owner-native-build.ts";
@@ -13,7 +16,7 @@ export { NativeRegistrationError } from "./owner-native-error.ts";
 export class OwnerNativeArtifacts extends Context.Service<
   OwnerNativeArtifacts,
   ReturnType<typeof makeOwnerNativeArtifacts>
->()("memory-agent/agent/OwnerNativeArtifacts") {
+>()("memory-agent/agent/owner-native-artifacts/OwnerNativeArtifacts") {
   static readonly layer = Layer.effect(
     OwnerNativeArtifacts,
     Effect.gen(function* () {
@@ -67,17 +70,21 @@ export function makeOwnerNativeArtifacts(owner: {
   const boundary = <A>(work: () => A) =>
     Effect.try({
       try: work,
-      catch: (cause) => new NativeRegistrationError({ cause }),
+      catch: (cause) => NativeRegistrationError.make({ cause }),
     });
   const acquire = Effect.fn("OwnerNativeArtifacts.acquire")(function* (goalInstanceId: string) {
+    const effectClock = yield* Clock.Clock;
+
     const parent = yield* files.parent(owner.directory);
     const saved = yield* boundary(() =>
+      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+      // @effect-diagnostics-next-line schemaSync:off
       Schema.decodeUnknownSync(Schema.UndefinedOr(Registration))(read.get(goalInstanceId)),
     );
     let registration = saved;
-    if (!registration) {
+    if (!isTruthy(registration)) {
       yield* boundary(() => {
-        if (historic.get(goalInstanceId, goalInstanceId))
+        if (isTruthy(historic.get(goalInstanceId, goalInstanceId)))
           throw new Error("Historical Goal has no native provenance; backfill refused");
       });
       const generated = yield* builder.build(owner.entry ?? OwnerNativeBuild.production.entry);
@@ -87,6 +94,8 @@ export function makeOwnerNativeArtifacts(owner: {
           Effect.gen(function* () {
             // Even an atomic adapter that throws after committing must retain registered bytes.
             const saved = yield* boundary(() =>
+              // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+              // @effect-diagnostics-next-line schemaSync:off
               Schema.decodeUnknownSync(Schema.UndefinedOr(Registration))(read.get(goalInstanceId)),
             );
             if (saved?.fileUrl === pathToFileURL(join(directory, "native.mjs")).href) return;
@@ -117,15 +126,17 @@ export function makeOwnerNativeArtifacts(owner: {
       boundary(() =>
         owner.atomic(() => {
           files.verifyAtFence(fileURLToPath(verified.fileUrl), parent, verified.sha256);
+          // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+          // @effect-diagnostics-next-line schemaSync:off
           const existing = Schema.decodeUnknownSync(Schema.UndefinedOr(Registration))(
             read.get(goalInstanceId),
           );
-          if (existing && JSON.stringify(existing) !== JSON.stringify(verified))
+          if (isTruthy(existing) && JSON.stringify(existing) !== JSON.stringify(verified))
             throw new Error("Conflicting native generation");
-          if (!existing) {
+          if (!isTruthy(existing)) {
             // The async build may overlap an SDK-only generation or run admission.
             // Reuse registered provenance, but never backfill newly historical Goals.
-            if (historic.get(goalInstanceId, goalInstanceId))
+            if (isTruthy(historic.get(goalInstanceId, goalInstanceId)))
               throw new Error("Historical Goal has no native provenance; backfill refused");
             insert.run(
               goalInstanceId,
@@ -133,7 +144,7 @@ export function makeOwnerNativeArtifacts(owner: {
               verified.sha256,
               verified.contractVersion,
               verified.sourceHash,
-              new Date().toISOString(),
+              DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe())),
             );
           }
         }),

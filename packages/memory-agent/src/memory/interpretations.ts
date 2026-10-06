@@ -1,5 +1,5 @@
 import type { SQLOutputValue } from "node:sqlite";
-import { Context, Effect, Layer, Schema } from "effect";
+import { DateTime, Clock, Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import { meaningfulNodeFilter } from "./quality.ts";
 import { edgeWeights } from "./edges.ts";
@@ -29,6 +29,8 @@ const Row = Schema.Struct({
   model: Schema.String,
   created_at: Schema.String,
 });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeRow = Schema.decodeUnknownSync(Row);
 const toInterpretation = (row: Record<string, SQLOutputValue>): Interpretation => {
   const decoded = decodeRow(row);
@@ -43,7 +45,13 @@ const toInterpretation = (row: Record<string, SQLOutputValue>): Interpretation =
   };
 };
 
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
+const decodeCount = Schema.decodeUnknownSync(Schema.Struct({ count: Schema.Finite }));
+
 const make = Effect.gen(function* () {
+  const effectClock = yield* Clock.Clock;
+
   const { sqlite } = yield* Database;
   const insert = sqlite.prepare(
     "INSERT INTO interpretations (node_id, kind, target_id, status, reason, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -54,7 +62,6 @@ const make = Effect.gen(function* () {
 
   const validEndpoints = sqlite.prepare(`
     SELECT count(*) AS count FROM nodes n WHERE n.id IN (?, ?) AND ${meaningfulNodeFilter}`);
-  const decodeCount = Schema.decodeUnknownSync(Schema.Struct({ count: Schema.Finite }));
 
   return {
     /**
@@ -66,7 +73,9 @@ const make = Effect.gen(function* () {
         decodeCount(validEndpoints.get(interpretation.nodeId, interpretation.targetId)).count !== 2
       )
         return;
-      const createdAt = new Date().toISOString();
+      const createdAt = DateTime.formatIso(
+        DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
+      );
       insert.run(
         interpretation.nodeId,
         interpretation.kind,
@@ -103,6 +112,6 @@ const make = Effect.gen(function* () {
 export class Interpretations extends Context.Service<
   Interpretations,
   Effect.Success<typeof make>
->()("memory-agent/Interpretations") {
+>()("memory-agent/memory/interpretations") {
   static readonly layer = Layer.effect(Interpretations, make);
 }

@@ -1,3 +1,7 @@
+import { Cause, Effect, Exit, Queue, DateTime } from "effect";
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import {
   EventType,
@@ -64,20 +68,23 @@ export class ExternalAgentAdapter extends BaseTextAdapter<
     this.preamble = preamble;
   }
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async *chatStream(options: TextOptions<Record<string, never>>): AsyncIterable<AdapterYieldChunk> {
     const signal =
       options.abortController?.signal ?? options.request?.signal ?? new AbortController().signal;
     const runId = options.runId ?? randomUUID();
     const threadId = options.threadId ?? randomUUID();
-    const stamp = () => ({ model: this.model, timestamp: Date.now() });
+    const stamp = () => ({
+      model: this.model,
+      timestamp: DateTime.toEpochMillis(DateTime.nowUnsafe()),
+    });
     const last = options.messages.at(-1);
     const text = last?.role === "user" ? messageText(last) : "";
 
-    const queue: Item[] = [];
-    let wake: (() => void) | null = null;
+    const queue = Effect.runSync(Queue.unbounded<Item>());
     const push = (item: Item) => {
-      queue.push(item);
-      wake?.();
+      Queue.offerUnsafe(queue, item);
     };
     const toolTitles = new Map<string, { title: string; status: string }>();
     void this.preamble(text)
@@ -115,29 +122,16 @@ export class ExternalAgentAdapter extends BaseTextAdapter<
     const messageId = randomUUID();
     let open = false;
     yield { ...stamp(), type: EventType.RUN_STARTED, runId, threadId };
-    for (;;) {
-      if (queue.length === 0) await new Promise<void>((resolve) => (wake = resolve));
-      wake = null;
-      const item = queue.shift();
-      if (!item) continue;
-      switch (item.kind) {
-        case "text":
-          if (!open) {
-            open = true;
-            yield { ...stamp(), type: EventType.TEXT_MESSAGE_START, messageId, role: "assistant" };
-          }
-          yield { ...stamp(), type: EventType.TEXT_MESSAGE_CONTENT, messageId, delta: item.text };
-          break;
-        case "error":
-          throw item.error;
-        case "done": {
-          if (signal.aborted) return;
-          const failure = failureOf(item.outcome);
-          if (failure) throw new Error(failure);
-          if (toolTitles.size > 0) {
-            const list = [...toolTitles.values()]
-              .map((call) => `- ${call.title} (${call.status})`)
-              .join("\n");
+    try {
+      for (;;) {
+        const exit = await Effect.runPromiseExit(Queue.take(queue), { signal });
+        if (Exit.isFailure(exit)) {
+          if (Cause.hasInterrupts(exit.cause)) return;
+          throw Cause.squash(exit.cause);
+        }
+        const item = exit.value;
+        switch (item.kind) {
+          case "text":
             if (!open) {
               open = true;
               yield {
@@ -147,18 +141,48 @@ export class ExternalAgentAdapter extends BaseTextAdapter<
                 role: "assistant",
               };
             }
+            yield { ...stamp(), type: EventType.TEXT_MESSAGE_CONTENT, messageId, delta: item.text };
+            break;
+          case "error":
+            throw item.error;
+          case "done": {
+            if (signal.aborted) return;
+            const failure = failureOf(item.outcome);
+            if (isTruthy(failure)) throw new Error(failure);
+            if (toolTitles.size > 0) {
+              const list = [...toolTitles.values()]
+                .map((call) => `- ${call.title} (${call.status})`)
+                .join("\n");
+              if (!open) {
+                open = true;
+                yield {
+                  ...stamp(),
+                  type: EventType.TEXT_MESSAGE_START,
+                  messageId,
+                  role: "assistant",
+                };
+              }
+              yield {
+                ...stamp(),
+                type: EventType.TEXT_MESSAGE_CONTENT,
+                messageId,
+                delta: `\n\n외부 에이전트가 알린 도구 호출:\n${list}`,
+              };
+            }
+            if (open) yield { ...stamp(), type: EventType.TEXT_MESSAGE_END, messageId };
             yield {
               ...stamp(),
-              type: EventType.TEXT_MESSAGE_CONTENT,
-              messageId,
-              delta: `\n\n외부 에이전트가 알린 도구 호출:\n${list}`,
+              type: EventType.RUN_FINISHED,
+              runId,
+              threadId,
+              finishReason: "stop",
             };
+            return;
           }
-          if (open) yield { ...stamp(), type: EventType.TEXT_MESSAGE_END, messageId };
-          yield { ...stamp(), type: EventType.RUN_FINISHED, runId, threadId, finishReason: "stop" };
-          return;
         }
       }
+    } finally {
+      Effect.runSync(Queue.shutdown(queue));
     }
   }
 

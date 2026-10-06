@@ -1,4 +1,7 @@
-import { Semaphore } from "effect";
+import { isTruthy } from "../truthy.ts";
+import { DateTime, Clock, Semaphore } from "effect";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import type { SQLOutputValue } from "node:sqlite";
 import { chat } from "@tanstack/ai";
@@ -11,6 +14,10 @@ import { Interpretations } from "./interpretations.ts";
 import { Nodes, toNode, type Node } from "./nodes.ts";
 import { meaningfulNodeFilter } from "./quality.ts";
 import { MemorySearch } from "./search.ts";
+
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
+const stringifyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 /** Standing instructions for the interpreter. It labels statements; it never decides for the user. */
 export const interpretInstructions = `You label statements from a person's conversations with a coding assistant, so a memory graph can find them later and tell current decisions from outdated ones.
@@ -53,10 +60,16 @@ export class InterpretationFailed extends Data.TaggedError("InterpretationFailed
 }> {}
 
 const Job = Schema.Struct({ node_id: Schema.String, session_id: Schema.NullOr(Schema.String) });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeJob = Schema.decodeUnknownSync(Job);
 const Id = Schema.Struct({ id: Schema.String });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeId = Schema.decodeUnknownSync(Id);
 const Label = Schema.Struct({ text: Schema.String });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeLabel = Schema.decodeUnknownSync(Label);
 
 /** Statements per model call; they share one session, so the model sees them in order. */
@@ -118,9 +131,9 @@ const make = Effect.gen(function* () {
   /** The next batch: the oldest pending statements of the session with the newest pending one. */
   const nextBatch = (): Node[] => {
     const first = newestPending.get();
-    if (!first) return [];
+    if (!isTruthy(first)) return [];
     const job = decodeJob(first);
-    if (!job.session_id) return [nodes.get(job.node_id)].filter((node) => node !== null);
+    if (!isTruthy(job.session_id)) return [nodes.get(job.node_id)].filter((node) => node !== null);
     return pendingInSession
       .all(job.session_id, batchSize)
       .map((row: Record<string, SQLOutputValue>) => toNode(row));
@@ -129,7 +142,7 @@ const make = Effect.gen(function* () {
   /** Earlier statements a statement may relate to: its session's recent ones and search matches. */
   const candidatesFor = (statement: Node) =>
     Effect.gen(function* () {
-      const recent = statement.sessionId
+      const recent = isTruthy(statement.sessionId)
         ? earlierInSession.all(statement.sessionId, statement.seq, 6).map(toNode)
         : [];
       const found = yield* search
@@ -142,7 +155,7 @@ const make = Effect.gen(function* () {
         .pipe(Effect.orElseSucceed(() => ({ matches: [] })));
       const matched = found.matches.flatMap((match) => {
         const node = nodes.get(match.id);
-        return node ? [node] : [];
+        return isTruthy(node) ? [node] : [];
       });
       const byId = new Map<string, Node>();
       for (const node of [...recent, ...matched])
@@ -158,12 +171,14 @@ const make = Effect.gen(function* () {
 
   const topicNode = (projectId: string, label: string) => {
     const existing = topicByLabel.get(projectId, label);
-    if (existing) return decodeId(existing).id;
+    if (isTruthy(existing)) return decodeId(existing).id;
     return nodes.append({ projectId, sessionId: null, kind: "topic", text: label }).id;
   };
 
   const interpretBatch = (batch: readonly Node[], selection: ModelSelection) =>
     Effect.gen(function* () {
+      const effectClock = yield* Clock.Clock;
+
       const candidates = new Map<string, readonly Node[]>();
       for (const statement of batch) candidates.set(statement.id, yield* candidatesFor(statement));
       const projectId = batch[0]!.projectId;
@@ -187,38 +202,49 @@ const make = Effect.gen(function* () {
 
       const { services } = yield* active.resolve(selection);
       const cheap = yield* services.models.cheapestEffort(selection);
-      const answer = yield* Effect.tryPromise({
-        try: () => {
-          const abortController = new AbortController();
-          const timer = setTimeout(() => abortController.abort(), interpretTimeoutMs);
-          return chat({
-            adapter: services.runtime.adapter(cheap),
-            messages: [{ role: "user", content: `Input (JSON): ${JSON.stringify(input)}` }],
-            systemPrompts: [interpretInstructions],
-            threadId: randomUUID(),
-            middleware: batch[0]?.sessionId
-              ? [
-                  collectApiUsage(usageLedger, {
-                    rootSessionId: batch[0].sessionId,
-                    purpose: "memory-interpretation",
-                    provider: cheap.provider,
-                    model: cheap.model,
-                  }),
-                ]
-              : [],
-            abortController,
-            stream: false,
-          }).finally(() => clearTimeout(timer));
-        },
-        catch: () => new InterpretationFailed({ reason: "model_call_failed" }),
-      });
+      const answer = yield* Effect.gen(function* () {
+        // TanStack requires a controller; this scope aborts it on completion/interruption.
+        const abortController = yield* Effect.acquireRelease(
+          Effect.sync(() => new AbortController()),
+          (controller) => Effect.sync(() => controller.abort()),
+        );
+        return yield* Effect.tryPromise({
+          try: () =>
+            chat({
+              adapter: services.runtime.adapter(cheap),
+              messages: [{ role: "user", content: `Input (JSON): ${stringifyJson(input)}` }],
+              systemPrompts: [interpretInstructions],
+              threadId: randomUUID(),
+              middleware: isTruthy(batch[0]?.sessionId)
+                ? [
+                    collectApiUsage(usageLedger, {
+                      rootSessionId: batch[0].sessionId,
+                      purpose: "memory-interpretation",
+                      provider: cheap.provider,
+                      model: cheap.model,
+                    }),
+                  ]
+                : [],
+              abortController,
+              stream: false,
+            }),
+          catch: () => new InterpretationFailed({ reason: "model_call_failed" }),
+        });
+      }).pipe(
+        Effect.scoped,
+        Effect.timeoutOrElse({
+          duration: interpretTimeoutMs,
+          orElse: () => Effect.fail(new InterpretationFailed({ reason: "model_call_failed" })),
+        }),
+      );
       const labelled = Option.getOrUndefined(decodeAnswer(answer.match(/\{[\s\S]*\}/)?.[0] ?? ""));
-      if (!labelled) return yield* new InterpretationFailed({ reason: "unreadable_answer" });
+      if (!isTruthy(labelled))
+        return yield* new InterpretationFailed({ reason: "unreadable_answer" });
 
       atomic(() => {
         for (const statement of batch) {
           const result = labelled.statements.find((entry) => entry.id === statement.id);
-          if (!result) continue;
+          if (!isTruthy(result)) continue;
           const offered = candidates.get(statement.id) ?? [];
           const allowed = new Set(offered.map((node) => node.id));
 
@@ -270,7 +296,10 @@ const make = Effect.gen(function* () {
                 break;
             }
           }
-          markDone.run(new Date().toISOString(), statement.id);
+          markDone.run(
+            DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe())),
+            statement.id,
+          );
         }
         // A statement the answer skipped is retried later, like any other failure.
         for (const statement of batch)
@@ -278,7 +307,7 @@ const make = Effect.gen(function* () {
             markFailed.run(
               maxAttempts,
               "missing_from_answer",
-              new Date().toISOString(),
+              DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe())),
               statement.id,
             );
       });
@@ -293,15 +322,17 @@ const make = Effect.gen(function* () {
      * search keeps working either way.
      */
     runPending: Effect.gen(function* () {
+      const effectClock = yield* Clock.Clock;
+
       const selection = yield* active.selected;
-      if (!selection) return 0;
+      if (!isTruthy(selection)) return 0;
       const auth = yield* active.auth(selection);
       if (auth.status !== "signed-in") return 0;
       let interpreted = 0;
       for (let round = 0; round < batchesPerRun; round++) {
         const batch = nextBatch();
         if (batch.length === 0) break;
-        const now = new Date().toISOString();
+        const now = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
         for (const statement of batch) markRunning.run(now, statement.id);
         interpreted += yield* interpretBatch(batch, selection).pipe(
           Effect.catch((error) =>
@@ -309,7 +340,12 @@ const make = Effect.gen(function* () {
               const reason =
                 error instanceof InterpretationFailed ? error.reason : "interpret_failed";
               for (const statement of batch)
-                markFailed.run(maxAttempts, reason, new Date().toISOString(), statement.id);
+                markFailed.run(
+                  maxAttempts,
+                  reason,
+                  DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe())),
+                  statement.id,
+                );
               return 0;
             }),
           ),
@@ -327,7 +363,7 @@ export class Interpreter extends Context.Service<
     /** Whether finished runs start interpretation on their own. Tests run it by hand instead. */
     readonly automatic: boolean;
   }
->()("memory-agent/Interpreter") {
+>()("memory-agent/memory/interpret/Interpreter") {
   static readonly layer = (automatic = true) =>
     Layer.effect(
       Interpreter,

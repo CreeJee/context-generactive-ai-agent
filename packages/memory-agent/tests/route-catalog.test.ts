@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off
 import { Effect, Result, Layer, ManagedRuntime } from "effect";
 import {
   ProviderRegistry,

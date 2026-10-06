@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off globalTimers:off newPromise:off nodeBuiltinImport:off schemaSync:off
+import { isTruthy } from "../src/truthy.ts";
 import { createServer } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { chat } from "@tanstack/ai";
@@ -180,6 +183,8 @@ describe("OpenAI compatible settings", () => {
       Layer.provide(Layer.succeed(GlobalConfig, f.config)),
     );
     const selection = await Effect.runPromise(
+      // Test entry point owns this Layer and its resource scope.
+      // @effect-diagnostics-next-line strictEffectProvide:off
       Effect.flatMap(ActiveProvider, (active) => active.selected).pipe(Effect.provide(layer)),
     );
     expect(selection).toEqual({
@@ -219,8 +224,8 @@ describe("OpenAI compatible settings", () => {
     ).rejects.toThrow();
   });
   it("does not apply an old server's model metadata after an endpoint change", async () => {
-    const started = Effect.runSync(Deferred.make<void>());
-    const response = Effect.runSync(Deferred.make<Response>());
+    const started = Deferred.makeUnsafe<void>();
+    const response = Deferred.makeUnsafe<Response>();
     const f = fixture(async () => {
       await Effect.runPromise(Deferred.succeed(started, undefined));
       return Effect.runPromise(Deferred.await(response));
@@ -622,7 +627,7 @@ describe("OpenAI compatible settings", () => {
       {
         get: async () => key,
         set: async (value) => {
-          if (value?.includes('"key":"second"')) {
+          if (isTruthy(value?.includes('"key":"second"'))) {
             entered?.();
             await gate;
           }
@@ -886,7 +891,7 @@ describe("OpenAI compatible settings", () => {
       requests.push({
         path: request.url ?? "",
         authorization: request.headers.authorization,
-        body: Schema.decodeUnknownSync(Schema.fromJsonString(ChatRequest))(body || "{}"),
+        body: Schema.decodeSync(Schema.fromJsonString(ChatRequest))(body || "{}"),
       });
       if (request.url === "/v1/models") {
         response.setHeader("Content-Type", "application/json");

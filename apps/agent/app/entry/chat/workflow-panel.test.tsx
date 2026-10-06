@@ -1,3 +1,4 @@
+import { isTruthy } from "../../truthy.ts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vite-plus/test";
 import { WorkflowArtifactPanel, workflowModeLabel } from "./workflow-panel";
@@ -17,7 +18,7 @@ const props = {
 };
 function button(html: string, label: string) {
   const match = html.match(new RegExp(`<button[^>]*>\\s*${label}\\s*</button>`));
-  if (!match) throw new Error(`Missing button: ${label}`);
+  if (!isTruthy(match)) throw new Error(`Missing button: ${label}`);
   return match[0];
 }
 

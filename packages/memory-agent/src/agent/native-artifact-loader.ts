@@ -1,3 +1,5 @@
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash } from "node:crypto";
 import {
   constants,
@@ -9,7 +11,11 @@ import {
   realpathSync,
   rmSync,
   writeFileSync,
+  // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+  // @effect-diagnostics-next-line nodeBuiltinImport:off
 } from "node:fs";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Effect, Predicate, Schema } from "effect";
@@ -41,7 +47,7 @@ export class NativeArtifactLoadError extends Schema.TaggedError<NativeArtifactLo
 ) {}
 
 const boundary = <A>(reason: NativeArtifactLoadError["reason"], run: () => A) =>
-  Effect.try({ try: run, catch: (cause) => new NativeArtifactLoadError({ reason, cause }) });
+  Effect.try({ try: run, catch: (cause) => NativeArtifactLoadError.make({ reason, cause }) });
 
 const FactoryExports = Schema.Struct({
   makeRecordingMiddleware: Schema.declare(Predicate.isFunction),
@@ -68,16 +74,16 @@ export const loadTrustedNativeArtifact = Effect.fn("loadTrustedNativeArtifact")(
   options: { readonly explicitlyTrusted: boolean; readonly ownerControlledDirectory: string },
 ) {
   if (options.explicitlyTrusted !== true)
-    return yield* new NativeArtifactLoadError({
+    return yield* NativeArtifactLoadError.make({
       reason: "trust",
       cause: "Explicit caller trust required",
     });
   const descriptor = yield* Schema.decodeUnknownEffect(NativeArtifactDescriptor)(input).pipe(
-    Effect.mapError((cause) => new NativeArtifactLoadError({ reason: "descriptor", cause })),
+    Effect.mapError((cause) => NativeArtifactLoadError.make({ reason: "descriptor", cause })),
   );
   const bytes = yield* boundary("path", () => {
     const url = new URL(descriptor.fileUrl);
-    if (url.protocol !== "file:" || url.search || url.hash)
+    if (url.protocol !== "file:" || url.search.length > 0 || url.hash.length > 0)
       throw new Error("Expected canonical file URL");
     const path = fileURLToPath(url);
     if (pathToFileURL(realpathSync(path)).href !== descriptor.fileUrl)
@@ -91,7 +97,7 @@ export const loadTrustedNativeArtifact = Effect.fn("loadTrustedNativeArtifact")(
     }
   });
   if (createHash("sha256").update(bytes).digest("hex") !== descriptor.sha256)
-    return yield* new NativeArtifactLoadError({ reason: "integrity", cause: "SHA256 mismatch" });
+    return yield* NativeArtifactLoadError.make({ reason: "integrity", cause: "SHA256 mismatch" });
   const directory = yield* Effect.acquireRelease(
     boundary("staging", () => {
       const parent = realpathSync(options.ownerControlledDirectory);
@@ -112,10 +118,10 @@ export const loadTrustedNativeArtifact = Effect.fn("loadTrustedNativeArtifact")(
   // Native import cannot be cancelled. Wait for evaluation to settle before scope removes bytes.
   const module: unknown = yield* Effect.tryPromise({
     try: () => import(/* @vite-ignore */ stagedUrl),
-    catch: (cause) => new NativeArtifactLoadError({ reason: "evaluation", cause }),
+    catch: (cause) => NativeArtifactLoadError.make({ reason: "evaluation", cause }),
   }).pipe(Effect.uninterruptible);
   yield* Schema.decodeUnknownEffect(FactoryExports)(module).pipe(
-    Effect.mapError((cause) => new NativeArtifactLoadError({ reason: "exports", cause })),
+    Effect.mapError((cause) => NativeArtifactLoadError.make({ reason: "exports", cause })),
   );
   // SAFETY: ABI checks all four callable exports; signatures/semantics remain caller-trusted.
   return { descriptor, stagedUrl, factories: module as typeof NativeArtifact };

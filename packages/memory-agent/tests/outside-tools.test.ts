@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,6 +33,8 @@ function layout() {
 
 async function outsideTools(project: string, storage: string) {
   const service = await Effect.runPromise(
+    // Test entry point owns this Layer and its resource scope.
+    // @effect-diagnostics-next-line strictEffectProvide:off
     Effect.provide(
       OutsideTools,
       OutsideTools.layer.pipe(Layer.provide(StorageRoot.layer(storage))),
@@ -49,7 +53,7 @@ async function outsideTools(project: string, storage: string) {
 }
 
 async function run<I, O>(tool: { execute?: ((args: I) => O) | undefined }, input: I) {
-  if (!tool.execute) throw new Error("tool has no server implementation");
+  if (!(tool.execute !== undefined)) throw new Error("tool has no server implementation");
   return tool.execute(input);
 }
 

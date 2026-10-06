@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off
+import { isTruthy } from "../../src/truthy.ts";
 import { Effect, type ManagedRuntime } from "effect";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { Projects } from "../../src/projects/projects.ts";
@@ -59,17 +62,17 @@ export function appFetch(runtime: Runtime): typeof fetch {
         ? chat((agent) => agent.handle(request, sessionId))
         : chat((agent) => agent.hydrate(request, sessionId));
     }
-    if ((match = /^\/api\/sessions\/([^/]+)$/.exec(path)))
+    if (isTruthy((match = /^\/api\/sessions\/([^/]+)$/.exec(path))))
       return chat((agent) => agent.status(match![1]!, url.searchParams.get("holder")));
-    if ((match = /^\/api\/sessions\/([^/]+)\/lease$/.exec(path))) {
+    if (isTruthy((match = /^\/api\/sessions\/([^/]+)\/lease$/.exec(path)))) {
       const { holder: leaseHolder, action } = await body();
       return chat((agent) => agent.lease(match![1]!, leaseHolder, action));
     }
-    if ((match = /^\/api\/sessions\/([^/]+)\/cancel$/.exec(path)))
+    if (isTruthy((match = /^\/api\/sessions\/([^/]+)\/cancel$/.exec(path))))
       return chat((agent) => agent.cancel(match![1]!, holder));
-    if ((match = /^\/api\/sessions\/([^/]+)\/approvals$/.exec(path)))
+    if (isTruthy((match = /^\/api\/sessions\/([^/]+)\/approvals$/.exec(path))))
       return chat((agent) => agent.approvals(match![1]!));
-    if ((match = /^\/api\/sessions\/([^/]+)\/approvals\/([^/]+)$/.exec(path))) {
+    if (isTruthy((match = /^\/api\/sessions\/([^/]+)\/approvals\/([^/]+)$/.exec(path)))) {
       const { approved } = await body();
       return chat((agent) => agent.answerApproval(match![1]!, holder, match![2]!, approved));
     }

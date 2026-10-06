@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { Option, Schema } from "effect";
 import { refsInArguments } from "../memory/refs.ts";
 import { isInjectedText, type InjectedText, type TranscriptReader } from "./items.ts";
@@ -84,7 +85,7 @@ export const codexReader =
   (transcriptId: string): TranscriptReader =>
   (line) => {
     const decoded = Option.getOrUndefined(decodeLine(line));
-    if (!decoded) return [];
+    if (!isTruthy(decoded)) return [];
 
     switch (decoded.type) {
       case "session_meta":
@@ -98,7 +99,7 @@ export const codexReader =
         ];
       case "response_item": {
         const payload = Option.getOrUndefined(decodePayload(decoded.payload));
-        if (!payload) return [];
+        if (!isTruthy(payload)) return [];
         const at = decoded.timestamp;
         const externalId = `${transcriptId}:${decoded.ordinal}`;
         switch (payload.type) {

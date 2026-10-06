@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { Semaphore } from "effect";
 import { Effect } from "effect";
 
@@ -16,7 +17,7 @@ export function keyedSerialLimit() {
     Effect.acquireUseRelease(
       Effect.sync(() => {
         let slot = slots.get(key);
-        if (!slot) {
+        if (!isTruthy(slot)) {
           slot = { semaphore: Semaphore.makeUnsafe(1), users: 0 };
           slots.set(key, slot);
         }

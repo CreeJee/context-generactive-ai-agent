@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 // Implementation references, not service constructors: no Layer/resource is acquired here.
 // Each middleware factory's native service requirements propagate at per-run binding.
 // oxlint-disable-next-line anti-slop-effect/no-service-constructor-imports
@@ -38,7 +39,7 @@ export function createGoalNativeImplementations() {
     },
     forGoal(goalInstanceId: string) {
       let implementation = goals.get(goalInstanceId);
-      if (!implementation) {
+      if (!isTruthy(implementation)) {
         implementation = capture();
         goals.set(goalInstanceId, implementation);
       }

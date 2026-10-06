@@ -18,13 +18,16 @@ const decodeRequest = Schema.decodeUnknownOption(
   Schema.fromJsonString(AnthropicValidationRequestSchema),
 );
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export const prepareAnthropicValidationBody = (
   serializedBody: string,
   sessionId: string,
 ): string => {
-  const decoded = Option.getOrThrowWith(decodeRequest(serializedBody), () => {
-    return new Error("invalid_anthropic_request");
-  });
+  const decoded = Option.getOrThrowWith(
+    decodeRequest(serializedBody),
+    () => new Error("invalid_anthropic_request"),
+  );
 
   const deviceId = sessionId.replaceAll("-", "");
   const userId = JSON.stringify({

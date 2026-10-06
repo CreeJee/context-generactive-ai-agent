@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off newPromise:off nodeBuiltinImport:off processEnv:off schemaSync:off
 import {
   chmodSync,
   copyFileSync,
@@ -289,7 +291,7 @@ for (const damage of ["missing", "tampered"] as const) {
       await currentRuntime.dispose();
       rmSync(fixture.directory, { recursive: true, force: true });
       fixture.directory = "";
-      if (previous === undefined) delete process.env.CONTEXT_AGENT_GOAL_WORKER;
+      if (previous === undefined) Reflect.deleteProperty(process.env, "CONTEXT_AGENT_GOAL_WORKER");
       else process.env.CONTEXT_AGENT_GOAL_WORKER = previous;
     }
   }, 30000);

@@ -45,6 +45,8 @@ const make = Effect.gen(function* () {
     description:
       "Search the web with Kagi. Returns titles, URLs and snippets (summaries, not page text). Each call costs money.",
     inputSchema: toToolSchema(KagiSearchInput),
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
   }).server(async ({ query, limit }, context?: ToolExecutionContext) => {
     const response = await run(
       kagi.search({ query, limit: Math.min(Math.max(limit ?? 10, 1), 20) }, context?.abortSignal),
@@ -61,6 +63,8 @@ const make = Effect.gen(function* () {
     name: "kagi_extract",
     description: `Read up to ${maxExtractUrls} web pages as Markdown with Kagi. Pages can fail one by one while the request succeeds. Each call costs money.`,
     inputSchema: toToolSchema(KagiExtractInput),
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
   }).server(async ({ urls }, context?: ToolExecutionContext) => {
     if (urls.length === 0 || urls.length > maxExtractUrls)
       throw new Error(`invalid_urls: pass 1 to ${maxExtractUrls} URLs.`);
@@ -108,7 +112,7 @@ const make = Effect.gen(function* () {
 });
 
 export class KagiTools extends Context.Service<KagiTools, Effect.Success<typeof make>>()(
-  "memory-agent/KagiTools",
+  "memory-agent/tools/kagi/KagiTools",
 ) {
   static readonly layer = Layer.effect(KagiTools, make);
 }

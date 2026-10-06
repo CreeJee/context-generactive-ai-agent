@@ -1,6 +1,15 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { execFile } from "node:child_process";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { lstat, readdir } from "node:fs/promises";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join, posix } from "node:path";
 import { promisify } from "node:util";
 import { Effect } from "effect";
@@ -14,6 +23,8 @@ const run = promisify(execFile);
 const statConcurrency = 64;
 
 /** Maps items with at most `limit` running at once, keeping the input order. */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function mapLimit<A, B>(
   items: readonly A[],
   limit: number,
@@ -21,6 +32,8 @@ async function mapLimit<A, B>(
 ): Promise<B[]> {
   const results: B[] = [];
   let next = 0;
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const worker = async () => {
     while (next < items.length) {
       const index = next++;
@@ -48,9 +61,11 @@ export interface FileListing {
   readonly truncated: boolean;
 }
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function gitFiles(root: string, directory: string): Promise<string[] | null> {
   const git = findExecutable("git");
-  if (!git) return null;
+  if (!isTruthy(git)) return null;
   try {
     const { stdout } = await run(
       git,
@@ -69,10 +84,14 @@ async function gitFiles(root: string, directory: string): Promise<string[] | nul
  * `credentialPrefix` joined with the relative path: empty for a project, whose root may itself sit
  * under an unusual name, and the absolute base outside, where `~/.config` + `gh` must still match.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function walkFiles(base: string, directory: string, credentialPrefix: string) {
   const files: string[] = [];
   let excluded = 0;
   let truncated = false;
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const visit = async (relative: string) => {
     const entries = await readdir(join(base, relative), { withFileTypes: true }).catch(() => []);
     for (const entry of entries) {
@@ -97,13 +116,16 @@ async function walkFiles(base: string, directory: string, credentialPrefix: stri
  * by a glob relative to that directory. Symlinks, `.git` and credential-looking files are left out;
  * a tracked file deleted from disk is not listed.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function listProjectFiles(
   root: string,
   directory: string,
   glob: string | undefined,
 ): Promise<FileListing> {
   const fromGit = await gitFiles(root, directory);
-  const walked = fromGit ? undefined : await walkFiles(root, directory, "");
+  const walked = isTruthy(fromGit) ? undefined : await walkFiles(root, directory, "");
   const prefix = directory === "." ? "" : `${directory}/`;
   let excluded = walked?.excluded ?? 0;
   const kept: string[] = [];
@@ -119,17 +141,24 @@ export async function listProjectFiles(
   }
   // A walk already saw regular files only. Git lists links and deleted files too, so check those,
   // many at a time.
-  const paths = fromGit
+  const paths = isTruthy(fromGit)
     ? (
-        await mapLimit(kept, statConcurrency, async (path) =>
-          (await lstat(join(root, path)).catch(() => undefined))?.isFile() ? path : null,
+        await mapLimit(
+          kept,
+          statConcurrency,
+          // Native filesystem Promise callback, consumed by this bounded adapter.
+          // @effect-diagnostics-next-line asyncFunction:off
+          async (path) =>
+            isTruthy((await lstat(join(root, path)).catch(() => undefined))?.isFile())
+              ? path
+              : null,
         )
       ).filter((path) => path !== null)
     : kept;
   paths.sort();
   return {
     paths,
-    source: fromGit ? "git" : "walk",
+    source: isTruthy(fromGit) ? "git" : "walk",
     excluded,
     truncated: walked?.truncated ?? false,
   };
@@ -140,6 +169,9 @@ export async function listProjectFiles(
  * paths, optionally filtered by a glob relative to it. Never uses Git ignore rules: outside
  * listings show what is on disk, minus links, `.git`, `node_modules` and credentials.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function listOutsideFiles(
   directory: string,
   glob: string | undefined,

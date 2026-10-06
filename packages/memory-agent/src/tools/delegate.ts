@@ -1,3 +1,7 @@
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
+import { randomUUID } from "node:crypto";
+import { isTruthy } from "../truthy.ts";
 import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
 import { Context, Effect, Layer, Schema } from "effect";
 import { RelayedApprovals } from "../approvals/relayed.ts";
@@ -69,7 +73,7 @@ const make = Effect.gen(function* () {
       project: Project,
       sessionId: string,
       signal: AbortSignal,
-      runId: string = crypto.randomUUID(),
+      runId: string = randomUUID(),
     ): DelegateToolset {
       const available = agents.available(project);
       if (available.length === 0) return { tools: [], instructions: null };
@@ -83,7 +87,7 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             const receipt = yield* background.start(
               { sessionId, runId, abortSignal: signal },
-              context?.toolCallId ?? crypto.randomUUID(),
+              context?.toolCallId ?? randomUUID(),
               "external_agent",
               task,
               backgroundOperation((runSignal) =>
@@ -114,10 +118,10 @@ const make = Effect.gen(function* () {
             );
             const saved = yield* background.waitResult(sessionId, receipt.taskId, yieldMs ?? 1000);
             if (saved?.status === "completed")
-              return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ExternalResult))(
+              return yield* Schema.decodeEffect(Schema.fromJsonString(ExternalResult))(
                 saved.result,
               );
-            if (saved) return { taskId: receipt.taskId, ...saved };
+            if (isTruthy(saved)) return { taskId: receipt.taskId, ...saved };
             return receipt;
           }),
         ),
@@ -128,7 +132,7 @@ const make = Effect.gen(function* () {
 });
 
 export class DelegateTools extends Context.Service<DelegateTools, Effect.Success<typeof make>>()(
-  "memory-agent/DelegateTools",
+  "memory-agent/tools/delegate/DelegateTools",
 ) {
   static readonly layer = Layer.effect(DelegateTools, make);
 }

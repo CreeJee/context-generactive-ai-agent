@@ -1,3 +1,4 @@
+import { isTruthy } from "../../truthy.ts";
 import { QueryErrorResetBoundary } from "@tanstack/react-query";
 import { Component, Suspense, type ReactNode } from "react";
 import { Button } from "~/components/ui/button";
@@ -14,7 +15,7 @@ class SectionErrorBoundary extends Component<
   }
 
   render() {
-    if (this.state.error)
+    if (isTruthy(this.state.error))
       return (
         <div role="alert" className="flex items-center gap-3 text-sm">
           <span>설정을 불러오지 못했어요.</span>

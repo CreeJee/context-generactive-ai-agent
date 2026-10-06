@@ -1,3 +1,4 @@
+import { isTruthy } from "../../truthy.ts";
 import { ArrowUpIcon, CheckIcon, ImagePlusIcon, SquareIcon, WandSparklesIcon } from "lucide-react";
 import { type Ref, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
@@ -225,9 +226,12 @@ export function ChatComposer({
                 event.stopPropagation();
                 return;
               }
-              if (!suggestions.length || (event.key !== "ArrowDown" && event.key !== "ArrowUp"))
+              if (
+                !isTruthy(suggestions.length) ||
+                (event.key !== "ArrowDown" && event.key !== "ArrowUp")
+              )
                 event.stopPropagation();
-              if (suggestions.length > 0 && highlighted) {
+              if (suggestions.length > 0 && isTruthy(highlighted)) {
                 if (event.key === "ArrowDown" || event.key === "ArrowUp") return;
                 const completes =
                   event.key === "Tab" ||
@@ -332,7 +336,7 @@ export function ChatComposer({
                   size="xs"
                   variant={(run.workflow?.phase ?? "chat") === phase ? "secondary" : "ghost"}
                   disabled={
-                    !run.actions?.phases[phase].allowed ||
+                    !isTruthy(run.actions?.phases[phase].allowed) ||
                     run.controlling ||
                     mutationBlocked ||
                     generating ||

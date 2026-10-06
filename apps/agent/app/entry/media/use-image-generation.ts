@@ -11,6 +11,8 @@ export function useImageGeneration(onProblem: (message: string) => void) {
   const consentMutation = useCrossProviderConsentMutation();
   const settings = useImageSettingsQuery().data ?? null;
   const generation = useMutation({
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     mutationFn: async (prompt: string) => {
       try {
         return await api.generateImage(prompt, true);
@@ -19,7 +21,7 @@ export function useImageGeneration(onProblem: (message: string) => void) {
           failure instanceof ApiError &&
           failure.code === "image_approval_required" &&
           failure.reason === "cross_provider" &&
-          failure.approval
+          failure.approval !== undefined
             ? await chooseCrossProviderApproval(failure.approval)
             : null;
         if (choice === null) throw failure;
@@ -37,6 +39,8 @@ export function useImageGeneration(onProblem: (message: string) => void) {
     },
   });
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const generate = async (prompt: string) => {
     if (generation.isPending) return false;
     try {

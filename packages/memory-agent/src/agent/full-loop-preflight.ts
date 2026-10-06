@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { convertSchemaToJsonSchema, type AnyTextAdapter } from "@tanstack/ai";
 import type { ChatExecutionCapabilities, ChatExecutionTurn } from "./chat-execution.ts";
 
@@ -23,11 +24,14 @@ export const fullLoopHooks = new Set([
  * not dispatch SDK hooks or model/tool calls and grants no owner authority.
  * Prepare the complete owner capability set first; admission is a separate commit.
  */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function preflightFullLoopExecution<TAdapter extends AnyTextAdapter>(
   turn: ChatExecutionTurn<TAdapter>,
   capabilities: ChatExecutionCapabilities<TAdapter>,
 ): void {
-  if (turn.resume?.length) throw new Error("Worker interrupt continuation is not yet supported");
+  if (isTruthy(turn.resume?.length))
+    throw new Error("Worker interrupt continuation is not yet supported");
   const declared = new Set(capabilities.middleware.flatMap((mw) => [...(mw.provides ?? [])]));
   for (const mw of capabilities.middleware) {
     for (const required of mw.requires ?? []) {
@@ -57,8 +61,12 @@ export function preflightFullLoopExecution<TAdapter extends AnyTextAdapter>(
     capabilities.tools.map((tool) => ({
       name: tool.name,
       description: tool.description,
-      inputSchema: tool.inputSchema ? convertSchemaToJsonSchema(tool.inputSchema) : undefined,
-      outputSchema: tool.outputSchema ? convertSchemaToJsonSchema(tool.outputSchema) : undefined,
+      inputSchema: isTruthy(tool.inputSchema)
+        ? convertSchemaToJsonSchema(tool.inputSchema)
+        : undefined,
+      outputSchema: isTruthy(tool.outputSchema)
+        ? convertSchemaToJsonSchema(tool.outputSchema)
+        : undefined,
       needsApproval: tool.needsApproval,
     })),
   );

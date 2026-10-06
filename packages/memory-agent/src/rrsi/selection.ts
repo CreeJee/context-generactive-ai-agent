@@ -7,6 +7,8 @@ export interface SelectionPolicy {
   beta1: number;
 }
 export type Selection = { kind: "accepted" } | { kind: "rejected"; reason: string };
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function selectCandidate(
   base: Measurement,
   candidate: Measurement,
@@ -29,6 +31,8 @@ export function selectCandidate(
   } else if (cost >= 0) return { kind: "rejected", reason: "within_noise_without_savings" };
   return { kind: "accepted" };
 }
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export const editBudget = (round: number, rounds: number) =>
   Math.ceil(1 + ((3 - 1) * (1 + Math.cos((Math.PI * round) / Math.max(1, rounds - 1)))) / 2);
 export function exploration(

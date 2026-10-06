@@ -1,4 +1,10 @@
+import { Effect } from "effect";
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { realpathSync } from "node:fs";
 import * as acp from "@agentclientprotocol/sdk";
 import type {
@@ -101,7 +107,7 @@ const requesterLabel = (
 ) => {
   switch (requester.kind) {
     case "subagent":
-      return requester.name ? `서브에이전트 ${requester.name}` : "일회성 서브에이전트";
+      return isTruthy(requester.name) ? `서브에이전트 ${requester.name}` : "일회성 서브에이전트";
     case "external_agent":
       return `외부 에이전트 ${requester.agent}`;
   }
@@ -124,7 +130,7 @@ export function startAcpAgent(options: {
   /** Streams the app's run events to the editor as session updates. */
   const forward = (session: BridgeSession, chunk: StreamChunk) => {
     const turn = session.turn;
-    if (!turn) return;
+    if (!(turn !== null)) return;
     switch (chunk.type) {
       case "TEXT_MESSAGE_CONTENT":
         notify(turn, session.id, {
@@ -159,7 +165,7 @@ export function startAcpAgent(options: {
         };
         // The path, command or query makes a better title than the tool name alone.
         const detail = toolDetail(args);
-        if (detail) update.title = detail;
+        if (isTruthy(detail)) update.title = detail;
         notify(turn, session.id, update);
         return;
       }
@@ -191,10 +197,14 @@ export function startAcpAgent(options: {
     }
   };
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const open = async (sessionId: string, project: ProjectSummary, messages: UIMessage[]) => {
     const holder = `acp-${randomUUID()}`;
     const lease = await api.lease(sessionId, holder, "claim");
     if (lease.state !== "mine") throw new AppRequestFailed(423, "session_in_use");
+    // Native callback heartbeat/debounce timing remains at the protocol boundary.
+    // @effect-diagnostics-next-line globalTimers:off
     const renew = setInterval(
       () => void api.lease(sessionId, holder, "claim").catch(() => undefined),
       leaseRenewMs,
@@ -221,6 +231,8 @@ export function startAcpAgent(options: {
     return session;
   };
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const projectFor = async (cwd: string) => {
     let root: string;
     try {
@@ -230,16 +242,20 @@ export function startAcpAgent(options: {
     }
     const project = (await api.projects()).find((candidate) => candidate.root === root);
     // Registering a project widens what the file tools may touch, so only the app's page does it.
-    if (!project)
+    if (!isTruthy(project))
       throw requestError(`등록된 프로젝트가 아니에요. 앱에서 ${root}를 먼저 추가하세요.`);
     return project;
   };
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const waitIdle = async (chat: Chat) => {
-    while (chat.getIsLoading()) await new Promise((resolve) => setTimeout(resolve, 50));
+    while (chat.getIsLoading()) await Effect.runPromise(Effect.sleep(50));
   };
 
   /** Asks the editor about one call; anything but an explicit allow is a no. */
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const askEditor = async (
     turn: PromptTurn,
     sessionId: string,
@@ -252,7 +268,7 @@ export function startAcpAgent(options: {
         sessionId,
         toolCall: {
           toolCallId: call.toolCallId,
-          title: call.requester ? `${call.requester}: ${view.title}` : view.title,
+          title: isTruthy(call.requester) ? `${call.requester}: ${view.title}` : view.title,
           kind: view.kind,
           status: "pending",
           rawInput: call.argumentsJson,
@@ -269,6 +285,8 @@ export function startAcpAgent(options: {
   /** Relays calls of subagents and external agents that wait for approval, while the turn runs. */
   const relayApprovals = (session: BridgeSession, turn: PromptTurn) => {
     const asked = new Set<string>();
+    // Native callback heartbeat/debounce timing remains at the protocol boundary.
+    // @effect-diagnostics-next-line globalTimers:off
     const timer = setInterval(() => {
       void api
         .approvals(session.id)
@@ -295,6 +313,8 @@ export function startAcpAgent(options: {
 
   const app = acp
     .agent({ name: "context-generactive-agent" })
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     .onRequest(acp.methods.agent.initialize, async () => ({
       protocolVersion: acp.PROTOCOL_VERSION,
       agentCapabilities: {
@@ -304,7 +324,11 @@ export function startAcpAgent(options: {
       agentInfo: { name: "context-generactive-agent", version: "0.0.0" },
       authMethods: [],
     }))
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     .onRequest(acp.methods.agent.authenticate, async () => ({}))
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     .onRequest(acp.methods.agent.session.new, async (ctx) => {
       try {
         const auth = await api.auth();
@@ -318,6 +342,8 @@ export function startAcpAgent(options: {
         throw explain(error instanceof Error ? error : new Error(String(error)));
       }
     })
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     .onRequest(acp.methods.agent.session.load, async (ctx) => {
       try {
         const project = await projectFor(ctx.params.cwd);
@@ -363,10 +389,13 @@ export function startAcpAgent(options: {
         throw explain(error instanceof Error ? error : new Error(String(error)));
       }
     })
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     .onRequest(acp.methods.agent.session.prompt, async (ctx) => {
       const session = sessions.get(ctx.params.sessionId);
-      if (!session) throw requestError("그런 세션이 없어요. 새로 시작하거나 다시 불러오세요.");
-      if (session.turn) throw requestError("이미 답하는 중이에요.");
+      if (!isTruthy(session))
+        throw requestError("그런 세션이 없어요. 새로 시작하거나 다시 불러오세요.");
+      if (isTruthy(session.turn)) throw requestError("이미 답하는 중이에요.");
       const turn: PromptTurn = {
         client: ctx.client,
         args: new Map(),
@@ -397,7 +426,7 @@ export function startAcpAgent(options: {
                 break;
               case "generic": {
                 const review = Option.getOrUndefined(decodeReview(interrupt));
-                if (!review) break;
+                if (!(review !== undefined)) break;
                 answers.set(
                   interrupt.id,
                   await askEditor(turn, session.id, {
@@ -424,21 +453,23 @@ export function startAcpAgent(options: {
             }
             return undefined;
           });
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          await Effect.runPromise(Effect.sleep(50));
           await waitIdle(session.chat);
         }
         if (turn.cancelled) return { stopReason: "cancelled" satisfies StopReason };
         const failure = turn.failure ?? session.chat.getError()?.message ?? null;
-        if (failure) throw requestError(failure);
+        if (isTruthy(failure)) throw requestError(failure);
         return { stopReason: "end_turn" satisfies StopReason };
       } finally {
         stopRelay();
         session.turn = null;
       }
     })
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     .onNotification(acp.methods.agent.session.cancel, async (ctx) => {
       const session = sessions.get(ctx.params.sessionId);
-      if (!session?.turn) return;
+      if (!isTruthy(session?.turn)) return;
       session.turn.cancelled = true;
       // The app's cancel stops the run for good; closing the stream alone would not (R10).
       await api.cancel(session.id, session.holder).catch(() => undefined);

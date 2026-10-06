@@ -1,3 +1,6 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -19,6 +22,8 @@ import {
 } from "./validation-harness.ts";
 
 /** Synchronous selection at request/run creation; each profile owns its client and refresh lock. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function createAccountBoundSubscriptionClients(
   sqlite: DatabaseSync,
   provider: OAuthProvider,
@@ -38,8 +43,18 @@ export function createAccountBoundSubscriptionClients(
     listOAuthProfiles(sqlite, provider).find((profile) => profile.selected)?.id ?? null;
   const clientFor = (id: string | null) => {
     const key = id ?? "__legacy__";
+    const configured = listOAuthProfiles(sqlite, provider);
+    for (const cachedId of cache.keys()) {
+      if (
+        cachedId !== key &&
+        cachedId !== "__legacy__" &&
+        !configured.some((profile) => profile.id === cachedId)
+      )
+        cache.delete(cachedId);
+    }
+    if (configured.length > 0) cache.delete("__legacy__");
     let client = cache.get(key);
-    if (!client) {
+    if (!isTruthy(client)) {
       client = createClient(id);
       cache.set(key, client);
     }
@@ -47,7 +62,9 @@ export function createAccountBoundSubscriptionClients(
   };
   const legacyAllowed = () =>
     listOAuthProfiles(sqlite, provider).length === 0 &&
-    !sqlite.prepare("SELECT provider FROM oauth_legacy_removed WHERE provider = ?").get(provider);
+    !isTruthy(
+      sqlite.prepare("SELECT provider FROM oauth_legacy_removed WHERE provider = ?").get(provider),
+    );
   const current = () => {
     const id = selectedId();
     if (id !== null) return clientFor(id);
@@ -75,11 +92,20 @@ export function createAccountBoundSubscriptionClients(
           : Promise.resolve({ provider, connected: false, expiresAt: null }),
       modelCatalog: () => current().modelCatalog(),
       // Explicit login always creates a fresh slot, including after legacy account removal.
+      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+      // @effect-diagnostics-next-line asyncFunction:off
       startLogin: async () => {
         const id = randomUUID();
-        const attempt = await clientFor(id).startLogin();
+        const attempt = await clientFor(id)
+          .startLogin()
+          .catch((error) => {
+            cache.delete(id);
+            throw error;
+          });
         let cancelled = false;
         const completed = attempt.completed
+          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+          // @effect-diagnostics-next-line asyncFunction:off
           .then(async (connection) => {
             if (cancelled) throw new OAuthHarnessError("cancelled");
             if (!connection.connected) throw new OAuthHarnessError("not_connected");
@@ -93,6 +119,8 @@ export function createAccountBoundSubscriptionClients(
             if (selectedId() === null) await selectOAuthProfile(sqlite, provider, id, accounts);
             return connection;
           })
+          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+          // @effect-diagnostics-next-line asyncFunction:off
           .catch(async (error) => {
             // A published account must survive a selection failure or late cancellation.
             if (!listOAuthProfiles(sqlite, provider).some((profile) => profile.id === id)) {
@@ -110,13 +138,18 @@ export function createAccountBoundSubscriptionClients(
           },
         };
       },
+      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+      // @effect-diagnostics-next-line asyncFunction:off
       disconnect: async () => {
         const id = selectedId();
-        if (id !== null) await removeOAuthProfile(sqlite, provider, id, accounts, legacy);
-        else if (legacyAllowed()) {
+        if (id !== null) {
+          await removeOAuthProfile(sqlite, provider, id, accounts, legacy);
+          cache.delete(id);
+        } else if (legacyAllowed()) {
           const finishRemoval = beginOAuthProfileRemoval(sqlite, provider, "__legacy__");
           try {
             await clientFor(null).disconnect();
+            cache.delete("__legacy__");
           } finally {
             finishRemoval();
           }

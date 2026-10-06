@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off processEnv:off schemaSync:off
 import { Effect, Schema } from "effect";
 
 import { describe, expect, test } from "vite-plus/test";
@@ -31,7 +33,7 @@ const request = (sessionId: string, runId: string) =>
   });
 const offsets = (stream: string) => [...stream.matchAll(/^id: (.+)$/gm)].map((match) => match[1]!);
 const restore = (previous: string | undefined) => {
-  if (previous === undefined) delete process.env.CONTEXT_AGENT_GOAL_WORKER;
+  if (previous === undefined) Reflect.deleteProperty(process.env, "CONTEXT_AGENT_GOAL_WORKER");
   else process.env.CONTEXT_AGENT_GOAL_WORKER = previous;
 };
 

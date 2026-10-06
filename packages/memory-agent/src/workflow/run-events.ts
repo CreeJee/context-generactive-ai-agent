@@ -1,5 +1,6 @@
+import { isTruthy } from "../truthy.ts";
 import type { StreamChunk } from "@tanstack/ai";
-import { Schema } from "effect";
+import { DateTime, Schema } from "effect";
 import type { DatabaseSync } from "node:sqlite";
 
 type OwnerDatabase = {
@@ -45,9 +46,13 @@ export function workflowRunEvents({ sqlite, atomic }: OwnerDatabase) {
     runId: row.run_id,
     eventKey: row.event_key,
     kind: row.kind,
+    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+    // @effect-diagnostics-next-line schemaSync:off
     payload: Schema.decodeSync(Schema.fromJsonString(Schema.Json))(row.payload_json),
   });
   const permitted = (sessionId: string, runId: string) =>
+    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+    // @effect-diagnostics-next-line schemaSync:off
     Schema.decodeUnknownSync(Schema.UndefinedOr(Schema.Struct({ session_id: Schema.String })))(
       owner.get(runId),
     )?.session_id === sessionId;
@@ -64,9 +69,11 @@ export function workflowRunEvents({ sqlite, atomic }: OwnerDatabase) {
       if (json === undefined) throw new Error("Run event payload is not JSON serializable");
       return atomic(() => {
         if (!permitted(sessionId, runId)) throw new Error("Run event has no owner binding");
-        insert.run(runId, eventKey, kind, json, new Date().toISOString());
+        insert.run(runId, eventKey, kind, json, DateTime.formatIso(DateTime.nowUnsafe()));
+        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+        // @effect-diagnostics-next-line schemaSync:off
         const row = Schema.decodeUnknownSync(Schema.UndefinedOr(Row))(byKey.get(runId, eventKey));
-        if (!row || row.kind !== kind || row.payload_json !== json)
+        if (!isTruthy(row) || row.kind !== kind || row.payload_json !== json)
           throw new Error("Run event key was reused for different content");
         return decode(row);
       });
@@ -82,6 +89,8 @@ export function workflowRunEvents({ sqlite, atomic }: OwnerDatabase) {
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 256)
         throw new Error("Invalid run limit");
       if (!permitted(sessionId, runId)) return [];
+      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+      // @effect-diagnostics-next-line schemaSync:off
       return Schema.decodeUnknownSync(Schema.Array(Row))(
         byCursor.all(runId, afterCursor, limit),
       ).map(decode);

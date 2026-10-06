@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { Option, Schema } from "effect";
 import { refsInArguments } from "../memory/refs.ts";
 import { isInjectedText, type InjectedText, type TranscriptItem } from "./items.ts";
@@ -71,7 +72,7 @@ const stripReminders = (text: string) =>
 /** Reads one line of a Claude Code transcript. */
 export function readClaudeCodeLine(line: string): readonly TranscriptItem[] {
   const decoded = Option.getOrUndefined(decodeLine(line));
-  if (!decoded || decoded.isSidechain === true || decoded.isMeta === true) return [];
+  if (!isTruthy(decoded) || decoded.isSidechain === true || decoded.isMeta === true) return [];
 
   const items: TranscriptItem[] = [];
   if (decoded.cwd !== undefined && decoded.sessionId !== undefined)
@@ -90,7 +91,7 @@ export function readClaudeCodeLine(line: string): readonly TranscriptItem[] {
 
   parts.forEach((part, index) => {
     const decodedPart = Option.getOrUndefined(decodePart(part));
-    if (!decodedPart) return;
+    if (!isTruthy(decodedPart)) return;
     switch (decodedPart.type) {
       case "text": {
         const text = stripReminders(decodedPart.text);

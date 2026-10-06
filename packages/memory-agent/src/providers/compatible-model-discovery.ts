@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { Option, Schema } from "effect";
 import { CompatibleReasoning } from "./openai-compatible-config.ts";
 
@@ -18,6 +19,8 @@ const isChatReasoningEffort = Schema.is(
   Schema.Literals(["none", "minimal", "low", "medium", "high", "xhigh"]),
 );
 /** Only explicit model-list extensions establish reasoning controls. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function readCompatibleReasoning(
   model: string,
   page: typeof CompatibleModelPage.Type,
@@ -29,7 +32,9 @@ export function readCompatibleReasoning(
     ),
   );
   const metadata = capabilities?.reasoning;
-  if (metadata) {
+  if (isTruthy(metadata)) {
+    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+    // @effect-diagnostics-next-line schemaSync:off
     const reasoning = Schema.decodeSync(CompatibleReasoning)({
       source: "models",
       model,

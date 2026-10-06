@@ -1,7 +1,9 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { chat } from "@tanstack/ai";
-import { Effect, Layer } from "effect";
+import { Random, Effect, Layer } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { Embedder, EmbeddingError } from "../src/memory/embedding/embedder.ts";
@@ -60,7 +62,7 @@ async function earlierSession(runtime: Runtime, projectId: string, sessionId: st
 async function otherProject(runtime: Runtime, base: string, text: string) {
   return runtime.runPromise(
     Effect.gen(function* () {
-      const root = join(base, `other-${Math.random().toString(36).slice(2)}`);
+      const root = join(base, `other-${(yield* Random.next).toString(36).slice(2)}`);
       mkdirSync(root);
       const project = yield* (yield* Projects).add(root);
       const session = yield* (yield* Sessions).create(project.id);

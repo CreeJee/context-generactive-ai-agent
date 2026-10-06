@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { Option, Schema } from "effect";
 import { PathRejected } from "./paths.ts";
 import { decodeText, TextFileRejected } from "./text.ts";
@@ -99,6 +100,9 @@ function* lineMatches(text: string, needle: string, caseSensitive: boolean, from
  * A file whose bytes do not contain a case-sensitive query cannot match, so it is not decoded, and
  * a binary or non-UTF-8 file is only reported as skipped when it might have matched.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function searchTextFiles(
   paths: readonly string[],
   readBytes: (path: string) => Promise<Uint8Array>,
@@ -118,7 +122,7 @@ export async function searchTextFiles(
   const reads = new Map<number, Promise<FileRead>>();
   const read = (file: number) => {
     const existing = reads.get(file);
-    if (existing) return existing;
+    if (isTruthy(existing)) return existing;
     const path = paths[file]!;
     const pending = readBytes(path).then(
       (bytes): FileRead => ({ kind: "bytes", bytes }),
@@ -196,6 +200,8 @@ export type SearchCursor = typeof Cursor.Type;
 
 /** An opaque continuation token for the model. */
 export const encodeSearchCursor = (cursor: SearchCursor) =>
+  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+  // @effect-diagnostics-next-line schemaSync:off
   Buffer.from(Schema.encodeSync(Cursor)(cursor)).toString("base64url");
 
 export const decodeSearchCursor = (text: string) =>

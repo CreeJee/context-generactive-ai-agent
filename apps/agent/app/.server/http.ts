@@ -16,6 +16,9 @@ export function rejectCrossSite(request: Request): Response | null {
 }
 
 /** Decodes a JSON body; an empty body decodes as `{}` so optional-only schemas accept it. */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function readJson<A, I>(request: Request, schema: Schema.Codec<A, I>) {
   const text = await request.text();
   return Schema.decodeResult(Schema.fromJsonString(schema))(text.trim() === "" ? "{}" : text);

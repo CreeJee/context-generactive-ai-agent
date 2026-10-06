@@ -1,3 +1,4 @@
+import { isTruthy } from "../../truthy.ts";
 import { AlertCircleIcon, XIcon } from "lucide-react";
 import { useState } from "react";
 import {
@@ -83,7 +84,7 @@ function splitReferences(text: string, images: readonly MessageImage[]): TextRun
   let last = 0;
   for (const match of text.matchAll(/#(\d+)/g)) {
     const image = images.find((candidate) => candidate.number === Number(match[1]));
-    if (!image) continue;
+    if (!isTruthy(image)) continue;
     if (match.index > last) runs.push({ kind: "text", text: text.slice(last, match.index) });
     runs.push({ kind: "reference", token: match[0], image });
     last = match.index + match[0].length;

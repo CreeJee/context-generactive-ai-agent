@@ -15,9 +15,11 @@ const QueueEdit = Schema.Union([
  * POST /api/sessions/:session/queue/:message { action } — edit (store unsaved text), save, remove,
  * or confirm a held message. Only the page holding the session may change the queue.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request, params }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
-  if (rejected) return rejected;
+  if (rejected !== null) return rejected;
   const body = await readJson(request, QueueEdit);
   if (Result.isFailure(body))
     return Response.json({ error: "invalid_queue_edit" }, { status: 400 });

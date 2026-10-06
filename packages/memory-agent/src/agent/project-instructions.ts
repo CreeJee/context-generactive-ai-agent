@@ -1,5 +1,9 @@
 import type { ChatMiddleware } from "@tanstack/ai";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { glob } from "node:fs/promises";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { sep } from "node:path";
 import { Result, Schema } from "effect";
 import { isCredentialPath, resolveProjectPath } from "../files/paths.ts";
@@ -12,13 +16,16 @@ export function projectInstructions(root: string): ChatMiddleware {
   let instructions: string | undefined;
   return {
     name: "memory-agent/project-instructions",
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async onConfig(_ctx, config) {
       if (instructions === undefined) {
         const resolved = resolveProjectPath(root, "AGENTS.md", "new-or-file");
         if (Result.isFailure(resolved)) throw resolved.failure;
-        const rootText = resolved.success.stats
-          ? (await readTextFile(resolved.success.absolute, "AGENTS.md")).text
-          : "";
+        const rootText =
+          resolved.success.stats !== undefined
+            ? (await readTextFile(resolved.success.absolute, "AGENTS.md")).text
+            : "";
         const paths: string[] = [];
         for await (const entry of glob("**/AGENTS.md", {
           cwd: root,

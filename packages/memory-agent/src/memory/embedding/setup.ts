@@ -1,3 +1,4 @@
+import { isTruthy } from "../../truthy.ts";
 import { totalmem } from "node:os";
 import { Context, Effect, Layer } from "effect";
 import {
@@ -45,7 +46,7 @@ export interface EmbeddingOverview {
  * checked unless asked.
  */
 const wantsCheck = (settings: Settings, memoryBytes: number) => {
-  if (settings.gpuCheck) return false;
+  if (isTruthy(settings.gpuCheck)) return false;
   switch (settings.embeddingDevice ?? "auto") {
     case "cpu":
       return false;
@@ -130,7 +131,7 @@ const make = Effect.gen(function* () {
 
 /** How the embedding model runs: the setting, what it resolves to, and whether WebGPU works. */
 export class EmbeddingSetup extends Context.Service<EmbeddingSetup, Effect.Success<typeof make>>()(
-  "memory-agent/EmbeddingSetup",
+  "memory-agent/memory/embedding/setup/EmbeddingSetup",
 ) {
   static readonly layer = Layer.effect(EmbeddingSetup, make).pipe(
     Layer.provideMerge(MemoryGraphMaintenance.layer),

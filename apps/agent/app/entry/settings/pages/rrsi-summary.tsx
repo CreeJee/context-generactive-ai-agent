@@ -1,3 +1,4 @@
+import { isTruthy } from "../../../truthy.ts";
 import type { ExperimentRecord, HarnessVersion } from "memory-agent";
 import { FieldDescription } from "~/components/ui/field";
 
@@ -40,14 +41,15 @@ export function AppliedSettings({
         <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 break-words text-sm">
           <dt>기억 검색 개수</dt>
           <dd>
-            {previous && previous.profile.retrievalLeadLimit !== current.profile.retrievalLeadLimit
+            {isTruthy(previous) &&
+            previous.profile.retrievalLeadLimit !== current.profile.retrievalLeadLimit
               ? `${previous.profile.retrievalLeadLimit}개 → `
               : ""}
             {current.profile.retrievalLeadLimit}개
           </dd>
           <dt>기억 검색 길이</dt>
           <dd>
-            {previous &&
+            {isTruthy(previous) &&
             previous.profile.retrievalTokenLimit !== current.profile.retrievalTokenLimit
               ? `${previous.profile.retrievalTokenLimit}토큰 → `
               : ""}
@@ -105,7 +107,7 @@ export function ExperimentSummary({
           : "이 평가에서 적용된 변경은 없어요."}
       </p>
       {status !== "running" && <FieldDescription>{reason}</FieldDescription>}
-      {progress ? (
+      {isTruthy(progress) ? (
         <FieldDescription>
           {status === "running" ? "현재 단계" : "마지막 기록된 단계"}: {phaseLabels[progress.phase]}{" "}
           · {progress.completed}/{progress.total}{" "}
@@ -117,7 +119,7 @@ export function ExperimentSummary({
         </FieldDescription>
       ) : (
         <FieldDescription>
-          {baselines?.length
+          {isTruthy(baselines?.length)
             ? `현재 설정의 반복 평가 ${baselines.length}/3회를 완료했어요.`
             : "이 기록에는 과제별 진행 정보가 없어 정확한 완료 개수를 알 수 없어요."}
         </FieldDescription>

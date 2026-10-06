@@ -1,5 +1,6 @@
+import { isTruthy } from "../truthy.ts";
 import type { DatabaseSync } from "node:sqlite";
-import { Schema } from "effect";
+import { DateTime, Schema } from "effect";
 
 const Pin = Schema.Struct({
   goalInstanceId: Schema.String,
@@ -22,15 +23,19 @@ export function makeGoalWorkerGenerationStore(owner: {
   const insert = owner.sqlite.prepare(`INSERT INTO workflow_goal_worker_generations
     (goal_instance_id, source_generation, manifest_hash, worker_url, created_at)
     VALUES (?, ?, ?, ?, ?)`);
+  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+  // @effect-diagnostics-next-line schemaSync:off
   const decode = Schema.decodeUnknownSync(Schema.UndefinedOr(Pin));
   return {
     get: (goalInstanceId: string) => decode(read.get(goalInstanceId)),
     hasUnpinnedDispatch: (goalInstanceId: string) => Boolean(oldDispatch.get(goalInstanceId)),
     record(pin: GoalWorkerGenerationPin): GoalWorkerGenerationPin {
-      const expected = Schema.decodeUnknownSync(Pin)(pin);
+      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+      // @effect-diagnostics-next-line schemaSync:off
+      const expected = Schema.decodeSync(Pin)(pin);
       return owner.atomic(() => {
         const existing = decode(read.get(expected.goalInstanceId));
-        if (existing) {
+        if (isTruthy(existing)) {
           if (
             existing.sourceGeneration !== expected.sourceGeneration ||
             existing.manifestHash !== expected.manifestHash ||
@@ -41,14 +46,14 @@ export function makeGoalWorkerGenerationStore(owner: {
         }
         // A previous dispatch proves code ran, but not which source assets it used.
         // Never invent a generation for an old Goal or auto-reexecute its runs.
-        if (oldDispatch.get(expected.goalInstanceId))
+        if (isTruthy(oldDispatch.get(expected.goalInstanceId)))
           throw new Error("Existing Goal execution has no recoverable source pin");
         insert.run(
           expected.goalInstanceId,
           expected.sourceGeneration,
           expected.manifestHash,
           expected.workerUrl,
-          new Date().toISOString(),
+          DateTime.formatIso(DateTime.nowUnsafe()),
         );
         return expected;
       });

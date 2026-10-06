@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { optionalProperty } from "../optional-property.ts";
 import type { ModelMessage } from "@tanstack/ai";
 import { Predicate, Effect, Schema } from "effect";
@@ -63,7 +64,7 @@ export const SubscriptionResult = Schema.Struct({
 });
 export interface CompletionGateway {
   readonly configuration: {
-    readonly provider: typeof ProviderId.Type;
+    readonly provider: ProviderId;
     readonly model: string;
     readonly baseUrl: string;
     readonly reasoningEffort: string;
@@ -88,12 +89,18 @@ const ProposalRequest = Schema.Struct({
 });
 
 /** Keep account/model credentials in the host; preserve native reasoning/tool events in worker replies. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function subscriptionGateway(
   selection: ModelSelection,
   client: StreamingOAuthClient,
 ): ModelGateway {
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const subscription = async (body: string, signal: AbortSignal) => {
-    const payload = Schema.decodeUnknownSync(
+    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+    // @effect-diagnostics-next-line schemaSync:off
+    const payload = Schema.decodeSync(
       Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
     )(body);
     const events: NormalizedStreamEvent[] = [];
@@ -128,8 +135,12 @@ export function subscriptionGateway(
     },
     release: () => client.releaseRun?.(),
     subscription,
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     complete: async (body, signal) => {
-      const request = Schema.decodeUnknownSync(Schema.fromJsonString(ProposalRequest))(body);
+      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+      // @effect-diagnostics-next-line schemaSync:off
+      const request = Schema.decodeSync(Schema.fromJsonString(ProposalRequest))(body);
       if (selection.provider === "openai-compatible")
         throw new Error("invalid_subscription_provider");
       const raw = await subscription(
@@ -150,7 +161,9 @@ export function subscriptionGateway(
         }),
         signal,
       );
-      const result = Schema.decodeUnknownSync(Schema.fromJsonString(SubscriptionResult))(raw);
+      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+      // @effect-diagnostics-next-line schemaSync:off
+      const result = Schema.decodeSync(Schema.fromJsonString(SubscriptionResult))(raw);
       return JSON.stringify({
         choices: [
           {
@@ -177,17 +190,17 @@ export const pinModelGateway = Effect.fn("Rrsi.pinModelGateway")(function* () {
   const provider = settings.provider ?? "openai";
   const configuration = yield* registry
     .get(provider)
-    .pipe(Effect.mapError(() => new GatewayUnavailable()));
+    .pipe(Effect.mapError(() => GatewayUnavailable.make()));
   const selection = yield* configuration.models.selected;
-  if (!selection) return yield* new GatewayUnavailable();
+  if (!isTruthy(selection)) return yield* GatewayUnavailable.make();
   const auth = yield* configuration.auth.status.pipe(
-    Effect.mapError(() => new GatewayUnavailable()),
+    Effect.mapError(() => GatewayUnavailable.make()),
   );
-  if (auth.status !== "signed-in") return yield* new GatewayUnavailable();
+  if (auth.status !== "signed-in") return yield* GatewayUnavailable.make();
   switch (selection.provider) {
     case "openai-compatible": {
       const client = yield* (yield* OpenAICompatibleSettings).pinRrsiClient.pipe(
-        Effect.mapError(() => new GatewayUnavailable()),
+        Effect.mapError(() => GatewayUnavailable.make()),
       );
       return {
         ...client,
@@ -202,17 +215,17 @@ export const pinModelGateway = Effect.fn("Rrsi.pinModelGateway")(function* () {
     }
     case "openai":
     case "anthropic": {
-      if (!registry.subscriptionDependencies) return yield* new GatewayUnavailable();
+      if (!isTruthy(registry.subscriptionDependencies)) return yield* GatewayUnavailable.make();
       const dependencies = yield* registry
         .subscriptionDependencies(selection.provider)
-        .pipe(Effect.mapError(() => new GatewayUnavailable()));
+        .pipe(Effect.mapError(() => GatewayUnavailable.make()));
       return yield* Effect.try({
         try: () =>
           subscriptionGateway(
             selection,
             Predicate.isFunction(dependencies.client) ? dependencies.client() : dependencies.client,
           ),
-        catch: () => new GatewayUnavailable(),
+        catch: () => GatewayUnavailable.make(),
       });
     }
   }

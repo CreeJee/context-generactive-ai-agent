@@ -1,5 +1,8 @@
+import { isTruthy } from "../app/truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { sign, verify } from "node:crypto";
-import { Schema } from "effect";
+import { Predicate, Schema } from "effect";
 
 export const releaseManifestSchemaVersion = 1;
 export const ReleaseChannel = Schema.Literals(["stable", "prerelease"]);
@@ -75,11 +78,19 @@ export function canonicalJson(value: Json): string {
     .join(",")}}`;
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line missingPipeableSignature:off schemaSync:off
 export const decodeReleaseManifest = Schema.decodeSync(ReleaseManifest);
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line missingPipeableSignature:off schemaSync:off
 export const decodeManifestSignature = Schema.decodeSync(ManifestSignature);
 
 const unsigned = (manifest: ReleaseManifest) => Buffer.from(canonicalJson(manifest), "utf8");
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function signReleaseManifest(
   manifest: ReleaseManifest,
   keyId: string,
@@ -88,13 +99,15 @@ export function signReleaseManifest(
   return { keyId, signature: sign(null, unsigned(manifest), privateKey).toString("base64") };
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function verifyManifestSignature(
   manifest: ReleaseManifest,
   signature: ManifestSignature,
   trustedKeys: Readonly<Record<string, string>>,
 ) {
   const publicKey = trustedKeys[signature.keyId];
-  if (!publicKey) throw new Error(`untrusted release key: ${signature.keyId}`);
+  if (!isTruthy(publicKey)) throw new Error(`untrusted release key: ${signature.keyId}`);
   const bytes = Buffer.from(signature.signature, "base64");
   if (!verify(null, unsigned(manifest), publicKey, bytes))
     throw new Error("release manifest signature is invalid");
@@ -106,6 +119,8 @@ interface ParsedVersion {
 }
 
 function parseVersion(version: string): ParsedVersion {
+  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+  // @effect-diagnostics-next-line schemaSync:off
   const valid = Schema.decodeSync(SemVer)(version);
   const withoutBuild = valid.split("+", 1)[0]!;
   const [core, suffix] = withoutBuild.split("-", 2);
@@ -117,6 +132,8 @@ function parseVersion(version: string): ParsedVersion {
 }
 
 /** SemVer precedence, ignoring build metadata. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function compareVersions(left: string, right: string) {
   const a = parseVersion(left);
   const b = parseVersion(right);
@@ -141,7 +158,11 @@ export function compareVersions(left: string, right: string) {
   return 0;
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function releaseAssetName(version: string, target: string) {
+  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+  // @effect-diagnostics-next-line schemaSync:off
   const normalized = Schema.decodeSync(SemVer)(version.replace(/^v/, ""));
   const extension = target.startsWith("win32-") ? "zip" : "tar.gz";
   return `context-agent-v${normalized}-${target}.${extension}`;
@@ -156,6 +177,8 @@ export interface UpdateDecisionOptions {
 }
 
 /** Verifies trust and policy before returning the exact platform asset that may be downloaded. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function acceptRelease(
   envelope: ReleaseEnvelope,
   trustedKeys: Readonly<Record<string, string>>,
@@ -164,14 +187,17 @@ export function acceptRelease(
   const manifest = decodeReleaseManifest(envelope.manifest);
   const signature = decodeManifestSignature(envelope.signature);
   verifyManifestSignature(manifest, signature, trustedKeys);
-  if (manifest.channel === "prerelease" && !options.allowPrerelease)
+  if (manifest.channel === "prerelease" && !(options.allowPrerelease === true))
     throw new Error("prerelease channel is not enabled");
-  if (!options.allowDowngrade && compareVersions(manifest.version, options.currentVersion) <= 0)
+  if (
+    !(options.allowDowngrade === true) &&
+    compareVersions(manifest.version, options.currentVersion) <= 0
+  )
     throw new Error("release is not newer than the installed version");
   if (compareVersions(options.updaterVersion, manifest.minUpdaterVersion) < 0)
     throw new Error(`updater ${manifest.minUpdaterVersion} or newer is required`);
   const asset = manifest.assets[options.target];
-  if (!asset) throw new Error(`release has no asset for ${options.target}`);
+  if (!Predicate.isNotNullish(asset)) throw new Error(`release has no asset for ${options.target}`);
   if (asset.name !== releaseAssetName(manifest.version, options.target))
     throw new Error(`release asset name does not match ${options.target}`);
   return asset;

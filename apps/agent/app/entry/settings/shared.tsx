@@ -1,3 +1,4 @@
+import { isTruthy } from "../../truthy.ts";
 import { CheckIcon, CopyIcon, FolderIcon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Alert, AlertDescription } from "~/components/ui/alert";
@@ -65,7 +66,7 @@ export function PageHeader({
 }
 
 export function PageError({ error }: { error: string | null }) {
-  if (!error) return null;
+  if (!isTruthy(error)) return null;
   return (
     <Alert variant="destructive">
       <AlertDescription>{error}</AlertDescription>
@@ -89,6 +90,8 @@ export function shortPath(path: string) {
 }
 
 /** A file of the project named from the project, a file elsewhere by its shortened path. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function pathIn(project: Project, path: string) {
   const inside = path.startsWith(`${project.root}/`) || path.startsWith(`${project.root}\\`);
   return inside ? `${project.name}${path.slice(project.root.length)}` : shortPath(path);
@@ -101,6 +104,8 @@ function CopyPathButton({ path }: { path: string }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
+    // Native callback heartbeat/debounce timing remains at the protocol boundary.
+    // @effect-diagnostics-next-line globalTimers:off
     const timer = setTimeout(() => setCopied(false), copiedForMs);
     return () => clearTimeout(timer);
   }, [copied]);

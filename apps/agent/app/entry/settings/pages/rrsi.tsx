@@ -1,3 +1,4 @@
+import { isTruthy } from "../../../truthy.ts";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ExperimentRecord, HarnessVersion, RrsiSettings as Configuration } from "memory-agent";
@@ -24,6 +25,8 @@ interface Status {
   running: boolean;
   configuredRepository: boolean;
 }
+// React/query clients consume this native Error contract outside Effect failure channels.
+// @effect-diagnostics-next-line extendsNativeError:off
 class ExperimentRequestFailed extends Error {
   readonly _tag = "ExperimentRequestFailed";
   constructor(
@@ -81,6 +84,8 @@ const reasons = {
 function reasonLabel(reason: string) {
   return Object.entries(reasons).find(([key]) => key === reason)?.[1];
 }
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function request(body?: {
   action: string;
   settings?: Configuration;
@@ -88,7 +93,7 @@ async function request(body?: {
 }): Promise<Status> {
   const response = await appFetch(
     "/api/settings/rrsi",
-    body
+    body !== undefined
       ? {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -132,14 +137,14 @@ export function RrsiSettings() {
     },
     onError: (failure) => setError(failure.message),
   });
-  if (!status)
+  if (!isTruthy(status))
     return (
       <FieldGroup>
         <PageHeader
           title="동작 개선 실험"
           description="에이전트의 작업 지침과 기억 검색 설정을 별도 과제로 평가해요."
         />
-        {queryError ? (
+        {queryError !== null ? (
           <>
             <PageError error={queryError.message} />
             <Button variant="outline" disabled={isFetching} onClick={() => void refetch()}>
@@ -228,6 +233,8 @@ export function RrsiSettings() {
       {status.experiments.map((experiment) => (
         <Collapsible key={experiment.id}>
           <CollapsibleTrigger render={<Button variant="ghost" />}>
+            // The native SDK/fixture requires a JavaScript Date; this converts a timestamp, not an
+            Effect clock read. // @effect-diagnostics-next-line globalDate:off
             {new Date(experiment.startedAt).toLocaleString()} · {statusLabels[experiment.status]} ·{" "}
             {experiment.tokens.toLocaleString()} 토큰
           </CollapsibleTrigger>
@@ -241,7 +248,7 @@ export function RrsiSettings() {
                 <p>
                   {candidate.kind === "code" ? "코드 후보" : `라운드 ${candidate.round + 1}`}:{" "}
                   {reasonLabel(candidate.decision) ?? candidate.decision}{" "}
-                  {candidate.measurement
+                  {isTruthy(candidate.measurement)
                     ? `· 성공률 ${(candidate.measurement.score * 100).toFixed(1)}%`
                     : ""}
                 </p>

@@ -1,7 +1,10 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off newPromise:off nodeBuiltinImport:off
+import { isTruthy } from "../src/truthy.ts";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AnyServerTool } from "@tanstack/ai";
 import type { AddressInfo } from "node:net";
-import { Effect, Result } from "effect";
+import { Random, Effect, Result } from "effect";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { Kagi } from "../src/kagi/kagi.ts";
@@ -76,7 +79,7 @@ async function kagiSetup(reply: (path: string) => Reply = () => searchReply) {
 
 function toolNamed(tools: readonly AnyServerTool[], name: string) {
   const execute = tools.find((candidate) => candidate.name === name)?.execute;
-  if (!execute) throw new Error(`no ${name}`);
+  if (!isTruthy(execute)) throw new Error(`no ${name}`);
   return execute;
 }
 
@@ -213,7 +216,7 @@ describe("Kagi tools", () => {
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 threadId: session.id,
-                runId: `run-${Math.random().toString(36).slice(2)}`,
+                runId: `run-${Effect.runSync(Random.next).toString(36).slice(2)}`,
                 messages: [{ id: "m1", role: "user", content: text }],
                 tools: [],
                 context: [],

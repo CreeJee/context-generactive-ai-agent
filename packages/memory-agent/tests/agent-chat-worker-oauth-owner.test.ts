@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off globalFetch:off newPromise:off nodeBuiltinImport:off processEnv:off
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -190,7 +192,7 @@ test("central account callback and PKCE survive actual SDK worker termination wi
     releaseModel?.();
     await manager?.cancel("openai");
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    if (previous === undefined) delete process.env.CONTEXT_AGENT_GOAL_WORKER;
+    if (previous === undefined) Reflect.deleteProperty(process.env, "CONTEXT_AGENT_GOAL_WORKER");
     else process.env.CONTEXT_AGENT_GOAL_WORKER = previous;
   }
 }, 20000);

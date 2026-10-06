@@ -14,7 +14,7 @@ function AnimatedNumber({ value, className }: { value: number; className?: strin
   const text = useTransform(spring, (latest) => numbers.format(Math.round(latest)));
 
   useEffect(() => {
-    if (reduced) spring.jump(value);
+    if (reduced === true) spring.jump(value);
     else spring.set(value);
   }, [reduced, spring, value]);
 

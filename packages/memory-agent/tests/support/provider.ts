@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off missingPipeableSignature:off newPromise:off schemaSync:off
+import { isTruthy } from "../../src/truthy.ts";
 import type { ModelMessage } from "@tanstack/ai";
 import { Effect, Layer, Schema } from "effect";
 import {
@@ -86,8 +89,10 @@ export const defaultTestResponder: ScriptedResponder = async (invocation) => {
   if (instructions.includes("You label statements")) {
     const input = JSON.parse(user.match(/Input \(JSON\): (.*)$/s)?.[1] ?? "{}");
     if (
-      input.statements?.some((statement: { text: string }) =>
-        statement.text.includes("[broken-interpret]"),
+      isTruthy(
+        input.statements?.some((statement: { text: string }) =>
+          statement.text.includes("[broken-interpret]"),
+        ),
       )
     )
       return { text: "not json at all" };
@@ -105,12 +110,12 @@ export const defaultTestResponder: ScriptedResponder = async (invocation) => {
             candidate.text.includes(word!),
           );
           const target = containing.find((candidate) => candidate.role === "user") ?? containing[0];
-          return target
+          return isTruthy(target)
             ? [
                 {
                   target: target.id,
                   relation,
-                  certainty: maybe ? "ambiguous" : "clear",
+                  certainty: isTruthy(maybe) ? "ambiguous" : "clear",
                   reason: `${word} 관련`,
                 },
               ]
@@ -144,7 +149,7 @@ export const defaultTestResponder: ScriptedResponder = async (invocation) => {
         if (message.toolCallId === "call-get_subagent_report") return [];
         try {
           const value = JSON.parse(toolText(message));
-          return value.status === "running" && value.taskId && value.attemptId
+          return value.status === "running" && isTruthy(value.taskId) && isTruthy(value.attemptId)
             ? [{ taskId: String(value.taskId), attemptId: String(value.attemptId) }]
             : [];
         } catch {
@@ -186,7 +191,7 @@ export const defaultTestResponder: ScriptedResponder = async (invocation) => {
     if ([...byId].some(([id]) => id.startsWith("call-delegate-")))
       return { text: `Both: ${[...byId.values()].join(" | ")}` };
     const sequential = user.match(/^sequential weather (\d+)$/);
-    if (sequential) {
+    if (isTruthy(sequential)) {
       const done = invocation.messages.filter(
         (message): message is ToolMessage =>
           message.role === "tool" && message.toolCallId?.startsWith("call-seq-") === true,
@@ -202,7 +207,7 @@ export const defaultTestResponder: ScriptedResponder = async (invocation) => {
       };
     }
     const generic = [...byId].find(([id]) => id.startsWith("call-"));
-    if (generic) return { text: `${generic[0].slice(5)} said ${generic[1]}` };
+    if (isTruthy(generic)) return { text: `${generic[0].slice(5)} said ${generic[1]}` };
   }
 
   if (instructions.includes("This is an automatic task completion follow-up"))
@@ -210,7 +215,7 @@ export const defaultTestResponder: ScriptedResponder = async (invocation) => {
   if (user === "dispatch only")
     return call("call-background", "run_subagent", { task: "nap background" });
   const generic = user.match(/^call (\S+) (\{.*\})$/s);
-  if (generic) return call(`call-${generic[1]}`, generic[1]!, JSON.parse(generic[2]!));
+  if (isTruthy(generic)) return call(`call-${generic[1]}`, generic[1]!, JSON.parse(generic[2]!));
   if (user.includes("remember"))
     return call("call-memory", "find_memory", { query: "SQLite 결정" });
   if (user.includes("shell"))
@@ -286,7 +291,7 @@ export function testProvider(options: TestProviderOptions = {}): TestProvider {
   const responder = options.responder ?? defaultTestResponder;
   const adapter = new ScriptedTextAdapter(async (invocation) => {
     const turn = await responder(invocation);
-    if (!options.delayedTurnGate || turn.delayMs === undefined) return turn;
+    if (!isTruthy(options.delayedTurnGate) || turn.delayMs === undefined) return turn;
     const { delayMs: _delayMs, ...gatedTurn } = turn;
     return { ...gatedTurn, waitFor: options.delayedTurnGate };
   });
@@ -307,7 +312,9 @@ export function testProvider(options: TestProviderOptions = {}): TestProvider {
           provider: "openai" as const,
           list: Effect.succeed(models),
           selected: Effect.map(config.read, (settings) =>
-            settings.provider === "openai" && settings.model && settings.reasoningEffort
+            settings.provider === "openai" &&
+            isTruthy(settings.model) &&
+            isTruthy(settings.reasoningEffort)
               ? {
                   provider: "openai" as const,
                   model: settings.model,
@@ -324,7 +331,8 @@ export function testProvider(options: TestProviderOptions = {}): TestProvider {
           cheapestEffort: (selection: ModelSelection) => Effect.succeed(selection),
           select: (model: string, reasoningEffort?: string) => {
             const found = models.find((candidate) => candidate.id === model);
-            if (!found) return Effect.fail(new ModelUnavailable({ provider: "openai", model }));
+            if (!isTruthy(found))
+              return Effect.fail(new ModelUnavailable({ provider: "openai", model }));
             const effort = reasoningEffort ?? found.defaultReasoningEffort;
             if (!found.supportedReasoningEfforts.includes(effort))
               return Effect.fail(

@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import type { UIMessage } from "@tanstack/ai-client";
 import { Data, Result, Schema } from "effect";
 import { sessionHolderHeader } from "../sessions/lease-state.ts";
@@ -41,7 +42,11 @@ export class AppRequestFailed extends Data.TaggedError("AppRequestFailed")<{
  * keeps the database, the vector index and the ChatGPT connection, so sessions started from an
  * editor are the same sessions the web page shows.
  */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function createAppApi(baseUrl: string, fetcher: typeof fetch = fetch) {
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const call = async <A, I>(
     schema: Schema.Codec<A, I>,
     path: string,
@@ -74,7 +79,7 @@ export function createAppApi(baseUrl: string, fetcher: typeof fetch = fetch) {
 
   const post = (body: JsonBody, holder?: string): RequestInit => {
     const headers = new Headers({ "Content-Type": "application/json" });
-    if (holder) headers.set(sessionHolderHeader, holder);
+    if (isTruthy(holder)) headers.set(sessionHolderHeader, holder);
     return { method: "POST", headers, body: JSON.stringify(body) };
   };
 
@@ -110,6 +115,8 @@ export function createAppApi(baseUrl: string, fetcher: typeof fetch = fetch) {
       ),
 
     /** The saved conversation, as a reloaded page gets it. */
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     transcript: async (sessionId: string): Promise<UIMessage[]> => {
       const body = await call(
         Schema.Struct({ messages: Schema.Array(Schema.Unknown) }),

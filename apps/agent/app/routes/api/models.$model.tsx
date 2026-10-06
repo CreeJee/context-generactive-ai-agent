@@ -31,9 +31,11 @@ const modelUnavailable = (error: {
 };
 
 /** Validates and saves an explicit provider/model/effort tuple, with no provider fallback. */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request, params }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
-  if (rejected) return rejected;
+  if (rejected !== null) return rejected;
   const body = await readJson(request, Selection);
   if (Result.isFailure(body)) return Response.json({ error: "invalid_selection" }, { status: 400 });
 

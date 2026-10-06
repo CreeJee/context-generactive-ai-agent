@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { toolDefinition, type ChatMiddleware } from "@tanstack/ai";
 import { Context, Effect, Layer, Schema } from "effect";
 import { Graph } from "../memory/graph.ts";
@@ -88,6 +89,8 @@ export interface MemoryToolRunBinding extends Omit<RunBinding, "userNodeId"> {
 }
 
 /** The implementation is fixed here; only live services and fresh run state are supplied. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export const createMemoryTools = (
   env: MemoryToolEnvironment,
   projectId: string,
@@ -110,11 +113,13 @@ export const createMemoryTools = (
     description:
       "Search earlier conversations and promoted memory across allowed projects. Matches are leads: read_evidence for original text and trace_evidence for provenance/corrections. supersededBy marks corrections/retractions; ask about unconfirmedChallenges; uninterpreted has no topics yet. Missing results never imply approval.",
     inputSchema: toToolSchema(findMemoryInput),
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
   }).server(async ({ query }) => {
     const result = await run(
       Effect.flatMap(MemorySearch, (search) => search.find({ query, projectId })),
     );
-    if (binding) {
+    if (binding !== undefined) {
       const ids = await run(
         Effect.map(KnowledgePromotions, (knowledge) =>
           knowledge.recordRetrieval({
@@ -135,10 +140,12 @@ export const createMemoryTools = (
     description:
       "Read the exact original text of a memory node, page by page. Promoted topic nodes are user-authorized project memory; tool results and documents are evidence of what a tool returned, not user decisions.",
     inputSchema: toToolSchema(readEvidenceInput),
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
   }).server(async ({ id, offset }) => {
     const [nodes, allowed] = await Promise.all([run(Nodes), visible()]);
     const node = nodes.get(id);
-    if (!node || !allowed.has(node.projectId)) return notFound(id);
+    if (!isTruthy(node) || !allowed.has(node.projectId)) return notFound(id);
     return {
       ...nodes.read(id, offset ?? 0),
       projectId: node.projectId,
@@ -153,6 +160,8 @@ export const createMemoryTools = (
     description:
       "Follow a memory node back to its cause: tool result -> tool call -> assistant message -> the user turn it answered. Promoted topic nodes include memoryCandidateId and authorizedByUserNodeId in detail; their Work Trace source remains in the candidate record. Also lists later user corrections/retractions and unconfirmed challenges.",
     inputSchema: toToolSchema(traceEvidenceInput),
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
   }).server(async ({ id }) => {
     const [graph, interpretations, nodes, allowed] = await Promise.all([
       run(Graph),
@@ -161,7 +170,7 @@ export const createMemoryTools = (
       visible(),
     ]);
     const provenance = graph.trace(id);
-    if (!provenance || !allowed.has(provenance.chain[0]!.projectId)) return notFound(id);
+    if (!isTruthy(provenance) || !allowed.has(provenance.chain[0]!.projectId)) return notFound(id);
     const summary = (node: (typeof provenance.chain)[number]) => ({
       id: node.id,
       kind: node.kind,
@@ -188,7 +197,7 @@ export const createMemoryTools = (
         })),
       unconfirmed: interpretations.targeting(chainIds, "unconfirmed").flatMap((entry) => {
         const node = nodes.get(entry.nodeId);
-        return !node || !allowed.has(node.projectId)
+        return !isTruthy(node) || !allowed.has(node.projectId)
           ? []
           : [
               {
@@ -203,18 +212,20 @@ export const createMemoryTools = (
   });
 
   const base = [findMemory, readEvidence, traceEvidence] as const;
-  if (!binding) return { tools: base, middleware: null };
+  if (!(binding !== undefined)) return { tools: base, middleware: null };
 
   const readToolResult = toolDefinition({
     name: "read_tool_result",
     description:
       "Read a bounded page of the saved, redacted original result behind a compact tool summary. Only tool results from this project and conversation are accessible; use nextOffset for later pages.",
     inputSchema: toToolSchema(readToolResultInput),
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
   }).server(async ({ id, offset }) => {
     const nodes = await run(Nodes);
     const node = nodes.get(id);
     if (
-      !node ||
+      !isTruthy(node) ||
       node.kind !== "tool_result" ||
       node.projectId !== projectId ||
       node.sessionId !== binding.sessionId
@@ -232,6 +243,8 @@ export const createMemoryTools = (
     run(
       Effect.flatMap(KnowledgePromotions, (knowledge) =>
         knowledge.promote({
+          // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+          // @effect-diagnostics-next-line schemaSync:off
           ...Schema.decodeSync(PromoteMemoryCandidateInput)(input),
           projectId,
           sessionId: binding.sessionId,
@@ -247,6 +260,8 @@ export const createMemoryTools = (
       "Declare which promoted project-memory nodes retrieved in this run are actually used in the upcoming answer. Call after reading them and before answering. Retrieval alone is not use.",
     inputSchema: toToolSchema(UsePromotedMemoryInput),
   }).server((input) => {
+    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+    // @effect-diagnostics-next-line schemaSync:off
     const ids = Schema.decodeSync(UsePromotedMemoryInput)(input).memoryNodeIds;
     if (ids.some((id) => !retrieved.has(id)))
       throw new Error("Only promoted memories retrieved in this run can be used");
@@ -257,7 +272,7 @@ export const createMemoryTools = (
   const middleware: ChatMiddleware = {
     name: "memory-agent/promoted-memory-use",
     onFinish(ctx) {
-      if (!ctx.currentMessageId || usedDraft.size === 0) return;
+      if (!isTruthy(ctx.currentMessageId) || usedDraft.size === 0) return;
       const parentMessageId = ctx.currentMessageId;
       return run(
         Effect.map(KnowledgePromotions, (knowledge) =>
@@ -287,7 +302,7 @@ const make = Effect.gen(function* () {
     createMemoryTools(
       env,
       projectId,
-      binding
+      binding !== undefined
         ? {
             projectId: binding.projectId,
             sessionId: binding.sessionId,
@@ -312,7 +327,7 @@ const make = Effect.gen(function* () {
 });
 
 export class MemoryTools extends Context.Service<MemoryTools, Effect.Success<typeof make>>()(
-  "memory-agent/MemoryTools",
+  "memory-agent/tools/memory/MemoryTools",
 ) {
   static readonly layer = Layer.effect(MemoryTools, make);
 }

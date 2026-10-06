@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off
+import { isTruthy } from "../../truthy.ts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vite-plus/test";
 import type { ReportEvidence } from "../../.server/report-evidence";
@@ -59,7 +62,7 @@ describe("report review and manual sharing", () => {
 
   test("only explicitly included, edited evidence enters the shareable text", () => {
     const item = evidenceItems(snapshot).find((entry) => entry.id === "call:c1");
-    if (!item) throw new Error("missing fixture call");
+    if (!isTruthy(item)) throw new Error("missing fixture call");
     const text = reportText(
       { symptom: "승인 반복", expected: "", actual: "" },
       "오늘",

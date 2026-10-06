@@ -1,3 +1,4 @@
+import { isTruthy } from "../../truthy.ts";
 import { Effect } from "effect";
 import { Attachments } from "memory-agent";
 import { agent } from "~/.server/agent";
@@ -7,19 +8,25 @@ import type { Route } from "./+types/attachments.$attachment";
  * GET /api/attachments/:attachment — a stored image. Other sites cannot embed it: images are
  * conversation evidence, not public assets.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function loader({ request, params }: Route.LoaderArgs) {
   const site = request.headers.get("Sec-Fetch-Site");
   if (site === "cross-site") return Response.json({ error: "cross_site_request" }, { status: 403 });
 
   const found = await agent.runPromise(
     Effect.flatMap(Attachments, (attachments) =>
+      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+      // @effect-diagnostics-next-line asyncFunction:off
       Effect.promise(async () => {
         const attachment = attachments.get(params.attachment);
-        return attachment ? { attachment, bytes: await attachments.read(attachment) } : null;
+        return isTruthy(attachment)
+          ? { attachment, bytes: await attachments.read(attachment) }
+          : null;
       }),
     ),
   );
-  if (!found) return Response.json({ error: "attachment_not_found" }, { status: 404 });
+  if (!isTruthy(found)) return Response.json({ error: "attachment_not_found" }, { status: 404 });
   return new Response(new Uint8Array(found.bytes), {
     headers: {
       "Content-Type": found.attachment.mimeType,

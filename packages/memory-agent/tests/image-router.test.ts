@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off
 import { Effect, Result } from "effect";
 import {
   ImageRouteFacts,
@@ -241,6 +243,8 @@ describe("image router", () => {
 
   it("treats configured direct routes as attemptable without an operator verification flag", async () => {
     const service = await Effect.runPromise(
+      // Test entry point owns this Layer and its resource scope.
+      // @effect-diagnostics-next-line strictEffectProvide:off
       Effect.provide(ImageRouteFacts, ImageRouteFacts.authenticatedRoutesLayer),
     );
     const routeFacts = await Effect.runPromise(

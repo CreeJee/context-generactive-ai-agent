@@ -12,7 +12,7 @@ export function loader() {
 }
 export function action({ request }: { request: Request }) {
   const rejected = rejectCrossSite(request);
-  if (rejected) return rejected;
+  if (rejected !== null) return rejected;
   return agent.runPromise(
     Effect.gen(function* () {
       const decoded = yield* Effect.tryPromise(() => readJson(request, RrsiCommand)).pipe(

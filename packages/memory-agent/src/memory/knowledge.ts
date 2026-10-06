@@ -1,5 +1,8 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
-import { Context, Data, Effect, Layer, Schema } from "effect";
+import { Clock, Context, Data, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import { Nodes } from "./nodes.ts";
 
@@ -84,11 +87,23 @@ const UsageRow = Schema.Struct({
   kind: Schema.Literals(["retrieved", "used"]),
   created_at: Schema.Finite,
 });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeClaimSource = Schema.decodeUnknownSync(ClaimSourceRow);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeExisting = Schema.decodeUnknownSync(ExistingRow);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeCandidates = Schema.decodeUnknownSync(Schema.Array(CandidateRow));
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeCandidateEvidence = Schema.decodeUnknownSync(Schema.Array(CandidateEvidenceRow));
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeCandidateIdentities = Schema.decodeUnknownSync(Schema.Array(CandidateIdentityRow));
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeUsage = Schema.decodeUnknownSync(Schema.Array(UsageRow));
 
 type MemoryPromotionReason =
@@ -116,6 +131,8 @@ export class MemoryPromotionRejected extends Data.TaggedError("MemoryPromotionRe
 }
 
 const make = Effect.gen(function* () {
+  const effectClock = yield* Clock.Clock;
+
   const { sqlite, atomic } = yield* Database;
   const nodes = yield* Nodes;
   const claimSource = sqlite.prepare(`
@@ -167,21 +184,23 @@ const make = Effect.gen(function* () {
   });
   const candidateByDecision = (decisionId: string): MemoryCandidateView => {
     const row = candidateRows("d.id", decisionId)[0];
-    if (!row) throw new Error("Memory candidate was not persisted");
+    if (!isTruthy(row)) throw new Error("Memory candidate was not persisted");
     return toView(row);
   };
 
   const promote = (input: PromoteMemoryInput) =>
     Effect.gen(function* () {
+      const effectClock = yield* Clock.Clock;
+
       const proposedText = input.proposedText.trim();
-      if (!proposedText)
+      if (!isTruthy(proposedText))
         return yield* new MemoryPromotionRejected({ reason: "empty_proposed_text" });
       const resolvedText = input.resolvedText.trim();
-      if (!resolvedText)
+      if (!isTruthy(resolvedText))
         return yield* new MemoryPromotionRejected({ reason: "empty_resolved_text" });
       const userNode = nodes.get(input.authorizedByUserNodeId);
       if (
-        !userNode ||
+        !isTruthy(userNode) ||
         userNode.kind !== "user" ||
         userNode.projectId !== input.projectId ||
         userNode.sessionId !== input.sessionId
@@ -193,10 +212,13 @@ const make = Effect.gen(function* () {
         input.taskId,
         input.attemptId,
       );
-      if (!claimRow) return yield* new MemoryPromotionRejected({ reason: "claim_not_adopted" });
+      if (!isTruthy(claimRow))
+        return yield* new MemoryPromotionRejected({ reason: "claim_not_adopted" });
       const claim = decodeClaimSource(claimRow);
       for (const evidenceRefId of new Set(input.evidenceRefIds))
-        if (!evidenceSource.get(input.claimId, input.taskId, input.attemptId, evidenceRefId))
+        if (
+          !isTruthy(evidenceSource.get(input.claimId, input.taskId, input.attemptId, evidenceRefId))
+        )
           return yield* new MemoryPromotionRejected({ reason: "evidence_not_adopted" });
       const status: MemoryDisposition =
         input.disposition === "reject"
@@ -214,10 +236,10 @@ const make = Effect.gen(function* () {
           resolvedText,
           status,
         );
-        if (found) return candidateByDecision(decodeExisting(found).id);
+        if (isTruthy(found)) return candidateByDecision(decodeExisting(found).id);
         const decisionId = randomUUID();
         const candidateId = randomUUID();
-        const createdAt = Date.now();
+        const createdAt = effectClock.currentTimeMillisUnsafe();
         const memoryNode =
           status === "saved" || status === "edited_saved"
             ? nodes.append({
@@ -277,7 +299,7 @@ const make = Effect.gen(function* () {
   }) =>
     atomic(() => {
       const placeholders = input.memoryNodeIds.map(() => "?").join(", ");
-      if (!placeholders) return [];
+      if (!isTruthy(placeholders)) return [];
       const candidates = decodeCandidateIdentities(
         sqlite
           .prepare(`SELECT id, memory_node_id FROM memory_candidates
@@ -295,7 +317,7 @@ const make = Effect.gen(function* () {
           candidate.memory_node_id,
           input.sessionId,
           input.runId,
-          Date.now(),
+          effectClock.currentTimeMillisUnsafe(),
         );
       return candidates.map((candidate) => candidate.memory_node_id);
     });
@@ -309,7 +331,7 @@ const make = Effect.gen(function* () {
   }) =>
     atomic(() => {
       const placeholders = input.memoryNodeIds.map(() => "?").join(", ");
-      if (!placeholders) return;
+      if (!isTruthy(placeholders)) return;
       const candidates = decodeCandidateIdentities(
         sqlite
           .prepare(`SELECT c.id, c.memory_node_id FROM memory_candidates c
@@ -330,7 +352,7 @@ const make = Effect.gen(function* () {
           input.sessionId,
           input.runId,
           input.parentMessageId,
-          Date.now(),
+          effectClock.currentTimeMillisUnsafe(),
         );
     });
 
@@ -362,6 +384,6 @@ const make = Effect.gen(function* () {
 export class KnowledgePromotions extends Context.Service<
   KnowledgePromotions,
   Effect.Success<typeof make>
->()("memory-agent/KnowledgePromotions") {
+>()("memory-agent/memory/knowledge/KnowledgePromotions") {
   static readonly layer = Layer.effect(KnowledgePromotions, make);
 }

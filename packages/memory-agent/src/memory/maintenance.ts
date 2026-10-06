@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { Context, Data, Effect, Layer, Schema, Semaphore } from "effect";
 import { GlobalConfig } from "../config/global-config.ts";
 import { Database } from "../db/database.ts";
@@ -12,6 +13,8 @@ export class MemoryGraphRepairFailed extends Data.TaggedError("MemoryGraphRepair
 
 export const memoryGraphRepairVersion = 1;
 const batchSize = 64;
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeProgress = Schema.decodeUnknownSync(
   Schema.Struct({
     through_seq: Schema.Finite,
@@ -24,6 +27,8 @@ const decodeProgress = Schema.decodeUnknownSync(
     error: Schema.NullOr(Schema.String),
   }),
 );
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeBatch = Schema.decodeUnknownSync(
   Schema.Array(Schema.Struct({ seq: Schema.Finite, id: Schema.String })),
 );
@@ -45,7 +50,7 @@ const make = Effect.gen(function* () {
   );
   const progress = () => {
     const row = saved.get(version);
-    return row
+    return isTruthy(row)
       ? decodeProgress(row)
       : {
           through_seq: 0,
@@ -152,7 +157,7 @@ const make = Effect.gen(function* () {
               for (const node of rows) {
                 // Remember only topics affected by empty-source links, not every orphan topic.
                 const blank = emptyNode.get(node.id);
-                if (blank) collectTopics.run(node.id);
+                if (isTruthy(blank)) collectTopics.run(node.id);
                 archiveEdges.run(version, node.id);
                 archiveInterpretations.run(version, version, node.id);
                 demote.run(node.id, version);
@@ -255,6 +260,6 @@ const make = Effect.gen(function* () {
 export class MemoryGraphMaintenance extends Context.Service<
   MemoryGraphMaintenance,
   Effect.Success<typeof make>
->()("memory-agent/MemoryGraphMaintenance") {
+>()("memory-agent/memory/maintenance/MemoryGraphMaintenance") {
   static readonly layer = Layer.effect(MemoryGraphMaintenance, make);
 }

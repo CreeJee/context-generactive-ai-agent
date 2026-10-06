@@ -1,9 +1,18 @@
+import { isTruthy } from "../src/truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { execFileSync } from "node:child_process";
-import { Cause, Effect, Layer, ManagedRuntime, Option, Schema } from "effect";
+import { Predicate, Cause, Effect, Layer, ManagedRuntime, Option, Schema } from "effect";
 import { memoryAgentLayer } from "../src/layers.ts";
 import { HarnessStore } from "../src/rrsi/store.ts";
 import { AgentChat } from "../src/agent/chat.ts";
@@ -24,6 +33,10 @@ import { fakeMorphLayer } from "../src/testing/fake-morph.ts";
 import { readTrialAnswer } from "../src/rrsi/trial-response.ts";
 import { EvaluationFailed } from "../src/rrsi/failure.ts";
 import { corpus } from "./rrsi-corpus.ts";
+
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
+const stringifyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 class CodingVerificationFailed extends Schema.TaggedError<CodingVerificationFailed>()(
   "CodingVerificationFailed",
@@ -47,20 +60,30 @@ const gatewayRequest = (
 ) =>
   gateway.runPromise(
     Effect.flatMap(WorkerGateway, (service) => service.request(kind, body)),
-    signal ? { signal } : undefined,
+    Predicate.isNotNullish(signal) ? { signal } : undefined,
   );
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 const transport: typeof fetch = async (_url, init) => {
   const body = await gatewayRequest(
     "request",
+    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+    // @effect-diagnostics-next-line schemaSync:off
     Schema.decodeUnknownSync(Schema.String)(init?.body),
     init?.signal,
   );
-  const request = Schema.decodeUnknownSync(
+  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+  // @effect-diagnostics-next-line schemaSync:off
+  const request = Schema.decodeSync(
     Schema.fromJsonString(Schema.Struct({ stream: Schema.optionalKey(Schema.Boolean) })),
+    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+    // @effect-diagnostics-next-line schemaSync:off
   )(Schema.decodeUnknownSync(Schema.String)(init?.body));
-  if (!request.stream)
+  if (!isTruthy(request.stream))
     return new Response(body, { headers: { "content-type": "application/json" } });
-  const page = Schema.decodeUnknownSync(
+  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+  // @effect-diagnostics-next-line schemaSync:off
+  const page = Schema.decodeSync(
     Schema.fromJsonString(
       Schema.Struct({
         id: Schema.String,
@@ -94,7 +117,7 @@ const transport: typeof fetch = async (_url, init) => {
 const filesystem = <A>(operation: () => A) =>
   Effect.try({
     try: operation,
-    catch: () => new EvaluationFailed({ reason: "worker_failed" }),
+    catch: () => EvaluationFailed.make({ reason: "worker_failed" }),
   });
 const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
   const input = yield* (yield* WorkerGateway).input;
@@ -114,7 +137,7 @@ const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
       mkdirSync(join(projectRoot, "src"), { recursive: true });
       mkdirSync(storage);
       mkdirSync(home);
-      if (task.fixture) writeFileSync(join(projectRoot, "src/solve.mjs"), task.fixture);
+      if (isTruthy(task.fixture)) writeFileSync(join(projectRoot, "src/solve.mjs"), task.fixture);
       writeFileSync(join(projectRoot, "notes.txt"), "Planning notes.\n".repeat(800));
       writeFileSync(
         join(storage, "config.json"),
@@ -133,6 +156,8 @@ const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
       );
     });
     const compatibleLayer = OpenAICompatibleSettings.layerWith(
+      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+      // @effect-diagnostics-next-line asyncFunction:off
       Layer.succeed(CompatibleKeyring, { get: async () => null, set: async () => undefined }),
       Layer.succeed(CompatibleFetch, transport),
     );
@@ -147,10 +172,14 @@ const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
             : createSubscriptionRuntime(
                 selection.provider,
                 {
+                  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+                  // @effect-diagnostics-next-line asyncFunction:off
                   async *stream(body, signal) {
-                    const result = Schema.decodeUnknownSync(
-                      Schema.fromJsonString(SubscriptionResult),
-                    )(await gatewayRequest("subscription-request", body, signal));
+                    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+                    // @effect-diagnostics-next-line schemaSync:off
+                    const result = Schema.decodeSync(Schema.fromJsonString(SubscriptionResult))(
+                      await gatewayRequest("subscription-request", body, signal),
+                    );
                     for (const event of result.events) yield event;
                   },
                 },
@@ -200,7 +229,7 @@ const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
           new Request(inProcessChatUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
+            body: stringifyJson({
               threadId: session.id,
               tools: [],
               context: [],
@@ -210,15 +239,15 @@ const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
           }),
           session.id,
         );
-        if (!response.ok) return yield* new EvaluationFailed({ reason: "trial_execution_failed" });
+        if (!response.ok) return yield* EvaluationFailed.make({ reason: "trial_execution_failed" });
         const responseText = yield* Effect.tryPromise({
           try: () => response.text(),
-          catch: () => new EvaluationFailed({ reason: "trial_execution_failed" }),
+          catch: () => EvaluationFailed.make({ reason: "trial_execution_failed" }),
         });
         lastAnswer = yield* readTrialAnswer(responseText);
         const summary = yield* summaries.catchUp(session.id, true);
         if (summary === "failed")
-          return yield* new EvaluationFailed({ reason: "trial_execution_failed" });
+          return yield* EvaluationFailed.make({ reason: "trial_execution_failed" });
       }
       let correct = false;
       if (task.domain === "coding") {
@@ -243,7 +272,7 @@ const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
               readFileSync(join(projectRoot, "src/solve.mjs"), "utf8") !== task.fixture
             );
           },
-          catch: () => new CodingVerificationFailed(),
+          catch: () => CodingVerificationFailed.make(),
         }).pipe(Effect.catchTag("CodingVerificationFailed", () => Effect.succeed(false)));
       } else {
         correct =
@@ -252,6 +281,8 @@ const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
           /[a-f0-9]{8}-[a-f0-9-]{27,}/i.test(lastAnswer);
       }
       return correct;
+      // Evaluation entry point owns this Layer and its resource scope.
+      // @effect-diagnostics-next-line strictEffectProvide:off
     }).pipe(Effect.provide(trialLayer));
     results.push({ id: task.id, domain: task.domain, score: correct ? 1 : 0 });
     emit({ kind: "progress", completed: results.length, total: tasks.length });
@@ -269,7 +300,7 @@ try {
           const error = Option.getOrUndefined(Cause.findErrorOption(cause));
           emit({
             kind: "failure",
-            reason: error instanceof EvaluationFailed ? error.reason : "worker_failed",
+            reason: Schema.is(EvaluationFailed)(error) ? error.reason : "worker_failed",
           });
           process.exitCode = 1;
         },

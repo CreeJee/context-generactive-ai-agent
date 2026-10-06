@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off schemaSync:off
 import { Effect, Schema } from "effect";
 import { expect, test } from "vite-plus/test";
 import { makeGoalWorkerGenerationStore } from "../src/agent/goal-worker-generation-store.ts";

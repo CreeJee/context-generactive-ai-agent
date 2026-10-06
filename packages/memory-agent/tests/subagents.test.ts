@@ -1,4 +1,7 @@
-import { Effect, Schema } from "effect";
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
+import { isTruthy } from "../src/truthy.ts";
+import { Random, Effect, Schema } from "effect";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vite-plus/test";
@@ -51,7 +54,9 @@ const answerOf = (events: string) =>
   events
     .split("\n")
     .flatMap((line) => (line.startsWith("data: ") ? [Schema.decodeSync(Delta)(line.slice(6))] : []))
-    .flatMap((event) => (event.type === "TEXT_MESSAGE_CONTENT" && event.delta ? [event.delta] : []))
+    .flatMap((event) =>
+      event.type === "TEXT_MESSAGE_CONTENT" && isTruthy(event.delta) ? [event.delta] : [],
+    )
     .join("");
 
 async function subagentSetup(
@@ -79,7 +84,7 @@ async function subagentSetup(
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               threadId: context.session.id,
-              runId: `run-${Math.random().toString(36).slice(2)}`,
+              runId: `run-${Effect.runSync(Random.next).toString(36).slice(2)}`,
               messages: [{ id: "m1", role: "user", content: text }],
               tools: [],
               context: [],
@@ -268,7 +273,7 @@ describe("subagents", () => {
       delayedTurnGate: gate.waitFor,
       responder: async (invocation) => {
         const turn = await defaultTestResponder(invocation);
-        if (turn.text?.startsWith("napped: nap ")) started.push(turn.text);
+        if (isTruthy(turn.text?.startsWith("napped: nap "))) started.push(turn.text);
         return turn;
       },
     });

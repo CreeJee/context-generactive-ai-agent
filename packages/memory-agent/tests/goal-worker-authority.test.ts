@@ -1,4 +1,6 @@
-import { Effect, Schema } from "effect";
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off schemaSync:off
+import { DateTime, Effect, Schema } from "effect";
 import { expect, test } from "vite-plus/test";
 import { goalWorkerAuthority } from "../src/agent/goal-worker-authority.ts";
 import { Database } from "../src/db/database.ts";
@@ -35,7 +37,7 @@ test("owner capability fences session, revision, generation and completed runs",
   const owner = goalWorkerAuthority(db);
   const first = owner.issue(admitted.binding, "worker-generation-1");
   expect(first).not.toBeNull();
-  if (!first) throw new Error("expected worker capability");
+  if (!(first !== null)) throw new Error("expected worker capability");
   const original = { ...first };
   expect(Object.isFrozen(first)).toBe(true);
   for (const [field, value] of Object.entries({
@@ -66,7 +68,7 @@ test("owner capability fences session, revision, generation and completed runs",
     .prepare(
       "INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES (?, ?, 'completed', ?)",
     )
-    .run(first.runId, context.session.id, Date.now());
+    .run(first.runId, context.session.id, DateTime.toEpochMillis(DateTime.nowUnsafe()));
   expect(owner.permits({ ...first, requestId: "late-tool" })).toBe(false);
   expect(owner.permitsFinalization({ ...first, requestId: "record-finish" })).toBe(true);
   for (const patch of [
@@ -102,6 +104,6 @@ test("owner capability fences session, revision, generation and completed runs",
     .prepare(
       "INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES (?, ?, 'failed', ?)",
     )
-    .run(first.runId, context.session.id, Date.now());
+    .run(first.runId, context.session.id, DateTime.toEpochMillis(DateTime.nowUnsafe()));
   expect(owner.permits({ ...first, requestId: "late-result" })).toBe(false);
 });

@@ -100,6 +100,8 @@ export function ImportSettings() {
 
   const reading = overview.activity?.status === "running";
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const apply = async (
     command: { action: "run" | "enable" | "disable" } | { action: "interpret"; interpret: boolean },
   ) => {

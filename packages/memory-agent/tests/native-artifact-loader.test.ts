@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
 import { createHash } from "node:crypto";
 import { mkdtemp, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";

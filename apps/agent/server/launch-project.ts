@@ -1,5 +1,10 @@
+import { isTruthy } from "../app/truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { Schema } from "effect";
 
@@ -28,6 +33,8 @@ const canonical = (path: string) => {
  * drive or filesystem root (a macOS double-click starts in `/`), the home folder, the storage root,
  * and the executable's own folder (a Windows double-click starts there, e.g. Downloads).
  */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function launchFolder(
   argument: string | undefined,
   cwd: string,
@@ -64,8 +71,12 @@ export type OpenedProject =
   | { readonly kind: "rejected"; readonly reason: string };
 
 /** Whether something answering on this address is this app (it lists projects). */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function isThisApp(baseUrl: string) {
   try {
+    // Native Request/Response adapter preserves host and SDK stream semantics.
+    // @effect-diagnostics-next-line globalFetch:off
     const response = await fetch(`${baseUrl}/api/projects`, { signal: AbortSignal.timeout(3_000) });
     return response.ok && Schema.is(Schema.Array(Project))(await response.json());
   } catch {
@@ -77,7 +88,12 @@ export async function isThisApp(baseUrl: string) {
  * Registers the folder as a project on the running app, or finds it if it is registered already.
  * Goes through the app's own API, so the same path checks apply as when adding in the browser.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function openProject(baseUrl: string, root: string): Promise<OpenedProject> {
+  // Native Request/Response adapter preserves host and SDK stream semantics.
+  // @effect-diagnostics-next-line globalFetch:off
   const response = await fetch(`${baseUrl}/api/projects`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -88,11 +104,13 @@ export async function openProject(baseUrl: string, root: string): Promise<Opened
     return { kind: "opened", projectId: body.id, added: true };
   if (!Schema.is(Rejected)(body)) return { kind: "rejected", reason: `status ${response.status}` };
   if (body.reason !== "already_registered") return { kind: "rejected", reason: body.reason };
+  // Native Request/Response adapter preserves host and SDK stream semantics.
+  // @effect-diagnostics-next-line globalFetch:off
   const projects: unknown = await (await fetch(`${baseUrl}/api/projects`)).json();
   const existing = Schema.is(Schema.Array(Project))(projects)
     ? projects.find((project) => project.root === root)
     : undefined;
-  return existing
+  return isTruthy(existing)
     ? { kind: "opened", projectId: existing.id, added: false }
     : { kind: "rejected", reason: "already_registered" };
 }

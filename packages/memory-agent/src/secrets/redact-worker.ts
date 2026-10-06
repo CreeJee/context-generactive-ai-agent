@@ -8,10 +8,14 @@ import { RedactRequest, type RedactReply } from "./redact-protocol.ts";
 import { SecretRedactor, type Redaction, type SecretRedactionFailed } from "./redactor.ts";
 
 const port = parentPort;
-if (!port) throw new Error("the redaction worker runs only as a worker thread");
+if (!(port !== null)) throw new Error("the redaction worker runs only as a worker thread");
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeRequest = Schema.decodeUnknownSync(RedactRequest);
 const decodeJsonText = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 
+// Worker entry point owns this Layer and its resource scope.
+// @effect-diagnostics-next-line strictEffectProvide:off
 const redactor = Effect.runSync(Effect.provide(SecretRedactor, SecretRedactor.layer));
 
 /** A JSON column's text with secrets hidden in its strings, or the text as it was. */
@@ -37,7 +41,11 @@ const hide = (request: RedactRequest) => {
 
 const reasonOf = (cause: Cause.Cause<unknown>) => {
   const error = Cause.squash(cause);
-  return error instanceof Error ? error.message || error.name : String(error);
+  return error instanceof Error
+    ? error.message.length > 0
+      ? error.message
+      : error.name
+    : String(error);
 };
 
 port.on("message", (message) => {

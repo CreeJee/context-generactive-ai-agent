@@ -15,6 +15,8 @@ const ImportAction = Schema.Union([
  * per source, how many conversations were read, and which working directories are not projects
  * here yet. File paths are shown; transcript contents are not.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function loader() {
   return agent.runPromise(
     Effect.flatMap(Importer, (importer) => importer.overview).pipe(
@@ -30,9 +32,11 @@ export async function loader() {
  * Both answer before the pass ends; `activity` in the overview reports how far it got.
  * - `interpret` { interpret }: whether migrated statements are interpreted like statements said here.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
-  if (rejected) return rejected;
+  if (rejected !== null) return rejected;
   const body = await readJson(request, ImportAction);
   if (Result.isFailure(body))
     return Response.json({ error: "invalid_import_action" }, { status: 400 });

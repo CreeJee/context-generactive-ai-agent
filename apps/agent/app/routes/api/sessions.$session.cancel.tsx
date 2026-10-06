@@ -9,9 +9,11 @@ import type { Route } from "./+types/sessions.$session.cancel";
  * page never does; this is the only way to end a run early. Answers whether it actually stopped.
  * Only the page holding the session may cancel.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request, params }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
-  if (rejected) return rejected;
+  if (rejected !== null) return rejected;
   const holder = request.headers.get(sessionHolderHeader);
   return agent.runPromise(
     Effect.flatMap(AgentChat, (chat) => chat.cancel(params.session, holder)).pipe(

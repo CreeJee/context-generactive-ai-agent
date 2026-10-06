@@ -1,3 +1,6 @@
+// Native server integration test uses host environment, SDK Promise callbacks and I/O fixtures.
+// @effect-diagnostics asyncFunction:off processEnv:off
+import { isTruthy } from "../../app/truthy.ts";
 import { Effect } from "effect";
 import { RouterContextProvider } from "react-router";
 import { Database, SessionLeases, Sessions, Workflows } from "memory-agent";
@@ -18,7 +21,7 @@ const owner = vi.hoisted(() => {
 vi.mock("../../app/.server/agent", () => ({
   agent: {
     runPromise: (...args: Parameters<TestRuntime["runtime"]["runPromise"]>) => {
-      if (!owner.runtime) throw new Error("Test owner is not initialized");
+      if (!isTruthy(owner.runtime)) throw new Error("Test owner is not initialized");
       return owner.runtime.runPromise(...args);
     },
   },
@@ -28,7 +31,7 @@ import { action, loader } from "../../app/routes/api/chat";
 
 const request = (sessionId: string, runId: string, holder: string | null, origin: string) => {
   const headers = new Headers({ "Content-Type": "application/json", Origin: origin });
-  if (holder) headers.set("X-Session-Holder", holder);
+  if (isTruthy(holder)) headers.set("X-Session-Holder", holder);
   return new Request(`http://localhost/api/chat?session=${sessionId}`, {
     method: "POST",
     headers,

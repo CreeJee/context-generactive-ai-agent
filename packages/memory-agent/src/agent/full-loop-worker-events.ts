@@ -27,6 +27,8 @@ export const acquireFullLoopWorkerEvents = Effect.fnUntraced(function* (
   const message = (input: unknown) => {
     if (terminal) return;
     try {
+      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+      // @effect-diagnostics-next-line schemaSync:off
       const frame = Schema.decodeUnknownSync(WorkerFrame)(input);
       if (frame.type !== "chunk") terminal = true;
       Queue.offerUnsafe(queue, frame);

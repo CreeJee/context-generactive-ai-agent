@@ -1,5 +1,11 @@
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
+import { randomUUID } from "node:crypto";
+import { isTruthy } from "../truthy.ts";
 import type { ToolExecutionContext } from "@tanstack/ai";
 import { tmpdir } from "node:os";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { isAbsolute, relative, sep } from "node:path";
 import { Context, Effect, Result, Layer, Schema } from "effect";
 import { BackgroundTasks, backgroundOperation, type BackgroundBinding } from "./background.ts";
@@ -42,6 +48,8 @@ const isSameOrBelow = (root: string, candidate: string) => {
 };
 
 /** Project-relative directories plus host temp directories are valid shell working directories. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function resolveShellWorkingDirectory(
   projectRoot: string,
   storageRoot: string,
@@ -82,6 +90,8 @@ const make = Effect.gen(function* () {
         { command, workdir, timeoutSeconds, yieldMs }: typeof RunShellInput.Type,
         context?: ToolExecutionContext,
       ) =>
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        // @effect-diagnostics-next-line asyncFunction:off
         guarded(workdir ?? ".", async () => {
           const directory = orThrow(
             resolveShellWorkingDirectory(project.root, storage.path, workdir ?? "."),
@@ -97,12 +107,12 @@ const make = Effect.gen(function* () {
               signal,
               env: process.env,
             });
-          if (binding) {
+          if (binding !== undefined) {
             return run(
               Effect.gen(function* () {
                 const receipt = yield* background.start(
                   binding,
-                  context?.toolCallId ?? crypto.randomUUID(),
+                  context?.toolCallId ?? randomUUID(),
                   "shell",
                   command,
                   backgroundOperation(execute).pipe(
@@ -117,10 +127,10 @@ const make = Effect.gen(function* () {
                   yieldMs ?? 1000,
                 );
                 if (result?.status === "completed")
-                  return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ShellResult))(
+                  return yield* Schema.decodeEffect(Schema.fromJsonString(ShellResult))(
                     result.result,
                   );
-                if (result) return { taskId: receipt.taskId, ...result };
+                if (isTruthy(result)) return { taskId: receipt.taskId, ...result };
                 return receipt;
               }),
             );
@@ -134,6 +144,8 @@ const make = Effect.gen(function* () {
         content,
         expectedSha256,
       }: typeof WriteOutsideFileInput.Type) =>
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        // @effect-diagnostics-next-line asyncFunction:off
         guarded(path, async () => {
           const target = orThrow(
             resolveOutsidePath(project.root, storage.path, path, "new-or-file"),
@@ -142,12 +154,14 @@ const make = Effect.gen(function* () {
             const created = await createTextFile(target.absolute, path, content);
             return { path: target.absolute, created: true, ...created };
           }
-          if (!target.stats) throw new PathRejected({ path, reason: "not_found" });
+          if (!(target.stats !== undefined)) throw new PathRejected({ path, reason: "not_found" });
           const replaced = await replaceTextFile(target.absolute, path, expectedSha256, content);
           return { path: target.absolute, created: false, ...replaced };
         });
 
       const deleteOutsideFile = ({ path, expectedSha256 }: typeof DeleteOutsideFileInput.Type) =>
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        // @effect-diagnostics-next-line asyncFunction:off
         guarded(path, async () => {
           const target = orThrow(resolveOutsidePath(project.root, storage.path, path, "file"));
           const removed = await deleteTextFile(target.absolute, path, expectedSha256);
@@ -174,7 +188,7 @@ const make = Effect.gen(function* () {
 
 /** Shell and outside-write tools, each run gated by an approval. */
 export class ApprovedTools extends Context.Service<ApprovedTools, Effect.Success<typeof make>>()(
-  "memory-agent/ApprovedTools",
+  "memory-agent/tools/approved/ApprovedTools",
 ) {
   static readonly layer = Layer.effect(ApprovedTools, make);
 }

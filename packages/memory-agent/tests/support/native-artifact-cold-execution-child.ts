@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics nodeBuiltinImport:off schemaSync:off
 import { strict as assert } from "node:assert";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

@@ -1,3 +1,4 @@
+import { isTruthy } from "../../truthy.ts";
 import { Effect, Result, Schema } from "effect";
 import { AppEvents, ExternalAgents, Projects, Sessions } from "memory-agent";
 import { agent } from "~/.server/agent";
@@ -15,10 +16,12 @@ const CreateSession = Schema.Struct({
  * GET /api/sessions?project=<projectId>[&archived=1] — sessions of a project, newest first; with
  * `archived=1`, only the archived ones.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function loader({ request }: Route.LoaderArgs) {
   const params = new URL(request.url).searchParams;
   const projectId = params.get("project");
-  if (!projectId) return Response.json({ error: "project_required" }, { status: 400 });
+  if (!isTruthy(projectId)) return Response.json({ error: "project_required" }, { status: 400 });
   const archived = params.get("archived") === "1";
   return Response.json(
     await agent.runPromise(
@@ -31,15 +34,17 @@ export async function loader({ request }: Route.LoaderArgs) {
  * POST /api/sessions { projectId, title?, agent? } — starts a new conversation in a project, with
  * the app's model or directly with a trusted external agent.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
-  if (rejected) return rejected;
+  if (rejected !== null) return rejected;
   const body = await readJson(request, CreateSession);
   if (Result.isFailure(body)) return Response.json({ error: "invalid_session" }, { status: 400 });
 
   const { projectId, title, agent: external } = body.success;
   const response = Effect.gen(function* () {
-    if (external) {
+    if (isTruthy(external)) {
       const project = yield* (yield* Projects).get(projectId);
       if (!(yield* ExternalAgents).available(project).includes(external))
         return Response.json({ error: "external_agent_unavailable" }, { status: 409 });

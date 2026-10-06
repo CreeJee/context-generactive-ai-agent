@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
+import { randomUUID } from "node:crypto";
 import { Context, Effect, Option } from "effect";
 import { expect, test } from "vite-plus/test";
 import { makeAgentChatImplementation } from "../src/agent/chat.ts";
@@ -16,7 +19,7 @@ const request = () =>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       threadId: "thread-ui",
-      runId: crypto.randomUUID(),
+      runId: randomUUID(),
       messages: [{ id: "m1", role: "user", content: "hello" }],
       tools: [],
       context: [],

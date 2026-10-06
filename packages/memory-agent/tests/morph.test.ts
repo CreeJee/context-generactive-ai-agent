@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -86,6 +88,8 @@ describe.skipIf(!kiwiCached)("Kiwi (model already downloaded)", () => {
           ]),
         ),
       ).pipe(
+        // Test entry point owns this Layer and its resource scope.
+        // @effect-diagnostics-next-line strictEffectProvide:off
         Effect.provide(MorphAnalyzer.kiwi.pipe(Layer.provide(StorageRoot.layer(kiwiStorage)))),
       ),
     );

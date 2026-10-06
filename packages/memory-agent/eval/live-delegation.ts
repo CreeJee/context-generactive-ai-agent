@@ -1,9 +1,16 @@
+import { isTruthy } from "../src/truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { Effect, Layer, ManagedRuntime, Schema } from "effect";
+import { DateTime, Clock, Effect, Layer, ManagedRuntime, Schema } from "effect";
 import { maxIterations, normalizeSystemPrompts, type ModelMessage } from "@tanstack/ai";
 import { AgentChat } from "../src/agent/chat.ts";
 import { ApiUsage } from "../src/agent/api-usage.ts";
@@ -38,7 +45,9 @@ const Selection = Schema.Struct({
   model: Schema.NonEmptyString,
   reasoningEffort: Schema.NonEmptyString,
 });
-const selection = Schema.decodeUnknownSync(Schema.fromJsonString(Selection))(
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
+const selection = Schema.decodeSync(Schema.fromJsonString(Selection))(
   readFileSync(join(defaultStorageRoot, "config.json"), "utf8"),
 );
 const accountDatabase = new DatabaseSync(join(defaultStorageRoot, "agent.db"), { readOnly: true });
@@ -50,7 +59,7 @@ const client = createSubscriptionOAuthClient({
   protocol: providerProtocols.openai,
   ...optionalProperty(
     "store",
-    selectedProfile ? createKeychainProfileCredentialStore(selectedProfile) : undefined,
+    isTruthy(selectedProfile) ? createKeychainProfileCredentialStore(selectedProfile) : undefined,
   ),
 });
 const baseline = `You can delegate with run_subagent and message_subagent. A child sees only the task and uses the same workspace, model and permissions. Dispatch returns immediately. Use wait_subagents when needed and retrieve its report with get_subagent_report before relying on it. Before a final answer call adopt_subagent_reports with only the reports and evidence actually used.`;
@@ -64,6 +73,8 @@ const frames = Schema.fromJsonString(
 let totalCalls = 0;
 let estimatedInputTokens = 0;
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function arm(variant: "baseline-guidance" | "optimized-guidance") {
   const base = mkdtempSync(join(tmpdir(), "delegation-live-eval-"));
   const projectRoot = join(base, "project");
@@ -82,6 +93,8 @@ async function arm(variant: "baseline-guidance" | "optimized-guidance") {
   const registry = Layer.effect(
     ProviderRegistry,
     Effect.gen(function* () {
+      const effectClock = yield* Clock.Clock;
+
       const upstream = yield* ProviderRegistry;
       const { subscriptionDependencies: _nativeDependencies, ...fallback } = upstream;
       const config = yield* GlobalConfig;
@@ -134,7 +147,11 @@ async function arm(variant: "baseline-guidance" | "optimized-guidance") {
                           ? (message.toolCalls ?? []).map((call) => call.function.name)
                           : [],
                       );
-                      observations.push({ at: Date.now(), child, toolCalls: calls });
+                      observations.push({
+                        at: effectClock.currentTimeMillisUnsafe(),
+                        child,
+                        toolCalls: calls,
+                      });
                       const prompts =
                         variant === "baseline-guidance" && !child
                           ? normalizeSystemPrompts(options.systemPrompts ?? []).map((prompt) =>
@@ -187,7 +204,7 @@ async function arm(variant: "baseline-guidance" | "optimized-guidance") {
         };
       }),
     );
-    const started = Date.now();
+    const started = DateTime.toEpochMillis(DateTime.nowUnsafe());
     const prompt = `Audit two independent files without modifying them. Delegate child.ts to one subagent; its task must first run the finite command node -e 'setTimeout(()=>console.log("ready"),10000)' and then read child.ts and report childTotal. You personally read main.ts and calculate mainTotal while the child runs. Retrieve and review the child's report before giving both totals. Do not change the Goal or Plan. Do not create another delegation to poll.`;
     const response = await runtime.runPromise(
       services.agent.handle(
@@ -207,20 +224,22 @@ async function arm(variant: "baseline-guidance" | "optimized-guidance") {
     );
     const sse = await response.text();
     if (!response.ok) throw new Error(`pilot_http_${response.status}: ${sse}`);
-    const events = sse
-      .split("\n")
-      .flatMap((line) =>
-        line.startsWith("data: ") ? [Schema.decodeSync(frames)(line.slice(6))] : [],
-      );
+    const events = sse.split("\n").flatMap((line) =>
+      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+      // @effect-diagnostics-next-line schemaSync:off
+      line.startsWith("data: ") ? [Schema.decodeSync(frames)(line.slice(6))] : [],
+    );
     const errors = events.filter((event) => event.type === "RUN_ERROR" || event.type === "error");
     if (errors.length > 0) throw new Error(`pilot_run_failed: ${JSON.stringify(errors)}`);
     const answer = sse
       .split("\n")
       .flatMap((line) =>
+        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+        // @effect-diagnostics-next-line schemaSync:off
         line.startsWith("data: ") ? [Schema.decodeSync(frames)(line.slice(6))] : [],
       )
       .flatMap((chunk) =>
-        chunk.type === "TEXT_MESSAGE_CONTENT" && chunk.delta ? [chunk.delta] : [],
+        chunk.type === "TEXT_MESSAGE_CONTENT" && isTruthy(chunk.delta) ? [chunk.delta] : [],
       )
       .join("");
     const messages: ModelMessage[] = await services.state.persistence.stores.messages.loadThread(
@@ -240,7 +259,7 @@ async function arm(variant: "baseline-guidance" | "optimized-guidance") {
     return {
       variant,
       selection,
-      durationMs: Date.now() - started,
+      durationMs: DateTime.toEpochMillis(DateTime.nowUnsafe()) - started,
       independentWorkBeforeChildCompletion: independent,
       pollingCalls: calls.filter((call) => call.function.name === "wait_subagents").length,
       waitArguments: calls
@@ -260,6 +279,8 @@ async function arm(variant: "baseline-guidance" | "optimized-guidance") {
   }
 }
 const results = [await arm("baseline-guidance"), await arm("optimized-guidance")];
+// Native stdout/stderr or SDK logging boundary preserves the existing output format.
+// @effect-diagnostics-next-line globalConsole:off
 console.log(
   JSON.stringify(
     {

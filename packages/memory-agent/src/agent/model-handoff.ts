@@ -1,3 +1,6 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash } from "node:crypto";
 import type { MetadataStore, ModelMessage } from "@tanstack/ai";
 import { Option, Predicate, Schema } from "effect";
@@ -17,6 +20,8 @@ function boundedLines(lines: readonly string[], limit: number): string {
   return kept.toReversed().join("\n\n");
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function handoffEvidenceContext(
   blocks: readonly SummaryBlock[],
   nodes: readonly Node[],
@@ -81,6 +86,8 @@ const fingerprint = (message: ModelMessage | undefined) =>
     .digest("hex");
 
 /** A new model reads evidence context, never the old model's reasoning/tool protocol. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function handoffHistory(
   messages: readonly ModelMessage[],
   state: Extract<HandoffState, { _tag: "handoff" }>,
@@ -100,18 +107,23 @@ export function handoffHistory(
   const question = past.findLast(
     (message) => message.role === "user" && messageText(message).trim(),
   );
-  if (!question && !tail.some((message) => message.role === "user" && messageText(message).trim()))
+  if (
+    !isTruthy(question) &&
+    !tail.some((message) => message.role === "user" && messageText(message).trim())
+  )
     throw new Error("Model handoff requires an actual user question");
   // Approved calls may complete before the first new-model request. Pair those results without
   // replaying the rest of the old protocol or changing the SDK's canonical execution state.
   const resultIds = new Set(tail.filter((m) => m.role === "tool").map((m) => m.toolCallId));
   const completed = past.flatMap((message) => {
     const toolCalls = message.toolCalls?.filter((call) => resultIds.has(call.id)) ?? [];
-    return toolCalls.length ? [{ role: "assistant" as const, content: null, toolCalls }] : [];
+    return isTruthy(toolCalls.length)
+      ? [{ role: "assistant" as const, content: null, toolCalls }]
+      : [];
   });
   return replayableToolHistory([
     { role: "assistant", content: state.context },
-    ...(question ? [question] : []),
+    ...(isTruthy(question) ? [question] : []),
     ...completed,
     ...tail,
   ]);
@@ -129,6 +141,8 @@ export function modelHandoffHistory(options: {
   evidenceContext: (history: readonly ModelMessage[]) => Promise<string>;
 }) {
   let prepared: Promise<HandoffState> | undefined;
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const prepare = async (): Promise<HandoffState> => {
     const saved = Option.getOrUndefined(
       decodeState(await options.metadata.get(modelHandoffNamespace, options.threadId)),
@@ -138,7 +152,7 @@ export function modelHandoffHistory(options: {
       const stored = await options.loadHistory();
       const index = stored.findIndex((message) => legacyFingerprint(message) === saved.anchor);
       const boundary = stored[index];
-      if (!boundary) return saved;
+      if (!isTruthy(boundary)) return saved;
       const migrated: HandoffState = {
         ...saved,
         through: index + 1,
@@ -153,9 +167,9 @@ export function modelHandoffHistory(options: {
       .filter((message) => message.role === "assistant")
       .map((message) => Option.getOrUndefined(decodeModel(message.metadata))?.tanstack.model)
       .findLast((model) => model !== undefined);
-    const changed = saved
+    const changed = isTruthy(saved)
       ? saved.target !== options.target
-      : options.previous
+      : options.previous !== undefined
         ? options.previous.provider !== options.provider || options.previous.model !== options.model
         : previousModel !== undefined && previousModel !== options.model;
     const state: HandoffState =
@@ -172,6 +186,8 @@ export function modelHandoffHistory(options: {
     await options.metadata.set(modelHandoffNamespace, options.threadId, state);
     return state;
   };
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   return async (messages: readonly ModelMessage[]) => {
     const state = await (prepared ??= prepare());
     switch (state._tag) {

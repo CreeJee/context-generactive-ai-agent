@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
 import {
   chmodSync,
   readdirSync,
@@ -214,7 +216,7 @@ for (const fault of [
               switch (fault) {
                 case "write":
                   yield* files.write(path, code);
-                  return yield* new NativeRegistrationError({
+                  return yield* NativeRegistrationError.make({
                     cause: new Error("write fault after creation"),
                   });
                 case "integrity":
@@ -229,7 +231,7 @@ for (const fault of [
                   yield* Effect.scoped(
                     makeOwnerNativeArtifacts({ ...owner.db, directory })
                       .acquire(id)
-                      .pipe(Effect.mapError((cause) => new NativeRegistrationError({ cause }))),
+                      .pipe(Effect.mapError((cause) => NativeRegistrationError.make({ cause }))),
                   );
                   expect(readdirSync(directory)).toHaveLength(2);
                   return;

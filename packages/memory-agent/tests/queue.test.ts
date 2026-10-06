@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off schemaSync:off
+import { isTruthy } from "../src/truthy.ts";
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
 import { Effect, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
@@ -39,7 +42,7 @@ function openTab(runtime: Runtime, sessionId: string, holder: string | null = nu
     history: { pageSize: 10_000 },
     tools: approvalToolDefinitions,
     connection: fetchServerSentEvents(`http://127.0.0.1/api/chat?session=${sessionId}`, {
-      headers: holder ? { [sessionHolderHeader]: holder } : {},
+      headers: isTruthy(holder) ? { [sessionHolderHeader]: holder } : {},
       fetchClient: (input, init) =>
         runtime.runPromise(
           Effect.flatMap(AgentChat, (agent) =>

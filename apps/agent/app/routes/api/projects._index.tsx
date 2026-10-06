@@ -7,6 +7,8 @@ import type { Route } from "./+types/projects._index";
 const AddProject = Schema.Struct({ root: Schema.NonEmptyString });
 
 /** GET /api/projects — registered project roots. */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function loader() {
   return Response.json(
     await agent.runPromise(Effect.flatMap(Projects, (projects) => projects.list)),
@@ -17,9 +19,11 @@ export async function loader() {
  * POST /api/projects { root } — registers a directory. File and shell tools may later act inside
  * it, so the path is canonicalized and must not overlap the app's storage directory.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
-  if (rejected) return rejected;
+  if (rejected !== null) return rejected;
   const body = await readJson(request, AddProject);
   if (Result.isFailure(body)) return Response.json({ error: "invalid_project" }, { status: 400 });
 

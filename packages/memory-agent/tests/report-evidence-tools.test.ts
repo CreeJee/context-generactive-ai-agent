@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off
+import { isTruthy } from "../src/truthy.ts";
 import { Schema } from "effect";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, test } from "vite-plus/test";
@@ -54,7 +57,7 @@ function fixture() {
   );
   const invoke = async (name: string, input: Schema.Json): Promise<any> => {
     const tool = tools.find((entry) => entry.name === name);
-    if (!tool?.execute) throw new Error(`Missing tool ${name}`);
+    if (!isTruthy(tool?.execute)) throw new Error(`Missing tool ${name}`);
     // SAFETY: each tool server decodes its own input schema, including invalid-input test cases.
     return tool.execute(input as never);
   };

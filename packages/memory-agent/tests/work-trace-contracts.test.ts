@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics schemaSync:off
 import { Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import {

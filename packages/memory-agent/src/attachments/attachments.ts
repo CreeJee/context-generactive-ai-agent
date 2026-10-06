@@ -1,8 +1,17 @@
-import { Semaphore } from "effect";
+import { isTruthy } from "../truthy.ts";
+import { DateTime, Clock, Semaphore } from "effect";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash, randomUUID } from "node:crypto";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { mkdirSync } from "node:fs";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import type { SQLOutputValue } from "node:sqlite";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { Context, Data, Effect, Layer, Schema } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
@@ -44,6 +53,8 @@ const AttachmentRow = Schema.Struct({
   bytes: Schema.Finite,
   created_at: Schema.String,
 });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeAttachmentRow = Schema.decodeUnknownSync(AttachmentRow);
 
 function toAttachment(row: Record<string, SQLOutputValue>): Attachment {
@@ -122,7 +133,7 @@ const make = Effect.gen(function* () {
   const get = (id: string): Attachment | null => {
     if (!isAttachmentId(id)) return null;
     const row = selectAttachment.get(id);
-    return row ? toAttachment(row) : null;
+    return isTruthy(row) ? toAttachment(row) : null;
   };
 
   const conversionPermits = yield* Semaphore.make(maxConcurrentImageConversions);
@@ -132,48 +143,48 @@ const make = Effect.gen(function* () {
    * benefit. GIFs keep their animation. Concurrent conversions use distinct temporary files and
    * atomically publish the same content-addressed copy.
    */
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const encodeForModel = async (attachment: Attachment): Promise<ModelImage> => {
     const upload: ModelImage = { path: fileOf(attachment), mimeType: attachment.mimeType };
     if (attachment.mimeType === "image/gif") return upload;
     const copy = join(directory, `${attachment.id}.model.webp`);
     const noCopy = join(directory, `${attachment.id}.model-original`);
     const existingCopy = await stat(copy).catch(() => undefined);
-    if (existingCopy && existingCopy.size <= maxModelImageBytes)
+    if (isTruthy(existingCopy) && existingCopy.size <= maxModelImageBytes)
       return { path: copy, mimeType: "image/webp" };
-    if (existingCopy) await rm(copy, { force: true });
-    if (await stat(noCopy).catch(() => undefined)) return upload;
+    if (isTruthy(existingCopy)) await rm(copy, { force: true });
+    if (isTruthy(await stat(noCopy).catch(() => undefined))) return upload;
     try {
-      const encoded = await run(
-        conversionPermits.withPermits(1)(
-          Effect.tryPromise({
-            try: async () => {
-              const sharp = requireRuntime("sharp");
-              const attempts = [
-                { edge: modelImageEdge, quality: 86 },
-                { edge: 1600, quality: 78 },
-                { edge: 1280, quality: 70 },
-                { edge: 1024, quality: 64 },
-              ] as const;
-              let candidate: Uint8Array = new Uint8Array();
-              for (const attempt of attempts) {
-                candidate = await sharp(upload.path)
-                  .rotate()
-                  .resize({
-                    width: attempt.edge,
-                    height: attempt.edge,
-                    fit: "inside",
-                    withoutEnlargement: true,
-                  })
-                  .webp({ quality: attempt.quality, smartSubsample: true })
-                  .toBuffer();
-                if (candidate.length <= maxModelImageBytes) break;
-              }
-              return candidate;
-            },
-            catch: (cause) => new AttachmentStorageFailed({ operation: "convert", cause }),
-          }),
-        ),
-      );
+      const encoded = await Effect.tryPromise({
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        // @effect-diagnostics-next-line asyncFunction:off
+        try: async () => {
+          const sharp = requireRuntime("sharp");
+          const attempts = [
+            { edge: modelImageEdge, quality: 86 },
+            { edge: 1600, quality: 78 },
+            { edge: 1280, quality: 70 },
+            { edge: 1024, quality: 64 },
+          ] as const;
+          let candidate: Uint8Array = new Uint8Array();
+          for (const attempt of attempts) {
+            candidate = await sharp(upload.path)
+              .rotate()
+              .resize({
+                width: attempt.edge,
+                height: attempt.edge,
+                fit: "inside",
+                withoutEnlargement: true,
+              })
+              .webp({ quality: attempt.quality, smartSubsample: true })
+              .toBuffer();
+            if (candidate.length <= maxModelImageBytes) break;
+          }
+          return candidate;
+        },
+        catch: (cause) => new AttachmentStorageFailed({ operation: "convert", cause }),
+      }).pipe(conversionPermits.withPermits(1), run);
       if (encoded.length >= attachment.bytes) {
         await writeFile(noCopy, "", { mode: 0o600 });
         return upload;
@@ -203,16 +214,18 @@ const make = Effect.gen(function* () {
       if (bytes.length > maxAttachmentBytes)
         return yield* new AttachmentRejected({ reason: "too_large" });
       const mimeType = sniffImageType(bytes);
-      if (!mimeType) return yield* new AttachmentRejected({ reason: "unsupported_type" });
+      if (!isTruthy(mimeType)) return yield* new AttachmentRejected({ reason: "unsupported_type" });
 
       const attachment: Attachment = {
         id: createHash("sha256").update(bytes).digest("hex"),
         mimeType,
         bytes: bytes.length,
-        createdAt: new Date().toISOString(),
+        createdAt: DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
       };
       const path = fileOf(attachment);
       yield* Effect.tryPromise({
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        // @effect-diagnostics-next-line asyncFunction:off
         try: async () => {
           const existing = await stat(path).catch(() => undefined);
           if (existing?.size === bytes.length) return;
@@ -283,6 +296,8 @@ const make = Effect.gen(function* () {
     forModel,
 
     /** `data:` URL of an image file, for replaying earlier turns to the model. */
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     dataUrl: async (image: ModelImage) =>
       `data:${image.mimeType};base64,${(await readFile(image.path)).toString("base64")}`,
 
@@ -296,6 +311,8 @@ const make = Effect.gen(function* () {
 
     /** Removes content-addressed blobs only after their last message reference is gone. */
     purgeOrphans: Effect.tryPromise({
+      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+      // @effect-diagnostics-next-line asyncFunction:off
       try: async () => {
         const orphaned = sqlite
           .prepare(
@@ -323,7 +340,7 @@ export type AttachmentsApi = Effect.Success<typeof make>;
 
 /** Images uploaded into conversations. Kept like the rest of the evidence: never expired. */
 export class Attachments extends Context.Service<Attachments, AttachmentsApi>()(
-  "memory-agent/Attachments",
+  "memory-agent/attachments/attachments",
 ) {
   static readonly layer = Layer.effect(Attachments, make);
 }

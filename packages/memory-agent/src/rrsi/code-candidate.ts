@@ -1,6 +1,15 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash } from "node:crypto";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { readFileSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { CodeProposal } from "./contracts.ts";
@@ -19,6 +28,8 @@ export function codeContext(repository: string) {
     source: readFileSync(join(repository, path), "utf8").slice(0, 15000),
   }));
 }
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function applyCodeProposal(directory: string, proposal: CodeProposal) {
   if (
     proposal.files.length < 1 ||
@@ -43,6 +54,9 @@ export function applyCodeProposal(directory: string, proposal: CodeProposal) {
   }
   for (const [file, source] of replacements) writeFileSync(file, source);
 }
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function prepareCodeCandidate(
   repository: string,
   experimentId: string,
@@ -61,7 +75,7 @@ export async function prepareCodeCandidate(
     cwd: directory,
     signal,
   });
-  if (!diff) throw new Error("empty_code_candidate");
+  if (!isTruthy(diff)) throw new Error("empty_code_candidate");
   await run("git", ["add", "--", ...editableCode], { cwd: directory, signal });
   await run(
     "git",

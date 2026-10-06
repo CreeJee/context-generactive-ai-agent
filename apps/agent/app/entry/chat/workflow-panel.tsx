@@ -1,3 +1,4 @@
+import { isTruthy } from "../../truthy.ts";
 import { ChevronRightIcon } from "lucide-react";
 import type { SessionRunState } from "memory-agent/definitions";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
@@ -92,12 +93,12 @@ export function WorkflowArtifactPanel({
   readonly onRevise: () => void;
   readonly onExecute: () => void;
 }) {
-  if (!state || state.phase === "chat") return null;
+  if (!(state !== null) || state.phase === "chat") return null;
   if (state.phase === "goal") {
     return (
       <Alert>
         <AlertTitle>
-          {state.goal
+          {isTruthy(state.goal)
             ? `Goal v${state.goal.version} · ${goalStatusLabels[state.goal.status]}`
             : "Goal"}
         </AlertTitle>
@@ -123,7 +124,9 @@ export function WorkflowArtifactPanel({
             <Button
               type="button"
               size="sm"
-              disabled={!actions?.controls.resume.allowed || disabled || controlling || busy}
+              disabled={
+                !isTruthy(actions?.controls.resume.allowed) || disabled || controlling || busy
+              }
               onClick={onResume}
             >
               계속
@@ -132,7 +135,7 @@ export function WorkflowArtifactPanel({
               type="button"
               size="sm"
               variant="outline"
-              disabled={!actions?.controls.pause.allowed || disabled || controlling}
+              disabled={!isTruthy(actions?.controls.pause.allowed) || disabled || controlling}
               onClick={onPause}
             >
               일시 중지
@@ -141,7 +144,7 @@ export function WorkflowArtifactPanel({
               type="button"
               size="sm"
               variant="destructive"
-              disabled={!actions?.controls.stop.allowed || disabled || controlling}
+              disabled={!isTruthy(actions?.controls.stop.allowed) || disabled || controlling}
               onClick={onStop}
             >
               중단
@@ -153,7 +156,7 @@ export function WorkflowArtifactPanel({
   }
 
   const plan = state.plan;
-  if (!plan) {
+  if (!isTruthy(plan)) {
     if (state.phase !== "plan") return null;
     return (
       <Alert>
@@ -240,7 +243,7 @@ export function WorkflowArtifactPanel({
             type="button"
             size="sm"
             variant="outline"
-            disabled={!actions?.phases.plan.allowed || busy || disabled || controlling}
+            disabled={!isTruthy(actions?.phases.plan.allowed) || busy || disabled || controlling}
             onClick={onRevise}
           >
             수정 요청
@@ -248,10 +251,10 @@ export function WorkflowArtifactPanel({
           <Button
             type="button"
             size="sm"
-            disabled={!execute?.allowed || busy || disabled || controlling}
+            disabled={!isTruthy(execute?.allowed) || busy || disabled || controlling}
             onClick={onExecute}
           >
-            {continuingImplementation ? "구현 계속" : "계획 실행"}
+            {isTruthy(continuingImplementation) ? "구현 계속" : "계획 실행"}
           </Button>
         </div>
       </AlertDescription>

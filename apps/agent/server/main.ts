@@ -2,9 +2,15 @@
 // process and opens the folder (or the folder it was started from) as a project;
 // `context-agent acp` is the stdio ACP agent editors start, working through that server.
 // Runs as the packaged executable (Node SEA) or as the `vp pack` bundle (`vp run start`).
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { dirname } from "node:path";
 import { isSea } from "node:sea";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -41,18 +47,24 @@ const { values, positionals } = parseArgs({
 
 if (values.version) {
   const release = readReleaseInfo();
+  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+  // @effect-diagnostics-next-line globalConsole:off
   console.log(`context-agent ${release.version} (${release.channel}, ${release.target})`);
   process.exit(0);
 }
 
 const port = Number(values.port);
 if (values.help || !Number.isInteger(port) || port < 1 || port > 65_535 || positionals.length > 1) {
+  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+  // @effect-diagnostics-next-line globalConsole:off
   console.error(usage);
   process.exit(values.help ? 0 : 2);
 }
 const baseUrl = `http://127.0.0.1:${port}`;
 
 /** Opens the launch folder on the app at `baseUrl` and returns the page to show. */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function pageFor(folder: LaunchFolder) {
   switch (folder.kind) {
     case "none":
@@ -62,11 +74,15 @@ async function pageFor(folder: LaunchFolder) {
       const opened = await openProject(baseUrl, folder.root);
       switch (opened.kind) {
         case "opened":
+          // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+          // @effect-diagnostics-next-line globalConsole:off
           console.log(
             `${opened.added ? "프로젝트로 추가했어요" : "등록된 프로젝트예요"}: ${folder.root}`,
           );
           return `${baseUrl}/?project=${encodeURIComponent(opened.projectId)}`;
         case "rejected":
+          // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+          // @effect-diagnostics-next-line globalConsole:off
           console.error(`이 폴더는 프로젝트로 열 수 없어요(${opened.reason}): ${folder.root}`);
           return baseUrl;
       }
@@ -92,6 +108,8 @@ if (positionals[0] === "acp") {
     ? { kind: "none" }
     : launchFolder(positionals[0], process.cwd(), storageRoot, executableFolder);
   if (folder.kind === "invalid") {
+    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+    // @effect-diagnostics-next-line globalConsole:off
     console.error(`폴더를 찾을 수 없어요: ${folder.path}`);
     process.exit(2);
   }
@@ -99,17 +117,25 @@ if (positionals[0] === "acp") {
   if (await isThisApp(baseUrl)) {
     // One server per storage root: a second start hands the folder to the running app.
     const page = await pageFor(folder);
+    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+    // @effect-diagnostics-next-line globalConsole:off
     console.log(`이미 실행 중인 앱(${baseUrl})에서 열었어요.`);
     if (values.open) openInBrowser(page);
     process.exit(0);
   }
 
+  // Native host/SDK configuration boundary reads or forwards the host environment.
+  // @effect-diagnostics-next-line processEnv:off
   process.env.CONTEXT_AGENT_HOME = storageRoot;
+  // Native host/SDK configuration boundary reads or forwards the host environment.
+  // @effect-diagnostics-next-line processEnv:off
   const developmentBuildId = process.env.CONTEXT_AGENT_BUILD_ID;
   const runtimeInstanceId = randomUUID();
   const releaseStorageLock = acquireStorageLock(storageRoot, port, runtimeInstanceId);
   process.once("exit", releaseStorageLock);
   const runtime = unpackRuntime(storageRoot);
+  // Native host/SDK configuration boundary reads or forwards the host environment.
+  // @effect-diagnostics-next-line processEnv:off
   if (runtime !== null) process.env.CONTEXT_AGENT_RUNTIME = runtime;
   const clientDirectory =
     runtime === null
@@ -122,6 +148,8 @@ if (positionals[0] === "acp") {
     developmentBuildId,
     runtimeInstanceId,
   }).catch((error: NodeJS.ErrnoException) => {
+    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+    // @effect-diagnostics-next-line globalConsole:off
     console.error(
       error.code === "EADDRINUSE"
         ? `포트 ${port}를 다른 프로그램이 쓰고 있어요. --port로 다른 포트를 지정하세요.`
@@ -129,6 +157,8 @@ if (positionals[0] === "acp") {
     );
     process.exit(1);
   });
+  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+  // @effect-diagnostics-next-line globalConsole:off
   console.log(`Context Agent가 ${baseUrl} 에서 실행 중이에요. 끝내려면 Ctrl+C.`);
   const page = await pageFor(folder);
   if (values.open) openInBrowser(page);

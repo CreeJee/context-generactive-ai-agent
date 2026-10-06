@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import {
   isStandardSchema,
   parseWithStandardSchema,
@@ -38,13 +39,22 @@ export interface ParallelReads {
  * Only the read-only calls before the first other call are started early: a read that follows a
  * write in the same step still runs after that write.
  */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function parallelReads(tools: readonly AnyServerTool[], signal: AbortSignal): ParallelReads {
   const started = new Map<string, Promise<unknown>>();
   const byName = new Map(tools.map((tool) => [tool.name, tool]));
+  // SDK results stay until their ordered tool call consumes them, including already settled calls.
+  // The SDK owns execution and its AbortSignal; this is a result handoff, not a fiber registry.
+  const clear = () => {
+    started.clear();
+    signal.removeEventListener("abort", clear);
+  };
+  signal.addEventListener("abort", clear, { once: true });
 
   const startEarly = (toolCallId: string, tool: AnyServerTool, argumentsJson: string) => {
     const execute = tool.execute;
-    if (!execute || started.has(toolCallId)) return;
+    if (!isTruthy(execute) || signal.aborted || started.has(toolCallId)) return;
     // Parsed and validated as the engine will; on any problem the call simply runs in order, where
     // the engine reports it.
     let value: unknown;
@@ -71,13 +81,15 @@ export function parallelReads(tools: readonly AnyServerTool[], signal: AbortSign
 
   const wrapped = tools.map((tool): AnyServerTool => {
     const execute = tool.execute;
-    if (!execute || !readOnlyToolNames.has(tool.name)) return tool;
+    if (!isTruthy(execute) || !readOnlyToolNames.has(tool.name)) return tool;
     return {
       ...tool,
+      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+      // @effect-diagnostics-next-line asyncFunction:off
       execute: async (...call: Parameters<typeof execute>) => {
         const [args, context] = call;
-        const early = context?.toolCallId ? started.get(context.toolCallId) : undefined;
-        if (!early) return execute(args, context);
+        const early = isTruthy(context?.toolCallId) ? started.get(context.toolCallId) : undefined;
+        if (!isTruthy(early)) return execute(args, context);
         started.delete(context?.toolCallId ?? "");
         return early;
       },
@@ -90,7 +102,7 @@ export function parallelReads(tools: readonly AnyServerTool[], signal: AbortSign
       if (!readOnlyToolNames.has(hook.toolName)) return undefined;
       const answered = new Set(
         ctx.messages.flatMap((message) =>
-          message.role === "tool" && message.toolCallId ? [message.toolCallId] : [],
+          message.role === "tool" && isTruthy(message.toolCallId) ? [message.toolCallId] : [],
         ),
       );
       const step = [...ctx.messages]
@@ -104,7 +116,7 @@ export function parallelReads(tools: readonly AnyServerTool[], signal: AbortSign
         if (!readOnlyToolNames.has(call.function.name)) break;
         if (answered.has(call.id)) continue;
         const tool = byName.get(call.function.name);
-        if (tool) startEarly(call.id, tool, call.function.arguments);
+        if (isTruthy(tool)) startEarly(call.id, tool, call.function.arguments);
       }
       return undefined;
     },

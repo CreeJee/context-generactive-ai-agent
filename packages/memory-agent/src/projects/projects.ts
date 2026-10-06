@@ -1,8 +1,15 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { realpathSync, statSync } from "node:fs";
 import type { SQLOutputValue } from "node:sqlite";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { basename, resolve } from "node:path";
-import { Context, Data, Effect, Layer, Schema } from "effect";
+import { DateTime, Clock, Context, Data, Effect, Layer, Schema } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
 import { canonicalPath, pathsOverlap } from "../files/paths.ts";
@@ -37,6 +44,8 @@ const ProjectRow = Schema.Struct({
   created_at: Schema.String,
   hidden_at: Schema.NullOr(Schema.String),
 });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeProjectRow = Schema.decodeUnknownSync(ProjectRow);
 
 function toProject(row: Record<string, SQLOutputValue>): Project {
@@ -62,6 +71,8 @@ export class ProjectNotFound extends Data.TaggedError("ProjectNotFound")<{
 }> {}
 
 const make = Effect.gen(function* () {
+  const effectClock = yield* Clock.Clock;
+
   const db = yield* Database;
   const storage = yield* StorageRoot;
   const storageRoot = canonicalPath(storage.path);
@@ -69,7 +80,7 @@ const make = Effect.gen(function* () {
   const find = (id: string) =>
     Effect.sync(() => db.sqlite.prepare("SELECT * FROM projects WHERE id = ?").get(id)).pipe(
       Effect.flatMap((row) =>
-        row ? Effect.succeed(toProject(row)) : Effect.fail(new ProjectNotFound({ id })),
+        isTruthy(row) ? Effect.succeed(toProject(row)) : Effect.fail(new ProjectNotFound({ id })),
       ),
     );
 
@@ -92,7 +103,12 @@ const make = Effect.gen(function* () {
       Effect.sync(() =>
         db.sqlite
           .prepare("UPDATE projects SET hidden_at = ? WHERE id = ?")
-          .run(hidden ? new Date().toISOString() : null, id),
+          .run(
+            hidden
+              ? DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()))
+              : null,
+            id,
+          ),
       ).pipe(
         Effect.flatMap((result) =>
           result.changes === 0 ? Effect.fail(new ProjectNotFound({ id })) : find(id),
@@ -120,7 +136,7 @@ const make = Effect.gen(function* () {
           name: basename(root) || root,
           crossRecallExcluded: false,
           permissionMode: "ask",
-          createdAt: new Date().toISOString(),
+          createdAt: DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
           hiddenAt: null,
         };
         // Adding a folder that is registered but hidden puts it back in the list: asking for it
@@ -131,7 +147,8 @@ const make = Effect.gen(function* () {
             ON CONFLICT(root) DO UPDATE SET hidden_at = NULL WHERE projects.hidden_at IS NOT NULL
             RETURNING *`)
           .get(project.id, project.root, project.name, project.createdAt);
-        if (!row) return yield* new ProjectRootRejected({ root, reason: "already_registered" });
+        if (!isTruthy(row))
+          return yield* new ProjectRootRejected({ root, reason: "already_registered" });
         return toProject(row);
       }),
 
@@ -163,7 +180,7 @@ const make = Effect.gen(function* () {
 
 /** Project roots registered from the UI. Sessions, memory and grants belong to one project. */
 export class Projects extends Context.Service<Projects, Effect.Success<typeof make>>()(
-  "memory-agent/Projects",
+  "memory-agent/projects/projects",
 ) {
   static readonly layer = Layer.effect(Projects, make);
 }

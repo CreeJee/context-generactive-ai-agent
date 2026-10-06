@@ -11,7 +11,7 @@ export const acquireFullLoopChannel = Effect.fn("acquireFullLoopChannel")(functi
   return yield* Effect.acquireRelease(
     Effect.try({
       try: () => new MessageChannel(),
-      catch: (cause) => new WorkerLifecycleError({ operation: "acquire", cause }),
+      catch: (cause) => WorkerLifecycleError.make({ operation: "acquire", cause }),
     }),
     (channel) =>
       Effect.sync(() => channel.port1.close()).pipe(
@@ -27,7 +27,7 @@ export const acquireFullLoopEndpoint = Effect.fn("acquireFullLoopEndpoint")(func
   return yield* Effect.acquireRelease(
     Effect.try({
       try: () => serveOwnerRpcPort(port, options),
-      catch: (cause) => new WorkerLifecycleError({ operation: "acquire", cause }),
+      catch: (cause) => WorkerLifecycleError.make({ operation: "acquire", cause }),
     }),
     (endpoint) => Effect.sync(() => endpoint.close()),
   );
@@ -47,7 +47,7 @@ export const acquireFullLoopWorker = Effect.fn("acquireFullLoopWorker")(function
         hooks.onWorkerStarting?.();
         return { workerCreated: false, terminated: false };
       },
-      catch: (cause) => new WorkerLifecycleError({ operation: "acquire", cause }),
+      catch: (cause) => WorkerLifecycleError.make({ operation: "acquire", cause }),
     }),
     (lease) =>
       Effect.sync(() => {
@@ -62,12 +62,12 @@ export const acquireFullLoopWorker = Effect.fn("acquireFullLoopWorker")(function
         lease.workerCreated = true;
         return worker;
       },
-      catch: (cause) => new WorkerLifecycleError({ operation: "acquire", cause }),
+      catch: (cause) => WorkerLifecycleError.make({ operation: "acquire", cause }),
     }),
     (worker) =>
       Effect.tryPromise({
         try: () => worker.terminate(),
-        catch: (cause) => new WorkerLifecycleError({ operation: "terminate", cause }),
+        catch: (cause) => WorkerLifecycleError.make({ operation: "terminate", cause }),
       }).pipe(
         Effect.tap(() =>
           Effect.sync(() => {

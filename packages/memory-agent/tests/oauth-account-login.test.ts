@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off globalFetch:off newPromise:off
+import { DateTime } from "effect";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, test, vi } from "vite-plus/test";
 import { migrations } from "../src/db/migrations.ts";
@@ -55,7 +58,12 @@ function fixture() {
       connected: boolean;
       expiresAt: number;
     }>((resolve, reject) => {
-      succeed = () => resolve({ provider, connected: true, expiresAt: Date.now() + 60_000 });
+      succeed = () =>
+        resolve({
+          provider,
+          connected: true,
+          expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 60_000,
+        });
       fail = () => reject(new Error("cancelled"));
     });
     attempts.set(provider, { id, succeed, fail });

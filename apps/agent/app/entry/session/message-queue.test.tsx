@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off
+import { isTruthy } from "../../truthy.ts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
@@ -35,7 +38,7 @@ function readSnapshot(snapshot: QueueSnapshot) {
     </QueryClientProvider>,
   );
   const current = captured[0];
-  if (!current) throw new Error("Missing queue result");
+  if (!isTruthy(current)) throw new Error("Missing queue result");
   return current;
 }
 

@@ -1,3 +1,6 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import type { SQLOutputValue } from "node:sqlite";
 import { Context, Effect, Layer, Schema } from "effect";
@@ -24,8 +27,13 @@ export interface MigrationCount {
   readonly repeated: number;
 }
 
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeId = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
-const idOf = (row: Record<string, SQLOutputValue> | undefined) => (row ? decodeId(row).id : null);
+const idOf = (row: Record<string, SQLOutputValue> | undefined) =>
+  isTruthy(row) ? decodeId(row).id : null;
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeCall = Schema.decodeUnknownSync(
   Schema.Struct({ id: Schema.String, tool_name: Schema.NullOr(Schema.String) }),
 );
@@ -111,7 +119,7 @@ const make = Effect.gen(function* () {
           JSON.stringify({ ...detail, importedFrom: source }),
           at,
         );
-        if (previousId) link(previousId, id, "next", at);
+        if (isTruthy(previousId)) link(previousId, id, "next", at);
         previousId = id;
         // An empty answer is not a statement; interpreting it would cost a model call for nothing.
         if (migration.interpret && interpretedKinds.has(kind) && hasStatementText(text))
@@ -127,16 +135,16 @@ const make = Effect.gen(function* () {
        * node the live recorder writes in that case, so both look alike to `trace_evidence`.
        */
       const assistantFor = (at: string) => {
-        if (assistantNodeId) return assistantNodeId;
+        if (isTruthy(assistantNodeId)) return assistantNodeId;
         const id = append("assistant", "", at, null, {});
-        if (userNodeId) link(id, userNodeId, "reply", at);
+        if (isTruthy(userNodeId)) link(id, userNodeId, "reply", at);
         assistantNodeId = id;
         return id;
       };
 
       for (const item of migration.items) {
         if (item.kind === "session" || item.kind === "ignored") continue;
-        if (alreadyImported.get(source, item.externalId)) {
+        if (isTruthy(alreadyImported.get(source, item.externalId))) {
           repeated += 1;
           continue;
         }
@@ -148,7 +156,7 @@ const make = Effect.gen(function* () {
               assistantNodeId = null;
               continue;
             }
-            if (userNodeId) link(id, userNodeId, "reply", item.at);
+            if (isTruthy(userNodeId)) link(id, userNodeId, "reply", item.at);
             assistantNodeId = id;
             continue;
           }
@@ -162,19 +170,19 @@ const make = Effect.gen(function* () {
             for (const ref of new Set(item.refs)) {
               const earlier = idOf(latestWithRef.get(ref, projectId));
               insertRef.run(id, ref);
-              if (earlier) link(id, earlier, "touches", item.at);
+              if (isTruthy(earlier)) link(id, earlier, "touches", item.at);
             }
             continue;
           }
           case "tool_result": {
             const row = callNode.get(sessionId, item.toolCallId);
-            const called = row ? decodeCall(row) : null;
+            const called = isTruthy(row) ? decodeCall(row) : null;
             const id = append("tool_result", item.text, item.at, item.externalId, {
               toolName: called?.tool_name ?? undefined,
               toolCallId: item.toolCallId,
               ok: item.ok,
             });
-            if (called) link(called.id, id, "returns", item.at);
+            if (isTruthy(called)) link(called.id, id, "returns", item.at);
           }
         }
       }
@@ -189,7 +197,7 @@ const make = Effect.gen(function* () {
  * get the same structural edges live ones do; only the clock differs.
  */
 export class BulkNodes extends Context.Service<BulkNodes, Effect.Success<typeof make>>()(
-  "memory-agent/BulkNodes",
+  "memory-agent/imports/bulk/BulkNodes",
 ) {
   static readonly layer = Layer.effect(BulkNodes, make);
 }

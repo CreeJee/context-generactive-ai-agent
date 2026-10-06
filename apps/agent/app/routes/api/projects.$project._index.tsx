@@ -17,9 +17,11 @@ const ProjectSettings = Schema.Struct({
  * - hidden: take it out of the sidebar. Its sessions, memory and search are untouched, and adding
  *   the same folder again brings it back.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request, params }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
-  if (rejected) return rejected;
+  if (rejected !== null) return rejected;
   const body = await readJson(request, ProjectSettings);
   if (Result.isFailure(body)) return Response.json({ error: "invalid_settings" }, { status: 400 });
   const { crossRecallExcluded, permissionMode, hidden } = body.success;

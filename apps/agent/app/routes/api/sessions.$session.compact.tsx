@@ -9,9 +9,11 @@ import type { Route } from "./+types/sessions.$session.compact";
  * has already answered from; each cleared output keeps a pointer to its memory node. 409
  * `run_in_progress` while the session is answering. Only the page holding the session may do it.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request, params }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
-  if (rejected) return rejected;
+  if (rejected !== null) return rejected;
   const holder = request.headers.get(sessionHolderHeader);
   return agent.runPromise(
     Effect.flatMap(AgentChat, (chat) => chat.compact(params.session, holder)),

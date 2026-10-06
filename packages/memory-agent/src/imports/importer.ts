@@ -1,7 +1,19 @@
-import { Semaphore } from "effect";
+import { isTruthy } from "../truthy.ts";
+import { DateTime, Clock, Semaphore } from "effect";
 import { homedir } from "node:os";
 import { Worker } from "node:worker_threads";
-import { Context, Data, Deferred, Effect, Layer, Schedule, Schema } from "effect";
+import {
+  Context,
+  Data,
+  Deferred,
+  HashMap,
+  Ref,
+  Effect,
+  Layer,
+  Option,
+  Schedule,
+  Schema,
+} from "effect";
 import { GlobalConfig } from "../config/global-config.ts";
 import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
@@ -84,13 +96,19 @@ export class ImportWorkerFailed extends Data.TaggedError("ImportWorkerFailed")<{
   readonly reason: string;
 }> {}
 
-const decodeReply = Schema.decodeUnknownSync(ImportWorkerReply);
+const decodeReply = Schema.decodeUnknownOption(ImportWorkerReply);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeSourceTotals = Schema.decodeUnknownSync(
   Schema.Struct({ migrated: Schema.Finite, nodes: Schema.Finite, failed: Schema.Finite }),
 );
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeFailure = Schema.decodeUnknownSync(
   Schema.Struct({ source: ImportSourceName, path: Schema.String, reason: Schema.String }),
 );
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeSkipped = Schema.decodeUnknownSync(
   Schema.Struct({ cwd: Schema.String, reason: Schema.String, transcripts: Schema.Finite }),
 );
@@ -111,6 +129,8 @@ const make = (watching: boolean, home: string) =>
     const indexer = yield* Indexer;
     const projects = yield* Projects;
     const oneDrainAtATime = yield* Semaphore.make(1);
+    const context = yield* Effect.context<never>();
+    const runSync = Effect.runSyncWith(context);
 
     const sourceTotals = sqlite.prepare(`
       SELECT
@@ -131,13 +151,22 @@ const make = (watching: boolean, home: string) =>
     const setup: ImportWorkerSetup = { storageRoot: storage.path, home };
     let worker: Worker | null = null;
     let nextId = 1;
-    const listeners = new Map<number, (reply: ImportWorkerReply) => void>();
+    const listeners = yield* Ref.make(
+      HashMap.empty<
+        number,
+        {
+          readonly done: Deferred.Deferred<ImportWorkerReply>;
+          readonly progress: (reply: PassProgress) => void;
+        }
+      >(),
+    );
 
     const stop = (reason: string) => {
       const current = worker;
       worker = null;
-      for (const [id, listen] of listeners) listen({ id, kind: "failed", reason });
-      listeners.clear();
+      const waiting = runSync(Ref.getAndSet(listeners, HashMap.empty()));
+      for (const [id, entry] of waiting)
+        Deferred.doneUnsafe(entry.done, Effect.succeed({ id, kind: "failed", reason }));
       return current?.terminate();
     };
 
@@ -147,19 +176,21 @@ const make = (watching: boolean, home: string) =>
         if (worker === created) void stop("the import worker stopped");
       };
       created.on("message", (message) => {
-        const reply = decodeReply(message);
-        const listen = listeners.get(reply.id);
+        const decoded = decodeReply(message);
+        if (Option.isNone(decoded)) return lost();
+        const reply = decoded.value;
+        const listen = Option.getOrUndefined(HashMap.get(runSync(Ref.get(listeners)), reply.id));
         switch (reply.kind) {
           case "progress":
-            listen?.(reply);
+            listen?.progress(reply);
             return;
           case "counts":
           case "finished":
           case "failed":
-            listeners.delete(reply.id);
-            listen?.(reply);
+            runSync(Ref.update(listeners, HashMap.remove(reply.id)));
+            if (isTruthy(listen)) Deferred.doneUnsafe(listen.done, Effect.succeed(reply));
             // An idle worker must not keep the process alive; one with requests in flight must.
-            if (listeners.size === 0) created.unref();
+            if (HashMap.isEmpty(runSync(Ref.get(listeners)))) created.unref();
         }
       });
       created.on("error", lost);
@@ -168,59 +199,80 @@ const make = (watching: boolean, home: string) =>
       return created;
     };
 
-    const ask = (kind: ImportWorkerRequest["kind"], listen: (reply: ImportWorkerReply) => void) => {
-      const current = (worker ??= start());
+    const ask = Effect.fnUntraced(function* (
+      kind: ImportWorkerRequest["kind"],
+      progress: (reply: PassProgress) => void = () => undefined,
+    ) {
+      const current = yield* Effect.try({
+        try: () => (worker ??= start()),
+        catch: () => new ImportWorkerFailed({ reason: "the import worker could not start" }),
+      });
       const id = nextId++;
-      listeners.set(id, listen);
-      current.ref();
-      current.postMessage({ id, kind } satisfies ImportWorkerRequest);
-    };
+      const done = yield* Deferred.make<ImportWorkerReply>();
+      return yield* Ref.update(listeners, HashMap.set(id, { done, progress })).pipe(
+        Effect.andThen(
+          Effect.try({
+            try: () => {
+              current.ref();
+              current.postMessage({ id, kind } satisfies ImportWorkerRequest);
+            },
+            catch: () => new ImportWorkerFailed({ reason: "the import worker request failed" }),
+          }),
+        ),
+        Effect.andThen(Deferred.await(done)),
+        Effect.ensuring(
+          Ref.updateAndGet(listeners, HashMap.remove(id)).pipe(
+            Effect.map((remaining) => {
+              if (HashMap.isEmpty(remaining)) current.unref();
+            }),
+          ),
+        ),
+      );
+    });
 
     yield* Effect.addFinalizer(() =>
+      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+      // @effect-diagnostics-next-line asyncFunction:off
       Effect.promise(async () => void (await stop("the importer stopped"))),
     );
 
     /** Transcripts on disk per source, counted by the worker so the folders are walked there. */
     let latestCounts: TranscriptCounts | null = null;
-    const countTranscripts = Effect.callback<TranscriptCounts, ImportWorkerFailed>((resume) =>
-      ask("count", (reply) => {
-        switch (reply.kind) {
-          case "counts":
-            latestCounts = reply.counts;
-            return resume(Effect.succeed(reply.counts));
-          case "failed":
-            return resume(Effect.fail(new ImportWorkerFailed({ reason: reply.reason })));
-          case "progress":
-          case "finished":
-            return;
-        }
-      }),
-    );
+    const countTranscripts = Effect.gen(function* () {
+      const reply = yield* ask("count");
+      switch (reply.kind) {
+        case "counts":
+          latestCounts = reply.counts;
+          return reply.counts;
+        case "failed":
+          return yield* new ImportWorkerFailed({ reason: reply.reason });
+        case "progress":
+        case "finished":
+          return yield* new ImportWorkerFailed({ reason: "unexpected import count reply" });
+      }
+    });
 
     let activity: ImportActivity | null = null;
     let running: Deferred.Deferred<number, ImportWorkerFailed> | null = null;
 
-    const pass = (startedAt: string) =>
-      Effect.callback<PassProgress, ImportWorkerFailed>((resume) =>
-        ask("run", (reply) => {
-          switch (reply.kind) {
-            case "progress":
-              activity = { status: "running", startedAt, ...progressOf(reply) };
-              events.publishGlobal("imports");
-              return;
-            case "finished":
-              latestCounts = reply.counts;
-              events.publishGlobal("imports");
-              events.publishGlobal("projects");
-              return resume(Effect.succeed(progressOf(reply)));
-            case "failed":
-              events.publishGlobal("imports");
-              return resume(Effect.fail(new ImportWorkerFailed({ reason: reply.reason })));
-            case "counts":
-              return;
-          }
-        }),
-      );
+    const pass = Effect.fnUntraced(function* (startedAt: string) {
+      const reply = yield* ask("run", (progress) => {
+        activity = { status: "running", startedAt, ...progressOf(progress) };
+        events.publishGlobal("imports");
+      });
+      events.publishGlobal("imports");
+      switch (reply.kind) {
+        case "finished":
+          latestCounts = reply.counts;
+          events.publishGlobal("projects");
+          return progressOf(reply);
+        case "failed":
+          return yield* new ImportWorkerFailed({ reason: reply.reason });
+        case "counts":
+        case "progress":
+          return yield* new ImportWorkerFailed({ reason: "unexpected import pass reply" });
+      }
+    });
 
     // Passes and the backlog after them run in this layer's scope, not a request's: a request that
     // starts a pass is answered at once, and the pass outlives it.
@@ -228,11 +280,13 @@ const make = (watching: boolean, home: string) =>
 
     /** The running pass, or a new one. Two passes would import a line twice before either marks it. */
     const begin = Effect.suspend(() => {
-      if (running) return Effect.succeed(running);
+      if (running !== null) return Effect.succeed(running);
       return Effect.gen(function* () {
+        const effectClock = yield* Clock.Clock;
+
         const done = yield* Deferred.make<number, ImportWorkerFailed>();
         running = done;
-        const startedAt = new Date().toISOString();
+        const startedAt = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
         activity = { status: "running", startedAt, checked: 0, total: 0, written: 0, failed: 0 };
         events.publishGlobal("imports");
         yield* pass(startedAt).pipe(
@@ -241,7 +295,9 @@ const make = (watching: boolean, home: string) =>
               activity = {
                 status: "finished",
                 startedAt,
-                finishedAt: new Date().toISOString(),
+                finishedAt: DateTime.formatIso(
+                  DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
+                ),
                 ...progress,
               };
               events.publishGlobal("imports");
@@ -259,7 +315,9 @@ const make = (watching: boolean, home: string) =>
               activity = {
                 status: "crashed",
                 startedAt,
-                finishedAt: new Date().toISOString(),
+                finishedAt: DateTime.formatIso(
+                  DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
+                ),
                 reason: failure.reason,
               };
               events.publishGlobal("imports");
@@ -322,7 +380,7 @@ const make = (watching: boolean, home: string) =>
       const settings = yield* config.read;
       // While a pass runs, the counts it started from are good enough and spare the worker a walk.
       const counts =
-        current?.status === "running" && latestCounts
+        current?.status === "running" && isTruthy(latestCounts)
           ? latestCounts
           : yield* countTranscripts.pipe(Effect.orElseSucceed(() => latestCounts ?? []));
       return {
@@ -367,7 +425,7 @@ const make = (watching: boolean, home: string) =>
  * worker thread; this service starts passes, reports on them and embeds what they wrote.
  */
 export class Importer extends Context.Service<Importer, Effect.Success<ReturnType<typeof make>>>()(
-  "memory-agent/Importer",
+  "memory-agent/imports/importer",
 ) {
   static readonly layer = (watching: boolean = true, home: string = homedir()) =>
     Layer.effect(Importer, make(watching, home));

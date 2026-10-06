@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics nodeBuiltinImport:off schemaSync:off
+import { isTruthy } from "../src/truthy.ts";
 import { readFileSync } from "node:fs";
 import { Schema } from "effect";
 import { expect, test } from "vite-plus/test";
@@ -25,7 +28,7 @@ const Case = Schema.Struct({
   }),
 });
 const Fixture = Schema.Struct({
-  schemaVersion: Schema.Number,
+  schemaVersion: Schema.Finite,
   description: Schema.String,
   partitions: Schema.Struct({
     train: Schema.Array(Schema.String),
@@ -35,7 +38,7 @@ const Fixture = Schema.Struct({
   cases: Schema.Array(Case),
 });
 
-const fixture = Schema.decodeUnknownSync(Schema.fromJsonString(Fixture))(
+const fixture = Schema.decodeSync(Schema.fromJsonString(Fixture))(
   readFileSync(new URL("../eval/recall-turns.fixture.json", import.meta.url), "utf8"),
 );
 const splits: Split[] = ["train", "validation", "holdout"];
@@ -64,7 +67,7 @@ test("synthetic recall turns have deterministic disjoint splits and grounded gol
     for (const id of fixture.partitions[split]) {
       const item = fixture.cases.find((candidate) => candidate.id === id);
       expect(item, id).toBeDefined();
-      if (!item) continue;
+      if (!isTruthy(item)) continue;
       expect(item.id.startsWith(`${prefix[split]}-`), id).toBe(true);
       expect(item.project).toMatch(/^synthetic-/);
       expect(handlings).toContain(item.expected.handling);

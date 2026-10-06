@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { Effect, Layer } from "effect";
 import { MorphAnalyzer } from "../memory/morph/analyzer.ts";
 
@@ -34,7 +35,7 @@ export function fakeTerms(text: string): string[] {
       const suffix = suffixes.find(
         (ending) => word.length > ending.length && word.endsWith(ending),
       );
-      return suffix ? word.slice(0, -suffix.length) : word;
+      return isTruthy(suffix) ? word.slice(0, -suffix.length) : word;
     });
 }
 

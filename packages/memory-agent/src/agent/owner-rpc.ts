@@ -1,5 +1,10 @@
-import { Cause, Effect, Predicate, Schema } from "effect";
+import { isTruthy } from "../truthy.ts";
+import { Exit, Option, Cause, Effect, Predicate, Schema } from "effect";
 import type { RunBinding } from "../workflow/run-bindings.ts";
+
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
+const parseJson = Schema.decodeSync(Schema.fromJsonString(Schema.Json));
 
 /** Owner infrastructure failures are not protocol replies or proof of settlement. */
 export class OwnerRpcFailure extends Schema.TaggedError<OwnerRpcFailure>()("OwnerRpcFailure", {
@@ -94,12 +99,12 @@ export function makeInMemoryOwnerRpcLedger(): OwnerRpcLedger {
   return {
     reserve(runKey, operationId, fingerprint, sideEffect) {
       let run = runs.get(runKey);
-      if (!run) {
+      if (!isTruthy(run)) {
         run = { highWater: 0, records: new Map(), pendingEffects: new Set() };
         runs.set(runKey, run);
       }
       const existing = run.records.get(operationId);
-      if (existing) return { type: "existing", record: existing };
+      if (isTruthy(existing)) return { type: "existing", record: existing };
       if (operationId <= run.highWater) return { type: "rejected", reason: "non_monotonic" };
       if (sideEffect && run.pendingEffects.size > 0)
         return { type: "rejected", reason: "uncertain_run" };
@@ -114,7 +119,7 @@ export function makeInMemoryOwnerRpcLedger(): OwnerRpcLedger {
     settle(runKey, operationId, reply) {
       const run = runs.get(runKey);
       const record = run?.records.get(operationId);
-      if (!run || !record) throw new Error("Unreserved owner RPC operation");
+      if (!isTruthy(run) || !isTruthy(record)) throw new Error("Unreserved owner RPC operation");
       switch (record.reply.type) {
         case "pending":
           break;
@@ -215,7 +220,7 @@ export function makeOwnerRpcEffect<M extends OwnerRpcOperations, E = never, R = 
     ): OwnerRpcReply => ({ type: "rejected", operationId, reason });
     const initiallyActive = yield* Effect.try({
       try: () => options.permits(capability),
-      catch: (cause) => new OwnerRpcFailure({ phase: "authority", cause }),
+      catch: (cause) => OwnerRpcFailure.make({ phase: "authority", cause }),
     });
     if (
       request.type !== "owner-rpc-request" ||
@@ -224,14 +229,12 @@ export function makeOwnerRpcEffect<M extends OwnerRpcOperations, E = never, R = 
       !Object.hasOwn(options.handlers, operation)
     )
       return reject("invalid_operation");
-    let fingerprint: string;
-    let input: M[keyof M]["input"];
-    try {
-      fingerprint = canonical({ operation, input: request.input });
-      input = freezeJson(JSON.parse(canonical(request.input)));
-    } catch {
-      return reject("invalid_operation");
-    }
+    const prepared = yield* Effect.try(() => ({
+      fingerprint: canonical({ operation, input: request.input }),
+      input: freezeJson(parseJson(canonical(request.input))),
+    })).pipe(Effect.option);
+    if (Option.isNone(prepared)) return reject("invalid_operation");
+    const { fingerprint, input } = prepared.value;
     // Deliberately excludes generation/token: rotating authority cannot reset a run's
     // operation IDs or bypass an uncertain side effect in that same run.
     const runKey = canonical({
@@ -246,18 +249,18 @@ export function makeOwnerRpcEffect<M extends OwnerRpcOperations, E = never, R = 
     const finalization = Effect.try({
       try: () =>
         Boolean(handler.finalization?.(input) && options.permitsFinalization?.(capability)),
-      catch: (cause) => new OwnerRpcFailure({ phase: "authority", cause }),
+      catch: (cause) => OwnerRpcFailure.make({ phase: "authority", cause }),
     });
     if (!initiallyActive && !(yield* finalization)) return reject("unauthorized");
-    try {
-      if (handler.authorize && handler.authorize(structuredClone(input), capability) !== true)
-        return reject("invalid_operation");
-    } catch {
-      return reject("invalid_operation");
-    }
+    const authorized = yield* Effect.try(() =>
+      isTruthy(handler.authorize)
+        ? handler.authorize(structuredClone(input), capability) === true
+        : true,
+    ).pipe(Effect.orElseSucceed(() => false));
+    if (!authorized) return reject("invalid_operation");
     const admission = yield* Effect.try({
       try: () => options.ledger.reserve(runKey, operationId, fingerprint, handler.sideEffect),
-      catch: (cause) => new OwnerRpcFailure({ phase: "reserve", cause }),
+      catch: (cause) => OwnerRpcFailure.make({ phase: "reserve", cause }),
     });
     switch (admission.type) {
       case "rejected":
@@ -275,7 +278,7 @@ export function makeOwnerRpcEffect<M extends OwnerRpcOperations, E = never, R = 
         Effect.try((): OwnerRpcReply => ({
           type: "succeeded",
           operationId,
-          output: JSON.parse(canonical(output)),
+          output: parseJson(canonical(output)),
         })),
       ),
       Effect.catchCause((cause) =>
@@ -286,11 +289,11 @@ export function makeOwnerRpcEffect<M extends OwnerRpcOperations, E = never, R = 
     );
     yield* Effect.try({
       try: () => options.ledger.settle(runKey, operationId, structuredClone(reply)),
-      catch: (cause) => new OwnerRpcFailure({ phase: "settle", cause }),
+      catch: (cause) => OwnerRpcFailure.make({ phase: "settle", cause }),
     }).pipe(Effect.uninterruptible);
     const stillActive = yield* Effect.try({
       try: () => options.permits(capability),
-      catch: (cause) => new OwnerRpcFailure({ phase: "authority", cause }),
+      catch: (cause) => OwnerRpcFailure.make({ phase: "authority", cause }),
     });
     if (!stillActive && !(yield* finalization)) return reject("unauthorized");
     return reply;
@@ -318,9 +321,13 @@ export function makeOwnerRpc<M extends OwnerRpcOperations>(options: {
   ) as OwnerRpcEffectHandlers<M, unknown>;
   const execute = makeOwnerRpcEffect({ ...options, handlers });
   return (request: OwnerRpcRequest<M>): Promise<OwnerRpcReply> =>
-    Effect.runPromise(
-      execute(request).pipe(
-        Effect.catchTag("OwnerRpcFailure", (error) => Effect.fail(error.cause)),
-      ),
+    Effect.runPromiseExit(execute(request)).then((exit) =>
+      Exit.match(exit, {
+        onSuccess: (reply) => reply,
+        onFailure: (cause) => {
+          const error = Cause.squash(cause);
+          throw Schema.is(OwnerRpcFailure)(error) ? error.cause : error;
+        },
+      }),
     );
 }

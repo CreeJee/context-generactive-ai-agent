@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off newPromise:off processEnv:off
 import { Effect } from "effect";
 import { expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
@@ -153,7 +155,7 @@ for (const toolFirst of [false, true]) {
       ).toEqual({ n: 1 });
     } finally {
       gate.release();
-      if (previous === undefined) delete process.env.CONTEXT_AGENT_GOAL_WORKER;
+      if (previous === undefined) Reflect.deleteProperty(process.env, "CONTEXT_AGENT_GOAL_WORKER");
       else process.env.CONTEXT_AGENT_GOAL_WORKER = previous;
     }
   });

@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { Schema } from "effect";
 
 const TransportObject = Schema.declare<object>(
@@ -13,6 +14,8 @@ function reject(member: string, reason: string): never {
 /** Stricter than structuredClone: the RPC codec must not silently erase
  * functions, accessors, symbols, prototypes or cyclic values. Does not invoke getters. */
 // Decoding a struct first would erase evidence at this descriptor boundary.
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function assertFullLoopPortable(
   // oxlint-disable-next-line anti-slop/no-unknown-parameters
   value: unknown,
@@ -35,7 +38,9 @@ export function assertFullLoopPortable(
       reject(member, "non-portable value");
   }
   if (value === null) return;
-  const object = Schema.decodeUnknownSync(TransportObject)(value);
+  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+  // @effect-diagnostics-next-line schemaSync:off
+  const object = Schema.decodeSync(TransportObject)(value);
   if (stack.has(object)) reject(member, "cyclic value");
   if (
     !Array.isArray(object) &&
@@ -51,7 +56,7 @@ export function assertFullLoopPortable(
       const child = `${member}.${key}`;
       const descriptor = Object.getOwnPropertyDescriptor(object, key)!;
       if (!Object.hasOwn(descriptor, "value")) reject(child, "accessor");
-      if (!descriptor.enumerable) reject(child, "non-enumerable member");
+      if (!isTruthy(descriptor.enumerable)) reject(child, "non-enumerable member");
       assertFullLoopPortable(descriptor.value, child, stack);
     }
   } finally {

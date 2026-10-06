@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { Effect, Schema } from "effect";
 import { ActivityFailed } from "./failure.ts";
 
-export const Activity = Schema.Struct({ busy: Schema.Int, latest: Schema.NullOr(Schema.Number) });
+export const Activity = Schema.Struct({ busy: Schema.Int, latest: Schema.NullOr(Schema.Finite) });
 // Missing session ownership remains conservative; a known archived project is excluded.
 // Archiving leaves conversations and memory intact and must not move the idle frontier.
 export const activitySql = `SELECT
@@ -21,7 +21,7 @@ export const activitySql = `SELECT
 
 export const readActivity = Effect.fn("Rrsi.readActivity")((sqlite: DatabaseSync) =>
   Effect.try({
-    try: () => Schema.decodeUnknownSync(Activity)(sqlite.prepare(activitySql).get()),
-    catch: () => new ActivityFailed(),
-  }),
+    try: () => sqlite.prepare(activitySql).get(),
+    catch: () => ActivityFailed.make(),
+  }).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Activity))),
 );

@@ -1,3 +1,6 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
@@ -8,6 +11,8 @@ export interface ReportSessionBinding {
 }
 
 /** Single SQLite transaction: repeat clicks/tabs cannot create competing report sessions. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function openReportSession(
   sqlite: DatabaseSync,
   projectId: string,
@@ -21,7 +26,7 @@ export function openReportSession(
        AND NOT EXISTS (SELECT 1 FROM report_sessions r WHERE r.report_session_id = s.id)`,
       )
       .get(sourceSessionId, projectId);
-    if (!source) {
+    if (!isTruthy(source)) {
       sqlite.exec("ROLLBACK");
       return null;
     }
@@ -30,8 +35,10 @@ export function openReportSession(
         "SELECT report_session_id FROM report_sessions WHERE source_session_id = ? AND project_id = ?",
       )
       .get(sourceSessionId, projectId);
-    if (!row) {
+    if (!isTruthy(row)) {
       const id = randomUUID();
+      // React/native timestamps use the host Date contract outside Effect execution.
+      // @effect-diagnostics-next-line globalDate:off
       const createdAt = new Date().toISOString();
       sqlite
         .prepare("INSERT INTO sessions (id, project_id, title, created_at) VALUES (?, ?, ?, ?)")

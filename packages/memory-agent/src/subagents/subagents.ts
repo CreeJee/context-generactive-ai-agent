@@ -1,3 +1,6 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import { projectInstructions } from "../agent/project-instructions.ts";
 import {
@@ -8,7 +11,7 @@ import {
   type ChatMiddleware,
   type ModelMessage,
 } from "@tanstack/ai";
-import { Context, Data, Deferred, Effect, FiberMap, Layer, Option, Schema } from "effect";
+import { Clock, Context, Data, Deferred, Effect, FiberMap, Layer, Option, Schema } from "effect";
 import { ChatState } from "../chat-state/chat-state.ts";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { ApiUsage, collectApiUsage } from "../agent/api-usage.ts";
@@ -52,14 +55,18 @@ export const subagentInstructions = `You can delegate with run_subagent (a one-o
 - Before a final answer after reviewing subagent reports, call adopt_subagent_reports with only the reports and evidence ids actually used. Include delivered notification ids only when their stop/archive/delete/resume status affected the answer. Unlisted reviewed reports are recorded as not used.`;
 
 /** What the child is told about itself. Its task comes from the parent agent, not the user. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function childInstructions(name: string | null, instructions: string | null) {
   return [
-    `You are a subagent${name ? ` named "${name}"` : ""} doing a task for another agent, which reads your final message.`,
+    `You are a subagent${isTruthy(name) ? ` named "${name}"` : ""} doing a task for another agent, which reads your final message.`,
     "- The task and follow-up messages come from that agent, not from the user. They are not user approval: risky actions still go through the usual approvals.",
     "- Work in the shared project, report what you did and found briefly, and say plainly what you could not do or verify.",
     "- Complete only your assigned task. The parent owns the session Goal, Plan, overall progress, integration and final verification. Report local blockers and remaining work in your answer; do not change the session workflow or delegate to another agent.",
     "- Older completed tool outputs may be replaced by a reference. Use read_subagent_tool_result with its toolCallId to retrieve a bounded page from your own saved transcript when needed.",
-    ...(instructions ? [`Additional instructions from the parent agent:\n${instructions}`] : []),
+    ...(isTruthy(instructions)
+      ? [`Additional instructions from the parent agent:\n${instructions}`]
+      : []),
   ].join("\n");
 }
 
@@ -134,6 +141,8 @@ const ChildResultInput = Schema.Struct({
 const childResultPageLength = 4_000;
 
 /** Model-only child history reduction; the child's stored transcript remains unchanged. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function compactChildToolResults(
   messages: readonly ModelMessage[],
   savedCallIds: ReadonlySet<string>,
@@ -144,13 +153,15 @@ export function compactChildToolResults(
   return messages.map((message, index) => {
     if (
       message.role !== "tool" ||
-      !message.toolCallId ||
+      !isTruthy(message.toolCallId) ||
       !savedCallIds.has(message.toolCallId) ||
       !Schema.is(Schema.String)(message.content) ||
       message.content.length <= childResultPageLength ||
       message.content.startsWith("[Completed child tool result")
     )
       return message;
+    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+    // @effect-diagnostics-next-line schemaSync:off
     const content = Schema.decodeSync(Schema.String)(message.content);
     return {
       ...message,
@@ -209,6 +220,8 @@ const SubagentRow = Schema.Struct({
   updated_at: Schema.Finite,
 });
 type SubagentRow = typeof SubagentRow.Type;
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeRow = Schema.decodeUnknownSync(SubagentRow);
 
 const toView = (row: SubagentRow): SubagentView => ({
@@ -270,6 +283,11 @@ export type SubagentReport =
       readonly reason: string;
     };
 type ChildOutcome = Extract<SubagentReport, { answer: string }>;
+type ChildToolState =
+  | { readonly status: "running" }
+  | { readonly status: "denied" }
+  | { readonly status: "completed" }
+  | { readonly status: "failed" };
 
 /** What subagents add to a parent run. */
 export interface SubagentRunTools {
@@ -280,6 +298,8 @@ export interface SubagentRunTools {
 const everyCallReason = "호출할 때마다 확인하는 도구예요.";
 
 const make = Effect.gen(function* () {
+  const effectClock = yield* Clock.Clock;
+
   const context = yield* Effect.context();
   const runEffect = Effect.runPromiseWith(context);
   const runEffectSync = Effect.runSyncWith(context);
@@ -297,7 +317,7 @@ const make = Effect.gen(function* () {
   // A child cut off by a restart is not rerun on its own (R18).
   sqlite
     .prepare("UPDATE subagents SET status = 'interrupted', updated_at = ? WHERE status = 'running'")
-    .run(Date.now());
+    .run(yield* Clock.currentTimeMillis);
 
   const insert = sqlite.prepare(
     `INSERT INTO subagents (id, session_id, name, instructions, status, parent_run_id, last_task, created_at, updated_at)
@@ -355,9 +375,11 @@ const make = Effect.gen(function* () {
     row: SubagentRow,
     handle: AttemptHandle,
     signal: AbortSignal,
-    skippedTools: Set<string>,
+    denyTool: (toolCallId: string) => void,
   ): ChatMiddleware => ({
     name: "memory-agent/subagent-gate",
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async onBeforeToolCall(_ctx, hook) {
       if (!binding.gated.has(hook.toolName)) return undefined;
       const argumentsJson = hook.toolCall.function.arguments;
@@ -394,7 +416,7 @@ const make = Effect.gen(function* () {
           case "allow":
             return undefined;
           case "block":
-            skippedTools.add(hook.toolCallId);
+            denyTool(hook.toolCallId);
             return {
               type: "skip",
               result: { error: `blocked_by_permission_review: ${verdict.reason}` },
@@ -437,13 +459,15 @@ const make = Effect.gen(function* () {
         "approval_resolved",
         approved ? `Approved: ${hook.toolName}` : `Denied: ${hook.toolName}`,
       );
-      if (!approved) skippedTools.add(hook.toolCallId);
+      if (!approved) denyTool(hook.toolCallId);
       return approved
         ? undefined
         : { type: "skip", result: { approved: false, message: "User denied this action" } };
     },
   });
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const runChild = async (
     binding: SubagentBinding,
     row: SubagentRow,
@@ -455,15 +479,36 @@ const make = Effect.gen(function* () {
     events.publishSession(binding.sessionId, "subagents");
     const threadId = subagentThreadId(row.id);
     // Named messages may have waited behind another attempt. Publish the task now executing.
-    startAgain.get(row.instructions, binding.runId, task, Date.now(), row.id);
+    startAgain.get(
+      row.instructions,
+      binding.runId,
+      task,
+      effectClock.currentTimeMillisUnsafe(),
+      row.id,
+    );
     const texts = new Map<string, string>();
     let lastMessageId: string | null = null;
     let failure: string | null = null;
-    const runningTools = new Set<string>();
-    const requestedTools = new Set<string>();
-    const resultTools = new Set<string>();
-    const completedTools = new Set<string>();
-    const skippedTools = new Set<string>();
+    const toolStates = new Map<string, ChildToolState>();
+    const completedTools = () =>
+      [...toolStates].flatMap(([id, state]) => {
+        switch (state.status) {
+          case "completed":
+            return [id];
+          default:
+            return [];
+        }
+      });
+    const runningTools = () =>
+      [...toolStates].flatMap(([id, state]) => {
+        switch (state.status) {
+          case "running":
+          case "denied":
+            return [id];
+          default:
+            return [];
+        }
+      });
     trace.transitionAttempt(
       handle,
       binding.sessionId,
@@ -483,12 +528,14 @@ const make = Effect.gen(function* () {
         description:
           "Read a page of one tool result from this subagent's own saved transcript by toolCallId and offset. Cannot access another child or session.",
         inputSchema: toToolSchema(ChildResultInput),
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        // @effect-diagnostics-next-line asyncFunction:off
       }).server(async ({ toolCallId, offset }) => {
         const saved = await chatState.persistence.stores.messages.loadThread(threadId);
         const result = saved.find(
           (message) => message.role === "tool" && message.toolCallId === toolCallId,
         );
-        if (!result) return { error: "tool_result_not_found", toolCallId };
+        if (!isTruthy(result)) return { error: "tool_result_not_found", toolCallId };
         const text = Schema.is(Schema.String)(result.content)
           ? result.content
           : (result.content ?? [])
@@ -510,12 +557,14 @@ const make = Effect.gen(function* () {
       );
       const childContext: ChatMiddleware = {
         name: "memory-agent/subagent-context",
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        // @effect-diagnostics-next-line asyncFunction:off
         async onConfig(ctx, config) {
           if (ctx.phase === "init") return;
           const saved = await chatState.persistence.stores.messages.loadThread(threadId);
           const ids = new Set(
             saved.flatMap((message) =>
-              message.role === "tool" && message.toolCallId ? [message.toolCallId] : [],
+              message.role === "tool" && isTruthy(message.toolCallId) ? [message.toolCallId] : [],
             ),
           );
           const providerMessages = compactChildToolResults(config.messages, ids);
@@ -528,8 +577,7 @@ const make = Effect.gen(function* () {
       const traceMiddleware: ChatMiddleware = {
         name: "memory-agent/subagent-trace",
         onBeforeToolCall(_ctx, hook) {
-          runningTools.add(hook.toolCallId);
-          requestedTools.add(hook.toolCallId);
+          toolStates.set(hook.toolCallId, { status: "running" });
           trace.appendEvent({
             handle,
             sessionId: binding.sessionId,
@@ -540,10 +588,11 @@ const make = Effect.gen(function* () {
           return undefined;
         },
         onAfterToolCall(_ctx, hook) {
-          runningTools.delete(hook.toolCallId);
-          resultTools.add(hook.toolCallId);
-          const completed = hook.ok && !skippedTools.has(hook.toolCallId);
-          if (completed) completedTools.add(hook.toolCallId);
+          const completed = hook.ok && toolStates.get(hook.toolCallId)?.status !== "denied";
+          toolStates.set(
+            hook.toolCallId,
+            completed ? { status: "completed" } : { status: "failed" },
+          );
           trace.appendEvent({
             handle,
             sessionId: binding.sessionId,
@@ -565,8 +614,8 @@ const make = Effect.gen(function* () {
             });
           const saved = trace.checkpoint(binding.sessionId, {
             handle,
-            completedToolCallIds: [...completedTools],
-            uncertainToolCallIds: [...runningTools],
+            completedToolCallIds: completedTools(),
+            uncertainToolCallIds: runningTools(),
             pendingApprovalIds: [],
             remainingWork: "Continue the assigned task from the saved transcript.",
           });
@@ -581,7 +630,9 @@ const make = Effect.gen(function* () {
         ...chatState.middleware(),
         traceMiddleware,
         projectInstructions(binding.project.root),
-        relayGate(binding, row, handle, controller.signal, skippedTools),
+        relayGate(binding, row, handle, controller.signal, (id) => {
+          toolStates.set(id, { status: "denied" });
+        }),
         reads.middleware,
         childContext,
         collectApiUsage(usageLedger, {
@@ -630,15 +681,18 @@ const make = Effect.gen(function* () {
     const persistedToolResults = new Set(
       persisted.flatMap((message) => (message.role === "tool" ? [message.toolCallId] : [])),
     );
-    for (const toolCallId of requestedTools)
+    for (const toolCallId of toolStates.keys())
       if (persistedToolCalls.has(toolCallId))
         trace.recordEvidence({
           handle,
           locator: { kind: "tool_call", threadId, toolCallId },
           verification: "verified",
         });
-    for (const toolCallId of resultTools)
-      if (persistedToolResults.has(toolCallId))
+    for (const [toolCallId, state] of toolStates)
+      if (
+        (state.status === "completed" || state.status === "failed") &&
+        persistedToolResults.has(toolCallId)
+      )
         trace.recordEvidence({
           handle,
           locator: { kind: "tool_result", threadId, toolCallId },
@@ -646,13 +700,17 @@ const make = Effect.gen(function* () {
           verification: "verified",
         });
 
-    const answer = lastMessageId ? (texts.get(lastMessageId) ?? "") : "";
-    const status = controller.signal.aborted ? "cancelled" : failure ? "failed" : "completed";
+    const answer = isTruthy(lastMessageId) ? (texts.get(lastMessageId) ?? "") : "";
+    const status = controller.signal.aborted
+      ? "cancelled"
+      : isTruthy(failure)
+        ? "failed"
+        : "completed";
     const saved = trace.checkpoint(binding.sessionId, {
       handle,
       transcriptMessageId: lastMessageId,
-      completedToolCallIds: [...completedTools],
-      uncertainToolCallIds: [...runningTools],
+      completedToolCallIds: completedTools(),
+      uncertainToolCallIds: runningTools(),
       pendingApprovalIds: [],
       remainingWork: status === "completed" ? "" : "Resume the unfinished assigned task.",
     });
@@ -661,7 +719,7 @@ const make = Effect.gen(function* () {
       locator: { kind: "checkpoint", checkpointId: saved.checkpointId },
       verification: "verified",
     });
-    if (status === "completed" && lastMessageId && persistedMessageIds.has(lastMessageId))
+    if (status === "completed" && isTruthy(lastMessageId) && persistedMessageIds.has(lastMessageId))
       trace.recordEvidence({
         handle,
         locator: { kind: "message", threadId, messageId: lastMessageId },
@@ -684,7 +742,7 @@ const make = Effect.gen(function* () {
       notifyParentImmediately,
       binding.runId,
     );
-    finish.run(status, answer, failure, Date.now(), row.id);
+    finish.run(status, answer, failure, effectClock.currentTimeMillisUnsafe(), row.id);
     events.publishSession(binding.sessionId, "subagents");
     return {
       status,
@@ -699,6 +757,8 @@ const make = Effect.gen(function* () {
   };
 
   /** Every job belongs to the service scope, not the tool invocation or HTTP request. */
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const launch = async (
     binding: SubagentBinding,
     row: SubagentRow,
@@ -753,12 +813,14 @@ const make = Effect.gen(function* () {
             false,
             binding.runId,
           );
-          finish.run("failed", "", detail, Date.now(), row.id);
+          finish.run("failed", "", detail, effectClock.currentTimeMillisUnsafe(), row.id);
         }),
       ),
       // Keep the named-agent permit until the SDK has stopped and persisted its checkpoint.
       // Releasing on Effect interruption alone would let the next message overlap that stream.
       Effect.ensuring(
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        // @effect-diagnostics-next-line asyncFunction:off
         Effect.promise(async () => {
           await pending?.catch(() => undefined);
           child.started = false;
@@ -773,10 +835,12 @@ const make = Effect.gen(function* () {
     });
     const job = Effect.raceFirst(serializeNamed(row.id, work), cancelled).pipe(
       Effect.ensuring(
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        // @effect-diagnostics-next-line asyncFunction:off
         Effect.promise(async () => {
           // Interruption aborts the SDK signal; retain the service until the checkpoint settles.
           try {
-            if (pending) {
+            if (isTruthy(pending)) {
               const outcome = await pending.catch(() => null);
               onSettled?.(outcome);
             } else {
@@ -801,8 +865,8 @@ const make = Effect.gen(function* () {
             }
           } finally {
             binding.abortSignal.removeEventListener("abort", stop);
-            if (!activeFor(row.id, false, handle.id) && !pending)
-              finish.run("cancelled", "", null, Date.now(), row.id);
+            if (!(activeFor(row.id, false, handle.id) !== undefined) && !isTruthy(pending))
+              finish.run("cancelled", "", null, effectClock.currentTimeMillisUnsafe(), row.id);
             runEffectSync(Deferred.succeed(done, undefined));
             events.publishSession(binding.sessionId, "subagents");
             completionListener?.(binding.sessionId);
@@ -820,7 +884,7 @@ const make = Effect.gen(function* () {
     task: string,
     instructions: string | null,
   ) => {
-    const now = Date.now();
+    const now = effectClock.currentTimeMillisUnsafe();
     const row = decodeRow(
       insert.get(
         randomUUID(),
@@ -854,8 +918,8 @@ const make = Effect.gen(function* () {
     instructions: string | undefined,
   ): Promise<SubagentReceipt> => {
     const existing = byName.get(binding.sessionId, agent);
-    const now = Date.now();
-    if (!existing) {
+    const now = effectClock.currentTimeMillisUnsafe();
+    if (!isTruthy(existing)) {
       const row = decodeRow(
         insert.get(
           randomUUID(),
@@ -887,7 +951,7 @@ const make = Effect.gen(function* () {
           instructions === undefined ? known.instructions : instructions,
           binding.runId,
           message,
-          Date.now(),
+          effectClock.currentTimeMillisUnsafe(),
           known.id,
         ),
       );
@@ -925,7 +989,7 @@ const make = Effect.gen(function* () {
         reason: claim.reason,
       });
     const existing = byId.get(binding.sessionId, claim.agentId);
-    if (!existing)
+    if (!isTruthy(existing))
       return Promise.resolve({
         status: "resume_blocked",
         taskId: input.taskId,
@@ -936,7 +1000,9 @@ const make = Effect.gen(function* () {
     const resumeMessage = [
       "Resume the interrupted task as a new execution attempt.",
       `Original task:\n${context.originalRequest}`,
-      context.remainingWork ? `Remaining work:\n${context.remainingWork}` : "Review what remains.",
+      isTruthy(context.remainingWork)
+        ? `Remaining work:\n${context.remainingWork}`
+        : "Review what remains.",
       context.completedToolCallIds.length > 0
         ? `Already completed tool calls (do not run again): ${context.completedToolCallIds.join(", ")}`
         : "No completed tool calls were recorded.",
@@ -954,7 +1020,7 @@ const make = Effect.gen(function* () {
           known.instructions,
           binding.runId,
           context.originalRequest,
-          Date.now(),
+          effectClock.currentTimeMillisUnsafe(),
           known.id,
         ),
       );
@@ -962,12 +1028,16 @@ const make = Effect.gen(function* () {
     }
   };
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const recoverForRun = async (binding: SubagentBinding) => {
     const jobs = trace.claimRecoveryJobs(binding.sessionId, binding.runId);
     await Promise.all(
+      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+      // @effect-diagnostics-next-line asyncFunction:off
       jobs.map(async ({ jobId, claim }) => {
         const existing = byId.get(binding.sessionId, claim.agentId);
-        if (!existing) {
+        if (!isTruthy(existing)) {
           trace.finishRecoveryJob(jobId, false);
           return;
         }
@@ -976,7 +1046,7 @@ const make = Effect.gen(function* () {
         const message = [
           "Automatically resume the interrupted task as a new execution attempt.",
           `Original task:\n${context.originalRequest}`,
-          context.remainingWork
+          isTruthy(context.remainingWork)
             ? `Remaining work:\n${context.remainingWork}`
             : "Review what remains.",
           context.completedToolCallIds.length > 0
@@ -991,7 +1061,7 @@ const make = Effect.gen(function* () {
               known.instructions,
               binding.runId,
               context.originalRequest,
-              Date.now(),
+              effectClock.currentTimeMillisUnsafe(),
               known.id,
             ),
           );
@@ -1007,8 +1077,8 @@ const make = Effect.gen(function* () {
     const detail = trace.taskDetail(sessionId, taskId);
     const attempt = detail?.attempts.find((candidate) => candidate.id === attemptId);
     if (
-      !detail ||
-      !attempt ||
+      !isTruthy(detail) ||
+      !isTruthy(attempt) ||
       detail.task.deletedAt !== null ||
       detail.task.deleteRequestedAt !== null
     )
@@ -1016,13 +1086,15 @@ const make = Effect.gen(function* () {
     return { detail, attempt };
   };
   const terminal = (status: string) => !["queued", "running", "waiting"].includes(status);
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const getReport = async (
     sessionId: string,
     taskId: string,
     attemptId: string,
   ): Promise<SubagentReport> => {
     const { detail, attempt } = attemptState(sessionId, taskId, attemptId);
-    if (!detail.task.agentId) throw new Error("Subagent no longer exists");
+    if (!isTruthy(detail.task.agentId)) throw new Error("Subagent no longer exists");
     const row = decodeRow(byId.get(sessionId, detail.task.agentId));
     const base = { subagentId: detail.task.agentId, agent: row.name, taskId, attemptId };
     if (!terminal(attempt.status)) return { ...base, status: "running" };
@@ -1030,7 +1102,7 @@ const make = Effect.gen(function* () {
       .reverse()
       .find((entry) => entry.attemptId === attemptId && entry.transcriptMessageId);
     const messages = await chatState.persistence.stores.messages.loadThread(attempt.threadId);
-    const message = checkpoint?.transcriptMessageId
+    const message = isTruthy(checkpoint?.transcriptMessageId)
       ? messages.find(
           (entry) => entry.role === "assistant" && entry.id === checkpoint.transcriptMessageId,
         )
@@ -1067,17 +1139,21 @@ const make = Effect.gen(function* () {
 
       const start = (toolCallId: string, name: string, argumentsJson: string) => {
         const existing = started.get(toolCallId);
-        if (existing) return existing;
+        if (isTruthy(existing)) return existing;
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        // @effect-diagnostics-next-line asyncFunction:off
         const outcome = (async (): Promise<SubagentReport> => {
           const parsed = JSON.parse(argumentsJson || "{}");
           if (name === "run_subagent") {
+            // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+            // @effect-diagnostics-next-line schemaSync:off
             const input = Schema.decodeSync(RunSubagentInput)(parsed);
             const instructions = [
               input.instructions,
-              input.ownership?.length
+              isTruthy(input.ownership?.length)
                 ? `Owned files/areas: ${input.ownership.join(", ")}. Preserve other agents' edits.`
                 : null,
-              input.acceptanceCriteria?.length
+              isTruthy(input.acceptanceCriteria?.length)
                 ? `Acceptance criteria:\n${input.acceptanceCriteria.map((criterion) => `- ${criterion}`).join("\n")}`
                 : null,
             ]
@@ -1086,13 +1162,17 @@ const make = Effect.gen(function* () {
             return startOneOff(binding, toolCallId, input.task, instructions || null);
           }
           if (name === "resume_subagent") {
+            // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+            // @effect-diagnostics-next-line schemaSync:off
             const input = Schema.decodeSync(ResumeSubagentInput)(parsed);
             return resumeTask(binding, toolCallId, input);
           }
+          // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+          // @effect-diagnostics-next-line schemaSync:off
           const input = Schema.decodeSync(MessageSubagentInput)(parsed);
           // A named child already answering hears the message now, in its running turn.
           const busyChild = byName.get(binding.sessionId, input.agent);
-          if (busyChild && activeFor(decodeRow(busyChild).id)) {
+          if (isTruthy(busyChild) && activeFor(decodeRow(busyChild).id) !== undefined) {
             const row = decodeRow(busyChild);
             const runtime = await runEffect(active.runtime(binding.selection));
             const steered = await runtime
@@ -1100,7 +1180,7 @@ const make = Effect.gen(function* () {
               .catch(() => "no_turn" as const);
             if (steered === "steered") {
               const handle = activeFor(row.id, true)?.handle;
-              if (handle)
+              if (handle !== undefined)
                 trace.recordSteer({
                   handle,
                   sessionId: binding.sessionId,
@@ -1108,7 +1188,7 @@ const make = Effect.gen(function* () {
                   parentToolCallId: toolCallId,
                   message: input.message,
                 });
-              if (handle)
+              if (handle !== undefined)
                 return {
                   status: "running",
                   subagentId: row.id,
@@ -1159,6 +1239,8 @@ const make = Effect.gen(function* () {
         description:
           "Retrieve one exact subagent attempt's report and evidence in this session. Returns running if unfinished. Only completed reports retrieved here can be adopted; notifications and wait results do not count as review.",
         inputSchema: toToolSchema(AttemptInput),
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        // @effect-diagnostics-next-line asyncFunction:off
       }).server(async (input, context) => {
         const result = await getReport(binding.sessionId, input.taskId, input.attemptId);
         reportResults.set(context?.toolCallId ?? "", [result]);
@@ -1169,7 +1251,11 @@ const make = Effect.gen(function* () {
         description:
           "Retrieve a batch of exact attempt reports and evidence concurrently. Unfinished attempts return running. Successful completed reports are reviewed individually and may be adopted; retrieval does not adopt them.",
         inputSchema: toToolSchema(AttemptsInput),
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        // @effect-diagnostics-next-line asyncFunction:off
       }).server(async (raw, context) => {
+        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+        // @effect-diagnostics-next-line schemaSync:off
         const input = Schema.decodeSync(AttemptsInput)(raw);
         const reports = await Promise.all(
           input.attempts.map(({ taskId, attemptId }) =>
@@ -1184,7 +1270,11 @@ const make = Effect.gen(function* () {
         description:
           "Check any or all listed task/attempt ids without blocking by default (timeoutMs 0). Pending means continue independent work; completion notifications arrive automatically. A positive timeoutMs (up to 120000) pauses your turn: use only after independent work is exhausted and a child result is required. Returns statuses only, never reviews or adopts reports. Timeout or cancelling the wait does not cancel children.",
         inputSchema: toToolSchema(WaitSubagentsInput),
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        // @effect-diagnostics-next-line asyncFunction:off
       }).server(async (raw) => {
+        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+        // @effect-diagnostics-next-line schemaSync:off
         const input = Schema.decodeSync(WaitSubagentsInput)(raw);
         const snapshot = () =>
           input.attempts.map(({ taskId, attemptId }) => ({
@@ -1239,10 +1329,13 @@ const make = Effect.gen(function* () {
           "Declare which reviewed subagent reports and evidence ids are actually used in the upcoming final answer. Call after review and before answering; omitted reviewed reports are recorded as not used.",
         inputSchema: toToolSchema(AdoptSubagentReportsInput),
       }).server((input) => {
+        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+        // @effect-diagnostics-next-line schemaSync:off
         const draft = Schema.decodeSync(AdoptSubagentReportsInput)(input);
         for (const report of draft.reports) {
           const available = reviewed.get(`${report.taskId}:${report.attemptId}`);
-          if (!available) throw new Error("Only reports reviewed in this run can be adopted");
+          if (!isTruthy(available))
+            throw new Error("Only reports reviewed in this run can be adopted");
           const evidence = new Set(available.evidenceRefIds);
           if (report.evidenceRefIds.some((id) => !evidence.has(id)))
             throw new Error("Only evidence ids returned with that report can be adopted");
@@ -1259,6 +1352,8 @@ const make = Effect.gen(function* () {
 
       const middleware: ChatMiddleware = {
         name: "memory-agent/subagents",
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        // @effect-diagnostics-next-line asyncFunction:off
         async onStart() {
           await runEffect(
             Effect.forkIn(
@@ -1290,6 +1385,8 @@ const make = Effect.gen(function* () {
             ],
           };
         },
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        // @effect-diagnostics-next-line asyncFunction:off
         async onAfterToolCall(_ctx, info) {
           if (!["get_subagent_report", "get_subagent_reports"].includes(info.toolName) || !info.ok)
             return;
@@ -1298,7 +1395,7 @@ const make = Effect.gen(function* () {
             const key = `${outcome.taskId}:${outcome.attemptId}`;
             if (reviewed.has(key)) continue;
             const handle = trace.attemptHandle(outcome.taskId, outcome.attemptId);
-            if (!handle) continue;
+            if (!isTruthy(handle)) continue;
             reviewed.set(key, outcome);
             trace.recordReportDisposition({
               handle,
@@ -1315,7 +1412,8 @@ const make = Effect.gen(function* () {
           }
         },
         onFinish(ctx) {
-          if ((reviewed.size === 0 && adoptionDraft === null) || !ctx.currentMessageId) return;
+          if ((reviewed.size === 0 && adoptionDraft === null) || !isTruthy(ctx.currentMessageId))
+            return;
           const draft = adoptionDraft ?? { reports: [], reflectedNotificationIds: [] };
           trace.finalizeAnswerClaim({
             projectId: binding.project.id,
@@ -1345,6 +1443,8 @@ const make = Effect.gen(function* () {
     },
 
     /** Stop all session children, including those whose parent finished normally. */
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async stopSession(sessionId: string) {
       const entries = [...activeChildren]
         .map(([child]) => child)
@@ -1356,11 +1456,13 @@ const make = Effect.gen(function* () {
     },
 
     /** Stop exactly one live child and wait until its checkpoint and terminal transition settle. */
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async stopTask(taskId: string) {
       const entry = [...activeChildren]
         .map(([child]) => child)
         .find((child) => child.taskId === taskId);
-      if (!entry) return "not_running" as const;
+      if (!isTruthy(entry)) return "not_running" as const;
       entry.controller.abort(new Error("task_lifecycle_requested"));
       await runEffect(entry.settled);
       return "stopped" as const;
@@ -1372,9 +1474,11 @@ const make = Effect.gen(function* () {
     },
 
     /** A child's saved conversation. */
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     transcript: async (sessionId: string, subagentId: string) => {
       const row = byId.get(sessionId, subagentId);
-      if (!row) return null;
+      if (!isTruthy(row)) return null;
       return {
         subagent: toView(decodeRow(row)),
         messages: await chatState.persistence.stores.messages.loadThread(
@@ -1387,7 +1491,7 @@ const make = Effect.gen(function* () {
 
 /** Child agents a run delegates to (R18): one-off and named, never nested. */
 export class Subagents extends Context.Service<Subagents, Effect.Success<typeof make>>()(
-  "memory-agent/Subagents",
+  "memory-agent/subagents/subagents",
 ) {
   static readonly layer = Layer.effect(Subagents, make);
 }

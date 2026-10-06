@@ -1,6 +1,8 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Effect } from "effect";
+import { Random, Effect } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import {
@@ -142,7 +144,7 @@ describe("Skills", () => {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                   threadId: session.id,
-                  runId: `run-${Math.random().toString(36).slice(2)}`,
+                  runId: `run-${Effect.runSync(Random.next).toString(36).slice(2)}`,
                   messages: [{ id: "m1", role: "user", content: text }],
                   tools: [],
                   context: [],

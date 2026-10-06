@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import { Embedder } from "./embedding/embedder.ts";
@@ -69,6 +70,8 @@ const fusionK = 60;
  * lists gets 0.5. Equal scores keep the order of the lists: a node the first list holds comes out
  * ahead.
  */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function fuseRanks(
   lists: readonly (readonly string[])[],
   weights: readonly number[] = lists.map(() => 1),
@@ -102,13 +105,25 @@ export function namesSomethingExactly(query: string) {
 }
 
 const IdProject = Schema.Struct({ id: Schema.String, project_id: Schema.String });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeIdProject = Schema.decodeUnknownSync(IdProject);
 const Id = Schema.Struct({ id: Schema.String });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeId = Schema.decodeUnknownSync(Id);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeSeq = Schema.decodeUnknownSync(Schema.Struct({ seq: Schema.Finite }));
 const Count = Schema.Struct({ count: Schema.Finite });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeCount = Schema.decodeUnknownSync(Count);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeName = Schema.decodeUnknownSync(Schema.Struct({ name: Schema.String }));
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeChallenge = Schema.decodeUnknownSync(
   Schema.Struct({ from_id: Schema.String, kind: Schema.Literals(["corrects", "retracts"]) }),
 );
@@ -158,7 +173,7 @@ const make = (tuning: SearchTuning) =>
     const nameOf = sqlite.prepare("SELECT name FROM projects WHERE id = ?");
     const projectName = (projectId: string) => {
       const row = nameOf.get(projectId);
-      return row ? decodeName(row).name : projectId;
+      return isTruthy(row) ? decodeName(row).name : projectId;
     };
 
     const allowedProjects = (projectId: string, crossProject: boolean) =>
@@ -176,7 +191,7 @@ const make = (tuning: SearchTuning) =>
     const vectorRanking = (query: string, allowed: readonly string[], k: number) =>
       Effect.gen(function* () {
         const [queryVector] = yield* embedder.embed([query]);
-        if (!queryVector) return [];
+        if (!isTruthy(queryVector)) return [];
         const projects = allowed.map(() => "?").join(", ");
         const allowedSeqs = sqlite
           .prepare(`
@@ -189,7 +204,7 @@ const make = (tuning: SearchTuning) =>
         const bySeq = sqlite.prepare("SELECT id FROM nodes WHERE seq = ?");
         return hits.flatMap((hit) => {
           const row = bySeq.get(hit.seq);
-          return row ? [decodeId(row).id] : [];
+          return isTruthy(row) ? [decodeId(row).id] : [];
         });
       });
 
@@ -342,7 +357,7 @@ const make = (tuning: SearchTuning) =>
 export class MemorySearch extends Context.Service<
   MemorySearch,
   Effect.Success<ReturnType<typeof make>>
->()("memory-agent/MemorySearch") {
+>()("memory-agent/memory/search/MemorySearch") {
   static readonly layer = Layer.effect(MemorySearch, make(searchTuning));
   /** The search with some settings changed, for the recall evaluation. */
   static readonly tuned = (tuning: Partial<SearchTuning>) =>

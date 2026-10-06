@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { Predicate, Schema } from "effect";
 import type { AgentLoopStrategy, ChatMiddleware } from "@tanstack/ai";
 import { SubscriptionTextAdapter, type StreamingOAuthClient } from "./subscription-adapter.ts";
@@ -60,7 +61,7 @@ export function createSubscriptionRuntimeImplementation(provider: SubscriptionAc
           const pinned = Predicate.isFunction(client) ? client() : client;
           const adapter = new Adapter(pinned, selection);
           const releaseRun = pinned.releaseRun;
-          return releaseRun ? Object.assign(adapter, { releaseRun }) : adapter;
+          return isTruthy(releaseRun) ? Object.assign(adapter, { releaseRun }) : adapter;
         },
         contextWindow: (model) => catalogWindow(model) ?? fallbackWindow,
         contextWindowKnown: (model) => catalogWindow(model) !== null,
@@ -68,12 +69,16 @@ export function createSubscriptionRuntimeImplementation(provider: SubscriptionAc
         runMiddleware: () => middleware(provider),
         // Subscription APIs do not expose live-turn steering. The central transcript middleware
         // retains queued messages; do not create a per-Goal steering registry here.
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        // @effect-diagnostics-next-line asyncFunction:off
         steer: async () => "no_turn",
       };
     },
   });
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function createSubscriptionRuntime(
   provider: SubscriptionAccountProvider,
   client: StreamingOAuthClient | (() => StreamingOAuthClient),

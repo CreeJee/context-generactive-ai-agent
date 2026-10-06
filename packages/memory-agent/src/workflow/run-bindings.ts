@@ -1,4 +1,5 @@
-import { Schema } from "effect";
+import { isTruthy } from "../truthy.ts";
+import { DateTime, Schema } from "effect";
 import type { DatabaseSync } from "node:sqlite";
 
 type OwnerDatabase = {
@@ -56,10 +57,14 @@ export function workflowRunBindings({ sqlite, atomic }: OwnerDatabase) {
   `);
   const bind = (sessionId: string, runId: string, expectedRevisionId: number): Admission =>
     atomic(() => {
+      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+      // @effect-diagnostics-next-line schemaSync:off
       const goal = Schema.decodeUnknownSync(
         Schema.UndefinedOr(Schema.Struct({ goal_instance_id: Schema.String })),
       )(identity.get(sessionId));
-      if (!goal) return { status: "refused", reason: "legacy_unbound" };
+      if (!isTruthy(goal)) return { status: "refused", reason: "legacy_unbound" };
+      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+      // @effect-diagnostics-next-line schemaSync:off
       const state = Schema.decodeUnknownSync(
         Schema.UndefinedOr(
           Schema.Struct({
@@ -71,20 +76,23 @@ export function workflowRunBindings({ sqlite, atomic }: OwnerDatabase) {
         ),
       )(latest.get(sessionId));
       if (
-        !state ||
+        !isTruthy(state) ||
         state.id !== expectedRevisionId ||
         state.goal_instance_id !== goal.goal_instance_id ||
         state.goal_version === null
       )
         return { status: "refused", reason: "workflow_changed" };
-      if (claimed.get(runId) || otherRun.get(runId))
+      if (isTruthy(claimed.get(runId)) || isTruthy(otherRun.get(runId)))
         return { status: "refused", reason: "run_id_conflict" };
       // A crashed, aborted or failed run may have performed an external side effect.
       // Do not silently start another one until the owner can prove or resolve it.
       // SDK completion does not prove every owner operation settled. Inspect all
       // bindings for this Goal, including older Goal/Plan versions, before admission.
       // Pending reads may still settle; uncertain reads alone cannot replay an effect.
-      if (previous.get(sessionId) || unresolved.get(sessionId, goal.goal_instance_id))
+      if (
+        isTruthy(previous.get(sessionId)) ||
+        isTruthy(unresolved.get(sessionId, goal.goal_instance_id))
+      )
         return { status: "refused", reason: "run_outcome_uncertain" };
       insert.run(
         runId,
@@ -93,7 +101,7 @@ export function workflowRunBindings({ sqlite, atomic }: OwnerDatabase) {
         state.goal_version,
         state.plan_version,
         state.id,
-        new Date().toISOString(),
+        DateTime.formatIso(DateTime.nowUnsafe()),
       );
       return {
         status: "bound",

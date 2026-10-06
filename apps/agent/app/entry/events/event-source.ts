@@ -18,8 +18,14 @@ export interface ConnectAppEventsOptions {
   readonly onDecodeError?: (error: Error) => void;
 }
 
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const changedDecode = Schema.decodeUnknownSync(AppChangedEvent);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const readyDecode = Schema.decodeUnknownSync(AppReadyEvent);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const textDecode = Schema.decodeUnknownSync(Schema.String);
 
 const payloadOf = (event: Event) => {
@@ -57,6 +63,6 @@ export function connectAppEvents(options: ConnectAppEventsOptions) {
   source.addEventListener("changed", decodeChanged);
   options.signal?.addEventListener("abort", close, { once: true });
   options.onStatus?.("connecting");
-  if (options.signal?.aborted) close();
+  if (options.signal?.aborted === true) close();
   return close;
 }

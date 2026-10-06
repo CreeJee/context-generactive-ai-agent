@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off globalTimers:off newPromise:off nodeBuiltinImport:off processEnv:off schemaSync:off
+import { isTruthy } from "../../src/truthy.ts";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
@@ -12,7 +15,7 @@ import { Workflows } from "../../src/workflow/workflow.ts";
 import { testProvider, turnGate } from "../support/provider.ts";
 
 const [base, mode] = process.argv.slice(2);
-if (!base) throw new Error("Missing owned temporary root");
+if (!isTruthy(base)) throw new Error("Missing owned temporary root");
 process.env.CONTEXT_AGENT_GOAL_WORKER = "1";
 const gate = turnGate();
 const provider = testProvider({
@@ -113,7 +116,7 @@ const server = createServer(async (incoming, outgoing) => {
         : chat.hydrate(request, sessionId),
     );
     outgoing.writeHead(response.status, Object.fromEntries(response.headers));
-    if (response.body) {
+    if (isTruthy(response.body)) {
       const reader = response.body.getReader();
       for (;;) {
         const chunk = await reader.read();

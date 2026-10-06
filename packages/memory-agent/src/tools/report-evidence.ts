@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
 import type { DatabaseSync } from "node:sqlite";
 import { Effect, Schema } from "effect";
@@ -10,6 +11,8 @@ export interface ReportBinding {
 }
 
 /** Never trust the redundant project_id in report_sessions without checking both sessions. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function reportBinding(
   sqlite: DatabaseSync,
   reportSessionId: string,
@@ -67,6 +70,9 @@ const ReportRow = Schema.Struct({
 });
 
 /** Small, failure-first snapshot for the first diagnostic request. Source text is untrusted data. */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function initialReportEvidence(
   sqlite: DatabaseSync,
   reportSessionId: string,
@@ -75,14 +81,16 @@ export async function initialReportEvidence(
   taskTree: () => readonly TraceItem[],
 ): Promise<string> {
   const binding = reportBinding(sqlite, reportSessionId, projectId);
-  if (!binding)
+  if (!(binding !== null))
     return "원본 바인딩을 확인할 수 없음; 증상만으로 계속 진행하고 추측을 사실로 적지 마세요.";
   const { sourceSessionId } = binding;
   const sections: string[] = [];
   const collect = (name: keyof typeof INITIAL_LIMITS, load: () => unknown[]) => {
     try {
       const rows = load();
-      sections.push(`${name}: ${rows.length ? "available" : "empty"}; ${JSON.stringify(rows)}`);
+      sections.push(
+        `${name}: ${isTruthy(rows.length) ? "available" : "empty"}; ${JSON.stringify(rows)}`,
+      );
     } catch {
       sections.push(`${name}: failed (조회 실패; 이 근거를 확보한 것으로 주장하지 마세요)`);
     }
@@ -153,6 +161,8 @@ export async function initialReportEvidence(
 }
 
 /** The trace callback must already be scoped to the source session; no session id is passed to it. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function reportToolsForSession(
   sqlite: DatabaseSync,
   reportSessionId: string,
@@ -161,13 +171,15 @@ export function reportToolsForSession(
   taskTree: () => readonly TraceItem[],
 ): AnyServerTool[] {
   const bound = reportBinding(sqlite, reportSessionId, projectId);
-  if (!bound) return [];
+  if (!(bound !== null)) return [];
   const current = () => {
     const latest = reportBinding(sqlite, reportSessionId, projectId);
     return (
       latest?.sourceSessionId === bound.sourceSessionId && latest.projectId === bound.projectId
     );
   };
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const limited = async (value: string | number | null | undefined) => {
     const text = String(value ?? "");
     const cleaned = await redact(text.slice(0, TEXT));
@@ -184,7 +196,11 @@ export function reportToolsForSession(
     description:
       "List bounded, redacted evidence from this report's bound source session only. Sections: runs, approvals, transcript, calls, trace. Offset is capped at 200.",
     inputSchema: toToolSchema(ListInput),
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
   }).server(async (input) => {
+    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+    // @effect-diagnostics-next-line schemaSync:off
     const { section, offset } = Schema.decodeSync(ListInput)(input);
     if (!current()) return absent;
     if (section === "trace") {
@@ -192,6 +208,8 @@ export function reportToolsForSession(
       return {
         section,
         items: await Promise.all(
+          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+          // @effect-diagnostics-next-line asyncFunction:off
           items.map(async (item) => ({
             id: item.id,
             status: item.status,
@@ -215,6 +233,8 @@ export function reportToolsForSession(
              json_extract(detail, '$.toolCallId') AS toolCallId FROM nodes
              WHERE session_id = ? AND project_id = ? AND kind IN (${section === "calls" ? "'tool_call','tool_result'" : "'user','assistant'"})
              ORDER BY seq DESC LIMIT ? OFFSET ?`;
+    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+    // @effect-diagnostics-next-line schemaSync:off
     const rows = Schema.decodeUnknownSync(Schema.Array(ReportRow))(
       section === "runs" || section === "approvals"
         ? sqlite.prepare(sql).all(bound.sourceSessionId, PAGE + 1, offset)
@@ -223,6 +243,8 @@ export function reportToolsForSession(
     return {
       section,
       items: await Promise.all(
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        // @effect-diagnostics-next-line asyncFunction:off
         rows.slice(0, PAGE).map(async (row) => ({
           id: String(row.id),
           status: row.status,
@@ -239,12 +261,16 @@ export function reportToolsForSession(
     description:
       "Read one bounded, redacted run, approval, evidence node or Work Trace item belonging to this report's source. Never executes a tool.",
     inputSchema: toToolSchema(ReadInput),
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
   }).server(async (input) => {
+    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+    // @effect-diagnostics-next-line schemaSync:off
     const { section, id } = Schema.decodeSync(ReadInput)(input);
     if (!current()) return absent;
     if (section === "trace") {
       const item = traces().find((entry) => entry.id === id);
-      if (!item) return absent;
+      if (!isTruthy(item)) return absent;
       return {
         id,
         section,
@@ -269,12 +295,14 @@ export function reportToolsForSession(
              json_extract(detail, '$.toolCallId') AS toolCallId FROM nodes
              WHERE id = ? AND session_id = ? AND project_id = ?
                AND kind IN ('user','assistant','tool_call','tool_result')`;
+    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+    // @effect-diagnostics-next-line schemaSync:off
     const row = Schema.decodeUnknownSync(Schema.UndefinedOr(ReportRow))(
       section === "node"
         ? sqlite.prepare(sql).get(id, bound.sourceSessionId, bound.projectId)
         : sqlite.prepare(sql).get(section === "approval" ? Number(id) : id, bound.sourceSessionId),
     );
-    if (!row) return absent;
+    if (!isTruthy(row)) return absent;
     return {
       id: String(row.id),
       section,

@@ -1,3 +1,5 @@
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { dirname, join } from "node:path";
 import { Context, Layer } from "effect";
 import { runtimeRequire } from "../runtime/resources.ts";
@@ -10,7 +12,7 @@ import { runtimeRequire } from "../runtime/resources.ts";
 export class OwnerNativeBuild extends Context.Service<
   OwnerNativeBuild,
   { readonly entry: string }
->()("memory-agent/agent/OwnerNativeBuild") {
+>()("memory-agent/agent/owner-native-build/OwnerNativeBuild") {
   static readonly production = {
     get entry() {
       return join(

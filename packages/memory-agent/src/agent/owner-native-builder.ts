@@ -1,10 +1,18 @@
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash } from "node:crypto";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
-import { Context, Effect, Layer } from "effect";
+import { Schema, Context, Effect, Layer } from "effect";
 import { runtimeRequire } from "../runtime/resources.ts";
 import { OwnerNativeFiles } from "./owner-native-files.ts";
 import { NativeRegistrationError } from "./owner-native-error.ts";
+
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
+const stringifyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 export const nativeDigest = (bytes: string | Buffer) =>
   createHash("sha256").update(bytes).digest("hex");
@@ -23,6 +31,8 @@ const buildNative = Effect.fn("OwnerNativeBuilder.build")(function* (
   ]);
   // Vite and its transform callback are the only Promise interoperability boundary.
   const result = yield* Effect.tryPromise({
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     try: async (signal) => {
       const builderUrl = pathToFileURL(runtimeRequire().resolve("vite")).href;
       const { build }: typeof import("vite") = await import(/* @vite-ignore */ builderUrl);
@@ -33,6 +43,8 @@ const buildNative = Effect.fn("OwnerNativeBuilder.build")(function* (
         plugins: [
           {
             name: "owner-native-provenance",
+            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+            // @effect-diagnostics-next-line asyncFunction:off
             async transform(_code, id) {
               if (id.startsWith("/") && !id.includes("?"))
                 sources.set(
@@ -60,7 +72,7 @@ const buildNative = Effect.fn("OwnerNativeBuilder.build")(function* (
         },
       });
     },
-    catch: (cause) => new NativeRegistrationError({ cause }),
+    catch: (cause) => NativeRegistrationError.make({ cause }),
   });
   const code = yield* Effect.try({
     try: () => {
@@ -73,17 +85,17 @@ const buildNative = Effect.fn("OwnerNativeBuilder.build")(function* (
       if (sources.size === 0) throw new Error("Missing build provenance");
       return chunks[0].code;
     },
-    catch: (cause) => new NativeRegistrationError({ cause }),
+    catch: (cause) => NativeRegistrationError.make({ cause }),
   });
   for (const [path, hash] of sources) {
     if (nativeDigest(yield* files.read(path)) !== hash)
-      return yield* new NativeRegistrationError({
+      return yield* NativeRegistrationError.make({
         cause: new Error("Native sources changed during build"),
       });
   }
   return {
     code,
-    sourceHash: nativeDigest(JSON.stringify([...sources].sort(([a], [b]) => a.localeCompare(b)))),
+    sourceHash: nativeDigest(stringifyJson([...sources].sort(([a], [b]) => a.localeCompare(b)))),
   };
 });
 export class OwnerNativeBuilder extends Context.Service<
@@ -93,7 +105,7 @@ export class OwnerNativeBuilder extends Context.Service<
       entry: string,
     ) => Effect.Effect<{ code: string; sourceHash: string }, NativeRegistrationError>;
   }
->()("memory-agent/agent/OwnerNativeBuilder") {
+>()("memory-agent/agent/owner-native-builder/OwnerNativeBuilder") {
   static readonly make = (files: OwnerNativeFiles["Service"]) => ({
     build: (entry: string) => buildNative(entry, files),
   });

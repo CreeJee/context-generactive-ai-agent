@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off
+import { isTruthy } from "../src/truthy.ts";
 import { Effect } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { createLiveRuns } from "../src/agent/live-runs.ts";
@@ -7,7 +10,7 @@ describe("createLiveRuns", () => {
     const runs = Effect.runSync(createLiveRuns);
     const controller = new AbortController();
     const claim = await Effect.runPromise(runs.claim("session", "first", controller));
-    if (!claim) throw new Error("first run was not claimed");
+    if (!isTruthy(claim)) throw new Error("first run was not claimed");
     expect(
       await Effect.runPromise(runs.claim("session", "second", new AbortController())),
     ).toBeNull();
@@ -25,9 +28,9 @@ describe("createLiveRuns", () => {
   test("a failing stream completes its Effect wait and frees the session", async () => {
     const runs = Effect.runSync(createLiveRuns);
     const claim = await Effect.runPromise(runs.claim("session", "first", new AbortController()));
-    if (!claim) throw new Error("first run was not claimed");
+    if (!isTruthy(claim)) throw new Error("first run was not claimed");
     const active = runs.get("session");
-    if (!active) throw new Error("claimed run was not registered");
+    if (!(active !== null)) throw new Error("claimed run was not registered");
     async function* failed() {
       yield* [];
       throw new Error("stream failed");

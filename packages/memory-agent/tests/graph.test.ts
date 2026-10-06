@@ -1,6 +1,8 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { Effect } from "effect";
+import { DateTime, Effect } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { Graph } from "../src/memory/graph.ts";
@@ -52,7 +54,7 @@ function addLlmEdge(
 ) {
   db.sqlite
     .prepare("INSERT INTO edges VALUES (?, ?, ?, 'llm', ?, ?)")
-    .run(fromId, toId, kind, weight, new Date().toISOString());
+    .run(fromId, toId, kind, weight, DateTime.formatIso(DateTime.nowUnsafe()));
 }
 
 describe("Graph.traverse", () => {

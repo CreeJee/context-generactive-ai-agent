@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Effect, Schema } from "effect";
@@ -9,6 +11,8 @@ import type { JsonValue } from "../src/json.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
 import { testRuntime } from "./support/runtime.ts";
+
+const stringifyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 /** Assembled at run time so no key-shaped text sits in the repository. */
 const githubToken = `${"gh"}p_${"Z9y8X7w6V5u4T3s2R1q0P9o8N7m6L5k4J3i2"}`;
@@ -30,7 +34,7 @@ const send = (
             new Request("http://127.0.0.1/api/chat", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
+              body: stringifyJson({
                 threadId: sessionId,
                 runId,
                 messages: [{ id: runId, role: "user", content }],

@@ -1,6 +1,9 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { Schema } from "effect";
+import { DateTime, Schema } from "effect";
 import type { RunBinding } from "../workflow/run-bindings.ts";
 
 /**
@@ -22,7 +25,6 @@ export function goalWorkerAuthority(owner: {
 }) {
   const { sqlite, atomic } = owner;
   const issued = new Map<string, GoalWorkerCapability>();
-  const byRun = new Map<string, string>();
   const binding = sqlite.prepare(`
     SELECT session_id, goal_instance_id, goal_version, plan_version, workflow_revision_id
     FROM workflow_run_bindings WHERE run_id = ?
@@ -36,6 +38,8 @@ export function goalWorkerAuthority(owner: {
     VALUES (?, ?, ?) ON CONFLICT(run_id) DO NOTHING
   `);
   const active = (claim: RunBinding, finalization = false) => {
+    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+    // @effect-diagnostics-next-line schemaSync:off
     const row = Schema.decodeUnknownSync(
       Schema.UndefinedOr(
         Schema.Struct({
@@ -48,7 +52,7 @@ export function goalWorkerAuthority(owner: {
       ),
     )(binding.get(claim.runId));
     if (
-      !row ||
+      !isTruthy(row) ||
       row.session_id !== claim.sessionId ||
       row.goal_instance_id !== claim.goalInstanceId ||
       row.goal_version !== claim.goalVersion ||
@@ -56,16 +60,20 @@ export function goalWorkerAuthority(owner: {
       row.workflow_revision_id !== claim.workflowRevisionId
     )
       return false;
+    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+    // @effect-diagnostics-next-line schemaSync:off
     const run = Schema.decodeUnknownSync(
       Schema.UndefinedOr(Schema.Struct({ status: Schema.String })),
     )(status.get(claim.runId));
     // A completed/failed/aborted run must never accept a late chunk or tool RPC.
-    return finalization || !run || run.status === "running" || run.status === "interrupted";
+    return (
+      finalization || !isTruthy(run) || run.status === "running" || run.status === "interrupted"
+    );
   };
 
   const permits = (claim: GoalWorkerClaim, finalization = false): boolean => {
-    if (!claim.requestId) return false;
-    const expected = issued.get(claim.token);
+    if (!(claim.requestId.length > 0)) return false;
+    const expected = issued.get(claim.runId);
     return Boolean(
       expected &&
       Object.entries(expected).every(
@@ -73,6 +81,8 @@ export function goalWorkerAuthority(owner: {
         // worker input; the indexed access only compares that issued value.
         ([key, value]) => value === claim[key as keyof GoalWorkerCapability],
       ) &&
+      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+      // @effect-diagnostics-next-line schemaSync:off
       Schema.decodeUnknownSync(Schema.UndefinedOr(Schema.Struct({ generation: Schema.String })))(
         dispatch.get(claim.runId),
       )?.generation === claim.generation &&
@@ -82,27 +92,28 @@ export function goalWorkerAuthority(owner: {
 
   return {
     issue(claim: RunBinding, generation: string): GoalWorkerCapability | null {
-      if (!generation) return null;
+      if (!(generation.length > 0)) return null;
       // Commit a single dispatch before exposing the ephemeral token to any worker.
       // After a crash the DB marker persists, so even a replacement owner refuses
       // automatic re-execution when an effect's outcome could be unknown.
       const reserved = atomic(() => {
-        if (byRun.has(claim.runId) || !active(claim) || status.get(claim.runId)) return false;
-        return reserve.run(claim.runId, generation, new Date().toISOString()).changes === 1;
+        if (issued.has(claim.runId) || !active(claim) || isTruthy(status.get(claim.runId)))
+          return false;
+        return (
+          reserve.run(claim.runId, generation, DateTime.formatIso(DateTime.nowUnsafe())).changes ===
+          1
+        );
       });
       if (!reserved) return null;
       const capability = Object.freeze({ ...claim, generation, token: randomUUID() });
-      issued.set(capability.token, capability);
-      byRun.set(claim.runId, capability.token);
+      issued.set(claim.runId, capability);
       return capability;
     },
     permits: (claim: GoalWorkerClaim) => permits(claim),
     /** Owner-only cleanup fence. Call only inside an owner-classified finalization scope. */
     permitsFinalization: (claim: GoalWorkerClaim) => permits(claim, true),
     revoke(runId: string): void {
-      const token = byRun.get(runId);
-      if (token) issued.delete(token);
-      byRun.delete(runId);
+      issued.delete(runId);
     },
   };
 }

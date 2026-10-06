@@ -1,5 +1,11 @@
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash } from "node:crypto";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { existsSync, mkdirSync, renameSync } from "node:fs";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { Context, Data, Effect, Layer, Option, Schema } from "effect";
 import { StorageRoot } from "../../config/storage-root.ts";
@@ -38,6 +44,8 @@ export interface VectorHit {
 const quantizationBits = 4;
 
 const Count = Schema.Struct({ count: Schema.Finite });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeSeq = Schema.decodeUnknownSync(Schema.Struct({ seq: Schema.Finite }));
 
 /** Writes a new file then swaps it in, so a crash never leaves a half-written index. */
@@ -47,6 +55,9 @@ function write(index: { save(path: string): void }, file: string) {
   renameSync(temporary, file);
 }
 
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
+const decodeVectorCount = Schema.decodeUnknownSync(Count);
 const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
   const { sqlite, atomic } = yield* Database;
@@ -87,13 +98,13 @@ const make = Effect.gen(function* () {
         const lease = new CacheLease(join(directory, "writer.lock"));
         try {
           const saved = existsSync(file) ? VectorIndex.load(file) : null;
-          if (saved && saved.dimensions() === embedder.dimensions) flush(saved);
-          const indexed = Schema.decodeUnknownSync(Count)(
+          if (saved !== null && saved.dimensions() === embedder.dimensions) flush(saved);
+          const indexed = decodeVectorCount(
             sqlite
               .prepare("SELECT count(*) AS count FROM node_vectors WHERE embedder = ?")
               .get(embedder.identity),
           ).count;
-          if (saved && saved.dimensions() === embedder.dimensions) {
+          if (saved !== null && saved.dimensions() === embedder.dimensions) {
             // Ahead of the database: vectors whose record never landed (a crash between save and
             // commit) or was dropped on purpose (tool nodes, since only statements are embedded).
             // Dropping those is cheaper than embedding everything again.
@@ -177,7 +188,7 @@ const make = Effect.gen(function* () {
 
 /** turbovec index of node embeddings for the active embedder. One writer process at a time. */
 export class VectorIndex extends Context.Service<VectorIndex, Effect.Success<typeof make>>()(
-  "memory-agent/VectorIndex",
+  "memory-agent/memory/embedding/vector-index/VectorIndex",
 ) {
   static readonly layer = Layer.effect(VectorIndex, make);
 }

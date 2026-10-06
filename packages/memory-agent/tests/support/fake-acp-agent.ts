@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off globalTimers:off newPromise:off nodeBuiltinImport:off processEnv:off
+import { isTruthy } from "../../src/truthy.ts";
 // A small external ACP agent for tests. Each start is appended to $FAKE_ACP_LOG, and each "slow"
 // prompt it receives to $FAKE_ACP_LOG.slow. While
 // $FAKE_ACP_REFUSE names an existing file, it exits at once, so connection attempts fail.
@@ -5,8 +8,9 @@ import { appendFileSync, existsSync } from "node:fs";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 
-if (process.env.FAKE_ACP_REFUSE && existsSync(process.env.FAKE_ACP_REFUSE)) process.exit(2);
-if (process.env.FAKE_ACP_LOG)
+if (isTruthy(process.env.FAKE_ACP_REFUSE) && existsSync(process.env.FAKE_ACP_REFUSE))
+  process.exit(2);
+if (isTruthy(process.env.FAKE_ACP_LOG))
   appendFileSync(
     process.env.FAKE_ACP_LOG,
     `${JSON.stringify({ pid: process.pid, cwd: process.cwd(), secret: process.env.SHOULD_NOT_LEAK ?? null })}\n`,
@@ -87,7 +91,7 @@ acp
     }
     if (text.includes("slow")) {
       // Lets a test cancel only after the prompt has really arrived.
-      if (process.env.FAKE_ACP_LOG)
+      if (isTruthy(process.env.FAKE_ACP_LOG))
         appendFileSync(`${process.env.FAKE_ACP_LOG}.slow`, `${sessionId}\n`);
       for (let step = 0; step < 50; step++) {
         if (cancelled.delete(sessionId)) return { stopReason: "cancelled" };

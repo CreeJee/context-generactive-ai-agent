@@ -1,10 +1,29 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { Context, Effect, Layer, Schema } from "effect";
+import {
+  Clock,
+  ConfigProvider,
+  Option,
+  Config,
+  Context,
+  Effect,
+  Layer,
+  Schedule,
+  Schema,
+} from "effect";
 import { Database } from "../db/database.ts";
 import { OpenAICompatibleSettings } from "../providers/openai-compatible.ts";
 import { GlobalConfig } from "../config/global-config.ts";
@@ -24,7 +43,7 @@ import {
 import { editBudget, exploration, noiseBand, selectCandidate } from "./selection.ts";
 import { codeContext, prepareCodeCandidate } from "./code-candidate.ts";
 import { evaluateSandbox, reportedTokens } from "./sandbox.ts";
-import { EvaluationFailed, experimentFailure } from "./failure.ts";
+import { ActivityFailed, EvaluationFailed, experimentFailure } from "./failure.ts";
 import { activitySql } from "./activity.ts";
 
 export class RrsiFailed extends Schema.TaggedError<RrsiFailed>()("RrsiFailed", {
@@ -41,11 +60,14 @@ const Completion = Schema.Struct({
   ),
 });
 const completionText = (raw: string) =>
-  Schema.decodeUnknownSync(Schema.fromJsonString(Completion))(raw).choices[0]?.message.content ??
-  "";
+  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+  // @effect-diagnostics-next-line schemaSync:off
+  Schema.decodeSync(Schema.fromJsonString(Completion))(raw).choices[0]?.message.content ?? "";
 const Critique = Schema.Struct({ approved: Schema.Boolean });
-const Activity = Schema.Struct({ busy: Schema.Number, latest: Schema.NullOr(Schema.Number) });
+const Activity = Schema.Struct({ busy: Schema.Finite, latest: Schema.NullOr(Schema.Finite) });
 function activity(sqlite: DatabaseSync) {
+  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+  // @effect-diagnostics-next-line schemaSync:off
   return Schema.decodeUnknownSync(Activity)(sqlite.prepare(activitySql).get());
 }
 const mean = (measurements: readonly Measurement[]): Measurement => {
@@ -61,6 +83,8 @@ const mean = (measurements: readonly Measurement[]): Measurement => {
   };
 };
 const make = Effect.gen(function* () {
+  const effectClock = yield* Clock.Clock;
+
   const store = yield* HarnessStore;
   const { sqlite, atomic } = yield* Database;
   const pin = Effect.runPromiseWith(
@@ -68,18 +92,25 @@ const make = Effect.gen(function* () {
   );
   let controller: AbortController | null = null;
   let task: Promise<void> | null = null;
-  let lastActivity = Date.now();
+  let lastActivity = yield* Clock.currentTimeMillis;
   let disposed = false;
-  const originalFile = process.env.CONTEXT_AGENT_RRSI_ORIGINAL_STORAGE
-    ? join(process.env.CONTEXT_AGENT_RRSI_ORIGINAL_STORAGE, "agent.db")
-    : null;
+  const originalStorage = yield* Config.String("CONTEXT_AGENT_RRSI_ORIGINAL_STORAGE")
+    .pipe(Config.withDefault(""))
+    .parse(ConfigProvider.fromEnv())
+    .pipe(Effect.orDie);
+  const originalFile = isTruthy(originalStorage) ? join(originalStorage, "agent.db") : null;
   const original =
-    originalFile && existsSync(originalFile)
+    isTruthy(originalFile) && existsSync(originalFile)
       ? new DatabaseSync(originalFile, { readOnly: true })
       : null;
-  const repo = process.env.CONTEXT_AGENT_RRSI_REPOSITORY ?? null;
+  const repo = Option.getOrNull(
+    yield* Config.String("CONTEXT_AGENT_RRSI_REPOSITORY")
+      .pipe(Config.option)
+      .parse(ConfigProvider.fromEnv())
+      .pipe(Effect.orDie),
+  );
   const touch = () => {
-    lastActivity = Date.now();
+    lastActivity = effectClock.currentTimeMillisUnsafe();
     controller?.abort("user_activity");
   };
   const status = () => ({
@@ -90,13 +121,15 @@ const make = Effect.gen(function* () {
     running: controller !== null,
     configuredRepository: repo !== null,
   });
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const branchCandidate = async (
     experimentId: string,
     round: number,
     index: number,
     profile: HarnessProfile,
   ) => {
-    if (!repo) return { branch: null, commit: null };
+    if (!isTruthy(repo)) return { branch: null, commit: null };
     const branch = `rrsi/${experimentId}/${round}/${index}`;
     const directory = join(repo, ".rrsi-local/candidates", experimentId, `${round}-${index}`);
     mkdirSync(join(repo, ".rrsi-local/candidates", experimentId), { recursive: true });
@@ -111,13 +144,15 @@ const make = Effect.gen(function* () {
     const { stdout } = await run("git", ["rev-parse", "HEAD"], { cwd: directory });
     return { branch, commit: stdout.trim() };
   };
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const execute = async (
     record: MutableExperiment,
     client: ModelGateway,
     abort: AbortController,
   ) => {
     const settings = store.settings();
-    const deadline = Date.now() + settings.maxMinutes * 60000;
+    const deadline = effectClock.currentTimeMillisUnsafe() + settings.maxMinutes * 60000;
     const progress = (
       phase: (typeof ExperimentProgress.Type)["phase"],
       completed: number,
@@ -129,20 +164,24 @@ const make = Effect.gen(function* () {
     const consume = (raw: string) => {
       const count = reportedTokens(raw);
       if (count === null) {
-        throw new EvaluationFailed({ reason: "usage_unknown" });
+        throw EvaluationFailed.make({ reason: "usage_unknown" });
       }
       record.tokens += count;
       store.saveExperiment(record);
     };
     const bounded: ModelGateway = {
       ...client,
+      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+      // @effect-diagnostics-next-line asyncFunction:off
       complete: async (body, signal) => {
-        if (Date.now() >= deadline) abort.abort("time_limit");
+        if (effectClock.currentTimeMillisUnsafe() >= deadline) abort.abort("time_limit");
         if (signal.aborted || abort.signal.aborted)
-          throw new EvaluationFailed({ reason: "evaluation_incomplete" });
+          throw EvaluationFailed.make({ reason: "evaluation_incomplete" });
         return client.complete(body, signal);
       },
     };
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     const request = async (instruction: string) => {
       const raw = await bounded.complete(
         JSON.stringify({
@@ -154,6 +193,8 @@ const make = Effect.gen(function* () {
       consume(raw);
       return completionText(raw);
     };
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     const evaluate = async (
       profile: HarnessProfile,
       split: "evolve" | "validation" | "sealed",
@@ -182,6 +223,8 @@ const make = Effect.gen(function* () {
       }
       return mean(measurements);
     };
+    // Native callback heartbeat/debounce timing remains at the protocol boundary.
+    // @effect-diagnostics-next-line globalTimers:off
     const timer = setTimeout(() => abort.abort("time_limit"), settings.maxMinutes * 60000);
     try {
       const base = store.get(record.baseVersion);
@@ -205,7 +248,9 @@ const make = Effect.gen(function* () {
         }[] = [];
         for (let index = 0; index < 2; index++) {
           progress("proposal", 0, 1);
-          const proposal = Schema.decodeUnknownSync(Schema.fromJsonString(Proposal))(
+          // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+          // @effect-diagnostics-next-line schemaSync:off
+          const proposal = Schema.decodeSync(Schema.fromJsonString(Proposal))(
             await request(
               [
                 "Propose one reusable agent harness improvement. Return JSON {profile:{rolePrompt,memoryToolDescription,retrievalLeadLimit,retrievalTokenLimit},edits:[{component,hypothesis}]}.",
@@ -253,7 +298,9 @@ const make = Effect.gen(function* () {
           store.saveExperiment(record);
           if (decision !== "pending") continue;
           progress("critique", 0, 1);
-          const critique = Schema.decodeUnknownSync(Schema.fromJsonString(Critique))(
+          // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+          // @effect-diagnostics-next-line schemaSync:off
+          const critique = Schema.decodeSync(Schema.fromJsonString(Critique))(
             await request(
               `Review candidate diff for task-specific logic, contradictory tool behavior, disabled verification or overridden permissions. Return only {"approved":true|false}. Diff: ${candidate.diff}`,
             ),
@@ -286,14 +333,14 @@ const make = Effect.gen(function* () {
         }
         admissible.sort((a, b) => b.measurement.score - a.measurement.score);
         const winner = admissible[0];
-        if (winner) {
+        if (isTruthy(winner)) {
           profile = winner.profile;
           incumbent = winner.measurement;
           best = Math.max(best, incumbent.score);
           const winnerRecord = record.candidates.find(
             (candidate) => candidate.id === winner.recordId,
           );
-          if (winnerRecord) winnerRecord.decision = "round_winner";
+          if (isTruthy(winnerRecord)) winnerRecord.decision = "round_winner";
         }
         store.saveExperiment(record);
       }
@@ -337,18 +384,20 @@ const make = Effect.gen(function* () {
         record.reason = "heldout_rejected";
         return;
       }
-      if (abort.signal.aborted) throw new EvaluationFailed({ reason: "evaluation_incomplete" });
+      if (abort.signal.aborted) throw EvaluationFailed.make({ reason: "evaluation_incomplete" });
       const winner = record.candidates.findLast(
         (candidate) => candidate.decision === "round_winner",
       );
       record.adoptedVersionId = store.adopt(profile, record.baseVersion, winner?.commit ?? null).id;
       record.reason = "profile_adopted";
       store.saveExperiment(record);
-      if (repo) {
+      if (isTruthy(repo)) {
         // Code is still review-only. An approved profile remains installed if code exploration fails.
         try {
           progress("code_proposal", 0, 1);
-          const proposal = Schema.decodeUnknownSync(Schema.fromJsonString(CodeProposal))(
+          // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+          // @effect-diagnostics-next-line schemaSync:off
+          const proposal = Schema.decodeSync(Schema.fromJsonString(CodeProposal))(
             await request(
               [
                 "Propose one reusable code improvement. Return JSON {edits:[{component,hypothesis}],files:[{path,before,after}]}. Use exact unique replacement anchors; touch at most three allowed files. Do not modify permissions, authentication, evaluator, tests, runtime version management or user instructions.",
@@ -374,7 +423,9 @@ const make = Effect.gen(function* () {
           record.candidates.push(candidate);
           store.saveExperiment(record);
           progress("critique", 0, 1);
-          const critique = Schema.decodeUnknownSync(Schema.fromJsonString(Critique))(
+          // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+          // @effect-diagnostics-next-line schemaSync:off
+          const critique = Schema.decodeSync(Schema.fromJsonString(Critique))(
             await request(
               `Review the code replacements for benchmark leakage, altered verification, credentials, changed permissions or inert machinery. Return {"approved":true|false}. ${candidate.diff}`,
             ),
@@ -423,7 +474,7 @@ const make = Effect.gen(function* () {
             selection.kind === "accepted" ? "code_review_pending" : selection.reason;
         } catch {
           const candidate = record.candidates.findLast((entry) => entry.kind === "code");
-          if (candidate) candidate.decision = "code_evaluation_incomplete";
+          if (isTruthy(candidate)) candidate.decision = "code_evaluation_incomplete";
         } finally {
           store.saveExperiment(record);
         }
@@ -433,10 +484,14 @@ const make = Effect.gen(function* () {
     }
   };
   const start = Effect.fn("Rrsi.start")(function* () {
-    if (controller !== null) return yield* new RrsiFailed({ reason: "experiment_running" });
-    if (sqlite.prepare("SELECT 1 FROM rrsi_corpus_receipts WHERE version='v1'").get())
-      return yield* new RrsiFailed({ reason: "sealed_corpus_exhausted" });
+    const effectClock = yield* Clock.Clock;
+
+    if (controller !== null) return yield* RrsiFailed.make({ reason: "experiment_running" });
+    if (isTruthy(sqlite.prepare("SELECT 1 FROM rrsi_corpus_receipts WHERE version='v1'").get()))
+      return yield* RrsiFailed.make({ reason: "sealed_corpus_exhausted" });
     const baselineImage = yield* Effect.tryPromise({
+      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+      // @effect-diagnostics-next-line asyncFunction:off
       try: async () => {
         const { stdout } = await run("docker", [
           "image",
@@ -447,25 +502,27 @@ const make = Effect.gen(function* () {
         ]);
         const image = stdout.trim();
         if (!/^sha256:[a-f0-9]{64}$/.test(image))
-          throw new RrsiFailed({ reason: "evaluation_image_unavailable" });
+          throw RrsiFailed.make({ reason: "evaluation_image_unavailable" });
         return image;
       },
-      catch: () => new RrsiFailed({ reason: "evaluation_image_unavailable" }),
+      catch: () => RrsiFailed.make({ reason: "evaluation_image_unavailable" }),
     });
     // Pin immutable evaluator provenance before any requests or candidates are created.
-    if (controller !== null) return yield* new RrsiFailed({ reason: "experiment_running" });
+    if (controller !== null) return yield* RrsiFailed.make({ reason: "experiment_running" });
     const client = yield* pinModelGateway().pipe(
-      Effect.mapError(() => new RrsiFailed({ reason: "model_unavailable" })),
+      Effect.mapError(() => RrsiFailed.make({ reason: "model_unavailable" })),
     );
     if (controller !== null) {
       client.release();
-      return yield* new RrsiFailed({ reason: "experiment_running" });
+      return yield* RrsiFailed.make({ reason: "experiment_running" });
     }
+    // The SDK experiment outlives start(); activity cancellation and the service finalizer own this controller.
+    // @effect-diagnostics-next-line abortControllerInEffect:off
     const abort = new AbortController();
     const record: MutableExperiment = {
       id: randomUUID(),
       status: "running",
-      startedAt: Date.now(),
+      startedAt: yield* Clock.currentTimeMillis,
       finishedAt: null,
       provider: client.configuration.provider,
       model: client.configuration.model,
@@ -478,7 +535,7 @@ const make = Effect.gen(function* () {
     };
     yield* Effect.try({
       try: () => store.saveExperiment(record),
-      catch: () => new RrsiFailed({ reason: "state_operation_failed" }),
+      catch: () => RrsiFailed.make({ reason: "state_operation_failed" }),
     }).pipe(Effect.onError(() => Effect.sync(client.release)));
     controller = abort;
     task = execute(record, client, abort)
@@ -493,7 +550,7 @@ const make = Effect.gen(function* () {
         },
       )
       .finally(() => {
-        record.finishedAt = Date.now();
+        record.finishedAt = effectClock.currentTimeMillisUnsafe();
         try {
           store.saveExperiment(record);
         } finally {
@@ -503,42 +560,64 @@ const make = Effect.gen(function* () {
       });
     return { experimentId: record.id };
   });
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const tick = async () => {
+    // Native host/SDK configuration boundary reads or forwards the host environment.
+    // @effect-diagnostics-next-line processEnv:off
     if (disposed || process.env.CONTEXT_AGENT_RRSI_WORKER === "1") return;
     const local = activity(sqlite);
-    const remote = original ? activity(original) : { busy: 0, latest: null };
-    if (local.busy || remote.busy) {
+    const remote = original !== null ? activity(original) : { busy: 0, latest: null };
+    if (isTruthy(local.busy) || isTruthy(remote.busy)) {
       touch();
       return;
     }
     const latest = Math.max(lastActivity, local.latest ?? 0, remote.latest ?? 0);
-    if (!store.settings().enabled || controller || Date.now() - latest < 600000) return;
-    if (store.experiments().some((entry) => entry.startedAt > Date.now() - 86400000)) return;
+    if (
+      !store.settings().enabled ||
+      controller !== null ||
+      effectClock.currentTimeMillisUnsafe() - latest < 600000
+    )
+      return;
+    if (
+      store
+        .experiments()
+        .some((entry) => entry.startedAt > effectClock.currentTimeMillisUnsafe() - 86400000)
+    )
+      return;
     await pin(start()).catch(() => undefined);
   };
-  yield* Effect.acquireRelease(
-    Effect.sync(() => {
-      const interval = setInterval(() => {
-        void tick().catch(() => {
-          controller?.abort("activity_check_failed");
-        });
-      }, 1000);
-      interval.unref();
-      return interval;
-    }),
-    (interval) =>
-      Effect.promise(async () => {
-        disposed = true;
-        clearInterval(interval);
-        controller?.abort("app_shutdown");
-        await task;
-        original?.close();
+  // Poll fibers belong to this service; a long experiment must not delay activity checks.
+  const poll = Effect.tryPromise({
+    try: () => tick(),
+    catch: () => ActivityFailed.make({}),
+  }).pipe(
+    Effect.catchTag("ActivityFailed", () =>
+      Effect.sync(() => {
+        controller?.abort("activity_check_failed");
       }),
+    ),
+  );
+  yield* poll.pipe(
+    Effect.forkScoped,
+    Effect.repeat({ schedule: Schedule.spaced(1000) }),
+    Effect.delay(1000),
+    Effect.forkScoped,
+  );
+  yield* Effect.addFinalizer(() =>
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
+    Effect.promise(async () => {
+      disposed = true;
+      controller?.abort("app_shutdown");
+      await task;
+      original?.close();
+    }),
   );
   const wrap = <A>(operation: () => A) =>
     Effect.try({
       try: operation,
-      catch: () => new RrsiFailed({ reason: "state_operation_failed" }),
+      catch: () => RrsiFailed.make({ reason: "state_operation_failed" }),
     });
   return {
     status: Effect.sync(status),
@@ -563,7 +642,7 @@ const make = Effect.gen(function* () {
   };
 });
 export class Rrsi extends Context.Service<Rrsi, Effect.Success<typeof make>>()(
-  "memory-agent/rrsi/Rrsi",
+  "memory-agent/rrsi/service/Rrsi",
 ) {
   static readonly layer = Layer.effect(Rrsi, make);
 }

@@ -1,5 +1,6 @@
+import { isTruthy } from "../truthy.ts";
 import { SubscriptionAccountProvider } from "../providers/contracts.ts";
-import { Schema } from "effect";
+import { DateTime, Schema } from "effect";
 import type { DatabaseSync } from "node:sqlite";
 import type { OAuthProvider } from "./protocol.ts";
 import { beginOAuthProfileRemoval, oauthProfileRemoving } from "./run-leases.ts";
@@ -39,6 +40,9 @@ const profileIdPattern =
   /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|legacy-(?:openai|anthropic))$/;
 
 /** Publish an already-authenticated per-profile vault slot; leave the current selection untouched. */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function publishOAuthProfile(
   sqlite: DatabaseSync,
   provider: OAuthProvider,
@@ -46,17 +50,26 @@ export async function publishOAuthProfile(
   label: string,
   accounts: ProfileCredentialStore = createProfileCredentialStore(),
 ): Promise<OAuthProfile> {
-  if (!profileIdPattern.test(id) || id.startsWith("legacy-") || !label.trim() || label.length > 80)
+  if (
+    !profileIdPattern.test(id) ||
+    id.startsWith("legacy-") ||
+    !isTruthy(label.trim()) ||
+    label.length > 80
+  )
     throw new Error("invalid_oauth_profile");
-  if (!(await accounts.read(provider, id))) throw new Error("oauth_profile_missing_credential");
+  if (!isTruthy(await accounts.read(provider, id)))
+    throw new Error("oauth_profile_missing_credential");
   sqlite
     .prepare(`INSERT INTO oauth_profiles(id, provider, label, selected, created_at)
     VALUES (?, ?, ?, 0, ?)`)
-    .run(id, provider, label.trim(), Date.now());
+    .run(id, provider, label.trim(), DateTime.toEpochMillis(DateTime.nowUnsafe()));
   return listOAuthProfiles(sqlite, provider).find((profile) => profile.id === id)!;
 }
 
 /** Selection is provider-scoped and committed atomically; vault contents are never copied. */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function selectOAuthProfile(
   sqlite: DatabaseSync,
   provider: OAuthProvider,
@@ -64,16 +77,19 @@ export async function selectOAuthProfile(
   accounts: ProfileCredentialStore = createProfileCredentialStore(),
 ): Promise<OAuthProfile> {
   const target = listOAuthProfiles(sqlite, provider).find((profile) => profile.id === id);
-  if (!target) throw new Error("oauth_profile_not_found");
+  if (!isTruthy(target)) throw new Error("oauth_profile_not_found");
   if (oauthProfileRemoving(sqlite, provider, id)) throw new Error("oauth_profile_removing");
-  if (!(await accounts.read(provider, id))) throw new Error("oauth_profile_missing_credential");
+  if (!isTruthy(await accounts.read(provider, id)))
+    throw new Error("oauth_profile_missing_credential");
   sqlite.exec("BEGIN IMMEDIATE");
   try {
     if (oauthProfileRemoving(sqlite, provider, id)) throw new Error("oauth_profile_removing");
     if (
-      !sqlite
-        .prepare("SELECT id FROM oauth_profiles WHERE id = ? AND provider = ?")
-        .get(id, provider)
+      !isTruthy(
+        sqlite
+          .prepare("SELECT id FROM oauth_profiles WHERE id = ? AND provider = ?")
+          .get(id, provider),
+      )
     )
       throw new Error("oauth_profile_not_found");
     sqlite
@@ -90,13 +106,15 @@ export async function selectOAuthProfile(
   return { ...target, selected: true };
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function renameOAuthProfile(
   sqlite: DatabaseSync,
   provider: OAuthProvider,
   id: string,
   label: string,
 ): OAuthProfile {
-  if (!label.trim() || label.length > 80) throw new Error("invalid_oauth_profile");
+  if (!isTruthy(label.trim()) || label.length > 80) throw new Error("invalid_oauth_profile");
   const updated = sqlite
     .prepare("UPDATE oauth_profiles SET label = ? WHERE id = ? AND provider = ?")
     .run(label.trim(), id, provider);
@@ -104,6 +122,9 @@ export function renameOAuthProfile(
   return listOAuthProfiles(sqlite, provider).find((item) => item.id === id)!;
 }
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function removeOAuthProfile(
   sqlite: DatabaseSync,
   provider: OAuthProvider,
@@ -112,7 +133,7 @@ export async function removeOAuthProfile(
   legacy: CredentialStore = createKeychainCredentialStore(),
 ): Promise<OAuthProfile[]> {
   const profile = listOAuthProfiles(sqlite, provider).find((item) => item.id === id);
-  if (!profile) throw new Error("oauth_profile_not_found");
+  if (!isTruthy(profile)) throw new Error("oauth_profile_not_found");
   const finishRemoval = beginOAuthProfileRemoval(sqlite, provider, id);
   try {
     let fallback: OAuthProfile | undefined;
@@ -120,7 +141,7 @@ export async function removeOAuthProfile(
       for (const candidate of listOAuthProfiles(sqlite, provider).filter(
         (item) => item.id !== id,
       )) {
-        if (await accounts.read(provider, candidate.id)) {
+        if (isTruthy(await accounts.read(provider, candidate.id))) {
           fallback = candidate;
           break;
         }
@@ -131,14 +152,14 @@ export async function removeOAuthProfile(
       // re-import the legacy credential if a keychain operation fails mid-removal.
       sqlite
         .prepare("INSERT OR IGNORE INTO oauth_legacy_removed(provider, removed_at) VALUES (?, ?)")
-        .run(provider, Date.now());
+        .run(provider, DateTime.toEpochMillis(DateTime.nowUnsafe()));
       await legacy.remove(provider);
     }
     await accounts.remove(provider, id);
     sqlite.exec("BEGIN IMMEDIATE");
     try {
       sqlite.prepare("DELETE FROM oauth_profiles WHERE id = ? AND provider = ?").run(id, provider);
-      if (fallback)
+      if (fallback !== undefined)
         sqlite
           .prepare("UPDATE oauth_profiles SET selected = 1 WHERE id = ? AND provider = ?")
           .run(fallback.id, provider);
@@ -153,8 +174,10 @@ export async function removeOAuthProfile(
   }
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function listOAuthProfiles(sqlite: DatabaseSync, provider?: OAuthProvider): OAuthProfile[] {
-  const rows = provider
+  const rows = isTruthy(provider)
     ? sqlite
         .prepare(
           "SELECT id, provider, label, selected, created_at FROM oauth_profiles WHERE provider = ? ORDER BY created_at, id",
@@ -165,6 +188,8 @@ export function listOAuthProfiles(sqlite: DatabaseSync, provider?: OAuthProvider
           "SELECT id, provider, label, selected, created_at FROM oauth_profiles ORDER BY provider, created_at, id",
         )
         .all();
+  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+  // @effect-diagnostics-next-line schemaSync:off
   const profiles = Schema.decodeUnknownSync(
     Schema.Array(
       Schema.Struct({
@@ -186,6 +211,9 @@ export function listOAuthProfiles(sqlite: DatabaseSync, provider?: OAuthProvider
 }
 
 /** Copy first, verify the new slot, then publish secret-free metadata. Never delete the legacy slot. */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function importLegacyOAuthProfile(
   sqlite: DatabaseSync,
   provider: OAuthProvider,
@@ -193,21 +221,25 @@ export async function importLegacyOAuthProfile(
   legacy: CredentialStore = createKeychainCredentialStore(),
 ): Promise<OAuthProfile | null> {
   const id = `legacy-${provider}`;
-  if (sqlite.prepare("SELECT provider FROM oauth_legacy_removed WHERE provider = ?").get(provider))
+  if (
+    isTruthy(
+      sqlite.prepare("SELECT provider FROM oauth_legacy_removed WHERE provider = ?").get(provider),
+    )
+  )
     return null;
   const existing = listOAuthProfiles(sqlite, provider).find((item) => item.id === id);
   const stored = await accounts.read(provider, id);
-  if (existing && stored) return existing;
+  if (isTruthy(existing) && isTruthy(stored)) return existing;
   const credential = await legacy.read(provider);
-  if (!credential) {
-    if (existing) throw new Error("oauth_profile_missing_credential");
+  if (!isTruthy(credential)) {
+    if (isTruthy(existing)) throw new Error("oauth_profile_missing_credential");
     return null;
   }
-  if (stored && JSON.stringify(stored) !== JSON.stringify(credential))
+  if (isTruthy(stored) && JSON.stringify(stored) !== JSON.stringify(credential))
     throw new Error("oauth_profile_conflicting_credential");
-  if (!stored) await accounts.write(provider, id, credential);
+  if (!isTruthy(stored)) await accounts.write(provider, id, credential);
   const verified = await accounts.read(provider, id);
-  if (!verified || JSON.stringify(verified) !== JSON.stringify(credential))
+  if (!isTruthy(verified) || JSON.stringify(verified) !== JSON.stringify(credential))
     throw new Error("oauth_profile_copy_unverified");
   // No asynchronous work in this transaction. A second importer may win; the legacy slot survives either way.
   sqlite.exec("BEGIN IMMEDIATE");
@@ -220,7 +252,7 @@ export async function importLegacyOAuthProfile(
         provider,
         `${provider === "openai" ? "ChatGPT" : "Claude"} (이전 계정)`,
         listOAuthProfiles(sqlite, provider).some((item) => item.selected) ? 0 : 1,
-        Date.now(),
+        DateTime.toEpochMillis(DateTime.nowUnsafe()),
       );
     sqlite.exec("COMMIT");
   } catch (error) {

@@ -3,6 +3,8 @@ import type { Project } from "../api";
 import { SettingsOverlay } from "./settings-dialog";
 
 /** Open a settings view with the currently selected project. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function openSettingsOverlay(
   project: Project | null,
   initialPage: "web" | "compatible" = "web",

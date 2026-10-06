@@ -1,6 +1,13 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash } from "node:crypto";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { dirname, join } from "node:path";
 import { Context, Effect, Layer, Schema } from "effect";
 import type { Project } from "../projects/projects.ts";
@@ -76,13 +83,13 @@ export interface FrontMatter {
  */
 export function parseFrontMatter(text: string): FrontMatter {
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
-  if (!match) return { fields: new Map(), body: text };
+  if (!isTruthy(match)) return { fields: new Map(), body: text };
   const fields = new Map<string, string>();
   const lines = (match[1] ?? "").split(/\r?\n/);
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index] ?? "";
     const field = /^([A-Za-z][\w-]*):\s*(.*)$/.exec(line);
-    if (!field) continue;
+    if (!isTruthy(field)) continue;
     const key = field[1] ?? "";
     const value = (field[2] ?? "").trim();
     if (value === ">" || value === "|" || value === ">-" || value === "|-") {
@@ -229,7 +236,7 @@ const make = (options: SkillsOptions) =>
 
       read: (project: Project, name: string): SkillDocument | null => {
         const entry = load(project).entries.find((candidate) => candidate.skill.name === name);
-        if (!entry) return null;
+        if (!isTruthy(entry)) return null;
         return { ...entry.skill, body: entry.body, files: filesOf(entry.skill) };
       },
     };
@@ -237,7 +244,7 @@ const make = (options: SkillsOptions) =>
 
 /** Agent skills (SKILL.md folders) from the user's shared directory and the project (R18). */
 export class Skills extends Context.Service<Skills, Effect.Success<ReturnType<typeof make>>>()(
-  "memory-agent/Skills",
+  "memory-agent/skills/skills",
 ) {
   static readonly layer = (options: SkillsOptions = {}) => Layer.effect(Skills, make(options));
 }

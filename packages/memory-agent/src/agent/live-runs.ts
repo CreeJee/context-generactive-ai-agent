@@ -39,6 +39,8 @@ export const createLiveRuns = Effect.sync(() => {
             }
           };
           return {
+            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+            // @effect-diagnostics-next-line asyncFunction:off
             track: async function* (stream) {
               try {
                 yield* stream;

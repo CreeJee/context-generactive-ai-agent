@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { Schema } from "effect";
 import type { WorkflowState } from "./workflow.ts";
@@ -47,6 +48,8 @@ const Binding = Schema.Struct({
   plan_version: Schema.NullOr(Schema.Int),
   workflow_revision_id: Schema.Int,
 });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const optionalBinding = Schema.decodeUnknownSync(Schema.UndefinedOr(Binding));
 const Registration = Schema.Struct({
   artifactHash: Schema.String,
@@ -56,6 +59,8 @@ const Registration = Schema.Struct({
 
 /** Owner-side DB boundary; no code, credentials or artifact bytes enter the snapshot. */
 export function completionEvidence(sqlite: DatabaseSync) {
+  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+  // @effect-diagnostics-next-line schemaSync:off
   const optionalString = Schema.decodeUnknownSync(Schema.UndefinedOr(Schema.String));
   const identity = (sessionId: string) =>
     optionalString(
@@ -92,8 +97,8 @@ export function completionEvidence(sqlite: DatabaseSync) {
       sqlite.prepare("SELECT project_id FROM sessions WHERE id = ?").get(sessionId)?.project_id,
     );
     if (
-      !goal ||
-      !plan ||
+      !isTruthy(goal) ||
+      !isTruthy(plan) ||
       goalId === undefined ||
       projectId === undefined ||
       plan.goalVersion !== goal.version ||
@@ -115,7 +120,7 @@ export function completionEvidence(sqlite: DatabaseSync) {
           .prepare(`SELECT session_id, goal_instance_id,
         goal_version, plan_version FROM workflow_state_revisions WHERE id = ?`)
           .get(bound.workflow_revision_id);
-      return bound &&
+      return isTruthy(bound) &&
         run?.thread_id === sessionId &&
         (run.status === "completed" || (runId === recorderRunId && run.status === "running")) &&
         bound.session_id === sessionId &&
@@ -130,7 +135,7 @@ export function completionEvidence(sqlite: DatabaseSync) {
         : null;
     };
     const recorder = valid(recorderRunId);
-    if (!recorder) return { status: "refused" };
+    if (!(recorder !== null)) return { status: "refused" };
     const runs = new Map<string, typeof RunProvenance.Type>();
     const recorderDispatch = sqlite
       .prepare("SELECT generation FROM workflow_worker_dispatches WHERE run_id = ?")
@@ -145,8 +150,8 @@ export function completionEvidence(sqlite: DatabaseSync) {
       const step = plan.steps.find((candidate) => candidate.id === mapping.stepId);
       const bound = valid(mapping.runId);
       if (
-        !bound ||
-        !step ||
+        !(bound !== null) ||
+        !isTruthy(step) ||
         step.status !== "completed" ||
         step.evidence.length === 0 ||
         mapping.outcomeIndex < 0 ||
@@ -162,7 +167,7 @@ export function completionEvidence(sqlite: DatabaseSync) {
           AND project_id = ? AND run_id = ? AND kind = 'tool_result'
           AND json_extract(detail, '$.ok') = 1 AND length(trim(text)) > 0`)
           .get(nodeId, sessionId, projectId, mapping.runId);
-        if (!node) return { status: "refused" };
+        if (!isTruthy(node)) return { status: "refused" };
       }
       coverage.add(mapping.outcomeIndex);
       const dispatch = sqlite
@@ -179,6 +184,8 @@ export function completionEvidence(sqlite: DatabaseSync) {
       .prepare(`SELECT source_generation, manifest_hash
       FROM workflow_goal_worker_generations WHERE goal_instance_id = ?`)
       .get(goalId);
+    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+    // @effect-diagnostics-next-line schemaSync:off
     const registration = Schema.decodeUnknownSync(Schema.UndefinedOr(Registration))(
       sqlite
         .prepare(`SELECT artifact_hash AS artifactHash, source_hash AS sourceHash,

@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ok } from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -76,9 +78,7 @@ test("a failed query can recover and display experiment controls", async () => {
       </QueryClientProvider>,
     );
   try {
-    vi.stubGlobal("fetch", async () => {
-      return Promise.reject(new TypeError("connection unavailable"));
-    });
+    vi.stubGlobal("fetch", async () => Promise.reject(new TypeError("connection unavailable")));
     render();
     const query = client.getQueryCache().find({ queryKey: ["settings", "rrsi"] });
     ok(query);

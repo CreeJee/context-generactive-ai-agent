@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import type { ChatMiddleware, ContentPart, ModelMessage } from "@tanstack/ai";
 import { Context, Data, Effect, Layer } from "effect";
 import { Attachments } from "../attachments/attachments.ts";
@@ -37,7 +38,7 @@ const make = Effect.gen(function* () {
   const toUserMessage = (message: QueuedMessage): ModelMessage => {
     const images = message.attachmentIds.flatMap((id) => {
       const attachment = attachments.get(id);
-      return attachment ? [attachment] : [];
+      return isTruthy(attachment) ? [attachment] : [];
     });
     if (images.length === 0) return { id: message.id, role: "user", content: message.text };
     const content: ContentPart[] = [
@@ -64,12 +65,14 @@ const make = Effect.gen(function* () {
         node.id,
         message.attachmentIds.flatMap((id) => {
           const attachment = attachments.get(id);
-          return attachment ? [attachment] : [];
+          return isTruthy(attachment) ? [attachment] : [];
         }),
       );
     });
 
   /** Puts steered messages into the saved conversation, before the answer they arrived during. */
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const saveSteered = async (binding: DeliveryBinding) => {
     const steered = queue.steeredOutsideTranscript(binding.sessionId, binding.runId);
     if (steered.length === 0) return;
@@ -113,6 +116,8 @@ const make = Effect.gen(function* () {
     forRun(binding: DeliveryBinding): ChatMiddleware {
       return {
         name: "memory-agent/queue-delivery",
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        // @effect-diagnostics-next-line asyncFunction:off
         async onConfig(ctx, config) {
           if (ctx.phase !== "beforeModel") return;
           const added: ModelMessage[] = [];
@@ -155,7 +160,7 @@ const make = Effect.gen(function* () {
 
 /** Gets queued follow-up messages to the agent: at tool-call boundaries, or steered at once. */
 export class QueueDelivery extends Context.Service<QueueDelivery, Effect.Success<typeof make>>()(
-  "memory-agent/QueueDelivery",
+  "memory-agent/queue/delivery/QueueDelivery",
 ) {
   static readonly layer = Layer.effect(QueueDelivery, make);
 }

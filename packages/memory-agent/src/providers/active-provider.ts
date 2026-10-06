@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { Context, Effect, Layer } from "effect";
 import { GlobalConfig } from "../config/global-config.ts";
 import type { ModelSelection, ProviderId, ProviderServices } from "./contracts.ts";
@@ -14,7 +15,7 @@ const make = Effect.gen(function* () {
 
   const provider = Effect.map(config.read, (settings): ProviderId => settings.provider ?? "openai");
   const selected = Effect.flatMap(config.read, (settings) =>
-    settings.provider
+    isTruthy(settings.provider)
       ? Effect.flatMap(registry.get(settings.provider), ({ models }) => models.selected)
       : Effect.succeed(null),
   );
@@ -53,7 +54,7 @@ const make = Effect.gen(function* () {
 
 /** Resolves the saved provider/model pair without silently falling back to another provider. */
 export class ActiveProvider extends Context.Service<ActiveProvider, Effect.Success<typeof make>>()(
-  "memory-agent/ActiveProvider",
+  "memory-agent/providers/active-provider/ActiveProvider",
 ) {
   static readonly layer = Layer.effect(ActiveProvider, make);
 }

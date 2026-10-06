@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
+import { isTruthy } from "../src/truthy.ts";
 import { mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,7 +29,7 @@ async function acpSetup(
   delayedTurnGate?: Promise<void>,
 ) {
   const context = await testRuntime({
-    testProvider: delayedTurnGate ? { delayedTurnGate } : {},
+    testProvider: isTruthy(delayedTurnGate) ? { delayedTurnGate } : {},
   });
   await context.provider!.select(context.runtime);
   const streams = linkedStreams();

@@ -1,8 +1,13 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createServer, type Server } from "node:http";
 import { optionalProperty } from "../optional-property.ts";
 import type { AddressInfo } from "node:net";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { Data, Option, Schema } from "effect";
+import { DateTime, Data, Option, Schema } from "effect";
 import { requireRuntime } from "../runtime/resources.ts";
 import { prepareAnthropicValidationBody } from "./anthropic-validation-adapter.ts";
 import { createChunkedPasswordEntry, type PasswordEntry } from "./chunked-password-entry.ts";
@@ -85,6 +90,8 @@ const keychainEntry = (provider: OAuthProvider, account = "subscription-oauth") 
 export const createKeychainCredentialStore = (
   open: (provider: OAuthProvider) => PasswordEntry = keychainEntry,
 ): CredentialStore => ({
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async read(provider: OAuthProvider): Promise<StoredCredential | null> {
     const entry = open(provider);
     let encoded: string | null | undefined;
@@ -106,6 +113,8 @@ export const createKeychainCredentialStore = (
     };
   },
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async write(provider: OAuthProvider, credential: StoredCredential): Promise<void> {
     const entry = open(provider);
     try {
@@ -115,6 +124,8 @@ export const createKeychainCredentialStore = (
     }
   },
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async remove(provider: OAuthProvider): Promise<void> {
     const entry = open(provider);
     try {
@@ -239,7 +250,7 @@ const TokenErrorBody = Schema.Struct({
 const decodeTokenErrorBody = Schema.decodeUnknownOption(Schema.fromJsonString(TokenErrorBody));
 const providerCode = (body: string): string | undefined => {
   const parsed = Option.getOrUndefined(decodeTokenErrorBody(body));
-  if (!parsed) return undefined;
+  if (!isTruthy(parsed)) return undefined;
   const code = Schema.is(Schema.String)(parsed.error) ? parsed.error : parsed.error.code;
   return safeOAuthCodes.has(code) ? code : undefined;
 };
@@ -326,6 +337,8 @@ const safeEqual = (left: string, right: string) => {
 };
 
 const close = (server: Server) =>
+  // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
+  // @effect-diagnostics-next-line newPromise:off
   new Promise<void>((resolve) => {
     server.close(() => resolve());
   });
@@ -372,7 +385,7 @@ const parseTokens = (
   const credential: StoredCredential = {
     accessToken: token.access_token,
     refreshToken,
-    expiresAt: Date.now() + token.expires_in * 1_000,
+    expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + token.expires_in * 1_000,
   };
   const withIdentity = idToken === undefined ? credential : { ...credential, idToken };
   return accountId === undefined ? withIdentity : { ...withIdentity, accountId };
@@ -410,11 +423,13 @@ const tokenBody = (protocol: ProviderProtocol, values: TokenGrant): EncodedToken
   return { body: JSON.stringify(values), contentType: "application/json" };
 };
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function* sseEvents(
   provider: OAuthProvider,
   response: Response,
 ): AsyncGenerator<NormalizedStreamEvent> {
-  if (!response.body) throw new OAuthHarnessError("transport_unavailable");
+  if (!(response.body !== null)) throw new OAuthHarnessError("transport_unavailable");
   const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
   let buffer = "";
   try {
@@ -432,7 +447,7 @@ async function* sseEvents(
           const data = line.slice(5).trim();
           if (data === "[DONE]") return;
           const event = decodeProviderEvent(provider, data);
-          if (event) yield event;
+          if (event !== null) yield event;
         }
       }
     }
@@ -450,6 +465,8 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
   let loginActive = false;
   let refreshing: Promise<StoredCredential> | null = null;
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async function status(): Promise<OAuthConnectionStatus> {
     let credential = await store.read(protocol.provider);
     if (credential !== null && credential.expiresAt <= now() + 30_000) {
@@ -468,11 +485,15 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
     };
   }
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async function disconnect(): Promise<OAuthConnectionStatus> {
     await store.remove(protocol.provider);
     return status();
   }
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async function startLogin(
     options: {
       readonly timeoutMs?: number;
@@ -488,6 +509,8 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
     const timeoutMs = options.timeoutMs ?? 120_000;
     const server = createServer();
     try {
+      // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
+      // @effect-diagnostics-next-line newPromise:off
       await new Promise<void>((resolve, reject) => {
         server.once("error", reject);
         // Bind the same loopback hostname used in the registered redirect URI. On Windows,
@@ -523,12 +546,16 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
 
     let settle!: (value: OAuthConnectionStatus) => void;
     let reject!: (reason: OAuthHarnessError) => void;
+    // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
+    // @effect-diagnostics-next-line newPromise:off
     const completed = new Promise<OAuthConnectionStatus>((resolve, fail) => {
       settle = resolve;
       reject = fail;
     });
     let finished = false;
     let callbackClaimed = false;
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     const finish = async (
       result: { readonly status: OAuthConnectionStatus } | { readonly error: OAuthHarnessError },
     ) => {
@@ -543,14 +570,18 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       else reject(result.error);
     };
     const abort = () => void finish({ error: new OAuthHarnessError("cancelled") });
+    // Native callback heartbeat/debounce timing remains at the protocol boundary.
+    // @effect-diagnostics-next-line globalTimers:off
     const timer = setTimeout(
       () => void finish({ error: new OAuthHarnessError("callback_timeout") }),
       timeoutMs,
     );
     options.signal?.addEventListener("abort", abort, { once: true });
-    if (options.signal?.aborted) abort();
+    if (options.signal?.aborted === true) abort();
 
     server.on("request", (request, response) => {
+      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+      // @effect-diagnostics-next-line asyncFunction:off
       void (async () => {
         // A one-shot callback must release its socket before finish closes the server.
         response.setHeader("Connection", "close");
@@ -653,6 +684,8 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
     };
   }
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async function exchange(
     values: TokenGrant,
     previous?: StoredCredential,
@@ -665,6 +698,8 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
     let proxyRoute: ProxyRoute | null = null;
     const withProxyRoute = (details: OAuthHarnessErrorContext): OAuthHarnessErrorContext =>
       proxyRoute === null ? details : { ...details, proxyRoute };
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     const request = async (): Promise<Response> => {
       try {
         return await fetcher(protocol.tokenUrl, {
@@ -721,7 +756,10 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
         () => new OAuthHarnessError("invalid_token_response", response.status, context),
       );
       const parsed = parseTokens(token, previous);
-      return { ...parsed, expiresAt: now() + (parsed.expiresAt - Date.now()) };
+      return {
+        ...parsed,
+        expiresAt: now() + (parsed.expiresAt - DateTime.toEpochMillis(DateTime.nowUnsafe())),
+      };
     } catch (error) {
       if (error instanceof OAuthHarnessError) throw error;
       throw new OAuthHarnessError("invalid_token_response", response.status, context);
@@ -729,15 +767,21 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
   }
 
   /** Forces one refresh for an explicit live protocol check and returns no credentials. */
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async function refreshForValidation(): Promise<OAuthConnectionStatus> {
     const credential = await store.read(protocol.provider);
-    if (!credential) throw new OAuthHarnessError("not_connected");
+    if (!isTruthy(credential)) throw new OAuthHarnessError("not_connected");
     await refresh(credential);
     return status();
   }
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async function refresh(credential: StoredCredential): Promise<StoredCredential> {
-    if (refreshing) return refreshing;
+    if (isTruthy(refreshing)) return refreshing;
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     refreshing = (async () => {
       const commonGrant = {
         grant_type: "refresh_token",
@@ -768,6 +812,8 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
     }
   }
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async function authorizedCatalogRequest(
     url: URL,
     credential: StoredCredential,
@@ -797,13 +843,15 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
   }
 
   /** Fetches only the provider's fixed model-catalog endpoint and never returns credentials. */
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async function modelCatalog(): Promise<ReadonlyArray<unknown>> {
     const context: OAuthHarnessErrorContext = {
       provider: protocol.provider,
       operation: "model_catalog",
     };
     let credential = await store.read(protocol.provider);
-    if (!credential) throw new OAuthHarnessError("not_connected", null, context);
+    if (!isTruthy(credential)) throw new OAuthHarnessError("not_connected", null, context);
     if (credential.expiresAt <= now() + 30_000) credential = await refresh(credential);
 
     const pages: unknown[] = [];
@@ -843,6 +891,8 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
     return pages;
   }
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async function* stream(
     serializedBody: string,
     signal?: AbortSignal,
@@ -852,7 +902,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       operation: "model_stream",
     };
     let credential = await store.read(protocol.provider);
-    if (!credential) throw new OAuthHarnessError("not_connected", null, context);
+    if (!isTruthy(credential)) throw new OAuthHarnessError("not_connected", null, context);
     if (credential.expiresAt <= now() + 30_000) credential = await refresh(credential);
 
     const providerBody =

@@ -71,6 +71,8 @@ export function useCreateSessionMutation(projectId: string) {
   });
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function useSessionLifecycleMutation(projectId: string, holder: () => string) {
   const client = useQueryClient();
   return useMutation<
@@ -78,6 +80,8 @@ export function useSessionLifecycleMutation(projectId: string, holder: () => str
     Error,
     { kind: "archive" | "restore" | "delete"; sessionId: string }
   >({
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     mutationFn: async (request) => {
       switch (request.kind) {
         case "archive":

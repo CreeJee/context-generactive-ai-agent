@@ -1,5 +1,10 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import type { Readable } from "node:stream";
 import { Context, Deferred, Effect, Layer, Schema, Stream } from "effect";
 import { HarnessProfile } from "./contracts.ts";
@@ -36,23 +41,23 @@ export const makeWorkerGateway = Effect.fn("Rrsi.makeWorkerGateway")(function* (
   );
   const close = Effect.gen(function* () {
     closed = true;
-    yield* Deferred.fail(initialized, new GatewayClosed());
-    yield* Effect.forEach(pending.values(), (reply) => Deferred.fail(reply, new GatewayClosed()));
+    yield* Deferred.fail(initialized, GatewayClosed.make());
+    yield* Effect.forEach(pending.values(), (reply) => Deferred.fail(reply, GatewayClosed.make()));
     pending.clear();
   });
-  yield* Stream.fromAsyncIterable(lines, () => new GatewayClosed()).pipe(
+  yield* Stream.fromAsyncIterable(lines, () => GatewayClosed.make()).pipe(
     Stream.runForEach(
       Effect.fnUntraced(function* (line) {
-        const frame = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Incoming))(line);
+        const frame = yield* Schema.decodeEffect(Schema.fromJsonString(Incoming))(line);
         switch (frame.kind) {
           case "initialize":
             yield* Deferred.succeed(initialized, frame);
             break;
           case "response": {
             const reply = pending.get(frame.id);
-            if (reply) {
+            if (isTruthy(reply)) {
               if (frame.ok) yield* Deferred.succeed(reply, frame.body);
-              else yield* Deferred.fail(reply, new GatewayClosed());
+              else yield* Deferred.fail(reply, GatewayClosed.make());
             }
             break;
           }
@@ -60,7 +65,7 @@ export const makeWorkerGateway = Effect.fn("Rrsi.makeWorkerGateway")(function* (
       }),
     ),
     Effect.onExit(() => close),
-    Effect.catch(() => Effect.void),
+    Effect.ignore,
     Effect.forkScoped({ uninterruptible: false, startImmediately: true }),
   );
   const request = Effect.fn("Rrsi.workerRequest")(function* (
@@ -72,13 +77,13 @@ export const makeWorkerGateway = Effect.fn("Rrsi.makeWorkerGateway")(function* (
     return yield* Effect.gen(function* () {
       yield* Effect.suspend(() =>
         closed
-          ? Effect.fail(new GatewayClosed())
+          ? Effect.fail(GatewayClosed.make())
           : Effect.try({
               try: () => {
                 pending.set(id, reply);
                 send({ kind, id, body });
               },
-              catch: () => new GatewayClosed(),
+              catch: () => GatewayClosed.make(),
             }),
       );
       return yield* Deferred.await(reply);
@@ -89,7 +94,7 @@ export const makeWorkerGateway = Effect.fn("Rrsi.makeWorkerGateway")(function* (
 export class WorkerGateway extends Context.Service<
   WorkerGateway,
   Effect.Success<ReturnType<typeof makeWorkerGateway>>
->()("memory-agent/rrsi/WorkerGateway") {
+>()("memory-agent/rrsi/worker-gateway/WorkerGateway") {
   static layer(input: Readable, send: (request: GatewayRequest) => void) {
     return Layer.effect(WorkerGateway, makeWorkerGateway(input, send));
   }

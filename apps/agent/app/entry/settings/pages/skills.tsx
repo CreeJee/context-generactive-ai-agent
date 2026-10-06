@@ -24,7 +24,7 @@ const description =
   "모델이 이름과 설명을 보고 작업에 맞는 skill을 읽어 따라요. skill은 지침일 뿐이라 승인을 대신하지 않아요.";
 
 export function SkillSettings({ project }: { project: Project | null }) {
-  if (!project)
+  if (!(project !== null))
     return (
       <FieldGroup>
         <PageHeader title={"Skills"} description={description} />

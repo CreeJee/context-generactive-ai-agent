@@ -47,7 +47,7 @@ const keychain: SecretStoreApi = {
  * they never reach config files, the conversation, tool output or logs.
  */
 export class SecretStore extends Context.Service<SecretStore, SecretStoreApi>()(
-  "memory-agent/SecretStore",
+  "memory-agent/config/secrets/SecretStore",
 ) {
   static readonly keychain = Layer.succeed(SecretStore, keychain);
 

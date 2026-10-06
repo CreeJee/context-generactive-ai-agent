@@ -1,4 +1,5 @@
-import { Context, Effect, Layer, Schema } from "effect";
+import { isTruthy } from "../truthy.ts";
+import { DateTime, Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 
 export type SessionEventTopic = "all" | "run-state" | "queue" | "subagents" | "relayed-approvals";
@@ -91,7 +92,12 @@ const make = (projectForSession: (sessionId: string) => string | null): AppEvent
         request.signal.addEventListener("abort", close, { once: true });
         if (request.signal.aborted) return close();
         send(frame("ready", { revision }));
-        heartbeat = setInterval(() => send(frame("heartbeat", { at: Date.now() })), heartbeatMs);
+        // Native callback heartbeat/debounce timing remains at the protocol boundary.
+        // @effect-diagnostics-next-line globalTimers:off
+        heartbeat = setInterval(
+          () => send(frame("heartbeat", { at: DateTime.toEpochMillis(DateTime.nowUnsafe()) })),
+          heartbeatMs,
+        );
       },
     });
     return new Response(body, {
@@ -108,7 +114,9 @@ const make = (projectForSession: (sessionId: string) => string | null): AppEvent
     publish,
     publishSession(sessionId: string, topic: SessionEventTopic) {
       const projectId = projectForSession(sessionId);
-      return projectId ? publish({ scope: "session", projectId, sessionId, topic }) : null;
+      return isTruthy(projectId)
+        ? publish({ scope: "session", projectId, sessionId, topic })
+        : null;
     },
     publishProject: (projectId: string, topic: ProjectEventTopic) =>
       publish({ scope: "project", projectId, topic }),
@@ -126,16 +134,18 @@ const make = (projectForSession: (sessionId: string) => string | null): AppEvent
 export const makeAppEvents: Effect.Effect<AppEventsApi> = Effect.sync(() => make(() => null));
 
 const liveAppEvents = Effect.map(Database, ({ sqlite }) => {
+  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+  // @effect-diagnostics-next-line schemaSync:off
   const decodeProject = Schema.decodeUnknownSync(Schema.Struct({ project_id: Schema.String }));
   const statement = sqlite.prepare("SELECT project_id FROM sessions WHERE id = ?");
   return make((sessionId) => {
     const row = statement.get(sessionId);
-    return row ? decodeProject(row).project_id : null;
+    return isTruthy(row) ? decodeProject(row).project_id : null;
   });
 });
 
 export class AppEvents extends Context.Service<AppEvents, AppEventsApi>()(
-  "memory-agent/AppEvents",
+  "memory-agent/events/app-events/AppEvents",
 ) {
   static readonly layer = Layer.effect(AppEvents, liveAppEvents);
 }

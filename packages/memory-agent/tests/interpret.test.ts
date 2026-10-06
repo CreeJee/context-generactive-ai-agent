@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off schemaSync:off
 import { Effect, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
@@ -29,7 +31,7 @@ const Trace = Schema.Struct({
 });
 
 async function run<I, O>(tool: { execute?: ((args: I) => O) | undefined }, input: I) {
-  if (!tool.execute) throw new Error("tool has no server implementation");
+  if (!(tool.execute !== undefined)) throw new Error("tool has no server implementation");
   return tool.execute(input);
 }
 

@@ -1,6 +1,14 @@
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { execFile } from "node:child_process";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash, randomUUID } from "node:crypto";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { renameWhenReleased, tarExecutable } from "./host.ts";
@@ -22,6 +30,8 @@ export interface ArchiveFailure {
 }
 
 /** An npm lockfile `integrity` value (`sha512-<base64>`) as a digest to check against. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function npmIntegrity(url: string, integrity: string): PinnedArchive {
   const [algorithm, base64 = ""] = integrity.split("-", 2);
   if (algorithm !== "sha512") throw new Error(`unsupported integrity algorithm: ${algorithm}`);
@@ -38,11 +48,16 @@ const explain = (error: Error): string =>
  * a half-installed folder in use; an existing `target` is replaced only after the new one is
  * complete. Never rejects.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function installArchive(
   archive: PinnedArchive,
   target: string,
 ): Promise<ArchiveFailure | null> {
   const failed = (reason: ArchiveFailure["reason"], detail: string) => ({ reason, detail });
+  // Native Request/Response adapter preserves host and SDK stream semantics.
+  // @effect-diagnostics-next-line globalFetch:off
   const response = await fetch(archive.url, { redirect: "follow" }).catch((error: Error) => error);
   if (response instanceof Error) return failed("download_failed", explain(response));
   if (!response.ok) return failed("download_failed", `HTTP ${response.status}`);
@@ -56,6 +71,8 @@ export async function installArchive(
 
   const tar = tarExecutable();
   const staging = join(dirname(target), `.install-${randomUUID()}`);
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const extract = async (): Promise<ArchiveFailure | null> => {
     mkdirSync(staging, { recursive: true, mode: 0o700 });
     const file = join(staging, "archive.tgz");

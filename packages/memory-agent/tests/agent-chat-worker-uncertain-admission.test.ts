@@ -1,4 +1,6 @@
-import { Effect, Schema } from "effect";
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off processEnv:off schemaSync:off
+import { DateTime, Effect, Schema } from "effect";
 import { expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { makeSqliteOwnerRpcLedger } from "../src/agent/owner-rpc-ledger.ts";
@@ -40,7 +42,7 @@ test.each(["pending", "uncertain", "succeeded"] as const)(
         .prepare(
           "INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES (?, ?, 'completed', ?)",
         )
-        .run("oldrun", context.session.id, Date.now());
+        .run("oldrun", context.session.id, DateTime.toEpochMillis(DateTime.nowUnsafe()));
       const ledger = makeSqliteOwnerRpcLedger(db);
       const key = JSON.stringify(admission.binding);
       expect(ledger.reserve(key, 1, "old-effect", true)).toEqual({ type: "reserved" });
@@ -102,7 +104,7 @@ test.each(["pending", "uncertain", "succeeded"] as const)(
         before,
       );
     } finally {
-      if (previous === undefined) delete process.env.CONTEXT_AGENT_GOAL_WORKER;
+      if (previous === undefined) Reflect.deleteProperty(process.env, "CONTEXT_AGENT_GOAL_WORKER");
       else process.env.CONTEXT_AGENT_GOAL_WORKER = previous;
     }
   },

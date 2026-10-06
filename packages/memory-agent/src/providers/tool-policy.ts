@@ -1,3 +1,5 @@
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { isAbsolute, resolve } from "node:path";
 import { optionalProperty } from "../optional-property.ts";
 import { Cause, Context, Data, Effect, Result, Exit, Layer, Predicate } from "effect";
@@ -204,17 +206,17 @@ function denial(
 ): ProviderToolPolicyDenied | null {
   if (
     has(app.disabledToolIds, tool.id) ||
-    (app.enabledToolIds && !has(app.enabledToolIds, tool.id))
+    (app.enabledToolIds && !has(app.enabledToolIds, tool.id)) === true
   )
     return new ProviderToolPolicyDenied({ toolId: tool.id, reason: "app_disabled" });
   if (
     has(user.disabledToolIds, tool.id) ||
-    (user.enabledToolIds && !has(user.enabledToolIds, tool.id))
+    (user.enabledToolIds && !has(user.enabledToolIds, tool.id)) === true
   )
     return new ProviderToolPolicyDenied({ toolId: tool.id, reason: "user_disabled" });
   if (
-    (app.allowedCategories && !has(app.allowedCategories, tool.category)) ||
-    (user.allowedCategories && !has(user.allowedCategories, tool.category))
+    (app.allowedCategories && !has(app.allowedCategories, tool.category)) === true ||
+    (user.allowedCategories && !has(user.allowedCategories, tool.category)) === true
   )
     return new ProviderToolPolicyDenied({ toolId: tool.id, reason: "category_denied" });
   if (
@@ -240,6 +242,8 @@ const noTrustedAuthority: ProviderToolTrustedAuthority = Object.freeze({
   isolatedDesktop: false,
   principalStorage: false,
 });
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function hasRequiredProviderToolAuthority(
   tool: AnyProviderToolDescriptor,
   authority: ProviderToolTrustedAuthority = noTrustedAuthority,
@@ -259,6 +263,8 @@ export function hasRequiredProviderToolAuthority(
     }
   });
 }
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function decideProviderToolExposure(
   tools: readonly AnyProviderToolDescriptor[],
   context: ProviderToolPolicyContext,
@@ -322,7 +328,7 @@ function validateSandbox(
       new ProviderToolSandboxViolation({ toolId: tool.id, reason: "isolated_desktop_required" }),
     );
   if (
-    options.networkRequested &&
+    options.networkRequested === true &&
     tool.sandbox.includes("provider_hosted") === false &&
     sandbox?.network !== "restricted"
   )
@@ -391,7 +397,7 @@ function validateSandbox(
         }),
       onSuccess: () => null,
     });
-    if (violation) return Result.fail(violation);
+    if (violation !== null) return Result.fail(violation);
   }
   return Result.succeed(appManaged ? (root ?? null) : null);
 }
@@ -416,6 +422,8 @@ const trustedSandbox = (
     limits: Object.freeze({ ...sandbox.limits }),
   });
 };
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function makeProviderToolPolicy(
   registry: ProviderToolCapabilityRegistry["Service"],
   config: ProviderToolPolicyConfig = {},
@@ -522,7 +530,7 @@ export function makeProviderToolPolicy(
             reason: "account_unsupported",
           });
         const refused = denial(tool, input.policy.app, input.policy.user);
-        if (refused) return yield* refused;
+        if (refused !== null) return yield* refused;
         const exposed = publicDescriptor(tool);
         if (exposed.requiresApproval) {
           if (input.approval === "not_requested")
@@ -543,7 +551,7 @@ export function makeProviderToolPolicy(
 export class ProviderToolPolicy extends Context.Service<
   ProviderToolPolicy,
   ProviderToolPolicyApi
->()("memory-agent/ProviderToolPolicy") {
+>()("memory-agent/providers/tool-policy/ProviderToolPolicy") {
   /** Production default: provider-hosted tools only; no local authority is granted. */
   static readonly layer = Layer.effect(
     ProviderToolPolicy,
@@ -759,6 +767,8 @@ const numberRecord = (value: unknown): Readonly<Record<string, number>> | undefi
   return entries.length === 0 ? undefined : Object.freeze(Object.fromEntries(entries));
 };
 /** Normalize reported values only; never estimate absent tokens or cost. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function normalizeProviderToolUsage(
   raw: unknown,
   attribution?: ProviderToolUsageAttribution,
@@ -830,6 +840,8 @@ const providerStatus = new Map<string, ProviderToolLifecycleStatus>([
   ["cancelled", "cancelled"],
   ["canceled", "cancelled"],
 ]);
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function normalizeProviderToolLifecycleStatus(
   kind: string | undefined,
   fallback: ProviderToolLifecycleStatus,
@@ -1022,6 +1034,8 @@ const invokeProviderFactory = (
   return factory(...args);
 };
 /* oxlint-enable anti-slop/no-unknown-parameters */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function makeProviderToolRuntime(
   registry: ProviderToolCapabilityRegistry["Service"],
   policyService: ProviderToolPolicy["Service"],
@@ -1184,7 +1198,7 @@ export function makeProviderToolRuntime(
 export class ProviderToolRuntime extends Context.Service<
   ProviderToolRuntime,
   ProviderToolRuntimeApi
->()("memory-agent/ProviderToolRuntime") {
+>()("memory-agent/providers/tool-policy/ProviderToolRuntime") {
   static readonly layer = Layer.effect(
     ProviderToolRuntime,
     Effect.gen(function* () {

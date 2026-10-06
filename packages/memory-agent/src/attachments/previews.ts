@@ -1,3 +1,6 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { readFile } from "node:fs/promises";
 import type { AnyServerTool } from "@tanstack/ai";
 import { Context, Data, Effect, Result, Layer, Option, Schema } from "effect";
@@ -65,13 +68,15 @@ const make = Effect.gen(function* () {
     withPreviews(project: Project, tools: readonly AnyServerTool[]): AnyServerTool[] {
       return tools.map((tool): AnyServerTool => {
         const execute = tool.execute;
-        if (!execute || !writingToolNames.has(tool.name)) return tool;
+        if (!isTruthy(execute) || !writingToolNames.has(tool.name)) return tool;
         return {
           ...tool,
+          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+          // @effect-diagnostics-next-line asyncFunction:off
           execute: async (...call: Parameters<typeof execute>) => {
             const result = await execute(...call);
             const written = Option.getOrUndefined(decodeWritten(result));
-            if (!written || !isDrawing(written.path)) return result;
+            if (!(written !== undefined) || !isDrawing(written.path)) return result;
             const preview = await run(previewOf(project, written.path));
             return Option.match(preview, {
               onNone: () => result,
@@ -88,6 +93,6 @@ const make = Effect.gen(function* () {
 export class DrawingPreviews extends Context.Service<
   DrawingPreviews,
   Effect.Success<typeof make>
->()("memory-agent/DrawingPreviews") {
+>()("memory-agent/attachments/previews/DrawingPreviews") {
   static readonly layer = Layer.effect(DrawingPreviews, make);
 }

@@ -1,5 +1,8 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off globalTimers:off newPromise:off
+import { isTruthy } from "../truthy.ts";
 import { EventType } from "@tanstack/ai";
-import { Schema } from "effect";
+import { DateTime, Schema } from "effect";
 import type {
   AdapterYieldChunk,
   DefaultMessageMetadataByModality,
@@ -69,7 +72,7 @@ export class ScriptedTextAdapter extends BaseTextAdapter<
         ? turns
         : (invocation) => {
             const turn = turns[invocation.index];
-            if (!turn)
+            if (!isTruthy(turn))
               throw new Error(`scripted adapter ran out of turns at index ${invocation.index}`);
             return turn;
           };
@@ -90,18 +93,18 @@ export class ScriptedTextAdapter extends BaseTextAdapter<
     this.invocations.push(invocation);
     const turn = await this.#respond(invocation);
     const signal = options.abortController?.signal ?? options.request?.signal;
-    if (turn.waitFor) {
-      if (!signal?.aborted)
+    if (isTruthy(turn.waitFor)) {
+      if (!(signal?.aborted === true))
         await new Promise<void>((resolve, reject) => {
           const onAbort = () => resolve();
           signal?.addEventListener("abort", onAbort, { once: true });
-          if (signal?.aborted) onAbort();
+          if (signal?.aborted === true) onAbort();
           void turn
             .waitFor!.finally(() => signal?.removeEventListener("abort", onAbort))
             .then(resolve, reject);
         });
     }
-    if (turn.delayMs !== undefined && !signal?.aborted)
+    if (turn.delayMs !== undefined && !(signal?.aborted === true))
       await new Promise<void>((resolve) => {
         const done = () => {
           clearTimeout(timer);
@@ -111,12 +114,12 @@ export class ScriptedTextAdapter extends BaseTextAdapter<
         const timer = setTimeout(done, turn.delayMs);
         signal?.addEventListener("abort", done, { once: true });
       });
-    if (signal?.aborted) return;
+    if (signal?.aborted === true) return;
 
     const runId = options.runId ?? `scripted-run-${index}`;
     const threadId = options.threadId ?? "scripted-thread";
     const messageId = `${runId}-message-${index}`;
-    const timestamp = Date.now();
+    const timestamp = DateTime.toEpochMillis(DateTime.nowUnsafe());
 
     yield { type: EventType.RUN_STARTED, runId, threadId, model, timestamp };
     if (turn.text !== undefined) {

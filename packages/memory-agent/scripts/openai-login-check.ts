@@ -1,3 +1,5 @@
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import {
@@ -11,12 +13,18 @@ import { providerProtocols } from "../src/oauth/protocol.ts";
 // Never touch the app's keychain credential during a one-off login diagnosis.
 let credential: StoredCredential | null = null;
 const store: CredentialStore = {
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async read() {
     return credential;
   },
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async write(_provider, value) {
     credential = value;
   },
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async remove() {
     credential = null;
   },
@@ -33,6 +41,8 @@ try {
   attempt = await client.startLogin({ timeoutMs: 10 * 60_000 });
   // Register a rejection handler before opening the browser (which can itself fail).
   void attempt.completed.catch(() => {});
+  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+  // @effect-diagnostics-next-line globalConsole:off
   console.log("OPENAI_LOGIN_CHECK waiting_for_browser");
   try {
     await openBrowser("open", [attempt.authorizationUrl]);
@@ -42,13 +52,19 @@ try {
   }
   const result = await attempt.completed;
   if (!result.connected) throw new Error("login_not_connected");
+  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+  // @effect-diagnostics-next-line globalConsole:off
   console.log("OPENAI_LOGIN_CHECK passed");
 } catch (error) {
   if (error instanceof OAuthHarnessError)
+    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+    // @effect-diagnostics-next-line globalConsole:off
     console.error(
       `OPENAI_LOGIN_CHECK failed code=${error.code} operation=${error.operation ?? "none"} status=${error.status ?? "none"}`,
     );
   else
+    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+    // @effect-diagnostics-next-line globalConsole:off
     console.error(
       `OPENAI_LOGIN_CHECK failed ${error instanceof Error ? error.message : "unexpected_error"}`,
     );

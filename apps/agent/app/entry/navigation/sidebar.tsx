@@ -1,3 +1,4 @@
+import { isTruthy } from "../../truthy.ts";
 import {
   ArchiveIcon,
   ArchiveRestoreIcon,
@@ -120,7 +121,7 @@ export function AccountSection({
         </DataListItem>
       ) : (
         <>
-          {!auth && (
+          {!(auth !== null) && (
             <DataListItem term="연결">
               <Spinner />
             </DataListItem>
@@ -272,7 +273,7 @@ export function ModelSection({
             </Select>
           </DataListItem>
         )}
-      {!selection && (
+      {!(selection !== null) && (
         <DataListItem term="추론">
           <p className="pt-1.5 text-xs text-muted-foreground">모델을 선택하세요.</p>
         </DataListItem>
@@ -355,7 +356,7 @@ export function ProjectSection({
                     items={permissionModes}
                     onValueChange={(value) => {
                       const mode = permissionModes.find((option) => option.value === value);
-                      if (mode) onPermissionMode(mode.value);
+                      if (isTruthy(mode)) onPermissionMode(mode.value);
                     }}
                   >
                     <SelectTrigger className="w-full" size="sm" aria-label="권한 모드">
@@ -429,14 +430,16 @@ function AddProjectDialog({ onAdd }: { onAdd: (root: string) => Promise<string |
         </DialogHeader>
         <form
           className="flex flex-col gap-3"
+          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+          // @effect-diagnostics-next-line asyncFunction:off
           onSubmit={async (event) => {
             event.preventDefault();
-            if (!root.trim()) return;
+            if (!isTruthy(root.trim())) return;
             setAdding(true);
             const failure = await onAdd(root.trim());
             setAdding(false);
             setError(failure);
-            if (failure) return;
+            if (isTruthy(failure)) return;
             setRoot("");
             setOpen(false);
           }}
@@ -454,7 +457,7 @@ function AddProjectDialog({ onAdd }: { onAdd: (root: string) => Promise<string |
           </Field>
           <DialogFooter>
             <DialogClose render={<Button type="button" variant="ghost" />}>취소</DialogClose>
-            <Button type="submit" disabled={adding || !root.trim()}>
+            <Button type="submit" disabled={adding || !isTruthy(root.trim())}>
               {adding && <Spinner />} 추가
             </Button>
           </DialogFooter>

@@ -1,5 +1,16 @@
 import type { MessagePort } from "node:worker_threads";
-import { Context, Effect, Exit, Schema, Scope } from "effect";
+import {
+  Cause,
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  HashMap,
+  Option,
+  Ref,
+  Schema,
+  Scope,
+} from "effect";
 import {
   // Pure protocol endpoint, not an Effect service constructor; owner supplies authority/ledger.
   // oxlint-disable-next-line anti-slop-effect/no-service-constructor-imports
@@ -61,14 +72,20 @@ const replyFrame = Schema.Struct({
   requestId: id,
   reply: replySchema,
 });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeRequest = Schema.decodeUnknownSync(requestFrame);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeReply = Schema.decodeUnknownSync(replyFrame);
 
 /** No frame contents or decoder errors are exposed: capabilities contain secrets. */
-export class OwnerRpcTransportError extends Error {
-  constructor(readonly reason: "closed" | "cancelled" | "protocol" | "send_failed") {
-    super(`Owner RPC transport ${reason}; dispatched effects may be uncertain`);
-    this.name = "OwnerRpcTransportError";
+export class OwnerRpcTransportError extends Schema.TaggedError<OwnerRpcTransportError>()(
+  "OwnerRpcTransportError",
+  { reason: Schema.Literals(["closed", "cancelled", "protocol", "send_failed"]) },
+) {
+  override get message() {
+    return `Owner RPC transport ${this.reason}; dispatched effects may be uncertain`;
   }
 }
 
@@ -76,26 +93,30 @@ export class OwnerRpcTransportError extends Error {
 export function makeOwnerRpcPortClient<M extends OwnerRpcOperations>(port: MessagePort) {
   let closed = false;
   let nextId = 0;
-  const pending = new Map<
-    number,
-    {
-      operationId: number;
-      resolve: (reply: OwnerRpcReply) => void;
-      reject: (error: Error) => void;
-      cleanup: () => void;
-    }
-  >();
-  // Cancelled requests may still complete. Keep correlation, never reuse their IDs.
-  const abandoned = new Map<number, number>();
+  type RequestState =
+    | {
+        readonly status: "pending";
+        readonly operationId: number;
+        readonly done: Deferred.Deferred<OwnerRpcReply, OwnerRpcTransportError>;
+      }
+    | { readonly status: "abandoned"; readonly operationId: number };
+  const requests = Ref.makeUnsafe(HashMap.empty<number, RequestState>());
   const close = (reason: OwnerRpcTransportError["reason"] = "closed") => {
     if (closed) return;
     closed = true;
-    for (const entry of pending.values()) {
-      entry.cleanup();
-      entry.reject(new OwnerRpcTransportError(reason));
+    const outstanding = Effect.runSync(Ref.getAndSet(requests, HashMap.empty()));
+    for (const entry of HashMap.values(outstanding)) {
+      switch (entry.status) {
+        case "pending":
+          Deferred.doneUnsafe(
+            entry.done,
+            Effect.fail(OwnerRpcTransportError.make({ reason: reason })),
+          );
+          break;
+        case "abandoned":
+          break;
+      }
     }
-    pending.clear();
-    abandoned.clear();
     port.off("message", onMessage);
     port.off("close", onClose);
     port.off("messageerror", onError);
@@ -108,16 +129,26 @@ export function makeOwnerRpcPortClient<M extends OwnerRpcOperations>(port: Messa
   const onMessage = (raw: unknown) => {
     try {
       const frame = decodeReply(raw);
-      const entry = pending.get(frame.requestId);
-      if (!entry) {
-        if (abandoned.get(frame.requestId) !== frame.reply.operationId) return close("protocol");
-        abandoned.delete(frame.requestId);
-        return;
+      const entry = Effect.runSync(
+        Ref.modify(requests, (entries) => {
+          const found = Option.getOrUndefined(HashMap.get(entries, frame.requestId));
+          return [
+            found,
+            found?.operationId === frame.reply.operationId
+              ? HashMap.remove(entries, frame.requestId)
+              : entries,
+          ];
+        }),
+      );
+      if (entry === undefined || entry.operationId !== frame.reply.operationId)
+        return close("protocol");
+      switch (entry.status) {
+        case "pending":
+          Deferred.doneUnsafe(entry.done, Effect.succeed(frame.reply));
+          break;
+        case "abandoned":
+          break;
       }
-      if (entry.operationId !== frame.reply.operationId) return close("protocol");
-      pending.delete(frame.requestId);
-      entry.cleanup();
-      entry.resolve(frame.reply);
     } catch {
       close("protocol");
     }
@@ -129,39 +160,72 @@ export function makeOwnerRpcPortClient<M extends OwnerRpcOperations>(port: Messa
   return {
     close,
     request(request: OwnerRpcRequest<M>, signal?: AbortSignal): Promise<OwnerRpcReply> {
-      if (closed) return Promise.reject(new OwnerRpcTransportError("closed"));
-      if (signal?.aborted) return Promise.reject(new OwnerRpcTransportError("cancelled"));
+      if (closed) return Promise.reject(OwnerRpcTransportError.make({ reason: "closed" }));
+      if (signal?.aborted === true)
+        return Promise.reject(OwnerRpcTransportError.make({ reason: "cancelled" }));
       if (nextId === Number.MAX_SAFE_INTEGER) {
         close("protocol");
-        return Promise.reject(new OwnerRpcTransportError("protocol"));
+        return Promise.reject(OwnerRpcTransportError.make({ reason: "protocol" }));
       }
       const requestId = ++nextId;
-      return new Promise((resolve, reject) => {
-        let frame: ReturnType<typeof decodeRequest>;
-        try {
-          // Capture both wire data and correlation before retaining any callbacks.
-          frame = decodeRequest(structuredClone({ type: "request", requestId, request }));
-        } catch {
-          close("send_failed");
-          reject(new OwnerRpcTransportError("send_failed"));
-          return;
-        }
+      const wait = Effect.gen(function* () {
+        const frame = yield* Effect.try({
+          try: () => decodeRequest(structuredClone({ type: "request", requestId, request })),
+          catch: () => {
+            close("send_failed");
+            return OwnerRpcTransportError.make({ reason: "send_failed" });
+          },
+        });
         const operationId = frame.request.operationId;
-        const cancel = () => {
-          pending.delete(requestId);
-          abandoned.set(requestId, operationId);
-          cleanup();
-          reject(new OwnerRpcTransportError("cancelled"));
-        };
-        const cleanup = () => signal?.removeEventListener("abort", cancel);
-        pending.set(requestId, { operationId, resolve, reject, cleanup });
-        signal?.addEventListener("abort", cancel, { once: true });
-        try {
-          port.postMessage(frame);
-        } catch {
-          close("send_failed");
-        }
+        const done = yield* Deferred.make<OwnerRpcReply, OwnerRpcTransportError>();
+        return yield* Effect.suspend(() =>
+          closed
+            ? Effect.fail(OwnerRpcTransportError.make({ reason: "closed" }))
+            : Ref.update(requests, (entries) =>
+                HashMap.set(entries, requestId, { status: "pending", operationId, done }),
+              ).pipe(
+                Effect.andThen(
+                  Effect.try({
+                    try: () => {
+                      port.postMessage(frame);
+                    },
+                    catch: () => {
+                      close("send_failed");
+                      return OwnerRpcTransportError.make({ reason: "send_failed" });
+                    },
+                  }),
+                ),
+              ),
+        ).pipe(
+          Effect.andThen(Deferred.await(done)),
+          // A cancelled request may still finish remotely. Retain only its wire correlation.
+          Effect.onInterrupt(() =>
+            Ref.update(requests, (entries) =>
+              !closed && HashMap.has(entries, requestId)
+                ? HashMap.set(entries, requestId, { status: "abandoned", operationId })
+                : entries,
+            ),
+          ),
+          Effect.ensuring(
+            Ref.update(requests, (entries) =>
+              Option.getOrUndefined(HashMap.get(entries, requestId))?.status === "pending"
+                ? HashMap.remove(entries, requestId)
+                : entries,
+            ),
+          ),
+        );
       });
+      return Effect.runPromiseExit(wait, signal === undefined ? undefined : { signal }).then(
+        (exit) =>
+          Exit.match(exit, {
+            onSuccess: (reply) => reply,
+            onFailure: (cause) => {
+              throw Cause.hasInterrupts(cause)
+                ? OwnerRpcTransportError.make({ reason: "cancelled" })
+                : Cause.squash(cause);
+            },
+          }),
+      );
     },
   };
 }
@@ -199,7 +263,7 @@ const acquireOwnerRpcPort = Effect.fn("OwnerRpcPort.acquire")(function* <
   const onMessage = (raw: unknown) => {
     const dispatch = Effect.try({
       try: () => decodeRequest(raw),
-      catch: () => new OwnerRpcTransportError("protocol"),
+      catch: () => OwnerRpcTransportError.make({ reason: "protocol" }),
     }).pipe(
       Effect.flatMap((frame) =>
         Effect.suspend(() => {
@@ -209,7 +273,7 @@ const acquireOwnerRpcPort = Effect.fn("OwnerRpcPort.acquire")(function* <
           // Legacy SDK work cannot be cancelled: retain its actual durable outcome.
           // Only native handlers allow interruption to leave an admitted pending receipt.
           return (legacyAwaitSettlement ? Effect.uninterruptible(execution) : execution).pipe(
-            Effect.mapError(() => new OwnerRpcTransportError("protocol")),
+            Effect.mapError(() => OwnerRpcTransportError.make({ reason: "protocol" })),
             Effect.flatMap((reply) =>
               Effect.try({
                 try: () => {
@@ -222,7 +286,7 @@ const acquireOwnerRpcPort = Effect.fn("OwnerRpcPort.acquire")(function* <
                       }),
                     );
                 },
-                catch: () => new OwnerRpcTransportError("send_failed"),
+                catch: () => OwnerRpcTransportError.make({ reason: "send_failed" }),
               }),
             ),
           );
@@ -246,19 +310,23 @@ const acquireOwnerRpcPort = Effect.fn("OwnerRpcPort.acquire")(function* <
         port.on("messageerror", onError);
         port.start();
       },
-      catch: () => new OwnerRpcTransportError("protocol"),
+      catch: () => OwnerRpcTransportError.make({ reason: "protocol" }),
     }).pipe(Effect.onError(() => close)),
     () => close,
   );
   return { close };
 });
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export const serveOwnerRpcPortEffect = <M extends OwnerRpcOperations, E = never, R = never>(
   port: MessagePort,
   options: OwnerRpcEffectOptions<M, E, R>,
 ) => acquireOwnerRpcPort(port, options, false);
 
 /** Synchronous full-loop adapter; Promise handlers cannot reverse dispatched external work. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function serveOwnerRpcPort<M extends OwnerRpcOperations>(
   port: MessagePort,
   options: {
@@ -304,6 +372,6 @@ export function serveOwnerRpcPort<M extends OwnerRpcOperations>(
     };
   } catch {
     Effect.runFork(Scope.close(scope, Exit.void));
-    throw new OwnerRpcTransportError("protocol");
+    throw OwnerRpcTransportError.make({ reason: "protocol" });
   }
 }

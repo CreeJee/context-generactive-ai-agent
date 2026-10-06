@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
 import { Context, Effect, Layer, Schema } from "effect";
 import type { Project } from "../projects/projects.ts";
@@ -45,7 +46,7 @@ const make = Effect.gen(function* () {
         inputSchema: toToolSchema(ReadSkillInput),
       }).server(({ name }) => {
         const document = skills.read(project, name);
-        if (!document) return { error: "skill_not_found", name };
+        if (!isTruthy(document)) return { error: "skill_not_found", name };
         return {
           name: document.name,
           scope: document.scope,
@@ -65,7 +66,7 @@ const make = Effect.gen(function* () {
 });
 
 export class SkillTools extends Context.Service<SkillTools, Effect.Success<typeof make>>()(
-  "memory-agent/SkillTools",
+  "memory-agent/tools/skills/SkillTools",
 ) {
   static readonly layer = Layer.effect(SkillTools, make);
 }

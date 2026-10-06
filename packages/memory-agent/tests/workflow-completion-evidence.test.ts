@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off
+import { isTruthy } from "../src/truthy.ts";
 import { Effect, Result } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
@@ -120,7 +123,7 @@ describe("criterion-linked Goal completion", () => {
     const tool = tools
       .forSession(ctx.session.id, "execute", "run")
       .find((item) => item.name === "update_workflow_progress");
-    if (!tool?.execute) throw new Error("Missing progress tool");
+    if (!isTruthy(tool?.execute)) throw new Error("Missing progress tool");
     const result = await tool.execute({ ...complete, recorderRunId: "spoofed" });
     expect(result).toMatchObject({ goal: { completion: { recorderRunId: "run" } } });
   });

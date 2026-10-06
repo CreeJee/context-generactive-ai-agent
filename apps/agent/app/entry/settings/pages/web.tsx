@@ -1,3 +1,4 @@
+import { isTruthy } from "../../../truthy.ts";
 import { KeyRoundIcon, Trash2Icon } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "~/components/ui/badge";
@@ -32,6 +33,8 @@ export function KagiSettings() {
   const busy = mutation.isPending;
   const [error, setError] = useState<string | null>(null);
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const apply = async (
     command: { action: "register"; key: string } | { action: "remove" | "enable" | "disable" },
   ) => {
@@ -92,7 +95,7 @@ export function KagiSettings() {
         <form
           onSubmit={(event) => {
             event.preventDefault();
-            if (key.trim()) void apply({ action: "register", key });
+            if (isTruthy(key.trim())) void apply({ action: "register", key });
           }}
         >
           <Field>
@@ -106,7 +109,7 @@ export function KagiSettings() {
                 onChange={(event) => setKey(event.target.value)}
                 placeholder="kagi.com/api/keys에서 발급한 키"
               />
-              <Button type="submit" variant="outline" disabled={busy || !key.trim()}>
+              <Button type="submit" variant="outline" disabled={busy || !isTruthy(key.trim())}>
                 {busy ? <Spinner /> : <KeyRoundIcon />} 저장
               </Button>
             </div>

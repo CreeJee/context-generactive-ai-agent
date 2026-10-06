@@ -47,6 +47,8 @@ describe("WorkflowRules", () => {
       yield* rules.resolve({ phase: "plan", text: "database migration" });
       yield* rules.resolve({ phase: "plan", text: "schema backfill" });
       expect(calls).toEqual([expect.any(Number), 1, 1]);
+      // Test entry point owns this Layer and its resource scope.
+      // @effect-diagnostics-next-line strictEffectProvide:off
     }).pipe(Effect.provide(countingLayer));
   });
 
@@ -73,6 +75,8 @@ describe("WorkflowRules", () => {
       const second = yield* rules.resolve({ phase: "plan", text: "database migration" });
       expect(first.degraded).toEqual(["embedding"]);
       expect(second.degraded).toEqual([]);
+      // Test entry point owns this Layer and its resource scope.
+      // @effect-diagnostics-next-line strictEffectProvide:off
     }).pipe(Effect.provide(recoveringLayer));
   });
 });

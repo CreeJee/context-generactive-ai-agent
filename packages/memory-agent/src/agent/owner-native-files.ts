@@ -1,4 +1,8 @@
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash } from "node:crypto";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { Context, Effect, Layer } from "effect";
 import { NativeRegistrationError } from "./owner-native-error.ts";
@@ -6,7 +10,7 @@ import { NativeRegistrationError } from "./owner-native-error.ts";
 const attempt = <A>(work: () => A) =>
   Effect.try({
     try: work,
-    catch: (cause) => new NativeRegistrationError({ cause }),
+    catch: (cause) => NativeRegistrationError.make({ cause }),
   });
 const filesystem = {
   // The Node SQLite atomic callback cannot suspend. Keep this native inspection
@@ -33,7 +37,7 @@ const filesystem = {
 
 /** Host filesystem boundaries only; generation ownership stays in the scoped lease. */
 export class OwnerNativeFiles extends Context.Service<OwnerNativeFiles, typeof filesystem>()(
-  "memory-agent/agent/OwnerNativeFiles",
+  "memory-agent/agent/owner-native-files/OwnerNativeFiles",
 ) {
   static readonly production = filesystem;
   static readonly layer = Layer.succeed(OwnerNativeFiles, filesystem);

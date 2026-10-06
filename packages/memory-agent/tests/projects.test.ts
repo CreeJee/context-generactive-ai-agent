@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,6 +27,8 @@ function workspace() {
 const run = <A, E>(storage: string, program: Effect.Effect<A, E, Projects>) =>
   Effect.runPromise(
     program.pipe(
+      // Test entry point owns this Layer and its resource scope.
+      // @effect-diagnostics-next-line strictEffectProvide:off
       Effect.provide(
         Projects.layer.pipe(
           Layer.provide(Database.layer(join(storage, "agent.db"))),

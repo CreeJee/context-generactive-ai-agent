@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { useAuthQuery, useModelsQuery, useProjectsQuery } from "./queries/global";
 import {
   useAddProjectMutation,
@@ -112,12 +113,12 @@ export function App() {
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const agentsQuery = useAgentsQuery(projectId);
   const skillsQuery = useSkillsQuery(projectId ?? "", projectId !== null);
-  const slashAgents = agentsQuery.data ? usableAgents(agentsQuery.data) : [];
+  const slashAgents = isTruthy(agentsQuery.data) ? usableAgents(agentsQuery.data) : [];
   const slashSkills =
     skillsQuery.data?.skills.map(({ name, description }) => ({ name, description })) ?? [];
 
   useEffect(() => {
-    if (!projectsQuery.data) return;
+    if (!isTruthy(projectsQuery.data)) return;
     void setLocation((current) => {
       const project = projects.some((item) => item.id === current.project)
         ? current.project
@@ -135,7 +136,7 @@ export function App() {
     const selected =
       modelQueries[provider].data?.selected ??
       Object.values(modelQueries).find((query) => query.data?.selected)?.data?.selected;
-    if (selected) {
+    if (isTruthy(selected)) {
       setSelection(selected);
       setProvider(selected.provider);
     }
@@ -146,7 +147,7 @@ export function App() {
   ]);
 
   useEffect(() => {
-    if (!projectId || !sessionsQuery.data) return;
+    if (!isTruthy(projectId) || !isTruthy(sessionsQuery.data)) return;
     void setLocation((current) =>
       current.project === projectId
         ? {
@@ -170,8 +171,10 @@ export function App() {
     );
   };
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const archiveSession = async (id: string) => {
-    if (!projectId) return;
+    if (!isTruthy(projectId)) return;
     try {
       const result = await lifecycleMutation.mutateAsync({ kind: "archive", sessionId: id });
       if (result.status !== "completed") return refreshPendingLifecycle(result.status);
@@ -185,8 +188,10 @@ export function App() {
     }
   };
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const deleteSession = async (id: string) => {
-    if (!projectId) return;
+    if (!isTruthy(projectId)) return;
     try {
       const result = await lifecycleMutation.mutateAsync({ kind: "delete", sessionId: id });
       if (result.status !== "completed") return refreshPendingLifecycle(result.status);
@@ -200,8 +205,10 @@ export function App() {
     }
   };
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const restoreSession = async (id: string) => {
-    if (!projectId) return;
+    if (!isTruthy(projectId)) return;
     try {
       const result = await lifecycleMutation.mutateAsync({ kind: "restore", sessionId: id });
       if (result.status !== "completed") return refreshPendingLifecycle(result.status);
@@ -213,11 +220,15 @@ export function App() {
     }
   };
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const authAction = async (intent: "login" | "cancel" | "logout") => {
     const state = await authMutation.mutateAsync(intent);
     if (state.status === "pending") window.open(state.authUrl, "_blank", "noopener");
   };
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const addProject = async (root: string) => {
     try {
       const project = await addProjectMutation.mutateAsync(root);
@@ -231,13 +242,17 @@ export function App() {
   const openSettings = () =>
     openSettingsOverlay(projects.find((item) => item.id === projectId) ?? null);
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const selectModel = async (model: string, effort?: string) => {
     const selected = await modelMutation.mutateAsync({ model, effort });
     setSelection(selected);
   };
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const createSession = async (agent?: string) => {
-    if (!projectId) return;
+    if (!isTruthy(projectId)) return;
     const session = await createSessionMutation.mutateAsync(agent);
     void setLocation({ session: session.id }, { history: "push" });
   };
@@ -248,6 +263,8 @@ export function App() {
       models: models.map((model) => ({ id: model.id, label: model.displayName })),
       skills: slashSkills,
     },
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     run: async (command) => {
       switch (command.kind) {
         case "new":
@@ -260,7 +277,7 @@ export function App() {
           window.location.assign(reportHref(projectId, sessionId));
           return;
         case "mode":
-          if (projectId) await permissionMutation.mutateAsync(command.mode);
+          if (isTruthy(projectId)) await permissionMutation.mutateAsync(command.mode);
           return;
         case "model":
           await selectModel(command.model);
@@ -354,7 +371,7 @@ export function App() {
                 auth={auth[provider]}
                 selection={selection}
                 modelName={
-                  selection
+                  selection !== null
                     ? modelQueries[selection.provider].data?.models.find(
                         (model) => model.id === selection.model,
                       )?.displayName
@@ -381,11 +398,11 @@ export function App() {
                 onSelect={selectProject}
                 onAdd={addProject}
                 onPermissionMode={(mode) => {
-                  if (!projectId) return;
+                  if (!isTruthy(projectId)) return;
                   void permissionMutation.mutateAsync(mode);
                 }}
                 onCrossRecall={(allowed) => {
-                  if (!projectId) return;
+                  if (!isTruthy(projectId)) return;
                   void crossRecallMutation.mutateAsync(!allowed);
                 }}
                 onHide={(hiddenId) => {

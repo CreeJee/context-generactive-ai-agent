@@ -1,3 +1,4 @@
+import { isTruthy } from "../../truthy.ts";
 import { BotIcon } from "lucide-react";
 import { Badge } from "~/components/ui/badge";
 import {
@@ -46,7 +47,7 @@ export function SubagentPanel({
 }) {
   const { state } = useDelegatedWork(sessionId, generating);
   const { projectId } = useSessionEventScope();
-  if (!projectId) throw new Error("Relayed approval requires an active project");
+  if (!isTruthy(projectId)) throw new Error("Relayed approval requires an active project");
   const answerMutation = useRelayedApprovalMutation(projectId, sessionId, holder);
   const running = state.subagents.filter((child) => child.status === "running");
   if (running.length === 0 && state.approvals.length === 0) return null;

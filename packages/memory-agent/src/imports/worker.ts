@@ -2,9 +2,11 @@
 // as nodes is steady CPU work; on the server's main thread it held up every request meanwhile.
 // In a checkout Node runs this file as TypeScript; the executable ships it bundled
 // (`scripts/package.ts`).
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
-import { Cause, Effect, Exit, Layer, ManagedRuntime, Schema } from "effect";
+import { DateTime, Cause, Effect, Exit, Layer, ManagedRuntime, Schema } from "effect";
 import { GlobalConfig } from "../config/global-config.ts";
 import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
@@ -23,8 +25,12 @@ import {
 const progressEveryMs = 100;
 
 const port = parentPort;
-if (!port) throw new Error("the import worker runs only as a worker thread");
+if (!(port !== null)) throw new Error("the import worker runs only as a worker thread");
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const setup = Schema.decodeUnknownSync(ImportWorkerSetup)(workerData);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeRequest = Schema.decodeUnknownSync(ImportWorkerRequest);
 
 // Its own connection to the same database; WAL lets the server read while this writes.
@@ -50,7 +56,12 @@ const failed = (id: number, cause: Cause.Cause<unknown>): ImportWorkerReply => {
   return {
     id,
     kind: "failed",
-    reason: error instanceof Error ? error.message || error.name : String(error),
+    reason:
+      error instanceof Error
+        ? error.message.length > 0
+          ? error.message
+          : error.name
+        : String(error),
   };
 };
 
@@ -70,7 +81,7 @@ const run = (id: number) => {
     .runPromiseExit(
       Effect.flatMap(TranscriptPass, (pass) =>
         pass.run((progress) => {
-          const now = Date.now();
+          const now = DateTime.toEpochMillis(DateTime.nowUnsafe());
           if (now - sentAt < progressEveryMs) return;
           sentAt = now;
           post({ id, kind: "progress", ...progress });

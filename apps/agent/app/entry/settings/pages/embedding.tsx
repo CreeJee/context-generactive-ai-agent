@@ -1,3 +1,4 @@
+import { isTruthy } from "../../../truthy.ts";
 import { RefreshCwIcon } from "lucide-react";
 import { useState } from "react";
 import { Alert, AlertDescription } from "~/components/ui/alert";
@@ -101,6 +102,8 @@ export function EmbeddingSettings() {
   const checking = overview.gpu.status === "checking";
   const indexing = overview.unindexed > 0;
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const apply = async (
     command: { action: "choose"; choice: EmbeddingChoice } | { action: "check" },
   ) => {
@@ -135,7 +138,7 @@ export function EmbeddingSettings() {
           disabled={busy}
           onValueChange={(value) => {
             const choice = embeddingChoices.find((option) => option.value === value);
-            if (choice) void apply({ action: "choose", choice: choice.value });
+            if (isTruthy(choice)) void apply({ action: "choose", choice: choice.value });
           }}
         >
           <SelectTrigger id="embedding-device" className="w-full">

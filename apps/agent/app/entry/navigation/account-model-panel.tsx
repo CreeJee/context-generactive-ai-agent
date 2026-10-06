@@ -6,13 +6,15 @@ import { SidebarDisclosureTrigger } from "./sidebar-disclosure-trigger";
 
 import { providerLabels as providerLabel } from "./providers";
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function accountSummary(
   provider: ProviderId,
   auth: ProviderAuthState | null,
   selection: ModelSelection | null,
   modelName: string | undefined,
 ) {
-  const status = !auth
+  const status = !(auth !== null)
     ? "확인 중"
     : auth.status === "signed-in"
       ? "연결됨"
@@ -23,9 +25,10 @@ export function accountSummary(
           : provider === "openai-compatible"
             ? "설정 필요"
             : "로그인 필요";
-  const model = selection
-    ? `${providerLabel[selection.provider]} · ${modelName ?? selection.model}`
-    : "모델 미선택";
+  const model =
+    selection !== null
+      ? `${providerLabel[selection.provider]} · ${modelName ?? selection.model}`
+      : "모델 미선택";
   return { status, model, hasError: auth?.status === "error" };
 }
 

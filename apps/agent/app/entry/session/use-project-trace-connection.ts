@@ -1,3 +1,4 @@
+import { isTruthy } from "../../truthy.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useEffectEvent, useState } from "react";
 import { api } from "../api";
@@ -5,6 +6,8 @@ import { projectQueries } from "../queries/project";
 import type { TraceConnection } from "./work-trace";
 
 /** Keep the project trace query current while the live panel is visible. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function useProjectTraceConnection(
   projectId: string,
   sessionId: string | null,
@@ -17,7 +20,7 @@ export function useProjectTraceConnection(
   );
 
   useEffect(() => {
-    if (!sessionId || !live) {
+    if (!isTruthy(sessionId) || !live) {
       setConnection("connecting");
       return;
     }

@@ -1,9 +1,11 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off
 import { Effect, Exit, Scope } from "effect";
 import { expect, test, vi } from "vite-plus/test";
 import { acquireFullLoopChannel } from "../src/agent/full-loop-resources.ts";
 
 test("channel finalization closes the second native port even if the first close throws", async () => {
-  const scope = Effect.runSync(Scope.make());
+  const scope = Scope.makeUnsafe();
   const channel = await Effect.runPromise(
     acquireFullLoopChannel().pipe(Effect.provideService(Scope.Scope, scope)),
   );

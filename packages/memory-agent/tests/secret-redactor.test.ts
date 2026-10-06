@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off globalTimers:off newPromise:off
 import { Effect } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { SecretRedactor, mergeFindings } from "../src/secrets/redactor.ts";
@@ -24,6 +26,8 @@ const fake = {
 const redact = (text: string) =>
   Effect.runPromise(
     Effect.flatMap(SecretRedactor, (redactor) => redactor.redactText(text)).pipe(
+      // Test entry point owns this Layer and its resource scope.
+      // @effect-diagnostics-next-line strictEffectProvide:off
       Effect.provide(SecretRedactor.layer),
     ),
   );
@@ -83,15 +87,19 @@ describe("SecretRedactor", () => {
 
   test("keeps the structure of a tool result and hides secrets in any string of it", async () => {
     const result = await Effect.runPromise(
-      Effect.flatMap(SecretRedactor, (redactor) =>
-        redactor.redactResult({
-          command: "env",
-          exitCode: 0,
-          truncated: false,
-          stdout: `HOME=/Users/someone\nGITHUB_TOKEN=${fake.github}`,
-          files: [{ path: "a.txt", note: `token ${fake.github}` }],
-          signal: null,
-        }),
+      Effect.flatMap(
+        SecretRedactor,
+        (redactor) =>
+          redactor.redactResult({
+            command: "env",
+            exitCode: 0,
+            truncated: false,
+            stdout: `HOME=/Users/someone\nGITHUB_TOKEN=${fake.github}`,
+            files: [{ path: "a.txt", note: `token ${fake.github}` }],
+            signal: null,
+          }),
+        // Test entry point owns this Layer and its resource scope.
+        // @effect-diagnostics-next-line strictEffectProvide:off
       ).pipe(Effect.provide(SecretRedactor.layer)),
     );
     expect(result).toEqual({

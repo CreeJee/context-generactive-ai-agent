@@ -1,3 +1,4 @@
+import { isTruthy } from "../../../truthy.ts";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Button } from "~/components/ui/button";
@@ -54,6 +55,8 @@ function CompatibleForm({
   const [message, setMessage] = useState<string | null>(null);
   const [models, setModels] = useState<readonly { id: string }[]>([]);
   const mutation = useMutation({
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     mutationFn: async (
       command: { action: "update"; value: CompatibleUpdate } | { action: "test" | "list" },
     ) => {
@@ -94,7 +97,11 @@ function CompatibleForm({
               ...form,
               baseUrl: form.baseUrl.trim(),
               model: form.model.trim(),
-              ...(removeKey ? { apiKey: null } : key.trim() ? { apiKey: key.trim() } : {}),
+              ...(removeKey
+                ? { apiKey: null }
+                : isTruthy(key.trim())
+                  ? { apiKey: key.trim() }
+                  : {}),
             },
           });
         }}
@@ -216,14 +223,14 @@ function CompatibleForm({
       <div className="flex gap-2">
         <Button
           variant="outline"
-          disabled={busy || !configuration}
+          disabled={busy || !(configuration !== null)}
           onClick={() => mutation.mutate({ action: "test" })}
         >
           연결 테스트
         </Button>
         <Button
           variant="outline"
-          disabled={busy || !configuration}
+          disabled={busy || !(configuration !== null)}
           onClick={() => mutation.mutate({ action: "list" })}
         >
           모델 목록 새로고침

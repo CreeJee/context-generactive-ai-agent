@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off
 import { Effect } from "effect";
 import {
   makeOpenAICompatibleSettings,
@@ -11,7 +13,7 @@ import { action, loader } from "../../routes/api/settings.compatible";
 let testApi: OpenAICompatibleSettingsApi;
 vi.mock("~/.server/agent", () => ({
   agent: {
-    runPromise: (program: Effect.Effect<Response, unknown, OpenAICompatibleSettings>) =>
+    runPromise: <E>(program: Effect.Effect<Response, E, OpenAICompatibleSettings>) =>
       Effect.runPromise(Effect.provideService(program, OpenAICompatibleSettings, testApi)),
   },
 }));

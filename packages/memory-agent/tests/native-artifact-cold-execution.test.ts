@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
 import { execFile } from "node:child_process";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -99,7 +101,7 @@ test("fresh Node executes saved recording factory after source removal and persi
         maxBuffer: 1_000_000,
       },
     );
-    const report = Schema.decodeUnknownSync(
+    const report = Schema.decodeSync(
       Schema.fromJsonString(
         Schema.Struct({
           acquired: Schema.Finite,

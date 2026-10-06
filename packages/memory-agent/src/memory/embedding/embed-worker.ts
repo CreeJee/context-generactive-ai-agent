@@ -3,7 +3,7 @@
 import { createRequire } from "node:module";
 import { parentPort, workerData } from "node:worker_threads";
 
-if (!parentPort) throw new Error("Embedding entry requires a worker parent port");
+if (!(parentPort !== null)) throw new Error("Embedding entry requires a worker parent port");
 const parent = parentPort;
 
 // The CommonJS build, resolved next to this file: in the package in a checkout, in the runtime
@@ -15,6 +15,8 @@ const { AutoModel, AutoTokenizer, env }: typeof import("@huggingface/transformer
 // `devices` in order of preference: the first that loads and runs a short text is used.
 const { cacheDir, modelId, modelFileName, maxTokens, devices } = workerData;
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function load() {
   env.cacheDir = cacheDir;
   env.allowLocalModels = false;
@@ -55,6 +57,8 @@ const tokenCount = ({ tokenizer }: LoadedModel, text: string) =>
   tokenizer(text, { truncation: true, max_length: maxTokens }).input_ids.dims.at(-1) ?? 0;
 
 /** The batch's sentence vectors, one row per text, not yet normalized. */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function embed({ tokenizer, model }: LoadedModel, texts: string[]) {
   const inputs = tokenizer(texts, { padding: true, truncation: true, max_length: maxTokens });
   const { last_hidden_state: hidden } = await model(inputs);
@@ -70,6 +74,8 @@ async function embed({ tokenizer, model }: LoadedModel, texts: string[]) {
 
 parent.on(
   "message",
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async ({ id, kind, texts }: { id: number; kind: "count" | "embed"; texts: string[] }) => {
     const state = await ready;
     if (state.kind === "failed")

@@ -46,6 +46,8 @@ const emptySettings = (): ModelFeatureFlagSettings => ({
 });
 const modelKey = (provider: ProviderId, model: string) => `${provider}:${model}`;
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function decideModelFeatureFlag(
   settings: ModelFeatureFlagSettings | undefined,
   query: ModelFeatureFlagQuery,
@@ -88,6 +90,8 @@ export interface ModelFeatureFlagsApi {
     enabled: boolean,
   ) => Effect.Effect<ModelFeatureFlagSettings, ModelFeatureFlagStoreFailed>;
 }
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function makeModelFeatureFlags(
   config: GlobalConfigApi,
   capabilities: Iterable<string>,
@@ -138,7 +142,7 @@ export function makeModelFeatureFlags(
   };
 }
 export class ModelFeatureFlags extends Context.Service<ModelFeatureFlags, ModelFeatureFlagsApi>()(
-  "memory-agent/ModelFeatureFlags",
+  "memory-agent/providers/model-feature-flags/ModelFeatureFlags",
 ) {
   static readonly layer = (capabilities: Iterable<string>) =>
     Layer.effect(

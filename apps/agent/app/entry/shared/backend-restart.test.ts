@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off
 import { describe, expect, test, vi } from "vite-plus/test";
 import { backendFetch, responseRequiresBackendRestart } from "./backend-restart.ts";
 import {

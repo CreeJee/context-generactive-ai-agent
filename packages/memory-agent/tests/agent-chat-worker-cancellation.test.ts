@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off processEnv:off
 import { Deferred, Effect } from "effect";
 import { expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
@@ -10,7 +12,7 @@ test("cancelled pending worker pull cannot leave a stopped SDK run marked runnin
   const previous = process.env.CONTEXT_AGENT_GOAL_WORKER;
   process.env.CONTEXT_AGENT_GOAL_WORKER = "1";
   const gate = turnGate();
-  const started = Effect.runSync(Deferred.make<void>());
+  const started = Deferred.makeUnsafe<void>();
   try {
     const context = await testRuntime({
       testProvider: {
@@ -111,7 +113,7 @@ test("cancelled pending worker pull cannot leave a stopped SDK run marked runnin
     expect(context.provider!.adapter.invocations.length).toBe(calls);
   } finally {
     gate.release();
-    if (previous === undefined) delete process.env.CONTEXT_AGENT_GOAL_WORKER;
+    if (previous === undefined) Reflect.deleteProperty(process.env, "CONTEXT_AGENT_GOAL_WORKER");
     else process.env.CONTEXT_AGENT_GOAL_WORKER = previous;
   }
 }, 20000);

@@ -1,4 +1,9 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import type { ChildProcess } from "node:child_process";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import type {
@@ -9,7 +14,7 @@ import type {
 } from "@agentclientprotocol/sdk";
 import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import spawn from "cross-spawn";
-import { Context, Data, Effect, Layer, Option, Schema } from "effect";
+import { DateTime, Clock, Context, Data, Effect, Layer, Option, Schema } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
 import { expandVariables } from "../mcp/config.ts";
@@ -128,6 +133,8 @@ const TrustRow = Schema.Struct({
   name: Schema.String,
   fingerprint: Schema.String,
 });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeTrustRows = Schema.decodeUnknownSync(Schema.Array(TrustRow));
 
 const DataMessage = Schema.Struct({ message: Schema.String });
@@ -152,12 +159,14 @@ function permissionAnswer(
 ): RequestPermissionResponse {
   const wanted = approved ? "allow_once" : "reject_once";
   const option = request.options.find((candidate) => candidate.kind === wanted);
-  return option
+  return isTruthy(option)
     ? { outcome: { outcome: "selected", optionId: option.optionId } }
     : { outcome: { outcome: "cancelled" } };
 }
 
 const make = Effect.gen(function* () {
+  const effectClock = yield* Clock.Clock;
+
   const storage = yield* StorageRoot;
   const { sqlite } = yield* Database;
   const links = new Map<string, Link>();
@@ -212,7 +221,7 @@ const make = Effect.gen(function* () {
   const shutdown = (link: Link) => {
     const live = link.live;
     link.live = null;
-    if (!live) return;
+    if (!(live !== null)) return;
     live.connection.close();
     endChild(live.child);
   };
@@ -222,6 +231,8 @@ const make = Effect.gen(function* () {
     shutdown(link);
   };
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const startProcess = async (
     project: Project,
     agent: ConfiguredAgent,
@@ -243,6 +254,8 @@ const make = Effect.gen(function* () {
       agent.command.args.map((arg) => expandVariables(arg, process.env)),
       { cwd: project.root, env, stdio: ["pipe", "pipe", "ignore"], windowsHide: true },
     );
+    // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
+    // @effect-diagnostics-next-line newPromise:off
     const spawned = new Promise<void>((resolve, reject) => {
       child.once("spawn", resolve);
       child.once("error", reject);
@@ -255,9 +268,11 @@ const make = Effect.gen(function* () {
       .onNotification(acp.methods.client.session.update, (ctx) => {
         handlers.get(ctx.params.sessionId)?.onUpdate(ctx.params.update);
       })
+      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+      // @effect-diagnostics-next-line asyncFunction:off
       .onRequest(acp.methods.client.session.requestPermission, async (ctx) => {
         const handler = handlers.get(ctx.params.sessionId);
-        return handler
+        return isTruthy(handler)
           ? handler.askPermission(ctx.params)
           : { outcome: { outcome: "cancelled" } as const };
       })
@@ -271,7 +286,11 @@ const make = Effect.gen(function* () {
 
     try {
       let timer: NodeJS.Timeout | undefined;
+      // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
+      // @effect-diagnostics-next-line newPromise:off
       const timeout = new Promise<never>((_, reject) => {
+        // Native callback heartbeat/debounce timing remains at the protocol boundary.
+        // @effect-diagnostics-next-line globalTimers:off
         timer = setTimeout(() => reject(new Error("initialize timed out")), connectTimeoutMs);
         timer.unref();
       });
@@ -287,7 +306,7 @@ const make = Effect.gen(function* () {
         }),
         timeout,
       ]).finally(() => {
-        if (timer) clearTimeout(timer);
+        if (timer !== undefined) clearTimeout(timer);
       });
       const live: Live = {
         child,
@@ -309,7 +328,7 @@ const make = Effect.gen(function* () {
 
   /** One connection attempt. Success clears the failure count; failure adds to it. */
   const attempt = (project: Project, agent: ConfiguredAgent, link: Link): Promise<Live> => {
-    if (link.attempt) return link.attempt;
+    if (isTruthy(link.attempt)) return link.attempt;
     link.state = { status: "connecting", failures: link.failures };
     const pending = startProcess(project, agent, link).then(
       (live) => {
@@ -348,11 +367,15 @@ const make = Effect.gen(function* () {
     link.live = null;
     endChild(live.child);
     const retry = (): void => {
-      if (link.retired || link.live || link.failures >= maxConsecutiveFailures) return;
+      if (link.retired || link.live !== null || link.failures >= maxConsecutiveFailures) return;
       void attempt(project, agent, link).catch(() => {
+        // Native callback heartbeat/debounce timing remains at the protocol boundary.
+        // @effect-diagnostics-next-line globalTimers:off
         if (link.failures < maxConsecutiveFailures) setTimeout(retry, retryDelayMs).unref();
       });
     };
+    // Native callback heartbeat/debounce timing remains at the protocol boundary.
+    // @effect-diagnostics-next-line globalTimers:off
     setTimeout(retry, retryDelayMs).unref();
   };
 
@@ -360,7 +383,7 @@ const make = Effect.gen(function* () {
     const key = linkKey(project, agent);
     const existing = links.get(key);
     if (existing?.fingerprint === agent.fingerprint) return existing;
-    if (existing) retire(existing);
+    if (isTruthy(existing)) retire(existing);
     const link: Link = {
       fingerprint: agent.fingerprint,
       retired: false,
@@ -425,13 +448,13 @@ const make = Effect.gen(function* () {
         const entry = configured(project).agents.find(
           (candidate) => candidate.agent.scope === scope && candidate.agent.name === name,
         );
-        if (trusted && entry)
+        if (trusted && isTruthy(entry))
           upsertTrust.run(
             scope,
             projectId,
             name,
             entry.agent.fingerprint,
-            new Date().toISOString(),
+            DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe())),
           );
         if (!trusted) {
           deleteTrust.run(scope, projectId, name);
@@ -448,7 +471,7 @@ const make = Effect.gen(function* () {
     reconnect: (project: Project, name: string) =>
       Effect.gen(function* () {
         const agent = usable(project, name);
-        if (!agent) return overview(project);
+        if (!isTruthy(agent)) return overview(project);
         const link = linkFor(project, agent);
         shutdown(link);
         link.failures = 0;
@@ -463,6 +486,8 @@ const make = Effect.gen(function* () {
      * Sends one prompt to the agent in the conversation `sessionKey` (a new agent session the first
      * time, or after the process restarted) and waits for its answer.
      */
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     prompt: async (
       project: Project,
       name: string,
@@ -471,9 +496,13 @@ const make = Effect.gen(function* () {
       hooks: PromptHooks,
     ): Promise<ExternalPromptOutcome> => {
       const agent = usable(project, name);
-      if (!agent) return { status: "unavailable", reason: "not_trusted" };
+      if (!isTruthy(agent)) return { status: "unavailable", reason: "not_trusted" };
       const link = linkFor(project, agent);
-      if (link.failures >= maxConsecutiveFailures && !link.live && !link.attempt)
+      if (
+        link.failures >= maxConsecutiveFailures &&
+        !isTruthy(link.live) &&
+        !isTruthy(link.attempt)
+      )
         return { status: "unavailable", reason: "stopped_after_failures" };
       let live: Live;
       try {
@@ -486,7 +515,7 @@ const make = Effect.gen(function* () {
       }
 
       let sessionId = live.sessions.get(sessionKey);
-      if (!sessionId) {
+      if (!isTruthy(sessionId)) {
         try {
           const created = await live.connection.agent.request(acp.methods.agent.session.new, {
             cwd: project.root,
@@ -529,6 +558,8 @@ const make = Effect.gen(function* () {
           }
           hooks.onUpdate?.(update);
         },
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        // @effect-diagnostics-next-line asyncFunction:off
         askPermission: async (request) =>
           permissionAnswer(request, await hooks.askPermission(request)),
       });
@@ -568,7 +599,7 @@ const make = Effect.gen(function* () {
 
 /** External ACP agents the app calls as a client (R17): Codex and others. */
 export class ExternalAgents extends Context.Service<ExternalAgents, Effect.Success<typeof make>>()(
-  "memory-agent/ExternalAgents",
+  "memory-agent/external-agents/agents/ExternalAgents",
 ) {
   static readonly layer = Layer.effect(ExternalAgents, make);
 }

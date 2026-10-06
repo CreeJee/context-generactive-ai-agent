@@ -13,9 +13,17 @@
 // A bare Mach-O executable cannot hold a stapled ticket — only a container can — which is why the
 // deliverable is a .dmg. Notarizing a .zip of the executable also works and needs no container, but
 // then every first launch has to reach Apple's server, and an offline Mac shows the warning anyway.
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { spawnSync } from "node:child_process";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash } from "node:crypto";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { basename, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -24,6 +32,8 @@ const target = `darwin-${process.arch}`;
 const directory = join(app, "dist", `context-agent-${target}`);
 const executable = join(directory, "context-agent");
 const image = join(app, "dist", `context-agent-${target}.dmg`);
+// Native host/SDK configuration boundary reads or forwards the host environment.
+// @effect-diagnostics-next-line processEnv:off
 const profile = process.env.CONTEXT_AGENT_NOTARY_PROFILE ?? "context-agent";
 
 function run(command: string, args: readonly string[]) {
@@ -75,6 +85,8 @@ run("hdiutil", [
 ]);
 run("codesign", [
   "--sign",
+  // Native host/SDK configuration boundary reads or forwards the host environment.
+  // @effect-diagnostics-next-line processEnv:off
   process.env.CONTEXT_AGENT_SIGN_IDENTITY ?? "-",
   "--force",
   "--timestamp",
@@ -96,4 +108,6 @@ run("spctl", [
 
 const digest = createHash("sha256").update(readFileSync(image)).digest("hex");
 writeFileSync(`${image}.sha256`, `${digest}  ${basename(image)}\n`);
+// Native stdout/stderr or SDK logging boundary preserves the existing output format.
+// @effect-diagnostics-next-line globalConsole:off
 console.log(`${relative(app, image)}: notarized and stapled`);

@@ -1,17 +1,24 @@
-import { Effect, Layer } from "effect";
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off schemaSync:off
+import { isTruthy } from "../src/truthy.ts";
+import { DateTime, Schema, Effect, Layer } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { WorkTraceStore } from "../src/work-trace/store.ts";
+
+const stringifyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 const testLayer = () => {
   const database = Database.layer(":memory:");
   return Layer.merge(database, WorkTraceStore.layer.pipe(Layer.provide(database)));
 };
 const run = <A>(effect: Effect.Effect<A, never, Database | WorkTraceStore>) =>
+  // Test entry point owns this Layer and its resource scope.
+  // @effect-diagnostics-next-line strictEffectProvide:off
   Effect.runPromise(Effect.scoped(effect.pipe(Effect.provide(testLayer()))));
 
 const seed = (db: Database["Service"]) => {
-  const iso = new Date(0).toISOString();
+  const iso = DateTime.formatIso(DateTime.makeUnsafe(0));
   db.sqlite
     .prepare("INSERT INTO projects (id, root, name, created_at) VALUES ('p1', '/tmp/p1', 'p1', ?)")
     .run(iso);
@@ -57,7 +64,7 @@ describe("Work Trace task lifecycle", () => {
           idempotencyKey: "archive-1",
         });
         expect(requested).toMatchObject({ status: "cancelling", operationId: expect.any(String) });
-        if (!("operationId" in requested) || !requested.operationId) return;
+        if (!("operationId" in requested) || !isTruthy(requested.operationId)) return;
         expect(trace.finalizeTaskLifecycle(requested.operationId)).toMatchObject({
           status: "waiting_for_stop",
         });
@@ -87,7 +94,7 @@ describe("Work Trace task lifecycle", () => {
           intent: "restore",
           idempotencyKey: "restore-1",
         });
-        if (!("operationId" in restored) || !restored.operationId) return;
+        if (!("operationId" in restored) || !isTruthy(restored.operationId)) return;
         expect(trace.finalizeTaskLifecycle(restored.operationId)).toMatchObject({
           status: "completed",
           intent: "restore",
@@ -140,7 +147,7 @@ describe("Work Trace task lifecycle", () => {
           intent: "delete",
           idempotencyKey: "delete-1",
         });
-        if (!("operationId" in requested) || !requested.operationId) return;
+        if (!("operationId" in requested) || !isTruthy(requested.operationId)) return;
         expect(retried).toMatchObject({ operationId: requested.operationId });
         expect(trace.finalizeTaskLifecycle(requested.operationId)).toMatchObject({
           status: "completed",
@@ -185,7 +192,7 @@ describe("Work Trace task lifecycle", () => {
             .prepare("SELECT count(*) AS count FROM purge_receipts WHERE operation_id = ?")
             .get(requested.operationId),
         ).toEqual({ count: 1 });
-        const receipt = JSON.stringify(
+        const receipt = stringifyJson(
           db.sqlite
             .prepare("SELECT * FROM purge_receipts WHERE operation_id = ?")
             .get(requested.operationId),
@@ -254,7 +261,7 @@ describe("Work Trace task lifecycle", () => {
             `INSERT INTO nodes (id, project_id, session_id, run_id, kind, text, detail, created_at)
          VALUES ('user-1', 'p1', 's1', 'parent-1', 'user', 'private lifecycle phrase', '{}', ?)`,
           )
-          .run(new Date(0).toISOString());
+          .run(DateTime.formatIso(DateTime.makeUnsafe(0)));
         db.sqlite
           .prepare(
             "INSERT INTO chat_threads (thread_id, messages, updated_at) VALUES ('s1', '[]', 1)",
@@ -273,7 +280,7 @@ describe("Work Trace task lifecycle", () => {
           intent: "delete",
           idempotencyKey: "delete-session-1",
         });
-        if (!("operationId" in sessionRequest) || !sessionRequest.operationId) return;
+        if (!("operationId" in sessionRequest) || !isTruthy(sessionRequest.operationId)) return;
         expect(trace.finalizeSessionLifecycle(sessionRequest.operationId)).toMatchObject({
           status: "blocked",
           blocker: "task_purge_required",
@@ -284,7 +291,7 @@ describe("Work Trace task lifecycle", () => {
           intent: "delete",
           idempotencyKey: "delete-session-task-1",
         });
-        if (!("operationId" in taskRequest) || !taskRequest.operationId) return;
+        if (!("operationId" in taskRequest) || !isTruthy(taskRequest.operationId)) return;
         trace.finalizeTaskLifecycle(taskRequest.operationId);
         expect(trace.finalizeSessionLifecycle(sessionRequest.operationId)).toMatchObject({
           status: "completed",

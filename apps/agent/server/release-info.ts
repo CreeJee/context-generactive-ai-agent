@@ -20,5 +20,7 @@ const development: ReleaseInfo = {
 /** Build identity embedded as a SEA asset; source bundles identify themselves as development. */
 export function readReleaseInfo(): ReleaseInfo {
   if (!isSea()) return development;
+  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+  // @effect-diagnostics-next-line schemaSync:off
   return Schema.decodeSync(Schema.fromJsonString(ReleaseInfo))(getAsset(releaseInfoAsset, "utf8"));
 }

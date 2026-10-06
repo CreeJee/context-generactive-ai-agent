@@ -1,3 +1,6 @@
+// Vitest benchmark entry points return Promises and use native process/filesystem fixtures.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
+import { isTruthy } from "../src/truthy.ts";
 // Tool latency at the tool-execution seam (no model, HTTP or UI): `vp test bench`.
 // A synthetic repository is generated once per process in the OS temp directory.
 import { execFileSync } from "node:child_process";
@@ -72,7 +75,7 @@ const tools = await runtime.runPromise(
     const git = yield* projects.add(join(base, "git"));
     const pick = (list: readonly AnyServerTool[], name: string) => {
       const execute = list.find((tool) => tool.name === name)?.execute;
-      if (!execute) throw new Error(name);
+      if (!isTruthy(execute)) throw new Error(name);
       return execute;
     };
     return {
@@ -108,7 +111,7 @@ interface ReadInput {
 /** Every page of a listing, as a model paging through it would. */
 async function listAll(list: (input: ListInput) => Promise<Page>) {
   let page = await list({});
-  while (page.nextOffset)
+  while (isTruthy(page.nextOffset))
     page = await list({
       ...optionalProperty("snapshot", page.snapshot),
       offset: page.nextOffset,
@@ -118,13 +121,13 @@ async function listAll(list: (input: ListInput) => Promise<Page>) {
 /** Every page of a search. */
 async function searchAll(search: (input: SearchInput) => Promise<Page>, query: string) {
   let page = await search({ query });
-  while (page.nextCursor) page = await search({ query, cursor: page.nextCursor });
+  while (isTruthy(page.nextCursor)) page = await search({ query, cursor: page.nextCursor });
 }
 
 async function readAll(read: (input: ReadInput) => Promise<{ nextStartLine?: number | null }>) {
   let page = await read({ path: "big.txt", maxLines: 2000 });
   let pages = 1;
-  while (page.nextStartLine) {
+  while (isTruthy(page.nextStartLine)) {
     page = await read({ path: "big.txt", startLine: page.nextStartLine, maxLines: 2000 });
     pages++;
   }

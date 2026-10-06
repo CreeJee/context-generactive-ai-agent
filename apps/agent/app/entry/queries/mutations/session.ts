@@ -3,6 +3,8 @@ import { api, type WorkflowAction, type WorkflowPhase } from "../../api";
 import { sessionQueries } from "../session";
 import { projectQueries } from "../project";
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function useRelayedApprovalMutation(projectId: string, sessionId: string, holder: string) {
   const client = useQueryClient();
   return useMutation({
@@ -15,6 +17,8 @@ export function useRelayedApprovalMutation(projectId: string, sessionId: string,
   });
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function useEnqueueMutation(projectId: string, sessionId: string, holder: string) {
   const client = useQueryClient();
   return useMutation({
@@ -32,6 +36,8 @@ export function useEnqueueMutation(projectId: string, sessionId: string, holder:
   });
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function useEditQueueMutation(projectId: string, sessionId: string, holder: string) {
   const client = useQueryClient();
   return useMutation({
@@ -51,6 +57,8 @@ function useTraceInvalidation(projectId: string, sessionId: string) {
     ]);
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function useResumeTraceTaskMutation(projectId: string, sessionId: string, holder: string) {
   const invalidate = useTraceInvalidation(projectId, sessionId);
   return useMutation({
@@ -67,6 +75,8 @@ export function useResumeTraceTaskMutation(projectId: string, sessionId: string,
   });
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function useArchiveTraceTaskMutation(projectId: string, sessionId: string, holder: string) {
   const invalidate = useTraceInvalidation(projectId, sessionId);
   return useMutation({
@@ -75,6 +85,8 @@ export function useArchiveTraceTaskMutation(projectId: string, sessionId: string
   });
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function useDeleteTraceTaskMutation(projectId: string, sessionId: string, holder: string) {
   const invalidate = useTraceInvalidation(projectId, sessionId);
   return useMutation({
@@ -83,6 +95,8 @@ export function useDeleteTraceTaskMutation(projectId: string, sessionId: string,
   });
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function useCompactSessionMutation(projectId: string, sessionId: string, holder: string) {
   const client = useQueryClient();
   return useMutation({
@@ -94,6 +108,8 @@ export function useCompactSessionMutation(projectId: string, sessionId: string, 
   });
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function useCancelRunMutation(projectId: string, sessionId: string, holder: string) {
   const client = useQueryClient();
   return useMutation({
@@ -109,6 +125,8 @@ type WorkflowChange =
   | { readonly kind: "phase"; readonly phase: WorkflowPhase }
   | { readonly kind: "control"; readonly action: WorkflowAction };
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function useWorkflowMutation(projectId: string, sessionId: string, holder: string) {
   const client = useQueryClient();
   return useMutation({

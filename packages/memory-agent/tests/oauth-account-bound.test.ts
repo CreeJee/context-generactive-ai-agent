@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off newPromise:off
 import { DatabaseSync } from "node:sqlite";
 import { Effect } from "effect";
 import { describe, expect, test } from "vite-plus/test";

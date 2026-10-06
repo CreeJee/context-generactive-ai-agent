@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
+import { isTruthy } from "../src/truthy.ts";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Effect } from "effect";
@@ -56,7 +59,7 @@ async function setup(turns: readonly ScriptedTurn[]) {
     testProvider: {
       responder: ({ index }) => {
         const turn = turns[index];
-        if (!turn) throw new Error(`Unexpected model iteration ${index}`);
+        if (!isTruthy(turn)) throw new Error(`Unexpected model iteration ${index}`);
         return turn;
       },
     },

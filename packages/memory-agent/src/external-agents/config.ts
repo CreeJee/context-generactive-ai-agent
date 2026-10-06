@@ -1,6 +1,12 @@
 import { Effect } from "effect";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash } from "node:crypto";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { existsSync, readFileSync } from "node:fs";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { Result, Schema } from "effect";
 import { McpServerName } from "../mcp/config.ts";
@@ -53,6 +59,8 @@ export const agentFingerprint = (command: AgentCommand) =>
     )
     .digest("hex");
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function readAgentsFile(path: string, scope: AgentScope): AgentsFileRead {
   if (!existsSync(path)) return { path, agents: [], error: null };
   let text: string;

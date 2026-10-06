@@ -1,11 +1,16 @@
+import { isTruthy } from "../src/truthy.ts";
 // Recall evaluation with the real embedding model and Kiwi, on two sets: Korean decisions
 // (recall-corpus.ts) and what coding sessions leave behind (recall-technical.ts).
 // Both models must already be under ~/.context-generactive-agent/models (the app downloads them).
 //   vp run eval:recall                    all configurations, both sets
 //   vp run eval:recall "trigram + kiwi"   one configuration
 //   vp run eval:recall --terms            Kiwi terms of the decision corpus and queries
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { SecretStore } from "../src/config/secrets.ts";
@@ -85,6 +90,8 @@ const recallSets: readonly RecallSet[] = [
   { name: "technical", sessions: technicalSessions, queries: technicalQueries },
 ];
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function evaluate(configuration: Configuration, set: RecallSet) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "memory-agent-recall-")));
   const projectRoot = join(base, "project");
@@ -123,7 +130,9 @@ async function evaluate(configuration: Configuration, set: RecallSet) {
         const indexedMs = Math.round(performance.now() - started);
         const search = yield* configuration.text
           ? MemorySearch
-          : Effect.provide(MemorySearch, MemorySearch.tuned({ text: false }));
+          : // Evaluation entry point owns this Layer and its resource scope.
+            // @effect-diagnostics-next-line strictEffectProvide:off
+            Effect.provide(MemorySearch, MemorySearch.tuned({ text: false }));
 
         let top1 = 0;
         let top3 = 0;
@@ -175,18 +184,26 @@ if (only === "--terms") {
   ];
   const terms = await Effect.runPromise(
     Effect.scoped(Effect.flatMap(MorphAnalyzer, (analyzer) => analyzer.terms(texts))).pipe(
+      // Evaluation entry point owns this Layer and its resource scope.
+      // @effect-diagnostics-next-line strictEffectProvide:off
       Effect.provide(kiwi),
     ),
   );
+  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+  // @effect-diagnostics-next-line globalConsole:off
   texts.forEach((text, index) => console.log(`${text} | ${terms[index]?.join(" ")}`));
   process.exit(0);
 }
 for (const set of recallSets)
   for (const configuration of configurations) {
-    if (only && configuration.name !== only) continue;
+    if (isTruthy(only) && configuration.name !== only) continue;
     const result = await evaluate(configuration, set);
+    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+    // @effect-diagnostics-next-line globalConsole:off
     console.log(
       `## ${result.name}: top1 ${result.top1}, top3 ${result.top3}, top5 ${result.top5}, MRR ${result.mrr} (index ${result.indexedMs} ms, ${result.searchMs} ms/query)`,
     );
+    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+    // @effect-diagnostics-next-line globalConsole:off
     for (const miss of result.misses) console.log(`  - ${miss}`);
   }

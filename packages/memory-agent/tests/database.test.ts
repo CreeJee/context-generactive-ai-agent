@@ -1,8 +1,10 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect } from "effect";
+import { DateTime, Effect } from "effect";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { migrations } from "../src/db/migrations.ts";
@@ -20,6 +22,8 @@ afterEach(() => {
 
 const withDatabase = <A>(file: string, use: (db: Database["Service"]) => A) =>
   Effect.runPromise(
+    // Test entry point owns this Layer and closes its resources.
+    // @effect-diagnostics-next-line strictEffectProvide:off
     Effect.scoped(Effect.map(Database, use)).pipe(Effect.provide(Database.layer(file))),
   );
 
@@ -41,7 +45,7 @@ function withPreBindingCheckDatabase(file: string, use: (db: Database["Service"]
 }
 
 function seed(db: Database["Service"]) {
-  const now = new Date().toISOString();
+  const now = DateTime.formatIso(DateTime.nowUnsafe());
   db.sqlite
     .prepare(
       "INSERT INTO projects (id, root, name, created_at) VALUES ('p1', '/work/app', 'app', ?)",
@@ -131,7 +135,7 @@ describe("Database", () => {
     const file = databaseFile();
     withPreBindingCheckDatabase(file, (db) => {
       seed(db);
-      const now = new Date().toISOString();
+      const now = DateTime.formatIso(DateTime.nowUnsafe());
       db.sqlite
         .prepare(
           "INSERT INTO sessions (id, project_id, title, created_at) VALUES ('s2', 'p1', NULL, ?)",
@@ -188,7 +192,7 @@ describe("Database", () => {
     const file = databaseFile();
     withPreBindingCheckDatabase(file, (db) => {
       seed(db);
-      const now = new Date().toISOString();
+      const now = DateTime.formatIso(DateTime.nowUnsafe());
       db.sqlite
         .prepare("INSERT INTO workflow_goal_identities VALUES ('s1', 'goal-s1', ?)")
         .run(now);
@@ -248,7 +252,7 @@ describe("Database", () => {
   test("rejects edges to unknown nodes", async () => {
     await withDatabase(databaseFile(), (db) => {
       seed(db);
-      const now = new Date().toISOString();
+      const now = DateTime.formatIso(DateTime.nowUnsafe());
       const edge = db.sqlite.prepare("INSERT INTO edges VALUES (?, ?, 'calls', 'structure', 1, ?)");
       edge.run("n1", "n2", now);
       expect(() => edge.run("n1", "missing", now)).toThrow();

@@ -1,4 +1,5 @@
-import { Option, Schema } from "effect";
+import { isTruthy } from "../truthy.ts";
+import { Cause, Effect, Exit, Option, Schema } from "effect";
 
 /** Optional, shadow-only Laya v0.3.26 System One adapter. No process or model lifecycle here. */
 export const layaSensorVersion = "laya-v0.3.26";
@@ -24,6 +25,11 @@ export interface RecallSensorInput {
   readonly resourceAllowed?: boolean;
 }
 
+class SensorFailed extends Schema.TaggedError<SensorFailed>()("SensorFailed", {}) {}
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
+const encodeRequest = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
+
 type MockEvaluator = (text: string, signal?: AbortSignal) => Promise<number> | number;
 export type RecallSensorConfig =
   | { readonly mode?: "disabled" }
@@ -44,11 +50,11 @@ function loopbackEndpoint(value: string): URL | null {
     if (
       url.protocol !== "http:" ||
       (url.hostname !== "127.0.0.1" && url.hostname !== "[::1]") ||
-      url.username ||
-      url.password ||
+      url.username.length > 0 ||
+      url.password.length > 0 ||
       url.pathname !== path ||
-      url.search ||
-      url.hash
+      url.search.length > 0 ||
+      url.hash.length > 0
     )
       return null;
     return url;
@@ -68,13 +74,21 @@ const NoulResponse = Schema.Struct({
     recall_useful: Schema.Struct({ type: Schema.Literal("noul"), noul: Probability }),
   }),
 });
+const decodeResponse = Schema.decodeOption(Schema.fromJsonString(NoulResponse));
 function validScore(value: number) {
   return Number.isFinite(value) && value >= 0 && value <= 1;
 }
 
-async function boundedScore(response: Response): Promise<number | null> {
-  if (!response.body) throw new Error("empty response");
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
+async function boundedScore(response: Response, signal: AbortSignal): Promise<number | null> {
+  if (!(response.body !== null)) throw new Error("empty response");
   const reader = response.body.getReader();
+  const cancel = () => {
+    void reader.cancel().catch(() => {});
+  };
+  signal.addEventListener("abort", cancel, { once: true });
+  if (signal.aborted) cancel();
   const parts: Uint8Array[] = [];
   let size = 0;
   try {
@@ -86,6 +100,7 @@ async function boundedScore(response: Response): Promise<number | null> {
       parts.push(value);
     }
   } finally {
+    signal.removeEventListener("abort", cancel);
     void reader.cancel().catch(() => {});
     reader.releaseLock();
   }
@@ -95,9 +110,7 @@ async function boundedScore(response: Response): Promise<number | null> {
     bytes.set(part, offset);
     offset += part.byteLength;
   }
-  const decoded = Schema.decodeUnknownOption(NoulResponse)(
-    JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)),
-  );
+  const decoded = decodeResponse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   return Option.isSome(decoded) ? decoded.value.answers.recall_useful.noul : null;
 }
 
@@ -107,96 +120,93 @@ export function createRecallSensor(config: RecallSensorConfig = { mode: "disable
   const version = config.mode === "mock" ? (config.version ?? "mock") : layaSensorVersion;
   const endpoint = config.mode === "http" ? loopbackEndpoint(config.endpoint) : null;
 
-  async function evaluate(input: RecallSensorInput): Promise<RecallSensorResult> {
+  function evaluate(input: RecallSensorInput): Promise<RecallSensorResult> {
     const previous = seen.get(input.turnId);
-    if (previous) return previous;
+    if (isTruthy(previous)) return previous;
     const outcome = run(input);
     seen.set(input.turnId, outcome);
     return outcome;
   }
 
-  async function run(input: RecallSensorInput): Promise<RecallSensorResult> {
-    if (config.mode === undefined || config.mode === "disabled")
-      return { status: "disabled", version };
-    if (input.signal?.aborted) return { status: "cancelled", version };
-    if (input.resourceAllowed === false || !input.redactedText.trim())
-      return { status: "skipped", version };
-    if (config.mode === "http" && !endpoint) return { status: "unavailable", version };
-    const text = input.redactedText.slice(0, maxInputChars);
-    if (config.mode === "mock") {
-      try {
-        const score = await config.evaluate(text, input.signal);
-        if (input.signal?.aborted) return { status: "cancelled", version };
+  function run(input: RecallSensorInput): Promise<RecallSensorResult> {
+    const operation = Effect.gen(function* (): Effect.fn.Return<RecallSensorResult, SensorFailed> {
+      if (config.mode === undefined || config.mode === "disabled")
+        return { status: "disabled", version };
+      if (isTruthy(input.signal?.aborted)) return { status: "cancelled", version };
+      if (input.resourceAllowed === false || !isTruthy(input.redactedText.trim()))
+        return { status: "skipped", version };
+      const text = input.redactedText.slice(0, maxInputChars);
+      if (config.mode === "mock") {
+        const score = yield* Effect.tryPromise({
+          try: () => Promise.resolve(config.evaluate(text, input.signal)),
+          catch: () => SensorFailed.make({}),
+        });
         return validScore(score)
           ? { status: "evaluated", version, score }
           : { status: "error", version };
-      } catch {
-        return { status: input.signal?.aborted ? "cancelled" : "error", version };
       }
-    }
-    if (config.mode !== "http" || !endpoint) return { status: "unavailable", version };
-    const controller = new AbortController();
-    let timedOut = false;
-    let rejectAbort: ((error: Error) => void) | undefined;
-    const aborted = new Promise<never>((_, reject) => {
-      rejectAbort = reject;
-    });
-    const cancel = () => {
-      controller.abort();
-      rejectAbort?.(new Error("cancelled"));
-    };
-    input.signal?.addEventListener("abort", cancel, { once: true });
-    const timeoutMs =
-      Number.isFinite(config.timeoutMs) && (config.timeoutMs ?? 0) > 0
-        ? Math.min(config.timeoutMs!, 30_000)
-        : defaultTimeoutMs;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      cancel();
-    }, timeoutMs);
-    try {
-      if (input.signal?.aborted) return { status: "cancelled", version };
-      const request = async () => {
-        const response = await (config.fetch ?? fetch)(endpoint.href, {
-          method: "POST",
-          redirect: "manual",
-          signal: controller.signal,
-          headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({
-            state: text,
-            questions: {
-              [questionId]: {
-                type: "noul",
-                instructions: "Would recalling earlier conversation context help answer this turn?",
-              },
-            },
-            model: "multilingual",
-          }),
+      if (config.mode !== "http" || endpoint === null) return { status: "unavailable", version };
+      const timeoutMs =
+        Number.isFinite(config.timeoutMs) && (config.timeoutMs ?? 0) > 0
+          ? Math.min(config.timeoutMs!, 30_000)
+          : defaultTimeoutMs;
+      return yield* Effect.gen(function* () {
+        const signal = yield* Effect.abortSignal;
+        // Injected fetch is the loopback protocol boundary; its signal is owned by this fiber.
+        const response = yield* Effect.tryPromise({
+          try: () =>
+            (config.fetch ?? fetch)(endpoint.href, {
+              method: "POST",
+              redirect: "manual",
+              signal,
+              headers: { "Content-Type": "application/json", Accept: "application/json" },
+              body: encodeRequest({
+                state: text,
+                questions: {
+                  [questionId]: {
+                    type: "noul",
+                    instructions:
+                      "Would recalling earlier conversation context help answer this turn?",
+                  },
+                },
+                model: "multilingual",
+              }),
+            }),
+          catch: () => SensorFailed.make({}),
         });
         if (
           response.redirected ||
           (response.status >= 300 && response.status < 400) ||
           !response.ok
         )
-          throw new Error("bad response");
-        return boundedScore(response);
-      };
-      const score = await Promise.race([request(), aborted]);
-      if (input.signal?.aborted) return { status: "cancelled", version };
-      if (timedOut) return { status: "timeout", version };
-      return score === null
-        ? { status: "error", version }
-        : { status: "evaluated", version, score };
-    } catch {
-      return {
-        status: input.signal?.aborted ? "cancelled" : timedOut ? "timeout" : "error",
-        version,
-      };
-    } finally {
-      clearTimeout(timer);
-      input.signal?.removeEventListener("abort", cancel);
-      controller.abort();
-    }
+          return yield* SensorFailed.make({});
+        const score = yield* Effect.tryPromise({
+          try: () => boundedScore(response, signal),
+          catch: () => SensorFailed.make({}),
+        });
+        return score === null
+          ? { status: "error" as const, version }
+          : { status: "evaluated" as const, version, score };
+      }).pipe(
+        Effect.scoped,
+        Effect.timeoutOrElse({
+          duration: timeoutMs,
+          orElse: () => Effect.succeed({ status: "timeout" as const, version }),
+        }),
+      );
+    });
+    return Effect.runPromiseExit(
+      operation,
+      input.signal === undefined ? undefined : { signal: input.signal },
+    ).then((exit) =>
+      Exit.match(exit, {
+        onSuccess: (result) => result,
+        onFailure: (cause) => ({
+          status: Cause.hasInterrupts(cause) ? "cancelled" : "error",
+          version,
+        }),
+      }),
+    );
   }
   return { evaluate };
 }

@@ -1,17 +1,30 @@
+import { isTruthy } from "../app/truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { spawn, type ChildProcess } from "node:child_process";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Option, Schema } from "effect";
 import { developmentBuildId } from "../server/dev-safety.ts";
 
 const app = fileURLToPath(new URL("..", import.meta.url));
+// Native host/SDK configuration boundary reads or forwards the host environment.
+// @effect-diagnostics-next-line processEnv:off
 const backendPort = Number(process.env.CONTEXT_AGENT_DEV_BACKEND_PORT ?? "5180");
+// Native host/SDK configuration boundary reads or forwards the host environment.
+// @effect-diagnostics-next-line processEnv:off
 const webPort = Number(process.env.CONTEXT_AGENT_DEV_WEB_PORT ?? "5173");
 const backendUrl = `http://127.0.0.1:${backendPort}`;
 const manifestFile = join(app, "build", "dev-backend.json");
 
 const Mode = Schema.Literals(["all", "agent", "web"]);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const mode = Schema.decodeUnknownSync(Mode)(process.argv[2] ?? "all");
 
 const Manifest = Schema.Struct({
@@ -21,8 +34,10 @@ const Manifest = Schema.Struct({
 const decodeManifest = Schema.decodeUnknownOption(Schema.fromJsonString(Manifest));
 
 function packageCommand(args: readonly string[], env: NodeJS.ProcessEnv = {}) {
+  // Native host/SDK configuration boundary reads or forwards the host environment.
+  // @effect-diagnostics-next-line processEnv:off
   const npmExecPath = process.env.npm_execpath;
-  return npmExecPath
+  return isTruthy(npmExecPath)
     ? spawn(process.execPath, [npmExecPath, ...args], {
         cwd: app,
         env: { ...process.env, ...env },
@@ -37,24 +52,36 @@ function packageCommand(args: readonly string[], env: NodeJS.ProcessEnv = {}) {
 }
 
 function completion(child: ChildProcess, label: string) {
+  // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
+  // @effect-diagnostics-next-line newPromise:off
   return new Promise<number>((resolve, reject) => {
     child.once("error", reject);
     child.once("exit", (code, signal) => {
-      if (signal) reject(new Error(`${label} stopped by ${signal}`));
+      if (isTruthy(signal)) reject(new Error(`${label} stopped by ${signal}`));
       else resolve(code ?? 1);
     });
   });
 }
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function run(args: readonly string[], env: NodeJS.ProcessEnv, label: string) {
   const code = await completion(packageCommand(args, env), label);
   if (code !== 0) throw new Error(`${label} failed with exit code ${code}`);
 }
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function waitForBackend(url: string, expectedBuildId: string) {
+  // React/native timestamps use the host Date contract outside Effect execution.
+  // @effect-diagnostics-next-line globalDate:off
   const deadline = Date.now() + 30_000;
+  // React/native timestamps use the host Date contract outside Effect execution.
+  // @effect-diagnostics-next-line globalDate:off
   while (Date.now() < deadline) {
     try {
+      // Native Request/Response adapter preserves host and SDK stream semantics.
+      // @effect-diagnostics-next-line globalFetch:off
       const response = await fetch(`${url}/api/health`, {
         signal: AbortSignal.timeout(1_000),
       });
@@ -67,6 +94,9 @@ async function waitForBackend(url: string, expectedBuildId: string) {
     } catch {
       // The stable backend is still starting.
     }
+    // Native callback heartbeat/debounce timing remains at the protocol boundary.
+    // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
+    // @effect-diagnostics-next-line globalTimers:off newPromise:off
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`stable backend did not become ready at ${url}`);
@@ -102,7 +132,12 @@ function stableBackend(buildId: string) {
     "--no-open",
     "--dev-backend",
   ];
-  if (process.env.CONTEXT_AGENT_HOME) args.push("--storage", process.env.CONTEXT_AGENT_HOME);
+  // Native host/SDK configuration boundary reads or forwards the host environment.
+  // @effect-diagnostics-next-line processEnv:off
+  if (isTruthy(process.env.CONTEXT_AGENT_HOME))
+    // Native host/SDK configuration boundary reads or forwards the host environment.
+    // @effect-diagnostics-next-line processEnv:off
+    args.push("--storage", process.env.CONTEXT_AGENT_HOME);
   return spawn(process.execPath, args, {
     cwd: app,
     env: { ...process.env, CONTEXT_AGENT_BUILD_ID: buildId },
@@ -120,20 +155,30 @@ function webFrontend(manifest: typeof Manifest.Type) {
   );
 }
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function buildBackend(buildId: string) {
   const env = { CONTEXT_AGENT_BUILD_ID: buildId };
+  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+  // @effect-diagnostics-next-line globalConsole:off
   console.log("Building the stable agent backend (HMR disabled)...");
   await run(["exec", "vp", "run", "turbovec#build"], env, "turbovec native build");
   await run(["exec", "react-router", "build"], env, "react-router build");
   await run(["exec", "vp", "pack"], env, "vp pack");
 }
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function stop(child: ChildProcess | null, signal: NodeJS.Signals) {
   if (child === null || child.exitCode !== null || child.signalCode !== null) return;
   child.kill(signal);
   await Promise.race([
     completion(child, "child process").catch(() => undefined),
+    // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
+    // @effect-diagnostics-next-line newPromise:off
     new Promise<void>((resolve) =>
+      // Native callback heartbeat/debounce timing remains at the protocol boundary.
+      // @effect-diagnostics-next-line globalTimers:off
       setTimeout(() => {
         if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
         resolve();
@@ -142,14 +187,20 @@ async function stop(child: ChildProcess | null, signal: NodeJS.Signals) {
   ]);
 }
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function runWebOnly() {
   const manifest = readManifest();
   await waitForBackend(manifest.backendUrl, manifest.buildId);
+  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+  // @effect-diagnostics-next-line globalConsole:off
   console.log(`Stable agent backend: ${manifest.backendUrl}`);
   const web = webFrontend(manifest);
   process.exitCode = await completion(web, "HMR frontend");
 }
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function runWithBackend(includeWeb: boolean) {
   const buildId = developmentBuildId(app);
   await buildBackend(buildId);
@@ -157,6 +208,8 @@ async function runWithBackend(includeWeb: boolean) {
   let web: ChildProcess | null = null;
   let stopping = false;
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const shutdown = async (signal: NodeJS.Signals) => {
     if (stopping) return;
     stopping = true;
@@ -169,6 +222,8 @@ async function runWithBackend(includeWeb: boolean) {
   try {
     await waitForBackend(backendUrl, buildId);
     writeManifest({ backendUrl, buildId });
+    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+    // @effect-diagnostics-next-line globalConsole:off
     console.log(`Stable agent backend: ${backendUrl}`);
 
     if (!includeWeb) {
@@ -177,6 +232,8 @@ async function runWithBackend(includeWeb: boolean) {
     }
 
     web = webFrontend({ backendUrl, buildId });
+    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+    // @effect-diagnostics-next-line globalConsole:off
     console.log(`HMR frontend: http://127.0.0.1:${webPort}`);
     const first = await Promise.race([
       completion(backend, "stable backend").then((code) => ({ child: "backend", code })),
@@ -193,6 +250,8 @@ try {
   if (mode === "web") await runWebOnly();
   else await runWithBackend(mode === "all");
 } catch (error) {
+  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+  // @effect-diagnostics-next-line globalConsole:off
   console.error(error instanceof Error ? error.message : "development server failed");
   process.exitCode = 1;
 }

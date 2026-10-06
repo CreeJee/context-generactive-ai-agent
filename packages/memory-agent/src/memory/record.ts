@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import type {
   AfterToolCallInfo,
   ChatMiddleware,
@@ -68,7 +69,7 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
   /** The review behind a gated call's result, when the permission gate decided it. */
   const permissionOf = (sessionId: string, toolCallId: string) => {
     const review = reviews.latest(sessionId, toolCallId);
-    return review
+    return isTruthy(review)
       ? { decision: review.decision, decidedBy: review.decidedBy, reason: review.reason }
       : undefined;
   };
@@ -81,7 +82,9 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
   const outcomes = new Map<string, ToolOutcome>();
 
   /** Who answered, when it was an external agent in a direct conversation. */
-  const source: NodeDetail = binding.externalAgent ? { externalAgent: binding.externalAgent } : {};
+  const source: NodeDetail = isTruthy(binding.externalAgent)
+    ? { externalAgent: binding.externalAgent }
+    : {};
 
   /** The text has been through `hide` already. */
   const appendAssistant = (text: string, partial?: { reason: string }) =>
@@ -89,7 +92,7 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
       ...base,
       kind: "assistant",
       text,
-      detail: partial ? { ...source, partial: true, reason: partial.reason } : source,
+      detail: partial !== undefined ? { ...source, partial: true, reason: partial.reason } : source,
       links: [{ kind: "reply", nodeId: binding.userNodeId }],
     });
 
@@ -99,10 +102,12 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
     // Every hook first hides what it will write, then checks and appends with no await in
     // between, so two hooks never both decide a node is still missing.
 
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async onIteration(ctx) {
       // Results the client wrote itself (a declined approval) never pass a server tool phase.
       const written = ctx.messages.flatMap((message) => {
-        if (message.role !== "tool" || !message.toolCallId) return [];
+        if (message.role !== "tool" || !isTruthy(message.toolCallId)) return [];
         const text = Array.isArray(message.content)
           ? message.content.flatMap((part) => (part.type === "text" ? [part.content] : [])).join("")
           : (message.content ?? "");
@@ -111,7 +116,11 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
       const hidden = await Promise.all(written.map((entry) => hide(entry.text)));
       written.forEach(({ toolCallId, text }, index) => {
         const call = nodes.toolNode(binding.sessionId, "tool_call", toolCallId);
-        if (!call || nodes.toolNode(binding.sessionId, "tool_result", toolCallId)) return;
+        if (
+          !isTruthy(call) ||
+          isTruthy(nodes.toolNode(binding.sessionId, "tool_result", toolCallId))
+        )
+          return;
         const parsed = Option.getOrUndefined(decodeJson(text));
         nodes.append({
           ...base,
@@ -135,12 +144,14 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
       outcomes.set(info.toolCallId, outcome);
     },
 
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async onToolPhaseComplete(ctx, info) {
       // A declined approval fires no after-call hook, and a call skipped by middleware reports
       // ok; the result itself says whether the tool really ran.
       const calls = info.toolCalls.map((call) => {
         const result = info.results.find((entry) => entry.toolCallId === call.id);
-        if (!result) return { call, result, ok: true, resultText: "" };
+        if (!isTruthy(result)) return { call, result, ok: true, resultText: "" };
         const reported = outcomes.get(call.id);
         const ok = (reported?.ok ?? true) && !isErrorResult(result.result);
         // A failure is recorded as its error message when there is one.
@@ -164,7 +175,7 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
       const recorded = new Map(
         info.toolCalls.flatMap((call) => {
           const node = nodes.toolNode(binding.sessionId, "tool_call", call.id);
-          return node ? [[call.id, node] as const] : [];
+          return isTruthy(node) ? [[call.id, node] as const] : [];
         }),
       );
       const needsAssistant =
@@ -179,11 +190,11 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
             kind: "tool_call",
             text: callTexts[index] ?? "",
             detail: { toolName: call.function.name, toolCallId: call.id },
-            links: assistant ? [{ kind: "calls", nodeId: assistant.id }] : [],
+            links: isTruthy(assistant) ? [{ kind: "calls", nodeId: assistant.id }] : [],
             refs: callRefs[index] ?? [],
           });
-        if (!result) return; // awaiting approval or client execution
-        if (nodes.toolNode(binding.sessionId, "tool_result", call.id)) return;
+        if (!isTruthy(result)) return; // awaiting approval or client execution
+        if (isTruthy(nodes.toolNode(binding.sessionId, "tool_result", call.id))) return;
         nodes.append({
           ...base,
           // Keep the result in the run that made the call, so history shows them together.
@@ -201,10 +212,14 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
       });
     },
 
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async onFinish(_ctx, info) {
       if (info.content.length > 0) appendAssistant(await hide(info.content));
     },
 
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async onAbort(ctx, info) {
       if (ctx.accumulatedContent.length > 0)
         appendAssistant(await hide(ctx.accumulatedContent), {
@@ -212,6 +227,8 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
         });
     },
 
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async onError(ctx, info) {
       if (ctx.accumulatedContent.length > 0)
         appendAssistant(await hide(ctx.accumulatedContent), {
@@ -237,7 +254,7 @@ const make = Effect.gen(function* () {
 
 /** Turns a chat run into memory nodes. The caller appends the user turn before starting the run. */
 export class Recorder extends Context.Service<Recorder, Effect.Success<typeof make>>()(
-  "memory-agent/Recorder",
+  "memory-agent/memory/record/Recorder",
 ) {
   static readonly layer = Layer.effect(Recorder, make);
 }

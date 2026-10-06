@@ -55,7 +55,7 @@ export function toPendingApproval(interrupt: ChatInterrupt): PendingApproval | n
     case "generic": {
       if (interrupt.binding.definitionId !== permissionReviewInterrupt.id) return null;
       const review = Option.getOrUndefined(decodeReview(interrupt));
-      if (!review) return null;
+      if (!(review !== undefined)) return null;
       return {
         kind: "permission-review",
         id: interrupt.id,

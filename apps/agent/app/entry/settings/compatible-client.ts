@@ -1,3 +1,4 @@
+import { isTruthy } from "../../truthy.ts";
 import { appFetch } from "../shared/backend-restart";
 
 export interface CompatibleConfiguration {
@@ -27,10 +28,12 @@ type CompatibleCommand =
   | { action: "test" }
   | { action: "list" };
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function request<T>(body?: CompatibleCommand): Promise<T> {
   const response = await appFetch(
     "/api/settings/compatible",
-    body
+    isTruthy(body)
       ? {
           method: "POST",
           headers: { "Content-Type": "application/json" },

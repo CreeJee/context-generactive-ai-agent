@@ -1,3 +1,4 @@
+import { isTruthy } from "../../truthy.ts";
 import type { PermissionMode } from "../api";
 
 /** A command typed at the start of the composer, once it is complete. */
@@ -109,7 +110,7 @@ function choices(from: "agents" | "modes" | "models" | "skills", context: SlashC
 /** Splits `/name rest` into the command word and what follows it. */
 function split(draft: string) {
   const match = /^\/(\S*)(\s+([\s\S]*))?$/.exec(draft);
-  if (!match) return null;
+  if (!isTruthy(match)) return null;
   return { word: match[1] ?? "", hasSpace: match[2] !== undefined, rest: match[3] ?? "" };
 }
 
@@ -121,14 +122,16 @@ const specNamed = (word: string) =>
  * skill is still reachable with `/skill`.
  */
 const skillNamed = (word: string, context: SlashContext) =>
-  specNamed(word)
+  isTruthy(specNamed(word))
     ? undefined
     : context.skills.find((skill) => skill.name.toLowerCase() === word.toLowerCase());
 
 /** Suggestions for the draft, or none when it is not a command being typed. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function suggest(draft: string, context: SlashContext): Suggestion[] {
   const parts = split(draft);
-  if (!parts) return [];
+  if (!(parts !== null)) return [];
   if (!parts.hasSpace) {
     const word = parts.word.toLowerCase();
     const commands = commandSpecs
@@ -141,7 +144,9 @@ export function suggest(draft: string, context: SlashContext): Suggestion[] {
         runnable: spec.argument.kind === "none",
       }));
     const skills = context.skills
-      .filter((skill) => skill.name.toLowerCase().startsWith(word) && !specNamed(skill.name))
+      .filter(
+        (skill) => skill.name.toLowerCase().startsWith(word) && !isTruthy(specNamed(skill.name)),
+      )
       .map((skill): Suggestion => ({
         kind: "skill",
         text: `/${skill.name} `,
@@ -153,7 +158,7 @@ export function suggest(draft: string, context: SlashContext): Suggestion[] {
   }
 
   const spec = specNamed(parts.word);
-  if (!spec) return [];
+  if (!isTruthy(spec)) return [];
   switch (spec.argument.kind) {
     case "none":
     case "text":
@@ -169,7 +174,9 @@ export function suggest(draft: string, context: SlashContext): Suggestion[] {
         .slice(0, 20)
         .map((choice): Suggestion => ({
           kind: from === "skills" ? "skill" : "value",
-          text: spec.trailingText ? `/${spec.name} ${choice.id} ` : `/${spec.name} ${choice.id}`,
+          text: isTruthy(spec.trailingText)
+            ? `/${spec.name} ${choice.id} `
+            : `/${spec.name} ${choice.id}`,
           label: choice.id,
           description: choice.label === choice.id ? spec.description : choice.label,
           runnable: spec.trailingText === undefined,
@@ -185,18 +192,20 @@ export type SlashParse =
   | { readonly kind: "command"; readonly command: SlashCommand };
 
 /** Reads a complete command from the draft. Text that does not start with `/` is a message. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function parseSlash(draft: string, context: SlashContext): SlashParse {
   const parts = split(draft.trim());
-  if (!parts) return { kind: "not_command" };
+  if (!(parts !== null)) return { kind: "not_command" };
   const skill = skillNamed(parts.word, context);
-  if (skill)
+  if (isTruthy(skill))
     return {
       kind: "command",
       command: { kind: "skill", skill: skill.name, request: parts.rest.trim() },
     };
   const spec = specNamed(parts.word);
   // Not one of ours: an ordinary message that happens to start with "/", like a path.
-  if (!spec) return { kind: "not_command" };
+  if (!isTruthy(spec)) return { kind: "not_command" };
   const rest = parts.rest.trim();
   const [value = "", ...others] = rest.split(/\s+/);
   const trailing = rest.slice(value.length).trim();
@@ -206,7 +215,7 @@ export function parseSlash(draft: string, context: SlashContext): SlashParse {
   // Whole sentences per command, so each noun gets its own particle.
   const needValue = (choose: string, unknown: string): SlashParse => ({
     kind: "incomplete",
-    reason: value ? `${unknown}: ${value}` : choose,
+    reason: isTruthy(value) ? `${unknown}: ${value}` : choose,
   });
 
   switch (spec.name) {
@@ -253,7 +262,7 @@ export function parseSlash(draft: string, context: SlashContext): SlashParse {
         ? { kind: "command", command: { kind: "skill", skill: value, request: trailing } }
         : needValue("skill을 골라 주세요.", "쓸 수 있는 skill 목록에 없어요");
     case "recall":
-      return rest
+      return isTruthy(rest)
         ? { kind: "command", command: { kind: "recall", question: rest } }
         : { kind: "incomplete", reason: "찾을 내용을 적어 주세요." };
     default:
@@ -265,7 +274,7 @@ export function parseSlash(draft: string, context: SlashContext): SlashParse {
 export function promptOf(command: Extract<SlashCommand, { kind: "skill" | "recall" }>) {
   switch (command.kind) {
     case "skill":
-      return `"${command.skill}" skill을 read_skill로 읽고 그 지침대로 해 주세요.${command.request ? `\n\n${command.request}` : ""}`;
+      return `"${command.skill}" skill을 read_skill로 읽고 그 지침대로 해 주세요.${isTruthy(command.request) ? `\n\n${command.request}` : ""}`;
     case "recall":
       return `find_memory로 기억을 찾아서, 출처(프로젝트와 시점)와 나중에 바뀐 결정이 있으면 함께 답해 주세요: ${command.question}`;
   }

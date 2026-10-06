@@ -13,6 +13,8 @@ const EmbeddingAction = Schema.Union([
  * GET /api/settings/embedding: how the embedding model runs now and from the next start, the
  * machine's memory, whether WebGPU works, and how many nodes wait to be embedded.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function loader() {
   return agent.runPromise(
     Effect.flatMap(EmbeddingSetup, (setup) => setup.overview).pipe(
@@ -26,9 +28,11 @@ export async function loader() {
  * - `choose` { choice }: `auto`, `cpu` or `gpu`; takes effect when the app next starts.
  * - `check`: checks WebGPU again, in the background.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
-  if (rejected) return rejected;
+  if (rejected !== null) return rejected;
   const body = await readJson(request, EmbeddingAction);
   if (Result.isFailure(body))
     return Response.json({ error: "invalid_embedding_action" }, { status: 400 });

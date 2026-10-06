@@ -1,9 +1,11 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
 import { SubscriptionAccountProvider } from "../src/providers/contracts.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { Effect, Layer, Result, Schema } from "effect";
+import { Clock, Effect, Layer, Result, Schema } from "effect";
 import { EventType } from "@tanstack/ai";
 import { InternalLogger } from "@tanstack/ai/adapter-internals";
 import { expect, test } from "vite-plus/test";
@@ -46,6 +48,8 @@ test("native registry exports fresh account dependencies without selecting until
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
+        const effectClock = yield* Clock.Clock;
+
         const storage = yield* temporary;
         const sqlite = yield* Effect.acquireRelease(
           Effect.sync(() => new DatabaseSync(":memory:")),
@@ -79,7 +83,7 @@ test("native registry exports fresh account dependencies without selecting until
                 read: async () => ({
                   accessToken: id!,
                   refreshToken: "fixture",
-                  expiresAt: Date.now() + 60_000,
+                  expiresAt: effectClock.currentTimeMillisUnsafe() + 60_000,
                 }),
                 write: async () => {
                   throw new Error("unexpected refresh");
@@ -187,10 +191,14 @@ test("native registry exports fresh account dependencies without selecting until
             });
           });
           yield* verification.pipe(
+            // Test entry point owns this Layer and its resource scope.
+            // @effect-diagnostics-next-line strictEffectProvide:off
             Effect.provide(ProviderRegistry.layer([provider], [compatibility], resolver)),
           );
         });
         yield* program.pipe(
+          // Test entry point owns this Layer and its resource scope.
+          // @effect-diagnostics-next-line strictEffectProvide:off
           Effect.provide(GlobalConfig.layer.pipe(Layer.provide(StorageRoot.layer(storage)))),
         );
       }),
@@ -212,6 +220,8 @@ test("default layer stays unavailable and native subscription layer exports with
             });
           }
         });
+        // Test entry point owns this Layer and its resource scope.
+        // @effect-diagnostics-next-line strictEffectProvide:off
         yield* unavailable.pipe(Effect.provide(ProviderRegistry.layer([])));
         const storage = yield* temporary;
         yield* Effect.gen(function* () {
@@ -227,6 +237,8 @@ test("default layer stays unavailable and native subscription layer exports with
             ).toBe(runtime.contextWindow("unknown"));
           }
         }).pipe(
+          // Test entry point owns this Layer and its resource scope.
+          // @effect-diagnostics-next-line strictEffectProvide:off
           Effect.provide(
             SubscriptionProviderRegistry.pipe(
               Layer.provide(GlobalConfig.layer.pipe(Layer.provide(StorageRoot.layer(storage)))),

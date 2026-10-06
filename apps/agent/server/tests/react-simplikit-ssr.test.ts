@@ -1,3 +1,5 @@
+// Native server integration test uses host environment, SDK Promise callbacks and I/O fixtures.
+// @effect-diagnostics nodeBuiltinImport:off
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vite-plus/test";

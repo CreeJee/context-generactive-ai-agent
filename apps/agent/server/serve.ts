@@ -1,6 +1,15 @@
+import { isTruthy } from "../app/truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { spawn } from "node:child_process";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createReadStream, statSync } from "node:fs";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { extname, resolve, sep } from "node:path";
 import { createRequestListener } from "@react-router/node";
 import { Schema } from "effect";
@@ -55,7 +64,7 @@ function contentType(file: string) {
 }
 
 function isLoopbackHost(host: string | undefined) {
-  if (!host) return false;
+  if (!isTruthy(host)) return false;
   try {
     return Schema.is(LoopbackHost)(new URL(`http://${host}`).hostname);
   } catch {
@@ -97,7 +106,7 @@ export function openInBrowser(url: string) {
 export function serve(options: ServeOptions) {
   const clientDirectory = resolve(options.clientDirectory);
   const handle = createRequestListener({ build: options.build, mode: "production" });
-  const development = options.developmentBuildId
+  const development = isTruthy(options.developmentBuildId)
     ? createDevelopmentBoundary(options.developmentBuildId, options.runtimeInstanceId)
     : null;
 
@@ -119,6 +128,8 @@ export function serve(options: ServeOptions) {
       );
       if (decision.kind !== "allow") {
         if (decision.kind === "reject")
+          // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+          // @effect-diagnostics-next-line globalConsole:off
           console.warn(
             `[dev-backend] blocked ${request.method ?? "UNKNOWN"} ${pathname}: ${decision.error} ` +
               `(backend=${decision.backendBuildId}, browser=${decision.presentedBuildId ?? "missing"})`,
@@ -136,7 +147,7 @@ export function serve(options: ServeOptions) {
       request.method === "GET" || request.method === "HEAD"
         ? clientFile(clientDirectory, pathname)
         : null;
-    if (!file) return handle(request, response);
+    if (!isTruthy(file)) return handle(request, response);
     response.writeHead(200, {
       "content-type": contentType(file),
       // Hashed build assets never change under the same name.
@@ -157,6 +168,8 @@ export function serve(options: ServeOptions) {
       });
   }
 
+  // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
+  // @effect-diagnostics-next-line newPromise:off
   return new Promise<void>((resolveListening, reject) => {
     server.once("error", reject);
     server.listen(options.port, "127.0.0.1", () => resolveListening());

@@ -1,3 +1,6 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
 import {
@@ -106,7 +109,7 @@ const make = Effect.gen(function* () {
   const owned = Effect.fn("BackgroundTasks.owned")(function* (sessionId: string, taskId: string) {
     const detail = yield* traceEffect(() => trace.taskDetail(sessionId, taskId));
     if (
-      !detail ||
+      !isTruthy(detail) ||
       !detail.task.agentName.startsWith("background_") ||
       detail.task.deletedAt !== null ||
       detail.task.deleteRequestedAt !== null
@@ -156,7 +159,7 @@ const make = Effect.gen(function* () {
               )
               .get(`${binding.runId}:${toolCallId}`, binding.sessionId, `background_${kind}`),
           );
-          if (prior) {
+          if (isTruthy(prior)) {
             const previous = yield* Schema.decodeUnknownEffect(
               Schema.Struct({
                 taskId: Schema.String,
@@ -376,6 +379,6 @@ const make = Effect.gen(function* () {
 export class BackgroundTasks extends Context.Service<
   BackgroundTasks,
   Effect.Success<typeof make>
->()("memory-agent/BackgroundTasks") {
+>()("memory-agent/tools/background/BackgroundTasks") {
   static readonly layer = Layer.effect(BackgroundTasks, make);
 }

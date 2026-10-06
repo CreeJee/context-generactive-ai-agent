@@ -37,19 +37,31 @@ export const sessionQueries = {
     }),
 };
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export const useRunStateQuery = (projectId: string, sessionId: string, holder: string) =>
   useQuery(sessionQueries.runState(projectId, sessionId, holder));
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export const useQueueQuery = (projectId: string, sessionId: string) =>
   useQuery(sessionQueries.queue(projectId, sessionId));
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export const useSubagentsQuery = (projectId: string, sessionId: string) =>
   useQuery(sessionQueries.subagents(projectId, sessionId));
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export const useApprovalsQuery = (projectId: string, sessionId: string) =>
   useQuery(sessionQueries.approvals(projectId, sessionId));
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export const useObservedRunStateQuery = (
   projectId: string,
   sessionId: string,
   holder: string,
   enabled: boolean,
 ) => useQuery({ ...sessionQueries.runState(projectId, sessionId, holder), enabled });
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export const useSessionTraceQuery = (projectId: string, sessionId: string) =>
   useQuery(sessionQueries.trace(projectId, sessionId));

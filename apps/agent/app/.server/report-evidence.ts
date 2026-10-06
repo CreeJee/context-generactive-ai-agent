@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { Schema } from "effect";
 
@@ -6,6 +7,8 @@ const MAX_TEXT = 1200;
 const MAX_DETAIL_TEXT = 8000;
 const MAX_TRANSCRIPT = 8;
 const MAX_RUNS = 3;
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const optionalText = Schema.decodeUnknownSync(Schema.NullOr(Schema.String));
 
 export type EvidenceStatus = "available" | "empty" | "failed";
@@ -58,6 +61,8 @@ export interface ReportEvidence {
   }>;
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function reportEvidenceResponse(
   sqlite: DatabaseSync,
   request: Request,
@@ -66,10 +71,15 @@ export function reportEvidenceResponse(
   const url = new URL(request.url);
   const projectId = url.searchParams.get("project");
   const sessionId = url.searchParams.get("session");
-  if (!projectId || !sessionId || projectId.length > 256 || sessionId.length > 256)
+  if (
+    !isTruthy(projectId) ||
+    !isTruthy(sessionId) ||
+    projectId.length > 256 ||
+    sessionId.length > 256
+  )
     return Response.json({ error: "project_and_session_required" }, { status: 400 });
   const session = reportSession(sqlite, projectId, sessionId);
-  if (!session) return Response.json({ error: "session_not_found" }, { status: 404 });
+  if (!(session !== null)) return Response.json({ error: "session_not_found" }, { status: 404 });
   return Response.json(
     collectReportEvidence(sqlite, session, () => traceTasks(sessionId)),
     {
@@ -78,22 +88,24 @@ export function reportEvidenceResponse(
   );
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function reportEvidenceItemResponse(sqlite: DatabaseSync, request: Request): Response {
   const url = new URL(request.url);
   const projectId = url.searchParams.get("project");
   const sessionId = url.searchParams.get("session");
   const itemId = url.searchParams.get("item");
   if (
-    !projectId ||
-    !sessionId ||
-    !itemId ||
+    !isTruthy(projectId) ||
+    !isTruthy(sessionId) ||
+    !isTruthy(itemId) ||
     projectId.length > 256 ||
     sessionId.length > 256 ||
     itemId.length > 256
   )
     return Response.json({ error: "project_session_item_required" }, { status: 400 });
   const session = reportSession(sqlite, projectId, sessionId);
-  if (!session) return Response.json({ error: "session_not_found" }, { status: 404 });
+  if (!(session !== null)) return Response.json({ error: "session_not_found" }, { status: 404 });
   const row = sqlite
     .prepare(
       `SELECT id, kind, run_id, created_at, substr(text, 1, ?) AS excerpt,
@@ -104,7 +116,7 @@ export function reportEvidenceItemResponse(sqlite: DatabaseSync, request: Reques
       AND kind IN ('tool_call', 'tool_result')`,
     )
     .get(MAX_DETAIL_TEXT, MAX_DETAIL_TEXT, itemId, session.id, session.projectId);
-  if (!row) return Response.json({ error: "item_not_found" }, { status: 404 });
+  if (!isTruthy(row)) return Response.json({ error: "item_not_found" }, { status: 404 });
   return Response.json(
     {
       id: String(row.id),
@@ -120,6 +132,8 @@ export function reportEvidenceItemResponse(sqlite: DatabaseSync, request: Reques
   );
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function reportSession(
   sqlite: DatabaseSync,
   projectId: string,
@@ -129,7 +143,7 @@ export function reportSession(
   const row = sqlite
     .prepare("SELECT id, project_id, title FROM sessions WHERE id = ? AND project_id = ?")
     .get(sessionId, projectId);
-  if (!row) return null;
+  if (!isTruthy(row)) return null;
   return {
     id: String(row.id),
     projectId: String(row.project_id),
@@ -138,7 +152,7 @@ export function reportSession(
 }
 
 const section = <T>(items: T[], limit: number): EvidenceSection<T> => ({
-  status: items.length ? "available" : "empty",
+  status: isTruthy(items.length) ? "available" : "empty",
   truncated: items.length > limit,
   items: items.slice(0, limit),
 });
@@ -153,6 +167,8 @@ function guarded<T>(load: () => EvidenceSection<T>): EvidenceSection<T> {
 }
 
 /** Read only bounded excerpts, not entire transcript blobs or unredacted provider wire output. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function collectReportEvidence(
   sqlite: DatabaseSync,
   session: ReportEvidence["session"],

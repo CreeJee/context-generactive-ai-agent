@@ -8,6 +8,8 @@ import type { Node } from "../memory/nodes.ts";
  * streams: one user message per user turn (its text, then its images in attachment order), and
  * one assistant message per run holding its text, tool calls and tool results in order.
  */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function sessionMessages(
   nodes: readonly Node[],
   attachmentsOf: (nodeId: string) => readonly Attachment[],
@@ -29,6 +31,8 @@ export function sessionMessages(
           ...(node.text.length > 0 ? [{ type: "text" as const, content: node.text }] : []),
           ...images,
         ],
+        // The native SDK/fixture requires a JavaScript Date; this converts a timestamp, not an Effect clock read.
+        // @effect-diagnostics-next-line globalDate:off
         createdAt: new Date(node.createdAt),
       });
       continue;
@@ -36,15 +40,17 @@ export function sessionMessages(
     if (node.kind !== "assistant" && node.kind !== "tool_call" && node.kind !== "tool_result")
       continue;
 
-    if (!current || current.runId !== node.runId) {
+    if (!(current !== null) || current.runId !== node.runId) {
       current = {
         runId: node.runId,
+        // The native SDK/fixture requires a JavaScript Date; this converts a timestamp, not an Effect clock read.
+        // @effect-diagnostics-next-line globalDate:off
         message: { id: node.id, role: "assistant", parts: [], createdAt: new Date(node.createdAt) },
       };
       messages.push(current.message);
     }
     const part = toPart(node);
-    if (part) current.message.parts.push(part);
+    if (part !== null) current.message.parts.push(part);
   }
   return messages;
 }

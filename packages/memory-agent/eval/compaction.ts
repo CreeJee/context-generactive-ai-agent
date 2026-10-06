@@ -1,3 +1,4 @@
+import { isTruthy } from "../src/truthy.ts";
 import type { ModelMessage } from "@tanstack/ai";
 import {
   recentRawUserTurns,
@@ -132,6 +133,8 @@ const retrieval = {
     `- node ${nodeId(14)} (current session · user): ${userText(14)}`,
 };
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function currentRequest(messages: readonly ModelMessage[]): Promise<ModelMessage[]> {
   const state: CompactionState = {
     manual: { clearedThrough: 0, summarizedTurns: 0 },
@@ -143,6 +146,8 @@ async function currentRequest(messages: readonly ModelMessage[]): Promise<ModelM
     {
       toolResultId: (toolCallId) => (toolCallId === "long-tool" ? "node-tool-result" : null),
       nodeText,
+      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+      // @effect-diagnostics-next-line asyncFunction:off
       retrievalAppendix: async () => retrieval,
     },
     { compactAt: 1, leaveOutAt: 1_000_000 },
@@ -185,14 +190,16 @@ function profile(
   };
 }
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function evaluateCompaction(): Promise<CompactionEvaluation> {
   const conversations = checkpoints.map(conversation);
   const legacyRequests = conversations.map(legacyRequest);
   const currentRequests = await Promise.all(conversations.map(currentRequest));
   const final = currentRequests.at(-1) ?? [];
   const appendix = final.find((message) => messageText(message).startsWith("[Retrieval appendix"));
-  const appendixText = appendix ? messageText(appendix) : "";
-  const retrievalTokens = appendix ? estimateTokens(appendix) : 0;
+  const appendixText = isTruthy(appendix) ? messageText(appendix) : "";
+  const retrievalTokens = isTruthy(appendix) ? estimateTokens(appendix) : 0;
   const evidenceReachRate = appendixText.includes(nodeId(14)) ? 1 : 0;
   const correctionAppliedRate =
     appendixText.includes("목요일 오후") && !appendixText.includes(nodeId(3)) ? 1 : 0;

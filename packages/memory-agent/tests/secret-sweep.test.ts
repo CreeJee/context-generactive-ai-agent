@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off schemaSync:off
 import { Effect, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
@@ -5,6 +7,8 @@ import { embeddedKindFilter, Indexer } from "../src/memory/embedding/indexer.ts"
 import { Nodes } from "../src/memory/nodes.ts";
 import { SecretSweep } from "../src/secrets/sweep.ts";
 import { testRuntime } from "./support/runtime.ts";
+
+const stringifyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 /** Assembled at run time so no key-shaped text sits in the repository. */
 const githubToken = `${"gh"}p_${"Q1w2E3r4T5y6U7i8O9p0A1s2D3f4G5h6J7k8"}`;
@@ -123,13 +127,13 @@ describe("SecretSweep", () => {
           .prepare("INSERT INTO chat_threads VALUES (?, ?, 0)")
           .run(
             session.id,
-            JSON.stringify([{ role: "tool", content: `token: ${githubToken}`, toolCallId: "c-1" }]),
+            stringifyJson([{ role: "tool", content: `token: ${githubToken}`, toolCallId: "c-1" }]),
           );
         sqlite
           .prepare(
             "INSERT INTO permission_reviews (session_id, tool_call_id, tool_name, input, decision, decided_by, reason, created_at) VALUES (?, 'c-2', 'run_shell', ?, 'ask', 'user', 'x', '2026')",
           )
-          .run(session.id, JSON.stringify({ command: `GITHUB_TOKEN=${githubToken} gh pr list` }));
+          .run(session.id, stringifyJson({ command: `GITHUB_TOKEN=${githubToken} gh pr list` }));
         sqlite
           .prepare(
             "INSERT INTO queued_messages (id, session_id, seq, text, state, created_at, updated_at) VALUES ('q-1', ?, 1, ?, 'held', 0, 0)",
@@ -188,7 +192,7 @@ describe("SecretSweep", () => {
         });
         sqlite
           .prepare("UPDATE chat_threads SET messages = ? WHERE thread_id = ?")
-          .run(JSON.stringify([{ role: "user", content: githubToken }]), session.id);
+          .run(stringifyJson([{ role: "user", content: githubToken }]), session.id);
 
         const changed = yield* sweep.run;
         const value = (sql: string) => decodeValue(sqlite.prepare(sql).get()).value;

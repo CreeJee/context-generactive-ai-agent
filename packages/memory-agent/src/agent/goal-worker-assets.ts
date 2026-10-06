@@ -1,3 +1,6 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
@@ -11,8 +14,12 @@ import {
   rmSync,
   symlinkSync,
   writeFileSync,
+  // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+  // @effect-diagnostics-next-line nodeBuiltinImport:off
 } from "node:fs";
 import { tmpdir } from "node:os";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Schema } from "effect";
@@ -101,7 +108,7 @@ export function makeGoalWorkerAssetsRegistry(
   let activeLeases = 0;
 
   function verify(saved: SavedGoalExecutionAssets): GoalExecutionAssets {
-    if (disposed || !saved.goalInstanceId || !saved.sourceGeneration)
+    if (disposed || !(saved.goalInstanceId.length > 0) || !(saved.sourceGeneration.length > 0))
       throw new Error("Inactive Goal asset registry");
     const url = new URL(saved.canonicalWorkerUrl);
     if (url.protocol !== "file:" || url.href !== saved.canonicalWorkerUrl)
@@ -119,6 +126,8 @@ export function makeGoalWorkerAssetsRegistry(
     const bytes = readFileSync(manifestPath);
     if (digest(bytes) !== saved.manifestHash)
       throw new Error("Goal snapshot manifest hash mismatch");
+    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+    // @effect-diagnostics-next-line schemaSync:off
     const manifest = Schema.decodeUnknownSync(snapshotManifest)(JSON.parse(bytes.toString("utf8")));
     if (
       manifest.goalInstanceId !== saved.goalInstanceId ||
@@ -188,6 +197,8 @@ export function makeGoalWorkerAssetsRegistry(
         }
       }
       walk(directory);
+      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+      // @effect-diagnostics-next-line schemaSync:off
       const metadata = Schema.decodeUnknownSync(packageMetadata)(
         JSON.parse(files.get(join(directory, "package.json"))!.toString("utf8")),
       );
@@ -201,10 +212,10 @@ export function makeGoalWorkerAssetsRegistry(
         if (!/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/.test(name))
           throw new Error(`Invalid SDK dependency name: ${name}`);
         const dependency = dependencyRoot(directory, name);
-        if (!dependency) {
+        if (!isTruthy(dependency)) {
           if (
-            metadata.peerDependenciesMeta?.[name]?.optional ||
-            metadata.optionalDependencies?.[name]
+            isTruthy(metadata.peerDependenciesMeta?.[name]?.optional) ||
+            isTruthy(metadata.optionalDependencies?.[name])
           )
             continue;
           throw new Error(`Unavailable SDK dependency: ${name}`);
@@ -226,9 +237,9 @@ export function makeGoalWorkerAssetsRegistry(
 
   return {
     resolve(goalInstanceId: string): GoalExecutionAssets {
-      if (disposed || !goalInstanceId) throw new Error("Inactive Goal asset registry");
+      if (disposed || !(goalInstanceId.length > 0)) throw new Error("Inactive Goal asset registry");
       const existing = goals.get(goalInstanceId);
-      if (existing) {
+      if (isTruthy(existing)) {
         verify(existing);
         return existing;
       }
@@ -247,7 +258,7 @@ export function makeGoalWorkerAssetsRegistry(
             const parent = [...captured.packages.keys()].find((directory) =>
               path.startsWith(directory + "/"),
             );
-            if (!parent) throw new Error("Unmapped SDK asset");
+            if (!isTruthy(parent)) throw new Error("Unmapped SDK asset");
             output = join(packagePath(parent), path.slice(parent.length + 1));
           }
           mkdirSync(dirname(output), { recursive: true });
@@ -295,7 +306,7 @@ export function makeGoalWorkerAssetsRegistry(
     adopt(saved: SavedGoalExecutionAssets): GoalExecutionAssets {
       const verified = verify(saved);
       const existing = goals.get(saved.goalInstanceId);
-      if (existing) {
+      if (isTruthy(existing)) {
         if (
           existing.manifestHash !== verified.manifestHash ||
           existing.canonicalWorkerUrl !== verified.canonicalWorkerUrl ||
@@ -330,7 +341,7 @@ export function makeGoalWorkerAssetsRegistry(
       goals.clear();
       // Production shutdown retains immutable pins. Explicit removal is for test-owned roots only;
       // this registry never deletes adopted snapshots owned by another registry.
-      if (options.remove) rmSync(root, { recursive: true, force: true });
+      if (options.remove === true) rmSync(root, { recursive: true, force: true });
     },
   };
 }

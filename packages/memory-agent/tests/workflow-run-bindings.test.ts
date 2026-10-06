@@ -1,5 +1,7 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off schemaSync:off
 import type { DatabaseSync } from "node:sqlite";
-import { Effect, Schema } from "effect";
+import { DateTime, Effect, Schema } from "effect";
 import { expect, test } from "vite-plus/test";
 import { makeSqliteOwnerRpcLedger } from "../src/agent/owner-rpc-ledger.ts";
 import { Database } from "../src/db/database.ts";
@@ -29,7 +31,7 @@ test.each([
       .prepare(
         "INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES (?, ?, 'completed', ?)",
       )
-      .run("old", context.session.id, Date.now());
+      .run("old", context.session.id, DateTime.toEpochMillis(DateTime.nowUnsafe()));
     const ledger = makeSqliteOwnerRpcLedger(db);
     const key = JSON.stringify(old.binding);
     expect(ledger.reserve(key, 1, "effect", sideEffect)).toEqual({ type: "reserved" });
@@ -102,7 +104,7 @@ test("the owner binds a new run to an immutable Goal/Plan revision, not a caller
     .prepare(
       "INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES (?, ?, 'completed', ?)",
     )
-    .run("first", context.session.id, Date.now());
+    .run("first", context.session.id, DateTime.toEpochMillis(DateTime.nowUnsafe()));
   await context.runtime.runPromise(
     workflows.updateGoal(context.session.id, { ...goal, outcomes: ["New outcome"] }),
   );
@@ -153,7 +155,7 @@ test("a run ID and an unresolved side effect cannot be silently adopted by anoth
     .prepare(
       "INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES (?, ?, 'failed', ?)",
     )
-    .run("shared", context.session.id, Date.now());
+    .run("shared", context.session.id, DateTime.toEpochMillis(DateTime.nowUnsafe()));
   expect(
     owner.bind(context.session.id, "different", latestRevision(db, context.session.id)),
   ).toEqual({
@@ -188,6 +190,12 @@ test("the schema rejects a binding assembled from another session's Goal and rev
           (run_id, session_id, goal_instance_id, goal_version, plan_version, workflow_revision_id, created_at)
         VALUES (?, ?, ?, 1, NULL, ?, ?)
       `)
-      .run("forged", other.id, identity.goal_instance_id, revision, new Date().toISOString()),
+      .run(
+        "forged",
+        other.id,
+        identity.goal_instance_id,
+        revision,
+        DateTime.formatIso(DateTime.nowUnsafe()),
+      ),
   ).toThrow("run binding session mismatch");
 });

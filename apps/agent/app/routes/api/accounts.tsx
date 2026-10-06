@@ -1,3 +1,4 @@
+import { isTruthy } from "../../truthy.ts";
 import { Effect, Result, Schema } from "effect";
 import {
   Database,
@@ -24,6 +25,8 @@ const reply = <A,>(value: A, status = 200) =>
     headers: { "Cache-Control": "no-store" },
   });
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function loader({ request }: Route.LoaderArgs) {
   const provider = new URL(request.url).searchParams.get("provider");
   if (!Schema.is(SubscriptionAccountProvider)(provider))
@@ -42,17 +45,19 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 }
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
-  if (rejected) return rejected;
+  if (rejected !== null) return rejected;
   const decoded = await readJson(request, Action);
   if (Result.isFailure(decoded)) return reply({ error: "invalid_account_action" }, 400);
   const { intent, provider, label, accountId } = decoded.success;
-  if ((intent === "add" || intent === "rename") && (!label?.trim() || label.length > 80))
+  if ((intent === "add" || intent === "rename") && (!isTruthy(label?.trim()) || label.length > 80))
     return reply({ error: "invalid_account_label" }, 400);
   if (
     (intent === "select" || intent === "remove" || intent === "rename") &&
-    (!accountId || accountId.length > 128)
+    (!isTruthy(accountId) || accountId.length > 128)
   )
     return reply({ error: "invalid_account_id" }, 400);
   try {

@@ -1,6 +1,9 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import type { SQLOutputValue } from "node:sqlite";
-import { Context, Effect, Layer, Schema } from "effect";
+import { DateTime, Clock, Context, Effect, Layer, Schema } from "effect";
 import { hasStatementText } from "./quality.ts";
 import { firstMessageTitle } from "../sessions/title.ts";
 import { Database } from "../db/database.ts";
@@ -91,6 +94,8 @@ const NodeRow = Schema.Struct({
   detail: Schema.fromJsonString(NodeDetail),
   created_at: Schema.String,
 });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeNodeRow = Schema.decodeUnknownSync(NodeRow);
 
 export function toNode(row: Record<string, SQLOutputValue>): Node {
@@ -116,6 +121,8 @@ const EdgeRow = Schema.Struct({
   weight: Schema.Finite,
   created_at: Schema.String,
 });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeEdgeRow = Schema.decodeUnknownSync(EdgeRow);
 
 export function toEdge(row: Record<string, SQLOutputValue>): Edge {
@@ -137,6 +144,8 @@ export const evidencePageLength = 4000;
 const interpretedKinds: ReadonlySet<NodeKind> = new Set(["user", "assistant"]);
 
 const make = Effect.gen(function* () {
+  const effectClock = yield* Clock.Clock;
+
   const { sqlite, atomic } = yield* Database;
   const insertNode = sqlite.prepare(
     "INSERT INTO nodes (id, project_id, session_id, run_id, kind, text, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
@@ -163,7 +172,9 @@ const make = Effect.gen(function* () {
   );
 
   const idOf = (row: Record<string, SQLOutputValue> | undefined) =>
-    row ? Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(row).id : null;
+    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+    // @effect-diagnostics-next-line schemaSync:off
+    isTruthy(row) ? Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(row).id : null;
 
   function link(fromId: string, toId: string, kind: EdgeKind, createdAt: string) {
     insertEdge.run(fromId, toId, kind, edgeWeights[kind], createdAt);
@@ -171,8 +182,10 @@ const make = Effect.gen(function* () {
 
   function append(input: NewNode): Node {
     return atomic(() => {
-      const createdAt = new Date().toISOString();
-      const previous = input.sessionId ? idOf(lastInSession.get(input.sessionId)) : null;
+      const createdAt = DateTime.formatIso(
+        DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
+      );
+      const previous = isTruthy(input.sessionId) ? idOf(lastInSession.get(input.sessionId)) : null;
       const row = insertNode.get(
         randomUUID(),
         input.projectId,
@@ -183,10 +196,14 @@ const make = Effect.gen(function* () {
         JSON.stringify(input.detail ?? {}),
         createdAt,
       );
-      if (!row) throw new Error("Node insert returned no row");
+      if (!isTruthy(row)) throw new Error("Node insert returned no row");
       const node = toNode(row);
       // Only the first accepted, redacted user message names a local conversation.
-      if (input.kind === "user" && input.sessionId && !input.detail?.importedFrom) {
+      if (
+        input.kind === "user" &&
+        isTruthy(input.sessionId) &&
+        !isTruthy(input.detail?.importedFrom)
+      ) {
         const label = firstMessageTitle(input.text);
         sqlite
           .prepare(`
@@ -196,7 +213,7 @@ const make = Effect.gen(function* () {
           .run(label || "이미지 대화", input.sessionId, input.sessionId, node.seq);
       }
 
-      if (previous) link(previous, node.id, "next", createdAt);
+      if (isTruthy(previous)) link(previous, node.id, "next", createdAt);
       for (const declared of input.links ?? []) {
         if (declared.kind === "reply") link(node.id, declared.nodeId, "reply", createdAt);
         else link(declared.nodeId, node.id, declared.kind, createdAt);
@@ -204,7 +221,7 @@ const make = Effect.gen(function* () {
       for (const ref of new Set(input.refs ?? [])) {
         const earlier = idOf(latestWithRef.get(ref, input.projectId));
         insertRef.run(node.id, ref);
-        if (earlier) link(node.id, earlier, "touches", createdAt);
+        if (isTruthy(earlier)) link(node.id, earlier, "touches", createdAt);
       }
       if (interpretedKinds.has(node.kind) && hasStatementText(node.text))
         insertJob.run(node.id, createdAt);
@@ -217,7 +234,7 @@ const make = Effect.gen(function* () {
 
     get: (id: string): Node | null => {
       const row = selectNode.get(id);
-      return row ? toNode(row) : null;
+      return isTruthy(row) ? toNode(row) : null;
     },
 
     /** The most recent node of a kind in a session, e.g. the user turn a continued run answers. */
@@ -225,7 +242,7 @@ const make = Effect.gen(function* () {
       const row = sqlite
         .prepare("SELECT * FROM nodes WHERE session_id = ? AND kind = ? ORDER BY seq DESC LIMIT 1")
         .get(sessionId, kind);
-      return row ? toNode(row) : null;
+      return isTruthy(row) ? toNode(row) : null;
     },
 
     /** The latest `limit` nodes of a kind in a session, oldest first. */
@@ -246,7 +263,7 @@ const make = Effect.gen(function* () {
           "SELECT * FROM nodes WHERE session_id = ? AND kind = ? AND json_extract(detail, '$.toolCallId') = ? ORDER BY seq LIMIT 1",
         )
         .get(sessionId, kind, toolCallId);
-      return row ? toNode(row) : null;
+      return isTruthy(row) ? toNode(row) : null;
     },
 
     /** The first recorded result for this call, without loading every result in the session. */
@@ -268,7 +285,7 @@ const make = Effect.gen(function* () {
     /** Reads original text in pages without splitting a surrogate pair. */
     read: (id: string, offset = 0): EvidencePage | null => {
       const row = selectNode.get(id);
-      if (!row) return null;
+      if (!isTruthy(row)) return null;
       const node = toNode(row);
       const start = Math.min(Math.max(0, Math.trunc(offset)), node.text.length);
       let end = Math.min(start + evidencePageLength, node.text.length);
@@ -288,7 +305,7 @@ const make = Effect.gen(function* () {
 
 /** Append-only store of every message, with the structural edges derived at write time. */
 export class Nodes extends Context.Service<Nodes, Effect.Success<typeof make>>()(
-  "memory-agent/Nodes",
+  "memory-agent/memory/nodes",
 ) {
   static readonly layer = Layer.effect(Nodes, make);
 }

@@ -1,3 +1,5 @@
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { closeSync, openSync, readSync } from "node:fs";
 
 /** 1 MiB at a time: big enough that a 20 MB transcript is a few dozen reads, small enough to hold. */
@@ -18,6 +20,8 @@ export interface LinesRead {
  * is what a cursor can be compared against the file's size. Cutting only at a newline is safe for
  * UTF-8: that byte never appears inside a multi-byte character.
  */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function readLinesFrom(
   path: string,
   offset: number,

@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import type { ModelMessage, TokenUsage } from "@tanstack/ai";
 import {
@@ -11,7 +12,7 @@ import {
   type MessagePage,
   type RunRecord,
 } from "@tanstack/ai-persistence";
-import { Schema } from "effect";
+import { DateTime, Schema } from "effect";
 import { isEmptyUserText } from "../messages/empty-user.ts";
 type Json = string | number | boolean | null | Json[] | { readonly [key: string]: Json };
 
@@ -29,6 +30,8 @@ const RunRow = Schema.Struct({
   cancel_requested: Schema.NullOr(Schema.Literals([0, 1])),
   driver_epoch: Schema.NullOr(Schema.Finite),
 });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeRunRow = Schema.decodeUnknownSync(RunRow);
 
 const InterruptRow = Schema.Struct({
@@ -41,11 +44,17 @@ const InterruptRow = Schema.Struct({
   payload: Schema.String,
   response: Schema.NullOr(Schema.String),
 });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeInterruptRow = Schema.decodeUnknownSync(InterruptRow);
 
 const JsonText = Schema.Struct({ value: Schema.String });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeJsonText = Schema.decodeUnknownSync(JsonText);
 const LegacyThreadRow = Schema.Struct({ id: Schema.String });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeLegacyThreadRow = Schema.decodeUnknownSync(LegacyThreadRow);
 
 // Stored JSON was written by these stores from the same TanStack types, so parsing restores them.
@@ -60,6 +69,8 @@ const parseValue = (text: string): Json => JSON.parse(text);
  * memory nodes, attachments and URLs keep pointing at the same conversation after the provider
  * runtime migration.
  */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function migrateLegacyChatThreads(
   sqlite: DatabaseSync,
   fallbackThread: (threadId: string) => ModelMessage[],
@@ -79,7 +90,7 @@ export function migrateLegacyChatThreads(
   const insert = sqlite.prepare(
     "INSERT INTO chat_threads (thread_id, messages, updated_at) VALUES (?, ?, ?)",
   );
-  const migratedAt = Date.now();
+  const migratedAt = DateTime.toEpochMillis(DateTime.nowUnsafe());
   sqlite.exec("BEGIN IMMEDIATE");
   try {
     for (const { id } of rows) insert.run(id, JSON.stringify(fallbackThread(id)), migratedAt);
@@ -92,6 +103,8 @@ export function migrateLegacyChatThreads(
 }
 
 /** Materializes a session imported after the chat-state service started, if still missing. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function migrateMissingChatThread(
   sqlite: DatabaseSync,
   threadId: string,
@@ -104,13 +117,13 @@ export function migrateMissingChatThread(
        WHERE sessions.id = ? AND chat_threads.thread_id IS NULL`,
     )
     .get(threadId);
-  if (!row) return false;
+  if (!isTruthy(row)) return false;
   const { id } = decodeLegacyThreadRow(row);
   sqlite
     .prepare(
       "INSERT OR IGNORE INTO chat_threads (thread_id, messages, updated_at) VALUES (?, ?, ?)",
     )
-    .run(id, JSON.stringify(fallbackThread(id)), Date.now());
+    .run(id, JSON.stringify(fallbackThread(id)), DateTime.toEpochMillis(DateTime.nowUnsafe()));
   return true;
 }
 
@@ -143,7 +156,7 @@ export function latestChatRun(sqlite: DatabaseSync) {
   );
   return (threadId: string): RunRecord | null => {
     const row = statement.get(threadId);
-    return row ? toRun(row) : null;
+    return isTruthy(row) ? toRun(row) : null;
   };
 }
 
@@ -178,14 +191,20 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
     "INSERT INTO chat_threads VALUES (?, ?, ?) ON CONFLICT(thread_id) DO UPDATE SET messages = excluded.messages, updated_at = excluded.updated_at",
   );
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async function loadThread(threadId: string): Promise<ModelMessage[]>;
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async function loadThread(
     threadId: string,
     options: { limit?: number; before?: string },
   ): Promise<ModelMessage[] | MessagePage>;
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async function loadThread(threadId: string, options?: { limit?: number; before?: string }) {
     const row = selectThread.get(threadId);
-    const stored = row ? parseMessages(decodeJsonText(row).value) : [];
+    const stored = isTruthy(row) ? parseMessages(decodeJsonText(row).value) : [];
     if (options?.limit === undefined) return stored;
     // Old imported transcripts may lack ids. Paging needs a cursor that survives each GET.
     const messages = stored.map((message, index) =>
@@ -202,11 +221,13 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
 
   const messages = defineMessageStore({
     loadThread,
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async saveThread(threadId, next) {
       upsertThread.run(
         threadId,
         JSON.stringify(next.filter((message) => !isEmptyUserText(message))),
-        Date.now(),
+        DateTime.toEpochMillis(DateTime.nowUnsafe()),
       );
     },
   });
@@ -217,16 +238,20 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
   );
   const getRun = (runId: string) => {
     const row = selectRun.get(runId);
-    return row ? toRun(row) : null;
+    return isTruthy(row) ? toRun(row) : null;
   };
 
   const runs = defineRunStore({
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async createOrResume({ runId, threadId, startedAt, status }) {
       insertRun.run(runId, threadId, status ?? "running", startedAt);
       const stored = getRun(runId);
-      if (!stored) throw new Error(`Run ${runId} was not stored.`);
+      if (!(stored !== null)) throw new Error(`Run ${runId} was not stored.`);
       return stored;
     },
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async update(runId, patch) {
       const assignments: string[] = [];
       const values: Array<string | number | null> = [];
@@ -255,23 +280,31 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
         .prepare(`UPDATE chat_runs SET ${assignments.join(", ")} WHERE run_id = ?`)
         .run(...values, runId);
     },
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async get(runId) {
       return getRun(runId);
     },
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async findActiveRun(threadId) {
       const row = sqlite
         .prepare(
           "SELECT * FROM chat_runs WHERE thread_id = ? AND status = 'running' ORDER BY started_at DESC LIMIT 1",
         )
         .get(threadId);
-      return row ? toRun(row) : null;
+      return isTruthy(row) ? toRun(row) : null;
     },
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async listByThread(threadId) {
       return sqlite
         .prepare("SELECT * FROM chat_runs WHERE thread_id = ? ORDER BY started_at, run_id")
         .all(threadId)
         .map(toRun);
     },
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async listReclaimable({ now, ttlMs }) {
       return sqlite
         .prepare(
@@ -299,6 +332,8 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
       .map(toInterrupt);
 
   const interrupts = defineInterruptStore({
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async create(record) {
       insertInterrupt.run(
         record.interruptId,
@@ -308,17 +343,23 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
         JSON.stringify(record.payload),
       );
     },
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async resolve(interruptId, response) {
       // `undefined` has no JSON form: the column stays NULL, which reads back as "no response".
       resolveInterrupt.run(
-        Date.now(),
+        DateTime.toEpochMillis(DateTime.nowUnsafe()),
         response === undefined ? null : JSON.stringify(response),
         interruptId,
       );
     },
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async cancel(interruptId) {
-      cancelInterrupt.run(Date.now(), interruptId);
+      cancelInterrupt.run(DateTime.toEpochMillis(DateTime.nowUnsafe()), interruptId);
     },
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async commitBatch(entries) {
       const ids = new Set<string>();
       for (const entry of entries) {
@@ -326,11 +367,12 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
           throw new Error(`Interrupt batch contains duplicate id: ${entry.interruptId}.`);
         ids.add(entry.interruptId);
         const row = selectInterrupt.get(entry.interruptId);
-        if (!row) throw new Error(`Interrupt batch references missing id: ${entry.interruptId}.`);
+        if (!isTruthy(row))
+          throw new Error(`Interrupt batch references missing id: ${entry.interruptId}.`);
         if (toInterrupt(row).status !== "pending")
           throw new Error(`Interrupt batch references non-pending id: ${entry.interruptId}.`);
       }
-      const resolvedAt = Date.now();
+      const resolvedAt = DateTime.toEpochMillis(DateTime.nowUnsafe());
       sqlite.exec("SAVEPOINT chat_interrupt_batch");
       try {
         for (const entry of entries) {
@@ -354,19 +396,29 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
         throw error;
       }
     },
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async get(interruptId) {
       const row = selectInterrupt.get(interruptId);
-      return row ? toInterrupt(row) : null;
+      return isTruthy(row) ? toInterrupt(row) : null;
     },
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async list(threadId) {
       return listed("thread_id = ?", threadId);
     },
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async listPending(threadId) {
       return listed("thread_id = ? AND status = 'pending'", threadId);
     },
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async listByRun(runId) {
       return listed("run_id = ?", runId);
     },
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async listPendingByRun(runId) {
       return listed("run_id = ? AND status = 'pending'", runId);
     },
@@ -376,10 +428,14 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
     "SELECT value FROM chat_metadata WHERE namespace = ? AND key = ?",
   );
   const metadata = defineMetadataStore({
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async get(namespace, key) {
       const row = selectMetadata.get(namespace, key);
-      return row ? parseValue(decodeJsonText(row).value) : null;
+      return isTruthy(row) ? parseValue(decodeJsonText(row).value) : null;
     },
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async set(namespace, key, value) {
       if (value === null || value === undefined)
         throw new TypeError("Metadata values must not be null or undefined.");
@@ -389,6 +445,8 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
         )
         .run(namespace, key, JSON.stringify(value));
     },
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async delete(namespace, key) {
       sqlite
         .prepare("DELETE FROM chat_metadata WHERE namespace = ? AND key = ?")

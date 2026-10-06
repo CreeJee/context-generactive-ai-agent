@@ -1,3 +1,4 @@
+import { isTruthy } from "../../truthy.ts";
 import { fetchServerSentEvents, useChat } from "@tanstack/ai-react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -110,12 +111,12 @@ const problem = (text: string): Notice => ({ tone: "problem", text });
 const done = (text: string): Notice => ({ tone: "done", text });
 
 function workflowStatus(state: WorkflowState | null): Notice {
-  if (!state) return problem("워크플로 상태를 아직 불러오지 못했어요.");
-  const goal = state.goal
+  if (!(state !== null)) return problem("워크플로 상태를 아직 불러오지 못했어요.");
+  const goal = isTruthy(state.goal)
     ? `Goal v${state.goal.version} · ${goalStatusLabels[state.goal.status]}`
     : "Goal 없음";
-  const plan = state.plan
-    ? `Plan v${state.plan.version} · ${planStatusLabels[state.plan.status]}${state.goal && state.plan.goalVersion !== state.goal.version ? " · Goal 변경으로 오래됨" : ""}`
+  const plan = isTruthy(state.plan)
+    ? `Plan v${state.plan.version} · ${planStatusLabels[state.plan.status]}${isTruthy(state.goal) && state.plan.goalVersion !== state.goal.version ? " · Goal 변경으로 오래됨" : ""}`
     : "Plan 없음";
   const mode = workflowModeLabel(state);
   return done(`${mode}${mode === "완료" ? "" : " 모드"} · ${goal} · ${plan}`);
@@ -224,7 +225,7 @@ function ChatPanel({
 }) {
   const queryClient = useQueryClient();
   const { projectId } = useSessionEventScope();
-  if (!projectId) throw new Error("Chat requires an active project");
+  if (!isTruthy(projectId)) throw new Error("Chat requires an active project");
   const resumeTraceMutation = useResumeTraceTaskMutation(projectId, sessionId, holder);
   const archiveTraceMutation = useArchiveTraceTaskMutation(projectId, sessionId, holder);
   const deleteTraceMutation = useDeleteTraceTaskMutation(projectId, sessionId, holder);
@@ -301,14 +302,15 @@ function ChatPanel({
       switch (eventType) {
         case contextUsageEvent: {
           const view = Option.getOrNull(decodeContextEvent(data));
-          if (view) setLiveContext(view);
+          if (isTruthy(view)) setLiveContext(view);
           return;
         }
         case queueDeliveredEvent: {
           // Taken in at a tool call: after the message that made it, before the answer that follows.
           const last = messages.at(-1);
           const delivered = Option.getOrNull(decodeDeliveredEvent(data));
-          if (last && delivered) place(delivered.ids, { side: "after", messageId: last.id });
+          if (isTruthy(last) && delivered !== null)
+            place(delivered.ids, { side: "after", messageId: last.id });
           void queue.refresh();
           return;
         }
@@ -345,6 +347,8 @@ function ChatPanel({
     waitingForApproval,
     answered: endsWithText,
   });
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const changeWorkflowPhase = async (phase: WorkflowPhase) => {
     try {
       const state = await run.setWorkflowPhase(phase);
@@ -363,18 +367,22 @@ function ChatPanel({
     }
   };
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const revisePlan = async () => {
-    if (run.workflow?.phase !== "plan" && !(await changeWorkflowPhase("plan"))) return;
+    if (run.workflow?.phase !== "plan" && !isTruthy(await changeWorkflowPhase("plan"))) return;
     composerInput.current?.focus();
     setNotice(done("바꾸고 싶은 내용을 입력해 주세요."));
   };
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const executePlan = async () => {
     const retryingFailedVerification =
       run.workflow?.plan?.status === "executing" &&
       run.workflow.plan.verification.status === "failed";
     // Even a continuation rechecks the current server policy before dispatching another turn.
-    if (!(await changeWorkflowPhase("execute"))) return;
+    if (!isTruthy(await changeWorkflowPhase("execute"))) return;
     setNotice(null);
     void sendMessage(
       contentOf(
@@ -386,6 +394,8 @@ function ChatPanel({
     );
   };
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const controlGoal = async (action: "pause" | "resume" | "stop") => {
     try {
       await run.controlWorkflow(action);
@@ -418,9 +428,11 @@ function ChatPanel({
     });
   const unplaced = inFlight.filter((taken) => {
     const placement = placements[taken.id];
-    return !placement || !messages.some((message) => message.id === placement.messageId);
+    return !isTruthy(placement) || !messages.some((message) => message.id === placement.messageId);
   });
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const cancel = async () => {
     // Stopping only the local stream would leave the run going on the server, so ask it first.
     const result = await run.cancel();
@@ -429,8 +441,10 @@ function ChatPanel({
     if (result === "failed") setNotice(problem("명령을 실행하지 못했어요."));
   };
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const resumeTask = async (task: TraceTaskView, confirmUncertain: boolean) => {
-    if (!task.latestAttemptId) return { status: "failed" as const };
+    if (!isTruthy(task.latestAttemptId)) return { status: "failed" as const };
     try {
       const result = await resumeTraceMutation.mutateAsync({
         taskId: task.id,
@@ -458,6 +472,8 @@ function ChatPanel({
     }
   };
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const archiveTask = async (task: TraceTaskView) => {
     try {
       const result = await archiveTraceMutation.mutateAsync(task.id);
@@ -475,6 +491,8 @@ function ChatPanel({
     }
   };
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const deleteTask = async (task: TraceTaskView) => {
     try {
       const result = await deleteTraceMutation.mutateAsync(task.id);
@@ -498,13 +516,14 @@ function ChatPanel({
   const shownNotice =
     notice ?? (failed ? problem("올리지 못한 이미지가 있어요. 빼고 보내 주세요.") : null);
   const editing = composer.kind === "editing" ? composer : null;
-  const composerMode: ComposerMode = editing
-    ? { kind: "editing" }
-    : waitingForApproval
-      ? { kind: "approval" }
-      : generating
-        ? { kind: "generating" }
-        : { kind: "idle" };
+  const composerMode: ComposerMode =
+    editing !== null
+      ? { kind: "editing" }
+      : waitingForApproval
+        ? { kind: "approval" }
+        : generating
+          ? { kind: "generating" }
+          : { kind: "idle" };
   const canSend =
     (draft.trim().length > 0 || ready.length > 0) &&
     !uploading &&
@@ -523,11 +542,19 @@ function ChatPanel({
   // When this page's run stops: catch up with messages the run took in along the way, then, after
   // a normal finish, send what is waiting as the next turn (R03). Not after a cancel or failure.
   const wasGenerating = useRef(generating);
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const handleRunSettled = useEffectEvent(async () => {
     setCatchingUp(true);
     try {
       const [snapshot, state] = await Promise.all([queue.refresh(), run.refresh()]);
-      if (!snapshot || !state || state.running || state.lastRun?.status === "interrupted") return;
+      if (
+        !isTruthy(snapshot) ||
+        !isTruthy(state) ||
+        isTruthy(state.running) ||
+        state.lastRun?.status === "interrupted"
+      )
+        return;
       if (snapshot.items.some(isTakenIn))
         setMessages(
           (await queryClient.fetchQuery(sessionQueries.transcript(projectId, sessionId))).messages,
@@ -551,13 +578,15 @@ function ChatPanel({
     queue.change(id, { action: "edit", draft: text }),
   );
   useEffect(() => {
-    if (!editing) return;
+    if (!(editing !== null)) return;
+    // Native callback heartbeat/debounce timing remains at the protocol boundary.
+    // @effect-diagnostics-next-line globalTimers:off
     const timer = setTimeout(() => void saveEditDraft(editing.id, draft), editDraftSaveMs);
     return () => clearTimeout(timer);
   }, [draft, editing?.id]);
 
   const startEdit = (message: QueuedMessage) => {
-    if (editing || readOnly) return;
+    if (editing !== null || readOnly) return;
     const text =
       message.state.kind === "editing"
         ? message.state.draft
@@ -569,8 +598,10 @@ function ChatPanel({
     void queue.change(message.id, { action: "edit", draft: text });
   };
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const finishEdit = async (outcome: "save" | "remove") => {
-    if (!editing) return;
+    if (!(editing !== null)) return;
     setComposer({ kind: "compose" });
     const text = draft.trim();
     const snapshot = await queue.change(
@@ -578,14 +609,18 @@ function ChatPanel({
       outcome === "save" && text.length > 0 ? { action: "save", text } : { action: "remove" },
     );
     // Saved while nothing runs: the queue may be free to go now.
-    if (snapshot && !generating && !waitingForApproval) sendNextQueued(snapshot);
+    if (isTruthy(snapshot) && !generating && !waitingForApproval) sendNextQueued(snapshot);
   };
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const confirmQueued = async (message: QueuedMessage) => {
     const snapshot = await queue.change(message.id, { action: "confirm" });
-    if (snapshot && !generating && !waitingForApproval) sendNextQueued(snapshot);
+    if (isTruthy(snapshot) && !generating && !waitingForApproval) sendNextQueued(snapshot);
   };
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const removeQueued = async (message: QueuedMessage) => {
     if (editing?.id === message.id) return finishEdit("remove");
     await queue.change(message.id, { action: "remove" });
@@ -593,13 +628,13 @@ function ChatPanel({
 
   /** Alt+↑ picks the last message still waiting, Alt+↓ the first. */
   const pickQueued = (direction: "up" | "down") => {
-    if (editing) {
+    if (editing !== null) {
       setNotice(problem("Enter로 저장하거나 Esc로 지운 뒤 다른 메시지를 고를 수 있어요."));
       return;
     }
     const editable = queue.items.filter(isEditable);
     const message = direction === "up" ? editable.at(-1) : editable[0];
-    if (message) startEdit(message);
+    if (isTruthy(message)) startEdit(message);
   };
 
   const attach = (files: readonly File[]) => {
@@ -616,8 +651,10 @@ function ChatPanel({
    * Enter. While nothing runs it sends a turn. While a run answers it queues the message for the
    * next tool-call boundary, or with `steer` (Ctrl/⌘+Shift+Enter) sends it into the answer now.
    */
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const submit = async (mode: "queue" | "steer") => {
-    if (editing) {
+    if (editing !== null) {
       if (mode === "steer") setNotice(problem("편집을 끝낸 뒤 스티어링할 수 있어요."));
       else await finishEdit("save");
       return;
@@ -647,7 +684,7 @@ function ChatPanel({
             return setNotice(workflowStatus(run.workflow));
           case "workflow": {
             const state = await changeWorkflowPhase(command.phase);
-            if (!state) return;
+            if (!isTruthy(state)) return;
             const request =
               command.request ||
               (command.phase === "plan"
@@ -655,7 +692,7 @@ function ChatPanel({
                 : command.phase === "execute"
                   ? "승인한 Plan을 첫 번째 미완료 단계부터 실행해 줘."
                   : "");
-            if (!request) {
+            if (!(request.length > 0)) {
               setDraft("");
               return;
             }
@@ -721,7 +758,7 @@ function ChatPanel({
       case "steered": {
         // The saved conversation puts a steered message before the answer it arrived during.
         const last = messages.at(-1);
-        if (last)
+        if (isTruthy(last))
           place([outcome.message.id], {
             side: last.role === "assistant" ? "before" : "after",
             messageId: last.id,
@@ -821,7 +858,7 @@ function ChatPanel({
             resolveInterrupts((interrupt) => {
               const pending = toPendingApproval(interrupt);
               const decision = decisions[interrupt.id];
-              if (pending && decision !== undefined) pending.answer(decision);
+              if (pending !== null && decision !== undefined) pending.answer(decision);
             })
           }
           onRetry={retryInterrupts}

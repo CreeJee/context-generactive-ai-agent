@@ -1,4 +1,7 @@
+import { isTruthy } from "../truthy.ts";
 import { Semaphore } from "effect";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import { chat, type ChatMiddleware } from "@tanstack/ai";
 import { Context, Data, Effect, Layer } from "effect";
@@ -83,6 +86,8 @@ const make = (automatic: boolean) =>
           .slice(0, inputCharacters);
         const answer = yield* summaryPromise("model", () => {
           const abortController = new AbortController();
+          // Native callback heartbeat/debounce timing remains at the protocol boundary.
+          // @effect-diagnostics-next-line globalTimers:off
           const timer = setTimeout(() => abortController.abort(), summaryTimeoutMs);
           return chat({
             adapter: services.runtime.adapter(cheap),
@@ -115,7 +120,7 @@ const make = (automatic: boolean) =>
     const catchUp = (sessionId: string, whole: boolean): Effect.Effect<SummaryOutcome> =>
       Effect.gen(function* () {
         const selection = yield* active.selected;
-        if (!selection) return "unavailable" as const;
+        if (!isTruthy(selection)) return "unavailable" as const;
         const auth = yield* active.auth(selection);
         if (auth.status !== "signed-in") return "unavailable" as const;
 
@@ -144,7 +149,7 @@ const make = (automatic: boolean) =>
           if (end <= start || end > limit) break;
           const first = turnNodes[start];
           const next = turnNodes[end];
-          if (!first || !next || !lines(start) || !lines(end)) break;
+          if (!isTruthy(first) || !isTruthy(next) || !lines(start) || !lines(end)) break;
           const part = sessionNodes.filter((node) => node.seq >= first.seq && node.seq < next.seq);
           const text = yield* summarize(sessionId, part, selection);
           blocks.push({ end, nextTurnNodeId: next.id, text });
@@ -178,6 +183,6 @@ const make = (automatic: boolean) =>
 export class TurnSummaries extends Context.Service<
   TurnSummaries,
   Effect.Success<ReturnType<typeof make>>
->()("memory-agent/TurnSummaries") {
+>()("memory-agent/agent/turn-summaries/TurnSummaries") {
   static readonly layer = (automatic = true) => Layer.effect(TurnSummaries, make(automatic));
 }

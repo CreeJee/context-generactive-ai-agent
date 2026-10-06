@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off
 import { memoryTool } from "@tanstack/ai-anthropic/tools";
 import { optionalProperty } from "../src/optional-property.ts";
 import { OPENAI_CHAT_MODELS } from "@tanstack/ai-openai";
@@ -13,6 +15,8 @@ import {
 } from "../src/providers/tool-capabilities.ts";
 
 const runDefault = <A, E>(program: Effect.Effect<A, E, ProviderToolCapabilityRegistry>) =>
+  // Test entry point owns this Layer and its resource scope.
+  // @effect-diagnostics-next-line strictEffectProvide:off
   Effect.runPromise(program.pipe(Effect.provide(ProviderToolCapabilityRegistry.layer)));
 
 const failure = <A, E>(effect: Effect.Effect<A, E>) =>

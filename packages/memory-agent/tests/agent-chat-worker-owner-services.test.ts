@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off processEnv:off
 import { threadId } from "node:worker_threads";
 import { Effect, Layer } from "effect";
 import { expect, test, vi } from "vite-plus/test";
@@ -180,7 +182,7 @@ test("actual SDK worker turn keeps the DB and embedding backend in one central o
     expect(maxActiveBackends).toBe(1);
     expect(ownership.sdkWorkerIds).toHaveLength(1);
   } finally {
-    if (previous === undefined) delete process.env.CONTEXT_AGENT_GOAL_WORKER;
+    if (previous === undefined) Reflect.deleteProperty(process.env, "CONTEXT_AGENT_GOAL_WORKER");
     else process.env.CONTEXT_AGENT_GOAL_WORKER = previous;
   }
 }, 20000);

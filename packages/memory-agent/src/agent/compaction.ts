@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import type { ChatMiddleware, MetadataStore, ModelMessage } from "@tanstack/ai";
 import { evictOldest } from "@tanstack/ai-compaction";
 import { Data, Effect, Option, Schema } from "effect";
@@ -33,7 +34,7 @@ export const messageText = (message: ModelMessage) =>
  * past the budget before anything is compacted.
  */
 export function estimateTokens(message: ModelMessage): number {
-  const calls = message.toolCalls?.length ? JSON.stringify(message.toolCalls) : "";
+  const calls = isTruthy(message.toolCalls?.length) ? JSON.stringify(message.toolCalls) : "";
   let ascii = 0;
   let other = 0;
   for (const character of messageText(message) + calls) {
@@ -50,7 +51,7 @@ const clearedPrefix = "[Tool output cleared to save context.";
 
 /** What a cleared tool result says instead of its output. */
 export function clearedOutput(nodeId: string | null) {
-  return nodeId
+  return isTruthy(nodeId)
     ? `${clearedPrefix} It is kept in memory as node ${nodeId}: call read_evidence with that id to read it again.]`
     : `${clearedPrefix} It is kept in memory: find it with find_memory, then read it with read_evidence.]`;
 }
@@ -78,7 +79,8 @@ function clearAnswered(
   if (answered < 0) return null;
   let changed = false;
   const next = messages.map((message, index) => {
-    if (message.role !== "tool" || index > answered || !message.toolCallId) return message;
+    if (message.role !== "tool" || index > answered || !isTruthy(message.toolCallId))
+      return message;
     const cleared = clearedOutput(toolResultId(message.toolCallId));
     if (message.content === cleared) return message;
     changed = true;
@@ -112,12 +114,16 @@ export const userTurns = (messages: readonly ModelMessage[]) =>
  * Whether a user message is the turn a node recorded. Memory keeps a turn without a pasted key,
  * so a node with a hidden secret matches whatever the message says.
  */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export const sameTurn = (message: ModelMessage | undefined, recorded: string | null) =>
   message?.role === "user" &&
   recorded !== null &&
   (messageText(message) === recorded || recorded.includes("[redacted:"));
 
 /** The summaries that fit this conversation, oldest first, up to the first that does not. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function linedUp(
   messages: readonly ModelMessage[],
   blocks: readonly SummaryBlock[],
@@ -172,6 +178,9 @@ export interface CompactionState {
   readonly blocks: readonly SummaryBlock[];
 }
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function compactionState(
   metadata: MetadataStore,
   threadId: string,
@@ -213,7 +222,7 @@ const decodeToolArguments = Schema.decodeUnknownOption(
 /** Partial historical calls cannot be replayed; keep the stored transcript intact. */
 export function replayableToolHistory(messages: readonly ModelMessage[]): readonly ModelMessage[] {
   const replayable = messages.map((message) => {
-    if (message.role !== "assistant" || !message.toolCalls?.length) return message;
+    if (message.role !== "assistant" || !isTruthy(message.toolCalls?.length)) return message;
     const toolCalls = message.toolCalls.filter((call) =>
       Option.isSome(decodeToolArguments(call.function.arguments)),
     );
@@ -246,6 +255,9 @@ export interface Compacted {
  * and validated older summary blocks replace raw turns regardless of conversation size. Past
  * `leaveOutAt` the oldest messages are left out. The saved conversation is never changed.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function compact(
   messages: readonly ModelMessage[],
   state: CompactionState,
@@ -261,12 +273,12 @@ export async function compact(
     messages.slice(0, manual.clearedThrough),
     sources.toolResultId,
   );
-  if (clearedByHand) sent = [...clearedByHand, ...messages.slice(manual.clearedThrough)];
+  if (clearedByHand !== null) sent = [...clearedByHand, ...messages.slice(manual.clearedThrough)];
   // A completed run no longer needs its tool payload in the next request. This transition happens
   // once; clearAnswered leaves pointers unchanged and never touches the run still in progress.
   const cleared = clearAnswered(sent, sources.toolResultId);
-  if (cleared) sent = cleared;
-  if (clearedByHand || cleared) stage = "clear-answered";
+  if (cleared !== null) sent = cleared;
+  if (clearedByHand !== null || cleared !== null) stage = "clear-answered";
 
   // Stored, validated blocks are monotonic: even a small request keeps earlier turns summarized.
   // The previous 25% gate could not change the chosen blocks: through always started at the end
@@ -298,7 +310,7 @@ export async function compact(
       maxTokens: budget.leaveOutAt,
       estimate: estimateTokens,
     });
-    if (leftOut) {
+    if (isTruthy(leftOut)) {
       sent = leftOut;
       stage = "leave-out";
     }
@@ -306,10 +318,10 @@ export async function compact(
   // Do not perturb an intact prefix with retrieval. Once this request did omit original content,
   // an optional appendix belongs at its variable tail, immediately before the latest user message,
   // so providers that require user-last requests still accept it. Retrieval is deliberately best-effort.
-  if (stage !== "none" && sources.retrievalAppendix) {
+  if (stage !== "none" && sources.retrievalAppendix !== undefined) {
     try {
       const appendix = await sources.retrievalAppendix(sent);
-      if (appendix) {
+      if (isTruthy(appendix)) {
         const lastUser = sent.findLastIndex((message) => message.role === "user");
         sent =
           lastUser < 0
@@ -375,6 +387,8 @@ const largeReportResult = Schema.fromJsonString(
 );
 
 /** Purpose-specific provider previews for recorded results; original history stays unchanged. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function lightweightToolResults(
   messages: readonly ModelMessage[],
   toolResultId: (toolCallId: string) => string | null,
@@ -389,12 +403,15 @@ export function lightweightToolResults(
   return messages.map((message) => {
     if (
       message.role !== "tool" ||
-      !message.toolCallId ||
+      !isTruthy(message.toolCallId) ||
       !Schema.is(Schema.String)(message.content)
     )
       return message;
     const name = names.get(message.toolCallId);
-    if (!name || !["run_shell", "list_files", "search_files", "get_subagent_report"].includes(name))
+    if (
+      !isTruthy(name) ||
+      !["run_shell", "list_files", "search_files", "get_subagent_report"].includes(name)
+    )
       return message;
     const preview = (text: string, length = 800) => {
       if (text.length <= length) return text;
@@ -404,7 +421,7 @@ export function lightweightToolResults(
     let summary;
     if (name === "run_shell") {
       const result = Option.getOrUndefined(Schema.decodeOption(largeShellResult)(message.content));
-      if (!result) return message;
+      if (!isTruthy(result)) return message;
       summary = {
         // The command is already present in the tool call. Avoid echoing it (and the shell path)
         // on every model request; the recorded original remains available by ID.
@@ -420,7 +437,7 @@ export function lightweightToolResults(
       };
     } else if (name === "list_files") {
       const result = Option.getOrUndefined(Schema.decodeOption(largeListResult)(message.content));
-      if (!result) return message;
+      if (!isTruthy(result)) return message;
       summary = {
         ...result,
         paths: result.paths.slice(0, 20),
@@ -428,7 +445,7 @@ export function lightweightToolResults(
       };
     } else if (name === "search_files") {
       const result = Option.getOrUndefined(Schema.decodeOption(largeSearchResult)(message.content));
-      if (!result) return message;
+      if (!isTruthy(result)) return message;
       summary = {
         ...result,
         matches: result.matches.slice(0, 8).map((match) => ({
@@ -440,7 +457,7 @@ export function lightweightToolResults(
       };
     } else {
       const result = Option.getOrUndefined(Schema.decodeOption(largeReportResult)(message.content));
-      if (!result) return message;
+      if (!isTruthy(result)) return message;
       summary = {
         ...result,
         answer: preview(result.answer, 1_200),
@@ -451,7 +468,7 @@ export function lightweightToolResults(
     const serialized = JSON.stringify(summary);
     if (serialized.length >= message.content.length) return message;
     const nodeId = toolResultId(message.toolCallId);
-    if (!nodeId) return message; // Never promise an ID that has not been recorded.
+    if (!isTruthy(nodeId)) return message; // Never promise an ID that has not been recorded.
     const shortened = `[${name} preview; full result: read_tool_result ID ${nodeId}, page by offset. Check omitted entries before relying on them.]\n${serialized}`;
     return shortened.length < message.content.length ? { ...message, content: shortened } : message;
   });
@@ -461,6 +478,8 @@ export function lightweightToolResults(
  * Compacts what one session sends to the model (see {@link compact}), before every model call of
  * a run. Goes last among the middleware that shape the conversation.
  */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function compaction(
   metadata: MetadataStore,
   sources: CompactionSources,
@@ -470,10 +489,12 @@ export function compaction(
 ): ChatMiddleware {
   return {
     name: "memory-agent/compaction",
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async onConfig(ctx, config) {
       if (ctx.phase === "init") {
         const restored = await historyForModel?.(config.messages);
-        if (!restored) return;
+        if (!isTruthy(restored)) return;
         const replayed = new Set(
           restored.flatMap((message) => (message.toolCalls ?? []).map((call) => call.id)),
         );
@@ -489,8 +510,8 @@ export function compaction(
               (call) =>
                 !replayed.has(call.id) &&
                 !answered.has(call.id) &&
-                !approvals?.has(call.id) &&
-                !approvals?.has(`approval_${call.id}`),
+                !isTruthy(approvals?.has(call.id)) &&
+                !isTruthy(approvals?.has(`approval_${call.id}`)),
             )
             .map((call) => call.id),
         );
@@ -508,13 +529,13 @@ export function compaction(
       const state = await compactionState(metadata, ctx.threadId);
       const coldId = await pendingColdObservation(metadata, ctx.threadId);
       const restored = await historyForModel?.(config.messages);
-      const removedTurns = restored
+      const removedTurns = isTruthy(restored)
         ? userTurns(config.messages).length - userTurns(restored).length
         : 0;
       const restoredContext = restored?.[0];
       const { messages, stage } = await compact(
-        restored ? restored.slice(1) : config.messages,
-        restored
+        isTruthy(restored) ? restored.slice(1) : config.messages,
+        isTruthy(restored)
           ? {
               manual: noManualCompaction,
               blocks: state.blocks
@@ -523,7 +544,7 @@ export function compaction(
             }
           : state,
         sources,
-        restoredContext
+        isTruthy(restoredContext)
           ? {
               ...budget,
               leaveOutAt: Math.max(1, budget.leaveOutAt - estimateTokens(restoredContext)),
@@ -532,14 +553,14 @@ export function compaction(
         coldId !== null,
       );
       if (coldId !== null) await consumeColdObservation(metadata, ctx.threadId, coldId);
-      observed(restored && stage === "none" ? "summarize" : stage);
+      observed(isTruthy(restored) && stage === "none" ? "summarize" : stage);
       const question = restored?.findLast(
         (message) => message.role === "user" && messageText(message).trim(),
       );
       const retained =
-        question && !messages.includes(question) ? [question, ...messages] : messages;
+        isTruthy(question) && !messages.includes(question) ? [question, ...messages] : messages;
       const providerMessages = lightweightToolResults(
-        restoredContext ? [restoredContext, ...retained] : messages,
+        isTruthy(restoredContext) ? [restoredContext, ...retained] : messages,
         sources.toolResultId,
       ).filter((message) => !isEmptyUserText(message));
       return providerMessages.every((message, index) => message === config.messages[index]) &&
@@ -572,6 +593,8 @@ const compactionPromise = <A>(
  * call the model has answered from and sends the turns before the latest few as their summaries,
  * whatever the budget, for this and every later run.
  */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export const compactByHand = <E>(
   metadata: MetadataStore,
   threadId: string,

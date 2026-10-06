@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off newPromise:off nodeBuiltinImport:off
 import { MessageChannel } from "node:worker_threads";
 import { once } from "node:events";
 import { describe, expect, it } from "vite-plus/test";

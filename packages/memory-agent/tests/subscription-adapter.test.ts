@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off newPromise:off
 import { EventType, chat, toolDefinition, type TextOptions } from "@tanstack/ai";
 import { InternalLogger } from "@tanstack/ai/adapter-internals";
 import { Schema } from "effect";

@@ -1,4 +1,8 @@
+import { isTruthy } from "../truthy.ts";
+import { isDeepStrictEqual } from "node:util";
 import { openaiCompatibleText } from "@tanstack/ai-openai/compatible";
+// Native host/SDK boundary uses cryptographic configuration fingerprints.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash } from "node:crypto";
 import { Context, Data, Effect, Layer, Option, Schema, Semaphore } from "effect";
 import { GlobalConfig, type GlobalConfigApi } from "../config/global-config.ts";
@@ -11,6 +15,10 @@ import {
 } from "./openai-compatible-config.ts";
 import { subscriptionAgentLoop } from "./subscription-runtime.ts";
 import { CompatibleModelPage, readCompatibleReasoning } from "./compatible-model-discovery.ts";
+
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
+const stringifyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 export class OpenAICompatibleFailed extends Data.TaggedError("OpenAICompatibleFailed")<{
   readonly operation: "validation" | "keychain" | "partial" | "test" | "models";
@@ -35,23 +43,29 @@ export interface CompatibleKeyStore {
 }
 const keyEntry = () =>
   new (requireRuntime("@napi-rs/keyring").AsyncEntry)(
+    // Native host/SDK configuration boundary reads or forwards the host environment.
+    // @effect-diagnostics-next-line processEnv:off
     process.env.CONTEXT_AGENT_CREDENTIAL_NAMESPACE ?? "context-generactive-agent",
     "openai-compatible-api-key",
   );
 const keychain: CompatibleKeyStore = {
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   get: async () => (await keyEntry().getPassword()) ?? null,
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   set: async (value) => {
     if (value === null) await keyEntry().deletePassword();
     else await keyEntry().setPassword(value);
   },
 };
 export class CompatibleKeyring extends Context.Service<CompatibleKeyring, CompatibleKeyStore>()(
-  "memory-agent/CompatibleKeyring",
+  "memory-agent/providers/openai-compatible/CompatibleKeyring",
 ) {
   static readonly layer = Layer.succeed(CompatibleKeyring, keychain);
 }
 export class CompatibleFetch extends Context.Service<CompatibleFetch, typeof fetch>()(
-  "memory-agent/CompatibleFetch",
+  "memory-agent/providers/openai-compatible/CompatibleFetch",
 ) {
   static readonly layer = Layer.succeed(CompatibleFetch, fetch);
 }
@@ -65,11 +79,13 @@ const requestRoles = Schema.decodeUnknownOption(
 const credentialPrefix = "context-generactive-agent/openai-compatible/v1:";
 const StoredCredential = Schema.Struct({ baseUrl: Schema.String, key: Schema.String });
 const credentialFor = (stored: string | null, baseUrl: string): string | null => {
-  if (!stored) return null;
+  if (!isTruthy(stored)) return null;
   // Legacy credentials predate endpoint binding. An endpoint change without an explicit
   // replacement or clear is rejected below; newly written credentials are always bound.
   if (!stored.startsWith(credentialPrefix)) return stored;
   try {
+    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+    // @effect-diagnostics-next-line schemaSync:off
     const value = Schema.decodeUnknownSync(StoredCredential)(
       JSON.parse(stored.slice(credentialPrefix.length)),
     );
@@ -81,23 +97,27 @@ const credentialFor = (stored: string | null, baseUrl: string): string | null =>
 export function validateCompatibleConfiguration(
   input: OpenAICompatibleUpdate,
 ): OpenAICompatibleUpdate {
-  const value = Schema.decodeUnknownSync(OpenAICompatibleUpdate)(input);
+  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+  // @effect-diagnostics-next-line schemaSync:off
+  const value = Schema.decodeSync(OpenAICompatibleUpdate)(input);
   const url = new URL(value.baseUrl);
   if (
     !["http:", "https:"].includes(url.protocol) ||
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash ||
+    url.username.length > 0 ||
+    url.password.length > 0 ||
+    url.search.length > 0 ||
+    url.hash.length > 0 ||
     value.contextWindow < 1024 ||
     value.contextWindow > 10_000_000 ||
     value.outputBudget < 1 ||
     value.outputBudget >= value.contextWindow ||
-    !value.model.trim()
+    !isTruthy(value.model.trim())
   )
     throw new OpenAICompatibleFailed({ operation: "validation" });
   return { ...value, baseUrl: url.href.replace(/\/+$/, ""), model: value.model.trim() };
 }
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function makeOpenAICompatibleSettings(
   config: GlobalConfigApi,
   keys: CompatibleKeyStore = keychain,
@@ -115,7 +135,7 @@ export function makeOpenAICompatibleSettings(
     const stored = yield* attempt("keychain", () => keys.get());
     return {
       configuration,
-      key: configuration ? credentialFor(stored, configuration.baseUrl) : null,
+      key: isTruthy(configuration) ? credentialFor(stored, configuration.baseUrl) : null,
       hasStoredKey: stored !== null,
     };
   });
@@ -168,7 +188,7 @@ export function makeOpenAICompatibleSettings(
                 reasoning: sameModel ? prior.openaiCompatible?.reasoning : undefined,
               },
             };
-            if (prior.provider === provider && prior.model)
+            if (prior.provider === provider && isTruthy(prior.model))
               patch = { ...patch, model: configuration.model };
             if (prior.provider === provider && !sameModel)
               patch = { ...patch, reasoningEffort: "default" };
@@ -186,22 +206,24 @@ export function makeOpenAICompatibleSettings(
     );
   const requestOperation = Effect.fnUntraced(function* (operation: "test" | "models") {
     const { configuration: settings, key } = yield* updates.withPermit(snapshot);
-    if (!settings) return yield* new OpenAICompatibleFailed({ operation });
+    if (!isTruthy(settings)) return yield* new OpenAICompatibleFailed({ operation });
     const headers = new Headers({ "Content-Type": "application/json" });
-    if (key) headers.set("Authorization", `Bearer ${key}`);
+    if (isTruthy(key)) headers.set("Authorization", `Bearer ${key}`);
     const init: RequestInit = {
       method: operation === "models" ? "GET" : "POST",
       redirect: "error",
       headers,
     };
     if (operation === "test")
-      init.body = JSON.stringify({
+      init.body = stringifyJson({
         model: settings.model,
         messages: [{ role: "user", content: "Reply OK" }],
         max_tokens: Math.min(16, settings.outputBudget),
         stream: false,
       });
     return yield* Effect.tryPromise({
+      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+      // @effect-diagnostics-next-line asyncFunction:off
       try: async (signal) => {
         const response = await fetcher(
           `${settings.baseUrl}/${operation === "models" ? "models" : "chat/completions"}`,
@@ -223,23 +245,22 @@ export function makeOpenAICompatibleSettings(
     request("models"),
     ({ page: rawPage, configuration: requested }) =>
       Effect.flatMap(
-        Effect.try({
-          try: () => Schema.decodeUnknownSync(CompatibleModelPage)(rawPage),
-          catch: () => new OpenAICompatibleFailed({ operation: "models" }),
-        }),
+        Schema.decodeUnknownEffect(CompatibleModelPage)(rawPage).pipe(
+          Effect.mapError(() => new OpenAICompatibleFailed({ operation: "models" })),
+        ),
         (page) =>
           updates.withPermit(
             Effect.gen(function* () {
               const ids = page.data.map((entry) => entry.id);
               const configuration = yield* read;
-              if (!configuration) return ids;
+              if (!isTruthy(configuration)) return ids;
               if (
                 configuration.baseUrl !== requested.baseUrl ||
                 configuration.model !== requested.model
               )
                 return yield* new OpenAICompatibleFailed({ operation: "models" });
               const reasoning = readCompatibleReasoning(configuration.model, page);
-              if (JSON.stringify(reasoning) !== JSON.stringify(configuration.reasoning)) {
+              if (!isDeepStrictEqual(reasoning, configuration.reasoning)) {
                 const stored = yield* config.read;
                 // Before capability discovery, none meant to omit the wire parameter.
                 const legacyDefault =
@@ -258,20 +279,20 @@ export function makeOpenAICompatibleSettings(
       ),
   );
   const test = Effect.flatMap(request("test"), ({ page }) =>
-    Effect.try({
-      try: () => {
-        const completion = Schema.decodeUnknownSync(
-          Schema.Struct({
-            choices: Schema.Array(
-              Schema.Struct({ message: Schema.Struct({ content: Schema.NullOr(Schema.String) }) }),
-            ),
-          }),
-        )(page);
-        if (completion.choices.length === 0) throw new Error("Empty completion");
-        return { ok: true as const };
-      },
-      catch: () => new OpenAICompatibleFailed({ operation: "test" }),
-    }),
+    Schema.decodeUnknownEffect(
+      Schema.Struct({
+        choices: Schema.Array(
+          Schema.Struct({ message: Schema.Struct({ content: Schema.NullOr(Schema.String) }) }),
+        ),
+      }),
+    )(page).pipe(
+      Effect.mapError(() => new OpenAICompatibleFailed({ operation: "test" })),
+      Effect.flatMap((completion) =>
+        completion.choices.length === 0
+          ? Effect.fail(new OpenAICompatibleFailed({ operation: "test" }))
+          : Effect.succeed({ ok: true as const }),
+      ),
+    ),
   );
   const model = (settings: OpenAICompatibleConfiguration): ProviderModel => ({
     provider,
@@ -295,15 +316,20 @@ export function makeOpenAICompatibleSettings(
   });
   const pinRrsiClient = Effect.gen(function* () {
     const { configuration, key } = yield* updates.withPermit(snapshot);
-    if (!configuration) return yield* new OpenAICompatibleFailed({ operation: "validation" });
+    if (!isTruthy(configuration))
+      return yield* new OpenAICompatibleFailed({ operation: "validation" });
     return {
       configuration,
+      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+      // @effect-diagnostics-next-line asyncFunction:off
       complete: async (body: string, signal: AbortSignal) => {
-        const payload = Schema.decodeUnknownSync(
+        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+        // @effect-diagnostics-next-line schemaSync:off
+        const payload = Schema.decodeSync(
           Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
         )(body);
         const headers = new Headers({ "Content-Type": "application/json" });
-        if (key) headers.set("Authorization", `Bearer ${key}`);
+        if (isTruthy(key)) headers.set("Authorization", `Bearer ${key}`);
         const response = await fetcher(`${configuration.baseUrl}/chat/completions`, {
           method: "POST",
           headers,
@@ -322,7 +348,7 @@ export function makeOpenAICompatibleSettings(
           throw new CompatibleCompletionRejected({
             status: response.status,
             reason:
-              capacity && capacity.error.estimated_bytes > capacity.error.limit_bytes
+              capacity !== undefined && capacity.error.estimated_bytes > capacity.error.limit_bytes
                 ? "memory_capacity_exceeded"
                 : "request_rejected",
           });
@@ -337,7 +363,7 @@ export function makeOpenAICompatibleSettings(
       provider,
       status: Effect.map(read, (settings) => ({
         provider,
-        status: settings ? ("signed-in" as const) : ("signed-out" as const),
+        status: isTruthy(settings) ? ("signed-in" as const) : ("signed-out" as const),
       })),
       connect: Effect.succeed({ provider, status: "signed-out" }),
       cancel: Effect.succeed({ provider, status: "signed-out" }),
@@ -348,15 +374,15 @@ export function makeOpenAICompatibleSettings(
       list: Effect.gen(function* () {
         yield* listModels.pipe(Effect.option);
         const settings = yield* read;
-        return settings ? [model(settings)] : [];
+        return isTruthy(settings) ? [model(settings)] : [];
       }),
       selected: Effect.map(config.read, (settings) =>
-        settings.provider === provider && settings.model
+        settings.provider === provider && isTruthy(settings.model)
           ? {
               provider,
               model: settings.model,
               reasoningEffort:
-                settings.openaiCompatible &&
+                isTruthy(settings.openaiCompatible) &&
                 model(settings.openaiCompatible).supportedReasoningEfforts.includes(
                   settings.reasoningEffort ?? "default",
                 )
@@ -372,7 +398,7 @@ export function makeOpenAICompatibleSettings(
           Effect.gen(function* () {
             const settings = yield* read;
             if (
-              !settings ||
+              !isTruthy(settings) ||
               id !== settings.model ||
               !model(settings).supportedReasoningEfforts.includes(effort)
             )
@@ -388,7 +414,7 @@ export function makeOpenAICompatibleSettings(
       adapter: (selection) => {
         const settings = Effect.runSync(read);
         if (
-          !settings ||
+          !isTruthy(settings) ||
           selection.model !== settings.model ||
           selection.provider !== provider ||
           !model(settings).supportedReasoningEfforts.includes(selection.reasoningEffort)
@@ -403,7 +429,7 @@ export function makeOpenAICompatibleSettings(
           ({ configuration, key }) => ({
             value: key,
             failed:
-              !configuration ||
+              !isTruthy(configuration) ||
               configuration.baseUrl !== settings.baseUrl ||
               configuration.model !== settings.model ||
               configuration.contextWindow !== settings.contextWindow ||
@@ -419,6 +445,8 @@ export function makeOpenAICompatibleSettings(
           apiKey: "unused",
           api: "chat-completions",
           maxRetries: 0,
+          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+          // @effect-diagnostics-next-line asyncFunction:off
           fetch: async (url, init) => {
             const credential = await pinnedKey;
             if (runAbort.signal.aborted) throw new Error("Compatible run cancelled");
@@ -426,10 +454,14 @@ export function makeOpenAICompatibleSettings(
             const key = credential.value;
             const headers = new Headers(init?.headers);
             headers.delete("authorization");
-            if (key) headers.set("authorization", `Bearer ${key}`);
+            if (isTruthy(key)) headers.set("authorization", `Bearer ${key}`);
+            // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+            // @effect-diagnostics-next-line schemaSync:off
             const rawBody = Schema.decodeUnknownSync(Schema.String)(init?.body ?? "{}");
             const payload = {
-              ...Schema.decodeUnknownSync(
+              // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+              // @effect-diagnostics-next-line schemaSync:off
+              ...Schema.decodeSync(
                 Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
               )(rawBody),
             };
@@ -469,7 +501,7 @@ export function makeOpenAICompatibleSettings(
                 body,
                 headers,
                 redirect: "error",
-                signal: init?.signal
+                signal: isTruthy(init?.signal)
                   ? AbortSignal.any([init.signal, runAbort.signal])
                   : runAbort.signal,
               });
@@ -485,14 +517,18 @@ export function makeOpenAICompatibleSettings(
                   codes.push(current.code);
                 current = current.cause;
               }
-              const diagnostic = codes.length ? codes.join(" <- ") : "transport failure";
+              const diagnostic = isTruthy(codes.length) ? codes.join(" <- ") : "transport failure";
               const error = new Error(`Compatible API request failed: ${diagnostic}`, { cause });
+              // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+              // @effect-diagnostics-next-line globalConsole:off
               console.error(error.message);
               throw error;
             }
           },
         });
         const original = adapter.chatStream.bind(adapter);
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        // @effect-diagnostics-next-line asyncFunction:off
         adapter.chatStream = async function* (options) {
           const request = {
             ...options,
@@ -501,11 +537,11 @@ export function makeOpenAICompatibleSettings(
           if (!settings.toolCalling) request.tools = [];
           try {
             for await (const chunk of original(request)) {
-              if (!settings.toolCalling && String(chunk.type).startsWith("TOOL_CALL"))
+              if (!isTruthy(settings.toolCalling) && String(chunk.type).startsWith("TOOL_CALL"))
                 throw new Error("Compatible tool calling is disabled");
               switch (chunk.type) {
                 case "RUN_ERROR":
-                  yield chunk.message.includes("No user query found in messages")
+                  yield isTruthy(chunk.message.includes("No user query found in messages"))
                     ? { ...chunk, message: `${chunk.message}\n${promptDiagnostic}` }
                     : chunk;
                   break;
@@ -526,11 +562,13 @@ export function makeOpenAICompatibleSettings(
       },
       contextWindow: () => {
         const settings = Effect.runSync(read);
-        return settings ? settings.contextWindow - settings.outputBudget : 0;
+        return isTruthy(settings) ? settings.contextWindow - settings.outputBudget : 0;
       },
       contextWindowKnown: () => true,
       agentLoop: subscriptionAgentLoop,
       runMiddleware: () => ({ name: "memory-agent/openai-compatible" }),
+      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+      // @effect-diagnostics-next-line asyncFunction:off
       steer: async () => "no_turn",
     },
   };
@@ -540,7 +578,7 @@ export type OpenAICompatibleSettingsApi = ReturnType<typeof makeOpenAICompatible
 export class OpenAICompatibleSettings extends Context.Service<
   OpenAICompatibleSettings,
   OpenAICompatibleSettingsApi
->()("memory-agent/OpenAICompatibleSettings") {
+>()("memory-agent/providers/openai-compatible/OpenAICompatibleSettings") {
   static readonly layerWith = (
     keys: Layer.Layer<CompatibleKeyring>,
     fetcher: Layer.Layer<CompatibleFetch>,

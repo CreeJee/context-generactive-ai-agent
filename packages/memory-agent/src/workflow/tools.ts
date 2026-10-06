@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
 import { Context, Effect, Layer } from "effect";
 import { AppEvents } from "../events/app-events.ts";
@@ -55,7 +56,7 @@ const make = Effect.gen(function* () {
         run(
           Effect.gen(function* () {
             const workflows = yield* Workflows;
-            if (runId) {
+            if (runId.length > 0) {
               const request = yield* workflows.requestNewGoal(sessionId, runId, input);
               return {
                 ...request,
@@ -120,31 +121,29 @@ const make = Effect.gen(function* () {
           "Record durable Goal/Plan/step progress, evidence and verification. Plan and step progress is executable only while the workflow is in Execute or Verify; after update_plan returns the workflow to Plan, wait for Execute to be confirmed before recording it. Never call this in parallel with update_plan. Classify verification as passed, failed, invalid_hypothesis, invalid_criterion, inconclusive, or blocked instead of treating every non-pass as an implementation failure. Set recoveryPhase to goal or plan for invalid_hypothesis. A completed step needs evidence; a completed Goal or Plan needs passed verification with evidence; a completed Plan also needs every step completed. Provenance-bound Goals also require criterionMappings covering every current outcome: freeze outcomeIndex/outcomeText and stepId/acceptanceIndex/acceptanceText from the current Plan, with actual runId and successful verification tool-result evidenceNodeIds. Only current Goal/Plan versions are supported; registration is execution authorization, not passed proof. The owner derives provenance and recorder identity, never accept those from input.",
         inputSchema: toToolSchema(UpdateWorkflowProgress),
       }).server((input) =>
-        run(
-          exposeProgressRefusal(
-            Effect.flatMap(Workflows, (workflows) =>
-              workflows.updateProgress(
-                sessionId,
-                {
-                  ...input,
-                  steps: (input.steps ?? []).map((step) => ({
-                    ...step,
-                    evidence: step.evidence ?? [],
-                  })),
-                  goalEvidence: input.goalEvidence ?? [],
-                  planEvidence: input.planEvidence ?? [],
-                },
-                runId,
-              ),
-            ).pipe(
-              Effect.tap(() => Effect.sync(() => events.publishSession(sessionId, "run-state"))),
-              Effect.map((state) => ({
-                phase: state.phase,
-                goal: state.goal,
-                plan: state.plan,
+        Effect.flatMap(Workflows, (workflows) =>
+          workflows.updateProgress(
+            sessionId,
+            {
+              ...input,
+              steps: (input.steps ?? []).map((step) => ({
+                ...step,
+                evidence: step.evidence ?? [],
               })),
-            ),
+              goalEvidence: input.goalEvidence ?? [],
+              planEvidence: input.planEvidence ?? [],
+            },
+            runId,
           ),
+        ).pipe(
+          Effect.tap(() => Effect.sync(() => events.publishSession(sessionId, "run-state"))),
+          Effect.map((state) => ({
+            phase: state.phase,
+            goal: state.goal,
+            plan: state.plan,
+          })),
+          exposeProgressRefusal,
+          run,
         ),
       );
 
@@ -168,7 +167,7 @@ const make = Effect.gen(function* () {
 
 /** Tools that write only workflow artifacts, never project files. */
 export class WorkflowTools extends Context.Service<WorkflowTools, Effect.Success<typeof make>>()(
-  "memory-agent/WorkflowTools",
+  "memory-agent/workflow/tools/WorkflowTools",
 ) {
   static readonly layer = Layer.effect(WorkflowTools, make);
 }
@@ -195,6 +194,8 @@ const ruleSource = (rule: ResolvedRules["rules"][number]) => {
   }
 };
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function workflowInstructions(
   state: WorkflowState,
   resolved: ResolvedRules,
@@ -214,7 +215,7 @@ Never claim an artifact was stored unless its update tool completed.
 Applicable workflow rules (reference these ids from Plan steps; do not copy their text into the artifact):
 ${applicableRules || "(none)"}${resolved.degraded.includes("embedding") ? "\nOptional semantic rule retrieval was unavailable; required metadata rules still apply." : ""}${resolved.degraded.includes("source") ? "\nOne or more optional structured rule sources were invalid or unreadable and were skipped." : ""}`;
 
-  const goal = state.goal
+  const goal = isTruthy(state.goal)
     ? `Goal v${state.goal.version} (${state.goal.status}): ${state.goal.statement}
 Outcomes:
 ${compactList(state.goal.outcomes)}
@@ -237,7 +238,7 @@ The user delegated an outcome, not merely a request to describe a goal. Save a c
 
 ${goal}`;
     case "plan": {
-      const plan = state.plan
+      const plan = isTruthy(state.plan)
         ? `Plan v${state.plan.version} (${state.plan.status}, based on Goal v${state.plan.goalVersion}): ${state.plan.summary}`
         : "Plan: not recorded yet.";
       return `${common}
@@ -256,7 +257,7 @@ When repairing failed verification, use the recorded failure evidence, perform t
 ${goal}
 
 ${
-  state.plan
+  isTruthy(state.plan)
     ? `Approved Plan v${state.plan.version}: ${state.plan.summary}
 Current steps:
 ${state.plan.steps.map((step) => `- ${step.id} [${step.status}]: ${step.title}${step.status === "completed" ? "" : `\n  Description: ${step.description}\n  Depends on: ${step.dependsOn.join(", ") || "(none)"}\n  Acceptance criteria:\n${compactList(step.acceptanceCriteria, step.acceptanceCriteria.length)}\n  Rule refs: ${step.ruleRefs.join(", ") || "(none)"}\n  Recent evidence (historical evidence is not fresh verification):\n${compactList(step.evidence.slice(-6))}`}`).join("\n")}`

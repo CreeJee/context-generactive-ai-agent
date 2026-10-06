@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { Effect, Schema } from "effect";
 import { EvaluationFailed } from "./failure.ts";
 
@@ -9,20 +10,20 @@ export const readTrialAnswer = Effect.fn("Rrsi.readTrialAnswer")(function* (stre
   const text: string[] = [];
   for (const line of stream.split("\n")) {
     if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
-    const chunk = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Chunk))(
-      line.slice(6),
-    ).pipe(Effect.mapError(() => new EvaluationFailed({ reason: "protocol_invalid" })));
+    const chunk = yield* Schema.decodeEffect(Schema.fromJsonString(Chunk))(line.slice(6)).pipe(
+      Effect.mapError(() => EvaluationFailed.make({ reason: "protocol_invalid" })),
+    );
     switch (chunk.type) {
       case "RUN_ERROR":
-        return yield* new EvaluationFailed({ reason: "trial_execution_failed" });
+        return yield* EvaluationFailed.make({ reason: "trial_execution_failed" });
       case "RUN_FINISHED":
         finished = true;
         break;
       case "TEXT_MESSAGE_CONTENT":
-        if (chunk.delta) text.push(chunk.delta);
+        if (isTruthy(chunk.delta)) text.push(chunk.delta);
         break;
     }
   }
-  if (!finished) return yield* new EvaluationFailed({ reason: "evaluation_incomplete" });
+  if (!finished) return yield* EvaluationFailed.make({ reason: "evaluation_incomplete" });
   return text.join("");
 });

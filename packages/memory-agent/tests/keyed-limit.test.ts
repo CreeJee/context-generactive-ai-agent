@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off
 import { Deferred, Effect, Fiber } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { keyedSerialLimit } from "../src/concurrency/keyed-limit.ts";

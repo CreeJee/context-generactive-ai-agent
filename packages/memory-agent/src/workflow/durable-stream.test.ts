@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off globalFetch:off newPromise:off nodeBuiltinImport:off
+import { isTruthy } from "../truthy.ts";
 import { describe, expect, it } from "vite-plus/test";
 import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -16,7 +19,7 @@ import { migrations } from "../db/migrations.ts";
 function owner(path: string) {
   const sqlite = new DatabaseSync(path);
   sqlite.exec("PRAGMA foreign_keys = ON");
-  if (!sqlite.prepare("SELECT name FROM sqlite_master WHERE name = 'projects'").get()) {
+  if (!isTruthy(sqlite.prepare("SELECT name FROM sqlite_master WHERE name = 'projects'").get())) {
     for (const migration of migrations) sqlite.exec(migration);
     sqlite.exec(`
       INSERT INTO projects (id, root, name, created_at) VALUES ('project', '/test', 'test', 'now');

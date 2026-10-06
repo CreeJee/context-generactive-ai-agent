@@ -1,7 +1,21 @@
 import { totalmem } from "node:os";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
-import { Context, Data, Effect, Layer, Schema } from "effect";
+import {
+  DateTime,
+  Clock,
+  Context,
+  Data,
+  Deferred,
+  HashMap,
+  Ref,
+  Effect,
+  Layer,
+  Option,
+  Schema,
+} from "effect";
 import { GlobalConfig, type GpuCheck, type Settings } from "../../config/global-config.ts";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { runtimeWorker } from "../../runtime/resources.ts";
@@ -87,6 +101,8 @@ export function normalize(vector: Float32Array): Float32Array {
  * shortest first, each batch within {@link localModel.batchSize} texts and
  * {@link localModel.batchCost}.
  */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function planBatches(
   tokenCounts: readonly number[],
   limits: { readonly size: number; readonly cost: number } = {
@@ -141,7 +157,7 @@ const Reply = Schema.Union([
   Schema.Struct({ id: Schema.Finite, kind: Schema.Literal("loaded"), device: EmbeddingDevice }),
 ]);
 type Reply = typeof Reply.Type;
-const decodeReply = Schema.decodeUnknownSync(Reply);
+const decodeReply = Schema.decodeUnknownOption(Reply);
 
 /** Which file to load, and the devices to try it on in order. */
 interface ModelSetup {
@@ -162,6 +178,8 @@ const modes = {
 export const gpuMemoryThreshold = 16 * 1024 ** 3;
 
 /** The mode the app runs with, given the settings it starts with. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function embeddingModeFor(
   settings: Settings,
   memoryBytes: number = totalmem(),
@@ -196,14 +214,15 @@ function modelWorker(cacheDir: string, setup: ModelSetup) {
   let worker: Worker | null = null;
   let device: EmbeddingDevice | null = null;
   let nextId = 1;
-  const pending = new Map<number, (reply: Reply) => void>();
+  const pending = Ref.makeUnsafe(HashMap.empty<number, Deferred.Deferred<Reply>>());
 
   const stop = (reason: string) => {
     const current = worker;
     worker = null;
     device = null;
-    for (const [id, resolve] of pending) resolve({ id, kind: "failed", stage: "run", reason });
-    pending.clear();
+    const waiting = Effect.runSync(Ref.getAndSet(pending, HashMap.empty()));
+    for (const [id, done] of waiting)
+      Deferred.doneUnsafe(done, Effect.succeed({ id, kind: "failed", stage: "run", reason }));
     return current?.terminate();
   };
 
@@ -213,7 +232,9 @@ function modelWorker(cacheDir: string, setup: ModelSetup) {
       if (worker === created) void stop("embedding worker stopped");
     };
     created.on("message", (message) => {
-      const reply = decodeReply(message);
+      const decoded = decodeReply(message);
+      if (Option.isNone(decoded)) return lost();
+      const reply = decoded.value;
       switch (reply.kind) {
         case "loaded":
           if (worker === created) device = reply.device;
@@ -221,12 +242,15 @@ function modelWorker(cacheDir: string, setup: ModelSetup) {
         case "counts":
         case "rows":
         case "failed":
-          pending.get(reply.id)?.(reply);
-          pending.delete(reply.id);
+          const done = Option.getOrUndefined(
+            HashMap.get(Effect.runSync(Ref.get(pending)), reply.id),
+          );
+          Effect.runSync(Ref.update(pending, HashMap.remove(reply.id)));
           // A model that failed to load is tried again by the next request, in a new worker.
           if (reply.kind === "failed" && reply.stage === "load") lost();
           // An idle worker must not keep the process alive; one with requests in flight must.
-          else if (pending.size === 0) created.unref();
+          else if (HashMap.isEmpty(Effect.runSync(Ref.get(pending)))) created.unref();
+          if (done !== undefined) Deferred.doneUnsafe(done, Effect.succeed(reply));
       }
     });
     created.on("error", lost);
@@ -235,57 +259,79 @@ function modelWorker(cacheDir: string, setup: ModelSetup) {
     return created;
   };
 
-  const request = (kind: "count" | "embed", texts: readonly string[]) =>
-    new Promise<Reply>((resolve) => {
-      const current = (worker ??= start());
-      const id = nextId++;
-      pending.set(id, resolve);
-      current.ref();
-      current.postMessage({ id, kind, texts });
+  const request = Effect.fnUntraced(function* (kind: "count" | "embed", texts: readonly string[]) {
+    const current = yield* Effect.try({
+      try: () => (worker ??= start()),
+      catch: (cause) => new EmbeddingError({ cause }),
     });
+    const id = nextId++;
+    const done = yield* Deferred.make<Reply>();
+    return yield* Ref.update(pending, HashMap.set(id, done)).pipe(
+      Effect.andThen(
+        Effect.try({
+          try: () => {
+            current.ref();
+            current.postMessage({ id, kind, texts });
+          },
+          catch: (cause) => new EmbeddingError({ cause }),
+        }),
+      ),
+      Effect.andThen(Deferred.await(done)),
+      Effect.ensuring(
+        Ref.updateAndGet(pending, HashMap.remove(id)).pipe(
+          Effect.map((remaining) => {
+            if (HashMap.isEmpty(remaining)) current.unref();
+          }),
+        ),
+      ),
+    );
+  });
 
-  const tokenCounts = async (texts: readonly string[]) => {
-    const reply = await request("count", texts);
+  const tokenCounts = Effect.fnUntraced(function* (texts: readonly string[]) {
+    const reply = yield* request("count", texts);
     switch (reply.kind) {
       case "counts":
         return reply.counts;
       case "failed":
-        throw new Error(reply.reason);
+        return yield* new EmbeddingError({ cause: reply.reason });
       case "rows":
       case "loaded":
-        throw new Error("the embedding worker answered a count with something else");
+        return yield* new EmbeddingError({
+          cause: "the embedding worker answered a count with something else",
+        });
     }
-  };
+  });
 
-  /** One batch's CLS rows, `texts.length` × {@link localModel.dimensions}, not normalized. */
-  const embedBatch = async (texts: readonly string[]) => {
-    const reply = await request("embed", texts);
+  const embedBatch = Effect.fnUntraced(function* (texts: readonly string[]) {
+    const reply = yield* request("embed", texts);
     switch (reply.kind) {
       case "rows":
         return reply.rows;
       case "failed":
-        throw new Error(reply.reason);
+        return yield* new EmbeddingError({ cause: reply.reason });
       case "counts":
       case "loaded":
-        throw new Error("the embedding worker answered an embedding with something else");
+        return yield* new EmbeddingError({
+          cause: "the embedding worker answered an embedding with something else",
+        });
     }
-  };
+  });
 
   return {
     device: () => device,
     stop,
-    embed: async (texts: readonly string[]) => {
+    embed: Effect.fnUntraced(function* (texts: readonly string[]) {
       const vectors: Float32Array[] = [];
       if (texts.length === 0) return vectors;
-      for (const batch of planBatches(await tokenCounts(texts))) {
-        const rows = await embedBatch(batch.map((index) => texts[index]!));
+      for (const batch of planBatches(yield* tokenCounts(texts))) {
+        const rows = yield* embedBatch(batch.map((index) => texts[index]!));
         batch.forEach((index, position) => {
           const start = position * localModel.dimensions;
           vectors[index] = normalize(rows.slice(start, start + localModel.dimensions));
         });
       }
       return vectors;
-    },
+    }),
   };
 }
 
@@ -299,6 +345,8 @@ const makeLocal = (setup: ModelSetup, purpose: LocalPurpose) =>
     const storage = yield* StorageRoot;
     const model = modelWorker(join(storage.path, "models"), setup);
     yield* Effect.addFinalizer(() =>
+      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+      // @effect-diagnostics-next-line asyncFunction:off
       Effect.promise(async () => void (await model.stop("embedder stopped"))),
     );
     return {
@@ -312,11 +360,7 @@ const makeLocal = (setup: ModelSetup, purpose: LocalPurpose) =>
             return { kind: "other" };
         }
       },
-      embed: (texts: readonly string[]) =>
-        Effect.tryPromise({
-          try: () => model.embed(texts),
-          catch: (cause) => new EmbeddingError({ cause }),
-        }),
+      embed: model.embed,
     } satisfies EmbedderApi;
   });
 
@@ -325,35 +369,57 @@ const makeLocal = (setup: ModelSetup, purpose: LocalPurpose) =>
  * afterwards. Downloads that model file first when it is not cached yet.
  */
 export const checkGpu = (storageRoot: string) =>
-  Effect.tryPromise({
-    try: async (): Promise<GpuCheck> => {
-      const model = modelWorker(join(storageRoot, "models"), {
-        variant: "fp32",
-        devices: ["webgpu"],
-      });
-      try {
-        await model.embed(["준비"]);
-        return model.device() === "webgpu"
-          ? { status: "available", checkedAt: new Date().toISOString() }
-          : {
-              status: "unavailable",
-              checkedAt: new Date().toISOString(),
-              reason: "no WebGPU device",
-            };
-      } catch (error) {
-        return {
-          status: "unavailable",
-          checkedAt: new Date().toISOString(),
-          reason: (error instanceof Error ? error.message : String(error)).slice(0, 300),
-        };
-      } finally {
-        await model.stop("GPU check done");
-      }
-    },
-    catch: (cause) => new EmbeddingError({ cause }),
-  });
+  Effect.scoped(
+    Effect.gen(function* () {
+      const effectClock = yield* Clock.Clock;
 
-export class Embedder extends Context.Service<Embedder, EmbedderApi>()("memory-agent/Embedder") {
+      const model = yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          modelWorker(join(storageRoot, "models"), {
+            variant: "fp32",
+            devices: ["webgpu"],
+          }),
+        ),
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        // @effect-diagnostics-next-line asyncFunction:off
+        (model) => Effect.promise(async () => void (await model.stop("GPU check done"))),
+      );
+      return yield* model.embed(["준비"]).pipe(
+        Effect.map((): GpuCheck =>
+          model.device() === "webgpu"
+            ? {
+                status: "available",
+                checkedAt: DateTime.formatIso(
+                  DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
+                ),
+              }
+            : {
+                status: "unavailable",
+                checkedAt: DateTime.formatIso(
+                  DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
+                ),
+                reason: "no WebGPU device",
+              },
+        ),
+        Effect.catchTag("EmbeddingError", (error) =>
+          Effect.succeed<GpuCheck>({
+            status: "unavailable",
+            checkedAt: DateTime.formatIso(
+              DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
+            ),
+            reason: (error.cause instanceof Error
+              ? error.cause.message
+              : String(error.cause)
+            ).slice(0, 300),
+          }),
+        ),
+      );
+    }),
+  );
+
+export class Embedder extends Context.Service<Embedder, EmbedderApi>()(
+  "memory-agent/memory/embedding/embedder",
+) {
   /** The local granite model, cached under `<storage>/models`, run the way the settings say. */
   static readonly local = Layer.effect(
     Embedder,

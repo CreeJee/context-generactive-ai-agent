@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { createOAuthAccountLoginManager } from "memory-agent";
 
@@ -8,7 +9,7 @@ export function accountLoginManager(
   sqlite: DatabaseSync,
 ): ReturnType<typeof createOAuthAccountLoginManager> {
   let manager = managers.get(sqlite);
-  if (!manager) {
+  if (!isTruthy(manager)) {
     manager = createOAuthAccountLoginManager(sqlite);
     managers.set(sqlite, manager);
   }

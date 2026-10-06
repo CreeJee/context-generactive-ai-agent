@@ -19,7 +19,11 @@ export const embeddedKinds = ["user", "assistant", "topic"] as const satisfies r
 export const embeddedKindFilter = `n.kind IN (${embeddedKinds.map((kind) => `'${kind}'`).join(", ")})`;
 
 const Pending = Schema.Struct({ seq: Schema.Finite, text: Schema.String });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodePending = Schema.decodeUnknownSync(Pending);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeCount = Schema.decodeUnknownSync(Schema.Struct({ count: Schema.Finite }));
 
 const make = Effect.gen(function* () {
@@ -143,7 +147,7 @@ const make = Effect.gen(function* () {
 
 /** Keeps the vector index in step with the nodes table. */
 export class Indexer extends Context.Service<Indexer, Effect.Success<typeof make>>()(
-  "memory-agent/Indexer",
+  "memory-agent/memory/embedding/indexer",
 ) {
   static readonly layer = Layer.effect(Indexer, make);
 }

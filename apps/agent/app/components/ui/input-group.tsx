@@ -1,3 +1,4 @@
+import { isTruthy } from "../../truthy.ts";
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "cn";
@@ -52,7 +53,7 @@ function InputGroupAddon({
       className={cn(inputGroupAddonVariants({ align }), className)}
       onClick={(e) => {
         const target = e.target;
-        if (target instanceof HTMLElement && target.closest("button")) {
+        if (target instanceof HTMLElement && isTruthy(target.closest("button"))) {
           return;
         }
         e.currentTarget.parentElement?.querySelector("input")?.focus();

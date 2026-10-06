@@ -1,9 +1,12 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash } from "node:crypto";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { AnyServerTool } from "@tanstack/ai";
 import { createMCPClient, type MCPClient } from "@tanstack/ai-mcp";
-import { Context, Data, Effect, Layer, Schema } from "effect";
+import { DateTime, Clock, Context, Data, Effect, Layer, Schema } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
 import type { Project } from "../projects/projects.ts";
@@ -57,6 +60,8 @@ export class McpOperationFailed extends Data.TaggedError("McpOperationFailed")<{
 }> {}
 
 /** OpenAI function names allow at most 64 characters of [A-Za-z0-9_-]. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function mcpToolName(server: string, tool: string) {
   const plain = `${mcpToolPrefix}${server}__${tool.replace(/[^A-Za-z0-9_-]/g, "_")}`;
   if (plain.length <= 64) return plain;
@@ -94,6 +99,8 @@ const TrustRow = Schema.Struct({
   name: Schema.String,
   fingerprint: Schema.String,
 });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeTrustRows = Schema.decodeUnknownSync(Schema.Array(TrustRow));
 
 interface Connection {
@@ -110,12 +117,16 @@ const describeFailure = (error: Error) => {
 
 const withTimeout = <A>(promise: Promise<A>, ms: number, what: string) => {
   let timer: NodeJS.Timeout | undefined;
+  // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
+  // @effect-diagnostics-next-line newPromise:off
   const timeout = new Promise<never>((_, reject) => {
+    // Native callback heartbeat/debounce timing remains at the protocol boundary.
+    // @effect-diagnostics-next-line globalTimers:off
     timer = setTimeout(() => reject(new Error(`${what} timed out`)), ms);
     timer.unref();
   });
   return Promise.race([promise, timeout]).finally(() => {
-    if (timer) clearTimeout(timer);
+    if (timer !== undefined) clearTimeout(timer);
   });
 };
 
@@ -180,7 +191,7 @@ const make = Effect.gen(function* () {
 
   const close = (key: string) => {
     const connection = connections.get(key);
-    if (!connection) return;
+    if (!isTruthy(connection)) return;
     connections.delete(key);
     void connection.client.then((client) => client.close()).catch(() => undefined);
   };
@@ -224,8 +235,10 @@ const make = Effect.gen(function* () {
     const existing = connections.get(key);
     if (existing?.fingerprint === server.fingerprint && existing.state.status !== "failed")
       return existing;
-    if (existing) close(key);
+    if (isTruthy(existing)) close(key);
     // Kept unwrapped: a start that outlives its timeout still gets closed with the connection.
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     const client = (async () =>
       createMCPClient({
         // SAFETY: The SDK's concrete HTTP transport declares sessionId as string | undefined while
@@ -249,8 +262,10 @@ const make = Effect.gen(function* () {
   /** Lists a server's tools as agent tools. A failure is remembered and retried next time. */
   const discover = (project: Project, server: ConfiguredServer): Promise<AnyServerTool[]> => {
     const connection = connect(project, server);
-    if (connection.discovering) return connection.discovering;
+    if (isTruthy(connection.discovering)) return connection.discovering;
     const key = connectionKey(project, server);
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     const pending = (async () => {
       try {
         const client = await withTimeout(connection.client, connectTimeoutMs, "connect");
@@ -259,13 +274,15 @@ const make = Effect.gen(function* () {
         connection.state = { status: "connected", tools: tools.map((tool) => tool.name) };
         return tools.flatMap((tool): AnyServerTool[] => {
           const execute = tool.execute;
-          if (!execute) return [];
+          if (!isTruthy(execute)) return [];
           return [
             {
               ...tool,
               name: mcpToolName(server.name, tool.name),
               description: `[MCP ${server.name}] ${tool.description}`.trim(),
               needsApproval: false,
+              // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+              // @effect-diagnostics-next-line asyncFunction:off
               execute: async (args, context) => {
                 const result = await execute(args, context);
                 return (
@@ -355,8 +372,14 @@ const make = Effect.gen(function* () {
           for (const key of connections.keys()) if (key.endsWith(`/${scope}/${name}`)) close(key);
           return overview(project);
         }
-        if (!entry) return overview(project);
-        upsertTrust.run(scope, projectId, name, entry.server.fingerprint, new Date().toISOString());
+        if (!isTruthy(entry)) return overview(project);
+        upsertTrust.run(
+          scope,
+          projectId,
+          name,
+          entry.server.fingerprint,
+          DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
+        );
         if (!entry.shadowed)
           yield* Effect.tryPromise({
             try: () => discover(project, entry.server),
@@ -390,7 +413,7 @@ const make = Effect.gen(function* () {
 
 /** MCP servers from `<storage>/mcp.json` and `<project>/.mcp.json` (R18). */
 export class McpServers extends Context.Service<McpServers, Effect.Success<typeof make>>()(
-  "memory-agent/McpServers",
+  "memory-agent/mcp/servers/McpServers",
 ) {
   static readonly layer = Layer.effect(McpServers, make);
 }

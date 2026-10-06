@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import type { WorkflowState } from "./workflow.ts";
@@ -56,11 +57,15 @@ export class WorkflowExecutionFailed extends Schema.TaggedError<WorkflowExecutio
 const storage = <A>(operation: "read" | "write", evaluate: () => A) =>
   Effect.try({
     try: evaluate,
-    catch: (cause) => new WorkflowExecutionFailed({ operation, cause }),
+    catch: (cause) => WorkflowExecutionFailed.make({ operation, cause }),
   });
 
 const namespace = "memory-agent/workflow-execution";
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const encode = Schema.encodeSync(Schema.fromJsonString(WorkflowExecutionState));
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decode = Schema.decodeUnknownSync(
   Schema.Struct({ value: Schema.fromJsonString(WorkflowExecutionState) }),
 );
@@ -94,7 +99,7 @@ const make = Effect.gen(function* () {
     ON CONFLICT(namespace, key) DO UPDATE SET value = excluded.value`);
   const read = (sessionId: string): WorkflowExecutionState => {
     const row = select.get(namespace, sessionId);
-    return row ? decode(row).value : { kind: "idle" };
+    return isTruthy(row) ? decode(row).value : { kind: "idle" };
   };
   const save = (sessionId: string, state: WorkflowExecutionState) => {
     upsert.run(namespace, sessionId, encode(state));
@@ -112,6 +117,8 @@ const make = Effect.gen(function* () {
             "SELECT key FROM chat_metadata WHERE namespace = ? AND json_extract(value, '$.kind') = 'ready'",
           )
           .all(namespace)
+          // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+          // @effect-diagnostics-next-line schemaSync:off
           .map((row) => Schema.decodeUnknownSync(Schema.Struct({ key: Schema.String }))(row).key),
       ),
     ),
@@ -234,6 +241,6 @@ const make = Effect.gen(function* () {
 export class WorkflowExecution extends Context.Service<
   WorkflowExecution,
   Effect.Success<typeof make>
->()("memory-agent/WorkflowExecution") {
+>()("memory-agent/workflow/execution/WorkflowExecution") {
   static readonly layer = Layer.effect(WorkflowExecution, make);
 }

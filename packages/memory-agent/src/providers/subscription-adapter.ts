@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import {
   EventType,
   convertSchemaToJsonSchema,
@@ -13,8 +14,10 @@ import {
   type StructuredOutputOptions,
   type StructuredOutputResult,
 } from "@tanstack/ai/adapters";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash, randomUUID } from "node:crypto";
-import { Option, Schema } from "effect";
+import { DateTime, Option, Schema } from "effect";
 import {
   ProviderFeatureRejectedError,
   ToolArguments,
@@ -243,6 +246,8 @@ export function requestFingerprints(
   };
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function subscriptionRequest(
   provider: OAuthProvider,
   selection: ModelSelection,
@@ -300,6 +305,8 @@ const isPromptCacheRejection = (event: NormalizedStreamEvent) =>
     `${event.code} ${event.message}`,
   );
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function* providerEventsWithPromptCacheFallback(
   client: StreamingOAuthClient,
   provider: OAuthProvider,
@@ -347,12 +354,17 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
     this.#selection = selection;
   }
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async *chatStream(options: TextOptions<Record<string, never>>): AsyncIterable<AdapterYieldChunk> {
     const signal = options.abortController?.signal ?? options.request?.signal ?? undefined;
     const runId = options.runId ?? randomUUID();
     const threadId = options.threadId ?? randomUUID();
     const messageId = randomUUID();
-    const stamp = () => ({ model: this.model, timestamp: Date.now() });
+    const stamp = () => ({
+      model: this.model,
+      timestamp: DateTime.toEpochMillis(DateTime.nowUnsafe()),
+    });
     let textOpen = false;
     let toolCalls = 0;
     let promptTokens: number | undefined;
@@ -386,7 +398,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
             provider: this.name,
           }),
       )) {
-        if (signal?.aborted) return;
+        if (signal?.aborted === true) return;
         options.logger.provider("subscription stream event", {
           provider: this.name,
           eventType: event.type,
@@ -487,7 +499,8 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
         }
         if (event.type === "reasoning-delta") {
           const reasoningId = streamingReasoning.get(event.index);
-          if (!reasoningId) throw new Error(`${this.name} sent an invalid reasoning stream.`);
+          if (!isTruthy(reasoningId))
+            throw new Error(`${this.name} sent an invalid reasoning stream.`);
           yield {
             ...stamp(),
             type: EventType.REASONING_MESSAGE_CONTENT,
@@ -498,7 +511,8 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
         }
         if (event.type === "reasoning-signature") {
           const reasoningId = streamingReasoning.get(event.index);
-          if (!reasoningId) throw new Error(`${this.name} sent an invalid reasoning stream.`);
+          if (!isTruthy(reasoningId))
+            throw new Error(`${this.name} sent an invalid reasoning stream.`);
           yield {
             ...stamp(),
             type: EventType.REASONING_ENCRYPTED_VALUE,
@@ -510,7 +524,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
         }
         if (event.type === "tool-call-arguments") {
           const call = streamingCalls.get(event.index);
-          if (!call) throw new Error(`${this.name} sent an invalid tool-call stream.`);
+          if (!isTruthy(call)) throw new Error(`${this.name} sent an invalid tool-call stream.`);
           yield {
             ...stamp(),
             type: EventType.TOOL_CALL_ARGS,
@@ -520,7 +534,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
           continue;
         }
         const reasoningId = streamingReasoning.get(event.index);
-        if (reasoningId) {
+        if (isTruthy(reasoningId)) {
           streamingReasoning.delete(event.index);
           yield {
             ...stamp(),
@@ -530,7 +544,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
           continue;
         }
         const call = streamingCalls.get(event.index);
-        if (!call) throw new Error(`${this.name} sent an invalid content block end.`);
+        if (!isTruthy(call)) throw new Error(`${this.name} sent an invalid content block end.`);
         streamingCalls.delete(event.index);
         yield {
           ...stamp(),
@@ -540,7 +554,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
         };
       }
     } catch (error) {
-      if (signal?.aborted) return;
+      if (signal?.aborted === true) return;
       options.logger.errors("subscription model request failed", {
         provider: this.name,
         message: error instanceof Error ? error.message : "unknown provider failure",

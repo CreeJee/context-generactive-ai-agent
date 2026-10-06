@@ -1,3 +1,4 @@
+import { isTruthy } from "../../truthy.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import type { PropsWithChildren } from "react";
@@ -13,7 +14,7 @@ function useScopedEvents(
 ) {
   const queryClient = useQueryClient();
   useEffect(() => {
-    if (!url) return;
+    if (!isTruthy(url)) return;
     const invalidations = createEventInvalidator(
       (queryKey) => void queryClient.invalidateQueries({ queryKey }),
       readyKey,

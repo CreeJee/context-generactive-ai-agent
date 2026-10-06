@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { Cache, Context, Effect, Exit, Layer, Result, Schema } from "effect";
 import { Embedder, type EmbeddingError } from "../memory/embedding/embedder.ts";
 import { WorkflowPhase } from "./workflow.ts";
@@ -196,7 +197,7 @@ const make = Effect.gen(function* () {
               new Map(
                 rules.flatMap((rule, index) => {
                   const vector = embedded[index];
-                  return vector ? [[rule.id, vector] as const] : [];
+                  return isTruthy(vector) ? [[rule.id, vector] as const] : [];
                 }),
               ),
           ),
@@ -227,11 +228,13 @@ const make = Effect.gen(function* () {
         const semantic = yield* Effect.result(
           Effect.all([vectors(optional), embedder.embed([text])]).pipe(
             Effect.map(([byId, [queryVector]]) =>
-              queryVector
+              isTruthy(queryVector)
                 ? optional
                     .map((rule) => ({
                       rule,
-                      score: byId.get(rule.id) ? cosine(queryVector, byId.get(rule.id)!) : -1,
+                      score: isTruthy(byId.get(rule.id))
+                        ? cosine(queryVector, byId.get(rule.id)!)
+                        : -1,
                     }))
                     .sort((left, right) => right.score - left.score)
                 : [],
@@ -267,7 +270,7 @@ const make = Effect.gen(function* () {
 
 /** Phase-filtered workflow rules with lexical + embedding ranking for optional rules. */
 export class WorkflowRules extends Context.Service<WorkflowRules, Effect.Success<typeof make>>()(
-  "memory-agent/WorkflowRules",
+  "memory-agent/workflow/rules/WorkflowRules",
 ) {
   static readonly layer = Layer.effect(WorkflowRules, make);
 }

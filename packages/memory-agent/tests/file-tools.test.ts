@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
 import { execFileSync } from "node:child_process";
 import {
   mkdirSync,
@@ -33,6 +35,8 @@ function project(files: ReadonlyMap<string, string | Buffer>) {
 }
 
 async function fileTools(root: string) {
+  // Test entry point owns this Layer and its resource scope.
+  // @effect-diagnostics-next-line strictEffectProvide:off
   const service = await Effect.runPromise(Effect.provide(FileTools, FileTools.layer));
   const [listFiles, searchFiles, readFile, writeFile, editFile, deleteFile] = service.forProject({
     id: "p1",
@@ -48,7 +52,7 @@ async function fileTools(root: string) {
 
 /** Runs a server tool the way the chat engine does, after input validation. */
 async function run<I, O>(tool: { execute?: ((args: I) => O) | undefined }, input: I) {
-  if (!tool.execute) throw new Error("tool has no server implementation");
+  if (!(tool.execute !== undefined)) throw new Error("tool has no server implementation");
   return tool.execute(input);
 }
 

@@ -1,6 +1,7 @@
-import { Semaphore } from "effect";
+import { isTruthy } from "../truthy.ts";
+import { DateTime, Clock, Semaphore } from "effect";
 import { Worker } from "node:worker_threads";
-import { Context, Data, Effect, Layer, Schema } from "effect";
+import { Context, Data, Deferred, HashMap, Ref, Effect, Layer, Option, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import { Indexer } from "../memory/embedding/indexer.ts";
 import { VectorIndex } from "../memory/embedding/vector-index.ts";
@@ -84,16 +85,26 @@ const Progress = Schema.Struct({
   done: Schema.Literals([0, 1]),
   hidden: Schema.Finite,
 });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeProgress = Schema.decodeUnknownSync(Progress);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeNodeRow = Schema.decodeUnknownSync(
   Schema.Struct({ seq: Schema.Finite, text: Schema.String }),
 );
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeRefRow = Schema.decodeUnknownSync(
   Schema.Struct({ row_key: Schema.Finite, ref: Schema.String }),
 );
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeRowKey = Schema.decodeUnknownSync(Schema.Struct({ row_key: Schema.Finite }));
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeCell = Schema.decodeUnknownSync(Schema.NullOr(Schema.String));
-const decodeReply = Schema.decodeUnknownSync(RedactReply);
+const decodeReply = Schema.decodeUnknownOption(RedactReply);
 
 /** A column value after sweeping; `null` stays `null`. */
 interface SweptCell {
@@ -123,36 +134,51 @@ const redactionWorker = Effect.map(
   ),
   (worker): Redact => {
     let nextId = 1;
-    const waiting = new Map<number, (reply: RedactReply) => void>();
+    const waiting = Ref.makeUnsafe(HashMap.empty<number, Deferred.Deferred<RedactReply>>());
+    let stopped: string | null = null;
     const lost = (reason: string) => {
-      for (const [id, answer] of waiting) answer({ id, kind: "failed", reason });
-      waiting.clear();
+      stopped = reason;
+      const requests = Effect.runSync(Ref.getAndSet(waiting, HashMap.empty()));
+      for (const [id, done] of requests)
+        Deferred.doneUnsafe(done, Effect.succeed({ id, kind: "failed", reason }));
     };
     worker.on("message", (message) => {
-      const reply = decodeReply(message);
-      const answer = waiting.get(reply.id);
-      waiting.delete(reply.id);
-      answer?.(reply);
+      const decoded = decodeReply(message);
+      if (Option.isNone(decoded)) return lost("invalid redaction worker reply");
+      const reply = decoded.value;
+      const answer = Option.getOrUndefined(HashMap.get(Effect.runSync(Ref.get(waiting)), reply.id));
+      Effect.runSync(Ref.update(waiting, HashMap.remove(reply.id)));
+      if (answer !== undefined) Deferred.doneUnsafe(answer, Effect.succeed(reply));
     });
     worker.on("error", (error) =>
       lost(error instanceof Error ? error.message : "the redaction worker failed"),
     );
     worker.on("exit", () => lost("the redaction worker stopped"));
 
-    return (kind, texts) =>
-      Effect.callback((resume) => {
-        if (texts.length === 0) return resume(Effect.succeed([]));
-        const id = nextId++;
-        waiting.set(id, (reply) => {
-          switch (reply.kind) {
-            case "redacted":
-              return resume(Effect.succeed(reply.redactions));
-            case "failed":
-              return resume(Effect.fail(new RedactionFailed({ reason: reply.reason })));
-          }
-        });
-        worker.postMessage({ id, kind, texts } satisfies RedactRequest);
-      });
+    return Effect.fnUntraced(function* (kind, texts) {
+      if (texts.length === 0) return [];
+      if (stopped !== null) return yield* new RedactionFailed({ reason: stopped });
+      const id = nextId++;
+      const done = yield* Deferred.make<RedactReply>();
+      const reply = yield* Ref.update(waiting, HashMap.set(id, done)).pipe(
+        Effect.andThen(
+          Effect.try({
+            try: () => {
+              worker.postMessage({ id, kind, texts } satisfies RedactRequest);
+            },
+            catch: () => new RedactionFailed({ reason: "the redaction worker request failed" }),
+          }),
+        ),
+        Effect.andThen(Deferred.await(done)),
+        Effect.ensuring(Ref.update(waiting, HashMap.remove(id))),
+      );
+      switch (reply.kind) {
+        case "redacted":
+          return reply.redactions;
+        case "failed":
+          return yield* new RedactionFailed({ reason: reply.reason });
+      }
+    });
   },
 );
 
@@ -201,7 +227,7 @@ const make = (running: boolean) =>
     /** Where a target's sweep stands; a sweep by an older detector counts as not started. */
     const progressOf = (target: Target) => {
       const row = readProgress.get(targetName(target));
-      const saved = row ? decodeProgress(row) : null;
+      const saved = isTruthy(row) ? decodeProgress(row) : null;
       return saved?.version === sweepVersion ? saved : { after: 0, done: 0, hidden: 0 };
     };
 
@@ -229,7 +255,9 @@ const make = (running: boolean) =>
         );
         const changed = rows.flatMap((row, index) => {
           const redaction = redactions[index];
-          return redaction && redaction.hidden > 0 ? [{ ...row, hidden: redaction.text }] : [];
+          return isTruthy(redaction) && redaction.hidden > 0
+            ? [{ ...row, hidden: redaction.text }]
+            : [];
         });
         // Under the indexer's permits, so no batch embeds or analyses a node between the vector
         // being dropped here and its text changing.
@@ -276,7 +304,7 @@ const make = (running: boolean) =>
         atomic(() =>
           rows.forEach((row, index) => {
             const redaction = redactions[index];
-            if (!redaction || redaction.hidden === 0) return;
+            if (!isTruthy(redaction) || redaction.hidden === 0) return;
             updateRef.run(redaction.text, row.row_key);
             hidden += 1;
           }),
@@ -321,7 +349,11 @@ const make = (running: boolean) =>
           for (const { rowid, values } of updates) update.run(...values, rowid);
         });
         const last = rows.at(-1);
-        return { rows: rows.length, last: last ? decodeRowKey(last).row_key : after, hidden };
+        return {
+          rows: rows.length,
+          last: isTruthy(last) ? decodeRowKey(last).row_key : after,
+          hidden,
+        };
       });
 
     const batchOf = (redact: Redact, target: Target, after: number) => {
@@ -375,7 +407,7 @@ const make = (running: boolean) =>
             after,
             finished ? 1 : 0,
             hidden,
-            new Date().toISOString(),
+            DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
           );
           if (finished) return sweptNow;
         }
@@ -423,6 +455,6 @@ const make = (running: boolean) =>
 export class SecretSweep extends Context.Service<
   SecretSweep,
   Effect.Success<ReturnType<typeof make>>
->()("memory-agent/SecretSweep") {
+>()("memory-agent/secrets/sweep/SecretSweep") {
   static readonly layer = (running: boolean = true) => Layer.effect(SecretSweep, make(running));
 }

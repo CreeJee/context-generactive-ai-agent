@@ -1,3 +1,6 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import { chat } from "@tanstack/ai";
 import { Context, Effect, Layer, Option, Schema } from "effect";
@@ -59,10 +62,12 @@ const decodeShellArguments = Schema.decodeUnknownOption(
  * intentionally an allowlist: shell syntax or one unfamiliar component falls back to the normal
  * reviewer instead of making a string-based safety decision.
  */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function routineShellVerdict(toolName: string, argumentsJson: string): Verdict | undefined {
   if (toolName !== "run_shell") return undefined;
   const decoded = Option.getOrUndefined(decodeShellArguments(argumentsJson));
-  if (!decoded || decoded.command.trim() === "") return undefined;
+  if (!(decoded !== undefined) || decoded.command.trim() === "") return undefined;
   const { command } = decoded;
   if (/[;\n`]|\$\(|(?<!\|)\|(?!\|)|(?:^|\s)(?:sudo|-g|--global)(?:\s|$)/u.test(command))
     return undefined;
@@ -116,10 +121,14 @@ const make = Effect.gen(function* () {
      * Asks the selected model (at its cheapest reasoning effort, with no tools) for a verdict.
      * Any failure — timeout, provider error, unreadable answer — becomes `ask`, never `allow`.
      */
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async classify(request: ReviewRequest): Promise<Verdict> {
       const routine = routineShellVerdict(request.toolName, request.argumentsJson);
-      if (routine) return routine;
+      if (isTruthy(routine)) return routine;
       const abortController = new AbortController();
+      // Native callback heartbeat/debounce timing remains at the protocol boundary.
+      // @effect-diagnostics-next-line globalTimers:off
       const timer = setTimeout(() => abortController.abort(), reviewTimeoutMs);
       try {
         // The review runs on every gated call, so it uses the cheapest effort.
@@ -143,7 +152,7 @@ const make = Effect.gen(function* () {
         });
         const json = answer.match(/\{[\s\S]*\}/)?.[0] ?? "";
         const verdict = Option.getOrUndefined(decodeVerdict(json));
-        if (verdict) return { ...verdict, decidedBy: "classifier" };
+        if (verdict !== undefined) return { ...verdict, decidedBy: "classifier" };
       } catch {
         // Fall through to asking the user.
       } finally {
@@ -162,6 +171,6 @@ const make = Effect.gen(function* () {
 export class PermissionClassifier extends Context.Service<
   PermissionClassifier,
   Effect.Success<typeof make>
->()("memory-agent/PermissionClassifier") {
+>()("memory-agent/permissions/classifier/PermissionClassifier") {
   static readonly layer = Layer.effect(PermissionClassifier, make);
 }

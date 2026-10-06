@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import { EdgeKind } from "./edges.ts";
@@ -61,6 +62,17 @@ const causeOf: Partial<Record<Node["kind"], { kind: EdgeKind; direction: Hop["di
   assistant: { kind: "reply", direction: "out" },
 };
 
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
+const decodeNeighbor = Schema.decodeUnknownSync(
+  Schema.Struct({
+    nodeId: Schema.String,
+    kind: EdgeKind,
+    direction: Schema.Literals(["out", "in"]),
+    weight: Schema.Finite,
+  }),
+);
+
 const make = Effect.gen(function* () {
   const { sqlite } = yield* Database;
   const selectNode = sqlite.prepare(
@@ -76,21 +88,13 @@ const make = Effect.gen(function* () {
 
   const nodeById = (id: string) => {
     const row = selectNode.get(id);
-    return row ? toNode(row) : null;
+    return isTruthy(row) ? toNode(row) : null;
   };
 
   const adjacent = sqlite.prepare(`
     SELECT to_id AS nodeId, kind, 'out' AS direction, weight FROM edges WHERE from_id = ?
     UNION ALL
     SELECT from_id AS nodeId, kind, 'in' AS direction, weight FROM edges WHERE to_id = ?`);
-  const decodeNeighbor = Schema.decodeUnknownSync(
-    Schema.Struct({
-      nodeId: Schema.String,
-      kind: EdgeKind,
-      direction: Schema.Literals(["out", "in"]),
-      weight: Schema.Finite,
-    }),
-  );
 
   function traverse(seeds: ReadonlyMap<string, number>, options: TraverseOptions): TraverseResult {
     const allowed = new Set(options.projectIds);
@@ -114,7 +118,7 @@ const make = Effect.gen(function* () {
       if (visited.size >= options.budget) return { visits, complete: false };
 
       const node = nodeById(candidate.nodeId);
-      if (!node || !allowed.has(node.projectId)) continue;
+      if (!(node !== null) || !allowed.has(node.projectId)) continue;
       visited.add(node.id);
       if (options.includeEmpty !== false || hasStatementText(node.text))
         visits.push({
@@ -150,20 +154,20 @@ const make = Effect.gen(function* () {
 
   function trace(id: string): Provenance | null {
     const start = nodeById(id);
-    if (!start) return null;
+    if (!(start !== null)) return null;
     const chain: Node[] = [start];
     let current = start;
     for (;;) {
       const rule = causeOf[current.kind];
-      if (!rule) break;
+      if (!isTruthy(rule)) break;
       const row = (rule.direction === "in" ? causeIncoming : causeOutgoing).get(
         current.id,
         rule.kind,
       );
-      if (!row) break;
+      if (!isTruthy(row)) break;
       const edge = toEdge(row);
       const cause = nodeById(rule.direction === "in" ? edge.fromId : edge.toId);
-      if (!cause || chain.some((node) => node.id === cause.id)) break;
+      if (!(cause !== null) || chain.some((node) => node.id === cause.id)) break;
       chain.push(cause);
       current = cause;
     }
@@ -174,7 +178,7 @@ const make = Effect.gen(function* () {
         const edge = toEdge(row);
         if (edge.kind !== "corrects" && edge.kind !== "retracts") continue;
         const node = nodeById(edge.fromId);
-        if (node) challengedBy.push({ node, kind: edge.kind, target: target.id });
+        if (node !== null) challengedBy.push({ node, kind: edge.kind, target: target.id });
       }
     }
 
@@ -186,7 +190,7 @@ const make = Effect.gen(function* () {
 
 /** Walks the memory graph: outward to explore around a match, backward to prove where it came from. */
 export class Graph extends Context.Service<Graph, Effect.Success<typeof make>>()(
-  "memory-agent/Graph",
+  "memory-agent/memory/graph",
 ) {
   static readonly layer = Layer.effect(Graph, make);
 }

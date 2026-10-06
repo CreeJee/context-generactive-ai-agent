@@ -1,3 +1,4 @@
+import { isTruthy } from "../../truthy.ts";
 import { useEffect, useState } from "react";
 import { MonitorIcon, MoonIcon, SunIcon } from "lucide-react";
 import {
@@ -52,7 +53,7 @@ export function ThemeSelect() {
       items={themes}
       onValueChange={(value) => {
         const selected = themes.find((item) => item.value === value);
-        if (!selected) return;
+        if (!isTruthy(selected)) return;
         setTheme(selected.value);
         try {
           localStorage.setItem(storageKey, selected.value);

@@ -5,7 +5,7 @@ import {
   type ModelMessage,
 } from "@tanstack/ai";
 import { reconstructChat, withPersistence, type MessagePage } from "@tanstack/ai-persistence";
-import { Context, Effect, Layer } from "effect";
+import { Clock, Context, Effect, Layer } from "effect";
 import { sessionMessages } from "../agent/history.ts";
 import { Attachments } from "../attachments/attachments.ts";
 import { messageText } from "../messages/text.ts";
@@ -20,6 +20,8 @@ import {
 } from "./persistence.ts";
 
 const make = Effect.gen(function* () {
+  const effectClock = yield* Clock.Clock;
+
   const { sqlite, atomic } = yield* Database;
   const nodes = yield* Nodes;
   const attachments = yield* Attachments;
@@ -36,11 +38,17 @@ const make = Effect.gen(function* () {
   // central store's existing full-thread index IDs for both paged and unpaged hydration. Keep
   // persisted SDK IDs (including assistant segments) untouched so their live-stream identity
   // survives. This is a read-only view: no transcript rewrite, provider input or SSE ID changes.
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async function loadHydrationThread(threadId: string): Promise<ModelMessage[]>;
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async function loadHydrationThread(
     threadId: string,
     options: { limit?: number; before?: string },
   ): Promise<ModelMessage[] | MessagePage>;
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async function loadHydrationThread(
     threadId: string,
     options?: { limit?: number; before?: string },
@@ -64,7 +72,7 @@ const make = Effect.gen(function* () {
   // process after a restart. The provider continuation they depended on is gone: leaving their
   // interrupts pending makes a reloaded page offer an approval that can only fail. Retire the
   // interrupts and runs together, then let the user decide whether to send the request again (R10).
-  const restartedAt = Date.now();
+  const restartedAt = yield* Clock.currentTimeMillis;
   atomic(() => {
     sqlite
       .prepare(
@@ -88,6 +96,8 @@ const make = Effect.gen(function* () {
    * A cancelled or failed run has no finish to save its transcript, and the answer it was writing
    * may not have reached the messages yet. Saves the messages with that answer in them.
    */
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const keepPartialAnswer = async (ctx: ChatMiddlewareContext) => {
     const answer = ctx.accumulatedContent;
     if (answer.length === 0) return;
@@ -126,11 +136,15 @@ const make = Effect.gen(function* () {
       // Imports may create sessions after this service's startup migration has already run.
       migrateMissingChatThread(sqlite, sessionId, fallbackThread);
       return reconstructChat(hydrationPersistence, request, {
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        // @effect-diagnostics-next-line asyncFunction:off
         authorize: async (threadId) => threadId === sessionId,
       });
     },
 
     /** The run record, when it belongs to the session. */
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     run: async (sessionId: string, runId: string) => {
       const run = await persistence.stores.runs.get(runId);
       return run?.threadId === sessionId ? run : null;
@@ -141,10 +155,12 @@ const make = Effect.gen(function* () {
      * was lost. This is explicit rather than automatic: abandoning an approval must never be
      * mistaken for approving and executing the gated tool.
      */
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     discardPendingInterrupts: async (sessionId: string) => {
       const pending = await persistence.stores.interrupts.listPending(sessionId);
       if (pending.length === 0) return 0;
-      const discardedAt = Date.now();
+      const discardedAt = effectClock.currentTimeMillisUnsafe();
       sqlite.exec("BEGIN IMMEDIATE");
       try {
         sqlite
@@ -175,6 +191,8 @@ const make = Effect.gen(function* () {
     },
 
     /** The session's most recent run, if any. */
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     lastRun: async (sessionId: string) => lastRun(sessionId),
   };
 });
@@ -184,7 +202,7 @@ const make = Effect.gen(function* () {
  * a reload show the same conversation and the same pending approval card.
  */
 export class ChatState extends Context.Service<ChatState, Effect.Success<typeof make>>()(
-  "memory-agent/ChatState",
+  "memory-agent/chat-state/chat-state/ChatState",
 ) {
   static readonly layer = Layer.effect(ChatState, make);
 }

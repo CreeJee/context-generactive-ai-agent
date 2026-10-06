@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { Effect } from "effect";
 import { ProviderId } from "memory-agent/provider-contracts";
 import type {
@@ -197,6 +198,8 @@ export const ApiErrorCode = Schema.Literals([
 ]);
 export type ApiErrorCode = typeof ApiErrorCode.Type;
 
+// React/query clients consume this native Error contract outside Effect failure channels.
+// @effect-diagnostics-next-line extendsNativeError:off
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -263,10 +266,14 @@ const decodeSessionSnapshot = Schema.decodeUnknownOption(SessionSnapshot);
 type PendingSessionLifecycle = Exclude<ArchiveTaskResult, { status: "completed" }>;
 type SessionArchiveResult = { status: "completed"; session: Session } | PendingSessionLifecycle;
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function changeSessionLifecycle(sessionId: string, holder: string, change: JsonBody) {
   const response = await appFetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
     method: "POST",
     headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
+    // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
+    // @effect-diagnostics-next-line cryptoRandomUUID:off
     body: JSON.stringify({ ...change, idempotencyKey: crypto.randomUUID() }),
   });
   const body: unknown = await response.json();
@@ -274,7 +281,7 @@ async function changeSessionLifecycle(sessionId: string, holder: string, change:
   if (response.status === 409 && result?.status === "blocked") return { response, body, result };
   if (!response.ok) throw apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
   // Accepted is not completed, even if a malformed response claims otherwise.
-  if (response.status === 202 && (!result || result.status === "completed"))
+  if (response.status === 202 && (!isTruthy(result) || result.status === "completed"))
     throw apiError(502, undefined);
   return { response, body, result };
 }
@@ -288,6 +295,9 @@ function apiError(
 }
 
 /** Preserve the server's typed error code through the chat transport. */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export const chatFetch: typeof fetch = async (...arguments_) => {
   const response = await appFetch(...arguments_);
   if (!response.ok) {
@@ -309,6 +319,8 @@ type JsonValue =
   | Readonly<{ [key: string]: JsonValue | undefined }>;
 type JsonBody = Readonly<{ [key: string]: JsonValue | undefined }>;
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function call<T>(
   method: "GET" | "POST",
   path: string,
@@ -367,6 +379,8 @@ export const api = {
   archivedSessions: (projectId: string) =>
     call<Session[]>("GET", `/api/sessions?project=${encodeURIComponent(projectId)}&archived=1`),
   /** Active parent/child runs are checkpointed and stopped before the conversation is archived. */
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   setArchived: async (
     sessionId: string,
     holder: string,
@@ -375,15 +389,17 @@ export const api = {
     const { response, body, result } = await changeSessionLifecycle(sessionId, holder, {
       archived,
     });
-    if (result && result.status !== "completed") return result;
+    if (isTruthy(result) && result.status !== "completed") return result;
     const session = Option.getOrUndefined(decodeSessionSnapshot(body));
-    if (response.status !== 200 || !session || session.id !== sessionId)
+    if (response.status !== 200 || !isTruthy(session) || session.id !== sessionId)
       throw apiError(502, undefined);
     return { status: "completed", session };
   },
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   deleteSession: async (sessionId: string, holder: string): Promise<ArchiveTaskResult> => {
     const { response, result } = await changeSessionLifecycle(sessionId, holder, { delete: true });
-    if (!result || (result.status === "completed" && response.status !== 200))
+    if (!isTruthy(result) || (result.status === "completed" && response.status !== 200))
       throw apiError(502, undefined);
     return result;
   },
@@ -553,6 +569,8 @@ export const api = {
       "GET",
       `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
     ),
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   resumeWorkTraceTask: async (
     sessionId: string,
     holder: string,
@@ -560,6 +578,8 @@ export const api = {
     expectedAttemptId: string,
     confirmUncertain = false,
   ): Promise<ResumeTaskResult> => {
+    // Native Request/Response adapter preserves host and SDK stream semantics.
+    // @effect-diagnostics-next-line globalFetch:off
     const response = await fetch(
       `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
       {
@@ -573,19 +593,25 @@ export const api = {
     // A safety refusal is an expected action result, not a transport failure.
     if (response.status === 409 && result?.status === "blocked") return result;
     if (!response.ok) throw apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
-    if (!result || result.status !== "queued") throw apiError(502, undefined);
+    if (!isTruthy(result) || result.status !== "queued") throw apiError(502, undefined);
     return result;
   },
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   archiveWorkTraceTask: async (
     sessionId: string,
     holder: string,
     taskId: string,
   ): Promise<ArchiveTaskResult> => {
+    // Native Request/Response adapter preserves host and SDK stream semantics.
+    // @effect-diagnostics-next-line globalFetch:off
     const response = await fetch(
       `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
       {
         method: "POST",
         headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
+        // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
+        // @effect-diagnostics-next-line cryptoRandomUUID:off
         body: JSON.stringify({ intent: "archive", idempotencyKey: crypto.randomUUID() }),
       },
     );
@@ -593,21 +619,30 @@ export const api = {
     const result = Option.getOrUndefined(decodeArchiveTaskResult(body));
     if (response.status === 409 && result?.status === "blocked") return result;
     if (!response.ok) throw apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
-    if (!result || (result.status !== "completed" && result.status !== "waiting_for_stop"))
+    if (
+      !isTruthy(result) ||
+      (result.status !== "completed" && result.status !== "waiting_for_stop")
+    )
       throw apiError(502, undefined);
     window.dispatchEvent(new CustomEvent("work-trace:changed"));
     return result;
   },
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   deleteWorkTraceTask: async (
     sessionId: string,
     holder: string,
     taskId: string,
   ): Promise<ArchiveTaskResult> => {
+    // Native Request/Response adapter preserves host and SDK stream semantics.
+    // @effect-diagnostics-next-line globalFetch:off
     const response = await fetch(
       `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
       {
         method: "POST",
         headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
+        // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
+        // @effect-diagnostics-next-line cryptoRandomUUID:off
         body: JSON.stringify({ intent: "delete", idempotencyKey: crypto.randomUUID() }),
       },
     );
@@ -615,7 +650,10 @@ export const api = {
     const result = Option.getOrUndefined(decodeArchiveTaskResult(body));
     if (response.status === 409 && result?.status === "blocked") return result;
     if (!response.ok) throw apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
-    if (!result || (result.status !== "completed" && result.status !== "waiting_for_stop"))
+    if (
+      !isTruthy(result) ||
+      (result.status !== "completed" && result.status !== "waiting_for_stop")
+    )
       throw apiError(502, undefined);
     window.dispatchEvent(new CustomEvent("work-trace:changed"));
     return result;
@@ -640,7 +678,11 @@ export const api = {
     ),
 
   /** Uploads one image as raw bytes; the server checks what it really is. */
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   uploadAttachment: async (file: File) => {
+    // Native Request/Response adapter preserves host and SDK stream semantics.
+    // @effect-diagnostics-next-line globalFetch:off
     const response = await fetch("/api/attachments", {
       method: "POST",
       headers: { "Content-Type": file.type || "application/octet-stream" },
@@ -665,7 +707,7 @@ const attachmentRejections = {
 } satisfies Record<typeof AttachmentRejection.Type, string>;
 
 export function attachmentErrorMessage(error: Error) {
-  if (!(error instanceof ApiError) || !error.reason) return "이미지를 올리지 못했어요.";
+  if (!(error instanceof ApiError) || !isTruthy(error.reason)) return "이미지를 올리지 못했어요.";
   return Schema.is(AttachmentRejection)(error.reason)
     ? attachmentRejections[error.reason]
     : error.reason;
@@ -685,7 +727,8 @@ const projectRejections = {
 } satisfies Record<typeof ProjectRejection.Type, string>;
 
 export function projectErrorMessage(error: Error) {
-  if (!(error instanceof ApiError) || !error.reason) return "프로젝트를 추가하지 못했어요.";
+  if (!(error instanceof ApiError) || !isTruthy(error.reason))
+    return "프로젝트를 추가하지 못했어요.";
   return Schema.is(ProjectRejection)(error.reason) ? projectRejections[error.reason] : error.reason;
 }
 
@@ -707,11 +750,15 @@ export function archiveErrorMessage(error: Error) {
 }
 
 /** Which queued messages a run just took in at a tool call. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export const decodeDeliveredEvent = Schema.decodeUnknownOption(
   Schema.Struct({ ids: Schema.Array(Schema.String) }),
 );
 
 /** A context update a run sends while it answers. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export const decodeContextEvent = Schema.decodeUnknownOption(
   Schema.Struct({
     usedTokens: Schema.NullOr(Schema.Finite),

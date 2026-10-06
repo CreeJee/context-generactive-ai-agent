@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off processEnv:off schemaSync:off
 import { Effect, Schema } from "effect";
 import { expect, test, vi } from "vite-plus/test";
 import { ChatState } from "../src/chat-state/chat-state.ts";
@@ -141,7 +143,7 @@ test.each([false, true])(
       ).toEqual({ n: 1 });
     } finally {
       vi.restoreAllMocks();
-      if (previous === undefined) delete process.env.CONTEXT_AGENT_GOAL_WORKER;
+      if (previous === undefined) Reflect.deleteProperty(process.env, "CONTEXT_AGENT_GOAL_WORKER");
       else process.env.CONTEXT_AGENT_GOAL_WORKER = previous;
     }
   },
@@ -213,7 +215,7 @@ test("unsupported opt-in worker preflight creates neither binding nor user node"
     ).toEqual({ n: 0 });
   } finally {
     vi.restoreAllMocks();
-    if (previous === undefined) delete process.env.CONTEXT_AGENT_GOAL_WORKER;
+    if (previous === undefined) Reflect.deleteProperty(process.env, "CONTEXT_AGENT_GOAL_WORKER");
     else process.env.CONTEXT_AGENT_GOAL_WORKER = previous;
   }
 });

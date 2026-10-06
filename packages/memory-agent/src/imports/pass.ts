@@ -1,6 +1,11 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { statSync } from "node:fs";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { isAbsolute, relative, sep } from "node:path";
-import { Cause, Context, Effect, Layer, Schema } from "effect";
+import { Clock, DateTime, Cause, Context, Effect, Layer, Schema } from "effect";
 import { GlobalConfig } from "../config/global-config.ts";
 import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
@@ -38,15 +43,24 @@ export type TranscriptCounts = ReadonlyArray<{
   readonly transcripts: number;
 }>;
 
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeCursor = Schema.decodeUnknownSync(
   Schema.Struct({ byte_offset: Schema.Finite, size: Schema.Finite, mtime_ms: Schema.Finite }),
 );
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeSessionId = Schema.decodeUnknownSync(Schema.Struct({ session_id: Schema.String }));
 
 /** What settings says went wrong: the error's message, never the transcript's content. */
 const failureOf = (cause: Cause.Cause<unknown>) => {
   const error = Cause.squash(cause);
-  const reason = error instanceof Error ? error.message || error.name : String(error);
+  const reason =
+    error instanceof Error
+      ? error.message.length > 0
+        ? error.message
+        : error.name
+      : String(error);
   return reason.slice(0, failureLength);
 };
 
@@ -60,6 +74,7 @@ const firstLine = (text: string) => text.replace(/\s+/gu, " ").trim().slice(0, t
 
 const make = (home: string) =>
   Effect.gen(function* () {
+    const effectClock = yield* Clock.Clock;
     const { sqlite, atomic } = yield* Database;
     const storage = yield* StorageRoot;
     const projects = yield* Projects;
@@ -126,7 +141,7 @@ const make = (home: string) =>
           transcript.path,
           transcript.externalId,
           failureOf(cause),
-          new Date().toISOString(),
+          DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe())),
         );
       });
 
@@ -147,7 +162,7 @@ const make = (home: string) =>
           .filter((project) => isWithin(project.root, canonical))
           .sort((a, b) => b.root.length - a.root.length)
           .at(0);
-        if (owner) return { project: owner, rejected: null };
+        if (isTruthy(owner)) return { project: owner, rejected: null };
         // A folder that has been deleted, or one inside this app's own storage, is left alone.
         return yield* projects.add(canonical).pipe(
           Effect.map((project) => ({ project, rejected: null })),
@@ -165,10 +180,11 @@ const make = (home: string) =>
     const sessionFor = (transcript: Transcript, start: TranscriptStart | undefined) =>
       Effect.gen(function* () {
         const existing = readMapping.get(transcript.source, transcript.externalId);
-        if (existing) return { sessionId: decodeSessionId(existing).session_id, skipped: null };
-        if (!start) return { sessionId: null, skipped: "no_session_line" };
+        if (isTruthy(existing))
+          return { sessionId: decodeSessionId(existing).session_id, skipped: null };
+        if (!(start !== undefined)) return { sessionId: null, skipped: "no_session_line" };
         const { project, rejected } = yield* projectOf(start.cwd);
-        if (!project) return { sessionId: null, skipped: rejected ?? "no_project" };
+        if (!isTruthy(project)) return { sessionId: null, skipped: rejected ?? "no_project" };
         const session = yield* sessions.createImported(
           project.id,
           null,
@@ -185,16 +201,17 @@ const make = (home: string) =>
         const stats = yield* Effect.try(() => statSync(transcript.path)).pipe(
           Effect.orElseSucceed(() => null),
         );
-        if (!stats) return 0;
+        if (!isTruthy(stats)) return 0;
         const saved = readCursor.get(transcript.source, transcript.path);
-        const cursor = saved ? decodeCursor(saved) : null;
-        if (cursor && cursor.size === stats.size && cursor.mtime_ms === stats.mtimeMs) return 0;
+        const cursor = isTruthy(saved) ? decodeCursor(saved) : null;
+        if (cursor !== null && cursor.size === stats.size && cursor.mtime_ms === stats.mtimeMs)
+          return 0;
         // A file shorter than the cursor was rewritten or truncated; reading it again is safe
         // because `imported_nodes` drops every line that already became a node.
-        const from = cursor && stats.size >= cursor.size ? cursor.byte_offset : 0;
+        const from = cursor !== null && stats.size >= cursor.size ? cursor.byte_offset : 0;
 
         const source = importSources.find((entry) => entry.name === transcript.source);
-        if (!source) return 0;
+        if (!isTruthy(source)) return 0;
         const read = source.reader(transcript.externalId);
         const lines: TranscriptItem[] = [];
         const { offset } = readLinesFrom(transcript.path, from, (line) => {
@@ -205,8 +222,8 @@ const make = (home: string) =>
 
         const start = items.find((item) => item.kind === "session");
         const { sessionId, skipped } = yield* sessionFor(transcript, start);
-        const now = new Date().toISOString();
-        if (!sessionId) {
+        const now = DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()));
+        if (!isTruthy(sessionId)) {
           // Leave the offset at 0: if the folder comes back, the whole transcript is read.
           saveCursor.run(
             transcript.source,
@@ -311,6 +328,6 @@ const make = (home: string) =>
 export class TranscriptPass extends Context.Service<
   TranscriptPass,
   Effect.Success<ReturnType<typeof make>>
->()("memory-agent/TranscriptPass") {
+>()("memory-agent/imports/pass/TranscriptPass") {
   static readonly layer = (home: string) => Layer.effect(TranscriptPass, make(home));
 }

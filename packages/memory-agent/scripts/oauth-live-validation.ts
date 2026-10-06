@@ -1,9 +1,13 @@
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { OAuthHarnessError, OAuthValidationHarness } from "../src/oauth/validation-harness.ts";
 import { providerProtocols } from "../src/oauth/protocol.ts";
 
 const openBrowser = promisify(execFile);
+// Native host/SDK configuration boundary reads or forwards the host environment.
+// @effect-diagnostics-next-line processEnv:off
 const model = process.env["CONTEXT_AGENT_OPENAI_VALIDATION_MODEL"] ?? "gpt-5.6-sol";
 
 const textRequest = JSON.stringify({
@@ -53,30 +57,42 @@ process.once("SIGINT", cancel);
 process.once("SIGTERM", cancel);
 
 try {
+  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+  // @effect-diagnostics-next-line globalConsole:off
   console.log("OPENAI_VALIDATION login_waiting");
   attempt = await harness.startLogin({ timeoutMs: 10 * 60_000 });
   await openBrowser("open", [attempt.authorizationUrl]);
   const login = await attempt.completed;
   if (!login.connected) throw new Error("login_not_connected");
+  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+  // @effect-diagnostics-next-line globalConsole:off
   console.log("OPENAI_VALIDATION login_passed");
 
   const refreshed = await harness.refreshForValidation();
   if (!refreshed.connected) throw new Error("refresh_not_connected");
+  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+  // @effect-diagnostics-next-line globalConsole:off
   console.log("OPENAI_VALIDATION refresh_passed");
 
   let textSeen = false;
   for await (const event of harness.stream(textRequest))
     if (event.type === "text" && event.text.length > 0) textSeen = true;
   if (!textSeen) throw new Error("stream_text_missing");
+  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+  // @effect-diagnostics-next-line globalConsole:off
   console.log("OPENAI_VALIDATION streaming_passed");
 
   let toolSeen = false;
   for await (const event of harness.stream(toolRequest))
     if (event.type === "tool-call" && event.name === "echo_probe") toolSeen = true;
   if (!toolSeen) throw new Error("tool_call_missing");
+  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+  // @effect-diagnostics-next-line globalConsole:off
   console.log("OPENAI_VALIDATION tool_call_passed");
 } catch (error) {
   const code = error instanceof OAuthHarnessError ? error.code : "validation_failed";
+  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+  // @effect-diagnostics-next-line globalConsole:off
   console.error(`OPENAI_VALIDATION failed ${code}`);
   process.exitCode = 1;
 } finally {
@@ -84,8 +100,12 @@ try {
   process.removeListener("SIGTERM", cancel);
   try {
     await harness.disconnect();
+    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+    // @effect-diagnostics-next-line globalConsole:off
     console.log("OPENAI_VALIDATION credentials_removed");
   } catch {
+    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+    // @effect-diagnostics-next-line globalConsole:off
     console.error("OPENAI_VALIDATION cleanup_failed");
     process.exitCode = 1;
   }

@@ -71,7 +71,7 @@ export function makeImageFeature(config: GlobalConfigApi): ImageFeatureApi {
 }
 
 export class ImageFeature extends Context.Service<ImageFeature, ImageFeatureApi>()(
-  "memory-agent/ImageFeature",
+  "memory-agent/providers/image-feature/ImageFeature",
 ) {
   static readonly layer = Layer.effect(
     ImageFeature,

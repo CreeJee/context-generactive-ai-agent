@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
+import { isTruthy } from "../src/truthy.ts";
 import { randomUUID } from "node:crypto";
 import { chat, type ChatMiddleware, type ModelMessage } from "@tanstack/ai";
 import { memoryPersistence } from "@tanstack/ai-persistence";
@@ -510,7 +513,7 @@ describe("compaction", () => {
       userNodeId: wrongKind.id,
     }).tools;
     const execute = tools[3]?.execute;
-    if (!execute) throw new Error("read_tool_result unavailable");
+    if (!isTruthy(execute)) throw new Error("read_tool_result unavailable");
     const first = await execute({ id: own.id, offset: 0 });
     expect(first).toMatchObject({ id: own.id, text: text.slice(0, 4_000), nextOffset: 4_000 });
     expect(await execute({ id: own.id, offset: 4_000 })).toMatchObject({

@@ -1,16 +1,22 @@
-import { Effect, Layer } from "effect";
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off schemaSync:off
+import { DateTime, Schema, Effect, Layer } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { WorkTraceStore } from "../src/work-trace/store.ts";
+
+const stringifyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 const testLayer = () => {
   const database = Database.layer(":memory:");
   return Layer.merge(database, WorkTraceStore.layer.pipe(Layer.provide(database)));
 };
 const run = <A>(effect: Effect.Effect<A, never, Database | WorkTraceStore>) =>
+  // Test entry point owns this Layer and its resource scope.
+  // @effect-diagnostics-next-line strictEffectProvide:off
   Effect.runPromise(Effect.scoped(effect.pipe(Effect.provide(testLayer()))));
 const seed = (db: Database["Service"]) => {
-  const iso = new Date(0).toISOString();
+  const iso = DateTime.formatIso(DateTime.makeUnsafe(0));
   db.sqlite
     .prepare("INSERT INTO projects (id, root, name, created_at) VALUES ('p1', '/tmp/p1', 'p1', ?)")
     .run(iso);
@@ -89,7 +95,7 @@ describe("Work Trace evidence and artifact provenance", () => {
             artifacts: [expect.objectContaining({ id: artifact.id, mediaType: "text/markdown" })],
           }),
         );
-        const persisted = JSON.stringify({
+        const persisted = stringifyJson({
           evidence: db.sqlite.prepare("SELECT * FROM evidence_refs").all(),
           artifacts: db.sqlite.prepare("SELECT * FROM work_artifacts").all(),
         });
@@ -132,7 +138,7 @@ describe("Work Trace evidence and artifact provenance", () => {
             verification: "source_deleted",
           }),
         );
-        const raw = JSON.stringify({
+        const raw = stringifyJson({
           evidence: db.sqlite.prepare("SELECT * FROM evidence_refs WHERE id = ?").get(evidence.id),
           artifact: db.sqlite.prepare("SELECT * FROM work_artifacts WHERE id = ?").get(artifact.id),
         });

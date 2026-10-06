@@ -1,4 +1,7 @@
-import { Effect, Schema } from "effect";
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off schemaSync:off
+import { isTruthy } from "../src/truthy.ts";
+import { Random, Effect, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { GlobalConfig } from "../src/config/global-config.ts";
@@ -16,7 +19,7 @@ function chatRequest(text: string) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       threadId: "thread-ui",
-      runId: `run-${Math.random().toString(36).slice(2)}`,
+      runId: `run-${Effect.runSync(Random.next).toString(36).slice(2)}`,
       messages: [{ id: "m1", role: "user", content: text }],
       tools: [],
       context: [],
@@ -117,7 +120,7 @@ describe("AgentChat.handle", () => {
         line.startsWith("data: ") ? [Schema.decodeSync(Delta)(line.slice(6))] : [],
       )
       .flatMap((event) =>
-        event.type === "TEXT_MESSAGE_CONTENT" && event.delta ? [event.delta] : [],
+        event.type === "TEXT_MESSAGE_CONTENT" && isTruthy(event.delta) ? [event.delta] : [],
       )
       .join("");
     expect(answer).toBe("Found: 저장소는 SQLite로 결정했다.");

@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 import { compatibleClient } from "./compatible-client";
 const fetcher = vi.fn();

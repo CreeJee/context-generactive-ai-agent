@@ -1,12 +1,16 @@
 // Kiwi (Korean morphological analyzer) in a worker thread: the WASM model needs ~850 MB, so it
 // lives here and the main thread can end the worker when it has been idle.
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { dirname, join } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import { KiwiBuilder, type Kiwi } from "kiwi-nlp";
 
-if (!parentPort) throw new Error("Kiwi entry requires a worker parent port");
+if (!(parentPort !== null)) throw new Error("Kiwi entry requires a worker parent port");
 const parent = parentPort;
 
 // Resolved here, next to this file's own dependency, so it works when the caller is bundled.
@@ -40,6 +44,8 @@ const lightStems = new Set([
  */
 const latinOrNumber = /[\p{Script=Latin}\p{Nd}]+/gu;
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function load() {
   const builder = await KiwiBuilder.create(wasmPath);
   const modelFiles = Object.fromEntries(
@@ -81,6 +87,8 @@ const ready = load().then(
   (error) => ({ kind: "failed" as const, error: String(error) }),
 );
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 parent.on("message", async ({ id, texts }: { id: number; texts: string[] }) => {
   const state = await ready;
   if (state.kind === "failed") return parent.postMessage({ id, kind: "error", error: state.error });

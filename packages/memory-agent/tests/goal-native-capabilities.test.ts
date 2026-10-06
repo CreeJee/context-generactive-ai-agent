@@ -1,5 +1,8 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
+import { randomUUID } from "node:crypto";
 import { chat, toolDefinition } from "@tanstack/ai";
-import { Effect } from "effect";
+import { Schema, Effect } from "effect";
 import { expect, test } from "vite-plus/test";
 import { makeAgentChatImplementation } from "../src/agent/chat.ts";
 import { createGoalNativeImplementations } from "../src/agent/goal-native-implementation.ts";
@@ -20,6 +23,8 @@ import { permissionReviewInterrupt } from "../src/tools/definitions.ts";
 import { MemoryTools } from "../src/tools/memory.ts";
 import { Workflows } from "../src/workflow/workflow.ts";
 import { testRuntime } from "./support/runtime.ts";
+
+const stringifyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 test("Goal factory references bind fresh native SDK capabilities and deferred attribution", async () => {
   const registry = createGoalNativeImplementations();
@@ -190,9 +195,9 @@ test("actual Goal-bound native AgentChat turns bypass bound recording and memory
             new Request("http://127.0.0.1/api/chat", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
+              body: stringifyJson({
                 threadId: session.id,
-                runId: crypto.randomUUID(),
+                runId: randomUUID(),
                 messages: [{ id: `user-${index}`, role: "user", content: `hello-${index}` }],
                 tools: [],
                 context: [],
@@ -200,7 +205,7 @@ test("actual Goal-bound native AgentChat turns bypass bound recording and memory
             }),
             session.id,
           );
-          const response = yield* Effect.promise(() => Effect.runPromise(operation));
+          const response = yield* operation;
           expect(response.status).toBe(200);
           expect(yield* Effect.promise(() => response.text())).toContain(`native-answer-${index}`);
         }

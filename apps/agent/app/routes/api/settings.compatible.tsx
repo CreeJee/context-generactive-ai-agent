@@ -26,19 +26,20 @@ const respond = <A,>(
 ) =>
   effect.pipe(
     Effect.map((value) => Response.json(value)),
-    Effect.catchTag("InvalidCommand", () =>
-      Effect.succeed(Response.json({ error: "invalid_settings" }, { status: 400 })),
-    ),
-    Effect.catchTag("OpenAICompatibleFailed", (failure) => {
-      const { error, status } =
-        failure.operation === "validation"
-          ? { error: "invalid_settings", status: 400 }
-          : failure.operation === "keychain"
-            ? { error: "keychain_failed", status: 500 }
-            : failure.operation === "partial"
-              ? { error: "settings_partially_saved", status: 409 }
-              : { error: "provider_unavailable", status: 502 };
-      return Effect.succeed(Response.json({ error }, { status }));
+    Effect.catchTags({
+      InvalidCommand: () =>
+        Effect.succeed(Response.json({ error: "invalid_settings" }, { status: 400 })),
+      OpenAICompatibleFailed: (failure) => {
+        const { error, status } =
+          failure.operation === "validation"
+            ? { error: "invalid_settings", status: 400 }
+            : failure.operation === "keychain"
+              ? { error: "keychain_failed", status: 500 }
+              : failure.operation === "partial"
+                ? { error: "settings_partially_saved", status: 409 }
+                : { error: "provider_unavailable", status: 502 };
+        return Effect.succeed(Response.json({ error }, { status }));
+      },
     }),
   );
 
@@ -51,7 +52,7 @@ export function action({ request }: { request: Request }) {
   return agent.runPromise(
     Effect.gen(function* () {
       const rejected = rejectCrossSite(request);
-      if (rejected) return rejected;
+      if (rejected !== null) return rejected;
       return yield* respond(
         Effect.gen(function* () {
           const command = yield* Effect.tryPromise({

@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
+import { isTruthy } from "../src/truthy.ts";
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -139,7 +142,7 @@ describe("Indexer + VectorIndex", () => {
         mark.run(call.seq, embedder.identity);
         // The migration that stopped embedding tool nodes, as an upgrade runs it.
         const cleanup = migrations.find((step) => step.includes("DELETE FROM node_vectors"));
-        if (!cleanup) throw new Error("missing tool-node vector cleanup migration");
+        if (!isTruthy(cleanup)) throw new Error("missing tool-node vector cleanup migration");
         sqlite.exec(cleanup);
         return { statement: statement.seq };
       }),

@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off
 import assert from "node:assert/strict";
 import { test } from "vite-plus/test";
 import { Effect, Layer } from "effect";
@@ -56,6 +58,8 @@ test("OpenAI-compatible usage includes cache reads and preserves missing counter
         uncachedInputTokens: null,
         totalInputTokens: null,
       });
+      // Test entry point owns this Layer and its resource scope.
+      // @effect-diagnostics-next-line strictEffectProvide:off
     }).pipe(Effect.provide(layer)),
   );
 });
@@ -100,6 +104,8 @@ test("records individual provider responses and sums cache exactly once", async 
         totalInputTokens: 145,
       });
       assert.equal(usage.byRootSession("other").responses, 0);
+      // Test entry point owns this Layer and its resource scope.
+      // @effect-diagnostics-next-line strictEffectProvide:off
     }).pipe(Effect.provide(layer)),
   );
 });
@@ -168,6 +174,8 @@ test("unknown counters remain unknown rather than becoming zero; only counts are
         RangeError,
       );
       assert.equal(usage.byRootSession("root").responses, 2);
+      // Test entry point owns this Layer and its resource scope.
+      // @effect-diagnostics-next-line strictEffectProvide:off
     }).pipe(Effect.provide(layer)),
   );
 });

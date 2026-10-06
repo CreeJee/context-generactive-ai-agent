@@ -1,5 +1,9 @@
+import { DateTime } from "effect";
+import { isTruthy } from "../truthy.ts";
 import type { StreamChunk, StreamDurability } from "@tanstack/ai";
 import type { DatabaseSync } from "node:sqlite";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { setTimeout } from "node:timers/promises";
 
 const namespace = "sdk-stream:v1:";
@@ -46,7 +50,7 @@ export function sqliteStreamDurability(input: {
       .prepare(`SELECT cursor FROM workflow_run_events WHERE run_id = ?
       AND cursor = ? AND kind = 'chunk' AND event_key LIKE 'sdk-stream:v1:chunk:%'`)
       .get(runId, cursor);
-    if (!row) throw new Error("Unknown stream offset");
+    if (!isTruthy(row)) throw new Error("Unknown stream offset");
     return cursor;
   };
   const entries = (after: number) => {
@@ -62,15 +66,17 @@ export function sqliteStreamDurability(input: {
   if (input.resumeOffset != null) parse(input.resumeOffset);
   return {
     resumeFrom: () => input.resumeOffset ?? null,
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     append: async (chunks) =>
       atomic(() => {
         check();
-        if (terminal.get(runId, closedKey)) throw new Error("Stream is closed");
+        if (isTruthy(terminal.get(runId, closedKey))) throw new Error("Stream is closed");
         // Validate every entry before any write, including sparse arrays.
         const payloads: string[] = [];
         for (let i = 0; i < chunks.length; i++) {
           const chunk = chunks[i];
-          if (!chunk) throw new Error("Missing stream chunk");
+          if (!isTruthy(chunk)) throw new Error("Missing stream chunk");
           // AG-UI message/tool events and SDK RUN_ACCEPTED have no runId.
           // Reject explicit cross-run lifecycle events; otherwise the owner binding scopes them.
           switch (chunk.type) {
@@ -101,39 +107,45 @@ export function sqliteStreamDurability(input: {
             `${namespace}chunk:${sequence + 1}`,
             "chunk",
             payload,
-            new Date().toISOString(),
+            DateTime.formatIso(DateTime.nowUnsafe()),
           );
           offsets.push(token(Number(result.lastInsertRowid)));
         }
         return offsets;
       }),
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     snapshot: async () =>
       atomic(() => {
         check();
         return entries(0);
       }),
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     close: async () =>
       atomic(() => {
         check();
-        if (!terminal.get(runId, closedKey))
+        if (!isTruthy(terminal.get(runId, closedKey)))
           insert.run(
             runId,
             closedKey,
             "run_completed",
             JSON.stringify({ deliveryClosed: true }),
-            new Date().toISOString(),
+            DateTime.formatIso(DateTime.nowUnsafe()),
           );
       }),
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     read: async function* (offset, signal) {
       check();
       let cursor = parse(offset);
-      while (!signal?.aborted) {
+      while (!isTruthy(signal?.aborted)) {
         const page = atomic(() => {
           check();
-          return { entries: entries(cursor), closed: !!terminal.get(runId, closedKey) };
+          return { entries: entries(cursor), closed: !!isTruthy(terminal.get(runId, closedKey)) };
         });
         for (const entry of page.entries) {
-          if (signal?.aborted) return;
+          if (isTruthy(signal?.aborted)) return;
           cursor = parse(entry.offset);
           yield entry;
         }
@@ -141,7 +153,7 @@ export function sqliteStreamDurability(input: {
         try {
           await setTimeout(20, undefined, { signal });
         } catch (error) {
-          if (signal?.aborted) return;
+          if (isTruthy(signal?.aborted)) return;
           throw error;
         }
       }

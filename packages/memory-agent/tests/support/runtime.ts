@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,7 +37,7 @@ export async function testRuntime(overrides: TestRuntimeOptions = {}) {
   const home = join(base, "home");
   mkdirSync(home);
   const { testProvider: providerOptions, ...layerOverrides } = overrides;
-  const provider = providerOptions ? makeTestProvider(providerOptions) : undefined;
+  const provider = providerOptions !== undefined ? makeTestProvider(providerOptions) : undefined;
   const baseOptions: MemoryAgentLayerOptions = {
     embedder: fakeEmbedderLayer,
     morphAnalyzer: fakeMorphLayer,
@@ -52,9 +54,8 @@ export async function testRuntime(overrides: TestRuntimeOptions = {}) {
     sweepSecrets: false,
     ...layerOverrides,
   };
-  const options: MemoryAgentLayerOptions = provider
-    ? { ...baseOptions, providerRegistry: provider.layer }
-    : baseOptions;
+  const options: MemoryAgentLayerOptions =
+    provider !== undefined ? { ...baseOptions, providerRegistry: provider.layer } : baseOptions;
   const storage = join(base, "storage");
   const projectRoot = join(base, "project");
   mkdirSync(projectRoot);

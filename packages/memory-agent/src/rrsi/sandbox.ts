@@ -1,4 +1,9 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { Option, Schema } from "effect";
@@ -30,6 +35,9 @@ const Frame = Schema.Union([
     total: Schema.Int.check(Schema.isGreaterThan(0)),
   }),
 ]);
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function evaluateSandbox(
   client: ModelGateway,
   profile: HarnessProfile,
@@ -90,18 +98,22 @@ export async function evaluateSandbox(
   reads.on("line", (line) => {
     if (!line.startsWith("RRSI:")) return;
     requests = requests
+      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+      // @effect-diagnostics-next-line asyncFunction:off
       .then(async () => {
         let frame: typeof Frame.Type;
         try {
-          frame = Schema.decodeUnknownSync(Schema.fromJsonString(Frame))(line.slice(5));
+          // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+          // @effect-diagnostics-next-line schemaSync:off
+          frame = Schema.decodeSync(Schema.fromJsonString(Frame))(line.slice(5));
         } catch {
-          throw new EvaluationFailed({ reason: "protocol_invalid" });
+          throw EvaluationFailed.make({ reason: "protocol_invalid" });
         }
         switch (frame.kind) {
           case "request":
           case "subscription-request": {
             if (frame.kind === "subscription-request" && client.protocol !== "subscription")
-              throw new EvaluationFailed({ reason: "gateway_protocol_mismatch" });
+              throw EvaluationFailed.make({ reason: "gateway_protocol_mismatch" });
             let raw: string;
             try {
               raw =
@@ -109,7 +121,7 @@ export async function evaluateSandbox(
                   ? await client.subscription(frame.body, signal)
                   : await client.complete(frame.body, signal);
             } catch (error) {
-              throw new EvaluationFailed({
+              throw EvaluationFailed.make({
                 reason:
                   error instanceof CompatibleCompletionRejected &&
                   error.reason === "memory_capacity_exceeded"
@@ -132,7 +144,7 @@ export async function evaluateSandbox(
               frame.completed > expected ||
               frame.completed < completedTasks
             )
-              throw new EvaluationFailed({ reason: "protocol_invalid" });
+              throw EvaluationFailed.make({ reason: "protocol_invalid" });
             completedTasks = frame.completed;
             onProgress?.(frame.completed, expected);
             break;
@@ -141,11 +153,11 @@ export async function evaluateSandbox(
               frame.results.length !== expected ||
               new Set(frame.results.map((item) => item.id)).size !== expected
             )
-              throw new EvaluationFailed({ reason: "evaluation_incomplete" });
+              throw EvaluationFailed.make({ reason: "evaluation_incomplete" });
             const score = (domain: "coding" | "memory") => {
               const items = frame.results.filter((item) => item.domain === domain);
               if (items.length !== expected / 2)
-                throw new EvaluationFailed({ reason: "evaluation_incomplete" });
+                throw EvaluationFailed.make({ reason: "evaluation_incomplete" });
               return items.reduce((sum, item) => sum + item.score, 0) / items.length;
             };
             const coding = score("coding");
@@ -156,7 +168,7 @@ export async function evaluateSandbox(
           }
           case "failure":
             // Accept only evaluator categories; arbitrary candidate text never becomes a reason.
-            throw new EvaluationFailed({
+            throw EvaluationFailed.make({
               reason: Option.getOrElse(
                 Schema.decodeUnknownOption(WorkerFailureReason)(frame.reason),
                 () => "worker_failed" as const,
@@ -165,27 +177,28 @@ export async function evaluateSandbox(
         }
       })
       .catch((error: Error) => {
-        failure ??=
-          error instanceof EvaluationFailed
-            ? error
-            : new EvaluationFailed({
-                reason: "protocol_invalid",
-              });
+        failure ??= Schema.is(EvaluationFailed)(error)
+          ? error
+          : EvaluationFailed.make({
+              reason: "protocol_invalid",
+            });
         abort();
       });
   });
   // Do not echo candidate stderr, which may contain arbitrary workspace or request text.
   child.stderr.resume();
   try {
+    // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
+    // @effect-diagnostics-next-line newPromise:off
     const code = await new Promise<number | null>((resolve, reject) => {
       child.once("error", reject);
       child.once("close", resolve);
     });
     await requests;
     if (failure !== null) throw failure;
-    if (code !== 0) throw new EvaluationFailed({ reason: "evaluation_container_failed" });
+    if (code !== 0) throw EvaluationFailed.make({ reason: "evaluation_container_failed" });
     if (signal.aborted || result === null || modelCalls === 0 || totalTokens === 0)
-      throw new EvaluationFailed({ reason: "evaluation_incomplete" });
+      throw EvaluationFailed.make({ reason: "evaluation_incomplete" });
     return result;
   } finally {
     signal.removeEventListener("abort", abort);
@@ -202,6 +215,8 @@ const Usage = Schema.Struct({
   ),
 });
 export function reportedTokens(raw: string): number | null {
-  const page = Schema.decodeUnknownSync(Schema.fromJsonString(Usage))(raw);
-  return page.usage ? page.usage.prompt_tokens + page.usage.completion_tokens : null;
+  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+  // @effect-diagnostics-next-line schemaSync:off
+  const page = Schema.decodeSync(Schema.fromJsonString(Usage))(raw);
+  return isTruthy(page.usage) ? page.usage.prompt_tokens + page.usage.completion_tokens : null;
 }

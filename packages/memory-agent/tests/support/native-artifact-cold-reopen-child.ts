@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off processEnv:off schemaSync:off
 import { strict as assert } from "node:assert";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -82,7 +84,7 @@ try {
   sqlite = services.db.sqlite;
   const previous =
     phase === "second"
-      ? Schema.decodeUnknownSync(Schema.fromJsonString(Snapshot))(
+      ? Schema.decodeSync(Schema.fromJsonString(Snapshot))(
           readFileSync(join(base, "snapshot.json"), "utf8"),
         )
       : undefined;
@@ -103,7 +105,7 @@ try {
     );
   const oldRun = async () =>
     JSON.stringify(await services.state.persistence.stores.runs.get("first"));
-  if (previous) {
+  if (previous !== undefined) {
     assert.notEqual(previous.pid, process.pid);
     assert.equal(oldNodes(), previous.nodes);
     assert.equal(await oldRun(), previous.run);
@@ -141,7 +143,7 @@ try {
   const current = await services.state.persistence.stores.runs.get(phase);
   assert.equal(current?.status, "completed");
   assert.equal(current?.threadId, binding.sessionId);
-  if (previous) {
+  if (previous !== undefined) {
     assert.equal(oldNodes(), previous.nodes);
     assert.equal(await oldRun(), previous.run);
   } else {

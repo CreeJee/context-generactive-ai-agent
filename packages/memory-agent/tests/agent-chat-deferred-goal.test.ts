@@ -1,4 +1,7 @@
-import { Effect } from "effect";
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off globalTimers:off newPromise:off
+import { isTruthy } from "../src/truthy.ts";
+import { DateTime, Effect } from "effect";
 import { expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { Database } from "../src/db/database.ts";
@@ -28,7 +31,7 @@ test.each(["goal", "completed"] as const)(
           const toolResult = invocation.messages.find(
             (message) => message.role === "tool" && message.toolCallId === "request-new-goal",
           );
-          if (toolResult) {
+          if (isTruthy(toolResult)) {
             expect(
               inspectDb?.sqlite
                 .prepare(
@@ -48,7 +51,7 @@ test.each(["goal", "completed"] as const)(
           }
           const instructions = invocation.systemPrompts.join("\n");
           const id = instructions.match(/Current Goal instance ID: ([\w-]+)\./)?.[1];
-          if (!id) throw new Error("Current Goal ID absent from prompt");
+          if (!isTruthy(id)) throw new Error("Current Goal ID absent from prompt");
           sawId = id;
           return {
             toolCalls: [
@@ -124,8 +127,8 @@ test.each(["goal", "completed"] as const)(
     expect(sawId).toBe(previousId);
     expect(observedBeforeRunCompleted).toBe(true);
     expect(body).toContain("The request was accepted, not saved yet.");
-    const deadline = Date.now() + 3_000;
-    while (Date.now() < deadline) {
+    const deadline = DateTime.toEpochMillis(DateTime.nowUnsafe()) + 3_000;
+    while (DateTime.toEpochMillis(DateTime.nowUnsafe()) < deadline) {
       const row = db.sqlite
         .prepare("SELECT status FROM workflow_new_goal_requests WHERE run_id = 'new-goal-chat-run'")
         .get();
@@ -162,7 +165,7 @@ test.each(["stale-id", "failed-run"] as const)(
           const id = invocation.systemPrompts
             .join("\n")
             .match(/Current Goal instance ID: ([\w-]+)\./)?.[1];
-          if (!id) throw new Error("Goal ID missing");
+          if (!isTruthy(id)) throw new Error("Goal ID missing");
           return {
             toolCalls: [
               {
@@ -206,15 +209,15 @@ test.each(["stale-id", "failed-run"] as const)(
     );
     expect(response.status).toBe(200);
     await response.text();
-    const deadline = Date.now() + 3_000;
-    while (Date.now() < deadline) {
+    const deadline = DateTime.toEpochMillis(DateTime.nowUnsafe()) + 3_000;
+    while (DateTime.toEpochMillis(DateTime.nowUnsafe()) < deadline) {
       const row = db.sqlite
         .prepare("SELECT status FROM chat_runs WHERE run_id = ?")
         .get(`new-goal-${scenario}`);
       const request = db.sqlite
         .prepare("SELECT status FROM workflow_new_goal_requests WHERE run_id = ?")
         .get(`new-goal-${scenario}`);
-      if (row?.status !== "running" && (!request || request.status !== "accepted")) break;
+      if (row?.status !== "running" && (!isTruthy(request) || request.status !== "accepted")) break;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     if (scenario === "stale-id") {

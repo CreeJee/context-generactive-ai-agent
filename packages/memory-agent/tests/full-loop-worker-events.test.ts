@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off
 import { Worker } from "node:worker_threads";
 import { Effect, Exit, Queue, Scope } from "effect";
 import { expect, test, vi } from "vite-plus/test";
@@ -5,7 +7,7 @@ import { acquireFullLoopWorkerEvents } from "../src/agent/full-loop-worker-event
 
 test("scoped worker handoff preserves FIFO and removes all listeners", async () => {
   const worker = new Worker("setInterval(() => {}, 1000)", { eval: true });
-  const scope = Effect.runSync(Scope.make());
+  const scope = Scope.makeUnsafe();
   const controller = new AbortController();
   try {
     const queue = await Effect.runPromise(
@@ -33,7 +35,7 @@ test("scoped worker handoff preserves FIFO and removes all listeners", async () 
 
 test("failed abort transport wakes the pending pull as failure without escaping its callback", async () => {
   const worker = new Worker("setInterval(() => {}, 1000)", { eval: true });
-  const scope = Effect.runSync(Scope.make());
+  const scope = Scope.makeUnsafe();
   const controller = new AbortController();
   const dispatch = vi.spyOn(worker, "postMessage").mockImplementation(() => {
     throw new Error("closed abort transport");
@@ -58,7 +60,7 @@ test("failed abort transport wakes the pending pull as failure without escaping 
 test("abort wakes pending take and malformed envelopes fail closed", async () => {
   for (const trigger of ["abort", "invalid"] as const) {
     const worker = new Worker("setInterval(() => {}, 1000)", { eval: true });
-    const scope = Effect.runSync(Scope.make());
+    const scope = Scope.makeUnsafe();
     const controller = new AbortController();
     try {
       const queue = await Effect.runPromise(

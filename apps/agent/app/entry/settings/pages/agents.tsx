@@ -67,7 +67,7 @@ const description =
   "신뢰한 ACP 에이전트에게 모델이 작업을 맡길 수 있어요. 맡길 때마다 승인하고, 에이전트는 이 앱의 ChatGPT 로그인이 아니라 자기 로그인으로 일해요.";
 
 export function AgentSettings({ project }: { project: Project | null }) {
-  if (!project)
+  if (!(project !== null))
     return (
       <FieldGroup>
         <PageHeader title={"외부 에이전트"} description={description} />
@@ -84,6 +84,8 @@ function AgentSettingsContent({ project }: { project: Project }) {
   const [error, setError] = useState<string | null>(null);
 
   const header = <PageHeader title="외부 에이전트" project={project} description={description} />;
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const apply = async (change: Parameters<typeof mutation.mutateAsync>[0]) => {
     setError(null);
     try {

@@ -1,3 +1,4 @@
+import { isTruthy } from "../../truthy.ts";
 import { Schema } from "effect";
 import type { TraceTaskDetail, TraceTaskView } from "memory-agent";
 import {
@@ -60,7 +61,7 @@ type EvidenceLocator = NonNullable<TraceTaskDetail["evidence"][number]["locator"
 type ArtifactLocator = NonNullable<TraceTaskDetail["artifacts"][number]["locator"]>;
 
 function evidenceLocatorLabel(locator: EvidenceLocator | null) {
-  if (!locator) return "원본 위치가 삭제되었거나 가려졌어요.";
+  if (!isTruthy(locator)) return "원본 위치가 삭제되었거나 가려졌어요.";
   switch (locator.kind) {
     case "message":
       return `Message ${locator.messageId} · Thread ${locator.threadId}`;
@@ -80,7 +81,7 @@ function evidenceLocatorLabel(locator: EvidenceLocator | null) {
 }
 
 function artifactLocatorLabel(locator: ArtifactLocator | null) {
-  if (!locator) return "원본 위치가 삭제되었거나 가려졌어요.";
+  if (!isTruthy(locator)) return "원본 위치가 삭제되었거나 가려졌어요.";
   switch (locator.kind) {
     case "file":
       return `${locator.path} · sha256 ${locator.sha256}`;
@@ -144,7 +145,7 @@ function TaskTree({
 }
 
 function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
-  if (!detail)
+  if (!(detail !== null))
     return (
       <p className="p-4 text-sm text-muted-foreground">작업을 선택하면 실행 근거가 표시돼요.</p>
     );
@@ -330,7 +331,7 @@ function TaskDetail({ detail }: { detail: TraceTaskDetail | null }) {
                   <div className="flex items-center gap-2">
                     <span className="font-medium">{candidate.disposition}</span>
                     <Badge className="ml-auto" variant="secondary">
-                      {candidate.memoryNodeId ? "project memory" : "저장 안 함"}
+                      {isTruthy(candidate.memoryNodeId) ? "project memory" : "저장 안 함"}
                     </Badge>
                   </div>
                   <p className="mt-1 whitespace-pre-wrap">{candidate.resolvedText}</p>
@@ -391,11 +392,11 @@ function PanelBody({
   const failed = traceQuery.isError;
   const connection = useProjectTraceConnection(projectId, sessionId, mode === "live");
   const shownTasks =
-    mode === "live" && sessionId
+    mode === "live" && isTruthy(sessionId)
       ? tasks.filter((task) => task.originSessionId === sessionId)
       : tasks;
   useEffect(() => {
-    if (selectedTaskId && shownTasks.some(({ id }) => id === selectedTaskId)) return;
+    if (isTruthy(selectedTaskId) && shownTasks.some(({ id }) => id === selectedTaskId)) return;
     onSelectedTaskIdChange(shownTasks[0]?.id ?? null);
   }, [mode, sessionId, tasks]);
   return (

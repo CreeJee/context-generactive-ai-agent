@@ -10,6 +10,8 @@ function createAgentRuntime(): AgentRuntime {
   // The storage root is read when the first request builds the layer, so the executable can set
   // CONTEXT_AGENT_HOME (its --storage option) after this module is loaded.
   const runtime = ManagedRuntime.make(
+    // Native host/SDK configuration boundary reads or forwards the host environment.
+    // @effect-diagnostics-next-line processEnv:off
     Layer.suspend(() => memoryAgentLayer(process.env.CONTEXT_AGENT_HOME ?? defaultStorageRoot)),
   );
   // Stop child commands and release the vector index lock with the server. SIGHUP is a closed

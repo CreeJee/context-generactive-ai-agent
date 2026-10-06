@@ -1,4 +1,6 @@
-import { Effect, Layer, Schema } from "effect";
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off schemaSync:off
+import { DateTime, Effect, Layer, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { WorkTraceStore } from "../src/work-trace/store.ts";
@@ -18,10 +20,12 @@ const testLayer = () => {
   return Layer.merge(database, WorkTraceStore.layer.pipe(Layer.provide(database)));
 };
 const run = <A>(effect: Effect.Effect<A, never, Database | WorkTraceStore>) =>
+  // Test entry point owns this Layer and its resource scope.
+  // @effect-diagnostics-next-line strictEffectProvide:off
   Effect.runPromise(Effect.scoped(effect.pipe(Effect.provide(testLayer()))));
 
 const seed = (db: Database["Service"]) => {
-  const iso = new Date(0).toISOString();
+  const iso = DateTime.formatIso(DateTime.makeUnsafe(0));
   db.sqlite
     .prepare("INSERT INTO projects (id, root, name, created_at) VALUES ('p1', '/tmp/p1', 'p1', ?)")
     .run(iso);

@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, test } from "vite-plus/test";
 import {
@@ -70,7 +72,7 @@ describe("bounded report evidence", () => {
       ).run();
       const session = reportSession(db, "p1", "s1");
       expect(session).not.toBeNull();
-      if (!session) throw new Error("missing fixture session");
+      if (!(session !== null)) throw new Error("missing fixture session");
       const result = collectReportEvidence(db, session, () => [
         {
           id: "t1",
@@ -104,7 +106,7 @@ describe("bounded report evidence", () => {
         INSERT INTO nodes VALUES ('wrong-project', 'user', 's1', 'p2', NULL, '2026-09-26', 31, 'wrong project', '{}');
       `);
       const session = reportSession(db, "p1", "s1");
-      if (!session) throw new Error("missing fixture session");
+      if (!(session !== null)) throw new Error("missing fixture session");
       const result = collectReportEvidence(db, session, () => []);
       expect(result.runs.items.map((run) => run.runId)).toEqual(["r1"]);
       expect(result.calls.status).toBe("empty");
@@ -162,7 +164,7 @@ describe("bounded report evidence", () => {
     try {
       db.exec("DROP TABLE chat_interrupts");
       const session = reportSession(db, "p1", "s1");
-      if (!session) throw new Error("missing fixture session");
+      if (!(session !== null)) throw new Error("missing fixture session");
       const result = collectReportEvidence(db, session, () => {
         throw new Error("trace unavailable");
       });

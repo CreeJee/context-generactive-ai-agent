@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { Context, Effect, Layer } from "effect";
 import type { ClaimResult, LeaseView } from "./lease-state.ts";
 
@@ -20,7 +21,7 @@ interface Lease {
  * with its next renewal, and a read-only page never takes over on its own.
  */
 export class SessionLeases extends Context.Service<SessionLeases, ReturnType<typeof makeLeases>>()(
-  "memory-agent/SessionLeases",
+  "memory-agent/sessions/leases/SessionLeases",
 ) {
   static readonly layer = (ttlMs = defaultLeaseTtlMs) =>
     Layer.effect(
@@ -39,11 +40,13 @@ export class SessionLeases extends Context.Service<SessionLeases, ReturnType<typ
     );
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function makeLeases(ttlMs: number, now: () => number = Date.now) {
   const leases = new Map<string, Lease>();
   const live = (sessionId: string) => {
     const lease = leases.get(sessionId);
-    if (!lease) return null;
+    if (!isTruthy(lease)) return null;
     if (now() - lease.renewedAt < ttlMs) return lease;
     leases.delete(sessionId);
     return null;
@@ -64,7 +67,7 @@ export function makeLeases(ttlMs: number, now: () => number = Date.now) {
 
     view(sessionId: string, holder: string | null): LeaseView {
       const lease = live(sessionId);
-      if (!lease) return { state: "free" };
+      if (!isTruthy(lease)) return { state: "free" };
       return lease.holder === holder ? { state: "mine" } : { state: "other", since: lease.since };
     },
 
@@ -74,8 +77,9 @@ export function makeLeases(ttlMs: number, now: () => number = Date.now) {
      */
     claim(sessionId: string, holder: string): ClaimResult {
       const lease = live(sessionId);
-      if (lease && lease.holder !== holder) return { claimed: false, heldSince: lease.since };
-      if (lease) lease.renewedAt = now();
+      if (isTruthy(lease) && lease.holder !== holder)
+        return { claimed: false, heldSince: lease.since };
+      if (isTruthy(lease)) lease.renewedAt = now();
       else leases.set(sessionId, { holder, since: now(), renewedAt: now() });
       return { claimed: true };
     },
@@ -90,7 +94,7 @@ export function makeLeases(ttlMs: number, now: () => number = Date.now) {
      */
     permits(sessionId: string, holder: string | null) {
       const lease = live(sessionId);
-      return !lease || lease.holder === holder;
+      return !isTruthy(lease) || lease.holder === holder;
     },
   };
 }

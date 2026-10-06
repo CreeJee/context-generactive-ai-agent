@@ -1,4 +1,7 @@
-import { Effect } from "effect";
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
+import { randomUUID } from "node:crypto";
+import { Schema, Effect } from "effect";
 import { expect, test } from "vite-plus/test";
 import { createGoalNativeImplementations } from "../src/agent/goal-native-implementation.ts";
 import { makeAgentChatImplementation } from "../src/agent/chat.ts";
@@ -9,6 +12,8 @@ import { ProviderRegistry } from "../src/providers/registry.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
 import { Workflows } from "../src/workflow/workflow.ts";
 import { testRuntime } from "./support/runtime.ts";
+
+const stringifyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 const goal = {
   statement: "native implementation identity",
@@ -92,9 +97,9 @@ test("one native AgentChat owner executes two Goal identities with fresh clients
             new Request("http://127.0.0.1/api/chat", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
+              body: stringifyJson({
                 threadId: target.id,
-                runId: crypto.randomUUID(),
+                runId: randomUUID(),
                 messages: [
                   { id: `user-${index + 1}`, role: "user", content: `hello-${index + 1}` },
                 ],

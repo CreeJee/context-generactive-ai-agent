@@ -1,3 +1,6 @@
+// Native server integration test uses host environment, SDK Promise callbacks and I/O fixtures.
+// @effect-diagnostics asyncFunction:off globalFetch:off globalFetchInEffect:off newPromise:off nodeBuiltinImport:off processEnv:off
+import { isTruthy } from "../../app/truthy.ts";
 import { createServer as createHttpServer, type Server } from "node:http";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -18,7 +21,8 @@ const listen = (server: Server) =>
         server.once("error", reject);
         server.listen(0, "127.0.0.1", () => {
           const address = server.address();
-          if (!address || Predicate.isString(address)) return reject(new Error("No loopback port"));
+          if (!isTruthy(address) || Predicate.isString(address))
+            return reject(new Error("No loopback port"));
           resolve(`http://127.0.0.1:${address.port}`);
         });
       }),
@@ -28,7 +32,7 @@ const close = (server: Server) =>
     () =>
       new Promise<void>((resolve, reject) => {
         server.closeAllConnections();
-        server.close((error) => (error ? reject(error) : resolve()));
+        server.close((error) => (error !== undefined ? reject(error) : resolve()));
       }),
   );
 
@@ -91,7 +95,8 @@ test("real two-listener Vite proxy preserves contracts through UI edits and dura
                       : chat.hydrate(request, sessionId),
                   );
                   outgoing.writeHead(response.status, Object.fromEntries(response.headers));
-                  if (response.body) for await (const chunk of response.body) outgoing.write(chunk);
+                  if (isTruthy(response.body))
+                    for await (const chunk of response.body) outgoing.write(chunk);
                   outgoing.end();
                 })().catch(() => {
                   outgoing.writeHead(500);
@@ -119,7 +124,8 @@ test("real two-listener Vite proxy preserves contracts through UI edits and dura
           );
           yield* Effect.promise(() => frontend.listen());
           const address = frontend.httpServer!.address();
-          if (!address || Predicate.isString(address)) throw new Error("No frontend port");
+          if (!isTruthy(address) || Predicate.isString(address))
+            throw new Error("No frontend port");
           const frontendUrl = `http://127.0.0.1:${address.port}`;
           const post = (sessionId: string, runId: string, buildId?: string, base = frontendUrl) => {
             const headers = new Headers({ "Content-Type": "application/json" });

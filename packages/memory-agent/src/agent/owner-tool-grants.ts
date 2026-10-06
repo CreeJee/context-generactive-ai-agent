@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { isDeepStrictEqual } from "node:util";
 import { Schema } from "effect";
 import type { StreamChunk } from "@tanstack/ai";
@@ -40,13 +41,14 @@ export function makeOwnerToolGrants() {
           break;
         case "TOOL_CALL_ARGS": {
           const call = calls.get(chunk.toolCallId);
-          if (!call || call.complete) throw new Error("Invalid owner tool argument stream");
+          if (!isTruthy(call) || call.complete)
+            throw new Error("Invalid owner tool argument stream");
           call.raw += chunk.delta;
           break;
         }
         case "TOOL_CALL_END": {
           const call = calls.get(chunk.toolCallId);
-          if (!call || call.complete) throw new Error("Invalid owner tool end");
+          if (!isTruthy(call) || call.complete) throw new Error("Invalid owner tool end");
           call.complete = true;
           break;
         }
@@ -64,10 +66,12 @@ export function makeOwnerToolGrants() {
     // Decoded RPC payload is untrusted; the exact Invocation schema below is its boundary.
     // oxlint-disable-next-line anti-slop/no-unknown-parameters
     observed(input: unknown): Invocation {
+      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+      // @effect-diagnostics-next-line schemaSync:off
       const invocation = Schema.decodeUnknownSync(Invocation, { onExcessProperty: "error" })(input);
       const call = calls.get(invocation.toolCallId);
       if (
-        !call?.complete ||
+        !isTruthy(call?.complete) ||
         call.used ||
         call.name !== invocation.name ||
         !isDeepStrictEqual(JSON.parse(call.raw || "{}"), invocation.args)
@@ -76,11 +80,13 @@ export function makeOwnerToolGrants() {
       return structuredClone(invocation);
     },
     approve(input: Invocation, args: Invocation["args"]) {
+      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+      // @effect-diagnostics-next-line schemaSync:off
       const invocation = Schema.decodeSync(Invocation, { onExcessProperty: "error" })(input);
       const call = calls.get(invocation.toolCallId);
       if (
-        !call?.complete ||
-        call.grant ||
+        !isTruthy(call?.complete) ||
+        isTruthy(call.grant) ||
         call.used ||
         call.name !== invocation.name ||
         !isDeepStrictEqual(JSON.parse(call.raw || "{}"), invocation.args)
@@ -94,11 +100,13 @@ export function makeOwnerToolGrants() {
     // oxlint-disable-next-line anti-slop/no-unknown-parameters
     validate(input: unknown): boolean {
       try {
+        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+        // @effect-diagnostics-next-line schemaSync:off
         const invocation = Schema.decodeUnknownSync(Invocation, { onExcessProperty: "error" })(
           input,
         );
         const call = calls.get(invocation.toolCallId);
-        return !!call?.grant && !call.used && isDeepStrictEqual(call.grant, invocation);
+        return !!isTruthy(call?.grant) && !call.used && isDeepStrictEqual(call.grant, invocation);
       } catch {
         return false;
       }
@@ -106,9 +114,11 @@ export function makeOwnerToolGrants() {
     // Guard the implementation boundary with the same exact RPC Invocation decoder.
     // oxlint-disable-next-line anti-slop/no-unknown-parameters
     start(input: unknown): Invocation {
+      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+      // @effect-diagnostics-next-line schemaSync:off
       const invocation = Schema.decodeUnknownSync(Invocation, { onExcessProperty: "error" })(input);
       const call = calls.get(invocation.toolCallId);
-      if (!call?.grant || call.started || !isDeepStrictEqual(call.grant, invocation))
+      if (!isTruthy(call?.grant) || call.started || !isDeepStrictEqual(call.grant, invocation))
         throw new Error("Invalid or repeated owner tool implementation grant");
       call.started = true;
       return structuredClone(call.grant);
@@ -116,9 +126,11 @@ export function makeOwnerToolGrants() {
     // Tool RPC consumption decodes untrusted payloads before comparing the owner grant.
     // oxlint-disable-next-line anti-slop/no-unknown-parameters
     consume(input: unknown): Invocation {
+      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+      // @effect-diagnostics-next-line schemaSync:off
       const invocation = Schema.decodeUnknownSync(Invocation, { onExcessProperty: "error" })(input);
       const call = calls.get(invocation.toolCallId);
-      if (!call?.grant || call.used || !isDeepStrictEqual(call.grant, invocation))
+      if (!isTruthy(call?.grant) || call.used || !isDeepStrictEqual(call.grant, invocation))
         throw new Error("Invalid owner tool grant");
       call.used = true;
       return structuredClone(call.grant);

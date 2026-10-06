@@ -1,3 +1,4 @@
+// Frozen worker wire adapter is independently snapshotted without the owner Effect runtime.
 import type { MessagePort } from "node:worker_threads";
 import type { OwnerRpcOperations, OwnerRpcReply, OwnerRpcRequest } from "./owner-rpc.ts";
 // Erasable TypeScript only: native Node workers load this without a transpiler.
@@ -26,7 +27,7 @@ export function makeOwnerRpcPortClient(port: MessagePort) {
     const entry = pending.get(frame?.requestId);
     if (
       frame?.type !== "reply" ||
-      !entry ||
+      entry === undefined ||
       frame.reply?.operationId !== entry.operationId ||
       !["succeeded", "pending", "uncertain", "rejected"].includes(frame.reply.type)
     )
@@ -44,6 +45,8 @@ export function makeOwnerRpcPortClient(port: MessagePort) {
         return Promise.reject(new Error("Request IDs exhausted"));
       }
       const requestId = ++nextId;
+      // Native MessagePort callback handshake; close rejects every pending request.
+      // @effect-diagnostics-next-line newPromise:off
       return new Promise((resolve, reject) => {
         pending.set(requestId, { resolve, reject, operationId: request.operationId });
         try {

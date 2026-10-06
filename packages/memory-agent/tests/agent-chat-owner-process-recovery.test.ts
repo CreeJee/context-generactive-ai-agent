@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off globalFetch:off globalTimers:off newPromise:off nodeBuiltinImport:off schemaSync:off
 import { fork, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -5,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vite-plus/test";
-import { Schema } from "effect";
+import { DateTime, Schema } from "effect";
 
 const inspection = Schema.Struct({
   bindings: Schema.Array(Schema.Unknown),
@@ -85,9 +87,10 @@ const post = (owner: Owner, runId: string) =>
     signal: AbortSignal.timeout(10_000),
   });
 async function waitForModel(base: string) {
-  const deadline = Date.now() + 10_000;
+  const deadline = DateTime.toEpochMillis(DateTime.nowUnsafe()) + 10_000;
   while (!existsSync(join(base, "model-calls"))) {
-    if (Date.now() > deadline) throw new Error("Fake model did not start");
+    if (DateTime.toEpochMillis(DateTime.nowUnsafe()) > deadline)
+      throw new Error("Fake model did not start");
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }

@@ -1,10 +1,15 @@
-import { Effect, Result } from "effect";
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off schemaSync:off
+import { isTruthy } from "../src/truthy.ts";
+import { Schema, Effect, Result } from "effect";
 import { describe, expect, test, vi } from "vite-plus/test";
 import { AppEvents } from "../src/events/app-events.ts";
 import { Database } from "../src/db/database.ts";
 import { WorkflowTools } from "../src/workflow/tools.ts";
 import { Workflows } from "../src/workflow/workflow.ts";
 import { testRuntime } from "./support/runtime.ts";
+
+const stringifyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 const goal = {
   statement: "Ship a durable planning workflow",
@@ -59,7 +64,7 @@ describe("WorkflowTools live refresh", () => {
         name === "update_goal" ? "goal" : "execute",
       );
       const tool = tools.find((candidate) => candidate.name === name);
-      if (!tool?.execute) throw new Error(`Missing server tool: ${name}`);
+      if (!isTruthy(tool?.execute)) throw new Error(`Missing server tool: ${name}`);
       const input =
         name === "update_goal"
           ? { ...goal, statement: "Revised goal" }
@@ -201,7 +206,7 @@ describe("WorkflowTools live refresh", () => {
     const publish = vi.spyOn(events, "publishSession");
     const tools = (await runtime.runPromise(WorkflowTools)).forSession(session.id, "execute");
     const progress = tools.find((tool) => tool.name === "update_workflow_progress");
-    if (!progress?.execute) throw new Error("Missing progress tool");
+    if (!isTruthy(progress?.execute)) throw new Error("Missing progress tool");
 
     expect(
       await progress.execute({
@@ -321,7 +326,8 @@ describe("Workflows", () => {
         yield* workflows.setPhase(session.id, "execute");
         const tools = (yield* WorkflowTools).forSession(session.id, "execute");
         const progress = tools.find((tool) => tool.name === "update_workflow_progress");
-        if (!progress?.execute) throw new Error("progress tool has no server implementation");
+        if (!isTruthy(progress?.execute))
+          throw new Error("progress tool has no server implementation");
         yield* workflows.updatePlan(session.id, {
           ...plan,
           summary: "Revised before stale progress arrived",
@@ -378,7 +384,7 @@ describe("Workflows", () => {
           )
           .run(
             session.id,
-            JSON.stringify({
+            stringifyJson({
               phase: "execute",
               goal: {
                 version: 1,

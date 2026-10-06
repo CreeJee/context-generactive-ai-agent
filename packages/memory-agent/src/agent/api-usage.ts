@@ -1,6 +1,6 @@
 import type { ChatMiddleware } from "@tanstack/ai";
 import { optionalProperty } from "../optional-property.ts";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Clock, Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import type { ProviderId } from "../providers/contracts.ts";
 
@@ -40,6 +40,8 @@ const CountRow = Schema.Struct({
   uncached_input_tokens: Schema.NullOr(Schema.Finite),
   total_input_tokens: Schema.NullOr(Schema.Finite),
 });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeCount = Schema.decodeUnknownSync(CountRow);
 
 function count(value: number | null | undefined): number | null {
@@ -50,6 +52,8 @@ function count(value: number | null | undefined): number | null {
 }
 
 const make = Effect.gen(function* () {
+  const effectClock = yield* Clock.Clock;
+
   const { sqlite } = yield* Database;
   const insert = sqlite.prepare(`INSERT INTO api_usage_responses
     (root_session_id, run_id, thread_id, purpose, provider, model, input_tokens,
@@ -73,7 +77,11 @@ const make = Effect.gen(function* () {
   return {
     /** Call once for each *actual provider response*, including auxiliary responses. Returns its unique row id. */
     record(response: ApiUsageResponse): number {
-      if (!response.rootSessionId || !response.purpose || !response.model)
+      if (
+        !(response.rootSessionId.length > 0) ||
+        !(response.purpose.length > 0) ||
+        !(response.model.length > 0)
+      )
         throw new Error("Usage attribution is required");
       const input = count(response.inputTokens);
       const read = count(response.cacheReadTokens);
@@ -95,7 +103,7 @@ const make = Effect.gen(function* () {
         read,
         write,
         included ? "included" : "separate",
-        Date.now(),
+        effectClock.currentTimeMillisUnsafe(),
       );
       return Number(result.lastInsertRowid);
     },
@@ -115,6 +123,8 @@ const make = Effect.gen(function* () {
 });
 
 /** Counts-only provider response capture; never persist prompts, messages or tool arguments. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export const collectApiUsage = (
   ledger: { record: (response: ApiUsageResponse) => number },
   source: Pick<ApiUsageResponse, "rootSessionId" | "purpose" | "provider" | "model">,
@@ -134,7 +144,7 @@ export const collectApiUsage = (
 });
 
 export class ApiUsage extends Context.Service<ApiUsage, Effect.Success<typeof make>>()(
-  "memory-agent/ApiUsage",
+  "memory-agent/agent/api-usage/ApiUsage",
 ) {
   static readonly layer = Layer.effect(ApiUsage, make);
 }

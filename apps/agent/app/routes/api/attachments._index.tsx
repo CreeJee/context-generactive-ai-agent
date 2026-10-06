@@ -9,9 +9,11 @@ import type { Route } from "./+types/attachments._index";
  * returns `{ id, mimeType, bytes }`. The type is read from the bytes; only PNG, JPEG, GIF and
  * WebP up to 20 MiB are accepted.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
-  if (rejected) return rejected;
+  if (rejected !== null) return rejected;
   const declared = Number(request.headers.get("Content-Length") ?? 0);
   if (declared > maxAttachmentBytes)
     return Response.json({ error: "attachment_rejected", reason: "too_large" }, { status: 413 });

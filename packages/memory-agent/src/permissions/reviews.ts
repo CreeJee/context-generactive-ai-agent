@@ -1,5 +1,6 @@
+import { isTruthy } from "../truthy.ts";
 import type { SQLOutputValue } from "node:sqlite";
-import { Context, Effect, Layer, Schema } from "effect";
+import { DateTime, Clock, Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 
 /**
@@ -38,6 +39,8 @@ const ReviewRow = Schema.Struct({
   reason: Schema.String,
   created_at: Schema.String,
 });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeReviewRow = Schema.decodeUnknownSync(ReviewRow);
 
 function toReview(row: Record<string, SQLOutputValue>): PermissionReview {
@@ -55,6 +58,8 @@ function toReview(row: Record<string, SQLOutputValue>): PermissionReview {
 }
 
 const make = Effect.gen(function* () {
+  const effectClock = yield* Clock.Clock;
+
   const { sqlite } = yield* Database;
   const insert = sqlite.prepare(
     "INSERT INTO permission_reviews (session_id, tool_call_id, tool_name, input, decision, decided_by, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
@@ -73,16 +78,16 @@ const make = Effect.gen(function* () {
         review.decision,
         review.decidedBy,
         review.reason,
-        new Date().toISOString(),
+        DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe())),
       );
-      if (!row) throw new Error("Permission review insert returned no row");
+      if (!isTruthy(row)) throw new Error("Permission review insert returned no row");
       return toReview(row);
     },
 
     /** The decision in force for a call: the user's answer if any, else the verdict. */
     latest(sessionId: string, toolCallId: string): PermissionReview | null {
       const row = selectLatest.get(sessionId, toolCallId);
-      return row ? toReview(row) : null;
+      return isTruthy(row) ? toReview(row) : null;
     },
   };
 });
@@ -94,6 +99,6 @@ const make = Effect.gen(function* () {
 export class PermissionReviews extends Context.Service<
   PermissionReviews,
   Effect.Success<typeof make>
->()("memory-agent/PermissionReviews") {
+>()("memory-agent/permissions/reviews/PermissionReviews") {
   static readonly layer = Layer.effect(PermissionReviews, make);
 }

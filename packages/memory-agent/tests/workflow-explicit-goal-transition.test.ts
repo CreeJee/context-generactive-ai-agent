@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off
+import { isTruthy } from "../src/truthy.ts";
 import { Effect, Layer } from "effect";
 import { expect, test } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
@@ -142,6 +145,8 @@ test("explicit new identity preserves prior revisions, bindings, receipts and ev
   await expect(
     Effect.runPromise(
       Effect.flatMap(Workflows, (w) => w.startNewGoal(f.sessionId, transition(newId))).pipe(
+        // Test entry point owns this Layer and its resource scope.
+        // @effect-diagnostics-next-line strictEffectProvide:off
         Effect.provide(disabled),
       ),
     ),
@@ -190,7 +195,7 @@ test("owner tool is exposed at potential source phases and checks latest state",
   const action = tools
     .forSession(f.sessionId, "goal")
     .find((tool) => tool.name === "start_new_goal");
-  if (!action?.execute) throw new Error("owner action missing");
+  if (!isTruthy(action?.execute)) throw new Error("owner action missing");
   await f.runtime.runPromise(f.workflows.setPhase(f.sessionId, "execute"));
   expect(await action.execute(transition(f.old))).toMatchObject({
     error: "new_goal_transition_refused",
@@ -209,7 +214,7 @@ test("correct Goal ID still refuses direct transition while the calling run is a
   const action = tools
     .forSession(f.sessionId, "goal")
     .find((tool) => tool.name === "start_new_goal");
-  if (!action?.execute) throw new Error("owner action missing");
+  if (!isTruthy(action?.execute)) throw new Error("owner action missing");
   f.db.sqlite.exec("UPDATE chat_runs SET status = 'running' WHERE run_id = 'old-run'");
   const before = rows(f.db, "workflow_state_revisions");
   expect(await action.execute(transition(f.old))).toMatchObject({

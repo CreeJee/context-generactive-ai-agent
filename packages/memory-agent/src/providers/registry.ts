@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import { Context, Effect, Layer } from "effect";
 import {
   ProviderUnavailable,
@@ -21,6 +22,8 @@ export interface ProviderRegistryApi {
   readonly subscriptionDependencies?: SubscriptionDependencyResolver;
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export const providerRegistryFrom = (
   configurations: ReadonlyArray<ProviderConfiguration>,
   runtimes: ReadonlyArray<AgentModelRuntime> = [],
@@ -33,24 +36,26 @@ export const providerRegistryFrom = (
   return {
     providers: [...byProvider.keys()],
     subscriptionDependencies: (provider) =>
-      byProvider.has(provider) && subscriptionDependencies
+      byProvider.has(provider) && subscriptionDependencies !== undefined
         ? subscriptionDependencies(provider)
         : Effect.fail(new ProviderUnavailable({ provider })),
     get: (provider) => {
       const configuration = byProvider.get(provider);
-      return configuration
+      return isTruthy(configuration)
         ? Effect.succeed(configuration)
         : Effect.fail(new ProviderUnavailable({ provider }));
     },
     runtime: (provider) => {
       const runtime = runtimeByProvider.get(provider);
-      return runtime ? Effect.succeed(runtime) : Effect.fail(new ProviderUnavailable({ provider }));
+      return isTruthy(runtime)
+        ? Effect.succeed(runtime)
+        : Effect.fail(new ProviderUnavailable({ provider }));
     },
   };
 };
 
 export class ProviderRegistry extends Context.Service<ProviderRegistry, ProviderRegistryApi>()(
-  "memory-agent/ProviderRegistry",
+  "memory-agent/providers/registry/ProviderRegistry",
 ) {
   static layer(
     configurations: ReadonlyArray<ProviderConfiguration>,

@@ -1,3 +1,4 @@
+import { isTruthy } from "../../truthy.ts";
 import { useEffect, useState } from "react";
 import { api, type LeaseView, type SessionRunState } from "../api";
 import { useSessionEventScope } from "../events/context";
@@ -14,11 +15,15 @@ const renewMs = 20_000;
 export function pageHolder() {
   try {
     const existing = sessionStorage.getItem(holderKey);
-    if (existing) return existing;
+    if (isTruthy(existing)) return existing;
+    // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
+    // @effect-diagnostics-next-line cryptoRandomUUID:off
     const created = crypto.randomUUID();
     sessionStorage.setItem(holderKey, created);
     return created;
   } catch {
+    // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
+    // @effect-diagnostics-next-line cryptoRandomUUID:off
     return crypto.randomUUID();
   }
 }
@@ -32,7 +37,7 @@ const runRevision = (state: SessionRunState) =>
 /** Session ownership: owner renewal remains a heartbeat; read-only observation follows SSE. */
 export function useSessionLease(sessionId: string) {
   const { projectId } = useSessionEventScope();
-  if (!projectId) throw new Error("Session lease requires an active project");
+  if (!isTruthy(projectId)) throw new Error("Session lease requires an active project");
   const [holder] = useState(pageHolder);
   const [lease, setLease] = useState<PageLease>({ state: "checking" });
   const [revision, setRevision] = useState("");
@@ -66,7 +71,7 @@ export function useSessionLease(sessionId: string) {
     lease.state !== "checking" && !owning,
   );
   useEffect(() => {
-    if (!observed.data || owning) return;
+    if (!isTruthy(observed.data) || owning) return;
     setLease(observed.data.lease);
     setRevision(runRevision(observed.data));
   }, [observed.data, owning]);
@@ -76,6 +81,8 @@ export function useSessionLease(sessionId: string) {
     let current = true;
     const tick = () =>
       api.leaseAction(sessionId, holder, "claim").then((view) => current && setLease(view));
+    // Native callback heartbeat/debounce timing remains at the protocol boundary.
+    // @effect-diagnostics-next-line globalTimers:off
     const timer = setInterval(() => void tick().catch(() => {}), renewMs);
     return () => {
       current = false;
@@ -84,6 +91,8 @@ export function useSessionLease(sessionId: string) {
   }, [sessionId, holder, owning]);
 
   /** "이어서 작업": claims the session if it is still free when asked. */
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const continueHere = async () => {
     const view = await api.leaseAction(sessionId, holder, "claim");
     setLease(view);

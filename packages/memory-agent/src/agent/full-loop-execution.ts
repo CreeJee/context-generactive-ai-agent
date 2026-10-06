@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import type { Worker } from "node:worker_threads";
 import {
   acquireFullLoopChannel,
@@ -12,6 +13,8 @@ import * as OwnerToolGrants from "./owner-tool-grants.ts";
 import { Effect, Exit, Queue, Schema, Scope } from "effect";
 import { acquireFullLoopWorkerEvents } from "./full-loop-worker-events.ts";
 
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import {
   convertSchemaToJsonSchema,
@@ -29,7 +32,7 @@ import { assertFullLoopPortable } from "./full-loop-admission-preflight.ts";
 function ownerData<T extends object>(value: T): T {
   for (const key of Reflect.ownKeys(value)) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (!descriptor || descriptor.get || descriptor.set)
+    if (!isTruthy(descriptor) || descriptor.get !== undefined || descriptor.set !== undefined)
       throw new Error("Unsupported owner snapshot accessor");
   }
   // All own string/symbol accessors were rejected above. Object.assign retains the
@@ -37,7 +40,7 @@ function ownerData<T extends object>(value: T): T {
   const snapshot = Object.assign({}, value);
   for (const key of Reflect.ownKeys(value)) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (!descriptor || descriptor.get || descriptor.set)
+    if (!isTruthy(descriptor) || descriptor.get !== undefined || descriptor.set !== undefined)
       throw new Error("Unsupported owner snapshot accessor");
     Object.defineProperty(snapshot, key, { ...descriptor, writable: true, configurable: true });
   }
@@ -57,8 +60,8 @@ function ownerConfigSnapshot(value: unknown): any {
 function ownerMember(receiver: object, key: string): any {
   for (let current = receiver; current; current = Object.getPrototypeOf(current)) {
     const descriptor = Object.getOwnPropertyDescriptor(current, key);
-    if (!descriptor) continue;
-    if (descriptor.get || descriptor.set)
+    if (!isTruthy(descriptor)) continue;
+    if (descriptor.get !== undefined || descriptor.set !== undefined)
       throw new Error(`Unsupported owner snapshot accessor: ${key}`);
     return descriptor.value;
   }
@@ -81,6 +84,8 @@ import {
   preflightFullLoopExecution as basePreflight,
 } from "./full-loop-preflight.ts";
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function preflightFullLoopExecution<TAdapter extends AnyTextAdapter>(
   turn: ChatExecutionTurn<TAdapter>,
   capabilities: ChatExecutionCapabilities<TAdapter>,
@@ -88,7 +93,7 @@ export function preflightFullLoopExecution<TAdapter extends AnyTextAdapter>(
   basePreflight(turn, capabilities);
   const names = new Set<string>();
   for (const tool of capabilities.tools) {
-    if (!tool.execute || names.has(tool.name))
+    if (!isTruthy(tool.execute) || names.has(tool.name))
       throw new Error(`Unsupported owner tool grant capability: ${tool.name}`);
     names.add(tool.name);
   }
@@ -121,6 +126,8 @@ const json = (value: unknown): OwnerRpcJson => encodeFullLoopValue(value);
  */
 export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: FullLoopOwner) {
   return {
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async *execute(
       turn: ChatExecutionTurn<TAdapter>,
       capabilities: ChatExecutionCapabilities<TAdapter>,
@@ -147,11 +154,11 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
           return {
             ...tool,
             inputSchema:
-              tool.inputSchema && !isStandardSchema(tool.inputSchema)
+              isTruthy(tool.inputSchema) && !isStandardSchema(tool.inputSchema)
                 ? ownerConfigSnapshot(tool.inputSchema)
                 : tool.inputSchema,
             outputSchema:
-              tool.outputSchema && !isStandardSchema(tool.outputSchema)
+              isTruthy(tool.outputSchema) && !isStandardSchema(tool.outputSchema)
                 ? ownerConfigSnapshot(tool.outputSchema)
                 : tool.outputSchema,
             execute: tool.execute?.bind(original),
@@ -165,8 +172,8 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
               Reflect.set(mw, hook, descriptor.value.bind(original));
           }
           for (const key of ["requires", "provides", "optionalRequires"] as const)
-            if (mw[key]) Reflect.set(mw, key, [...mw[key]!]);
-          if (mw.routedSubagentPersistence) {
+            if (isTruthy(mw[key])) Reflect.set(mw, key, [...mw[key]!]);
+          if (isTruthy(mw.routedSubagentPersistence)) {
             const persistence = original.routedSubagentPersistence!;
             const captured = ownerData(persistence);
             for (const [key, method] of Object.entries(captured))
@@ -187,10 +194,14 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
       const toolDescriptions = capabilities.tools.map((tool) => ({
         name: tool.name,
         description: tool.description,
-        inputSchema: tool.inputSchema ? convertSchemaToJsonSchema(tool.inputSchema) : undefined,
-        outputSchema: tool.outputSchema ? convertSchemaToJsonSchema(tool.outputSchema) : undefined,
+        inputSchema: isTruthy(tool.inputSchema)
+          ? convertSchemaToJsonSchema(tool.inputSchema)
+          : undefined,
+        outputSchema: isTruthy(tool.outputSchema)
+          ? convertSchemaToJsonSchema(tool.outputSchema)
+          : undefined,
         needsApproval: tool.needsApproval,
-        server: !!tool.execute,
+        server: !!isTruthy(tool.execute),
       }));
       const supportedHooks = fullLoopHooks;
       const middleware = capabilities.middleware.map((mw) => {
@@ -213,7 +224,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
         return {
           name: mw.name,
           hooks,
-          routedPersistence: mw.routedSubagentPersistence
+          routedPersistence: isTruthy(mw.routedSubagentPersistence)
             ? Object.keys(mw.routedSubagentPersistence)
             : [],
         };
@@ -265,7 +276,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
       ownerContext.provide = (handle: any, value: any) => handle[1](ownerContext, value);
       // Generic continuation requires preserving schema validation and Map-backed
       // resume state; do not downgrade it to JSON validation or silently replay.
-      if (turn.resume?.length)
+      if (isTruthy(turn.resume?.length))
         throw new Error("Worker interrupt continuation is not yet supported");
       const definitions = (turn.interrupts ?? []).map((definition) => ({
         id: definition.id,
@@ -280,7 +291,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
       // payloads have already passed the original owner's definition factory.
       const wireTurn = structuredClone({ ...turn, interrupts: definitions });
       // The SDK iterator owns this Scope across yields, including setup failures.
-      const workerScope = Effect.runSync(Scope.make());
+      const workerScope = Scope.makeUnsafe();
       const models = new Map<string, AsyncIterator<any>>();
       let closed = false;
       try {
@@ -301,8 +312,9 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
         const completedTools = new Map<string, any>();
         const phaseCall = (call: any) => {
           const observed = grants.toolCalls().find((entry) => isDeepStrictEqual(entry, call));
-          if (observed) return observed;
-          if (!ownerConfig.resumeToolState?.cancelledToolCallIds?.has(call.id)) return undefined;
+          if (isTruthy(observed)) return observed;
+          if (!isTruthy(ownerConfig.resumeToolState?.cancelledToolCallIds?.has(call.id)))
+            return undefined;
           return ownerContext.messages
             .flatMap((message: any) => message.toolCalls ?? [])
             .find((entry: any) => isDeepStrictEqual(entry, call));
@@ -323,6 +335,8 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
         const boundaryTools = capabilities.tools.map((tool) => ({
           ...tool,
           __toolSide: "server" as const,
+          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+          // @effect-diagnostics-next-line asyncFunction:off
           execute: async (args: any, context: any) => {
             if (
               closed ||
@@ -346,18 +360,19 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                   const prepared = { ...tool };
                   // Owner permission preparation already schema-validated these arguments.
                   // Do not run potentially non-idempotent Standard Schema transforms twice.
-                  if (tool.inputSchema)
+                  if (isTruthy(tool.inputSchema))
                     prepared.inputSchema = convertSchemaToJsonSchema(tool.inputSchema);
                   return prepared;
                 }),
                 controller.signal,
               );
-        const ownerTools = guardedParallel
-          ? guardedParallel.tools.map((tool, index) => ({
-              ...boundaryTools[index]!,
-              execute: tool.execute!,
-            }))
-          : boundaryTools;
+        const ownerTools =
+          guardedParallel !== undefined
+            ? guardedParallel.tools.map((tool, index) => ({
+                ...boundaryTools[index]!,
+                execute: tool.execute!,
+              }))
+            : boundaryTools;
         const ownerMiddleware = capabilities.middleware.map((mw, index) =>
           index === parallelIndex ? guardedParallel!.middleware : mw,
         );
@@ -384,8 +399,8 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
               const tool = ownerTools.find((tool) => tool.name === invocation.name);
               // The inventory retains SDK needsApproval. Without owner-issued
               // approval continuation support, it cannot authorize execution.
-              if (!tool?.execute || tool.needsApproval) return false;
-              if (tool.inputSchema && isStandardSchema(tool.inputSchema))
+              if (!isTruthy(tool?.execute) || isTruthy(tool.needsApproval)) return false;
+              if (isTruthy(tool.inputSchema) && isStandardSchema(tool.inputSchema))
                 parseWithStandardSchema(tool.inputSchema, invocation.args);
               return true;
             } catch {
@@ -401,7 +416,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
             if (input.hook === "onAfterToolCall") {
               const completed = completedTools.get(input.info?.toolCallId);
               if (
-                !completed ||
+                !isTruthy(completed) ||
                 input.info.toolName !== completed.toolName ||
                 !isDeepStrictEqual(input.info.toolCall, completed.toolCall)
               )
@@ -410,13 +425,13 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
             if (input.hook === "onToolPhaseComplete") {
               if (
                 !Array.isArray(input.info?.toolCalls) ||
-                input.info.toolCalls.some((call: any) => !phaseCall(call))
+                isTruthy(input.info.toolCalls.some((call: any) => !isTruthy(phaseCall(call))))
               )
                 return false;
             }
             const snapshot = input.context;
             if (
-              !snapshot ||
+              !isTruthy(snapshot) ||
               snapshot.runId !== ownerContext.runId ||
               snapshot.threadId !== ownerContext.threadId ||
               !isDeepStrictEqual(snapshot.context, turn.context ?? {}) ||
@@ -437,6 +452,8 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
             handlers: {
               modelOpen: {
                 sideEffect: false,
+                // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+                // @effect-diagnostics-next-line asyncFunction:off
                 execute: async (input: any) => {
                   input = decodeFullLoopValue(input);
                   const id = randomUUID();
@@ -470,12 +487,14 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
               },
               modelNext: {
                 sideEffect: false,
+                // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+                // @effect-diagnostics-next-line asyncFunction:off
                 execute: async (input: any) => {
                   input = decodeFullLoopValue(input);
                   const iterator = models.get(input.id);
-                  if (!iterator) throw new Error("Unknown owner model stream");
+                  if (!isTruthy(iterator)) throw new Error("Unknown owner model stream");
                   const next = await iterator.next();
-                  if (next.done) {
+                  if (isTruthy(next.done)) {
                     models.delete(input.id);
                     ownerContext.phase = "afterModel";
                   } else {
@@ -489,7 +508,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                       );
                       const fresh = observed.filter((call) => !existing.has(call.id));
                       const last = ownerContext.messages.at(-1);
-                      if (last?.role === "assistant" && last.toolCalls)
+                      if (last?.role === "assistant" && isTruthy(last.toolCalls))
                         last.toolCalls.push(...fresh);
                       else
                         ownerContext.messages.push({
@@ -508,7 +527,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                     }
                     if (next.value.type === "REASONING_MESSAGE_CONTENT") {
                       const thinking = ownerContext.messages.at(-1)?.thinking?.at(-1);
-                      if (thinking) thinking.content += next.value.delta;
+                      if (isTruthy(thinking)) thinking.content += next.value.delta;
                     }
                     if (next.value.type === "TEXT_MESSAGE_START") {
                       ownerContext.currentMessageId = next.value.messageId;
@@ -520,16 +539,21 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                       if (last?.role === "assistant") last.content += next.value.delta;
                     }
                   }
-                  return json({ done: !!next.done, value: next.done ? null : next.value });
+                  return json({
+                    done: !!isTruthy(next.done),
+                    value: isTruthy(next.done) ? null : next.value,
+                  });
                 },
               },
               toolAuthorize: {
                 sideEffect: true,
                 authorize: (wire) => authorizeRequest("toolAuthorize", wire),
+                // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+                // @effect-diagnostics-next-line asyncFunction:off
                 execute: async (wire: any) => {
                   const invocation = grants.observed(decodeFullLoopValue(wire));
                   const tool = ownerTools.find((tool) => tool.name === invocation.name);
-                  if (!tool?.execute || tool.needsApproval)
+                  if (!isTruthy(tool?.execute) || isTruthy(tool.needsApproval))
                     throw new Error("Unsupported owner approval tool");
                   const events: any[] = [];
                   ownerContext.emitCustomEvent = (name: string, value: any, options: any) =>
@@ -545,7 +569,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                     prefix.push(call);
                   }
                   const candidates =
-                    parallel && prefix.some((call) => call.id === invocation.toolCallId)
+                    isTruthy(parallel) && prefix.some((call) => call.id === invocation.toolCallId)
                       ? prefix
                       : observed.filter((call) => call.id === invocation.toolCallId);
                   // Evaluate every prefetched read's permission chain BEFORE parallelReads
@@ -553,11 +577,14 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                   for (const call of candidates) {
                     if (decisions.has(call.id)) continue;
                     const definition = ownerTools.find((tool) => tool.name === call.function.name);
-                    if (!definition?.execute || definition.needsApproval)
+                    if (!isTruthy(definition?.execute) || isTruthy(definition.needsApproval))
                       throw new Error("Unsupported owner approval tool");
                     const raw = JSON.parse(call.function.arguments);
                     let args = raw;
-                    if (definition.inputSchema && isStandardSchema(definition.inputSchema))
+                    if (
+                      isTruthy(definition.inputSchema) &&
+                      isStandardSchema(definition.inputSchema)
+                    )
                       args = parseWithStandardSchema(definition.inputSchema, args);
                     const info = {
                       toolCall: call,
@@ -607,7 +634,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                     decisions.set(call.id, decision);
                   }
                   const decision = decisions.get(invocation.toolCallId);
-                  if (parallel && decision?.type === "transformArgs") {
+                  if (isTruthy(parallel) && decision?.type === "transformArgs") {
                     const approved = candidates
                       .filter((call) => decisions.get(call.id)?.type === "transformArgs")
                       .map((call) => ({
@@ -620,7 +647,8 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                     const saved = ownerContext.messages;
                     ownerContext.messages = [
                       ...saved.filter(
-                        (message: any) => message.role !== "assistant" || !message.toolCalls,
+                        (message: any) =>
+                          message.role !== "assistant" || !isTruthy(message.toolCalls),
                       ),
                       { role: "assistant", content: "", toolCalls: approved },
                     ];
@@ -642,10 +670,12 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
               tool: {
                 sideEffect: true,
                 authorize: (wire) => authorizeRequest("tool", wire),
+                // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+                // @effect-diagnostics-next-line asyncFunction:off
                 execute: async (input: any) => {
                   input = grants.consume(decodeFullLoopValue(input));
                   const tool = ownerTools.find((tool) => tool.name === input.name);
-                  if (!tool?.execute) throw new Error("Unknown owner tool");
+                  if (!isTruthy(tool?.execute)) throw new Error("Unknown owner tool");
                   const args = input.args;
                   const events: any[] = [];
                   const value = await tool.execute(args, {
@@ -675,11 +705,13 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
               },
               routedPersistence: {
                 sideEffect: true,
+                // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+                // @effect-diagnostics-next-line asyncFunction:off
                 execute: async (input: any) => {
                   input = decodeFullLoopValue(input);
                   const mw = ownerMiddleware[input.index];
                   if (
-                    !mw?.routedSubagentPersistence ||
+                    !isTruthy(mw?.routedSubagentPersistence) ||
                     !middleware[input.index]?.routedPersistence.includes(input.method)
                   )
                     throw new Error("Invalid routed persistence capability");
@@ -694,10 +726,12 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
               },
               strategy: {
                 sideEffect: false,
+                // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+                // @effect-diagnostics-next-line asyncFunction:off
                 execute: async (input: any) => {
                   input = decodeFullLoopValue(input);
                   return json(
-                    capabilities.model.agentLoopStrategy
+                    isTruthy(capabilities.model.agentLoopStrategy)
                       ? capabilities.model.agentLoopStrategy(input)
                       : input.iterationCount < 5,
                   );
@@ -707,17 +741,19 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                 sideEffect: true,
                 authorize: (wire) => authorizeRequest("middleware", wire),
                 finalization: finalizationInput,
+                // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+                // @effect-diagnostics-next-line asyncFunction:off
                 execute: async (input: any) => {
                   input = decodeFullLoopValue(input);
                   const mw = ownerMiddleware[input.index];
                   if (
                     (terminalObserved || controller.signal.aborted) &&
                     cleanupHooks.has(input.hook) &&
-                    owner.finalizationMiddleware?.includes(mw?.name ?? "") &&
-                    owner.permitsFinalization?.(owner.capability)
+                    isTruthy(owner.finalizationMiddleware?.includes(mw?.name ?? "")) &&
+                    owner.permitsFinalization?.(owner.capability) === true
                   )
                     finalizing = true;
-                  if (!mw || !middleware[input.index]?.hooks.includes(input.hook))
+                  if (!isTruthy(mw) || !middleware[input.index]?.hooks.includes(input.hook))
                     throw new Error("Unknown middleware hook");
                   const phases = new Map<string, ChatMiddlewareContext["phase"]>(
                     Object.entries({
@@ -770,9 +806,11 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                   if (input.hook === "onToolPhaseComplete") {
                     const toolCalls = input.info.toolCalls.map(phaseCall);
                     for (const call of toolCalls) {
-                      if (!call) throw new Error("Unobserved owner tool phase call");
+                      if (!isTruthy(call)) throw new Error("Unobserved owner tool phase call");
                       if (completedTools.has(call.id)) continue;
-                      if (!ownerConfig.resumeToolState?.cancelledToolCallIds?.has(call.id))
+                      if (
+                        !isTruthy(ownerConfig.resumeToolState?.cancelledToolCallIds?.has(call.id))
+                      )
                         continue;
                       const result = { error: "Tool execution cancelled" };
                       completedTools.set(call.id, {
@@ -783,9 +821,11 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                         state: "output-error",
                       });
                       if (
-                        !ownerContext.messages.some(
-                          (message: any) =>
-                            message.role === "tool" && message.toolCallId === call.id,
+                        !isTruthy(
+                          ownerContext.messages.some(
+                            (message: any) =>
+                              message.role === "tool" && message.toolCallId === call.id,
+                          ),
                         )
                       )
                         ownerContext.messages.push({
@@ -823,12 +863,13 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                       if (!handle.has(ctx))
                         throw new Error(`Owner setup did not provide ${handle.capabilityName}`);
                     }
-                  if (result?.tools)
+                  if (isTruthy(result?.tools))
                     throw new Error("Worker middleware cannot replace owner tool capabilities");
-                  if (input.hook === "onConfig" && result) {
+                  if (input.hook === "onConfig" && isTruthy(result)) {
                     Object.assign(ownerConfig, result);
-                    if (result.messages) ownerContext.messages = result.messages;
-                    if (result.systemPrompts) ownerContext.systemPrompts = result.systemPrompts;
+                    if (isTruthy(result.messages)) ownerContext.messages = result.messages;
+                    if (isTruthy(result.systemPrompts))
+                      ownerContext.systemPrompts = result.systemPrompts;
                   }
                   return json({
                     result: result ?? null,
@@ -884,7 +925,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
               // The owner ended the pull without SDK terminal acknowledgement.
               // Surface uncertainty so AgentChat records failure instead of leaving
               // a stopped run marked running or silently treating it as successful.
-              throw new WorkerLifecycleError({
+              throw WorkerLifecycleError.make({
                 operation: "cancel",
                 cause: new Error("Worker cancellation outcome unacknowledged; no replay"),
               });

@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off newPromise:off nodeBuiltinImport:off schemaSync:off
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { Schema } from "effect";
@@ -87,7 +89,7 @@ test("HTTP transport works with a short-lived loopback-only synthetic server", a
   const server = createServer(async (request, response) => {
     const parts: Buffer[] = [];
     for await (const part of request) parts.push(Buffer.from(part));
-    requests.push(Schema.decodeUnknownSync(requestBody)(Buffer.concat(parts).toString("utf8")));
+    requests.push(Schema.decodeSync(requestBody)(Buffer.concat(parts).toString("utf8")));
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({ answers: { recall_useful: { type: "noul", noul: 0.6 } } }));
   });
@@ -108,7 +110,7 @@ test("HTTP transport works with a short-lived loopback-only synthetic server", a
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) =>
-      server.close((error) => (error ? reject(error) : resolve())),
+      server.close((error) => (error !== undefined ? reject(error) : resolve())),
     );
   }
 });

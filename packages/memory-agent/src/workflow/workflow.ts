@@ -1,6 +1,9 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import type { SQLOutputValue } from "node:sqlite";
-import { Context, Data, Effect, Layer, Schema } from "effect";
+import { DateTime, Clock, Context, Data, Effect, Layer, Schema } from "effect";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { Database } from "../db/database.ts";
 import { evaluateWorkflowAction, type WorkflowActionReason } from "./actions.ts";
@@ -242,6 +245,8 @@ const PersistedWorkflowState = Schema.Struct({
   plan: Schema.NullOr(PersistedPlanArtifact),
   ledger: Schema.Array(LedgerEvent),
 });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodePersistedState = Schema.decodeUnknownSync(
   Schema.fromJsonString(PersistedWorkflowState),
 );
@@ -268,7 +273,11 @@ const decodeState = (json: string): WorkflowState => {
           },
   };
 };
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const encodeState = Schema.encodeSync(Schema.fromJsonString(WorkflowState));
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeRow = Schema.decodeUnknownSync(Schema.Struct({ state_json: Schema.String }));
 
 export class WorkflowTransitionRefused extends Data.TaggedError("WorkflowTransitionRefused")<{
@@ -290,7 +299,7 @@ export class WorkflowProgressRefused extends Data.TaggedError("WorkflowProgressR
 }> {}
 
 function rowText(row: Record<string, SQLOutputValue> | undefined) {
-  return row ? decodeRow(row).state_json : null;
+  return isTruthy(row) ? decodeRow(row).state_json : null;
 }
 
 const implementationComplete = (plan: PlanArtifact) =>
@@ -357,6 +366,8 @@ export function reconciledWorkflowPhase(state: WorkflowState): WorkflowPhase {
 
 const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
   Effect.gen(function* () {
+    const effectClock = yield* Clock.Clock;
+
     const { sqlite, atomic } = yield* Database;
     const completion = completionEvidence(sqlite);
     const serialize = keyedSerialLimit();
@@ -381,7 +392,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
       return json === null ? emptyState() : decodeState(json);
     };
     const save = (sessionId: string, state: WorkflowState) => {
-      const now = new Date().toISOString();
+      const now = DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()));
       const json = encodeState(state);
       upsert.run(sessionId, json, now);
       recordRevision.run(
@@ -411,7 +422,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
       detail: string,
     ) => ({
       sequence: (state.ledger.at(-1)?.sequence ?? 0) + 1,
-      at: new Date().toISOString(),
+      at: DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe())),
       kind,
       detail,
     });
@@ -432,43 +443,51 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
       if ((identity?.goal_instance_id ?? null) !== input.previousGoalInstanceId)
         refuseNewGoal("workflow_changed");
       if (
-        sqlite
-          .prepare(`
+        isTruthy(
+          sqlite
+            .prepare(`
           SELECT b.run_id FROM workflow_run_bindings b LEFT JOIN chat_runs r ON r.run_id = b.run_id
           WHERE b.session_id = ? AND b.run_id <> ? AND (r.status IS NULL OR r.status <> 'completed') LIMIT 1
         `)
-          .get(sessionId, callingRunId ?? "") ||
-        sqlite
-          .prepare(`
+            .get(sessionId, callingRunId ?? ""),
+        ) ||
+        isTruthy(
+          sqlite
+            .prepare(`
           SELECT run_id FROM chat_runs WHERE thread_id = ? AND run_id <> ? AND status <> 'completed' LIMIT 1
         `)
-          .get(sessionId, callingRunId ?? "")
+            .get(sessionId, callingRunId ?? ""),
+        )
       )
         refuseNewGoal("run_outcome_uncertain");
       if (
-        sqlite
-          .prepare(`
+        isTruthy(
+          sqlite
+            .prepare(`
         SELECT o.run_id FROM owner_rpc_operations o JOIN workflow_run_bindings b ON b.run_id = o.run_id
         WHERE b.session_id = ? AND (o.status = 'pending' OR (o.side_effect = 1 AND o.status = 'uncertain')) LIMIT 1
       `)
-          .get(sessionId)
+            .get(sessionId),
+        )
       )
         refuseNewGoal("owner_effect_uncertain");
       if (
-        sqlite
-          .prepare(`
+        isTruthy(
+          sqlite
+            .prepare(`
         SELECT id FROM work_tasks WHERE origin_session_id = ? AND status NOT IN ('completed', 'archived') LIMIT 1
       `)
-          .get(sessionId)
+            .get(sessionId),
+        )
       )
         refuseNewGoal("execution_outstanding");
       return { current, identity, closedVerification: source.closedVerification };
     };
     const commitNewGoal = (sessionId: string, input: StartNewGoal) => {
       const { current, identity, closedVerification } = checkNewGoal(sessionId, input);
-      const now = new Date().toISOString();
+      const now = DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()));
       const newId = randomUUID();
-      if (identity) {
+      if (isTruthy(identity)) {
         sqlite
           .prepare("INSERT INTO workflow_goal_instances VALUES (?, ?, ?)")
           .run(newId, sessionId, now);
@@ -510,7 +529,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
           const row = sqlite
             .prepare("SELECT goal_instance_id FROM workflow_goal_identities WHERE session_id = ?")
             .get(sessionId);
-          return row ? String(row.goal_instance_id) : null;
+          return isTruthy(row) ? String(row.goal_instance_id) : null;
         }),
 
       /** Repairs stale persisted phases before a new turn or an idle status response. */
@@ -548,7 +567,9 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
               return Effect.fail(new WorkflowTransitionRefused({ reason: decision.reason }));
             return Effect.sync(() =>
               atomic(() => {
-                const now = new Date().toISOString();
+                const now = DateTime.formatIso(
+                  DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
+                );
                 const goal =
                   phase === "execute" && current.goal?.status === "draft"
                     ? { ...current.goal, status: "active" as const, updatedAt: now }
@@ -584,7 +605,9 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             const currentGoal = current.goal;
             return Effect.sync(() =>
               atomic(() => {
-                const now = new Date().toISOString();
+                const now = DateTime.formatIso(
+                  DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
+                );
                 const goalStatus =
                   action === "pause" ? "paused" : action === "resume" ? "active" : "failed";
                 const plan =
@@ -626,7 +649,9 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
 
       finishRun: (sessionId: string, startedPhase: WorkflowPhase) =>
         change(sessionId, (current) => {
-          const now = new Date().toISOString();
+          const now = DateTime.formatIso(
+            DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
+          );
           if (startedPhase === "execute" && current.phase === "execute") {
             const readyToVerify =
               current.plan !== null &&
@@ -689,12 +714,12 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
           // Legacy/unprovenanced Goals retain the release-compatible automatic completion.
           if (
             completion.required(sessionId) &&
-            (!current.goal?.completion ||
+            (!isTruthy(current.goal?.completion) ||
               current.goal.completion.goalVersion !== current.goal.version ||
               current.goal.completion.planVersion !== current.plan.version)
           )
             return current;
-          const goal = current.goal
+          const goal = isTruthy(current.goal)
             ? {
                 ...current.goal,
                 status: "completed" as const,
@@ -723,11 +748,13 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             try: () =>
               atomic(() => {
                 if (
-                  sqlite
-                    .prepare(
-                      "SELECT run_id FROM workflow_new_goal_requests WHERE session_id = ? AND status = 'accepted' LIMIT 1",
-                    )
-                    .get(sessionId)
+                  isTruthy(
+                    sqlite
+                      .prepare(
+                        "SELECT run_id FROM workflow_new_goal_requests WHERE session_id = ? AND status = 'accepted' LIMIT 1",
+                      )
+                      .get(sessionId),
+                  )
                 )
                   refuseNewGoal("transition_pending");
                 return commitNewGoal(sessionId, input).state;
@@ -751,7 +778,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                     "SELECT run_id, payload_json, status FROM workflow_new_goal_requests WHERE run_id = ?",
                   )
                   .get(runId);
-                if (existing) {
+                if (isTruthy(existing)) {
                   if (
                     existing.run_id === runId &&
                     existing.payload_json === JSON.stringify(input) &&
@@ -763,14 +790,14 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                 const run = sqlite
                   .prepare("SELECT thread_id, status FROM chat_runs WHERE run_id = ?")
                   .get(runId);
-                if (!runId || run?.thread_id !== sessionId || run.status !== "running")
+                if (!(runId.length > 0) || run?.thread_id !== sessionId || run.status !== "running")
                   refuseNewGoal("run_outcome_uncertain");
                 const pending = sqlite
                   .prepare(
                     "SELECT run_id FROM workflow_new_goal_requests WHERE session_id = ? AND status = 'accepted' LIMIT 1",
                   )
                   .get(sessionId);
-                if (pending) refuseNewGoal("transition_pending");
+                if (isTruthy(pending)) refuseNewGoal("transition_pending");
                 checkNewGoal(sessionId, input, runId);
                 const binding = sqlite
                   .prepare(
@@ -783,11 +810,13 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                   )
                   .get(sessionId);
                 if (
-                  !revision ||
-                  (binding &&
-                    (binding.session_id !== sessionId ||
-                      binding.goal_instance_id !== input.previousGoalInstanceId ||
-                      binding.workflow_revision_id !== revision.id))
+                  !isTruthy(revision) ||
+                  isTruthy(
+                    binding &&
+                      (binding.session_id !== sessionId ||
+                        binding.goal_instance_id !== input.previousGoalInstanceId ||
+                        binding.workflow_revision_id !== revision.id),
+                  )
                 )
                   return refuseNewGoal("workflow_changed");
                 sqlite
@@ -803,7 +832,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                     input.previousGoalInstanceId,
                     revision.id,
                     JSON.stringify(input),
-                    new Date().toISOString(),
+                    DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe())),
                   );
                 return { status: "accepted" as const, runId };
               }),
@@ -826,7 +855,8 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             FROM workflow_new_goal_requests WHERE run_id = ?
           `)
                 .get(runId);
-              if (!row || row.session_id !== sessionId) return { status: "none" as const };
+              if (!isTruthy(row) || row.session_id !== sessionId)
+                return { status: "none" as const };
               if (row.status === "applied")
                 return { status: "applied" as const, goalInstanceId: row.applied_goal_instance_id };
               if (row.status === "rejected")
@@ -842,7 +872,11 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
               UPDATE workflow_new_goal_requests SET status = 'rejected', reason = ?, settled_at = ?
               WHERE run_id = ? AND status = 'accepted'
             `)
-                  .run(reason, new Date().toISOString(), runId);
+                  .run(
+                    reason,
+                    DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe())),
+                    runId,
+                  );
                 return { status: "rejected" as const, reason };
               };
               if (run?.status !== "completed") return reject("run_outcome_uncertain");
@@ -855,6 +889,8 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
               try {
                 const { newId } = commitNewGoal(
                   sessionId,
+                  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+                  // @effect-diagnostics-next-line schemaSync:off
                   Schema.decodeUnknownSync(StartNewGoal)(JSON.parse(String(row.payload_json))),
                 );
                 sqlite
@@ -863,7 +899,11 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
               SET status = 'applied', applied_goal_instance_id = ?, settled_at = ?
               WHERE run_id = ? AND status = 'accepted'
             `)
-                  .run(newId, new Date().toISOString(), runId);
+                  .run(
+                    newId,
+                    DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe())),
+                    runId,
+                  );
                 return { status: "applied" as const, goalInstanceId: newId };
               } catch (error) {
                 if (error instanceof NewGoalTransitionRefused) return reject(error.reason);
@@ -878,13 +918,19 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
           // Only the first Goal in a new session is unambiguously new. A legacy Goal
           // without a recorded identity stays unbound; guessing it from text is unsafe.
           if (current.goal === null)
-            insertGoalIdentity.run(sessionId, randomUUID(), new Date().toISOString());
+            insertGoalIdentity.run(
+              sessionId,
+              randomUUID(),
+              DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe())),
+            );
           const goal: GoalArtifact = {
             ...input,
             evidence: [],
             verification: verificationDefault(),
             version: (current.goal?.version ?? 0) + 1,
-            updatedAt: new Date().toISOString(),
+            updatedAt: DateTime.formatIso(
+              DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
+            ),
           };
           return {
             ...current,
@@ -909,7 +955,9 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             verification: verificationDefault(),
             version: (current.plan?.version ?? 0) + 1,
             goalVersion: current.goal?.version ?? 0,
-            updatedAt: new Date().toISOString(),
+            updatedAt: DateTime.formatIso(
+              DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
+            ),
           };
           const kind = current.plan === null ? "plan_updated" : "plan_replanned";
           const phase =
@@ -945,7 +993,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
               return Effect.fail(new WorkflowProgressRefused({ reason: "plan_missing" }));
             if (
               input.steps.some(
-                (update) => !current.plan?.steps.some((step) => step.id === update.id),
+                (update) => !isTruthy(current.plan?.steps.some((step) => step.id === update.id)),
               )
             )
               return Effect.fail(new WorkflowProgressRefused({ reason: "unknown_step" }));
@@ -961,7 +1009,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             const steps =
               current.plan?.steps.map((step) => {
                 const update = input.steps.find((candidate) => candidate.id === step.id);
-                if (!update) return step;
+                if (!isTruthy(update)) return step;
                 return {
                   ...step,
                   status: update.status,
@@ -971,11 +1019,13 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
             if (steps.some((step) => step.status === "completed" && step.evidence.length === 0))
               return Effect.fail(new WorkflowProgressRefused({ reason: "step_evidence_required" }));
 
-            const verification = input.verification
+            const verification = isTruthy(input.verification)
               ? {
                   ...input.verification,
                   recoveryPhase: input.verification.recoveryPhase ?? null,
-                  updatedAt: new Date().toISOString(),
+                  updatedAt: DateTime.formatIso(
+                    DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
+                  ),
                 }
               : null;
             const goalVerification = verification ?? current.goal?.verification;
@@ -1005,14 +1055,17 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                       sessionId,
                       {
                         ...current,
-                        plan: current.plan ? { ...current.plan, steps } : null,
+                        plan: isTruthy(current.plan) ? { ...current.plan, steps } : null,
                       },
                       input.criterionMappings,
                       recorderRunId,
                     );
                     if (derived.status === "refused")
                       throw new WorkflowProgressRefused({ reason: "completion_evidence_invalid" });
-                    if (snapshot && JSON.stringify(snapshot) !== JSON.stringify(derived.snapshot))
+                    if (
+                      isTruthy(snapshot) &&
+                      JSON.stringify(snapshot) !== JSON.stringify(derived.snapshot)
+                    )
                       throw new WorkflowProgressRefused({ reason: "completion_snapshot_conflict" });
                     if (
                       goalVerification?.status !== "passed" ||
@@ -1022,13 +1075,13 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                     snapshot = derived.snapshot;
                   }
                   if (input.goalStatus === "completed" && completion.required(sessionId)) {
-                    if (!snapshot)
+                    if (!isTruthy(snapshot))
                       throw new WorkflowProgressRefused({ reason: "completion_evidence_required" });
                     const checked = completion.derive(
                       sessionId,
                       {
                         ...current,
-                        plan: current.plan ? { ...current.plan, steps } : null,
+                        plan: isTruthy(current.plan) ? { ...current.plan, steps } : null,
                       },
                       snapshot.mappings,
                       recorderRunId,
@@ -1039,7 +1092,9 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                     )
                       throw new WorkflowProgressRefused({ reason: "completion_evidence_invalid" });
                   }
-                  const now = new Date().toISOString();
+                  const now = DateTime.formatIso(
+                    DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
+                  );
                   const recordGoalVerification =
                     verification !== null &&
                     (input.goalStatus !== undefined ||
@@ -1051,7 +1106,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                     (input.planStatus !== undefined ||
                       current.phase === "execute" ||
                       current.phase === "verify");
-                  const goal = current.goal
+                  const goal = isTruthy(current.goal)
                     ? {
                         ...current.goal,
                         status: input.goalStatus ?? current.goal.status,
@@ -1062,8 +1117,8 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                         updatedAt: now,
                       }
                     : null;
-                  if (goal && snapshot) goal.completion = snapshot;
-                  const plan = current.plan
+                  if (isTruthy(goal) && isTruthy(snapshot)) goal.completion = snapshot;
+                  const plan = isTruthy(current.plan)
                     ? {
                         ...current.plan,
                         status: input.planStatus ?? current.plan.status,
@@ -1108,7 +1163,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
 export class Workflows extends Context.Service<
   Workflows,
   Effect.Success<ReturnType<typeof make>>
->()("memory-agent/Workflows") {
+>()("memory-agent/workflow/workflow/Workflows") {
   static readonly layer = Layer.effect(Workflows, make());
   /** Compatible code rollback disables only the new action; never deletes history or lowers schema. */
   static readonly layerWithOptions = (options: { readonly allowNewGoal: boolean }) =>

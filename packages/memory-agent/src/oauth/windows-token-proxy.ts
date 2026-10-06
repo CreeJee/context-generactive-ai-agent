@@ -1,3 +1,5 @@
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fetch as undiciFetch, ProxyAgent } from "undici";
@@ -21,12 +23,12 @@ export function parseWindowsProxy(value: string): string | null {
     const url = new URL(value.trim());
     if (
       (url.protocol !== "http:" && url.protocol !== "https:") ||
-      !url.hostname ||
-      url.username ||
-      url.password ||
+      !(url.hostname.length > 0) ||
+      url.username.length > 0 ||
+      url.password.length > 0 ||
       url.pathname !== "/" ||
-      url.search ||
-      url.hash
+      url.search.length > 0 ||
+      url.hash.length > 0
     )
       return null;
     return url.toString();
@@ -43,6 +45,8 @@ export function classifyWindowsProxyOutput(output: string): ProxyResolution {
 }
 
 /** Resolve only this fixed OAuth endpoint through the current Windows user's proxy policy. */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function windowsTokenProxy(): Promise<ProxyResolution> {
   if (process.platform !== "win32") return { route: "unavailable" };
   const script =
@@ -66,6 +70,9 @@ export async function windowsTokenProxy(): Promise<ProxyResolution> {
 }
 
 /** One scoped fallback after a proven pre-connect timeout; never change global fetch routing. */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function fetchOpenAiTokenViaSystemProxy(
   url: string,
   body: string,

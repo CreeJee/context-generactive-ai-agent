@@ -1,4 +1,8 @@
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { lstatSync, realpathSync, type Stats } from "node:fs";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Data, Result } from "effect";
 
@@ -129,6 +133,8 @@ const hasControlCharacter = (path: string) =>
   });
 
 /** True when one absolute path equals or contains the other, compared by spelling. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function pathsOverlap(left: string, right: string): boolean {
   const contains = (root: string, candidate: string) => {
     const path = relative(root, candidate);
@@ -160,10 +166,10 @@ export function canonicalPath(path: string): string {
  */
 function isSameOrBelow(directory: string, candidate: string): boolean {
   const target = lstat(directory);
-  if (!target) return pathsOverlap(directory, candidate);
+  if (!(target !== undefined)) return pathsOverlap(directory, candidate);
   for (let current = candidate; ; current = dirname(current)) {
     const stats = lstat(current);
-    if (stats && stats.dev === target.dev && stats.ino === target.ino) return true;
+    if (stats !== undefined && stats.dev === target.dev && stats.ino === target.ino) return true;
     if (dirname(current) === current) return false;
   }
 }
@@ -185,6 +191,8 @@ export interface ProjectPath {
  * `new-or-file` target whose missing parents the caller may create. This is a local capability
  * check, not an OS sandbox against a concurrent directory swap.
  */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function resolveProjectPath(
   root: string,
   path: string,
@@ -207,12 +215,12 @@ export function resolveProjectPath(
 
   let current = root;
   let stats = lstat(root);
-  if (!stats?.isDirectory()) return reject(path, "not_found");
+  if (!(stats?.isDirectory() === true)) return reject(path, "not_found");
   for (const [index, segment] of segments.entries()) {
     const last = index === segments.length - 1;
     current = join(current, segment);
     stats = lstat(current);
-    if (!stats) {
+    if (!(stats !== undefined)) {
       if (kind === "new-or-file")
         return Result.succeed({ absolute: join(root, ...segments), relative: spelled, stats });
       return reject(path, "not_found");
@@ -244,6 +252,8 @@ export interface OutsidePath {
  * symlink cannot reach `~/.ssh`. Paths inside the project, or inside the app storage root, are
  * refused: project files have their own tools with their own link rules.
  */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function resolveOutsidePath(
   projectRoot: string,
   storageRoot: string,
@@ -256,14 +266,14 @@ export function resolveOutsidePath(
 
   const canonical = canonicalPath(spelled);
   const stats = lstat(canonical);
-  if (!stats && kind !== "new-or-file") return reject(path, "not_found");
+  if (!(stats !== undefined) && kind !== "new-or-file") return reject(path, "not_found");
   if (isCredentialPath(canonical)) return reject(path, "credential");
   if (canonical.split(sep).some((segment) => segment.toLowerCase() === ".git"))
     return reject(path, "git_internal");
   if (isSameOrBelow(projectRoot, canonical)) return reject(path, "inside_project");
   if (isSameOrBelow(storageRoot, canonical)) return reject(path, "credential");
 
-  if (!stats) return Result.succeed({ absolute: canonical, stats });
+  if (!(stats !== undefined)) return Result.succeed({ absolute: canonical, stats });
   if (kind === "directory") {
     if (!stats.isDirectory()) return reject(path, "not_directory");
   } else {

@@ -1,8 +1,10 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off processEnv:off
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
-import { Effect } from "effect";
+import { Random, Effect } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { RelayedApprovals } from "../src/approvals/relayed.ts";
@@ -129,7 +131,7 @@ describe("external ACP agents", () => {
       expect(await prompt("again")).toMatchObject({ answer: "external: again (turn 2)" });
       expect(starts()).toEqual([expect.objectContaining({ cwd: project.root, secret: null })]);
     } finally {
-      delete process.env.SHOULD_NOT_LEAK;
+      Reflect.deleteProperty(process.env, "SHOULD_NOT_LEAK");
     }
   });
 
@@ -269,7 +271,7 @@ describe("external ACP agents", () => {
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 threadId: sessionId,
-                runId: `run-${Math.random().toString(36).slice(2)}`,
+                runId: `run-${Effect.runSync(Random.next).toString(36).slice(2)}`,
                 messages: [{ id: "m1", role: "user", content: text }],
                 tools: [],
                 context: [],

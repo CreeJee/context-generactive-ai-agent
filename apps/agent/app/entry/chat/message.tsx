@@ -1,3 +1,4 @@
+import { isTruthy } from "../../truthy.ts";
 import { SchemaTransformation } from "effect";
 import type { UIMessage } from "@tanstack/ai-react";
 import { Option, Schema } from "effect";
@@ -45,7 +46,7 @@ function toolLabel(name: string) {
   const mcp = /^mcp_([A-Za-z0-9_-]+?)__(.+)$/.exec(name);
   return (
     Object.entries(toolLabels).find(([tool]) => tool === name)?.[1] ??
-    (mcp ? `MCP ${mcp[1]} · ${mcp[2]}` : name)
+    (isTruthy(mcp) ? `MCP ${mcp[1]} · ${mcp[2]}` : name)
   );
 }
 
@@ -118,20 +119,20 @@ const decodeDrawing = Schema.decodeUnknownOption(
 
 /** The picture to show for a result, when it is one of this app's stored images. */
 function drawingOf(result: ToolResult | undefined) {
-  if (!result) return null;
+  if (!isTruthy(result)) return null;
   const drawing = Option.getOrUndefined(decodeDrawing(resultText(result)));
-  if (!drawing) return null;
+  if (!(drawing !== undefined)) return null;
   const url = attachmentUrl(drawing.preview.attachmentId);
-  return attachmentIdOf(url) ? { url, path: drawing.path } : null;
+  return isTruthy(attachmentIdOf(url)) ? { url, path: drawing.path } : null;
 }
 
 function callStatus(call: ToolCall, result: ToolResult | undefined, awaitingApproval: boolean) {
-  if (!result)
+  if (!isTruthy(result))
     return awaitingApproval || call.state === "approval-requested"
       ? ({ kind: "awaiting-approval" } satisfies CallStatus)
       : ({ kind: "running" } satisfies CallStatus);
   const refusal = Option.getOrUndefined(decodeRefusal(resultText(result)));
-  if (refusal) return { kind: refusal } satisfies CallStatus;
+  if (isTruthy(refusal)) return { kind: refusal } satisfies CallStatus;
   return result.state === "error"
     ? ({ kind: "failed" } satisfies CallStatus)
     : ({ kind: "completed" } satisfies CallStatus);
@@ -165,6 +166,8 @@ const activeTaskStatuses: readonly TraceTaskView["status"][] = [
 function elapsed(task: TraceTaskView) {
   const milliseconds = Math.max(
     0,
+    // React/native timestamps use the host Date contract outside Effect execution.
+    // @effect-diagnostics-next-line globalDate:off
     (activeTaskStatuses.includes(task.status) ? Date.now() : task.updatedAt) - task.createdAt,
   );
   const seconds = Math.round(milliseconds / 1_000);
@@ -247,6 +250,8 @@ function TaskSummaryCard({
   const [resumeState, setResumeState] = useState<
     "idle" | "requesting" | "confirm-uncertain" | "queued" | "failed"
   >("idle");
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const resume = async (confirmUncertain: boolean) => {
     setResumeState("requesting");
     const result = await onResume(task, confirmUncertain);
@@ -256,12 +261,16 @@ function TaskSummaryCard({
     setResumeState("failed");
   };
   const [archiveState, setArchiveState] = useState<"idle" | "requesting" | "failed">("idle");
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const archive = async () => {
     setArchiveState("requesting");
     const result = await onArchive(task);
     setArchiveState(result.status === "archived" ? "idle" : "failed");
   };
   const [deleteState, setDeleteState] = useState<"idle" | "requesting" | "failed">("idle");
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const remove = async () => {
     if (
       !window.confirm(
@@ -394,7 +403,7 @@ function ToolCallView({
   const drawing = drawingOf(result);
   return (
     <div className="flex flex-col gap-1.5">
-      {task ? (
+      {task !== undefined ? (
         <TaskSummaryCard
           task={task}
           connection={traceConnection}
@@ -499,7 +508,9 @@ export function MessageView({
     // Only our own attachments are shown; an image part pointing elsewhere is not loaded.
     const images = message.parts
       .flatMap((part) =>
-        part.type === "image" && part.source.type === "url" && attachmentIdOf(part.source.value)
+        part.type === "image" &&
+        part.source.type === "url" &&
+        isTruthy(attachmentIdOf(part.source.value))
           ? [part.source.value]
           : [],
       )

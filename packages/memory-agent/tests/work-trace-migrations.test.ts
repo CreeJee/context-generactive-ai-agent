@@ -1,8 +1,10 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { Effect } from "effect";
+import { DateTime, Effect } from "effect";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { migrations } from "../src/db/migrations.ts";
@@ -20,11 +22,13 @@ afterEach(() => {
 
 const withDatabase = <A>(file: string, use: (db: Database["Service"]) => A) =>
   Effect.runPromise(
+    // Test entry point owns this Layer and its resource scope.
+    // @effect-diagnostics-next-line strictEffectProvide:off
     Effect.scoped(Effect.map(Database, use)).pipe(Effect.provide(Database.layer(file))),
   );
 
 function seedProjectSessionAndAgent(sqlite: DatabaseSync) {
-  const iso = new Date(0).toISOString();
+  const iso = DateTime.formatIso(DateTime.makeUnsafe(0));
   sqlite
     .prepare("INSERT INTO projects (id, root, name, created_at) VALUES ('p1', '/tmp/p1', 'p1', ?)")
     .run(iso);

@@ -1,3 +1,5 @@
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash, randomUUID } from "node:crypto";
 import { Option, Schema } from "effect";
 
@@ -29,12 +31,16 @@ function manifest(value: string | null | undefined): Manifest | null {
 }
 
 /** Keep every fragment in the OS vault, and publish a new generation only after all writes succeed. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function createChunkedPasswordEntry(
   open: (account: string) => PasswordEntry,
   account: string,
 ): PasswordEntry {
   const root = open(account);
   const chunk = (value: Manifest, index: number) => open(`${account}:${value.generation}:${index}`);
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const removeChunks = async (value: Manifest) => {
     // Serialize native vault mutations, but still try every fragment if one deletion fails.
     const results: PromiseSettledResult<boolean>[] = [];
@@ -44,6 +50,8 @@ export function createChunkedPasswordEntry(
   };
 
   return {
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async getPassword() {
       let encoded = (await root.getPassword()) ?? undefined;
       for (let attempt = 0; attempt < 2; attempt++) {
@@ -52,6 +60,8 @@ export function createChunkedPasswordEntry(
         const parts = await Promise.all(
           Array.from(
             { length: current.count },
+            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+            // @effect-diagnostics-next-line asyncFunction:off
             async (_, index) => (await chunk(current, index).getPassword()) ?? undefined,
           ),
         );
@@ -66,6 +76,8 @@ export function createChunkedPasswordEntry(
       throw new Error("Credential changed while reading.");
     },
 
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async setPassword(password) {
       const previous = manifest(await root.getPassword());
       if (password.length <= passwordLimit) {
@@ -94,6 +106,8 @@ export function createChunkedPasswordEntry(
       if (previous !== null) await removeChunks(previous).catch(() => {});
     },
 
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async deleteCredential() {
       const previous = manifest(await root.getPassword());
       const deleted = await root.deleteCredential();

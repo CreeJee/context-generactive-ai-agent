@@ -1,5 +1,5 @@
 import { providerConnection, type ProviderVendor } from "./contracts.ts";
-import { Context, Data, Effect, Layer, Ref } from "effect";
+import { ConfigProvider, Option, Config, Context, Data, Effect, Layer, Ref } from "effect";
 import type { AuthConnectionState, ProviderId, ProviderModel } from "./contracts.ts";
 import type { ImageRouteContract } from "./image-contracts.ts";
 import { imageRouteContracts } from "./image-contracts.ts";
@@ -262,6 +262,10 @@ const sourceFromServices = Effect.gen(function* () {
         }
       }
 
+      const openAIKey = yield* Config.String("OPENAI_API_KEY")
+        .pipe(Config.option)
+        .parse(ConfigProvider.fromEnv())
+        .pipe(Effect.orDie);
       const openAIAuth =
         authByProvider.get("openai") ??
         authEvidence("openai", { provider: "openai", status: "signed-out" }, "subscription_oauth");
@@ -270,11 +274,8 @@ const sourceFromServices = Effect.gen(function* () {
           contract.executionMode === "direct_adapter"
             ? Object.freeze({
                 mechanism: "openai_api_key" as const,
-                status:
-                  process.env.OPENAI_API_KEY === undefined
-                    ? ("signed-out" as const)
-                    : ("signed-in" as const),
-                verified: process.env.OPENAI_API_KEY !== undefined,
+                status: Option.isNone(openAIKey) ? ("signed-out" as const) : ("signed-in" as const),
+                verified: Option.isSome(openAIKey),
               })
             : openAIAuth;
         media.push(
@@ -306,6 +307,8 @@ const sourceFromServices = Effect.gen(function* () {
   } satisfies RouteCatalogSource;
 });
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function makeRouteCatalog(
   source: RouteCatalogSource,
   now: () => number = Date.now,
@@ -367,7 +370,7 @@ export function makeRouteCatalog(
 }
 
 export class RouteCatalog extends Context.Service<RouteCatalog, RouteCatalogApi>()(
-  "memory-agent/RouteCatalog",
+  "memory-agent/providers/route-catalog/RouteCatalog",
 ) {
   static readonly layer = Layer.effect(
     RouteCatalog,

@@ -1002,3 +1002,17 @@
 - 모델을 호출했다는 사실과 평가를 통해 설정을 개선했다는 사실을 구분한다. 실평가가 후보 생성에 도달하지 못한 경우 모의 제어 흐름 검증을 실제 품질 향상으로 보고하지 않는다.
 
 - 정상 평가의 영역별 0점은 개선 대상이므로 후보 생성 전에 중단하지 않는다. 기존 채택 기준과 코딩·기억 회귀 방어는 유지한다. 실제 실행 오류는 typed failure로 중단시켜 정상적인 낮은 성능과 구분한다.
+
+## Map·Set 응답 대기와 상태 소유권 정리 (2026-10-06)
+
+- 화면의 서버 메시지·큐 배열은 배열에서 직접 대조한다. 구독자 목록과 현재 창의 요청 직렬화는 서버 응답을 복제하는 인덱스와 구분한다.
+- import·embedding·Kiwi·redaction worker의 요청 ID 레지스트리는 `Ref<HashMap>` 상태로 `Deferred`를 연결하며, 정상 응답·전송 실패·취소 때 등록을 회수한다. 연결 종료나 잘못된 응답은 남은 대기자를 끝낸다. Kiwi 워밍업은 서비스 scope가 소유한다.
+- 하위 에이전트의 도구 진행, RPC의 `Ref<HashMap>` 응답 대기·취소 상관관계, OAuth 실행 점유·삭제 및 로그인 진행·결과는 각각 하나의 태그 상태 레지스트리가 소유한다. Goal 실행 권한은 run ID별 capability 하나로 보관하며 영속 dispatch gate와 재실행 금지는 유지한다.
+- SDK가 Promise 결과를 순서대로 소비하는 경계의 임시 결과 캐시는 실행 fiber 레지스트리와 구분한다. 병렬 읽기 결과는 SDK 소비 시 삭제하고 취소 시 남은 결과를 회수한다. 정상 종료 시 캐시의 수명은 해당 SDK 실행으로 한정하며, worker의 완료 권한 계약을 바꾸는 종료 hook은 추가하지 않는다. Node 네이티브 worker의 독립 RPC 클라이언트는 현재 로딩·생성 코드 계약을 유지한다.
+- 전체 생성식 목록과 유지 근거는 `docs/map-set-audit-2026-10-06.md`에 기록한다. 이 목록은 저장소 코드의 스냅샷이며 의존성·빌드 산출물·스킬 예제는 포함하지 않는다.
+
+### Effect 진단의 native 경계와 시간·대기 수명 (2026-10-06)
+
+- 새 Effect 진단은 memory-agent와 앱에서 오류·경고까지 검사하고 severity를 유지한다. Vitest·React/query·Node/SDK의 native 계약 및 동기 DTO/SQLite codec, 고정 인자 application API에는 범위를 제한한 진단 예외와 이유를 코드에 남긴다. React UI에는 앱 AGENTS.md의 Effect 적용 제외 기준을 따른다.
+- owner의 일회성 요청 대기는 Deferred와 Ref<HashMap>으로, stream producer/consumer 전달은 Queue로 관리한다. RcMap은 공유 scoped resource 획득·반납에 사용한다. 고정된 worker 자산은 세 개의 독립 모듈과 SDK만 복제하므로, native RPC adapter는 외부 Effect 런타임을 가져오지 않고 MessagePort 경계의 Map/Promise 계약을 유지한다.
+- Effect 내부 시간은 Clock/DateTime을 사용하고, SDK 동기 callback은 소유자의 Clock을 캡처한다. 해석·센서의 deadline과 HTTP body 취소는 Scope/timeout에 묶고 RRSI 주기 검사는 Schedule/scoped fibers로 관리한다.

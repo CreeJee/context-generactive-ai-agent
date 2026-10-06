@@ -1,6 +1,9 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import type { SQLOutputValue } from "node:sqlite";
-import { Context, Data, Effect, Layer, Schema } from "effect";
+import { Clock, Context, Data, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import type { DeliveryVia, QueueItemState, QueuedMessage, QueueSnapshot } from "./queue-state.ts";
 
@@ -16,6 +19,8 @@ const Row = Schema.Struct({
   failure: Schema.NullOr(Schema.String),
   created_at: Schema.Finite,
 });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeRow = Schema.decodeUnknownSync(Row);
 
 function toMessage(raw: Record<string, SQLOutputValue>): QueuedMessage {
@@ -56,21 +61,24 @@ export class QueueChangeRefused extends Data.TaggedError("QueueChangeRefused")<{
 }> {}
 
 const make = Effect.gen(function* () {
+  const effectClock = yield* Clock.Clock;
+
   const { sqlite } = yield* Database;
-  const now = () => Date.now();
+  const now = () => effectClock.currentTimeMillisUnsafe();
   // All queue methods and SQLite statements here are synchronous within this service instance.
   const reservations = new Map<string, { readonly id: string; readonly holdOnRelease: boolean }>();
   const get = (sessionId: string, id: string) => {
     const row = sqlite
       .prepare("SELECT * FROM queued_messages WHERE session_id = ? AND id = ?")
       .get(sessionId, id);
-    return row ? toMessage(row) : null;
+    return isTruthy(row) ? toMessage(row) : null;
   };
   /** The message, if it may still change (not delivered). */
   const pending = (sessionId: string, id: string) =>
     Effect.suspend(() => {
       const message = get(sessionId, id);
-      if (!message) return Effect.fail(new QueueChangeRefused({ id, reason: "not_found" }));
+      if (!(message !== null))
+        return Effect.fail(new QueueChangeRefused({ id, reason: "not_found" }));
       if (reservations.get(sessionId)?.id === id)
         return Effect.fail(new QueueChangeRefused({ id, reason: "reserved" }));
       if (message.state.kind === "delivered")
@@ -141,7 +149,7 @@ const make = Effect.gen(function* () {
            RETURNING *`,
         )
         .get(randomUUID(), sessionId, sessionId, text, JSON.stringify(attachmentIds), now(), now());
-      if (!row) throw new Error("Queued message insert returned no row");
+      if (!isTruthy(row)) throw new Error("Queued message insert returned no row");
       return toMessage(row);
     },
 
@@ -209,8 +217,8 @@ const make = Effect.gen(function* () {
           "SELECT * FROM queued_messages WHERE session_id = ? AND state IN ('waiting', 'editing', 'held') ORDER BY seq LIMIT 1",
         )
         .get(sessionId);
-      const message = row && row.state === "waiting" ? toMessage(row) : null;
-      if (message) reservations.set(sessionId, { id: message.id, holdOnRelease: false });
+      const message = isTruthy(row) && row.state === "waiting" ? toMessage(row) : null;
+      if (message !== null) reservations.set(sessionId, { id: message.id, holdOnRelease: false });
       return message;
     },
 
@@ -260,7 +268,7 @@ const make = Effect.gen(function* () {
       // A selected next turn is locked until committed or released. Holding it here would allow a
       // different state to be delivered from the content already selected for this request.
       const reserved = reservations.get(sessionId);
-      if (reserved) reservations.set(sessionId, { ...reserved, holdOnRelease: true });
+      if (isTruthy(reserved)) reservations.set(sessionId, { ...reserved, holdOnRelease: true });
       sqlite
         .prepare(
           "UPDATE queued_messages SET state = 'held', updated_at = ? WHERE session_id = ? AND state = 'waiting' AND id != ?",
@@ -272,7 +280,7 @@ const make = Effect.gen(function* () {
 
 /** Follow-up messages sent while a run answers, kept in order until they reach the agent. */
 export class MessageQueue extends Context.Service<MessageQueue, Effect.Success<typeof make>>()(
-  "memory-agent/MessageQueue",
+  "memory-agent/queue/queue/MessageQueue",
 ) {
   static readonly layer = Layer.effect(MessageQueue, make);
 }

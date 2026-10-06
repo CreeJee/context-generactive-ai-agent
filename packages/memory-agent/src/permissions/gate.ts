@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import type { ChatMiddleware, ModelMessage, ToolCall } from "@tanstack/ai";
 import { Context, Effect, Layer } from "effect";
 import type { ModelSelection } from "../providers/contracts.ts";
@@ -30,7 +31,7 @@ function pendingGatedCalls(
 ): ToolCall[] {
   const answered = new Set(
     messages.flatMap((message) =>
-      message.role === "tool" && message.toolCallId ? [message.toolCallId] : [],
+      message.role === "tool" && isTruthy(message.toolCallId) ? [message.toolCallId] : [],
     ),
   );
   return messages.flatMap((message) =>
@@ -69,6 +70,8 @@ export const makePermissionGateMiddleware = Effect.fnUntraced(function* (
   return {
     name: "memory-agent/permission-gate",
 
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async onInterruptBoundary(ctx) {
       if (ctx.phase !== "beforeTools") return undefined;
       const asks = [];
@@ -91,11 +94,11 @@ export const makePermissionGateMiddleware = Effect.fnUntraced(function* (
           latest?.toolName === call.function.name && latest.input === call.function.arguments
             ? latest
             : null;
-        if (!review && binding.decider === "user") {
+        if (!isTruthy(review) && binding.decider === "user") {
           asks.push(ask(call, askEveryCallReason, "every_call"));
           continue;
         }
-        if (!review) {
+        if (!isTruthy(review)) {
           const verdict = await classifier.classify({
             project: binding.project,
             sessionId,
@@ -121,7 +124,7 @@ export const makePermissionGateMiddleware = Effect.fnUntraced(function* (
     onInterruptResolution(_ctx, resolutions) {
       for (const resolution of resolutions.for(permissionReviewInterrupt)) {
         const { payload } = resolution.request;
-        if (!payload) continue;
+        if (!isTruthy(payload)) continue;
         const approved = resolution.status === "resolved" && resolution.response.approved;
         reviews.record({
           sessionId,
@@ -142,7 +145,7 @@ export const makePermissionGateMiddleware = Effect.fnUntraced(function* (
         .findLast((entry) => entry.id === hook.toolCallId);
       const latest = reviews.latest(sessionId, hook.toolCallId);
       const review =
-        call &&
+        isTruthy(call) &&
         call.function.name === hook.toolName &&
         latest?.toolName === hook.toolName &&
         latest.input === call.function.arguments
@@ -171,7 +174,7 @@ const make = Effect.gen(function* () {
 
 /** `auto` permission mode: classify each gated call, ask only when the verdict says so. */
 export class PermissionGate extends Context.Service<PermissionGate, Effect.Success<typeof make>>()(
-  "memory-agent/PermissionGate",
+  "memory-agent/permissions/gate/PermissionGate",
 ) {
   static readonly layer = Layer.effect(PermissionGate, make);
 }

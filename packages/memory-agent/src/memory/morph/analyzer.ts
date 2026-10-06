@@ -1,7 +1,12 @@
+import { isTruthy } from "../../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { existsSync, mkdirSync } from "node:fs";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { dirname, join } from "node:path";
 import { Worker } from "node:worker_threads";
-import { Context, Data, Effect, Layer, Schema } from "effect";
+import { Context, Data, Deferred, HashMap, Ref, Effect, Layer, Option, Schema } from "effect";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { installArchive } from "../../runtime/archive.ts";
 import { runtimeWorker } from "../../runtime/resources.ts";
@@ -45,9 +50,11 @@ const Reply = Schema.Union([
   }),
   Schema.Struct({ id: Schema.Finite, kind: Schema.Literal("error"), error: Schema.String }),
 ]);
-const decodeReply = Schema.decodeUnknownSync(Reply);
+const decodeReply = Schema.decodeUnknownOption(Reply);
 
 /** Downloads and extracts the model once, into `<storage>/models/kiwi-<version>`. */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function ensureModel(storageRoot: string) {
   const root = join(storageRoot, "models", `kiwi-${kiwiModel.version}`);
   const modelDirectory = join(root, kiwiModel.directory);
@@ -69,42 +76,56 @@ async function ensureModel(storageRoot: string) {
  */
 const makeKiwi = Effect.gen(function* () {
   const storage = yield* StorageRoot;
+  const context = yield* Effect.context<never>();
+  const runSync = Effect.runSyncWith(context);
   let worker: Worker | null = null;
   let loaded = false;
   let starting: Promise<Worker> | null = null;
   let nextId = 1;
-  const pending = new Map<number, (reply: typeof Reply.Type) => void>();
+  const pending = yield* Ref.make(HashMap.empty<number, Deferred.Deferred<typeof Reply.Type>>());
 
   const stop = () => {
     const current = worker;
     worker = null;
     loaded = false;
-    for (const [id, resolve] of pending) resolve({ id, kind: "error", error: "analyzer stopped" });
-    pending.clear();
-    void current?.terminate();
+    const waiting = runSync(Ref.getAndSet(pending, HashMap.empty()));
+    for (const [id, done] of waiting)
+      Deferred.doneUnsafe(done, Effect.succeed({ id, kind: "error", error: "analyzer stopped" }));
+    return current?.terminate();
   };
 
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   const start = async () => {
     const modelDirectory = await ensureModel(storage.path);
     const created = new Worker(runtimeWorker("kiwi-worker"), { workerData: { modelDirectory } });
     created.on("message", (message) => {
-      const reply = decodeReply(message);
-      pending.get(reply.id)?.(reply);
-      pending.delete(reply.id);
+      const decoded = decodeReply(message);
+      if (Option.isNone(decoded)) return lost();
+      const reply = decoded.value;
+      const done = Option.getOrUndefined(HashMap.get(runSync(Ref.get(pending)), reply.id));
+      runSync(Ref.update(pending, HashMap.remove(reply.id)));
+      if (isTruthy(done)) Deferred.doneUnsafe(done, Effect.succeed(reply));
       // An idle worker must not keep the process alive; one with requests in flight must.
-      if (pending.size === 0) created.unref();
+      if (HashMap.isEmpty(runSync(Ref.get(pending)))) created.unref();
     });
-    created.on("error", () => {
-      if (worker === created) stop();
-    });
+    const lost = () => {
+      if (worker === created) void stop();
+    };
+    created.on("error", lost);
+    created.on("exit", lost);
     created.unref();
     return created;
   };
 
   const running = () => {
-    if (worker) return Promise.resolve(worker);
+    if (worker !== null) return Promise.resolve(worker);
     starting ??= start().then(
       (created) => {
+        if (closed) {
+          void created.terminate();
+          throw new MorphAnalysisFailed({ reason: "analyzer stopped" });
+        }
         worker = created;
         starting = null;
         return created;
@@ -117,49 +138,78 @@ const makeKiwi = Effect.gen(function* () {
     return starting;
   };
 
-  const request = async (texts: readonly string[]) => {
-    const current = await running();
-    const id = nextId++;
-    const reply = await new Promise<typeof Reply.Type>((resolve) => {
-      pending.set(id, resolve);
-      current.ref();
-      current.postMessage({ id, texts: texts.map((text) => text.slice(0, maxCharacters)) });
+  const request = Effect.fnUntraced(function* (texts: readonly string[]) {
+    const current = yield* Effect.tryPromise({
+      try: () => running(),
+      catch: () => new MorphAnalysisFailed({ reason: "analyzer could not start" }),
     });
+    const id = nextId++;
+    const done = yield* Deferred.make<typeof Reply.Type>();
+    const reply = yield* Ref.update(pending, HashMap.set(id, done)).pipe(
+      Effect.andThen(
+        Effect.try({
+          try: () => {
+            if (closed || worker !== current)
+              throw new MorphAnalysisFailed({ reason: "analyzer stopped" });
+            current.ref();
+            current.postMessage({ id, texts: texts.map((text) => text.slice(0, maxCharacters)) });
+          },
+          catch: () => new MorphAnalysisFailed({ reason: "analyzer request failed" }),
+        }),
+      ),
+      Effect.andThen(Deferred.await(done)),
+      Effect.ensuring(
+        Ref.updateAndGet(pending, HashMap.remove(id)).pipe(
+          Effect.map((remaining) => {
+            if (HashMap.isEmpty(remaining)) current.unref();
+          }),
+        ),
+      ),
+    );
     switch (reply.kind) {
       case "error":
-        throw new Error(reply.error);
+        return yield* new MorphAnalysisFailed({ reason: reply.error });
       case "terms":
         loaded = true;
         return reply.terms.map((terms) => [...terms]);
     }
-  };
+  });
 
-  yield* Effect.addFinalizer(() => Effect.sync(stop));
+  const layerScope = yield* Effect.scope;
+  const fork = Effect.runForkWith(context);
+  let closed = false;
+  yield* Effect.addFinalizer(() =>
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
+    Effect.promise(async () => {
+      closed = true;
+      await stop();
+      if (isTruthy(starting)) {
+        const created = await starting.catch(() => null);
+        await created?.terminate();
+      }
+    }),
+  );
 
   return {
     identity: `kiwi-${kiwiModel.version}-cong-v1`,
     ready: () => loaded && worker !== null,
     // A tiny request loads the model; failures (offline, no model) just leave it not ready.
-    warm: () => void request(["준비"]).catch(() => undefined),
-    terms: (texts: readonly string[]) =>
-      Effect.tryPromise({
-        try: async () => {
-          const all: string[][] = [];
-          for (let index = 0; index < texts.length; index += batchSize)
-            all.push(...(await request(texts.slice(index, index + batchSize))));
-          return all;
-        },
-        catch: (error) =>
-          new MorphAnalysisFailed({
-            reason: error instanceof Error ? error.message : String(error),
-          }),
-      }),
+    warm: () => {
+      fork(Effect.forkIn(request(["준비"]).pipe(Effect.ignore), layerScope));
+    },
+    terms: Effect.fnUntraced(function* (texts: readonly string[]) {
+      const all: string[][] = [];
+      for (let index = 0; index < texts.length; index += batchSize)
+        all.push(...(yield* request(texts.slice(index, index + batchSize))));
+      return all;
+    }),
   } satisfies MorphAnalyzerApi;
 });
 
 /** Korean morphological analysis for search terms. */
 export class MorphAnalyzer extends Context.Service<MorphAnalyzer, MorphAnalyzerApi>()(
-  "memory-agent/MorphAnalyzer",
+  "memory-agent/memory/morph/analyzer/MorphAnalyzer",
 ) {
   /** Kiwi in a worker thread, with its model downloaded to `<storage>/models` on first use. */
   static readonly kiwi = Layer.effect(MorphAnalyzer, makeKiwi);

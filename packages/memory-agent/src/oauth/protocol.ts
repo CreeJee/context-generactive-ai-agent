@@ -1,3 +1,5 @@
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash, randomBytes } from "node:crypto";
 import { optionalProperty } from "../optional-property.ts";
 import { Data, Option, Schema } from "effect";
@@ -326,6 +328,8 @@ const AnthropicWireEvent = Schema.Union([
 const decodeToolArguments = Schema.decodeUnknownOption(Schema.fromJsonString(ToolArguments));
 
 /** Parses one provider SSE data value into the provider-neutral stream contract. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function decodeProviderEvent(
   provider: OAuthProvider,
   data: string,

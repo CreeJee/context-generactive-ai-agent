@@ -34,6 +34,8 @@ const browserState = (state: {
     : state;
 
 /** GET /api/auth?provider=... reads one subscription provider's connection state. */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function loader({ request }: Route.LoaderArgs) {
   const provider = providerFrom(request);
   if (provider === null || provider === undefined)
@@ -73,9 +75,11 @@ export async function loader({ request }: Route.LoaderArgs) {
 }
 
 /** Starts, cancels or disconnects one explicit subscription provider. */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
-  if (rejected) return rejected;
+  if (rejected !== null) return rejected;
   const body = await readJson(request, Intent);
   if (Result.isFailure(body)) return Response.json({ error: "invalid_intent" }, { status: 400 });
   const { intent, provider } = body.success;

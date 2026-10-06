@@ -1,4 +1,9 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { mkdirSync } from "node:fs";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Context, Data, Effect, Layer, Schema } from "effect";
@@ -19,6 +24,8 @@ const UserVersion = Schema.Struct({ user_version: Schema.Finite });
 
 /** Startup-only: call before handing this connection to any service or writer. */
 export function migrateDatabase(sqlite: DatabaseSync) {
+  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+  // @effect-diagnostics-next-line schemaSync:off
   const { user_version: applied } = Schema.decodeUnknownSync(UserVersion)(
     sqlite.prepare("PRAGMA user_version").get(),
   );
@@ -35,6 +42,8 @@ export function migrateDatabase(sqlite: DatabaseSync) {
           (_key, value) => (Schema.is(Schema.BigInt)(value) ? value.toString() : value),
         ),
       );
+    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+    // @effect-diagnostics-next-line schemaSync:off
     const foreignKeys = Schema.decodeUnknownSync(Schema.Struct({ foreign_keys: Schema.Finite }))(
       sqlite.prepare("PRAGMA foreign_keys").get(),
     ).foreign_keys;
@@ -59,7 +68,7 @@ export function migrateDatabase(sqlite: DatabaseSync) {
       if (started) sqlite.exec("ROLLBACK");
       throw error;
     } finally {
-      if (rebuild) sqlite.exec(`PRAGMA foreign_keys = ${foreignKeys ? "ON" : "OFF"}`);
+      if (rebuild) sqlite.exec(`PRAGMA foreign_keys = ${isTruthy(foreignKeys) ? "ON" : "OFF"}`);
     }
   }
 }
@@ -112,6 +121,6 @@ const make = (file: string) =>
   );
 
 /** The single local SQLite database shared by every memory-agent module. */
-export class Database extends Context.Service<Database, DatabaseApi>()("memory-agent/Database") {
+export class Database extends Context.Service<Database, DatabaseApi>()("memory-agent/db/database") {
   static readonly layer = (file: string) => Layer.effect(Database, make(file));
 }

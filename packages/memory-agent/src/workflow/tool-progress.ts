@@ -1,3 +1,6 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash } from "node:crypto";
 import type { ToolPhaseCompleteInfo } from "@tanstack/ai";
 import { Option, Schema } from "effect";
@@ -41,6 +44,8 @@ function stable(value: JsonValue): JsonValue {
 }
 
 /** Parse the SDK's heterogeneous result at this boundary before measuring progress. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function toolProgressFingerprint(
   name: string,
   args: string,
@@ -52,7 +57,7 @@ export function toolProgressFingerprint(
     : decodeResult(result);
   if (Option.isNone(parsed)) return null;
   const value = parsed.value;
-  if (value === null || (isString(value) && !value.trim())) return null;
+  if (value === null || (isString(value) && !isTruthy(value.trim()))) return null;
   if (isObject(value)) {
     if (
       "error" in value ||

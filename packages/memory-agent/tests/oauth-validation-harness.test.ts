@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off globalFetch:off globalTimers:off newPromise:off nodeBuiltinImport:off
+import { DateTime } from "effect";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, test } from "vite-plus/test";
@@ -38,7 +41,7 @@ test.each(["cancel", "timeout"] as const)(
     const previous = {
       accessToken: "previous",
       refreshToken: "previous-refresh",
-      expiresAt: Date.now() + 3600_000,
+      expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 3600_000,
     };
     await store.write("openai", previous);
     let release!: () => void;
@@ -608,7 +611,10 @@ for (const provider of ["openai", "anthropic"] as const) {
       const harness = OAuthValidationHarness({ protocol: fake.protocol, store });
       await login(harness);
       const credential = store.values.get(provider)!;
-      store.values.set(provider, { ...credential, expiresAt: Date.now() + 20_000 });
+      store.values.set(provider, {
+        ...credential,
+        expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 20_000,
+      });
 
       await expect(harness.status()).resolves.toMatchObject({ provider, connected: true });
       expect(fake.counts().refreshRequests).toBe(1);
@@ -621,7 +627,10 @@ for (const provider of ["openai", "anthropic"] as const) {
       const harness = OAuthValidationHarness({ protocol: fake.protocol, store });
       await login(harness);
       const credential = store.values.get(provider)!;
-      store.values.set(provider, { ...credential, expiresAt: Date.now() - 1 });
+      store.values.set(provider, {
+        ...credential,
+        expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) - 1,
+      });
       fake.rejectRefresh();
 
       await expect(harness.status()).resolves.toEqual({
@@ -658,7 +667,7 @@ describe("provider wire contracts", () => {
     store.values.set("anthropic", {
       accessToken: "access-secret",
       refreshToken: "refresh-secret",
-      expiresAt: Date.now() + 60_000,
+      expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 60_000,
     });
     const cacheRejected = OAuthValidationHarness({
       protocol: providerProtocols.anthropic,
@@ -739,7 +748,7 @@ describe("OAuth callback safety", () => {
     const prior: StoredCredential = {
       accessToken: "prior-access",
       refreshToken: "prior-refresh",
-      expiresAt: Date.now() + 300_000,
+      expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 300_000,
     };
     const store = new MemoryCredentialStore();
     store.values.set("anthropic", prior);

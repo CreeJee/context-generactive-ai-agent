@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -213,14 +215,14 @@ test("late-first native memory bundles preserve helpers and isolate populated ru
         runId: label,
         userNodeId: () => runUser.id,
       });
-      if (prepared.tools.length !== 6 || !prepared.middleware)
+      if (prepared.tools.length !== 6 || prepared.middleware === undefined)
         throw new Error("Expected run tools");
       expect(await prepared.tools[1].execute!({ id: "absent-evidence" })).toEqual({
         error: `${prefix}not_found`,
         id: "absent-evidence",
       });
       const memoryNodeIds = [promoted.memoryNodeId];
-      expect(() => prepared.tools[5].execute!({ memoryNodeIds })).toThrow(
+      expect(() => prepared.tools[5]!.execute!({ memoryNodeIds })).toThrow(
         "Only promoted memories retrieved in this run can be used",
       );
       // Finishing a fresh run before retrieval/use must not inherit the previous usedDraft.
@@ -245,7 +247,7 @@ test("late-first native memory bundles preserve helpers and isolate populated ru
       expect(await prepared.tools[1].execute!({ id: promoted.memoryNodeId })).toMatchObject({
         text: "isolated-memory-state is a fixture decision",
       });
-      expect(prepared.tools[5].execute!({ memoryNodeIds })).toMatchObject({ usedMemoryCount: 1 });
+      expect(prepared.tools[5]!.execute!({ memoryNodeIds })).toMatchObject({ usedMemoryCount: 1 });
       expectedUsage.push({ kind: "retrieved", parentRunId: label });
       expect(usage()).toEqual(expectedUsage);
       await finish();

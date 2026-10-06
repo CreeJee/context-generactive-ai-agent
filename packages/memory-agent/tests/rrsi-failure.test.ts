@@ -8,7 +8,7 @@ test.each(CancellationReason.literals)(
     abort.abort(reason);
     expect(
       experimentFailure(
-        new EvaluationFailed({ reason: "evaluation_container_failed" }),
+        EvaluationFailed.make({ reason: "evaluation_container_failed" }),
         abort.signal,
       ),
     ).toBe(reason);
@@ -20,7 +20,7 @@ test("untrusted provider messages and abort payloads never enter experiment reco
   const abort = new AbortController();
   expect(experimentFailure(new Error(secret), abort.signal)).toBe("evaluation_failed");
   expect(
-    experimentFailure(new EvaluationFailed({ reason: "gateway_request_failed" }), abort.signal),
+    experimentFailure(EvaluationFailed.make({ reason: "gateway_request_failed" }), abort.signal),
   ).toBe("gateway_request_failed");
   abort.abort(secret);
   expect(experimentFailure(new Error(secret), abort.signal)).toBe("experiment_stopped");

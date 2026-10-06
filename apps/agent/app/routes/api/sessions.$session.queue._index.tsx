@@ -5,6 +5,8 @@ import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/sessions.$session.queue._index";
 
 /** GET /api/sessions/:session/queue — messages waiting to reach the agent, and those just delivered. */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function loader({ params }: Route.LoaderArgs) {
   return agent.runPromise(Effect.flatMap(AgentChat, (chat) => chat.queued(params.session)));
 }
@@ -14,9 +16,11 @@ export async function loader({ params }: Route.LoaderArgs) {
  * answers: `queue` for the next tool-call boundary, `steer` into the answering turn now. 409
  * `not_running` means nothing is answering and the page should send a normal turn.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request, params }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
-  if (rejected) return rejected;
+  if (rejected !== null) return rejected;
   const body = await readJson(request, QueueRequest);
   if (Result.isFailure(body))
     return Response.json({ error: "invalid_queue_request" }, { status: 400 });

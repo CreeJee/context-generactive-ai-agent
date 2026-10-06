@@ -1,3 +1,4 @@
+import { isTruthy } from "../truthy.ts";
 import type { AnyServerTool } from "@tanstack/ai";
 import { lintSource } from "@secretlint/core";
 import { secretLintProfiler } from "@secretlint/profiler";
@@ -90,6 +91,8 @@ function assignmentFindings(text: string): Finding[] {
 /** `@secretlint/secretlint-rule-github` → `github`. */
 const kindOf = (ruleId: string) => ruleId.replace(/^.*secretlint-rule-/u, "");
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function formatFindings(text: string): Promise<Finding[]> {
   const result = await lintSource({
     source: { filePath: "text.txt", content: text, ext: ".txt", contentType: "text" },
@@ -115,7 +118,7 @@ export function mergeFindings(findings: readonly Finding[]): Finding[] {
   const merged: Finding[] = [];
   for (const finding of sorted) {
     const last = merged.at(-1);
-    if (!last || finding.start >= last.end) {
+    if (!isTruthy(last) || finding.start >= last.end) {
       merged.push(finding);
       continue;
     }
@@ -201,9 +204,11 @@ const make = Effect.sync(() => {
     withHiddenResults(tools: readonly AnyServerTool[]): AnyServerTool[] {
       return tools.map((tool): AnyServerTool => {
         const execute = tool.execute;
-        if (!execute) return tool;
+        if (!isTruthy(execute)) return tool;
         return {
           ...tool,
+          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+          // @effect-diagnostics-next-line asyncFunction:off
           execute: async (...call: Parameters<typeof execute>) => {
             let result: Awaited<ReturnType<typeof execute>>;
             try {
@@ -224,7 +229,7 @@ const make = Effect.sync(() => {
 
 /** Hides secrets in what the model reads and in what memory keeps. */
 export class SecretRedactor extends Context.Service<SecretRedactor, Effect.Success<typeof make>>()(
-  "memory-agent/SecretRedactor",
+  "memory-agent/secrets/redactor/SecretRedactor",
 ) {
   static readonly layer = Layer.effect(SecretRedactor, make);
 }

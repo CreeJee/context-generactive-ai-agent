@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off globalTimers:off newPromise:off nodeBuiltinImport:off
 import { mkdtempSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,6 +33,8 @@ const defaultPolicyLayer = ProviderToolPolicy.layer.pipe(
 const run = <A, E>(
   effect: Effect.Effect<A, E, ProviderToolPolicy>,
   layer: Layer.Layer<ProviderToolPolicy, ProviderToolMetadataFailure> = defaultPolicyLayer,
+  // Test entry point owns this Layer and its resource scope.
+  // @effect-diagnostics-next-line strictEffectProvide:off
 ) => Effect.runPromise(effect.pipe(Effect.provide(layer)));
 const errorOf = <A, E>(effect: Effect.Effect<A, E>) =>
   effect.pipe(
@@ -412,6 +416,8 @@ describe("ProviderToolPolicy", () => {
     };
     const value = await Effect.runPromise(
       Effect.map(ProviderToolPolicy, (service) => service).pipe(
+        // Test entry point owns this Layer and its resource scope.
+        // @effect-diagnostics-next-line strictEffectProvide:off
         Effect.provide(ProviderToolPolicy.layerFrom(override)),
       ),
     );
@@ -424,6 +430,8 @@ const runtimeLayer = ProviderToolRuntime.layer.pipe(
   Layer.provide(ProviderToolCapabilityRegistry.layer),
 );
 const runRuntime = <A, E>(effect: Effect.Effect<A, E, ProviderToolRuntime>) =>
+  // Test entry point owns this Layer and its resource scope.
+  // @effect-diagnostics-next-line strictEffectProvide:off
   Effect.runPromise(effect.pipe(Effect.provide(runtimeLayer)));
 
 describe("ProviderToolRuntime", () => {
@@ -741,6 +749,8 @@ describe("ProviderToolRuntime", () => {
         );
         yield* Effect.sleep("10 millis");
         yield* Fiber.interrupt(fiber);
+        // Test entry point owns this Layer and its resource scope.
+        // @effect-diagnostics-next-line strictEffectProvide:off
       }).pipe(Effect.provide(runtimeLayer)),
     );
     expect(aborted).toBe(true);
@@ -807,24 +817,28 @@ describe("ProviderToolRuntime", () => {
     );
     let executed = false;
     const result = await Effect.runPromise(
-      Effect.flatMap(ProviderToolRuntime, (runtime) =>
-        runtime.execute({
-          policy: basePolicy({
-            accountToolKinds: ["local_shell"],
-            app: { allowHighRisk: true },
-            user: { allowHighRisk: true },
+      Effect.flatMap(
+        ProviderToolRuntime,
+        (runtime) =>
+          runtime.execute({
+            policy: basePolicy({
+              accountToolKinds: ["local_shell"],
+              app: { allowHighRisk: true },
+              user: { allowHighRisk: true },
+            }),
+            toolId: "openai:local_shell",
+            kind: "local_shell",
+            accountId: "account-local",
+            runId: "run-local",
+            options: {},
+            approval: "granted",
+            operation: () => {
+              executed = true;
+              return { raw: "must-not-run" };
+            },
           }),
-          toolId: "openai:local_shell",
-          kind: "local_shell",
-          accountId: "account-local",
-          runId: "run-local",
-          options: {},
-          approval: "granted",
-          operation: () => {
-            executed = true;
-            return { raw: "must-not-run" };
-          },
-        }),
+        // Test entry point owns this Layer and its resource scope.
+        // @effect-diagnostics-next-line strictEffectProvide:off
       ).pipe(Effect.provide(layer)),
     );
     expect(executed).toBe(false);
@@ -848,6 +862,8 @@ describe("ProviderToolRuntime", () => {
     };
     const value = await Effect.runPromise(
       Effect.map(ProviderToolRuntime, (runtime) => runtime).pipe(
+        // Test entry point owns this Layer and its resource scope.
+        // @effect-diagnostics-next-line strictEffectProvide:off
         Effect.provide(ProviderToolRuntime.layerFrom(override)),
       ),
     );

@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off
 import { chat, toolDefinition } from "@tanstack/ai";
 import { Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";

@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off processEnv:off
 import { Effect } from "effect";
 import { webSearchTool } from "@tanstack/ai-openai/tools";
 import { expect, test, vi } from "vite-plus/test";
@@ -82,7 +84,7 @@ test.each(["duplicate", "client-only", "provider-native"] as const)(
       expect(context.provider!.adapter.invocations).toHaveLength(0);
     } finally {
       vi.restoreAllMocks();
-      if (previous === undefined) delete process.env.CONTEXT_AGENT_GOAL_WORKER;
+      if (previous === undefined) Reflect.deleteProperty(process.env, "CONTEXT_AGENT_GOAL_WORKER");
       else process.env.CONTEXT_AGENT_GOAL_WORKER = previous;
     }
   },

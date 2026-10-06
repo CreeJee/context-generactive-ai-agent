@@ -1,9 +1,12 @@
+import { isTruthy } from "../../truthy.ts";
 export interface ReportFields {
   symptom: string;
   expected: string;
   actual: string;
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function reportText(
   fields: ReportFields,
   createdAt: string,
@@ -14,7 +17,9 @@ export function reportText(
   return [
     "# Context Agent 문제 제보",
     `작성 시각: ${createdAt}`,
-    ...(origin ? [`증거 출처: 프로젝트 ${origin.projectId} / 원본 세션 ${origin.sessionId}`] : []),
+    ...(origin !== undefined
+      ? [`증거 출처: 프로젝트 ${origin.projectId} / 원본 세션 ${origin.sessionId}`]
+      : []),
     "",
     "## 사용자 설명 (AI 진단 아님)",
     `증상: ${fields.symptom.trim() || "(작성하지 않음)"}`,
@@ -22,10 +27,10 @@ export function reportText(
     `실제 동작: ${fields.actual.trim() || "(작성하지 않음)"}`,
     "",
     "## 관측된 증거 (선택한 항목만)",
-    evidence.length
+    isTruthy(evidence.length)
       ? evidence.map((item) => `[${item.label} | ${item.source}]\n${item.text}`).join("\n\n")
       : "첨부된 증거 없음. 아래 설명만으로 제보할 수 있습니다.",
-    ...(unavailable.length ? ["", "## 수집하지 못한 정보", ...unavailable] : []),
+    ...(isTruthy(unavailable.length) ? ["", "## 수집하지 못한 정보", ...unavailable] : []),
     "",
     "AI 진단: 수행하지 않음 (위 증거는 AI의 추정이 아닙니다.)",
   ].join("\n");

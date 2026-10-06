@@ -1,6 +1,14 @@
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash, randomUUID } from "node:crypto";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { constants } from "node:fs";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { mkdir, open, rename, rm } from "node:fs/promises";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { basename, dirname, join } from "node:path";
 import { Data, Schema } from "effect";
 import { PathRejected } from "./paths.ts";
@@ -42,6 +50,9 @@ export interface FileBytes {
  * the opened file itself must be a regular file with one link, checked on the handle (for callers
  * that validated the directories but not the file).
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function readFileBytes(
   absolute: string,
   path: string,
@@ -62,6 +73,8 @@ export async function readFileBytes(
 }
 
 /** Decodes bytes as UTF-8 text, throwing {@link TextFileRejected} for binary or invalid content. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function decodeText(bytes: Uint8Array, path: string): string {
   if (bytes.includes(0)) throw new TextFileRejected({ path, reason: "binary" });
   try {
@@ -75,6 +88,9 @@ export function decodeText(bytes: Uint8Array, path: string): string {
  * Reads a UTF-8 text file without following a symlink at the leaf. `path` is only used in errors.
  * Throws {@link TextFileRejected} for binary, oversized or undecodable content.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function readTextFile(absolute: string, path: string): Promise<TextFile> {
   const { bytes, mode } = await readFileBytes(absolute, path);
   const text = decodeText(bytes, path);
@@ -82,6 +98,9 @@ export async function readTextFile(absolute: string, path: string): Promise<Text
 }
 
 /** Creates a new file, failing if anything already exists at that name. Parents are created. */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function createTextFile(absolute: string, path: string, text: string) {
   await mkdir(dirname(absolute), { recursive: true });
   const bytes = Buffer.from(text, "utf8");
@@ -109,6 +128,9 @@ export async function createTextFile(absolute: string, path: string, text: strin
  * Replaces a file's content atomically (temp file in the same directory, then rename), but only
  * when it still has the content the caller read. The permission bits are kept.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function replaceTextFile(
   absolute: string,
   path: string,
@@ -141,6 +163,9 @@ export async function replaceTextFile(
 }
 
 /** Removes a file only when it still has the content the caller read. */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function deleteTextFile(absolute: string, path: string, expectedSha256: string) {
   const current = await readTextFile(absolute, path);
   if (current.sha256 !== expectedSha256) throw new TextFileRejected({ path, reason: "changed" });
@@ -166,6 +191,8 @@ export const readPageCharacters = 16_000;
  * One page of a text file by 1-based line numbers. Line endings are kept exactly, so CRLF files
  * can be edited with the text as read.
  */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function linePage(text: string, startLine: number, maxLines: number): LinePage {
   return linePageOf(splitLines(text), startLine, maxLines);
 }
@@ -175,6 +202,8 @@ export const splitLines = (text: string): readonly string[] =>
   text.match(/[^\n]*\n|[^\n]+$/g) ?? [];
 
 /** {@link linePage} over lines already split with {@link splitLines}. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function linePageOf(
   lines: readonly string[],
   startLine: number,

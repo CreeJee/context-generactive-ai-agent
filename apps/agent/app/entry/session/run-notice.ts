@@ -21,11 +21,13 @@ export interface PageView {
 }
 
 /** The notice for a run record while this page is not generating; null when all is as it looks. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function noticeOf(state: SessionRunState | null, page: PageView): RunNotice | null {
-  if (!state) return null;
-  if (state.running) return { kind: "detached" };
+  if (!(state !== null)) return null;
+  if (state.running !== null) return { kind: "detached" };
   const lastRun = state.lastRun;
-  if (!lastRun) return null;
+  if (!(lastRun !== null)) return null;
   // A restart is recorded as an error; the status may have been rewritten since.
   if (lastRun.error?.code === serverRestartedCode) return { kind: "restarted" };
   switch (lastRun.status) {

@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off newPromise:off nodeBuiltinImport:off
+import { isTruthy } from "../src/truthy.ts";
 import { createHook } from "node:async_hooks";
 import { MessagePort } from "node:worker_threads";
 import { DatabaseSync } from "node:sqlite";
@@ -393,6 +396,8 @@ test("tampered worker RPC name/args/ID/context is rejected before durable reserv
           selection: { provider: "openai", model: "scripted-1", reasoningEffort: "none" },
         });
       }).pipe(
+        // Test entry point owns this Layer and its resource scope.
+        // @effect-diagnostics-next-line strictEffectProvide:off
         Effect.provide(PermissionGate.layer.pipe(Layer.provideMerge(PermissionReviews.layer))),
         Effect.provideService(PermissionClassifier, {
           classify: async () => {
@@ -941,7 +946,7 @@ test.each([true, false])(
       expect(executions).toBe(1);
       const first = adapter.invocations[0]?.messages ?? [];
       expect(
-        first.filter((message) => message.role !== "tool" && !message.toolCalls?.length),
+        first.filter((message) => message.role !== "tool" && !isTruthy(message.toolCalls?.length)),
       ).toEqual([
         { role: "assistant", content: "Evidence (node old-result)" },
         past[0],
@@ -1020,7 +1025,7 @@ test("parallel reads use only owner observations and evaluate every permission b
             onConfig: async (_ctx, config) => {
               if (guardedBeforeModel) return;
               const tool = config.tools.find((tool) => tool.name === "read_file");
-              if (!tool?.execute) throw new Error("Missing owner tool");
+              if (!isTruthy(tool?.execute)) throw new Error("Missing owner tool");
               await expect(
                 tool.execute!(
                   {},

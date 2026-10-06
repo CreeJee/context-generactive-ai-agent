@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off
+import { DateTime } from "effect";
 import { EventType, type TextOptions } from "@tanstack/ai";
 import { InternalLogger } from "@tanstack/ai/adapter-internals";
 import { expect, test } from "vite-plus/test";
@@ -40,7 +43,7 @@ test("retained native implementation binds fresh central clients and pins each r
             accessToken: account,
             refreshToken: "controlled-refresh",
             accountId: account,
-            expiresAt: Date.now() + 60_000,
+            expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 60_000,
           };
         },
         async write() {

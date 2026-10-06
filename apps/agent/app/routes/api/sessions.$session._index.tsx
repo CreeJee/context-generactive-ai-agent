@@ -23,6 +23,8 @@ const ChangeSession = Schema.Union([
  * still producing, how the last run ended (completed, cancelled, cut off by a server restart), and
  * whether the asking page holds the session.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function loader({ request, params }: Route.LoaderArgs) {
   const holder = new URL(request.url).searchParams.get("holder");
   return agent.runPromise(Effect.flatMap(AgentChat, (chat) => chat.status(params.session, holder)));
@@ -32,9 +34,11 @@ export async function loader({ request, params }: Route.LoaderArgs) {
  * POST /api/sessions/:session { archived } — archives the conversation or restores it. Refused
  * while it is answering (409) or another page holds it (423).
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request, params }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
-  if (rejected) return rejected;
+  if (rejected !== null) return rejected;
   const body = await readJson(request, ChangeSession);
   if (Result.isFailure(body))
     return Response.json({ error: "invalid_session_change" }, { status: 400 });
@@ -51,6 +55,8 @@ export async function action({ request, params }: Route.ActionArgs) {
           params.session,
           holder,
           change.archived,
+          // HTTP/SDK boundary assigns a cryptographic idempotency token when the caller omitted one.
+          // @effect-diagnostics-next-line cryptoRandomUUIDInEffect:off
           change.idempotencyKey ?? crypto.randomUUID(),
         );
         events.publishProject(session.projectId, "sessions");

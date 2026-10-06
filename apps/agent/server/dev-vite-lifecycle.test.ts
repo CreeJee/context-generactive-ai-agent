@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off globalTimers:off newPromise:off nodeBuiltinImport:off
+import { isTruthy } from "../app/truthy.ts";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,7 +14,7 @@ let root: string | null = null;
 afterEach(async () => {
   await server?.close();
   server = null;
-  if (root) rmSync(root, { recursive: true, force: true });
+  if (isTruthy(root)) rmSync(root, { recursive: true, force: true });
   root = null;
 });
 

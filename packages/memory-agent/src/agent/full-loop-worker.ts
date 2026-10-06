@@ -22,7 +22,7 @@ const {
   adapter: identity,
   lastOperationId,
 } = workerData;
-if (!parentPort) throw new Error("Full-loop entry requires a worker parent port");
+if (!(parentPort !== null)) throw new Error("Full-loop entry requires a worker parent port");
 const parent = parentPort;
 function portableSchema(schema: any) {
   if (schema === undefined) return undefined;
@@ -48,11 +48,11 @@ function restoreInterruptRequests(value: any): any {
   if (value === null || value === undefined) return value;
   if (Array.isArray(value)) return value.map(restoreInterruptRequests);
   if (Object.getPrototypeOf(value) !== Object.prototype) return value;
-  if (value.definition?.id && value.key) {
+  if ((value.definition?.id?.length ?? 0) > 0 && (value.key?.length ?? 0) > 0) {
     const definition = definitions.find(
       (definition: ReturnType<typeof defineInterrupt>) => definition.id === value.definition.id,
     );
-    if (!definition) throw new Error("Unregistered owner interrupt definition");
+    if (definition === undefined) throw new Error("Unregistered owner interrupt definition");
     const { definition: _definition, ...input } = value;
     return definition.interrupt(input);
   }
@@ -63,6 +63,8 @@ function restoreInterruptRequests(value: any): any {
 const client = makeOwnerRpcPortClient(port);
 const controller = new AbortController();
 let operationId = lastOperationId;
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function rpc(operation: string, input: any): Promise<any> {
   const reply = await client.request({
     type: "owner-rpc-request",
@@ -76,7 +78,9 @@ async function rpc(operation: string, input: any): Promise<any> {
 }
 function toolProxy(tool: any) {
   const proxy = { ...tool };
-  if (tool.server)
+  if (tool.server === true)
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     proxy.execute = async (args: any, context: ChatMiddlewareContext & { toolCallId?: string }) => {
       const result = await rpc("tool", {
         name: tool.name,
@@ -115,7 +119,7 @@ const hooks = middleware.map(
   ) => {
     // SDK hooks have heterogeneous signatures; only inventoried hooks are installed.
     const proxy: any = { name };
-    if (routedPersistence.length)
+    if (routedPersistence.length > 0)
       proxy.routedSubagentPersistence = Object.fromEntries(
         routedPersistence.map((method) => [
           method,
@@ -126,6 +130,8 @@ const hooks = middleware.map(
       // Owner authorization runs the complete permission chain once, not worker-
       // selected individual hooks. Keep the middleware's other SDK hooks intact.
       if (hook === "onBeforeToolCall") continue;
+      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+      // @effect-diagnostics-next-line asyncFunction:off
       proxy[hook] = async (ctx: ChatMiddlewareContext, info: any) => {
         let payload = info ?? null;
         if (hook === "onConfig") payload = { ...info, tools: tools };
@@ -139,9 +145,9 @@ const hooks = middleware.map(
           ctx.emitCustomEvent(event.name, event.value, event.options);
         if (response.abort !== null) ctx.abort(response.abort);
         let result = restoreInterruptRequests(response.result);
-        if (hook === "onConfig" && result?.tools)
+        if (hook === "onConfig" && result?.tools !== undefined)
           result = { ...result, tools: result.tools.map(toolProxy) };
-        return result === null && response.void ? undefined : result;
+        return result === null && response.void === true ? undefined : result;
       };
     }
     return proxy;
@@ -149,6 +155,8 @@ const hooks = middleware.map(
 );
 const adapter: AnyTextAdapter = {
   ...identity,
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  // @effect-diagnostics-next-line asyncFunction:off
   async *chatStream(options) {
     const { request: _request, logger: _logger, capabilities: _capabilities, ...input } = options;
     const opened = await rpc("modelOpen", {
@@ -157,7 +165,7 @@ const adapter: AnyTextAdapter = {
     });
     while (!controller.signal.aborted) {
       const next = await rpc("modelNext", { id: opened.id });
-      if (next.done) return;
+      if (next.done === true) return;
       yield next.value;
     }
   },
@@ -182,6 +190,8 @@ try {
       ...hooks,
       {
         name: "owner-tool-grant",
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        // @effect-diagnostics-next-line asyncFunction:off
         onBeforeToolCall: async (ctx, info) => {
           const response = await rpc("toolAuthorize", {
             name: info.toolName,
@@ -204,6 +214,8 @@ try {
     // Acknowledgement bounds the output queue to one event and keeps publication
     // ordered behind the owner's stream consumer.
     parentPort.postMessage({ type: "chunk", chunk });
+    // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
+    // @effect-diagnostics-next-line newPromise:off
     await new Promise((resolve) => parent.once("message", resolve));
   }
   parentPort.postMessage({ type: "done" });

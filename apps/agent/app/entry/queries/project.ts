@@ -6,6 +6,8 @@ export const projectQueries = {
   sessions: (projectId: string) =>
     queryOptions({
       queryKey: appQueryKeys.project.sessions(projectId),
+      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+      // @effect-diagnostics-next-line asyncFunction:off
       queryFn: async () => ({
         active: await api.sessions(projectId),
         archived: await api.archivedSessions(projectId),
@@ -48,10 +50,14 @@ export function useProjectSessionsQuery(projectId: string | null) {
 
 export const useAgentsQuery = (projectId: string | null) =>
   useQuery({ ...projectQueries.agents(projectId ?? ""), enabled: projectId !== null });
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export const useSkillsQuery = (projectId: string, enabled: boolean) =>
   useQuery({ ...projectQueries.skills(projectId), enabled });
 export const useProjectTraceQuery = (projectId: string) =>
   useQuery(projectQueries.trace(projectId));
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export const useProjectTraceTaskQuery = (projectId: string, taskId: string | null) =>
   useQuery({ ...projectQueries.traceTask(projectId, taskId ?? ""), enabled: taskId !== null });
 export const useSuspenseMcpQuery = (projectId: string) =>

@@ -1,3 +1,5 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics nodeBuiltinImport:off
 import { createHash } from "node:crypto";
 import { Effect, Layer } from "effect";
 import { Embedder, normalize } from "../memory/embedding/embedder.ts";

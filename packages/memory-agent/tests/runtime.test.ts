@@ -1,3 +1,6 @@
+// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
+// @effect-diagnostics asyncFunction:off newPromise:off nodeBuiltinImport:off
+import { isTruthy } from "../src/truthy.ts";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -34,7 +37,7 @@ function tempDir() {
 async function archiveServer(files: Record<string, Buffer>) {
   const server: Server = createServer((request, response) => {
     const body = files[request.url ?? ""];
-    if (!body) return void response.writeHead(404).end();
+    if (!isTruthy(body)) return void response.writeHead(404).end();
     response.writeHead(200, { "content-type": "application/gzip" }).end(body);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));

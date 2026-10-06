@@ -1,3 +1,4 @@
+import { isTruthy } from "../src/truthy.ts";
 import { encodingForModel, getEncoding, getEncodingNameForModel } from "js-tiktoken";
 
 type KnownModel = Parameters<typeof encodingForModel>[0];
@@ -12,13 +13,15 @@ export interface RequestTokenEstimate {
 const encoders = new Map<string, ReturnType<typeof getEncoding>>();
 const encoderFor = (name: Parameters<typeof getEncoding>[0]) => {
   let encoder = encoders.get(name);
-  if (!encoder) {
+  if (!isTruthy(encoder)) {
     encoder = getEncoding(name);
     encoders.set(name, encoder);
   }
   return encoder;
 };
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export const estimateRequestTokens = (
   serializedRequest: string,
   model: string,
@@ -41,6 +44,8 @@ export const estimateRequestTokens = (
 };
 
 /** A conservative pilot stop, not a guarantee about server-side tokens or cache hits. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export const exceedsRequestTokenBudget = (
   estimate: RequestTokenEstimate,
   maxEstimatedTokens: number,

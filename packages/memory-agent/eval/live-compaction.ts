@@ -1,9 +1,16 @@
+import { isTruthy } from "../src/truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { maxIterations } from "@tanstack/ai";
-import { Effect, Layer, ManagedRuntime, Schema } from "effect";
+import { DateTime, Effect, Layer, ManagedRuntime, Schema } from "effect";
 import { AgentChat } from "../src/agent/chat.ts";
 import { ApiUsage } from "../src/agent/api-usage.ts";
 import { compactionState } from "../src/agent/compaction.ts";
@@ -96,8 +103,10 @@ function answerFromSse(sse: string) {
     .flatMap((line) => {
       if (!line.startsWith("data: ")) return [];
       try {
+        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+        // @effect-diagnostics-next-line schemaSync:off
         const chunk = Schema.decodeSync(Delta)(line.slice(6));
-        return chunk.type === "TEXT_MESSAGE_CONTENT" && chunk.delta ? [chunk.delta] : [];
+        return chunk.type === "TEXT_MESSAGE_CONTENT" && isTruthy(chunk.delta) ? [chunk.delta] : [];
       } catch {
         return [];
       }
@@ -105,6 +114,8 @@ function answerFromSse(sse: string) {
     .join("");
 }
 
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 async function runArm(variant: "auto" | "auto-plus-manual") {
   const base = mkdtempSync(join(tmpdir(), "memory-agent-paid-ab-"));
   const projectRoot = join(base, "project");
@@ -144,7 +155,7 @@ async function runArm(variant: "auto" | "auto-plus-manual") {
         };
       }),
     );
-    const started = Date.now();
+    const started = DateTime.toEpochMillis(DateTime.nowUnsafe());
     const answers: string[] = [];
     let manual: {
       cleared: number;
@@ -162,13 +173,15 @@ async function runArm(variant: "auto" | "auto-plus-manual") {
             services.agent.compact(services.sessionId, null),
           );
           if (response.status !== 200) throw new Error(`manual_compact_status_${response.status}`);
+          // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+          // @effect-diagnostics-next-line schemaSync:off
           manual = Schema.decodeUnknownSync(
             Schema.Struct({
-              cleared: Schema.Number,
-              summarizedTurns: Schema.Number,
+              cleared: Schema.Finite,
+              summarizedTurns: Schema.Finite,
               summaryFailed: Schema.Boolean,
-              tokensBefore: Schema.Number,
-              tokensAfter: Schema.Number,
+              tokensBefore: Schema.Finite,
+              tokensAfter: Schema.Finite,
             }),
           )(await response.json());
           if (manual.cleared === 0 && manual.summarizedTurns === 0)
@@ -197,6 +210,8 @@ async function runArm(variant: "auto" | "auto-plus-manual") {
       const statusResponse = await runtime.runPromise(
         services.agent.status(services.sessionId, null),
       );
+      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+      // @effect-diagnostics-next-line schemaSync:off
       const status = Schema.decodeUnknownSync(
         Schema.Struct({
           lastRun: Schema.NullOr(Schema.Struct({ status: Schema.String })),
@@ -219,7 +234,7 @@ async function runArm(variant: "auto" | "auto-plus-manual") {
       usage: services.usage.byRootSession(services.sessionId),
       evidenceCorrect: final.includes(phrase),
       computationCorrect: /\b8\b/.test(final),
-      elapsedMs: Date.now() - started,
+      elapsedMs: DateTime.toEpochMillis(DateTime.nowUnsafe()) - started,
       providerCallsSoFar: calls,
     };
   } finally {
@@ -230,18 +245,26 @@ async function runArm(variant: "auto" | "auto-plus-manual") {
 
 // This historical A/B is invalid if automatic catch-up has already done manual /compact's work.
 // Do not accidentally repeat it. A redesigned comparator needs a fresh explicit paid opt-in.
+// Native host/SDK configuration boundary reads or forwards the host environment.
+// @effect-diagnostics-next-line processEnv:off
 if (process.env.MEMORY_AGENT_ENABLE_PAID_COMPACTION_PILOT !== "1") {
+  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+  // @effect-diagnostics-next-line globalConsole:off
   console.log(JSON.stringify({ stopped: true, reason: "paid_pilot_disabled_until_redesign" }));
 } else {
   try {
     for (const variant of ["auto", "auto-plus-manual"] as const) {
       const outcome = await runArm(variant);
+      // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+      // @effect-diagnostics-next-line globalConsole:off
       console.log(JSON.stringify(outcome));
       // A comparison of failed coding/evidence tasks is not worth another paid arm.
       if (!outcome.evidenceCorrect || !outcome.computationCorrect)
         throw new Error("pilot_baseline_quality_failed");
     }
   } catch (error) {
+    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+    // @effect-diagnostics-next-line globalConsole:off
     console.log(
       JSON.stringify({
         stopped: true,

@@ -16,6 +16,8 @@ const keychainFailed = (operation: string) =>
   Response.json({ error: "keychain_failed", reason: operation }, { status: 500 });
 
 /** GET /api/settings/kagi: whether a key is registered and Kagi is on. The key is never returned. */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function loader() {
   return agent.runPromise(
     Effect.flatMap(Kagi, (kagi) => kagi.status).pipe(
@@ -33,9 +35,11 @@ export async function loader() {
  * - `enable` / `disable`: turns Search and Extract on or off for every project.
  * - `remove`: deletes the key and turns Kagi off.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
-  if (rejected) return rejected;
+  if (rejected !== null) return rejected;
   const body = await readJson(request, KagiAction);
   if (Result.isFailure(body))
     return Response.json({ error: "invalid_kagi_action" }, { status: 400 });

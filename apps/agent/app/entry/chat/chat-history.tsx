@@ -38,9 +38,16 @@ export function ChatHistory({
   const [initialScrollDone, setInitialScrollDone] = useState(false);
   const [olderLoadFailed, setOlderLoadFailed] = useState(false);
   const loadPreviousMessages = useCallback(
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    // @effect-diagnostics-next-line asyncFunction:off
     async (retry = false) => {
       const scroll = viewport.current;
-      if (!scroll || !hasOlderMessages || pendingPrepend.current || (olderLoadFailed && !retry))
+      if (
+        !(scroll !== null) ||
+        !hasOlderMessages ||
+        pendingPrepend.current !== null ||
+        (olderLoadFailed && !retry)
+      )
         return;
       pendingPrepend.current = {
         count: messages.length,
@@ -61,7 +68,7 @@ export function ChatHistory({
 
   useLayoutEffect(() => {
     const scroll = viewport.current;
-    if (!scroll || messages.length === 0) return;
+    if (!(scroll !== null) || messages.length === 0) return;
     if (!initialScrollDone) {
       scroll.scrollTop = scroll.scrollHeight;
       pinnedToBottom.current = true;
@@ -69,7 +76,7 @@ export function ChatHistory({
       return;
     }
     const prepend = pendingPrepend.current;
-    if (prepend) {
+    if (prepend !== null) {
       if (messages.length > prepend.count) {
         // Keep the old viewport content in place when a page is inserted above it.
         scroll.scrollTop = prepend.scrollTop + scroll.scrollHeight - prepend.scrollHeight;
@@ -85,9 +92,9 @@ export function ChatHistory({
   useEffect(() => {
     const scroll = viewport.current;
     const target = content.current;
-    if (!scroll || !target) return;
+    if (!(scroll !== null) || !(target !== null)) return;
     const observer = new ResizeObserver(() => {
-      if (initialScrollDone && pinnedToBottom.current && !pendingPrepend.current)
+      if (initialScrollDone && pinnedToBottom.current && !(pendingPrepend.current !== null))
         scroll.scrollTop = scroll.scrollHeight;
     });
     observer.observe(target);
@@ -97,7 +104,14 @@ export function ChatHistory({
   useEffect(() => {
     const scroll = viewport.current;
     const target = topSentinel.current;
-    if (!initialScrollDone || !hasOlderMessages || olderLoadFailed || !scroll || !target) return;
+    if (
+      !initialScrollDone ||
+      !hasOlderMessages ||
+      olderLoadFailed ||
+      !(scroll !== null) ||
+      !(target !== null)
+    )
+      return;
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry?.isIntersecting) void loadPreviousMessages();

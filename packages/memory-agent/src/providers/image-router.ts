@@ -106,7 +106,7 @@ export interface ImageRouteFactsApi {
 }
 
 export class ImageRouteFacts extends Context.Service<ImageRouteFacts, ImageRouteFactsApi>()(
-  "memory-agent/ImageRouteFacts",
+  "memory-agent/providers/image-router/ImageRouteFacts",
 ) {
   static readonly layerFrom = (api: ImageRouteFactsApi) => Layer.succeed(ImageRouteFacts, api);
   static readonly unavailableLayer = Layer.succeed(ImageRouteFacts, {
@@ -123,8 +123,8 @@ export class ImageRouteFacts extends Context.Service<ImageRouteFacts, ImageRoute
       ),
   });
   static readonly authenticatedRoutesLayer = Layer.succeed(ImageRouteFacts, {
-    forRoutes: (routes) => {
-      return Effect.succeed(
+    forRoutes: (routes) =>
+      Effect.succeed(
         routes.map((route) => {
           const available =
             route.executionMode === "direct_adapter" && route.authentication.verified;
@@ -146,8 +146,7 @@ export class ImageRouteFacts extends Context.Service<ImageRouteFacts, ImageRoute
             ],
           };
         }),
-      );
-    },
+      ),
   });
 }
 
@@ -298,6 +297,8 @@ export interface ImageRouterApi {
   >;
 }
 
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function makeImageRouter(
   catalog: RouteCatalogApi,
   factsService: ImageRouteFactsApi,
@@ -448,7 +449,7 @@ export function makeImageRouter(
 }
 
 export class ImageRouter extends Context.Service<ImageRouter, ImageRouterApi>()(
-  "memory-agent/ImageRouter",
+  "memory-agent/providers/image-router/ImageRouter",
 ) {
   static readonly layer = Layer.effect(
     ImageRouter,

@@ -24,9 +24,11 @@ const ImageMediaRequest = Schema.Struct({
 });
 
 /** POST /api/media/image — paid direct media workflow, deliberately outside chat tool context. */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
-  if (rejected) return rejected;
+  if (rejected !== null) return rejected;
   const body = await readJson(request, ImageMediaRequest);
   if (Result.isFailure(body))
     return Response.json({ error: "invalid_image_request" }, { status: 400 });

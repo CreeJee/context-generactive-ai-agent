@@ -11,9 +11,11 @@ const OpenReport = Schema.Struct({
 });
 
 /** Explicit same-origin opening; no chat run or original-session mutation. */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
-  if (rejected) return rejected;
+  if (rejected !== null) return rejected;
   const decoded = await readJson(request, OpenReport);
   if (Result.isFailure(decoded))
     return Response.json({ error: "invalid_report_source" }, { status: 400 });
@@ -24,7 +26,8 @@ export async function action({ request }: Route.ActionArgs) {
     Effect.gen(function* () {
       const { sqlite } = yield* Database;
       const result = openReportSession(sqlite, projectId, sourceSessionId);
-      if (!result) return Response.json({ error: "report_source_not_found" }, { status: 404 });
+      if (!(result !== null))
+        return Response.json({ error: "report_source_not_found" }, { status: 404 });
       (yield* AppEvents).publishProject(projectId, "sessions");
       return Response.json(result, { headers: { "Cache-Control": "no-store" } });
     }),

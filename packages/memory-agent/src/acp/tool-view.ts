@@ -1,3 +1,6 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { resolve } from "node:path";
 import type { ToolKind } from "@agentclientprotocol/sdk";
 import { Option, Schema } from "effect";
@@ -34,9 +37,9 @@ const views = new Map<string, ToolView>([
 
 export function toolView(name: string): ToolView {
   const known = views.get(name);
-  if (known) return known;
+  if (isTruthy(known)) return known;
   const mcp = /^mcp_([A-Za-z0-9_-]+?)__(.+)$/.exec(name);
-  return { title: mcp ? `MCP ${mcp[1]} · ${mcp[2]}` : name, kind: "other" };
+  return { title: isTruthy(mcp) ? `MCP ${mcp[1]} · ${mcp[2]}` : name, kind: "other" };
 }
 
 const PathArguments = Schema.fromJsonString(
@@ -61,6 +64,8 @@ export function toolDetail(argumentsJson: string): string | null {
 }
 
 /** Absolute paths a call touches, for editors that follow along. Project-relative ones are resolved. */
+// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+// @effect-diagnostics-next-line missingPipeableSignature:off
 export function toolLocations(argumentsJson: string, projectRoot: string) {
   return Option.match(decodePathArguments(argumentsJson), {
     onNone: () => [],

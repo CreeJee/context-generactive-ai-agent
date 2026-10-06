@@ -21,6 +21,8 @@ const projectNotFound = () =>
  * GET /api/projects/:project/agents: external ACP agents from `<storage>/agents.json` and
  * `<project>/.agents/agents.json`, with trust and connection state. Environment values are hidden.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function loader({ params }: Route.LoaderArgs) {
   return agent.runPromise(
     Effect.gen(function* () {
@@ -35,9 +37,11 @@ export async function loader({ params }: Route.LoaderArgs) {
  * - `trust` { scope, name, trusted }: allow (or stop) starting that exact configuration.
  * - `reconnect` { name }: after automatic reconnecting gave up, try again.
  */
+// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request, params }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
-  if (rejected) return rejected;
+  if (rejected !== null) return rejected;
   const body = await readJson(request, AgentChange);
   if (Result.isFailure(body))
     return Response.json({ error: "invalid_agent_change" }, { status: 400 });

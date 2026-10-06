@@ -86,7 +86,7 @@ export const ProviderModel = Schema.Struct({
   defaultReasoningEffort: Schema.String,
   supportedReasoningEfforts: Schema.Array(Schema.String),
   /** Model-advertised input context size, when the provider catalog supplies one. */
-  contextWindow: Schema.optional(Schema.Number),
+  contextWindow: Schema.optional(Schema.Finite),
   capabilities: ModelCapabilities,
 });
 export type ProviderModel = typeof ProviderModel.Type;

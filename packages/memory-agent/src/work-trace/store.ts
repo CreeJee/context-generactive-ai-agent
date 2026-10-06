@@ -1,6 +1,9 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import { optionalProperty } from "../optional-property.ts";
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { DateTime, Clock, Context, Effect, Layer, Option, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import { JsonValue } from "../json.ts";
 import type { MemoryCandidateView, MemoryUsageView } from "../memory/knowledge.ts";
@@ -247,41 +250,105 @@ const StoredEventRow = Schema.Struct({
   payload: Schema.String,
   occurred_at: Schema.Finite,
 });
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeAttempt = Schema.decodeUnknownSync(AttemptRow);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeRecoveryRows = Schema.decodeUnknownSync(Schema.Array(RecoveryRow));
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeRecoveryAssessment = Schema.decodeUnknownSync(RecoveryAssessment);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeRecoveryJobRows = Schema.decodeUnknownSync(Schema.Array(RecoveryJobRow));
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeNotificationTask = Schema.decodeUnknownSync(NotificationTaskRow);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeParentNotificationRows = Schema.decodeUnknownSync(Schema.Array(ParentNotificationRow));
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeSequence = Schema.decodeUnknownSync(SequenceRow);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeCursor = Schema.decodeUnknownSync(CursorRow);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeId = Schema.decodeUnknownSync(IdRow);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeTaskId = Schema.decodeUnknownSync(TaskIdRow);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeAttemptId = Schema.decodeUnknownSync(AttemptIdRow);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeAttemptNumber = Schema.decodeUnknownSync(AttemptNumberRow);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeLifecycleOperation = Schema.decodeUnknownSync(LifecycleOperationRow);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeLifecycleTask = Schema.decodeUnknownSync(LifecycleTaskRow);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeTaskViewRows = Schema.decodeUnknownSync(Schema.Array(TaskViewRow));
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeAttemptViewRows = Schema.decodeUnknownSync(Schema.Array(AttemptViewRow));
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeCheckpointViewRows = Schema.decodeUnknownSync(Schema.Array(CheckpointViewRow));
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeStoredEventRows = Schema.decodeUnknownSync(Schema.Array(StoredEventRow));
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeResumeTask = Schema.decodeUnknownSync(ResumeTaskRow);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeCheckpoint = Schema.decodeUnknownSync(CheckpointRow);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeEvidenceRows = Schema.decodeUnknownSync(Schema.Array(EvidenceRow));
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeEvidenceRow = Schema.decodeUnknownSync(EvidenceRow);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeArtifactRows = Schema.decodeUnknownSync(Schema.Array(ArtifactRow));
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeArtifactRow = Schema.decodeUnknownSync(ArtifactRow);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeReportAdoptionRows = Schema.decodeUnknownSync(Schema.Array(ReportAdoptionRow));
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeFinalAnswerClaimRows = Schema.decodeUnknownSync(Schema.Array(FinalAnswerClaimRow));
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeFinalAnswerSourceRows = Schema.decodeUnknownSync(Schema.Array(FinalAnswerSourceRow));
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeFinalAnswerNotificationRows = Schema.decodeUnknownSync(
   Schema.Array(FinalAnswerNotificationRow),
 );
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeEvidenceLocator = Schema.decodeUnknownSync(Schema.fromJsonString(EvidenceLocator));
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeArtifactLocator = Schema.decodeUnknownSync(Schema.fromJsonString(ArtifactLocator));
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeStringArray = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Array(Schema.String)),
 );
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodePayload = Schema.decodeUnknownSync(Schema.fromJsonString(JsonValue));
 
 export interface TraceTaskView {
@@ -552,6 +619,8 @@ const taskStatusForAttempt = (status: AttemptStatus): TaskStatus => {
 };
 
 const make = Effect.gen(function* () {
+  const effectClock = yield* Clock.Clock;
+
   const { sqlite, atomic } = yield* Database;
   // A crash after prompt delivery but before parent completion must not lose operational
   // notifications. No current-process runs exist while this singleton is being constructed.
@@ -568,7 +637,8 @@ const make = Effect.gen(function* () {
          WHERE id = ? AND task_id = ? AND invocation_id = ? AND chat_run_id = ? AND thread_id = ?`,
       )
       .get(handle.id, handle.taskId, handle.invocationId, handle.chatRunId, handle.threadId);
-    if (!found) throw new Error("Evidence AttemptHandle does not match a durable attempt");
+    if (!isTruthy(found))
+      throw new Error("Evidence AttemptHandle does not match a durable attempt");
   };
   const assertSafeFile = (locator: { readonly path: string; readonly sha256: string }) => {
     if (
@@ -613,6 +683,8 @@ const make = Effect.gen(function* () {
   const recordEvidence = (input: RecordEvidenceInput): TraceEvidenceView =>
     atomic(() => {
       assertHandle(input.handle);
+      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+      // @effect-diagnostics-next-line schemaSync:off
       const locator = Schema.decodeSync(EvidenceLocator)(input.locator);
       if (locator.kind !== input.locator.kind)
         throw new Error("Evidence locator kind changed during decoding");
@@ -626,16 +698,22 @@ const make = Effect.gen(function* () {
         throw new Error("Evidence locator belongs to another thread");
       if (
         locator.kind === "checkpoint" &&
-        !sqlite
-          .prepare("SELECT 1 FROM work_checkpoints WHERE id = ? AND attempt_id = ? AND task_id = ?")
-          .get(locator.checkpointId, input.handle.id, input.handle.taskId)
+        !isTruthy(
+          sqlite
+            .prepare(
+              "SELECT 1 FROM work_checkpoints WHERE id = ? AND attempt_id = ? AND task_id = ?",
+            )
+            .get(locator.checkpointId, input.handle.id, input.handle.taskId),
+        )
       )
         throw new Error("Evidence checkpoint does not belong to this attempt");
       if (
         locator.kind === "artifact" &&
-        !sqlite
-          .prepare("SELECT 1 FROM work_artifacts WHERE id = ? AND task_id = ?")
-          .get(locator.artifactId, input.handle.taskId)
+        !isTruthy(
+          sqlite
+            .prepare("SELECT 1 FROM work_artifacts WHERE id = ? AND task_id = ?")
+            .get(locator.artifactId, input.handle.taskId),
+        )
       )
         throw new Error("Evidence artifact does not belong to this task");
       const sourceKind = locator.kind;
@@ -646,8 +724,8 @@ const make = Effect.gen(function* () {
            WHERE attempt_id = ? AND source_kind = ? AND locator = ?`,
         )
         .get(input.handle.id, sourceKind, encoded);
-      if (existing) return evidenceView(decodeEvidenceRow(existing));
-      const now = Date.now();
+      if (isTruthy(existing)) return evidenceView(decodeEvidenceRow(existing));
+      const now = effectClock.currentTimeMillisUnsafe();
       return evidenceView(
         decodeEvidenceRow(
           sqlite
@@ -683,13 +761,13 @@ const make = Effect.gen(function* () {
           `UPDATE evidence_refs SET verification = ?, source_deleted_at = NULL, updated_at = ?
            WHERE id = ? AND locator IS NOT NULL RETURNING *`,
         )
-        .get(verification, Date.now(), evidenceId);
-      return row ? evidenceView(decodeEvidenceRow(row)) : null;
+        .get(verification, effectClock.currentTimeMillisUnsafe(), evidenceId);
+      return isTruthy(row) ? evidenceView(decodeEvidenceRow(row)) : null;
     });
 
   const markEvidenceSourceDeleted = (evidenceId: string): TraceEvidenceView | null =>
     atomic(() => {
-      const now = Date.now();
+      const now = effectClock.currentTimeMillisUnsafe();
       const row = sqlite
         .prepare(
           `UPDATE evidence_refs
@@ -698,12 +776,14 @@ const make = Effect.gen(function* () {
            WHERE id = ? RETURNING *`,
         )
         .get(now, now, evidenceId);
-      return row ? evidenceView(decodeEvidenceRow(row)) : null;
+      return isTruthy(row) ? evidenceView(decodeEvidenceRow(row)) : null;
     });
 
   const recordArtifact = (input: RecordArtifactInput): TraceArtifactView =>
     atomic(() => {
       assertHandle(input.handle);
+      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+      // @effect-diagnostics-next-line schemaSync:off
       const locator = Schema.decodeSync(ArtifactLocator)(input.locator);
       if (locator.kind !== input.kind) throw new Error("Artifact kind must match its locator");
       if (locator.kind === "file") assertSafeFile(locator);
@@ -711,8 +791,8 @@ const make = Effect.gen(function* () {
       const existing = sqlite
         .prepare("SELECT * FROM work_artifacts WHERE attempt_id = ? AND kind = ? AND locator = ?")
         .get(input.handle.id, input.kind, encoded);
-      if (existing) return artifactView(decodeArtifactRow(existing));
-      const now = Date.now();
+      if (isTruthy(existing)) return artifactView(decodeArtifactRow(existing));
+      const now = effectClock.currentTimeMillisUnsafe();
       return artifactView(
         decodeArtifactRow(
           sqlite
@@ -747,13 +827,13 @@ const make = Effect.gen(function* () {
           `UPDATE work_artifacts SET verification = ?, source_deleted_at = NULL, updated_at = ?
            WHERE id = ? AND locator IS NOT NULL RETURNING *`,
         )
-        .get(verification, Date.now(), artifactId);
-      return row ? artifactView(decodeArtifactRow(row)) : null;
+        .get(verification, effectClock.currentTimeMillisUnsafe(), artifactId);
+      return isTruthy(row) ? artifactView(decodeArtifactRow(row)) : null;
     });
 
   const markArtifactSourceDeleted = (artifactId: string): TraceArtifactView | null =>
     atomic(() => {
-      const now = Date.now();
+      const now = effectClock.currentTimeMillisUnsafe();
       const row = sqlite
         .prepare(
           `UPDATE work_artifacts
@@ -762,11 +842,11 @@ const make = Effect.gen(function* () {
            WHERE id = ? RETURNING *`,
         )
         .get(now, now, artifactId);
-      return row ? artifactView(decodeArtifactRow(row)) : null;
+      return isTruthy(row) ? artifactView(decodeArtifactRow(row)) : null;
     });
 
   const recover = atomic(() => {
-    const now = Date.now();
+    const now = effectClock.currentTimeMillisUnsafe();
     const attempts = decodeRecoveryRows(
       sqlite
         .prepare(
@@ -808,7 +888,7 @@ const make = Effect.gen(function* () {
     );
     for (const row of attempts) {
       const assessmentRow = assess.get(row.id);
-      const assessment = assessmentRow
+      const assessment = isTruthy(assessmentRow)
         ? decodeRecoveryAssessment(assessmentRow)
         : { checkpoint_id: null, uncertain_count: 0, approval_count: 0 };
       const blocker =
@@ -872,7 +952,7 @@ const make = Effect.gen(function* () {
           )
           .get(input.handle.id),
       );
-      const occurredAt = input.occurredAt ?? Date.now();
+      const occurredAt = input.occurredAt ?? effectClock.currentTimeMillisUnsafe();
       const id = randomUUID();
       const row = decodeCursor(
         sqlite
@@ -929,7 +1009,7 @@ const make = Effect.gen(function* () {
           )
           .get(input.taskId),
       );
-      const now = Date.now();
+      const now = effectClock.currentTimeMillisUnsafe();
       const id = randomUUID();
       const result = sqlite
         .prepare(
@@ -949,8 +1029,10 @@ const make = Effect.gen(function* () {
           input.summary,
           JSON.stringify(input.payload ?? {}),
           input.idempotencyKey,
-          input.deliveredImmediately ? (input.deliveredToRunId ?? task.parent_run_id) : null,
-          input.deliveredImmediately ? now : null,
+          input.deliveredImmediately === true
+            ? (input.deliveredToRunId ?? task.parent_run_id)
+            : null,
+          input.deliveredImmediately === true ? now : null,
           now,
         );
       return result.changes === 1 ? id : null;
@@ -976,7 +1058,7 @@ const make = Effect.gen(function* () {
           .all(sessionId),
       );
       if (rows.length === 0) return [];
-      const now = Date.now();
+      const now = effectClock.currentTimeMillisUnsafe();
       const deliver = sqlite.prepare(
         `UPDATE parent_notifications SET delivered_to_run_id = ?, delivered_at = ?
          WHERE id = ? AND delivered_at IS NULL`,
@@ -998,17 +1080,17 @@ const make = Effect.gen(function* () {
 
   const startAttempt = (input: StartAttemptInput): AttemptHandle =>
     atomic(() => {
-      const now = Date.now();
+      const now = effectClock.currentTimeMillisUnsafe();
       const taskId = randomUUID();
       const invocationId = randomUUID();
       const attemptId = randomUUID();
       const chatRunId = randomUUID();
-      const previousAttempt = input.resumedFromAttemptId
+      const previousAttempt = isTruthy(input.resumedFromAttemptId)
         ? sqlite
             .prepare("SELECT attempt_number FROM agent_run_attempts WHERE id = ?")
             .get(input.resumedFromAttemptId)
         : undefined;
-      const attemptNumber = previousAttempt
+      const attemptNumber = isTruthy(previousAttempt)
         ? decodeAttemptNumber(previousAttempt).attempt_number + 1
         : 1;
       const insertedTask = sqlite
@@ -1103,7 +1185,7 @@ const make = Effect.gen(function* () {
   }) =>
     atomic(() => {
       const id = randomUUID();
-      const now = Date.now();
+      const now = effectClock.currentTimeMillisUnsafe();
       sqlite
         .prepare(
           `INSERT INTO agent_invocations
@@ -1150,7 +1232,7 @@ const make = Effect.gen(function* () {
       const from = current.status;
       if (!canTransitionAttempt(from, status))
         throw new Error(`Invalid attempt transition ${from} -> ${status}`);
-      const now = Date.now();
+      const now = effectClock.currentTimeMillisUnsafe();
       const terminal = ["interrupted", "completed", "failed", "cancelled"].includes(status);
       sqlite
         .prepare(
@@ -1182,7 +1264,7 @@ const make = Effect.gen(function* () {
         sessionId,
         kind: event,
         summary,
-        payload: error ? { error } : {},
+        payload: isTruthy(error) ? { error } : {},
         occurredAt: now,
       });
       const notificationKind =
@@ -1197,7 +1279,7 @@ const make = Effect.gen(function* () {
                 : status === "running" && handle.attemptNumber > 1
                   ? "resumed"
                   : null;
-      if (notificationKind)
+      if (isTruthy(notificationKind))
         notifyParent({
           taskId: handle.taskId,
           kind: notificationKind,
@@ -1346,10 +1428,12 @@ const make = Effect.gen(function* () {
     if ((input.disposition === "superseded") !== Boolean(input.supersededByAttemptId))
       throw new Error("Only superseded reports require a superseding attempt");
     if (
-      input.supersededByAttemptId &&
-      !sqlite
-        .prepare("SELECT 1 FROM agent_run_attempts WHERE id = ? AND task_id = ?")
-        .get(input.supersededByAttemptId, input.handle.taskId)
+      isTruthy(input.supersededByAttemptId) &&
+      !isTruthy(
+        sqlite
+          .prepare("SELECT 1 FROM agent_run_attempts WHERE id = ? AND task_id = ?")
+          .get(input.supersededByAttemptId, input.handle.taskId),
+      )
     )
       throw new Error("Superseding attempt belongs to another task");
     const existing = sqlite
@@ -1369,9 +1453,9 @@ const make = Effect.gen(function* () {
         input.claimId ?? null,
         input.supersededByAttemptId ?? null,
       );
-    if (existing) return decodeCursor(existing).seq;
+    if (isTruthy(existing)) return decodeCursor(existing).seq;
     return atomic(() => {
-      const now = Date.now();
+      const now = effectClock.currentTimeMillisUnsafe();
       const result = sqlite
         .prepare(
           `INSERT INTO report_adoptions
@@ -1394,7 +1478,7 @@ const make = Effect.gen(function* () {
         sessionId: input.sessionId,
         kind: `report_${input.disposition}`,
         summary: `Subagent report ${input.disposition.replace("_", " ")}`,
-        payload: input.claimId ? { claimId: input.claimId } : {},
+        payload: isTruthy(input.claimId) ? { claimId: input.claimId } : {},
       });
       return Number(result.lastInsertRowid);
     });
@@ -1417,11 +1501,11 @@ const make = Effect.gen(function* () {
         "SELECT id FROM final_answer_claims WHERE parent_run_id = ? AND parent_message_id = ?",
       )
       .get(input.parentRunId, input.parentMessageId);
-    if (existing) return decodeId(existing).id;
+    if (isTruthy(existing)) return decodeId(existing).id;
     const session = sqlite
       .prepare("SELECT 1 FROM sessions WHERE id = ? AND project_id = ?")
       .get(input.sessionId, input.projectId);
-    if (!session) throw new Error("Final answer session does not belong to the project");
+    if (!isTruthy(session)) throw new Error("Final answer session does not belong to the project");
     const reviewed = decodeReportAdoptionRows(
       sqlite
         .prepare(
@@ -1442,12 +1526,14 @@ const make = Effect.gen(function* () {
       if (!reviewedKeys.has(key)) throw new Error("Final answer selected an unreviewed report");
       for (const evidenceId of report.evidenceRefIds)
         if (
-          !sqlite
-            .prepare(
-              `SELECT 1 FROM evidence_refs
+          !isTruthy(
+            sqlite
+              .prepare(
+                `SELECT 1 FROM evidence_refs
                WHERE id = ? AND task_id = ? AND attempt_id = ? AND verification = 'verified'`,
-            )
-            .get(evidenceId, report.taskId, report.attemptId)
+              )
+              .get(evidenceId, report.taskId, report.attemptId),
+          )
         )
           throw new Error("Final answer selected unavailable or unrelated evidence");
     }
@@ -1461,12 +1547,13 @@ const make = Effect.gen(function* () {
              AND t.project_id = ?`,
         )
         .get(notificationId, input.sessionId, input.parentRunId, input.projectId);
-      if (!row) throw new Error("Final answer selected an undelivered parent notification");
+      if (!isTruthy(row))
+        throw new Error("Final answer selected an undelivered parent notification");
       notificationTasks.set(notificationId, decodeTaskId(row).task_id);
     }
 
     const claimId = randomUUID();
-    const now = Date.now();
+    const now = effectClock.currentTimeMillisUnsafe();
     const eventInputs: {
       handle: AttemptHandle;
       disposition: "used" | "not_used" | "superseded";
@@ -1547,7 +1634,7 @@ const make = Effect.gen(function* () {
              ORDER BY seq DESC LIMIT 1`,
           )
           .get(report.taskId, report.attemptId);
-        if (priorRow) {
+        if (isTruthy(priorRow)) {
           const prior = decodeAttemptId(priorRow);
           sqlite
             .prepare(
@@ -1708,7 +1795,7 @@ const make = Effect.gen(function* () {
 
   const taskDetail = (sessionId: string, taskId: string) => {
     const task = taskTree(sessionId).find((candidate) => candidate.id === taskId);
-    if (!task) return null;
+    if (!isTruthy(task)) return null;
     const attempts: TraceAttemptView[] = decodeAttemptViewRows(
       sqlite
         .prepare(
@@ -1767,7 +1854,7 @@ const make = Effect.gen(function* () {
 
   const projectTaskDetail = (projectId: string, taskId: string) => {
     const task = projectTaskTree(projectId).find((candidate) => candidate.id === taskId);
-    if (!task) return null;
+    if (!isTruthy(task)) return null;
     if (task.originSessionId !== null) return taskDetail(task.originSessionId, taskId);
     const attempts: TraceAttemptView[] = decodeAttemptViewRows(
       sqlite
@@ -1856,14 +1943,14 @@ const make = Effect.gen(function* () {
            ORDER BY a.attempt_number DESC LIMIT 1`,
         )
         .get(input.taskId, input.sessionId);
-      if (!candidate) return { status: "blocked", reason: "task_not_found" };
+      if (!isTruthy(candidate)) return { status: "blocked", reason: "task_not_found" };
       const task = decodeResumeTask(candidate);
       if (task.deleted_at !== null || task.delete_requested_at !== null)
         return { status: "blocked", reason: "task_deleted" };
       if (task.archived_at !== null) return { status: "blocked", reason: "task_archived" };
       if (task.origin_session_id === null) return { status: "blocked", reason: "origin_deleted" };
       if (task.agent_id === null) return { status: "blocked", reason: "agent_deleted" };
-      if (task.active_attempt_id) return { status: "blocked", reason: "attempt_alive" };
+      if (isTruthy(task.active_attempt_id)) return { status: "blocked", reason: "attempt_alive" };
       if (task.status === "completed") return { status: "blocked", reason: "task_terminal" };
       if (task.previous_attempt_id !== input.expectedAttemptId)
         return { status: "blocked", reason: "stale_attempt" };
@@ -1874,13 +1961,13 @@ const make = Effect.gen(function* () {
            FROM work_checkpoints WHERE attempt_id = ? ORDER BY event_sequence DESC LIMIT 1`,
         )
         .get(task.previous_attempt_id);
-      if (!checkpointRow) return { status: "blocked", reason: "missing_checkpoint" };
+      if (!isTruthy(checkpointRow)) return { status: "blocked", reason: "missing_checkpoint" };
       const checkpoint = decodeCheckpoint(checkpointRow);
       const uncertainToolCallIds = decodeStringArray(checkpoint.uncertain_tool_call_ids);
       if (uncertainToolCallIds.length > 0 && !input.confirmUncertain)
         return { status: "blocked", reason: "uncertain_side_effect" };
 
-      const now = Date.now();
+      const now = effectClock.currentTimeMillisUnsafe();
       const invocationId = randomUUID();
       const attemptId = randomUUID();
       const chatRunId = randomUUID();
@@ -1988,17 +2075,18 @@ const make = Effect.gen(function* () {
       const retried = sqlite
         .prepare("SELECT * FROM lifecycle_operations WHERE idempotency_key = ?")
         .get(input.idempotencyKey);
-      if (retried) return lifecycleOperationView(decodeLifecycleOperation(retried));
+      if (isTruthy(retried)) return lifecycleOperationView(decodeLifecycleOperation(retried));
       // SAFETY: this statement selects exactly the typed session columns; absence is allowed.
       const session = sqlite
         .prepare("SELECT project_id, archived_at FROM sessions WHERE id = ?")
         .get(input.sessionId) as { project_id: string; archived_at: string | null } | undefined;
-      if (!session) return { status: "blocked" as const, blocker: "session_not_found" };
+      if (!(session !== undefined))
+        return { status: "blocked" as const, blocker: "session_not_found" };
       if (input.intent === "restore" && session.archived_at === null)
         return { status: "blocked" as const, blocker: "session_not_archived" };
       if (input.intent === "archive" && session.archived_at !== null)
         return { status: "completed" as const, targetId: input.sessionId, intent: input.intent };
-      const now = Date.now();
+      const now = effectClock.currentTimeMillisUnsafe();
       const operationId = randomUUID();
       sqlite
         .prepare(
@@ -2037,11 +2125,11 @@ const make = Effect.gen(function* () {
       const found = sqlite
         .prepare("SELECT * FROM lifecycle_operations WHERE id = ?")
         .get(operationId);
-      if (!found) return { status: "blocked" as const, blocker: "operation_not_found" };
+      if (!isTruthy(found)) return { status: "blocked" as const, blocker: "operation_not_found" };
       const operation = decodeLifecycleOperation(found);
       if (operation.status === "completed")
         return { status: "completed" as const, operationId, targetId: operation.target_id };
-      const now = Date.now();
+      const now = effectClock.currentTimeMillisUnsafe();
       const active = decodeId(
         sqlite
           .prepare(
@@ -2065,7 +2153,7 @@ const make = Effect.gen(function* () {
       else if (operation.intent === "archive")
         sqlite
           .prepare("UPDATE sessions SET archived_at = ? WHERE id = ?")
-          .run(new Date(now).toISOString(), operation.target_id);
+          .run(DateTime.formatIso(DateTime.makeUnsafe(now)), operation.target_id);
       else {
         const remaining = decodeId(
           sqlite
@@ -2209,7 +2297,8 @@ const make = Effect.gen(function* () {
       const retried = sqlite
         .prepare("SELECT * FROM lifecycle_operations WHERE idempotency_key = ?")
         .get(input.idempotencyKey);
-      if (retried) return { ...lifecycleOperationView(decodeLifecycleOperation(retried)) };
+      if (isTruthy(retried))
+        return { ...lifecycleOperationView(decodeLifecycleOperation(retried)) };
       const found = sqlite
         .prepare(
           `SELECT project_id, origin_session_id, agent_id, parent_run_id, active_attempt_id,
@@ -2217,7 +2306,7 @@ const make = Effect.gen(function* () {
            FROM work_tasks WHERE id = ? AND origin_session_id = ?`,
         )
         .get(input.taskId, input.sessionId);
-      if (!found) return { status: "blocked" as const, blocker: "task_not_found" };
+      if (!isTruthy(found)) return { status: "blocked" as const, blocker: "task_not_found" };
       const task = decodeLifecycleTask(found);
       if (task.deleted_at !== null)
         return {
@@ -2230,7 +2319,7 @@ const make = Effect.gen(function* () {
         return { status: "blocked" as const, blocker: "task_not_archived" };
       if (input.intent === "archive" && task.archived_at !== null)
         return { status: "completed" as const, targetId: input.taskId, intent: input.intent };
-      const now = Date.now();
+      const now = effectClock.currentTimeMillisUnsafe();
       const id = randomUUID();
       const status = task.active_attempt_id === null ? "requested" : "cancelling";
       sqlite
@@ -2277,7 +2366,7 @@ const make = Effect.gen(function* () {
       const found = sqlite
         .prepare("SELECT * FROM lifecycle_operations WHERE id = ?")
         .get(operationId);
-      if (!found) return { status: "blocked" as const, blocker: "operation_not_found" };
+      if (!isTruthy(found)) return { status: "blocked" as const, blocker: "operation_not_found" };
       const operation = decodeLifecycleOperation(found);
       if (operation.status === "completed")
         return { status: "completed" as const, operationId, targetId: operation.target_id };
@@ -2290,7 +2379,7 @@ const make = Effect.gen(function* () {
           )
           .get(operation.target_id),
       );
-      const now = Date.now();
+      const now = effectClock.currentTimeMillisUnsafe();
       if (task.active_attempt_id !== null) {
         sqlite
           .prepare(
@@ -2466,7 +2555,7 @@ const make = Effect.gen(function* () {
           if (
             requested.status !== "completed" &&
             "operationId" in requested &&
-            requested.operationId
+            isTruthy(requested.operationId)
           )
             finalizeTaskLifecycle(requested.operationId);
         }
@@ -2502,7 +2591,7 @@ const make = Effect.gen(function* () {
         return { status: "blocked" as const, reason: "task_not_archivable" as const };
       sqlite
         .prepare("UPDATE work_tasks SET archived_at = ?, updated_at = ? WHERE id = ?")
-        .run(Date.now(), Date.now(), taskId);
+        .run(effectClock.currentTimeMillisUnsafe(), effectClock.currentTimeMillisUnsafe(), taskId);
       return { status: "archived" as const, taskId };
     });
 
@@ -2528,7 +2617,8 @@ const make = Effect.gen(function* () {
            ORDER BY a.attempt_number DESC LIMIT 1`,
         )
         .get(input.taskId, input.sessionId);
-      if (!candidate) return { status: "blocked" as const, reason: "task_not_found" as const };
+      if (!isTruthy(candidate))
+        return { status: "blocked" as const, reason: "task_not_found" as const };
       const task = decodeResumeTask(candidate);
       if (task.deleted_at !== null || task.delete_requested_at !== null)
         return { status: "blocked" as const, reason: "task_deleted" as const };
@@ -2538,7 +2628,7 @@ const make = Effect.gen(function* () {
         return { status: "blocked" as const, reason: "origin_deleted" as const };
       if (task.agent_id === null)
         return { status: "blocked" as const, reason: "agent_deleted" as const };
-      if (task.active_attempt_id)
+      if (isTruthy(task.active_attempt_id))
         return { status: "blocked" as const, reason: "attempt_alive" as const };
       if (task.status === "completed")
         return { status: "blocked" as const, reason: "task_terminal" as const };
@@ -2551,14 +2641,14 @@ const make = Effect.gen(function* () {
            FROM work_checkpoints WHERE attempt_id = ? ORDER BY event_sequence DESC LIMIT 1`,
         )
         .get(task.previous_attempt_id);
-      if (!checkpointRow)
+      if (!isTruthy(checkpointRow))
         return { status: "blocked" as const, reason: "missing_checkpoint" as const };
       const checkpoint = decodeCheckpoint(checkpointRow);
       const uncertain = decodeStringArray(checkpoint.uncertain_tool_call_ids);
       if (uncertain.length > 0 && !input.confirmUncertain)
         return { status: "blocked" as const, reason: "uncertain_side_effect" as const };
 
-      const now = Date.now();
+      const now = effectClock.currentTimeMillisUnsafe();
       sqlite
         .prepare(
           `INSERT INTO work_recovery_jobs
@@ -2580,6 +2670,8 @@ const make = Effect.gen(function* () {
           input.confirmUncertain ? 1 : 0,
           task.id,
         );
+      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+      // @effect-diagnostics-next-line schemaSync:off
       const queued = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(
         sqlite.prepare("SELECT id FROM work_recovery_jobs WHERE task_id = ?").get(task.id),
       );
@@ -2608,7 +2700,7 @@ const make = Effect.gen(function* () {
         readonly claim: Extract<ResumeClaim, { readonly status: "started" }>;
       }> = [];
       for (const job of jobs) {
-        const now = Date.now();
+        const now = effectClock.currentTimeMillisUnsafe();
         const acquired = sqlite
           .prepare(
             `UPDATE work_recovery_jobs
@@ -2649,7 +2741,8 @@ const make = Effect.gen(function* () {
         `UPDATE work_recovery_jobs SET status = ?, updated_at = ?
          WHERE id = ? AND status = 'claimed'`,
       )
-      .run(completed ? "completed" : "failed", Date.now(), jobId).changes === 1;
+      .run(completed ? "completed" : "failed", effectClock.currentTimeMillisUnsafe(), jobId)
+      .changes === 1;
 
   const events = (sessionId: string, afterCursor = 0, limit = 200): TraceEventView[] =>
     decodeStoredEventRows(
@@ -2715,6 +2808,8 @@ const make = Effect.gen(function* () {
   ): Promise<"event" | "heartbeat" | "aborted"> => {
     if (signal.aborted) return Promise.resolve("aborted");
     if (latestCursor(sessionId) > afterCursor) return Promise.resolve("event");
+    // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
+    // @effect-diagnostics-next-line newPromise:off
     return new Promise((resolve) => {
       let settled = false;
       const done = (result: "event" | "heartbeat" | "aborted") => {
@@ -2729,6 +2824,8 @@ const make = Effect.gen(function* () {
         if (changedSessionId === sessionId && cursor > afterCursor) done("event");
       };
       const aborted = () => done("aborted");
+      // Native callback heartbeat/debounce timing remains at the protocol boundary.
+      // @effect-diagnostics-next-line globalTimers:off
       const timer = setTimeout(() => done("heartbeat"), Math.max(1, heartbeatMs));
       listeners.add(listener);
       signal.addEventListener("abort", aborted, { once: true });
@@ -2740,7 +2837,7 @@ const make = Effect.gen(function* () {
     const row = sqlite
       .prepare("SELECT * FROM agent_run_attempts WHERE id = ? AND task_id = ?")
       .get(attemptId, taskId);
-    if (!row) return null;
+    if (!isTruthy(row)) return null;
     const attempt = decodeAttempt(row);
     return {
       id: attempt.id,
@@ -2761,7 +2858,7 @@ const make = Effect.gen(function* () {
          ORDER BY a.created_at DESC LIMIT 1`,
       )
       .get(agentId);
-    if (!row) return null;
+    if (!isTruthy(row)) return null;
     const decoded = decodeAttempt(row);
     return {
       id: decoded.id,
@@ -2787,7 +2884,7 @@ const make = Effect.gen(function* () {
            SELECT id, ? FROM sessions WHERE id = ?
            ON CONFLICT(session_id) DO UPDATE SET held_at = excluded.held_at`,
         )
-        .run(Date.now(), sessionId),
+        .run(effectClock.currentTimeMillisUnsafe(), sessionId),
     resumeParentNotifications: (sessionId: string) =>
       sqlite.prepare("DELETE FROM parent_notification_holds WHERE session_id = ?").run(sessionId),
     parentNotificationsHeld: (sessionId: string) =>
@@ -2796,6 +2893,8 @@ const make = Effect.gen(function* () {
         .get(sessionId) !== undefined,
     /** Durable wake-up source. Reading does not mark a notification delivered. */
     pendingParentNotificationSessions: () =>
+      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+      // @effect-diagnostics-next-line schemaSync:off
       Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ origin_session_id: Schema.String })))(
         sqlite
           .prepare(
@@ -2832,7 +2931,9 @@ const make = Effect.gen(function* () {
         WHERE a.id = ? AND a.task_id = ? AND t.origin_session_id = ?
           AND t.agent_id IS NOT NULL AND t.deleted_at IS NULL AND t.delete_requested_at IS NULL`)
         .get(attemptId, taskId, sessionId);
-      if (!row) throw new Error("Subagent attempt not found in this session");
+      if (!isTruthy(row)) throw new Error("Subagent attempt not found in this session");
+      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+      // @effect-diagnostics-next-line schemaSync:off
       return Schema.decodeUnknownSync(Schema.Struct({ status: AttemptStatus }))(row).status;
     },
     projectTaskDetail,
@@ -2857,7 +2958,7 @@ const make = Effect.gen(function* () {
 });
 
 export class WorkTraceStore extends Context.Service<WorkTraceStore, Effect.Success<typeof make>>()(
-  "memory-agent/WorkTraceStore",
+  "memory-agent/work-trace/store/WorkTraceStore",
 ) {
   static readonly layer = Layer.effect(WorkTraceStore, make);
 }

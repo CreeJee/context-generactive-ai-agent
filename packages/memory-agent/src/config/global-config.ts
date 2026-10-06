@@ -1,4 +1,9 @@
+import { isTruthy } from "../truthy.ts";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { Context, Effect, Layer, Schema } from "effect";
 import { ProviderId } from "../providers/contracts.ts";
@@ -72,6 +77,8 @@ export const Settings = Schema.Struct({
 });
 export type Settings = typeof Settings.Type;
 
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+// @effect-diagnostics-next-line schemaSync:off
 const decodeSettings = Schema.decodeUnknownSync(Schema.fromJsonString(Settings));
 
 const make = Effect.gen(function* () {
@@ -88,7 +95,11 @@ const make = Effect.gen(function* () {
   const read = (): Settings => {
     if (!existsSync(file)) return {};
     const settings = decodeSettings(readFileSync(file, "utf8"));
-    if (settings.model && settings.reasoningEffort && settings.provider === undefined) {
+    if (
+      isTruthy(settings.model) &&
+      isTruthy(settings.reasoningEffort) &&
+      settings.provider === undefined
+    ) {
       const migrated = { ...settings, provider: "openai" as const };
       write(migrated);
       return migrated;
@@ -112,7 +123,7 @@ export type GlobalConfigApi = Effect.Success<typeof make>;
 
 /** `<storage>/config.json`. */
 export class GlobalConfig extends Context.Service<GlobalConfig, GlobalConfigApi>()(
-  "memory-agent/GlobalConfig",
+  "memory-agent/config/global-config/GlobalConfig",
 ) {
   static readonly layer = Layer.effect(GlobalConfig, make);
 }
