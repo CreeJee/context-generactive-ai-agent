@@ -17,7 +17,7 @@ import {
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash, randomUUID } from "node:crypto";
-import { DateTime, Option, Schema } from "effect";
+import { MutableHashMap, DateTime, Option, Schema } from "effect";
 import {
   ProviderFeatureRejectedError,
   ToolArguments,
@@ -370,8 +370,11 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
     let promptTokens: number | undefined;
     let completionTokens: number | undefined;
     let cachedPromptTokens: number | undefined;
-    const streamingCalls = new Map<number, { readonly id: string; readonly name: string }>();
-    const streamingReasoning = new Map<number, string>();
+    const streamingCalls = MutableHashMap.empty<
+      number,
+      { readonly id: string; readonly name: string }
+    >();
+    const streamingReasoning = MutableHashMap.empty<number, string>();
 
     yield { ...stamp(), type: EventType.RUN_STARTED, runId, threadId };
     const body = subscriptionRequest(this.name, this.#selection, options);
@@ -474,7 +477,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
           continue;
         }
         if (event.type === "tool-call-start") {
-          streamingCalls.set(event.index, { id: event.id, name: event.name });
+          MutableHashMap.set(streamingCalls, event.index, { id: event.id, name: event.name });
           toolCalls += 1;
           yield {
             ...stamp(),
@@ -488,7 +491,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
         }
         if (event.type === "reasoning-start") {
           const reasoningId = `reasoning-${event.index}`;
-          streamingReasoning.set(event.index, reasoningId);
+          MutableHashMap.set(streamingReasoning, event.index, reasoningId);
           yield {
             ...stamp(),
             type: EventType.REASONING_MESSAGE_START,
@@ -498,7 +501,9 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
           continue;
         }
         if (event.type === "reasoning-delta") {
-          const reasoningId = streamingReasoning.get(event.index);
+          const reasoningId = Option.getOrUndefined(
+            MutableHashMap.get(streamingReasoning, event.index),
+          );
           if (!isTruthy(reasoningId))
             throw new Error(`${this.name} sent an invalid reasoning stream.`);
           yield {
@@ -510,7 +515,9 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
           continue;
         }
         if (event.type === "reasoning-signature") {
-          const reasoningId = streamingReasoning.get(event.index);
+          const reasoningId = Option.getOrUndefined(
+            MutableHashMap.get(streamingReasoning, event.index),
+          );
           if (!isTruthy(reasoningId))
             throw new Error(`${this.name} sent an invalid reasoning stream.`);
           yield {
@@ -523,7 +530,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
           continue;
         }
         if (event.type === "tool-call-arguments") {
-          const call = streamingCalls.get(event.index);
+          const call = Option.getOrUndefined(MutableHashMap.get(streamingCalls, event.index));
           if (!isTruthy(call)) throw new Error(`${this.name} sent an invalid tool-call stream.`);
           yield {
             ...stamp(),
@@ -533,9 +540,11 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
           };
           continue;
         }
-        const reasoningId = streamingReasoning.get(event.index);
+        const reasoningId = Option.getOrUndefined(
+          MutableHashMap.get(streamingReasoning, event.index),
+        );
         if (isTruthy(reasoningId)) {
-          streamingReasoning.delete(event.index);
+          MutableHashMap.remove(streamingReasoning, event.index);
           yield {
             ...stamp(),
             type: EventType.REASONING_MESSAGE_END,
@@ -543,9 +552,9 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
           };
           continue;
         }
-        const call = streamingCalls.get(event.index);
+        const call = Option.getOrUndefined(MutableHashMap.get(streamingCalls, event.index));
         if (!isTruthy(call)) throw new Error(`${this.name} sent an invalid content block end.`);
-        streamingCalls.delete(event.index);
+        MutableHashMap.remove(streamingCalls, event.index);
         yield {
           ...stamp(),
           type: EventType.TOOL_CALL_END,

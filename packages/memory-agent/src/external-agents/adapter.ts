@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, Queue, DateTime } from "effect";
+import { MutableHashMap, Option, Cause, Effect, Exit, Queue, DateTime } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 // @effect-diagnostics-next-line nodeBuiltinImport:off
@@ -86,7 +86,7 @@ export class ExternalAgentAdapter extends BaseTextAdapter<
     const push = (item: Item) => {
       Queue.offerUnsafe(queue, item);
     };
-    const toolTitles = new Map<string, { title: string; status: string }>();
+    const toolTitles = MutableHashMap.empty<string, { title: string; status: string }>();
     void this.preamble(text)
       .then((lead) =>
         this.turn(`${lead}${text}`, signal, (update) => {
@@ -95,14 +95,16 @@ export class ExternalAgentAdapter extends BaseTextAdapter<
               if (update.content.type === "text") push({ kind: "text", text: update.content.text });
               return;
             case "tool_call":
-              toolTitles.set(update.toolCallId, {
+              MutableHashMap.set(toolTitles, update.toolCallId, {
                 title: update.title,
                 status: update.status ?? "pending",
               });
               return;
             case "tool_call_update": {
-              const known = toolTitles.get(update.toolCallId);
-              toolTitles.set(update.toolCallId, {
+              const known = Option.getOrUndefined(
+                MutableHashMap.get(toolTitles, update.toolCallId),
+              );
+              MutableHashMap.set(toolTitles, update.toolCallId, {
                 title: update.title ?? known?.title ?? "",
                 status: update.status ?? known?.status ?? "",
               });
@@ -149,8 +151,8 @@ export class ExternalAgentAdapter extends BaseTextAdapter<
             if (signal.aborted) return;
             const failure = failureOf(item.outcome);
             if (isTruthy(failure)) throw new Error(failure);
-            if (toolTitles.size > 0) {
-              const list = [...toolTitles.values()]
+            if (MutableHashMap.size(toolTitles) > 0) {
+              const list = [...MutableHashMap.values(toolTitles)]
                 .map((call) => `- ${call.title} (${call.status})`)
                 .join("\n");
               if (!open) {

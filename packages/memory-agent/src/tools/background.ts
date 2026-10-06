@@ -4,6 +4,7 @@ import { isTruthy } from "../truthy.ts";
 import { randomUUID } from "node:crypto";
 import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
 import {
+  MutableHashMap,
   Cause,
   Clock,
   Context,
@@ -85,7 +86,7 @@ const make = Effect.gen(function* () {
   const run = Effect.runPromiseWith(context);
   const fibers = yield* FiberMap.make<string>();
   const dispatch = Semaphore.makeUnsafe(1);
-  const sessions = new Map<string, string>();
+  const sessions = MutableHashMap.empty<string, string>();
   let onCompletion: ((sessionId: string) => void) | undefined;
   const loadResult = Effect.fn("BackgroundTasks.loadResult")(function* (taskId: string) {
     const saved = yield* Effect.tryPromise({
@@ -186,7 +187,7 @@ const make = Effect.gen(function* () {
               threadId: `background-${randomUUID()}`,
             }),
           );
-          sessions.set(handle.taskId, binding.sessionId);
+          MutableHashMap.set(sessions, handle.taskId, binding.sessionId);
           const save = Effect.fn("BackgroundTasks.saveResult")(function* (
             status: typeof SavedResult.Type.status,
             result: string,
@@ -266,7 +267,7 @@ const make = Effect.gen(function* () {
             Effect.asVoid,
             Effect.ensuring(
               Effect.sync(() => {
-                sessions.delete(handle.taskId);
+                MutableHashMap.remove(sessions, handle.taskId);
               }),
             ),
           );
@@ -318,7 +319,7 @@ const make = Effect.gen(function* () {
       onCompletion = listener;
     },
     hasSession(sessionId: string) {
-      return [...sessions.values()].includes(sessionId);
+      return [...MutableHashMap.values(sessions)].includes(sessionId);
     },
     stopTask(taskId: string) {
       return FiberMap.remove(fibers, taskId);

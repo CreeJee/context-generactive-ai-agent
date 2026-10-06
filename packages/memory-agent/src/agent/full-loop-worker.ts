@@ -161,7 +161,7 @@ const adapter: AnyTextAdapter = {
     const { request: _request, logger: _logger, capabilities: _capabilities, ...input } = options;
     const opened = await rpc("modelOpen", {
       ...input,
-      approvals: [...(input.approvals ?? new Map()).entries()],
+      approvals: [...(input.approvals?.entries() ?? [])],
     });
     while (!controller.signal.aborted) {
       const next = await rpc("modelNext", { id: opened.id });

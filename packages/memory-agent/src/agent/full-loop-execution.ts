@@ -10,7 +10,7 @@ import { isDeepStrictEqual } from "node:util";
 import { parallelReads, readOnlyToolNames } from "../tools/parallel-reads.ts";
 // Run-local observation ledger, not an Effect contextual service constructor.
 import * as OwnerToolGrants from "./owner-tool-grants.ts";
-import { Effect, Exit, Queue, Schema, Scope } from "effect";
+import { HashMap, MutableHashMap, Option, Effect, Exit, Queue, Schema, Scope } from "effect";
 import { acquireFullLoopWorkerEvents } from "./full-loop-worker-events.ts";
 
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
@@ -292,7 +292,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
       const wireTurn = structuredClone({ ...turn, interrupts: definitions });
       // The SDK iterator owns this Scope across yields, including setup failures.
       const workerScope = Scope.makeUnsafe();
-      const models = new Map<string, AsyncIterator<any>>();
+      const models = MutableHashMap.empty<string, AsyncIterator<any>>();
       let closed = false;
       try {
         const { port1, port2 } = await Effect.runPromise(
@@ -308,8 +308,8 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
           tools: capabilities.tools,
           modelOptions: turn.modelOptions,
         };
-        const decisions = new Map<string, any>();
-        const completedTools = new Map<string, any>();
+        const decisions = MutableHashMap.empty<string, any>();
+        const completedTools = MutableHashMap.empty<string, any>();
         const phaseCall = (call: any) => {
           const observed = grants.toolCalls().find((entry) => isDeepStrictEqual(entry, call));
           if (isTruthy(observed)) return observed;
@@ -414,7 +414,9 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
             )
               return false;
             if (input.hook === "onAfterToolCall") {
-              const completed = completedTools.get(input.info?.toolCallId);
+              const completed = Option.getOrUndefined(
+                MutableHashMap.get(completedTools, input.info?.toolCallId),
+              );
               if (
                 !isTruthy(completed) ||
                 input.info.toolName !== completed.toolName ||
@@ -461,7 +463,8 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                   ownerContext.accumulatedContent = "";
                   ownerContext.currentMessageId = null;
                   ownerContext.phase = "modelStream";
-                  models.set(
+                  MutableHashMap.set(
+                    models,
                     id,
                     chatStream({
                       ...input,
@@ -491,11 +494,11 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                 // @effect-diagnostics-next-line asyncFunction:off
                 execute: async (input: any) => {
                   input = decodeFullLoopValue(input);
-                  const iterator = models.get(input.id);
+                  const iterator = Option.getOrUndefined(MutableHashMap.get(models, input.id));
                   if (!isTruthy(iterator)) throw new Error("Unknown owner model stream");
                   const next = await iterator.next();
                   if (isTruthy(next.done)) {
-                    models.delete(input.id);
+                    MutableHashMap.remove(models, input.id);
                     ownerContext.phase = "afterModel";
                   } else {
                     grants.observe(next.value);
@@ -575,7 +578,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                   // Evaluate every prefetched read's permission chain BEFORE parallelReads
                   // can start any implementation. A worker snapshot cannot inject peers.
                   for (const call of candidates) {
-                    if (decisions.has(call.id)) continue;
+                    if (MutableHashMap.has(decisions, call.id)) continue;
                     const definition = ownerTools.find((tool) => tool.name === call.function.name);
                     if (!isTruthy(definition?.execute) || isTruthy(definition.needsApproval))
                       throw new Error("Unsupported owner approval tool");
@@ -609,7 +612,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                         );
                         break;
                       case "skip":
-                        completedTools.set(call.id, {
+                        MutableHashMap.set(completedTools, call.id, {
                           toolCallId: call.id,
                           toolName: call.function.name,
                           toolCall: call,
@@ -631,17 +634,25 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                       default:
                         throw new Error("Unsupported owner tool decision");
                     }
-                    decisions.set(call.id, decision);
+                    MutableHashMap.set(decisions, call.id, decision);
                   }
-                  const decision = decisions.get(invocation.toolCallId);
+                  const decision = Option.getOrUndefined(
+                    MutableHashMap.get(decisions, invocation.toolCallId),
+                  );
                   if (isTruthy(parallel) && decision?.type === "transformArgs") {
                     const approved = candidates
-                      .filter((call) => decisions.get(call.id)?.type === "transformArgs")
+                      .filter(
+                        (call) =>
+                          Option.getOrUndefined(MutableHashMap.get(decisions, call.id))?.type ===
+                          "transformArgs",
+                      )
                       .map((call) => ({
                         ...call,
                         function: {
                           ...call.function,
-                          arguments: JSON.stringify(decisions.get(call.id).args),
+                          arguments: JSON.stringify(
+                            Option.getOrUndefined(MutableHashMap.get(decisions, call.id)).args,
+                          ),
                         },
                       }));
                     const saved = ownerContext.messages;
@@ -686,7 +697,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                       events.push({ name, value, options });
                     },
                   });
-                  completedTools.set(input.toolCallId, {
+                  MutableHashMap.set(completedTools, input.toolCallId, {
                     toolCallId: input.toolCallId,
                     toolName: input.name,
                     toolCall: grants.toolCalls().find((call) => call.id === input.toolCallId),
@@ -755,7 +766,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                     finalizing = true;
                   if (!isTruthy(mw) || !middleware[input.index]?.hooks.includes(input.hook))
                     throw new Error("Unknown middleware hook");
-                  const phases = new Map<string, ChatMiddlewareContext["phase"]>(
+                  const phases = HashMap.fromIterable<string, ChatMiddlewareContext["phase"]>(
                     Object.entries({
                       setup: "init",
                       onStart: "init",
@@ -765,7 +776,8 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                       onConfig: configuredMiddleware.has(input.index) ? "beforeModel" : "init",
                     } satisfies Record<string, ChatMiddlewareContext["phase"]>),
                   );
-                  ownerContext.phase = phases.get(input.hook) ?? ownerContext.phase;
+                  ownerContext.phase =
+                    Option.getOrUndefined(HashMap.get(phases, input.hook)) ?? ownerContext.phase;
                   if (input.hook === "onConfig") {
                     configuredMiddleware.add(input.index);
                     if (input.index === firstConfigMiddleware)
@@ -802,18 +814,20 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                   });
                   let info = input.info;
                   if (input.hook === "onAfterToolCall")
-                    info = completedTools.get(input.info.toolCallId);
+                    info = Option.getOrUndefined(
+                      MutableHashMap.get(completedTools, input.info.toolCallId),
+                    );
                   if (input.hook === "onToolPhaseComplete") {
                     const toolCalls = input.info.toolCalls.map(phaseCall);
                     for (const call of toolCalls) {
                       if (!isTruthy(call)) throw new Error("Unobserved owner tool phase call");
-                      if (completedTools.has(call.id)) continue;
+                      if (MutableHashMap.has(completedTools, call.id)) continue;
                       if (
                         !isTruthy(ownerConfig.resumeToolState?.cancelledToolCallIds?.has(call.id))
                       )
                         continue;
                       const result = { error: "Tool execution cancelled" };
-                      completedTools.set(call.id, {
+                      MutableHashMap.set(completedTools, call.id, {
                         toolCallId: call.id,
                         toolName: call.function.name,
                         toolCall: call,
@@ -837,7 +851,9 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                     info = {
                       toolCalls,
                       results: input.info.toolCalls.flatMap((call: any) =>
-                        completedTools.has(call.id) ? [completedTools.get(call.id)] : [],
+                        MutableHashMap.has(completedTools, call.id)
+                          ? [Option.getOrUndefined(MutableHashMap.get(completedTools, call.id))]
+                          : [],
                       ),
                       needsApproval: [],
                       needsClientExecution: [],
@@ -948,7 +964,8 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
               Effect.sync(() => {
                 // SDK iterators may have an outstanding non-interruptible next().
                 // Do not await return() and deadlock worker lease release on that SDK boundary.
-                for (const iterator of models.values()) void iterator.return?.().catch(() => {});
+                for (const iterator of MutableHashMap.values(models))
+                  void iterator.return?.().catch(() => {});
               }),
             ),
           ),

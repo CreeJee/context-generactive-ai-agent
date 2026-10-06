@@ -6,7 +6,7 @@ import { createInterface } from "node:readline";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import type { Readable } from "node:stream";
-import { Context, Deferred, Effect, Layer, Schema, Stream } from "effect";
+import { HashMap, Ref, Option, Context, Deferred, Effect, Layer, Schema, Stream } from "effect";
 import { HarnessProfile } from "./contracts.ts";
 import { ProviderId } from "../providers/contracts.ts";
 
@@ -33,7 +33,9 @@ export const makeWorkerGateway = Effect.fn("Rrsi.makeWorkerGateway")(function* (
   send: (request: GatewayRequest) => void,
 ) {
   const initialized = yield* Deferred.make<typeof WorkerInput.Type, GatewayClosed>();
-  const pending = new Map<string, Deferred.Deferred<string, GatewayClosed>>();
+  const pending = yield* Ref.make(
+    HashMap.empty<string, Deferred.Deferred<string, GatewayClosed>>(),
+  );
   let closed = false;
   const lines = yield* Effect.acquireRelease(
     Effect.sync(() => createInterface({ input })),
@@ -42,8 +44,10 @@ export const makeWorkerGateway = Effect.fn("Rrsi.makeWorkerGateway")(function* (
   const close = Effect.gen(function* () {
     closed = true;
     yield* Deferred.fail(initialized, GatewayClosed.make());
-    yield* Effect.forEach(pending.values(), (reply) => Deferred.fail(reply, GatewayClosed.make()));
-    pending.clear();
+    const replies = yield* Ref.getAndSet(pending, HashMap.empty());
+    yield* Effect.forEach(HashMap.values(replies), (reply) =>
+      Deferred.fail(reply, GatewayClosed.make()),
+    );
   });
   yield* Stream.fromAsyncIterable(lines, () => GatewayClosed.make()).pipe(
     Stream.runForEach(
@@ -54,7 +58,7 @@ export const makeWorkerGateway = Effect.fn("Rrsi.makeWorkerGateway")(function* (
             yield* Deferred.succeed(initialized, frame);
             break;
           case "response": {
-            const reply = pending.get(frame.id);
+            const reply = Option.getOrUndefined(HashMap.get(yield* Ref.get(pending), frame.id));
             if (isTruthy(reply)) {
               if (frame.ok) yield* Deferred.succeed(reply, frame.body);
               else yield* Deferred.fail(reply, GatewayClosed.make());
@@ -75,19 +79,19 @@ export const makeWorkerGateway = Effect.fn("Rrsi.makeWorkerGateway")(function* (
     const id = randomUUID();
     const reply = yield* Deferred.make<string, GatewayClosed>();
     return yield* Effect.gen(function* () {
+      yield* Ref.update(pending, (requests) => HashMap.set(requests, id, reply));
       yield* Effect.suspend(() =>
         closed
           ? Effect.fail(GatewayClosed.make())
           : Effect.try({
               try: () => {
-                pending.set(id, reply);
                 send({ kind, id, body });
               },
               catch: () => GatewayClosed.make(),
             }),
       );
       return yield* Deferred.await(reply);
-    }).pipe(Effect.ensuring(Effect.sync(() => pending.delete(id))));
+    }).pipe(Effect.ensuring(Ref.update(pending, (requests) => HashMap.remove(requests, id))));
   });
   return { input: Deferred.await(initialized), request };
 });

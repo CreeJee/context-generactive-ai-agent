@@ -1,5 +1,5 @@
 import { isTruthy } from "../truthy.ts";
-import { Context, Effect, Layer } from "effect";
+import { MutableHashMap, Option, Context, Effect, Layer } from "effect";
 import type { ClaimResult, LeaseView } from "./lease-state.ts";
 
 /**
@@ -43,12 +43,12 @@ export class SessionLeases extends Context.Service<SessionLeases, ReturnType<typ
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
 // @effect-diagnostics-next-line missingPipeableSignature:off
 export function makeLeases(ttlMs: number, now: () => number = Date.now) {
-  const leases = new Map<string, Lease>();
+  const leases = MutableHashMap.empty<string, Lease>();
   const live = (sessionId: string) => {
-    const lease = leases.get(sessionId);
+    const lease = Option.getOrUndefined(MutableHashMap.get(leases, sessionId));
     if (!isTruthy(lease)) return null;
     if (now() - lease.renewedAt < ttlMs) return lease;
-    leases.delete(sessionId);
+    MutableHashMap.remove(leases, sessionId);
     return null;
   };
 
@@ -59,7 +59,7 @@ export function makeLeases(ttlMs: number, now: () => number = Date.now) {
       let removed = 0;
       for (const [sessionId, lease] of leases)
         if (current - lease.renewedAt >= ttlMs) {
-          leases.delete(sessionId);
+          MutableHashMap.remove(leases, sessionId);
           removed += 1;
         }
       return removed;
@@ -80,12 +80,13 @@ export function makeLeases(ttlMs: number, now: () => number = Date.now) {
       if (isTruthy(lease) && lease.holder !== holder)
         return { claimed: false, heldSince: lease.since };
       if (isTruthy(lease)) lease.renewedAt = now();
-      else leases.set(sessionId, { holder, since: now(), renewedAt: now() });
+      else MutableHashMap.set(leases, sessionId, { holder, since: now(), renewedAt: now() });
       return { claimed: true };
     },
 
     release(sessionId: string, holder: string) {
-      if (leases.get(sessionId)?.holder === holder) leases.delete(sessionId);
+      if (Option.getOrUndefined(MutableHashMap.get(leases, sessionId))?.holder === holder)
+        MutableHashMap.remove(leases, sessionId);
     },
 
     /**

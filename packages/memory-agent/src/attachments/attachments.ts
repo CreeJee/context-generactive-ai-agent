@@ -1,5 +1,5 @@
 import { isTruthy } from "../truthy.ts";
-import { DateTime, Clock, Semaphore } from "effect";
+import { HashMap, Option, DateTime, Clock, Semaphore } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash, randomUUID } from "node:crypto";
@@ -102,7 +102,7 @@ export interface ModelImage {
   readonly mimeType: AttachmentMimeType;
 }
 
-const extensions = new Map<AttachmentMimeType, string>([
+const extensions = HashMap.fromIterable<AttachmentMimeType, string>([
   ["image/png", "png"],
   ["image/jpeg", "jpg"],
   ["image/gif", "gif"],
@@ -128,7 +128,10 @@ const make = Effect.gen(function* () {
   );
 
   const fileOf = (attachment: Attachment) =>
-    join(directory, `${attachment.id}.${extensions.get(attachment.mimeType)}`);
+    join(
+      directory,
+      `${attachment.id}.${Option.getOrUndefined(HashMap.get(extensions, attachment.mimeType))}`,
+    );
 
   const get = (id: string): Attachment | null => {
     if (!isAttachmentId(id)) return null;

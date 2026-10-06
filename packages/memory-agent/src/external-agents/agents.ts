@@ -14,7 +14,17 @@ import type {
 } from "@agentclientprotocol/sdk";
 import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import spawn from "cross-spawn";
-import { DateTime, Clock, Context, Data, Effect, Layer, Option, Schema } from "effect";
+import {
+  MutableHashMap,
+  DateTime,
+  Clock,
+  Context,
+  Data,
+  Effect,
+  Layer,
+  Option,
+  Schema,
+} from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
 import { expandVariables } from "../mcp/config.ts";
@@ -115,8 +125,8 @@ interface Live {
   readonly agentName: string | null;
   readonly loadSession: boolean;
   /** Our session key → the agent's session id, valid only for this process. */
-  readonly sessions: Map<string, string>;
-  readonly handlers: Map<string, SessionHandlers>;
+  readonly sessions: MutableHashMap.MutableHashMap<string, string>;
+  readonly handlers: MutableHashMap.MutableHashMap<string, SessionHandlers>;
 }
 
 interface Link {
@@ -169,7 +179,7 @@ const make = Effect.gen(function* () {
 
   const storage = yield* StorageRoot;
   const { sqlite } = yield* Database;
-  const links = new Map<string, Link>();
+  const links = MutableHashMap.empty<string, Link>();
 
   const selectTrust = sqlite.prepare(
     "SELECT scope, name, fingerprint FROM agent_trust WHERE project_id = '' OR project_id = ?",
@@ -197,16 +207,17 @@ const make = Effect.gen(function* () {
         null,
       shadowed: agent.scope === "global" && localNames.has(agent.name),
     }));
-    const usableFingerprints = new Map(
+    const usableFingerprints = MutableHashMap.fromIterable(
       agents
         .filter((entry) => !entry.shadowed && entry.trusted === entry.agent.fingerprint)
         .map((entry) => [linkKey(project, entry.agent), entry.agent.fingerprint]),
     );
     for (const [key, link] of links) {
       if (!key.startsWith(`${project.id}/`)) continue;
-      if (usableFingerprints.get(key) === link.fingerprint) continue;
+      if (Option.getOrUndefined(MutableHashMap.get(usableFingerprints, key)) === link.fingerprint)
+        continue;
       retire(link);
-      links.delete(key);
+      MutableHashMap.remove(links, key);
     }
     return {
       files: [global, local].map((file, index) => ({
@@ -262,16 +273,18 @@ const make = Effect.gen(function* () {
     });
     await spawned;
 
-    const handlers = new Map<string, SessionHandlers>();
+    const handlers = MutableHashMap.empty<string, SessionHandlers>();
     const connection = acp
       .client({ name: "context-generactive-agent" })
       .onNotification(acp.methods.client.session.update, (ctx) => {
-        handlers.get(ctx.params.sessionId)?.onUpdate(ctx.params.update);
+        Option.getOrUndefined(MutableHashMap.get(handlers, ctx.params.sessionId))?.onUpdate(
+          ctx.params.update,
+        );
       })
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
       // @effect-diagnostics-next-line asyncFunction:off
       .onRequest(acp.methods.client.session.requestPermission, async (ctx) => {
-        const handler = handlers.get(ctx.params.sessionId);
+        const handler = Option.getOrUndefined(MutableHashMap.get(handlers, ctx.params.sessionId));
         return isTruthy(handler)
           ? handler.askPermission(ctx.params)
           : { outcome: { outcome: "cancelled" } as const };
@@ -313,7 +326,7 @@ const make = Effect.gen(function* () {
         connection,
         agentName: initialized.agentInfo?.name ?? null,
         loadSession: initialized.agentCapabilities?.loadSession === true,
-        sessions: new Map(),
+        sessions: MutableHashMap.empty(),
         handlers,
       };
       child.once("exit", () => onLost(project, agent, link, live));
@@ -381,7 +394,7 @@ const make = Effect.gen(function* () {
 
   const linkFor = (project: Project, agent: ConfiguredAgent) => {
     const key = linkKey(project, agent);
-    const existing = links.get(key);
+    const existing = Option.getOrUndefined(MutableHashMap.get(links, key));
     if (existing?.fingerprint === agent.fingerprint) return existing;
     if (isTruthy(existing)) retire(existing);
     const link: Link = {
@@ -392,7 +405,7 @@ const make = Effect.gen(function* () {
       attempt: null,
       failures: 0,
     };
-    links.set(key, link);
+    MutableHashMap.set(links, key, link);
     return link;
   };
 
@@ -420,7 +433,9 @@ const make = Effect.gen(function* () {
               ? { status: "changed" }
               : {
                   status: "trusted",
-                  link: links.get(linkKey(project, entry.agent))?.state ?? { status: "idle" },
+                  link: Option.getOrUndefined(
+                    MutableHashMap.get(links, linkKey(project, entry.agent)),
+                  )?.state ?? { status: "idle" },
                 },
       })),
     };
@@ -428,7 +443,7 @@ const make = Effect.gen(function* () {
 
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
-      for (const link of links.values()) retire(link);
+      for (const link of MutableHashMap.values(links)) retire(link);
     }),
   );
 
@@ -461,7 +476,7 @@ const make = Effect.gen(function* () {
           for (const [key, link] of links)
             if (key.endsWith(`/${scope}/${name}`)) {
               retire(link);
-              links.delete(key);
+              MutableHashMap.remove(links, key);
             }
         }
         return overview(project);
@@ -514,7 +529,7 @@ const make = Effect.gen(function* () {
         };
       }
 
-      let sessionId = live.sessions.get(sessionKey);
+      let sessionId = Option.getOrUndefined(MutableHashMap.get(live.sessions, sessionKey));
       if (!isTruthy(sessionId)) {
         try {
           const created = await live.connection.agent.request(acp.methods.agent.session.new, {
@@ -522,7 +537,7 @@ const make = Effect.gen(function* () {
             mcpServers: [],
           });
           sessionId = created.sessionId;
-          live.sessions.set(sessionKey, sessionId);
+          MutableHashMap.set(live.sessions, sessionKey, sessionId);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           return { status: "unavailable", reason: `session_failed: ${message.slice(0, 200)}` };
@@ -530,23 +545,23 @@ const make = Effect.gen(function* () {
       }
 
       let answer = "";
-      const toolCalls = new Map<string, ReportedToolCall>();
-      live.handlers.set(sessionId, {
+      const toolCalls = MutableHashMap.empty<string, ReportedToolCall>();
+      MutableHashMap.set(live.handlers, sessionId, {
         onUpdate: (update) => {
           switch (update.sessionUpdate) {
             case "agent_message_chunk":
               if (update.content.type === "text") answer += update.content.text;
               break;
             case "tool_call":
-              toolCalls.set(update.toolCallId, {
+              MutableHashMap.set(toolCalls, update.toolCallId, {
                 title: update.title,
                 kind: update.kind ?? null,
                 status: update.status ?? null,
               });
               break;
             case "tool_call_update": {
-              const known = toolCalls.get(update.toolCallId);
-              toolCalls.set(update.toolCallId, {
+              const known = Option.getOrUndefined(MutableHashMap.get(toolCalls, update.toolCallId));
+              MutableHashMap.set(toolCalls, update.toolCallId, {
                 title: update.title ?? known?.title ?? "",
                 kind: update.kind ?? known?.kind ?? null,
                 status: update.status ?? known?.status ?? null,
@@ -578,20 +593,24 @@ const make = Effect.gen(function* () {
           status: done.stopReason === "cancelled" ? "cancelled" : "completed",
           stopReason: done.stopReason,
           answer,
-          toolCalls: [...toolCalls.values()],
+          toolCalls: [...MutableHashMap.values(toolCalls)],
         };
       } catch (error) {
         if (live.connection.signal.aborted || link.live !== live)
-          return { status: "disconnected", answer, toolCalls: [...toolCalls.values()] };
+          return {
+            status: "disconnected",
+            answer,
+            toolCalls: [...MutableHashMap.values(toolCalls)],
+          };
         return {
           status: "failed",
           error: failureText(error instanceof Error ? error : new Error(String(error))),
           answer,
-          toolCalls: [...toolCalls.values()],
+          toolCalls: [...MutableHashMap.values(toolCalls)],
         };
       } finally {
         hooks.signal.removeEventListener("abort", cancel);
-        live.handlers.delete(agentSession);
+        MutableHashMap.remove(live.handlers, agentSession);
       }
     },
   };

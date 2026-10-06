@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { threadId, type Worker } from "node:worker_threads";
-import { Effect } from "effect";
+import { MutableHashMap, Option, Effect } from "effect";
 import { expect, test, vi } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { Database } from "../src/db/database.ts";
@@ -51,15 +51,15 @@ test("central account callback and PKCE survive actual SDK worker termination wi
   let loginStarts = 0;
   const grants: URLSearchParams[] = [];
   const writes: number[] = [];
-  const slots = new Map<string, StoredCredential>();
+  const slots = MutableHashMap.empty<string, StoredCredential>();
   const store = (id: string): CredentialStore => ({
-    read: async () => slots.get(id) ?? null,
+    read: async () => Option.getOrUndefined(MutableHashMap.get(slots, id)) ?? null,
     write: async (_provider, credential) => {
       writes.push(threadId);
-      slots.set(id, credential);
+      MutableHashMap.set(slots, id, credential);
     },
     remove: async () => {
-      slots.delete(id);
+      MutableHashMap.remove(slots, id);
     },
   });
   const server = createServer(async (request, response) => {

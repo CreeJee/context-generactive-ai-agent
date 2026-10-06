@@ -26,7 +26,7 @@ import {
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { basename, dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Schema } from "effect";
+import { MutableHashMap, Option, Schema } from "effect";
 import { build } from "vite-plus/pack";
 
 const app = fileURLToPath(new URL("..", import.meta.url));
@@ -136,16 +136,18 @@ function skipDependency(dependent: string, dependency: string) {
 
 /** Copies the runtime-loaded packages and their dependencies into `<stage>/node_modules`. */
 function collectPackages() {
-  const placed = new Map<string, string>();
-  const topLevel = new Map<string, string>();
+  const placed = MutableHashMap.empty<string, string>();
+  const topLevel = MutableHashMap.empty<string, string>();
   const place = (realDirectory: string, name: string, parentTarget: string) => {
-    if (placed.has(realDirectory)) return;
-    const conflict = topLevel.has(name) && topLevel.get(name) !== realDirectory;
+    if (MutableHashMap.has(placed, realDirectory)) return;
+    const conflict =
+      MutableHashMap.has(topLevel, name) &&
+      Option.getOrUndefined(MutableHashMap.get(topLevel, name)) !== realDirectory;
     const destination = conflict
       ? join(parentTarget, "node_modules", name)
       : join(stage, "node_modules", name);
-    if (!conflict) topLevel.set(name, realDirectory);
-    placed.set(realDirectory, destination);
+    if (!conflict) MutableHashMap.set(topLevel, name, realDirectory);
+    MutableHashMap.set(placed, realDirectory, destination);
     const kept = keptFiles(name);
     cpSync(realDirectory, destination, {
       recursive: true,

@@ -1,5 +1,15 @@
 import { providerConnection, type ProviderVendor } from "./contracts.ts";
-import { ConfigProvider, Option, Config, Context, Data, Effect, Layer, Ref } from "effect";
+import {
+  MutableHashMap,
+  ConfigProvider,
+  Option,
+  Config,
+  Context,
+  Data,
+  Effect,
+  Layer,
+  Ref,
+} from "effect";
 import type { AuthConnectionState, ProviderId, ProviderModel } from "./contracts.ts";
 import type { ImageRouteContract } from "./image-contracts.ts";
 import { imageRouteContracts } from "./image-contracts.ts";
@@ -165,7 +175,7 @@ const sourceFromServices = Effect.gen(function* () {
       const chat: ChatRoute[] = [];
       const media: MediaRoute[] = [];
       const execution: ExecutionRoute[] = [];
-      const authByProvider = new Map<ProviderId, RouteAuthEvidence>();
+      const authByProvider = MutableHashMap.empty<ProviderId, RouteAuthEvidence>();
 
       for (const provider of [...providers.providers].toSorted()) {
         const configuration = yield* providers
@@ -186,7 +196,7 @@ const sourceFromServices = Effect.gen(function* () {
           status,
           connection.type === "compatible-endpoint" ? "openai_compatible" : "subscription_oauth",
         );
-        authByProvider.set(provider, authentication);
+        MutableHashMap.set(authByProvider, provider, authentication);
         const models = yield* configuration.models.list.pipe(
           Effect.mapError(
             (cause) => new RouteCatalogRefreshFailed({ provider, operation: "models", cause }),
@@ -267,7 +277,7 @@ const sourceFromServices = Effect.gen(function* () {
         .parse(ConfigProvider.fromEnv())
         .pipe(Effect.orDie);
       const openAIAuth =
-        authByProvider.get("openai") ??
+        Option.getOrUndefined(MutableHashMap.get(authByProvider, "openai")) ??
         authEvidence("openai", { provider: "openai", status: "signed-out" }, "subscription_oauth");
       for (const contract of imageRouteContracts) {
         const authentication =

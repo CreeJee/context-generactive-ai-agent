@@ -3,7 +3,7 @@ import { isTruthy } from "../truthy.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import type { SQLOutputValue } from "node:sqlite";
-import { Clock, Context, Data, Effect, Layer, Schema } from "effect";
+import { MutableHashMap, Option, Clock, Context, Data, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import type { DeliveryVia, QueueItemState, QueuedMessage, QueueSnapshot } from "./queue-state.ts";
 
@@ -66,7 +66,10 @@ const make = Effect.gen(function* () {
   const { sqlite } = yield* Database;
   const now = () => effectClock.currentTimeMillisUnsafe();
   // All queue methods and SQLite statements here are synchronous within this service instance.
-  const reservations = new Map<string, { readonly id: string; readonly holdOnRelease: boolean }>();
+  const reservations = MutableHashMap.empty<
+    string,
+    { readonly id: string; readonly holdOnRelease: boolean }
+  >();
   const get = (sessionId: string, id: string) => {
     const row = sqlite
       .prepare("SELECT * FROM queued_messages WHERE session_id = ? AND id = ?")
@@ -79,7 +82,7 @@ const make = Effect.gen(function* () {
       const message = get(sessionId, id);
       if (!(message !== null))
         return Effect.fail(new QueueChangeRefused({ id, reason: "not_found" }));
-      if (reservations.get(sessionId)?.id === id)
+      if (Option.getOrUndefined(MutableHashMap.get(reservations, sessionId))?.id === id)
         return Effect.fail(new QueueChangeRefused({ id, reason: "reserved" }));
       if (message.state.kind === "delivered")
         return Effect.fail(new QueueChangeRefused({ id, reason: "delivered" }));
@@ -210,7 +213,7 @@ const make = Effect.gen(function* () {
 
     /** Atomically select and reserve the current head until delivery or explicit release. */
     claimNext(sessionId: string): QueuedMessage | null {
-      if (reservations.has(sessionId)) return null;
+      if (MutableHashMap.has(reservations, sessionId)) return null;
       // Only one row is needed for a next turn; do not materialize the whole waiting prefix.
       const row = sqlite
         .prepare(
@@ -218,14 +221,15 @@ const make = Effect.gen(function* () {
         )
         .get(sessionId);
       const message = isTruthy(row) && row.state === "waiting" ? toMessage(row) : null;
-      if (message !== null) reservations.set(sessionId, { id: message.id, holdOnRelease: false });
+      if (message !== null)
+        MutableHashMap.set(reservations, sessionId, { id: message.id, holdOnRelease: false });
       return message;
     },
 
     releaseNext(sessionId: string, id: string) {
-      const reservation = reservations.get(sessionId);
+      const reservation = Option.getOrUndefined(MutableHashMap.get(reservations, sessionId));
       if (reservation?.id !== id) return;
-      reservations.delete(sessionId);
+      MutableHashMap.remove(reservations, sessionId);
       if (reservation.holdOnRelease) setState(id, "held");
     },
 
@@ -237,7 +241,7 @@ const make = Effect.gen(function* () {
         .run(via, runId, inTranscript ? 1 : 0, now(), id);
       for (const [sessionId, reservation] of reservations)
         if (reservation.id === id) {
-          reservations.delete(sessionId);
+          MutableHashMap.remove(reservations, sessionId);
         }
     },
 
@@ -267,8 +271,9 @@ const make = Effect.gen(function* () {
     holdWaiting(sessionId: string) {
       // A selected next turn is locked until committed or released. Holding it here would allow a
       // different state to be delivered from the content already selected for this request.
-      const reserved = reservations.get(sessionId);
-      if (isTruthy(reserved)) reservations.set(sessionId, { ...reserved, holdOnRelease: true });
+      const reserved = Option.getOrUndefined(MutableHashMap.get(reservations, sessionId));
+      if (isTruthy(reserved))
+        MutableHashMap.set(reservations, sessionId, { ...reserved, holdOnRelease: true });
       sqlite
         .prepare(
           "UPDATE queued_messages SET state = 'held', updated_at = ? WHERE session_id = ? AND state = 'waiting' AND id != ?",

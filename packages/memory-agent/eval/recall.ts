@@ -12,7 +12,7 @@ import { homedir, tmpdir } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
-import { Effect, Layer, ManagedRuntime } from "effect";
+import { Effect, Layer, ManagedRuntime, MutableHashMap, Option } from "effect";
 import { SecretStore } from "../src/config/secrets.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
@@ -110,7 +110,7 @@ async function evaluate(configuration: Configuration, set: RecallSet) {
       Effect.gen(function* () {
         const project = yield* (yield* Projects).add(projectRoot);
         const nodes = yield* Nodes;
-        const keys = new Map<string, string>();
+        const keys = MutableHashMap.empty<string, string>();
         for (const statements of set.sessions) {
           const session = yield* (yield* Sessions).create(project.id);
           for (const statement of statements) {
@@ -120,7 +120,7 @@ async function evaluate(configuration: Configuration, set: RecallSet) {
               kind: statement.kind ?? "user",
               text: statement.text,
             });
-            keys.set(node.id, statement.key);
+            MutableHashMap.set(keys, node.id, statement.key);
           }
         }
         const indexer = yield* Indexer;
@@ -146,7 +146,9 @@ async function evaluate(configuration: Configuration, set: RecallSet) {
             projectId: project.id,
             limit: 10,
           });
-          const found = result.matches.map((match) => keys.get(match.id));
+          const found = result.matches.map((match) =>
+            Option.getOrUndefined(MutableHashMap.get(keys, match.id)),
+          );
           const rank = found.indexOf(item.expected);
           if (rank === 0) top1++;
           if (rank >= 0 && rank < 3) top3++;

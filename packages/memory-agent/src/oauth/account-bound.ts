@@ -1,3 +1,4 @@
+import { MutableHashMap, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 // @effect-diagnostics-next-line nodeBuiltinImport:off
@@ -38,25 +39,25 @@ export function createAccountBoundSubscriptionClients(
   accounts: ProfileCredentialStore = createProfileCredentialStore(),
   legacy?: CredentialStore,
 ) {
-  const cache = new Map<string, SubscriptionOAuthClient>();
+  const cache = MutableHashMap.empty<string, SubscriptionOAuthClient>();
   const selectedId = () =>
     listOAuthProfiles(sqlite, provider).find((profile) => profile.selected)?.id ?? null;
   const clientFor = (id: string | null) => {
     const key = id ?? "__legacy__";
     const configured = listOAuthProfiles(sqlite, provider);
-    for (const cachedId of cache.keys()) {
+    for (const cachedId of MutableHashMap.keys(cache)) {
       if (
         cachedId !== key &&
         cachedId !== "__legacy__" &&
         !configured.some((profile) => profile.id === cachedId)
       )
-        cache.delete(cachedId);
+        MutableHashMap.remove(cache, cachedId);
     }
-    if (configured.length > 0) cache.delete("__legacy__");
-    let client = cache.get(key);
+    if (configured.length > 0) MutableHashMap.remove(cache, "__legacy__");
+    let client = Option.getOrUndefined(MutableHashMap.get(cache, key));
     if (!isTruthy(client)) {
       client = createClient(id);
-      cache.set(key, client);
+      MutableHashMap.set(cache, key, client);
     }
     return client;
   };
@@ -99,7 +100,7 @@ export function createAccountBoundSubscriptionClients(
         const attempt = await clientFor(id)
           .startLogin()
           .catch((error) => {
-            cache.delete(id);
+            MutableHashMap.remove(cache, id);
             throw error;
           });
         let cancelled = false;
@@ -125,7 +126,7 @@ export function createAccountBoundSubscriptionClients(
             // A published account must survive a selection failure or late cancellation.
             if (!listOAuthProfiles(sqlite, provider).some((profile) => profile.id === id)) {
               await accounts.remove(provider, id);
-              cache.delete(id);
+              MutableHashMap.remove(cache, id);
             }
             throw error;
           });
@@ -144,12 +145,12 @@ export function createAccountBoundSubscriptionClients(
         const id = selectedId();
         if (id !== null) {
           await removeOAuthProfile(sqlite, provider, id, accounts, legacy);
-          cache.delete(id);
+          MutableHashMap.remove(cache, id);
         } else if (legacyAllowed()) {
           const finishRemoval = beginOAuthProfileRemoval(sqlite, provider, "__legacy__");
           try {
             await clientFor(null).disconnect();
-            cache.delete("__legacy__");
+            MutableHashMap.remove(cache, "__legacy__");
           } finally {
             finishRemoval();
           }

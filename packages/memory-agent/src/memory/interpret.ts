@@ -1,5 +1,5 @@
 import { isTruthy } from "../truthy.ts";
-import { DateTime, Clock, Semaphore } from "effect";
+import { MutableHashMap, DateTime, Clock, Semaphore } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
@@ -157,7 +157,7 @@ const make = Effect.gen(function* () {
         const node = nodes.get(match.id);
         return isTruthy(node) ? [node] : [];
       });
-      const byId = new Map<string, Node>();
+      const byId = MutableHashMap.empty<string, Node>();
       for (const node of [...recent, ...matched])
         if (
           node.id !== statement.id &&
@@ -165,8 +165,8 @@ const make = Effect.gen(function* () {
           node.createdAt <= statement.createdAt &&
           (node.kind === "user" || node.kind === "assistant")
         )
-          byId.set(node.id, node);
-      return [...byId.values()].slice(0, candidatesPerStatement);
+          MutableHashMap.set(byId, node.id, node);
+      return [...MutableHashMap.values(byId)].slice(0, candidatesPerStatement);
     });
 
   const topicNode = (projectId: string, label: string) => {
@@ -179,8 +179,9 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const effectClock = yield* Clock.Clock;
 
-      const candidates = new Map<string, readonly Node[]>();
-      for (const statement of batch) candidates.set(statement.id, yield* candidatesFor(statement));
+      const candidates = MutableHashMap.empty<string, readonly Node[]>();
+      for (const statement of batch)
+        MutableHashMap.set(candidates, statement.id, yield* candidatesFor(statement));
       const projectId = batch[0]!.projectId;
       const input = {
         existingTopics: topicsOf.all(projectId).map((row) => decodeLabel(row).text),
@@ -190,7 +191,9 @@ const make = Effect.gen(function* () {
           createdAt: statement.createdAt,
           sessionId: statement.sessionId,
           text: statement.text.slice(0, statementCharacters),
-          candidates: (candidates.get(statement.id) ?? []).map((candidate) => ({
+          candidates: (
+            Option.getOrUndefined(MutableHashMap.get(candidates, statement.id)) ?? []
+          ).map((candidate) => ({
             id: candidate.id,
             role: candidate.kind,
             createdAt: candidate.createdAt,
@@ -245,7 +248,7 @@ const make = Effect.gen(function* () {
         for (const statement of batch) {
           const result = labelled.statements.find((entry) => entry.id === statement.id);
           if (!isTruthy(result)) continue;
-          const offered = candidates.get(statement.id) ?? [];
+          const offered = Option.getOrUndefined(MutableHashMap.get(candidates, statement.id)) ?? [];
           const allowed = new Set(offered.map((node) => node.id));
 
           for (const label of new Set(result.topics.map(normalizeTopic))) {

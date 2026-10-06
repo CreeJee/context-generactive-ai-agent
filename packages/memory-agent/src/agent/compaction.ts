@@ -1,7 +1,7 @@
 import { isTruthy } from "../truthy.ts";
 import type { ChatMiddleware, MetadataStore, ModelMessage } from "@tanstack/ai";
 import { evictOldest } from "@tanstack/ai-compaction";
-import { Data, Effect, Option, Schema } from "effect";
+import { MutableHashMap, Data, Effect, Option, Schema } from "effect";
 import { recentRawUserTurns } from "./compaction-policy.ts";
 import { consumeColdObservation, pendingColdObservation } from "./context-usage.ts";
 import type { CompactResult, CompactionStage } from "./run-state.ts";
@@ -393,7 +393,7 @@ export function lightweightToolResults(
   messages: readonly ModelMessage[],
   toolResultId: (toolCallId: string) => string | null,
 ): readonly ModelMessage[] {
-  const names = new Map(
+  const names = MutableHashMap.fromIterable(
     messages.flatMap((message) =>
       message.role === "assistant"
         ? (message.toolCalls ?? []).map((call) => [call.id, call.function.name] as const)
@@ -407,7 +407,7 @@ export function lightweightToolResults(
       !Schema.is(Schema.String)(message.content)
     )
       return message;
-    const name = names.get(message.toolCallId);
+    const name = Option.getOrUndefined(MutableHashMap.get(names, message.toolCallId));
     if (
       !isTruthy(name) ||
       !["run_shell", "list_files", "search_files", "get_subagent_report"].includes(name)

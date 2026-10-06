@@ -1,3 +1,4 @@
+import { MutableHashMap, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 // @effect-diagnostics-next-line nodeBuiltinImport:off
@@ -39,18 +40,19 @@ export function applyCodeProposal(directory: string, proposal: CodeProposal) {
   )
     throw new Error("code_edit_budget");
   const root = realpathSync(directory);
-  const replacements = new Map<string, string>();
+  const replacements = MutableHashMap.empty<string, string>();
   for (const edit of proposal.files) {
     if (!editableCode.some((path) => path === edit.path)) throw new Error("protected_code_path");
     const file = join(root, edit.path);
     if (realpathSync(file) !== file) throw new Error("code_symlink_rejected");
-    const source = replacements.get(file) ?? readFileSync(file, "utf8");
+    const source =
+      Option.getOrUndefined(MutableHashMap.get(replacements, file)) ?? readFileSync(file, "utf8");
     if (
       source.indexOf(edit.before) < 0 ||
       source.indexOf(edit.before) !== source.lastIndexOf(edit.before)
     )
       throw new Error("code_anchor_ambiguous");
-    replacements.set(file, source.replace(edit.before, edit.after));
+    MutableHashMap.set(replacements, file, source.replace(edit.before, edit.after));
   }
   for (const [file, source] of replacements) writeFileSync(file, source);
 }

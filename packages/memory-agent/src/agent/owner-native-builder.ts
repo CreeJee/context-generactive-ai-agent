@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
-import { Schema, Context, Effect, Layer } from "effect";
+import { MutableHashMap, Schema, Context, Effect, Layer } from "effect";
 import { runtimeRequire } from "../runtime/resources.ts";
 import { OwnerNativeFiles } from "./owner-native-files.ts";
 import { NativeRegistrationError } from "./owner-native-error.ts";
@@ -21,7 +21,7 @@ const buildNative = Effect.fn("OwnerNativeBuilder.build")(function* (
   files: OwnerNativeFiles["Service"],
 ) {
   const context = yield* Effect.context<never>();
-  const sources = new Map<string, string>();
+  const sources = MutableHashMap.empty<string, string>();
   const allowed = new Set([
     "effect",
     "@tanstack/ai",
@@ -47,7 +47,8 @@ const buildNative = Effect.fn("OwnerNativeBuilder.build")(function* (
             // @effect-diagnostics-next-line asyncFunction:off
             async transform(_code, id) {
               if (id.startsWith("/") && !id.includes("?"))
-                sources.set(
+                MutableHashMap.set(
+                  sources,
                   id,
                   nativeDigest(await Effect.runPromiseWith(context)(files.read(id), { signal })),
                 );
@@ -82,7 +83,7 @@ const buildNative = Effect.fn("OwnerNativeBuilder.build")(function* (
       const chunks = (outputs[0] as { output: Array<{ type: string; code?: string }> }).output;
       if (chunks.length !== 1 || chunks[0].type !== "chunk" || chunks[0].code === undefined)
         throw new Error("Native assets not portable");
-      if (sources.size === 0) throw new Error("Missing build provenance");
+      if (MutableHashMap.size(sources) === 0) throw new Error("Missing build provenance");
       return chunks[0].code;
     },
     catch: (cause) => NativeRegistrationError.make({ cause }),

@@ -6,7 +6,7 @@ import { lstat } from "node:fs/promises";
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join, posix } from "node:path";
 import { toolDefinition } from "@tanstack/ai";
-import { Context, Effect, Result, Layer, Schema } from "effect";
+import { MutableHashMap, Option, Context, Effect, Result, Layer, Schema } from "effect";
 import { gitGrepFiles } from "../files/git-grep.ts";
 import { listProjectFiles, createSnapshots, type Snapshot } from "../files/listing.ts";
 import { PathRejected, resolveProjectPath } from "../files/paths.ts";
@@ -122,8 +122,8 @@ interface CachedRead {
 
 const make = Effect.gen(function* () {
   const snapshots = yield* createSnapshots();
-  const candidateCache = new Map<string, Promise<ReadonlySet<string> | null>>();
-  const readCache = new Map<string, CachedRead>();
+  const candidateCache = MutableHashMap.empty<string, Promise<ReadonlySet<string> | null>>();
+  const readCache = MutableHashMap.empty<string, CachedRead>();
 
   /**
    * In a Git work tree, the files that can match at all; null means search every file. The first
@@ -137,13 +137,13 @@ const make = Effect.gen(function* () {
   ) => {
     if (view.source !== "git") return Promise.resolve(null);
     const key = `${view.id}\u0000${caseSensitive}\u0000${query}`;
-    const cached = candidateCache.get(key);
+    const cached = Option.getOrUndefined(MutableHashMap.get(candidateCache, key));
     if (isTruthy(cached)) return cached;
     const pending = started ?? gitGrepFiles(view.root, view.directory, query, caseSensitive);
-    candidateCache.set(key, pending);
-    for (const old of candidateCache.keys()) {
-      if (candidateCache.size <= candidateCacheSize) break;
-      candidateCache.delete(old);
+    MutableHashMap.set(candidateCache, key, pending);
+    for (const old of MutableHashMap.keys(candidateCache)) {
+      if (MutableHashMap.size(candidateCache) <= candidateCacheSize) break;
+      MutableHashMap.remove(candidateCache, old);
     }
     return pending;
   };
@@ -157,15 +157,15 @@ const make = Effect.gen(function* () {
   const readLines = async (absolute: string, path: string) => {
     const stats = await lstat(absolute, { bigint: true });
     const stamp = `${stats.size}:${stats.ctimeNs}:${stats.mtimeNs}:${stats.ino}`;
-    const cached = readCache.get(absolute);
+    const cached = Option.getOrUndefined(MutableHashMap.get(readCache, absolute));
     if (cached?.stamp === stamp) return cached;
     const file = await readTextFile(absolute, path);
     const entry: CachedRead = { stamp, sha256: file.sha256, lines: splitLines(file.text) };
-    readCache.delete(absolute);
-    readCache.set(absolute, entry);
-    for (const old of readCache.keys()) {
-      if (readCache.size <= readCacheSize) break;
-      readCache.delete(old);
+    MutableHashMap.remove(readCache, absolute);
+    MutableHashMap.set(readCache, absolute, entry);
+    for (const old of MutableHashMap.keys(readCache)) {
+      if (MutableHashMap.size(readCache) <= readCacheSize) break;
+      MutableHashMap.remove(readCache, old);
     }
     return entry;
   };
@@ -262,17 +262,17 @@ const make = Effect.gen(function* () {
           // Each directory is checked once per page (no links, still inside the project); the file
           // itself is checked on the opened handle, so thousands of files do not mean thousands of
           // synchronous path walks.
-          const directories = new Map<string, Result.Result<unknown, PathRejected>>();
+          const directories = MutableHashMap.empty<string, Result.Result<unknown, PathRejected>>();
           const page = await searchTextFiles(
             view.paths,
             // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
             // @effect-diagnostics-next-line asyncFunction:off
             async (path) => {
               const directory = posix.dirname(path);
-              let checked = directories.get(directory);
+              let checked = Option.getOrUndefined(MutableHashMap.get(directories, directory));
               if (!isTruthy(checked)) {
                 checked = resolveProjectPath(root, directory, "directory");
-                directories.set(directory, checked);
+                MutableHashMap.set(directories, directory, checked);
               }
               Result.getOrElse(checked, (rejection) => {
                 throw new PathRejected({ path, reason: rejection.reason });

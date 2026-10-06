@@ -1,4 +1,4 @@
-import { Context, Data, Effect, Layer } from "effect";
+import { MutableHashMap, Option, Context, Data, Effect, Layer } from "effect";
 import { optionalProperty } from "../optional-property.ts";
 import {
   RouteCatalog,
@@ -259,9 +259,16 @@ export function rankImageRoutes(
 ): Effect.Effect<readonly ImageRouteScore[], ImageRoutingInvalidRequest> {
   const invalid = validateInput(input);
   if (invalid !== undefined) return Effect.fail(invalid);
-  const facts = new Map(input.facts.map((fact) => [fact.routeId, fact]));
+  const facts = MutableHashMap.fromIterable(input.facts.map((fact) => [fact.routeId, fact]));
   const ranking = input.routes
-    .map((route) => scoreRoute(route, facts.get(route.id), input.intent, input.policy))
+    .map((route) =>
+      scoreRoute(
+        route,
+        Option.getOrUndefined(MutableHashMap.get(facts, route.id)),
+        input.intent,
+        input.policy,
+      ),
+    )
     .toSorted(
       (left, right) => right.score - left.score || left.routeId.localeCompare(right.routeId),
     );
@@ -315,7 +322,7 @@ export function makeImageRouter(
             }),
         ),
       );
-      const consentByRoute = new Map<string, CrossProviderMediaConsentMode>();
+      const consentByRoute = MutableHashMap.empty<string, CrossProviderMediaConsentMode>();
       const routes =
         crossProviderConsent === undefined
           ? snapshot.media
@@ -328,7 +335,7 @@ export function makeImageRouter(
                 })
                 .pipe(
                   Effect.map((decision) => {
-                    consentByRoute.set(route.id, decision.mode);
+                    MutableHashMap.set(consentByRoute, route.id, decision.mode);
                     return !decision.crossProvider || decision.mode !== "disabled";
                   }),
                   Effect.orElseSucceed(() => false),
@@ -341,8 +348,8 @@ export function makeImageRouter(
         intent: request.intent,
         policy: request.policy,
       });
-      const routeById = new Map(routes.map((route) => [route.id, route]));
-      const factById = new Map(facts.map((fact) => [fact.routeId, fact]));
+      const routeById = MutableHashMap.fromIterable(routes.map((route) => [route.id, route]));
+      const factById = MutableHashMap.fromIterable(facts.map((fact) => [fact.routeId, fact]));
       return {
         chat,
         ranking,
@@ -375,8 +382,12 @@ export function makeImageRouter(
           reasons: ["no eligible image route"],
           ranking: result.ranking,
         });
-      const route = result.routeById.get(selectedScore.routeId)!;
-      const fact = result.factById.get(selectedScore.routeId)!;
+      const route = Option.getOrUndefined(
+        MutableHashMap.get(result.routeById, selectedScore.routeId),
+      )!;
+      const fact = Option.getOrUndefined(
+        MutableHashMap.get(result.factById, selectedScore.routeId),
+      )!;
       const preference = request.policy.preference ?? "balanced";
       return Object.freeze({
         type: "selected" as const,
@@ -390,10 +401,11 @@ export function makeImageRouter(
         initiatorProvider: result.chat.provider,
         crossProvider: result.chat.provider !== route.provider,
         crossProviderConsentMode:
-          result.consentByRoute.get(route.id) ??
+          Option.getOrUndefined(MutableHashMap.get(result.consentByRoute, route.id)) ??
           (result.chat.provider === route.provider ? "always" : "disabled"),
         crossProviderApprovalRequired:
-          result.chat.provider !== route.provider && result.consentByRoute.get(route.id) === "ask",
+          result.chat.provider !== route.provider &&
+          Option.getOrUndefined(MutableHashMap.get(result.consentByRoute, route.id)) === "ask",
         accountId: fact.accountId,
         executionMode: route.executionMode,
         ...optionalProperty("estimatedCostUsd", selectedScore.estimatedCostUsd),
@@ -417,8 +429,12 @@ export function makeImageRouter(
         const alternatives: ImageRouteDecision[] = [];
         for (const candidate of result.ranking) {
           if (!candidate.eligible || candidate.routeId === decision.executorMediaRouteId) continue;
-          const route = result.routeById.get(candidate.routeId)!;
-          const fact = result.factById.get(candidate.routeId)!;
+          const route = Option.getOrUndefined(
+            MutableHashMap.get(result.routeById, candidate.routeId),
+          )!;
+          const fact = Option.getOrUndefined(
+            MutableHashMap.get(result.factById, candidate.routeId),
+          )!;
           alternatives.push(
             Object.freeze({
               ...decision,

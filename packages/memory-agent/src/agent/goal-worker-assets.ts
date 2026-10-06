@@ -22,7 +22,7 @@ import { tmpdir } from "node:os";
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { Schema } from "effect";
+import { MutableHashMap, Option, Schema } from "effect";
 import { runtimeGoalSdkMetadata, runtimeWorker } from "../runtime/resources.ts";
 
 const dependencyMap = Schema.Record(Schema.String, Schema.String);
@@ -103,7 +103,7 @@ export function makeGoalWorkerAssetsRegistry(
   const root = realpathSync(
     mkdtempSync(join(options.temporaryDirectory ?? tmpdir(), "goal-worker-assets-")),
   );
-  const goals = new Map<string, GoalExecutionAssets>();
+  const goals = MutableHashMap.empty<string, GoalExecutionAssets>();
   let disposed = false;
   let activeLeases = 0;
 
@@ -152,15 +152,18 @@ export function makeGoalWorkerAssetsRegistry(
     // Resolve only for new capture: cold adoption never requires replacement live assets.
     const source = options.sourceDirectory ?? dirname(runtimeWorker("full-loop-worker"));
     const sdkEntry = options.sdkEntry ?? runtimeGoalSdkMetadata();
-    const files = new Map<string, Buffer>();
-    const packages = new Map<string, { index: number; dependencies: Map<string, string> }>();
+    const files = MutableHashMap.empty<string, Buffer>();
+    const packages = MutableHashMap.empty<
+      string,
+      { index: number; dependencies: MutableHashMap.MutableHashMap<string, string> }
+    >();
     let size = 0;
     const put = (path: string) => {
       const bytes = readFileSync(path);
       size += bytes.length;
-      if (size > 64 * 1024 * 1024 || files.size >= 20000)
+      if (size > 64 * 1024 * 1024 || MutableHashMap.size(files) >= 20000)
         throw new Error("Goal asset snapshot exceeds bounded capture");
-      files.set(path, bytes);
+      MutableHashMap.set(files, path, bytes);
     };
     function packageRoot(entry: string): string {
       let cursor = dirname(entry);
@@ -182,9 +185,12 @@ export function makeGoalWorkerAssetsRegistry(
       }
     }
     function visit(directory: string) {
-      if (packages.has(directory)) return;
-      const record = { index: packages.size, dependencies: new Map<string, string>() };
-      packages.set(directory, record);
+      if (MutableHashMap.has(packages, directory)) return;
+      const record = {
+        index: MutableHashMap.size(packages),
+        dependencies: MutableHashMap.empty<string, string>(),
+      };
+      MutableHashMap.set(packages, directory, record);
       function walk(path: string) {
         for (const entry of readdirSync(path, { withFileTypes: true }).sort((a, b) =>
           a.name.localeCompare(b.name),
@@ -200,7 +206,11 @@ export function makeGoalWorkerAssetsRegistry(
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
       // @effect-diagnostics-next-line schemaSync:off
       const metadata = Schema.decodeUnknownSync(packageMetadata)(
-        JSON.parse(files.get(join(directory, "package.json"))!.toString("utf8")),
+        JSON.parse(
+          Option.getOrUndefined(
+            MutableHashMap.get(files, join(directory, "package.json")),
+          )!.toString("utf8"),
+        ),
       );
       const names = new Set([
         ...Object.keys(metadata.dependencies ?? {}),
@@ -220,7 +230,7 @@ export function makeGoalWorkerAssetsRegistry(
             continue;
           throw new Error(`Unavailable SDK dependency: ${name}`);
         }
-        record.dependencies.set(name, dependency);
+        MutableHashMap.set(record.dependencies, name, dependency);
         visit(dependency);
       }
     }
@@ -238,7 +248,7 @@ export function makeGoalWorkerAssetsRegistry(
   return {
     resolve(goalInstanceId: string): GoalExecutionAssets {
       if (disposed || !(goalInstanceId.length > 0)) throw new Error("Inactive Goal asset registry");
-      const existing = goals.get(goalInstanceId);
+      const existing = Option.getOrUndefined(MutableHashMap.get(goals, goalInstanceId));
       if (isTruthy(existing)) {
         verify(existing);
         return existing;
@@ -249,13 +259,17 @@ export function makeGoalWorkerAssetsRegistry(
       mkdirSync(destination);
       try {
         const packagePath = (path: string) =>
-          join(destination, "packages", String(captured.packages.get(path)!.index));
+          join(
+            destination,
+            "packages",
+            String(Option.getOrUndefined(MutableHashMap.get(captured.packages, path))!.index),
+          );
         for (const [path, bytes] of captured.files) {
           let output: string;
           if (modules.some((name) => path === join(captured.source, name)))
             output = join(destination, "worker", path.slice(captured.source.length + 1));
           else {
-            const parent = [...captured.packages.keys()].find((directory) =>
+            const parent = [...MutableHashMap.keys(captured.packages)].find((directory) =>
               path.startsWith(directory + "/"),
             );
             if (!isTruthy(parent)) throw new Error("Unmapped SDK asset");
@@ -294,7 +308,7 @@ export function makeGoalWorkerAssetsRegistry(
           canonicalWorkerUrl: workerUrlString,
           manifestHash: digest(manifest),
         });
-        goals.set(goalInstanceId, assets);
+        MutableHashMap.set(goals, goalInstanceId, assets);
         return assets;
       } catch (error) {
         rmSync(destination, { recursive: true, force: true });
@@ -305,7 +319,7 @@ export function makeGoalWorkerAssetsRegistry(
     /** Cold completed-Goal adoption only: validates saved bytes, never captures replacement code. */
     adopt(saved: SavedGoalExecutionAssets): GoalExecutionAssets {
       const verified = verify(saved);
-      const existing = goals.get(saved.goalInstanceId);
+      const existing = Option.getOrUndefined(MutableHashMap.get(goals, saved.goalInstanceId));
       if (isTruthy(existing)) {
         if (
           existing.manifestHash !== verified.manifestHash ||
@@ -315,12 +329,15 @@ export function makeGoalWorkerAssetsRegistry(
           throw new Error("Goal asset pin conflict");
         return existing;
       }
-      goals.set(verified.goalInstanceId, verified);
+      MutableHashMap.set(goals, verified.goalInstanceId, verified);
       return verified;
     },
     /** Acquire before Worker construction; release only after termination/exit (or boot failure). */
     use(assets: GoalExecutionAssets) {
-      if (disposed || goals.get(assets.goalInstanceId) !== assets)
+      if (
+        disposed ||
+        Option.getOrUndefined(MutableHashMap.get(goals, assets.goalInstanceId)) !== assets
+      )
         throw new Error("Unregistered Goal execution assets");
       verify(assets);
       activeLeases++;
@@ -338,7 +355,7 @@ export function makeGoalWorkerAssetsRegistry(
     dispose(options: { readonly remove?: boolean } = {}): void {
       if (activeLeases !== 0) throw new Error("Goal asset workers are still active");
       disposed = true;
-      goals.clear();
+      MutableHashMap.clear(goals);
       // Production shutdown retains immutable pins. Explicit removal is for test-owned roots only;
       // this registry never deletes adopted snapshots owned by another registry.
       if (options.remove === true) rmSync(root, { recursive: true, force: true });

@@ -1,6 +1,6 @@
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off globalFetch:off globalTimers:off newPromise:off nodeBuiltinImport:off
-import { DateTime } from "effect";
+import { MutableHashMap, Option, DateTime } from "effect";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, test } from "vite-plus/test";
@@ -20,17 +20,17 @@ import {
 } from "../src/oauth/protocol.ts";
 
 class MemoryCredentialStore implements CredentialStore {
-  readonly values = new Map<OAuthProvider, StoredCredential>();
+  readonly values = MutableHashMap.empty<OAuthProvider, StoredCredential>();
   writes = 0;
   async read(provider: OAuthProvider) {
-    return this.values.get(provider) ?? null;
+    return Option.getOrUndefined(MutableHashMap.get(this.values, provider)) ?? null;
   }
   async write(provider: OAuthProvider, credential: StoredCredential) {
     this.writes += 1;
-    this.values.set(provider, credential);
+    MutableHashMap.set(this.values, provider, credential);
   }
   async remove(provider: OAuthProvider) {
-    this.values.delete(provider);
+    MutableHashMap.remove(this.values, provider);
   }
 }
 
@@ -601,7 +601,9 @@ for (const provider of ["openai", "anthropic"] as const) {
       expect(first).toHaveLength(provider === "openai" ? 2 : 4);
       expect(second).toHaveLength(provider === "openai" ? 2 : 4);
       expect(fake.counts().refreshRequests).toBe(1);
-      expect(store.values.get(provider)?.refreshToken).toBe("refresh-secret-2");
+      expect(Option.getOrUndefined(MutableHashMap.get(store.values, provider))?.refreshToken).toBe(
+        "refresh-secret-2",
+      );
       expect(fake.modelHeaders.at(-1)?.authorization).toBe("Bearer access-secret-2");
     });
 
@@ -610,15 +612,17 @@ for (const provider of ["openai", "anthropic"] as const) {
       const store = new MemoryCredentialStore();
       const harness = OAuthValidationHarness({ protocol: fake.protocol, store });
       await login(harness);
-      const credential = store.values.get(provider)!;
-      store.values.set(provider, {
+      const credential = Option.getOrUndefined(MutableHashMap.get(store.values, provider))!;
+      MutableHashMap.set(store.values, provider, {
         ...credential,
         expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 20_000,
       });
 
       await expect(harness.status()).resolves.toMatchObject({ provider, connected: true });
       expect(fake.counts().refreshRequests).toBe(1);
-      expect(store.values.get(provider)?.accessToken).toBe("access-secret-2");
+      expect(Option.getOrUndefined(MutableHashMap.get(store.values, provider))?.accessToken).toBe(
+        "access-secret-2",
+      );
     });
 
     test("signs out after the provider permanently rejects an expired credential", async () => {
@@ -626,8 +630,8 @@ for (const provider of ["openai", "anthropic"] as const) {
       const store = new MemoryCredentialStore();
       const harness = OAuthValidationHarness({ protocol: fake.protocol, store });
       await login(harness);
-      const credential = store.values.get(provider)!;
-      store.values.set(provider, {
+      const credential = Option.getOrUndefined(MutableHashMap.get(store.values, provider))!;
+      MutableHashMap.set(store.values, provider, {
         ...credential,
         expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) - 1,
       });
@@ -639,7 +643,7 @@ for (const provider of ["openai", "anthropic"] as const) {
         expiresAt: null,
       });
       expect(fake.counts().refreshRequests).toBe(1);
-      expect(store.values.has(provider)).toBe(false);
+      expect(MutableHashMap.has(store.values, provider)).toBe(false);
     });
   });
 }
@@ -664,7 +668,7 @@ describe("provider wire contracts", () => {
 
   test("classifies only Anthropic cache-feature HTTP rejection for safe fallback", async () => {
     const store = new MemoryCredentialStore();
-    store.values.set("anthropic", {
+    MutableHashMap.set(store.values, "anthropic", {
       accessToken: "access-secret",
       refreshToken: "refresh-secret",
       expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 60_000,
@@ -751,7 +755,7 @@ describe("OAuth callback safety", () => {
       expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 300_000,
     };
     const store = new MemoryCredentialStore();
-    store.values.set("anthropic", prior);
+    MutableHashMap.set(store.values, "anthropic", prior);
     const deferred: CredentialStore = {
       read: (provider) => store.read(provider),
       write: async (provider, value) => {
@@ -769,7 +773,7 @@ describe("OAuth callback safety", () => {
     release();
     await expect(attempt.completed).rejects.toMatchObject({ code: "cancelled" });
     await browser;
-    expect(store.values.get("anthropic")).toEqual(prior);
+    expect(Option.getOrUndefined(MutableHashMap.get(store.values, "anthropic"))).toEqual(prior);
   });
 
   test("uses separate OS-keychain namespaces and has no file fallback contract", () => {

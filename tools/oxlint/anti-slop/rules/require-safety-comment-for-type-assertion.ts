@@ -1,3 +1,4 @@
+import { MutableHashMap, Option } from "effect";
 import { defineRule } from "vite-plus/lint/plugins";
 
 import type { ESTree, SourceCode } from "vite-plus/lint/plugins";
@@ -107,14 +108,14 @@ export const requireSafetyCommentForTypeAssertionRule = defineRule({
     defaultOptions: [{ markers: ["SAFETY"] }],
   },
   createOnce(context) {
-    const patterns = new Map<string, RegExp>();
+    const patterns = MutableHashMap.empty<string, RegExp>();
 
     const checkAssertion = (node: TypeAssertion) => {
       if (isConstAssertion(node)) return;
       const markers = configuredSafetyMarkers(context.options?.[0]);
       const patternKey = markers.join("\u0000");
-      const pattern = patterns.get(patternKey) ?? markerPattern(markers);
-      patterns.set(patternKey, pattern);
+      const pattern = Option.getOrUndefined(MutableHashMap.get(patterns, patternKey)) ?? markerPattern(markers);
+      MutableHashMap.set(patterns, patternKey, pattern);
       if (hasSafetyComment(context.sourceCode, node, pattern)) return;
       context.report({
         node,

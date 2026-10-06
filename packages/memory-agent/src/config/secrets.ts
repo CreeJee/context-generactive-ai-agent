@@ -1,4 +1,4 @@
-import { Context, Data, Effect, Layer } from "effect";
+import { MutableHashMap, Option, Context, Data, Effect, Layer } from "effect";
 import { requireRuntime } from "../runtime/resources.ts";
 
 /** Keychain service name every secret of this app is stored under. */
@@ -53,11 +53,12 @@ export class SecretStore extends Context.Service<SecretStore, SecretStoreApi>()(
 
   /** Kept in memory only, for tests. */
   static readonly memory = Layer.sync(SecretStore, () => {
-    const values = new Map<SecretName, string>();
+    const values = MutableHashMap.empty<SecretName, string>();
     return {
-      get: (name) => Effect.sync(() => values.get(name) ?? null),
-      set: (name, value) => Effect.sync(() => void values.set(name, value)),
-      remove: (name) => Effect.sync(() => void values.delete(name)),
+      get: (name) =>
+        Effect.sync(() => Option.getOrUndefined(MutableHashMap.get(values, name)) ?? null),
+      set: (name, value) => Effect.sync(() => void MutableHashMap.set(values, name, value)),
+      remove: (name) => Effect.sync(() => void MutableHashMap.remove(values, name)),
     };
   });
 }

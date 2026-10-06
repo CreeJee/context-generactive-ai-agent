@@ -6,25 +6,31 @@ import type { OwnerRpcOperations, OwnerRpcReply, OwnerRpcRequest } from "./owner
 export function makeOwnerRpcPortClient(port: MessagePort) {
   let nextId = 0;
   let closed = false;
-  const pending = new Map<
-    number,
-    {
-      resolve: (reply: OwnerRpcReply) => void;
-      reject: (error: Error) => void;
-      operationId: number;
-    }
-  >();
+  const pending: Partial<
+    Record<
+      number,
+      {
+        resolve: (reply: OwnerRpcReply) => void;
+        reject: (error: Error) => void;
+        operationId: number;
+      }
+    >
+  > = {};
   function close() {
     if (closed) return;
     closed = true;
-    for (const entry of pending.values()) entry.reject(new Error("Owner port closed; no replay"));
-    pending.clear();
+    const entries = Object.values(pending);
+    for (const key of Object.keys(pending)) delete pending[Number(key)];
+    for (const entry of entries) entry?.reject(new Error("Owner port closed; no replay"));
     port.close();
   }
   port.on("close", close);
   port.on("messageerror", close);
   port.on("message", (frame) => {
-    const entry = pending.get(frame?.requestId);
+    const entry =
+      Number.isSafeInteger(frame?.requestId) && frame.requestId > 0
+        ? pending[frame.requestId]
+        : undefined;
     if (
       frame?.type !== "reply" ||
       entry === undefined ||
@@ -32,7 +38,7 @@ export function makeOwnerRpcPortClient(port: MessagePort) {
       !["succeeded", "pending", "uncertain", "rejected"].includes(frame.reply.type)
     )
       return close();
-    pending.delete(frame.requestId);
+    delete pending[frame.requestId];
     entry.resolve(frame.reply);
   });
   port.start();
@@ -48,7 +54,7 @@ export function makeOwnerRpcPortClient(port: MessagePort) {
       // Native MessagePort callback handshake; close rejects every pending request.
       // @effect-diagnostics-next-line newPromise:off
       return new Promise((resolve, reject) => {
-        pending.set(requestId, { resolve, reject, operationId: request.operationId });
+        pending[requestId] = { resolve, reject, operationId: request.operationId };
         try {
           port.postMessage({ type: "request", requestId, request });
         } catch {

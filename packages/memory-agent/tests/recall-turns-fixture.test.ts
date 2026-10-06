@@ -2,7 +2,7 @@
 // @effect-diagnostics nodeBuiltinImport:off schemaSync:off
 import { isTruthy } from "../src/truthy.ts";
 import { readFileSync } from "node:fs";
-import { Schema } from "effect";
+import { MutableHashMap, Option, Schema } from "effect";
 import { expect, test } from "vite-plus/test";
 
 type Split = "train" | "validation" | "holdout";
@@ -61,7 +61,7 @@ test("synthetic recall turns have deterministic disjoint splits and grounded gol
   expect(splits.flatMap((split) => fixture.partitions[split])).toEqual(caseIds);
   expect(splits.every((split) => fixture.partitions[split].length > 0)).toBe(true);
 
-  const evidenceBySplit = new Map<Split, Set<string>>();
+  const evidenceBySplit = MutableHashMap.empty<Split, Set<string>>();
   for (const split of splits) {
     const evidenceIds: string[] = [];
     for (const id of fixture.partitions[split]) {
@@ -127,13 +127,15 @@ test("synthetic recall turns have deterministic disjoint splits and grounded gol
       evidenceIds.push(...localIds);
     }
     expect(unique(evidenceIds), split).toBe(true);
-    evidenceBySplit.set(split, new Set(evidenceIds));
+    MutableHashMap.set(evidenceBySplit, split, new Set(evidenceIds));
   }
   for (const left of splits)
     for (const right of splits) {
       if (left !== right)
         expect(
-          [...evidenceBySplit.get(left)!].some((id) => evidenceBySplit.get(right)!.has(id)),
+          [...Option.getOrUndefined(MutableHashMap.get(evidenceBySplit, left))!].some((id) =>
+            Option.getOrUndefined(MutableHashMap.get(evidenceBySplit, right))!.has(id),
+          ),
         ).toBe(false);
     }
 });

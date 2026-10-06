@@ -1,3 +1,4 @@
+import { MutableHashMap, Option } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
 import { DatabaseSync } from "node:sqlite";
@@ -34,24 +35,26 @@ const token = (value: string): StoredCredential => ({
 function fixture() {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec(oauthSchema);
-  const legacySecrets = new Map<OAuthProvider, StoredCredential>();
-  const profileSecrets = new Map<string, StoredCredential>();
+  const legacySecrets = MutableHashMap.empty<OAuthProvider, StoredCredential>();
+  const profileSecrets = MutableHashMap.empty<string, StoredCredential>();
   const legacy: CredentialStore = {
-    read: async (provider) => legacySecrets.get(provider) ?? null,
+    read: async (provider) =>
+      Option.getOrUndefined(MutableHashMap.get(legacySecrets, provider)) ?? null,
     write: async (provider, value) => {
-      legacySecrets.set(provider, value);
+      MutableHashMap.set(legacySecrets, provider, value);
     },
     remove: async (provider) => {
-      legacySecrets.delete(provider);
+      MutableHashMap.remove(legacySecrets, provider);
     },
   };
   const accounts = createProfileCredentialStore((id) => ({
-    read: async (provider) => profileSecrets.get(`${provider}:${id}`) ?? null,
+    read: async (provider) =>
+      Option.getOrUndefined(MutableHashMap.get(profileSecrets, `${provider}:${id}`)) ?? null,
     write: async (provider, value) => {
-      profileSecrets.set(`${provider}:${id}`, value);
+      MutableHashMap.set(profileSecrets, `${provider}:${id}`, value);
     },
     remove: async (provider) => {
-      profileSecrets.delete(`${provider}:${id}`);
+      MutableHashMap.remove(profileSecrets, `${provider}:${id}`);
     },
   }));
   return { sqlite, legacy, accounts, legacySecrets, profileSecrets };
@@ -76,7 +79,7 @@ describe("OAuth per-profile secret storage and non-destructive migration", () =>
           expect(await accounts.read(provider, id)).toEqual(token(`${provider}-${id}`));
         }
       }
-      expect(profileSecrets.size).toBe(4);
+      expect(MutableHashMap.size(profileSecrets)).toBe(4);
       expect(JSON.stringify(listOAuthProfiles(sqlite))).not.toContain("access-");
       expect(JSON.stringify(listOAuthProfiles(sqlite))).not.toContain("refresh-");
     } finally {
@@ -98,7 +101,7 @@ describe("OAuth per-profile secret storage and non-destructive migration", () =>
           imported,
         );
         expect(listOAuthProfiles(sqlite, provider)).toHaveLength(1);
-        expect(legacySecrets.size).toBe(1);
+        expect(MutableHashMap.size(legacySecrets)).toBe(1);
       } finally {
         sqlite.close();
       }

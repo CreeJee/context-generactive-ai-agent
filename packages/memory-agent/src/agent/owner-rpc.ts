@@ -1,5 +1,5 @@
 import { isTruthy } from "../truthy.ts";
-import { Exit, Option, Cause, Effect, Predicate, Schema } from "effect";
+import { MutableHashMap, Exit, Option, Cause, Effect, Predicate, Schema } from "effect";
 import type { RunBinding } from "../workflow/run-bindings.ts";
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
@@ -88,28 +88,28 @@ export interface OwnerRpcLedger {
 
 /** Test/reference ledger only: NOT crash-safe and NOT a production integration. */
 export function makeInMemoryOwnerRpcLedger(): OwnerRpcLedger {
-  const runs = new Map<
+  const runs = MutableHashMap.empty<
     string,
     {
       highWater: number;
-      records: Map<number, OwnerRpcRecord>;
+      records: MutableHashMap.MutableHashMap<number, OwnerRpcRecord>;
       pendingEffects: Set<number>;
     }
   >();
   return {
     reserve(runKey, operationId, fingerprint, sideEffect) {
-      let run = runs.get(runKey);
+      let run = Option.getOrUndefined(MutableHashMap.get(runs, runKey));
       if (!isTruthy(run)) {
-        run = { highWater: 0, records: new Map(), pendingEffects: new Set() };
-        runs.set(runKey, run);
+        run = { highWater: 0, records: MutableHashMap.empty(), pendingEffects: new Set() };
+        MutableHashMap.set(runs, runKey, run);
       }
-      const existing = run.records.get(operationId);
+      const existing = Option.getOrUndefined(MutableHashMap.get(run.records, operationId));
       if (isTruthy(existing)) return { type: "existing", record: existing };
       if (operationId <= run.highWater) return { type: "rejected", reason: "non_monotonic" };
       if (sideEffect && run.pendingEffects.size > 0)
         return { type: "rejected", reason: "uncertain_run" };
       run.highWater = operationId;
-      run.records.set(operationId, {
+      MutableHashMap.set(run.records, operationId, {
         fingerprint,
         reply: { type: "pending", operationId },
       });
@@ -117,8 +117,12 @@ export function makeInMemoryOwnerRpcLedger(): OwnerRpcLedger {
       return { type: "reserved" };
     },
     settle(runKey, operationId, reply) {
-      const run = runs.get(runKey);
-      const record = run?.records.get(operationId);
+      const run = Option.getOrUndefined(MutableHashMap.get(runs, runKey));
+      const record = Option.getOrUndefined(
+        Option.flatMap(Option.fromNullishOr(run?.records), (map) =>
+          MutableHashMap.get(map, operationId),
+        ),
+      );
       if (!isTruthy(run) || !isTruthy(record)) throw new Error("Unreserved owner RPC operation");
       switch (record.reply.type) {
         case "pending":
@@ -126,7 +130,7 @@ export function makeInMemoryOwnerRpcLedger(): OwnerRpcLedger {
         default:
           throw new Error("Owner RPC operation already settled");
       }
-      run.records.set(operationId, { fingerprint: record.fingerprint, reply });
+      MutableHashMap.set(run.records, operationId, { fingerprint: record.fingerprint, reply });
       switch (reply.type) {
         case "succeeded":
           run.pendingEffects.delete(operationId);

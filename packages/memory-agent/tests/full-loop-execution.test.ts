@@ -16,7 +16,7 @@ import {
 } from "@tanstack/ai";
 import { webSearchTool } from "@tanstack/ai-openai/tools";
 import { expect, test, vi } from "vite-plus/test";
-import { Effect, Layer } from "effect";
+import { MutableHashMap, Option, Effect, Layer } from "effect";
 import { Database } from "../src/db/database.ts";
 import { PermissionGate } from "../src/permissions/gate.ts";
 import { PermissionReviews } from "../src/permissions/reviews.ts";
@@ -865,14 +865,15 @@ test.each([true, false])(
   async (hasOldResult) => {
     const f = fixture();
     try {
-      const values = new Map<string, unknown>();
+      const values = MutableHashMap.empty<string, unknown>();
       const metadata: MetadataStore = {
-        get: async (namespace, key) => values.get(`${namespace}:${key}`) ?? null,
+        get: async (namespace, key) =>
+          Option.getOrUndefined(MutableHashMap.get(values, `${namespace}:${key}`)) ?? null,
         set: async (namespace, key, value) => {
-          values.set(`${namespace}:${key}`, value);
+          MutableHashMap.set(values, `${namespace}:${key}`, value);
         },
         delete: async (namespace, key) => {
-          values.delete(`${namespace}:${key}`);
+          MutableHashMap.remove(values, `${namespace}:${key}`);
         },
       };
       const past = [

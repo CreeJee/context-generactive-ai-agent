@@ -2,7 +2,7 @@
 // @effect-diagnostics asyncFunction:off missingPipeableSignature:off newPromise:off schemaSync:off
 import { isTruthy } from "../../src/truthy.ts";
 import type { ModelMessage } from "@tanstack/ai";
-import { Effect, Layer, Schema } from "effect";
+import { MutableHashMap, Option, Effect, Layer, Schema } from "effect";
 import {
   GlobalConfig,
   ModelUnavailable,
@@ -141,7 +141,9 @@ export const defaultTestResponder: ScriptedResponder = async (invocation) => {
   }
 
   if (tools.length > 0) {
-    const byId = new Map(tools.map((message) => [message.toolCallId, toolText(message)]));
+    const byId = MutableHashMap.fromIterable(
+      tools.map((message) => [message.toolCallId, toolText(message)]),
+    );
     // Exercise the asynchronous contract explicitly: dispatch -> wait -> retrieve. The test
     // model waits by choice; production dispatch tools no longer block their parent turn.
     if (!instructions.includes("You are a subagent") && !user.includes("dispatch only")) {
@@ -161,7 +163,7 @@ export const defaultTestResponder: ScriptedResponder = async (invocation) => {
           attempts: receipts,
           timeoutMs: 30_000,
         });
-      if (byId.has("call-wait-children")) {
+      if (MutableHashMap.has(byId, "call-wait-children")) {
         const result = Schema.decodeSync(
           Schema.fromJsonString(
             Schema.Struct({
@@ -170,7 +172,7 @@ export const defaultTestResponder: ScriptedResponder = async (invocation) => {
               ),
             }),
           ),
-        )(byId.get("call-wait-children")!);
+        )(Option.getOrUndefined(MutableHashMap.get(byId, "call-wait-children"))!);
         return {
           toolCalls: result.attempts.map((attempt, index) => ({
             id: `call-report-${index}`,
@@ -179,17 +181,20 @@ export const defaultTestResponder: ScriptedResponder = async (invocation) => {
           })),
         };
       }
-      if ([...byId.keys()].some((id) => id.startsWith("call-report-")))
-        return { text: [...byId.values()].join(" | ") };
+      if ([...MutableHashMap.keys(byId)].some((id) => id.startsWith("call-report-")))
+        return { text: [...MutableHashMap.values(byId)].join(" | ") };
     }
-    if (byId.has("call-memory")) {
-      const found = JSON.parse(byId.get("call-memory")!);
+    if (MutableHashMap.has(byId, "call-memory")) {
+      const found = JSON.parse(Option.getOrUndefined(MutableHashMap.get(byId, "call-memory"))!);
       return { text: `Found: ${found.matches?.[0]?.snippet ?? "nothing"}` };
     }
-    if (byId.has("call-shell")) return { text: `Shell said ${byId.get("call-shell")}` };
-    if (byId.has("call-files")) return { text: "Files checked. Heard: nothing" };
+    if (MutableHashMap.has(byId, "call-shell"))
+      return {
+        text: `Shell said ${Option.getOrUndefined(MutableHashMap.get(byId, "call-shell"))}`,
+      };
+    if (MutableHashMap.has(byId, "call-files")) return { text: "Files checked. Heard: nothing" };
     if ([...byId].some(([id]) => id.startsWith("call-delegate-")))
-      return { text: `Both: ${[...byId.values()].join(" | ")}` };
+      return { text: `Both: ${[...MutableHashMap.values(byId)].join(" | ")}` };
     const sequential = user.match(/^sequential weather (\d+)$/);
     if (isTruthy(sequential)) {
       const done = invocation.messages.filter(
@@ -200,8 +205,11 @@ export const defaultTestResponder: ScriptedResponder = async (invocation) => {
         return call(`call-seq-${done.length}`, "get_weather", { city: `City${done.length}` });
       return { text: `Looked up ${done.length}: ${done.map(toolText).join(" | ")}` };
     }
-    if (byId.has("call-0") || byId.has("call-1")) {
-      const answers = [byId.get("call-0"), byId.get("call-1")].filter(Boolean);
+    if (MutableHashMap.has(byId, "call-0") || MutableHashMap.has(byId, "call-1")) {
+      const answers = [
+        Option.getOrUndefined(MutableHashMap.get(byId, "call-0")),
+        Option.getOrUndefined(MutableHashMap.get(byId, "call-1")),
+      ].filter(Boolean);
       return {
         text: answers.length > 1 ? `Both: ${answers.join(" | ")}` : `Weather says ${answers[0]}`,
       };

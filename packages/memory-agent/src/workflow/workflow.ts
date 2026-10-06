@@ -370,7 +370,7 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
 
     const { sqlite, atomic } = yield* Database;
     const completion = completionEvidence(sqlite);
-    const serialize = keyedSerialLimit();
+    const serialize = yield* keyedSerialLimit();
     const select = sqlite.prepare("SELECT state_json FROM session_workflows WHERE session_id = ?");
     const upsert = sqlite.prepare(`
     INSERT INTO session_workflows (session_id, state_json, updated_at) VALUES (?, ?, ?)

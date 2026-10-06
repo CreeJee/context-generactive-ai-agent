@@ -1,5 +1,5 @@
 import { isTruthy } from "../truthy.ts";
-import { Context, Effect, Layer } from "effect";
+import { MutableHashMap, Option, Context, Effect, Layer } from "effect";
 import {
   ProviderUnavailable,
   type AgentModelRuntime,
@@ -29,24 +29,26 @@ export const providerRegistryFrom = (
   runtimes: ReadonlyArray<AgentModelRuntime> = [],
   subscriptionDependencies?: SubscriptionDependencyResolver,
 ): ProviderRegistryApi => {
-  const byProvider = new Map(
+  const byProvider = MutableHashMap.fromIterable(
     configurations.map((configuration) => [configuration.provider, configuration]),
   );
-  const runtimeByProvider = new Map(runtimes.map((runtime) => [runtime.provider, runtime]));
+  const runtimeByProvider = MutableHashMap.fromIterable(
+    runtimes.map((runtime) => [runtime.provider, runtime]),
+  );
   return {
-    providers: [...byProvider.keys()],
+    providers: [...MutableHashMap.keys(byProvider)],
     subscriptionDependencies: (provider) =>
-      byProvider.has(provider) && subscriptionDependencies !== undefined
+      MutableHashMap.has(byProvider, provider) && subscriptionDependencies !== undefined
         ? subscriptionDependencies(provider)
         : Effect.fail(new ProviderUnavailable({ provider })),
     get: (provider) => {
-      const configuration = byProvider.get(provider);
+      const configuration = Option.getOrUndefined(MutableHashMap.get(byProvider, provider));
       return isTruthy(configuration)
         ? Effect.succeed(configuration)
         : Effect.fail(new ProviderUnavailable({ provider }));
     },
     runtime: (provider) => {
-      const runtime = runtimeByProvider.get(provider);
+      const runtime = Option.getOrUndefined(MutableHashMap.get(runtimeByProvider, provider));
       return isTruthy(runtime)
         ? Effect.succeed(runtime)
         : Effect.fail(new ProviderUnavailable({ provider }));

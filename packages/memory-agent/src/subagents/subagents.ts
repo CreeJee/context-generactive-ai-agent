@@ -11,7 +11,18 @@ import {
   type ChatMiddleware,
   type ModelMessage,
 } from "@tanstack/ai";
-import { Clock, Context, Data, Deferred, Effect, FiberMap, Layer, Option, Schema } from "effect";
+import {
+  MutableHashMap,
+  Clock,
+  Context,
+  Data,
+  Deferred,
+  Effect,
+  FiberMap,
+  Layer,
+  Option,
+  Schema,
+} from "effect";
 import { ChatState } from "../chat-state/chat-state.ts";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
 import { ApiUsage, collectApiUsage } from "../agent/api-usage.ts";
@@ -336,7 +347,7 @@ const make = Effect.gen(function* () {
     "SELECT * FROM subagents WHERE session_id = ? ORDER BY created_at, rowid",
   );
 
-  const serializeNamed = keyedSerialLimit();
+  const serializeNamed = yield* keyedSerialLimit();
   let completionListener: ((sessionId: string) => void) | undefined;
   /** Controllers indexed independently so archive/delete stops one child, not its parent or peers. */
   type ActiveChild = {
@@ -486,10 +497,10 @@ const make = Effect.gen(function* () {
       effectClock.currentTimeMillisUnsafe(),
       row.id,
     );
-    const texts = new Map<string, string>();
+    const texts = MutableHashMap.empty<string, string>();
     let lastMessageId: string | null = null;
     let failure: string | null = null;
-    const toolStates = new Map<string, ChildToolState>();
+    const toolStates = MutableHashMap.empty<string, ChildToolState>();
     const completedTools = () =>
       [...toolStates].flatMap(([id, state]) => {
         switch (state.status) {
@@ -577,7 +588,7 @@ const make = Effect.gen(function* () {
       const traceMiddleware: ChatMiddleware = {
         name: "memory-agent/subagent-trace",
         onBeforeToolCall(_ctx, hook) {
-          toolStates.set(hook.toolCallId, { status: "running" });
+          MutableHashMap.set(toolStates, hook.toolCallId, { status: "running" });
           trace.appendEvent({
             handle,
             sessionId: binding.sessionId,
@@ -588,8 +599,12 @@ const make = Effect.gen(function* () {
           return undefined;
         },
         onAfterToolCall(_ctx, hook) {
-          const completed = hook.ok && toolStates.get(hook.toolCallId)?.status !== "denied";
-          toolStates.set(
+          const completed =
+            hook.ok &&
+            Option.getOrUndefined(MutableHashMap.get(toolStates, hook.toolCallId))?.status !==
+              "denied";
+          MutableHashMap.set(
+            toolStates,
             hook.toolCallId,
             completed ? { status: "completed" } : { status: "failed" },
           );
@@ -631,7 +646,7 @@ const make = Effect.gen(function* () {
         traceMiddleware,
         projectInstructions(binding.project.root),
         relayGate(binding, row, handle, controller.signal, (id) => {
-          toolStates.set(id, { status: "denied" });
+          MutableHashMap.set(toolStates, id, { status: "denied" });
         }),
         reads.middleware,
         childContext,
@@ -658,7 +673,12 @@ const make = Effect.gen(function* () {
         switch (chunk.type) {
           case EventType.TEXT_MESSAGE_CONTENT:
             lastMessageId = chunk.messageId;
-            texts.set(chunk.messageId, (texts.get(chunk.messageId) ?? "") + chunk.delta);
+            MutableHashMap.set(
+              texts,
+              chunk.messageId,
+              (Option.getOrUndefined(MutableHashMap.get(texts, chunk.messageId)) ?? "") +
+                chunk.delta,
+            );
             break;
           case EventType.RUN_ERROR:
             failure = chunk.message;
@@ -681,7 +701,7 @@ const make = Effect.gen(function* () {
     const persistedToolResults = new Set(
       persisted.flatMap((message) => (message.role === "tool" ? [message.toolCallId] : [])),
     );
-    for (const toolCallId of toolStates.keys())
+    for (const toolCallId of MutableHashMap.keys(toolStates))
       if (persistedToolCalls.has(toolCallId))
         trace.recordEvidence({
           handle,
@@ -700,7 +720,9 @@ const make = Effect.gen(function* () {
           verification: "verified",
         });
 
-    const answer = isTruthy(lastMessageId) ? (texts.get(lastMessageId) ?? "") : "";
+    const answer = isTruthy(lastMessageId)
+      ? (Option.getOrUndefined(MutableHashMap.get(texts, lastMessageId)) ?? "")
+      : "";
     const status = controller.signal.aborted
       ? "cancelled"
       : isTruthy(failure)
@@ -1132,13 +1154,13 @@ const make = Effect.gen(function* () {
   return {
     /** Dispatch is nonblocking; only explicit retrieval marks a report reviewed in this run. */
     forRun(binding: SubagentBinding): SubagentRunTools {
-      const started = new Map<string, Promise<SubagentReport>>();
-      const reviewed = new Map<string, ChildOutcome>();
+      const started = MutableHashMap.empty<string, Promise<SubagentReport>>();
+      const reviewed = MutableHashMap.empty<string, ChildOutcome>();
       const deliveredNotificationIds = new Set(binding.deliveredParentNotificationIds);
       let adoptionDraft: AdoptionDraft | null = null;
 
       const start = (toolCallId: string, name: string, argumentsJson: string) => {
-        const existing = started.get(toolCallId);
+        const existing = Option.getOrUndefined(MutableHashMap.get(started, toolCallId));
         if (isTruthy(existing)) return existing;
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
         // @effect-diagnostics-next-line asyncFunction:off
@@ -1202,7 +1224,7 @@ const make = Effect.gen(function* () {
           return startNamed(binding, toolCallId, input.agent, input.message, input.instructions);
         })();
         outcome.catch(() => undefined);
-        started.set(toolCallId, outcome);
+        MutableHashMap.set(started, toolCallId, outcome);
         return outcome;
       };
 
@@ -1233,7 +1255,7 @@ const make = Effect.gen(function* () {
         start(context?.toolCallId ?? randomUUID(), "resume_subagent", JSON.stringify(input)),
       );
 
-      const reportResults = new Map<string, readonly SubagentReport[]>();
+      const reportResults = MutableHashMap.empty<string, readonly SubagentReport[]>();
       const reportTool = toolDefinition({
         name: "get_subagent_report",
         description:
@@ -1243,7 +1265,7 @@ const make = Effect.gen(function* () {
         // @effect-diagnostics-next-line asyncFunction:off
       }).server(async (input, context) => {
         const result = await getReport(binding.sessionId, input.taskId, input.attemptId);
-        reportResults.set(context?.toolCallId ?? "", [result]);
+        MutableHashMap.set(reportResults, context?.toolCallId ?? "", [result]);
         return result;
       });
       const reportsTool = toolDefinition({
@@ -1262,7 +1284,7 @@ const make = Effect.gen(function* () {
             getReport(binding.sessionId, taskId, attemptId),
           ),
         );
-        reportResults.set(context?.toolCallId ?? "", reports);
+        MutableHashMap.set(reportResults, context?.toolCallId ?? "", reports);
         return { reports };
       });
       const waitTool = toolDefinition({
@@ -1333,7 +1355,9 @@ const make = Effect.gen(function* () {
         // @effect-diagnostics-next-line schemaSync:off
         const draft = Schema.decodeSync(AdoptSubagentReportsInput)(input);
         for (const report of draft.reports) {
-          const available = reviewed.get(`${report.taskId}:${report.attemptId}`);
+          const available = Option.getOrUndefined(
+            MutableHashMap.get(reviewed, `${report.taskId}:${report.attemptId}`),
+          );
           if (!isTruthy(available))
             throw new Error("Only reports reviewed in this run can be adopted");
           const evidence = new Set(available.evidenceRefIds);
@@ -1390,13 +1414,15 @@ const make = Effect.gen(function* () {
         async onAfterToolCall(_ctx, info) {
           if (!["get_subagent_report", "get_subagent_reports"].includes(info.toolName) || !info.ok)
             return;
-          for (const outcome of reportResults.get(info.toolCallId) ?? []) {
+          for (const outcome of Option.getOrUndefined(
+            MutableHashMap.get(reportResults, info.toolCallId),
+          ) ?? []) {
             if (outcome.status !== "completed") continue;
             const key = `${outcome.taskId}:${outcome.attemptId}`;
-            if (reviewed.has(key)) continue;
+            if (MutableHashMap.has(reviewed, key)) continue;
             const handle = trace.attemptHandle(outcome.taskId, outcome.attemptId);
             if (!isTruthy(handle)) continue;
-            reviewed.set(key, outcome);
+            MutableHashMap.set(reviewed, key, outcome);
             trace.recordReportDisposition({
               handle,
               sessionId: binding.sessionId,
@@ -1412,7 +1438,10 @@ const make = Effect.gen(function* () {
           }
         },
         onFinish(ctx) {
-          if ((reviewed.size === 0 && adoptionDraft === null) || !isTruthy(ctx.currentMessageId))
+          if (
+            (MutableHashMap.size(reviewed) === 0 && adoptionDraft === null) ||
+            !isTruthy(ctx.currentMessageId)
+          )
             return;
           const draft = adoptionDraft ?? { reports: [], reflectedNotificationIds: [] };
           trace.finalizeAnswerClaim({

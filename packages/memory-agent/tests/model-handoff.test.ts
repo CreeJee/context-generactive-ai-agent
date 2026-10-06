@@ -1,3 +1,4 @@
+import { MutableHashMap, Option } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
 import {
@@ -16,14 +17,15 @@ import {
 import type { Node } from "../src/memory/nodes.ts";
 
 function fixture(stored: readonly ModelMessage[]) {
-  const values = new Map<string, unknown>();
+  const values = MutableHashMap.empty<string, unknown>();
   const metadata: MetadataStore = {
-    get: async (namespace, key) => values.get(`${namespace}:${key}`) ?? null,
+    get: async (namespace, key) =>
+      Option.getOrUndefined(MutableHashMap.get(values, `${namespace}:${key}`)) ?? null,
     set: async (namespace, key, value) => {
-      values.set(`${namespace}:${key}`, value);
+      MutableHashMap.set(values, `${namespace}:${key}`, value);
     },
     delete: async (namespace, key) => {
-      values.delete(`${namespace}:${key}`);
+      MutableHashMap.remove(values, `${namespace}:${key}`);
     },
   };
   const restore = (target: string, model: string, history = stored) =>

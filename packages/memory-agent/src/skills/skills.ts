@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { dirname, join } from "node:path";
-import { Context, Effect, Layer, Schema } from "effect";
+import { MutableHashMap, Option, Context, Effect, Layer, Schema } from "effect";
 import type { Project } from "../projects/projects.ts";
 import { runtimeRequire, runtimeRoot } from "../runtime/resources.ts";
 
@@ -73,7 +73,7 @@ export interface SkillDocument extends Skill {
 }
 
 export interface FrontMatter {
-  readonly fields: ReadonlyMap<string, string>;
+  readonly fields: MutableHashMap.MutableHashMap<string, string>;
   readonly body: string;
 }
 
@@ -83,8 +83,8 @@ export interface FrontMatter {
  */
 export function parseFrontMatter(text: string): FrontMatter {
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
-  if (!isTruthy(match)) return { fields: new Map(), body: text };
-  const fields = new Map<string, string>();
+  if (!isTruthy(match)) return { fields: MutableHashMap.empty(), body: text };
+  const fields = MutableHashMap.empty<string, string>();
   const lines = (match[1] ?? "").split(/\r?\n/);
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index] ?? "";
@@ -98,10 +98,14 @@ export function parseFrontMatter(text: string): FrontMatter {
         index++;
         block.push((lines[index] ?? "").trim());
       }
-      fields.set(key, value.startsWith(">") ? block.join(" ").trim() : block.join("\n").trim());
+      MutableHashMap.set(
+        fields,
+        key,
+        value.startsWith(">") ? block.join(" ").trim() : block.join("\n").trim(),
+      );
       continue;
     }
-    fields.set(key, value.replace(/^(["'])(.*)\1$/, "$2"));
+    MutableHashMap.set(fields, key, value.replace(/^(["'])(.*)\1$/, "$2"));
   }
   return { fields, body: text.slice(match[0].length) };
 }
@@ -135,11 +139,11 @@ function readSkill(scope: SkillScope, directory: string, folder: string): SkillR
     if (stats.size > maxSkillBytes) return problem("too_large");
     const text = readFileSync(file, "utf8");
     const { fields, body } = parseFrontMatter(text);
-    const description = fields.get("description") ?? "";
+    const description = Option.getOrUndefined(MutableHashMap.get(fields, "description")) ?? "";
     if (description.length === 0) return problem("no_description");
     const skill: Skill = {
       scope,
-      name: fields.get("name") || folder,
+      name: Option.getOrUndefined(MutableHashMap.get(fields, "name")) || folder,
       description: description.slice(0, maxDescriptionCharacters),
       directory,
       contentHash: createHash("sha256").update(text).digest("hex"),
@@ -209,11 +213,11 @@ const make = (options: SkillsOptions) =>
         scan("global", globalSkillsDirectory(home)),
         scan("project", projectSkillsDirectory(project.root)),
       ];
-      const byName = new Map<string, { skill: Skill; body: string }>();
+      const byName = MutableHashMap.empty<string, { skill: Skill; body: string }>();
       for (const layer of layers)
-        for (const entry of layer.skills) byName.set(entry.skill.name, entry);
+        for (const entry of layer.skills) MutableHashMap.set(byName, entry.skill.name, entry);
       return {
-        entries: [...byName.values()],
+        entries: [...MutableHashMap.values(byName)],
         problems: layers.flatMap((layer) => layer.problems),
       };
     };

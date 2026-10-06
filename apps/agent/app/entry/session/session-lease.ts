@@ -4,6 +4,13 @@ import { api, type LeaseView, type SessionRunState } from "../api";
 import { useSessionEventScope } from "../events/context";
 import { useObservedRunStateQuery } from "../queries/session";
 
+import { orderedLeaseActions } from "./lease-actions";
+
+const runLeaseAction = orderedLeaseActions();
+if (import.meta.hot !== undefined) import.meta.hot.dispose(() => runLeaseAction.dispose());
+const leaseAction = (sessionId: string, holder: string, action: "claim" | "release") =>
+  runLeaseAction(sessionId, () => api.leaseAction(sessionId, holder, action));
+
 const holderKey = "context-agent:page-holder";
 /** An owning page renews well inside the server's 90s lease, even with background-tab throttling. */
 const renewMs = 20_000;
@@ -46,7 +53,7 @@ export function useSessionLease(sessionId: string) {
   useEffect(() => {
     let current = true;
     setLease({ state: "checking" });
-    void api.leaseAction(sessionId, holder, "claim").then(
+    void leaseAction(sessionId, holder, "claim").then(
       (view) => current && setLease(view),
       () => {},
     );
@@ -59,7 +66,7 @@ export function useSessionLease(sessionId: string) {
     return () => {
       current = false;
       window.removeEventListener("pagehide", leave);
-      void api.leaseAction(sessionId, holder, "release").catch(() => {});
+      void leaseAction(sessionId, holder, "release").catch(() => {});
     };
   }, [sessionId, holder]);
 
@@ -80,7 +87,7 @@ export function useSessionLease(sessionId: string) {
     if (!owning) return;
     let current = true;
     const tick = () =>
-      api.leaseAction(sessionId, holder, "claim").then((view) => current && setLease(view));
+      leaseAction(sessionId, holder, "claim").then((view) => current && setLease(view));
     // Native callback heartbeat/debounce timing remains at the protocol boundary.
     // @effect-diagnostics-next-line globalTimers:off
     const timer = setInterval(() => void tick().catch(() => {}), renewMs);
@@ -94,7 +101,7 @@ export function useSessionLease(sessionId: string) {
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   // @effect-diagnostics-next-line asyncFunction:off
   const continueHere = async () => {
-    const view = await api.leaseAction(sessionId, holder, "claim");
+    const view = await leaseAction(sessionId, holder, "claim");
     setLease(view);
     setRefused(view.state !== "mine");
   };

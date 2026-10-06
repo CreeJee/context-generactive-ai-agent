@@ -1014,5 +1014,11 @@
 ### Effect 진단의 native 경계와 시간·대기 수명 (2026-10-06)
 
 - 새 Effect 진단은 memory-agent와 앱에서 오류·경고까지 검사하고 severity를 유지한다. Vitest·React/query·Node/SDK의 native 계약 및 동기 DTO/SQLite codec, 고정 인자 application API에는 범위를 제한한 진단 예외와 이유를 코드에 남긴다. React UI에는 앱 AGENTS.md의 Effect 적용 제외 기준을 따른다.
-- owner의 일회성 요청 대기는 Deferred와 Ref<HashMap>으로, stream producer/consumer 전달은 Queue로 관리한다. RcMap은 공유 scoped resource 획득·반납에 사용한다. 고정된 worker 자산은 세 개의 독립 모듈과 SDK만 복제하므로, native RPC adapter는 외부 Effect 런타임을 가져오지 않고 MessagePort 경계의 Map/Promise 계약을 유지한다.
+- owner의 일회성 요청 대기는 Deferred와 Ref<HashMap>으로, stream producer/consumer 전달은 Queue로 관리한다. RcMap은 공유 scoped resource 획득·반납에 사용한다. 고정된 worker 자산은 세 개의 독립 모듈과 SDK만 복제하므로, native RPC adapter는 외부 Effect 런타임을 가져오지 않고 MessagePort 경계의 Promise 계약을 유지한다. 응답 상관관계는 숫자 ID별 객체로 보관한다.
 - Effect 내부 시간은 Clock/DateTime을 사용하고, SDK 동기 callback은 소유자의 Clock을 캡처한다. 해석·센서의 deadline과 HTTP body 취소는 Scope/timeout에 묶고 RRSI 주기 검사는 Schedule/scoped fibers로 관리한다.
+
+## native Map 예외 재검토 (2026-10-06)
+
+- 지역 인덱스·상수·테스트·Node 경계만으로 native Map을 허용했던 1차 판단을 수정한다. 내부 갱신 인덱스는 MutableHashMap, 상수는 HashMap, 재사용 encoder는 Effect Cache로 관리한다. 실제 SDK 승인 데이터와 wire codec 및 해당 계약의 테스트에만 native Map을 남긴다.
+- 동일 키 작업의 직렬화는 RcMap에서 Semaphore를 공유한다. 대기 작업도 획득 scope를 유지하고 성공·실패·취소 시 반납한다. 서비스는 상위 scope, 브라우저 lease 직렬화는 ManagedRuntime이 소유하며 HMR 종료 시 dispose한다.
+- RRSI worker 응답 대기는 Ref<HashMap>과 Deferred로 관리한다. 고정된 worker의 독립 RPC 클라이언트는 숫자 요청 ID별 객체를 사용하며 native Promise·MessagePort 및 자산 복제 계약을 유지한다.

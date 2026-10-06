@@ -1,3 +1,4 @@
+import { MutableHashMap, Option } from "effect";
 import type { ESTree } from "vite-plus/lint/plugins";
 
 import {
@@ -19,7 +20,7 @@ const BUILT_INS = new Set([
 ]);
 const TRANSPARENT_WRAPPERS = new Set(["Readonly", "Partial", "Required", "NonNullable"]);
 
-type TypeAliasEnvironment = ReadonlyMap<string, ESTree.TSType>;
+type TypeAliasEnvironment = MutableHashMap.MutableHashMap<string, ESTree.TSType>;
 
 type ResolvedType = {
 	readonly type: ESTree.TSType;
@@ -43,7 +44,7 @@ export type WideningTarget = {
 };
 
 export type TypeEnvironment = {
-	readonly interfaces: ReadonlyMap<string, readonly ESTree.TSInterfaceDeclaration[]>;
+	readonly interfaces: MutableHashMap.MutableHashMap<string, readonly ESTree.TSInterfaceDeclaration[]>;
 	readonly typeAliases: LexicalTypeAliasEnvironment;
 };
 
@@ -58,14 +59,14 @@ export function createTypeEnvironment(
 	program: ESTree.Program,
 	visitorKeys: Readonly<Record<string, readonly string[]>>,
 ): TypeEnvironment {
-	const interfaces = new Map<string, ESTree.TSInterfaceDeclaration[]>();
+	const interfaces = MutableHashMap.empty<string, ESTree.TSInterfaceDeclaration[]>();
 
 	for (const statement of program.body) {
 		const declaration = declaredStatement(statement);
 		if (declaration?.type !== "TSInterfaceDeclaration") continue;
-		const declarations = interfaces.get(declaration.id.name) ?? [];
+		const declarations = Option.getOrUndefined(MutableHashMap.get(interfaces, declaration.id.name)) ?? [];
 		declarations.push(declaration);
-		interfaces.set(declaration.id.name, declarations);
+		MutableHashMap.set(interfaces, declaration.id.name, declarations);
 	}
 
 	return {
@@ -150,7 +151,7 @@ function resolvedSubstitutionArgument(
 	if (unwrapped.type !== "TSTypeReference") return type;
 	const name = typeReferenceName(unwrapped);
 	if (name === null || resolving.has(name)) return type;
-	const substitution = base.get(name);
+	const substitution = Option.getOrUndefined(MutableHashMap.get(base, name));
 	if (substitution === undefined) return type;
 	const nextResolving = new Set(resolving);
 	nextResolving.add(name);
@@ -164,11 +165,11 @@ function aliasSubstitution(
 ): TypeAliasEnvironment | null {
 	const parameters = alias.typeParameters?.params ?? [];
 	const arguments_ = type.typeArguments?.params ?? [];
-	const next = new Map(base);
+	const next = MutableHashMap.fromIterable(base);
 	for (const [index, parameter] of parameters.entries()) {
 		const argument = arguments_[index] ?? parameter.default;
 		if (argument === null || argument === undefined) return null;
-		next.set(parameter.name.name, resolvedSubstitutionArgument(argument, next));
+		MutableHashMap.set(next, parameter.name.name, resolvedSubstitutionArgument(argument, next));
 	}
 	return next;
 }
@@ -210,13 +211,13 @@ function unsafeDirectValue(
 			? null
 			: unsafeDirectValue(wrapped, environment, substitutions, resolvingAliases);
 	}
-	const substitution = substitutions.get(name);
+	const substitution = Option.getOrUndefined(MutableHashMap.get(substitutions, name));
 	if (substitution !== undefined) {
 		return isUnappliedReferenceTo(substitution, name)
 			? null
 			: unsafeDirectValue(substitution, environment, substitutions, resolvingAliases);
 	}
-	const interfaceDeclarations = environment.interfaces.get(name);
+	const interfaceDeclarations = Option.getOrUndefined(MutableHashMap.get(environment.interfaces, name));
 	if (interfaceDeclarations !== undefined) {
 		return isEffectivelyEmptyInterface(interfaceDeclarations) ? "empty-object" : null;
 	}
@@ -255,7 +256,7 @@ function dictionaryValueTypes(
 	const name = typeReferenceName(unwrapped);
 	if (name === null) return [];
 
-	const substitution = substitutions.get(name);
+	const substitution = Option.getOrUndefined(MutableHashMap.get(substitutions, name));
 	if (substitution !== undefined) {
 		return isUnappliedReferenceTo(substitution, name)
 			? []
@@ -297,7 +298,7 @@ export function classifyUnsafeDictionaryValue(
 	valueType: ESTree.TSType,
 	environment: TypeEnvironment,
 ): UnsafeDictionary | null {
-	const unsafeValue = unsafeDirectValue(valueType, environment, new Map(), new Set());
+	const unsafeValue = unsafeDirectValue(valueType, environment, MutableHashMap.empty(), new Set());
 	return unsafeValue === null ? null : { kind: "unsafe-dictionary", unsafeValue };
 }
 
@@ -305,7 +306,7 @@ export function classifyUnsafeDictionary(
 	type: ESTree.TSType,
 	environment: TypeEnvironment,
 ): UnsafeDictionary | null {
-	for (const valueType of dictionaryValueTypes(type, environment, new Map(), new Set())) {
+	for (const valueType of dictionaryValueTypes(type, environment, MutableHashMap.empty(), new Set())) {
 		const unsafeValue = unsafeDirectValue(
 			valueType.type,
 			environment,
@@ -340,14 +341,14 @@ export function classifyWideningTarget(
 		return wrapped === undefined ? null : classifyWideningTarget(wrapped, environment);
 	}
 	if (name === "Record" && isBuiltIn(name, unwrapped, environment)) {
-		return hasBroadRecordKey(unwrapped, environment, new Map())
+		return hasBroadRecordKey(unwrapped, environment, MutableHashMap.empty())
 			? { kind: "open dictionary" }
 			: null;
 	}
 	const alias = visibleTypeAlias(name, unwrapped, environment.typeAliases);
 	if (alias === null) return null;
 	if ((alias.typeParameters?.params.length ?? 0) > 0) {
-		const substitutions = aliasSubstitution(alias, unwrapped, new Map());
+		const substitutions = aliasSubstitution(alias, unwrapped, MutableHashMap.empty());
 		const resolved =
 			substitutions === null
 				? null
@@ -359,7 +360,7 @@ export function classifyWideningTarget(
 					);
 		return resolved?.kind === "open dictionary" ? { kind: "generic container" } : null;
 	}
-	const substitutions = aliasSubstitution(alias, unwrapped, new Map());
+	const substitutions = aliasSubstitution(alias, unwrapped, MutableHashMap.empty());
 	if (substitutions === null) return null;
 	const resolved = classifyAliasBroadTarget(
 		alias.typeAnnotation,
@@ -401,7 +402,7 @@ function isBroadMappedKey(
 	if (unwrapped.type !== "TSTypeReference") return false;
 	const name = typeReferenceName(unwrapped);
 	if (name === null) return false;
-	const substitution = substitutions.get(name);
+	const substitution = Option.getOrUndefined(MutableHashMap.get(substitutions, name));
 	if (substitution !== undefined && !isUnappliedReferenceTo(substitution, name)) {
 		return isBroadMappedKey(substitution, environment, substitutions, visitedAliases);
 	}
@@ -441,7 +442,7 @@ function classifyAliasBroadTarget(
 	if (unwrapped.type !== "TSTypeReference") return null;
 	const name = typeReferenceName(unwrapped);
 	if (name === null) return null;
-	const substitution = substitutions.get(name);
+	const substitution = Option.getOrUndefined(MutableHashMap.get(substitutions, name));
 	if (substitution !== undefined) {
 		return isUnappliedReferenceTo(substitution, name)
 			? null

@@ -1,7 +1,7 @@
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off newPromise:off
 import { DatabaseSync } from "node:sqlite";
-import { Effect } from "effect";
+import { MutableHashMap, Option, Effect } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { migrations } from "../src/db/migrations.ts";
 import { createAccountBoundSubscriptionClients } from "../src/oauth/account-bound.ts";
@@ -69,14 +69,14 @@ describe("account-bound subscription provider", () => {
         refreshToken: "fake",
         expiresAt: 123,
       };
-      const vault = new Map<string, StoredCredential>([[legacyId, credential]]);
+      const vault = MutableHashMap.fromIterable<string, StoredCredential>([[legacyId, credential]]);
       const accounts: ProfileCredentialStore = {
-        read: async (_provider, id) => vault.get(id) ?? null,
+        read: async (_provider, id) => Option.getOrUndefined(MutableHashMap.get(vault, id)) ?? null,
         write: async (_provider, id, value) => {
-          vault.set(id, value);
+          MutableHashMap.set(vault, id, value);
         },
         remove: async (_provider, id) => {
-          vault.delete(id);
+          MutableHashMap.remove(vault, id);
         },
       };
       let legacyRemoved = false;
@@ -94,7 +94,11 @@ describe("account-bound subscription provider", () => {
           db,
           provider,
           (id) => ({
-            status: async () => ({ provider, connected: vault.has(id!), expiresAt: null }),
+            status: async () => ({
+              provider,
+              connected: MutableHashMap.has(vault, id!),
+              expiresAt: null,
+            }),
             modelCatalog: async () => [],
             async *stream() {},
             refreshForValidation: async () => ({ provider, connected: true, expiresAt: null }),
@@ -104,7 +108,7 @@ describe("account-bound subscription provider", () => {
               created.push(id!);
               const completed = new Promise<OAuthConnectionStatus>((resolve) => {
                 finish = () => {
-                  vault.set(id!, credential);
+                  MutableHashMap.set(vault, id!, credential);
                   resolve({ provider, connected: true, expiresAt: null });
                 };
               });
@@ -384,14 +388,16 @@ describe("account-bound subscription provider", () => {
       refreshToken: "fake",
       expiresAt: 123,
     };
-    const vault = new Map<string, StoredCredential>(ids.map((id) => [id, credential]));
+    const vault = MutableHashMap.fromIterable<string, StoredCredential>(
+      ids.map((id) => [id, credential]),
+    );
     const accounts: ProfileCredentialStore = {
-      read: async (_provider, id) => vault.get(id) ?? null,
+      read: async (_provider, id) => Option.getOrUndefined(MutableHashMap.get(vault, id)) ?? null,
       write: async (_provider, id, value) => {
-        vault.set(id, value);
+        MutableHashMap.set(vault, id, value);
       },
       remove: async (_provider, id) => {
-        vault.delete(id);
+        MutableHashMap.remove(vault, id);
       },
     };
     const legacy: CredentialStore = {
@@ -420,12 +426,12 @@ describe("account-bound subscription provider", () => {
       await expect(removeOAuthProfile(db, "openai", ids[0], accounts, legacy)).rejects.toThrow(
         "oauth_profile_in_use",
       );
-      expect(vault.has(ids[0])).toBe(true);
+      expect(MutableHashMap.has(vault, ids[0])).toBe(true);
       pinnedA.releaseRun();
       pinnedA.releaseRun(); // release is idempotent
       await removeOAuthProfile(db, "openai", ids[0], accounts, legacy);
-      expect(vault.has(ids[0])).toBe(false);
-      expect(vault.has(ids[1])).toBe(true);
+      expect(MutableHashMap.has(vault, ids[0])).toBe(false);
+      expect(MutableHashMap.has(vault, ids[1])).toBe(true);
       expect(db.prepare("SELECT id FROM oauth_profiles WHERE selected = 1").get()).toEqual({
         id: ids[1],
       });

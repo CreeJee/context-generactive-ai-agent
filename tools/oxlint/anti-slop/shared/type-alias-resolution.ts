@@ -1,3 +1,4 @@
+import { MutableHashMap, Option } from "effect";
 import type { ESTree } from "vite-plus/lint/plugins";
 
 import { lexicalTypeParameterNames } from "./lexical-type-parameters.ts";
@@ -16,11 +17,11 @@ type Substitution = {
 	readonly type: ESTree.TSType;
 };
 
-type Substitutions = ReadonlyMap<string, Substitution>;
+type Substitutions = MutableHashMap.MutableHashMap<string, Substitution>;
 
 export type TypeAliasEnvironment = {
 	readonly aliases: readonly ESTree.TSTypeAliasDeclaration[];
-	readonly bindingsByName: ReadonlyMap<string, readonly TypeBinding[]>;
+	readonly bindingsByName: MutableHashMap.MutableHashMap<string, readonly TypeBinding[]>;
 	readonly visitorKeys: VisitorKeys;
 };
 
@@ -85,14 +86,14 @@ function declaredTypeBinding(node: ESTree.Node): {
 function collectTypeBindings(
 	node: ESTree.Node,
 	visitorKeys: VisitorKeys,
-	bindingsByName: Map<string, TypeBinding[]>,
+	bindingsByName: MutableHashMap.MutableHashMap<string, TypeBinding[]>,
 	aliases: ESTree.TSTypeAliasDeclaration[],
 ): void {
 	const declared = declaredTypeBinding(node);
 	if (declared !== null) {
-		const bindings = bindingsByName.get(declared.name) ?? [];
+		const bindings = Option.getOrUndefined(MutableHashMap.get(bindingsByName, declared.name)) ?? [];
 		bindings.push({ ...declared, scope: enclosingTypeScope(node) });
-		bindingsByName.set(declared.name, bindings);
+		MutableHashMap.set(bindingsByName, declared.name, bindings);
 		if (declared.alias !== null) aliases.push(declared.alias);
 	}
 
@@ -120,7 +121,7 @@ export function createTypeAliasEnvironment(
 ): TypeAliasEnvironment {
 	const cached = environmentsByProgram.get(program);
 	if (cached !== undefined) return cached;
-	const bindingsByName = new Map<string, TypeBinding[]>();
+	const bindingsByName = MutableHashMap.empty<string, TypeBinding[]>();
 	const aliases: ESTree.TSTypeAliasDeclaration[] = [];
 	collectTypeBindings(program, visitorKeys, bindingsByName, aliases);
 	const environment = { aliases, bindingsByName, visitorKeys };
@@ -144,7 +145,7 @@ function nearestTypeBindings(
 	use: ESTree.Node,
 	environment: TypeAliasEnvironment,
 ): readonly TypeBinding[] {
-	const candidates = environment.bindingsByName.get(name) ?? [];
+	const candidates = Option.getOrUndefined(MutableHashMap.get(environment.bindingsByName, name)) ?? [];
 	let nearestDistance = Number.POSITIVE_INFINITY;
 	let nearest: TypeBinding[] = [];
 	for (const candidate of candidates) {
@@ -194,15 +195,15 @@ function aliasSubstitutions(
 ): Substitutions | null {
 	const parameters = alias.typeParameters?.params ?? [];
 	const arguments_ = reference.typeArguments?.params ?? [];
-	const next = new Map(base);
+	const next = MutableHashMap.fromIterable(base);
 	for (const [index, parameter] of parameters.entries()) {
 		const explicitArgument = arguments_[index];
 		const argument = explicitArgument ?? parameter.default;
 		if (argument === null || argument === undefined) return null;
 		const argumentSubstitutions = explicitArgument === undefined ? next : base;
-		next.set(parameter.name.name, {
+		MutableHashMap.set(next, parameter.name.name, {
 			type: argument,
-			substitutions: new Map(argumentSubstitutions),
+			substitutions: MutableHashMap.fromIterable(argumentSubstitutions),
 		});
 	}
 	return next;
@@ -222,7 +223,7 @@ export function resolvedTypeMatches(
 		if (current.type === "TSTypeReference") {
 			const name = typeReferenceName(current);
 			if (name !== null) {
-				const substitution = substitutions.get(name);
+				const substitution = Option.getOrUndefined(MutableHashMap.get(substitutions, name));
 				if (substitution !== undefined && !current.typeArguments?.params.length) {
 					return evaluate(
 						substitution.type,
@@ -246,5 +247,5 @@ export function resolvedTypeMatches(
 		);
 	};
 
-	return evaluate(type, new Map(), new Set());
+	return evaluate(type, MutableHashMap.empty(), new Set());
 }

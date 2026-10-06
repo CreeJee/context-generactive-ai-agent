@@ -1,6 +1,6 @@
 import { isTruthy } from "../truthy.ts";
 import { isDeepStrictEqual } from "node:util";
-import { Schema } from "effect";
+import { MutableHashMap, Option, Schema } from "effect";
 import type { StreamChunk } from "@tanstack/ai";
 type OwnerToolObservation =
   | StreamChunk
@@ -25,13 +25,14 @@ type Call = {
 
 /** Run-local owner observations only. Nothing supplied by a worker creates a call. */
 export function makeOwnerToolGrants() {
-  const calls = new Map<string, Call>();
+  const calls = MutableHashMap.empty<string, Call>();
   return {
     observe(chunk: OwnerToolObservation) {
       switch (chunk.type) {
         case "TOOL_CALL_START":
-          if (calls.has(chunk.toolCallId)) throw new Error("Duplicate owner tool call ID");
-          calls.set(chunk.toolCallId, {
+          if (MutableHashMap.has(calls, chunk.toolCallId))
+            throw new Error("Duplicate owner tool call ID");
+          MutableHashMap.set(calls, chunk.toolCallId, {
             name: chunk.toolCallName,
             raw: "",
             complete: false,
@@ -40,14 +41,14 @@ export function makeOwnerToolGrants() {
           });
           break;
         case "TOOL_CALL_ARGS": {
-          const call = calls.get(chunk.toolCallId);
+          const call = Option.getOrUndefined(MutableHashMap.get(calls, chunk.toolCallId));
           if (!isTruthy(call) || call.complete)
             throw new Error("Invalid owner tool argument stream");
           call.raw += chunk.delta;
           break;
         }
         case "TOOL_CALL_END": {
-          const call = calls.get(chunk.toolCallId);
+          const call = Option.getOrUndefined(MutableHashMap.get(calls, chunk.toolCallId));
           if (!isTruthy(call) || call.complete) throw new Error("Invalid owner tool end");
           call.complete = true;
           break;
@@ -69,7 +70,7 @@ export function makeOwnerToolGrants() {
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
       // @effect-diagnostics-next-line schemaSync:off
       const invocation = Schema.decodeUnknownSync(Invocation, { onExcessProperty: "error" })(input);
-      const call = calls.get(invocation.toolCallId);
+      const call = Option.getOrUndefined(MutableHashMap.get(calls, invocation.toolCallId));
       if (
         !isTruthy(call?.complete) ||
         call.used ||
@@ -83,7 +84,7 @@ export function makeOwnerToolGrants() {
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
       // @effect-diagnostics-next-line schemaSync:off
       const invocation = Schema.decodeSync(Invocation, { onExcessProperty: "error" })(input);
-      const call = calls.get(invocation.toolCallId);
+      const call = Option.getOrUndefined(MutableHashMap.get(calls, invocation.toolCallId));
       if (
         !isTruthy(call?.complete) ||
         isTruthy(call.grant) ||
@@ -105,7 +106,7 @@ export function makeOwnerToolGrants() {
         const invocation = Schema.decodeUnknownSync(Invocation, { onExcessProperty: "error" })(
           input,
         );
-        const call = calls.get(invocation.toolCallId);
+        const call = Option.getOrUndefined(MutableHashMap.get(calls, invocation.toolCallId));
         return !!isTruthy(call?.grant) && !call.used && isDeepStrictEqual(call.grant, invocation);
       } catch {
         return false;
@@ -117,7 +118,7 @@ export function makeOwnerToolGrants() {
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
       // @effect-diagnostics-next-line schemaSync:off
       const invocation = Schema.decodeUnknownSync(Invocation, { onExcessProperty: "error" })(input);
-      const call = calls.get(invocation.toolCallId);
+      const call = Option.getOrUndefined(MutableHashMap.get(calls, invocation.toolCallId));
       if (!isTruthy(call?.grant) || call.started || !isDeepStrictEqual(call.grant, invocation))
         throw new Error("Invalid or repeated owner tool implementation grant");
       call.started = true;
@@ -129,7 +130,7 @@ export function makeOwnerToolGrants() {
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
       // @effect-diagnostics-next-line schemaSync:off
       const invocation = Schema.decodeUnknownSync(Invocation, { onExcessProperty: "error" })(input);
-      const call = calls.get(invocation.toolCallId);
+      const call = Option.getOrUndefined(MutableHashMap.get(calls, invocation.toolCallId));
       if (!isTruthy(call?.grant) || call.used || !isDeepStrictEqual(call.grant, invocation))
         throw new Error("Invalid owner tool grant");
       call.used = true;

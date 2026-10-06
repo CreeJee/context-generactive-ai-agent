@@ -1,6 +1,6 @@
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off
-import { DateTime } from "effect";
+import { MutableHashMap, DateTime } from "effect";
 import { EventType, type TextOptions } from "@tanstack/ai";
 import { InternalLogger } from "@tanstack/ai/adapter-internals";
 import { expect, test } from "vite-plus/test";
@@ -28,7 +28,7 @@ const selection = { provider: "openai", model: "gpt-5", reasoningEffort: "low" }
 
 test("retained native implementation binds fresh central clients and pins each run", async () => {
   const implementation = createSubscriptionRuntimeImplementation("openai");
-  const routes = new Map<string, string>();
+  const routes = MutableHashMap.empty<string, string>();
   const requests: { auth: string | null; body: string; signal: AbortSignal | null | undefined }[] =
     [];
   const released: string[] = [];
@@ -74,11 +74,11 @@ test("retained native implementation binds fresh central clients and pins each r
     client: () => {
       const account = selected;
       const id = `run-${++acquisitions}`;
-      routes.set(id, account);
+      MutableHashMap.set(routes, id, account);
       return {
         stream: centralClients[account].stream.bind(centralClients[account]),
         releaseRun: () => {
-          routes.delete(id);
+          MutableHashMap.remove(routes, id);
           released.push(id);
         },
       };
@@ -90,11 +90,11 @@ test("retained native implementation binds fresh central clients and pins each r
   const secondRuntime = implementation.bind({
     client: () => {
       acquisitions++;
-      routes.set("fresh-run", "second");
+      MutableHashMap.set(routes, "fresh-run", "second");
       return {
         stream: centralClients.second.stream.bind(centralClients.second),
         releaseRun: () => {
-          routes.delete("fresh-run");
+          MutableHashMap.remove(routes, "fresh-run");
           released.push("fresh-run");
         },
       };
@@ -131,11 +131,11 @@ test("retained native implementation binds fresh central clients and pins each r
   expect(requests[1]?.signal).toBe(controllers[1]?.signal);
   expect(credentialReads).toBe(2);
   expect(acquisitions).toBe(2);
-  expect(routes.size).toBe(2);
+  expect(MutableHashMap.size(routes)).toBe(2);
   firstAdapter.releaseRun?.();
   expect([...routes]).toEqual([["fresh-run", "second"]]);
   secondAdapter.releaseRun?.();
-  expect(routes.size).toBe(0);
+  expect(MutableHashMap.size(routes)).toBe(0);
   expect(released).toEqual(["run-1", "fresh-run"]);
   expect(firstRuntime.runMiddleware()).toEqual(secondRuntime.runMiddleware());
   expect(firstRuntime.runMiddleware()).not.toBe(secondRuntime.runMiddleware());

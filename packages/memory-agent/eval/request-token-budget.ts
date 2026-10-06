@@ -1,4 +1,4 @@
-import { isTruthy } from "../src/truthy.ts";
+import { Cache, Effect } from "effect";
 import { encodingForModel, getEncoding, getEncodingNameForModel } from "js-tiktoken";
 
 type KnownModel = Parameters<typeof encodingForModel>[0];
@@ -10,15 +10,14 @@ export interface RequestTokenEstimate {
   readonly fallback: boolean;
 }
 
-const encoders = new Map<string, ReturnType<typeof getEncoding>>();
-const encoderFor = (name: Parameters<typeof getEncoding>[0]) => {
-  let encoder = encoders.get(name);
-  if (!isTruthy(encoder)) {
-    encoder = getEncoding(name);
-    encoders.set(name, encoder);
-  }
-  return encoder;
-};
+const encoders = Effect.runSync(
+  Cache.make({
+    capacity: 8,
+    lookup: (name: Parameters<typeof getEncoding>[0]) => Effect.sync(() => getEncoding(name)),
+  }),
+);
+const encoderFor = (name: Parameters<typeof getEncoding>[0]) =>
+  Effect.runSync(Cache.get(encoders, name));
 
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
 // @effect-diagnostics-next-line missingPipeableSignature:off

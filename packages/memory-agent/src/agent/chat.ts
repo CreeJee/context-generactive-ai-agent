@@ -1,5 +1,5 @@
 import { isTruthy } from "../truthy.ts";
-import { DateTime, SchemaTransformation } from "effect";
+import { MutableHashMap, DateTime, SchemaTransformation } from "effect";
 import { projectInstructions } from "./project-instructions.ts";
 import { workflowActions } from "../workflow/actions.ts";
 import { createGoalNativeImplementations } from "./goal-native-implementation.ts";
@@ -559,7 +559,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
       temporaryDirectory: places.storageRoot,
     }));
   let workerScopeAlive = true;
-  const ownedSDKWorkers = new Map<Worker, { runId: string; release: () => void }>();
+  const ownedSDKWorkers = MutableHashMap.empty<Worker, { runId: string; release: () => void }>();
   // Registered after service acquisition: fence RPC first, await actual OS worker exit,
   // then dispose the registry while retaining every durable snapshot for cold adoption.
   yield* Effect.addFinalizer(() =>
@@ -575,14 +575,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
         workers.map(async ([worker, owned]) => {
           await worker.terminate();
           owned.release();
-          ownedSDKWorkers.delete(worker);
+          MutableHashMap.remove(ownedSDKWorkers, worker);
         }),
       );
       workerAssetsRegistry?.dispose();
     }),
   );
   const notificationWakeups = yield* Queue.unbounded<string>();
-  const serializeNotification = keyedSerialLimit();
+  const serializeNotification = yield* keyedSerialLimit();
   const wakeNotifications = (sessionId: string) => {
     runEffectSync(Queue.offer(notificationWakeups, sessionId));
   };
@@ -686,7 +686,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
     async onConfig(ctx, config) {
       if (ctx.phase === "init") return;
       let changed = false;
-      const inlineImages = new Map<
+      const inlineImages = MutableHashMap.empty<
         string,
         Promise<{
           readonly type: "image";
@@ -713,7 +713,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
               const attachment = attachments.get(id);
               if (attachment === null)
                 return { type: "text" as const, content: "[Attached image is unavailable.]" };
-              const known = inlineImages.get(id);
+              const known = Option.getOrUndefined(MutableHashMap.get(inlineImages, id));
               if (isTruthy(known)) return known;
               // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
               // @effect-diagnostics-next-line asyncFunction:off
@@ -730,7 +730,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
                   },
                 };
               })();
-              inlineImages.set(id, inline);
+              MutableHashMap.set(inlineImages, id, inline);
               return inline;
             }),
           );
@@ -2031,7 +2031,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
         let ownedWorker: Worker | undefined;
         const releaseWorker = () => {
           workerLease?.release();
-          if (ownedWorker !== undefined) ownedSDKWorkers.delete(ownedWorker);
+          if (ownedWorker !== undefined) MutableHashMap.remove(ownedSDKWorkers, ownedWorker);
         };
         const pinnedWorkerUrl = () => {
           if (!(workerAssets !== undefined)) throw new Error("Goal worker source was not admitted");
@@ -2050,7 +2050,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
                 },
                 onWorker: (worker) => {
                   ownedWorker = worker;
-                  ownedSDKWorkers.set(worker, { runId, release: releaseWorker });
+                  MutableHashMap.set(ownedSDKWorkers, worker, { runId, release: releaseWorker });
                   worker.once("exit", releaseWorker);
                 },
                 onWorkerStopped: releaseWorker,

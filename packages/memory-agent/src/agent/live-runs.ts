@@ -1,5 +1,5 @@
 import type { StreamChunk } from "@tanstack/ai";
-import { Deferred, Effect } from "effect";
+import { MutableHashMap, Option, Deferred, Effect } from "effect";
 
 /** A run whose model stream is still being produced in this process. */
 export interface LiveRun {
@@ -11,10 +11,11 @@ export interface LiveRun {
 
 /** One registry per AgentChat service. Only active streams occupy a session key. */
 export const createLiveRuns = Effect.sync(() => {
-  const bySession = new Map<string, LiveRun>();
+  const bySession = MutableHashMap.empty<string, LiveRun>();
 
   return {
-    get: (sessionId: string): LiveRun | null => bySession.get(sessionId) ?? null,
+    get: (sessionId: string): LiveRun | null =>
+      Option.getOrUndefined(MutableHashMap.get(bySession, sessionId)) ?? null,
 
     /** Claims a session until the returned stream finishes. */
     claim: (
@@ -27,11 +28,12 @@ export const createLiveRuns = Effect.sync(() => {
     } | null> =>
       Effect.flatMap(Deferred.make<void>(), (done) =>
         Effect.sync(() => {
-          if (bySession.has(sessionId)) return null;
+          if (MutableHashMap.has(bySession, sessionId)) return null;
           const run: LiveRun = { runId, controller, ended: Deferred.await(done) };
-          bySession.set(sessionId, run);
+          MutableHashMap.set(bySession, sessionId, run);
           const release = () => {
-            if (bySession.get(sessionId) === run) bySession.delete(sessionId);
+            if (Option.getOrUndefined(MutableHashMap.get(bySession, sessionId)) === run)
+              MutableHashMap.remove(bySession, sessionId);
             try {
               onEnded();
             } finally {

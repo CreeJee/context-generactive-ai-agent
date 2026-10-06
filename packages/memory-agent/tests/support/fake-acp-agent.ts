@@ -1,3 +1,4 @@
+import { MutableHashMap, Option } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off globalTimers:off newPromise:off nodeBuiltinImport:off processEnv:off
 import { isTruthy } from "../../src/truthy.ts";
@@ -16,7 +17,7 @@ if (isTruthy(process.env.FAKE_ACP_LOG))
     `${JSON.stringify({ pid: process.pid, cwd: process.cwd(), secret: process.env.SHOULD_NOT_LEAK ?? null })}\n`,
   );
 
-const history = new Map<string, string[]>();
+const history = MutableHashMap.empty<string, string[]>();
 const cancelled = new Set<string>();
 let nextSession = 1;
 
@@ -36,7 +37,7 @@ acp
   }))
   .onRequest(acp.methods.agent.session.new, () => {
     const sessionId = `ext-${nextSession++}`;
-    history.set(sessionId, []);
+    MutableHashMap.set(history, sessionId, []);
     return { sessionId };
   })
   .onRequest(acp.methods.agent.session.prompt, async (ctx) => {
@@ -44,7 +45,7 @@ acp
     const text = ctx.params.prompt
       .map((block) => (block.type === "text" ? block.text : ""))
       .join("");
-    const earlier = history.get(sessionId) ?? [];
+    const earlier = Option.getOrUndefined(MutableHashMap.get(history, sessionId)) ?? [];
     earlier.push(text);
 
     if (text.includes("crash")) {

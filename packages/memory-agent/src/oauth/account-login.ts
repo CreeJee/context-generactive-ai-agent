@@ -1,3 +1,4 @@
+import { MutableHashMap, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 // @effect-diagnostics-next-line nodeBuiltinImport:off
@@ -45,9 +46,9 @@ export function createOAuthAccountLoginManager(
   type LoginEntry =
     | { readonly status: "running"; readonly attempt: Attempt; result: AccountLoginState }
     | { readonly status: "settled"; readonly result: AccountLoginState };
-  const entries = new Map<OAuthProvider, LoginEntry>();
+  const entries = MutableHashMap.empty<OAuthProvider, LoginEntry>();
   const activeAttempt = (provider: OAuthProvider) => {
-    const entry = entries.get(provider);
+    const entry = Option.getOrUndefined(MutableHashMap.get(entries, provider));
     switch (entry?.status) {
       case "running":
         return entry.attempt;
@@ -56,18 +57,18 @@ export function createOAuthAccountLoginManager(
     }
   };
   const recordResult = (provider: OAuthProvider, value: AccountLoginState) => {
-    const entry = entries.get(provider);
+    const entry = Option.getOrUndefined(MutableHashMap.get(entries, provider));
     switch (entry?.status) {
       case "running":
         entry.result = value;
         break;
       default:
-        entries.set(provider, { status: "settled", result: value });
+        MutableHashMap.set(entries, provider, { status: "settled", result: value });
         break;
     }
   };
   const state = (provider: OAuthProvider): AccountLoginState => {
-    const entry = entries.get(provider);
+    const entry = Option.getOrUndefined(MutableHashMap.get(entries, provider));
     switch (entry?.status) {
       case "running":
         return isTruthy(entry.attempt.login)
@@ -89,7 +90,11 @@ export function createOAuthAccountLoginManager(
     if (!isTruthy(label.trim()) || label.length > 80) throw new Error("invalid_oauth_profile");
     if (isTruthy(activeAttempt(provider))) throw new Error("oauth_login_in_progress");
     const attempt: Attempt = { id: randomUUID(), label: label.trim(), cancelled: false };
-    entries.set(provider, { status: "running", attempt, result: { status: "idle" } });
+    MutableHashMap.set(entries, provider, {
+      status: "running",
+      attempt,
+      result: { status: "idle" },
+    });
     try {
       attempt.login = await startLogin(provider, attempt.id);
       if (attempt.cancelled) attempt.login.cancel();
@@ -120,14 +125,14 @@ export function createOAuthAccountLoginManager(
           }
         })
         .finally(() => {
-          const entry = entries.get(provider);
+          const entry = Option.getOrUndefined(MutableHashMap.get(entries, provider));
           if (entry?.status === "running" && entry.attempt === attempt)
-            entries.set(provider, { status: "settled", result: entry.result });
+            MutableHashMap.set(entries, provider, { status: "settled", result: entry.result });
         });
       // The callback is asynchronous. Its rejection is handled above before this function returns.
       return profiles(provider);
     } catch {
-      entries.set(provider, {
+      MutableHashMap.set(entries, provider, {
         status: "settled",
         result: { status: "error", error: "credential_unavailable" },
       });

@@ -1,6 +1,6 @@
 import { isTruthy } from "../truthy.ts";
 import type { DatabaseSync } from "node:sqlite";
-import { Schema } from "effect";
+import { MutableHashMap, Schema } from "effect";
 import type { WorkflowState } from "./workflow.ts";
 
 /** Only the current Plan version is supported; historical Plan mappings are not adopted. */
@@ -136,11 +136,11 @@ export function completionEvidence(sqlite: DatabaseSync) {
     };
     const recorder = valid(recorderRunId);
     if (!(recorder !== null)) return { status: "refused" };
-    const runs = new Map<string, typeof RunProvenance.Type>();
+    const runs = MutableHashMap.empty<string, typeof RunProvenance.Type>();
     const recorderDispatch = sqlite
       .prepare("SELECT generation FROM workflow_worker_dispatches WHERE run_id = ?")
       .get(recorderRunId)?.generation;
-    runs.set(recorderRunId, {
+    MutableHashMap.set(runs, recorderRunId, {
       runId: recorderRunId,
       workflowRevisionId: recorder.workflow_revision_id,
       dispatchGeneration: optionalString(recorderDispatch) ?? null,
@@ -173,7 +173,7 @@ export function completionEvidence(sqlite: DatabaseSync) {
       const dispatch = sqlite
         .prepare("SELECT generation FROM workflow_worker_dispatches WHERE run_id = ?")
         .get(mapping.runId)?.generation;
-      runs.set(mapping.runId, {
+      MutableHashMap.set(runs, mapping.runId, {
         runId: mapping.runId,
         workflowRevisionId: bound.workflow_revision_id,
         dispatchGeneration: optionalString(dispatch) ?? null,
@@ -207,7 +207,7 @@ export function completionEvidence(sqlite: DatabaseSync) {
         manifestHash: optionalString(source?.manifest_hash) ?? null,
         nativeRegistration: registration ?? null,
         mappings,
-        runs: [...runs.values()],
+        runs: [...MutableHashMap.values(runs)],
       },
     };
   };

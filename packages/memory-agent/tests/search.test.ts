@@ -3,7 +3,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { chat } from "@tanstack/ai";
-import { Random, Effect, Layer } from "effect";
+import { MutableHashMap, Option, Random, Effect, Layer } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { Embedder, EmbeddingError } from "../src/memory/embedding/embedder.ts";
@@ -95,10 +95,16 @@ describe("fuseRanks", () => {
       ["vector-only", "both"],
       ["both", "text-only"],
     ]);
-    expect(fused.get("vector-only")).toBeCloseTo(0.5);
-    expect(fused.get("both")!).toBeGreaterThan(fused.get("vector-only")!);
-    expect(fused.get("text-only")!).toBeLessThan(fused.get("vector-only")!);
-    expect(fuseRanks([["a"], ["a"]]).get("a")).toBeCloseTo(1);
+    expect(Option.getOrUndefined(MutableHashMap.get(fused, "vector-only"))).toBeCloseTo(0.5);
+    expect(Option.getOrUndefined(MutableHashMap.get(fused, "both"))!).toBeGreaterThan(
+      Option.getOrUndefined(MutableHashMap.get(fused, "vector-only"))!,
+    );
+    expect(Option.getOrUndefined(MutableHashMap.get(fused, "text-only"))!).toBeLessThan(
+      Option.getOrUndefined(MutableHashMap.get(fused, "vector-only"))!,
+    );
+    expect(Option.getOrUndefined(MutableHashMap.get(fuseRanks([["a"], ["a"]]), "a"))).toBeCloseTo(
+      1,
+    );
   });
 
   test("a weighted list outvotes the others by its weight", () => {
@@ -109,8 +115,12 @@ describe("fuseRanks", () => {
       ],
       [2, 1],
     );
-    expect(fused.get("exact")!).toBeGreaterThan(fused.get("near")!);
-    expect(fuseRanks([["a"], ["b"]], [2, 1]).get("a")).toBeCloseTo(2 / 3);
+    expect(Option.getOrUndefined(MutableHashMap.get(fused, "exact"))!).toBeGreaterThan(
+      Option.getOrUndefined(MutableHashMap.get(fused, "near"))!,
+    );
+    expect(
+      Option.getOrUndefined(MutableHashMap.get(fuseRanks([["a"], ["b"]], [2, 1]), "a")),
+    ).toBeCloseTo(2 / 3);
   });
 });
 
@@ -186,19 +196,21 @@ describe("MemorySearch.find", () => {
         search.find({ query: "SQLite로 결정했던 이유", projectId: project.id }),
       ),
     );
-    const byId = new Map(result.matches.map((match) => [match.id, match]));
+    const byId = MutableHashMap.fromIterable(result.matches.map((match) => [match.id, match]));
     expect(result.degraded).toEqual([]);
     expect(result.unindexed).toBe(0);
-    expect(byId.get(earlier.decision.id)?.foundBy).toMatch(/vector|text/);
-    expect(byId.get(earlier.result.id)).toMatchObject({
+    expect(Option.getOrUndefined(MutableHashMap.get(byId, earlier.decision.id))?.foundBy).toMatch(
+      /vector|text/,
+    );
+    expect(Option.getOrUndefined(MutableHashMap.get(byId, earlier.result.id))).toMatchObject({
       foundBy: "graph",
       fromOtherProject: false,
     });
-    expect(byId.get(earlier.result.id)?.path.map((hop) => hop.kind)).toEqual([
-      "reply",
-      "calls",
-      "returns",
-    ]);
+    expect(
+      Option.getOrUndefined(MutableHashMap.get(byId, earlier.result.id))?.path.map(
+        (hop) => hop.kind,
+      ),
+    ).toEqual(["reply", "calls", "returns"]);
   });
 
   test("a query naming something exactly finds the tool output ahead of the nearest statement", async () => {
@@ -332,27 +344,31 @@ describe("memory tools", () => {
       // drain
     }
 
-    const results = new Map(
+    const results = MutableHashMap.fromIterable(
       nodes
         .session(newSession.id)
         .filter((node) => node.kind === "tool_result")
         .map((node) => [node.detail.toolCallId, JSON.parse(node.text)]),
     );
-    expect(results.get("c1").matches.map((match: { id: string }) => match.id)).toContain(
-      earlier.decision.id,
-    );
-    expect(results.get("c2")).toMatchObject({
+    expect(
+      Option.getOrUndefined(MutableHashMap.get(results, "c1")).matches.map(
+        (match: { id: string }) => match.id,
+      ),
+    ).toContain(earlier.decision.id);
+    expect(Option.getOrUndefined(MutableHashMap.get(results, "c2"))).toMatchObject({
       text: earlier.decision.text,
       nextOffset: null,
       sessionId: session.id,
     });
-    expect(results.get("c3").chain.map((node: { id: string }) => node.id)).toEqual([
-      earlier.result.id,
-      earlier.call.id,
-      earlier.answer.id,
-      earlier.decision.id,
-    ]);
-    expect(results.get("c4")).toEqual({ error: "not_found", id: hidden.node.id });
+    expect(
+      Option.getOrUndefined(MutableHashMap.get(results, "c3")).chain.map(
+        (node: { id: string }) => node.id,
+      ),
+    ).toEqual([earlier.result.id, earlier.call.id, earlier.answer.id, earlier.decision.id]);
+    expect(Option.getOrUndefined(MutableHashMap.get(results, "c4"))).toEqual({
+      error: "not_found",
+      id: hidden.node.id,
+    });
   });
 });
 

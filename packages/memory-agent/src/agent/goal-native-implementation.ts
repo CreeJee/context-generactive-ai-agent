@@ -1,3 +1,4 @@
+import { MutableHashMap, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Implementation references, not service constructors: no Layer/resource is acquired here.
 // Each middleware factory's native service requirements propagate at per-run binding.
@@ -13,7 +14,7 @@ import { createSubscriptionRuntimeImplementation } from "../providers/subscripti
  * Account clients, adapters, middleware and run state must be bound anew by the owner.
  */
 export function createGoalNativeImplementations() {
-  const goals = new Map<string, ReturnType<typeof capture>>();
+  const goals = MutableHashMap.empty<string, ReturnType<typeof capture>>();
   function capture() {
     return Object.freeze({
       createMemoryTools,
@@ -25,8 +26,10 @@ export function createGoalNativeImplementations() {
   }
   return {
     adopt(goalInstanceId: string, factories: typeof import("./native-artifact-entry.ts")) {
-      if (goals.has(goalInstanceId)) throw new Error("Native Goal implementation already selected");
-      goals.set(
+      if (MutableHashMap.has(goals, goalInstanceId))
+        throw new Error("Native Goal implementation already selected");
+      MutableHashMap.set(
+        goals,
         goalInstanceId,
         Object.freeze({
           createMemoryTools: factories.createMemoryTools,
@@ -38,10 +41,10 @@ export function createGoalNativeImplementations() {
       );
     },
     forGoal(goalInstanceId: string) {
-      let implementation = goals.get(goalInstanceId);
+      let implementation = Option.getOrUndefined(MutableHashMap.get(goals, goalInstanceId));
       if (!isTruthy(implementation)) {
         implementation = capture();
-        goals.set(goalInstanceId, implementation);
+        MutableHashMap.set(goals, goalInstanceId, implementation);
       }
       return implementation;
     },

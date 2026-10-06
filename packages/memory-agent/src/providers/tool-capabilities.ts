@@ -2,7 +2,7 @@ import { ANTHROPIC_MODELS, type AnthropicChatModel } from "@tanstack/ai-anthropi
 import * as AnthropicTools from "@tanstack/ai-anthropic/tools";
 import { OPENAI_CHAT_MODELS, type OpenAIChatModel } from "@tanstack/ai-openai";
 import * as OpenAITools from "@tanstack/ai-openai/tools";
-import { Context, Data, Effect, Layer } from "effect";
+import { MutableHashMap, Option, Context, Data, Effect, Layer } from "effect";
 import type { ProviderVendor } from "./contracts.ts";
 import {
   anthropicModelToolCapabilities,
@@ -454,39 +454,41 @@ export function makeProviderToolCapabilityRegistry(
   models: readonly ProviderToolModelMetadata[] = installedModelMetadata(),
 ): Effect.Effect<ProviderToolCapabilityRegistryApi, ProviderToolMetadataFailure> {
   return Effect.gen(function* () {
-    const byId = new Map<string, AnyProviderToolDescriptor>();
+    const byId = MutableHashMap.empty<string, AnyProviderToolDescriptor>();
     for (const entry of descriptors) {
       if (entry.id !== `${entry.provider}:${entry.kind}`)
         return yield* new ProviderToolMetadataFailure({
           reason: `invalid provider-qualified id: ${entry.id}`,
         });
-      if (byId.has(entry.id))
+      if (MutableHashMap.has(byId, entry.id))
         return yield* new ProviderToolMetadataFailure({
           reason: `duplicate provider tool id: ${entry.id}`,
         });
-      byId.set(entry.id, entry);
+      MutableHashMap.set(byId, entry.id, entry);
     }
-    const byModel = new Map<string, ReadonlySet<string>>();
+    const byModel = MutableHashMap.empty<string, ReadonlySet<string>>();
     for (const model of models) {
       const key = `${model.provider}:${model.model}`;
-      if (byModel.has(key))
+      if (MutableHashMap.has(byModel, key))
         return yield* new ProviderToolMetadataFailure({
           reason: `duplicate provider model metadata: ${key}`,
         });
-      byModel.set(key, new Set(model.tools));
+      MutableHashMap.set(byModel, key, new Set(model.tools));
     }
     const stableDescriptors = Object.freeze([...descriptors].toSorted(compareDescriptor));
     return {
       descriptors: stableDescriptors,
       get: (id) => {
-        const found = byId.get(id);
+        const found = Option.getOrUndefined(MutableHashMap.get(byId, id));
         return found === undefined
           ? Effect.fail(new UnknownProviderTool({ id }))
           : Effect.succeed(found);
       },
       filter: (query) => filterProviderTools(stableDescriptors, query),
       resolve: (query) => {
-        const supported = byModel.get(`${query.provider}:${query.model}`);
+        const supported = Option.getOrUndefined(
+          MutableHashMap.get(byModel, `${query.provider}:${query.model}`),
+        );
         if (supported === undefined)
           return Effect.fail(
             new UnknownProviderToolModel({ provider: query.provider, model: query.model }),

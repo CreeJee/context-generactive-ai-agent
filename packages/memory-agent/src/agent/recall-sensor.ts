@@ -1,5 +1,5 @@
 import { isTruthy } from "../truthy.ts";
-import { Cause, Effect, Exit, Option, Schema } from "effect";
+import { MutableHashMap, Cause, Effect, Exit, Option, Schema } from "effect";
 
 /** Optional, shadow-only Laya v0.3.26 System One adapter. No process or model lifecycle here. */
 export const layaSensorVersion = "laya-v0.3.26";
@@ -116,15 +116,15 @@ async function boundedScore(response: Response, signal: AbortSignal): Promise<nu
 
 /** Per-run instance: memoizes a turn, including failure, so continuations cannot repeat a call. */
 export function createRecallSensor(config: RecallSensorConfig = { mode: "disabled" }) {
-  const seen = new Map<string, Promise<RecallSensorResult>>();
+  const seen = MutableHashMap.empty<string, Promise<RecallSensorResult>>();
   const version = config.mode === "mock" ? (config.version ?? "mock") : layaSensorVersion;
   const endpoint = config.mode === "http" ? loopbackEndpoint(config.endpoint) : null;
 
   function evaluate(input: RecallSensorInput): Promise<RecallSensorResult> {
-    const previous = seen.get(input.turnId);
+    const previous = Option.getOrUndefined(MutableHashMap.get(seen, input.turnId));
     if (isTruthy(previous)) return previous;
     const outcome = run(input);
-    seen.set(input.turnId, outcome);
+    MutableHashMap.set(seen, input.turnId, outcome);
     return outcome;
   }
 

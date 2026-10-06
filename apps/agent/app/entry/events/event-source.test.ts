@@ -1,14 +1,15 @@
+import { MutableHashMap, Option } from "effect";
 import { describe, expect, test, vi } from "vite-plus/test";
 import { connectAppEvents } from "./event-source";
 
 class FakeSource {
-  readonly listeners = new Map<string, (event: Event) => void>();
+  readonly listeners = MutableHashMap.empty<string, (event: Event) => void>();
   readonly close = vi.fn();
   addEventListener(type: string, listener: (event: Event) => void) {
-    this.listeners.set(type, listener);
+    MutableHashMap.set(this.listeners, type, listener);
   }
   emit(type: string, data?: string) {
-    this.listeners.get(type)?.(
+    Option.getOrUndefined(MutableHashMap.get(this.listeners, type))?.(
       data === undefined ? new Event(type) : new MessageEvent(type, { data }),
     );
   }

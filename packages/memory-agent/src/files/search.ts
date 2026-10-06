@@ -1,5 +1,5 @@
 import { isTruthy } from "../truthy.ts";
-import { Option, Schema } from "effect";
+import { MutableHashMap, Option, Schema } from "effect";
 import { PathRejected } from "./paths.ts";
 import { decodeText, TextFileRejected } from "./text.ts";
 
@@ -119,9 +119,9 @@ export async function searchTextFiles(
   let characters = 0;
   let opened = 0;
 
-  const reads = new Map<number, Promise<FileRead>>();
+  const reads = MutableHashMap.empty<number, Promise<FileRead>>();
   const read = (file: number) => {
-    const existing = reads.get(file);
+    const existing = Option.getOrUndefined(MutableHashMap.get(reads, file));
     if (isTruthy(existing)) return existing;
     const path = paths[file]!;
     const pending = readBytes(path).then(
@@ -134,7 +134,7 @@ export async function searchTextFiles(
         return reason === "not_found" ? { kind: "gone" } : { kind: "skipped", reason };
       },
     );
-    reads.set(file, pending);
+    MutableHashMap.set(reads, file, pending);
     return pending;
   };
   // The files this page may open, in order: every file, or only the candidates.
@@ -150,7 +150,7 @@ export async function searchTextFiles(
     for (const ahead of order.slice(position + 1, position + 1 + readAhead)) void read(ahead);
     const path = paths[file]!;
     const result = await read(file);
-    reads.delete(file);
+    MutableHashMap.remove(reads, file);
     switch (result.kind) {
       case "gone":
         continue;

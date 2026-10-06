@@ -1,6 +1,6 @@
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off globalFetch:off newPromise:off
-import { DateTime } from "effect";
+import { MutableHashMap, Option, DateTime } from "effect";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, test, vi } from "vite-plus/test";
 import { migrations } from "../src/db/migrations.ts";
@@ -29,27 +29,31 @@ const credential = (suffix: string): StoredCredential => ({
 function fixture() {
   const db = new DatabaseSync(":memory:");
   db.exec(oauthSchema);
-  const slots = new Map<string, StoredCredential>();
+  const slots = MutableHashMap.empty<string, StoredCredential>();
   const accounts = createProfileCredentialStore((id) => ({
-    read: async (provider) => slots.get(`${provider}:${id}`) ?? null,
+    read: async (provider) =>
+      Option.getOrUndefined(MutableHashMap.get(slots, `${provider}:${id}`)) ?? null,
     write: async (provider, value) => {
-      slots.set(`${provider}:${id}`, value);
+      MutableHashMap.set(slots, `${provider}:${id}`, value);
     },
     remove: async (provider) => {
-      slots.delete(`${provider}:${id}`);
+      MutableHashMap.remove(slots, `${provider}:${id}`);
     },
   }));
-  const legacy = new Map<OAuthProvider, StoredCredential>();
+  const legacy = MutableHashMap.empty<OAuthProvider, StoredCredential>();
   const legacyStore: CredentialStore = {
-    read: async (provider) => legacy.get(provider) ?? null,
+    read: async (provider) => Option.getOrUndefined(MutableHashMap.get(legacy, provider)) ?? null,
     write: async (provider, value) => {
-      legacy.set(provider, value);
+      MutableHashMap.set(legacy, provider, value);
     },
     remove: async (provider) => {
-      legacy.delete(provider);
+      MutableHashMap.remove(legacy, provider);
     },
   };
-  const attempts = new Map<OAuthProvider, { id: string; succeed(): void; fail(): void }>();
+  const attempts = MutableHashMap.empty<
+    OAuthProvider,
+    { id: string; succeed(): void; fail(): void }
+  >();
   const start = async (provider: OAuthProvider, id: string): Promise<LoginAttempt> => {
     let succeed!: () => void;
     let fail!: () => void;
@@ -66,7 +70,7 @@ function fixture() {
         });
       fail = () => reject(new Error("cancelled"));
     });
-    attempts.set(provider, { id, succeed, fail });
+    MutableHashMap.set(attempts, provider, { id, succeed, fail });
     return {
       provider,
       authorizationUrl: `https://login.example/${provider}`,
@@ -159,7 +163,7 @@ describe("multi-account OAuth login manager", () => {
         await login.completed;
         await vi.waitFor(() => expect(manager.profiles(provider).login.status).toBe("completed"));
         expect(writes).toBe(1);
-        expect(slots.size).toBe(1);
+        expect(MutableHashMap.size(slots)).toBe(1);
         expect(manager.profiles(provider).profiles).toEqual([
           expect.objectContaining({ label: "concurrent profile", selected: true }),
         ]);
@@ -182,7 +186,7 @@ describe("multi-account OAuth login manager", () => {
         for (const suffix of [1, 2]) {
           const pending = await manager.start(provider, `계정 ${suffix}`);
           expect(pending.login).toMatchObject({ status: "pending" });
-          const attempt = attempts.get(provider)!;
+          const attempt = Option.getOrUndefined(MutableHashMap.get(attempts, provider))!;
           await accounts.write(provider, attempt.id, credential(`${provider}-${suffix}`));
           attempt.succeed();
           await vi.waitFor(() => expect(manager.profiles(provider).login.status).toBe("completed"));
@@ -205,8 +209,10 @@ describe("multi-account OAuth login manager", () => {
             .profiles.filter((p) => p.selected)
             .map((p) => p.id),
         ).toEqual([`legacy-${provider}`]);
-        expect(legacy.get(provider)).toEqual(credential("original"));
-        expect(slots.size).toBe(3);
+        expect(Option.getOrUndefined(MutableHashMap.get(legacy, provider))).toEqual(
+          credential("original"),
+        );
+        expect(MutableHashMap.size(slots)).toBe(3);
       } finally {
         db.close();
       }
@@ -219,7 +225,7 @@ describe("multi-account OAuth login manager", () => {
       await legacyStore.write("openai", credential("original"));
       await importLegacyOAuthProfile(db, "openai", accounts, legacyStore);
       await manager.start("openai", "new account");
-      const attempt = attempts.get("openai")!;
+      const attempt = Option.getOrUndefined(MutableHashMap.get(attempts, "openai"))!;
       await accounts.write("openai", attempt.id, credential("new"));
       await expect(manager.start("openai", "overlap")).rejects.toThrow("oauth_login_in_progress");
       await manager.cancel("openai");

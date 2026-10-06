@@ -3,7 +3,7 @@ import { isTruthy } from "../truthy.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { resolve } from "node:path";
 import type { ToolKind } from "@agentclientprotocol/sdk";
-import { Option, Schema } from "effect";
+import { HashMap, Option, Schema } from "effect";
 
 /** How an editor should show one of the agent's tools: a title and an ACP tool kind. */
 export interface ToolView {
@@ -11,7 +11,7 @@ export interface ToolView {
   readonly kind: ToolKind;
 }
 
-const views = new Map<string, ToolView>([
+const views = HashMap.fromIterable<string, ToolView>([
   ["find_memory", { title: "기억 검색", kind: "search" }],
   ["read_evidence", { title: "원문 읽기", kind: "read" }],
   ["trace_evidence", { title: "근거 추적", kind: "search" }],
@@ -36,7 +36,7 @@ const views = new Map<string, ToolView>([
 ]);
 
 export function toolView(name: string): ToolView {
-  const known = views.get(name);
+  const known = Option.getOrUndefined(HashMap.get(views, name));
   if (isTruthy(known)) return known;
   const mcp = /^mcp_([A-Za-z0-9_-]+?)__(.+)$/.exec(name);
   return { title: isTruthy(mcp) ? `MCP ${mcp[1]} · ${mcp[2]}` : name, kind: "other" };

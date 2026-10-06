@@ -1,8 +1,8 @@
-import { Result, Option, Schema } from "effect";
+import { HashMap, Result, Option, Schema } from "effect";
 import { PathRejected } from "../files/paths.ts";
 import { TextFileRejected } from "../files/text.ts";
 
-const refusalHints = new Map<string, string>([
+const refusalHints = HashMap.fromIterable<string, string>([
   [
     "invalid_path",
     "Project file tools take relative paths with / separators and no . or .. segments; outside tools take absolute paths.",
@@ -34,7 +34,9 @@ const decodeSystemError = Schema.decodeUnknownOption(SystemError);
 // @effect-diagnostics-next-line missingPipeableSignature:off
 export function toolFailure(error: Error, path: string): Error {
   if (error instanceof PathRejected || error instanceof TextFileRejected)
-    return new Error(`${error.reason}: ${path}. ${refusalHints.get(error.reason) ?? ""}`.trim());
+    return new Error(
+      `${error.reason}: ${path}. ${Option.getOrUndefined(HashMap.get(refusalHints, error.reason)) ?? ""}`.trim(),
+    );
   const systemError = Option.getOrUndefined(decodeSystemError(error));
   if (systemError !== undefined) return new Error(`io_error: ${path} (${systemError.code})`);
   // Tool-authored messages already follow the `reason: detail` form.

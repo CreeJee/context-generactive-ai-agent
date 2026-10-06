@@ -3,7 +3,7 @@ import { isTruthy } from "../truthy.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { DateTime, Schema } from "effect";
+import { MutableHashMap, Option, DateTime, Schema } from "effect";
 import type { RunBinding } from "../workflow/run-bindings.ts";
 
 /**
@@ -24,7 +24,7 @@ export function goalWorkerAuthority(owner: {
   readonly atomic: <T>(work: () => T) => T;
 }) {
   const { sqlite, atomic } = owner;
-  const issued = new Map<string, GoalWorkerCapability>();
+  const issued = MutableHashMap.empty<string, GoalWorkerCapability>();
   const binding = sqlite.prepare(`
     SELECT session_id, goal_instance_id, goal_version, plan_version, workflow_revision_id
     FROM workflow_run_bindings WHERE run_id = ?
@@ -73,7 +73,7 @@ export function goalWorkerAuthority(owner: {
 
   const permits = (claim: GoalWorkerClaim, finalization = false): boolean => {
     if (!(claim.requestId.length > 0)) return false;
-    const expected = issued.get(claim.runId);
+    const expected = Option.getOrUndefined(MutableHashMap.get(issued, claim.runId));
     return Boolean(
       expected &&
       Object.entries(expected).every(
@@ -97,7 +97,11 @@ export function goalWorkerAuthority(owner: {
       // After a crash the DB marker persists, so even a replacement owner refuses
       // automatic re-execution when an effect's outcome could be unknown.
       const reserved = atomic(() => {
-        if (issued.has(claim.runId) || !active(claim) || isTruthy(status.get(claim.runId)))
+        if (
+          MutableHashMap.has(issued, claim.runId) ||
+          !active(claim) ||
+          isTruthy(status.get(claim.runId))
+        )
           return false;
         return (
           reserve.run(claim.runId, generation, DateTime.formatIso(DateTime.nowUnsafe())).changes ===
@@ -106,14 +110,14 @@ export function goalWorkerAuthority(owner: {
       });
       if (!reserved) return null;
       const capability = Object.freeze({ ...claim, generation, token: randomUUID() });
-      issued.set(claim.runId, capability);
+      MutableHashMap.set(issued, claim.runId, capability);
       return capability;
     },
     permits: (claim: GoalWorkerClaim) => permits(claim),
     /** Owner-only cleanup fence. Call only inside an owner-classified finalization scope. */
     permitsFinalization: (claim: GoalWorkerClaim) => permits(claim, true),
     revoke(runId: string): void {
-      issued.delete(runId);
+      MutableHashMap.remove(issued, runId);
     },
   };
 }

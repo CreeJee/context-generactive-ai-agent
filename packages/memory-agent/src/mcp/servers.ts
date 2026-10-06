@@ -6,7 +6,17 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { AnyServerTool } from "@tanstack/ai";
 import { createMCPClient, type MCPClient } from "@tanstack/ai-mcp";
-import { DateTime, Clock, Context, Data, Effect, Layer, Schema } from "effect";
+import {
+  MutableHashMap,
+  Option,
+  DateTime,
+  Clock,
+  Context,
+  Data,
+  Effect,
+  Layer,
+  Schema,
+} from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
 import type { Project } from "../projects/projects.ts";
@@ -141,7 +151,7 @@ const truncated = (text: string) =>
 const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
   const { sqlite } = yield* Database;
-  const connections = new Map<string, Connection>();
+  const connections = MutableHashMap.empty<string, Connection>();
 
   const selectTrust = sqlite.prepare(
     "SELECT scope, name, fingerprint FROM mcp_trust WHERE project_id = '' OR project_id = ?",
@@ -170,14 +180,18 @@ const make = Effect.gen(function* () {
       trusted: trustedFingerprint(server),
       shadowed: server.scope === "global" && localNames.has(server.name),
     }));
-    const usableFingerprints = new Map(
+    const usableFingerprints = MutableHashMap.fromIterable(
       servers
         .filter((entry) => !entry.shadowed && entry.trusted === entry.server.fingerprint)
         .map((entry) => [connectionKey(project, entry.server), entry.server.fingerprint]),
     );
     for (const [key, connection] of connections) {
       if (!key.startsWith(`${project.id}/`)) continue;
-      if (usableFingerprints.get(key) !== connection.fingerprint) close(key);
+      if (
+        Option.getOrUndefined(MutableHashMap.get(usableFingerprints, key)) !==
+        connection.fingerprint
+      )
+        close(key);
     }
     return {
       files: [global, local].map((file, index) => ({
@@ -190,9 +204,9 @@ const make = Effect.gen(function* () {
   };
 
   const close = (key: string) => {
-    const connection = connections.get(key);
+    const connection = Option.getOrUndefined(MutableHashMap.get(connections, key));
     if (!isTruthy(connection)) return;
-    connections.delete(key);
+    MutableHashMap.remove(connections, key);
     void connection.client.then((client) => client.close()).catch(() => undefined);
   };
 
@@ -232,7 +246,7 @@ const make = Effect.gen(function* () {
   /** The live connection for a trusted server, started on first use or after a failure. */
   const connect = (project: Project, server: ConfiguredServer): Connection => {
     const key = connectionKey(project, server);
-    const existing = connections.get(key);
+    const existing = Option.getOrUndefined(MutableHashMap.get(connections, key));
     if (existing?.fingerprint === server.fingerprint && existing.state.status !== "failed")
       return existing;
     if (isTruthy(existing)) close(key);
@@ -255,7 +269,7 @@ const make = Effect.gen(function* () {
       state: { status: "trusted" },
       discovering: null,
     };
-    connections.set(key, connection);
+    MutableHashMap.set(connections, key, connection);
     return connection;
   };
 
@@ -270,7 +284,7 @@ const make = Effect.gen(function* () {
       try {
         const client = await withTimeout(connection.client, connectTimeoutMs, "connect");
         const tools = await withTimeout(client.tools(), connectTimeoutMs, "tools/list");
-        if (connections.get(key) !== connection) return [];
+        if (Option.getOrUndefined(MutableHashMap.get(connections, key)) !== connection) return [];
         connection.state = { status: "connected", tools: tools.map((tool) => tool.name) };
         return tools.flatMap((tool): AnyServerTool[] => {
           const execute = tool.execute;
@@ -295,7 +309,7 @@ const make = Effect.gen(function* () {
       } catch (error) {
         // Stop whatever did start; the next run starts it again.
         void connection.client.then((client) => client.close()).catch(() => undefined);
-        if (connections.get(key) === connection)
+        if (Option.getOrUndefined(MutableHashMap.get(connections, key)) === connection)
           connection.state = {
             status: "failed",
             error: describeFailure(error instanceof Error ? error : new Error(String(error))),
@@ -316,7 +330,9 @@ const make = Effect.gen(function* () {
   ): McpServerState => {
     if (entry.trusted === null) return { status: "untrusted" };
     if (entry.trusted !== entry.server.fingerprint) return { status: "changed" };
-    const connection = connections.get(connectionKey(project, entry.server));
+    const connection = Option.getOrUndefined(
+      MutableHashMap.get(connections, connectionKey(project, entry.server)),
+    );
     return connection?.fingerprint === entry.server.fingerprint
       ? connection.state
       : { status: "trusted" };
@@ -346,7 +362,7 @@ const make = Effect.gen(function* () {
   yield* Effect.addFinalizer(() =>
     Effect.promise(() =>
       Promise.allSettled(
-        [...connections.values()].map((connection) =>
+        [...MutableHashMap.values(connections)].map((connection) =>
           connection.client.then((client) => client.close()),
         ),
       ),
@@ -369,7 +385,8 @@ const make = Effect.gen(function* () {
         if (!trusted) {
           deleteTrust.run(scope, projectId, name);
           // A global server may be running for any project.
-          for (const key of connections.keys()) if (key.endsWith(`/${scope}/${name}`)) close(key);
+          for (const key of MutableHashMap.keys(connections))
+            if (key.endsWith(`/${scope}/${name}`)) close(key);
           return overview(project);
         }
         if (!isTruthy(entry)) return overview(project);

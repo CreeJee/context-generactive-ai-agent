@@ -5,7 +5,7 @@ import type {
   ErrorInfo,
   ToolPhaseCompleteInfo,
 } from "@tanstack/ai";
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { MutableHashMap, Context, Effect, Layer, Option, Schema } from "effect";
 import { PermissionReviews } from "../permissions/reviews.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { Nodes, type NodeDetail } from "./nodes.ts";
@@ -79,7 +79,7 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
     sessionId: binding.sessionId,
     runId: binding.runId,
   };
-  const outcomes = new Map<string, ToolOutcome>();
+  const outcomes = MutableHashMap.empty<string, ToolOutcome>();
 
   /** Who answered, when it was an external agent in a direct conversation. */
   const source: NodeDetail = isTruthy(binding.externalAgent)
@@ -141,7 +141,7 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
     onAfterToolCall(_ctx, info) {
       const outcome: ToolOutcome = { ok: info.ok };
       if (!info.ok) outcome.error = failureText(info);
-      outcomes.set(info.toolCallId, outcome);
+      MutableHashMap.set(outcomes, info.toolCallId, outcome);
     },
 
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -152,13 +152,13 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
       const calls = info.toolCalls.map((call) => {
         const result = info.results.find((entry) => entry.toolCallId === call.id);
         if (!isTruthy(result)) return { call, result, ok: true, resultText: "" };
-        const reported = outcomes.get(call.id);
+        const reported = Option.getOrUndefined(MutableHashMap.get(outcomes, call.id));
         const ok = (reported?.ok ?? true) && !isErrorResult(result.result);
         // A failure is recorded as its error message when there is one.
         const text = ok ? resultText(result) : (reported?.error ?? resultText(result));
         return { call, result, ok, resultText: text };
       });
-      outcomes.clear();
+      MutableHashMap.clear(outcomes);
       const [assistantText, callTexts, callRefs, resultTexts] = await Promise.all([
         hide(ctx.accumulatedContent),
         Promise.all(
@@ -172,19 +172,19 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
       ]);
 
       // A run resumed after an approval replays calls recorded by the interrupted run.
-      const recorded = new Map(
+      const recorded = MutableHashMap.fromIterable(
         info.toolCalls.flatMap((call) => {
           const node = nodes.toolNode(binding.sessionId, "tool_call", call.id);
           return isTruthy(node) ? [[call.id, node] as const] : [];
         }),
       );
       const needsAssistant =
-        ctx.accumulatedContent.length > 0 || recorded.size < info.toolCalls.length;
+        ctx.accumulatedContent.length > 0 || MutableHashMap.size(recorded) < info.toolCalls.length;
       const assistant = needsAssistant ? appendAssistant(assistantText) : null;
 
       calls.forEach(({ call, result, ok }, index) => {
         const callNode =
-          recorded.get(call.id) ??
+          Option.getOrUndefined(MutableHashMap.get(recorded, call.id)) ??
           nodes.append({
             ...base,
             kind: "tool_call",

@@ -1,5 +1,5 @@
 import { isTruthy } from "../truthy.ts";
-import { Context, Effect, Layer, Schema } from "effect";
+import { MutableHashMap, Option, Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import { EdgeKind } from "./edges.ts";
 import { hasStatementText } from "./quality.ts";
@@ -96,13 +96,16 @@ const make = Effect.gen(function* () {
     UNION ALL
     SELECT from_id AS nodeId, kind, 'in' AS direction, weight FROM edges WHERE to_id = ?`);
 
-  function traverse(seeds: ReadonlyMap<string, number>, options: TraverseOptions): TraverseResult {
+  function traverse(
+    seeds: Iterable<readonly [string, number]>,
+    options: TraverseOptions,
+  ): TraverseResult {
     const allowed = new Set(options.projectIds);
-    const best = new Map<string, number>();
+    const best = MutableHashMap.empty<string, number>();
     const frontier: Candidate[] = [];
     for (const [nodeId, utility] of seeds) {
-      if (utility <= (best.get(nodeId) ?? 0)) continue;
-      best.set(nodeId, utility);
+      if (utility <= (Option.getOrUndefined(MutableHashMap.get(best, nodeId)) ?? 0)) continue;
+      MutableHashMap.set(best, nodeId, utility);
       frontier.push({ nodeId, utility, seedId: nodeId, path: [] });
     }
 
@@ -134,10 +137,10 @@ const make = Effect.gen(function* () {
         if (
           visited.has(next.nodeId) ||
           utility < options.minUtility ||
-          utility <= (best.get(next.nodeId) ?? 0)
+          utility <= (Option.getOrUndefined(MutableHashMap.get(best, next.nodeId)) ?? 0)
         )
           continue;
-        best.set(next.nodeId, utility);
+        MutableHashMap.set(best, next.nodeId, utility);
         frontier.push({
           nodeId: next.nodeId,
           utility,

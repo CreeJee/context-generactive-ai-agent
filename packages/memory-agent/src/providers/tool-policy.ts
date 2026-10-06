@@ -2,7 +2,18 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { isAbsolute, resolve } from "node:path";
 import { optionalProperty } from "../optional-property.ts";
-import { Cause, Context, Data, Effect, Result, Exit, Layer, Predicate } from "effect";
+import {
+  HashMap,
+  Option,
+  Cause,
+  Context,
+  Data,
+  Effect,
+  Result,
+  Exit,
+  Layer,
+  Predicate,
+} from "effect";
 import { canonicalPath, isCredentialPath, resolveProjectPath } from "../files/paths.ts";
 import {
   ModelFeatureFlags,
@@ -822,7 +833,7 @@ export function normalizeProviderToolCost(raw: unknown): ProviderToolCost | unde
       });
 }
 /* oxlint-enable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof, anti-slop/no-unsafe-dictionary-type */
-const providerStatus = new Map<string, ProviderToolLifecycleStatus>([
+const providerStatus = HashMap.fromIterable<string, ProviderToolLifecycleStatus>([
   ["pending", "pending"],
   ["queued", "pending"],
   ["approval_required", "approval-required"],
@@ -847,7 +858,7 @@ export function normalizeProviderToolLifecycleStatus(
   fallback: ProviderToolLifecycleStatus,
 ): ProviderToolLifecycleStatus {
   if (kind === undefined) return fallback;
-  return providerStatus.get(kind) ?? fallback;
+  return Option.getOrUndefined(HashMap.get(providerStatus, kind)) ?? fallback;
 }
 const runtimeEnvelope = <Raw>(
   request: ProviderToolExecutionRequest,
@@ -865,7 +876,7 @@ const runtimeEnvelope = <Raw>(
     execution: descriptor.execution,
     status,
     ...optionalProperty("providerKind", result.kind),
-    unknownKind: result.kind !== undefined && !providerStatus.has(result.kind),
+    unknownKind: result.kind !== undefined && !HashMap.has(providerStatus, result.kind),
     ...optionalProperty(
       "usage",
       normalizeProviderToolUsage(result.usage, {

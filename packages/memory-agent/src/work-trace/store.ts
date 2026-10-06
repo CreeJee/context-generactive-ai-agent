@@ -3,7 +3,7 @@ import { isTruthy } from "../truthy.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import { optionalProperty } from "../optional-property.ts";
-import { DateTime, Clock, Context, Effect, Layer, Option, Schema } from "effect";
+import { MutableHashMap, DateTime, Clock, Context, Effect, Layer, Option, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import { JsonValue } from "../json.ts";
 import type { MemoryCandidateView, MemoryUsageView } from "../memory/knowledge.ts";
@@ -1519,7 +1519,7 @@ const make = Effect.gen(function* () {
         .all(input.parentRunId, input.projectId, input.sessionId),
     );
     const reviewedKeys = new Set(reviewed.map((row) => `${row.task_id}:${row.attempt_id}`));
-    const selected = new Map(
+    const selected = MutableHashMap.fromIterable(
       input.usedReports.map((report) => [`${report.taskId}:${report.attemptId}`, report] as const),
     );
     for (const [key, report] of selected) {
@@ -1537,7 +1537,7 @@ const make = Effect.gen(function* () {
         )
           throw new Error("Final answer selected unavailable or unrelated evidence");
     }
-    const notificationTasks = new Map<string, string>();
+    const notificationTasks = MutableHashMap.empty<string, string>();
     for (const notificationId of input.reflectedNotificationIds) {
       const row = sqlite
         .prepare(
@@ -1549,7 +1549,7 @@ const make = Effect.gen(function* () {
         .get(notificationId, input.sessionId, input.parentRunId, input.projectId);
       if (!isTruthy(row))
         throw new Error("Final answer selected an undelivered parent notification");
-      notificationTasks.set(notificationId, decodeTaskId(row).task_id);
+      MutableHashMap.set(notificationTasks, notificationId, decodeTaskId(row).task_id);
     }
 
     const claimId = randomUUID();
@@ -1577,7 +1577,7 @@ const make = Effect.gen(function* () {
         `INSERT INTO final_answer_sources (id, claim_id, task_id, attempt_id, evidence_ref_id)
          VALUES (?, ?, ?, ?, ?)`,
       );
-      for (const report of selected.values()) {
+      for (const report of MutableHashMap.values(selected)) {
         const ids = [...new Set(report.evidenceRefIds)];
         if (ids.length === 0)
           addSource.run(randomUUID(), claimId, report.taskId, report.attemptId, null);
@@ -1597,7 +1597,9 @@ const make = Effect.gen(function* () {
       );
       for (const row of reviewed) {
         const attempt = decodeAttempt(findHandle.get(row.attempt_id, row.task_id));
-        const disposition = selected.has(`${row.task_id}:${row.attempt_id}`) ? "used" : "not_used";
+        const disposition = MutableHashMap.has(selected, `${row.task_id}:${row.attempt_id}`)
+          ? "used"
+          : "not_used";
         sqlite
           .prepare(
             `INSERT INTO report_adoptions
@@ -1626,7 +1628,7 @@ const make = Effect.gen(function* () {
           disposition,
         });
       }
-      for (const report of selected.values()) {
+      for (const report of MutableHashMap.values(selected)) {
         const priorRow = sqlite
           .prepare(
             `SELECT attempt_id FROM report_adoptions

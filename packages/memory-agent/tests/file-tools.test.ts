@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { Effect, Schema } from "effect";
+import { MutableHashMap, Effect, Schema } from "effect";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import { FileTools } from "../src/tools/files.ts";
 
@@ -22,7 +22,7 @@ afterEach(() => {
     rmSync(directory, { recursive: true, force: true });
 });
 
-function project(files: ReadonlyMap<string, string | Buffer>) {
+function project(files: MutableHashMap.MutableHashMap<string, string | Buffer>) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "memory-agent-files-")));
   directories.push(base);
   const root = join(base, "project");
@@ -77,7 +77,7 @@ const WithSha = Schema.Struct({ sha256: Schema.String });
 describe("list_files", () => {
   test("uses Git ignore rules and leaves out links, .git and credentials", async () => {
     const { root, base } = project(
-      new Map([
+      MutableHashMap.fromIterable([
         ["src/app.ts", "export {};\n"],
         ["dist/app.js", "built\n"],
         [".gitignore", "dist\n"],
@@ -109,9 +109,9 @@ describe("list_files", () => {
   });
 
   test("walks projects without Git, skipping node_modules, and pages one snapshot", async () => {
-    const files = new Map([["node_modules/pkg/index.js", "x"]]);
+    const files = MutableHashMap.fromIterable([["node_modules/pkg/index.js", "x"]]);
     for (let index = 0; index < 510; index++)
-      files.set(`notes/${String(index).padStart(3, "0")}.md`, "note\n");
+      MutableHashMap.set(files, `notes/${String(index).padStart(3, "0")}.md`, "note\n");
     const { root } = project(files);
     const { listFiles } = await fileTools(root);
 
@@ -130,7 +130,7 @@ describe("search_files", () => {
   test("returns matching lines, pages with a cursor and reports skipped files", async () => {
     const many = Array.from({ length: 150 }, (_, index) => `const TODO_${index} = 1;`).join("\n");
     const { root } = project(
-      new Map<string, string | Buffer>([
+      MutableHashMap.fromIterable<string, string | Buffer>([
         ["src/a.ts", "// todo: first\nexport const a = 1;\r\n// TODO second\n"],
         ["src/many.ts", many],
         ["src/image.bin", Buffer.from([0x89, 0x00, 0x01])],
@@ -175,7 +175,7 @@ describe("search_files", () => {
 describe("search_files in a Git work tree", () => {
   test("narrows files with git grep but keeps untracked, ignore rules, credentials and case rules", async () => {
     const { root } = project(
-      new Map<string, string | Buffer>([
+      MutableHashMap.fromIterable<string, string | Buffer>([
         ["src/tracked.ts", "const Needle = 1;\nconst other = 2;\n"],
         ["src/untracked.ts", "// needle in a new file\n"],
         ["dist/built.js", "needle in an ignored file\n"],
@@ -221,7 +221,7 @@ describe("search_files in a Git work tree", () => {
 
 describe("read, write, edit and delete", () => {
   test("paging a file reuses the read only while the file is unchanged", async () => {
-    const { root } = project(new Map([["log.txt", "a\nb\nc\n"]]));
+    const { root } = project(MutableHashMap.fromIterable([["log.txt", "a\nb\nc\n"]]));
     const { readFile } = await fileTools(root);
     const first = Schema.decodeUnknownSync(WithSha)(
       await run(readFile, { path: "log.txt", maxLines: 1 }),
@@ -234,7 +234,9 @@ describe("read, write, edit and delete", () => {
   });
 
   test("reads line pages exactly, including CRLF, with a sha256", async () => {
-    const { root } = project(new Map([["notes.txt", "one\r\ntwo\r\nthree\r\n"]]));
+    const { root } = project(
+      MutableHashMap.fromIterable([["notes.txt", "one\r\ntwo\r\nthree\r\n"]]),
+    );
     const { readFile } = await fileTools(root);
     expect(await run(readFile, { path: "notes.txt", startLine: 2, maxLines: 1 })).toMatchObject({
       content: "two\r\n",
@@ -247,7 +249,7 @@ describe("read, write, edit and delete", () => {
   });
 
   test("creates, replaces only the version that was read, and deletes with a sha256", async () => {
-    const { root } = project(new Map());
+    const { root } = project(MutableHashMap.empty());
     const { readFile, writeFile, deleteFile } = await fileTools(root);
     const plan = join(root, "docs", "plan.md");
     const shaOf = async () =>
@@ -280,7 +282,7 @@ describe("read, write, edit and delete", () => {
 
   test("edits exact text once, keeps CRLF, and refuses ambiguous or missing text", async () => {
     const { root } = project(
-      new Map([
+      MutableHashMap.fromIterable([
         ["app.ts", "const a = 1;\r\nconst b = 1;\r\n"],
         ["twice.ts", "x\nx\n"],
       ]),
@@ -309,7 +311,7 @@ describe("read, write, edit and delete", () => {
 
   test("refuses credentials, .git internals, links and escapes", async () => {
     const { root, base } = project(
-      new Map([
+      MutableHashMap.fromIterable([
         [".env", "SECRET=1\n"],
         ["ok.txt", "ok\n"],
       ]),

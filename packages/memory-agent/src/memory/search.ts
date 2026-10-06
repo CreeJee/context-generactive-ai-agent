@@ -1,5 +1,5 @@
 import { isTruthy } from "../truthy.ts";
-import { Context, Effect, Layer, Schema } from "effect";
+import { MutableHashMap, Option, Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import { Embedder } from "./embedding/embedder.ts";
 import { embeddedKindFilter } from "./embedding/indexer.ts";
@@ -75,16 +75,21 @@ const fusionK = 60;
 export function fuseRanks(
   lists: readonly (readonly string[])[],
   weights: readonly number[] = lists.map(() => 1),
-): Map<string, number> {
-  const scores = new Map<string, number>();
+): MutableHashMap.MutableHashMap<string, number> {
+  const scores = MutableHashMap.empty<string, number>();
   lists.forEach((list, index) => {
     const weight = weights[index] ?? 1;
     list.forEach((id, rank) =>
-      scores.set(id, (scores.get(id) ?? 0) + weight / (fusionK + rank + 1)),
+      MutableHashMap.set(
+        scores,
+        id,
+        (Option.getOrUndefined(MutableHashMap.get(scores, id)) ?? 0) +
+          weight / (fusionK + rank + 1),
+      ),
     );
   });
   const best = weights.reduce((sum, weight) => sum + weight, 0) / (fusionK + 1);
-  return new Map([...scores].map(([id, score]) => [id, score / best]));
+  return MutableHashMap.fromIterable([...scores].map(([id, score]) => [id, score / best]));
 }
 
 /**

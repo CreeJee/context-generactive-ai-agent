@@ -1,3 +1,4 @@
+import { MutableHashMap, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
 import type { DatabaseSync } from "node:sqlite";
 import type { OAuthProvider } from "./protocol.ts";
@@ -7,11 +8,11 @@ import type { OAuthProvider } from "./protocol.ts";
 type ProfileRunState =
   | { readonly status: "active"; readonly count: number }
   | { readonly status: "removing" };
-const states = new WeakMap<DatabaseSync, Map<string, ProfileRunState>>();
+const states = new WeakMap<DatabaseSync, MutableHashMap.MutableHashMap<string, ProfileRunState>>();
 const profilesFor = (sqlite: DatabaseSync) => {
   let profiles = states.get(sqlite);
   if (!isTruthy(profiles)) {
-    profiles = new Map();
+    profiles = MutableHashMap.empty();
     states.set(sqlite, profiles);
   }
   return profiles;
@@ -27,7 +28,7 @@ export function acquireOAuthProfileRun(
 ): () => void {
   const profiles = profilesFor(sqlite);
   const name = key(provider, id);
-  const current = profiles.get(name);
+  const current = Option.getOrUndefined(MutableHashMap.get(profiles, name));
   let count = 0;
   switch (current?.status) {
     case "removing":
@@ -38,16 +39,16 @@ export function acquireOAuthProfileRun(
     case undefined:
       break;
   }
-  profiles.set(name, { status: "active", count: count + 1 });
+  MutableHashMap.set(profiles, name, { status: "active", count: count + 1 });
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    const active = profiles.get(name);
+    const active = Option.getOrUndefined(MutableHashMap.get(profiles, name));
     switch (active?.status) {
       case "active":
-        if (active.count <= 1) profiles.delete(name);
-        else profiles.set(name, { status: "active", count: active.count - 1 });
+        if (active.count <= 1) MutableHashMap.remove(profiles, name);
+        else MutableHashMap.set(profiles, name, { status: "active", count: active.count - 1 });
         break;
       default:
         break;
@@ -62,7 +63,13 @@ export function oauthProfileInUse(
   provider: OAuthProvider,
   id: string,
 ): boolean {
-  return states.get(sqlite)?.get(key(provider, id))?.status === "active";
+  return (
+    Option.getOrUndefined(
+      Option.flatMap(Option.fromNullishOr(states.get(sqlite)), (map) =>
+        MutableHashMap.get(map, key(provider, id)),
+      ),
+    )?.status === "active"
+  );
 }
 
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
@@ -72,7 +79,13 @@ export function oauthProfileRemoving(
   provider: OAuthProvider,
   id: string,
 ): boolean {
-  return states.get(sqlite)?.get(key(provider, id))?.status === "removing";
+  return (
+    Option.getOrUndefined(
+      Option.flatMap(Option.fromNullishOr(states.get(sqlite)), (map) =>
+        MutableHashMap.get(map, key(provider, id)),
+      ),
+    )?.status === "removing"
+  );
 }
 
 /** Synchronous admission gate before any asynchronous vault operation. Always release in finally. */
@@ -93,8 +106,9 @@ export function beginOAuthProfileRemoval(
   )
     throw new Error("oauth_profile_removing");
   const removing: ProfileRunState = { status: "removing" };
-  profiles.set(name, removing);
+  MutableHashMap.set(profiles, name, removing);
   return () => {
-    if (profiles.get(name) === removing) profiles.delete(name);
+    if (Option.getOrUndefined(MutableHashMap.get(profiles, name)) === removing)
+      MutableHashMap.remove(profiles, name);
   };
 }

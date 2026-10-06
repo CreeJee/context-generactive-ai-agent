@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { HashMap, MutableHashMap, Effect } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 // @effect-diagnostics-next-line nodeBuiltinImport:off
@@ -38,7 +38,7 @@ type Chat = ChatClient<typeof approvalToolDefinitions, [typeof permissionReviewI
 
 interface PromptTurn {
   readonly client: AgentContext;
-  readonly args: Map<string, string>;
+  readonly args: MutableHashMap.MutableHashMap<string, string>;
   cancelled: boolean;
   failure: string | null;
 }
@@ -55,7 +55,7 @@ interface BridgeSession {
 
 const requestError = (message: string) => acp.RequestError.internalError(undefined, message);
 
-const failureMessages = new Map([
+const failureMessages = HashMap.fromIterable([
   ["unreachable", "앱에 연결하지 못했어요. context-generactive-agent 앱을 먼저 실행하세요."],
   ["login_required", "앱에서 ChatGPT에 로그인하세요."],
   ["model_selection_required", "앱에서 모델을 선택하세요."],
@@ -67,7 +67,10 @@ const explain = (error: Error) =>
   error instanceof acp.RequestError
     ? error
     : error instanceof AppRequestFailed
-      ? requestError(failureMessages.get(error.code) ?? `앱 요청이 실패했어요: ${error.code}`)
+      ? requestError(
+          Option.getOrUndefined(HashMap.get(failureMessages, error.code)) ??
+            `앱 요청이 실패했어요: ${error.code}`,
+        )
       : requestError(error.message);
 
 const decodeReview = Schema.decodeUnknownOption(
@@ -122,7 +125,7 @@ export function startAcpAgent(options: {
   readonly api: AppApi;
 }): acp.AgentConnection {
   const { api } = options;
-  const sessions = new Map<string, BridgeSession>();
+  const sessions = MutableHashMap.empty<string, BridgeSession>();
 
   const notify = (turn: PromptTurn, sessionId: string, update: SessionUpdate) =>
     void turn.client.notify(acp.methods.client.session.update, { sessionId, update });
@@ -141,7 +144,7 @@ export function startAcpAgent(options: {
         return;
       case "TOOL_CALL_START": {
         const view = toolView(chunk.toolCallName);
-        turn.args.set(chunk.toolCallId, "");
+        MutableHashMap.set(turn.args, chunk.toolCallId, "");
         notify(turn, session.id, {
           sessionUpdate: "tool_call",
           toolCallId: chunk.toolCallId,
@@ -152,10 +155,15 @@ export function startAcpAgent(options: {
         return;
       }
       case "TOOL_CALL_ARGS":
-        turn.args.set(chunk.toolCallId, (turn.args.get(chunk.toolCallId) ?? "") + chunk.delta);
+        MutableHashMap.set(
+          turn.args,
+          chunk.toolCallId,
+          (Option.getOrUndefined(MutableHashMap.get(turn.args, chunk.toolCallId)) ?? "") +
+            chunk.delta,
+        );
         return;
       case "TOOL_CALL_END": {
-        const args = turn.args.get(chunk.toolCallId) ?? "";
+        const args = Option.getOrUndefined(MutableHashMap.get(turn.args, chunk.toolCallId)) ?? "";
         const update: SessionUpdate = {
           sessionUpdate: "tool_call_update",
           toolCallId: chunk.toolCallId,
@@ -227,7 +235,7 @@ export function startAcpAgent(options: {
         onChunk: (chunk) => forward(session, chunk),
       }),
     };
-    sessions.set(sessionId, session);
+    MutableHashMap.set(sessions, sessionId, session);
     return session;
   };
 
@@ -349,7 +357,7 @@ export function startAcpAgent(options: {
         const project = await projectFor(ctx.params.cwd);
         const messages = await api.transcript(ctx.params.sessionId);
         const session =
-          sessions.get(ctx.params.sessionId) ??
+          Option.getOrUndefined(MutableHashMap.get(sessions, ctx.params.sessionId)) ??
           (await open(ctx.params.sessionId, project, messages));
         // Replays the saved conversation, so the editor shows what the page shows.
         for (const message of messages)
@@ -392,13 +400,13 @@ export function startAcpAgent(options: {
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
     // @effect-diagnostics-next-line asyncFunction:off
     .onRequest(acp.methods.agent.session.prompt, async (ctx) => {
-      const session = sessions.get(ctx.params.sessionId);
+      const session = Option.getOrUndefined(MutableHashMap.get(sessions, ctx.params.sessionId));
       if (!isTruthy(session))
         throw requestError("그런 세션이 없어요. 새로 시작하거나 다시 불러오세요.");
       if (isTruthy(session.turn)) throw requestError("이미 답하는 중이에요.");
       const turn: PromptTurn = {
         client: ctx.client,
-        args: new Map(),
+        args: MutableHashMap.empty(),
         cancelled: false,
         failure: null,
       };
@@ -411,11 +419,12 @@ export function startAcpAgent(options: {
         for (;;) {
           const interrupts = session.chat.getInterrupts();
           if (interrupts.length === 0 || turn.cancelled) break;
-          const answers = new Map<string, boolean>();
+          const answers = MutableHashMap.empty<string, boolean>();
           for (const interrupt of interrupts)
             switch (interrupt.kind) {
               case "tool-approval":
-                answers.set(
+                MutableHashMap.set(
+                  answers,
                   interrupt.id,
                   await askEditor(turn, session.id, {
                     toolCallId: interrupt.toolCallId,
@@ -427,7 +436,8 @@ export function startAcpAgent(options: {
               case "generic": {
                 const review = Option.getOrUndefined(decodeReview(interrupt));
                 if (!(review !== undefined)) break;
-                answers.set(
+                MutableHashMap.set(
+                  answers,
                   interrupt.id,
                   await askEditor(turn, session.id, {
                     toolCallId: review.payload.toolCallId,
@@ -441,7 +451,8 @@ export function startAcpAgent(options: {
                 break;
             }
           session.chat.resolveInterrupts((interrupt) => {
-            const approved = answers.get(interrupt.id) ?? false;
+            const approved =
+              Option.getOrUndefined(MutableHashMap.get(answers, interrupt.id)) ?? false;
             switch (interrupt.kind) {
               case "tool-approval":
                 interrupt.resolveInterrupt(approved);
@@ -468,7 +479,7 @@ export function startAcpAgent(options: {
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
     // @effect-diagnostics-next-line asyncFunction:off
     .onNotification(acp.methods.agent.session.cancel, async (ctx) => {
-      const session = sessions.get(ctx.params.sessionId);
+      const session = Option.getOrUndefined(MutableHashMap.get(sessions, ctx.params.sessionId));
       if (!isTruthy(session?.turn)) return;
       session.turn.cancelled = true;
       // The app's cancel stops the run for good; closing the stream alone would not (R10).
@@ -477,11 +488,11 @@ export function startAcpAgent(options: {
 
   const connection = app.connect(options.stream);
   void connection.closed.finally(() => {
-    for (const session of sessions.values()) {
+    for (const session of MutableHashMap.values(sessions)) {
       clearInterval(session.renew);
       void api.lease(session.id, session.holder, "release").catch(() => undefined);
     }
-    sessions.clear();
+    MutableHashMap.clear(sessions);
   });
   return connection;
 }

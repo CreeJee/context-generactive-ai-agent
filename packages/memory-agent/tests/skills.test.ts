@@ -2,7 +2,7 @@
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Random, Effect } from "effect";
+import { MutableHashMap, Random, Effect } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import {
@@ -34,7 +34,7 @@ describe("parseFrontMatter", () => {
       license: "MIT",
     });
     expect(body).toBe("# Body\n");
-    expect(parseFrontMatter("no front matter").fields.size).toBe(0);
+    expect(MutableHashMap.size(parseFrontMatter("no front matter").fields)).toBe(0);
   });
 });
 

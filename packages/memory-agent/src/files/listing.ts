@@ -12,7 +12,7 @@ import { lstat, readdir } from "node:fs/promises";
 // @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join, posix } from "node:path";
 import { promisify } from "node:util";
-import { Effect } from "effect";
+import { MutableHashMap, Option, Effect } from "effect";
 import { findExecutable } from "../runtime/host.ts";
 import { gitEnvironment } from "./git-grep.ts";
 import { isCredentialPath } from "./paths.ts";
@@ -202,21 +202,21 @@ export interface Snapshot extends FileListing {
  */
 export const createSnapshots = (capacity = 32) =>
   Effect.sync(() => {
-    const entries = new Map<string, Snapshot>();
+    const entries = MutableHashMap.empty<string, Snapshot>();
     return {
       add(root: string, directory: string, glob: string | undefined, listing: FileListing) {
         const snapshot: Snapshot = { id: randomUUID(), root, directory, glob, ...listing };
-        entries.set(snapshot.id, snapshot);
-        for (const id of entries.keys()) {
-          if (entries.size <= capacity) break;
-          entries.delete(id);
+        MutableHashMap.set(entries, snapshot.id, snapshot);
+        for (const id of MutableHashMap.keys(entries)) {
+          if (MutableHashMap.size(entries) <= capacity) break;
+          MutableHashMap.remove(entries, id);
         }
         return snapshot;
       },
 
       /** A snapshot taken for this project root, or undefined when unknown or evicted. */
       get(id: string, root: string) {
-        const snapshot = entries.get(id);
+        const snapshot = Option.getOrUndefined(MutableHashMap.get(entries, id));
         return snapshot?.root === root ? snapshot : undefined;
       },
     };

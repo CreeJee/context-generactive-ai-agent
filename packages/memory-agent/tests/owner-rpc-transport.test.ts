@@ -1,5 +1,6 @@
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off newPromise:off nodeBuiltinImport:off
+import { makeOwnerRpcPortClient as makeFrozenOwnerRpcPortClient } from "../src/agent/full-loop-rpc-client.ts";
 import { MessageChannel } from "node:worker_threads";
 import { once } from "node:events";
 import { describe, expect, it } from "vite-plus/test";
@@ -386,4 +387,24 @@ describe("owner MessagePort RPC", () => {
     client.close();
     port1.close();
   });
+});
+
+it.each(["1", "__proto__"])("frozen worker rejects non-numeric reply ID %s", async (requestId) => {
+  const { port1, port2 } = new MessageChannel();
+  const client = makeFrozenOwnerRpcPortClient(port1);
+  try {
+    const received = once(port2, "message");
+    const pending = client.request(request());
+    const rejected = expect(pending).rejects.toThrow("Owner port closed; no replay");
+    await received;
+    port2.postMessage({
+      type: "reply",
+      requestId,
+      reply: { type: "succeeded", operationId: 1, output: "unexpected" },
+    });
+    await rejected;
+  } finally {
+    client.close();
+    port2.close();
+  }
 });

@@ -2,7 +2,7 @@
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { DateTime, Effect } from "effect";
+import { MutableHashMap, Option, DateTime, Effect } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { Graph } from "../src/memory/graph.ts";
@@ -75,7 +75,7 @@ describe("Graph.traverse", () => {
       .prepare("INSERT INTO edges VALUES (?, ?, 'calls', 'structure', 0.95, ?)")
       .run(empty.id, call.id, empty.createdAt);
     const graph = await runtime.runPromise(Graph);
-    const walk = graph.traverse(new Map([[result.id, 1]]), {
+    const walk = graph.traverse(MutableHashMap.fromIterable([[result.id, 1]]), {
       budget: 20,
       minUtility: 0.1,
       projectIds: [project.id],
@@ -87,7 +87,7 @@ describe("Graph.traverse", () => {
       kind: "calls",
       direction: "in",
     });
-    const bounded = graph.traverse(new Map([[empty.id, 1]]), {
+    const bounded = graph.traverse(MutableHashMap.fromIterable([[empty.id, 1]]), {
       budget: 1,
       minUtility: 0.1,
       projectIds: [project.id],
@@ -106,19 +106,26 @@ describe("Graph.traverse", () => {
     const { runtime, project, user, assistant, call, result } = await conversation();
     const graph = await runtime.runPromise(Graph);
 
-    const { visits, complete } = graph.traverse(new Map([[result.id, 1]]), {
+    const { visits, complete } = graph.traverse(MutableHashMap.fromIterable([[result.id, 1]]), {
       budget: 10,
       minUtility: 0.5,
       projectIds: [project.id],
     });
 
     expect(complete).toBe(true);
-    const byId = new Map(visits.map((visit) => [visit.node.id, visit]));
-    expect(byId.get(result.id)).toMatchObject({ utility: 1, path: [] });
-    expect(byId.get(call.id)?.utility).toBeCloseTo(0.95);
-    expect(byId.get(assistant.id)?.utility).toBeCloseTo(0.95 * 0.95);
-    expect(byId.get(user.id)?.utility).toBeCloseTo(0.95 * 0.95 * 0.9);
-    expect(byId.get(user.id)?.path).toEqual([
+    const byId = MutableHashMap.fromIterable(visits.map((visit) => [visit.node.id, visit]));
+    expect(Option.getOrUndefined(MutableHashMap.get(byId, result.id))).toMatchObject({
+      utility: 1,
+      path: [],
+    });
+    expect(Option.getOrUndefined(MutableHashMap.get(byId, call.id))?.utility).toBeCloseTo(0.95);
+    expect(Option.getOrUndefined(MutableHashMap.get(byId, assistant.id))?.utility).toBeCloseTo(
+      0.95 * 0.95,
+    );
+    expect(Option.getOrUndefined(MutableHashMap.get(byId, user.id))?.utility).toBeCloseTo(
+      0.95 * 0.95 * 0.9,
+    );
+    expect(Option.getOrUndefined(MutableHashMap.get(byId, user.id))?.path).toEqual([
       { nodeId: call.id, kind: "returns", direction: "in" },
       { nodeId: assistant.id, kind: "calls", direction: "in" },
       { nodeId: user.id, kind: "reply", direction: "out" },
@@ -132,7 +139,7 @@ describe("Graph.traverse", () => {
   test("reports an incomplete walk when the budget runs out", async () => {
     const { runtime, project, user } = await conversation();
     const graph = await runtime.runPromise(Graph);
-    const { visits, complete } = graph.traverse(new Map([[user.id, 1]]), {
+    const { visits, complete } = graph.traverse(MutableHashMap.fromIterable([[user.id, 1]]), {
       budget: 2,
       minUtility: 0.01,
       projectIds: [project.id],
@@ -164,7 +171,11 @@ describe("Graph.traverse", () => {
 
     const walk = (projectIds: string[]) =>
       graph
-        .traverse(new Map([[user.id, 1]]), { budget: 20, minUtility: 0.1, projectIds })
+        .traverse(MutableHashMap.fromIterable([[user.id, 1]]), {
+          budget: 20,
+          minUtility: 0.1,
+          projectIds,
+        })
         .visits.map((visit) => visit.node.id);
     expect(walk([project.id])).not.toContain(other.id);
     expect(walk([project.id, other.projectId])).toContain(other.id);

@@ -1,5 +1,15 @@
 import { isTruthy } from "../truthy.ts";
-import { Cache, Context, Effect, Exit, Layer, Result, Schema } from "effect";
+import {
+  MutableHashMap,
+  Option,
+  Cache,
+  Context,
+  Effect,
+  Exit,
+  Layer,
+  Result,
+  Schema,
+} from "effect";
 import { Embedder, type EmbeddingError } from "../memory/embedding/embedder.ts";
 import { WorkflowPhase } from "./workflow.ts";
 
@@ -185,21 +195,20 @@ const make = Effect.gen(function* () {
   const embedder = yield* Embedder;
   const vectorSets = yield* Cache.makeWith<
     readonly WorkflowRule[],
-    ReadonlyMap<string, Float32Array>,
+    MutableHashMap.MutableHashMap<string, Float32Array>,
     EmbeddingError
   >(
     (rules) =>
       embedder
         .embed(rules.map((rule) => `${rule.title}\n${rule.terms.join(" ")}\n${rule.instruction}`))
         .pipe(
-          Effect.map(
-            (embedded) =>
-              new Map(
-                rules.flatMap((rule, index) => {
-                  const vector = embedded[index];
-                  return isTruthy(vector) ? [[rule.id, vector] as const] : [];
-                }),
-              ),
+          Effect.map((embedded) =>
+            MutableHashMap.fromIterable(
+              rules.flatMap((rule, index) => {
+                const vector = embedded[index];
+                return isTruthy(vector) ? [[rule.id, vector] as const] : [];
+              }),
+            ),
           ),
         ),
     {
@@ -212,9 +221,14 @@ const make = Effect.gen(function* () {
 
   return {
     resolve: ({ phase, text, rules = [], limit = 3 }: RuleQuery): Effect.Effect<ResolvedRules> => {
-      const byId = new Map(builtInWorkflowRules.map((rule) => [rule.id, rule] as const));
-      for (const rule of rules) if (!byId.has(rule.id)) byId.set(rule.id, rule);
-      const candidates = [...byId.values()].filter((rule) => rule.phases.includes(phase));
+      const byId = MutableHashMap.fromIterable(
+        builtInWorkflowRules.map((rule) => [rule.id, rule] as const),
+      );
+      for (const rule of rules)
+        if (!MutableHashMap.has(byId, rule.id)) MutableHashMap.set(byId, rule.id, rule);
+      const candidates = [...MutableHashMap.values(byId)].filter((rule) =>
+        rule.phases.includes(phase),
+      );
       const required = candidates.filter((rule) => rule.priority === "required");
       const optional = candidates.filter((rule) => rule.priority === "recommended");
       if (optional.length === 0) return Effect.succeed({ rules: required, degraded: [] as const });
@@ -232,8 +246,11 @@ const make = Effect.gen(function* () {
                 ? optional
                     .map((rule) => ({
                       rule,
-                      score: isTruthy(byId.get(rule.id))
-                        ? cosine(queryVector, byId.get(rule.id)!)
+                      score: isTruthy(Option.getOrUndefined(MutableHashMap.get(byId, rule.id)))
+                        ? cosine(
+                            queryVector,
+                            Option.getOrUndefined(MutableHashMap.get(byId, rule.id))!,
+                          )
                         : -1,
                     }))
                     .sort((left, right) => right.score - left.score)
@@ -241,10 +258,15 @@ const make = Effect.gen(function* () {
             ),
           ),
         );
-        const ranks = new Map<string, number>();
+        const ranks = MutableHashMap.empty<string, number>();
         const addRanks = (ranked: readonly { readonly rule: WorkflowRule }[]) =>
           ranked.forEach(({ rule }, index) =>
-            ranks.set(rule.id, (ranks.get(rule.id) ?? 0) + 1 / (60 + index + 1)),
+            MutableHashMap.set(
+              ranks,
+              rule.id,
+              (Option.getOrUndefined(MutableHashMap.get(ranks, rule.id)) ?? 0) +
+                1 / (60 + index + 1),
+            ),
           );
         addRanks(lexical);
         const degraded = Result.match(semantic, {
@@ -256,8 +278,14 @@ const make = Effect.gen(function* () {
         });
 
         const selected = optional
-          .filter((rule) => lexicalScore(queryTerms, rule) > 0 || ranks.has(rule.id))
-          .sort((left, right) => (ranks.get(right.id) ?? 0) - (ranks.get(left.id) ?? 0))
+          .filter(
+            (rule) => lexicalScore(queryTerms, rule) > 0 || MutableHashMap.has(ranks, rule.id),
+          )
+          .sort(
+            (left, right) =>
+              (Option.getOrUndefined(MutableHashMap.get(ranks, right.id)) ?? 0) -
+              (Option.getOrUndefined(MutableHashMap.get(ranks, left.id)) ?? 0),
+          )
           .slice(0, limit);
         return {
           rules: [...required, ...selected],
