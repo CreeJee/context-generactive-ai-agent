@@ -1,3 +1,4 @@
+import { Array as EffectArray } from "effect";
 import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
@@ -153,7 +154,7 @@ describe("migrating other agents' transcripts", () => {
       "2026-03-01T09:00:12.000Z",
     ]);
     // Everything answering one user turn shares its run, which is how the transcript renders.
-    expect(new Set(rows.map((row) => row.run_id)).size).toBe(1);
+    expect(EffectArray.dedupe(rows.map((row) => row.run_id)).length).toBe(1);
   });
 
   test("builds the evidence chain the live recorder builds", async () => {

@@ -1,3 +1,4 @@
+import { Array as EffectArray } from "effect";
 import { HashSet } from "effect";
 import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
@@ -237,10 +238,10 @@ test("actual Goal-bound native AgentChat turns bypass bound recording and memory
   );
   const assistants = services.nodes.session(session.id).filter((node) => node.kind === "assistant");
   expect(assistants.map((node) => node.text)).toEqual(["native-answer-1", "native-answer-2"]);
-  expect(new Set(assistants.map((node) => node.runId)).size).toBe(2);
+  expect(EffectArray.dedupe(assistants.map((node) => node.runId)).length).toBe(2);
   const replies = assistants.map(
     (node) => services.nodes.edgesOf(node.id).find((edge) => edge.kind === "reply")?.toId,
   );
-  expect(new Set(replies).size).toBe(2);
+  expect(EffectArray.dedupe(replies).length).toBe(2);
   expect(provider!.adapter.invocations).toHaveLength(0);
 });

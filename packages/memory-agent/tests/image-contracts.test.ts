@@ -1,3 +1,4 @@
+import { Array as EffectArray } from "effect";
 import { OPENAI_IMAGE_MODELS, createOpenaiImage } from "@tanstack/ai-openai";
 import { imageGenerationTool } from "@tanstack/ai-openai/tools";
 import {
@@ -72,9 +73,9 @@ describe("image route contracts", () => {
       imageInputSupported: true,
       imageGenerationSupported: false,
     });
-    expect(new Set<string>(imageRouteContracts.map((route) => route.provider))).toEqual(
-      new Set(["openai"]),
-    );
+    expect(EffectArray.dedupe(imageRouteContracts.map((route) => route.provider))).toEqual([
+      "openai",
+    ]);
   });
 
   it("enables implemented direct adapters but keeps the Provider Tool staged", () => {

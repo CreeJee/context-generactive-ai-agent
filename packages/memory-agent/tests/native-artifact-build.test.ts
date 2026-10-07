@@ -25,7 +25,7 @@ test("factory bundle imports shared host packages and binds fresh central servic
   // Keep output under the package so native Node imports resolve the host's dependencies.
   const temporary = await mkdtemp(join(root, ".native-artifact-test-"));
   try {
-    const allowedPackages = new Set([
+    const allowedPackages = HashSet.fromIterable([
       "effect",
       "@tanstack/ai",
       "@secretlint/core",
@@ -36,7 +36,7 @@ test("factory bundle imports shared host packages and binds fresh central servic
       if (id.startsWith("node:")) return true;
       if (id.startsWith(".") || id.startsWith("/") || id.startsWith("\0")) return false;
       const name = id.startsWith("@") ? id.split("/").slice(0, 2).join("/") : id.split("/")[0];
-      if (!allowedPackages.has(name)) throw new Error(`Unexpected host dependency: ${id}`);
+      if (!HashSet.has(allowedPackages, name)) throw new Error(`Unexpected host dependency: ${id}`);
       return true;
     };
     const result = await build({

@@ -1,3 +1,4 @@
+import { Array as EffectArray } from "effect";
 // Native server integration test uses host environment, SDK Promise callbacks and I/O fixtures.
 // @effect-diagnostics asyncFunction:off globalFetch:off globalFetchInEffect:off newPromise:off nodeBuiltinImport:off processEnv:off
 import { isTruthy } from "../../app/truthy.ts";
@@ -184,7 +185,7 @@ test("real two-listener Vite proxy preserves contracts through UI edits and dura
           const resumed = yield* Effect.promise(() => reconnect.text());
           const resumedIds = [...resumed.matchAll(/^id: (.+)$/gm)].map((match) => match[1]!);
           expect(resumedIds).toEqual(ids.slice(1));
-          expect(new Set(resumedIds).size).toBe(resumedIds.length);
+          expect(EffectArray.dedupe(resumedIds).length).toBe(resumedIds.length);
           expect(context.provider!.adapter.invocations).toHaveLength(calls);
           expect(
             db.sqlite

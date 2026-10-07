@@ -1,3 +1,4 @@
+import { Array as EffectArray } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
 import { isTruthy } from "../src/truthy.ts";
@@ -120,7 +121,9 @@ test("continues a promise-only turn without a browser and verifies the completed
     )
     .toBe("completed");
   expect(context.provider!.adapter.invocations).toHaveLength(5);
-  expect(new Set(context.provider!.adapter.invocations.map((turn) => turn.runId)).size).toBe(3);
+  expect(
+    EffectArray.dedupe(context.provider!.adapter.invocations.map((turn) => turn.runId)).length,
+  ).toBe(3);
   expect(context.provider!.adapter.invocations[1]?.systemPrompts.join("\n")).toContain(
     "automatic continuation of the already approved Plan",
   );

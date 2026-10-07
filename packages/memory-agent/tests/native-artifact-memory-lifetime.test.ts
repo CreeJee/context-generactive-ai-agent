@@ -1,3 +1,5 @@
+import { Array as EffectArray } from "effect";
+import { HashSet } from "effect";
 import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
@@ -30,7 +32,7 @@ test("late-first native memory bundles preserve helpers and isolate populated ru
   try {
     const source = join(temporary, "src");
     await cp(join(root, "src"), source, { recursive: true });
-    const allowed = new Set([
+    const allowed = HashSet.fromIterable([
       "effect",
       "@tanstack/ai",
       "@secretlint/core",
@@ -41,7 +43,7 @@ test("late-first native memory bundles preserve helpers and isolate populated ru
       if (id.startsWith("node:")) return true;
       if (id.startsWith(".") || id.startsWith("/") || id.startsWith("\0")) return false;
       const name = id.startsWith("@") ? id.split("/").slice(0, 2).join("/") : id.split("/")[0];
-      if (!allowed.has(name)) throw new Error(`Unexpected host dependency: ${id}`);
+      if (!HashSet.has(allowed, name)) throw new Error(`Unexpected host dependency: ${id}`);
       return true;
     };
     const bundle = async (name: string) => {
@@ -258,7 +260,7 @@ test("late-first native memory bundles preserve helpers and isolate populated ru
       // Narrow observable acquisition counter, NOT comprehensive DB/vector/OAuth singleton proof.
       expect(embedderOwners).toBe(1);
     }
-    expect(new Set(sessions).size).toBe(3);
+    expect(EffectArray.dedupe(sessions).length).toBe(3);
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }

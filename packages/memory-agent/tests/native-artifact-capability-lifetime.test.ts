@@ -1,3 +1,4 @@
+import { Array as EffectArray } from "effect";
 import { HashSet } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
@@ -24,7 +25,7 @@ test("late-first native bundles retain permission refusal helper and fresh centr
   try {
     const source = join(temporary, "src");
     await cp(join(root, "src"), source, { recursive: true });
-    const allowed = new Set([
+    const allowed = HashSet.fromIterable([
       "effect",
       "@tanstack/ai",
       "@secretlint/core",
@@ -35,7 +36,7 @@ test("late-first native bundles retain permission refusal helper and fresh centr
       if (id.startsWith("node:")) return true;
       if (id.startsWith(".") || id.startsWith("/") || id.startsWith("\0")) return false;
       const name = id.startsWith("@") ? id.split("/").slice(0, 2).join("/") : id.split("/")[0];
-      if (!allowed.has(name)) throw new Error(`Unexpected host dependency: ${id}`);
+      if (!HashSet.has(allowed, name)) throw new Error(`Unexpected host dependency: ${id}`);
       return true;
     };
     const bundle = async (name: string) => {
@@ -198,7 +199,7 @@ test("late-first native bundles retain permission refusal helper and fresh centr
       // Observable embedder acquisition only, NOT comprehensive singleton ownership proof.
       expect(embedderOwners).toBe(1);
     }
-    expect(new Set(sessions).size).toBe(3);
+    expect(EffectArray.dedupe(sessions).length).toBe(3);
     expect(executed).toEqual(["a-first", "b", "a-next"]);
     for (const [index, sessionId] of sessions.entries()) {
       expect(reviews.latest(sessionId, "blocked-id")?.reason).toBe(

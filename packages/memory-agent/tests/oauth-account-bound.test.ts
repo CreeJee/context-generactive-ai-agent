@@ -1,3 +1,4 @@
+import { Array as EffectArray } from "effect";
 import { it as effectTest } from "@effect/vitest";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off newPromise:off
@@ -146,7 +147,7 @@ describe("account-bound subscription provider", () => {
           bound.forRun().releaseRun();
         }
         expect(legacyRemoved).toBe(true);
-        expect(new Set(created).size).toBe(2);
+        expect(EffectArray.dedupe(created).length).toBe(2);
         expect(db.prepare("SELECT provider FROM oauth_legacy_removed").get()).toEqual({ provider });
       } finally {
         db.close();

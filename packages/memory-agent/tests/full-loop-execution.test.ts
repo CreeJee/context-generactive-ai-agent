@@ -1,4 +1,4 @@
-import { HashSet } from "effect";
+import { HashSet, MutableHashSet } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off newPromise:off nodeBuiltinImport:off
 import { isTruthy } from "../src/truthy.ts";
@@ -157,7 +157,7 @@ test("consumer cancellation awaits actual termination and rejected termination r
 test("endpoint preparation failure rolls back both acquired ports before any worker starts", async () => {
   const f = fixture();
   const ports: MessagePort[] = [];
-  const closed = new Set<MessagePort>();
+  const closed = MutableHashSet.empty<MessagePort>();
   const hook = createHook({
     init(_id, type, _trigger, resource) {
       if (type === "MESSAGEPORT" && resource instanceof MessagePort) {
@@ -177,7 +177,7 @@ test("endpoint preparation failure rolls back both acquired ports before any wor
       get ledger(): never {
         // Node initializes the ports after async_hooks.init; observe close only
         // after construction so initialization cannot overwrite these listeners.
-        for (const port of ports) port.once("close", () => closed.add(port));
+        for (const port of ports) port.once("close", () => MutableHashSet.add(closed, port));
         throw new Error("endpoint preparation failed");
       },
       onWorkerStarting: starting,
@@ -191,7 +191,7 @@ test("endpoint preparation failure rolls back both acquired ports before any wor
     await expect(stream.next()).rejects.toThrow("endpoint preparation failed");
     hook.disable();
     expect(ports).toHaveLength(2);
-    await vi.waitFor(() => expect(closed.size).toBe(2));
+    await vi.waitFor(() => expect(MutableHashSet.size(closed)).toBe(2));
     expect(starting).not.toHaveBeenCalled();
     expect(stopped).not.toHaveBeenCalled();
     expect(modelCall).not.toHaveBeenCalled();

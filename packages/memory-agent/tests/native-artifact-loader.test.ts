@@ -1,3 +1,4 @@
+import { Array as EffectArray } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
 import { createHash } from "node:crypto";
@@ -143,6 +144,6 @@ test("real bundled A/B/A subscription factories execute verified snapshots with 
         false,
       );
     }
-    expect(new Set(urls).size).toBe(3);
+    expect(EffectArray.dedupe(urls).length).toBe(3);
   });
 }, 60_000);

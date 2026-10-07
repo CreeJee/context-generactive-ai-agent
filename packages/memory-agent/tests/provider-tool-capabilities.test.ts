@@ -1,3 +1,4 @@
+import { Array as EffectArray } from "effect";
 import { Layer } from "effect";
 import { it as effectTest } from "@effect/vitest";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
@@ -38,7 +39,7 @@ const failure = <A, E>(effect: Effect.Effect<A, E>) =>
 describe("ProviderToolCapabilityRegistry", () => {
   test("contains all 18 provider-qualified tools without cross-provider collisions", () => {
     expect(providerToolDescriptors).toHaveLength(18);
-    expect(new Set(providerToolDescriptors.map((entry) => entry.id)).size).toBe(18);
+    expect(EffectArray.dedupe(providerToolDescriptors.map((entry) => entry.id)).length).toBe(18);
     expect(
       providerToolDescriptors
         .filter((entry) => entry.kind === "web_search")

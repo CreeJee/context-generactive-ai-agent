@@ -1,3 +1,4 @@
+import { HashSet } from "effect";
 import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
@@ -18,7 +19,7 @@ test("cold native reopen reads exact completed run before one explicit fresh sav
   try {
     const source = join(temporary, "src");
     await cp(join(root, "src"), source, { recursive: true });
-    const allowed = new Set([
+    const allowed = HashSet.fromIterable([
       "effect",
       "@tanstack/ai",
       "@secretlint/core",
@@ -29,7 +30,7 @@ test("cold native reopen reads exact completed run before one explicit fresh sav
       if (id.startsWith("node:")) return true;
       if (id.startsWith(".") || id.startsWith("/") || id.startsWith("\0")) return false;
       const name = id.startsWith("@") ? id.split("/").slice(0, 2).join("/") : id.split("/")[0];
-      if (!allowed.has(name)) throw new Error(`Unexpected host dependency: ${id}`);
+      if (!HashSet.has(allowed, name)) throw new Error(`Unexpected host dependency: ${id}`);
       return true;
     };
     const result = await build({

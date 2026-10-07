@@ -1,3 +1,4 @@
+import { Array as EffectArray } from "effect";
 import { Effect, Layer } from "effect";
 import { describe, expect, it, layer as testLayer } from "@effect/vitest";
 import { Embedder, EmbeddingError } from "../src/memory/embedding/embedder.ts";
@@ -25,7 +26,7 @@ describe("WorkflowRules", () => {
 
   it("has unique versioned ids", () => {
     const identities = builtInWorkflowRules.map((rule) => `${rule.id}@${rule.version}`);
-    expect(new Set(identities).size).toBe(identities.length);
+    expect(EffectArray.dedupe(identities).length).toBe(identities.length);
   });
 
   it.effect("shares rule vectors across equivalent queries while embedding each query", () => {

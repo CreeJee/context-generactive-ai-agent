@@ -1,4 +1,4 @@
-import { Result, Function as EffectFunction } from "effect";
+import { Array as EffectArray, HashSet, Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics nodeBuiltinImport:off schemaSync:off
 import { isTruthy } from "../src/truthy.ts";
@@ -52,7 +52,7 @@ const handlings = [
   "not_needed",
   "unresolved_empty_search",
 ];
-const unique = (values: readonly string[]) => new Set(values).size === values.length;
+const unique = (values: readonly string[]) => EffectArray.dedupe(values).length === values.length;
 
 test("synthetic recall turns have deterministic disjoint splits and grounded gold evidence", () => {
   expect(fixture.schemaVersion).toBe(1);
@@ -63,7 +63,7 @@ test("synthetic recall turns have deterministic disjoint splits and grounded gol
   expect(splits.flatMap((split) => fixture.partitions[split])).toEqual(caseIds);
   expect(splits.every((split) => fixture.partitions[split].length > 0)).toBe(true);
 
-  const evidenceBySplit = MutableHashMap.empty<Split, Set<string>>();
+  const evidenceBySplit = MutableHashMap.empty<Split, HashSet.HashSet<string>>();
   for (const split of splits) {
     const evidenceIds: string[] = [];
     for (const id of fixture.partitions[split]) {
@@ -129,14 +129,14 @@ test("synthetic recall turns have deterministic disjoint splits and grounded gol
       evidenceIds.push(...localIds);
     }
     expect(unique(evidenceIds), split).toBe(true);
-    MutableHashMap.set(evidenceBySplit, split, new Set(evidenceIds));
+    MutableHashMap.set(evidenceBySplit, split, HashSet.fromIterable(evidenceIds));
   }
   for (const left of splits)
     for (const right of splits) {
       if (left !== right)
         expect(
           [...Option.getOrUndefined(MutableHashMap.get(evidenceBySplit, left))!].some((id) =>
-            Option.getOrUndefined(MutableHashMap.get(evidenceBySplit, right))!.has(id),
+            HashSet.has(Option.getOrUndefined(MutableHashMap.get(evidenceBySplit, right))!, id),
           ),
         ).toBe(false);
     }

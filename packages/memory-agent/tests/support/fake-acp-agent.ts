@@ -1,4 +1,4 @@
-import { MutableHashMap, Option } from "effect";
+import { MutableHashMap, MutableHashSet, Option } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off globalTimers:off newPromise:off nodeBuiltinImport:off processEnv:off
 import { isTruthy } from "../../src/truthy.ts";
@@ -18,7 +18,7 @@ if (isTruthy(process.env.FAKE_ACP_LOG))
   );
 
 const history = MutableHashMap.empty<string, string[]>();
-const cancelled = new Set<string>();
+const cancelled = MutableHashSet.empty<string>();
 let nextSession = 1;
 
 const say = (client: acp.AgentContext, sessionId: string, text: string) =>
@@ -95,7 +95,10 @@ acp
       if (isTruthy(process.env.FAKE_ACP_LOG))
         appendFileSync(`${process.env.FAKE_ACP_LOG}.slow`, `${sessionId}\n`);
       for (let step = 0; step < 50; step++) {
-        if (cancelled.delete(sessionId)) return { stopReason: "cancelled" };
+        if (MutableHashSet.has(cancelled, sessionId)) {
+          MutableHashSet.remove(cancelled, sessionId);
+          return { stopReason: "cancelled" };
+        }
         await new Promise((resolve) => setTimeout(resolve, 40));
       }
     }
@@ -103,6 +106,6 @@ acp
     return { stopReason: "end_turn" };
   })
   .onNotification(acp.methods.agent.session.cancel, (ctx) => {
-    cancelled.add(ctx.params.sessionId);
+    MutableHashSet.add(cancelled, ctx.params.sessionId);
   })
   .connect(acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin)));

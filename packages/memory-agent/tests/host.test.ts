@@ -1,3 +1,4 @@
+import { HashSet } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -41,12 +42,12 @@ describe("host differences", () => {
     );
     expect(findExecutable("git", { PATH: "relative" }, "linux")).toBeNull();
 
-    const existing = new Set([
+    const existing = HashSet.fromIterable([
       "C:\\Program Files\\Git\\cmd\\git.exe",
       "C:\\Users\\me\\AppData\\Roaming\\npm\\npx.cmd",
     ]);
     const onWindows = (name: string) =>
-      findExecutable(name, windowsEnv, "win32", (path) => existing.has(path));
+      findExecutable(name, windowsEnv, "win32", (path) => HashSet.has(existing, path));
     expect(onWindows("git")).toBe("C:\\Program Files\\Git\\cmd\\git.exe");
     expect(onWindows("npx")).toBe("C:\\Users\\me\\AppData\\Roaming\\npm\\npx.cmd");
   });

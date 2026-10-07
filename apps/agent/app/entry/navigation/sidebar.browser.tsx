@@ -1,3 +1,4 @@
+import { Array as EffectArray } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off
 import { render } from "vitest-browser-react";
@@ -15,7 +16,7 @@ const alignedTerms = (root: HTMLElement, expected: string[]) => {
   const valueEdges = rows.map((row) =>
     Math.round(row.querySelector("dd")!.getBoundingClientRect().left),
   );
-  expect(new Set(valueEdges).size).toBe(1);
+  expect(EffectArray.dedupe(valueEdges).length).toBe(1);
 };
 
 describe("sidebar disclosures", () => {
