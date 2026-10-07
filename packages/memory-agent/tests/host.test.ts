@@ -116,9 +116,10 @@ describe("host differences", () => {
     expect(windows.calls()).toBe(3);
 
     const posix = renameAfter(1);
-    await expect(renameWhenReleased("a", "b", "linux", posix.rename)).rejects.toThrow(
-      "not permitted",
-    );
+    await expect(renameWhenReleased("a", "b", "linux", posix.rename)).rejects.toMatchObject({
+      _tag: "DirectoryRenameFailed",
+      reason: { _tag: "RenameFailed", code: "EPERM" },
+    });
     expect(posix.calls()).toBe(1);
   });
 

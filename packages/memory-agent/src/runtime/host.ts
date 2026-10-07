@@ -5,9 +5,15 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { renameSync, statSync } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { posix, win32 } from "node:path";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { setTimeout as sleep } from "node:timers/promises";
-import { Array as EffectArray, Option, Schema } from "effect";
+import {
+  Array as EffectArray,
+  Effect,
+  Function as EffectFunction,
+  HashSet,
+  Option,
+  Schedule,
+  Schema,
+} from "effect";
 
 /**
  * Host differences between POSIX systems and Windows, in one place. Every function takes the
@@ -24,8 +30,17 @@ const searchPath = (env: NodeJS.ProcessEnv, platform: NodeJS.Platform) =>
  * An executable found on the absolute entries of `PATH` only, so a relative entry (a project
  * folder) can never shadow it. On Windows the `PATHEXT` extensions (`.exe`, `.cmd`, …) are tried.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function findExecutable(
+export const findExecutable: {
+  (
+    env?: NodeJS.ProcessEnv,
+    platform?: NodeJS.Platform,
+    isFile?: (path: string) => boolean,
+  ): (name: string) => ReturnType<typeof findExecutableBody>;
+} & typeof findExecutableBody = EffectFunction.dual(
+  (args) => Schema.is(Schema.String)(args[0]),
+  findExecutableBody,
+);
+function findExecutableBody(
   name: string,
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
@@ -56,8 +71,13 @@ function fileExists(path: string) {
  * The system `tar`. On Windows that is bsdtar in System32 (Windows 10 1803 and later), named by
  * path: a GNU tar earlier on `PATH` (Git for Windows, MSYS) reads `C:\…` as a remote `host:path`.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function tarExecutable(
+export const tarExecutable: {
+  (platform: NodeJS.Platform): (env: NodeJS.ProcessEnv) => string;
+} & typeof tarExecutableBody = EffectFunction.dual(
+  (args) => args.length === 0 || !Schema.is(Schema.String)(args[0]),
+  tarExecutableBody,
+);
+function tarExecutableBody(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
 ) {
@@ -67,35 +87,80 @@ export function tarExecutable(
 
 const ErrorCode = Schema.Struct({ code: Schema.String });
 /** What Windows returns while another process (antivirus, search indexer) still holds a file open. */
-const busyCodes = ["EPERM", "EACCES", "EBUSY"];
+const busyCodes = HashSet.make("EPERM", "EACCES", "EBUSY");
 
 /**
  * `renameSync`, retried on Windows for up to ~10 s while the moved files are still held open:
  * antivirus may scan freshly written executables or native libraries before releasing their folder.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export async function renameWhenReleased(
-  from: string,
-  to: string,
-  platform: NodeJS.Platform = process.platform,
-  rename: (from: string, to: string) => void = renameSync,
+export class DirectoryRenameFailed extends Schema.TaggedError<DirectoryRenameFailed>()(
+  "DirectoryRenameFailed",
+  {
+    from: Schema.String,
+    to: Schema.String,
+    reason: Schema.TaggedStruct("RenameFailed", { code: Schema.String }),
+    cause: Schema.Defect(),
+  },
 ) {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      rename(from, to);
-      return;
-    } catch (error) {
-      const code = Schema.decodeUnknownOption(ErrorCode)(error);
-      const busy = Option.match(code, {
-        onNone: () => false,
-        onSome: ({ code }) => busyCodes.includes(code),
-      });
-      if (platform !== "win32" || !busy || attempt === 20) throw error;
-      await sleep(500);
-    }
+  override get message() {
+    return `rename_failed (${this.reason.code})`;
   }
 }
+
+interface RenameOptions {
+  readonly to: string;
+  readonly platform?: NodeJS.Platform;
+  readonly rename?: (from: string, to: string) => void;
+}
+
+export const renameWhenReleased: {
+  (options: RenameOptions): (from: string) => Promise<void>;
+  (
+    from: string,
+    to: string,
+    platform?: NodeJS.Platform,
+    rename?: (from: string, to: string) => void,
+  ): Promise<void>;
+} = EffectFunction.dual(
+  (args) => Schema.is(Schema.String)(args[0]),
+  (
+    from: string,
+    to: string | RenameOptions,
+    platform: NodeJS.Platform = process.platform,
+    rename: (from: string, to: string) => void = renameSync,
+  ) =>
+    Effect.runPromise(
+      renameWhenReleasedEffect(
+        Schema.is(Schema.String)(to) ? { from, to, platform, rename } : { from, ...to },
+      ),
+    ),
+);
+
+export const renameWhenReleasedEffect = Effect.fn("renameWhenReleased")(function* (
+  options: RenameOptions & { readonly from: string },
+) {
+  const { from, to, platform = process.platform, rename = renameSync } = options;
+  return yield* Effect.try({
+    try: () => rename(from, to),
+    catch: (cause) => {
+      const decoded = Schema.decodeUnknownOption(ErrorCode)(cause);
+      if (Option.isNone(decoded)) throw cause;
+      return DirectoryRenameFailed.make({
+        from,
+        to,
+        reason: { _tag: "RenameFailed", code: decoded.value.code },
+        cause,
+      });
+    },
+  }).pipe(
+    Effect.retry({
+      times: 19,
+      schedule: Schedule.spaced("500 millis"),
+      while: (error) => platform === "win32" && HashSet.has(busyCodes, error.reason.code),
+    }),
+  );
+});
 
 /** What Windows programs need to start at all, whatever else they are given. */
 const windowsSystemVariables = [
@@ -129,8 +194,17 @@ const pick = (env: NodeJS.ProcessEnv, names: readonly string[]) =>
  * start it and a fixed search path (`searchDirectories`, then the system folders), never
  * the user's other variables (R14). `user` adds the per-user folders on Windows.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function helperEnvironment(
+export const helperEnvironment: {
+  (
+    options: { readonly user: boolean },
+    env?: NodeJS.ProcessEnv,
+    platform?: NodeJS.Platform,
+  ): (searchDirectories: readonly string[]) => ReturnType<typeof helperEnvironmentBody>;
+} & typeof helperEnvironmentBody = EffectFunction.dual(
+  (args) => EffectArray.isArray(args[0]),
+  helperEnvironmentBody,
+);
+function helperEnvironmentBody(
   searchDirectories: readonly string[],
   options: { readonly user: boolean },
   env: NodeJS.ProcessEnv = process.env,
@@ -160,8 +234,17 @@ export interface ShellInvocation {
   readonly verbatim: boolean;
 }
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function shellInvocation(
+export const shellInvocation: {
+  (
+    env: NodeJS.ProcessEnv,
+    platform?: NodeJS.Platform,
+    exists?: (path: string) => boolean,
+  ): (command: string) => ShellInvocation;
+} & typeof shellInvocationBody = EffectFunction.dual(
+  (args) => Schema.is(Schema.String)(args[0]),
+  shellInvocationBody,
+);
+function shellInvocationBody(
   command: string,
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform = process.platform,
@@ -185,8 +268,13 @@ export function shellInvocation(
  * Ends a child the app started. On Windows a launcher (`npx.cmd` through cmd.exe) would leave the
  * real program running if only the launcher were killed, so the whole tree goes.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function endChild(child: ChildProcess, platform: NodeJS.Platform = process.platform) {
+export const endChild: {
+  (platform?: NodeJS.Platform): (child: ChildProcess) => void;
+} & typeof endChildBody = EffectFunction.dual(
+  (args) => args.length > 0 && !Schema.is(Schema.UndefinedOr(Schema.String))(args[0]),
+  endChildBody,
+);
+function endChildBody(child: ChildProcess, platform: NodeJS.Platform = process.platform) {
   if (platform === "win32" && child.pid !== undefined) stopProcessTree(child.pid, true, platform);
   else child.kill();
 }
@@ -195,8 +283,13 @@ export function endChild(child: ChildProcess, platform: NodeJS.Platform = proces
  * Stops a process and everything it started. POSIX signals its process group (it must have been
  * spawned `detached`); Windows has no groups or SIGTERM, so `taskkill /T /F` ends the tree at once.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function stopProcessTree(
+export const stopProcessTree: {
+  (force: boolean, platform?: NodeJS.Platform): (pid: number) => void;
+} & typeof stopProcessTreeBody = EffectFunction.dual(
+  (args) => Schema.is(Schema.Finite)(args[0]),
+  stopProcessTreeBody,
+);
+function stopProcessTreeBody(
   pid: number,
   force: boolean,
   platform: NodeJS.Platform = process.platform,
