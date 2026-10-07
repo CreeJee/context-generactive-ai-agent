@@ -13,55 +13,12 @@ const optionalText = EffectFunction.flow(
   Result.getOrThrow,
 );
 
-export type EvidenceStatus = "available" | "empty" | "failed";
-export interface EvidenceSection<T> {
-  status: EvidenceStatus;
-  items: T[];
-  truncated: boolean;
-}
-export interface ReportEvidence {
-  session: { id: string; projectId: string; title: string | null };
-  runs: EvidenceSection<{
-    runId: string;
-    status: string;
-    startedAt: number;
-    finishedAt: number | null;
-    error: string | null;
-    truncated: boolean;
-  }>;
-  approvals: EvidenceSection<{
-    runId: string;
-    status: string;
-    requestedAt: number;
-    resolvedAt: number | null;
-  }>;
-  transcript: EvidenceSection<{
-    id: string;
-    kind: string;
-    runId: string | null;
-    createdAt: string;
-    text: string;
-    truncated: boolean;
-  }>;
-  calls: EvidenceSection<{
-    id: string;
-    kind: string;
-    runId: string | null;
-    toolCallId: string | null;
-    toolName: string | null;
-    ok: boolean | null;
-    createdAt: string;
-    text: string;
-    truncated: boolean;
-  }>;
-  trace: EvidenceSection<{
-    id: string;
-    status: string;
-    parentRunId: string;
-    parentToolCallId: string;
-    updatedAt: number;
-  }>;
-}
+import type { EvidenceSection, ReportEvidence } from "../entry/report/report-contracts";
+export type {
+  EvidenceStatus,
+  EvidenceSection,
+  ReportEvidence,
+} from "../entry/report/report-contracts";
 
 export const reportEvidenceResponse: {
   (
@@ -162,7 +119,7 @@ function reportSessionBody(
   };
 }
 
-const section = <T>(items: T[], limit: number): EvidenceSection<T> => ({
+const section = <T>(items: readonly T[], limit: number): EvidenceSection<T> => ({
   status: isTruthy(items.length) ? "available" : "empty",
   truncated: items.length > limit,
   items: items.slice(0, limit),

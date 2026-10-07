@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
-import { MutableHashMap, Schema, Context, Effect, Layer } from "effect";
+import { HashSet, MutableHashMap, Schema, Context, Effect, Layer } from "effect";
 import { runtimeRequire } from "../runtime/resources.ts";
 import { OwnerNativeFiles } from "./owner-native-files.ts";
 import { NativeRegistrationError } from "./owner-native-error.ts";
@@ -23,7 +23,7 @@ const buildNative = Effect.fn("OwnerNativeBuilder.build")(function* (
 ) {
   const context = yield* Effect.context<never>();
   const sources = MutableHashMap.empty<string, string>();
-  const allowed = new Set([
+  const allowed = HashSet.fromIterable([
     "effect",
     "@tanstack/ai",
     "@secretlint/core",
@@ -65,7 +65,7 @@ const buildNative = Effect.fn("OwnerNativeBuilder.build")(function* (
               const name = id.startsWith("@")
                 ? id.split("/").slice(0, 2).join("/")
                 : id.split("/")[0];
-              if (!allowed.has(name)) throw new Error("Unsupported native dependency");
+              if (!HashSet.has(allowed, name)) throw new Error("Unsupported native dependency");
               return true;
             },
           },

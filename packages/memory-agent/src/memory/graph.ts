@@ -1,4 +1,4 @@
-import { Result, Function as EffectFunction } from "effect";
+import { HashSet, MutableHashSet, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { MutableHashMap, Option, Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
@@ -103,7 +103,7 @@ const make = Effect.gen(function* () {
     seeds: Iterable<readonly [string, number]>,
     options: TraverseOptions,
   ): TraverseResult {
-    const allowed = new Set(options.projectIds);
+    const allowed = HashSet.fromIterable(options.projectIds);
     const best = MutableHashMap.empty<string, number>();
     const frontier: Candidate[] = [];
     for (const [nodeId, utility] of seeds) {
@@ -113,19 +113,20 @@ const make = Effect.gen(function* () {
     }
 
     const visits: Visit[] = [];
-    const visited = new Set<string>();
+    const visited = MutableHashSet.empty<string>();
     while (frontier.length > 0) {
       // Frontiers stay small under the budget, so a linear scan keeps this obvious.
       let top = 0;
       for (let i = 1; i < frontier.length; i++)
         if (frontier[i]!.utility > frontier[top]!.utility) top = i;
       const candidate = frontier.splice(top, 1)[0]!;
-      if (visited.has(candidate.nodeId) || candidate.utility < options.minUtility) continue;
-      if (visited.size >= options.budget) return { visits, complete: false };
+      if (MutableHashSet.has(visited, candidate.nodeId) || candidate.utility < options.minUtility)
+        continue;
+      if (MutableHashSet.size(visited) >= options.budget) return { visits, complete: false };
 
       const node = nodeById(candidate.nodeId);
-      if (!(node !== null) || !allowed.has(node.projectId)) continue;
-      visited.add(node.id);
+      if (!(node !== null) || !HashSet.has(allowed, node.projectId)) continue;
+      MutableHashSet.add(visited, node.id);
       if (options.includeEmpty !== false || hasStatementText(node.text))
         visits.push({
           node,
@@ -138,7 +139,7 @@ const make = Effect.gen(function* () {
         const next = decodeNeighbor(row);
         const utility = candidate.utility * next.weight;
         if (
-          visited.has(next.nodeId) ||
+          MutableHashSet.has(visited, next.nodeId) ||
           utility < options.minUtility ||
           utility <= (Option.getOrUndefined(MutableHashMap.get(best, next.nodeId)) ?? 0)
         )

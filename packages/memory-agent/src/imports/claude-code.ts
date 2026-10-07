@@ -1,3 +1,4 @@
+import { HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Option, Schema } from "effect";
 import { refsInArguments } from "../memory/refs.ts";
@@ -11,7 +12,12 @@ import { isInjectedText, type InjectedText, type TranscriptItem } from "./items.
 
 /** What the CLI writes on the user's side: slash commands, interruptions, a compaction summary. */
 const injected: InjectedText = {
-  tags: new Set(["command-name", "command-message", "command-args", "local-command-stdout"]),
+  tags: HashSet.fromIterable([
+    "command-name",
+    "command-message",
+    "command-args",
+    "local-command-stdout",
+  ]),
   prefixes: [
     "[Request interrupted",
     "This session is being continued from a previous conversation",

@@ -11,7 +11,18 @@ import { isDeepStrictEqual } from "node:util";
 import { parallelReads, readOnlyToolNames } from "../tools/parallel-reads.ts";
 // Run-local observation ledger, not an Effect contextual service constructor.
 import * as OwnerToolGrants from "./owner-tool-grants.ts";
-import { HashMap, MutableHashMap, Option, Effect, Exit, Queue, Schema, Scope } from "effect";
+import {
+  HashMap,
+  HashSet,
+  MutableHashMap,
+  MutableHashSet,
+  Option,
+  Effect,
+  Exit,
+  Queue,
+  Schema,
+  Scope,
+} from "effect";
 import { acquireFullLoopWorkerEvents } from "./full-loop-worker-events.ts";
 
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
@@ -96,11 +107,11 @@ function preflightFullLoopExecutionBody<TAdapter extends AnyTextAdapter>(
   capabilities: ChatExecutionCapabilities<TAdapter>,
 ): void {
   basePreflight(turn, capabilities);
-  const names = new Set<string>();
+  const names = MutableHashSet.empty<string>();
   for (const tool of capabilities.tools) {
-    if (!isTruthy(tool.execute) || names.has(tool.name))
+    if (!isTruthy(tool.execute) || MutableHashSet.has(names, tool.name))
       throw new Error(`Unsupported owner tool grant capability: ${tool.name}`);
-    names.add(tool.name);
+    MutableHashSet.add(names, tool.name);
   }
 }
 
@@ -221,7 +232,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
             ].includes(key)
           )
             continue;
-          if (!supportedHooks.has(key) || !(value instanceof Function))
+          if (!HashSet.has(supportedHooks, key) || !(value instanceof Function))
             throw new Error(`Unsupported worker middleware member: ${key}`);
           hooks.push(key);
         }
@@ -235,11 +246,13 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
       });
       // A stable owner context preserves SDK WeakMap-backed middleware state and
       // capability values. Only snapshots cross the port; live values never do.
-      const provided = new Set<any>();
-      const declared = new Set(capabilities.middleware.flatMap((mw) => [...(mw.provides ?? [])]));
+      const provided = MutableHashSet.empty<any>();
+      const declared = HashSet.fromIterable(
+        capabilities.middleware.flatMap((mw) => [...(mw.provides ?? [])]),
+      );
       for (const mw of capabilities.middleware)
         for (const required of mw.requires ?? []) {
-          if (!declared.has(required))
+          if (!HashSet.has(declared, required))
             throw new Error(`Unprovided owner middleware capability: ${required.capabilityName}`);
         }
       const grants = OwnerToolGrants.makeOwnerToolGrants();
@@ -269,9 +282,9 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
         accumulatedContent: "",
         capabilities: {
           markProvided: (handle: any) => {
-            provided.add(handle);
+            MutableHashSet.add(provided, handle);
           },
-          has: (handle: any) => provided.has(handle),
+          has: (handle: any) => MutableHashSet.has(provided, handle),
           setOnDuplicate: () => {},
         },
       };
@@ -323,7 +336,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
             .flatMap((message: any) => message.toolCalls ?? [])
             .find((entry: any) => isDeepStrictEqual(entry, call));
         };
-        const configuredMiddleware = new Set<number>();
+        const configuredMiddleware = MutableHashSet.empty<number>();
         const firstConfigMiddleware = middleware.findIndex((mw) => mw.hooks.includes("onConfig"));
         let modelIterations = 0;
         ownerContext.signal = controller.signal;
@@ -380,13 +393,13 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
           index === parallelIndex ? guardedParallel!.middleware : mw,
         );
         ownerConfig.tools = ownerTools;
-        const cleanupHooks = new Set(["onFinish", "onError", "onAbort"]);
+        const cleanupHooks = HashSet.fromIterable(["onFinish", "onError", "onAbort"]);
         const finalizationInput = (wire: any) => {
           const input: any = decodeFullLoopValue(wire);
           return (
             finalizing &&
             !closed &&
-            cleanupHooks.has(input.hook) &&
+            HashSet.has(cleanupHooks, input.hook) &&
             owner.finalizationMiddleware?.includes(
               capabilities.middleware[input.index]?.name ?? "",
             ) === true &&
@@ -505,12 +518,12 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                     grants.observe(next.value);
                     if (next.value.type === "TOOL_CALL_END") {
                       const observed = grants.toolCalls();
-                      const existing = new Set(
+                      const existing = HashSet.fromIterable(
                         ownerContext.messages.flatMap((message: any) =>
                           (message.toolCalls ?? []).map((call: any) => call.id),
                         ),
                       );
-                      const fresh = observed.filter((call) => !existing.has(call.id));
+                      const fresh = observed.filter((call) => !HashSet.has(existing, call.id));
                       const last = ownerContext.messages.at(-1);
                       if (last?.role === "assistant" && isTruthy(last.toolCalls))
                         last.toolCalls.push(...fresh);
@@ -568,7 +581,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                   const observed = grants.toolCalls();
                   const prefix = [];
                   for (const call of observed) {
-                    if (!readOnlyToolNames.has(call.function.name)) break;
+                    if (!HashSet.has(readOnlyToolNames, call.function.name)) break;
                     prefix.push(call);
                   }
                   const candidates =
@@ -755,7 +768,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                   const mw = ownerMiddleware[input.index];
                   if (
                     (terminalObserved || controller.signal.aborted) &&
-                    cleanupHooks.has(input.hook) &&
+                    HashSet.has(cleanupHooks, input.hook) &&
                     isTruthy(owner.finalizationMiddleware?.includes(mw?.name ?? "")) &&
                     owner.permitsFinalization?.(owner.capability) === true
                   )
@@ -769,23 +782,27 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                       onIteration: "beforeModel",
                       onBeforeToolCall: "beforeTools",
                       onAfterToolCall: "afterTools",
-                      onConfig: configuredMiddleware.has(input.index) ? "beforeModel" : "init",
+                      onConfig: MutableHashSet.has(configuredMiddleware, input.index)
+                        ? "beforeModel"
+                        : "init",
                     } satisfies Record<string, ChatMiddlewareContext["phase"]>),
                   );
                   ownerContext.phase =
                     Option.getOrUndefined(HashMap.get(phases, input.hook)) ?? ownerContext.phase;
                   if (input.hook === "onConfig") {
-                    configuredMiddleware.add(input.index);
+                    MutableHashSet.add(configuredMiddleware, input.index);
                     if (input.index === firstConfigMiddleware)
                       ownerConfig.providerMessages = ownerContext.messages;
                   }
                   if (input.hook === "onInterruptBoundary") {
-                    const answered = new Set(
+                    const answered = HashSet.fromIterable(
                       ownerContext.messages
                         .filter((message: any) => message.role === "tool")
                         .map((message: any) => message.toolCallId),
                     );
-                    ownerContext.phase = grants.toolCalls().some((call) => !answered.has(call.id))
+                    ownerContext.phase = grants
+                      .toolCalls()
+                      .some((call) => !HashSet.has(answered, call.id))
                       ? "beforeTools"
                       : "beforeModel";
                   }

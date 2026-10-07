@@ -1,5 +1,5 @@
 import { toolDefinition, type AnyServerTool, type ToolExecutionContext } from "@tanstack/ai";
-import { Context, Effect, Layer, Schema } from "effect";
+import { HashSet, Context, Effect, Layer, Schema } from "effect";
 import { Kagi, maxExtractUrls } from "../kagi/kagi.ts";
 import { toToolSchema } from "./schema.ts";
 
@@ -80,7 +80,7 @@ const make = Effect.gen(function* () {
         truncated,
       };
     });
-    const answered = new Set(pages.map((page) => page.url));
+    const answered = HashSet.fromIterable(pages.map((page) => page.url));
     return {
       pages,
       // URLs Kagi reported an error for, or left out of the answer entirely.
@@ -91,7 +91,7 @@ const make = Effect.gen(function* () {
           message: error.message ?? null,
         })),
         ...urls
-          .filter((url) => !answered.has(url))
+          .filter((url) => !HashSet.has(answered, url))
           .map((url) => ({ url, code: "missing", message: null })),
       ],
       requested: urls.length,

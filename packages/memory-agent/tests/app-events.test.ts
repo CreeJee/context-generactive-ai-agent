@@ -1,56 +1,86 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off
-import { Effect } from "effect";
-import { describe, expect, test } from "vite-plus/test";
+import { it } from "@effect/vitest";
+import { Effect, Exit, Scope } from "effect";
+import { TestClock } from "effect/testing";
+import { describe, expect } from "vite-plus/test";
 import { makeAppEvents } from "../src/events/app-events.ts";
 
-const readFrames = async (response: Response, count: number) => {
-  const reader = response.body!.getReader();
-  const decoder = new TextDecoder();
-  let text = "";
-  while (text.split("\n\n").filter(Boolean).length < count) {
-    const next = await reader.read();
-    if (next.done) break;
-    text += decoder.decode(next.value, { stream: true });
-  }
-  await reader.cancel();
-  return text;
-};
+const readFrames = Effect.fnUntraced(function* (options: { response: Response; count: number }) {
+  return yield* Effect.acquireUseRelease(
+    Effect.sync(() => options.response.body!.getReader()),
+    (reader) =>
+      Effect.gen(function* () {
+        const decoder = new TextDecoder();
+        let text = "";
+        while (text.split("\n\n").filter(Boolean).length < options.count) {
+          const next = yield* Effect.promise(() => reader.read());
+          if (next.done) break;
+          text += decoder.decode(next.value, { stream: true });
+        }
+        return text;
+      }),
+    (reader) => Effect.promise(() => reader.cancel()),
+  );
+});
 
 describe("AppEvents", () => {
-  test("closes a stream when its request aborts", async () => {
-    const events = Effect.runSync(makeAppEvents);
-    const controller = new AbortController();
-    const response = events.globalStream(
-      new Request("http://local", { signal: controller.signal }),
-    );
-    const reader = response.body!.getReader();
-    expect((await reader.read()).done).toBe(false);
-    controller.abort();
-    expect((await reader.read()).done).toBe(true);
-  });
+  it.effect("closes a stream when its request aborts", () =>
+    Effect.gen(function* () {
+      const events = yield* makeAppEvents;
+      const requestScope = yield* Scope.fork(yield* Scope.Scope, "sequential");
+      const signal = yield* Effect.provideService(Effect.abortSignal, Scope.Scope, requestScope);
+      const response = events.globalStream(new Request("http://local", { signal }));
+      const reader = response.body!.getReader();
+      expect((yield* Effect.promise(() => reader.read())).done).toBe(false);
+      yield* Scope.close(requestScope, Exit.void);
+      expect((yield* Effect.promise(() => reader.read())).done).toBe(true);
+    }),
+  );
 
-  test("isolates session, project, and global subscribers", async () => {
-    const events = Effect.runSync(makeAppEvents);
-    const session = events.sessionStream(
-      new Request("http://local", { signal: new AbortController().signal }),
-      "s1",
-    );
-    const project = events.projectStream(
-      new Request("http://local", { signal: new AbortController().signal }),
-      "p1",
-    );
+  it.effect("isolates subscribers and preserves immediately published events", () =>
+    Effect.gen(function* () {
+      const events = yield* makeAppEvents;
+      const session = events.sessionStream(new Request("http://local"), "s1");
+      const project = events.projectStream(new Request("http://local"), "p1");
+      events.publish({ scope: "session", projectId: "p1", sessionId: "s2", topic: "queue" });
+      events.publish({ scope: "session", projectId: "p1", sessionId: "s1", topic: "queue" });
+      events.publish({ scope: "project", projectId: "p1", topic: "sessions" });
+      const [sessionText, projectText] = yield* Effect.all(
+        [readFrames({ response: session, count: 2 }), readFrames({ response: project, count: 2 })],
+        { concurrency: "unbounded" },
+      );
+      expect(sessionText).toContain('"sessionId":"s1"');
+      expect(sessionText).not.toContain('"sessionId":"s2"');
+      expect(projectText).toContain('"scope":"project"');
+    }),
+  );
 
-    events.publish({ scope: "session", projectId: "p1", sessionId: "s2", topic: "queue" });
-    events.publish({ scope: "session", projectId: "p1", sessionId: "s1", topic: "queue" });
-    events.publish({ scope: "project", projectId: "p1", topic: "sessions" });
+  it.effect(
+    "emits heartbeats with the service clock and permits publication after cancellation",
+    () =>
+      Effect.gen(function* () {
+        const events = yield* makeAppEvents;
+        const reader = events.globalStream(new Request("http://local")).body!.getReader();
+        yield* Effect.promise(() => reader.read());
+        yield* TestClock.adjust(15_000);
+        const heartbeat = yield* Effect.promise(() => reader.read());
+        expect(new TextDecoder().decode(heartbeat.value)).toContain(
+          'event: heartbeat\ndata: {"at":15000}',
+        );
+        yield* Effect.promise(() => reader.cancel());
+        events.publishGlobal("auth");
+        const next = events.globalStream(new Request("http://local"));
+        expect(yield* readFrames({ response: next, count: 1 })).toContain('"revision":1');
+      }),
+  );
 
-    const [sessionText, projectText] = await Promise.all([
-      readFrames(session, 2),
-      readFrames(project, 2),
-    ]);
-    expect(sessionText).toContain('"sessionId":"s1"');
-    expect(sessionText).not.toContain('"sessionId":"s2"');
-    expect(projectText).toContain('"scope":"project"');
-  });
+  it.effect("closes a response when its service owner closes", () =>
+    Effect.gen(function* () {
+      const owner = yield* Scope.fork(yield* Scope.Scope, "sequential");
+      const events = yield* Effect.provideService(makeAppEvents, Scope.Scope, owner);
+      const reader = events.globalStream(new Request("http://local")).body!.getReader();
+      yield* Effect.promise(() => reader.read());
+      yield* Scope.close(owner, Exit.void);
+      expect((yield* Effect.promise(() => reader.read())).done).toBe(true);
+    }),
+  );
 });

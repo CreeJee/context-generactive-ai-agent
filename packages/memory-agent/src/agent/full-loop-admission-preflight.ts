@@ -20,7 +20,7 @@ export function assertFullLoopPortable(
   // oxlint-disable-next-line anti-slop/no-unknown-parameters
   value: unknown,
   member = "turn",
-  stack = new Set<object>(),
+  stack: readonly object[] = [],
 ): void {
   // Runtime representation inspection is the transport validation boundary.
   // oxlint-disable-next-line anti-slop/no-runtime-typeof
@@ -43,15 +43,15 @@ export function assertFullLoopPortable(
     Schema.decodeResult(TransportObject),
     Result.getOrThrow,
   )(value);
-  if (stack.has(object)) reject(member, "cyclic value");
+  if (stack.includes(object)) reject(member, "cyclic value");
   if (
     !Array.isArray(object) &&
     Object.getPrototypeOf(object) !== Object.prototype &&
     Object.getPrototypeOf(object) !== null
   )
     reject(member, "unsupported prototype");
-  stack.add(object);
-  try {
+  const nextStack = [...stack, object];
+  {
     for (const key of Reflect.ownKeys(object)) {
       if (Array.isArray(object) && key === "length") continue;
       if (!Schema.is(Schema.String)(key)) reject(`${member}.${String(key)}`, "symbol member");
@@ -59,9 +59,7 @@ export function assertFullLoopPortable(
       const descriptor = Object.getOwnPropertyDescriptor(object, key)!;
       if (!Object.hasOwn(descriptor, "value")) reject(child, "accessor");
       if (!isTruthy(descriptor.enumerable)) reject(child, "non-enumerable member");
-      assertFullLoopPortable(descriptor.value, child, stack);
+      assertFullLoopPortable(descriptor.value, child, nextStack);
     }
-  } finally {
-    stack.delete(object);
   }
 }

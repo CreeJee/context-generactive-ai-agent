@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import type { ModelMessage, TokenUsage } from "@tanstack/ai";
@@ -12,7 +13,7 @@ import {
   type MessagePage,
   type RunRecord,
 } from "@tanstack/ai-persistence";
-import { DateTime, Schema } from "effect";
+import { MutableHashSet, DateTime, Schema } from "effect";
 import { isEmptyUserText } from "../messages/empty-user.ts";
 type Json = string | number | boolean | null | Json[] | { readonly [key: string]: Json };
 
@@ -31,8 +32,7 @@ const RunRow = Schema.Struct({
   driver_epoch: Schema.NullOr(Schema.Finite),
 });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeRunRow = Schema.decodeUnknownSync(RunRow);
+const decodeRunRow = EffectFunction.flow(Schema.decodeUnknownResult(RunRow), Result.getOrThrow);
 
 const InterruptRow = Schema.Struct({
   interrupt_id: Schema.String,
@@ -45,17 +45,20 @@ const InterruptRow = Schema.Struct({
   response: Schema.NullOr(Schema.String),
 });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeInterruptRow = Schema.decodeUnknownSync(InterruptRow);
+const decodeInterruptRow = EffectFunction.flow(
+  Schema.decodeUnknownResult(InterruptRow),
+  Result.getOrThrow,
+);
 
 const JsonText = Schema.Struct({ value: Schema.String });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeJsonText = Schema.decodeUnknownSync(JsonText);
+const decodeJsonText = EffectFunction.flow(Schema.decodeUnknownResult(JsonText), Result.getOrThrow);
 const LegacyThreadRow = Schema.Struct({ id: Schema.String });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeLegacyThreadRow = Schema.decodeUnknownSync(LegacyThreadRow);
+const decodeLegacyThreadRow = EffectFunction.flow(
+  Schema.decodeUnknownResult(LegacyThreadRow),
+  Result.getOrThrow,
+);
 
 // Stored JSON was written by these stores from the same TanStack types, so parsing restores them.
 const parseMessages = (text: string): ModelMessage[] => JSON.parse(text);
@@ -69,9 +72,12 @@ const parseValue = (text: string): Json => JSON.parse(text);
  * memory nodes, attachments and URLs keep pointing at the same conversation after the provider
  * runtime migration.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function migrateLegacyChatThreads(
+export const migrateLegacyChatThreads: {
+  (
+    fallbackThread: (threadId: string) => ModelMessage[],
+  ): (sqlite: DatabaseSync) => ReturnType<typeof migrateLegacyChatThreadsBody>;
+} & typeof migrateLegacyChatThreadsBody = EffectFunction.dual(2, migrateLegacyChatThreadsBody);
+function migrateLegacyChatThreadsBody(
   sqlite: DatabaseSync,
   fallbackThread: (threadId: string) => ModelMessage[],
 ) {
@@ -103,9 +109,13 @@ export function migrateLegacyChatThreads(
 }
 
 /** Materializes a session imported after the chat-state service started, if still missing. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function migrateMissingChatThread(
+export const migrateMissingChatThread: {
+  (
+    threadId: string,
+    fallbackThread: (threadId: string) => ModelMessage[],
+  ): (sqlite: DatabaseSync) => ReturnType<typeof migrateMissingChatThreadBody>;
+} & typeof migrateMissingChatThreadBody = EffectFunction.dual(3, migrateMissingChatThreadBody);
+function migrateMissingChatThreadBody(
   sqlite: DatabaseSync,
   threadId: string,
   fallbackThread: (threadId: string) => ModelMessage[],
@@ -192,16 +202,13 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
   );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   async function loadThread(threadId: string): Promise<ModelMessage[]>;
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   async function loadThread(
     threadId: string,
     options: { limit?: number; before?: string },
   ): Promise<ModelMessage[] | MessagePage>;
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   async function loadThread(threadId: string, options?: { limit?: number; before?: string }) {
     const row = selectThread.get(threadId);
     const stored = isTruthy(row) ? parseMessages(decodeJsonText(row).value) : [];
@@ -222,7 +229,6 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
   const messages = defineMessageStore({
     loadThread,
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async saveThread(threadId, next) {
       upsertThread.run(
         threadId,
@@ -243,7 +249,6 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
 
   const runs = defineRunStore({
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async createOrResume({ runId, threadId, startedAt, status }) {
       insertRun.run(runId, threadId, status ?? "running", startedAt);
       const stored = getRun(runId);
@@ -251,7 +256,6 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
       return stored;
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async update(runId, patch) {
       const assignments: string[] = [];
       const values: Array<string | number | null> = [];
@@ -281,12 +285,10 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
         .run(...values, runId);
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async get(runId) {
       return getRun(runId);
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async findActiveRun(threadId) {
       const row = sqlite
         .prepare(
@@ -296,7 +298,6 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
       return isTruthy(row) ? toRun(row) : null;
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async listByThread(threadId) {
       return sqlite
         .prepare("SELECT * FROM chat_runs WHERE thread_id = ? ORDER BY started_at, run_id")
@@ -304,7 +305,6 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
         .map(toRun);
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async listReclaimable({ now, ttlMs }) {
       return sqlite
         .prepare(
@@ -333,7 +333,6 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
 
   const interrupts = defineInterruptStore({
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async create(record) {
       insertInterrupt.run(
         record.interruptId,
@@ -344,7 +343,6 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
       );
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async resolve(interruptId, response) {
       // `undefined` has no JSON form: the column stays NULL, which reads back as "no response".
       resolveInterrupt.run(
@@ -354,18 +352,16 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
       );
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async cancel(interruptId) {
       cancelInterrupt.run(DateTime.toEpochMillis(DateTime.nowUnsafe()), interruptId);
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async commitBatch(entries) {
-      const ids = new Set<string>();
+      const ids = MutableHashSet.empty<string>();
       for (const entry of entries) {
-        if (ids.has(entry.interruptId))
+        if (MutableHashSet.has(ids, entry.interruptId))
           throw new Error(`Interrupt batch contains duplicate id: ${entry.interruptId}.`);
-        ids.add(entry.interruptId);
+        MutableHashSet.add(ids, entry.interruptId);
         const row = selectInterrupt.get(entry.interruptId);
         if (!isTruthy(row))
           throw new Error(`Interrupt batch references missing id: ${entry.interruptId}.`);
@@ -397,28 +393,23 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
       }
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async get(interruptId) {
       const row = selectInterrupt.get(interruptId);
       return isTruthy(row) ? toInterrupt(row) : null;
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async list(threadId) {
       return listed("thread_id = ?", threadId);
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async listPending(threadId) {
       return listed("thread_id = ? AND status = 'pending'", threadId);
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async listByRun(runId) {
       return listed("run_id = ?", runId);
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async listPendingByRun(runId) {
       return listed("run_id = ? AND status = 'pending'", runId);
     },
@@ -429,13 +420,11 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
   );
   const metadata = defineMetadataStore({
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async get(namespace, key) {
       const row = selectMetadata.get(namespace, key);
       return isTruthy(row) ? parseValue(decodeJsonText(row).value) : null;
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async set(namespace, key, value) {
       if (value === null || value === undefined)
         throw new TypeError("Metadata values must not be null or undefined.");
@@ -446,7 +435,6 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
         .run(namespace, key, JSON.stringify(value));
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async delete(namespace, key) {
       sqlite
         .prepare("DELETE FROM chat_metadata WHERE namespace = ? AND key = ?")

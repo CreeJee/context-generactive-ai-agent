@@ -5,7 +5,7 @@ import { optionalProperty } from "../optional-property.ts";
 import type { AddressInfo } from "node:net";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { DateTime, Data, Option, Schema } from "effect";
+import { HashSet, MutableHashSet, DateTime, Data, Option, Schema } from "effect";
 import { requireRuntime } from "../runtime/resources.ts";
 import { prepareAnthropicValidationBody } from "./anthropic-validation-adapter.ts";
 import { createChunkedPasswordEntry, type PasswordEntry } from "./chunked-password-entry.ts";
@@ -193,7 +193,7 @@ export interface OAuthHarnessErrorContext {
   readonly proxyRoute?: ProxyRoute;
 }
 
-const safeTransportCodes = new Set([
+const safeTransportCodes = HashSet.fromIterable([
   "ENETUNREACH",
   "EHOSTUNREACH",
   "ECONNREFUSED",
@@ -215,7 +215,7 @@ const decodeNativeCause = Schema.decodeUnknownOption(NativeCause);
 const safeTransportCode = (error: Error): string => {
   if (error.name === "TimeoutError") return "timeout";
   const code = Option.getOrUndefined(decodeNativeCause(error.cause))?.code;
-  return code !== undefined && safeTransportCodes.has(code) ? code : "other";
+  return code !== undefined && HashSet.has(safeTransportCodes, code) ? code : "other";
 };
 
 const providerName = (provider: OAuthProvider) => (provider === "openai" ? "OpenAI" : "Anthropic");
@@ -228,7 +228,7 @@ const decodeProviderErrorBody = Schema.decodeUnknownOption(
   Schema.fromJsonString(ProviderErrorBody),
 );
 
-const safeOAuthCodes = new Set([
+const safeOAuthCodes = HashSet.fromIterable([
   "access_denied",
   "invalid_client",
   "invalid_grant",
@@ -247,7 +247,7 @@ const providerCode = (body: string): string | undefined => {
   const parsed = Option.getOrUndefined(decodeTokenErrorBody(body));
   if (!isTruthy(parsed)) return undefined;
   const code = Schema.is(Schema.String)(parsed.error) ? parsed.error : parsed.error.code;
-  return safeOAuthCodes.has(code) ? code : undefined;
+  return HashSet.has(safeOAuthCodes, code) ? code : undefined;
 };
 
 const providerReason = (body: string): string | undefined => {
@@ -596,7 +596,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
           response.writeHead(400).end("Invalid OAuth callback.");
           await finish({
             error:
-              callbackCode !== null && safeOAuthCodes.has(callbackCode)
+              callbackCode !== null && HashSet.has(safeOAuthCodes, callbackCode)
                 ? new OAuthHarnessError("provider_rejected", null, {
                     provider: protocol.provider,
                     operation: "login_callback",
@@ -834,7 +834,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
 
     const pages: unknown[] = [];
     const signal = AbortSignal.timeout(30_000);
-    const seenCursors = new Set<string>();
+    const seenCursors = MutableHashSet.empty<string>();
     let afterId: string | undefined;
     for (;;) {
       const url = new URL(protocol.catalogUrl);
@@ -858,12 +858,12 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       if (protocol.provider !== "anthropic") break;
       const pagination = Option.getOrUndefined(decodeCatalogPage(page));
       if (pagination?.has_more !== true || pagination.last_id === undefined) break;
-      if (pages.length >= 10 || seenCursors.has(pagination.last_id))
+      if (pages.length >= 10 || MutableHashSet.has(seenCursors, pagination.last_id))
         throw new OAuthHarnessError("provider_rejected", null, {
           ...context,
           reason: "Model catalog pagination did not terminate.",
         });
-      seenCursors.add(pagination.last_id);
+      MutableHashSet.add(seenCursors, pagination.last_id);
       afterId = pagination.last_id;
     }
     return pages;

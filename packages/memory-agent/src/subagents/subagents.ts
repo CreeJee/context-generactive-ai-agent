@@ -1,3 +1,4 @@
+import { HashSet } from "effect";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
@@ -155,12 +156,12 @@ const childResultPageLength = 4_000;
 /** Model-only child history reduction; the child's stored transcript remains unchanged. */
 export const compactChildToolResults: {
   (
-    savedCallIds: ReadonlySet<string>,
+    savedCallIds: HashSet.HashSet<string>,
   ): (messages: readonly ModelMessage[]) => ReturnType<typeof compactChildToolResultsBody>;
 } & typeof compactChildToolResultsBody = EffectFunction.dual(2, compactChildToolResultsBody);
 function compactChildToolResultsBody(
   messages: readonly ModelMessage[],
-  savedCallIds: ReadonlySet<string>,
+  savedCallIds: HashSet.HashSet<string>,
 ): readonly ModelMessage[] {
   const answered = messages
     .map((message) => message.role === "assistant" && (message.toolCalls ?? []).length === 0)
@@ -169,7 +170,7 @@ function compactChildToolResultsBody(
     if (
       message.role !== "tool" ||
       !isTruthy(message.toolCallId) ||
-      !savedCallIds.has(message.toolCallId) ||
+      !HashSet.has(savedCallIds, message.toolCallId) ||
       !Schema.is(Schema.String)(message.content) ||
       message.content.length <= childResultPageLength ||
       message.content.startsWith("[Completed child tool result")
@@ -265,9 +266,9 @@ export interface SubagentBinding {
   readonly tools: readonly AnyServerTool[];
   readonly systemPrompts: readonly string[];
   /** Durable status notifications included in this parent's prompt and eligible for adoption. */
-  readonly deliveredParentNotificationIds: ReadonlySet<string>;
+  readonly deliveredParentNotificationIds: HashSet.HashSet<string>;
   /** Tools whose calls need an approval. For children every one goes through the relay gate. */
-  readonly gated: ReadonlySet<string>;
+  readonly gated: HashSet.HashSet<string>;
 }
 
 /** What a subagent tool call returns to the parent model. */
@@ -396,7 +397,7 @@ const make = Effect.gen(function* () {
     name: "memory-agent/subagent-gate",
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
     async onBeforeToolCall(_ctx, hook) {
-      if (!binding.gated.has(hook.toolName)) return undefined;
+      if (!HashSet.has(binding.gated, hook.toolName)) return undefined;
       const argumentsJson = hook.toolCall.function.arguments;
       const toolCallId = `${subagentThreadId(row.id)}:${hook.toolCallId}`;
       const record = (
@@ -574,7 +575,7 @@ const make = Effect.gen(function* () {
         async onConfig(ctx, config) {
           if (ctx.phase === "init") return;
           const saved = await chatState.persistence.stores.messages.loadThread(threadId);
-          const ids = new Set(
+          const ids = HashSet.fromIterable(
             saved.flatMap((message) =>
               message.role === "tool" && isTruthy(message.toolCallId) ? [message.toolCallId] : [],
             ),
@@ -693,17 +694,17 @@ const make = Effect.gen(function* () {
     }
 
     const persisted = await chatState.persistence.stores.messages.loadThread(threadId);
-    const persistedMessageIds = new Set(persisted.map((message) => message.id));
-    const persistedToolCalls = new Set(
+    const persistedMessageIds = HashSet.fromIterable(persisted.map((message) => message.id));
+    const persistedToolCalls = HashSet.fromIterable(
       persisted.flatMap((message) =>
         message.role === "assistant" ? (message.toolCalls ?? []).map((call) => call.id) : [],
       ),
     );
-    const persistedToolResults = new Set(
+    const persistedToolResults = HashSet.fromIterable(
       persisted.flatMap((message) => (message.role === "tool" ? [message.toolCallId] : [])),
     );
     for (const toolCallId of MutableHashMap.keys(toolStates))
-      if (persistedToolCalls.has(toolCallId))
+      if (HashSet.has(persistedToolCalls, toolCallId))
         trace.recordEvidence({
           handle,
           locator: { kind: "tool_call", threadId, toolCallId },
@@ -712,7 +713,7 @@ const make = Effect.gen(function* () {
     for (const [toolCallId, state] of toolStates)
       if (
         (state.status === "completed" || state.status === "failed") &&
-        persistedToolResults.has(toolCallId)
+        HashSet.has(persistedToolResults, toolCallId)
       )
         trace.recordEvidence({
           handle,
@@ -742,7 +743,11 @@ const make = Effect.gen(function* () {
       locator: { kind: "checkpoint", checkpointId: saved.checkpointId },
       verification: "verified",
     });
-    if (status === "completed" && isTruthy(lastMessageId) && persistedMessageIds.has(lastMessageId))
+    if (
+      status === "completed" &&
+      isTruthy(lastMessageId) &&
+      HashSet.has(persistedMessageIds, lastMessageId)
+    )
       trace.recordEvidence({
         handle,
         locator: { kind: "message", threadId, messageId: lastMessageId },
@@ -1151,7 +1156,7 @@ const make = Effect.gen(function* () {
     forRun(binding: SubagentBinding): SubagentRunTools {
       const started = MutableHashMap.empty<string, Promise<SubagentReport>>();
       const reviewed = MutableHashMap.empty<string, ChildOutcome>();
-      const deliveredNotificationIds = new Set(binding.deliveredParentNotificationIds);
+      let deliveredNotificationIds = binding.deliveredParentNotificationIds;
       let adoptionDraft: AdoptionDraft | null = null;
 
       const start = (toolCallId: string, name: string, argumentsJson: string) => {
@@ -1363,11 +1368,11 @@ const make = Effect.gen(function* () {
           );
           if (!isTruthy(available))
             throw new Error("Only reports reviewed in this run can be adopted");
-          const evidence = new Set(available.evidenceRefIds);
-          if (report.evidenceRefIds.some((id) => !evidence.has(id)))
+          const evidence = HashSet.fromIterable(available.evidenceRefIds);
+          if (report.evidenceRefIds.some((id) => !HashSet.has(evidence, id)))
             throw new Error("Only evidence ids returned with that report can be adopted");
         }
-        if (draft.reflectedNotificationIds.some((id) => !deliveredNotificationIds.has(id)))
+        if (draft.reflectedNotificationIds.some((id) => !HashSet.has(deliveredNotificationIds, id)))
           throw new Error("Only status notifications delivered in this run can be adopted");
         adoptionDraft = draft;
         return {
@@ -1397,7 +1402,8 @@ const make = Effect.gen(function* () {
           if (ctx.phase !== "beforeModel") return;
           const notifications = trace.consumeParentNotifications(binding.sessionId, binding.runId);
           if (notifications.length === 0) return;
-          for (const notification of notifications) deliveredNotificationIds.add(notification.id);
+          for (const notification of notifications)
+            deliveredNotificationIds = HashSet.add(deliveredNotificationIds, notification.id);
           return {
             systemPrompts: [
               ...config.systemPrompts,

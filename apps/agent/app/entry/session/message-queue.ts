@@ -1,6 +1,6 @@
 import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../../truthy.ts";
-import { ApiError, type QueuedMessage, type QueueEdit, type QueueSnapshot } from "../api";
+import { isApiError, type QueuedMessage, type QueueEdit, type QueueSnapshot } from "../api";
 import { useSessionEventScope } from "../events/context";
 import { useQueueQuery } from "../queries/session";
 import { useEditQueueMutation, useEnqueueMutation } from "../queries/mutations/session";
@@ -51,9 +51,8 @@ function useMessageQueueBody(sessionId: string, holder: string, _generating: boo
       const message = await enqueue.mutateAsync({ text, attachmentIds, mode });
       return mode === "steer" ? { kind: "steered", message } : { kind: "queued" };
     } catch (failure) {
-      if (failure instanceof ApiError && failure.code === "not_running")
-        return { kind: "not-running" };
-      if (failure instanceof ApiError && failure.code === "steer_unavailable")
+      if (isApiError(failure) && failure.code === "not_running") return { kind: "not-running" };
+      if (isApiError(failure) && failure.code === "steer_unavailable")
         return { kind: "steer-unavailable" };
       return { kind: "failed" };
     }

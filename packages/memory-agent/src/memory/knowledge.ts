@@ -1,4 +1,4 @@
-import { Result, Function as EffectFunction } from "effect";
+import { Array as EffectArray, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "node:crypto";
@@ -227,7 +227,7 @@ const make = Effect.gen(function* () {
       if (!isTruthy(claimRow))
         return yield* new MemoryPromotionRejected({ reason: "claim_not_adopted" });
       const claim = decodeClaimSource(claimRow);
-      for (const evidenceRefId of new Set(input.evidenceRefIds))
+      for (const evidenceRefId of EffectArray.dedupe(input.evidenceRefIds))
         if (
           !isTruthy(evidenceSource.get(input.claimId, input.taskId, input.attemptId, evidenceRefId))
         )
@@ -297,7 +297,7 @@ const make = Effect.gen(function* () {
         const addEvidence = sqlite.prepare(`INSERT INTO memory_candidate_evidence
         (candidate_id, evidence_ref_id, evidence_ref_id_snapshot, source_deleted_at)
         VALUES (?, ?, ?, NULL)`);
-        for (const evidenceRefId of new Set(input.evidenceRefIds))
+        for (const evidenceRefId of EffectArray.dedupe(input.evidenceRefIds))
           addEvidence.run(candidateId, evidenceRefId, evidenceRefId);
         return candidateByDecision(decisionId);
       });

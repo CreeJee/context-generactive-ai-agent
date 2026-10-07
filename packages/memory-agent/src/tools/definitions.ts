@@ -6,7 +6,7 @@
  * The server implementations live in `approved.ts`.
  */
 import { defineInterrupt, toolDefinition } from "@tanstack/ai";
-import { Schema } from "effect";
+import { HashSet, Schema } from "effect";
 import { toToolSchema } from "./schema.ts";
 
 export { attachmentIdOf, attachmentUrl } from "../attachments/urls.ts";
@@ -107,7 +107,7 @@ const deleteOutsideFile = {
 } as const;
 
 /** Names of the tools that never run without an approval, in either permission mode. */
-export const gatedToolNames: ReadonlySet<string> = new Set([
+export const gatedToolNames = HashSet.fromIterable([
   runShell.name,
   writeOutsideFile.name,
   deleteOutsideFile.name,

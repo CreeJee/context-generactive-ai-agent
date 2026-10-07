@@ -1,7 +1,7 @@
 import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { ANTHROPIC_MODELS } from "@tanstack/ai-anthropic";
-import { DateTime, Effect, Option, Schema } from "effect";
+import { MutableHashSet, DateTime, Effect, Option, Schema } from "effect";
 import type { Settings } from "../config/global-config.ts";
 import { optionalProperty } from "../optional-property.ts";
 import {
@@ -29,8 +29,10 @@ interface ProductOAuthClient {
 }
 
 interface SettingsStore {
-  readonly read: Effect.Effect<Settings>;
-  readonly update: (patch: Partial<Settings>) => Effect.Effect<Settings>;
+  readonly read: Effect.Effect<Settings, import("../config/global-config.ts").GlobalConfigFailed>;
+  readonly update: (
+    patch: Partial<Settings>,
+  ) => Effect.Effect<Settings, import("../config/global-config.ts").GlobalConfigFailed>;
 }
 
 export interface SubscriptionProviderOptions {
@@ -158,10 +160,10 @@ function parseSubscriptionCatalogBody(
 ): ReadonlyArray<ProviderModel> {
   const entries = catalogEntries(provider, pages);
   const preferred = provider === "openai" ? "gpt-6-astra" : "claude-opus-5";
-  const seen = new Set<string>();
+  const seen = MutableHashSet.empty<string>();
   return entries.flatMap(({ entry, id }, index) => {
-    if (seen.has(id)) return [];
-    seen.add(id);
+    if (MutableHashSet.has(seen, id)) return [];
+    MutableHashSet.add(seen, id);
     const advertised = provider === "openai" ? effortValues(entry) : anthropicEfforts(id);
     const efforts = advertised.length > 0 ? advertised : ["none"];
     const requestedDefault = canonicalEffort(
@@ -401,11 +403,13 @@ export function createSubscriptionProvider(
               model,
               reasoningEffort: effort,
             });
-          yield* options.config.update({
-            provider,
-            model,
-            reasoningEffort: effort,
-          });
+          yield* options.config
+            .update({
+              provider,
+              model,
+              reasoningEffort: effort,
+            })
+            .pipe(Effect.mapError(() => operationFailure(provider, "model")));
           return { provider, model, reasoningEffort: effort };
         }),
     },

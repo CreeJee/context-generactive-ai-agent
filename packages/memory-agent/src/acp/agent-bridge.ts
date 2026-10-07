@@ -1,4 +1,4 @@
-import { HashMap, MutableHashMap, Effect } from "effect";
+import { MutableHashSet, HashMap, MutableHashMap, Effect } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "node:crypto";
@@ -285,15 +285,15 @@ export function startAcpAgent(options: {
 
   /** Relays calls of subagents and external agents that wait for approval, while the turn runs. */
   const relayApprovals = (session: BridgeSession, turn: PromptTurn) => {
-    const asked = new Set<string>();
+    const asked = MutableHashSet.empty<string>();
     // Native callback heartbeat/debounce timing remains at the protocol boundary.
     const timer = setInterval(() => {
       void api
         .approvals(session.id)
         .then((approvals) => {
           for (const approval of approvals) {
-            if (asked.has(approval.id)) continue;
-            asked.add(approval.id);
+            if (MutableHashSet.has(asked, approval.id)) continue;
+            MutableHashSet.add(asked, approval.id);
             void askEditor(turn, session.id, {
               toolCallId: approval.id,
               toolName: approval.toolName,

@@ -1,3 +1,4 @@
+import { ProviderOperationFailed } from "../../src/providers/contracts.ts";
 import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off missingPipeableSignature:off newPromise:off schemaSync:off
@@ -351,7 +352,13 @@ export function testProvider(options: TestProviderOptions = {}): TestProvider {
                 new ModelUnavailable({ provider: "openai", model, reasoningEffort: effort }),
               );
             return Effect.map(
-              config.update({ provider: "openai", model, reasoningEffort: effort }),
+              config
+                .update({ provider: "openai", model, reasoningEffort: effort })
+                .pipe(
+                  Effect.mapError(
+                    () => new ProviderOperationFailed({ provider: "openai", operation: "model" }),
+                  ),
+                ),
               () => ({ provider: "openai" as const, model, reasoningEffort: effort }),
             );
           },
@@ -378,7 +385,13 @@ export function testProvider(options: TestProviderOptions = {}): TestProvider {
     select: async (runtime, model = "fast-1", effort = "low") => {
       await runtime.runPromise(
         Effect.flatMap(GlobalConfig, (config) =>
-          config.update({ provider: "openai", model, reasoningEffort: effort }),
+          config
+            .update({ provider: "openai", model, reasoningEffort: effort })
+            .pipe(
+              Effect.mapError(
+                () => new ProviderOperationFailed({ provider: "openai", operation: "model" }),
+              ),
+            ),
         ),
       );
       return { provider: "openai", model, reasoningEffort: effort };

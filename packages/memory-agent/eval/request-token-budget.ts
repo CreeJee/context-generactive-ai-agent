@@ -1,5 +1,5 @@
 import { Function as EffectFunction } from "effect";
-import { Cache, Effect } from "effect";
+import { Cache, Effect, Schema } from "effect";
 import { encodingForModel, getEncoding, getEncodingNameForModel } from "js-tiktoken";
 
 type KnownModel = Parameters<typeof encodingForModel>[0];
@@ -45,8 +45,18 @@ export const estimateRequestTokens: {
 } & typeof estimateRequestTokensBody = EffectFunction.dual(2, estimateRequestTokensBody);
 
 /** A conservative pilot stop, not a guarantee about server-side tokens or cache hits. */
-export const exceedsRequestTokenBudget = (
+const exceedsRequestTokenBudgetBody = (
   estimate: RequestTokenEstimate,
   maxEstimatedTokens: number,
   margin = 1.25,
 ) => Math.ceil(estimate.estimatedTokens * margin) > maxEstimatedTokens;
+
+export const exceedsRequestTokenBudget: {
+  (estimate: RequestTokenEstimate, maxEstimatedTokens: number): boolean;
+  (estimate: RequestTokenEstimate, maxEstimatedTokens: number, margin: number): boolean;
+  (maxEstimatedTokens: number): (estimate: RequestTokenEstimate) => boolean;
+  (maxEstimatedTokens: number, margin: number): (estimate: RequestTokenEstimate) => boolean;
+} = EffectFunction.dual(
+  (args) => !Schema.is(Schema.Finite)(args[0]),
+  exceedsRequestTokenBudgetBody,
+);

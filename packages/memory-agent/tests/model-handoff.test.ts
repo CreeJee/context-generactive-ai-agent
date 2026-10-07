@@ -1,6 +1,6 @@
-import { MutableHashMap, Option } from "effect";
+import { Effect, MutableHashMap, Option, Schema } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off
 import {
   convertMessagesToModelMessages,
   modelMessagesToUIMessages,
@@ -9,9 +9,10 @@ import {
 } from "@tanstack/ai";
 import { createHash } from "node:crypto";
 import { expect, test } from "vite-plus/test";
+import { it } from "@effect/vitest";
 import {
   handoffEvidenceContext,
-  modelHandoffHistory,
+  modelHandoffHistoryEffect,
   modelHandoffNamespace,
 } from "../src/agent/model-handoff.ts";
 import type { Node } from "../src/memory/nodes.ts";
@@ -19,25 +20,31 @@ import type { Node } from "../src/memory/nodes.ts";
 function fixture(stored: readonly ModelMessage[]) {
   const values = MutableHashMap.empty<string, unknown>();
   const metadata: MetadataStore = {
-    get: async (namespace, key) =>
-      Option.getOrUndefined(MutableHashMap.get(values, `${namespace}:${key}`)) ?? null,
-    set: async (namespace, key, value) => {
+    get: (namespace, key) =>
+      Promise.resolve(
+        Option.getOrUndefined(MutableHashMap.get(values, `${namespace}:${key}`)) ?? null,
+      ),
+    set: (namespace, key, value) => {
       MutableHashMap.set(values, `${namespace}:${key}`, value);
+      return Promise.resolve();
     },
-    delete: async (namespace, key) => {
+    delete: (namespace, key) => {
       MutableHashMap.remove(values, `${namespace}:${key}`);
+      return Promise.resolve();
     },
   };
-  const restore = (target: string, model: string, history = stored) =>
-    modelHandoffHistory({
-      metadata,
-      threadId: "session",
-      target,
-      model,
-      provider: "openai-compatible",
-      loadHistory: async () => history,
-      evidenceContext: async () => "Evidence summary (node observed-result)",
-    });
+  const restore =
+    (target: string, model: string, history = stored) =>
+    (messages: readonly ModelMessage[]) =>
+      modelHandoffHistoryEffect({
+        metadata,
+        threadId: "session",
+        target,
+        model,
+        provider: "openai-compatible",
+        loadHistory: () => Promise.resolve(history),
+        evidenceContext: () => Promise.resolve("Evidence summary (node observed-result)"),
+      }).pipe(Effect.flatMap((restore) => restore(messages)));
   return { restore, metadata };
 }
 
@@ -58,74 +65,92 @@ const past: ModelMessage[] = [
   { role: "tool", toolCallId: "old-call", content: "build completed" },
 ];
 
-test("a new model gets evidence context and real user questions, not the old protocol", async () => {
-  const f = fixture(past);
-  const input = [...past, { role: "user" as const, content: "이어서해줘" }];
-  const original = structuredClone(input);
-  const restored = await f.restore("provider:new-model", "new-model")(input);
-  expect(restored).toEqual([
-    { role: "assistant", content: "Evidence summary (node observed-result)" },
-    past[0],
-    input.at(-1),
-  ]);
-  expect(input).toEqual(original);
-});
+it.effect("a new model gets evidence context and real user questions, not the old protocol", () =>
+  Effect.gen(function* () {
+    const f = fixture(past);
+    const input = [...past, { role: "user" as const, content: "이어서해줘" }];
+    const original = structuredClone(input);
+    const restored = yield* f.restore("provider:new-model", "new-model")(input);
+    expect(restored).toEqual([
+      { role: "assistant", content: "Evidence summary (node observed-result)" },
+      past[0],
+      input.at(-1),
+    ]);
+    expect(input).toEqual(original);
+  }),
+);
 
-test("a retry/restart keeps the checkpoint and new-model tool iterations", async () => {
-  const f = fixture(past);
-  const question: ModelMessage = { role: "user", content: "continue" };
-  const first = [...past, question];
-  const restored = await f.restore("new", "new-model")(first);
-  const newCall = { ...oldCall, id: "new-call" };
-  const tail: ModelMessage[] = [
-    question,
-    { role: "assistant", content: null, toolCalls: [newCall] },
-    { role: "tool", toolCallId: "new-call", content: "new result" },
-  ];
-  const retried = await f.restore("new", "new-model", [...past, ...tail])([...past, ...tail]);
-  expect(retried?.slice(0, 2)).toEqual(restored?.slice(0, 2));
-  expect(retried?.slice(2)).toEqual(tail);
-});
+it.effect("a retry/restart keeps the checkpoint and new-model tool iterations", () =>
+  Effect.gen(function* () {
+    const f = fixture(past);
+    const question: ModelMessage = { role: "user", content: "continue" };
+    const first = [...past, question];
+    const restored = yield* f.restore("new", "new-model")(first);
+    const newCall = { ...oldCall, id: "new-call" };
+    const tail: ModelMessage[] = [
+      question,
+      { role: "assistant", content: null, toolCalls: [newCall] },
+      { role: "tool", toolCallId: "new-call", content: "new result" },
+    ];
+    const retried = yield* f.restore("new", "new-model", [...past, ...tail])([...past, ...tail]);
+    expect(retried?.slice(0, 2)).toEqual(restored?.slice(0, 2));
+    expect(retried?.slice(2)).toEqual(tail);
+  }),
+);
 
-test("same target preserves history; switching endpoints with the same model restores context", async () => {
-  const f = fixture(past);
-  expect(await f.restore("endpoint-a", "old-model")(past)).toBeNull();
-  expect(await f.restore("endpoint-a", "old-model")(past)).toBeNull();
-  expect(await f.restore("endpoint-b", "old-model")(past)).toEqual([
-    { role: "assistant", content: "Evidence summary (node observed-result)" },
-    past[0],
-  ]);
-});
+it.effect(
+  "same target preserves history; switching endpoints with the same model restores context",
+  () =>
+    Effect.gen(function* () {
+      const f = fixture(past);
+      expect(yield* f.restore("endpoint-a", "old-model")(past)).toBeNull();
+      expect(yield* f.restore("endpoint-a", "old-model")(past)).toBeNull();
+      expect(yield* f.restore("endpoint-b", "old-model")(past)).toEqual([
+        { role: "assistant", content: "Evidence summary (node observed-result)" },
+        past[0],
+      ]);
+    }),
+);
 
-test("pairs an approved old call completed during the new run without replaying other calls", async () => {
-  const pending = past.slice(0, 2);
-  const f = fixture(pending);
-  const result = past[2]!;
-  const restored = await f.restore("new", "new-model")([...pending, result]);
-  expect(restored).toEqual([
-    { role: "assistant", content: "Evidence summary (node observed-result)" },
-    past[0],
-    { role: "assistant", content: null, toolCalls: [oldCall] },
-    result,
-  ]);
-});
+it.effect(
+  "pairs an approved old call completed during the new run without replaying other calls",
+  () =>
+    Effect.gen(function* () {
+      const pending = past.slice(0, 2);
+      const f = fixture(pending);
+      const result = past[2]!;
+      const restored = yield* f.restore("new", "new-model")([...pending, result]);
+      expect(restored).toEqual([
+        { role: "assistant", content: "Evidence summary (node observed-result)" },
+        past[0],
+        { role: "assistant", content: null, toolCalls: [oldCall] },
+        result,
+      ]);
+    }),
+);
 
-test("rejects an invalidated boundary instead of dropping unrelated history", async () => {
-  const f = fixture(past);
-  await f.restore("new", "new-model")(past);
-  await expect(
-    f.restore(
-      "new",
-      "new-model",
-    )([past[0]!, past[1]!, { role: "tool", content: "different result" }]),
-  ).rejects.toThrow("saved boundary");
-});
+it.effect("rejects an invalidated boundary instead of dropping unrelated history", () =>
+  Effect.gen(function* () {
+    const f = fixture(past);
+    yield* f.restore("new", "new-model")(past);
+    const failed = yield* Effect.flip(
+      f.restore(
+        "new",
+        "new-model",
+      )([past[0]!, past[1]!, { role: "tool", content: "different result" }]),
+    );
+    expect(failed.reason._tag).toBe("HistoryChanged");
+  }),
+);
 
-test("does not invent a user request for an assistant-only legacy thread", async () => {
-  const history = past.slice(1);
-  const f = fixture(history);
-  await expect(f.restore("new", "new-model")(history)).rejects.toThrow("actual user question");
-});
+it.effect("does not invent a user request for an assistant-only legacy thread", () =>
+  Effect.gen(function* () {
+    const history = past.slice(1);
+    const f = fixture(history);
+    const failed = yield* Effect.flip(f.restore("new", "new-model")(history));
+    expect(failed.reason._tag).toBe("UserQuestionMissing");
+  }),
+);
 
 test("handoff context stays small and directs the model to retrieve evidence", () => {
   const nodes: Node[] = Array.from({ length: 100 }, (_, seq) => ({
@@ -153,49 +178,94 @@ test("handoff context stays small and directs the model to retrieve evidence", (
   expect(context).not.toContain(nodes[99]!.text);
 });
 
-test("UI hydration preserves a handoff across tool fan-out and field reordering", async () => {
-  const stored = past.map((message, index) => ({ ...message, id: `message-${index}` }));
-  stored.push({
-    role: "assistant",
-    content: null,
-    id: "boundary",
-    thinking: [{ content: "reasoning" }],
-  });
-  const f = fixture(stored);
-  await f.restore("new", "new-model")(stored);
-  const tail: ModelMessage = { role: "user", content: "continue", id: "next" };
-  const hydrated = convertMessagesToModelMessages(modelMessagesToUIMessages([...stored, tail]));
-  const restored = await f.restore("new", "new-model")(hydrated);
-  expect(restored).toEqual([
-    { role: "assistant", content: "Evidence summary (node observed-result)" },
-    hydrated[0],
-    hydrated.at(-1),
-  ]);
-  const changed = hydrated.map((message) =>
-    message.id === "boundary" ? { ...message, content: "changed" } : message,
-  );
-  await expect(f.restore("new", "new-model")(changed)).rejects.toThrow("saved boundary");
-});
+it.effect("UI hydration preserves a handoff across tool fan-out and field reordering", () =>
+  Effect.gen(function* () {
+    const stored = past.map((message, index) => ({ ...message, id: `message-${index}` }));
+    stored.push({
+      role: "assistant",
+      content: null,
+      id: "boundary",
+      thinking: [{ content: "reasoning" }],
+    });
+    const f = fixture(stored);
+    yield* f.restore("new", "new-model")(stored);
+    const tail: ModelMessage = { role: "user", content: "continue", id: "next" };
+    const hydrated = convertMessagesToModelMessages(modelMessagesToUIMessages([...stored, tail]));
+    const restored = yield* f.restore("new", "new-model")(hydrated);
+    expect(restored).toEqual([
+      { role: "assistant", content: "Evidence summary (node observed-result)" },
+      hydrated[0],
+      hydrated.at(-1),
+    ]);
+    const changed = hydrated.map((message) =>
+      message.id === "boundary" ? { ...message, content: "changed" } : message,
+    );
+    const failed = yield* Effect.flip(f.restore("new", "new-model")(changed));
+    expect(failed.reason._tag).toBe("HistoryChanged");
+  }),
+);
 
-test("migrates a verified legacy boundary before replaying hydrated history", async () => {
-  const stored = past.map((message, index) => ({ ...message, id: `message-${index}` }));
-  const f = fixture(stored);
-  await f.metadata.set(modelHandoffNamespace, "session", {
-    _tag: "handoff",
-    target: "new",
-    through: stored.length,
-    anchor: createHash("sha256")
-      .update(JSON.stringify(stored.at(-1)))
-      .digest("hex"),
-    context: "legacy evidence",
-  });
-  const hydrated = convertMessagesToModelMessages(modelMessagesToUIMessages(stored));
-  expect(await f.restore("new", "new-model")(hydrated)).toEqual([
-    { role: "assistant", content: "legacy evidence" },
-    hydrated[0],
-  ]);
-  expect(await f.metadata.get(modelHandoffNamespace, "session")).toMatchObject({
-    anchorId: "message-2",
-    anchor: expect.stringMatching(/^v2:/),
-  });
-});
+it.effect("migrates a verified legacy boundary before replaying hydrated history", () =>
+  Effect.gen(function* () {
+    const stored = past.map((message, index) => ({ ...message, id: `message-${index}` }));
+    const f = fixture(stored);
+    const legacyBoundary = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
+      stored.at(-1),
+    );
+    yield* Effect.promise(() =>
+      f.metadata.set(modelHandoffNamespace, "session", {
+        _tag: "handoff",
+        target: "new",
+        through: stored.length,
+        anchor: createHash("sha256").update(legacyBoundary).digest("hex"),
+        context: "legacy evidence",
+      }),
+    );
+    const hydrated = convertMessagesToModelMessages(modelMessagesToUIMessages(stored));
+    expect(yield* f.restore("new", "new-model")(hydrated)).toEqual([
+      { role: "assistant", content: "legacy evidence" },
+      hydrated[0],
+    ]);
+    expect(
+      yield* Effect.promise(() => f.metadata.get(modelHandoffNamespace, "session")),
+    ).toMatchObject({
+      anchorId: "message-2",
+      anchor: expect.stringMatching(/^v2:/),
+    });
+  }),
+);
+
+it.effect(
+  "metadata failures stay typed and one preparation is shared across concurrent requests",
+  () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const cause = new Error("private metadata details");
+      const restore = yield* modelHandoffHistoryEffect({
+        metadata: {
+          get: () => {
+            reads += 1;
+            return Promise.reject(cause);
+          },
+          set: () => Promise.resolve(),
+          delete: () => Promise.resolve(),
+        },
+        threadId: "session",
+        target: "new",
+        model: "new-model",
+        provider: "openai-compatible",
+        loadHistory: () => Promise.resolve(past),
+        evidenceContext: () => Promise.resolve("evidence"),
+      });
+      const failures = yield* Effect.all([Effect.flip(restore(past)), Effect.flip(restore(past))], {
+        concurrency: "unbounded",
+      });
+      expect(reads).toBe(1);
+      for (const failure of failures) {
+        expect(failure._tag).toBe("ModelHandoffFailed");
+        expect(failure.reason._tag).toBe("ReadStateFailed");
+        expect(failure.cause).toBe(cause);
+        expect(failure.message).not.toContain("private metadata");
+      }
+    }),
+);

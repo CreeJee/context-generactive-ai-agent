@@ -1,3 +1,4 @@
+import { HashSet } from "effect";
 import { Function as EffectFunction } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { isAbsolute, resolve } from "node:path";
@@ -179,21 +180,21 @@ export type ProviderToolPolicyFailure =
   | UnknownModelFeatureCapability
   | ModelFeatureFlagStoreFailed;
 
-const highRisk = new Set<ProviderToolCategory>([
+const highRisk = HashSet.fromIterable<ProviderToolCategory>([
   "execution.shell",
   "computer.control",
   "filesystem.write",
   "memory.read_write",
   "integration.mcp.remote",
 ]);
-const readOnly = new Set<ProviderToolCategory>([
+const readOnly = HashSet.fromIterable<ProviderToolCategory>([
   "network.search",
   "network.fetch",
   "data.provider_files.read",
 ]);
 export function classifyProviderToolRisk(tool: AnyProviderToolDescriptor): ProviderToolRisk {
-  if (highRisk.has(tool.category) || tool.sideEffect === "write") return "high";
-  return readOnly.has(tool.category) && tool.sideEffect !== "stateful_execution"
+  if (HashSet.has(highRisk, tool.category) || tool.sideEffect === "write") return "high";
+  return HashSet.has(readOnly, tool.category) && tool.sideEffect !== "stateful_execution"
     ? "read_only"
     : "elevated";
 }
@@ -295,7 +296,7 @@ type ValidationFailure =
   | ProviderToolSandboxViolation
   | ProviderToolOptionsViolation
   | ProviderToolPathViolation;
-const executionOptionKeys = new Set([
+const executionOptionKeys = HashSet.fromIterable([
   "paths",
   "networkRequested",
   "environmentNames",
@@ -304,13 +305,13 @@ const executionOptionKeys = new Set([
   "maxMemoryBytes",
   "maxProcesses",
 ]);
-const pathRequestKeys = new Set(["path", "access", "target"]);
+const pathRequestKeys = HashSet.fromIterable(["path", "access", "target"]);
 function validateSandbox(
   tool: AnyProviderToolDescriptor,
   options: ProviderToolExecutionOptions,
   sandbox: ProviderToolSandboxPolicy | undefined,
 ): Result.Result<string | null, ValidationFailure> {
-  if (Object.keys(options).some((key) => !executionOptionKeys.has(key)))
+  if (Object.keys(options).some((key) => !HashSet.has(executionOptionKeys, key)))
     return Result.fail(
       new ProviderToolOptionsViolation({ toolId: tool.id, reason: "unknown_policy_option" }),
     );
@@ -371,7 +372,7 @@ function validateSandbox(
       new ProviderToolSandboxViolation({ toolId: tool.id, reason: "local_access_not_applicable" }),
     );
   for (const request of options.paths ?? []) {
-    if (Object.keys(request).some((key) => !pathRequestKeys.has(key)))
+    if (Object.keys(request).some((key) => !HashSet.has(pathRequestKeys, key)))
       return Result.fail(
         new ProviderToolOptionsViolation({ toolId: tool.id, reason: "path_request_invalid" }),
       );
@@ -1058,7 +1059,7 @@ function makeProviderToolRuntimeBody(
     compose: (context, requests = []) =>
       Effect.gen(function* () {
         const exposed = yield* policyService.expose(context);
-        const allowed = new Set(exposed.tools.map((tool) => tool.id));
+        const allowed = HashSet.fromIterable(exposed.tools.map((tool) => tool.id));
         const output: ComposedProviderTool[] = [];
         for (const request of [...requests].toSorted((a, b) => a.id.localeCompare(b.id))) {
           const requestKeys = Object.keys(request);
@@ -1080,7 +1081,7 @@ function makeProviderToolRuntimeBody(
               toolId: request.id,
               reason: "invalid_factory_options",
             });
-          if (!allowed.has(request.id))
+          if (!HashSet.has(allowed, request.id))
             return yield* new ProviderToolNotExposed({
               toolId: request.id,
               provider: context.provider,

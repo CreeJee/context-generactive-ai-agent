@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { MutableHashMap, Option, Schema } from "effect";
+import { Array as EffectArray, MutableHashMap, Option, Schema } from "effect";
 import { runtimeGoalSdkMetadata, runtimeWorker } from "../runtime/resources.ts";
 
 const dependencyMap = Schema.Record(Schema.String, Schema.String);
@@ -214,12 +214,12 @@ export function makeGoalWorkerAssetsRegistry(
           )!.toString("utf8"),
         ),
       );
-      const names = new Set([
+      const names = EffectArray.dedupe([
         ...Object.keys(metadata.dependencies ?? {}),
         ...Object.keys(metadata.peerDependencies ?? {}),
         ...Object.keys(metadata.optionalDependencies ?? {}),
       ]);
-      for (const name of [...names].sort()) {
+      for (const name of names.sort()) {
         // npm module names, never traversal paths or absolute filesystem names.
         if (!/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/.test(name))
           throw new Error(`Invalid SDK dependency name: ${name}`);

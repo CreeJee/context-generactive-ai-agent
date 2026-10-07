@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import { isTruthy } from "../src/truthy.ts";
 import type { ModelMessage } from "@tanstack/ai";
 import {
@@ -6,7 +7,7 @@ import {
   summaryBlockTurns,
 } from "../src/agent/compaction-policy.ts";
 import {
-  compact,
+  compactEffect,
   estimateConversation,
   estimateTokens,
   messageText,
@@ -134,24 +135,24 @@ const retrieval = {
 };
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function currentRequest(messages: readonly ModelMessage[]): Promise<ModelMessage[]> {
+const currentRequest = Effect.fnUntraced(function* (messages: readonly ModelMessage[]) {
   const state: CompactionState = {
     manual: { clearedThrough: 0, summarizedTurns: 0 },
     blocks: summaryBlocks(userIndexes(messages).length),
   };
-  const result = await compact(
+  const result = yield* compactEffect({
     messages,
     state,
-    {
+    sources: {
       toolResultId: (toolCallId) => (toolCallId === "long-tool" ? "node-tool-result" : null),
       nodeText,
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      retrievalAppendix: async () => retrieval,
+      retrievalAppendix: () => Promise.resolve(retrieval),
     },
-    { compactAt: 1, leaveOutAt: 1_000_000 },
-  );
+    budget: { compactAt: 1, leaveOutAt: 1_000_000 },
+  });
   return [...result.messages];
-}
+});
 
 const sameMessage = (left: ModelMessage, right: ModelMessage) =>
   JSON.stringify(left) === JSON.stringify(right);
@@ -189,10 +190,15 @@ function profile(
 }
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function evaluateCompaction(): Promise<CompactionEvaluation> {
+export const evaluateCompactionEffect: Effect.Effect<
+  CompactionEvaluation,
+  import("../src/agent/compaction.ts").CompactionFailed
+> = Effect.gen(function* () {
   const conversations = checkpoints.map(conversation);
   const legacyRequests = conversations.map(legacyRequest);
-  const currentRequests = await Promise.all(conversations.map(currentRequest));
+  const currentRequests = yield* Effect.forEach(conversations, currentRequest, {
+    concurrency: "unbounded",
+  });
   const final = currentRequests.at(-1) ?? [];
   const appendix = final.find((message) => messageText(message).startsWith("[Retrieval appendix"));
   const appendixText = isTruthy(appendix) ? messageText(appendix) : "";
@@ -229,4 +235,7 @@ export async function evaluateCompaction(): Promise<CompactionEvaluation> {
       retrievalWithinBudget: retrievalTokens <= retrievalTokenLimit,
     },
   };
-}
+});
+
+/** Native evaluation command boundary. */
+export const evaluateCompaction = () => Effect.runPromise(evaluateCompactionEffect);

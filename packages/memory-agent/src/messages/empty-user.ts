@@ -1,4 +1,5 @@
-const textMessageFields = new Set(["id", "role", "content", "createdAt", "metadata"]);
+import { HashSet } from "effect";
+const textMessageFields = HashSet.fromIterable(["id", "role", "content", "createdAt", "metadata"]);
 
 /** Only the confirmed empty text shape is disposable; preserve media and unknown payloads. */
 export function isEmptyUserText(message: {
@@ -8,6 +9,6 @@ export function isEmptyUserText(message: {
   return (
     message.role === "user" &&
     message.content === "" &&
-    Object.keys(message).every((key) => textMessageFields.has(key))
+    Object.keys(message).every((key) => HashSet.has(textMessageFields, key))
   );
 }

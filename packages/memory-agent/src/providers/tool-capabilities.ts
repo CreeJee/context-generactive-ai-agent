@@ -2,7 +2,7 @@ import { ANTHROPIC_MODELS, type AnthropicChatModel } from "@tanstack/ai-anthropi
 import * as AnthropicTools from "@tanstack/ai-anthropic/tools";
 import { OPENAI_CHAT_MODELS, type OpenAIChatModel } from "@tanstack/ai-openai";
 import * as OpenAITools from "@tanstack/ai-openai/tools";
-import { MutableHashMap, Option, Context, Data, Effect, Layer } from "effect";
+import { MutableHashMap, HashSet, Option, Context, Data, Effect, Layer } from "effect";
 import type { ProviderVendor } from "./contracts.ts";
 import {
   anthropicModelToolCapabilities,
@@ -417,14 +417,15 @@ export function filterProviderTools(
   descriptors: readonly AnyProviderToolDescriptor[],
   filter: ProviderToolFilter = {},
 ): readonly AnyProviderToolDescriptor[] {
-  const categories = filter.categories === undefined ? null : new Set(filter.categories);
-  const ids = filter.ids === undefined ? null : new Set(filter.ids);
+  const categories =
+    filter.categories === undefined ? null : HashSet.fromIterable(filter.categories);
+  const ids = filter.ids === undefined ? null : HashSet.fromIterable(filter.ids);
   return descriptors
     .filter(
       (entry) =>
         (filter.provider === undefined || entry.provider === filter.provider) &&
-        (categories === null || categories.has(entry.category)) &&
-        (ids === null || ids.has(entry.id)),
+        (categories === null || HashSet.has(categories, entry.category)) &&
+        (ids === null || HashSet.has(ids, entry.id)),
     )
     .toSorted(compareDescriptor);
 }
@@ -464,14 +465,14 @@ export function makeProviderToolCapabilityRegistry(
         });
       MutableHashMap.set(byId, entry.id, entry);
     }
-    const byModel = MutableHashMap.empty<string, ReadonlySet<string>>();
+    const byModel = MutableHashMap.empty<string, HashSet.HashSet<string>>();
     for (const model of models) {
       const key = `${model.provider}:${model.model}`;
       if (MutableHashMap.has(byModel, key))
         return yield* new ProviderToolMetadataFailure({
           reason: `duplicate provider model metadata: ${key}`,
         });
-      MutableHashMap.set(byModel, key, new Set(model.tools));
+      MutableHashMap.set(byModel, key, HashSet.fromIterable(model.tools));
     }
     const stableDescriptors = Object.freeze([...descriptors].toSorted(compareDescriptor));
     return {
@@ -492,10 +493,14 @@ export function makeProviderToolCapabilityRegistry(
             new UnknownProviderToolModel({ provider: query.provider, model: query.model }),
           );
         const account =
-          query.accountToolKinds === undefined ? null : new Set(query.accountToolKinds);
+          query.accountToolKinds === undefined
+            ? null
+            : HashSet.fromIterable(query.accountToolKinds);
         return Effect.succeed(
           filterProviderTools(stableDescriptors, query).filter(
-            (entry) => supported.has(entry.kind) && (account === null || account.has(entry.kind)),
+            (entry) =>
+              HashSet.has(supported, entry.kind) &&
+              (account === null || HashSet.has(account, entry.kind)),
           ),
         );
       },

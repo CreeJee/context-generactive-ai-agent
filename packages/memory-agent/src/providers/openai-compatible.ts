@@ -1,10 +1,11 @@
+import { ProviderOperationFailed } from "./contracts.ts";
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { isDeepStrictEqual } from "node:util";
 import { openaiCompatibleText } from "@tanstack/ai-openai/compatible";
 // Native host/SDK boundary uses cryptographic configuration fingerprints.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash } from "node:crypto";
-import { Context, Data, Effect, Layer, Option, Schema, Semaphore } from "effect";
+import { Config, Context, Data, Effect, Layer, Option, Schema, Semaphore } from "effect";
 import { GlobalConfig, type GlobalConfigApi } from "../config/global-config.ts";
 import { requireRuntime } from "../runtime/resources.ts";
 import { ModelUnavailable, type ProviderServices, type ProviderModel } from "./contracts.ts";
@@ -17,8 +18,10 @@ import { subscriptionAgentLoop } from "./subscription-runtime.ts";
 import { CompatibleModelPage, readCompatibleReasoning } from "./compatible-model-discovery.ts";
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const stringifyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const stringifyJson = EffectFunction.flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
 
 export class OpenAICompatibleFailed extends Data.TaggedError("OpenAICompatibleFailed")<{
   readonly operation: "validation" | "keychain" | "partial" | "test" | "models";
@@ -44,20 +47,28 @@ export interface CompatibleKeyStore {
 const keyEntry = () =>
   new (requireRuntime("@napi-rs/keyring").AsyncEntry)(
     // Native host/SDK configuration boundary reads or forwards the host environment.
-    // @effect-diagnostics-next-line processEnv:off
-    process.env.CONTEXT_AGENT_CREDENTIAL_NAMESPACE ?? "context-generactive-agent",
+    Effect.runSync(
+      Config.String("CONTEXT_AGENT_CREDENTIAL_NAMESPACE").pipe(
+        Config.withDefault("context-generactive-agent"),
+      ),
+    ),
     "openai-compatible-api-key",
   );
 const keychain: CompatibleKeyStore = {
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
-  get: async () => (await keyEntry().getPassword()) ?? null,
+  get: () =>
+    keyEntry()
+      .getPassword()
+      .then((password) => password ?? null),
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
-  set: async (value) => {
-    if (value === null) await keyEntry().deletePassword();
-    else await keyEntry().setPassword(value);
-  },
+  set: (value) =>
+    value === null
+      ? keyEntry()
+          .deletePassword()
+          .then(() => undefined)
+      : keyEntry()
+          .setPassword(value)
+          .then(() => undefined),
 };
 export class CompatibleKeyring extends Context.Service<CompatibleKeyring, CompatibleKeyStore>()(
   "memory-agent/providers/openai-compatible/CompatibleKeyring",
@@ -85,10 +96,10 @@ const credentialFor = (stored: string | null, baseUrl: string): string | null =>
   if (!stored.startsWith(credentialPrefix)) return stored;
   try {
     // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    // @effect-diagnostics-next-line schemaSync:off
-    const value = Schema.decodeUnknownSync(StoredCredential)(
-      JSON.parse(stored.slice(credentialPrefix.length)),
-    );
+    const value = EffectFunction.flow(
+      Schema.decodeUnknownResult(StoredCredential),
+      Result.getOrThrow,
+    )(JSON.parse(stored.slice(credentialPrefix.length)));
     return value.baseUrl === baseUrl ? value.key : null;
   } catch {
     return null;
@@ -98,8 +109,10 @@ export function validateCompatibleConfiguration(
   input: OpenAICompatibleUpdate,
 ): OpenAICompatibleUpdate {
   // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  // @effect-diagnostics-next-line schemaSync:off
-  const value = Schema.decodeSync(OpenAICompatibleUpdate)(input);
+  const value = EffectFunction.flow(
+    Schema.decodeResult(OpenAICompatibleUpdate),
+    Result.getOrThrow,
+  )(input);
   const url = new URL(value.baseUrl);
   if (
     !["http:", "https:"].includes(url.protocol) ||
@@ -117,7 +130,6 @@ export function validateCompatibleConfiguration(
   return { ...value, baseUrl: url.href.replace(/\/+$/, ""), model: value.model.trim() };
 }
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function makeOpenAICompatibleSettings(
   config: GlobalConfigApi,
   keys: CompatibleKeyStore = keychain,
@@ -194,11 +206,7 @@ export function makeOpenAICompatibleSettings(
               patch = { ...patch, reasoningEffort: "default" };
             yield* config
               .update(patch)
-              .pipe(
-                Effect.catchCause(() =>
-                  Effect.fail(new OpenAICompatibleFailed({ operation: "partial" })),
-                ),
-              );
+              .pipe(Effect.mapError(() => new OpenAICompatibleFailed({ operation: "partial" })));
           }),
         );
         return yield* statusOf;
@@ -209,10 +217,12 @@ export function makeOpenAICompatibleSettings(
     if (!isTruthy(settings)) return yield* new OpenAICompatibleFailed({ operation });
     const headers = new Headers({ "Content-Type": "application/json" });
     if (isTruthy(key)) headers.set("Authorization", `Bearer ${key}`);
+    const signal = yield* Effect.abortSignal;
     const init: RequestInit = {
       method: operation === "models" ? "GET" : "POST",
       redirect: "error",
       headers,
+      signal,
     };
     if (operation === "test")
       init.body = stringifyJson({
@@ -221,23 +231,19 @@ export function makeOpenAICompatibleSettings(
         max_tokens: Math.min(16, settings.outputBudget),
         stream: false,
       });
-    return yield* Effect.tryPromise({
-      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      // @effect-diagnostics-next-line asyncFunction:off
-      try: async (signal) => {
-        const response = await fetcher(
-          `${settings.baseUrl}/${operation === "models" ? "models" : "chat/completions"}`,
-          { ...init, signal },
-        );
-        if (!response.ok) throw new Error("request_failed");
-        const page: unknown = await response.json();
-        return { page, configuration: settings };
-      },
-      catch: () => new OpenAICompatibleFailed({ operation }),
-    });
+    const response = yield* attempt(operation, () =>
+      fetcher(
+        `${settings.baseUrl}/${operation === "models" ? "models" : "chat/completions"}`,
+        init,
+      ),
+    );
+    if (!response.ok) return yield* new OpenAICompatibleFailed({ operation });
+    const page = yield* attempt(operation, () => response.json());
+    return { page, configuration: settings };
   });
   const request = (operation: "test" | "models") =>
     requestOperation(operation).pipe(
+      Effect.scoped,
       Effect.timeout(15_000),
       Effect.mapError(() => new OpenAICompatibleFailed({ operation })),
     );
@@ -318,34 +324,33 @@ export function makeOpenAICompatibleSettings(
     const { configuration, key } = yield* updates.withPermit(snapshot);
     if (!isTruthy(configuration))
       return yield* new OpenAICompatibleFailed({ operation: "validation" });
-    return {
-      configuration,
-      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      // @effect-diagnostics-next-line asyncFunction:off
-      complete: async (body: string, signal: AbortSignal) => {
-        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        // @effect-diagnostics-next-line schemaSync:off
-        const payload = Schema.decodeSync(
+    const context = yield* Effect.context<never>();
+    const complete = (body: string) =>
+      Effect.gen(function* () {
+        const payload = yield* Schema.decodeEffect(
           Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
         )(body);
         const headers = new Headers({ "Content-Type": "application/json" });
         if (isTruthy(key)) headers.set("Authorization", `Bearer ${key}`);
-        const response = await fetcher(`${configuration.baseUrl}/chat/completions`, {
-          method: "POST",
-          headers,
-          redirect: "error",
-          signal,
-          body: JSON.stringify({
-            ...payload,
-            model: configuration.model,
-            max_tokens: configuration.outputBudget,
-            stream: false,
+        const signal = yield* Effect.abortSignal;
+        const response = yield* attempt("test", () =>
+          fetcher(`${configuration.baseUrl}/chat/completions`, {
+            method: "POST",
+            headers,
+            redirect: "error",
+            signal,
+            body: stringifyJson({
+              ...payload,
+              model: configuration.model,
+              max_tokens: configuration.outputBudget,
+              stream: false,
+            }),
           }),
-        });
+        );
+        const text = yield* attempt("test", () => response.text());
         if (!response.ok) {
-          const errorBody = await response.text();
-          const capacity = Option.getOrUndefined(decodeMemoryCapacity(errorBody));
-          throw new CompatibleCompletionRejected({
+          const capacity = Option.getOrUndefined(decodeMemoryCapacity(text));
+          return yield* new CompatibleCompletionRejected({
             status: response.status,
             reason:
               capacity !== undefined && capacity.error.estimated_bytes > capacity.error.limit_bytes
@@ -353,8 +358,12 @@ export function makeOpenAICompatibleSettings(
                 : "request_rejected",
           });
         }
-        return response.text();
-      },
+        return text;
+      }).pipe(Effect.scoped);
+    return {
+      configuration,
+      complete: (body: string, signal: AbortSignal) =>
+        Effect.runPromiseWith(context)(complete(body), { signal }),
     };
   });
   const services: ProviderServices = {
@@ -364,7 +373,7 @@ export function makeOpenAICompatibleSettings(
       status: Effect.map(read, (settings) => ({
         provider,
         status: isTruthy(settings) ? ("signed-in" as const) : ("signed-out" as const),
-      })),
+      })).pipe(Effect.mapError(() => new ProviderOperationFailed({ provider, operation: "auth" }))),
       connect: Effect.succeed({ provider, status: "signed-out" }),
       cancel: Effect.succeed({ provider, status: "signed-out" }),
       disconnect: Effect.succeed({ provider, status: "signed-out" }),
@@ -375,7 +384,9 @@ export function makeOpenAICompatibleSettings(
         yield* listModels.pipe(Effect.option);
         const settings = yield* read;
         return isTruthy(settings) ? [model(settings)] : [];
-      }),
+      }).pipe(
+        Effect.mapError(() => new ProviderOperationFailed({ provider, operation: "catalog" })),
+      ),
       selected: Effect.map(config.read, (settings) =>
         settings.provider === provider && isTruthy(settings.model)
           ? {
@@ -396,7 +407,9 @@ export function makeOpenAICompatibleSettings(
       select: (id: string, effort = "default") =>
         updates.withPermit(
           Effect.gen(function* () {
-            const settings = yield* read;
+            const settings = yield* read.pipe(
+              Effect.mapError(() => new ProviderOperationFailed({ provider, operation: "model" })),
+            );
             if (
               !isTruthy(settings) ||
               id !== settings.model ||
@@ -404,7 +417,13 @@ export function makeOpenAICompatibleSettings(
             )
               return yield* new ModelUnavailable({ provider, model: id, reasoningEffort: effort });
             const selection = { provider, model: id, reasoningEffort: effort };
-            yield* config.update(selection);
+            yield* config
+              .update(selection)
+              .pipe(
+                Effect.mapError(
+                  () => new ProviderOperationFailed({ provider, operation: "model" }),
+                ),
+              );
             return selection;
           }),
         ),
@@ -446,7 +465,6 @@ export function makeOpenAICompatibleSettings(
           api: "chat-completions",
           maxRetries: 0,
           // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          // @effect-diagnostics-next-line asyncFunction:off
           fetch: async (url, init) => {
             const credential = await pinnedKey;
             if (runAbort.signal.aborted) throw new Error("Compatible run cancelled");
@@ -456,13 +474,17 @@ export function makeOpenAICompatibleSettings(
             headers.delete("authorization");
             if (isTruthy(key)) headers.set("authorization", `Bearer ${key}`);
             // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-            // @effect-diagnostics-next-line schemaSync:off
-            const rawBody = Schema.decodeUnknownSync(Schema.String)(init?.body ?? "{}");
+            const rawBody = EffectFunction.flow(
+              Schema.decodeUnknownResult(Schema.String),
+              Result.getOrThrow,
+            )(init?.body ?? "{}");
             const payload = {
               // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-              // @effect-diagnostics-next-line schemaSync:off
-              ...Schema.decodeSync(
-                Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+              ...EffectFunction.flow(
+                Schema.decodeResult(
+                  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+                ),
+                Result.getOrThrow,
               )(rawBody),
             };
             payload.max_tokens = settings.outputBudget;
@@ -510,9 +532,9 @@ export function makeOpenAICompatibleSettings(
               // when the provider SDK reduces this exception to "Connection error".
               const codes: string[] = [];
               let current: unknown = cause;
-              const seen = new Set<unknown>();
-              while (current instanceof Error && !seen.has(current) && seen.size < 8) {
-                seen.add(current);
+              const seen: unknown[] = [];
+              while (current instanceof Error && !seen.includes(current) && seen.length < 8) {
+                seen.push(current);
                 if ("code" in current && isTransportErrorCode(current.code))
                   codes.push(current.code);
                 current = current.cause;
@@ -520,7 +542,6 @@ export function makeOpenAICompatibleSettings(
               const diagnostic = isTruthy(codes.length) ? codes.join(" <- ") : "transport failure";
               const error = new Error(`Compatible API request failed: ${diagnostic}`, { cause });
               // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-              // @effect-diagnostics-next-line globalConsole:off
               console.error(error.message);
               throw error;
             }
@@ -528,7 +549,6 @@ export function makeOpenAICompatibleSettings(
         });
         const original = adapter.chatStream.bind(adapter);
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         adapter.chatStream = async function* (options) {
           const request = {
             ...options,
@@ -568,7 +588,6 @@ export function makeOpenAICompatibleSettings(
       agentLoop: subscriptionAgentLoop,
       runMiddleware: () => ({ name: "memory-agent/openai-compatible" }),
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      // @effect-diagnostics-next-line asyncFunction:off
       steer: async () => "no_turn",
     },
   };

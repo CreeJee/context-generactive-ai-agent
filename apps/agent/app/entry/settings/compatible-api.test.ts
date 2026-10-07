@@ -2,6 +2,7 @@
 // @effect-diagnostics asyncFunction:off
 import { Effect } from "effect";
 import {
+  GlobalConfigFailed,
   makeOpenAICompatibleSettings,
   OpenAICompatibleSettings,
   type OpenAICompatibleSettingsApi,
@@ -50,9 +51,13 @@ test("returns a safe partial-save response without credential or provider detail
     {
       read: Effect.succeed({}),
       update: () =>
-        Effect.sync(() => {
-          throw new Error("private config detail");
-        }),
+        Effect.fail(
+          GlobalConfigFailed.make({
+            operation: "write",
+            reason: { _tag: "WriteFailed" },
+            cause: new Error("private config detail"),
+          }),
+        ),
     },
     { get: async () => null, set: async () => {} },
   );

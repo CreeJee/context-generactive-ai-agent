@@ -7,6 +7,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { AnyServerTool } from "@tanstack/ai";
 import { createMCPClient, type MCPClient } from "@tanstack/ai-mcp";
 import {
+  HashSet,
   MutableHashMap,
   Option,
   DateTime,
@@ -175,11 +176,11 @@ const make = Effect.gen(function* () {
     const trustedFingerprint = (server: ConfiguredServer) =>
       trust.find((row) => row.scope === server.scope && row.name === server.name)?.fingerprint ??
       null;
-    const localNames = new Set(local.servers.map((server) => server.name));
+    const localNames = HashSet.fromIterable(local.servers.map((server) => server.name));
     const servers = [...global.servers, ...local.servers].map((server) => ({
       server,
       trusted: trustedFingerprint(server),
-      shadowed: server.scope === "global" && localNames.has(server.name),
+      shadowed: server.scope === "global" && HashSet.has(localNames, server.name),
     }));
     const usableFingerprints = MutableHashMap.fromIterable(
       servers

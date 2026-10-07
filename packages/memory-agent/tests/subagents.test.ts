@@ -1,3 +1,4 @@
+import { HashSet } from "effect";
 import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
@@ -112,7 +113,7 @@ describe("subagents", () => {
       { role: "assistant" as const, content: "finished" },
       { role: "tool" as const, toolCallId: "current", content },
     ];
-    const sent = compactChildToolResults(messages, new Set(["old", "current"]));
+    const sent = compactChildToolResults(messages, HashSet.fromIterable(["old", "current"]));
     expect(sent[0]?.content).toContain("read_subagent_tool_result");
     expect(JSON.stringify(sent[0]?.content).length).toBeLessThan(content.length / 10);
     expect(sent[2]?.content).toContain("Child tool result preview");
@@ -120,7 +121,7 @@ describe("subagents", () => {
     expect(JSON.stringify(sent[2]?.content).length).toBeLessThan(content.length);
     expect(messages[2]?.content).toBe(content);
     expect(messages[0]?.content).toBe(content);
-    expect(compactChildToolResults(messages, new Set())[0]?.content).toBe(content);
+    expect(compactChildToolResults(messages, HashSet.empty<string>())[0]?.content).toBe(content);
   });
 
   test("a one-off child gets only the task, the parent's tools minus subagents, and reports back", async () => {

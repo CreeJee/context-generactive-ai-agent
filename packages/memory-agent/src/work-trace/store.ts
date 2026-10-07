@@ -1,9 +1,23 @@
+import { HashSet, Array as EffectArray } from "effect";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "node:crypto";
 import { optionalProperty } from "../optional-property.ts";
-import { MutableHashMap, DateTime, Clock, Context, Effect, Layer, Option, Schema } from "effect";
+import {
+  Cause,
+  Deferred,
+  Exit,
+  MutableHashMap,
+  MutableHashSet,
+  DateTime,
+  Clock,
+  Context,
+  Effect,
+  Layer,
+  Option,
+  Schema,
+} from "effect";
 import { Database } from "../db/database.ts";
 import { JsonValue } from "../json.ts";
 import type { MemoryCandidateView, MemoryUsageView } from "../memory/knowledge.ts";
@@ -24,6 +38,15 @@ import {
   type ArtifactLocator as ArtifactLocatorValue,
   type EvidenceLocator as EvidenceLocatorValue,
 } from "./contracts.ts";
+
+export class WorkTraceReadFailed extends Schema.TaggedError<WorkTraceReadFailed>()(
+  "WorkTraceReadFailed",
+  {
+    operation: Schema.Literals(["latest_cursor", "snapshot"]),
+    reason: Schema.TaggedStruct("ReadFailed", {}),
+    cause: Schema.Defect(),
+  },
+) {}
 
 const AttemptRow = Schema.Struct({
   id: Schema.String,
@@ -671,6 +694,7 @@ const taskStatusForAttempt = (status: AttemptStatus): TaskStatus => {
 
 const make = Effect.gen(function* () {
   const effectClock = yield* Clock.Clock;
+  const runPromiseExit = Effect.runPromiseExitWith(yield* Effect.context());
 
   const { sqlite, atomic } = yield* Database;
   // A crash after prompt delivery but before parent completion must not lose operational
@@ -996,7 +1020,7 @@ const make = Effect.gen(function* () {
     return attempts.length;
   });
 
-  const listeners = new Set<(sessionId: string, cursor: number) => void>();
+  const listeners = MutableHashSet.empty<(sessionId: string, cursor: number) => void>();
   const appendEvent = (input: AppendEventInput) => {
     const event = atomic(() => {
       const next = decodeSequence(
@@ -1573,12 +1597,15 @@ const make = Effect.gen(function* () {
         )
         .all(input.parentRunId, input.projectId, input.sessionId),
     );
-    const reviewedKeys = new Set(reviewed.map((row) => `${row.task_id}:${row.attempt_id}`));
+    const reviewedKeys = HashSet.fromIterable(
+      reviewed.map((row) => `${row.task_id}:${row.attempt_id}`),
+    );
     const selected = MutableHashMap.fromIterable(
       input.usedReports.map((report) => [`${report.taskId}:${report.attemptId}`, report] as const),
     );
     for (const [key, report] of selected) {
-      if (!reviewedKeys.has(key)) throw new Error("Final answer selected an unreviewed report");
+      if (!HashSet.has(reviewedKeys, key))
+        throw new Error("Final answer selected an unreviewed report");
       for (const evidenceId of report.evidenceRefIds)
         if (
           !isTruthy(
@@ -1633,7 +1660,7 @@ const make = Effect.gen(function* () {
          VALUES (?, ?, ?, ?, ?)`,
       );
       for (const report of MutableHashMap.values(selected)) {
-        const ids = [...new Set(report.evidenceRefIds)];
+        const ids = EffectArray.dedupe(report.evidenceRefIds);
         if (ids.length === 0)
           addSource.run(randomUUID(), claimId, report.taskId, report.attemptId, null);
         else
@@ -2642,9 +2669,7 @@ const make = Effect.gen(function* () {
       if (task.archived_at !== null) return { status: "archived" as const, taskId };
       if (task.active_attempt_id !== null)
         return { status: "blocked" as const, reason: "attempt_alive" as const };
-      if (
-        !new Set(["interrupted", "resumable", "completed", "failed", "cancelled"]).has(task.status)
-      )
+      if (!["interrupted", "resumable", "completed", "failed", "cancelled"].includes(task.status))
         return { status: "blocked" as const, reason: "task_not_archivable" as const };
       sqlite
         .prepare("UPDATE work_tasks SET archived_at = ?, updated_at = ? WHERE id = ?")
@@ -2857,36 +2882,65 @@ const make = Effect.gen(function* () {
       return { cursor, events: rows.map(eventView) };
     });
 
+  const latestCursorEffect = (sessionId: string) =>
+    Effect.try({
+      try: () => latestCursor(sessionId),
+      catch: (cause) =>
+        WorkTraceReadFailed.make({
+          operation: "latest_cursor",
+          reason: { _tag: "ReadFailed" },
+          cause,
+        }),
+    });
+
+  const snapshotEffect = (options: { readonly sessionId: string; readonly afterCursor: number }) =>
+    Effect.try({
+      try: () => snapshot(options.sessionId, options.afterCursor),
+      catch: (cause) =>
+        WorkTraceReadFailed.make({ operation: "snapshot", reason: { _tag: "ReadFailed" }, cause }),
+    });
+
+  const waitForChangeEffect = Effect.fnUntraced(function* (options: {
+    readonly sessionId: string;
+    readonly afterCursor: number;
+    readonly heartbeatMs?: number;
+  }) {
+    const { sessionId, afterCursor } = options;
+    if ((yield* latestCursorEffect(sessionId)) > afterCursor) return "event" as const;
+    const changed = yield* Deferred.make<"event">();
+    const listener = (changedSessionId: string, cursor: number) => {
+      if (changedSessionId === sessionId && cursor > afterCursor)
+        Deferred.doneUnsafe(changed, Effect.succeed("event"));
+    };
+    return yield* Effect.acquireUseRelease(
+      Effect.sync(() => MutableHashSet.add(listeners, listener)),
+      () =>
+        Effect.gen(function* () {
+          // Close the gap between the first durable read and listener registration.
+          if ((yield* latestCursorEffect(sessionId)) > afterCursor) return "event" as const;
+          const result = yield* Deferred.await(changed).pipe(
+            Effect.timeoutOption(Math.max(1, options.heartbeatMs ?? 15_000)),
+          );
+          return Option.getOrElse(result, () => "heartbeat" as const);
+        }),
+      () => Effect.sync(() => MutableHashSet.remove(listeners, listener)),
+    );
+  });
+
+  /** Native stream/SDK compatibility boundary; interruption alone means an aborted wait. */
   const waitForChange = (
     sessionId: string,
     afterCursor: number,
     signal: AbortSignal,
     heartbeatMs = 15_000,
-  ): Promise<"event" | "heartbeat" | "aborted"> => {
-    if (signal.aborted) return Promise.resolve("aborted");
-    if (latestCursor(sessionId) > afterCursor) return Promise.resolve("event");
-    // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-    return new Promise((resolve) => {
-      let settled = false;
-      const done = (result: "event" | "heartbeat" | "aborted") => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        listeners.delete(listener);
-        signal.removeEventListener("abort", aborted);
-        resolve(result);
-      };
-      const listener = (changedSessionId: string, cursor: number) => {
-        if (changedSessionId === sessionId && cursor > afterCursor) done("event");
-      };
-      const aborted = () => done("aborted");
-      // Native callback heartbeat/debounce timing remains at the protocol boundary.
-      const timer = setTimeout(() => done("heartbeat"), Math.max(1, heartbeatMs));
-      listeners.add(listener);
-      signal.addEventListener("abort", aborted, { once: true });
-      if (latestCursor(sessionId) > afterCursor) done("event");
-    });
-  };
+  ): Promise<"event" | "heartbeat" | "aborted"> =>
+    runPromiseExit(waitForChangeEffect({ sessionId, afterCursor, heartbeatMs }), { signal }).then(
+      (exit) => {
+        if (Exit.isSuccess(exit)) return exit.value;
+        if (Cause.hasInterruptsOnly(exit.cause)) return "aborted";
+        throw Cause.squash(exit.cause);
+      },
+    );
 
   const attemptHandle = (taskId: string, attemptId: string): AttemptHandle | null => {
     const row = sqlite
@@ -3013,6 +3067,8 @@ const make = Effect.gen(function* () {
     latestCursor,
     projectLatestCursor,
     waitForChange,
+    waitForChangeEffect,
+    snapshotEffect,
     attemptHandle,
     activeAttemptForAgent,
   };

@@ -1,7 +1,7 @@
 import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../../truthy.ts";
 import { useState } from "react";
-import { ApiError, type WorkflowAction, type WorkflowPhase } from "../api";
+import { isApiError, type WorkflowAction, type WorkflowPhase } from "../api";
 import { useSessionEventScope } from "../events/context";
 import { noticeOf, type PageView } from "./run-notice";
 import { useRunStateQuery } from "../queries/session";
@@ -40,7 +40,7 @@ function useRunStateBody(sessionId: string, holder: string, generating: boolean,
       setCancelPending(!result.stopped);
       return "requested" as const;
     } catch (failure) {
-      if (failure instanceof ApiError && failure.code === "no_running_run") {
+      if (isApiError(failure) && failure.code === "no_running_run") {
         setCancelPending(false);
         return "idle" as const;
       }

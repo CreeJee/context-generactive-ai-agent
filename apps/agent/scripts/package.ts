@@ -1,3 +1,4 @@
+import { HashSet } from "effect";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../app/truthy.ts";
 // Builds the executable for this machine's platform:
@@ -110,13 +111,18 @@ function findPackage(fromDirectory: string, name: string) {
 }
 
 /** Files a package needs at run time; null keeps everything except nested node_modules. */
-function keptFiles(name: string): ReadonlySet<string> | null {
+function keptFiles(name: string): HashSet.HashSet<string> | null {
   switch (name) {
     case "turbovec":
-      return new Set(["package.json", "index.js", "index.d.ts", "memory-turbovec.node"]);
+      return HashSet.fromIterable([
+        "package.json",
+        "index.js",
+        "index.d.ts",
+        "memory-turbovec.node",
+      ]);
     case "@huggingface/transformers":
       // memory-agent `require`s it: the Node CommonJS build is the only file used.
-      return new Set(["package.json", "dist", "dist/transformers.node.cjs"]);
+      return HashSet.fromIterable(["package.json", "dist", "dist/transformers.node.cjs"]);
     default:
       return null;
   }
@@ -154,7 +160,7 @@ function collectPackages() {
         const path = toPosix(relative(realDirectory, source));
         if (path === "") return true;
         if (path.split("/").includes("node_modules")) return false;
-        return kept === null || kept.has(path);
+        return kept === null || HashSet.has(kept, path);
       },
     });
     const manifest = readPackage(realDirectory);

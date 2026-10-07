@@ -1022,3 +1022,9 @@
 - 지역 인덱스·상수·테스트·Node 경계만으로 native Map을 허용했던 1차 판단을 수정한다. 내부 갱신 인덱스는 MutableHashMap, 상수는 HashMap, 재사용 encoder는 Effect Cache로 관리한다. 실제 SDK 승인 데이터와 wire codec 및 해당 계약의 테스트에만 native Map을 남긴다.
 - 동일 키 작업의 직렬화는 RcMap에서 Semaphore를 공유한다. 대기 작업도 획득 scope를 유지하고 성공·실패·취소 시 반납한다. 서비스는 상위 scope, 브라우저 lease 직렬화는 ManagedRuntime이 소유하며 HMR 종료 시 dispose한다.
 - RRSI worker 응답 대기는 Ref<HashMap>과 Deferred로 관리한다. 고정된 worker의 독립 RPC 클라이언트는 숫자 요청 ID별 객체를 사용하며 native Promise·MessagePort 및 자산 복제 계약을 유지한다.
+
+## 설정 실패와 제보 요청의 Effect 경계 (2026-10-07)
+
+- 설정 파일의 읽기·쓰기 및 검증 실패는 `GlobalConfigFailed` 실패 채널로 전파한다. 저장소 어댑터의 `mapError`는 예상된 실패만 변환하며 결함과 취소는 보존한다. 설정 읽기 실패를 모델 미지원으로 분류하지 않는다.
+- 제보 응답은 서버·클라이언트가 공유하는 스키마로 검증한다. 실패 응답의 비공개 본문은 표시하지 않고, 화면의 세션·증거·상세 요청은 소유 fiber의 Scope가 취소를 관리한다.
+- React API 오류도 태그와 스키마를 가지며 `Schema.is`로 판별한다. 네트워크·JSON·스키마 검증 실패는 typed failure로 처리하고, Effect 내부의 일반 `Error` throw로 예상된 실패를 만들지 않는다.

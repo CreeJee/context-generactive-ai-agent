@@ -1,10 +1,10 @@
-import { Result, Function as EffectFunction } from "effect";
+import { DateTime, Effect, Fiber } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { Schema } from "effect";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReportEvidence } from "../.server/report-evidence";
 import { ReportDraft, reportText, type ReportFields } from "../entry/report/report-draft";
 import { copyReportText } from "../entry/report/report-copy";
+import { openReportSession, readReportEvidence } from "../entry/report/report-client";
 import {
   ReportEvidenceReview,
   evidenceGaps,
@@ -20,8 +20,20 @@ export default function ReportPage() {
   const [fields, setFields] = useState<ReportFields>({ symptom: "", expected: "", actual: "" });
   const [editedText, setEditedText] = useState<string | null>(null);
   const [createdAt, setCreatedAt] = useState("작성 중");
-  // React/native timestamps use the host Date contract outside Effect execution.
-  useEffect(() => setCreatedAt(new Date().toLocaleString("ko-KR")), []);
+  useEffect(
+    () =>
+      setCreatedAt(
+        new Intl.DateTimeFormat("ko-KR", {
+          year: "numeric",
+          month: "numeric",
+          day: "numeric",
+          hour: "numeric",
+          minute: "numeric",
+          second: "numeric",
+        }).format(DateTime.toEpochMillis(DateTime.nowUnsafe())),
+      ),
+    [],
+  );
   const [evidence, setEvidence] = useState<ReportEvidence | null>(null);
   const [selected, setSelected] = useState<ReviewSelection>({});
   const [status, setStatus] = useState("증거를 불러오지 않아도 제보할 수 있습니다.");
@@ -37,34 +49,20 @@ export default function ReportPage() {
     const projectId = params.get("project");
     const sourceSessionId = params.get("session");
     if (!isTruthy(projectId) || !isTruthy(sourceSessionId)) return;
-    let active = true;
     setSessionFailed(false);
-    // Native Request/Response adapter preserves host and SDK stream semantics.
-    fetch("/api/reports/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ projectId, sourceSessionId }),
-    })
-      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      .then(async (response) => {
-        if (!response.ok) throw new Error("report session unavailable");
-        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        return EffectFunction.flow(
-          Schema.decodeUnknownResult(Schema.Struct({ reportSessionId: Schema.String })),
-          Result.getOrThrow,
-        )(await response.json());
-      })
-      .then(({ reportSessionId }) => {
-        if (active) setAnalysisSession({ projectId, reportSessionId });
-      })
-      .catch(() => {
-        if (active) {
-          setSessionFailed(true);
-          setStatus("분석 세션을 열 수 없습니다. 증상 제보문은 계속 작성·저장할 수 있습니다.");
-        }
-      });
+    const task = Effect.runFork(
+      openReportSession({ projectId, sourceSessionId }).pipe(
+        Effect.match({
+          onSuccess: ({ reportSessionId }) => setAnalysisSession({ projectId, reportSessionId }),
+          onFailure: () => {
+            setSessionFailed(true);
+            setStatus("분석 세션을 열 수 없습니다. 증상 제보문은 계속 작성·저장할 수 있습니다.");
+          },
+        }),
+      ),
+    );
     return () => {
-      active = false;
+      Effect.runFork(Fiber.interrupt(task));
     };
   }, [sessionRetry]);
   const included = evidenceItems(evidence ?? emptyEvidence).filter((item) =>
@@ -87,8 +85,14 @@ export default function ReportPage() {
   );
   const text = editedText ?? generatedText;
 
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const loadEvidence = async () => {
+  const evidenceTask = useRef<Fiber.Fiber<void> | null>(null);
+  useEffect(
+    () => () => {
+      if (evidenceTask.current !== null) Effect.runFork(Fiber.interrupt(evidenceTask.current));
+    },
+    [],
+  );
+  const loadEvidence = () => {
     const params = new URLSearchParams(window.location.search);
     const project = params.get("project");
     const session = params.get("session");
@@ -98,31 +102,29 @@ export default function ReportPage() {
     }
     setLoading(true);
     setStatus("증거를 조회하는 중입니다. 증상 제보는 계속 작성할 수 있습니다.");
-    try {
-      const query = new URLSearchParams({ project, session });
-      // Native Request/Response adapter preserves host and SDK stream semantics.
-      const response = await fetch(`/api/reports/evidence?${query}`, { cache: "no-store" });
-      if (!response.ok) throw new Error(`조회 실패 (${response.status})`);
-      const result: ReportEvidence = await response.json();
-      setEvidence(result);
-      setSelected({});
-      setStatus("증거를 불러왔습니다. 포함할 항목을 직접 선택하세요.");
-    } catch {
-      setStatus("증거 조회에 실패했습니다. 증상만으로도 제보문을 복사할 수 있습니다.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const copy = async () => {
-    const copied = await copyReportText(text, (value) => navigator.clipboard.writeText(value));
-    setStatus(
-      copied
-        ? "제보문을 복사했습니다. 개발자의 Discord 채널에 직접 붙여넣으세요."
-        : "클립보드를 사용할 수 없습니다. 위 제보 문안에서 텍스트를 직접 선택해 복사하세요.",
+    evidenceTask.current = Effect.runFork(
+      readReportEvidence({ project, session }).pipe(
+        Effect.match({
+          onSuccess: (result) => {
+            setEvidence(result);
+            setSelected({});
+            setStatus("증거를 불러왔습니다. 포함할 항목을 직접 선택하세요.");
+          },
+          onFailure: () =>
+            setStatus("증거 조회에 실패했습니다. 증상만으로도 제보문을 복사할 수 있습니다."),
+        }),
+        Effect.tap(() => Effect.sync(() => setLoading(false))),
+      ),
     );
   };
+  const copy = () =>
+    copyReportText(text, (value) => navigator.clipboard.writeText(value)).then((copied) => {
+      setStatus(
+        copied
+          ? "제보문을 복사했습니다. 개발자의 Discord 채널에 직접 붙여넣으세요."
+          : "클립보드를 사용할 수 없습니다. 위 제보 문안에서 텍스트를 직접 선택해 복사하세요.",
+      );
+    });
 
   const download = () => {
     const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
@@ -130,8 +132,9 @@ export default function ReportPage() {
     link.href = url;
     link.download = "context-agent-report.txt";
     link.click();
-    // Native callback heartbeat/debounce timing remains at the protocol boundary.
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    Effect.runFork(
+      Effect.sleep("1 second").pipe(Effect.andThen(Effect.sync(() => URL.revokeObjectURL(url)))),
+    );
   };
 
   return (
@@ -186,7 +189,7 @@ export default function ReportPage() {
         <button
           type="button"
           disabled={loading}
-          onClick={() => void loadEvidence()}
+          onClick={() => loadEvidence()}
           className="rounded-md border px-3 py-2 text-sm disabled:opacity-50"
         >
           최근 증거 불러오기 (선택)

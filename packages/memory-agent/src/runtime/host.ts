@@ -7,7 +7,7 @@ import { renameSync, statSync } from "node:fs";
 import { posix, win32 } from "node:path";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { setTimeout as sleep } from "node:timers/promises";
-import { Option, Schema } from "effect";
+import { Array as EffectArray, Option, Schema } from "effect";
 
 /**
  * Host differences between POSIX systems and Windows, in one place. Every function takes the
@@ -136,7 +136,7 @@ export function helperEnvironment(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
 ) {
-  const unique = (directories: readonly string[]) => [...new Set(directories)];
+  const unique = (directories: readonly string[]) => EffectArray.dedupe(directories);
   if (platform !== "win32")
     return { PATH: unique([...searchDirectories, "/usr/bin", "/bin"]).join(posix.delimiter) };
   const systemRoot = env.SystemRoot ?? env.SYSTEMROOT ?? "C:\\Windows";

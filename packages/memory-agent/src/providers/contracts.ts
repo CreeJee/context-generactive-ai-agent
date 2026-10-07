@@ -1,3 +1,4 @@
+import type { GlobalConfigFailed } from "../config/global-config.ts";
 import type { AgentLoopStrategy, AnyTextAdapter, ChatMiddleware, ModelMessage } from "@tanstack/ai";
 import { Data, Effect, Schema } from "effect";
 
@@ -143,7 +144,7 @@ export interface AuthProvider {
 export interface ModelCatalog {
   readonly provider: ProviderId;
   readonly list: Effect.Effect<ReadonlyArray<ProviderModel>, ProviderOperationFailed>;
-  readonly selected: Effect.Effect<ModelSelection | null>;
+  readonly selected: Effect.Effect<ModelSelection | null, GlobalConfigFailed>;
   readonly acceptsImages: (model: string) => Effect.Effect<boolean, ProviderOperationFailed>;
   readonly cheapestEffort: (selection: ModelSelection) => Effect.Effect<ModelSelection>;
   readonly select: (

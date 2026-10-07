@@ -1,6 +1,13 @@
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { MutableHashMap, DateTime, SchemaTransformation } from "effect";
+import {
+  Array as EffectArray,
+  HashSet,
+  MutableHashMap,
+  MutableHashSet,
+  DateTime,
+  SchemaTransformation,
+} from "effect";
 import { projectInstructions } from "./project-instructions.ts";
 import { workflowActions } from "../workflow/actions.ts";
 import { createGoalNativeImplementations } from "./goal-native-implementation.ts";
@@ -35,6 +42,7 @@ import {
   Option,
   Queue,
   Schema,
+  Stream,
 } from "effect";
 import { Attachments } from "../attachments/attachments.ts";
 import { attachmentIdOf } from "../attachments/urls.ts";
@@ -397,8 +405,8 @@ const cancelWaitMs = 5_000;
 const afterRunBudget = 200;
 
 /** Plan/Verify never receive project mutation, outside access, MCP or delegation tools. */
-const readOnlyWorkflowPhases: ReadonlySet<WorkflowPhase> = new Set(["plan", "verify", "completed"]);
-const workflowReadToolNames: ReadonlySet<string> = new Set([
+const readOnlyWorkflowPhases = HashSet.fromIterable<WorkflowPhase>(["plan", "verify", "completed"]);
+const workflowReadToolNames = HashSet.fromIterable([
   "find_memory",
   "read_evidence",
   "trace_evidence",
@@ -418,7 +426,7 @@ const workflowReadToolNames: ReadonlySet<string> = new Set([
   "record_workflow_blocker",
 ]);
 /** Verify can execute checks, but cannot mutate source files or install dependencies. */
-const verificationToolNames: ReadonlySet<string> = new Set(["run_shell"]);
+const verificationToolNames = HashSet.fromIterable(["run_shell"]);
 
 type InternalFollowup =
   | { readonly kind: "notification" }
@@ -439,6 +447,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
   recallSensor?: ReturnType<typeof createRecallSensor>,
 ) {
   const context = yield* Effect.context();
+  const ownerSignal = yield* Effect.abortSignal;
   const runEffect = Effect.runPromiseWith(context);
   const runEffectSync = Effect.runSyncWith(context);
   const active = yield* ActiveProvider;
@@ -549,7 +558,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
     OwnerNativeArtifacts.layer.pipe(Layer.provide(Layer.succeed(OwnerNativeBuild, ownerBuild))),
   );
   const ownerNativeArtifacts = Context.get(nativeArtifactContext, OwnerNativeArtifacts);
-  const adoptedNativeGoals = new Set<string>();
+  const adoptedNativeGoals = MutableHashSet.empty<string>();
   const workerGenerations = GoalWorkerGenerations.makeGoalWorkerGenerationStore({ sqlite, atomic });
   let workerAssetsRegistry:
     | ReturnType<typeof GoalWorkerAssets.makeGoalWorkerAssetsRegistry>
@@ -617,7 +626,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
         const currentUser = nodes.latestOfKind(sessionId, "user");
         if (!isTruthy(currentUser)) return null;
         // A node can remain as raw text or as a tool-result pointer. Do not retrieve either again.
-        const visible = new Set(
+        const visible = MutableHashSet.fromIterable(
           sessionNodes
             .filter(
               (node) =>
@@ -629,9 +638,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
             )
             .map((node) => node.id),
         );
-        visible.add(currentUser.id);
+        MutableHashSet.add(visible, currentUser.id);
         const recentTurns = nodes.recentOfKind(sessionId, "user", 3).map((node) => node.text);
-        const query = [...new Set([...retrievalSeed, ...recentTurns])]
+        const query = EffectArray.dedupe([...retrievalSeed, ...recentTurns])
           .filter((text) => text.length > 0)
           .join("\n")
           .slice(0, 6_000);
@@ -641,7 +650,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
         const candidates = found.matches
           .filter(
             (match) =>
-              !visible.has(match.id) && match.supersededBy.length === 0 && match.kind !== "topic",
+              !MutableHashSet.has(visible, match.id) &&
+              match.supersededBy.length === 0 &&
+              match.kind !== "topic",
           )
           .sort((left, right) => {
             const sessionOrder =
@@ -816,8 +827,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
     phase: WorkflowPhase,
     runId: string,
   ): ChatMiddleware => {
-    const successfulCalls = new Set<string>();
-    const toolResults = new Set<string>();
+    const successfulCalls = MutableHashSet.empty<string>();
+    const toolResults: string[] = [];
     // Verification may record a failed result immediately before the provider or its continuation
     // errors. Settle from the durable artifact on every terminal path, not only a clean finish, so
     // the session returns to Execute instead of remaining trapped in read-only Verify.
@@ -833,21 +844,22 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
     return {
       name: "memory-agent/workflow-lifecycle",
       onAfterToolCall(_ctx, info) {
-        if (info.ok) successfulCalls.add(info.toolCallId);
+        if (info.ok) MutableHashSet.add(successfulCalls, info.toolCallId);
       },
       onToolPhaseComplete(_ctx, info) {
         for (const call of info.toolCalls) {
           // Declined approvals have no after-call hook; skipped/error results never count.
-          if (!successfulCalls.has(call.id)) continue;
+          if (!MutableHashSet.has(successfulCalls, call.id)) continue;
           const result = info.results.find((entry) => entry.toolCallId === call.id);
           const fingerprint = toolProgressFingerprint(
             call.function.name,
             call.function.arguments,
             result?.result,
           );
-          if (isTruthy(fingerprint)) toolResults.add(fingerprint);
+          if (isTruthy(fingerprint) && !toolResults.includes(fingerprint))
+            toolResults.push(fingerprint);
         }
-        successfulCalls.clear();
+        MutableHashSet.clear(successfulCalls);
       },
       onFinish: () => settle(true),
       onAbort: () => settle(false),
@@ -912,7 +924,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
           cursor: workTrace.latestCursor(sessionId),
           tasks: workTrace.taskTree(sessionId),
         });
-      }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
+      }).pipe(
+        Effect.catchTags({
+          SessionNotFound: sessionNotFound,
+          GlobalConfigFailed: () => Effect.succeed(json(500, { error: "settings_unavailable" })),
+        }),
+      ),
 
     /** Project-owned review tree, including tasks whose origin conversation was deleted. */
     projectTraceTree: (projectId: string) =>
@@ -1023,41 +1040,56 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
         const requestedCursor = traceCursor(request);
         if (requestedCursor === null) return json(400, { error: "invalid_trace_cursor" });
         const encoder = new TextEncoder();
-        // The HTTP/SDK stream outlives this handler; its owner and explicit cancel retain this controller.
-        const abortController = new AbortController();
-        const body = new ReadableStream<Uint8Array>({
-          start(controller) {
-            const write = (frame: string) => controller.enqueue(encoder.encode(frame));
-            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-            const pump = async () => {
-              let cursor = requestedCursor;
-              const initial = workTrace.snapshot(sessionId, cursor);
-              write(traceFrame("snapshot", JSON.stringify(initial), initial.cursor));
-              cursor = initial.cursor;
-              while (!abortController.signal.aborted) {
-                const change = await workTrace.waitForChange(
+        const encodeTrace = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+        const frames = Stream.unwrap(
+          Effect.gen(function* () {
+            const initial = yield* workTrace.snapshotEffect({
+              sessionId,
+              afterCursor: requestedCursor,
+            });
+            const initialJSON = yield* encodeTrace(initial);
+            const tail = Stream.paginate(initial.cursor, (cursor) =>
+              Effect.gen(function* () {
+                const change = yield* workTrace.waitForChangeEffect({
                   sessionId,
-                  cursor,
-                  abortController.signal,
+                  afterCursor: cursor,
+                });
+                if (change === "heartbeat")
+                  return [[`: heartbeat ${cursor}\n\n`], Option.some(cursor)] as const;
+                const next = yield* workTrace.snapshotEffect({ sessionId, afterCursor: cursor });
+                const events = yield* Effect.forEach(next.events, (event) =>
+                  encodeTrace(event).pipe(
+                    Effect.map((json) => traceFrame("trace", json, event.cursor)),
+                  ),
                 );
-                if (change === "aborted") break;
-                if (change === "heartbeat") {
-                  write(`: heartbeat ${cursor}\n\n`);
-                  continue;
-                }
-                const next = workTrace.snapshot(sessionId, cursor);
-                for (const event of next.events)
-                  write(traceFrame("trace", JSON.stringify(event), event.cursor));
-                cursor = next.cursor;
-              }
-              controller.close();
-            };
-            void pump().catch(controller.error.bind(controller));
-          },
-          cancel() {
-            abortController.abort();
-          },
+                return [events, Option.some(next.cursor)] as const;
+              }),
+            );
+            return Stream.concat(
+              Stream.succeed(traceFrame("snapshot", initialJSON, initial.cursor)),
+              tail,
+            );
+          }),
+        );
+        // The body outlives the HTTP handler. Its own consumer, request signal and service owner
+        // terminate the producer; closing the handler's Scope must not terminate a live response.
+        const stopped = Effect.callback<void>((resume) => {
+          const stop = () => resume(Effect.void);
+          request.signal.addEventListener("abort", stop, { once: true });
+          ownerSignal.addEventListener("abort", stop, { once: true });
+          if (request.signal.aborted || ownerSignal.aborted) stop();
+          return Effect.sync(() => {
+            request.signal.removeEventListener("abort", stop);
+            ownerSignal.removeEventListener("abort", stop);
+          });
         });
+        const body = Stream.toReadableStreamWith(
+          frames.pipe(
+            Stream.interruptWhen(stopped),
+            Stream.map((frame) => encoder.encode(frame)),
+          ),
+          context,
+        );
         return new Response(body, {
           headers: {
             "Cache-Control": "no-cache, no-transform",
@@ -1065,7 +1097,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
             "Content-Type": "text/event-stream; charset=utf-8",
           },
         });
-      }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
+      }).pipe(
+        Effect.catchTags({
+          SessionNotFound: sessionNotFound,
+          GlobalConfigFailed: () => Effect.succeed(json(500, { error: "settings_unavailable" })),
+        }),
+      ),
 
     /**
      * POST handler for one chat run in a session. Stores the user turn, runs the model through
@@ -1415,9 +1452,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
             case "rejected":
               return json(409, { error: "goal_native_generation_unavailable" });
             case "ready":
-              if (!adoptedNativeGoals.has(implementationGoal)) {
+              if (!MutableHashSet.has(adoptedNativeGoals, implementationGoal)) {
                 goalNativeImplementations.adopt(implementationGoal, loaded.factories);
-                adoptedNativeGoals.add(implementationGoal);
+                MutableHashSet.add(adoptedNativeGoals, implementationGoal);
               }
               break;
           }
@@ -1541,7 +1578,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
             route: imageRoute?.executorMediaRouteId,
           });
 
-        const workflowReadOnly = readOnlyWorkflowPhases.has(workflow.phase);
+        const workflowReadOnly = HashSet.has(readOnlyWorkflowPhases, workflow.phase);
         // Present only while the user has Kagi turned on with a key (R19).
         const webTools = reportSource !== null ? [] : yield* kagiTools.tools;
         // A report session never connects external MCP servers or loads additional skills.
@@ -1604,7 +1641,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
               project,
               sessionId,
               selection,
-              gated: new Set([...gatedToolNames, ...askEveryCall]),
+              gated: HashSet.fromIterable([...gatedToolNames, ...askEveryCall]),
               decider: "classifier",
             }),
           );
@@ -1614,7 +1651,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
               project,
               sessionId,
               selection,
-              gated: new Set(askEveryCall),
+              gated: HashSet.fromIterable(askEveryCall),
               decider: "user",
             }),
           );
@@ -1632,7 +1669,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
                       runId,
                       abortSignal: abortController.signal,
                     })
-                    .filter((tool) => verificationToolNames.has(tool.name))
+                    .filter((tool) => HashSet.has(verificationToolNames, tool.name))
                 : []
               : approvedTools.forProject(project, undefined, {
                   sessionId,
@@ -1686,7 +1723,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
                 () => workTrace.taskTree(reportSource.sourceSessionId),
               )
             : workflowReadOnly
-              ? profiledTools.filter((tool) => workflowReadToolNames.has(tool.name))
+              ? profiledTools.filter((tool) => HashSet.has(workflowReadToolNames, tool.name))
               : profiledTools;
         const standingPrompts = [
           ...(reportSource !== null ? [reportAnalysisInstructions] : [memoryInstructions]),
@@ -1794,11 +1831,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
               ...(isTruthy(skills.instructions) ? [skills.instructions] : []),
               workspaceInstructions(project, places),
             ],
+            [],
           ),
-          deliveredParentNotificationIds: new Set(
+          deliveredParentNotificationIds: HashSet.fromIterable(
             parentNotifications.map((notification) => notification.id),
           ),
-          gated: new Set([...gatedToolNames, ...askEveryCall]),
+          gated: HashSet.fromIterable([...gatedToolNames, ...askEveryCall]),
         });
         // Read-only calls of one step run at once instead of one after another.
         const reads = parallelReads(

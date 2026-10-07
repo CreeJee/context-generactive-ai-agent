@@ -1,7 +1,7 @@
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import type { DatabaseSync } from "node:sqlite";
-import { MutableHashMap, Schema } from "effect";
+import { MutableHashMap, MutableHashSet, Schema } from "effect";
 import type { WorkflowState } from "./workflow.ts";
 
 /** Only the current Plan version is supported; historical Plan mappings are not adopted. */
@@ -150,7 +150,7 @@ export function completionEvidence(sqlite: DatabaseSync) {
       workflowRevisionId: recorder.workflow_revision_id,
       dispatchGeneration: optionalString(recorderDispatch) ?? null,
     });
-    const coverage = new Set<number>();
+    const coverage = MutableHashSet.empty<number>();
     for (const mapping of mappings) {
       const step = plan.steps.find((candidate) => candidate.id === mapping.stepId);
       const bound = valid(mapping.runId);
@@ -174,7 +174,7 @@ export function completionEvidence(sqlite: DatabaseSync) {
           .get(nodeId, sessionId, projectId, mapping.runId);
         if (!isTruthy(node)) return { status: "refused" };
       }
-      coverage.add(mapping.outcomeIndex);
+      MutableHashSet.add(coverage, mapping.outcomeIndex);
       const dispatch = sqlite
         .prepare("SELECT generation FROM workflow_worker_dispatches WHERE run_id = ?")
         .get(mapping.runId)?.generation;
@@ -184,7 +184,7 @@ export function completionEvidence(sqlite: DatabaseSync) {
         dispatchGeneration: optionalString(dispatch) ?? null,
       });
     }
-    if (coverage.size !== goal.outcomes.length) return { status: "refused" };
+    if (MutableHashSet.size(coverage) !== goal.outcomes.length) return { status: "refused" };
     const source = sqlite
       .prepare(`SELECT source_generation, manifest_hash
       FROM workflow_goal_worker_generations WHERE goal_instance_id = ?`)

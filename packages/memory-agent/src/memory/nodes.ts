@@ -3,7 +3,16 @@ import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "node:crypto";
 import type { SQLOutputValue } from "node:sqlite";
-import { DateTime, Clock, Context, Effect, Layer, Schema } from "effect";
+import {
+  DateTime,
+  Clock,
+  Context,
+  Effect,
+  Layer,
+  Schema,
+  HashSet,
+  Array as EffectArray,
+} from "effect";
 import { hasStatementText } from "./quality.ts";
 import { firstMessageTitle } from "../sessions/title.ts";
 import { Database } from "../db/database.ts";
@@ -139,7 +148,7 @@ export function toEdge(row: Record<string, SQLOutputValue>): Edge {
 export const evidencePageLength = 4000;
 
 /** Statements worth interpreting for topics and corrections; tool output is evidence, not a claim. */
-const interpretedKinds: ReadonlySet<NodeKind> = new Set(["user", "assistant"]);
+const interpretedKinds = HashSet.fromIterable<NodeKind>(["user", "assistant"]);
 
 const make = Effect.gen(function* () {
   const effectClock = yield* Clock.Clock;
@@ -220,12 +229,12 @@ const make = Effect.gen(function* () {
         if (declared.kind === "reply") link(node.id, declared.nodeId, "reply", createdAt);
         else link(declared.nodeId, node.id, declared.kind, createdAt);
       }
-      for (const ref of new Set(input.refs ?? [])) {
+      for (const ref of EffectArray.dedupe(input.refs ?? [])) {
         const earlier = idOf(latestWithRef.get(ref, input.projectId));
         insertRef.run(node.id, ref);
         if (isTruthy(earlier)) link(node.id, earlier, "touches", createdAt);
       }
-      if (interpretedKinds.has(node.kind) && hasStatementText(node.text))
+      if (HashSet.has(interpretedKinds, node.kind) && hasStatementText(node.text))
         insertJob.run(node.id, createdAt);
       return node;
     });

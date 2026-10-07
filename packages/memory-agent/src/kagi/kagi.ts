@@ -134,7 +134,10 @@ const make = (options: KagiOptions) =>
     const secrets = yield* SecretStore;
     const baseUrl = options.baseUrl ?? kagiBaseUrl;
 
-    const status: Effect.Effect<KagiStatus, SecretStoreFailed> = Effect.gen(function* () {
+    const status: Effect.Effect<
+      KagiStatus,
+      SecretStoreFailed | import("../config/global-config.ts").GlobalConfigFailed
+    > = Effect.gen(function* () {
       const key = yield* secrets.get("kagi-api-key");
       const settings = yield* config.read;
       return {

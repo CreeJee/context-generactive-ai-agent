@@ -1,3 +1,4 @@
+import { HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
 import {
   MutableHashMap,
@@ -171,17 +172,17 @@ export const builtInWorkflowRules: readonly WorkflowRule[] = builtInRuleInputs.m
 }));
 
 const normalizedTerms = (text: string) =>
-  new Set(
+  HashSet.fromIterable(
     text
       .toLocaleLowerCase()
       .split(/[^\p{L}\p{N}_./:-]+/u)
       .filter(Boolean),
   );
 
-const lexicalScore = (query: ReadonlySet<string>, rule: WorkflowRule) => {
+const lexicalScore = (query: HashSet.HashSet<string>, rule: WorkflowRule) => {
   const searchable = normalizedTerms(`${rule.title} ${rule.terms.join(" ")} ${rule.instruction}`);
   let overlap = 0;
-  for (const term of query) if (searchable.has(term)) overlap += 1;
+  for (const term of query) if (HashSet.has(searchable, term)) overlap += 1;
   return overlap;
 };
 

@@ -1,6 +1,7 @@
+import { HashSet } from "effect";
 import type { AnyServerTool } from "@tanstack/ai";
 
-const parentToolNames = new Set([
+const parentToolNames = HashSet.fromIterable([
   "start_new_goal",
   "update_goal",
   "update_plan",
@@ -15,5 +16,5 @@ const parentToolNames = new Set([
 
 /** Children report local progress; the parent owns session planning and final adoption. */
 export function childTools(tools: readonly AnyServerTool[]) {
-  return tools.filter((tool) => !parentToolNames.has(tool.name));
+  return tools.filter((tool) => !HashSet.has(parentToolNames, tool.name));
 }

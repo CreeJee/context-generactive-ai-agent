@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { useBooleanState } from "react-simplikit";
-import { api, ApiError } from "../api";
+import { api, isApiError } from "../api";
 import { chooseCrossProviderApproval } from "./cross-provider-approval";
 import { useImageSettingsQuery } from "../queries/global";
 import { useCrossProviderConsentMutation } from "../queries/mutations/global";
@@ -17,7 +17,7 @@ export function useImageGeneration(onProblem: (message: string) => void) {
         return await api.generateImage(prompt, true);
       } catch (failure) {
         const choice =
-          failure instanceof ApiError &&
+          isApiError(failure) &&
           failure.code === "image_approval_required" &&
           failure.reason === "cross_provider" &&
           failure.approval !== undefined

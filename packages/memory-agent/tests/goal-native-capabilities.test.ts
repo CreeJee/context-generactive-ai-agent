@@ -1,3 +1,4 @@
+import { HashSet } from "effect";
 import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
@@ -77,7 +78,7 @@ test("Goal factory references bind fresh native SDK capabilities and deferred at
           project: owner.project,
           sessionId: owner.session.id,
           selection: { provider: "openai", model: "scripted-1", reasoningEffort: "none" },
-          gated: new Set(["probe"]),
+          gated: HashSet.fromIterable(["probe"]),
           decider: "classifier",
         })
         .pipe(

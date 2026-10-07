@@ -1,3 +1,4 @@
+import { HashSet } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off newPromise:off nodeBuiltinImport:off
 import { isTruthy } from "../src/truthy.ts";
@@ -382,7 +383,7 @@ test("tampered worker RPC name/args/ID/context is rejected before durable reserv
         const gate = yield* PermissionGate;
         return gate.forRun({
           sessionId: "s",
-          gated: new Set(["owner_tool", "other"]),
+          gated: HashSet.fromIterable(["owner_tool", "other"]),
           decider: "classifier",
           project: {
             id: "p",

@@ -1,5 +1,5 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off
+import { it as effectTest } from "@effect/vitest";
+import { Effect } from "effect";
 import { isTruthy } from "../../truthy.ts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vite-plus/test";
@@ -78,18 +78,23 @@ describe("report review and manual sharing", () => {
     expect(text).toContain("AI 진단: 수행하지 않음");
   });
 
-  test("clipboard denial preserves a manually selectable draft", async () => {
-    expect(
-      await copyReportText("draft", async () => {
-        throw new Error("denied");
-      }),
-    ).toBe(false);
-    const captured: string[] = [];
-    expect(
-      await copyReportText("draft", async (text) => {
-        captured.push(text);
-      }),
-    ).toBe(true);
-    expect(captured).toEqual(["draft"]);
-  });
+  effectTest.effect("clipboard denial preserves a manually selectable draft", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* Effect.tryPromise(() =>
+          copyReportText("draft", () => Promise.reject(new Error("denied"))),
+        ),
+      ).toBe(false);
+      const captured: string[] = [];
+      expect(
+        yield* Effect.tryPromise(() =>
+          copyReportText("draft", (text) => {
+            captured.push(text);
+            return Promise.resolve();
+          }),
+        ),
+      ).toBe(true);
+      expect(captured).toEqual(["draft"]);
+    }),
+  );
 });

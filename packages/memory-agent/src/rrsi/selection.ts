@@ -1,4 +1,4 @@
-import { Function as EffectFunction } from "effect";
+import { HashSet, Function as EffectFunction } from "effect";
 import type { Measurement, Component } from "./contracts.ts";
 
 export interface SelectionPolicy {
@@ -47,13 +47,13 @@ export function exploration(
     measurement: Measurement | null;
   }[],
 ) {
-  const tried = new Set(
+  const tried = HashSet.fromIterable(
     history
       .filter((entry) => entry.measurement !== null)
       .flatMap((entry) => entry.edits.map((edit) => edit.component)),
   );
   return (["prompt", "client_tool", "context_mgmt", "memory", "config"] as const).filter(
-    (component) => !tried.has(component),
+    (component) => !HashSet.has(tried, component),
   );
 }
 export function noiseBand(scores: readonly number[]) {

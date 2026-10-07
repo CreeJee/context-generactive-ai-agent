@@ -3,10 +3,10 @@ import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { createHash } from "node:crypto";
 import type { ToolPhaseCompleteInfo } from "@tanstack/ai";
-import { Option, Schema } from "effect";
+import { HashSet, Option, Schema } from "effect";
 import { JsonValue } from "../json.ts";
 
-const bookkeeping = new Set([
+const bookkeeping = HashSet.fromIterable([
   "get_workflow",
   "update_workflow_progress",
   "update_goal",
@@ -14,7 +14,13 @@ const bookkeeping = new Set([
   "record_workflow_blocker",
   "read_skill",
 ]);
-const volatileKeys = new Set(["snapshot", "nextCursor", "nextOffset", "durationMs", "elapsedMs"]);
+const volatileKeys = HashSet.fromIterable([
+  "snapshot",
+  "nextCursor",
+  "nextOffset",
+  "durationMs",
+  "elapsedMs",
+]);
 const isString = Schema.is(Schema.String);
 const isArray = Schema.is(Schema.Array(JsonValue));
 const isObject = Schema.is(Schema.Record(Schema.String, JsonValue));
@@ -36,7 +42,7 @@ function stable(value: JsonValue): JsonValue {
   if (isObject(value))
     return Object.fromEntries(
       Object.entries(value)
-        .filter(([key]) => !volatileKeys.has(key))
+        .filter(([key]) => !HashSet.has(volatileKeys, key))
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([key, item]) => [key, stable(item)]),
     );
@@ -55,7 +61,7 @@ function toolProgressFingerprintBody(
   args: string,
   result: ToolPhaseCompleteInfo["results"][number]["result"],
 ): string | null {
-  if (bookkeeping.has(name)) return null;
+  if (HashSet.has(bookkeeping, name)) return null;
   const parsed = isString(result)
     ? Option.orElse(decodeText(result), () => decodeResult(result))
     : decodeResult(result);
@@ -64,7 +70,7 @@ function toolProgressFingerprintBody(
   if (value === null || (isString(value) && !isTruthy(value.trim()))) return null;
   if (isObject(value)) {
     if (
-      "error" in value ||
+      value.error !== undefined ||
       value.approved === false ||
       value.isError === true ||
       (value.exitCode !== undefined && value.exitCode !== 0) ||

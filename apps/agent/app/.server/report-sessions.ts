@@ -59,6 +59,6 @@ export const openReportSession = Effect.fn("openReportSession")(function* (
         throw error;
       }
     },
-    catch: (cause) => new ReportSessionFailed({ cause }),
+    catch: (cause) => ReportSessionFailed.make({ cause }),
   });
 });

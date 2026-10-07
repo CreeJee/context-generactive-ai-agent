@@ -1,3 +1,4 @@
+import { HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Option, Schema } from "effect";
 import { refsInArguments } from "../memory/refs.ts";
@@ -11,7 +12,7 @@ import { isInjectedText, type InjectedText, type TranscriptReader } from "./item
 
 /** What the CLI sends as a user message: its own context, project instructions, agent handoffs. */
 const injected: InjectedText = {
-  tags: new Set([
+  tags: HashSet.fromIterable([
     "user_instructions",
     "environment_context",
     "turn_aborted",

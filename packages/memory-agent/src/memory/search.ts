@@ -1,6 +1,15 @@
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { MutableHashMap, Option, Context, Effect, Layer, Schema } from "effect";
+import {
+  MutableHashMap,
+  HashSet,
+  Array as EffectArray,
+  Option,
+  Context,
+  Effect,
+  Layer,
+  Schema,
+} from "effect";
 import { Database } from "../db/database.ts";
 import { Embedder } from "./embedding/embedder.ts";
 import { embeddedKindFilter } from "./embedding/indexer.ts";
@@ -141,9 +150,9 @@ const decodeChallenge = EffectFunction.flow(
 
 /** Splits a question into search terms; trigram FTS needs 3+ characters, shorter terms use LIKE. */
 export function searchTerms(query: string) {
-  const terms = [
-    ...new Set(query.split(/[\s,.;:!?()[\]{}"'`]+/u).filter((term) => term.length >= 2)),
-  ];
+  const terms = EffectArray.dedupe(
+    query.split(/[\s,.;:!?()[\]{}"'`]+/u).filter((term) => term.length >= 2),
+  );
   return {
     trigram: terms.filter((term) => term.length >= 3),
     short: terms.filter((term) => term.length === 2),
@@ -230,7 +239,7 @@ const make = (tuning: SearchTuning) =>
           return yield* new MorphAnalysisFailed({ reason: "not_ready" });
         }
         const [terms = []] = yield* analyzer.terms([query]);
-        const unique = [...new Set(terms)].filter((term) => term.length > 0);
+        const unique = EffectArray.dedupe(terms).filter((term) => term.length > 0);
         if (unique.length === 0) return [];
         const match = unique.map((term) => `"${term.replaceAll('"', '""')}"`).join(" OR ");
         const projects = allowed.map(() => "?").join(", ");
@@ -303,7 +312,7 @@ const make = (tuning: SearchTuning) =>
                 [tuning.exactTextWeight, ...morph.map(() => 1), 1],
               )
             : fuseRanks([byVector, byText, ...morph]);
-        const vectorIds = new Set(byVector);
+        const vectorIds = HashSet.fromIterable(byVector);
 
         const walk = graph.traverse(seeds, {
           budget: limit * 4,
@@ -332,7 +341,8 @@ const make = (tuning: SearchTuning) =>
         for (const visit of walk.visits) {
           if (matches.length === limit) break;
           let foundBy: Match["foundBy"] = "graph";
-          if (visit.path.length === 0) foundBy = vectorIds.has(visit.node.id) ? "vector" : "text";
+          if (visit.path.length === 0)
+            foundBy = HashSet.has(vectorIds, visit.node.id) ? "vector" : "text";
           matches.push({
             id: visit.node.id,
             kind: visit.node.kind,

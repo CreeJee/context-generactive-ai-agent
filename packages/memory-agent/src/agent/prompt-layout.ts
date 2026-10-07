@@ -1,12 +1,18 @@
+import { Function as EffectFunction } from "effect";
+
 /**
  * Keep shared standing rules before role rules, then project/run context.
  * Never sort instructions: order can affect their meaning. Callers classify each block explicitly.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function promptLayout(
+function promptLayoutBody(
   standing: readonly string[],
   context: readonly string[],
-  role: readonly string[] = [],
+  role: readonly string[],
 ): string[] {
   return [...standing, ...role, ...context];
 }
+
+export const promptLayout: {
+  (standing: readonly string[], context: readonly string[], role: readonly string[]): string[];
+  (context: readonly string[], role: readonly string[]): (standing: readonly string[]) => string[];
+} = EffectFunction.dual(3, promptLayoutBody);

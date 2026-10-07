@@ -1,4 +1,4 @@
-import { Result, Function as EffectFunction } from "effect";
+import { Array as EffectArray, HashSet, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "node:crypto";
@@ -43,7 +43,7 @@ const decodeCall = EffectFunction.flow(
 );
 
 /** Statements worth interpreting, the same rule live nodes follow: tool output is not a claim. */
-const interpretedKinds: ReadonlySet<NodeKind> = new Set(["user", "assistant"]);
+const interpretedKinds = HashSet.fromIterable<NodeKind>(["user", "assistant"]);
 
 const make = Effect.gen(function* () {
   const { sqlite, atomic } = yield* Database;
@@ -126,7 +126,7 @@ const make = Effect.gen(function* () {
         if (isTruthy(previousId)) link(previousId, id, "next", at);
         previousId = id;
         // An empty answer is not a statement; interpreting it would cost a model call for nothing.
-        if (migration.interpret && interpretedKinds.has(kind) && hasStatementText(text))
+        if (migration.interpret && HashSet.has(interpretedKinds, kind) && hasStatementText(text))
           insertJob.run(id, at);
         if (externalId !== null) markImported.run(source, externalId, id);
         written += 1;
@@ -171,7 +171,7 @@ const make = Effect.gen(function* () {
               toolCallId: item.toolCallId,
             });
             link(calledBy, id, "calls", item.at);
-            for (const ref of new Set(item.refs)) {
+            for (const ref of EffectArray.dedupe(item.refs)) {
               const earlier = idOf(latestWithRef.get(ref, projectId));
               insertRef.run(id, ref);
               if (isTruthy(earlier)) link(id, earlier, "touches", item.at);

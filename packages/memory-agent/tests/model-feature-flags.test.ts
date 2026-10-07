@@ -1,3 +1,5 @@
+import { HashSet } from "effect";
+import { GlobalConfigFailed } from "../src/config/global-config.ts";
 import { it as effectTest } from "@effect/vitest";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off
@@ -28,18 +30,22 @@ const enabled = (): ModelFeatureFlagSettings => ({
 
 describe("model feature flag policy", () => {
   it("fails closed when settings are absent or the capability is unknown", () => {
-    expect(decideModelFeatureFlag(undefined, query, new Set([capability]))).toMatchObject({
+    expect(
+      decideModelFeatureFlag(undefined, query, HashSet.fromIterable([capability])),
+    ).toMatchObject({
       allowed: false,
       reasons: ["settings_missing"],
     });
-    expect(decideModelFeatureFlag(enabled(), query, new Set())).toMatchObject({
+    expect(decideModelFeatureFlag(enabled(), query, HashSet.empty<string>())).toMatchObject({
       allowed: false,
       reasons: ["unknown_capability"],
     });
   });
 
   it("requires every parent allow and lets specific denies win", () => {
-    expect(decideModelFeatureFlag(enabled(), query, new Set([capability])).allowed).toBe(true);
+    expect(
+      decideModelFeatureFlag(enabled(), query, HashSet.fromIterable([capability])).allowed,
+    ).toBe(true);
     for (const settings of [
       { ...enabled(), global: false },
       { ...enabled(), providers: { openai: false } },
@@ -47,7 +53,9 @@ describe("model feature flag policy", () => {
       { ...enabled(), models: { "openai:gpt-test": { [capability]: false } } },
       { ...enabled(), routes: { "chat:openai:gpt-test": false } },
     ])
-      expect(decideModelFeatureFlag(settings, query, new Set([capability])).allowed).toBe(false);
+      expect(
+        decideModelFeatureFlag(settings, query, HashSet.fromIterable([capability])).allowed,
+      ).toBe(false);
   });
 });
 
@@ -80,7 +88,7 @@ describe("ModelFeatureFlags service", () => {
     }),
   );
 
-  effectTest.effect("returns typed failures for unknown capabilities and storage defects", () =>
+  effectTest.effect("returns typed failures for unknown capabilities and storage failures", () =>
     Effect.gen(function* () {
       const unknown = yield* Effect.result(
         fixture().service.decide({ ...query, capability: "unknown" }),
@@ -89,7 +97,23 @@ describe("ModelFeatureFlags service", () => {
         "UnknownModelFeatureCapability",
       );
       const failed = makeModelFeatureFlags(
-        { read: Effect.die("broken"), update: () => Effect.die("broken") },
+        {
+          read: Effect.fail(
+            GlobalConfigFailed.make({
+              operation: "read",
+              reason: { _tag: "ReadFailed" },
+              cause: "broken",
+            }),
+          ),
+          update: () =>
+            Effect.fail(
+              GlobalConfigFailed.make({
+                operation: "read",
+                reason: { _tag: "ReadFailed" },
+                cause: "broken",
+              }),
+            ),
+        },
         [capability],
       );
       const result = yield* Effect.result(failed.read);

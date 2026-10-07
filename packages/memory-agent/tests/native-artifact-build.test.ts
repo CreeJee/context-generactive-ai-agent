@@ -1,3 +1,4 @@
+import { HashSet } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -145,7 +146,7 @@ test("factory bundle imports shared host packages and binds fresh central servic
           project: owner.project,
           sessionId: owner.session.id,
           selection: { provider: "openai", model: "fixture", reasoningEffort: "none" },
-          gated: new Set(),
+          gated: HashSet.empty<string>(),
           decider: "user",
         }),
       );

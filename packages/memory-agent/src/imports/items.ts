@@ -1,3 +1,4 @@
+import { HashSet } from "effect";
 import { Function as EffectFunction } from "effect";
 import { Schema } from "effect";
 
@@ -74,7 +75,7 @@ export type TranscriptReader = (line: string) => readonly TranscriptItem[];
  */
 export interface InjectedText {
   /** An opening tag, with or without attributes: `<environment_context>`, `<command-name>`. */
-  readonly tags: ReadonlySet<string>;
+  readonly tags: HashSet.HashSet<string>;
   /** Text the tool writes with no tag around it, matched from the start. */
   readonly prefixes: readonly string[];
 }
@@ -85,6 +86,6 @@ export const isInjectedText: {
 function isInjectedTextBody(text: string, injected: InjectedText): boolean {
   const start = text.trimStart();
   const opening = /^<([a-z_-]+)[\s>/]/u.exec(start);
-  if (opening !== null && injected.tags.has(opening[1] ?? "")) return true;
+  if (opening !== null && HashSet.has(injected.tags, opening[1] ?? "")) return true;
   return injected.prefixes.some((prefix) => start.startsWith(prefix));
 }

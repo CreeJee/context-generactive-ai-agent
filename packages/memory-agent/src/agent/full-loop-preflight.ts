@@ -1,9 +1,9 @@
-import { Function as EffectFunction } from "effect";
+import { Function as EffectFunction, HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { convertSchemaToJsonSchema, type AnyTextAdapter } from "@tanstack/ai";
 import type { ChatExecutionCapabilities, ChatExecutionTurn } from "./chat-execution.ts";
 
-export const fullLoopHooks = new Set([
+export const fullLoopHooks = HashSet.fromIterable([
   "setup",
   "onInterruptBoundary",
   "onInterruptResolution",
@@ -38,10 +38,12 @@ function preflightFullLoopExecutionBody<TAdapter extends AnyTextAdapter>(
 ): void {
   if (isTruthy(turn.resume?.length))
     throw new Error("Worker interrupt continuation is not yet supported");
-  const declared = new Set(capabilities.middleware.flatMap((mw) => [...(mw.provides ?? [])]));
+  const declared = HashSet.fromIterable(
+    capabilities.middleware.flatMap((mw) => [...(mw.provides ?? [])]),
+  );
   for (const mw of capabilities.middleware) {
     for (const required of mw.requires ?? []) {
-      if (!declared.has(required))
+      if (!HashSet.has(declared, required))
         throw new Error(`Unprovided owner middleware capability: ${required.capabilityName}`);
     }
     for (const [key, value] of Object.entries(mw)) {
@@ -51,7 +53,7 @@ function preflightFullLoopExecutionBody<TAdapter extends AnyTextAdapter>(
         )
       )
         continue;
-      if (!fullLoopHooks.has(key) || !(value instanceof Function))
+      if (!HashSet.has(fullLoopHooks, key) || !(value instanceof Function))
         throw new Error(`Unsupported worker middleware member: ${key}`);
     }
   }

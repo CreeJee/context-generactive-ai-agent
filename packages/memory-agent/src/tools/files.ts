@@ -1,3 +1,4 @@
+import { HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { lstat } from "node:fs/promises";
@@ -120,7 +121,7 @@ interface CachedRead {
 
 const make = Effect.gen(function* () {
   const snapshots = yield* createSnapshots();
-  const candidateCache = MutableHashMap.empty<string, Promise<ReadonlySet<string> | null>>();
+  const candidateCache = MutableHashMap.empty<string, Promise<HashSet.HashSet<string> | null>>();
   const readCache = MutableHashMap.empty<string, CachedRead>();
 
   /**
@@ -131,7 +132,7 @@ const make = Effect.gen(function* () {
     view: Snapshot,
     query: string,
     caseSensitive: boolean,
-    started?: Promise<ReadonlySet<string> | null>,
+    started?: Promise<HashSet.HashSet<string> | null>,
   ) => {
     if (view.source !== "git") return Promise.resolve(null);
     const key = `${view.id}\u0000${caseSensitive}\u0000${query}`;

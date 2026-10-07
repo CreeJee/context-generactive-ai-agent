@@ -1,6 +1,5 @@
+import { GlobalConfigFailed } from "../src/config/global-config.ts";
 import { it as effectTest } from "@effect/vitest";
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off
 import { describe, expect, it } from "vite-plus/test";
 import {
   CrossProviderMediaConsentStoreFailed,
@@ -8,7 +7,8 @@ import {
   makeCrossProviderMediaConsent,
   type Settings,
 } from "../src/index.ts";
-import { Effect } from "effect";
+import { Cause, Effect } from "effect";
+import { assertExitFailure } from "@effect/vitest/utils";
 
 const pair = {
   initiatorProvider: "anthropic" as const,
@@ -28,7 +28,7 @@ const config = (initial: Settings = {}) => {
 };
 
 describe("CrossProviderMediaConsent", () => {
-  it("denies a missing cross-provider setting without inferring consent from login", async () => {
+  it("denies a missing cross-provider setting without inferring consent from login", () => {
     const decision = decideCrossProviderMediaConsent(undefined, pair);
     expect(decision).toMatchObject({
       crossProvider: true,
@@ -89,12 +89,35 @@ describe("CrossProviderMediaConsent", () => {
   effectTest.effect("keeps read failures typed and therefore fail-closed", () =>
     Effect.gen(function* () {
       const service = makeCrossProviderMediaConsent({
-        read: Effect.die("broken store"),
-        update: () => Effect.die("broken store"),
+        read: Effect.fail(
+          GlobalConfigFailed.make({
+            operation: "read",
+            reason: { _tag: "ReadFailed" },
+            cause: "broken store",
+          }),
+        ),
+        update: () =>
+          Effect.fail(
+            GlobalConfigFailed.make({
+              operation: "read",
+              reason: { _tag: "ReadFailed" },
+              cause: "broken store",
+            }),
+          ),
       });
       const error = yield* Effect.flip(service.decide(pair));
       expect(error).toBeInstanceOf(CrossProviderMediaConsentStoreFailed);
       expect(error.operation).toBe("read");
+    }),
+  );
+  effectTest.effect("preserves store defects instead of treating them as read failures", () =>
+    Effect.gen(function* () {
+      const defect = new Error("unexpected store bug");
+      const service = makeCrossProviderMediaConsent({
+        read: Effect.die(defect),
+        update: () => Effect.die(defect),
+      });
+      assertExitFailure(yield* Effect.exit(service.decide(pair)), Cause.die(defect));
     }),
   );
 });

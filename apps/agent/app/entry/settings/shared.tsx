@@ -14,10 +14,10 @@ import {
   ItemMedia,
   ItemTitle,
 } from "~/components/ui/item";
-import { ApiError, type Project } from "../api";
+import { isApiError, type Project } from "../api";
 
 export function errorMessage(error: Error) {
-  if (!(error instanceof ApiError)) return "설정을 바꾸지 못했어요.";
+  if (!isApiError(error)) return "설정을 바꾸지 못했어요.";
   switch (error.code) {
     case "keychain_failed":
       return "OS 키체인에 접근하지 못했어요. 키를 다른 곳에 대신 저장하지 않아요.";

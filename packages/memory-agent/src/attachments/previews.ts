@@ -1,3 +1,4 @@
+import { HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { readFile } from "node:fs/promises";
@@ -8,7 +9,7 @@ import type { Project } from "../projects/projects.ts";
 import { Attachments } from "./attachments.ts";
 
 /** File tools whose result names the project file they just wrote. */
-const writingToolNames: ReadonlySet<string> = new Set(["write_file", "edit_file"]);
+const writingToolNames = HashSet.fromIterable(["write_file", "edit_file"]);
 
 /** The result's other fields are kept as they are, so the preview is only added, never swapped in. */
 const decodeWritten = Schema.decodeUnknownOption(Schema.Struct({ path: Schema.String }), {
@@ -67,7 +68,7 @@ const make = Effect.gen(function* () {
     withPreviews(project: Project, tools: readonly AnyServerTool[]): AnyServerTool[] {
       return tools.map((tool): AnyServerTool => {
         const execute = tool.execute;
-        if (!isTruthy(execute) || !writingToolNames.has(tool.name)) return tool;
+        if (!isTruthy(execute) || !HashSet.has(writingToolNames, tool.name)) return tool;
         return {
           ...tool,
           // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.

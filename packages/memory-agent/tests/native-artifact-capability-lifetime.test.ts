@@ -1,3 +1,4 @@
+import { HashSet } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -147,7 +148,7 @@ test("late-first native bundles retain permission refusal helper and fresh centr
           project: owner.project,
           sessionId: session.id,
           selection: { provider: "openai", model: "scripted-1", reasoningEffort: "none" },
-          gated: new Set(["blocked_tool", "allowed_tool"]),
+          gated: HashSet.fromIterable(["blocked_tool", "allowed_tool"]),
           decider: "user",
         }),
       );

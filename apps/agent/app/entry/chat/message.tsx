@@ -1,7 +1,7 @@
 import { isTruthy } from "../../truthy.ts";
 import { SchemaTransformation } from "effect";
 import type { UIMessage } from "@tanstack/ai-react";
-import { Option, Schema } from "effect";
+import { DateTime, Option, Schema } from "effect";
 import { BotIcon, ChevronRightIcon, Clock3Icon, WrenchIcon } from "lucide-react";
 import type { TraceTaskView } from "memory-agent";
 import { useState } from "react";
@@ -166,8 +166,9 @@ const activeTaskStatuses: readonly TraceTaskView["status"][] = [
 function elapsed(task: TraceTaskView) {
   const milliseconds = Math.max(
     0,
-    // React/native timestamps use the host Date contract outside Effect execution.
-    (activeTaskStatuses.includes(task.status) ? Date.now() : task.updatedAt) - task.createdAt,
+    (activeTaskStatuses.includes(task.status)
+      ? DateTime.toEpochMillis(DateTime.nowUnsafe())
+      : task.updatedAt) - task.createdAt,
   );
   const seconds = Math.round(milliseconds / 1_000);
   if (seconds < 60) return `${Math.max(1, seconds)}초`;

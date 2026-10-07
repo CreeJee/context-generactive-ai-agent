@@ -1,6 +1,6 @@
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { MutableHashMap, Option, Schema } from "effect";
+import { HashSet, MutableHashMap, Option, Schema } from "effect";
 import { PathRejected } from "./paths.ts";
 import { decodeText, TextFileRejected } from "./text.ts";
 
@@ -53,7 +53,7 @@ export interface SearchOptions {
    * Files known to contain the query (from `git grep`); other files are not opened. Null searches
    * every file.
    */
-  readonly candidates?: ReadonlySet<string> | null;
+  readonly candidates?: HashSet.HashSet<string> | null;
 }
 
 /** Matches of `needle` in `text`, one per line, from 0-based line `fromLine`. */
@@ -140,7 +140,7 @@ export async function searchTextFiles(
   // The files this page may open, in order: every file, or only the candidates.
   const order: number[] = [];
   for (let file = start.file; file < paths.length; file++)
-    if (candidates === null || candidates.has(paths[file]!)) order.push(file);
+    if (candidates === null || HashSet.has(candidates, paths[file]!)) order.push(file);
 
   for (let position = 0; position < order.length; position++) {
     const file = order[position]!;

@@ -1,4 +1,4 @@
-import { Function as EffectFunction } from "effect";
+import { Data, Effect, MutableHashSet, Function as EffectFunction } from "effect";
 import { Schema } from "effect";
 
 const BackendRestartBody = Schema.Struct({
@@ -6,7 +6,7 @@ const BackendRestartBody = Schema.Struct({
 });
 
 let restartRequired = false;
-const listeners = new Set<() => void>();
+const listeners = MutableHashSet.empty<() => void>();
 
 const markBackendRestartRequired = () => {
   if (restartRequired) return;
@@ -14,22 +14,29 @@ const markBackendRestartRequired = () => {
   for (const listener of listeners) listener();
 };
 
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function responseRequiresBackendRestart(response: Response) {
-  if (response.ok) return false;
-  return Schema.is(BackendRestartBody)(
-    await response
-      .clone()
-      .json()
-      .catch(() => null),
-  );
-}
+const requiresRestart = (response: Response) =>
+  response.ok
+    ? Effect.succeed(false)
+    : Effect.tryPromise(() => response.clone().json()).pipe(
+        Effect.flatMap(Schema.decodeUnknownEffect(BackendRestartBody)),
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
+      );
+export const responseRequiresBackendRestart = (response: Response) =>
+  Effect.runPromise(requiresRestart(response));
 
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-const observeBackendRestart = async (response: Response) => {
-  if (await responseRequiresBackendRestart(response)) markBackendRestartRequired();
-  return response;
-};
+const observeBackendRestart = (response: Response) =>
+  requiresRestart(response).pipe(
+    Effect.tap((required) =>
+      Effect.sync(() => {
+        if (required) markBackendRestartRequired();
+      }),
+    ),
+    Effect.as(response),
+  );
+class BackendTransportFailed extends Data.TaggedError("BackendTransportFailed")<{
+  readonly cause: unknown;
+}> {}
 
 /** Pin requests to the backend used to build this client; never retry a rejected mutation. */
 export const backendFetch: {
@@ -39,18 +46,23 @@ export const backendFetch: {
   ): (buildId: string) => ReturnType<typeof backendFetchBody>;
 } & typeof backendFetchBody = EffectFunction.dual(3, backendFetchBody);
 function backendFetchBody(buildId: string, origin: string, transport: typeof fetch): typeof fetch {
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  return async (input, init) => {
-    const url = new URL(input instanceof Request ? input.url : String(input), origin);
-    if (buildId.length > 0 && url.origin === origin && url.pathname.startsWith("/api/")) {
-      const headers = new Headers(
-        init?.headers ?? (input instanceof Request ? input.headers : undefined),
-      );
-      headers.set("x-context-agent-build-id", buildId);
-      return observeBackendRestart(await transport(input, { ...init, headers }));
-    }
-    return observeBackendRestart(await transport(input, init));
-  };
+  return (input, init) =>
+    Effect.runPromise(
+      Effect.tryPromise({
+        try: () => {
+          const url = new URL(input instanceof Request ? input.url : String(input), origin);
+          if (buildId.length > 0 && url.origin === origin && url.pathname.startsWith("/api/")) {
+            const headers = new Headers(
+              init?.headers ?? (input instanceof Request ? input.headers : undefined),
+            );
+            headers.set("x-context-agent-build-id", buildId);
+            return transport(input, { ...init, headers });
+          }
+          return transport(input, init);
+        },
+        catch: (cause) => new BackendTransportFailed({ cause }),
+      }).pipe(Effect.flatMap(observeBackendRestart)),
+    );
 }
 
 /** Includes direct backend browsing and the chat SSE transport. */
@@ -65,8 +77,8 @@ export const appFetch: typeof fetch = (...arguments_) =>
       )(...arguments_);
 
 export const subscribeBackendRestart = (listener: () => void) => {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+  MutableHashSet.add(listeners, listener);
+  return () => MutableHashSet.remove(listeners, listener);
 };
 
 export const backendRestartSnapshot = () => restartRequired;

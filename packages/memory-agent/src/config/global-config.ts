@@ -1,10 +1,9 @@
-import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { join } from "node:path";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Context, Effect, Layer, Schema, Semaphore } from "effect";
 import { ProviderId } from "../providers/contracts.ts";
 import { OpenAICompatibleConfiguration } from "../providers/openai-compatible-config.ts";
 import { StorageRoot } from "./storage-root.ts";
@@ -76,47 +75,84 @@ export const Settings = Schema.Struct({
 });
 export type Settings = typeof Settings.Type;
 
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeSettings = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.fromJsonString(Settings)),
-  Result.getOrThrow,
-);
+export class GlobalConfigFailed extends Schema.TaggedError<GlobalConfigFailed>()(
+  "GlobalConfigFailed",
+  {
+    operation: Schema.Literals(["read", "write"]),
+    reason: Schema.Union([
+      Schema.TaggedStruct("MissingFile", {}),
+      Schema.TaggedStruct("ReadFailed", {}),
+      Schema.TaggedStruct("WriteFailed", {}),
+      Schema.TaggedStruct("InvalidSettings", {}),
+    ]),
+    cause: Schema.Defect(),
+  },
+) {}
 
 const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
   const file = join(storage.path, "config.json");
 
-  const write = (settings: Settings) => {
-    mkdirSync(storage.path, { recursive: true, mode: 0o700 });
-    const temporary = `${file}.${process.pid}.tmp`;
-    writeFileSync(temporary, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
-    renameSync(temporary, file);
-  };
-
-  const read = (): Settings => {
-    if (!existsSync(file)) return {};
-    const settings = decodeSettings(readFileSync(file, "utf8"));
+  const updates = Semaphore.makeUnsafe(1);
+  const isMissingFile = Schema.is(Schema.Struct({ code: Schema.Literal("ENOENT") }));
+  const jsonSettings = Schema.fromJsonString(Settings, { space: 2 });
+  const write = (settings: Settings) =>
+    Effect.gen(function* () {
+      const json = yield* Schema.encodeEffect(jsonSettings)(settings).pipe(
+        Effect.mapError((cause) =>
+          GlobalConfigFailed.make({
+            operation: "write",
+            reason: { _tag: "InvalidSettings" },
+            cause,
+          }),
+        ),
+      );
+      yield* Effect.try({
+        try: () => {
+          mkdirSync(storage.path, { recursive: true, mode: 0o700 });
+          const temporary = `${file}.${process.pid}.tmp`;
+          writeFileSync(temporary, `${json}\n`, { mode: 0o600 });
+          renameSync(temporary, file);
+        },
+        catch: (cause) =>
+          GlobalConfigFailed.make({ operation: "write", reason: { _tag: "WriteFailed" }, cause }),
+      });
+      return settings;
+    });
+  const read = Effect.gen(function* () {
+    const json = yield* Effect.try({
+      try: () => readFileSync(file, "utf8"),
+      catch: (cause) =>
+        GlobalConfigFailed.make({
+          operation: "read",
+          reason: isMissingFile(cause) ? { _tag: "MissingFile" } : { _tag: "ReadFailed" },
+          cause,
+        }),
+    }).pipe(Effect.catchReason("GlobalConfigFailed", "MissingFile", () => Effect.succeed(null)));
+    if (json === null) return {};
+    const settings = yield* Schema.decodeEffect(jsonSettings)(json).pipe(
+      Effect.mapError((cause) =>
+        GlobalConfigFailed.make({ operation: "read", reason: { _tag: "InvalidSettings" }, cause }),
+      ),
+    );
     if (
       isTruthy(settings.model) &&
       isTruthy(settings.reasoningEffort) &&
       settings.provider === undefined
-    ) {
-      const migrated = { ...settings, provider: "openai" as const };
-      write(migrated);
-      return migrated;
-    }
+    )
+      return yield* write({ ...settings, provider: "openai" });
     return settings;
-  };
-
+  });
   return {
-    read: Effect.sync(read),
+    read: updates.withPermit(read),
     /** Merges and writes atomically, so a crash never leaves half a config file. */
     update: (patch: Partial<Settings>) =>
-      Effect.sync(() => {
-        const next = { ...read(), ...patch };
-        write(next);
-        return next;
-      }),
+      updates.withPermit(
+        Effect.gen(function* () {
+          const current = yield* read;
+          return yield* write({ ...current, ...patch });
+        }),
+      ),
   };
 });
 

@@ -1,5 +1,9 @@
 import { Context, Effect, Layer } from "effect";
-import { GlobalConfig, type GlobalConfigApi } from "../config/global-config.ts";
+import {
+  GlobalConfig,
+  type GlobalConfigFailed,
+  type GlobalConfigApi,
+} from "../config/global-config.ts";
 import type { ImageRouteDecision } from "./image-router.ts";
 
 export interface ImageFeatureStatus {
@@ -27,8 +31,10 @@ export interface ImageContextGateDecision {
 }
 
 export interface ImageFeatureApi {
-  readonly status: Effect.Effect<ImageFeatureStatus>;
-  readonly setImageGenerationEnabled: (enabled: boolean) => Effect.Effect<ImageFeatureStatus>;
+  readonly status: Effect.Effect<ImageFeatureStatus, GlobalConfigFailed>;
+  readonly setImageGenerationEnabled: (
+    enabled: boolean,
+  ) => Effect.Effect<ImageFeatureStatus, GlobalConfigFailed>;
 }
 
 export function decideImageContext(input: ImageContextGateInput): ImageContextGateDecision {

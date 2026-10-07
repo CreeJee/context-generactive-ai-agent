@@ -1,3 +1,4 @@
+import { HashSet } from "effect";
 import { Function as EffectFunction } from "effect";
 import { Schema } from "effect";
 
@@ -363,17 +364,23 @@ export const WorkDecision = Schema.Struct({
 });
 export type WorkDecision = typeof WorkDecision.Type;
 
-const activeAttemptStatuses = new Set<AttemptStatus>(["queued", "running", "waiting", "blocked"]);
-const terminalAttemptStatuses = new Set<AttemptStatus>([
+const activeAttemptStatuses = HashSet.fromIterable<AttemptStatus>([
+  "queued",
+  "running",
+  "waiting",
+  "blocked",
+]);
+const terminalAttemptStatuses = HashSet.fromIterable<AttemptStatus>([
   "interrupted",
   "completed",
   "failed",
   "cancelled",
 ]);
 
-export const isActiveAttemptStatus = (status: AttemptStatus) => activeAttemptStatuses.has(status);
+export const isActiveAttemptStatus = (status: AttemptStatus) =>
+  HashSet.has(activeAttemptStatuses, status);
 export const isTerminalAttemptStatus = (status: AttemptStatus) =>
-  terminalAttemptStatuses.has(status);
+  HashSet.has(terminalAttemptStatuses, status);
 
 const canTransitionAttemptBody = (from: AttemptStatus, to: AttemptStatus) => {
   if (from === to) return true;

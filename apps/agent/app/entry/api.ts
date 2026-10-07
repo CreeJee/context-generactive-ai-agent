@@ -198,24 +198,23 @@ export const ApiErrorCode = Schema.Literals([
 ]);
 export type ApiErrorCode = typeof ApiErrorCode.Type;
 
-// React/query clients consume this native Error contract outside Effect failure channels.
-export class ApiError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: ApiErrorCode,
-    readonly reason: string | null,
-    readonly approval?: CrossProviderMediaRunApproval,
-  ) {
-    super(code);
-  }
-}
-
 const CrossProviderMediaRunApproval = Schema.Struct({
   runId: Schema.String,
   initiatorChatRouteId: Schema.TemplateLiteral(["chat:", ProviderId, ":", Schema.String]),
   executorMediaRouteId: Schema.String,
   capability: Schema.Literal("media.image.generate"),
 });
+export class ApiError extends Schema.TaggedError<ApiError>()("ApiError", {
+  status: Schema.Int,
+  code: ApiErrorCode,
+  reason: Schema.NullOr(Schema.String),
+  approval: Schema.optional(CrossProviderMediaRunApproval),
+}) {
+  override get message() {
+    return this.code;
+  }
+}
+export const isApiError = Schema.is(ApiError);
 const ErrorBody = Schema.Struct({
   error: Schema.optional(ApiErrorCode),
   reason: Schema.optional(Schema.String),
@@ -288,7 +287,12 @@ function apiError(
   body: ErrorBody | undefined,
   fallback: "request_failed" | "upload_failed" = "request_failed",
 ) {
-  return new ApiError(status, body?.error ?? fallback, body?.reason ?? null, body?.approval);
+  return ApiError.make({
+    status,
+    code: body?.error ?? fallback,
+    reason: body?.reason ?? null,
+    approval: body?.approval,
+  });
 }
 
 /** Preserve the server's typed error code through the chat transport. */
@@ -690,7 +694,7 @@ const attachmentRejections = {
 } satisfies Record<typeof AttachmentRejection.Type, string>;
 
 export function attachmentErrorMessage(error: Error) {
-  if (!(error instanceof ApiError) || !isTruthy(error.reason)) return "이미지를 올리지 못했어요.";
+  if (!isApiError(error) || !isTruthy(error.reason)) return "이미지를 올리지 못했어요.";
   return Schema.is(AttachmentRejection)(error.reason)
     ? attachmentRejections[error.reason]
     : error.reason;
@@ -710,8 +714,7 @@ const projectRejections = {
 } satisfies Record<typeof ProjectRejection.Type, string>;
 
 export function projectErrorMessage(error: Error) {
-  if (!(error instanceof ApiError) || !isTruthy(error.reason))
-    return "프로젝트를 추가하지 못했어요.";
+  if (!isApiError(error) || !isTruthy(error.reason)) return "프로젝트를 추가하지 못했어요.";
   return Schema.is(ProjectRejection)(error.reason) ? projectRejections[error.reason] : error.reason;
 }
 
@@ -727,7 +730,7 @@ const archiveRejections = {
 } satisfies Record<typeof ArchiveRejection.Type, string>;
 
 export function archiveErrorMessage(error: Error) {
-  return error instanceof ApiError && Schema.is(ArchiveRejection)(error.code)
+  return isApiError(error) && Schema.is(ArchiveRejection)(error.code)
     ? archiveRejections[error.code]
     : "대화를 바꾸지 못했어요.";
 }
@@ -770,7 +773,7 @@ const compactRejections = {
 } satisfies Record<typeof CompactRejection.Type, string>;
 
 export function compactErrorMessage(error: Error) {
-  return error instanceof ApiError && Schema.is(CompactRejection)(error.code)
+  return isApiError(error) && Schema.is(CompactRejection)(error.code)
     ? compactRejections[error.code]
     : "도구 출력을 비우지 못했어요.";
 }

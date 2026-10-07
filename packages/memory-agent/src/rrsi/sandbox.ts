@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { Option, Schema } from "effect";
+import { Array as EffectArray, Option, Schema } from "effect";
 import type { ModelGateway } from "./model-gateway.ts";
 import type { HarnessProfile, Measurement } from "./contracts.ts";
 import { EvaluationFailed, WorkerFailureReason } from "./failure.ts";
@@ -150,7 +150,7 @@ export async function evaluateSandbox(
           case "result": {
             if (
               frame.results.length !== expected ||
-              new Set(frame.results.map((item) => item.id)).size !== expected
+              EffectArray.dedupe(frame.results.map((item) => item.id)).length !== expected
             )
               throw EvaluationFailed.make({ reason: "evaluation_incomplete" });
             const score = (domain: "coding" | "memory") => {

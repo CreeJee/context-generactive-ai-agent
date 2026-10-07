@@ -1,7 +1,8 @@
 import { Function as EffectFunction } from "effect";
-import { Cause, Context, Data, Effect, Layer } from "effect";
+import { Context, Effect, HashSet, Layer, Schema } from "effect";
 import {
   GlobalConfig,
+  GlobalConfigFailed,
   type GlobalConfigApi,
   type ModelFeatureFlagSettings,
 } from "../config/global-config.ts";
@@ -29,13 +30,21 @@ export interface ModelFeatureFlagDecision {
   readonly reasons: readonly string[];
   readonly settingsVersion: 1 | null;
 }
-export class UnknownModelFeatureCapability extends Data.TaggedError(
+export class UnknownModelFeatureCapability extends Schema.TaggedError<UnknownModelFeatureCapability>()(
   "UnknownModelFeatureCapability",
-)<{ readonly capability: string }> {}
-export class ModelFeatureFlagStoreFailed extends Data.TaggedError("ModelFeatureFlagStoreFailed")<{
-  readonly operation: "read" | "write";
-  readonly cause: unknown;
-}> {}
+  {
+    capability: Schema.String,
+    reason: Schema.TaggedStruct("UnknownCapability", {}),
+  },
+) {}
+export class ModelFeatureFlagStoreFailed extends Schema.TaggedError<ModelFeatureFlagStoreFailed>()(
+  "ModelFeatureFlagStoreFailed",
+  {
+    operation: Schema.Literals(["read", "write"]),
+    reason: Schema.TaggedStruct("SettingsFailed", {}),
+    cause: GlobalConfigFailed,
+  },
+) {}
 
 const emptySettings = (): ModelFeatureFlagSettings => ({
   version: 1,
@@ -50,7 +59,7 @@ const modelKey = (provider: ProviderId, model: string) => `${provider}:${model}`
 export const decideModelFeatureFlag: {
   (
     query: ModelFeatureFlagQuery,
-    known: ReadonlySet<string>,
+    known: HashSet.HashSet<string>,
   ): (
     settings: ModelFeatureFlagSettings | undefined,
   ) => ReturnType<typeof decideModelFeatureFlagBody>;
@@ -58,10 +67,10 @@ export const decideModelFeatureFlag: {
 function decideModelFeatureFlagBody(
   settings: ModelFeatureFlagSettings | undefined,
   query: ModelFeatureFlagQuery,
-  known: ReadonlySet<string>,
+  known: HashSet.HashSet<string>,
 ): ModelFeatureFlagDecision {
   const reasons: string[] = [];
-  if (!known.has(query.capability)) reasons.push("unknown_capability");
+  if (!HashSet.has(known, query.capability)) reasons.push("unknown_capability");
   if (settings === undefined) reasons.push("settings_missing");
   else {
     if (!settings.global) reasons.push("global_disabled");
@@ -82,8 +91,8 @@ function decideModelFeatureFlagBody(
   });
 }
 
-const storeFailure = (operation: "read" | "write") => (cause: Cause.Cause<never>) =>
-  new ModelFeatureFlagStoreFailed({ operation, cause: Cause.squash(cause) });
+const storeFailure = (operation: "read" | "write") => (cause: GlobalConfigFailed) =>
+  ModelFeatureFlagStoreFailed.make({ operation, reason: { _tag: "SettingsFailed" }, cause });
 export interface ModelFeatureFlagsApi {
   readonly read: Effect.Effect<ModelFeatureFlagSettings, ModelFeatureFlagStoreFailed>;
   readonly decide: (
@@ -106,17 +115,22 @@ function makeModelFeatureFlagsBody(
   config: GlobalConfigApi,
   capabilities: Iterable<string>,
 ): ModelFeatureFlagsApi {
-  const known = new Set(capabilities);
+  const known = HashSet.fromIterable(capabilities);
   const read = config.read.pipe(
     Effect.map((settings) => settings.modelFeatureFlags ?? emptySettings()),
-    Effect.catchCause((cause) => Effect.fail(storeFailure("read")(cause))),
+    Effect.mapError(storeFailure("read")),
   );
   return {
     read,
     decide: (query) =>
-      known.has(query.capability)
+      HashSet.has(known, query.capability)
         ? Effect.map(read, (settings) => decideModelFeatureFlag(settings, query, known))
-        : Effect.fail(new UnknownModelFeatureCapability({ capability: query.capability })),
+        : Effect.fail(
+            UnknownModelFeatureCapability.make({
+              capability: query.capability,
+              reason: { _tag: "UnknownCapability" },
+            }),
+          ),
     set: (scope, enabled) =>
       Effect.flatMap(read, (current) => {
         const next: ModelFeatureFlagSettings = (() => {
@@ -144,10 +158,9 @@ function makeModelFeatureFlagsBody(
               return { ...current, routes: { ...current.routes, [scope.route]: enabled } };
           }
         })();
-        return config.update({ modelFeatureFlags: next }).pipe(
-          Effect.as(next),
-          Effect.catchCause((cause) => Effect.fail(storeFailure("write")(cause))),
-        );
+        return config
+          .update({ modelFeatureFlags: next })
+          .pipe(Effect.as(next), Effect.mapError(storeFailure("write")));
       }),
   };
 }

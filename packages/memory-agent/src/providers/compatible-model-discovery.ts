@@ -1,6 +1,6 @@
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { Option, Schema } from "effect";
+import { Array as EffectArray, Option, Schema } from "effect";
 import { CompatibleReasoning } from "./openai-compatible-config.ts";
 
 const ReasoningMetadata = Schema.Struct({
@@ -44,7 +44,7 @@ function readCompatibleReasoningBody(
     )({
       source: "models",
       model,
-      options: [...new Set(metadata.allowed_options.filter(isChatReasoningEffort))],
+      options: EffectArray.dedupe(metadata.allowed_options.filter(isChatReasoningEffort)),
       default: metadata.default,
     });
     return reasoning;

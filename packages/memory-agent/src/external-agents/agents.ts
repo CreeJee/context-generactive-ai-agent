@@ -14,6 +14,7 @@ import type {
 import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import spawn from "cross-spawn";
 import {
+  HashSet,
   MutableHashMap,
   DateTime,
   Clock,
@@ -200,13 +201,13 @@ const make = Effect.gen(function* () {
     const global = readAgentsFile(globalAgentsFile(storage.path), "global");
     const local = readAgentsFile(projectAgentsFile(project.root), "project");
     const trust = decodeTrustRows(selectTrust.all(project.id));
-    const localNames = new Set(local.agents.map((agent) => agent.name));
+    const localNames = HashSet.fromIterable(local.agents.map((agent) => agent.name));
     const agents = [...global.agents, ...local.agents].map((agent) => ({
       agent,
       trusted:
         trust.find((row) => row.scope === agent.scope && row.name === agent.name)?.fingerprint ??
         null,
-      shadowed: agent.scope === "global" && localNames.has(agent.name),
+      shadowed: agent.scope === "global" && HashSet.has(localNames, agent.name),
     }));
     const usableFingerprints = MutableHashMap.fromIterable(
       agents

@@ -1,3 +1,4 @@
+import { HashSet } from "effect";
 // Kiwi (Korean morphological analyzer) in a worker thread: the WASM model needs ~850 MB, so it
 // lives here and the main thread can end the worker when it has been idle.
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
@@ -18,10 +19,10 @@ const wasmPath = join(
 );
 
 /** Parts of speech worth searching by: nouns, numerals, verb/adjective stems, roots, Hanja. */
-const kept = new Set(["NNG", "NNP", "NR", "VV", "VA", "XR", "SH"]);
-const nouns = new Set(["NNG", "NNP"]);
+const kept = HashSet.fromIterable(["NNG", "NNP", "NR", "VV", "VA", "XR", "SH"]);
+const nouns = HashSet.fromIterable(["NNG", "NNP"]);
 /** Stems that occur in almost every sentence ("하기로 했다", "있다") and only add noise. */
-const lightStems = new Set([
+const lightStems = HashSet.fromIterable([
   "하",
   "되",
   "있",
@@ -66,13 +67,14 @@ function termsOf(kiwi: Kiwi, input: string) {
   };
   for (const token of kiwi.tokenize(text)) {
     const tag = token.tag.replace(/-[RI]$/, "");
-    if (nouns.has(tag)) {
+    if (HashSet.has(nouns, tag)) {
       if (token.position !== runEnd) closeRun();
       run.push(token.str);
       runEnd = token.position + token.length;
     } else closeRun();
     const latin = token.str.search(latinOrNumber) >= 0;
-    if (kept.has(tag) && !lightStems.has(token.str) && !latin) terms.push(token.str);
+    if (HashSet.has(kept, tag) && !HashSet.has(lightStems, token.str) && !latin)
+      terms.push(token.str);
   }
   closeRun();
   for (const [word] of text.matchAll(latinOrNumber)) terms.push(word);

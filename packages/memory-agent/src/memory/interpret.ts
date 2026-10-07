@@ -1,6 +1,6 @@
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { MutableHashMap, DateTime, Clock, Semaphore } from "effect";
+import { MutableHashMap, HashSet, Array as EffectArray, DateTime, Clock, Semaphore } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "node:crypto";
 import type { SQLOutputValue } from "node:sqlite";
@@ -248,9 +248,9 @@ const make = Effect.gen(function* () {
           const result = labelled.statements.find((entry) => entry.id === statement.id);
           if (!isTruthy(result)) continue;
           const offered = Option.getOrUndefined(MutableHashMap.get(candidates, statement.id)) ?? [];
-          const allowed = new Set(offered.map((node) => node.id));
+          const allowed = HashSet.fromIterable(offered.map((node) => node.id));
 
-          for (const label of new Set(result.topics.map(normalizeTopic))) {
+          for (const label of EffectArray.dedupe(result.topics.map(normalizeTopic))) {
             if (label.length === 0) continue;
             interpretations.record({
               nodeId: statement.id,
@@ -264,7 +264,7 @@ const make = Effect.gen(function* () {
 
           for (const link of result.links) {
             // Only ids offered for this statement: the model cannot point anywhere else.
-            if (!allowed.has(link.target)) continue;
+            if (!HashSet.has(allowed, link.target)) continue;
             switch (link.relation) {
               case "corrects":
               case "retracts":

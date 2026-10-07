@@ -1,7 +1,8 @@
 import { Function as EffectFunction } from "effect";
-import { Cause, Context, Data, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
 import {
   GlobalConfig,
+  GlobalConfigFailed,
   type CrossProviderMediaConsentMode,
   type CrossProviderMediaConsentSettings,
   type GlobalConfigApi,
@@ -23,9 +24,14 @@ export interface CrossProviderMediaConsentDecision extends CrossProviderMediaCon
   readonly settingsVersion: 1 | null;
 }
 
-export class CrossProviderMediaConsentStoreFailed extends Data.TaggedError(
+export class CrossProviderMediaConsentStoreFailed extends Schema.TaggedError<CrossProviderMediaConsentStoreFailed>()(
   "CrossProviderMediaConsentStoreFailed",
-)<{ readonly operation: "read" | "write"; readonly cause: unknown }> {}
+  {
+    operation: Schema.Literals(["read", "write"]),
+    reason: Schema.TaggedStruct("SettingsFailed", {}),
+    cause: GlobalConfigFailed,
+  },
+) {}
 
 const emptySettings = (): CrossProviderMediaConsentSettings => ({ version: 1, pairs: {} });
 export const crossProviderMediaConsentKey = (pair: CrossProviderMediaConsentPair) =>
@@ -75,8 +81,12 @@ function decideCrossProviderMediaConsentBody(
   });
 }
 
-const storeFailure = (operation: "read" | "write") => (cause: Cause.Cause<never>) =>
-  new CrossProviderMediaConsentStoreFailed({ operation, cause: Cause.squash(cause) });
+const storeFailure = (operation: "read" | "write") => (cause: GlobalConfigFailed) =>
+  CrossProviderMediaConsentStoreFailed.make({
+    operation,
+    reason: { _tag: "SettingsFailed" },
+    cause,
+  });
 
 export interface CrossProviderMediaConsentApi {
   readonly read: Effect.Effect<
@@ -97,7 +107,7 @@ export function makeCrossProviderMediaConsent(
 ): CrossProviderMediaConsentApi {
   const read = config.read.pipe(
     Effect.map((settings) => settings.crossProviderMediaConsent ?? emptySettings()),
-    Effect.catchCause((cause) => Effect.fail(storeFailure("read")(cause))),
+    Effect.mapError(storeFailure("read")),
   );
   return {
     read,
@@ -106,7 +116,7 @@ export function makeCrossProviderMediaConsent(
         Effect.map((settings) =>
           decideCrossProviderMediaConsent(settings.crossProviderMediaConsent, pair),
         ),
-        Effect.catchCause((cause) => Effect.fail(storeFailure("read")(cause))),
+        Effect.mapError(storeFailure("read")),
       ),
     set: (pair, mode) =>
       Effect.flatMap(read, (current) => {
@@ -114,10 +124,9 @@ export function makeCrossProviderMediaConsent(
           ...current,
           pairs: { ...current.pairs, [crossProviderMediaConsentKey(pair)]: mode },
         };
-        return config.update({ crossProviderMediaConsent: next }).pipe(
-          Effect.as(next),
-          Effect.catchCause((cause) => Effect.fail(storeFailure("write")(cause))),
-        );
+        return config
+          .update({ crossProviderMediaConsent: next })
+          .pipe(Effect.as(next), Effect.mapError(storeFailure("write")));
       }),
   };
 }

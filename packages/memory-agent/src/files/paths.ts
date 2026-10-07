@@ -3,7 +3,7 @@ import { Function as EffectFunction } from "effect";
 import { lstatSync, realpathSync, type Stats } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { Data, Result } from "effect";
+import { Data, HashSet, Result } from "effect";
 
 /**
  * Why a path was refused. Messages the model sees name the reason, never file contents.
@@ -59,7 +59,7 @@ const credentialDirectories = [
 ].map((directory) => directory.split("/"));
 
 /** File names that hold secrets wherever they are. Compared lowercased. */
-const credentialFileNames = new Set([
+const credentialFileNames = HashSet.fromIterable([
   ".netrc",
   "_netrc",
   ".pgpass",
@@ -118,7 +118,7 @@ export function isCredentialPath(path: string): boolean {
   );
   return (
     inCredentialDirectory ||
-    credentialFileNames.has(name) ||
+    HashSet.has(credentialFileNames, name) ||
     envFile.test(name) ||
     credentialExtension.test(name) ||
     segments.some((segment) => credentialWord.test(segment))

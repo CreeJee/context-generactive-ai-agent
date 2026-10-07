@@ -1,3 +1,4 @@
+import { HashSet } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off
 import { chat, toolDefinition } from "@tanstack/ai";
@@ -22,7 +23,7 @@ test("a retained permission factory uses each run's central Context and fresh se
     project,
     sessionId,
     selection: { provider: "openai", model: "scripted-1", reasoningEffort: "none" },
-    gated: new Set(["owner_tool"]),
+    gated: HashSet.fromIterable(["owner_tool"]),
     decider: "classifier",
   });
   const calls: string[] = [];
@@ -109,7 +110,7 @@ test("reusing a tool-call ID with changed arguments cannot borrow a previous all
         project,
         sessionId: session.id,
         selection: { provider: "openai", model: "scripted-1", reasoningEffort: "none" },
-        gated: new Set(["owner_tool"]),
+        gated: HashSet.fromIterable(["owner_tool"]),
         decider: "classifier",
       }).pipe(
         Effect.provideService(PermissionClassifier, {
@@ -165,7 +166,7 @@ test("ask-every-call cannot apply a previous approval to a different tool", asyn
         project,
         sessionId: session.id,
         selection: { provider: "openai", model: "scripted-1", reasoningEffort: "none" },
-        gated: new Set(["new_tool"]),
+        gated: HashSet.fromIterable(["new_tool"]),
         decider: "user",
       }),
     ),
@@ -217,7 +218,7 @@ test("ask-every-call preserves exact approvals but denies changed input without 
         project,
         sessionId: session.id,
         selection: { provider: "openai", model: "scripted-1", reasoningEffort: "none" },
-        gated: new Set(["owner_tool"]),
+        gated: HashSet.fromIterable(["owner_tool"]),
         decider: "user",
       }),
     );

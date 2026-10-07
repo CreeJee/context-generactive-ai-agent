@@ -124,7 +124,7 @@ describe("server mutation results", () => {
           kind === "phase" ? run.setWorkflowPhase("plan") : run.controlWorkflow("pause");
         await mutate();
         expect(client.getQueryData(queryKey)).toEqual(latest);
-        const refusal = new ApiError(409, "run_in_progress", null);
+        const refusal = ApiError.make({ status: 409, code: "run_in_progress", reason: null });
         phase.mockRejectedValue(refusal);
         control.mockRejectedValue(refusal);
         fetchState.mockResolvedValue(snapshot(3));
@@ -145,9 +145,13 @@ describe("server mutation results", () => {
     try {
       expect(await run.cancel()).toBe("requested");
       expect(cancel).toHaveBeenCalledWith(sessionId, "holder-1");
-      cancel.mockRejectedValue(new ApiError(409, "session_in_use", null));
+      cancel.mockRejectedValue(
+        ApiError.make({ status: 409, code: "session_in_use", reason: null }),
+      );
       expect(await run.cancel()).toBe("failed");
-      cancel.mockRejectedValue(new ApiError(409, "no_running_run", null));
+      cancel.mockRejectedValue(
+        ApiError.make({ status: 409, code: "no_running_run", reason: null }),
+      );
       expect(await run.cancel()).toBe("idle");
       cancel.mockRejectedValue(new Error("offline"));
       expect(await run.cancel()).toBe("failed");

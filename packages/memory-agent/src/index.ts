@@ -53,6 +53,7 @@ export {
   CrossProviderMediaConsentSettings,
   EmbeddingChoice,
   GlobalConfig,
+  GlobalConfigFailed,
   GpuCheck,
   ModelFeatureFlagSettings,
   Settings,

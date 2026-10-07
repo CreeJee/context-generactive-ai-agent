@@ -4,7 +4,7 @@ import { useLoading } from "react-simplikit";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
 import { cn } from "cn";
-import { api, ApiError } from "../api";
+import { api, isApiError } from "../api";
 import { ApprovalCard } from "./approval";
 import type { PendingApproval } from "./pending-approval";
 
@@ -64,7 +64,7 @@ export function ChatApprovals({
       onResync();
     } catch (failure) {
       onProblem(
-        failure instanceof ApiError && failure.code === "run_in_progress"
+        isApiError(failure) && failure.code === "run_in_progress"
           ? "실행 중인 응답이 끝난 뒤 다시 시도해 주세요."
           : "끊어진 승인 요청을 폐기하지 못했어요.",
       );

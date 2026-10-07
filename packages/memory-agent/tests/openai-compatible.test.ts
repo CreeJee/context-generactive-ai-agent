@@ -1,3 +1,4 @@
+import { GlobalConfigFailed } from "../src/config/global-config.ts";
 import { it as effectTest } from "@effect/vitest";
 import { assertFailure } from "@effect/vitest/utils";
 import { TestClock } from "effect/testing";
@@ -634,9 +635,13 @@ describe("OpenAI compatible settings", () => {
           {
             read: Effect.succeed({}),
             update: () =>
-              Effect.sync(() => {
-                throw new Error("private config detail");
-              }),
+              Effect.fail(
+                GlobalConfigFailed.make({
+                  operation: "write",
+                  reason: { _tag: "WriteFailed" },
+                  cause: new Error("private config detail"),
+                }),
+              ),
           },
           {
             get: async () => key,

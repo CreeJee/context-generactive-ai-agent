@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { join } from "node:path";
-import { Schema, Struct } from "effect";
+import { HashSet, Schema, Struct } from "effect";
 import type { Project } from "../projects/projects.ts";
 import type { Skill } from "../skills/skills.ts";
 import {
@@ -59,8 +59,11 @@ function structuredWorkflowRulesBody(
   try {
     const decoded = decodeProjectRules(text);
     const ids = decoded.rules.map((rule) => rule.id);
-    const builtInIds = new Set(builtInWorkflowRules.map((rule) => rule.id));
-    if (new Set(ids).size !== ids.length || ids.some((id) => builtInIds.has(id)))
+    const builtInIds = HashSet.fromIterable(builtInWorkflowRules.map((rule) => rule.id));
+    if (
+      HashSet.size(HashSet.fromIterable(ids)) !== ids.length ||
+      ids.some((id) => HashSet.has(builtInIds, id))
+    )
       return { rules: [], problems: [{ source: sourceName(origin), problem: "invalid" }] };
     const contentHash = digest(text);
     return {

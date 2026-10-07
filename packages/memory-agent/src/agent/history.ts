@@ -1,4 +1,4 @@
-import { Function as EffectFunction } from "effect";
+import { DateTime, Function as EffectFunction } from "effect";
 import type { MessagePart, UIMessage } from "@tanstack/ai";
 import type { Attachment } from "../attachments/attachments.ts";
 import { attachmentUrl } from "../attachments/urls.ts";
@@ -35,8 +35,7 @@ function sessionMessagesBody(
           ...(node.text.length > 0 ? [{ type: "text" as const, content: node.text }] : []),
           ...images,
         ],
-        // The native SDK/fixture requires a JavaScript Date; this converts a timestamp, not an Effect clock read.
-        createdAt: new Date(node.createdAt),
+        createdAt: DateTime.toDateUtc(DateTime.makeUnsafe(node.createdAt)),
       });
       continue;
     }
@@ -46,8 +45,12 @@ function sessionMessagesBody(
     if (!(current !== null) || current.runId !== node.runId) {
       current = {
         runId: node.runId,
-        // The native SDK/fixture requires a JavaScript Date; this converts a timestamp, not an Effect clock read.
-        message: { id: node.id, role: "assistant", parts: [], createdAt: new Date(node.createdAt) },
+        message: {
+          id: node.id,
+          role: "assistant",
+          parts: [],
+          createdAt: DateTime.toDateUtc(DateTime.makeUnsafe(node.createdAt)),
+        },
       };
       messages.push(current.message);
     }

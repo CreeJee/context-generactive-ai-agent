@@ -1,6 +1,6 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import type { SQLOutputValue } from "node:sqlite";
 import { DateTime, Clock, Context, Data, Effect, Layer, Schema } from "effect";
@@ -246,9 +246,9 @@ const PersistedWorkflowState = Schema.Struct({
   ledger: Schema.Array(LedgerEvent),
 });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodePersistedState = Schema.decodeUnknownSync(
-  Schema.fromJsonString(PersistedWorkflowState),
+const decodePersistedState = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.fromJsonString(PersistedWorkflowState)),
+  Result.getOrThrow,
 );
 const decodeState = (json: string): WorkflowState => {
   const state = decodePersistedState(json);
@@ -274,11 +274,15 @@ const decodeState = (json: string): WorkflowState => {
   };
 };
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const encodeState = Schema.encodeSync(Schema.fromJsonString(WorkflowState));
+const encodeState = EffectFunction.flow(
+  Schema.encodeResult(Schema.fromJsonString(WorkflowState)),
+  Result.getOrThrow,
+);
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeRow = Schema.decodeUnknownSync(Schema.Struct({ state_json: Schema.String }));
+const decodeRow = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Struct({ state_json: Schema.String })),
+  Result.getOrThrow,
+);
 
 export class WorkflowTransitionRefused extends Data.TaggedError("WorkflowTransitionRefused")<{
   readonly reason: WorkflowActionReason;
@@ -890,8 +894,10 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
                 const { newId } = commitNewGoal(
                   sessionId,
                   // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-                  // @effect-diagnostics-next-line schemaSync:off
-                  Schema.decodeUnknownSync(StartNewGoal)(JSON.parse(String(row.payload_json))),
+                  EffectFunction.flow(
+                    Schema.decodeUnknownResult(StartNewGoal),
+                    Result.getOrThrow,
+                  )(JSON.parse(String(row.payload_json))),
                 );
                 sqlite
                   .prepare(`

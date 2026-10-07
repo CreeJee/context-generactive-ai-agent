@@ -20,13 +20,17 @@ class InvalidCommand extends Data.TaggedError("InvalidCommand") {}
 const respond = <A,>(
   effect: Effect.Effect<
     A,
-    InvalidCommand | { readonly _tag: "OpenAICompatibleFailed"; readonly operation: string },
+    | InvalidCommand
+    | { readonly _tag: "OpenAICompatibleFailed"; readonly operation: string }
+    | { readonly _tag: "GlobalConfigFailed" },
     OpenAICompatibleSettings
   >,
 ) =>
   effect.pipe(
     Effect.map((value) => Response.json(value)),
     Effect.catchTags({
+      GlobalConfigFailed: () =>
+        Effect.succeed(Response.json({ error: "settings_unavailable" }, { status: 500 })),
       InvalidCommand: () =>
         Effect.succeed(Response.json({ error: "invalid_settings" }, { status: 400 })),
       OpenAICompatibleFailed: (failure) => {

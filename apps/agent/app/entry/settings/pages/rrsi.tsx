@@ -1,3 +1,4 @@
+import { Schema } from "effect";
 import { isTruthy } from "../../../truthy.ts";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -25,17 +26,13 @@ interface Status {
   running: boolean;
   configuredRepository: boolean;
 }
-// React/query clients consume this native Error contract outside Effect failure channels.
-class ExperimentRequestFailed extends Error {
-  readonly _tag = "ExperimentRequestFailed";
-  constructor(
-    readonly reason: "server_restart_required" | "request_failed",
-    message: string,
-  ) {
-    super(message);
-    this.name = "ExperimentRequestFailed";
-  }
-}
+class ExperimentRequestFailed extends Schema.TaggedError<ExperimentRequestFailed>()(
+  "ExperimentRequestFailed",
+  {
+    reason: Schema.Literals(["server_restart_required", "request_failed"]),
+    message: Schema.String,
+  },
+) {}
 const queryKey = ["settings", "rrsi"];
 const reasons = {
   baseline_quality_failed: "현재 설정이 코딩·기억 과제를 해결하지 못해 후보를 만들지 않았어요",
@@ -101,15 +98,16 @@ async function request(body?: {
   );
   if (!response.ok) {
     if (response.status === 404)
-      throw new ExperimentRequestFailed(
-        "server_restart_required",
-        "실행 중인 서버가 동작 개선 실험을 지원하지 않아요. 앱 서버를 재시작한 뒤 다시 시도하세요.",
-      );
+      throw ExperimentRequestFailed.make({
+        reason: "server_restart_required",
+        message:
+          "실행 중인 서버가 동작 개선 실험을 지원하지 않아요. 앱 서버를 재시작한 뒤 다시 시도하세요.",
+      });
     const page: { error: string } = await response.json();
-    throw new ExperimentRequestFailed(
-      "request_failed",
-      reasonLabel(page.error) ?? "요청을 처리하지 못했어요",
-    );
+    throw ExperimentRequestFailed.make({
+      reason: "request_failed",
+      message: reasonLabel(page.error) ?? "요청을 처리하지 못했어요",
+    });
   }
   return response.json();
 }

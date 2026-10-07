@@ -4,7 +4,7 @@ import { isTruthy } from "../truthy.ts";
 import { execFile } from "node:child_process";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { dirname } from "node:path";
-import { Schema } from "effect";
+import { Effect, HashSet, Schema } from "effect";
 import { findExecutable, helperEnvironment } from "../runtime/host.ts";
 
 /** Git runs with its own folder and the system folders on its search path, and nothing else. */
@@ -33,40 +33,52 @@ function gitGrepFilesBody(
   directory: string,
   query: string,
   caseSensitive: boolean,
-): Promise<ReadonlySet<string> | null> {
-  if (query.includes("\n") || (!caseSensitive && !isAscii(query))) return Promise.resolve(null);
-  const git = findExecutable("git");
-  if (!isTruthy(git)) return Promise.resolve(null);
-  const args = [
-    "grep",
-    "--untracked",
-    "--no-color",
-    "-z",
-    "-l",
-    "-F",
-    ...(caseSensitive ? [] : ["-i"]),
-    "-e",
-    query,
-    "--",
-    directory,
-  ];
-  // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-  return new Promise((resolve) => {
-    execFile(
-      git,
-      args,
-      {
-        cwd: root,
-        maxBuffer: 64 * 1024 * 1024,
-        windowsHide: true,
-        // A fixed environment: no user pager, config-driven external tools or locale surprises.
-        env: { ...gitEnvironment(git), LANG: "C", GIT_PAGER: "cat" },
-      },
-      (error, stdout) => {
-        if (!(error !== null)) return resolve(new Set(stdout.split("\0").filter(Boolean)));
-        // Exit status 1 means "no file matched"; anything else means Git could not answer.
-        resolve(noFileMatched(error) ? new Set() : null);
-      },
-    );
-  });
+): Promise<HashSet.HashSet<string> | null> {
+  return Effect.runPromise(gitGrepFilesEffect({ root, directory, query, caseSensitive }));
 }
+
+export const gitGrepFilesEffect = (options: {
+  readonly root: string;
+  readonly directory: string;
+  readonly query: string;
+  readonly caseSensitive: boolean;
+}): Effect.Effect<HashSet.HashSet<string> | null> =>
+  Effect.suspend(() => {
+    const { root, directory, query, caseSensitive } = options;
+    if (query.includes("\n") || (!caseSensitive && !isAscii(query))) return Effect.succeed(null);
+    const git = findExecutable("git");
+    if (!isTruthy(git)) return Effect.succeed(null);
+    const args = [
+      "grep",
+      "--untracked",
+      "--no-color",
+      "-z",
+      "-l",
+      "-F",
+      ...(caseSensitive ? [] : ["-i"]),
+      "-e",
+      query,
+      "--",
+      directory,
+    ];
+    return Effect.callback<HashSet.HashSet<string> | null>((resume) => {
+      const child = execFile(
+        git,
+        args,
+        {
+          cwd: root,
+          maxBuffer: 64 * 1024 * 1024,
+          windowsHide: true,
+          env: { ...gitEnvironment(git), LANG: "C", GIT_PAGER: "cat" },
+        },
+        (error, stdout) => {
+          if (error === null)
+            resume(Effect.succeed(HashSet.fromIterable(stdout.split("\0").filter(Boolean))));
+          else resume(Effect.succeed(noFileMatched(error) ? HashSet.empty<string>() : null));
+        },
+      );
+      return Effect.sync(() => {
+        child.kill();
+      });
+    });
+  });

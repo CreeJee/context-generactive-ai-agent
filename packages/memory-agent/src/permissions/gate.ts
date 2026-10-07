@@ -1,6 +1,6 @@
 import { isTruthy } from "../truthy.ts";
 import type { ChatMiddleware, ModelMessage, ToolCall } from "@tanstack/ai";
-import { Context, Effect, Layer } from "effect";
+import { HashSet, Context, Effect, Layer } from "effect";
 import type { ModelSelection } from "../providers/contracts.ts";
 import type { Project } from "../projects/projects.ts";
 import { permissionReviewInterrupt } from "../tools/definitions.ts";
@@ -12,7 +12,7 @@ export interface GateBinding {
   readonly sessionId: string;
   readonly selection: ModelSelection;
   /** Tools whose every call this gate decides. */
-  readonly gated: ReadonlySet<string>;
+  readonly gated: HashSet.HashSet<string>;
   /**
    * `classifier`: the permission review decides first and asks the user only when unsure (`auto`
    * mode). `user`: every call asks the user (tools without a static TanStack approval in `ask`
@@ -27,9 +27,9 @@ const askEveryCallReason = "호출할 때마다 확인하는 도구예요.";
 /** Gated calls the model made that have no result yet: the batch about to execute. */
 function pendingGatedCalls(
   messages: ReadonlyArray<ModelMessage>,
-  gatedToolNames: ReadonlySet<string>,
+  gatedToolNames: HashSet.HashSet<string>,
 ): ToolCall[] {
-  const answered = new Set(
+  const answered = HashSet.fromIterable(
     messages.flatMap((message) =>
       message.role === "tool" && isTruthy(message.toolCallId) ? [message.toolCallId] : [],
     ),
@@ -37,7 +37,8 @@ function pendingGatedCalls(
   return messages.flatMap((message) =>
     message.role === "assistant"
       ? (message.toolCalls ?? []).filter(
-          (call) => gatedToolNames.has(call.function.name) && !answered.has(call.id),
+          (call) =>
+            HashSet.has(gatedToolNames, call.function.name) && !HashSet.has(answered, call.id),
         )
       : [],
   );
@@ -138,7 +139,7 @@ export const makePermissionGateMiddleware = Effect.fnUntraced(function* (
     },
 
     onBeforeToolCall(ctx, hook) {
-      if (!gated.has(hook.toolName)) return undefined;
+      if (!HashSet.has(gated, hook.toolName)) return undefined;
       const call = ctx.messages
         .flatMap((message) => (message.role === "assistant" ? (message.toolCalls ?? []) : []))
         .findLast((entry) => entry.id === hook.toolCallId);

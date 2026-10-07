@@ -1,6 +1,17 @@
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { DateTime, Context, Effect, Layer, Schema } from "effect";
+import {
+  Cause,
+  DateTime,
+  Context,
+  Effect,
+  Layer,
+  Option,
+  Queue,
+  Schema,
+  Scope,
+  Stream,
+} from "effect";
 import { Database } from "../db/database.ts";
 
 export type SessionEventTopic = "all" | "run-state" | "queue" | "subagents" | "relayed-approvals";
@@ -52,7 +63,11 @@ const heartbeatMs = 15_000;
 const frame = (event: string, payload: SsePayload, id?: number) =>
   `${id === undefined ? "" : `id: ${id}\n`}event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
 
-const make = (projectForSession: (sessionId: string) => string | null): AppEventsApi => {
+const make = (options: {
+  readonly projectForSession: (sessionId: string) => string | null;
+  readonly context: Context.Context<never>;
+  readonly ownerSignal: AbortSignal | undefined;
+}): AppEventsApi => {
   const target = new EventTarget();
   let revision = 0;
 
@@ -69,37 +84,46 @@ const make = (projectForSession: (sessionId: string) => string | null): AppEvent
   };
 
   const stream = (request: Request, accepts: (event: AppChangedEvent) => boolean) => {
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        let closed = false;
-        let heartbeat: ReturnType<typeof setInterval> | undefined;
-        const send = (value: string) => {
-          if (!closed) controller.enqueue(encoder.encode(value));
-        };
-        const onChanged = (raw: Event) => {
-          // SAFETY: this listener is registered only for CustomEvents created by publish above.
-          const event = (raw as CustomEvent<AppChangedEvent>).detail;
-          if (accepts(event)) send(frame("changed", event, event.revision));
-        };
-        const close = () => {
-          if (closed) return;
-          closed = true;
-          if (heartbeat !== undefined) clearInterval(heartbeat);
-          target.removeEventListener("changed", onChanged);
-          request.signal.removeEventListener("abort", close);
-          controller.close();
-        };
-        target.addEventListener("changed", onChanged);
-        request.signal.addEventListener("abort", close, { once: true });
-        if (request.signal.aborted) return close();
-        send(frame("ready", { revision }));
-        // Native callback heartbeat/debounce timing remains at the protocol boundary.
-        heartbeat = setInterval(
-          () => send(frame("heartbeat", { at: DateTime.toEpochMillis(DateTime.nowUnsafe()) })),
-          heartbeatMs,
+    // Native publication is synchronous: register before returning the response so an event
+    // published immediately after subscription cannot fall between registration and a fiber start.
+    const queue = Effect.runSyncWith(options.context)(Queue.make<string, Cause.Done>());
+    const onChanged = (raw: Event) => {
+      // SAFETY: only publish above dispatches this CustomEvent.
+      const event = (raw as CustomEvent<AppChangedEvent>).detail;
+      if (accepts(event)) Queue.offerUnsafe(queue, frame("changed", event, event.revision));
+    };
+    const close = () => {
+      Queue.endUnsafe(queue);
+    };
+    target.addEventListener("changed", onChanged);
+    request.signal.addEventListener("abort", close, { once: true });
+    options.ownerSignal?.addEventListener("abort", close, { once: true });
+    if (request.signal.aborted || options.ownerSignal?.aborted === true) close();
+    else Queue.offerUnsafe(queue, frame("ready", { revision }));
+    const frames = Stream.unwrap(
+      Effect.gen(function* () {
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            target.removeEventListener("changed", onChanged);
+            request.signal.removeEventListener("abort", close);
+            options.ownerSignal?.removeEventListener("abort", close);
+            Queue.shutdownUnsafe(queue);
+          }),
         );
-      },
-    });
+        yield* Effect.forever(
+          Effect.gen(function* () {
+            yield* Effect.sleep(heartbeatMs);
+            const now = yield* DateTime.now;
+            yield* Queue.offer(queue, frame("heartbeat", { at: DateTime.toEpochMillis(now) }));
+          }),
+        ).pipe(Effect.forkIn(yield* Scope.Scope));
+        return Stream.fromQueue(queue);
+      }),
+    );
+    const body = Stream.toReadableStreamWith(
+      frames.pipe(Stream.map((value) => encoder.encode(value))),
+      options.context,
+    );
     return new Response(body, {
       headers: {
         "Cache-Control": "no-cache, no-transform",
@@ -113,7 +137,7 @@ const make = (projectForSession: (sessionId: string) => string | null): AppEvent
   return {
     publish,
     publishSession(sessionId: string, topic: SessionEventTopic) {
-      const projectId = projectForSession(sessionId);
+      const projectId = options.projectForSession(sessionId);
       return isTruthy(projectId)
         ? publish({ scope: "session", projectId, sessionId, topic })
         : null;
@@ -131,16 +155,28 @@ const make = (projectForSession: (sessionId: string) => string | null): AppEvent
   };
 };
 
-export const makeAppEvents: Effect.Effect<AppEventsApi> = Effect.sync(() => make(() => null));
+const create = Effect.fnUntraced(function* (
+  projectForSession: (sessionId: string) => string | null,
+) {
+  const context = yield* Effect.context<never>();
+  const ownerScope = yield* Effect.serviceOption(Scope.Scope);
+  const ownerSignal = Option.isSome(ownerScope)
+    ? yield* Effect.provideService(Effect.abortSignal, Scope.Scope, ownerScope.value)
+    : undefined;
+  return make({ projectForSession, context, ownerSignal });
+});
 
-const liveAppEvents = Effect.map(Database, ({ sqlite }) => {
+export const makeAppEvents: Effect.Effect<AppEventsApi> = create(() => null);
+
+const liveAppEvents = Effect.gen(function* () {
+  const { sqlite } = yield* Database;
   // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
   const decodeProject = EffectFunction.flow(
     Schema.decodeUnknownResult(Schema.Struct({ project_id: Schema.String })),
     Result.getOrThrow,
   );
   const statement = sqlite.prepare("SELECT project_id FROM sessions WHERE id = ?");
-  return make((sessionId) => {
+  return yield* create((sessionId) => {
     const row = statement.get(sessionId);
     return isTruthy(row) ? decodeProject(row).project_id : null;
   });

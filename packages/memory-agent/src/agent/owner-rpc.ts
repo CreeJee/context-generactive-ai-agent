@@ -1,3 +1,4 @@
+import { MutableHashSet } from "effect";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { MutableHashMap, Exit, Option, Cause, Effect, Predicate, Schema } from "effect";
@@ -96,27 +97,31 @@ export function makeInMemoryOwnerRpcLedger(): OwnerRpcLedger {
     {
       highWater: number;
       records: MutableHashMap.MutableHashMap<number, OwnerRpcRecord>;
-      pendingEffects: Set<number>;
+      pendingEffects: MutableHashSet.MutableHashSet<number>;
     }
   >();
   return {
     reserve(runKey, operationId, fingerprint, sideEffect) {
       let run = Option.getOrUndefined(MutableHashMap.get(runs, runKey));
       if (!isTruthy(run)) {
-        run = { highWater: 0, records: MutableHashMap.empty(), pendingEffects: new Set() };
+        run = {
+          highWater: 0,
+          records: MutableHashMap.empty(),
+          pendingEffects: MutableHashSet.empty<number>(),
+        };
         MutableHashMap.set(runs, runKey, run);
       }
       const existing = Option.getOrUndefined(MutableHashMap.get(run.records, operationId));
       if (isTruthy(existing)) return { type: "existing", record: existing };
       if (operationId <= run.highWater) return { type: "rejected", reason: "non_monotonic" };
-      if (sideEffect && run.pendingEffects.size > 0)
+      if (sideEffect && MutableHashSet.size(run.pendingEffects) > 0)
         return { type: "rejected", reason: "uncertain_run" };
       run.highWater = operationId;
       MutableHashMap.set(run.records, operationId, {
         fingerprint,
         reply: { type: "pending", operationId },
       });
-      if (sideEffect) run.pendingEffects.add(operationId);
+      if (sideEffect) MutableHashSet.add(run.pendingEffects, operationId);
       return { type: "reserved" };
     },
     settle(runKey, operationId, reply) {
@@ -136,7 +141,7 @@ export function makeInMemoryOwnerRpcLedger(): OwnerRpcLedger {
       MutableHashMap.set(run.records, operationId, { fingerprint: record.fingerprint, reply });
       switch (reply.type) {
         case "succeeded":
-          run.pendingEffects.delete(operationId);
+          MutableHashSet.remove(run.pendingEffects, operationId);
           break;
         case "pending":
         case "uncertain":

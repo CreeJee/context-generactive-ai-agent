@@ -2,7 +2,17 @@ import { Result, Function as EffectFunction } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "node:crypto";
 import { isTruthy } from "../truthy.ts";
-import { Config, ConfigProvider, Option, Context, Data, Effect, Layer, Schema } from "effect";
+import {
+  Config,
+  ConfigProvider,
+  HashSet,
+  Option,
+  Context,
+  Data,
+  Effect,
+  Layer,
+  Schema,
+} from "effect";
 import { optionalProperty } from "../optional-property.ts";
 import { Attachments, type Attachment, type AttachmentsApi } from "../attachments/attachments.ts";
 import {
@@ -25,7 +35,7 @@ const stringifyJson = EffectFunction.flow(
 );
 
 const maximumGeneratedImageBytes = 25 * 1024 * 1024;
-const supportedOutputTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
+const supportedOutputTypes = HashSet.fromIterable(["image/png", "image/jpeg", "image/webp"]);
 const OpenAIImageResponse = Schema.Struct({
   data: Schema.Array(Schema.Struct({ b64_json: Schema.String })),
 });
@@ -187,7 +197,11 @@ export function makeImageMediaWorkflow(
               () => new ImageMediaUnavailable({ reason: "route catalog refresh failed" }),
             ),
           );
-        const status = yield* feature.status;
+        const status = yield* feature.status.pipe(
+          Effect.mapError(
+            () => new ImageMediaUnavailable({ reason: "image settings unavailable" }),
+          ),
+        );
         const policy =
           request.maximumEstimatedCostUsd === undefined
             ? {
@@ -290,7 +304,7 @@ export function makeImageMediaWorkflow(
         if (
           output.bytes.byteLength === 0 ||
           output.bytes.byteLength > maximumGeneratedImageBytes ||
-          !supportedOutputTypes.has(output.contentType)
+          !HashSet.has(supportedOutputTypes, output.contentType)
         )
           return yield* new ImageMediaExecutionFailed({
             cause: new DirectImageExecutionFailed({ reason: "invalid_output" }),

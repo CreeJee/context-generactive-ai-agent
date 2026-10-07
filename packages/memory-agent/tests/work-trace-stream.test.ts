@@ -1,17 +1,16 @@
 import { it } from "@effect/vitest";
-import { DateTime, Effect, Exit, Layer, Scope } from "effect";
+import { DateTime, Effect, Exit, Fiber, Layer, Scope } from "effect";
+import { TestClock } from "effect/testing";
 import { describe, expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
-import { WorkTraceStore } from "../src/work-trace/store.ts";
+import { WorkTraceReadFailed, WorkTraceStore } from "../src/work-trace/store.ts";
 
 const testLayer = () => {
   const database = Database.layer(":memory:");
   return Layer.merge(database, WorkTraceStore.layer.pipe(Layer.provide(database)));
 };
 
-const run = Effect.fnUntraced(function* <A>(
-  effect: Effect.Effect<A, never, Database | WorkTraceStore | Scope.Scope>,
-) {
+const run = Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
   const services = yield* Layer.build(testLayer());
   return yield* Effect.provideContext(effect, services);
 });
@@ -36,7 +35,7 @@ const seed = (db: Database["Service"]) => {
 };
 
 describe("Work Trace durable stream source", () => {
-  it.live("replays visible events by durable cursor and redacts payloads", () =>
+  it.effect("replays visible events by durable cursor and redacts payloads", () =>
     run(
       Effect.gen(function* () {
         const db = yield* Database;
@@ -115,7 +114,7 @@ describe("Work Trace durable stream source", () => {
     ),
   );
 
-  it.live("wakes a live tail on an appended event and emits an idle heartbeat", () =>
+  it.effect("wakes a live tail on an appended event and emits an idle heartbeat", () =>
     run(
       Effect.gen(function* () {
         const db = yield* Database;
@@ -132,27 +131,86 @@ describe("Work Trace durable stream source", () => {
           threadId: "subagent-agent-1",
         });
         const cursor = trace.latestCursor("s1");
-        const signalScope = yield* Scope.fork(yield* Scope.Scope, "sequential");
-        const signal = yield* Effect.provideService(Effect.abortSignal, Scope.Scope, signalScope);
-        const waiting = trace.waitForChange("s1", cursor, signal, 1_000);
-        queueMicrotask(() =>
-          trace.appendEvent({
-            handle,
+        const waiting = yield* trace
+          .waitForChangeEffect({
             sessionId: "s1",
-            kind: "activity",
-            summary: "Continued",
-          }),
-        );
-        expect(yield* Effect.promise(() => waiting)).toBe("event");
+            afterCursor: cursor,
+            heartbeatMs: 1_000,
+          })
+          .pipe(Effect.forkChild);
+        yield* Effect.yieldNow;
+        trace.appendEvent({
+          handle,
+          sessionId: "s1",
+          kind: "activity",
+          summary: "Continued",
+        });
+        expect(yield* Fiber.join(waiting)).toBe("event");
         const latest = trace.latestCursor("s1");
         expect(trace.events("s1", cursor)).toHaveLength(1);
-        expect(yield* Effect.promise(() => trace.waitForChange("s1", latest, signal, 5))).toBe(
-          "heartbeat",
-        );
+        const heartbeat = yield* trace
+          .waitForChangeEffect({
+            sessionId: "s1",
+            afterCursor: latest,
+            heartbeatMs: 5,
+          })
+          .pipe(Effect.forkChild);
+        yield* TestClock.adjust(5);
+        expect(yield* Fiber.join(heartbeat)).toBe("heartbeat");
+      }),
+    ),
+  );
+
+  it.effect("interrupts a waiting tail without converting cancellation to a heartbeat", () =>
+    run(
+      Effect.gen(function* () {
+        seed(yield* Database);
+        const trace = yield* WorkTraceStore;
+        const waiting = yield* trace
+          .waitForChangeEffect({
+            sessionId: "s1",
+            afterCursor: 0,
+            heartbeatMs: 1_000,
+          })
+          .pipe(Effect.forkChild);
+        yield* Effect.yieldNow;
+        yield* Fiber.interrupt(waiting);
+        const exit = yield* Fiber.await(waiting);
+        expect(Exit.hasInterrupts(exit)).toBe(true);
+      }),
+    ),
+  );
+
+  it.live("preserves the native aborted-wait contract", () =>
+    run(
+      Effect.gen(function* () {
+        seed(yield* Database);
+        const trace = yield* WorkTraceStore;
+        const signalScope = yield* Scope.fork(yield* Scope.Scope, "sequential");
+        const signal = yield* Effect.provideService(Effect.abortSignal, Scope.Scope, signalScope);
+        const waiting = trace.waitForChange("s1", 0, signal, 1_000);
         yield* Scope.close(signalScope, Exit.void);
-        expect(yield* Effect.promise(() => trace.waitForChange("s1", latest, signal, 5))).toBe(
-          "aborted",
-        );
+        expect(yield* Effect.promise(() => waiting)).toBe("aborted");
+      }),
+    ),
+  );
+
+  it.effect("reports a durable cursor read failure in the typed error channel", () =>
+    run(
+      Effect.gen(function* () {
+        const db = yield* Database;
+        seed(db);
+        db.sqlite.exec("DROP TABLE run_events");
+        const trace = yield* WorkTraceStore;
+        const failure = yield* trace
+          .waitForChangeEffect({
+            sessionId: "s1",
+            afterCursor: 0,
+          })
+          .pipe(Effect.flip);
+        expect(failure).toBeInstanceOf(WorkTraceReadFailed);
+        expect(failure.operation).toBe("latest_cursor");
+        expect(failure.reason._tag).toBe("ReadFailed");
       }),
     ),
   );

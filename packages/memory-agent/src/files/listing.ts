@@ -9,7 +9,7 @@ import { lstat, readdir } from "node:fs/promises";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { join, posix } from "node:path";
 import { promisify } from "node:util";
-import { MutableHashMap, Option, Effect } from "effect";
+import { MutableHashMap, Option, Effect, HashSet, Array as EffectArray } from "effect";
 import { findExecutable } from "../runtime/host.ts";
 import { gitEnvironment } from "./git-grep.ts";
 import { isCredentialPath } from "./paths.ts";
@@ -40,7 +40,7 @@ async function mapLimit<A, B>(
 }
 
 /** Directories skipped when walking a project that is not a Git work tree. */
-const walkSkips = new Set([".git", "node_modules"]);
+const walkSkips = HashSet.fromIterable([".git", "node_modules"]);
 
 /** Files a walk collects before it stops and reports itself truncated. */
 export const walkLimit = 50_000;
@@ -93,7 +93,7 @@ async function walkFiles(base: string, directory: string, credentialPrefix: stri
       }
       const path = relative === "." ? entry.name : `${relative}/${entry.name}`;
       if (entry.isDirectory()) {
-        if (walkSkips.has(entry.name)) continue;
+        if (HashSet.has(walkSkips, entry.name)) continue;
         if (isCredentialPath(join(credentialPrefix, path))) excluded++;
         else await visit(path);
       } else if (entry.isFile()) files.push(path);
@@ -125,7 +125,7 @@ async function listProjectFilesBody(
   const prefix = directory === "." ? "" : `${directory}/`;
   let excluded = walked?.excluded ?? 0;
   const kept: string[] = [];
-  for (const path of new Set(fromGit ?? walked?.files)) {
+  for (const path of EffectArray.dedupe(fromGit ?? walked?.files ?? [])) {
     if (!path.startsWith(prefix)) continue;
     if (glob !== undefined && !posix.matchesGlob(path.slice(prefix.length), glob)) continue;
     if (path.split("/").some((segment) => segment.toLowerCase() === ".git")) continue;

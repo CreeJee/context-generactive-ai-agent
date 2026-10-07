@@ -1,6 +1,6 @@
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Array as EffectArray, Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import type { WorkflowState } from "./workflow.ts";
 
@@ -81,14 +81,12 @@ const progressOf = (
   toolResults,
   completedSteps:
     state.plan?.steps.filter((step) => step.status === "completed").map((step) => step.id) ?? [],
-  evidence: [
-    ...new Set([
-      ...(state.goal?.evidence ?? []),
-      ...(state.plan?.evidence ?? []),
-      ...(state.plan?.steps.flatMap((step) => step.evidence) ?? []),
-      ...(state.plan?.verification.evidence ?? []),
-    ]),
-  ],
+  evidence: EffectArray.dedupe([
+    ...(state.goal?.evidence ?? []),
+    ...(state.plan?.evidence ?? []),
+    ...(state.plan?.steps.flatMap((step) => step.evidence) ?? []),
+    ...(state.plan?.verification.evidence ?? []),
+  ]),
 });
 
 const executable = (state: WorkflowState) =>
@@ -189,9 +187,10 @@ const make = Effect.gen(function* () {
             });
             return;
           }
-          const progress = progressOf(state, [
-            ...new Set([...previous.progress.toolResults, ...toolResults]),
-          ]);
+          const progress = progressOf(
+            state,
+            EffectArray.dedupe([...previous.progress.toolResults, ...toolResults]),
+          );
           const advanced =
             progress.toolResults.some((item) => !previous.progress.toolResults.includes(item)) ||
             progress.completedSteps.some((id) => !previous.progress.completedSteps.includes(id)) ||

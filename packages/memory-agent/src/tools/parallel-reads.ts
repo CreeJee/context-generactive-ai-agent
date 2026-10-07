@@ -1,5 +1,5 @@
 import { Function as EffectFunction } from "effect";
-import { MutableHashMap, Option } from "effect";
+import { HashSet, MutableHashMap, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
 import {
   isStandardSchema,
@@ -10,7 +10,7 @@ import {
 } from "@tanstack/ai";
 
 /** Tools that only read: running several of them at once cannot change what another sees. */
-export const readOnlyToolNames: ReadonlySet<string> = new Set([
+export const readOnlyToolNames = HashSet.fromIterable([
   "find_memory",
   "read_evidence",
   "trace_evidence",
@@ -84,7 +84,7 @@ function parallelReadsBody(tools: readonly AnyServerTool[], signal: AbortSignal)
 
   const wrapped = tools.map((tool): AnyServerTool => {
     const execute = tool.execute;
-    if (!isTruthy(execute) || !readOnlyToolNames.has(tool.name)) return tool;
+    if (!isTruthy(execute) || !HashSet.has(readOnlyToolNames, tool.name)) return tool;
     return {
       ...tool,
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -103,8 +103,8 @@ function parallelReadsBody(tools: readonly AnyServerTool[], signal: AbortSignal)
   const middleware: ChatMiddleware = {
     name: "memory-agent/parallel-reads",
     onBeforeToolCall(ctx, hook) {
-      if (!readOnlyToolNames.has(hook.toolName)) return undefined;
-      const answered = new Set(
+      if (!HashSet.has(readOnlyToolNames, hook.toolName)) return undefined;
+      const answered = HashSet.fromIterable(
         ctx.messages.flatMap((message) =>
           message.role === "tool" && isTruthy(message.toolCallId) ? [message.toolCallId] : [],
         ),
@@ -117,8 +117,8 @@ function parallelReadsBody(tools: readonly AnyServerTool[], signal: AbortSignal)
             (message.toolCalls ?? []).some((call) => call.id === hook.toolCallId),
         );
       for (const call of step?.role === "assistant" ? (step.toolCalls ?? []) : []) {
-        if (!readOnlyToolNames.has(call.function.name)) break;
-        if (answered.has(call.id)) continue;
+        if (!HashSet.has(readOnlyToolNames, call.function.name)) break;
+        if (HashSet.has(answered, call.id)) continue;
         const tool = Option.getOrUndefined(MutableHashMap.get(byName, call.function.name));
         if (isTruthy(tool)) startEarly(call.id, tool, call.function.arguments);
       }
