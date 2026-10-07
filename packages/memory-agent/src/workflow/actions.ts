@@ -1,3 +1,4 @@
+import { Function as EffectFunction, Schema } from "effect";
 import { isTruthy } from "../truthy.ts";
 import type { LeaseView } from "../sessions/lease-state.ts";
 import type { WorkflowAction, WorkflowPhase, WorkflowState } from "./workflow.ts";
@@ -31,8 +32,21 @@ export interface WorkflowActionContext {
 }
 
 /** Shared by snapshots and serialized mutations against the latest durable state. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function evaluateWorkflowAction(
+const isActionRequest = Schema.is(Schema.Struct({ kind: Schema.Literals(["phase", "control"]) }));
+export const evaluateWorkflowAction: {
+  (request: WorkflowActionRequest): (state: WorkflowState) => WorkflowActionDecision;
+  (
+    request: WorkflowActionRequest,
+    context: WorkflowActionContext,
+  ): (state: WorkflowState) => WorkflowActionDecision;
+  (state: WorkflowState, request: WorkflowActionRequest): WorkflowActionDecision;
+  (
+    state: WorkflowState,
+    request: WorkflowActionRequest,
+    context: WorkflowActionContext,
+  ): WorkflowActionDecision;
+} = EffectFunction.dual((args) => !isActionRequest(args[0]), evaluateWorkflowActionBody);
+function evaluateWorkflowActionBody(
   state: WorkflowState,
   request: WorkflowActionRequest,
   context: WorkflowActionContext = {},
@@ -41,33 +55,43 @@ export function evaluateWorkflowAction(
   if (context.running === true && (request.kind === "phase" || request.action === "resume"))
     return { allowed: false, reason: "run_in_progress" };
   const { goal, plan } = state;
-  if (request.kind === "phase") {
-    // Completion is a server-owned terminal phase, never a user navigation target.
-    if (request.phase === "completed") return { allowed: false, reason: "goal_terminal" };
-    // Non-execution phase navigation does not approve or mutate artifacts.
-    if (request.phase !== "execute") return { allowed: true };
-    if (isTruthy(goal) && isTruthy(plan) && plan.goalVersion !== goal.version)
-      return { allowed: false, reason: "plan_outdated" };
-    if (
-      !isTruthy(goal) ||
-      !isTruthy(plan) ||
-      (plan.status !== "ready" && plan.status !== "executing")
-    )
-      return { allowed: false, reason: "plan_not_ready" };
-    return { allowed: true, intent: plan.status === "executing" ? "continue" : "start" };
+  switch (request.kind) {
+    case "phase": {
+      // Completion is a server-owned terminal phase, never a user navigation target.
+      if (request.phase === "completed") return { allowed: false, reason: "goal_terminal" };
+      // Non-execution phase navigation does not approve or mutate artifacts.
+      if (request.phase !== "execute") return { allowed: true };
+      if (isTruthy(goal) && isTruthy(plan) && plan.goalVersion !== goal.version)
+        return { allowed: false, reason: "plan_outdated" };
+      if (
+        !isTruthy(goal) ||
+        !isTruthy(plan) ||
+        (plan.status !== "ready" && plan.status !== "executing")
+      )
+        return { allowed: false, reason: "plan_not_ready" };
+      return { allowed: true, intent: plan.status === "executing" ? "continue" : "start" };
+    }
+    case "control": {
+      if (!isTruthy(goal)) return { allowed: false, reason: "goal_missing" };
+      if (goal.status === "completed" || goal.status === "failed")
+        return { allowed: false, reason: "goal_terminal" };
+      if (request.action === "pause" && goal.status === "paused")
+        return { allowed: false, reason: "goal_not_active" };
+      if (request.action === "resume" && goal.status !== "paused")
+        return { allowed: false, reason: "goal_not_paused" };
+      return { allowed: true };
+    }
   }
-  if (!isTruthy(goal)) return { allowed: false, reason: "goal_missing" };
-  if (goal.status === "completed" || goal.status === "failed")
-    return { allowed: false, reason: "goal_terminal" };
-  if (request.action === "pause" && goal.status === "paused")
-    return { allowed: false, reason: "goal_not_active" };
-  if (request.action === "resume" && goal.status !== "paused")
-    return { allowed: false, reason: "goal_not_paused" };
-  return { allowed: true };
 }
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function workflowActions(
+const isStateInput = Schema.is(Schema.Struct({ phase: Schema.String }));
+export const workflowActions: {
+  (): (state: WorkflowState) => WorkflowActions;
+  (context: WorkflowActionContext): (state: WorkflowState) => WorkflowActions;
+  (state: WorkflowState): WorkflowActions;
+  (state: WorkflowState, context: WorkflowActionContext): WorkflowActions;
+} = EffectFunction.dual((args) => isStateInput(args[0]), workflowActionsBody);
+function workflowActionsBody(
   state: WorkflowState,
   context: WorkflowActionContext = {},
 ): WorkflowActions {
