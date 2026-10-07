@@ -36,8 +36,9 @@ export const OpenAICompatibleUpdate = Schema.Struct({
   apiKey: Schema.optional(Schema.Union([Schema.String, Schema.Null])),
 });
 export type OpenAICompatibleUpdate = typeof OpenAICompatibleUpdate.Type;
-export interface OpenAICompatibleStatus {
-  readonly configuration: OpenAICompatibleConfiguration | null;
-  readonly configured: boolean;
-  readonly hasApiKey: boolean;
-}
+export const OpenAICompatibleStatus = Schema.Struct({
+  configuration: Schema.NullOr(OpenAICompatibleConfiguration),
+  configured: Schema.Boolean,
+  hasApiKey: Schema.Boolean,
+});
+export type OpenAICompatibleStatus = typeof OpenAICompatibleStatus.Type;

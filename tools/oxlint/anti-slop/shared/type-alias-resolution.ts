@@ -1,4 +1,4 @@
-import { MutableHashMap, Option } from "effect";
+import { HashSet, MutableHashSet, MutableHashMap, Option } from "effect";
 import type { ESTree } from "vite-plus/lint/plugins";
 
 import { lexicalTypeParameterNames } from "./lexical-type-parameters.ts";
@@ -167,7 +167,7 @@ export function visibleTypeAlias(
 	use: ESTree.Node,
 	environment: TypeAliasEnvironment,
 ): ESTree.TSTypeAliasDeclaration | null {
-	if (lexicalTypeParameterNames(use, environment.visitorKeys).has(name)) return null;
+	if (MutableHashSet.has(lexicalTypeParameterNames(use, environment.visitorKeys), name)) return null;
 	const bindings = nearestTypeBindings(name, use, environment);
 	return bindings.length === 1 ? (bindings[0]?.alias ?? null) : null;
 }
@@ -179,7 +179,7 @@ export function hasVisibleTypeBinding(
 	environment: TypeAliasEnvironment,
 ): boolean {
 	return (
-		lexicalTypeParameterNames(use, environment.visitorKeys).has(name) ||
+		MutableHashSet.has(lexicalTypeParameterNames(use, environment.visitorKeys), name) ||
 		nearestTypeBindings(name, use, environment).length > 0
 	);
 }
@@ -218,7 +218,7 @@ export function resolvedTypeMatches(
 	const evaluate = (
 		current: ESTree.TSType,
 		substitutions: Substitutions,
-		resolvingAliases: ReadonlySet<ESTree.TSTypeAliasDeclaration>,
+		resolvingAliases: HashSet.HashSet<ESTree.TSTypeAliasDeclaration>,
 	): boolean => {
 		if (current.type === "TSTypeReference") {
 			const name = typeReferenceName(current);
@@ -232,11 +232,10 @@ export function resolvedTypeMatches(
 					);
 				}
 				const alias = visibleTypeAlias(name, current, environment);
-				if (alias !== null && !resolvingAliases.has(alias)) {
+				if (alias !== null && !HashSet.has(resolvingAliases, alias)) {
 					const nextSubstitutions = aliasSubstitutions(alias, current, substitutions);
 					if (nextSubstitutions !== null) {
-						const nextResolving = new Set(resolvingAliases);
-						nextResolving.add(alias);
+						const nextResolving = HashSet.add(resolvingAliases, alias);
 						return evaluate(alias.typeAnnotation, nextSubstitutions, nextResolving);
 					}
 				}
@@ -247,5 +246,5 @@ export function resolvedTypeMatches(
 		);
 	};
 
-	return evaluate(type, MutableHashMap.empty(), new Set());
+	return evaluate(type, MutableHashMap.empty(), HashSet.empty<ESTree.TSTypeAliasDeclaration>());
 }

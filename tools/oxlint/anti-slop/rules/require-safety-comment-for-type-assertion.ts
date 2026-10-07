@@ -1,3 +1,4 @@
+import { HashSet } from "effect";
 import { MutableHashMap, Option } from "effect";
 import { defineRule } from "vite-plus/lint/plugins";
 
@@ -7,7 +8,7 @@ type TypeAssertion = ESTree.TSAsExpression | ESTree.TSTypeAssertion;
 
 const DEFAULT_SAFETY_MARKERS = ["SAFETY"] as const;
 
-const commentOwnerKinds = new Set([
+const commentOwnerKinds = HashSet.fromIterable([
   "ExpressionStatement",
   "PropertyDefinition",
   "ReturnStatement",
@@ -66,7 +67,7 @@ function hasSafetyComment(
   let current: ESTree.Node = node;
   while (true) {
     if (hasSafetyJustificationBefore(sourceCode, current, node, pattern)) return true;
-    if (commentOwnerKinds.has(current.type)) {
+    if (HashSet.has(commentOwnerKinds, current.type)) {
       const exportDeclaration = current.parent;
       return (
         exportDeclaration.type === "ExportNamedDeclaration" &&

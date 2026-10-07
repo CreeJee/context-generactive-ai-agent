@@ -1,6 +1,6 @@
 import { isTruthy } from "../truthy.ts";
 import type { UIMessage } from "@tanstack/ai-client";
-import { Data, Result, Schema } from "effect";
+import { Effect, Function as EffectFunction, Result, Schema } from "effect";
 import { sessionHolderHeader } from "../sessions/lease-state.ts";
 
 /** Where the running app is, unless `CONTEXT_AGENT_URL` says otherwise. */
@@ -27,53 +27,69 @@ export type ProjectSummary = typeof ProjectSummary.Type;
 export type SessionSummary = typeof SessionSummary.Type;
 
 /** The app answered with an error, or could not be reached (`unreachable`). */
-export class AppRequestFailed extends Data.TaggedError("AppRequestFailed")<{
-  readonly status: number;
-  readonly code: string;
-  readonly message: string;
-}> {
-  constructor(status: number, code: string) {
-    super({ status, code, message: `${code} (${status})` });
-  }
-}
+export class AppRequestFailed extends Schema.TaggedError<AppRequestFailed>()("AppRequestFailed", {
+  status: Schema.Finite,
+  code: Schema.String,
+  message: Schema.String,
+  reason: Schema.Union([
+    Schema.TaggedStruct("TransportFailed", {}),
+    Schema.TaggedStruct("RequestRejected", {}),
+    Schema.TaggedStruct("InvalidResponse", {}),
+  ]),
+}) {}
+
+const requestFailure = (status: number, code: string, reason: AppRequestFailed["reason"]["_tag"]) =>
+  AppRequestFailed.make({ status, code, message: `${code} (${status})`, reason: { _tag: reason } });
 
 /**
  * The app's HTTP API as the ACP bridge uses it. The bridge owns no storage: the app process
  * keeps the database, the vector index and the ChatGPT connection, so sessions started from an
  * editor are the same sessions the web page shows.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function createAppApi(baseUrl: string, fetcher: typeof fetch = fetch) {
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const call = async <A, I>(
+export const createAppApi: {
+  (baseUrl: string): ReturnType<typeof createAppApiBody>;
+  (baseUrl: string, fetcher: typeof fetch): ReturnType<typeof createAppApiBody>;
+  (fetcher: typeof fetch): (baseUrl: string) => ReturnType<typeof createAppApiBody>;
+} = EffectFunction.dual((args) => Schema.is(Schema.String)(args[0]), createAppApiBody);
+function createAppApiBody(baseUrl: string, fetcher: typeof fetch = fetch) {
+  const requestEffect = <A, I>(schema: Schema.Codec<A, I>, path: string, init: RequestInit = {}) =>
+    Effect.gen(function* () {
+      const ownerSignal = yield* Effect.abortSignal;
+      const signal =
+        init.signal == null ? ownerSignal : AbortSignal.any([init.signal, ownerSignal]);
+      const response = yield* Effect.tryPromise({
+        try: () => fetcher(`${baseUrl}${path}`, { ...init, signal }),
+        catch: () => requestFailure(0, "unreachable", "TransportFailed"),
+      });
+      const parsed = yield* Effect.tryPromise({
+        try: () => response.json(),
+        catch: () => requestFailure(response.status, "unexpected_response", "InvalidResponse"),
+      }).pipe(Effect.result);
+      if (!response.ok) {
+        const body = Result.isSuccess(parsed) ? parsed.success : null;
+        const code = Result.match(Schema.decodeUnknownResult(ErrorBody)(body), {
+          onFailure: () => "request_failed",
+          onSuccess: (body) => body.error,
+        });
+        return yield* requestFailure(response.status, code, "RequestRejected");
+      }
+      const json: unknown = yield* Result.match(parsed, {
+        onFailure: Effect.fail,
+        onSuccess: Effect.succeed,
+      });
+      return yield* Schema.decodeUnknownEffect(schema)(json).pipe(
+        Effect.mapError(() =>
+          requestFailure(response.status, "unexpected_response", "InvalidResponse"),
+        ),
+      );
+    }).pipe(Effect.scoped);
+
+  // The ACP SDK consumes native Promises; request composition and failures remain Effect values.
+  const call = <A, I>(
     schema: Schema.Codec<A, I>,
     path: string,
     init: RequestInit = {},
-  ): Promise<A> => {
-    let response: Response;
-    try {
-      response = await fetcher(`${baseUrl}${path}`, init);
-    } catch {
-      throw new AppRequestFailed(0, "unreachable");
-    }
-    const json: unknown = await response.json().catch(() => null);
-    if (!response.ok) {
-      const code = Schema.decodeUnknownResult(ErrorBody)(json);
-      throw new AppRequestFailed(
-        response.status,
-        Result.match(code, {
-          onFailure: () => "request_failed",
-          onSuccess: (body) => body.error,
-        }),
-      );
-    }
-    return Result.getOrElse(Schema.decodeUnknownResult(schema)(json), (error) => {
-      throw new AppRequestFailed(
-        response.status,
-        `unexpected_response: ${String(error).split("\n")[0]}`,
-      );
-    });
-  };
+  ): Promise<A> => Effect.runPromise(requestEffect(schema, path, init));
 
   const post = (body: JsonBody, holder?: string): RequestInit => {
     const headers = new Headers({ "Content-Type": "application/json" });
@@ -84,6 +100,7 @@ export function createAppApi(baseUrl: string, fetcher: typeof fetch = fetch) {
   return {
     baseUrl,
     fetcher,
+    requestEffect,
 
     auth: () => call(AuthSummary, "/api/auth"),
 
@@ -114,15 +131,19 @@ export function createAppApi(baseUrl: string, fetcher: typeof fetch = fetch) {
 
     /** The saved conversation, as a reloaded page gets it. */
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    transcript: async (sessionId: string): Promise<UIMessage[]> => {
-      const body = await call(
-        Schema.Struct({ messages: Schema.Array(Schema.Unknown) }),
-        `/api/chat?session=${encodeURIComponent(sessionId)}&threadId=${encodeURIComponent(sessionId)}`,
-      );
-      // SAFETY: the app serializes UIMessage values it built itself; the bridge only reads roles,
-      // text and tool parts from them and ignores anything else.
-      return body.messages as UIMessage[];
-    },
+    transcript: (sessionId: string): Promise<UIMessage[]> =>
+      Effect.runPromise(
+        requestEffect(
+          Schema.Struct({ messages: Schema.Array(Schema.Unknown) }),
+          `/api/chat?session=${encodeURIComponent(sessionId)}&threadId=${encodeURIComponent(sessionId)}`,
+        ).pipe(
+          Effect.map(
+            (body) =>
+              // SAFETY: the app serializes UIMessage values; this native SDK boundary reads their roles and parts.
+              body.messages as UIMessage[],
+          ),
+        ),
+      ),
 
     /** Calls of subagents and external agents waiting for the user. */
     approvals: (sessionId: string) =>
@@ -156,4 +177,4 @@ export function createAppApi(baseUrl: string, fetcher: typeof fetch = fetch) {
   };
 }
 
-export type AppApi = ReturnType<typeof createAppApi>;
+export type AppApi = ReturnType<typeof createAppApiBody>;

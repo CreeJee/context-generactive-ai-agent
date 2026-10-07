@@ -1,3 +1,4 @@
+import { Function as EffectFunction, Schema } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { join } from "node:path";
 import { optionalProperty } from "./optional-property.ts";
@@ -134,8 +135,14 @@ export interface MemoryAgentLayerOptions {
 }
 
 /** Composition root: every memory-agent service backed by one storage directory. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerOptions = {}) {
+export const memoryAgentLayer: {
+  (
+    options: MemoryAgentLayerOptions,
+  ): (storageRoot: string) => ReturnType<typeof memoryAgentLayerBody>;
+  (storageRoot: string): ReturnType<typeof memoryAgentLayerBody>;
+  (storageRoot: string, options: MemoryAgentLayerOptions): ReturnType<typeof memoryAgentLayerBody>;
+} = EffectFunction.dual((args) => Schema.is(Schema.String)(args[0]), memoryAgentLayerBody);
+function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOptions = {}) {
   // Each tier only depends on the tiers below it.
   // The settings are read by services in every tier above, the embedder among them.
   const foundation = GlobalConfig.layer.pipe(

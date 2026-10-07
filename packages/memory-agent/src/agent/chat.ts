@@ -1884,12 +1884,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
             restoreModelHistory,
           ),
           modelImages(),
-          recordContextUsage(
+          recordContextUsage({
             metadata,
-            window,
-            () => compactionStage,
-            () => runtime.contextWindowKnown?.(selection.model) ?? false,
-          ),
+            windowTokens: window,
+            compactionStage: () => compactionStage,
+            windowKnown: () => runtime.contextWindowKnown?.(selection.model) ?? false,
+          }),
           collectApiUsage(usageLedger, {
             rootSessionId: sessionId,
             purpose: "main",
@@ -2385,13 +2385,13 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
           running: isTruthy(live) ? { runId: live.runId } : null,
           lastRun: last && { runId: last.runId, status: last.status, error: last.error ?? null },
           lease,
-          context: contextView(
-            usage?.inputTokens ?? null,
-            window.tokens,
-            usage?.cachedTokens ?? null,
-            usage?.compactionStage ?? null,
-            window.known,
-          ),
+          context: contextView({
+            usedTokens: usage?.inputTokens ?? null,
+            windowTokens: window.tokens,
+            cachedTokens: usage?.cachedTokens ?? null,
+            compactionStage: usage?.compactionStage ?? null,
+            windowKnown: window.known,
+          }),
           workflow,
           execution: yield* execution.get(sessionId),
           actions: workflowActions(workflow, { running: Boolean(live), lease }),

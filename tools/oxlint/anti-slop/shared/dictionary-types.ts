@@ -1,4 +1,4 @@
-import { MutableHashMap, Option } from "effect";
+import { HashSet, MutableHashMap, Option } from "effect";
 import type { ESTree } from "vite-plus/lint/plugins";
 
 import {
@@ -8,7 +8,7 @@ import {
 	type TypeAliasEnvironment as LexicalTypeAliasEnvironment,
 } from "./type-alias-resolution.ts";
 
-const BUILT_INS = new Set([
+const BUILT_INS = HashSet.fromIterable([
 	"Record",
 	"Readonly",
 	"Partial",
@@ -18,7 +18,7 @@ const BUILT_INS = new Set([
 	"PropertyKey",
 	"NonNullable",
 ]);
-const TRANSPARENT_WRAPPERS = new Set(["Readonly", "Partial", "Required", "NonNullable"]);
+const TRANSPARENT_WRAPPERS = HashSet.fromIterable(["Readonly", "Partial", "Required", "NonNullable"]);
 
 type TypeAliasEnvironment = MutableHashMap.MutableHashMap<string, ESTree.TSType>;
 
@@ -85,7 +85,7 @@ function isBuiltIn(
 	environment: TypeEnvironment,
 ): boolean {
 	return (
-		BUILT_INS.has(name) &&
+		HashSet.has(BUILT_INS, name) &&
 		!hasVisibleTypeBinding(name, use, environment.typeAliases)
 	);
 }
@@ -145,16 +145,15 @@ function isEffectivelyEmptyInterface(
 function resolvedSubstitutionArgument(
 	type: ESTree.TSType,
 	base: TypeAliasEnvironment,
-	resolving: ReadonlySet<string> = new Set(),
+	resolving: HashSet.HashSet<string> = HashSet.empty<string>(),
 ): ESTree.TSType {
 	const unwrapped = unwrapTransparentType(type);
 	if (unwrapped.type !== "TSTypeReference") return type;
 	const name = typeReferenceName(unwrapped);
-	if (name === null || resolving.has(name)) return type;
+	if (name === null || HashSet.has(resolving, name)) return type;
 	const substitution = Option.getOrUndefined(MutableHashMap.get(base, name));
 	if (substitution === undefined) return type;
-	const nextResolving = new Set(resolving);
-	nextResolving.add(name);
+	const nextResolving = HashSet.add(resolving, name);
 	return resolvedSubstitutionArgument(substitution, base, nextResolving);
 }
 
@@ -178,7 +177,7 @@ function unsafeDirectValue(
 	type: ESTree.TSType,
 	environment: TypeEnvironment,
 	substitutions: TypeAliasEnvironment,
-	resolvingAliases: ReadonlySet<string>,
+	resolvingAliases: HashSet.HashSet<string>,
 ): UnsafeDictionary["unsafeValue"] | null {
 	const unwrapped = unwrapTransparentType(type);
 	if (unwrapped.type === "TSUnknownKeyword") return "unknown";
@@ -205,7 +204,7 @@ function unsafeDirectValue(
 	if (unwrapped.type !== "TSTypeReference") return null;
 	const name = typeReferenceName(unwrapped);
 	if (name === null) return null;
-	if (TRANSPARENT_WRAPPERS.has(name) && isBuiltIn(name, unwrapped, environment)) {
+	if (HashSet.has(TRANSPARENT_WRAPPERS, name) && isBuiltIn(name, unwrapped, environment)) {
 		const wrapped = unwrapped.typeArguments?.params[0];
 		return wrapped === undefined
 			? null
@@ -222,11 +221,10 @@ function unsafeDirectValue(
 		return isEffectivelyEmptyInterface(interfaceDeclarations) ? "empty-object" : null;
 	}
 	const alias = visibleTypeAlias(name, unwrapped, environment.typeAliases);
-	if (alias === null || resolvingAliases.has(name)) return null;
+	if (alias === null || HashSet.has(resolvingAliases, name)) return null;
 	const nextSubstitutions = aliasSubstitution(alias, unwrapped, substitutions);
 	if (nextSubstitutions === null) return null;
-	const nextResolving = new Set(resolvingAliases);
-	nextResolving.add(name);
+	const nextResolving = HashSet.add(resolvingAliases, name);
 	return unsafeDirectValue(alias.typeAnnotation, environment, nextSubstitutions, nextResolving);
 }
 
@@ -234,7 +232,7 @@ function dictionaryValueTypes(
 	type: ESTree.TSType,
 	environment: TypeEnvironment,
 	substitutions: TypeAliasEnvironment,
-	resolvingAliases: ReadonlySet<string>,
+	resolvingAliases: HashSet.HashSet<string>,
 ): readonly ResolvedType[] {
 	const unwrapped = unwrapTransparentType(type);
 
@@ -263,7 +261,7 @@ function dictionaryValueTypes(
 			: dictionaryValueTypes(substitution, environment, substitutions, resolvingAliases);
 	}
 
-	if (TRANSPARENT_WRAPPERS.has(name) && isBuiltIn(name, unwrapped, environment)) {
+	if (HashSet.has(TRANSPARENT_WRAPPERS, name) && isBuiltIn(name, unwrapped, environment)) {
 		const wrapped = unwrapped.typeArguments?.params[0];
 		return wrapped === undefined
 			? []
@@ -286,11 +284,10 @@ function dictionaryValueTypes(
 	}
 
 	const alias = visibleTypeAlias(name, unwrapped, environment.typeAliases);
-	if (alias === null || resolvingAliases.has(name)) return [];
+	if (alias === null || HashSet.has(resolvingAliases, name)) return [];
 	const nextSubstitutions = aliasSubstitution(alias, unwrapped, substitutions);
 	if (nextSubstitutions === null) return [];
-	const nextResolving = new Set(resolvingAliases);
-	nextResolving.add(name);
+	const nextResolving = HashSet.add(resolvingAliases, name);
 	return dictionaryValueTypes(alias.typeAnnotation, environment, nextSubstitutions, nextResolving);
 }
 
@@ -298,7 +295,7 @@ export function classifyUnsafeDictionaryValue(
 	valueType: ESTree.TSType,
 	environment: TypeEnvironment,
 ): UnsafeDictionary | null {
-	const unsafeValue = unsafeDirectValue(valueType, environment, MutableHashMap.empty(), new Set());
+	const unsafeValue = unsafeDirectValue(valueType, environment, MutableHashMap.empty(), HashSet.empty<string>());
 	return unsafeValue === null ? null : { kind: "unsafe-dictionary", unsafeValue };
 }
 
@@ -306,12 +303,12 @@ export function classifyUnsafeDictionary(
 	type: ESTree.TSType,
 	environment: TypeEnvironment,
 ): UnsafeDictionary | null {
-	for (const valueType of dictionaryValueTypes(type, environment, MutableHashMap.empty(), new Set())) {
+	for (const valueType of dictionaryValueTypes(type, environment, MutableHashMap.empty(), HashSet.empty<string>())) {
 		const unsafeValue = unsafeDirectValue(
 			valueType.type,
 			environment,
 			valueType.substitutions,
-			new Set(),
+			HashSet.empty<string>(),
 		);
 		if (unsafeValue !== null) return { kind: "unsafe-dictionary", unsafeValue };
 	}
@@ -336,7 +333,7 @@ export function classifyWideningTarget(
 	if (unwrapped.type !== "TSTypeReference") return null;
 	const name = typeReferenceName(unwrapped);
 	if (name === null) return null;
-	if (TRANSPARENT_WRAPPERS.has(name) && isBuiltIn(name, unwrapped, environment)) {
+	if (HashSet.has(TRANSPARENT_WRAPPERS, name) && isBuiltIn(name, unwrapped, environment)) {
 		const wrapped = unwrapped.typeArguments?.params[0];
 		return wrapped === undefined ? null : classifyWideningTarget(wrapped, environment);
 	}
@@ -356,7 +353,7 @@ export function classifyWideningTarget(
 						alias.typeAnnotation,
 						environment,
 						substitutions,
-						new Set([name]),
+						HashSet.make(name),
 					);
 		return resolved?.kind === "open dictionary" ? { kind: "generic container" } : null;
 	}
@@ -366,7 +363,7 @@ export function classifyWideningTarget(
 		alias.typeAnnotation,
 		environment,
 		substitutions,
-		new Set([name]),
+		HashSet.make(name),
 	);
 	return resolved;
 }
@@ -384,7 +381,7 @@ function isBroadMappedKey(
 	type: ESTree.TSType,
 	environment: TypeEnvironment,
 	substitutions: TypeAliasEnvironment,
-	visitedAliases: ReadonlySet<string> = new Set(),
+	visitedAliases: HashSet.HashSet<string> = HashSet.empty<string>(),
 ): boolean {
 	const unwrapped = unwrapTransparentType(type);
 	if (
@@ -411,12 +408,11 @@ function isBroadMappedKey(
 	if (
 		alias === null ||
 		(alias.typeParameters?.params.length ?? 0) > 0 ||
-		visitedAliases.has(name)
+		HashSet.has(visitedAliases, name)
 	) {
 		return false;
 	}
-	const nextVisited = new Set(visitedAliases);
-	nextVisited.add(name);
+	const nextVisited = HashSet.add(visitedAliases, name);
 	return isBroadMappedKey(alias.typeAnnotation, environment, substitutions, nextVisited);
 }
 
@@ -424,7 +420,7 @@ function classifyAliasBroadTarget(
 	type: ESTree.TSType,
 	environment: TypeEnvironment,
 	substitutions: TypeAliasEnvironment,
-	resolvingAliases: ReadonlySet<string>,
+	resolvingAliases: HashSet.HashSet<string>,
 ): WideningTarget | null {
 	const unwrapped = unwrapTransparentType(type);
 	if (unwrapped.type === "TSUnknownKeyword") return { kind: "unknown" };
@@ -453,7 +449,7 @@ function classifyAliasBroadTarget(
 					resolvingAliases,
 				);
 	}
-	if (TRANSPARENT_WRAPPERS.has(name) && isBuiltIn(name, unwrapped, environment)) {
+	if (HashSet.has(TRANSPARENT_WRAPPERS, name) && isBuiltIn(name, unwrapped, environment)) {
 		const wrapped = unwrapped.typeArguments?.params[0];
 		return wrapped === undefined
 			? null
@@ -465,11 +461,10 @@ function classifyAliasBroadTarget(
 			: null;
 	}
 	const alias = visibleTypeAlias(name, unwrapped, environment.typeAliases);
-	if (alias === null || resolvingAliases.has(name)) return null;
+	if (alias === null || HashSet.has(resolvingAliases, name)) return null;
 	const nextSubstitutions = aliasSubstitution(alias, unwrapped, substitutions);
 	if (nextSubstitutions === null) return null;
-	const nextResolving = new Set(resolvingAliases);
-	nextResolving.add(name);
+	const nextResolving = HashSet.add(resolvingAliases, name);
 	return classifyAliasBroadTarget(
 		alias.typeAnnotation,
 		environment,

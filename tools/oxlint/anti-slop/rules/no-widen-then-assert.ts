@@ -1,3 +1,4 @@
+import { HashSet } from "effect";
 import { defineRule } from "vite-plus/lint/plugins";
 import type { ESTree, Variable } from "vite-plus/lint/plugins";
 
@@ -7,7 +8,7 @@ type KnownValueEvidence = {
   readonly type: ESTree.TSType | null;
 };
 
-const functionBoundaryTypes = new Set([
+const functionBoundaryTypes = HashSet.fromIterable([
   "ArrowFunctionExpression",
   "FunctionDeclaration",
   "FunctionExpression",
@@ -162,7 +163,7 @@ function isDefinitelyNarrowerRecordType(type: ESTree.TSType): boolean {
 function functionBoundary(node: ESTree.Node): ESTree.Node | null {
   let current = node.parent;
   while (current !== null && current.type !== "Program") {
-    if (functionBoundaryTypes.has(current.type)) return current;
+    if (HashSet.has(functionBoundaryTypes, current.type)) return current;
     current = current.parent;
   }
   return null;
@@ -201,7 +202,7 @@ function knownValueEvidence(
   expression: ESTree.Expression,
   scopes: Parameters<typeof resolvedVariableForIdentifier>[0],
   boundary: ESTree.Node | null,
-  visitedVariables: ReadonlySet<Variable>,
+  visitedVariables: HashSet.HashSet<Variable>,
 ): KnownValueEvidence | null {
   const unwrapped = unwrapExpressionParentheses(expression);
 
@@ -227,7 +228,7 @@ function knownValueEvidence(
 
   if (unwrapped.type !== "Identifier") return null;
   const variable = resolvedVariableForIdentifier(scopes, unwrapped);
-  if (variable === null || visitedVariables.has(variable)) return null;
+  if (variable === null || HashSet.has(visitedVariables, variable)) return null;
 
   const annotatedIdentifier = variable.identifiers.find(
     (identifier) => identifier.typeAnnotation !== null && identifier.typeAnnotation !== undefined,
@@ -256,7 +257,7 @@ function knownValueEvidence(
     declarator.init,
     scopes,
     boundary,
-    new Set([...visitedVariables, variable]),
+    HashSet.add(visitedVariables, variable),
   );
 }
 
@@ -294,7 +295,7 @@ function widenedBinding(
     initializerAssertion !== null && initializerBroadKind !== null
       ? assertedExpression(initializerAssertion)
       : declarator.init;
-  const evidence = knownValueEvidence(originalExpression, scopes, boundary, new Set([variable]));
+  const evidence = knownValueEvidence(originalExpression, scopes, boundary, HashSet.make(variable));
   return evidence === null ? null : { broadKind, evidence, declaredAt: declarator.end, boundary };
 }
 

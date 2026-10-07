@@ -1,3 +1,4 @@
+import { HashSet } from "effect";
 import { defineRule } from "vite-plus/lint/plugins";
 
 import {
@@ -10,7 +11,7 @@ import { visibleTypeAlias } from "../shared/type-alias-resolution.ts";
 
 import type { ESTree } from "vite-plus/lint/plugins";
 
-const typeNodeKinds: ReadonlySet<string> = new Set([
+const typeNodeKinds = HashSet.fromIterable([
 	"JSDocNonNullableType",
 	"JSDocNullableType",
 	"JSDocUnknownType",
@@ -51,7 +52,7 @@ const typeNodeKinds: ReadonlySet<string> = new Set([
 ]);
 
 function isTypeNode(node: ESTree.Node): node is ESTree.TSType {
-	return typeNodeKinds.has(node.type);
+	return HashSet.has(typeNodeKinds, node.type);
 }
 
 function typeReferenceName(type: ESTree.TSTypeReference): string | null {

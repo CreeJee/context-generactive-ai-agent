@@ -64,7 +64,7 @@ const failureMessages = HashMap.fromIterable([
 const explain = (error: Error) =>
   error instanceof acp.RequestError
     ? error
-    : error instanceof AppRequestFailed
+    : Schema.is(AppRequestFailed)(error)
       ? requestError(
           Option.getOrUndefined(HashMap.get(failureMessages, error.code)) ??
             `앱 요청이 실패했어요: ${error.code}`,
@@ -207,7 +207,13 @@ export function startAcpAgent(options: {
   const open = async (sessionId: string, project: ProjectSummary, messages: UIMessage[]) => {
     const holder = `acp-${randomUUID()}`;
     const lease = await api.lease(sessionId, holder, "claim");
-    if (lease.state !== "mine") throw new AppRequestFailed(423, "session_in_use");
+    if (lease.state !== "mine")
+      throw AppRequestFailed.make({
+        status: 423,
+        code: "session_in_use",
+        message: "session_in_use (423)",
+        reason: { _tag: "RequestRejected" },
+      });
     // Native callback heartbeat/debounce timing remains at the protocol boundary.
     const renew = setInterval(
       () => void api.lease(sessionId, holder, "claim").catch(() => undefined),
@@ -329,7 +335,13 @@ export function startAcpAgent(options: {
     .onRequest(acp.methods.agent.session.new, async (ctx) => {
       try {
         const auth = await api.auth();
-        if (auth.status !== "signed-in") throw new AppRequestFailed(401, "login_required");
+        if (auth.status !== "signed-in")
+          throw AppRequestFailed.make({
+            status: 401,
+            code: "login_required",
+            message: "login_required (401)",
+            reason: { _tag: "RequestRejected" },
+          });
         const project = await projectFor(ctx.params.cwd);
         // MCP servers an editor offers are not trusted here; the app's own MCP settings apply.
         const created = await api.createSession(project.id, "ACP");

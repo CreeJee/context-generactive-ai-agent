@@ -1,8 +1,9 @@
+import { HashSet } from "effect";
 import { defineRule } from "vite-plus/lint/plugins";
 
 import type { ESTree, Scope, SourceCode, Variable } from "vite-plus/lint/plugins";
 
-const moduleMockMethods = new Set(["doMock", "mock", "unstable_mockModule"]);
+const moduleMockMethods = HashSet.fromIterable(["doMock", "mock", "unstable_mockModule"]);
 
 function resolveVariable(
   sourceCode: SourceCode,
@@ -44,12 +45,12 @@ function isTestFrameworkObject(
     }
     const source = definition.parent.source.value;
     const name = importedName(definition.node);
-    return (source === "vitest" && name === "vi") || (source === "@jest/globals" && name === "jest");
+    return ((source === "vitest" || source === "vite-plus/test") && name === "vi") || (source === "@jest/globals" && name === "jest");
   });
 }
 
 function moduleMockCall(sourceCode: SourceCode, callee: ESTree.Expression): boolean {
-  if (!("property" in callee) || !("object" in callee) || !("computed" in callee)) return false;
+  if (callee.type !== "MemberExpression") return false;
   if (!isTestFrameworkObject(sourceCode, callee.object)) return false;
   const property = callee.property;
   const method = callee.computed
@@ -62,7 +63,7 @@ function moduleMockCall(sourceCode: SourceCode, callee: ESTree.Expression): bool
     : property.type === "Identifier"
       ? property.name
       : null;
-  return method !== null && moduleMockMethods.has(method);
+  return method !== null && HashSet.has(moduleMockMethods, method);
 }
 
 /** Ban test framework module mocking in favor of real dependency seams. */

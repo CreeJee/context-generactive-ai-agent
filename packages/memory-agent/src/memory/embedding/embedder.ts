@@ -1,3 +1,4 @@
+import { Array as EffectArray, Function as EffectFunction } from "effect";
 import { totalmem } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { join } from "node:path";
@@ -100,10 +101,15 @@ export function normalize(vector: Float32Array): Float32Array {
  * shortest first, each batch within {@link localModel.batchSize} texts and
  * {@link localModel.batchCost}.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function planBatches(
+type BatchLimits = { readonly size: number; readonly cost: number };
+export const planBatches: {
+  (tokenCounts: readonly number[]): number[][];
+  (tokenCounts: readonly number[], limits: BatchLimits): number[][];
+  (limits: BatchLimits): (tokenCounts: readonly number[]) => number[][];
+} = EffectFunction.dual((args) => EffectArray.isArray(args[0]), planBatchesBody);
+function planBatchesBody(
   tokenCounts: readonly number[],
-  limits: { readonly size: number; readonly cost: number } = {
+  limits: BatchLimits = {
     size: localModel.batchSize,
     cost: localModel.batchCost,
   },
@@ -176,11 +182,12 @@ const modes = {
 export const gpuMemoryThreshold = 16 * 1024 ** 3;
 
 /** The mode the app runs with, given the settings it starts with. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function embeddingModeFor(
-  settings: Settings,
-  memoryBytes: number = totalmem(),
-): EmbeddingMode {
+export const embeddingModeFor: {
+  (settings: Settings): EmbeddingMode;
+  (settings: Settings, memoryBytes: number): EmbeddingMode;
+  (memoryBytes: number): (settings: Settings) => EmbeddingMode;
+} = EffectFunction.dual((args) => !Schema.is(Schema.Finite)(args[0]), embeddingModeForBody);
+function embeddingModeForBody(settings: Settings, memoryBytes: number = totalmem()): EmbeddingMode {
   switch (settings.embeddingDevice ?? "auto") {
     case "cpu":
       return "cpu";

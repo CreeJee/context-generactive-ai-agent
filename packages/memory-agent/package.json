@@ -26,6 +26,7 @@
     "./testing": "./src/testing/index.ts",
     "./definitions": "./src/tools/definitions.ts",
     "./provider-contracts": "./src/providers/contracts.ts",
+    "./compatible-config": "./src/providers/openai-compatible-config.ts",
     "./package.json": "./package.json",
     "./acp": "./src/acp/index.ts",
     "./kiwi-worker": "./src/memory/morph/kiwi-worker.ts",

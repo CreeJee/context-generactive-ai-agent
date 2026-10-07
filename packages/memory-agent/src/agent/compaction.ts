@@ -4,7 +4,7 @@ import type { ChatMiddleware, MetadataStore, ModelMessage } from "@tanstack/ai";
 import { evictOldest } from "@tanstack/ai-compaction";
 import { MutableHashMap, MutableHashSet, Effect, Option, Schema } from "effect";
 import { recentRawUserTurns } from "./compaction-policy.ts";
-import { consumeColdObservation, pendingColdObservation } from "./context-usage.ts";
+import { consumeColdObservationEffect, pendingColdObservationEffect } from "./context-usage.ts";
 import type { CompactResult, CompactionStage } from "./run-state.ts";
 import { isEmptyUserText } from "../messages/empty-user.ts";
 
@@ -638,11 +638,18 @@ function compactionBody(
             };
           }
           const state = yield* compactionStateEffect({ metadata, threadId: ctx.threadId });
-          const coldId = yield* compactionPromise({
-            operation: "read-cold",
-            reason: "MetadataFailed",
-            evaluate: () => pendingColdObservation(metadata, ctx.threadId),
-          });
+          const coldId = yield* pendingColdObservationEffect({
+            metadata,
+            threadId: ctx.threadId,
+          }).pipe(
+            Effect.mapError((failure) =>
+              CompactionFailed.make({
+                operation: "read-cold",
+                reason: { _tag: "MetadataFailed" },
+                cause: failure.cause,
+              }),
+            ),
+          );
           const restored =
             historyForModel === undefined
               ? null
@@ -675,11 +682,19 @@ function compactionBody(
             early: coldId !== null,
           });
           if (coldId !== null)
-            yield* compactionPromise({
-              operation: "consume-cold",
-              reason: "MetadataFailed",
-              evaluate: () => consumeColdObservation(metadata, ctx.threadId, coldId),
-            });
+            yield* consumeColdObservationEffect({
+              metadata,
+              threadId: ctx.threadId,
+              observationId: coldId,
+            }).pipe(
+              Effect.mapError((failure) =>
+                CompactionFailed.make({
+                  operation: "consume-cold",
+                  reason: { _tag: "MetadataFailed" },
+                  cause: failure.cause,
+                }),
+              ),
+            );
           observed(isTruthy(restored) && stage === "none" ? "summarize" : stage);
           const question = restored?.findLast(
             (message) => message.role === "user" && messageText(message).trim(),

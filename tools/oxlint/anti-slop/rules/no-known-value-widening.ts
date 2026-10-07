@@ -1,3 +1,4 @@
+import { MutableHashSet } from "effect";
 import { defineRule } from "vite-plus/lint/plugins";
 
 import {
@@ -64,13 +65,13 @@ function isStableConstVariable(variable: Variable, declarator: ESTree.VariableDe
 function hasKnownEvidence(
 	sourceCode: SourceCode,
 	expression: ESTree.Expression,
-	visitedVariables = new Set<Variable>(),
+	visitedVariables = MutableHashSet.empty<Variable>(),
 ): boolean {
 	if (isKnownEvidenceExpression(expression)) return true;
 	const unwrapped = unwrapExpression(expression);
 	if (unwrapped.type !== "Identifier") return false;
 	const variable = resolveVariable(sourceCode, unwrapped);
-	if (variable === null || visitedVariables.has(variable)) return false;
+	if (variable === null || MutableHashSet.has(visitedVariables, variable)) return false;
 	const declarator = variableDeclarator(variable);
 	if (
 		declarator === null ||
@@ -79,7 +80,7 @@ function hasKnownEvidence(
 	) {
 		return false;
 	}
-	visitedVariables.add(variable);
+	MutableHashSet.add(visitedVariables, variable);
 	return hasKnownEvidence(sourceCode, declarator.init, visitedVariables);
 }
 
@@ -151,7 +152,7 @@ function hasKnownCallArgumentEvidence(
 	sourceCode: SourceCode,
 	expression: ESTree.Expression,
 	environment: TypeEnvironment,
-	visitedVariables = new Set<Variable>(),
+	visitedVariables = MutableHashSet.empty<Variable>(),
 ): boolean {
 	if (expression.type === "ParenthesizedExpression" || expression.type === "TSNonNullExpression") {
 		return hasKnownCallArgumentEvidence(
@@ -179,7 +180,7 @@ function hasKnownCallArgumentEvidence(
 	}
 	if (expression.type !== "Identifier") return isKnownEvidenceExpression(expression);
 	const variable = resolveVariable(sourceCode, expression);
-	if (variable === null || visitedVariables.has(variable)) return false;
+	if (variable === null || MutableHashSet.has(visitedVariables, variable)) return false;
 	const annotation = variableTypeAnnotation(sourceCode, variable);
 	if (annotation !== null) {
 		return hasInformativeType(annotation.typeAnnotation, environment);
@@ -192,7 +193,7 @@ function hasKnownCallArgumentEvidence(
 	) {
 		return false;
 	}
-	visitedVariables.add(variable);
+	MutableHashSet.add(visitedVariables, variable);
 	return hasKnownCallArgumentEvidence(
 		sourceCode,
 		declarator.init,

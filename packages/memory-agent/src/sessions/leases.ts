@@ -1,5 +1,15 @@
 import { isTruthy } from "../truthy.ts";
-import { MutableHashMap, Option, Context, Effect, Layer } from "effect";
+import {
+  Clock,
+  DateTime,
+  Function as EffectFunction,
+  MutableHashMap,
+  Option,
+  Context,
+  Effect,
+  Layer,
+  Schema,
+} from "effect";
 import type { ClaimResult, LeaseView } from "./lease-state.ts";
 
 /**
@@ -27,7 +37,8 @@ export class SessionLeases extends Context.Service<SessionLeases, ReturnType<typ
     Layer.effect(
       SessionLeases,
       Effect.gen(function* () {
-        const leases = makeLeases(ttlMs);
+        const clock = yield* Clock.Clock;
+        const leases = makeLeases(ttlMs, () => clock.currentTimeMillisUnsafe());
         yield* Effect.forkScoped(
           Effect.forever(
             Effect.sleep(Math.max(1_000, ttlMs)).pipe(
@@ -40,8 +51,15 @@ export class SessionLeases extends Context.Service<SessionLeases, ReturnType<typ
     );
 }
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function makeLeases(ttlMs: number, now: () => number = Date.now) {
+export const makeLeases: {
+  (now: () => number): (ttlMs: number) => ReturnType<typeof makeLeasesBody>;
+  (ttlMs: number): ReturnType<typeof makeLeasesBody>;
+  (ttlMs: number, now: () => number): ReturnType<typeof makeLeasesBody>;
+} = EffectFunction.dual((args) => Schema.is(Schema.Finite)(args[0]), makeLeasesBody);
+function makeLeasesBody(
+  ttlMs: number,
+  now: () => number = () => DateTime.toEpochMillis(DateTime.nowUnsafe()),
+) {
   const leases = MutableHashMap.empty<string, Lease>();
   const live = (sessionId: string) => {
     const lease = Option.getOrUndefined(MutableHashMap.get(leases, sessionId));

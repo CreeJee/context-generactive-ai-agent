@@ -1,3 +1,4 @@
+import { MutableHashSet } from "effect";
 import type { ESTree } from "vite-plus/lint/plugins";
 
 type VisitorKeys = Readonly<Record<string, readonly string[]>>;
@@ -14,9 +15,9 @@ function isNode(value: unknown): value is ESTree.Node {
 function collectInferTypeParameterNames(
 	node: ESTree.Node,
 	visitorKeys: VisitorKeys,
-	names: Set<string>,
+	names: MutableHashSet.MutableHashSet<string>,
 ): void {
-	if (node.type === "TSInferType") names.add(node.typeParameter.name.name);
+	if (node.type === "TSInferType") MutableHashSet.add(names, node.typeParameter.name.name);
 	const record = node as unknown as Readonly<Record<string, unknown>>;
 	for (const key of visitorKeys[node.type] ?? []) {
 		const value = record[key];
@@ -35,21 +36,21 @@ function collectInferTypeParameterNames(
 export function lexicalTypeParameterNames(
 	node: ESTree.Node,
 	visitorKeys: VisitorKeys,
-): ReadonlySet<string> {
-	const names = new Set<string>();
+): MutableHashSet.MutableHashSet<string> {
+	const names = MutableHashSet.empty<string>();
 	let descendant: ESTree.Node = node;
 	let current: ESTree.Node | null = node;
 	while (current !== null && current.type !== "Program") {
 		if ("typeParameters" in current) {
 			for (const parameter of current.typeParameters?.params ?? []) {
-				names.add(parameter.name.name);
+				MutableHashSet.add(names, parameter.name.name);
 			}
 		}
 		if (
 			current.type === "TSMappedType" &&
 			(descendant === current.nameType || descendant === current.typeAnnotation)
 		) {
-			names.add(current.key.name);
+			MutableHashSet.add(names, current.key.name);
 		}
 		if (current.type === "TSConditionalType" && descendant === current.trueType) {
 			collectInferTypeParameterNames(current.extendsType, visitorKeys, names);
