@@ -91,10 +91,12 @@ describe("searchTerms", () => {
 
 describe("fuseRanks", () => {
   test("rewards agreement between rankings using ranks only", () => {
-    const fused = fuseRanks([
-      ["vector-only", "both"],
-      ["both", "text-only"],
-    ]);
+    const fused = fuseRanks({
+      lists: [
+        ["vector-only", "both"],
+        ["both", "text-only"],
+      ],
+    });
     expect(Option.getOrUndefined(MutableHashMap.get(fused, "vector-only"))).toBeCloseTo(0.5);
     expect(Option.getOrUndefined(MutableHashMap.get(fused, "both"))!).toBeGreaterThan(
       Option.getOrUndefined(MutableHashMap.get(fused, "vector-only"))!,
@@ -102,24 +104,26 @@ describe("fuseRanks", () => {
     expect(Option.getOrUndefined(MutableHashMap.get(fused, "text-only"))!).toBeLessThan(
       Option.getOrUndefined(MutableHashMap.get(fused, "vector-only"))!,
     );
-    expect(Option.getOrUndefined(MutableHashMap.get(fuseRanks([["a"], ["a"]]), "a"))).toBeCloseTo(
-      1,
-    );
+    expect(
+      Option.getOrUndefined(MutableHashMap.get(fuseRanks({ lists: [["a"], ["a"]] }), "a")),
+    ).toBeCloseTo(1);
   });
 
   test("a weighted list outvotes the others by its weight", () => {
-    const fused = fuseRanks(
-      [
+    const fused = fuseRanks({
+      lists: [
         ["exact", "other"],
         ["near", "exact"],
       ],
-      [2, 1],
-    );
+      weights: [2, 1],
+    });
     expect(Option.getOrUndefined(MutableHashMap.get(fused, "exact"))!).toBeGreaterThan(
       Option.getOrUndefined(MutableHashMap.get(fused, "near"))!,
     );
     expect(
-      Option.getOrUndefined(MutableHashMap.get(fuseRanks([["a"], ["b"]], [2, 1]), "a")),
+      Option.getOrUndefined(
+        MutableHashMap.get(fuseRanks({ lists: [["a"], ["b"]], weights: [2, 1] }), "a"),
+      ),
     ).toBeCloseTo(2 / 3);
   });
 });

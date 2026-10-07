@@ -80,11 +80,11 @@ const fusionK = 60;
  * lists gets 0.5. Equal scores keep the order of the lists: a node the first list holds comes out
  * ahead.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function fuseRanks(
-  lists: readonly (readonly string[])[],
-  weights: readonly number[] = lists.map(() => 1),
-): MutableHashMap.MutableHashMap<string, number> {
+export function fuseRanks(input: {
+  readonly lists: readonly (readonly string[])[];
+  readonly weights?: readonly number[];
+}): MutableHashMap.MutableHashMap<string, number> {
+  const { lists, weights = input.lists.map(() => 1) } = input;
   const scores = MutableHashMap.empty<string, number>();
   lists.forEach((list, index) => {
     const weight = weights[index] ?? 1;
@@ -307,11 +307,11 @@ const make = (tuning: SearchTuning) =>
         const morph = byMorph.length > 0 ? [byMorph] : [];
         const seeds =
           tuning.text && tuning.exactFirst && namesSomethingExactly(input.query)
-            ? fuseRanks(
-                [byText, ...morph, byVector],
-                [tuning.exactTextWeight, ...morph.map(() => 1), 1],
-              )
-            : fuseRanks([byVector, byText, ...morph]);
+            ? fuseRanks({
+                lists: [byText, ...morph, byVector],
+                weights: [tuning.exactTextWeight, ...morph.map(() => 1), 1],
+              })
+            : fuseRanks({ lists: [byVector, byText, ...morph] });
         const vectorIds = HashSet.fromIterable(byVector);
 
         const walk = graph.traverse(seeds, {

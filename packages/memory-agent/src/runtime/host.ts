@@ -31,15 +31,31 @@ const searchPath = (env: NodeJS.ProcessEnv, platform: NodeJS.Platform) =>
  * folder) can never shadow it. On Windows the `PATHEXT` extensions (`.exe`, `.cmd`, …) are tried.
  */
 export const findExecutable: {
+  (): (name: string) => ReturnType<typeof findExecutableBody>;
+  (env: NodeJS.ProcessEnv | undefined): (name: string) => ReturnType<typeof findExecutableBody>;
   (
-    env?: NodeJS.ProcessEnv,
-    platform?: NodeJS.Platform,
-    isFile?: (path: string) => boolean,
+    env: NodeJS.ProcessEnv | undefined,
+    platform: NodeJS.Platform | undefined,
   ): (name: string) => ReturnType<typeof findExecutableBody>;
-} & typeof findExecutableBody = EffectFunction.dual(
-  (args) => Schema.is(Schema.String)(args[0]),
-  findExecutableBody,
-);
+  (
+    env: NodeJS.ProcessEnv | undefined,
+    platform: NodeJS.Platform | undefined,
+    isFile: ((path: string) => boolean) | undefined,
+  ): (name: string) => ReturnType<typeof findExecutableBody>;
+  (name: string): ReturnType<typeof findExecutableBody>;
+  (name: string, env: NodeJS.ProcessEnv | undefined): ReturnType<typeof findExecutableBody>;
+  (
+    name: string,
+    env: NodeJS.ProcessEnv | undefined,
+    platform: NodeJS.Platform | undefined,
+  ): ReturnType<typeof findExecutableBody>;
+  (
+    name: string,
+    env: NodeJS.ProcessEnv | undefined,
+    platform: NodeJS.Platform | undefined,
+    isFile: ((path: string) => boolean) | undefined,
+  ): ReturnType<typeof findExecutableBody>;
+} = EffectFunction.dual((args) => Schema.is(Schema.String)(args[0]), findExecutableBody);
 function findExecutableBody(
   name: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -114,28 +130,12 @@ interface RenameOptions {
   readonly rename?: (from: string, to: string) => void;
 }
 
-export const renameWhenReleased: {
-  (options: RenameOptions): (from: string) => Promise<void>;
-  (
-    from: string,
-    to: string,
-    platform?: NodeJS.Platform,
-    rename?: (from: string, to: string) => void,
-  ): Promise<void>;
-} = EffectFunction.dual(
-  (args) => Schema.is(Schema.String)(args[0]),
-  (
-    from: string,
-    to: string | RenameOptions,
-    platform: NodeJS.Platform = process.platform,
-    rename: (from: string, to: string) => void = renameSync,
-  ) =>
-    Effect.runPromise(
-      renameWhenReleasedEffect(
-        Schema.is(Schema.String)(to) ? { from, to, platform, rename } : { from, ...to },
-      ),
-    ),
-);
+/** Native archive installer entry point; Effect callers retain the caller clock and interruption. */
+export function renameWhenReleased(
+  options: RenameOptions & { readonly from: string },
+): Promise<void> {
+  return Effect.runPromise(renameWhenReleasedEffect(options));
+}
 
 export const renameWhenReleasedEffect = Effect.fn("renameWhenReleased")(function* (
   options: RenameOptions & { readonly from: string },
@@ -195,15 +195,34 @@ const pick = (env: NodeJS.ProcessEnv, names: readonly string[]) =>
  * the user's other variables (R14). `user` adds the per-user folders on Windows.
  */
 export const helperEnvironment: {
+  (options: {
+    readonly user: boolean;
+  }): (searchDirectories: readonly string[]) => ReturnType<typeof helperEnvironmentBody>;
   (
     options: { readonly user: boolean },
-    env?: NodeJS.ProcessEnv,
-    platform?: NodeJS.Platform,
+    env: NodeJS.ProcessEnv | undefined,
   ): (searchDirectories: readonly string[]) => ReturnType<typeof helperEnvironmentBody>;
-} & typeof helperEnvironmentBody = EffectFunction.dual(
-  (args) => EffectArray.isArray(args[0]),
-  helperEnvironmentBody,
-);
+  (
+    options: { readonly user: boolean },
+    env: NodeJS.ProcessEnv | undefined,
+    platform: NodeJS.Platform | undefined,
+  ): (searchDirectories: readonly string[]) => ReturnType<typeof helperEnvironmentBody>;
+  (
+    searchDirectories: readonly string[],
+    options: { readonly user: boolean },
+  ): ReturnType<typeof helperEnvironmentBody>;
+  (
+    searchDirectories: readonly string[],
+    options: { readonly user: boolean },
+    env: NodeJS.ProcessEnv | undefined,
+  ): ReturnType<typeof helperEnvironmentBody>;
+  (
+    searchDirectories: readonly string[],
+    options: { readonly user: boolean },
+    env: NodeJS.ProcessEnv | undefined,
+    platform: NodeJS.Platform | undefined,
+  ): ReturnType<typeof helperEnvironmentBody>;
+} = EffectFunction.dual((args) => EffectArray.isArray(args[0]), helperEnvironmentBody);
 function helperEnvironmentBody(
   searchDirectories: readonly string[],
   options: { readonly user: boolean },
@@ -235,15 +254,29 @@ export interface ShellInvocation {
 }
 
 export const shellInvocation: {
+  (env: NodeJS.ProcessEnv): (command: string) => ReturnType<typeof shellInvocationBody>;
   (
     env: NodeJS.ProcessEnv,
-    platform?: NodeJS.Platform,
-    exists?: (path: string) => boolean,
-  ): (command: string) => ShellInvocation;
-} & typeof shellInvocationBody = EffectFunction.dual(
-  (args) => Schema.is(Schema.String)(args[0]),
-  shellInvocationBody,
-);
+    platform: NodeJS.Platform | undefined,
+  ): (command: string) => ReturnType<typeof shellInvocationBody>;
+  (
+    env: NodeJS.ProcessEnv,
+    platform: NodeJS.Platform | undefined,
+    exists: ((path: string) => boolean) | undefined,
+  ): (command: string) => ReturnType<typeof shellInvocationBody>;
+  (command: string, env: NodeJS.ProcessEnv): ReturnType<typeof shellInvocationBody>;
+  (
+    command: string,
+    env: NodeJS.ProcessEnv,
+    platform: NodeJS.Platform | undefined,
+  ): ReturnType<typeof shellInvocationBody>;
+  (
+    command: string,
+    env: NodeJS.ProcessEnv,
+    platform: NodeJS.Platform | undefined,
+    exists: ((path: string) => boolean) | undefined,
+  ): ReturnType<typeof shellInvocationBody>;
+} = EffectFunction.dual((args) => Schema.is(Schema.String)(args[0]), shellInvocationBody);
 function shellInvocationBody(
   command: string,
   env: NodeJS.ProcessEnv,
@@ -269,8 +302,11 @@ function shellInvocationBody(
  * real program running if only the launcher were killed, so the whole tree goes.
  */
 export const endChild: {
-  (platform?: NodeJS.Platform): (child: ChildProcess) => void;
-} & typeof endChildBody = EffectFunction.dual(
+  (): (child: ChildProcess) => ReturnType<typeof endChildBody>;
+  (platform: NodeJS.Platform | undefined): (child: ChildProcess) => ReturnType<typeof endChildBody>;
+  (child: ChildProcess): ReturnType<typeof endChildBody>;
+  (child: ChildProcess, platform: NodeJS.Platform | undefined): ReturnType<typeof endChildBody>;
+} = EffectFunction.dual(
   (args) => args.length > 0 && !Schema.is(Schema.UndefinedOr(Schema.String))(args[0]),
   endChildBody,
 );
@@ -284,11 +320,18 @@ function endChildBody(child: ChildProcess, platform: NodeJS.Platform = process.p
  * spawned `detached`); Windows has no groups or SIGTERM, so `taskkill /T /F` ends the tree at once.
  */
 export const stopProcessTree: {
-  (force: boolean, platform?: NodeJS.Platform): (pid: number) => void;
-} & typeof stopProcessTreeBody = EffectFunction.dual(
-  (args) => Schema.is(Schema.Finite)(args[0]),
-  stopProcessTreeBody,
-);
+  (force: boolean): (pid: number) => ReturnType<typeof stopProcessTreeBody>;
+  (
+    force: boolean,
+    platform: NodeJS.Platform | undefined,
+  ): (pid: number) => ReturnType<typeof stopProcessTreeBody>;
+  (pid: number, force: boolean): ReturnType<typeof stopProcessTreeBody>;
+  (
+    pid: number,
+    force: boolean,
+    platform: NodeJS.Platform | undefined,
+  ): ReturnType<typeof stopProcessTreeBody>;
+} = EffectFunction.dual((args) => Schema.is(Schema.Finite)(args[0]), stopProcessTreeBody);
 function stopProcessTreeBody(
   pid: number,
   force: boolean,

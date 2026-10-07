@@ -112,11 +112,13 @@ describe("host differences", () => {
       };
     };
     const windows = renameAfter(2);
-    await renameWhenReleased("a", "b", "win32", windows.rename);
+    await renameWhenReleased({ from: "a", to: "b", platform: "win32", rename: windows.rename });
     expect(windows.calls()).toBe(3);
 
     const posix = renameAfter(1);
-    await expect(renameWhenReleased("a", "b", "linux", posix.rename)).rejects.toMatchObject({
+    await expect(
+      renameWhenReleased({ from: "a", to: "b", platform: "linux", rename: posix.rename }),
+    ).rejects.toMatchObject({
       _tag: "DirectoryRenameFailed",
       reason: { _tag: "RenameFailed", code: "EPERM" },
     });

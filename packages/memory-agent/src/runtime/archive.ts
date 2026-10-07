@@ -83,7 +83,7 @@ async function installArchiveBody(
     await run(tar, ["-xzf", file, "-C", staging]);
     rmSync(file, { maxRetries: 10, retryDelay: 200 });
     rmSync(target, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-    await renameWhenReleased(staging, target);
+    await renameWhenReleased({ from: staging, to: target });
     return null;
   };
   const failure = await extract().catch((error: Error) => failed("extract_failed", explain(error)));
