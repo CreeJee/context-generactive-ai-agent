@@ -21,6 +21,7 @@ test("fresh Node executes saved recording factory after source removal and persi
     await cp(join(root, "src"), source, { recursive: true });
     const allowed = HashSet.fromIterable([
       "effect",
+      "@effect/platform-node",
       "@tanstack/ai",
       "@secretlint/core",
       "@secretlint/profiler",

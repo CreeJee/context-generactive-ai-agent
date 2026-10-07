@@ -25,6 +25,7 @@ const buildNative = Effect.fn("OwnerNativeBuilder.build")(function* (
   const sources = MutableHashMap.empty<string, string>();
   const allowed = HashSet.fromIterable([
     "effect",
+    "@effect/platform-node",
     "@tanstack/ai",
     "@secretlint/core",
     "@secretlint/profiler",

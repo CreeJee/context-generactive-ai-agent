@@ -1046,3 +1046,11 @@
 - 예상 실패는 `ArchiveInstallFailed`와 태그가 있는 reason으로 전파한다. native Promise 진입점에서만 기존 결과 형식으로 변환하며 Effect 호출자는 자기 runtime과 취소 계약을 유지한다.
 - 임시 디렉터리는 `acquireUseRelease`가 정상 완료·실패·중단 시 반납한다. tar 중단은 프로세스를 종료하고 close를 기다린 뒤 디렉터리를 정리한다. 정리 실패도 typed error 채널에 남긴다.
 - unstable API 진단과 native artifact의 의존성 제한은 유지한다. 서비스로 감싸는 것만으로 어댑터 경고가 해결됐다고 간주하지 않으며, 남은 Node·fetch 경고는 별도로 추적한다.
+
+## Node 플랫폼 서비스와 native factory 호스트 의존성 (2026-10-07)
+
+- archive와 프로젝트 등록의 파일·경로·해시·UUID 작업은 `FileSystem`, `Path`, `Crypto` 서비스로 합성하고 Node 구현은 `@effect/platform-node` Layer에서 제공한다. 서비스 구성 시 의존성을 캡처하며 내부에서 별도의 runtime을 만들지 않는다.
+- 프로젝트 경로 부재와 권한·stat·UUID 실패를 구분하고 후자는 `ProjectHostFailed` 실패 채널에 남긴다. symlink의 실제 경로 해석과 저장소 겹침 거부는 유지한다.
+- 파일 삭제 재시도는 기존 errno 목록·횟수·지연을 Schedule로 유지한다. 취소할 수 없는 단일 Node 파일 작업은 완료를 기다린 뒤 staging을 해제하되 재시도 사이의 대기는 중단할 수 있다.
+- native factory의 명시적 호스트 패키지 목록에 기존 의존성인 `@effect/platform-node`를 추가한다. 외부 패키지 전부를 허용하지 않으며, 빌드와 소스 제거 후 새 프로세스 실행으로 호스트 해석을 검증한다.
+- `O_NOFOLLOW`와 동기 transaction fence처럼 설치된 플랫폼 API로 동일하게 표현할 수 없는 보호 계약은 그대로 유지한다. 프로세스·HTTP의 unstable API 정책과 진단 설정은 이 변경에서 낮추지 않는다.

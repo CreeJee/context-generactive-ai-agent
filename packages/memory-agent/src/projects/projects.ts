@@ -1,16 +1,23 @@
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { realpathSync, statSync } from "node:fs";
 import type { SQLOutputValue } from "node:sqlite";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { basename, resolve } from "node:path";
-import { DateTime, Clock, Context, Data, Effect, Layer, Schema } from "effect";
+import {
+  DateTime,
+  Clock,
+  Context,
+  Crypto,
+  Data,
+  Effect,
+  FileSystem,
+  Layer,
+  Path,
+  Schema,
+} from "effect";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
+import * as NodePath from "@effect/platform-node/NodePath";
 import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
-import { canonicalPath, pathsOverlap } from "../files/paths.ts";
 
 /**
  * How approval-gated tools (shell, writes outside the project) are allowed.
@@ -70,12 +77,52 @@ export class ProjectNotFound extends Data.TaggedError("ProjectNotFound")<{
   readonly id: string;
 }> {}
 
+export class ProjectHostFailed extends Schema.TaggedError<ProjectHostFailed>()(
+  "ProjectHostFailed",
+  {
+    root: Schema.String,
+    reason: Schema.Union([
+      Schema.TaggedStruct("RealPathFailed", { cause: Schema.Defect() }),
+      Schema.TaggedStruct("StatFailed", { cause: Schema.Defect() }),
+      Schema.TaggedStruct("IdentityFailed", { cause: Schema.Defect() }),
+    ]),
+  },
+) {}
+
 const make = Effect.gen(function* () {
   const effectClock = yield* Clock.Clock;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const crypto = yield* Crypto.Crypto;
+  const canonical = Effect.fnUntraced(function* (
+    requested: string,
+  ): Effect.fn.Return<string, ProjectHostFailed> {
+    return yield* fs.realPath(requested).pipe(
+      Effect.catchTag("PlatformError", (error) => {
+        switch (error.reason._tag) {
+          case "NotFound": {
+            const parent = path.dirname(requested);
+            return parent === requested
+              ? Effect.succeed(requested)
+              : canonical(parent).pipe(
+                  Effect.map((resolved) => path.join(resolved, path.basename(requested))),
+                );
+          }
+          default:
+            return Effect.fail(
+              ProjectHostFailed.make({
+                root: requested,
+                reason: { _tag: "RealPathFailed", cause: error },
+              }),
+            );
+        }
+      }),
+    );
+  });
 
   const db = yield* Database;
   const storage = yield* StorageRoot;
-  const storageRoot = canonicalPath(storage.path);
+  const storageRoot = yield* canonical(storage.path);
 
   const find = (id: string) =>
     Effect.sync(() => db.sqlite.prepare("SELECT * FROM projects WHERE id = ?").get(id)).pipe(
@@ -120,20 +167,56 @@ const make = Effect.gen(function* () {
     /** Registering a root widens what file and shell tools may touch, so it is checked here. */
     add: (requestedRoot: string) =>
       Effect.gen(function* () {
-        const absolute = resolve(requestedRoot);
-        const root = yield* Effect.try({
-          try: () => realpathSync.native(absolute),
-          catch: () => new ProjectRootRejected({ root: absolute, reason: "not_found" }),
-        });
-        if (!statSync(root).isDirectory())
+        const absolute = path.resolve(requestedRoot);
+        const root = yield* fs.realPath(absolute).pipe(
+          Effect.catchTag(
+            "PlatformError",
+            (error): Effect.Effect<never, ProjectRootRejected | ProjectHostFailed> => {
+              switch (error.reason._tag) {
+                case "NotFound":
+                  return Effect.fail(
+                    new ProjectRootRejected({ root: absolute, reason: "not_found" }),
+                  );
+                default:
+                  return Effect.fail(
+                    ProjectHostFailed.make({
+                      root: absolute,
+                      reason: { _tag: "RealPathFailed", cause: error },
+                    }),
+                  );
+              }
+            },
+          ),
+        );
+        const info = yield* fs
+          .stat(root)
+          .pipe(
+            Effect.mapError((cause) =>
+              ProjectHostFailed.make({ root, reason: { _tag: "StatFailed", cause } }),
+            ),
+          );
+        if (info.type !== "Directory")
           return yield* new ProjectRootRejected({ root, reason: "not_directory" });
-        if (pathsOverlap(root, storageRoot))
+        const contains = (parent: string) => (candidate: string) => {
+          const relative = path.relative(parent, candidate);
+          return (
+            relative === "" ||
+            (relative !== ".." &&
+              !relative.startsWith(".." + path.sep) &&
+              !path.isAbsolute(relative))
+          );
+        };
+        if (contains(root)(storageRoot) || contains(storageRoot)(root))
           return yield* new ProjectRootRejected({ root, reason: "overlaps_storage" });
 
         const project: Project = {
-          id: randomUUID(),
+          id: yield* crypto.randomUUIDv4.pipe(
+            Effect.mapError((cause) =>
+              ProjectHostFailed.make({ root, reason: { _tag: "IdentityFailed", cause } }),
+            ),
+          ),
           root,
-          name: basename(root) || root,
+          name: path.basename(root) || root,
           crossRecallExcluded: false,
           permissionMode: "ask",
           createdAt: DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
@@ -182,5 +265,8 @@ const make = Effect.gen(function* () {
 export class Projects extends Context.Service<Projects, Effect.Success<typeof make>>()(
   "memory-agent/projects/projects",
 ) {
-  static readonly layer = Layer.effect(Projects, make);
+  static readonly layerNoDeps = Layer.effect(Projects, make);
+  static readonly layer = Projects.layerNoDeps.pipe(
+    Layer.provide(Layer.mergeAll(NodeCrypto.layer, NodeFileSystem.layer, NodePath.layer)),
+  );
 }

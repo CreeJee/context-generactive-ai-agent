@@ -27,6 +27,7 @@ test("factory bundle imports shared host packages and binds fresh central servic
   try {
     const allowedPackages = HashSet.fromIterable([
       "effect",
+      "@effect/platform-node",
       "@tanstack/ai",
       "@secretlint/core",
       "@secretlint/profiler",

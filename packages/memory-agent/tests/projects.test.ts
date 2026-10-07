@@ -1,142 +1,143 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { Effect, Result, Layer } from "effect";
-import { afterEach, describe, expect, test } from "vite-plus/test";
+import { expect, it } from "@effect/vitest";
+import { NodeCrypto, NodeFileSystem, NodePath } from "@effect/platform-node";
+import { Context, Effect, FileSystem, Layer, Path, PlatformError } from "effect";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { Database } from "../src/db/database.ts";
 import { Projects } from "../src/projects/projects.ts";
 
-const directories: string[] = [];
-afterEach(() => {
-  for (const directory of directories.splice(0))
-    rmSync(directory, { recursive: true, force: true });
+const hostLayer = Layer.mergeAll(NodeCrypto.layer, NodeFileSystem.layer, NodePath.layer);
+const workspace = Effect.fnUntraced(function* () {
+  const host = yield* Layer.build(hostLayer);
+  const fs = Context.get(host, FileSystem.FileSystem);
+  const path = Context.get(host, Path.Path);
+  const base = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
+  const storage = path.join(base, "storage");
+  const app = path.join(base, "code", "app");
+  yield* fs.makeDirectory(app, { recursive: true });
+  const open = Effect.fnUntraced(function* (filesystem: FileSystem.FileSystem) {
+    const services = yield* Layer.build(
+      Projects.layerNoDeps.pipe(
+        Layer.provide(Database.layer(path.join(storage, "agent.db"))),
+        Layer.provide(StorageRoot.layer(storage)),
+        Layer.provide(
+          Layer.mergeAll(
+            NodeCrypto.layer,
+            NodePath.layer,
+            Layer.succeed(FileSystem.FileSystem, filesystem),
+          ),
+        ),
+      ),
+    );
+    return Context.get(services, Projects);
+  });
+  return { base, storage, app, fs, path, open };
 });
 
-function workspace() {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), "memory-agent-projects-")));
-  directories.push(base);
-  const storage = join(base, "storage");
-  const app = join(base, "code", "app");
-  mkdirSync(app, { recursive: true });
-  return { base, storage, app };
-}
-
-const run = <A, E>(storage: string, program: Effect.Effect<A, E, Projects>) =>
-  Effect.runPromise(
-    program.pipe(
-      // Test entry point owns this Layer and its resource scope.
-      Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
-        const services = yield* Layer.build(
-          Projects.layer.pipe(
-            Layer.provide(Database.layer(join(storage, "agent.db"))),
-            Layer.provide(StorageRoot.layer(storage)),
-          ),
-        );
-        return yield* Effect.provideContext(program, services);
-      }, Effect.scoped),
-    ),
-  );
-
-const rejection = <A, E>(effect: Effect.Effect<A, E>) =>
-  effect.pipe(
-    Effect.result,
-    Effect.map((result) => (Result.isFailure(result) ? result.failure : null)),
-  );
-
-describe("Projects", () => {
-  test("registers a canonical root once and lists it after reopening", async () => {
-    const { storage, app, base } = workspace();
-    const link = join(base, "app-link");
-    symlinkSync(app, link);
-
-    const added = await run(
-      storage,
+it.live("registers a canonical root once and lists it after reopening", () =>
+  Effect.gen(function* () {
+    const fixture = yield* workspace();
+    const { base, app, fs, path } = fixture;
+    const link = path.join(base, "app-link");
+    yield* fs.symlink(app, link);
+    const added = yield* Effect.scoped(
       Effect.gen(function* () {
-        const projects = yield* Projects;
+        const projects = yield* fixture.open(fs);
         const project = yield* projects.add(link);
-        const again = yield* rejection(projects.add(app));
+        const again = yield* Effect.result(projects.add(app));
         return { project, again };
       }),
     );
     expect(added.project).toMatchObject({ root: app, name: "app", crossRecallExcluded: false });
     expect(added.again).toMatchObject({
-      _tag: "ProjectRootRejected",
-      reason: "already_registered",
+      _tag: "Failure",
+      failure: { _tag: "ProjectRootRejected", reason: "already_registered" },
     });
+    const reopened = yield* fixture.open(fs);
+    expect(yield* reopened.list).toEqual([added.project]);
+  }),
+);
 
-    const listed = await run(
-      storage,
-      Effect.flatMap(Projects, (projects) => projects.list),
+it.live("rejects missing, file and storage-overlapping roots", () =>
+  Effect.gen(function* () {
+    const fixture = yield* workspace();
+    const { base, storage, fs, path } = fixture;
+    const file = path.join(base, "notes.txt");
+    yield* fs.writeFileString(file, "x");
+    const projects = yield* fixture.open(fs);
+    for (const input of [
+      { root: path.join(base, "missing"), reason: "not_found" },
+      { root: file, reason: "not_directory" },
+      { root: storage, reason: "overlaps_storage" },
+      { root: base, reason: "overlaps_storage" },
+    ]) {
+      expect(yield* Effect.result(projects.add(input.root))).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "ProjectRootRejected", reason: input.reason },
+      });
+    }
+  }),
+);
+
+it.live("toggles cross-project recall exclusion and reports unknown ids", () =>
+  Effect.gen(function* () {
+    const fixture = yield* workspace();
+    const projects = yield* fixture.open(fixture.fs);
+    const project = yield* projects.add(fixture.app);
+    expect((yield* projects.setCrossRecallExcluded(project.id, true)).crossRecallExcluded).toBe(
+      true,
     );
-    expect(listed).toEqual([added.project]);
-  });
-
-  test("rejects roots that are missing, files, or overlap the storage root", async () => {
-    const { storage, base } = workspace();
-    const file = join(base, "notes.txt");
-    writeFileSync(file, "x");
-    mkdirSync(storage, { recursive: true });
-
-    const reasons = await run(
-      storage,
-      Effect.gen(function* () {
-        const projects = yield* Projects;
-        return [
-          yield* rejection(projects.add(join(base, "missing"))),
-          yield* rejection(projects.add(file)),
-          yield* rejection(projects.add(storage)),
-          yield* rejection(projects.add(base)),
-        ].map((error) => (error?._tag === "ProjectRootRejected" ? error.reason : null));
-      }),
-    );
-    expect(reasons).toEqual(["not_found", "not_directory", "overlaps_storage", "overlaps_storage"]);
-  });
-
-  test("toggles cross-project recall exclusion and reports unknown ids", async () => {
-    const { storage, app } = workspace();
-    const result = await run(
-      storage,
-      Effect.gen(function* () {
-        const projects = yield* Projects;
-        const project = yield* projects.add(app);
-        const excluded = yield* projects.setCrossRecallExcluded(project.id, true);
-        const missing = yield* rejection(projects.setCrossRecallExcluded("nope", true));
-        return { excluded, missing };
-      }),
-    );
-    expect(result.excluded.crossRecallExcluded).toBe(true);
-    expect(result.missing).toMatchObject({ _tag: "ProjectNotFound", id: "nope" });
-  });
-
-  test("starts in ask mode and switches the permission mode", async () => {
-    const { storage, app } = workspace();
-    const modes = await run(
-      storage,
-      Effect.gen(function* () {
-        const projects = yield* Projects;
-        const project = yield* projects.add(app);
-        const auto = yield* projects.setPermissionMode(project.id, "auto");
-        const full = yield* projects.setPermissionMode(project.id, "full");
-        const ask = yield* projects.setPermissionMode(project.id, "ask");
-        const missing = yield* rejection(projects.setPermissionMode("nope", "auto"));
-        return {
-          initial: project.permissionMode,
-          auto: auto.permissionMode,
-          full: full.permissionMode,
-          ask: ask.permissionMode,
-          missing,
-        };
-      }),
-    );
-    expect(modes).toMatchObject({
-      initial: "ask",
-      auto: "auto",
-      full: "full",
-      ask: "ask",
-      missing: { _tag: "ProjectNotFound" },
+    expect(yield* Effect.result(projects.setCrossRecallExcluded("nope", true))).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "ProjectNotFound", id: "nope" },
     });
-  });
-});
+  }),
+);
+
+it.live("starts in ask mode and switches the permission mode", () =>
+  Effect.gen(function* () {
+    const fixture = yield* workspace();
+    const projects = yield* fixture.open(fixture.fs);
+    const project = yield* projects.add(fixture.app);
+    expect(project.permissionMode).toBe("ask");
+    for (const mode of ["auto", "full", "ask"] as const) {
+      expect((yield* projects.setPermissionMode(project.id, mode)).permissionMode).toBe(mode);
+    }
+    expect(yield* Effect.result(projects.setPermissionMode("nope", "auto"))).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "ProjectNotFound" },
+    });
+  }),
+);
+
+it.live("permission and stat failures stay typed and cannot register a project", () =>
+  Effect.gen(function* () {
+    const fixture = yield* workspace();
+    const denied = PlatformError.systemError({
+      _tag: "PermissionDenied",
+      module: "FileSystem",
+      method: "realPath",
+    });
+    const projects = yield* fixture.open(
+      FileSystem.makeNoop({
+        ...fixture.fs,
+        realPath: (requested) =>
+          requested === fixture.app ? Effect.fail(denied) : fixture.fs.realPath(requested),
+      }),
+    );
+    expect(yield* Effect.result(projects.add(fixture.app))).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "ProjectHostFailed", reason: { _tag: "RealPathFailed", cause: denied } },
+    });
+    const raced = yield* fixture.open(
+      FileSystem.makeNoop({
+        ...fixture.fs,
+        stat: () => Effect.fail(denied),
+      }),
+    );
+    expect(yield* Effect.result(raced.add(fixture.app))).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "ProjectHostFailed", reason: { _tag: "StatFailed", cause: denied } },
+    });
+    expect(yield* projects.list).toEqual([]);
+  }),
+);

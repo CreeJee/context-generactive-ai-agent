@@ -1,8 +1,18 @@
-import { Effect, Function as EffectFunction, Layer, Schema } from "effect";
+import {
+  Crypto,
+  Duration,
+  Effect,
+  FileSystem,
+  Function as EffectFunction,
+  Layer,
+  Path,
+  Schedule,
+  Schema,
+} from "effect";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
+import * as NodePath from "@effect/platform-node/NodePath";
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
 import {
   ArchiveHost,
   ArchiveInstaller,
@@ -10,7 +20,7 @@ import {
   type PinnedArchive,
   type ArchiveStaging,
 } from "./archive-install.ts";
-import { renameWhenReleasedEffect, tarExecutable } from "./host.ts";
+import { tarExecutable } from "./host.ts";
 
 export {
   ArchiveHost,
@@ -99,89 +109,107 @@ const archiveCommand = (options: {
     });
   });
 
-/** Node ABI adapter: individual I/O operations, not the installation workflow. */
-export const archiveHostLayer = Layer.succeed(
+const removalCode = Schema.is(
+  Schema.Struct({
+    code: Schema.Literals(["EBUSY", "ENOTEMPTY", "EPERM", "EMFILE", "ENFILE"]),
+  }),
+);
+const renameCode = Schema.is(
+  Schema.Struct({ code: Schema.Literals(["EPERM", "EACCES", "EBUSY"]) }),
+);
+const removalRetries = Schedule.recurs(10).pipe(
+  Schedule.addDelay(({ output }) => Effect.succeed(Duration.millis(200 * (output + 1)))),
+);
+
+/** Platform services are captured at construction; methods expose only the archive contract. */
+export const archiveHostLayer = Layer.effect(
   ArchiveHost,
-  ArchiveHost.of({
-    download: Effect.fn("ArchiveHost.download")(function* (url: string) {
-      // One fiber signal owns both the request and consumption of its response body.
-      return yield* Effect.tryPromise({
-        try: (signal) =>
-          fetch(url, { redirect: "follow", signal }).then((response) => {
-            if (!response.ok) {
-              throw ArchiveInstallFailed.make({
-                reason: { _tag: "HttpStatus", status: response.status },
-              });
-            }
-            return response.arrayBuffer().then((bytes) => new Uint8Array(bytes));
-          }),
-        catch: (cause) =>
-          Schema.is(ArchiveInstallFailed)(cause)
-            ? cause
-            : ArchiveInstallFailed.make({ reason: { _tag: "DownloadFailed", cause } }),
-      });
-    }),
-    checksum: (options) =>
-      Effect.try({
-        try: () => createHash(options.algorithm).update(options.bytes).digest("hex"),
-        catch: hostFailure("checksum"),
-      }),
-    stage: (target) =>
-      Effect.try({
-        try: () => {
-          mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-          const directory = mkdtempSync(join(dirname(target), ".install-"));
-          return { directory, file: join(directory, "archive.tgz") };
-        },
-        catch: hostFailure("stage"),
-      }),
-    write: (options) =>
-      Effect.try({
-        try: () => writeFileSync(options.staging.file, options.bytes, { mode: 0o600 }),
-        catch: hostFailure("write"),
-      }),
-    list: (staging) =>
-      archiveCommand({
-        operation: "list",
-        args: ["-tzf", staging.file],
-        maxBuffer: 64 * 1024 * 1024,
-      }),
-    extract: (staging) =>
-      archiveCommand({
-        operation: "extract",
-        args: ["-xzf", staging.file, "-C", staging.directory],
-        maxBuffer: 1024 * 1024,
-      }).pipe(Effect.asVoid),
-    publish: Effect.fn("ArchiveHost.publish")(function* (options: {
-      readonly staging: ArchiveStaging;
-      readonly target: string;
-    }) {
-      yield* Effect.try({
-        try: () => {
-          rmSync(options.staging.file, { maxRetries: 10, retryDelay: 200 });
-          rmSync(options.target, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-        },
-        catch: hostFailure("publish"),
-      });
-      yield* renameWhenReleasedEffect({ from: options.staging.directory, to: options.target }).pipe(
-        Effect.mapError(hostFailure("publish")),
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const crypto = yield* Crypto.Crypto;
+    // Node filesystem calls cannot abort; settle each call before staging is released.
+    const remove = (file: string) =>
+      fs.remove(file, { recursive: true, force: true }).pipe(
+        Effect.uninterruptible,
+        Effect.retry({
+          schedule: removalRetries,
+          while: (error) => removalCode(error.reason.cause),
+        }),
       );
-    }),
-    cleanup: (staging) =>
-      Effect.try({
-        try: () =>
-          rmSync(staging.directory, {
-            recursive: true,
-            force: true,
-            maxRetries: 10,
-            retryDelay: 200,
-          }),
-        catch: hostFailure("cleanup"),
+    return ArchiveHost.of({
+      download: Effect.fn("ArchiveHost.download")(function* (url: string) {
+        // One fiber signal owns both the request and consumption of its response body.
+        return yield* Effect.tryPromise({
+          try: (signal) =>
+            fetch(url, { redirect: "follow", signal }).then((response) => {
+              if (!response.ok) {
+                throw ArchiveInstallFailed.make({
+                  reason: { _tag: "HttpStatus", status: response.status },
+                });
+              }
+              return response.arrayBuffer().then((bytes) => new Uint8Array(bytes));
+            }),
+          catch: (cause) =>
+            Schema.is(ArchiveInstallFailed)(cause)
+              ? cause
+              : ArchiveInstallFailed.make({ reason: { _tag: "DownloadFailed", cause } }),
+        });
       }),
+      checksum: (options) =>
+        crypto.digest(options.algorithm === "sha256" ? "SHA-256" : "SHA-512", options.bytes).pipe(
+          Effect.map((digest) => Buffer.from(digest).toString("hex")),
+          Effect.mapError(hostFailure("checksum")),
+        ),
+      stage: Effect.fn("ArchiveHost.stage")(
+        function* (target: string) {
+          const parent = path.dirname(target);
+          yield* fs.makeDirectory(parent, { recursive: true, mode: 0o700 });
+          const directory = yield* fs.makeTempDirectory({ directory: parent, prefix: ".install-" });
+          return { directory, file: path.join(directory, "archive.tgz") };
+        },
+        Effect.mapError(hostFailure("stage")),
+      ),
+      write: (options) =>
+        fs
+          .writeFile(options.staging.file, options.bytes, { mode: 0o600 })
+          .pipe(Effect.uninterruptible, Effect.mapError(hostFailure("write"))),
+      list: (staging) =>
+        archiveCommand({
+          operation: "list",
+          args: ["-tzf", staging.file],
+          maxBuffer: 64 * 1024 * 1024,
+        }),
+      extract: (staging) =>
+        archiveCommand({
+          operation: "extract",
+          args: ["-xzf", staging.file, "-C", staging.directory],
+          maxBuffer: 1024 * 1024,
+        }).pipe(Effect.asVoid),
+      publish: Effect.fn("ArchiveHost.publish")(
+        function* (options: { readonly staging: ArchiveStaging; readonly target: string }) {
+          yield* remove(options.staging.file);
+          yield* remove(options.target);
+          yield* fs.rename(options.staging.directory, options.target).pipe(
+            Effect.uninterruptible,
+            Effect.retry({
+              times: 19,
+              schedule: Schedule.spaced("500 millis"),
+              while: (error) => process.platform === "win32" && renameCode(error.reason.cause),
+            }),
+          );
+        },
+        Effect.mapError(hostFailure("publish")),
+      ),
+      cleanup: (staging) => remove(staging.directory).pipe(Effect.mapError(hostFailure("cleanup"))),
+    });
   }),
 );
 
-const installerLayer = ArchiveInstaller.layer.pipe(Layer.provide(archiveHostLayer));
+const installerLayer = ArchiveInstaller.layer.pipe(
+  Layer.provide(archiveHostLayer),
+  Layer.provide(Layer.mergeAll(NodeCrypto.layer, NodeFileSystem.layer, NodePath.layer)),
+);
 
 const nativeFailure = (error: ArchiveInstallFailed): ArchiveFailure => {
   switch (error.reason._tag) {

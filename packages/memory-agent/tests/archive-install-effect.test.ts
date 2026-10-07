@@ -1,7 +1,17 @@
 import { expect, it } from "@effect/vitest";
 import { assertTrue } from "@effect/vitest/utils";
-import { NodeFileSystem, NodePath } from "@effect/platform-node";
-import { Context, Deferred, Effect, Exit, Fiber, FileSystem, Layer, Path } from "effect";
+import { NodeCrypto, NodeFileSystem, NodePath } from "@effect/platform-node";
+import {
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  FileSystem,
+  Layer,
+  Path,
+  PlatformError,
+} from "effect";
 import {
   ArchiveHost,
   ArchiveInstaller,
@@ -13,6 +23,7 @@ import {
   ArchiveIntegrityRejected,
   npmIntegrity,
 } from "../src/runtime/archive.ts";
+import { TestClock } from "effect/testing";
 import { tgz } from "./support/tgz.ts";
 
 const pin: PinnedArchive = {
@@ -129,7 +140,9 @@ it.effect("extract and cleanup failures remain typed; interruption waits for cle
 it.live("native adapter installs real tar contents and keeps an existing target on rejection", () =>
   Effect.gen(function* () {
     const context = yield* Layer.build(
-      Layer.mergeAll(NodeFileSystem.layer, NodePath.layer, archiveHostLayer),
+      archiveHostLayer.pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeCrypto.layer, NodeFileSystem.layer, NodePath.layer)),
+      ),
     );
     const fs = Context.get(context, FileSystem.FileSystem);
     const path = Context.get(context, Path.Path);
@@ -189,5 +202,54 @@ it.live("native adapter installs real tar contents and keeps an existing target 
     }
     expect(yield* fs.exists(path.join(directory, "outside"))).toBe(false);
     expect(() => npmIntegrity(pin.url, "sha256-abc")).toThrow(ArchiveIntegrityRejected);
+  }),
+);
+
+it.effect("platform cleanup retries transient errno failures and interruption stops retries", () =>
+  Effect.gen(function* () {
+    let attempts = 0;
+    const busy = PlatformError.systemError({
+      _tag: "Busy",
+      module: "FileSystem",
+      method: "remove",
+      cause: { code: "EBUSY" },
+    });
+    const filesystem = FileSystem.makeNoop({
+      remove: () =>
+        Effect.suspend(() => {
+          attempts++;
+          return Effect.fail(busy);
+        }),
+    });
+    const context = yield* Layer.build(
+      archiveHostLayer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            NodeCrypto.layer,
+            NodePath.layer,
+            Layer.succeed(FileSystem.FileSystem, filesystem),
+          ),
+        ),
+      ),
+    );
+    const host = Context.get(context, ArchiveHost);
+    const exhausted = yield* Effect.forkChild(Effect.result(host.cleanup(staging)));
+    yield* TestClock.adjust("11 seconds");
+    expect(yield* Fiber.join(exhausted)).toMatchObject({
+      _tag: "Failure",
+      failure: {
+        _tag: "ArchiveInstallFailed",
+        reason: { _tag: "HostOperationFailed", operation: "cleanup", cause: busy },
+      },
+    });
+    expect(attempts).toBe(11);
+    attempts = 0;
+    const cancelled = yield* Effect.forkChild(host.cleanup(staging));
+    yield* TestClock.adjust("600 millis");
+    yield* Fiber.interrupt(cancelled);
+    assertTrue(Exit.hasInterrupts(yield* Fiber.await(cancelled)));
+    const before = attempts;
+    yield* TestClock.adjust("20 seconds");
+    expect(attempts).toBe(before);
   }),
 );
