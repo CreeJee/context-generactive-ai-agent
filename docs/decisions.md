@@ -1039,3 +1039,10 @@
 - 기억 과제의 최종 응답은 `decision`과 `evidenceIds` 두 필드만 가진 JSON으로 받는다. 현재 결정의 정확한 일치와 원본 정정 노드 하나의 인용을 함께 요구한다.
 - 정정 턴 직후 실제 사용자 노드 ID를 별도로 고정한다. 채점 시 원본의 존재, 종류, 프로젝트, 세션, 정정 텍스트를 확인한다. 원본을 고정할 수 없는 실행은 `evaluation_incomplete`이며, 잘못된 답변은 실패 점수다.
 - 기존 문구·UUID 패턴 채점의 점수와 새 점수는 직접 비교하지 않는다. 평가 이미지를 다시 빌드해 같은 채점기로 기준과 후보를 평가하며, 이미 소비한 sealed corpus 영수증은 초기화하지 않는다.
+
+## archive 설치의 Effect 서비스와 호스트 경계 (2026-10-07)
+
+- archive 검증·설치 순서는 `ArchiveInstaller`, 다운로드·해시·파일·tar 실행은 주입 가능한 `ArchiveHost`로 분리한다. 구현 의존성은 Layer 구성에서 해결하며 도메인 서비스 메서드에는 호스트 요구사항을 누출하지 않는다.
+- 예상 실패는 `ArchiveInstallFailed`와 태그가 있는 reason으로 전파한다. native Promise 진입점에서만 기존 결과 형식으로 변환하며 Effect 호출자는 자기 runtime과 취소 계약을 유지한다.
+- 임시 디렉터리는 `acquireUseRelease`가 정상 완료·실패·중단 시 반납한다. tar 중단은 프로세스를 종료하고 close를 기다린 뒤 디렉터리를 정리한다. 정리 실패도 typed error 채널에 남긴다.
+- unstable API 진단과 native artifact의 의존성 제한은 유지한다. 서비스로 감싸는 것만으로 어댑터 경고가 해결됐다고 간주하지 않으며, 남은 Node·fetch 경고는 별도로 추적한다.
