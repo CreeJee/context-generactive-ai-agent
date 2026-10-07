@@ -2,7 +2,17 @@ import { ANTHROPIC_MODELS, type AnthropicChatModel } from "@tanstack/ai-anthropi
 import * as AnthropicTools from "@tanstack/ai-anthropic/tools";
 import { OPENAI_CHAT_MODELS, type OpenAIChatModel } from "@tanstack/ai-openai";
 import * as OpenAITools from "@tanstack/ai-openai/tools";
-import { MutableHashMap, HashSet, Option, Context, Data, Effect, Layer } from "effect";
+import {
+  Array as EffectArray,
+  Function as EffectFunction,
+  MutableHashMap,
+  HashSet,
+  Option,
+  Context,
+  Data,
+  Effect,
+  Layer,
+} from "effect";
 import type { ProviderVendor } from "./contracts.ts";
 import {
   anthropicModelToolCapabilities,
@@ -412,8 +422,18 @@ export interface ProviderToolCapabilityRegistryApi {
 }
 const compareDescriptor = (left: AnyProviderToolDescriptor, right: AnyProviderToolDescriptor) =>
   left.id.localeCompare(right.id);
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function filterProviderTools(
+export const filterProviderTools: {
+  (): (descriptors: readonly AnyProviderToolDescriptor[]) => readonly AnyProviderToolDescriptor[];
+  (
+    filter: ProviderToolFilter | undefined,
+  ): (descriptors: readonly AnyProviderToolDescriptor[]) => readonly AnyProviderToolDescriptor[];
+  (descriptors: readonly AnyProviderToolDescriptor[]): readonly AnyProviderToolDescriptor[];
+  (
+    descriptors: readonly AnyProviderToolDescriptor[],
+    filter: ProviderToolFilter | undefined,
+  ): readonly AnyProviderToolDescriptor[];
+} = EffectFunction.dual((args) => EffectArray.isArray(args[0]), filterProviderToolsBody);
+function filterProviderToolsBody(
   descriptors: readonly AnyProviderToolDescriptor[],
   filter: ProviderToolFilter = {},
 ): readonly AnyProviderToolDescriptor[] {
