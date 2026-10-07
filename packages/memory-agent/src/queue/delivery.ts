@@ -1,6 +1,7 @@
+import { nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
 import { isTruthy } from "../truthy.ts";
 import type { ChatMiddleware, ContentPart, ModelMessage } from "@tanstack/ai";
-import { Context, Data, Effect, Layer } from "effect";
+import { Context, Data, Effect, Layer, Result } from "effect";
 import { Attachments } from "../attachments/attachments.ts";
 import { attachmentUrl } from "../attachments/urls.ts";
 import { ChatState } from "../chat-state/chat-state.ts";
@@ -26,7 +27,7 @@ export class QueueSteerFailed extends Data.TaggedError("QueueSteerFailed")<{
 }> {}
 
 const make = Effect.gen(function* () {
-  const run = Effect.runPromiseWith(yield* Effect.context());
+  const run = runNativeEffectWith(yield* Effect.context());
   const queue = yield* MessageQueue;
   const active = yield* ActiveProvider;
   const nodes = yield* Nodes;
@@ -72,19 +73,23 @@ const make = Effect.gen(function* () {
 
   /** Puts steered messages into the saved conversation, before the answer they arrived during. */
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const saveSteered = async (binding: DeliveryBinding) => {
+  const saveSteered = Effect.fn("QueueDelivery.saveSteered")(function* (binding: DeliveryBinding) {
     const steered = queue.steeredOutsideTranscript(binding.sessionId, binding.runId);
     if (steered.length === 0) return;
-    const stored = await chatState.persistence.stores.messages.loadThread(binding.sessionId);
+    const stored = yield* nativePromise(() =>
+      chatState.persistence.stores.messages.loadThread(binding.sessionId),
+    );
     const lastAnswer = stored.map((message) => message.role).lastIndexOf("assistant");
     const at = lastAnswer === -1 ? stored.length : lastAnswer;
-    await chatState.persistence.stores.messages.saveThread(binding.sessionId, [
-      ...stored.slice(0, at),
-      ...steered.map(toUserMessage),
-      ...stored.slice(at),
-    ]);
+    yield* nativePromise(() =>
+      chatState.persistence.stores.messages.saveThread(binding.sessionId, [
+        ...stored.slice(0, at),
+        ...steered.map(toUserMessage),
+        ...stored.slice(at),
+      ]),
+    );
     queue.markInTranscript(steered.map((message) => message.id));
-  };
+  });
 
   return {
     toUserMessage,
@@ -116,41 +121,46 @@ const make = Effect.gen(function* () {
       return {
         name: "memory-agent/queue-delivery",
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        async onConfig(ctx, config) {
-          if (ctx.phase !== "beforeModel") return;
-          const added: ModelMessage[] = [];
-          const delivered: string[] = [];
+        onConfig: (ctx, config) =>
+          run(
+            Effect.gen(function* () {
+              if (ctx.phase !== "beforeModel") return;
+              const added: ModelMessage[] = [];
+              const delivered: string[] = [];
 
-          const steered = queue.steeredOutsideTranscript(binding.sessionId, binding.runId);
-          added.push(...steered.map(toUserMessage));
-          queue.markInTranscript(steered.map((message) => message.id));
+              const steered = queue.steeredOutsideTranscript(binding.sessionId, binding.runId);
+              added.push(...steered.map(toUserMessage));
+              queue.markInTranscript(steered.map((message) => message.id));
 
-          if (config.messages.at(-1)?.role === "tool") {
-            const runtime = await run(active.runtime(binding.selection));
-            for (const message of queue.deliverable(binding.sessionId)) {
-              const userMessage = toUserMessage(message);
-              try {
-                // With no live turn, the next provider request carries it in the conversation.
-                await runtime.steer(binding.sessionId, userMessage);
-              } catch {
-                // Later messages stay behind it, so the order the user wrote in holds.
-                queue.markFailed(message.id, "steer_refused");
-                break;
+              if (config.messages.at(-1)?.role === "tool") {
+                const runtime = yield* active.runtime(binding.selection);
+                for (const message of queue.deliverable(binding.sessionId)) {
+                  const userMessage = toUserMessage(message);
+                  // With no live turn, the next provider request carries it in the conversation.
+                  const outcome = yield* Effect.result(
+                    nativePromise(() => runtime.steer(binding.sessionId, userMessage)),
+                  );
+                  if (Result.isFailure(outcome)) {
+                    // Later messages stay behind it, so the order the user wrote in holds.
+                    queue.markFailed(message.id, "steer_refused");
+                    break;
+                  }
+                  added.push(userMessage);
+                  queue.markDelivered(message.id, "tool_boundary", binding.runId, true);
+                  yield* record(binding, message);
+                  delivered.push(message.id);
+                }
               }
-              added.push(userMessage);
-              queue.markDelivered(message.id, "tool_boundary", binding.runId, true);
-              await run(record(binding, message));
-              delivered.push(message.id);
-            }
-          }
 
-          if (delivered.length > 0) ctx.emitCustomEvent(queueDeliveredEvent, { ids: delivered });
-          if (added.length === 0) return;
-          return { messages: [...config.messages, ...added] };
-        },
-        onFinish: () => saveSteered(binding),
-        onAbort: () => saveSteered(binding),
-        onError: () => saveSteered(binding),
+              if (delivered.length > 0)
+                ctx.emitCustomEvent(queueDeliveredEvent, { ids: delivered });
+              if (added.length === 0) return;
+              return { messages: [...config.messages, ...added] };
+            }),
+          ),
+        onFinish: () => run(saveSteered(binding)),
+        onAbort: () => run(saveSteered(binding)),
+        onError: () => run(saveSteered(binding)),
       };
     },
   };

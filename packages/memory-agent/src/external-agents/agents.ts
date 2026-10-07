@@ -1,3 +1,4 @@
+import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
@@ -14,6 +15,7 @@ import type {
 import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import spawn from "cross-spawn";
 import {
+  Cause,
   HashSet,
   MutableHashMap,
   DateTime,
@@ -245,96 +247,94 @@ const make = Effect.gen(function* () {
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const startProcess = async (
-    project: Project,
-    agent: ConfiguredAgent,
-    link: Link,
-  ): Promise<Live> => {
-    const env = {
-      // The agent logs in its own official way; the app's ChatGPT and Kagi secrets are not passed.
-      ...getDefaultEnvironment(),
-      ...Object.fromEntries(
-        Object.entries(agent.command.env).map(([name, value]) => [
-          name,
-          expandVariables(value, process.env),
-        ]),
-      ),
-    };
-    // cross-spawn runs `npx` and other `.cmd` launchers on Windows, with arguments quoted for cmd.exe.
-    const child = spawn(
-      expandVariables(agent.command.command, process.env),
-      agent.command.args.map((arg) => expandVariables(arg, process.env)),
-      { cwd: project.root, env, stdio: ["pipe", "pipe", "ignore"], windowsHide: true },
-    );
-    // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-    const spawned = new Promise<void>((resolve, reject) => {
-      child.once("spawn", resolve);
-      child.once("error", reject);
-    });
-    await spawned;
-
-    const handlers = MutableHashMap.empty<string, SessionHandlers>();
-    const connection = acp
-      .client({ name: "context-generactive-agent" })
-      .onNotification(acp.methods.client.session.update, (ctx) => {
-        Option.getOrUndefined(MutableHashMap.get(handlers, ctx.params.sessionId))?.onUpdate(
-          ctx.params.update,
+  const startProcess = (project: Project, agent: ConfiguredAgent, link: Link): Promise<Live> =>
+    runNativeEffect(
+      Effect.gen(function* () {
+        const env = {
+          // The agent logs in its own official way; the app's ChatGPT and Kagi secrets are not passed.
+          ...getDefaultEnvironment(),
+          ...Object.fromEntries(
+            Object.entries(agent.command.env).map(([name, value]) => [
+              name,
+              expandVariables(value, process.env),
+            ]),
+          ),
+        };
+        // cross-spawn runs `npx` and other `.cmd` launchers on Windows, with arguments quoted for cmd.exe.
+        const child = spawn(
+          expandVariables(agent.command.command, process.env),
+          agent.command.args.map((arg) => expandVariables(arg, process.env)),
+          { cwd: project.root, env, stdio: ["pipe", "pipe", "ignore"], windowsHide: true },
         );
-      })
-      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      .onRequest(acp.methods.client.session.requestPermission, async (ctx) => {
-        const handler = Option.getOrUndefined(MutableHashMap.get(handlers, ctx.params.sessionId));
-        return isTruthy(handler)
-          ? handler.askPermission(ctx.params)
-          : { outcome: { outcome: "cancelled" } as const };
-      })
-      .connect(
-        acp.ndJsonStream(
-          Writable.toWeb(child.stdin!),
-          // SAFETY: a spawned child's stdout is a byte stream; Node types its web form loosely.
-          Readable.toWeb(child.stdout!) as ReadableStream<Uint8Array>,
-        ),
-      );
+        // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
+        const spawned = new Promise<void>((resolve, reject) => {
+          child.once("spawn", resolve);
+          child.once("error", reject);
+        });
+        yield* nativePromise(() => spawned);
 
-    try {
-      let timer: NodeJS.Timeout | undefined;
-      // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-      const timeout = new Promise<never>((_, reject) => {
-        // Native callback heartbeat/debounce timing remains at the protocol boundary.
-        timer = setTimeout(() => reject(new Error("initialize timed out")), connectTimeoutMs);
-        timer.unref();
-      });
-      const initialized = await Promise.race([
-        connection.agent.request(acp.methods.agent.initialize, {
-          protocolVersion: acp.PROTOCOL_VERSION,
-          // The agent works with its own tools; the app does not lend it file or terminal access.
-          clientCapabilities: {
-            fs: { readTextFile: false, writeTextFile: false },
-            terminal: false,
-          },
-          clientInfo: { name: "context-generactive-agent", version: "0.0.0" },
-        }),
-        timeout,
-      ]).finally(() => {
-        if (timer !== undefined) clearTimeout(timer);
-      });
-      const live: Live = {
-        child,
-        connection,
-        agentName: initialized.agentInfo?.name ?? null,
-        loadSession: initialized.agentCapabilities?.loadSession === true,
-        sessions: MutableHashMap.empty(),
-        handlers,
-      };
-      child.once("exit", () => onLost(project, agent, link, live));
-      void connection.closed.finally(() => onLost(project, agent, link, live));
-      return live;
-    } catch (error) {
-      connection.close();
-      endChild(child);
-      throw error;
-    }
-  };
+        const handlers = MutableHashMap.empty<string, SessionHandlers>();
+        const connection = acp
+          .client({ name: "context-generactive-agent" })
+          .onNotification(acp.methods.client.session.update, (ctx) => {
+            Option.getOrUndefined(MutableHashMap.get(handlers, ctx.params.sessionId))?.onUpdate(
+              ctx.params.update,
+            );
+          })
+          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+          .onRequest(acp.methods.client.session.requestPermission, (ctx) => {
+            const handler = Option.getOrUndefined(
+              MutableHashMap.get(handlers, ctx.params.sessionId),
+            );
+            return isTruthy(handler)
+              ? handler.askPermission(ctx.params)
+              : Promise.resolve({ outcome: { outcome: "cancelled" } as const });
+          })
+          .connect(
+            acp.ndJsonStream(
+              Writable.toWeb(child.stdin!),
+              // SAFETY: a spawned child's stdout is a byte stream; Node types its web form loosely.
+              Readable.toWeb(child.stdout!) as ReadableStream<Uint8Array>,
+            ),
+          );
+
+        return yield* Effect.gen(function* () {
+          const initialized = yield* nativePromise(() =>
+            connection.agent.request(acp.methods.agent.initialize, {
+              protocolVersion: acp.PROTOCOL_VERSION,
+              clientCapabilities: {
+                fs: { readTextFile: false, writeTextFile: false },
+                terminal: false,
+              },
+              clientInfo: { name: "context-generactive-agent", version: "0.0.0" },
+            }),
+          ).pipe(
+            Effect.timeoutOrElse({
+              duration: connectTimeoutMs,
+              orElse: () => Effect.fail(new Cause.UnknownError(new Error("initialize timed out"))),
+            }),
+          );
+          const live: Live = {
+            child,
+            connection,
+            agentName: initialized.agentInfo?.name ?? null,
+            loadSession: initialized.agentCapabilities?.loadSession === true,
+            sessions: MutableHashMap.empty(),
+            handlers,
+          };
+          child.once("exit", () => onLost(project, agent, link, live));
+          void connection.closed.finally(() => onLost(project, agent, link, live));
+          return live;
+        }).pipe(
+          Effect.onError(() =>
+            Effect.sync(() => {
+              connection.close();
+              endChild(child);
+            }),
+          ),
+        );
+      }),
+    );
 
   /** One connection attempt. Success clears the failure count; failure adds to it. */
   const attempt = (project: Project, agent: ConfiguredAgent, link: Link): Promise<Live> => {
@@ -497,115 +497,147 @@ const make = Effect.gen(function* () {
      * time, or after the process restarted) and waits for its answer.
      */
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    prompt: async (
+    prompt: (
       project: Project,
       name: string,
       sessionKey: string,
       text: string,
       hooks: PromptHooks,
-    ): Promise<ExternalPromptOutcome> => {
-      const agent = usable(project, name);
-      if (!isTruthy(agent)) return { status: "unavailable", reason: "not_trusted" };
-      const link = linkFor(project, agent);
-      if (
-        link.failures >= maxConsecutiveFailures &&
-        !isTruthy(link.live) &&
-        !isTruthy(link.attempt)
-      )
-        return { status: "unavailable", reason: "stopped_after_failures" };
-      let live: Live;
-      try {
-        live = link.live ?? (await attempt(project, agent, link));
-      } catch (error) {
-        return {
-          status: "unavailable",
-          reason: failureText(error instanceof Error ? error : new Error(String(error))),
-        };
-      }
-
-      let sessionId = Option.getOrUndefined(MutableHashMap.get(live.sessions, sessionKey));
-      if (!isTruthy(sessionId)) {
-        try {
-          const created = await live.connection.agent.request(acp.methods.agent.session.new, {
-            cwd: project.root,
-            mcpServers: [],
-          });
-          sessionId = created.sessionId;
-          MutableHashMap.set(live.sessions, sessionKey, sessionId);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          return { status: "unavailable", reason: `session_failed: ${message.slice(0, 200)}` };
-        }
-      }
-
-      let answer = "";
-      const toolCalls = MutableHashMap.empty<string, ReportedToolCall>();
-      MutableHashMap.set(live.handlers, sessionId, {
-        onUpdate: (update) => {
-          switch (update.sessionUpdate) {
-            case "agent_message_chunk":
-              if (update.content.type === "text") answer += update.content.text;
-              break;
-            case "tool_call":
-              MutableHashMap.set(toolCalls, update.toolCallId, {
-                title: update.title,
-                kind: update.kind ?? null,
-                status: update.status ?? null,
-              });
-              break;
-            case "tool_call_update": {
-              const known = Option.getOrUndefined(MutableHashMap.get(toolCalls, update.toolCallId));
-              MutableHashMap.set(toolCalls, update.toolCallId, {
-                title: update.title ?? known?.title ?? "",
-                kind: update.kind ?? known?.kind ?? null,
-                status: update.status ?? known?.status ?? null,
-              });
-              break;
-            }
-            default:
-              break;
+    ): Promise<ExternalPromptOutcome> =>
+      runNativeEffect(
+        Effect.gen(function* () {
+          const agent = usable(project, name);
+          if (!isTruthy(agent)) return { status: "unavailable" as const, reason: "not_trusted" };
+          const link = linkFor(project, agent);
+          if (
+            link.failures >= maxConsecutiveFailures &&
+            !isTruthy(link.live) &&
+            !isTruthy(link.attempt)
+          )
+            return { status: "unavailable" as const, reason: "stopped_after_failures" };
+          const connected = yield* Effect.result(
+            nativePromise(() =>
+              link.live === null ? attempt(project, agent, link) : Promise.resolve(link.live),
+            ),
+          );
+          if (Result.isFailure(connected)) {
+            const error = connected.failure.cause;
+            return {
+              status: "unavailable" as const,
+              reason: failureText(error instanceof Error ? error : new Error(String(error))),
+            };
           }
-          hooks.onUpdate?.(update);
-        },
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        askPermission: async (request) =>
-          permissionAnswer(request, await hooks.askPermission(request)),
-      });
-      const agentSession = sessionId;
-      const cancel = () =>
-        void live.connection.agent
-          .notify(acp.methods.agent.session.cancel, { sessionId: agentSession })
-          .catch(() => undefined);
-      hooks.signal.addEventListener("abort", cancel, { once: true });
-      try {
-        const done = await live.connection.agent.request(acp.methods.agent.session.prompt, {
-          sessionId,
-          prompt: [{ type: "text", text }],
-        });
-        return {
-          status: done.stopReason === "cancelled" ? "cancelled" : "completed",
-          stopReason: done.stopReason,
-          answer,
-          toolCalls: [...MutableHashMap.values(toolCalls)],
-        };
-      } catch (error) {
-        if (live.connection.signal.aborted || link.live !== live)
-          return {
-            status: "disconnected",
-            answer,
-            toolCalls: [...MutableHashMap.values(toolCalls)],
-          };
-        return {
-          status: "failed",
-          error: failureText(error instanceof Error ? error : new Error(String(error))),
-          answer,
-          toolCalls: [...MutableHashMap.values(toolCalls)],
-        };
-      } finally {
-        hooks.signal.removeEventListener("abort", cancel);
-        MutableHashMap.remove(live.handlers, agentSession);
-      }
-    },
+          const live = connected.success;
+
+          let sessionId = Option.getOrUndefined(MutableHashMap.get(live.sessions, sessionKey));
+          if (!isTruthy(sessionId)) {
+            const created = yield* Effect.result(
+              nativePromise(() =>
+                live.connection.agent.request(acp.methods.agent.session.new, {
+                  cwd: project.root,
+                  mcpServers: [],
+                }),
+              ),
+            );
+            if (Result.isFailure(created)) {
+              const error = created.failure.cause;
+              const message = error instanceof Error ? error.message : String(error);
+              return {
+                status: "unavailable" as const,
+                reason: `session_failed: ${message.slice(0, 200)}`,
+              };
+            }
+            sessionId = created.success.sessionId;
+            MutableHashMap.set(live.sessions, sessionKey, sessionId);
+          }
+
+          let answer = "";
+          const toolCalls = MutableHashMap.empty<string, ReportedToolCall>();
+          MutableHashMap.set(live.handlers, sessionId, {
+            onUpdate: (update) => {
+              switch (update.sessionUpdate) {
+                case "agent_message_chunk":
+                  if (update.content.type === "text") answer += update.content.text;
+                  break;
+                case "tool_call":
+                  MutableHashMap.set(toolCalls, update.toolCallId, {
+                    title: update.title,
+                    kind: update.kind ?? null,
+                    status: update.status ?? null,
+                  });
+                  break;
+                case "tool_call_update": {
+                  const known = Option.getOrUndefined(
+                    MutableHashMap.get(toolCalls, update.toolCallId),
+                  );
+                  MutableHashMap.set(toolCalls, update.toolCallId, {
+                    title: update.title ?? known?.title ?? "",
+                    kind: update.kind ?? known?.kind ?? null,
+                    status: update.status ?? known?.status ?? null,
+                  });
+                  break;
+                }
+                default:
+                  break;
+              }
+              hooks.onUpdate?.(update);
+            },
+            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+            askPermission: (request) =>
+              runNativeEffect(
+                nativePromise(() => hooks.askPermission(request)).pipe(
+                  Effect.map((answer) => permissionAnswer(request, answer)),
+                ),
+              ),
+          });
+          const agentSession = sessionId;
+          const cancel = () =>
+            void live.connection.agent
+              .notify(acp.methods.agent.session.cancel, { sessionId: agentSession })
+              .catch(() => undefined);
+          hooks.signal.addEventListener("abort", cancel, { once: true });
+          return yield* Effect.gen(function* () {
+            const outcome = yield* Effect.result(
+              nativePromise(() =>
+                live.connection.agent.request(acp.methods.agent.session.prompt, {
+                  sessionId: agentSession,
+                  prompt: [{ type: "text", text }],
+                }),
+              ),
+            );
+            if (Result.isSuccess(outcome))
+              return {
+                status:
+                  outcome.success.stopReason === "cancelled"
+                    ? ("cancelled" as const)
+                    : ("completed" as const),
+                stopReason: outcome.success.stopReason,
+                answer,
+                toolCalls: [...MutableHashMap.values(toolCalls)],
+              };
+            if (live.connection.signal.aborted || link.live !== live)
+              return {
+                status: "disconnected" as const,
+                answer,
+                toolCalls: [...MutableHashMap.values(toolCalls)],
+              };
+            const error = outcome.failure.cause;
+            return {
+              status: "failed" as const,
+              error: failureText(error instanceof Error ? error : new Error(String(error))),
+              answer,
+              toolCalls: [...MutableHashMap.values(toolCalls)],
+            };
+          }).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                hooks.signal.removeEventListener("abort", cancel);
+                MutableHashMap.remove(live.handlers, agentSession);
+              }),
+            ),
+          );
+        }),
+      ),
   };
 });
 

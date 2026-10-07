@@ -1,8 +1,6 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics nodeBuiltinImport:off
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { NodeFileSystem, NodePath } from "@effect/platform-node";
+import { it } from "@effect/vitest";
+import { Effect, FileSystem, Layer, Path } from "effect";
 import { applyCodeProposal, editableCode } from "../src/rrsi/code-candidate.ts";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, test } from "vite-plus/test";
@@ -134,13 +132,19 @@ test("restarting an owner records uncertain experiments as cancelled", () => {
   expect(reopened.current().id).toBe("baseline");
 });
 
-test("code proposals reject protected paths and ambiguous anchors without partial writes", () => {
-  const directory = mkdtempSync(join(tmpdir(), "rrsi-code-test-"));
-  try {
+it.live("code proposals reject protected paths and ambiguous anchors without partial writes", () =>
+  Effect.gen(function* () {
+    const context = yield* Layer.build(Layer.merge(NodeFileSystem.layer, NodePath.layer));
+    const { fs, paths } = yield* Effect.gen(function* () {
+      return { fs: yield* FileSystem.FileSystem, paths: yield* Path.Path };
+    }).pipe(Effect.provideContext(context));
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "rrsi-code-test-" });
     const path = editableCode[0];
-    const file = join(directory, path);
-    mkdirSync(join(directory, "packages/memory-agent/src/agent"), { recursive: true });
-    writeFileSync(file, "const first = 1;\nconst second = 2;\n");
+    const file = paths.join(directory, path);
+    yield* fs.makeDirectory(paths.join(directory, "packages/memory-agent/src/agent"), {
+      recursive: true,
+    });
+    yield* fs.writeFileString(file, "const first = 1;\nconst second = 2;\n");
     const edits = [{ component: "prompt" as const, hypothesis: "Shorten redundant instructions." }];
     expect(() =>
       applyCodeProposal(directory, {
@@ -151,7 +155,7 @@ test("code proposals reject protected paths and ambiguous anchors without partia
         ],
       }),
     ).toThrow("protected_code_path");
-    expect(readFileSync(file, "utf8")).toContain("const first = 1;");
+    expect(yield* fs.readFileString(file)).toContain("const first = 1;");
     expect(() =>
       applyCodeProposal(directory, { edits, files: [{ path, before: "const", after: "let" }] }),
     ).toThrow("code_anchor_ambiguous");
@@ -159,11 +163,9 @@ test("code proposals reject protected paths and ambiguous anchors without partia
       edits,
       files: [{ path, before: "const first = 1;", after: "const first = 3;" }],
     });
-    expect(readFileSync(file, "utf8")).toContain("const first = 3;");
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
+    expect(yield* fs.readFileString(file)).toContain("const first = 3;");
+  }),
+);
 
 test("legacy persisted token budgets no longer constrain experiment settings", () => {
   const { owner, store } = setup();

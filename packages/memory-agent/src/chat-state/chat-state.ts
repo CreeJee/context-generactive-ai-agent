@@ -1,3 +1,4 @@
+import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
 import {
   convertMessagesToModelMessages,
   type ChatMiddleware,
@@ -40,22 +41,24 @@ const make = Effect.gen(function* () {
   // persisted SDK IDs (including assistant segments) untouched so their live-stream identity
   // survives. This is a read-only view: no transcript rewrite, provider input or SSE ID changes.
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  async function loadHydrationThread(threadId: string): Promise<ModelMessage[]>;
+  function loadHydrationThread(threadId: string): Promise<ModelMessage[]>;
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  async function loadHydrationThread(
+  function loadHydrationThread(
     threadId: string,
     options: { limit?: number; before?: string },
   ): Promise<ModelMessage[] | MessagePage>;
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  async function loadHydrationThread(
-    threadId: string,
-    options?: { limit?: number; before?: string },
-  ) {
+  function loadHydrationThread(threadId: string, options?: { limit?: number; before?: string }) {
     if (options?.limit !== undefined)
       return persistence.stores.messages.loadThread(threadId, options);
-    const stored = await persistence.stores.messages.loadThread(threadId);
-    return stored.map((message, index) =>
-      message.id === undefined ? { ...message, id: `stored:${threadId}:${index}` } : message,
+    return runNativeEffect(
+      nativePromise(() => persistence.stores.messages.loadThread(threadId)).pipe(
+        Effect.map((stored) =>
+          stored.map((message, index) =>
+            message.id === undefined ? { ...message, id: `stored:${threadId}:${index}` } : message,
+          ),
+        ),
+      ),
     );
   }
   const hydrationPersistence = {
@@ -95,18 +98,22 @@ const make = Effect.gen(function* () {
    * may not have reached the messages yet. Saves the messages with that answer in them.
    */
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const keepPartialAnswer = async (ctx: ChatMiddlewareContext) => {
+  const keepPartialAnswer = Effect.fn("ChatState.keepPartialAnswer")(function* (
+    ctx: ChatMiddlewareContext,
+  ) {
     const answer = ctx.accumulatedContent;
     if (answer.length === 0) return;
     const turnStart = ctx.messages.map((message) => message.role).lastIndexOf("user");
     const inMessages = ctx.messages
       .slice(turnStart + 1)
       .some((message) => message.role === "assistant" && messageText(message) === answer);
-    await persistence.stores.messages.saveThread(
-      ctx.threadId,
-      inMessages ? [...ctx.messages] : [...ctx.messages, { role: "assistant", content: answer }],
+    yield* nativePromise(() =>
+      persistence.stores.messages.saveThread(
+        ctx.threadId,
+        inMessages ? [...ctx.messages] : [...ctx.messages, { role: "assistant", content: answer }],
+      ),
     );
-  };
+  });
 
   return {
     persistence,
@@ -116,12 +123,35 @@ const make = Effect.gen(function* () {
      * being written is saved too (every second, and at once when the run is cancelled or fails),
      * so a reload after a cancel or a restart shows what the user had already seen.
      */
-    middleware: (): ChatMiddleware[] => [
+    middleware: (signal?: AbortSignal): ChatMiddleware[] => [
       withPersistence(persistence, { snapshotStreaming: true }),
       {
         name: "memory-agent/partial-answer",
-        onAbort: keepPartialAnswer,
-        onError: keepPartialAnswer,
+        // SDK persistence records ordinary cancellation as aborted; owner shutdown is a restart failure.
+        onAbort(ctx) {
+          return runNativeEffect(
+            Effect.gen(function* () {
+              yield* keepPartialAnswer(ctx);
+              if (signal?.reason === "service_shutdown") {
+                atomic(() => {
+                  sqlite
+                    .prepare(
+                      `UPDATE chat_runs
+                   SET status = 'failed', finished_at = ?, error = ?, error_code = ?
+                   WHERE run_id = ? AND status = 'aborted'`,
+                    )
+                    .run(
+                      effectClock.currentTimeMillisUnsafe(),
+                      "The server stopped before this answer finished.",
+                      serverRestartedCode,
+                      ctx.runId,
+                    );
+                });
+              }
+            }),
+          );
+        },
+        onError: (ctx) => runNativeEffect(keepPartialAnswer(ctx)),
       },
     ],
 
@@ -136,16 +166,18 @@ const make = Effect.gen(function* () {
       }
       return reconstructChat(hydrationPersistence, request, {
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        authorize: async (threadId) => threadId === sessionId,
+        authorize: (threadId) => Promise.resolve(threadId === sessionId),
       });
     },
 
     /** The run record, when it belongs to the session. */
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    run: async (sessionId: string, runId: string) => {
-      const run = await persistence.stores.runs.get(runId);
-      return run?.threadId === sessionId ? run : null;
-    },
+    run: (sessionId: string, runId: string) =>
+      runNativeEffect(
+        nativePromise(() => persistence.stores.runs.get(runId)).pipe(
+          Effect.map((run) => (run?.threadId === sessionId ? run : null)),
+        ),
+      ),
 
     /**
      * Retires approvals that the browser can still display after their server-side continuation
@@ -153,42 +185,49 @@ const make = Effect.gen(function* () {
      * mistaken for approving and executing the gated tool.
      */
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    discardPendingInterrupts: async (sessionId: string) => {
-      const pending = await persistence.stores.interrupts.listPending(sessionId);
-      if (pending.length === 0) return 0;
-      const discardedAt = effectClock.currentTimeMillisUnsafe();
-      sqlite.exec("BEGIN IMMEDIATE");
-      try {
-        sqlite
-          .prepare(
-            `UPDATE chat_interrupts
+    discardPendingInterrupts: (sessionId: string) =>
+      runNativeEffect(
+        Effect.gen(function* () {
+          const pending = yield* nativePromise(() =>
+            persistence.stores.interrupts.listPending(sessionId),
+          );
+          if (pending.length === 0) return 0;
+          const discardedAt = effectClock.currentTimeMillisUnsafe();
+          yield* Effect.try(() => {
+            sqlite.exec("BEGIN IMMEDIATE");
+            try {
+              sqlite
+                .prepare(
+                  `UPDATE chat_interrupts
              SET status = 'cancelled', resolved_at = ?
              WHERE thread_id = ? AND status = 'pending'`,
-          )
-          .run(discardedAt, sessionId);
-        sqlite
-          .prepare(
-            `UPDATE chat_runs
+                )
+                .run(discardedAt, sessionId);
+              sqlite
+                .prepare(
+                  `UPDATE chat_runs
              SET status = 'failed', finished_at = ?, error = ?, error_code = ?
              WHERE thread_id = ? AND status IN ('running', 'interrupted')`,
-          )
-          .run(
-            discardedAt,
-            "The approval continuation was no longer available, so the request was discarded.",
-            interruptContinuationLostCode,
-            sessionId,
-          );
-        sqlite.exec("COMMIT");
-      } catch (error) {
-        sqlite.exec("ROLLBACK");
-        throw error;
-      }
-      return pending.length;
-    },
+                )
+                .run(
+                  discardedAt,
+                  "The approval continuation was no longer available, so the request was discarded.",
+                  interruptContinuationLostCode,
+                  sessionId,
+                );
+              sqlite.exec("COMMIT");
+            } catch (error) {
+              sqlite.exec("ROLLBACK");
+              throw error;
+            }
+          });
+          return pending.length;
+        }),
+      ),
 
     /** The session's most recent run, if any. */
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    lastRun: async (sessionId: string) => lastRun(sessionId),
+    lastRun: (sessionId: string) => runNativeEffect(Effect.sync(() => lastRun(sessionId))),
   };
 });
 

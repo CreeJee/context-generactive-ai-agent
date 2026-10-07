@@ -18,7 +18,7 @@ const TaskAction = Schema.Union([
 
 /** GET /api/sessions/:session/trace/tasks/:task — task attempt and checkpoint detail. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function loader({ params }: Route.LoaderArgs) {
+export function loader({ params }: Route.LoaderArgs) {
   return agent.runPromise(
     Effect.flatMap(AgentChat, (chat) => chat.traceTask(params.session, params.task)),
   );
@@ -26,31 +26,33 @@ export async function loader({ params }: Route.LoaderArgs) {
 
 /** POST queues a safe logical resume for execution under the next valid parent run binding. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function action({ request, params }: Route.ActionArgs) {
-  const rejected = rejectCrossSite(request);
-  if (rejected !== null) return rejected;
-  const body = await readJson(request, TaskAction);
-  if (Result.isFailure(body))
-    return Response.json({ error: "invalid_trace_task_action" }, { status: 400 });
-  const holder = request.headers.get(sessionHolderHeader);
+export function action({ request, params }: Route.ActionArgs) {
   return agent.runPromise(
-    Effect.flatMap(AgentChat, (chat) =>
-      body.success.intent === "resume"
-        ? chat.requestTraceResume(
-            params.session,
-            holder,
-            params.task,
-            body.success.expectedAttemptId,
-            body.success.confirmUncertain,
-          )
-        : chat.lifecycleTraceTask(
-            params.session,
-            holder,
-            params.task,
-            body.success.intent,
-            // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
-            body.success.idempotencyKey ?? crypto.randomUUID(),
-          ),
-    ),
+    Effect.gen(function* () {
+      const rejected = rejectCrossSite(request);
+      if (rejected !== null) return rejected;
+      const body = yield* Effect.tryPromise(() => readJson(request, TaskAction));
+      if (Result.isFailure(body))
+        return Response.json({ error: "invalid_trace_task_action" }, { status: 400 });
+      const holder = request.headers.get(sessionHolderHeader);
+      return yield* Effect.flatMap(AgentChat, (chat) =>
+        body.success.intent === "resume"
+          ? chat.requestTraceResume(
+              params.session,
+              holder,
+              params.task,
+              body.success.expectedAttemptId,
+              body.success.confirmUncertain,
+            )
+          : chat.lifecycleTraceTask(
+              params.session,
+              holder,
+              params.task,
+              body.success.intent,
+              // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
+              body.success.idempotencyKey ?? crypto.randomUUID(),
+            ),
+      );
+    }),
   );
 }

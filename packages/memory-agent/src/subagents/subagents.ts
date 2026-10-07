@@ -1,3 +1,4 @@
+import { nativeFailure, nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
 import { HashSet } from "effect";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
@@ -13,6 +14,8 @@ import {
   type ModelMessage,
 } from "@tanstack/ai";
 import {
+  Cause,
+  Stream,
   MutableHashMap,
   Clock,
   Context,
@@ -318,7 +321,7 @@ const make = Effect.gen(function* () {
   const effectClock = yield* Clock.Clock;
 
   const context = yield* Effect.context();
-  const runEffect = Effect.runPromiseWith(context);
+  const runEffect = runNativeEffectWith(context);
   const runEffectSync = Effect.runSyncWith(context);
   const scope = yield* Effect.scope;
   const { sqlite } = yield* Database;
@@ -365,14 +368,20 @@ const make = Effect.gen(function* () {
     readonly settled: Effect.Effect<void>;
     started: boolean;
   };
-  const activeChildren = yield* FiberMap.make<ActiveChild>();
+  const activeChildren = yield* FiberMap.make<string>();
+  const childMetadata = MutableHashMap.empty<string, ActiveChild>();
+  const liveChildren = () =>
+    [...activeChildren].flatMap(([attemptId]) => {
+      const child = Option.getOrUndefined(MutableHashMap.get(childMetadata, attemptId));
+      return child === undefined ? [] : [child];
+    });
   const activeFor = (
     subagentId: string,
     startedOnly = false,
     exceptAttemptId?: string,
   ): ActiveChild | undefined => {
     let latest: ActiveChild | undefined;
-    for (const [child] of activeChildren)
+    for (const child of liveChildren())
       if (
         child.handle.id !== exceptAttemptId &&
         child.receipt.subagentId === subagentId &&
@@ -396,511 +405,576 @@ const make = Effect.gen(function* () {
   ): ChatMiddleware => ({
     name: "memory-agent/subagent-gate",
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async onBeforeToolCall(_ctx, hook) {
-      if (!HashSet.has(binding.gated, hook.toolName)) return undefined;
-      const argumentsJson = hook.toolCall.function.arguments;
-      const toolCallId = `${subagentThreadId(row.id)}:${hook.toolCallId}`;
-      const record = (
-        decision: "allow" | "ask" | "block" | "approved" | "denied",
-        decidedBy: "classifier" | "fallback" | "user",
-        reason: string,
-      ) =>
-        reviews.record({
-          sessionId: binding.sessionId,
-          toolCallId,
-          toolName: hook.toolName,
-          input: argumentsJson,
-          decision,
-          decidedBy,
-          reason,
-        });
+    onBeforeToolCall(_ctx, hook) {
+      return runEffect(
+        Effect.gen(function* () {
+          if (!HashSet.has(binding.gated, hook.toolName)) return undefined;
+          const argumentsJson = hook.toolCall.function.arguments;
+          const toolCallId = `${subagentThreadId(row.id)}:${hook.toolCallId}`;
+          const record = (
+            decision: "allow" | "ask" | "block" | "approved" | "denied",
+            decidedBy: "classifier" | "fallback" | "user",
+            reason: string,
+          ) =>
+            reviews.record({
+              sessionId: binding.sessionId,
+              toolCallId,
+              toolName: hook.toolName,
+              input: argumentsJson,
+              decision,
+              decidedBy,
+              reason,
+            });
 
-      if (binding.project.permissionMode === "full") return undefined;
+          if (binding.project.permissionMode === "full") return undefined;
 
-      let reason = everyCallReason;
-      let askedBy: "review" | "every_call" = "every_call";
-      if (binding.project.permissionMode === "auto") {
-        const verdict = await classifier.classify({
-          project: binding.project,
-          sessionId: binding.sessionId,
-          selection: binding.selection,
-          toolName: hook.toolName,
-          argumentsJson,
-        });
-        record(verdict.decision, verdict.decidedBy, verdict.reason);
-        switch (verdict.decision) {
-          case "allow":
-            return undefined;
-          case "block":
-            denyTool(hook.toolCallId);
-            return {
-              type: "skip",
-              result: { error: `blocked_by_permission_review: ${verdict.reason}` },
-            };
-          case "ask":
-            reason = verdict.reason;
-            askedBy = "review";
-        }
-      }
-      trace.transitionAttempt(
-        handle,
-        binding.sessionId,
-        "waiting",
-        "approval_waiting",
-        `Waiting for approval: ${hook.toolName}`,
+          let reason = everyCallReason;
+          let askedBy: "review" | "every_call" = "every_call";
+          if (binding.project.permissionMode === "auto") {
+            const verdict = yield* nativePromise(() =>
+              classifier.classify({
+                project: binding.project,
+                sessionId: binding.sessionId,
+                selection: binding.selection,
+                toolName: hook.toolName,
+                argumentsJson,
+              }),
+            );
+            record(verdict.decision, verdict.decidedBy, verdict.reason);
+            switch (verdict.decision) {
+              case "allow":
+                return undefined;
+              case "block":
+                denyTool(hook.toolCallId);
+                return {
+                  type: "skip" as const,
+                  result: { error: `blocked_by_permission_review: ${verdict.reason}` },
+                };
+              case "ask":
+                reason = verdict.reason;
+                askedBy = "review";
+            }
+          }
+          trace.transitionAttempt(
+            handle,
+            binding.sessionId,
+            "waiting",
+            "approval_waiting",
+            `Waiting for approval: ${hook.toolName}`,
+          );
+          const decision = relayed.ask(
+            binding.sessionId,
+            {
+              requester: { kind: "subagent", subagentId: row.id, name: row.name },
+              toolName: hook.toolName,
+              argumentsJson,
+              reason,
+              askedBy,
+            },
+            signal,
+          );
+          events.publishSession(binding.sessionId, "relayed-approvals");
+          const approved = yield* nativePromise(() => decision);
+          events.publishSession(binding.sessionId, "relayed-approvals");
+          record(
+            approved ? "approved" : "denied",
+            "user",
+            approved ? "사용자가 승인했어요." : "사용자가 거부했어요.",
+          );
+          trace.transitionAttempt(
+            handle,
+            binding.sessionId,
+            "running",
+            "approval_resolved",
+            approved ? `Approved: ${hook.toolName}` : `Denied: ${hook.toolName}`,
+          );
+          if (!approved) denyTool(hook.toolCallId);
+          return approved
+            ? undefined
+            : {
+                type: "skip" as const,
+                result: { approved: false, message: "User denied this action" },
+              };
+        }),
       );
-      const decision = relayed.ask(
-        binding.sessionId,
-        {
-          requester: { kind: "subagent", subagentId: row.id, name: row.name },
-          toolName: hook.toolName,
-          argumentsJson,
-          reason,
-          askedBy,
-        },
-        signal,
-      );
-      events.publishSession(binding.sessionId, "relayed-approvals");
-      const approved = await decision;
-      events.publishSession(binding.sessionId, "relayed-approvals");
-      record(
-        approved ? "approved" : "denied",
-        "user",
-        approved ? "사용자가 승인했어요." : "사용자가 거부했어요.",
-      );
-      trace.transitionAttempt(
-        handle,
-        binding.sessionId,
-        "running",
-        "approval_resolved",
-        approved ? `Approved: ${hook.toolName}` : `Denied: ${hook.toolName}`,
-      );
-      if (!approved) denyTool(hook.toolCallId);
-      return approved
-        ? undefined
-        : { type: "skip", result: { approved: false, message: "User denied this action" } };
     },
   });
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const runChild = async (
+  const runChild = (
     binding: SubagentBinding,
     row: SubagentRow,
     task: string,
     handle: AttemptHandle,
     controller: AbortController,
     notifyParentImmediately = false,
-  ): Promise<ChildOutcome> => {
-    events.publishSession(binding.sessionId, "subagents");
-    const threadId = subagentThreadId(row.id);
-    // Named messages may have waited behind another attempt. Publish the task now executing.
-    startAgain.get(
-      row.instructions,
-      binding.runId,
-      task,
-      effectClock.currentTimeMillisUnsafe(),
-      row.id,
-    );
-    const texts = MutableHashMap.empty<string, string>();
-    let lastMessageId: string | null = null;
-    let failure: string | null = null;
-    const toolStates = MutableHashMap.empty<string, ChildToolState>();
-    const completedTools = () =>
-      [...toolStates].flatMap(([id, state]) => {
-        switch (state.status) {
-          case "completed":
-            return [id];
-          default:
-            return [];
-        }
-      });
-    const runningTools = () =>
-      [...toolStates].flatMap(([id, state]) => {
-        switch (state.status) {
-          case "running":
-          case "denied":
-            return [id];
-          default:
-            return [];
-        }
-      });
-    trace.transitionAttempt(
-      handle,
-      binding.sessionId,
-      "running",
-      "attempt_started",
-      "Subagent started",
-      null,
-      notifyParentImmediately,
-      binding.runId,
-    );
-    try {
-      const history = await chatState.persistence.stores.messages.loadThread(threadId);
-      const messages: ModelMessage[] = [...history, { role: "user", content: task }];
-      const runtime = await runEffect(active.runtime(binding.selection));
-      const readChildResult = toolDefinition({
-        name: "read_subagent_tool_result",
-        description:
-          "Read a page of one tool result from this subagent's own saved transcript by toolCallId and offset. Cannot access another child or session.",
-        inputSchema: toToolSchema(ChildResultInput),
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      }).server(async ({ toolCallId, offset }) => {
-        const saved = await chatState.persistence.stores.messages.loadThread(threadId);
-        const result = saved.find(
-          (message) => message.role === "tool" && message.toolCallId === toolCallId,
+  ): Promise<ChildOutcome> =>
+    runEffect(
+      Effect.gen(function* () {
+        events.publishSession(binding.sessionId, "subagents");
+        const threadId = subagentThreadId(row.id);
+        // Named messages may have waited behind another attempt. Publish the task now executing.
+        startAgain.get(
+          row.instructions,
+          binding.runId,
+          task,
+          effectClock.currentTimeMillisUnsafe(),
+          row.id,
         );
-        if (!isTruthy(result)) return { error: "tool_result_not_found", toolCallId };
-        const text = Schema.is(Schema.String)(result.content)
-          ? result.content
-          : (result.content ?? [])
-              .flatMap((part) => (part.type === "text" ? [part.content] : []))
-              .join("");
-        const start = Math.min(offset ?? 0, text.length);
-        const end = Math.min(start + childResultPageLength, text.length);
-        return {
-          toolCallId,
-          text: text.slice(start, end),
-          offset: start,
-          nextOffset: end < text.length ? end : null,
-          length: text.length,
-        };
-      });
-      const reads = parallelReads(
-        [...childTools(binding.tools), readChildResult],
-        controller.signal,
-      );
-      const childContext: ChatMiddleware = {
-        name: "memory-agent/subagent-context",
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        async onConfig(ctx, config) {
-          if (ctx.phase === "init") return;
-          const saved = await chatState.persistence.stores.messages.loadThread(threadId);
-          const ids = HashSet.fromIterable(
-            saved.flatMap((message) =>
-              message.role === "tool" && isTruthy(message.toolCallId) ? [message.toolCallId] : [],
+        const texts = MutableHashMap.empty<string, string>();
+        let lastMessageId: string | null = null;
+        let failure: string | null = null;
+        const toolStates = MutableHashMap.empty<string, ChildToolState>();
+        const completedTools = () =>
+          [...toolStates].flatMap(([id, state]) => {
+            switch (state.status) {
+              case "completed":
+                return [id];
+              default:
+                return [];
+            }
+          });
+        const runningTools = () =>
+          [...toolStates].flatMap(([id, state]) => {
+            switch (state.status) {
+              case "running":
+              case "denied":
+                return [id];
+              default:
+                return [];
+            }
+          });
+        trace.transitionAttempt(
+          handle,
+          binding.sessionId,
+          "running",
+          "attempt_started",
+          "Subagent started",
+          null,
+          notifyParentImmediately,
+          binding.runId,
+        );
+        yield* Effect.gen(function* () {
+          const history = yield* nativePromise(() =>
+            chatState.persistence.stores.messages.loadThread(threadId),
+          );
+          const messages: ModelMessage[] = [...history, { role: "user", content: task }];
+          const runtime = yield* active.runtime(binding.selection);
+          const readChildResult = toolDefinition({
+            name: "read_subagent_tool_result",
+            description:
+              "Read a page of one tool result from this subagent's own saved transcript by toolCallId and offset. Cannot access another child or session.",
+            inputSchema: toToolSchema(ChildResultInput),
+            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+          }).server(({ toolCallId, offset }) =>
+            runEffect(
+              Effect.gen(function* () {
+                const saved = yield* nativePromise(() =>
+                  chatState.persistence.stores.messages.loadThread(threadId),
+                );
+                const result = saved.find(
+                  (message) => message.role === "tool" && message.toolCallId === toolCallId,
+                );
+                if (!isTruthy(result)) return { error: "tool_result_not_found", toolCallId };
+                const text = Schema.is(Schema.String)(result.content)
+                  ? result.content
+                  : (result.content ?? [])
+                      .flatMap((part) => (part.type === "text" ? [part.content] : []))
+                      .join("");
+                const start = Math.min(offset ?? 0, text.length);
+                const end = Math.min(start + childResultPageLength, text.length);
+                return {
+                  toolCallId,
+                  text: text.slice(start, end),
+                  offset: start,
+                  nextOffset: end < text.length ? end : null,
+                  length: text.length,
+                };
+              }),
             ),
           );
-          const providerMessages = compactChildToolResults(config.messages, ids);
-          return providerMessages.every((message, index) => message === config.messages[index]) &&
-            providerMessages.length === config.messages.length
-            ? undefined
-            : { providerMessages: [...providerMessages] };
-        },
-      };
-      const traceMiddleware: ChatMiddleware = {
-        name: "memory-agent/subagent-trace",
-        onBeforeToolCall(_ctx, hook) {
-          MutableHashMap.set(toolStates, hook.toolCallId, { status: "running" });
-          trace.appendEvent({
-            handle,
-            sessionId: binding.sessionId,
-            kind: "tool_requested",
-            summary: `Requested ${hook.toolName}`,
-            payload: { toolCallId: hook.toolCallId, toolName: hook.toolName },
-          });
-          return undefined;
-        },
-        onAfterToolCall(_ctx, hook) {
-          const completed =
-            hook.ok &&
-            Option.getOrUndefined(MutableHashMap.get(toolStates, hook.toolCallId))?.status !==
-              "denied";
-          MutableHashMap.set(
-            toolStates,
-            hook.toolCallId,
-            completed ? { status: "completed" } : { status: "failed" },
+          const reads = parallelReads(
+            [...childTools(binding.tools), readChildResult],
+            controller.signal,
           );
-          trace.appendEvent({
-            handle,
-            sessionId: binding.sessionId,
-            kind: completed ? "tool_completed" : "tool_failed",
-            summary: completed ? `Completed ${hook.toolName}` : `Failed ${hook.toolName}`,
-            payload: { toolCallId: hook.toolCallId, toolName: hook.toolName },
+          const childContext: ChatMiddleware = {
+            name: "memory-agent/subagent-context",
+            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+            onConfig(ctx, config) {
+              return runEffect(
+                Effect.gen(function* () {
+                  if (ctx.phase === "init") return;
+                  const saved = yield* nativePromise(() =>
+                    chatState.persistence.stores.messages.loadThread(threadId),
+                  );
+                  const ids = HashSet.fromIterable(
+                    saved.flatMap((message) =>
+                      message.role === "tool" && isTruthy(message.toolCallId)
+                        ? [message.toolCallId]
+                        : [],
+                    ),
+                  );
+                  const providerMessages = compactChildToolResults(config.messages, ids);
+                  return providerMessages.every(
+                    (message, index) => message === config.messages[index],
+                  ) && providerMessages.length === config.messages.length
+                    ? undefined
+                    : { providerMessages: [...providerMessages] };
+                }),
+              );
+            },
+          };
+          const traceMiddleware: ChatMiddleware = {
+            name: "memory-agent/subagent-trace",
+            onBeforeToolCall(_ctx, hook) {
+              MutableHashMap.set(toolStates, hook.toolCallId, { status: "running" });
+              trace.appendEvent({
+                handle,
+                sessionId: binding.sessionId,
+                kind: "tool_requested",
+                summary: `Requested ${hook.toolName}`,
+                payload: { toolCallId: hook.toolCallId, toolName: hook.toolName },
+              });
+              return undefined;
+            },
+            onAfterToolCall(_ctx, hook) {
+              const completed =
+                hook.ok &&
+                Option.getOrUndefined(MutableHashMap.get(toolStates, hook.toolCallId))?.status !==
+                  "denied";
+              MutableHashMap.set(
+                toolStates,
+                hook.toolCallId,
+                completed ? { status: "completed" } : { status: "failed" },
+              );
+              trace.appendEvent({
+                handle,
+                sessionId: binding.sessionId,
+                kind: completed ? "tool_completed" : "tool_failed",
+                summary: completed ? `Completed ${hook.toolName}` : `Failed ${hook.toolName}`,
+                payload: { toolCallId: hook.toolCallId, toolName: hook.toolName },
+              });
+              if (
+                completed &&
+                (hook.toolName === "write_file" || hook.toolName === "edit_file") &&
+                Schema.is(FileArtifactResult)(hook.result)
+              )
+                trace.recordArtifact({
+                  handle,
+                  kind: "file",
+                  locator: { kind: "file", path: hook.result.path, sha256: hook.result.sha256 },
+                  mediaType: "text/plain",
+                  verification: "verified",
+                });
+              const saved = trace.checkpoint(binding.sessionId, {
+                handle,
+                completedToolCallIds: completedTools(),
+                uncertainToolCallIds: runningTools(),
+                pendingApprovalIds: [],
+                remainingWork: "Continue the assigned task from the saved transcript.",
+              });
+              trace.recordEvidence({
+                handle,
+                locator: { kind: "checkpoint", checkpointId: saved.checkpointId },
+                verification: "verified",
+              });
+            },
+          };
+          const middleware: ChatMiddleware[] = [
+            ...chatState.middleware(),
+            traceMiddleware,
+            projectInstructions(binding.project.root),
+            relayGate(binding, row, handle, controller.signal, (id) => {
+              MutableHashMap.set(toolStates, id, { status: "denied" });
+            }),
+            reads.middleware,
+            childContext,
+            collectApiUsage(usageLedger, {
+              rootSessionId: binding.sessionId,
+              purpose: "subagent",
+              provider: binding.selection.provider,
+              model: binding.selection.model,
+            }),
+            runtime.runMiddleware(),
+          ];
+          const stream = chat({
+            adapter: runtime.adapter(binding.selection),
+            agentLoopStrategy: runtime.agentLoop,
+            messages,
+            tools: reads.tools,
+            systemPrompts: [
+              ...binding.systemPrompts,
+              childInstructions(row.name, row.instructions),
+            ],
+            threadId,
+            runId: handle.chatRunId,
+            abortController: controller,
+            middleware,
           });
-          if (
-            completed &&
-            (hook.toolName === "write_file" || hook.toolName === "edit_file") &&
-            Schema.is(FileArtifactResult)(hook.result)
-          )
-            trace.recordArtifact({
+          yield* Stream.fromAsyncIterable(stream, (cause) => new Cause.UnknownError(cause)).pipe(
+            Stream.runForEach((chunk) =>
+              Effect.sync(() => {
+                switch (chunk.type) {
+                  case EventType.TEXT_MESSAGE_CONTENT:
+                    lastMessageId = chunk.messageId;
+                    MutableHashMap.set(
+                      texts,
+                      chunk.messageId,
+                      (Option.getOrUndefined(MutableHashMap.get(texts, chunk.messageId)) ?? "") +
+                        chunk.delta,
+                    );
+                    break;
+                  case EventType.RUN_ERROR:
+                    failure = chunk.message;
+                    break;
+                  default:
+                    break;
+                }
+              }),
+            ),
+          );
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.sync(() => {
+              const error = nativeFailure(cause).cause;
+              failure = error instanceof Error ? error.message : String(error);
+            }),
+          ),
+        );
+
+        const persisted = yield* nativePromise(() =>
+          chatState.persistence.stores.messages.loadThread(threadId),
+        );
+        const persistedMessageIds = HashSet.fromIterable(persisted.map((message) => message.id));
+        const persistedToolCalls = HashSet.fromIterable(
+          persisted.flatMap((message) =>
+            message.role === "assistant" ? (message.toolCalls ?? []).map((call) => call.id) : [],
+          ),
+        );
+        const persistedToolResults = HashSet.fromIterable(
+          persisted.flatMap((message) => (message.role === "tool" ? [message.toolCallId] : [])),
+        );
+        for (const toolCallId of MutableHashMap.keys(toolStates))
+          if (HashSet.has(persistedToolCalls, toolCallId))
+            trace.recordEvidence({
               handle,
-              kind: "file",
-              locator: { kind: "file", path: hook.result.path, sha256: hook.result.sha256 },
-              mediaType: "text/plain",
+              locator: { kind: "tool_call", threadId, toolCallId },
               verification: "verified",
             });
-          const saved = trace.checkpoint(binding.sessionId, {
-            handle,
-            completedToolCallIds: completedTools(),
-            uncertainToolCallIds: runningTools(),
-            pendingApprovalIds: [],
-            remainingWork: "Continue the assigned task from the saved transcript.",
-          });
+        for (const [toolCallId, state] of toolStates)
+          if (
+            (state.status === "completed" || state.status === "failed") &&
+            HashSet.has(persistedToolResults, toolCallId)
+          )
+            trace.recordEvidence({
+              handle,
+              locator: { kind: "tool_result", threadId, toolCallId },
+              // The result is authentic provenance even when it records denial or execution failure.
+              verification: "verified",
+            });
+
+        const answer = isTruthy(lastMessageId)
+          ? (Option.getOrUndefined(MutableHashMap.get(texts, lastMessageId)) ?? "")
+          : "";
+        const status = controller.signal.aborted
+          ? "cancelled"
+          : isTruthy(failure)
+            ? "failed"
+            : "completed";
+        const saved = trace.checkpoint(binding.sessionId, {
+          handle,
+          transcriptMessageId: lastMessageId,
+          completedToolCallIds: completedTools(),
+          uncertainToolCallIds: runningTools(),
+          pendingApprovalIds: [],
+          remainingWork: status === "completed" ? "" : "Resume the unfinished assigned task.",
+        });
+        trace.recordEvidence({
+          handle,
+          locator: { kind: "checkpoint", checkpointId: saved.checkpointId },
+          verification: "verified",
+        });
+        if (
+          status === "completed" &&
+          isTruthy(lastMessageId) &&
+          HashSet.has(persistedMessageIds, lastMessageId)
+        )
           trace.recordEvidence({
             handle,
-            locator: { kind: "checkpoint", checkpointId: saved.checkpointId },
-            verification: "verified",
+            locator: { kind: "message", threadId, messageId: lastMessageId },
           });
-        },
-      };
-      const middleware: ChatMiddleware[] = [
-        ...chatState.middleware(),
-        traceMiddleware,
-        projectInstructions(binding.project.root),
-        relayGate(binding, row, handle, controller.signal, (id) => {
-          MutableHashMap.set(toolStates, id, { status: "denied" });
-        }),
-        reads.middleware,
-        childContext,
-        collectApiUsage(usageLedger, {
-          rootSessionId: binding.sessionId,
-          purpose: "subagent",
-          provider: binding.selection.provider,
-          model: binding.selection.model,
-        }),
-        runtime.runMiddleware(),
-      ];
-      const stream = chat({
-        adapter: runtime.adapter(binding.selection),
-        agentLoopStrategy: runtime.agentLoop,
-        messages,
-        tools: reads.tools,
-        systemPrompts: [...binding.systemPrompts, childInstructions(row.name, row.instructions)],
-        threadId,
-        runId: handle.chatRunId,
-        abortController: controller,
-        middleware,
-      });
-      for await (const chunk of stream) {
-        switch (chunk.type) {
-          case EventType.TEXT_MESSAGE_CONTENT:
-            lastMessageId = chunk.messageId;
-            MutableHashMap.set(
-              texts,
-              chunk.messageId,
-              (Option.getOrUndefined(MutableHashMap.get(texts, chunk.messageId)) ?? "") +
-                chunk.delta,
-            );
-            break;
-          case EventType.RUN_ERROR:
-            failure = chunk.message;
-            break;
-          default:
-            break;
-        }
-      }
-    } catch (error) {
-      failure = error instanceof Error ? error.message : String(error);
-    }
-
-    const persisted = await chatState.persistence.stores.messages.loadThread(threadId);
-    const persistedMessageIds = HashSet.fromIterable(persisted.map((message) => message.id));
-    const persistedToolCalls = HashSet.fromIterable(
-      persisted.flatMap((message) =>
-        message.role === "assistant" ? (message.toolCalls ?? []).map((call) => call.id) : [],
-      ),
-    );
-    const persistedToolResults = HashSet.fromIterable(
-      persisted.flatMap((message) => (message.role === "tool" ? [message.toolCallId] : [])),
-    );
-    for (const toolCallId of MutableHashMap.keys(toolStates))
-      if (HashSet.has(persistedToolCalls, toolCallId))
-        trace.recordEvidence({
+        trace.transitionAttempt(
           handle,
-          locator: { kind: "tool_call", threadId, toolCallId },
-          verification: "verified",
-        });
-    for (const [toolCallId, state] of toolStates)
-      if (
-        (state.status === "completed" || state.status === "failed") &&
-        HashSet.has(persistedToolResults, toolCallId)
-      )
-        trace.recordEvidence({
-          handle,
-          locator: { kind: "tool_result", threadId, toolCallId },
-          // The result is authentic provenance even when it records denial or execution failure.
-          verification: "verified",
-        });
-
-    const answer = isTruthy(lastMessageId)
-      ? (Option.getOrUndefined(MutableHashMap.get(texts, lastMessageId)) ?? "")
-      : "";
-    const status = controller.signal.aborted
-      ? "cancelled"
-      : isTruthy(failure)
-        ? "failed"
-        : "completed";
-    const saved = trace.checkpoint(binding.sessionId, {
-      handle,
-      transcriptMessageId: lastMessageId,
-      completedToolCallIds: completedTools(),
-      uncertainToolCallIds: runningTools(),
-      pendingApprovalIds: [],
-      remainingWork: status === "completed" ? "" : "Resume the unfinished assigned task.",
-    });
-    trace.recordEvidence({
-      handle,
-      locator: { kind: "checkpoint", checkpointId: saved.checkpointId },
-      verification: "verified",
-    });
-    if (
-      status === "completed" &&
-      isTruthy(lastMessageId) &&
-      HashSet.has(persistedMessageIds, lastMessageId)
-    )
-      trace.recordEvidence({
-        handle,
-        locator: { kind: "message", threadId, messageId: lastMessageId },
-      });
-    trace.transitionAttempt(
-      handle,
-      binding.sessionId,
-      status,
-      status === "completed"
-        ? "attempt_completed"
-        : status === "cancelled"
-          ? "attempt_cancelled"
-          : "attempt_failed",
-      status === "completed"
-        ? "Subagent completed"
-        : status === "cancelled"
-          ? "Subagent cancelled"
-          : "Subagent failed",
-      failure,
-      notifyParentImmediately,
-      binding.runId,
+          binding.sessionId,
+          status,
+          status === "completed"
+            ? "attempt_completed"
+            : status === "cancelled"
+              ? "attempt_cancelled"
+              : "attempt_failed",
+          status === "completed"
+            ? "Subagent completed"
+            : status === "cancelled"
+              ? "Subagent cancelled"
+              : "Subagent failed",
+          failure,
+          notifyParentImmediately,
+          binding.runId,
+        );
+        finish.run(status, answer, failure, effectClock.currentTimeMillisUnsafe(), row.id);
+        events.publishSession(binding.sessionId, "subagents");
+        return {
+          status,
+          subagentId: row.id,
+          agent: row.name,
+          taskId: handle.taskId,
+          attemptId: handle.id,
+          evidenceRefIds: trace.evidenceIdsForAttempt(handle.id),
+          answer,
+          error: failure,
+        };
+      }),
     );
-    finish.run(status, answer, failure, effectClock.currentTimeMillisUnsafe(), row.id);
-    events.publishSession(binding.sessionId, "subagents");
-    return {
-      status,
-      subagentId: row.id,
-      agent: row.name,
-      taskId: handle.taskId,
-      attemptId: handle.id,
-      evidenceRefIds: trace.evidenceIdsForAttempt(handle.id),
-      answer,
-      error: failure,
-    };
-  };
 
   /** Every job belongs to the service scope, not the tool invocation or HTTP request. */
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const launch = async (
+  const launch = (
     binding: SubagentBinding,
     row: SubagentRow,
     task: string,
     handle: AttemptHandle,
     onSettled?: (outcome: ChildOutcome | null) => void,
   ): Promise<SubagentReceipt> => {
-    const receipt: SubagentReceipt = {
-      status: "running",
-      subagentId: row.id,
-      agent: row.name,
-      taskId: handle.taskId,
-      attemptId: handle.id,
-    };
+    // The SDK requires this controller across receipt delivery and the service-owned job.
     const controller = new AbortController();
-    const done = runEffectSync(Deferred.make<void>());
-    const stop = () => controller.abort(binding.abortSignal.reason);
-    binding.abortSignal.addEventListener("abort", stop, { once: true });
-    if (binding.abortSignal.aborted) stop();
-    const child: ActiveChild = {
-      taskId: handle.taskId,
-      sessionId: binding.sessionId,
-      receipt,
-      handle,
-      controller,
-      settled: Deferred.await(done),
-      started: false,
-    };
-    let pending: Promise<ChildOutcome> | undefined;
-    const work = Effect.tryPromise({
-      try: (signal) => {
-        child.started = true;
-        const interrupted = () => controller.abort(signal.reason);
-        signal.addEventListener("abort", interrupted, { once: true });
-        pending = runChild(binding, row, task, handle, controller).finally(() =>
-          signal.removeEventListener("abort", interrupted),
-        );
-        return pending;
-      },
-      catch: (cause) => new SubagentOperationFailed({ operation: "run", cause }),
-    }).pipe(
-      Effect.catch((error) =>
-        Effect.sync(() => {
-          const detail = String(error.cause);
-          trace.transitionAttempt(
-            handle,
-            binding.sessionId,
-            "failed",
-            "attempt_failed",
-            "Subagent failed",
-            detail,
-            false,
-            binding.runId,
-          );
-          finish.run("failed", "", detail, effectClock.currentTimeMillisUnsafe(), row.id);
-        }),
-      ),
-      // Keep the named-agent permit until the SDK has stopped and persisted its checkpoint.
-      // Releasing on Effect interruption alone would let the next message overlap that stream.
-      Effect.ensuring(
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        Effect.promise(async () => {
-          await pending?.catch(() => undefined);
-          child.started = false;
-        }),
-      ),
-    );
-    const cancelled = Effect.callback<never>((resume) => {
-      const abort = () => resume(Effect.interrupt);
-      if (controller.signal.aborted) abort();
-      else controller.signal.addEventListener("abort", abort, { once: true });
-      return Effect.sync(() => controller.signal.removeEventListener("abort", abort));
-    });
-    const job = Effect.raceFirst(serializeNamed(row.id, work), cancelled).pipe(
-      Effect.ensuring(
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        Effect.promise(async () => {
-          // Interruption aborts the SDK signal; retain the service until the checkpoint settles.
-          try {
-            if (isTruthy(pending)) {
-              const outcome = await pending.catch(() => null);
-              onSettled?.(outcome);
-            } else {
-              trace.checkpoint(binding.sessionId, {
-                handle,
-                completedToolCallIds: [],
-                uncertainToolCallIds: [],
-                pendingApprovalIds: [],
-                remainingWork: task,
-              });
+    return runEffect(
+      Effect.gen(function* () {
+        const receipt: SubagentReceipt = {
+          status: "running",
+          subagentId: row.id,
+          agent: row.name,
+          taskId: handle.taskId,
+          attemptId: handle.id,
+        };
+        const done = runEffectSync(Deferred.make<void>());
+        const stop = () => controller.abort(binding.abortSignal.reason);
+        binding.abortSignal.addEventListener("abort", stop, { once: true });
+        if (binding.abortSignal.aborted) stop();
+        const child: ActiveChild = {
+          taskId: handle.taskId,
+          sessionId: binding.sessionId,
+          receipt,
+          handle,
+          controller,
+          settled: Deferred.await(done),
+          started: false,
+        };
+        let pending: Promise<ChildOutcome> | undefined;
+        const work = Effect.tryPromise({
+          try: (signal) => {
+            child.started = true;
+            const interrupted = () => controller.abort(signal.reason);
+            signal.addEventListener("abort", interrupted, { once: true });
+            pending = runChild(binding, row, task, handle, controller).finally(() =>
+              signal.removeEventListener("abort", interrupted),
+            );
+            return pending;
+          },
+          catch: (cause) => new SubagentOperationFailed({ operation: "run", cause }),
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.sync(() => {
+              const detail = String(error.cause);
               trace.transitionAttempt(
                 handle,
                 binding.sessionId,
-                "cancelled",
-                "attempt_cancelled",
-                "Queued subagent cancelled",
-                null,
+                "failed",
+                "attempt_failed",
+                "Subagent failed",
+                detail,
                 false,
                 binding.runId,
               );
-              onSettled?.(null);
-            }
-          } finally {
-            binding.abortSignal.removeEventListener("abort", stop);
-            if (!(activeFor(row.id, false, handle.id) !== undefined) && !isTruthy(pending))
-              finish.run("cancelled", "", null, effectClock.currentTimeMillisUnsafe(), row.id);
-            runEffectSync(Deferred.succeed(done, undefined));
-            events.publishSession(binding.sessionId, "subagents");
-            completionListener?.(binding.sessionId);
-          }
-        }),
-      ),
+              finish.run("failed", "", detail, effectClock.currentTimeMillisUnsafe(), row.id);
+            }),
+          ),
+          // Keep the named-agent permit until the SDK has stopped and persisted its checkpoint.
+          // Releasing on Effect interruption alone would let the next message overlap that stream.
+          Effect.ensuring(
+            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+            Effect.gen(function* () {
+              if (pending !== undefined)
+                yield* nativePromise(() => pending!.catch(() => undefined));
+              child.started = false;
+            }).pipe(Effect.orDie),
+          ),
+        );
+        const cancelled = Effect.callback<never>((resume) => {
+          const abort = () => resume(Effect.interrupt);
+          if (controller.signal.aborted) abort();
+          else controller.signal.addEventListener("abort", abort, { once: true });
+          return Effect.sync(() => controller.signal.removeEventListener("abort", abort));
+        });
+        const job = Effect.raceFirst(serializeNamed(row.id, work), cancelled).pipe(
+          Effect.ensuring(
+            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+            // Interruption aborts the SDK signal; retain the service until the checkpoint settles.
+            Effect.gen(function* () {
+              if (isTruthy(pending)) {
+                const outcome = yield* nativePromise(() => pending!.catch(() => null));
+                onSettled?.(outcome);
+              } else {
+                trace.checkpoint(binding.sessionId, {
+                  handle,
+                  completedToolCallIds: [],
+                  uncertainToolCallIds: [],
+                  pendingApprovalIds: [],
+                  remainingWork: task,
+                });
+                trace.transitionAttempt(
+                  handle,
+                  binding.sessionId,
+                  "cancelled",
+                  "attempt_cancelled",
+                  "Queued subagent cancelled",
+                  null,
+                  false,
+                  binding.runId,
+                );
+                onSettled?.(null);
+              }
+            }).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  binding.abortSignal.removeEventListener("abort", stop);
+                  if (!(activeFor(row.id, false, handle.id) !== undefined) && !isTruthy(pending))
+                    finish.run(
+                      "cancelled",
+                      "",
+                      null,
+                      effectClock.currentTimeMillisUnsafe(),
+                      row.id,
+                    );
+                  runEffectSync(Deferred.succeed(done, undefined));
+                  events.publishSession(binding.sessionId, "subagents");
+                  completionListener?.(binding.sessionId);
+                }),
+              ),
+              Effect.orDie,
+            ),
+          ),
+        );
+        MutableHashMap.set(childMetadata, handle.id, child);
+        yield* FiberMap.run(
+          activeChildren,
+          handle.id,
+          job.pipe(
+            Effect.ensuring(Effect.sync(() => MutableHashMap.remove(childMetadata, handle.id))),
+          ),
+        );
+        return receipt;
+      }),
     );
-    await runEffect(FiberMap.run(activeChildren, child, job));
-    return receipt;
   };
 
   const startOneOff = (
@@ -1054,47 +1128,58 @@ const make = Effect.gen(function* () {
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const recoverForRun = async (binding: SubagentBinding) => {
-    const jobs = trace.claimRecoveryJobs(binding.sessionId, binding.runId);
-    await Promise.all(
-      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      jobs.map(async ({ jobId, claim }) => {
-        const existing = byId.get(binding.sessionId, claim.agentId);
-        if (!isTruthy(existing)) {
-          trace.finishRecoveryJob(jobId, false);
-          return;
-        }
-        const known = decodeRow(existing);
-        const context = claim.context;
-        const message = [
-          "Automatically resume the interrupted task as a new execution attempt.",
-          `Original task:\n${context.originalRequest}`,
-          isTruthy(context.remainingWork)
-            ? `Remaining work:\n${context.remainingWork}`
-            : "Review what remains.",
-          context.completedToolCallIds.length > 0
-            ? `Already completed tool calls (do not run again): ${context.completedToolCallIds.join(", ")}`
-            : "No completed tool calls were recorded.",
-          "Old approvals are expired. Request fresh approval for any gated action.",
-          `Checkpoint: ${context.checkpointId}`,
-        ].join("\n\n");
-        {
-          const row = decodeRow(
-            startAgain.get(
-              known.instructions,
-              binding.runId,
-              context.originalRequest,
-              effectClock.currentTimeMillisUnsafe(),
-              known.id,
+  const recoverForRun = (binding: SubagentBinding) =>
+    runEffect(
+      Effect.gen(function* () {
+        const jobs = trace.claimRecoveryJobs(binding.sessionId, binding.runId);
+        yield* nativePromise(() =>
+          Promise.all(
+            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+            jobs.map(({ jobId, claim }) =>
+              runEffect(
+                Effect.gen(function* () {
+                  const existing = byId.get(binding.sessionId, claim.agentId);
+                  if (!isTruthy(existing)) {
+                    trace.finishRecoveryJob(jobId, false);
+                    return;
+                  }
+                  const known = decodeRow(existing);
+                  const context = claim.context;
+                  const message = [
+                    "Automatically resume the interrupted task as a new execution attempt.",
+                    `Original task:\n${context.originalRequest}`,
+                    isTruthy(context.remainingWork)
+                      ? `Remaining work:\n${context.remainingWork}`
+                      : "Review what remains.",
+                    context.completedToolCallIds.length > 0
+                      ? `Already completed tool calls (do not run again): ${context.completedToolCallIds.join(", ")}`
+                      : "No completed tool calls were recorded.",
+                    "Old approvals are expired. Request fresh approval for any gated action.",
+                    `Checkpoint: ${context.checkpointId}`,
+                  ].join("\n\n");
+                  {
+                    const row = decodeRow(
+                      startAgain.get(
+                        known.instructions,
+                        binding.runId,
+                        context.originalRequest,
+                        effectClock.currentTimeMillisUnsafe(),
+                        known.id,
+                      ),
+                    );
+                    yield* nativePromise(() =>
+                      launch(binding, row, message, claim.handle, (outcome) =>
+                        trace.finishRecoveryJob(jobId, outcome?.status === "completed"),
+                      ),
+                    );
+                  }
+                }),
+              ),
             ),
-          );
-          await launch(binding, row, message, claim.handle, (outcome) =>
-            trace.finishRecoveryJob(jobId, outcome?.status === "completed"),
-          );
-        }
+          ),
+        );
       }),
     );
-  };
 
   const attemptState = (sessionId: string, taskId: string, attemptId: string) => {
     const detail = trace.taskDetail(sessionId, taskId);
@@ -1110,46 +1195,52 @@ const make = Effect.gen(function* () {
   };
   const terminal = (status: string) => !["queued", "running", "waiting"].includes(status);
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const getReport = async (
+  const getReport = (
     sessionId: string,
     taskId: string,
     attemptId: string,
-  ): Promise<SubagentReport> => {
-    const { detail, attempt } = attemptState(sessionId, taskId, attemptId);
-    if (!isTruthy(detail.task.agentId)) throw new Error("Subagent no longer exists");
-    const row = decodeRow(byId.get(sessionId, detail.task.agentId));
-    const base = { subagentId: detail.task.agentId, agent: row.name, taskId, attemptId };
-    if (!terminal(attempt.status)) return { ...base, status: "running" };
-    const checkpoint = [...detail.checkpoints]
-      .reverse()
-      .find((entry) => entry.attemptId === attemptId && entry.transcriptMessageId);
-    const messages = await chatState.persistence.stores.messages.loadThread(attempt.threadId);
-    const message = isTruthy(checkpoint?.transcriptMessageId)
-      ? messages.find(
-          (entry) => entry.role === "assistant" && entry.id === checkpoint.transcriptMessageId,
-        )
-      : undefined;
-    const answer = Schema.is(Schema.String)(message?.content)
-      ? message.content
-      : (message?.content ?? [])
-          .flatMap((part) => (part.type === "text" ? [part.content] : []))
-          .join("");
-    return {
-      ...base,
-      status:
-        attempt.status === "completed"
-          ? "completed"
-          : attempt.status === "cancelled"
-            ? "cancelled"
-            : attempt.status === "failed"
-              ? "failed"
-              : "interrupted",
-      answer,
-      error:
-        attempt.status === "failed" ? "Subagent failed; inspect Work Trace for details." : null,
-      evidenceRefIds: trace.evidenceIdsForAttempt(attemptId),
-    };
-  };
+  ): Promise<SubagentReport> =>
+    runEffect(
+      Effect.gen(function* () {
+        const { detail, attempt } = attemptState(sessionId, taskId, attemptId);
+        if (!isTruthy(detail.task.agentId))
+          return yield* new Cause.UnknownError(new Error("Subagent no longer exists"));
+        const row = decodeRow(byId.get(sessionId, detail.task.agentId));
+        const base = { subagentId: detail.task.agentId, agent: row.name, taskId, attemptId };
+        if (!terminal(attempt.status)) return { ...base, status: "running" };
+        const checkpoint = [...detail.checkpoints]
+          .reverse()
+          .find((entry) => entry.attemptId === attemptId && entry.transcriptMessageId);
+        const messages = yield* nativePromise(() =>
+          chatState.persistence.stores.messages.loadThread(attempt.threadId),
+        );
+        const message = isTruthy(checkpoint?.transcriptMessageId)
+          ? messages.find(
+              (entry) => entry.role === "assistant" && entry.id === checkpoint.transcriptMessageId,
+            )
+          : undefined;
+        const answer = Schema.is(Schema.String)(message?.content)
+          ? message.content
+          : (message?.content ?? [])
+              .flatMap((part) => (part.type === "text" ? [part.content] : []))
+              .join("");
+        return {
+          ...base,
+          status:
+            attempt.status === "completed"
+              ? "completed"
+              : attempt.status === "cancelled"
+                ? "cancelled"
+                : attempt.status === "failed"
+                  ? "failed"
+                  : "interrupted",
+          answer,
+          error:
+            attempt.status === "failed" ? "Subagent failed; inspect Work Trace for details." : null,
+          evidenceRefIds: trace.evidenceIdsForAttempt(attemptId),
+        };
+      }),
+    );
 
   return {
     /** Dispatch is nonblocking; only explicit retrieval marks a report reviewed in this run. */
@@ -1163,71 +1254,82 @@ const make = Effect.gen(function* () {
         const existing = Option.getOrUndefined(MutableHashMap.get(started, toolCallId));
         if (isTruthy(existing)) return existing;
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        const outcome = (async (): Promise<SubagentReport> => {
-          const parsed = JSON.parse(argumentsJson || "{}");
-          if (name === "run_subagent") {
-            // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-            const input = EffectFunction.flow(
-              Schema.decodeResult(RunSubagentInput),
-              Result.getOrThrow,
-            )(parsed);
-            const instructions = [
-              input.instructions,
-              isTruthy(input.ownership?.length)
-                ? `Owned files/areas: ${input.ownership.join(", ")}. Preserve other agents' edits.`
-                : null,
-              isTruthy(input.acceptanceCriteria?.length)
-                ? `Acceptance criteria:\n${input.acceptanceCriteria.map((criterion) => `- ${criterion}`).join("\n")}`
-                : null,
-            ]
-              .filter((part) => part !== undefined && part !== null)
-              .join("\n");
-            return startOneOff(binding, toolCallId, input.task, instructions || null);
-          }
-          if (name === "resume_subagent") {
-            // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-            const input = EffectFunction.flow(
-              Schema.decodeResult(ResumeSubagentInput),
-              Result.getOrThrow,
-            )(parsed);
-            return resumeTask(binding, toolCallId, input);
-          }
-          // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-          const input = EffectFunction.flow(
-            Schema.decodeResult(MessageSubagentInput),
-            Result.getOrThrow,
-          )(parsed);
-          // A named child already answering hears the message now, in its running turn.
-          const busyChild = byName.get(binding.sessionId, input.agent);
-          if (isTruthy(busyChild) && activeFor(decodeRow(busyChild).id) !== undefined) {
-            const row = decodeRow(busyChild);
-            const runtime = await runEffect(active.runtime(binding.selection));
-            const steered = await runtime
-              .steer(subagentThreadId(row.id), { role: "user", content: input.message })
-              .catch(() => "no_turn" as const);
-            if (steered === "steered") {
-              const handle = activeFor(row.id, true)?.handle;
-              if (handle !== undefined)
-                trace.recordSteer({
-                  handle,
-                  sessionId: binding.sessionId,
-                  parentRunId: binding.runId,
-                  parentToolCallId: toolCallId,
-                  message: input.message,
-                });
-              if (handle !== undefined)
-                return {
-                  status: "running",
-                  subagentId: row.id,
-                  agent: input.agent,
-                  taskId: handle.taskId,
-                  attemptId: handle.id,
-                  delivery: "steered",
-                };
-            }
-          }
-          return startNamed(binding, toolCallId, input.agent, input.message, input.instructions);
-        })();
+        const outcome = ((): Promise<SubagentReport> =>
+          runEffect(
+            Effect.gen(function* () {
+              const parsed = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(
+                argumentsJson || "{}",
+              );
+              if (name === "run_subagent") {
+                // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+                const input = EffectFunction.flow(
+                  Schema.decodeUnknownResult(RunSubagentInput),
+                  Result.getOrThrow,
+                )(parsed);
+                const instructions = [
+                  input.instructions,
+                  isTruthy(input.ownership?.length)
+                    ? `Owned files/areas: ${input.ownership.join(", ")}. Preserve other agents' edits.`
+                    : null,
+                  isTruthy(input.acceptanceCriteria?.length)
+                    ? `Acceptance criteria:\n${input.acceptanceCriteria.map((criterion) => `- ${criterion}`).join("\n")}`
+                    : null,
+                ]
+                  .filter((part) => part !== undefined && part !== null)
+                  .join("\n");
+                return yield* nativePromise(() =>
+                  startOneOff(binding, toolCallId, input.task, instructions || null),
+                );
+              }
+              if (name === "resume_subagent") {
+                // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+                const input = EffectFunction.flow(
+                  Schema.decodeUnknownResult(ResumeSubagentInput),
+                  Result.getOrThrow,
+                )(parsed);
+                return yield* nativePromise(() => resumeTask(binding, toolCallId, input));
+              }
+              // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+              const input = EffectFunction.flow(
+                Schema.decodeUnknownResult(MessageSubagentInput),
+                Result.getOrThrow,
+              )(parsed);
+              // A named child already answering hears the message now, in its running turn.
+              const busyChild = byName.get(binding.sessionId, input.agent);
+              if (isTruthy(busyChild) && activeFor(decodeRow(busyChild).id) !== undefined) {
+                const row = decodeRow(busyChild);
+                const runtime = yield* active.runtime(binding.selection);
+                const steered = yield* nativePromise(() =>
+                  runtime
+                    .steer(subagentThreadId(row.id), { role: "user", content: input.message })
+                    .catch(() => "no_turn" as const),
+                );
+                if (steered === "steered") {
+                  const handle = activeFor(row.id, true)?.handle;
+                  if (handle !== undefined)
+                    trace.recordSteer({
+                      handle,
+                      sessionId: binding.sessionId,
+                      parentRunId: binding.runId,
+                      parentToolCallId: toolCallId,
+                      message: input.message,
+                    });
+                  if (handle !== undefined)
+                    return {
+                      status: "running",
+                      subagentId: row.id,
+                      agent: input.agent,
+                      taskId: handle.taskId,
+                      attemptId: handle.id,
+                      delivery: "steered",
+                    };
+                }
+              }
+              return yield* nativePromise(() =>
+                startNamed(binding, toolCallId, input.agent, input.message, input.instructions),
+              );
+            }),
+          ))();
         outcome.catch(() => undefined);
         MutableHashMap.set(started, toolCallId, outcome);
         return outcome;
@@ -1267,89 +1369,97 @@ const make = Effect.gen(function* () {
           "Retrieve one exact subagent attempt's report and evidence in this session. Returns running if unfinished. Only completed reports retrieved here can be adopted; notifications and wait results do not count as review.",
         inputSchema: toToolSchema(AttemptInput),
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      }).server(async (input, context) => {
-        const result = await getReport(binding.sessionId, input.taskId, input.attemptId);
-        MutableHashMap.set(reportResults, context?.toolCallId ?? "", [result]);
-        return result;
-      });
+      }).server((input, context) =>
+        runEffect(
+          Effect.gen(function* () {
+            const result = yield* nativePromise(() =>
+              getReport(binding.sessionId, input.taskId, input.attemptId),
+            );
+            MutableHashMap.set(reportResults, context?.toolCallId ?? "", [result]);
+            return result;
+          }),
+        ),
+      );
       const reportsTool = toolDefinition({
         name: "get_subagent_reports",
         description:
           "Retrieve a batch of exact attempt reports and evidence concurrently. Unfinished attempts return running. Successful completed reports are reviewed individually and may be adopted; retrieval does not adopt them.",
         inputSchema: toToolSchema(AttemptsInput),
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      }).server(async (raw, context) => {
-        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        const input = EffectFunction.flow(
-          Schema.decodeResult(AttemptsInput),
-          Result.getOrThrow,
-        )(raw);
-        const reports = await Promise.all(
-          input.attempts.map(({ taskId, attemptId }) =>
-            getReport(binding.sessionId, taskId, attemptId),
-          ),
-        );
-        MutableHashMap.set(reportResults, context?.toolCallId ?? "", reports);
-        return { reports };
-      });
+      }).server((raw, context) =>
+        runEffect(
+          Effect.gen(function* () {
+            // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+            const input = EffectFunction.flow(
+              Schema.decodeResult(AttemptsInput),
+              Result.getOrThrow,
+            )(raw);
+            const reports = yield* nativePromise(() =>
+              Promise.all(
+                input.attempts.map(({ taskId, attemptId }) =>
+                  getReport(binding.sessionId, taskId, attemptId),
+                ),
+              ),
+            );
+            MutableHashMap.set(reportResults, context?.toolCallId ?? "", reports);
+            return { reports };
+          }),
+        ),
+      );
       const waitTool = toolDefinition({
         name: "wait_subagents",
         description:
           "Check any or all listed task/attempt ids without blocking by default (timeoutMs 0). Pending means continue independent work; completion notifications arrive automatically. A positive timeoutMs (up to 120000) pauses your turn: use only after independent work is exhausted and a child result is required. Returns statuses only, never reviews or adopts reports. Timeout or cancelling the wait does not cancel children.",
         inputSchema: toToolSchema(WaitSubagentsInput),
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      }).server(async (raw) => {
-        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        const input = EffectFunction.flow(
-          Schema.decodeResult(WaitSubagentsInput),
-          Result.getOrThrow,
-        )(raw);
-        const snapshot = () =>
-          input.attempts.map(({ taskId, attemptId }) => ({
-            taskId,
-            attemptId,
-            status: trace.subagentAttemptStatus(binding.sessionId, taskId, attemptId),
-          }));
-        const ready = (states: ReturnType<typeof snapshot>) =>
-          input.mode === "all"
-            ? states.every((entry) => terminal(entry.status))
-            : states.some((entry) => terminal(entry.status));
-        if (input.timeoutMs === 0) {
-          const states = snapshot();
-          if (ready(states)) return { status: "completed" as const, attempts: states };
-          return {
-            status: "pending" as const,
-            attempts: states,
-            nextAction:
-              "Continue independent work. Completion notifications arrive automatically; do not repeatedly poll. Wait with a positive timeout only when no independent work remains.",
-          };
-        }
-        const waiting = Effect.gen(function* () {
-          while (true) {
-            // Read the durable cursor before status so completion cannot fall between the read
-            // and subscription. waitForChange rechecks that cursor after registering its listener.
-            const cursor = trace.latestCursor(binding.sessionId);
-            const states = snapshot();
-            if (ready(states)) return { status: "completed" as const, attempts: states };
-            yield* Effect.tryPromise({
-              try: (signal) => trace.waitForChange(binding.sessionId, cursor, signal),
-              catch: (cause) => new SubagentOperationFailed({ operation: "wait", cause }),
+      }).server((raw) =>
+        runEffect(
+          Effect.gen(function* () {
+            const input = yield* Schema.decodeEffect(WaitSubagentsInput)(raw);
+            const snapshot = () =>
+              input.attempts.map(({ taskId, attemptId }) => ({
+                taskId,
+                attemptId,
+                status: trace.subagentAttemptStatus(binding.sessionId, taskId, attemptId),
+              }));
+            const ready = (states: ReturnType<typeof snapshot>) =>
+              input.mode === "all"
+                ? states.every((entry) => terminal(entry.status))
+                : states.some((entry) => terminal(entry.status));
+            if (input.timeoutMs === 0) {
+              const states = snapshot();
+              if (ready(states)) return { status: "completed" as const, attempts: states };
+              return {
+                status: "pending" as const,
+                attempts: states,
+                nextAction:
+                  "Continue independent work. Completion notifications arrive automatically; do not repeatedly poll. Wait with a positive timeout only when no independent work remains.",
+              };
+            }
+            const waiting = Effect.gen(function* () {
+              while (true) {
+                // Read the cursor before status; waitForChange rechecks after registration.
+                const cursor = trace.latestCursor(binding.sessionId);
+                const states = snapshot();
+                if (ready(states)) return { status: "completed" as const, attempts: states };
+                yield* Effect.tryPromise({
+                  try: (signal) => trace.waitForChange(binding.sessionId, cursor, signal),
+                  catch: (cause) => new SubagentOperationFailed({ operation: "wait", cause }),
+                });
+              }
             });
-          }
-        });
-        return runEffect(
-          waiting.pipe(
-            Effect.timeoutOption(input.timeoutMs),
-            Effect.map((result) =>
-              Option.match(result, {
-                onNone: () => ({ status: "timed_out" as const, attempts: snapshot() }),
-                onSome: (value) => value,
-              }),
-            ),
-          ),
+            return yield* waiting.pipe(
+              Effect.timeoutOption(input.timeoutMs),
+              Effect.map((result) =>
+                Option.match(result, {
+                  onNone: () => ({ status: "timed_out" as const, attempts: snapshot() }),
+                  onSome: (value) => value,
+                }),
+              ),
+            );
+          }),
           { signal: binding.abortSignal },
-        );
-      });
+        ),
+      );
 
       const adoptTool = toolDefinition({
         name: "adopt_subagent_reports",
@@ -1385,8 +1495,8 @@ const make = Effect.gen(function* () {
       const middleware: ChatMiddleware = {
         name: "memory-agent/subagents",
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        async onStart() {
-          await runEffect(
+        onStart() {
+          return runEffect(
             Effect.forkIn(
               Effect.tryPromise({
                 try: () => recoverForRun(binding),
@@ -1395,7 +1505,7 @@ const make = Effect.gen(function* () {
                 Effect.catch((error) => Effect.logWarning("Subagent recovery deferred", error)),
               ),
               scope,
-            ),
+            ).pipe(Effect.asVoid),
           );
         },
         onConfig(ctx, config) {
@@ -1418,31 +1528,38 @@ const make = Effect.gen(function* () {
           };
         },
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        async onAfterToolCall(_ctx, info) {
-          if (!["get_subagent_report", "get_subagent_reports"].includes(info.toolName) || !info.ok)
-            return;
-          for (const outcome of Option.getOrUndefined(
-            MutableHashMap.get(reportResults, info.toolCallId),
-          ) ?? []) {
-            if (outcome.status !== "completed") continue;
-            const key = `${outcome.taskId}:${outcome.attemptId}`;
-            if (MutableHashMap.has(reviewed, key)) continue;
-            const handle = trace.attemptHandle(outcome.taskId, outcome.attemptId);
-            if (!isTruthy(handle)) continue;
-            MutableHashMap.set(reviewed, key, outcome);
-            trace.recordReportDisposition({
-              handle,
-              sessionId: binding.sessionId,
-              disposition: "returned",
-              parentRunId: binding.runId,
-            });
-            trace.recordReportDisposition({
-              handle,
-              sessionId: binding.sessionId,
-              disposition: "reviewed",
-              parentRunId: binding.runId,
-            });
-          }
+        onAfterToolCall(_ctx, info) {
+          return runEffect(
+            Effect.sync(() => {
+              if (
+                !["get_subagent_report", "get_subagent_reports"].includes(info.toolName) ||
+                !info.ok
+              )
+                return;
+              for (const outcome of Option.getOrUndefined(
+                MutableHashMap.get(reportResults, info.toolCallId),
+              ) ?? []) {
+                if (outcome.status !== "completed") continue;
+                const key = `${outcome.taskId}:${outcome.attemptId}`;
+                if (MutableHashMap.has(reviewed, key)) continue;
+                const handle = trace.attemptHandle(outcome.taskId, outcome.attemptId);
+                if (!isTruthy(handle)) continue;
+                MutableHashMap.set(reviewed, key, outcome);
+                trace.recordReportDisposition({
+                  handle,
+                  sessionId: binding.sessionId,
+                  disposition: "returned",
+                  parentRunId: binding.runId,
+                });
+                trace.recordReportDisposition({
+                  handle,
+                  sessionId: binding.sessionId,
+                  disposition: "reviewed",
+                  parentRunId: binding.runId,
+                });
+              }
+            }),
+          );
         },
         onFinish(ctx) {
           if (
@@ -1480,26 +1597,29 @@ const make = Effect.gen(function* () {
 
     /** Stop all session children, including those whose parent finished normally. */
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async stopSession(sessionId: string) {
-      const entries = [...activeChildren]
-        .map(([child]) => child)
-        .filter((child) => child.sessionId === sessionId);
-      for (const entry of entries) entry.controller.abort(new Error("session_cancel_requested"));
-      await runEffect(
-        Effect.forEach(entries, (entry) => entry.settled, { concurrency: "unbounded" }),
+    stopSession(sessionId: string) {
+      return runEffect(
+        Effect.gen(function* () {
+          const entries = liveChildren().filter((child) => child.sessionId === sessionId);
+          for (const entry of entries)
+            entry.controller.abort(new Error("session_cancel_requested"));
+          yield* Effect.forEach(entries, (entry) => entry.settled, { concurrency: "unbounded" });
+        }),
       );
     },
 
     /** Stop exactly one live child and wait until its checkpoint and terminal transition settle. */
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async stopTask(taskId: string) {
-      const entry = [...activeChildren]
-        .map(([child]) => child)
-        .find((child) => child.taskId === taskId);
-      if (!isTruthy(entry)) return "not_running" as const;
-      entry.controller.abort(new Error("task_lifecycle_requested"));
-      await runEffect(entry.settled);
-      return "stopped" as const;
+    stopTask(taskId: string) {
+      return runEffect(
+        Effect.gen(function* () {
+          const entry = liveChildren().find((child) => child.taskId === taskId);
+          if (!isTruthy(entry)) return "not_running" as const;
+          entry.controller.abort(new Error("task_lifecycle_requested"));
+          yield* entry.settled;
+          return "stopped" as const;
+        }),
+      );
     },
 
     /** Children of a session. Their calls waiting for the user are in `RelayedApprovals`. */
@@ -1509,16 +1629,19 @@ const make = Effect.gen(function* () {
 
     /** A child's saved conversation. */
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    transcript: async (sessionId: string, subagentId: string) => {
-      const row = byId.get(sessionId, subagentId);
-      if (!isTruthy(row)) return null;
-      return {
-        subagent: toView(decodeRow(row)),
-        messages: await chatState.persistence.stores.messages.loadThread(
-          subagentThreadId(subagentId),
-        ),
-      };
-    },
+    transcript: (sessionId: string, subagentId: string) =>
+      runEffect(
+        Effect.gen(function* () {
+          const row = byId.get(sessionId, subagentId);
+          if (!isTruthy(row)) return null;
+          return {
+            subagent: toView(decodeRow(row)),
+            messages: yield* nativePromise(() =>
+              chatState.persistence.stores.messages.loadThread(subagentThreadId(subagentId)),
+            ),
+          };
+        }),
+      ),
   };
 });
 

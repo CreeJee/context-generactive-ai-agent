@@ -1,10 +1,8 @@
-import { Array as EffectArray, HashSet, Result, Function as EffectFunction } from "effect";
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics nodeBuiltinImport:off schemaSync:off
+import { Array as EffectArray, Effect, FileSystem, HashSet, Path } from "effect";
 import { isTruthy } from "../src/truthy.ts";
-import { readFileSync } from "node:fs";
 import { MutableHashMap, Option, Schema } from "effect";
 import { expect, test } from "vite-plus/test";
+import { withTestPlatform } from "./support/platform.ts";
 
 type Split = "train" | "validation" | "holdout";
 const Evidence = Schema.Struct({ id: Schema.String, project: Schema.String, text: Schema.String });
@@ -39,10 +37,17 @@ const Fixture = Schema.Struct({
   cases: Schema.Array(Case),
 });
 
-const fixture = EffectFunction.flow(
-  Schema.decodeResult(Schema.fromJsonString(Fixture)),
-  Result.getOrThrow,
-)(readFileSync(new URL("../eval/recall-turns.fixture.json", import.meta.url), "utf8"));
+const fixture = await Effect.runPromise(
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const file = yield* path.fromFileUrl(
+      new URL("../eval/recall-turns.fixture.json", import.meta.url),
+    );
+    const text = yield* fs.readFileString(file);
+    return yield* Schema.decodeEffect(Schema.fromJsonString(Fixture))(text);
+  }).pipe(withTestPlatform, Effect.scoped),
+);
 const splits: Split[] = ["train", "validation", "holdout"];
 const prefix: Record<Split, string> = { train: "tr", validation: "va", holdout: "ho" };
 const handlings = [

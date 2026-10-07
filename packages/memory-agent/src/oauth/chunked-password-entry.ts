@@ -1,4 +1,5 @@
-import { Function as EffectFunction } from "effect";
+import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
+import { Cause, Effect, Exit, Function as EffectFunction } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { createHash, randomUUID } from "node:crypto";
 import { Option, Schema } from "effect";
@@ -44,75 +45,93 @@ function createChunkedPasswordEntryBody(
 ): PasswordEntry {
   const root = open(account);
   const chunk = (value: Manifest, index: number) => open(`${account}:${value.generation}:${index}`);
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const removeChunks = async (value: Manifest) => {
-    // Serialize native vault mutations, but still try every fragment if one deletion fails.
-    const results: PromiseSettledResult<boolean>[] = [];
-    for (let index = 0; index < value.count; index++)
-      results.push(...(await Promise.allSettled([chunk(value, index).deleteCredential()])));
-    for (const result of results) if (result.status === "rejected") throw result.reason;
-  };
-
+  const removeChunks = Effect.fn("CredentialFragments.remove")(function* (value: Manifest) {
+    const results = yield* Effect.forEach(
+      Array.from({ length: value.count }, (_, index) => index),
+      (index) => Effect.exit(nativePromise(() => chunk(value, index).deleteCredential())),
+      { concurrency: 1 },
+    );
+    for (const result of results)
+      if (Exit.isFailure(result)) return yield* Effect.failCause(result.cause);
+  });
   return {
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async getPassword() {
-      let encoded = (await root.getPassword()) ?? undefined;
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const current = manifest(encoded);
-        if (current === null) return encoded;
-        const parts = await Promise.all(
-          Array.from(
-            { length: current.count },
-            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-            async (_, index) => (await chunk(current, index).getPassword()) ?? undefined,
-          ),
-        );
-        const password = Buffer.from(parts.join(""), "base64").toString("utf8");
-        if (parts.every((part) => part !== undefined) && digest(password) === current.digest)
-          return password;
-        // A concurrent refresh or logout may have retired the generation we just read.
-        const latest = (await root.getPassword()) ?? undefined;
-        if (latest === encoded) throw new Error("Incomplete credential fragments.");
-        encoded = latest;
-      }
-      throw new Error("Credential changed while reading.");
-    },
-
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async setPassword(password) {
-      const previous = manifest(await root.getPassword());
-      if (password.length <= passwordLimit) {
-        await root.setPassword(password);
-      } else {
-        // ASCII fragments also avoid splitting a surrogate pair at a native string boundary.
-        const encoded = Buffer.from(password).toString("base64");
-        const next: Manifest = {
-          generation: randomUUID(),
-          count: Math.ceil(encoded.length / passwordLimit),
-          digest: digest(password),
-        };
-        if (next.count > 256) throw new Error("Credential exceeds the fragment limit.");
-        try {
-          for (let index = 0; index < next.count; index++)
-            await chunk(next, index).setPassword(
-              encoded.slice(index * passwordLimit, (index + 1) * passwordLimit),
+    getPassword: () =>
+      runNativeEffect(
+        Effect.gen(function* () {
+          let encoded = (yield* nativePromise(() => root.getPassword())) ?? undefined;
+          for (let attempt = 0; attempt < 2; attempt++) {
+            const current = yield* Effect.try(() => manifest(encoded));
+            if (current === null) return encoded;
+            const parts = yield* Effect.forEach(
+              Array.from({ length: current.count }, (_, index) => index),
+              (index) =>
+                nativePromise(() => chunk(current, index).getPassword()).pipe(
+                  Effect.map((part) => part ?? undefined),
+                ),
+              { concurrency: "unbounded" },
             );
-          await root.setPassword(manifestPrefix + JSON.stringify(next));
-        } catch (error) {
-          await removeChunks(next).catch(() => {});
-          throw error;
-        }
-      }
-      // The new refresh token is already committed; cleanup failure must not invalidate it.
-      if (previous !== null) await removeChunks(previous).catch(() => {});
-    },
-
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async deleteCredential() {
-      const previous = manifest(await root.getPassword());
-      const deleted = await root.deleteCredential();
-      if (previous !== null) await removeChunks(previous);
-      return deleted;
-    },
+            const password = Buffer.from(parts.join(""), "base64").toString("utf8");
+            if (parts.every((part) => part !== undefined) && digest(password) === current.digest)
+              return password;
+            const latest = (yield* nativePromise(() => root.getPassword())) ?? undefined;
+            if (latest === encoded)
+              return yield* new Cause.UnknownError(new Error("Incomplete credential fragments."));
+            encoded = latest;
+          }
+          return yield* new Cause.UnknownError(new Error("Credential changed while reading."));
+        }),
+      ),
+    setPassword: (password) =>
+      runNativeEffect(
+        Effect.gen(function* () {
+          const previous = yield* nativePromise(() => root.getPassword()).pipe(
+            Effect.flatMap((encoded) => Effect.try(() => manifest(encoded))),
+          );
+          if (password.length <= passwordLimit)
+            yield* nativePromise(() => root.setPassword(password));
+          else {
+            const encoded = Buffer.from(password).toString("base64");
+            const next: Manifest = {
+              generation: randomUUID(),
+              count: Math.ceil(encoded.length / passwordLimit),
+              digest: digest(password),
+            };
+            if (next.count > 256)
+              return yield* new Cause.UnknownError(
+                new Error("Credential exceeds the fragment limit."),
+              );
+            yield* Effect.gen(function* () {
+              for (let index = 0; index < next.count; index++) {
+                const entry = chunk(next, index);
+                yield* nativePromise(() =>
+                  entry.setPassword(
+                    encoded.slice(index * passwordLimit, (index + 1) * passwordLimit),
+                  ),
+                );
+              }
+              const encodedManifest = yield* Schema.encodeEffect(Schema.fromJsonString(Manifest))(
+                next,
+              );
+              yield* nativePromise(() => root.setPassword(manifestPrefix + encodedManifest));
+            }).pipe(
+              Effect.catchCause((cause) =>
+                removeChunks(next).pipe(Effect.ignore, Effect.andThen(Effect.failCause(cause))),
+              ),
+            );
+          }
+          if (previous !== null) yield* removeChunks(previous).pipe(Effect.ignore);
+        }),
+      ),
+    deleteCredential: () =>
+      runNativeEffect(
+        Effect.gen(function* () {
+          const previous = yield* nativePromise(() => root.getPassword()).pipe(
+            Effect.flatMap((encoded) => Effect.try(() => manifest(encoded))),
+          );
+          const deleted = yield* nativePromise(() => root.deleteCredential());
+          if (previous !== null) yield* removeChunks(previous);
+          return deleted;
+        }),
+      ),
   };
 }

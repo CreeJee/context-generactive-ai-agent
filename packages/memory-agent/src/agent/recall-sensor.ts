@@ -83,38 +83,44 @@ function validScore(value: number) {
 }
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function boundedScore(response: Response, signal: AbortSignal): Promise<number | null> {
-  if (!(response.body !== null)) throw new Error("empty response");
-  const reader = response.body.getReader();
-  const cancel = () => {
-    void reader.cancel().catch(() => {});
-  };
-  signal.addEventListener("abort", cancel, { once: true });
-  if (signal.aborted) cancel();
-  const parts: Uint8Array[] = [];
-  let size = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > maxResponseBytes) throw new Error("oversized response");
-      parts.push(value);
-    }
-  } finally {
-    signal.removeEventListener("abort", cancel);
-    void reader.cancel().catch(() => {});
-    reader.releaseLock();
-  }
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const part of parts) {
-    bytes.set(part, offset);
-    offset += part.byteLength;
-  }
-  const decoded = decodeResponse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-  return Option.isSome(decoded) ? decoded.value.answers.recall_useful.noul : null;
-}
+const boundedScore = Effect.fn("RecallSensor.boundedScore")(function* (response: Response) {
+  if (response.body === null) return yield* SensorFailed.make({});
+  const body = response.body;
+  return yield* Effect.acquireUseRelease(
+    Effect.try({ try: () => body.getReader(), catch: () => SensorFailed.make({}) }),
+    Effect.fnUntraced(function* (reader) {
+      const parts: Uint8Array[] = [];
+      let size = 0;
+      for (;;) {
+        const { done, value } = yield* Effect.tryPromise({
+          try: () => reader.read(),
+          catch: () => SensorFailed.make({}),
+        });
+        if (done) break;
+        size += value.byteLength;
+        if (size > maxResponseBytes) return yield* SensorFailed.make({});
+        parts.push(value);
+      }
+      return yield* Effect.try({
+        try: () => {
+          const bytes = new Uint8Array(size);
+          let offset = 0;
+          for (const part of parts) {
+            bytes.set(part, offset);
+            offset += part.byteLength;
+          }
+          const decoded = decodeResponse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+          return Option.isSome(decoded) ? decoded.value.answers.recall_useful.noul : null;
+        },
+        catch: () => SensorFailed.make({}),
+      });
+    }),
+    (reader) =>
+      Effect.promise(() => reader.cancel().catch(() => undefined)).pipe(
+        Effect.andThen(Effect.sync(() => reader.releaseLock())),
+      ),
+  );
+});
 
 /** Per-run instance: memoizes a turn, including failure, so continuations cannot repeat a call. */
 export function createRecallSensor(config: RecallSensorConfig = { mode: "disabled" }) {
@@ -182,10 +188,7 @@ export function createRecallSensor(config: RecallSensorConfig = { mode: "disable
           !response.ok
         )
           return yield* SensorFailed.make({});
-        const score = yield* Effect.tryPromise({
-          try: () => boundedScore(response, signal),
-          catch: () => SensorFailed.make({}),
-        });
+        const score = yield* boundedScore(response);
         return score === null
           ? { status: "error" as const, version }
           : { status: "evaluated" as const, version, score };

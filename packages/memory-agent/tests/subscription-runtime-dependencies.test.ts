@@ -1,14 +1,10 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
 import { SubscriptionAccountProvider } from "../src/providers/contracts.ts";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { Clock, Effect, Layer, Result, Schema } from "effect";
+import { Clock, Effect, FileSystem, Layer, Result, Schema, Stream } from "effect";
 import { EventType } from "@tanstack/ai";
 import { InternalLogger } from "@tanstack/ai/adapter-internals";
-import { expect, test } from "vite-plus/test";
+import { it } from "@effect/vitest";
+import { expect } from "vite-plus/test";
 import { GlobalConfig } from "../src/config/global-config.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { migrations } from "../src/db/migrations.ts";
@@ -23,6 +19,7 @@ import {
   createSubscriptionRuntime,
   createSubscriptionRuntimeImplementation,
 } from "../src/providers/subscription-runtime.ts";
+import { withTestPlatform } from "./support/platform.ts";
 
 const logger = new InternalLogger(
   { debug() {}, info() {}, warn() {}, error() {} },
@@ -39,13 +36,14 @@ const logger = new InternalLogger(
   },
 );
 const selection = { provider: "openai", model: "gpt-5", reasoningEffort: "low" } as const;
-const temporary = Effect.acquireRelease(
-  Effect.sync(() => mkdtempSync(join(tmpdir(), "subscription-dependencies-"))),
-  (path) => Effect.sync(() => rmSync(path, { recursive: true, force: true })),
-);
+const temporary = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  return yield* fs.makeTempDirectoryScoped({ prefix: "subscription-dependencies-" });
+}).pipe(withTestPlatform);
 
-test("native registry exports fresh account dependencies without selecting until adapter creation", () =>
-  Effect.runPromise(
+it.live(
+  "native registry exports fresh account dependencies without selecting until adapter creation",
+  () =>
     Effect.scoped(
       Effect.gen(function* () {
         const effectClock = yield* Clock.Clock;
@@ -80,39 +78,34 @@ test("native registry exports fresh account dependencies without selecting until
             return createSubscriptionOAuthClient({
               protocol: providerProtocols.openai,
               store: {
-                read: async () => ({
-                  accessToken: id!,
-                  refreshToken: "fixture",
-                  expiresAt: effectClock.currentTimeMillisUnsafe() + 60_000,
-                }),
-                write: async () => {
-                  throw new Error("unexpected refresh");
-                },
-                remove: async () => {
-                  throw new Error("unexpected removal");
-                },
+                read: () =>
+                  Promise.resolve({
+                    accessToken: id!,
+                    refreshToken: "fixture",
+                    expiresAt: effectClock.currentTimeMillisUnsafe() + 60_000,
+                  }),
+                write: () => Promise.reject(new Error("unexpected refresh")),
+                remove: () => Promise.reject(new Error("unexpected removal")),
               },
-              fetch: async (url, init) => {
+              fetch: (url, init) => {
                 requests.push(new Headers(init?.headers).get("authorization")!);
-                return (url instanceof Request ? url.url : url.toString()).includes("/models")
-                  ? Response.json({
-                      models: [{ slug: "gpt-5", context_window: id === "first" ? 111 : 222 }],
-                    })
-                  : new Response(
-                      'data: {"type":"response.output_text.delta","delta":"reply"}\n\ndata: {"type":"response.completed"}\n\n',
-                      { headers: { "content-type": "text/event-stream" } },
-                    );
+                return Promise.resolve(
+                  (url instanceof Request ? url.url : url.toString()).includes("/models")
+                    ? Response.json({
+                        models: [{ slug: "gpt-5", context_window: id === "first" ? 111 : 222 }],
+                      })
+                    : new Response(
+                        'data: {"type":"response.output_text.delta","delta":"reply"}\n\ndata: {"type":"response.completed"}\n\n',
+                        { headers: { "content-type": "text/event-stream" } },
+                      ),
+                );
               },
             });
           },
           {
-            read: async () => null,
-            write: async () => {
-              throw new Error("unexpected profile write");
-            },
-            remove: async () => {
-              throw new Error("unexpected profile removal");
-            },
+            read: () => Promise.resolve(null),
+            write: () => Promise.reject(new Error("unexpected profile write")),
+            remove: () => Promise.reject(new Error("unexpected profile removal")),
           },
         );
         const program = Effect.gen(function* () {
@@ -160,18 +153,18 @@ test("native registry exports fresh account dependencies without selecting until
             );
             requests.length = 0;
             for (const [index, adapter] of [first, second, legacy].entries()) {
-              const chunks = yield* Effect.promise(async () => {
-                const output = [];
-                for await (const chunk of adapter.chatStream({
-                  messages: [{ role: "user", content: "hello" }],
-                  model: selection.model,
-                  logger,
-                  runId: `run-${index}`,
-                  threadId: "thread",
-                }))
-                  output.push(chunk);
-                return output;
-              });
+              const chunks = yield* Stream.runCollect(
+                Stream.fromAsyncIterable(
+                  adapter.chatStream({
+                    messages: [{ role: "user", content: "hello" }],
+                    model: selection.model,
+                    logger,
+                    runId: `run-${index}`,
+                    threadId: "thread",
+                  }),
+                  (cause) => cause,
+                ),
+              );
               expect(chunks.some((chunk) => chunk.type === EventType.RUN_FINISHED)).toBe(true);
             }
             expect(requests).toEqual(["Bearer first", "Bearer second", "Bearer second"]);
@@ -211,10 +204,11 @@ test("native registry exports fresh account dependencies without selecting until
         );
       }),
     ),
-  ));
+);
 
-test("default layer stays unavailable and native subscription layer exports without auth IO", () =>
-  Effect.runPromise(
+it.live(
+  "default layer stays unavailable and native subscription layer exports without auth IO",
+  () =>
     Effect.scoped(
       Effect.gen(function* () {
         const unavailable = Effect.gen(function* () {
@@ -261,4 +255,4 @@ test("default layer stays unavailable and native subscription layer exports with
         );
       }),
     ),
-  ));
+);

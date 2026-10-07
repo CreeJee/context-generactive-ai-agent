@@ -86,7 +86,7 @@ function useSessionLifecycleMutationBody(projectId: string, holder: () => string
     { kind: "archive" | "restore" | "delete"; sessionId: string }
   >({
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    mutationFn: async (request) => {
+    mutationFn: (request) => {
       switch (request.kind) {
         case "archive":
           return api.setArchived(request.sessionId, holder(), true);

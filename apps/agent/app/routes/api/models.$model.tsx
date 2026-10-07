@@ -32,25 +32,30 @@ const modelUnavailable = (error: {
 
 /** Validates and saves an explicit provider/model/effort tuple, with no provider fallback. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function action({ request, params }: Route.ActionArgs) {
-  const rejected = rejectCrossSite(request);
-  if (rejected !== null) return rejected;
-  const body = await readJson(request, Selection);
-  if (Result.isFailure(body)) return Response.json({ error: "invalid_selection" }, { status: 400 });
+export function action({ request, params }: Route.ActionArgs) {
+  return agent.runPromise(
+    Effect.gen(function* () {
+      const rejected = rejectCrossSite(request);
+      if (rejected !== null) return rejected;
+      const body = yield* Effect.tryPromise(() => readJson(request, Selection));
+      if (Result.isFailure(body))
+        return Response.json({ error: "invalid_selection" }, { status: 400 });
 
-  const { provider, reasoningEffort } = body.success;
-  const response = Effect.gen(function* () {
-    const configured = yield* (yield* ProviderRegistry).get(provider);
-    return yield* configured.models.select(params.model, reasoningEffort);
-  }).pipe(
-    Effect.map((selection) => Response.json(selection)),
-    Effect.catchTags({
-      ModelUnavailable: (error) => Effect.succeed(modelUnavailable(error)),
-      ProviderUnavailable: () =>
-        Effect.succeed(Response.json({ error: "provider_unavailable" }, { status: 404 })),
-      ProviderOperationFailed: () =>
-        Effect.succeed(Response.json({ error: "model_list_failed" }, { status: 502 })),
+      const { provider, reasoningEffort } = body.success;
+      const response = Effect.gen(function* () {
+        const configured = yield* (yield* ProviderRegistry).get(provider);
+        return yield* configured.models.select(params.model, reasoningEffort);
+      }).pipe(
+        Effect.map((selection) => Response.json(selection)),
+        Effect.catchTags({
+          ModelUnavailable: (error) => Effect.succeed(modelUnavailable(error)),
+          ProviderUnavailable: () =>
+            Effect.succeed(Response.json({ error: "provider_unavailable" }, { status: 404 })),
+          ProviderOperationFailed: () =>
+            Effect.succeed(Response.json({ error: "model_list_failed" }, { status: 502 })),
+        }),
+      );
+      return yield* response;
     }),
   );
-  return agent.runPromise(response);
 }

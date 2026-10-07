@@ -1,3 +1,5 @@
+import { Cause, Clock, Effect } from "effect";
+import { nativePromise, runNativeEffect } from "memory-agent/native-effect";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../app/truthy.ts";
 // Runs the built executable from a folder outside the repository (so nothing resolves from the
@@ -44,31 +46,33 @@ function check(name: string, ok: boolean, detail = "") {
 }
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function freePort() {
+const freePort = Effect.fn("smoke.freePort")(function* () {
   const server = createServer();
   // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  yield* nativePromise(
+    () => new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve)),
+  );
   // SAFETY: a server listening on a TCP port reports an AddressInfo, never a pipe name.
   const { port } = server.address() as AddressInfo;
   // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  yield* nativePromise(() => new Promise<void>((resolve) => server.close(() => resolve())));
   return port;
-}
+});
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function until<T>(what: string, probe: () => Promise<T | null>, timeoutMs: number) {
-  // React/native timestamps use the host Date contract outside Effect execution.
-  const deadline = Date.now() + timeoutMs;
-  // React/native timestamps use the host Date contract outside Effect execution.
-  while (Date.now() < deadline) {
-    const value = await probe().catch(() => null);
+const until = Effect.fn("smoke.until")(function* <T>(
+  what: string,
+  probe: () => Promise<T | null>,
+  timeoutMs: number,
+) {
+  const deadline = (yield* Clock.currentTimeMillis) + timeoutMs;
+  while ((yield* Clock.currentTimeMillis) < deadline) {
+    const value = yield* nativePromise(probe).pipe(Effect.orElseSucceed(() => null));
     if (value !== null) return value;
-    // Native callback heartbeat/debounce timing remains at the protocol boundary.
-    // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    yield* Effect.sleep(250);
   }
-  throw new Error(`timed out waiting for ${what}`);
-}
+  return yield* new Cause.UnknownError(new Error(`timed out waiting for ${what}`));
+});
 
 function start(port: number) {
   const env = { ...process.env };
@@ -85,7 +89,7 @@ function start(port: number) {
 }
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function stop(child: ChildProcess) {
+const stop = Effect.fn("smoke.stop")(function* (child: ChildProcess) {
   // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
   const exited = new Promise<number | null>((resolve) =>
     child.once("exit", (code) => resolve(code)),
@@ -94,8 +98,8 @@ async function stop(child: ChildProcess) {
   if (windows && child.pid !== undefined)
     spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
   else child.kill("SIGTERM");
-  return exited;
-}
+  return yield* nativePromise(() => exited);
+});
 
 const ErrorResponse = Schema.Struct({ error: Schema.String });
 const Created = Schema.Struct({ id: Schema.String });
@@ -127,7 +131,7 @@ const statusWithHost = (url: string, host: string) =>
 
 let server: ChildProcess | null = null;
 try {
-  const port = await freePort();
+  const port = await runNativeEffect(freePort());
   const url = `http://127.0.0.1:${port}`;
   const post = (path: string, body: Record<string, string>, headers: Record<string, string> = {}) =>
     // Native Request/Response adapter preserves host and SDK stream semantics.
@@ -140,11 +144,13 @@ try {
   // React/native timestamps use the host Date contract outside Effect execution.
   let started = Date.now();
   server = start(port);
-  await until(
-    "the server",
-    // Native Request/Response adapter preserves host and SDK stream semantics.
-    () => fetch(url).then((response) => (response.ok ? response : null)),
-    60_000,
+  await runNativeEffect(
+    until(
+      "the server",
+      // Native Request/Response adapter preserves host and SDK stream semantics.
+      () => fetch(url).then((response) => (response.ok ? response : null)),
+      60_000,
+    ),
   );
   // React/native timestamps use the host Date contract outside Effect execution.
   check("first start serves the app", true, `${Date.now() - started} ms`);
@@ -207,7 +213,7 @@ try {
     acp.stdout.slice(0, 80),
   );
 
-  const code = await stop(server);
+  const code = await runNativeEffect(stop(server));
   check("server shuts down cleanly", windows || code === 0, `exit ${code}`);
 
   // A node stored the way it was before secrets were hidden on the way in; the start below sweeps
@@ -229,41 +235,50 @@ try {
   })();
 
   server = start(port);
-  await until(
-    "the second start",
-    // Native Request/Response adapter preserves host and SDK stream semantics.
-    () => fetch(url).then((response) => (response.ok ? response : null)),
-    60_000,
+  await runNativeEffect(
+    until(
+      "the second start",
+      // Native Request/Response adapter preserves host and SDK stream semantics.
+      () => fetch(url).then((response) => (response.ok ? response : null)),
+      60_000,
+    ),
   );
   // The agent (and the sweep it starts) is made on the first API request, as the page makes one.
   // Native Request/Response adapter preserves host and SDK stream semantics.
   await fetch(`${url}/api/auth`);
-  const swept = await until(
-    "the secret sweep",
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async () => {
-      const database = new DatabaseSync(join(storage, "agent.db"), { readOnly: true });
-      try {
-        const row = database.prepare("SELECT text FROM nodes WHERE id = 'smoke-secret'").get();
-        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        const text = isTruthy(row)
-          ? EffectFunction.flow(Schema.decodeUnknownResult(Text), Result.getOrThrow)(row).text
-          : "";
-        return text.includes(smokeToken) ? null : text;
-      } finally {
-        database.close();
-      }
-    },
-    30_000,
+  const swept = await runNativeEffect(
+    until(
+      "the secret sweep",
+      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+      () =>
+        runNativeEffect(
+          Effect.sync(() => {
+            const database = new DatabaseSync(join(storage, "agent.db"), { readOnly: true });
+            try {
+              const row = database
+                .prepare("SELECT text FROM nodes WHERE id = 'smoke-secret'")
+                .get();
+              // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+              const text = isTruthy(row)
+                ? EffectFunction.flow(Schema.decodeUnknownResult(Text), Result.getOrThrow)(row).text
+                : "";
+              return text.includes(smokeToken) ? null : text;
+            } finally {
+              database.close();
+            }
+          }),
+        ),
+      30_000,
+    ),
   );
   check(
     "stored secrets swept on start (bundled detector)",
     seeded && swept === "GITHUB_TOKEN=[redacted:github]",
     swept,
   );
-  await stop(server);
+  await runNativeEffect(stop(server));
 } finally {
-  if (server !== null && server.exitCode === null) await stop(server);
+  if (server !== null && server.exitCode === null) await runNativeEffect(stop(server));
   rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
 

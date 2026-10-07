@@ -1,3 +1,5 @@
+import { Effect } from "effect";
+import { runUiEffect, uiPromise } from "../../shared/ui-effect";
 import { BotIcon, RefreshCwIcon } from "lucide-react";
 import { Schema } from "effect";
 import { useState } from "react";
@@ -101,16 +103,25 @@ export function ImportSettings() {
   const reading = overview.activity?.status === "running";
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const apply = async (
+  const apply = (
     command: { action: "run" | "enable" | "disable" } | { action: "interpret"; interpret: boolean },
-  ) => {
-    setError(null);
-    try {
-      await mutation.mutateAsync(command);
-    } catch (failure) {
-      setError(errorMessage(failure instanceof Error ? failure : new Error(String(failure))));
-    }
-  };
+  ) =>
+    runUiEffect(
+      Effect.gen(function* () {
+        setError(null);
+        yield* uiPromise(() => mutation.mutateAsync(command)).pipe(
+          Effect.catch((failure) =>
+            Effect.sync(() => {
+              setError(
+                errorMessage(
+                  failure.cause instanceof Error ? failure.cause : new Error(String(failure.cause)),
+                ),
+              );
+            }),
+          ),
+        );
+      }),
+    );
 
   const header = (
     <PageHeader

@@ -1,4 +1,6 @@
-import { DateTime } from "effect";
+import { Cause, DateTime, Effect, Stream } from "effect";
+import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
+import { nativeStream } from "../runtime/native-stream.ts";
 import { isTruthy } from "../truthy.ts";
 import type { StreamChunk, StreamDurability } from "@tanstack/ai";
 import type { DatabaseSync } from "node:sqlite";
@@ -66,92 +68,142 @@ export function sqliteStreamDurability(input: {
   return {
     resumeFrom: () => input.resumeOffset ?? null,
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    append: async (chunks) =>
-      atomic(() => {
-        check();
-        if (isTruthy(terminal.get(runId, closedKey))) throw new Error("Stream is closed");
-        // Validate every entry before any write, including sparse arrays.
-        const payloads: string[] = [];
-        for (let i = 0; i < chunks.length; i++) {
-          const chunk = chunks[i];
-          if (!isTruthy(chunk)) throw new Error("Missing stream chunk");
-          // AG-UI message/tool events and SDK RUN_ACCEPTED have no runId.
-          // Reject explicit cross-run lifecycle events; otherwise the owner binding scopes them.
-          switch (chunk.type) {
-            case "RUN_STARTED":
-            case "RUN_FINISHED":
-            case "RUN_ERROR":
-              if (chunk.runId !== undefined && chunk.runId !== runId)
-                throw new Error("Stream chunk run mismatch");
-              if (chunk.threadId !== undefined && chunk.threadId !== sessionId)
-                throw new Error("Stream chunk session mismatch");
-              break;
-          }
-          payloads.push(JSON.stringify(chunk));
-        }
-        const offsets: string[] = [];
-        for (const payload of payloads) {
-          // SAFETY: aggregate always returns one row; COALESCE yields an INTEGER cursor or zero.
-          const sequence = Number(
-            (
-              sqlite
-                .prepare(`SELECT COALESCE(MAX(cursor), 0) AS cursor
+    append: (chunks) =>
+      runNativeEffect(
+        Effect.try({
+          try: () =>
+            atomic(() => {
+              check();
+              if (isTruthy(terminal.get(runId, closedKey))) throw new Error("Stream is closed");
+              // Validate every entry before any write, including sparse arrays.
+              const payloads: string[] = [];
+              for (let i = 0; i < chunks.length; i++) {
+                const chunk = chunks[i];
+                if (!isTruthy(chunk)) throw new Error("Missing stream chunk");
+                // AG-UI message/tool events and SDK RUN_ACCEPTED have no runId.
+                // Reject explicit cross-run lifecycle events; otherwise the owner binding scopes them.
+                switch (chunk.type) {
+                  case "RUN_STARTED":
+                  case "RUN_FINISHED":
+                  case "RUN_ERROR":
+                    if (chunk.runId !== undefined && chunk.runId !== runId)
+                      throw new Error("Stream chunk run mismatch");
+                    if (chunk.threadId !== undefined && chunk.threadId !== sessionId)
+                      throw new Error("Stream chunk session mismatch");
+                    break;
+                }
+                payloads.push(JSON.stringify(chunk));
+              }
+              const offsets: string[] = [];
+              for (const payload of payloads) {
+                // SAFETY: aggregate always returns one row; COALESCE yields an INTEGER cursor or zero.
+                const sequence = Number(
+                  (
+                    sqlite
+                      .prepare(`SELECT COALESCE(MAX(cursor), 0) AS cursor
           FROM workflow_run_events WHERE run_id = ?`)
-                .get(runId) as { cursor: number }
-            ).cursor,
-          );
-          const result = insert.run(
-            runId,
-            `${namespace}chunk:${sequence + 1}`,
-            "chunk",
-            payload,
-            DateTime.formatIso(DateTime.nowUnsafe()),
-          );
-          offsets.push(token(Number(result.lastInsertRowid)));
-        }
-        return offsets;
-      }),
+                      .get(runId) as { cursor: number }
+                  ).cursor,
+                );
+                const result = insert.run(
+                  runId,
+                  `${namespace}chunk:${sequence + 1}`,
+                  "chunk",
+                  payload,
+                  DateTime.formatIso(DateTime.nowUnsafe()),
+                );
+                offsets.push(token(Number(result.lastInsertRowid)));
+              }
+              return offsets;
+            }),
+          catch: (cause) => new Cause.UnknownError(cause),
+        }),
+      ),
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    snapshot: async () =>
-      atomic(() => {
-        check();
-        return entries(0);
-      }),
+    snapshot: () =>
+      runNativeEffect(
+        Effect.try({
+          try: () =>
+            atomic(() => {
+              check();
+              return entries(0);
+            }),
+          catch: (cause) => new Cause.UnknownError(cause),
+        }),
+      ),
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    close: async () =>
-      atomic(() => {
-        check();
-        if (!isTruthy(terminal.get(runId, closedKey)))
-          insert.run(
-            runId,
-            closedKey,
-            "run_completed",
-            JSON.stringify({ deliveryClosed: true }),
-            DateTime.formatIso(DateTime.nowUnsafe()),
-          );
-      }),
+    close: () =>
+      runNativeEffect(
+        Effect.try({
+          try: () =>
+            atomic(() => {
+              check();
+              if (!isTruthy(terminal.get(runId, closedKey)))
+                insert.run(
+                  runId,
+                  closedKey,
+                  "run_completed",
+                  JSON.stringify({ deliveryClosed: true }),
+                  DateTime.formatIso(DateTime.nowUnsafe()),
+                );
+            }),
+          catch: (cause) => new Cause.UnknownError(cause),
+        }),
+      ),
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    read: async function* (offset, signal) {
-      check();
-      let cursor = parse(offset);
-      while (!isTruthy(signal?.aborted)) {
-        const page = atomic(() => {
-          check();
-          return { entries: entries(cursor), closed: !!isTruthy(terminal.get(runId, closedKey)) };
-        });
-        for (const entry of page.entries) {
-          if (isTruthy(signal?.aborted)) return;
-          cursor = parse(entry.offset);
-          yield entry;
-        }
-        if (page.closed) return;
-        try {
-          await setTimeout(20, undefined, { signal });
-        } catch (error) {
-          if (isTruthy(signal?.aborted)) return;
-          throw error;
-        }
-      }
-    },
+    read: (offset, signal) =>
+      nativeStream(
+        Stream.fromPull(
+          Effect.try({
+            try: () => {
+              check();
+              return parse(offset);
+            },
+            catch: (cause) => new Cause.UnknownError(cause),
+          }).pipe(
+            Effect.map((initialCursor) => {
+              let cursor = initialCursor;
+              let pending: ReturnType<typeof entries> = [];
+              let closed = false;
+              return Effect.gen(function* () {
+                while (!signal?.aborted) {
+                  const entry = pending.shift();
+                  if (entry !== undefined) {
+                    cursor = yield* Effect.try({
+                      try: () => parse(entry.offset),
+                      catch: (cause) => new Cause.UnknownError(cause),
+                    });
+                    return [entry] as const;
+                  }
+                  if (closed) return yield* Cause.done();
+                  const page = yield* Effect.try({
+                    try: () =>
+                      atomic(() => {
+                        check();
+                        return {
+                          entries: entries(cursor),
+                          closed: !!isTruthy(terminal.get(runId, closedKey)),
+                        };
+                      }),
+                    catch: (cause) => new Cause.UnknownError(cause),
+                  });
+                  pending = page.entries;
+                  closed = page.closed;
+                  if (pending.length > 0 || closed) continue;
+                  yield* nativePromise(() => setTimeout(20, undefined, { signal })).pipe(
+                    Effect.catch((error) =>
+                      Effect.gen(function* () {
+                        if (signal?.aborted) return yield* Cause.done();
+                        return yield* error;
+                      }),
+                    ),
+                  );
+                }
+                return yield* Cause.done();
+              });
+            }),
+          ),
+        ),
+      ),
   };
 }

@@ -1,3 +1,5 @@
+import { Effect } from "effect";
+import { runUiEffect, uiPromise } from "../../shared/ui-effect";
 import { useState } from "react";
 import { Alert, AlertDescription } from "~/components/ui/alert";
 import { Badge } from "~/components/ui/badge";
@@ -38,24 +40,34 @@ export function ImageSettings() {
   const [error, setError] = useState<string | null>(null);
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const setImageGenerationEnabled = async (enabled: boolean) => {
-    setError(null);
-    try {
-      await enabledMutation.mutateAsync(enabled);
-    } catch {
-      setError("이미지 설정을 바꾸지 못했어요.");
-    }
-  };
+  const setImageGenerationEnabled = (enabled: boolean) =>
+    runUiEffect(
+      Effect.gen(function* () {
+        setError(null);
+        yield* uiPromise(() => enabledMutation.mutateAsync(enabled)).pipe(
+          Effect.catch((_failure) =>
+            Effect.sync(() => {
+              setError("이미지 설정을 바꾸지 못했어요.");
+            }),
+          ),
+        );
+      }),
+    );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const applyCrossProviderMode = async (mode: CrossProviderMediaConsentMode) => {
-    setError(null);
-    try {
-      await consentMutation.mutateAsync(mode);
-    } catch {
-      setError("공급자 간 이미지 실행 동의를 바꾸지 못했어요.");
-    }
-  };
+  const applyCrossProviderMode = (mode: CrossProviderMediaConsentMode) =>
+    runUiEffect(
+      Effect.gen(function* () {
+        setError(null);
+        yield* uiPromise(() => consentMutation.mutateAsync(mode)).pipe(
+          Effect.catch((_failure) =>
+            Effect.sync(() => {
+              setError("공급자 간 이미지 실행 동의를 바꾸지 못했어요.");
+            }),
+          ),
+        );
+      }),
+    );
 
   const header = (
     <PageHeader

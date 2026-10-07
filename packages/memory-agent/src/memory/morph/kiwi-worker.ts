@@ -1,4 +1,5 @@
-import { HashSet } from "effect";
+import { nativeFailure, nativePromise, runNativeEffect } from "../../runtime/native-effect.ts";
+import { Effect, HashSet } from "effect";
 // Kiwi (Korean morphological analyzer) in a worker thread: the WASM model needs ~850 MB, so it
 // lives here and the main thread can end the worker when it has been idle.
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
@@ -44,15 +45,15 @@ const lightStems = HashSet.fromIterable([
 const latinOrNumber = /[\p{Script=Latin}\p{Nd}]+/gu;
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function load() {
-  const builder = await KiwiBuilder.create(wasmPath);
+const load = Effect.fn("KiwiWorker.load")(function* () {
+  const builder = yield* nativePromise(() => KiwiBuilder.create(wasmPath));
   const modelFiles = Object.fromEntries(
     readdirSync(workerData.modelDirectory, { withFileTypes: true })
       .filter((entry) => entry.isFile())
       .map((entry) => [entry.name, readFileSync(join(workerData.modelDirectory, entry.name))]),
   );
-  return builder.build({ modelFiles, modelType: "cong" });
-}
+  return yield* nativePromise(() => builder.build({ modelFiles, modelType: "cong" }));
+});
 
 function termsOf(kiwi: Kiwi, input: string) {
   const text = input.normalize("NFKC");
@@ -81,19 +82,26 @@ function termsOf(kiwi: Kiwi, input: string) {
   return terms.map((term) => term.toLowerCase());
 }
 
-const ready = load().then(
+const ready = runNativeEffect(load()).then(
   (kiwi) => ({ kind: "ready" as const, kiwi }),
   (error) => ({ kind: "failed" as const, error: String(error) }),
 );
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-parent.on("message", async ({ id, texts }: { id: number; texts: string[] }) => {
-  const state = await ready;
-  if (state.kind === "failed") return parent.postMessage({ id, kind: "error", error: state.error });
-  try {
-    const terms = texts.map((text) => termsOf(state.kiwi, text));
-    parent.postMessage({ id, kind: "terms", terms });
-  } catch (error) {
-    parent.postMessage({ id, kind: "error", error: String(error) });
-  }
+parent.on("message", ({ id, texts }: { id: number; texts: string[] }) => {
+  void runNativeEffect(
+    Effect.gen(function* () {
+      const state = yield* nativePromise(() => ready);
+      if (state.kind === "failed")
+        return parent.postMessage({ id, kind: "error", error: state.error });
+      const terms = texts.map((text) => termsOf(state.kiwi, text));
+      parent.postMessage({ id, kind: "terms", terms });
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.sync(() => {
+          parent.postMessage({ id, kind: "error", error: String(nativeFailure(cause).cause) });
+        }),
+      ),
+    ),
+  );
 });

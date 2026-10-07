@@ -202,7 +202,7 @@ function knownValueEvidence(
   expression: ESTree.Expression,
   scopes: Parameters<typeof resolvedVariableForIdentifier>[0],
   boundary: ESTree.Node | null,
-  visitedVariables: HashSet.HashSet<Variable>,
+  visitedDeclarations: HashSet.HashSet<number>,
 ): KnownValueEvidence | null {
   const unwrapped = unwrapExpressionParentheses(expression);
 
@@ -228,7 +228,9 @@ function knownValueEvidence(
 
   if (unwrapped.type !== "Identifier") return null;
   const variable = resolvedVariableForIdentifier(scopes, unwrapped);
-  if (variable === null || HashSet.has(visitedVariables, variable)) return null;
+  if (variable === null) return null;
+  const declarator = variableDeclarator(variable);
+  if (declarator !== null && HashSet.has(visitedDeclarations, declarator.start)) return null;
 
   const annotatedIdentifier = variable.identifiers.find(
     (identifier) => identifier.typeAnnotation !== null && identifier.typeAnnotation !== undefined,
@@ -241,7 +243,6 @@ function knownValueEvidence(
     return { type: annotation };
   }
 
-  const declarator = variableDeclarator(variable);
   if (
     declarator === null ||
     declarator.parent.type !== "VariableDeclaration" ||
@@ -257,7 +258,7 @@ function knownValueEvidence(
     declarator.init,
     scopes,
     boundary,
-    HashSet.add(visitedVariables, variable),
+    HashSet.add(visitedDeclarations, declarator.start),
   );
 }
 
@@ -295,7 +296,14 @@ function widenedBinding(
     initializerAssertion !== null && initializerBroadKind !== null
       ? assertedExpression(initializerAssertion)
       : declarator.init;
-  const evidence = knownValueEvidence(originalExpression, scopes, boundary, HashSet.make(variable));
+  // This traversal stays within one source file: declaration offsets identify bindings without
+  // structurally hashing the scope graph and its cyclic AST parents.
+  const evidence = knownValueEvidence(
+    originalExpression,
+    scopes,
+    boundary,
+    HashSet.make(declarator.start),
+  );
   return evidence === null ? null : { broadKind, evidence, declaredAt: declarator.end, boundary };
 }
 

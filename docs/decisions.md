@@ -1068,3 +1068,64 @@
 - ID가 없는 메시지는 기본 `stored:${threadId}:${modelOrdinal}`을 유지하되 명시적 ID와 충돌하면 예약되지 않은 첫 `:fallback:${n}` 접미사를 선택한다. 이미 projection에 발행된 fallback cursor는 재사용하며, 새 명시적 ID가 그 cursor와 충돌하면 cursor를 바꾸거나 서로 다른 답변을 합치지 않고 오류를 유지한다. ID 조회 컬렉션의 키는 문자열 ID와 숫자 ordinal이다.
 - 기존 미준비 projection은 수정된 초기화 경로에서 준비한다. 페이지 읽기에 전체 원본 파싱이나 자동 backfill을 추가하지 않는다.
 - `stored:` 형식만으로 합성 cursor의 소유자를 판단하지 않는다. assistant에 연결되는 tool 결과는 독립 UI cursor를 갖지 않으므로, 해당 tool의 원본 ordinal을 가리키는 다른 명시적 cursor를 합성 cursor로 재사용하거나 충돌로 거부하지 않는다. 연결된 tool의 fallback은 명시적 ID를 피해서 생성하고 assistant cursor와 toolCallId 연결을 보존한다.
+
+## Effect 4 컬렉션의 키 동등성과 AST 방문 추적 (2026-10-07)
+
+- Set/Map 전환은 API 치환에 앞서 키의 동등성·불변성 계약을 확인한다. Effect 4의 구조 해싱을 AST·scope·변경 가능한 SDK 객체에 적용하지 않고 안정적인 도메인 ID를 우선 사용한다. 외부 객체를 `byReferenceUnsafe`로 전역 표시하지 않으며, 조회마다 새 `byReference` 프록시를 만들지 않는다.
+- 린트의 변수·타입 별칭 방문 집합은 한 Program 안의 선언 시작 위치를 키로 쓴다. 이름이 같은 내부 선언을 구분하고 순환 추적을 유지하면서, 부모·scope로 연결된 AST 전체를 해싱하지 않는다. 파일 간 집합으로 확장할 경우 파일 ID도 키에 포함해야 한다.
+- AgentChat이 소유한 SDK Worker는 불변 `runId`로 등록·제거하고 Worker와 lease 해제 콜백은 값으로 보관한다. 종료로 변경되는 Worker 내부 상태가 정리 키에 영향을 주지 않는다.
+- 문자열·숫자 ID 기반 컬렉션과 함수 참조의 방문·리스너 컬렉션은 별도로 판단한다. 객체를 값으로 보관하는 Map은 객체 키의 구조 해싱 문제에 해당하지 않는다.
+
+## 테스트의 Effect 진단 억제 제거 기준 (2026-10-07)
+
+- Effect 서비스·Schema를 검증하는 테스트는 `@effect/vitest`에서 Effect를 직접 실행한다. 기존 fixture가 소유한 ManagedRuntime의 Context를 받아 서비스를 조회하고, 테스트 내부의 반복 `runPromise` 진입을 없앤다. fixture의 기존 자원 정리 계약은 유지한다.
+- Schema 검증은 Effect 디코더로 실행하며, 기대하는 typed failure는 `Effect.flip`으로 검증한다. SDK AsyncIterable은 Stream으로 소비하고 오류 원인을 보존한다. Promise를 요구하는 즉시 값 콜백은 SDK 경계에서만 `Promise.resolve`로 반환한다.
+- 진단 억제는 원인을 수정하거나 이미 원인이 사라졌음을 검증한 뒤 제거한다. 억제를 다른 위치로 옮기거나 설정을 약화하지 않는다. 프로세스·브라우저·외부 SDK의 호출 계약 또는 동기 fixture API 변경이 필요한 항목은 별도로 설계한다.
+- SDK 테스트의 AbortController는 `SdkCancellations`를 통해 테스트 Scope에 연결한다. Promise 배리어와 네이티브 종료 이벤트는 `Deferred`로 기다리고, 병렬 테스트는 Effect의 동시성을 명시한다. ScriptedTextAdapter는 응답 함수·외부 Promise·지연을 Stream의 Fiber에서 기다리고 `Stream.toAsyncIterable`로 SDK에 전달한다. iterator 종료는 대기 Fiber를 중단하며, 원래 rejection과 실패 전에 전달한 청크를 유지한다.
+- 공통 `testRuntime` fixture는 테스트 Scope가 임시 디렉터리와 모든 재시작 런타임을 소유한다. 파일 I/O는 `FileSystem`·`Path` 서비스로 수행하고 초기화 Fiber도 해당 Scope에 연결한다. 런타임 재시작은 저장소 Scope를 닫지 않으며, 테스트 종료 시 초기화 중단·런타임 해제·디렉터리 제거 순서를 유지한다. SDK 클라이언트 상태를 기다리는 테스트는 Effect의 반복과 시간 제한을 사용하고 클라이언트를 Scope에서 해제한다.
+- scripted responder와 테스트 배리어는 요구 서비스가 없는 Effect도 받을 수 있다. 공통 `turnGate`는 Deferred로 만들고 스트림의 실행 Fiber에서 직접 기다린다. 기존 Promise 응답·대기 계약은 유지하며, 의도적으로 취소를 무시하는 네이티브 SDK·서브프로세스 실험은 해당 경계에서만 Promise로 실행한다. Effect 대기는 취소 시 정리를 마친 뒤 SDK 스트림을 종료한다.
+- 원인 수정의 검증은 `vp run typecheck`로 앱·memory-agent·utils와 서버 테스트용 프로젝트를 모두 검사한다. Vite Task는 병렬 실행 중에도 다른 패키지의 진단 실패로 앱 작업을 중단할 수 있으므로 각 검사 결과를 모은 뒤 최종 실패를 반환한다. 앱의 `tsc`가 경고로 중단되어도 서버 테스트용 프로젝트를 검사한다.
+
+## 2026-10-07: SDK 실행 Fiber와 응답 연결의 수명
+
+- 채팅의 SDK 스트림 소비와 RRSI 실험 실행은 서비스 Scope에 속한 실제 실행 Fiber가 소유한다. AbortController는 SDK 경계에만 두며, Fiber 중단을 SDK 신호로 전달한 뒤 iterator·평가기 정리를 기다린다.
+- HTTP 응답 연결 종료는 실행 취소가 아니다. SDK의 durable producer 계약을 유지하며, 제한된 Queue를 통해 전달한 최종 프레임을 로그에 남겨 재연결할 수 있게 한다. 명시적 취소와 서비스 종료는 실행을 중단한다.
+- 워커 실행의 정리 신호와 최종 오류 프레임의 전달 신호를 분리한다. 전달 취소는 실행으로 전파하지만 실행 정리가 전달을 취소하지 않는다. 세션의 실행 점유와 모델 계정은 실제 실행 정리가 끝난 뒤 반납한다.
+- RRSI의 이미지 확인·모델·평가기 경계는 주입 가능한 Effect 서비스로 분리하고, 테스트는 모듈 모킹 없이 실제 서비스의 Fiber 수명과 정리 순서를 검증한다.
+- 채팅 실행 결과와 실행 점유 추적은 내부에서 Effect Stream으로 합성한다. Stream의 typed error를 유지하고 계정·실행 자원 해제는 `Stream.ensuring`으로 연결한다. SDK SSE 응답을 만드는 지점에서만 AsyncIterable로 변환하며, SDK durable producer의 재연결 계약을 유지한다.
+
+## 2026-10-07: 모듈 모킹 없이 테스트 의존성 구성
+
+- 테스트는 `vi.mock`으로 모듈 그래프를 바꾸지 않는다. HTTP 클라이언트와 서버 핸들러는 생성 함수로 전송 함수와 Effect 런타임을 주입한다.
+- Goal 워커의 소스 경로와 생성 관찰자는 런타임의 `GoalWorkerConfiguration`으로 구성한다. SQLite 생성 함수는 Database Layer에서 주입하고, 파일 캡처 경쟁은 캡처 읽기 함수를 주입해 재현한다. 실제 워커·SQLite와 종료·재시작 검증은 유지한다.
+
+## 2026-10-07: 첨부파일 변환의 서비스 수명
+
+- 첨부파일의 선행 모델 이미지 변환은 Attachments 서비스 Scope에 연결한 Fiber가 소유한다. 같은 콘텐츠 해시의 진행 중 변환을 공유하고, 완료되면 추적 항목을 제거한다.
+- Sharp와 원자적 파일 게시를 수행하는 네이티브 Promise는 중간 취소 대신 완료를 기다린다. 런타임 종료는 해당 작업이 정리된 뒤 반환하며, 파일 I/O를 수행하는 작업이 저장소 삭제 뒤에 남지 않게 한다.
+- 파일 fixture는 FileSystem·Path 서비스를 테스트 Scope에 제공한다. 마이그레이션 검증의 실제 SQLite 연결과 재열기 계약은 유지하고, 연결 종료가 임시 디렉터리 제거보다 먼저 이루어지게 한다.
+- 테스트 임베더의 SHA-256 계산은 Effect Crypto를 사용하되 기존 문자 분할·UTF-8·정규화 결과와 동기 fixture API를 보존한다. NodeCrypto의 자원이 없는 Layer와 동기 digest 계약을 확인하고, 동기 실행은 SQLite 등 네이티브 fixture 진입점에만 둔다. 일반 임베더 호출은 Effect 안에서 직접 계산하고 실패를 EmbeddingError로 전달한다.
+
+## 2026-10-07: 실행 플래그의 ConfigProvider 주입
+
+- Goal worker와 native artifact 활성화 플래그는 호출 컨텍스트의 ConfigProvider로 읽는다. 기본 제공자는 환경변수를 사용하고 누락된 플래그는 기존대로 비활성화한다.
+- worker 경계 테스트는 ConfigProvider Layer에 플래그를 주입한다. 프로세스 전역 환경변수를 변경하지 않고도 실제 워커의 입장·최종화·재열기 계약을 검증한다.
+
+## 2026-10-07: 테스트의 Fiber와 네이티브 SDK 게이트
+
+- Effect 테스트가 시작하는 조회·스트림 소비 Fiber는 해당 테스트 Scope에 연결한다. 동시 조회의 시작 순서가 계약인 경우 `startImmediately`로 기존 순서를 보존한다.
+- SDK가 요구하는 안정적인 Promise 대기값은 Deferred와 캡처한 실행 컨텍스트로 제공한다. Scope 종료 때 대기 Fiber를 정리하고, 공유 조회의 소비자 취소·소유자 취소·늦은 결과 차단을 실제 서비스로 검증한다.
+- Effect의 Scope 신호와 호출 Fiber의 취소 신호를 구분한다. 취소 가능한 네이티브 명령에는 `Effect.tryPromise`의 신호를 전달하고, Promise가 종료될 때까지 기다린 뒤 임시 파일을 제거한다.
+- 실제 stdio·별도 Node 프로세스·Ed25519 PEM 키 생성처럼 SDK 또는 플랫폼 API가 필요한 경계는 명시적으로 유지한다. 진단 억제 주석이나 진단 수준 하향으로 감추지 않는다.
+- 실행 종료 후 큐와 새 Goal 요청을 정리하는 작업도 실행의 해제 Effect가 기다린다. `ended` 신호는 이 정리가 끝난 뒤 완료하여, SQLite와 이벤트 서비스를 닫은 뒤 미처리 Promise가 남지 않게 한다.
+- 서비스 Scope 종료는 SDK에 `service_shutdown` 사유를 먼저 전달한 뒤 생산 Fiber를 중단한다. 완료한 실행은 중단하지 않으며, 종료 당시 진행 중인 실행은 `failed/server_restarted`로 남긴다. 사용자의 명시적 취소는 기존 `aborted` 의미를 유지한다.
+
+## 2026-10-08: Effect 4 strict async와 SDK 경계 (Asia/Seoul)
+
+- 앱과 memory-agent의 `asyncFunction` 진단은 error로 유지한다. 도메인의 반복·대기·병렬 처리·해제는 Effect와 Stream에서 계산하며, Promise 및 AsyncGenerator는 실제 SDK·React·Node 호출 계약에 연결하는 경계에서만 제공한다. `@effect-diagnostics` 억제 주석으로 예외를 만들지 않는다.
+- Promise 경계는 실제 네이티브 작업의 rejection을 Cause.UnknownError로 받아 원래 원인으로 반환한다. SDK에 넘기는 기존 AbortSignal의 참조, 실제 SDK 종료를 기다리는 해제 순서와 서비스 Scope 소유권을 유지한다. AsyncGenerator의 return은 진행 중인 pull을 중단하고 자원 해제 완료를 기다린다.
+- HashSet·HashMap·FiberMap의 키는 안정적인 문자열·숫자 ID를 사용한다. AST와 변경 가능한 SDK 객체의 참조 동일성이 필요한 곳은 경계의 WeakMap으로 ID를 발급하고 객체는 값으로 보관한다. 외부 객체의 전역 동등성 계약을 변경하지 않는다.
+- 고정 Goal worker는 Effect 4의 실행용 dist JavaScript, 전체 런타임 의존성 그래프와 native-effect/native-stream 보조 파일까지 자신의 불변 스냅샷에서 읽는다. Effect 원본·선언·source map은 실행되지 않으므로 Goal마다 복제하지 않는다. 새 캡처의 경쟁 감지, 저장된 해시 검증, cold adoption과 자동 재실행 금지는 유지한다. 실행 파일에도 동일한 agent/runtime 경로와 Effect 패키지를 포함한다.
+- 현재 작업 트리에서 AST async 선언과 소스의 억제 주석은 0개다. `vp check` 및 전체 회귀 테스트 221개 파일·1300개 테스트와 브라우저 테스트 4개가 통과했다. native TypeScript의 error 진단은 0개지만 warning 523개로 `vp run typecheck`의 종료 코드는 1이다. warning을 숨기거나 검사를 통과했다고 보고하지 않는다. 실제 유료 모델·Docker 평가는 실행하지 않았다.
+
+- native artifact 서비스 초기화는 소스 패키지의 빌드 경로를 조회하지 않는다. 실제 새 빌드 요청에서만 경로를 확인하고 실패를 NativeRegistrationError로 전달한다. 저장된 artifact를 사용하는 실행 파일의 시작은 소스 checkout을 요구하지 않는다. 이 변경 후 관련 테스트 14개와 독립 실행 파일 스모크 검증 12개가 통과했다.

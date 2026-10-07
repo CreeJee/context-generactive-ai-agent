@@ -1,3 +1,4 @@
+import { nativePromise, runNativeEffect } from "../src/runtime/native-effect.ts";
 import { Console, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../src/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
@@ -8,7 +9,7 @@ import { tmpdir } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { DateTime, Clock, Effect, Layer, ManagedRuntime, Schema } from "effect";
+import { DateTime, Clock, Effect, Layer, Schema } from "effect";
 import { maxIterations, normalizeSystemPrompts, type ModelMessage } from "@tanstack/ai";
 import { AgentChat } from "../src/agent/chat.ts";
 import { ApiUsage } from "../src/agent/api-usage.ts";
@@ -38,6 +39,11 @@ import { subscriptionRequest } from "../src/providers/subscription-adapter.ts";
 
 // Explicit live pilot over synthetic files only. Never writes the user's config or project.
 // This comparison changes parent guidance only; it is not a benchmark of old runtime behavior.
+const stringifyJson = <A>(value: A, _replacer?: null, space?: number) =>
+  Result.getOrThrow(
+    Schema.encodeResult(Schema.fromJsonString(Schema.Unknown, { space: space ?? 0 }))(value),
+  );
+
 const Selection = Schema.Struct({
   provider: Schema.Literal("openai"),
   model: Schema.NonEmptyString,
@@ -72,7 +78,7 @@ let totalCalls = 0;
 let estimatedInputTokens = 0;
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function arm(variant: "baseline-guidance" | "optimized-guidance") {
+const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "optimized-guidance") {
   const base = mkdtempSync(join(tmpdir(), "delegation-live-eval-"));
   const projectRoot = join(base, "project");
   const home = join(base, "home");
@@ -167,7 +173,10 @@ async function arm(variant: "baseline-guidance" | "optimized-guidance") {
       };
     }),
   ).pipe(Layer.provide(SubscriptionProviderRegistry));
-  const runtime = ManagedRuntime.make(
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => rmSync(base, { recursive: true, force: true })),
+  );
+  const servicesContext = yield* Layer.build(
     memoryAgentLayer(join(base, "storage"), {
       providerRegistry: registry,
       embedder: fakeEmbedderLayer,
@@ -181,107 +190,107 @@ async function arm(variant: "baseline-guidance" | "optimized-guidance") {
       sweepSecrets: false,
     }),
   );
-  try {
-    const services = await runtime.runPromise(
-      Effect.gen(function* () {
-        yield* (yield* GlobalConfig).update(selection);
-        const provider = yield* (yield* ProviderRegistry).get(selection.provider);
-        if ((yield* provider.auth.status).status !== "signed-in")
-          throw new Error("pilot_not_signed_in");
-        const projects = yield* Projects;
-        const initial = yield* projects.add(projectRoot);
-        const project = yield* projects.setPermissionMode(initial.id, "full");
-        const session = yield* (yield* Sessions).create(project.id);
-        return {
-          agent: yield* AgentChat,
-          state: yield* ChatState,
-          children: yield* Subagents,
-          usage: yield* ApiUsage,
-          session,
-        };
-      }),
-    );
-    const started = DateTime.toEpochMillis(DateTime.nowUnsafe());
-    const prompt = `Audit two independent files without modifying them. Delegate child.ts to one subagent; its task must first run the finite command node -e 'setTimeout(()=>Effect.runSync(Console.log("ready")),10000)' and then read child.ts and report childTotal. You personally read main.ts and calculate mainTotal while the child runs. Retrieve and review the child's report before giving both totals. Do not change the Goal or Plan. Do not create another delegation to poll.`;
-    const response = await runtime.runPromise(
-      services.agent.handle(
-        new Request("http://local/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            threadId: services.session.id,
-            runId: randomUUID(),
-            messages: [{ id: randomUUID(), role: "user", content: prompt }],
-            tools: [],
-            context: [],
-          }),
+  const services = yield* Effect.provideContext(
+    Effect.gen(function* () {
+      yield* (yield* GlobalConfig).update(selection);
+      const provider = yield* (yield* ProviderRegistry).get(selection.provider);
+      if ((yield* provider.auth.status).status !== "signed-in")
+        throw new Error("pilot_not_signed_in");
+      const projects = yield* Projects;
+      const initial = yield* projects.add(projectRoot);
+      const project = yield* projects.setPermissionMode(initial.id, "full");
+      const session = yield* (yield* Sessions).create(project.id);
+      return {
+        agent: yield* AgentChat,
+        state: yield* ChatState,
+        children: yield* Subagents,
+        usage: yield* ApiUsage,
+        session,
+      };
+    }),
+    servicesContext,
+  );
+  const started = DateTime.toEpochMillis(DateTime.nowUnsafe());
+  const prompt = `Audit two independent files without modifying them. Delegate child.ts to one subagent; its task must first run the finite command node -e 'setTimeout(()=>Effect.runSync(Console.log("ready")),10000)' and then read child.ts and report childTotal. You personally read main.ts and calculate mainTotal while the child runs. Retrieve and review the child's report before giving both totals. Do not change the Goal or Plan. Do not create another delegation to poll.`;
+  const response = yield* Effect.provideContext(
+    services.agent.handle(
+      new Request("http://local/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: stringifyJson({
+          threadId: services.session.id,
+          runId: randomUUID(),
+          messages: [{ id: randomUUID(), role: "user", content: prompt }],
+          tools: [],
+          context: [],
         }),
-        services.session.id,
-      ),
-    );
-    const sse = await response.text();
-    if (!response.ok) throw new Error(`pilot_http_${response.status}: ${sse}`);
-    const events = sse.split("\n").flatMap((line) =>
+      }),
+      services.session.id,
+    ),
+    servicesContext,
+  );
+  const sse = yield* nativePromise(() => response.text());
+  if (!response.ok) throw new Error(`pilot_http_${response.status}: ${sse}`);
+  const events = sse.split("\n").flatMap((line) =>
+    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+    line.startsWith("data: ")
+      ? [EffectFunction.flow(Schema.decodeResult(frames), Result.getOrThrow)(line.slice(6))]
+      : [],
+  );
+  const errors = events.filter((event) => event.type === "RUN_ERROR" || event.type === "error");
+  if (errors.length > 0) throw new Error(`pilot_run_failed: ${stringifyJson(errors)}`);
+  const answer = sse
+    .split("\n")
+    .flatMap((line) =>
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
       line.startsWith("data: ")
         ? [EffectFunction.flow(Schema.decodeResult(frames), Result.getOrThrow)(line.slice(6))]
         : [],
-    );
-    const errors = events.filter((event) => event.type === "RUN_ERROR" || event.type === "error");
-    if (errors.length > 0) throw new Error(`pilot_run_failed: ${JSON.stringify(errors)}`);
-    const answer = sse
-      .split("\n")
-      .flatMap((line) =>
-        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        line.startsWith("data: ")
-          ? [EffectFunction.flow(Schema.decodeResult(frames), Result.getOrThrow)(line.slice(6))]
-          : [],
-      )
-      .flatMap((chunk) =>
-        chunk.type === "TEXT_MESSAGE_CONTENT" && isTruthy(chunk.delta) ? [chunk.delta] : [],
-      )
-      .join("");
-    const messages: ModelMessage[] = await services.state.persistence.stores.messages.loadThread(
-      services.session.id,
-    );
-    const calls = messages.flatMap((message) =>
-      message.role === "assistant" ? (message.toolCalls ?? []) : [],
-    );
-    const independent = observations.some(
-      (observation) =>
-        !observation.child &&
-        observation.toolCalls.includes("read_file") &&
-        services.children
-          .list(services.session.id)
-          .some((child) => child.createdAt <= observation.at && child.updatedAt > observation.at),
-    );
-    return {
-      variant,
-      selection,
-      durationMs: DateTime.toEpochMillis(DateTime.nowUnsafe()) - started,
-      independentWorkBeforeChildCompletion: independent,
-      pollingCalls: calls.filter((call) => call.function.name === "wait_subagents").length,
-      waitArguments: calls
-        .filter((call) => call.function.name === "wait_subagents")
-        .map((call) => call.function.arguments),
-      reportCalls: calls.filter((call) =>
-        ["get_subagent_report", "get_subagent_reports"].includes(call.function.name),
-      ).length,
-      toolCalls: calls.map((call) => call.function.name),
-      correctTotals: answer.includes("10") && answer.includes("18"),
-      answer,
-      usage: services.usage.byRootSession(services.session.id),
-    };
-  } finally {
-    await runtime.dispose();
-    rmSync(base, { recursive: true, force: true });
-  }
-}
-const results = [await arm("baseline-guidance"), await arm("optimized-guidance")];
+    )
+    .flatMap((chunk) =>
+      chunk.type === "TEXT_MESSAGE_CONTENT" && isTruthy(chunk.delta) ? [chunk.delta] : [],
+    )
+    .join("");
+  const messages: ModelMessage[] = yield* nativePromise(() =>
+    services.state.persistence.stores.messages.loadThread(services.session.id),
+  );
+  const calls = messages.flatMap((message) =>
+    message.role === "assistant" ? (message.toolCalls ?? []) : [],
+  );
+  const independent = observations.some(
+    (observation) =>
+      !observation.child &&
+      observation.toolCalls.includes("read_file") &&
+      services.children
+        .list(services.session.id)
+        .some((child) => child.createdAt <= observation.at && child.updatedAt > observation.at),
+  );
+  return {
+    variant,
+    selection,
+    durationMs: DateTime.toEpochMillis(DateTime.nowUnsafe()) - started,
+    independentWorkBeforeChildCompletion: independent,
+    pollingCalls: calls.filter((call) => call.function.name === "wait_subagents").length,
+    waitArguments: calls
+      .filter((call) => call.function.name === "wait_subagents")
+      .map((call) => call.function.arguments),
+    reportCalls: calls.filter((call) =>
+      ["get_subagent_report", "get_subagent_reports"].includes(call.function.name),
+    ).length,
+    toolCalls: calls.map((call) => call.function.name),
+    correctTotals: answer.includes("10") && answer.includes("18"),
+    answer,
+    usage: services.usage.byRootSession(services.session.id),
+  };
+}, Effect.scoped);
+const results = [
+  await runNativeEffect(arm("baseline-guidance")),
+  await runNativeEffect(arm("optimized-guidance")),
+];
 // Native stdout/stderr or SDK logging boundary preserves the existing output format.
 Effect.runSync(
   Console.log(
-    JSON.stringify(
+    stringifyJson(
       {
         results,
         totalCalls,

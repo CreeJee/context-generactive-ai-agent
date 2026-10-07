@@ -1,3 +1,4 @@
+import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
@@ -14,12 +15,15 @@ import {
   Clock,
   ConfigProvider,
   Option,
+  Predicate,
   Config,
   Context,
   Effect,
+  Fiber,
   Layer,
   Schedule,
   Schema,
+  Scope,
 } from "effect";
 import { Database } from "../db/database.ts";
 import { OpenAICompatibleSettings } from "../providers/openai-compatible.ts";
@@ -42,15 +46,48 @@ import { codeContext, prepareCodeCandidate } from "./code-candidate.ts";
 import { evaluateSandbox, reportedTokens } from "./sandbox.ts";
 import { ActivityFailed, EvaluationFailed, experimentFailure } from "./failure.ts";
 import { activitySql } from "./activity.ts";
+import { SdkCancellations } from "../runtime/sdk-cancellation.ts";
+import { sdkPromiseWithController } from "../runtime/sdk-promise.ts";
 
 export class RrsiFailed extends Schema.TaggedError<RrsiFailed>()("RrsiFailed", {
   reason: Schema.String,
 }) {}
+
+/** Native evaluator and model boundaries, independent of the experiment's lifecycle. */
+export class RrsiExecution extends Context.Service<
+  RrsiExecution,
+  {
+    readonly image: Effect.Effect<string, RrsiFailed>;
+    readonly pinModel: typeof pinModelGateway;
+    readonly evaluate: typeof evaluateSandbox;
+  }
+>()("memory-agent/rrsi/service/RrsiExecution") {
+  static readonly layer = Layer.succeed(RrsiExecution, {
+    image: Effect.tryPromise({
+      try: () =>
+        run("docker", ["image", "inspect", "context-agent-rrsi:local", "--format", "{{.Id}}"]),
+      catch: () => RrsiFailed.make({ reason: "evaluation_image_unavailable" }),
+    }).pipe(
+      Effect.flatMap(({ stdout }) => {
+        const image = stdout.trim();
+        return /^sha256:[a-f0-9]{64}$/.test(image)
+          ? Effect.succeed(image)
+          : Effect.fail(RrsiFailed.make({ reason: "evaluation_image_unavailable" }));
+      }),
+    ),
+    pinModel: pinModelGateway,
+    evaluate: evaluateSandbox,
+  });
+}
 type MutableCandidate = { -readonly [K in keyof CandidateRecord]: CandidateRecord[K] };
 type MutableExperiment = {
   -readonly [K in keyof Omit<ExperimentRecord, "candidates">]: ExperimentRecord[K];
 } & { candidates: MutableCandidate[] };
 const run = promisify(execFile);
+const stringifyJson = <A>(value: A, _replacer?: null, space?: number) =>
+  Result.getOrThrow(
+    Schema.encodeResult(Schema.fromJsonString(Schema.Unknown, { space: space ?? 0 }))(value),
+  );
 const Completion = Schema.Struct({
   choices: Schema.Array(
     Schema.Struct({ message: Schema.Struct({ content: Schema.NullOr(Schema.String) }) }),
@@ -85,14 +122,17 @@ const mean = (measurements: readonly Measurement[]): Measurement => {
 };
 const make = Effect.gen(function* () {
   const effectClock = yield* Clock.Clock;
+  const cancellations = yield* SdkCancellations;
+  const native = yield* RrsiExecution;
+  const owner = yield* Scope.fork(yield* Effect.scope);
 
   const store = yield* HarnessStore;
   const { sqlite, atomic } = yield* Database;
-  const pin = Effect.runPromiseWith(
-    yield* Effect.context<OpenAICompatibleSettings | GlobalConfig | ProviderRegistry>(),
-  );
+  const dependencies = yield* Effect.context<
+    OpenAICompatibleSettings | GlobalConfig | ProviderRegistry
+  >();
   let controller: AbortController | null = null;
-  let task: Promise<void> | null = null;
+  let task: Fiber.Fiber<void> | null = null;
   let lastActivity = yield* Clock.currentTimeMillis;
   let disposed = false;
   const originalStorage = yield* Config.String("CONTEXT_AGENT_RRSI_ORIGINAL_STORAGE")
@@ -123,33 +163,39 @@ const make = Effect.gen(function* () {
     configuredRepository: repo !== null,
   });
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const branchCandidate = async (
+  const branchCandidate = Effect.fn("Rrsi.branchCandidate")(function* (
     experimentId: string,
     round: number,
     index: number,
     profile: HarnessProfile,
-  ) => {
+  ) {
     if (!isTruthy(repo)) return { branch: null, commit: null };
     const branch = `rrsi/${experimentId}/${round}/${index}`;
     const directory = join(repo, ".rrsi-local/candidates", experimentId, `${round}-${index}`);
     mkdirSync(join(repo, ".rrsi-local/candidates", experimentId), { recursive: true });
-    await run("git", ["worktree", "add", "-b", branch, directory, "HEAD"], { cwd: repo });
-    writeFileSync(join(directory, "rrsi-profile.json"), JSON.stringify(profile, null, 2) + "\n");
-    await run("git", ["add", "--", "rrsi-profile.json"], { cwd: directory });
-    await run(
-      "git",
-      ["-c", "core.hooksPath=/dev/null", "commit", "-m", "experiment: propose harness profile"],
-      { cwd: directory },
+    yield* nativePromise(() =>
+      run("git", ["worktree", "add", "-b", branch, directory, "HEAD"], { cwd: repo }),
     );
-    const { stdout } = await run("git", ["rev-parse", "HEAD"], { cwd: directory });
+    writeFileSync(join(directory, "rrsi-profile.json"), stringifyJson(profile, null, 2) + "\n");
+    yield* nativePromise(() => run("git", ["add", "--", "rrsi-profile.json"], { cwd: directory }));
+    yield* nativePromise(() =>
+      run(
+        "git",
+        ["-c", "core.hooksPath=/dev/null", "commit", "-m", "experiment: propose harness profile"],
+        { cwd: directory },
+      ),
+    );
+    const { stdout } = yield* nativePromise(() =>
+      run("git", ["rev-parse", "HEAD"], { cwd: directory }),
+    );
     return { branch, commit: stdout.trim() };
-  };
+  });
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const execute = async (
+  const executeEffect = Effect.fn("Rrsi.execute")(function* (
     record: MutableExperiment,
     client: ModelGateway,
     abort: AbortController,
-  ) => {
+  ) {
     const settings = store.settings();
     const deadline = effectClock.currentTimeMillisUnsafe() + settings.maxMinutes * 60000;
     const progress = (
@@ -171,62 +217,69 @@ const make = Effect.gen(function* () {
     const bounded: ModelGateway = {
       ...client,
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      complete: async (body, signal) => {
-        if (effectClock.currentTimeMillisUnsafe() >= deadline) abort.abort("time_limit");
-        if (signal.aborted || abort.signal.aborted)
-          throw EvaluationFailed.make({ reason: "evaluation_incomplete" });
-        return client.complete(body, signal);
-      },
+      complete: (body, signal) =>
+        runNativeEffect(
+          Effect.gen(function* () {
+            if (effectClock.currentTimeMillisUnsafe() >= deadline) abort.abort("time_limit");
+            if (signal.aborted || abort.signal.aborted)
+              return yield* EvaluationFailed.make({ reason: "evaluation_incomplete" });
+            return yield* nativePromise(() => client.complete(body, signal));
+          }),
+        ),
     };
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    const request = async (instruction: string) => {
-      const raw = await bounded.complete(
-        JSON.stringify({
-          messages: [{ role: "user", content: instruction }],
-          response_format: { type: "json_object" },
-        }),
-        abort.signal,
+    const request = Effect.fn("Rrsi.proposalRequest")(function* (instruction: string) {
+      const raw = yield* nativePromise(() =>
+        bounded.complete(
+          stringifyJson({
+            messages: [{ role: "user", content: instruction }],
+            response_format: { type: "json_object" },
+          }),
+          abort.signal,
+        ),
       );
       consume(raw);
       return completionText(raw);
-    };
+    });
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    const evaluate = async (
+    const evaluate = Effect.fn("Rrsi.evaluate")(function* (
       profile: HarnessProfile,
       split: "evolve" | "validation" | "sealed",
       trials = 2,
       phase: (typeof ExperimentProgress.Type)["phase"] = "candidate_evaluation",
       completedOffset = 0,
       total = trials * (split === "evolve" ? 12 : 6),
-    ) => {
+    ) {
       const measurements: Measurement[] = [];
       const tasksPerTrial = split === "evolve" ? 12 : 6;
       progress(phase, completedOffset, total);
       for (let trial = 0; trial < trials; trial++) {
         measurements.push(
-          await evaluateSandbox(
-            bounded,
-            profile,
-            split,
-            abort.signal,
-            consume,
-            record.baselineImage,
-            (completed) =>
-              progress(phase, completedOffset + trial * tasksPerTrial + completed, total),
+          yield* nativePromise(() =>
+            native.evaluate(
+              bounded,
+              profile,
+              split,
+              abort.signal,
+              consume,
+              record.baselineImage,
+              (completed) =>
+                progress(phase, completedOffset + trial * tasksPerTrial + completed, total),
+            ),
           ),
         );
         progress(phase, completedOffset + (trial + 1) * tasksPerTrial, total);
       }
       return mean(measurements);
-    };
+    });
     // Native callback heartbeat/debounce timing remains at the protocol boundary.
     const timer = setTimeout(() => abort.abort("time_limit"), settings.maxMinutes * 60000);
-    try {
+    yield* Effect.gen(function* () {
       const base = store.get(record.baseVersion);
       let profile = base.profile;
       const baselines: Measurement[] = [];
       for (let repeat = 0; repeat < 3; repeat++) {
-        baselines.push(await evaluate(profile, "evolve", 1, "baseline", repeat * 12, 36));
+        baselines.push(yield* evaluate(profile, "evolve", 1, "baseline", repeat * 12, 36));
         record.baselines = [...baselines];
         store.saveExperiment(record);
       }
@@ -248,13 +301,13 @@ const make = Effect.gen(function* () {
             Schema.decodeResult(Schema.fromJsonString(Proposal)),
             Result.getOrThrow,
           )(
-            await request(
+            yield* request(
               [
                 "Propose one reusable agent harness improvement. Return JSON {profile:{rolePrompt,memoryToolDescription,retrievalLeadLimit,retrievalTokenLimit},edits:[{component,hypothesis}]}.",
                 "Do not change user instructions, permissions, authentication, evaluation or safety rules. Keep tool descriptions consistent with existing behavior. Do not encode task identifiers, answers or fixtures.",
-                `Independent edit budget: ${editBudget(round, 2)}. Profile: ${JSON.stringify(profile)}.`,
+                `Independent edit budget: ${editBudget(round, 2)}. Profile: ${stringifyJson(profile)}.`,
                 `Untried components: ${exploration(record.candidates).join(", ")}. Prefer untried mechanisms if progress stalls; propose removing earlier additions that produced no positive evidence.`,
-                `Measured history (including failures): ${JSON.stringify(record.candidates)}`,
+                `Measured history (including failures): ${stringifyJson(record.candidates)}`,
               ].join("\n"),
             ),
           );
@@ -274,7 +327,7 @@ const make = Effect.gen(function* () {
             decision = "edit_budget";
           if (
             /(decision-\d|obsolete-\d|(?:evolve|validation|sealed)-(?:coding|memory)-)/.test(
-              JSON.stringify(proposal.profile),
+              stringifyJson(proposal.profile),
             )
           )
             decision = "task_leakage";
@@ -287,7 +340,7 @@ const make = Effect.gen(function* () {
             edits: proposal.edits,
             measurement: null,
             decision,
-            diff: JSON.stringify({ before: profile, after: proposal.profile }, null, 2),
+            diff: stringifyJson({ before: profile, after: proposal.profile }, null, 2),
             branch: null,
             commit: null,
           };
@@ -300,7 +353,7 @@ const make = Effect.gen(function* () {
             Schema.decodeResult(Schema.fromJsonString(Critique)),
             Result.getOrThrow,
           )(
-            await request(
+            yield* request(
               `Review candidate diff for task-specific logic, contradictory tool behavior, disabled verification or overridden permissions. Return only {"approved":true|false}. Diff: ${candidate.diff}`,
             ),
           );
@@ -312,9 +365,9 @@ const make = Effect.gen(function* () {
           }
           Object.assign(
             candidate,
-            await branchCandidate(record.id, round, index, proposal.profile),
+            yield* branchCandidate(record.id, round, index, proposal.profile),
           );
-          candidate.measurement = await evaluate(proposal.profile, "evolve");
+          candidate.measurement = yield* evaluate(proposal.profile, "evolve");
           const selection = selectCandidate(incumbent, candidate.measurement, {
             delta,
             bestScore: best,
@@ -343,12 +396,12 @@ const make = Effect.gen(function* () {
         }
         store.saveExperiment(record);
       }
-      if (JSON.stringify(profile) === JSON.stringify(base.profile)) {
+      if (stringifyJson(profile) === stringifyJson(base.profile)) {
         record.reason = "no_admissible_candidate";
         return;
       }
-      const validationBase = await evaluate(base.profile, "validation", 2, "validation", 0, 24);
-      const validationNew = await evaluate(profile, "validation", 2, "validation", 12, 24);
+      const validationBase = yield* evaluate(base.profile, "validation", 2, "validation", 0, 24);
+      const validationNew = yield* evaluate(profile, "validation", 2, "validation", 12, 24);
       record.validationBase = validationBase;
       record.validationNew = validationNew;
       store.saveExperiment(record);
@@ -367,8 +420,8 @@ const make = Effect.gen(function* () {
       atomic(() => {
         sqlite.prepare("INSERT INTO rrsi_corpus_receipts VALUES ('v1', ?)").run(record.id);
       });
-      const sealedBase = await evaluate(base.profile, "sealed", 2, "sealed", 0, 24);
-      const sealedNew = await evaluate(profile, "sealed", 2, "sealed", 12, 24);
+      const sealedBase = yield* evaluate(base.profile, "sealed", 2, "sealed", 0, 24);
+      const sealedNew = yield* evaluate(profile, "sealed", 2, "sealed", 12, 24);
       record.sealedBase = sealedBase;
       record.sealedNew = sealedNew;
       store.saveExperiment(record);
@@ -383,7 +436,8 @@ const make = Effect.gen(function* () {
         record.reason = "heldout_rejected";
         return;
       }
-      if (abort.signal.aborted) throw EvaluationFailed.make({ reason: "evaluation_incomplete" });
+      if (abort.signal.aborted)
+        return yield* EvaluationFailed.make({ reason: "evaluation_incomplete" });
       const winner = record.candidates.findLast(
         (candidate) => candidate.decision === "round_winner",
       );
@@ -392,18 +446,18 @@ const make = Effect.gen(function* () {
       store.saveExperiment(record);
       if (isTruthy(repo)) {
         // Code is still review-only. An approved profile remains installed if code exploration fails.
-        try {
+        yield* Effect.gen(function* () {
           progress("code_proposal", 0, 1);
           // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
           const proposal = EffectFunction.flow(
             Schema.decodeResult(Schema.fromJsonString(CodeProposal)),
             Result.getOrThrow,
           )(
-            await request(
+            yield* request(
               [
                 "Propose one reusable code improvement. Return JSON {edits:[{component,hypothesis}],files:[{path,before,after}]}. Use exact unique replacement anchors; touch at most three allowed files. Do not modify permissions, authentication, evaluator, tests, runtime version management or user instructions.",
-                `Source: ${JSON.stringify(codeContext(repo))}`,
-                `Measured profile history: ${JSON.stringify(record.candidates)}`,
+                `Source: ${stringifyJson(codeContext(repo))}`,
+                `Measured profile history: ${stringifyJson(record.candidates)}`,
               ].join("\n"),
             ),
           );
@@ -417,7 +471,7 @@ const make = Effect.gen(function* () {
             edits: proposal.edits,
             measurement: null,
             decision: "code_validating",
-            diff: JSON.stringify(proposal.files, null, 2),
+            diff: stringifyJson(proposal.files, null, 2),
             branch: null,
             commit: null,
           };
@@ -429,7 +483,7 @@ const make = Effect.gen(function* () {
             Schema.decodeResult(Schema.fromJsonString(Critique)),
             Result.getOrThrow,
           )(
-            await request(
+            yield* request(
               `Review the code replacements for benchmark leakage, altered verification, credentials, changed permissions or inert machinery. Return {"approved":true|false}. ${candidate.diff}`,
             ),
           );
@@ -439,7 +493,9 @@ const make = Effect.gen(function* () {
             return;
           }
           progress("code_build", 0, 1);
-          const code = await prepareCodeCandidate(repo, record.id, proposal, abort.signal);
+          const code = yield* nativePromise(() =>
+            prepareCodeCandidate(repo, record.id, proposal, abort.signal),
+          );
           progress("code_build", 1, 1);
           progress("code_validation", 0, 12);
           candidate.branch = code.branch;
@@ -447,23 +503,27 @@ const make = Effect.gen(function* () {
           candidate.diff = code.diff;
           candidate.imageId = code.image;
           candidate.measurement = mean([
-            await evaluateSandbox(
-              bounded,
-              profile,
-              "validation",
-              abort.signal,
-              consume,
-              code.image,
-              (completed) => progress("code_validation", completed, 12),
+            yield* nativePromise(() =>
+              native.evaluate(
+                bounded,
+                profile,
+                "validation",
+                abort.signal,
+                consume,
+                code.image,
+                (completed) => progress("code_validation", completed, 12),
+              ),
             ),
-            await evaluateSandbox(
-              bounded,
-              profile,
-              "validation",
-              abort.signal,
-              consume,
-              code.image,
-              (completed) => progress("code_validation", 6 + completed, 12),
+            yield* nativePromise(() =>
+              native.evaluate(
+                bounded,
+                profile,
+                "validation",
+                abort.signal,
+                consume,
+                code.image,
+                (completed) => progress("code_validation", 6 + completed, 12),
+              ),
             ),
           ]);
           progress("code_validation", 12, 12);
@@ -475,51 +535,38 @@ const make = Effect.gen(function* () {
           });
           candidate.decision =
             selection.kind === "accepted" ? "code_review_pending" : selection.reason;
-        } catch {
-          const candidate = record.candidates.findLast((entry) => entry.kind === "code");
-          if (isTruthy(candidate)) candidate.decision = "code_evaluation_incomplete";
-        } finally {
-          store.saveExperiment(record);
-        }
+        }).pipe(
+          Effect.catchCause(() =>
+            Effect.sync(() => {
+              const candidate = record.candidates.findLast((entry) => entry.kind === "code");
+              if (isTruthy(candidate)) candidate.decision = "code_evaluation_incomplete";
+            }),
+          ),
+          Effect.ensuring(Effect.sync(() => store.saveExperiment(record))),
+        );
       }
-    } finally {
-      clearTimeout(timer);
-    }
-  };
+    }).pipe(Effect.ensuring(Effect.sync(() => clearTimeout(timer))));
+  });
+  const execute = (record: MutableExperiment, client: ModelGateway, abort: AbortController) =>
+    runNativeEffect(executeEffect(record, client, abort));
   const start = Effect.fn("Rrsi.start")(function* () {
     const effectClock = yield* Clock.Clock;
 
     if (controller !== null) return yield* RrsiFailed.make({ reason: "experiment_running" });
     if (isTruthy(sqlite.prepare("SELECT 1 FROM rrsi_corpus_receipts WHERE version='v1'").get()))
       return yield* RrsiFailed.make({ reason: "sealed_corpus_exhausted" });
-    const baselineImage = yield* Effect.tryPromise({
-      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      try: async () => {
-        const { stdout } = await run("docker", [
-          "image",
-          "inspect",
-          "context-agent-rrsi:local",
-          "--format",
-          "{{.Id}}",
-        ]);
-        const image = stdout.trim();
-        if (!/^sha256:[a-f0-9]{64}$/.test(image))
-          throw RrsiFailed.make({ reason: "evaluation_image_unavailable" });
-        return image;
-      },
-      catch: () => RrsiFailed.make({ reason: "evaluation_image_unavailable" }),
-    });
+    const baselineImage = yield* native.image;
     // Pin immutable evaluator provenance before any requests or candidates are created.
     if (controller !== null) return yield* RrsiFailed.make({ reason: "experiment_running" });
-    const client = yield* pinModelGateway().pipe(
-      Effect.mapError(() => RrsiFailed.make({ reason: "model_unavailable" })),
-    );
+    const client = yield* native
+      .pinModel()
+      .pipe(Effect.mapError(() => RrsiFailed.make({ reason: "model_unavailable" })));
     if (controller !== null) {
       client.release();
       return yield* RrsiFailed.make({ reason: "experiment_running" });
     }
-    // The SDK experiment outlives start(); activity cancellation and the service finalizer own this controller.
-    const abort = new AbortController();
+    const cancellation = yield* cancellations.allocate("app_shutdown");
+    const abort = cancellation.controller;
     const record: MutableExperiment = {
       id: randomUUID(),
       status: "running",
@@ -537,34 +584,74 @@ const make = Effect.gen(function* () {
     yield* Effect.try({
       try: () => store.saveExperiment(record),
       catch: () => RrsiFailed.make({ reason: "state_operation_failed" }),
-    }).pipe(Effect.onError(() => Effect.sync(client.release)));
+    }).pipe(
+      Effect.onError(() => Effect.sync(client.release).pipe(Effect.ensuring(cancellation.cancel))),
+    );
     controller = abort;
-    task = execute(record, client, abort)
-      .then(
-        () => {
-          record.status = abort.signal.aborted ? "cancelled" : "completed";
-          if (abort.signal.aborted) record.reason = experimentFailure(null, abort.signal);
-        },
-        (error: Error) => {
-          record.status = abort.signal.aborted ? "cancelled" : "failed";
-          record.reason = experimentFailure(error, abort.signal);
-        },
-      )
-      .finally(() => {
-        record.finishedAt = effectClock.currentTimeMillisUnsafe();
-        try {
-          store.saveExperiment(record);
-        } finally {
-          client.release();
-          controller = null;
-        }
-      });
+    const experiment = Effect.suspend(() => {
+      const pending = execute(record, client, abort);
+      // Interruption waits for the native evaluator's finally before releasing its client.
+      return sdkPromiseWithController(() => pending, abort).pipe(
+        Effect.onInterrupt(() => Effect.sync(() => abort.abort("app_shutdown"))),
+        Effect.ensuring(
+          Effect.tryPromise({
+            try: () => pending,
+            catch: () => RrsiFailed.make({ reason: "evaluation_incomplete" }),
+          }).pipe(Effect.exit, Effect.asVoid),
+        ),
+      );
+    }).pipe(
+      Effect.matchEffect({
+        onSuccess: () =>
+          Effect.sync(() => {
+            record.status = abort.signal.aborted ? "cancelled" : "completed";
+            if (abort.signal.aborted) record.reason = experimentFailure(null, abort.signal);
+          }),
+        onFailure: (error) =>
+          Effect.sync(() => {
+            record.status = abort.signal.aborted ? "cancelled" : "failed";
+            record.reason = experimentFailure(
+              Predicate.isError(error.cause) ? error.cause : null,
+              abort.signal,
+            );
+          }),
+      }),
+      Effect.onInterrupt(() =>
+        Effect.sync(() => {
+          record.status = "cancelled";
+          record.reason = experimentFailure(null, abort.signal);
+        }),
+      ),
+      Effect.ensuring(
+        Effect.try({
+          try: () => {
+            record.finishedAt = effectClock.currentTimeMillisUnsafe();
+            try {
+              store.saveExperiment(record);
+            } finally {
+              client.release();
+              controller = null;
+            }
+          },
+          catch: () => RrsiFailed.make({ reason: "state_operation_failed" }),
+        }).pipe(
+          Effect.catchTag("RrsiFailed", (error) => Effect.logError(error)),
+          Effect.ensuring(cancellation.release),
+        ),
+      ),
+    );
+    // This fiber owns the experiment; cancellation.release is a separate SDK resource scope.
+    task = yield* Effect.forkIn(experiment, owner, { startImmediately: true });
     return { experimentId: record.id };
   });
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const tick = async () => {
+  const tick = Effect.fn("Rrsi.tick")(function* () {
     // Native host/SDK configuration boundary reads or forwards the host environment.
-    if (disposed || process.env.CONTEXT_AGENT_RRSI_WORKER === "1") return;
+    if (disposed) return;
+    const worker = yield* Config.String("CONTEXT_AGENT_RRSI_WORKER")
+      .pipe(Config.withDefault("0"))
+      .parse(ConfigProvider.fromEnv());
+    if (worker === "1") return;
     const local = activity(sqlite);
     const remote = original !== null ? activity(original) : { busy: 0, latest: null };
     if (isTruthy(local.busy) || isTruthy(remote.busy)) {
@@ -584,13 +671,11 @@ const make = Effect.gen(function* () {
         .some((entry) => entry.startedAt > effectClock.currentTimeMillisUnsafe() - 86400000)
     )
       return;
-    await pin(start()).catch(() => undefined);
-  };
+    yield* start().pipe(Effect.provideContext(dependencies), Effect.ignore);
+  });
   // Poll fibers belong to this service; a long experiment must not delay activity checks.
-  const poll = Effect.tryPromise({
-    try: () => tick(),
-    catch: () => ActivityFailed.make({}),
-  }).pipe(
+  const poll = tick().pipe(
+    Effect.catchCause(() => Effect.fail(ActivityFailed.make({}))),
     Effect.catchTag("ActivityFailed", () =>
       Effect.sync(() => {
         controller?.abort("activity_check_failed");
@@ -604,11 +689,10 @@ const make = Effect.gen(function* () {
     Effect.forkScoped,
   );
   yield* Effect.addFinalizer(() =>
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    Effect.promise(async () => {
+    Effect.gen(function* () {
       disposed = true;
       controller?.abort("app_shutdown");
-      await task;
+      if (task !== null) yield* Fiber.interrupt(task);
       original?.close();
     }),
   );
@@ -621,8 +705,9 @@ const make = Effect.gen(function* () {
     status: Effect.sync(status),
     start,
     touch,
-    stop: Effect.sync(() => {
+    stop: Effect.gen(function* () {
       controller?.abort("manual_stop");
+      if (task !== null) yield* Fiber.interrupt(task);
       return { stopped: true };
     }),
     configure: (settings: RrsiSettings) =>
@@ -642,5 +727,11 @@ const make = Effect.gen(function* () {
 export class Rrsi extends Context.Service<Rrsi, Effect.Success<typeof make>>()(
   "memory-agent/rrsi/service/Rrsi",
 ) {
-  static readonly layer = Layer.effect(Rrsi, make);
+  static layerWith(execution: Layer.Layer<RrsiExecution>) {
+    return Layer.effect(Rrsi, make).pipe(
+      Layer.provide(execution),
+      Layer.provideMerge(SdkCancellations.layer),
+    );
+  }
+  static readonly layer = Rrsi.layerWith(RrsiExecution.layer);
 }

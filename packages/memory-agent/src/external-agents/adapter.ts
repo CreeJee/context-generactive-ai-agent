@@ -1,4 +1,6 @@
-import { MutableHashMap, Option, Cause, Effect, Exit, Queue, DateTime } from "effect";
+import { nativePromise, nativeFailure } from "../runtime/native-effect.ts";
+import { nativeStream } from "../runtime/native-stream.ts";
+import { MutableHashMap, Option, Cause, Effect, Stream, Queue, DateTime } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "node:crypto";
@@ -68,91 +70,97 @@ export class ExternalAgentAdapter extends BaseTextAdapter<
   }
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  async *chatStream(options: TextOptions<Record<string, never>>): AsyncIterable<AdapterYieldChunk> {
-    const signal =
-      options.abortController?.signal ?? options.request?.signal ?? new AbortController().signal;
-    const runId = options.runId ?? randomUUID();
-    const threadId = options.threadId ?? randomUUID();
-    const stamp = () => ({
-      model: this.model,
-      timestamp: DateTime.toEpochMillis(DateTime.nowUnsafe()),
-    });
-    const last = options.messages.at(-1);
-    const text = last?.role === "user" ? messageText(last) : "";
+  chatStream(options: TextOptions<Record<string, never>>): AsyncIterable<AdapterYieldChunk> {
+    const turn = this.turn;
+    const preamble = this.preamble;
+    return nativeStream(
+      Stream.suspend(() => {
+        const signal = options.abortController?.signal ?? options.request?.signal ?? undefined;
+        const runId = options.runId ?? randomUUID();
+        const threadId = options.threadId ?? randomUUID();
+        const stamp = () => ({
+          model: this.model,
+          timestamp: DateTime.toEpochMillis(DateTime.nowUnsafe()),
+        });
+        const last = options.messages.at(-1);
+        const text = last?.role === "user" ? messageText(last) : "";
 
-    const queue = Effect.runSync(Queue.unbounded<Item>());
-    const push = (item: Item) => {
-      Queue.offerUnsafe(queue, item);
-    };
-    const toolTitles = MutableHashMap.empty<string, { title: string; status: string }>();
-    void this.preamble(text)
-      .then((lead) =>
-        this.turn(`${lead}${text}`, signal, (update) => {
-          switch (update.sessionUpdate) {
-            case "agent_message_chunk":
-              if (update.content.type === "text") push({ kind: "text", text: update.content.text });
-              return;
-            case "tool_call":
-              MutableHashMap.set(toolTitles, update.toolCallId, {
-                title: update.title,
-                status: update.status ?? "pending",
-              });
-              return;
-            case "tool_call_update": {
-              const known = Option.getOrUndefined(
-                MutableHashMap.get(toolTitles, update.toolCallId),
-              );
-              MutableHashMap.set(toolTitles, update.toolCallId, {
-                title: update.title ?? known?.title ?? "",
-                status: update.status ?? known?.status ?? "",
-              });
+        const toolTitles = MutableHashMap.empty<string, { title: string; status: string }>();
+        const items = Stream.callback<Item>((queue) =>
+          Effect.gen(function* () {
+            const push = (item: Item) => {
+              Queue.offerUnsafe(queue, item);
+            };
+            const cancel = () => {
+              Queue.endUnsafe(queue);
+            };
+            signal?.addEventListener("abort", cancel, { once: true });
+            yield* Effect.addFinalizer(() =>
+              Effect.sync(() => signal?.removeEventListener("abort", cancel)),
+            );
+            if (signal?.aborted === true) {
+              cancel();
               return;
             }
-            default:
-              return;
-          }
-        }),
-      )
-      .then(
-        (outcome) => push({ kind: "done", outcome }),
-        (error) =>
-          push({ kind: "error", error: error instanceof Error ? error : new Error(String(error)) }),
-      );
-
-    const messageId = randomUUID();
-    let open = false;
-    yield { ...stamp(), type: EventType.RUN_STARTED, runId, threadId };
-    try {
-      for (;;) {
-        const exit = await Effect.runPromiseExit(Queue.take(queue), { signal });
-        if (Exit.isFailure(exit)) {
-          if (Cause.hasInterrupts(exit.cause)) return;
-          throw Cause.squash(exit.cause);
-        }
-        const item = exit.value;
-        switch (item.kind) {
-          case "text":
-            if (!open) {
-              open = true;
-              yield {
-                ...stamp(),
-                type: EventType.TEXT_MESSAGE_START,
-                messageId,
-                role: "assistant",
-              };
-            }
-            yield { ...stamp(), type: EventType.TEXT_MESSAGE_CONTENT, messageId, delta: item.text };
-            break;
-          case "error":
-            throw item.error;
-          case "done": {
-            if (signal.aborted) return;
-            const failure = failureOf(item.outcome);
-            if (isTruthy(failure)) throw new Error(failure);
-            if (MutableHashMap.size(toolTitles) > 0) {
-              const list = [...MutableHashMap.values(toolTitles)]
-                .map((call) => `- ${call.title} (${call.status})`)
-                .join("\n");
+            yield* Effect.forkScoped(
+              Effect.gen(function* () {
+                const lead = yield* nativePromise(() => preamble(text));
+                const outcome = yield* Effect.tryPromise({
+                  try: (ownerSignal) =>
+                    turn(`${lead}${text}`, signal ?? ownerSignal, (update) => {
+                      switch (update.sessionUpdate) {
+                        case "agent_message_chunk":
+                          if (update.content.type === "text")
+                            push({ kind: "text", text: update.content.text });
+                          return;
+                        case "tool_call":
+                          MutableHashMap.set(toolTitles, update.toolCallId, {
+                            title: update.title,
+                            status: update.status ?? "pending",
+                          });
+                          return;
+                        case "tool_call_update": {
+                          const known = Option.getOrUndefined(
+                            MutableHashMap.get(toolTitles, update.toolCallId),
+                          );
+                          MutableHashMap.set(toolTitles, update.toolCallId, {
+                            title: update.title ?? known?.title ?? "",
+                            status: update.status ?? known?.status ?? "",
+                          });
+                          return;
+                        }
+                        default:
+                          return;
+                      }
+                    }),
+                  catch: (cause) => new Cause.UnknownError(cause),
+                });
+                push({ kind: "done", outcome });
+              }).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.sync(() => {
+                    const error = nativeFailure(cause).cause;
+                    if (signal?.aborted !== true)
+                      push({
+                        kind: "error",
+                        error: error instanceof Error ? error : new Error(String(error)),
+                      });
+                  }),
+                ),
+                Effect.onInterrupt(() =>
+                  Effect.sync(() => options.abortController?.abort("stream_closed")),
+                ),
+                Effect.ensuring(Effect.sync(() => Queue.endUnsafe(queue))),
+              ),
+              { startImmediately: true },
+            );
+          }),
+        );
+        const messageId = randomUUID();
+        let open = false;
+        const translate = function* (item: Item): Generator<AdapterYieldChunk, void, unknown> {
+          switch (item.kind) {
+            case "text":
               if (!open) {
                 open = true;
                 yield {
@@ -166,24 +174,56 @@ export class ExternalAgentAdapter extends BaseTextAdapter<
                 ...stamp(),
                 type: EventType.TEXT_MESSAGE_CONTENT,
                 messageId,
-                delta: `\n\n외부 에이전트가 알린 도구 호출:\n${list}`,
+                delta: item.text,
               };
+              break;
+            case "error":
+              throw item.error;
+            case "done": {
+              if (signal?.aborted === true) return;
+              const failure = failureOf(item.outcome);
+              if (isTruthy(failure)) throw new Error(failure);
+              if (MutableHashMap.size(toolTitles) > 0) {
+                const list = [...MutableHashMap.values(toolTitles)]
+                  .map((call) => `- ${call.title} (${call.status})`)
+                  .join("\n");
+                if (!open) {
+                  open = true;
+                  yield {
+                    ...stamp(),
+                    type: EventType.TEXT_MESSAGE_START,
+                    messageId,
+                    role: "assistant",
+                  };
+                }
+                yield {
+                  ...stamp(),
+                  type: EventType.TEXT_MESSAGE_CONTENT,
+                  messageId,
+                  delta: `\n\n외부 에이전트가 알린 도구 호출:\n${list}`,
+                };
+              }
+              if (open) yield { ...stamp(), type: EventType.TEXT_MESSAGE_END, messageId };
+              yield {
+                ...stamp(),
+                type: EventType.RUN_FINISHED,
+                runId,
+                threadId,
+                finishReason: "stop",
+              };
+              return;
             }
-            if (open) yield { ...stamp(), type: EventType.TEXT_MESSAGE_END, messageId };
-            yield {
-              ...stamp(),
-              type: EventType.RUN_FINISHED,
-              runId,
-              threadId,
-              finishReason: "stop",
-            };
-            return;
           }
-        }
-      }
-    } finally {
-      Effect.runSync(Queue.shutdown(queue));
-    }
+        };
+        return Stream.concat(
+          Stream.make({ ...stamp(), type: EventType.RUN_STARTED, runId, threadId }),
+          items.pipe(
+            Stream.takeWhile(() => signal?.aborted !== true),
+            Stream.flatMap((item) => Stream.fromIterable(translate(item))),
+          ),
+        );
+      }),
+    );
   }
 
   structuredOutput(

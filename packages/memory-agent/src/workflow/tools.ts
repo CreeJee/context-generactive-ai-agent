@@ -82,7 +82,7 @@ const make = Effect.gen(function* () {
       const updateGoal = toolDefinition({
         name: "update_goal",
         description:
-          "Save the session's canonical Goal artifact. Use after discovering or revising the problem, outcomes, constraints, assumptions, non-goals, or blocking questions. This creates the next version.",
+          "Save the session's canonical Goal artifact. Use after discovering or revising the problem, outcomes, constraints, assumptions, non-goals, or blocking questions. This creates the next version. Reflect explicit user decisions, including an authorized change to implementation scope, without asking for the same approval again. Never remove constraints or non-goals merely to make execution possible. Revising a Goal during Execute or Verify returns the workflow to Plan; synchronize the Plan with the new Goal before execution is confirmed. Do not call update_workflow_progress in parallel with update_goal.",
         inputSchema: toToolSchema(UpdateGoal),
       }).server((input) =>
         run(
@@ -153,9 +153,9 @@ const make = Effect.gen(function* () {
         case "plan":
           return [updateGoal, updatePlan, startNewGoal];
         case "execute":
-          return [updatePlan, updateProgress, recordBlocker];
+          return [updateGoal, updatePlan, updateProgress, recordBlocker];
         case "verify":
-          return [updateProgress, recordBlocker, startNewGoal];
+          return [updateGoal, updateProgress, recordBlocker, startNewGoal];
         case "completed":
           return [startNewGoal];
         case "chat":
@@ -211,6 +211,7 @@ Current Goal instance ID: ${goalInstanceId ?? "(none; legacy/unbound)"}. For sta
 Goal and Plan are durable artifacts, not substitutes for a conversational answer.
 Use only the workflow artifact tools available in this phase, and update an artifact when the user's decisions materially change it.
 Never claim an artifact was stored unless its update tool completed.
+When an explicit user decision changes saved Goal constraints or non-goals, persist that decision with update_goal before proceeding; do not treat an artifact you can update as an external dependency or ask the user to use an unverified Goal editor. Do not ask again for an approval already explicitly given, and never infer permission from a generic resume request. In Execute or Verify, update_goal returns to Plan and invalidates progress against the old Goal. Synchronize the Plan with the revised Goal and wait for execution confirmation; do not call update_goal and update_workflow_progress in parallel.
 Applicable workflow rules (reference these ids from Plan steps; do not copy their text into the artifact):
 ${applicableRules || "(none)"}${resolved.degraded.includes("embedding") ? "\nOptional semantic rule retrieval was unavailable; required metadata rules still apply." : ""}${resolved.degraded.includes("source") ? "\nOne or more optional structured rule sources were invalid or unreadable and were skipped." : ""}`;
 

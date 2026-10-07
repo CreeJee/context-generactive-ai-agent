@@ -1,8 +1,8 @@
-import { Result, Function as EffectFunction } from "effect";
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off schemaSync:off
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
-import { Schema } from "effect";
+import { Cause, Effect, Schema } from "effect";
+import { it } from "@effect/vitest";
+import { selectTestModel } from "./support/provider.ts";
+import { waitUntil } from "./support/wait-until.ts";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { sessionHolderHeader } from "../src/sessions/lease-state.ts";
@@ -17,9 +17,7 @@ const Lease = Schema.Union([
 ]);
 const StatusLease = Schema.Struct({ lease: Lease });
 
-async function until(condition: () => boolean, what: string) {
-  await expect.poll(condition, { message: what, timeout: 6_000, interval: 20 }).toBe(true);
-}
+const until = (condition: () => boolean, what: string) => waitUntil(condition, what, 6_000);
 
 describe("session leases", () => {
   test("one page holds a session until it lets go or stops renewing", () => {
@@ -63,84 +61,122 @@ describe("session leases", () => {
     expect(leases.view("fresh", "tab-b")).toEqual({ state: "mine" });
   });
 
-  test("a page that does not hold the session can read it but not send, approve or cancel", async () => {
-    const context = await testRuntime({ testProvider: {} });
-    const { runtime, session } = context;
-    await context.provider!.select(runtime);
-    const agent = await runtime.runPromise(AgentChat);
-    const leaseOf = async (holder: string) =>
-      EffectFunction.flow(
-        Schema.decodeUnknownResult(StatusLease),
-        Result.getOrThrow,
-      )(await (await runtime.runPromise(agent.status(session.id, holder))).json()).lease;
-
-    await runtime.runPromise(agent.lease(session.id, "tab-a", "claim"));
-    // A second tab asks too and is refused.
-    const refused = await runtime.runPromise(agent.lease(session.id, "tab-b", "claim"));
-    expect(
-      EffectFunction.flow(
-        Schema.decodeUnknownResult(Lease),
-        Result.getOrThrow,
-      )(await refused.json()).state,
-    ).toBe("other");
-    expect(await leaseOf("tab-a")).toEqual({ state: "mine" });
-
-    const tab = (holder: string) => {
-      const client = new ChatClient({
-        threadId: session.id,
-        persistence: true,
-        tools: approvalToolDefinitions,
-        connection: fetchServerSentEvents(`http://127.0.0.1/api/chat?session=${session.id}`, {
-          headers: { [sessionHolderHeader]: holder },
-          fetchClient: (input, init) =>
-            runtime.runPromise(
-              (init?.method ?? "GET") === "POST"
-                ? agent.handle(new Request(input, init), session.id)
-                : agent.hydrate(new Request(input, init), session.id),
-            ),
-        }),
+  it.live("a page that does not hold the session can read it but not send, approve or cancel", () =>
+    Effect.gen(function* () {
+      const context = yield* Effect.tryPromise({
+        try: () => testRuntime({ testProvider: {} }),
+        catch: (cause) => new Cause.UnknownError(cause),
       });
-      client.attach();
-      return client;
-    };
+      const { runtime, session } = context;
+      yield* Effect.provideContext(selectTestModel(), yield* runtime.contextEffect);
+      const agent = yield* Effect.provideContext(AgentChat, yield* runtime.contextEffect);
+      const leaseOf = Effect.fnUntraced(function* (holder: string) {
+        const response = yield* agent.status(session.id, holder);
+        return (yield* Schema.decodeUnknownEffect(StatusLease)(
+          yield* Effect.tryPromise({
+            try: () => response.json(),
+            catch: (cause) => new Cause.UnknownError(cause),
+          }),
+        )).lease;
+      });
 
-    const owner = tab("tab-a");
-    await owner.sendMessage("please use the shell");
-    await until(() => owner.getInterrupts().length === 1, "the approval request");
+      yield* Effect.provideContext(
+        agent.lease(session.id, "tab-a", "claim"),
+        yield* runtime.contextEffect,
+      );
+      // A second tab asks too and is refused.
+      const refused = yield* Effect.provideContext(
+        agent.lease(session.id, "tab-b", "claim"),
+        yield* runtime.contextEffect,
+      );
+      expect(
+        (yield* Schema.decodeUnknownEffect(Lease)(
+          yield* Effect.tryPromise({
+            try: () => refused.json(),
+            catch: (cause) => new Cause.UnknownError(cause),
+          }),
+        )).state,
+      ).toBe("other");
+      expect(yield* leaseOf("tab-a")).toEqual({ state: "mine" });
 
-    // The read-only tab sees the same conversation and the waiting approval…
-    const reader = tab("tab-b");
-    await until(() => reader.getInterrupts().length === 1, "the approval in the read-only tab");
-    // …but its answer is refused, and so are a new message and a cancel.
-    reader.resolveInterrupts(true);
-    await until(() => reader.getError() !== undefined, "the refused approval");
-    expect(reader.getError()?.message).toContain("423");
-    const cancel = await runtime.runPromise(agent.cancel(session.id, "tab-b"));
-    expect(cancel.status).toBe(423);
-
-    // The owner leaves; the reader is told the session is free and continues after claiming it.
-    await runtime.runPromise(agent.lease(session.id, "tab-a", "release"));
-    owner.dispose();
-    expect(await leaseOf("tab-b")).toEqual({ state: "free" });
-    await runtime.runPromise(agent.lease(session.id, "tab-b", "claim"));
-    reader.dispose();
-    const continued = tab("tab-b");
-    await until(() => continued.getInterrupts().length === 1, "the approval after taking over");
-    continued.resolveInterrupts(true);
-    await until(
-      () =>
-        continued
-          .getMessages()
-          .some(
-            (message) =>
-              message.role === "assistant" &&
-              message.parts.some(
-                (part) => part.type === "text" && part.content.includes("approved-output"),
-              ),
+      const tab = Effect.fnUntraced(function* (holder: string) {
+        const client = yield* Effect.acquireRelease(
+          Effect.sync(
+            () =>
+              new ChatClient({
+                threadId: session.id,
+                persistence: true,
+                tools: approvalToolDefinitions,
+                connection: fetchServerSentEvents(
+                  `http://127.0.0.1/api/chat?session=${session.id}`,
+                  {
+                    headers: { [sessionHolderHeader]: holder },
+                    fetchClient: (input, init) =>
+                      runtime.runPromise(
+                        (init?.method ?? "GET") === "POST"
+                          ? agent.handle(new Request(input, init), session.id)
+                          : agent.hydrate(new Request(input, init), session.id),
+                      ),
+                  },
+                ),
+              }),
           ),
-      "the answer after approval",
-    );
-    await until(() => !continued.getIsLoading(), "the run to finish");
-    continued.dispose();
-  });
+          (client) => Effect.sync(() => client.dispose()),
+        );
+        client.attach();
+        return client;
+      });
+
+      const owner = yield* tab("tab-a");
+      yield* Effect.tryPromise({
+        try: () => owner.sendMessage("please use the shell"),
+        catch: (cause) => new Cause.UnknownError(cause),
+      });
+      yield* until(() => owner.getInterrupts().length === 1, "the approval request");
+
+      // The read-only tab sees the same conversation and the waiting approval…
+      const reader = yield* tab("tab-b");
+      yield* until(() => reader.getInterrupts().length === 1, "the approval in the read-only tab");
+      // …but its answer is refused, and so are a new message and a cancel.
+      reader.resolveInterrupts(true);
+      yield* until(() => reader.getError() !== undefined, "the refused approval");
+      expect(reader.getError()?.message).toContain("423");
+      const cancel = yield* Effect.provideContext(
+        agent.cancel(session.id, "tab-b"),
+        yield* runtime.contextEffect,
+      );
+      expect(cancel.status).toBe(423);
+
+      // The owner leaves; the reader is told the session is free and continues after claiming it.
+      yield* Effect.provideContext(
+        agent.lease(session.id, "tab-a", "release"),
+        yield* runtime.contextEffect,
+      );
+      owner.dispose();
+      expect(yield* leaseOf("tab-b")).toEqual({ state: "free" });
+      yield* Effect.provideContext(
+        agent.lease(session.id, "tab-b", "claim"),
+        yield* runtime.contextEffect,
+      );
+      reader.dispose();
+      const continued = yield* tab("tab-b");
+      yield* until(() => continued.getInterrupts().length === 1, "the approval after taking over");
+      continued.resolveInterrupts(true);
+      yield* until(
+        () =>
+          continued
+            .getMessages()
+            .some(
+              (message) =>
+                message.role === "assistant" &&
+                message.parts.some(
+                  (part) => part.type === "text" && part.content.includes("approved-output"),
+                ),
+            ),
+        "the answer after approval",
+      );
+      yield* until(() => !continued.getIsLoading(), "the run to finish");
+      continued.dispose();
+    }),
+  );
 });

@@ -1,5 +1,5 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off
+import { it } from "@effect/vitest";
+import { Effect } from "effect";
 import { expect, test } from "vite-plus/test";
 import { makeOwnerToolGrants } from "../src/agent/owner-tool-grants.ts";
 import { makeInMemoryOwnerRpcLedger, makeOwnerRpc } from "../src/agent/owner-rpc.ts";
@@ -59,63 +59,71 @@ test("unobserved, unfinished and duplicate calls never become grants", () => {
   ).toThrow();
 });
 
-test("malformed invocation never reserves an uncertain side effect; legitimate next operation succeeds", async () => {
-  const grants = observed();
-  grants.approve(grants.observed(legitimate), legitimate.args);
-  const inner = makeInMemoryOwnerRpcLedger();
-  let reservations = 0;
-  let effects = 0;
-  const endpoint = makeOwnerRpc({
-    permits: () => true,
-    ledger: {
-      reserve(...args) {
-        reservations++;
-        return inner.reserve(...args);
-      },
-      settle: (...args) => inner.settle(...args),
-    },
-    handlers: {
-      tool: {
-        sideEffect: true,
-        authorize: (input) => grants.validate(input),
-        execute: async (input) => {
-          grants.consume(input);
-          effects++;
-          return "read result";
+it.effect(
+  "malformed invocation never reserves an uncertain side effect; legitimate next operation succeeds",
+  () =>
+    Effect.gen(function* () {
+      const grants = observed();
+      grants.approve(grants.observed(legitimate), legitimate.args);
+      const inner = makeInMemoryOwnerRpcLedger();
+      let reservations = 0;
+      let effects = 0;
+      const endpoint = makeOwnerRpc({
+        permits: () => true,
+        ledger: {
+          reserve(...args) {
+            reservations++;
+            return inner.reserve(...args);
+          },
+          settle: (...args) => inner.settle(...args),
         },
-      },
-    },
-  });
-  const capability = {
-    runId: "r",
-    sessionId: "s",
-    goalInstanceId: "g",
-    goalVersion: 1,
-    planVersion: null,
-    workflowRevisionId: 1,
-    generation: "one",
-    token: "secret",
-  };
-  expect(
-    await endpoint({
-      type: "owner-rpc-request",
-      operationId: 1,
-      capability,
-      operation: "tool",
-      input: { ...legitimate, name: "write_file" },
+        handlers: {
+          tool: {
+            sideEffect: true,
+            authorize: (input) => grants.validate(input),
+            execute: (input) => {
+              grants.consume(input);
+              effects++;
+              return Promise.resolve("read result");
+            },
+          },
+        },
+      });
+      const capability = {
+        runId: "r",
+        sessionId: "s",
+        goalInstanceId: "g",
+        goalVersion: 1,
+        planVersion: null,
+        workflowRevisionId: 1,
+        generation: "one",
+        token: "secret",
+      };
+      expect(
+        yield* Effect.promise(() =>
+          endpoint({
+            type: "owner-rpc-request",
+            operationId: 1,
+            capability,
+            operation: "tool",
+            input: { ...legitimate, name: "write_file" },
+          }),
+        ),
+      ).toMatchObject({ type: "rejected", reason: "invalid_operation" });
+      expect(reservations).toBe(0);
+      expect(effects).toBe(0);
+      expect(
+        yield* Effect.promise(() =>
+          endpoint({
+            type: "owner-rpc-request",
+            operationId: 2,
+            capability,
+            operation: "tool",
+            input: legitimate,
+          }),
+        ),
+      ).toMatchObject({ type: "succeeded" });
+      expect(reservations).toBe(1);
+      expect(effects).toBe(1);
     }),
-  ).toMatchObject({ type: "rejected", reason: "invalid_operation" });
-  expect(reservations).toBe(0);
-  expect(effects).toBe(0);
-  expect(
-    await endpoint({
-      type: "owner-rpc-request",
-      operationId: 2,
-      capability,
-      operation: "tool",
-      input: legitimate,
-    }),
-  ).toMatchObject({ type: "succeeded" });
-  expect(reservations).toBe(1);
-  expect(effects).toBe(1);
-});
+);

@@ -23,19 +23,21 @@ export function loader() {
  * holds the session from that page's point of view.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function action({ request, params }: Route.ActionArgs) {
-  const rejected = rejectCrossSite(request);
-  if (rejected !== null) return rejected;
-  const body = await readJson(request, LeaseRequest);
-  if (Result.isFailure(body))
-    return Response.json({ error: "invalid_lease_request" }, { status: 400 });
+export function action({ request, params }: Route.ActionArgs) {
   return agent.runPromise(
-    Effect.flatMap(AgentChat, (chat) =>
-      chat.lease(params.session, body.success.holder, body.success.action),
-    ).pipe(
-      Effect.tap(() =>
-        Effect.map(AppEvents, (events) => events.publishSession(params.session, "run-state")),
-      ),
-    ),
+    Effect.gen(function* () {
+      const rejected = rejectCrossSite(request);
+      if (rejected !== null) return rejected;
+      const body = yield* Effect.tryPromise(() => readJson(request, LeaseRequest));
+      if (Result.isFailure(body))
+        return Response.json({ error: "invalid_lease_request" }, { status: 400 });
+      return yield* Effect.flatMap(AgentChat, (chat) =>
+        chat.lease(params.session, body.success.holder, body.success.action),
+      ).pipe(
+        Effect.tap(() =>
+          Effect.map(AppEvents, (events) => events.publishSession(params.session, "run-state")),
+        ),
+      );
+    }),
   );
 }

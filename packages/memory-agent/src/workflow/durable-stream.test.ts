@@ -1,13 +1,12 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off globalFetch:off newPromise:off nodeBuiltinImport:off
+import { nativeStream } from "../runtime/native-stream.ts";
+import { it } from "@effect/vitest";
+import { Cause, Effect, FileSystem, Path, Schema, Stream } from "effect";
+import { withTestPlatform } from "../../tests/support/platform.ts";
+// SQLite and the TanStack SDK retain their native synchronous transaction and HTTP contracts.
 import { isTruthy } from "../truthy.ts";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect } from "vite-plus/test";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createServer } from "node:http";
-import { once } from "node:events";
 import {
   resumeServerSentEventsResponse,
   toServerSentEventsResponse,
@@ -53,109 +52,162 @@ const chunk = (type: "RUN_STARTED" | "RUN_FINISHED", runId = "run"): StreamChunk
   ({ type, runId, threadId: "session", timestamp: 1 }) as StreamChunk;
 
 describe("central SQLite SDK durability", () => {
-  it("validates binding, minted offsets, atomic batches, snapshot and close", async () => {
-    const db = owner(":memory:");
-    try {
-      const adapter = sqliteStreamDurability(db);
-      expect(await adapter.snapshot()).toEqual([]);
-      expect(() => sqliteStreamDurability({ ...db, sessionId: "other" })).toThrow();
-      await expect(
-        adapter.append([chunk("RUN_STARTED"), chunk("RUN_FINISHED", "other")]),
-      ).rejects.toThrow();
-      expect(await adapter.snapshot()).toEqual([]);
-      const [offset] = await adapter.append([chunk("RUN_STARTED")]);
-      expect(() => sqliteStreamDurability({ ...db, resumeOffset: "1" })).toThrow();
-      expect(() =>
-        sqliteStreamDurability({ ...db, resumeOffset: "sdk-stream:v1:other:1" }),
-      ).toThrow();
-      const snapshot = await adapter.snapshot();
-      snapshot[0]!.chunk.timestamp = 999;
-      expect((await adapter.snapshot())[0]!.chunk.timestamp).toBe(1);
-      await adapter.close();
-      await adapter.close();
-      await expect(adapter.append([chunk("RUN_FINISHED")])).rejects.toThrow();
-      const replay = [];
-      for await (const entry of adapter.read("-1")) replay.push(entry);
-      expect(replay.map((entry) => entry.offset)).toEqual([offset]);
-    } finally {
-      db.sqlite.close();
-    }
+  it.live("validates binding, minted offsets, atomic batches, snapshot and close", () =>
+    withTestPlatform(
+      Effect.gen(function* () {
+        const db = yield* Effect.acquireRelease(
+          Effect.sync(() => owner(":memory:")),
+          (db) => Effect.sync(() => db.sqlite.close()),
+        );
+        const adapter = sqliteStreamDurability(db);
+        expect(yield* sdkCall(() => adapter.snapshot())).toEqual([]);
+        expect(() => sqliteStreamDurability({ ...db, sessionId: "other" })).toThrow();
+        yield* sdkCall(() =>
+          expect(
+            adapter.append([chunk("RUN_STARTED"), chunk("RUN_FINISHED", "other")]),
+          ).rejects.toThrow(),
+        );
+        expect(yield* sdkCall(() => adapter.snapshot())).toEqual([]);
+        const [offset] = yield* sdkCall(() => adapter.append([chunk("RUN_STARTED")]));
+        expect(() => sqliteStreamDurability({ ...db, resumeOffset: "1" })).toThrow();
+        expect(() =>
+          sqliteStreamDurability({ ...db, resumeOffset: "sdk-stream:v1:other:1" }),
+        ).toThrow();
+        const snapshot = yield* sdkCall(() => adapter.snapshot());
+        snapshot[0]!.chunk.timestamp = 999;
+        expect((yield* sdkCall(() => adapter.snapshot()))[0]!.chunk.timestamp).toBe(1);
+        yield* sdkCall(() => adapter.close());
+        yield* sdkCall(() => adapter.close());
+        yield* sdkCall(() => expect(adapter.append([chunk("RUN_FINISHED")])).rejects.toThrow());
+        const replay = yield* Stream.runCollect(
+          Stream.fromAsyncIterable(adapter.read("-1"), (cause) => new Cause.UnknownError(cause)),
+        );
+        expect(replay.map((entry) => entry.offset)).toEqual([offset]);
+      }),
+    ),
+  );
+
+  it.live("tails across owner adapters and aborts open logs without terminalizing them", () => {
+    const abort = new AbortController();
+    return withTestPlatform(
+      Effect.gen(function* () {
+        const db = yield* Effect.acquireRelease(
+          Effect.sync(() => owner(":memory:")),
+          (db) => Effect.sync(() => db.sqlite.close()),
+        );
+        const reader = sqliteStreamDurability(db);
+        const iterator = reader.read("-1", abort.signal)[Symbol.asyncIterator]();
+        const next = iterator.next();
+        yield* sdkCall(() => sqliteStreamDurability(db).append([chunk("RUN_STARTED")]));
+        expect((yield* sdkCall(() => next)).value?.chunk.type).toBe("RUN_STARTED");
+        const pending = iterator.next();
+        abort.abort();
+        expect((yield* sdkCall(() => pending)).done).toBe(true);
+        yield* sdkCall(() => reader.append([chunk("RUN_FINISHED")]));
+      }),
+    );
   });
 
-  it("tails across owner adapters and aborts open logs without terminalizing them", async () => {
-    const db = owner(":memory:");
-    try {
-      const reader = sqliteStreamDurability(db);
-      const abort = new AbortController();
-      const iterator = reader.read("-1", abort.signal)[Symbol.asyncIterator]();
-      const next = iterator.next();
-      await sqliteStreamDurability(db).append([chunk("RUN_STARTED")]);
-      expect((await next).value?.chunk.type).toBe("RUN_STARTED");
-      const pending = iterator.next();
-      abort.abort();
-      expect((await pending).done).toBe(true);
-      await reader.append([chunk("RUN_FINISHED")]);
-    } finally {
-      db.sqlite.close();
-    }
-  });
-
-  it("serves real SDK SSE over HTTP and replays persisted offsets after owner DB restart without running a producer", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "sdk-durable-"));
-    const path = join(directory, "owner.sqlite");
-    let db = owner(path);
-    let producerCalls = 0;
-    const server = createServer(async (request, response) => {
-      try {
-        const offset = request.headers["last-event-id"];
-        const adapter = sqliteStreamDurability({
-          ...db,
-          resumeOffset: Array.isArray(offset) ? (offset[0] ?? null) : (offset ?? null),
-        });
-        async function* produce() {
-          producerCalls++;
-          yield chunk("RUN_STARTED");
-          yield chunk("RUN_FINISHED");
-        }
-        const result =
-          request.url === "/resume"
-            ? resumeServerSentEventsResponse({ adapter })
-            : toServerSentEventsResponse(produce(), { durability: { adapter } });
-        response.writeHead(result.status, Object.fromEntries(result.headers));
-        for await (const bytes of result.body!) response.write(bytes);
-        response.end();
-      } catch {
-        response.writeHead(400);
-        response.end();
-      }
-    });
-    try {
-      server.listen(0, "127.0.0.1");
-      await once(server, "listening");
-      // SAFETY: listen(0, IPv4 host) selected TCP, and the listening event has fired.
-      const address = server.address() as import("node:net").AddressInfo;
-      const url = `http://127.0.0.1:${address.port}`;
-      const live = await (await fetch(url)).text();
-      const ids = [...live.matchAll(/^id: (.+)$/gm)].map((match) => match[1]!);
-      expect(ids).toHaveLength(3); // SDK inserts a persisted RUN_ACCEPTED CUSTOM event.
-      expect(ids.every((id) => id.startsWith("sdk-stream:v1:run:"))).toBe(true);
-      db.sqlite.close();
-      db = owner(path);
-      const replay = await (
-        await fetch(`${url}/resume`, { headers: { "Last-Event-ID": ids[1]! } })
-      ).text();
-      expect(replay).not.toContain("RUN_STARTED");
-      expect(replay).toContain("RUN_FINISHED");
-      expect(replay).toContain(`id: ${ids[2]}`);
-      expect(producerCalls).toBe(1);
-      expect(
-        (await fetch(`${url}/resume`, { headers: { "Last-Event-ID": "forged" } })).status,
-      ).toBe(400);
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-      db.sqlite.close();
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
+  it.live(
+    "serves real SDK SSE over HTTP and replays persisted offsets after owner DB restart without running a producer",
+    () =>
+      withTestPlatform(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const paths = yield* Path.Path;
+          const directory = yield* fs.makeTempDirectoryScoped({ prefix: "sdk-durable-" });
+          const path = paths.join(directory, "owner.sqlite");
+          let db = owner(path);
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              if (db.sqlite.isOpen) db.sqlite.close();
+            }),
+          );
+          const runNative = Effect.runPromiseWith(yield* Effect.context<never>());
+          let producerCalls = 0;
+          const server = createServer((request, response) => {
+            void runNative(
+              Effect.gen(function* () {
+                const offset = request.headers["last-event-id"];
+                const adapter = sqliteStreamDurability({
+                  ...db,
+                  resumeOffset: Array.isArray(offset) ? (offset[0] ?? null) : (offset ?? null),
+                });
+                const produce = () =>
+                  nativeStream(
+                    Stream.suspend(() => {
+                      producerCalls++;
+                      return Stream.fromIterable([chunk("RUN_STARTED"), chunk("RUN_FINISHED")]);
+                    }),
+                  );
+                const result =
+                  request.url === "/resume"
+                    ? resumeServerSentEventsResponse({ adapter })
+                    : toServerSentEventsResponse(produce(), { durability: { adapter } });
+                response.writeHead(result.status, Object.fromEntries(result.headers));
+                yield* Stream.runForEach(
+                  Stream.fromAsyncIterable(result.body!, (cause) => new Cause.UnknownError(cause)),
+                  (bytes) =>
+                    Effect.sync(() => {
+                      response.write(bytes);
+                    }),
+                );
+                response.end();
+              }).pipe(
+                Effect.catchCause(() =>
+                  Effect.sync(() => {
+                    response.writeHead(400);
+                    response.end();
+                  }),
+                ),
+              ),
+            );
+          });
+          yield* Effect.acquireRelease(
+            Effect.callback<void, Cause.UnknownError>((resume) => {
+              const failed = (cause: Error) => resume(Effect.fail(new Cause.UnknownError(cause)));
+              server.once("error", failed);
+              server.listen(0, "127.0.0.1", () => resume(Effect.void));
+              return Effect.sync(() => server.off("error", failed));
+            }),
+            () =>
+              Effect.callback<void>((resume) => {
+                server.closeAllConnections();
+                server.close(() => resume(Effect.void));
+              }),
+          );
+          const address = yield* Schema.decodeUnknownEffect(Schema.Struct({ port: Schema.Int }))(
+            server.address(),
+          );
+          const url = `http://127.0.0.1:${address.port}`;
+          const liveResponse = yield* sdkCall(() => fetch(url));
+          const live = yield* sdkCall(() => liveResponse.text());
+          const ids = [...live.matchAll(/^id: (.+)$/gm)].map((match) => match[1]!);
+          expect(ids).toHaveLength(3); // SDK inserts a persisted RUN_ACCEPTED CUSTOM event.
+          expect(ids.every((id) => id.startsWith("sdk-stream:v1:run:"))).toBe(true);
+          db.sqlite.close();
+          db = owner(path);
+          const replayResponse = yield* sdkCall(() =>
+            fetch(`${url}/resume`, { headers: { "Last-Event-ID": ids[1]! } }),
+          );
+          const replay = yield* sdkCall(() => replayResponse.text());
+          expect(replay).not.toContain("RUN_STARTED");
+          expect(replay).toContain("RUN_FINISHED");
+          expect(replay).toContain(`id: ${ids[2]}`);
+          expect(producerCalls).toBe(1);
+          expect(
+            (yield* sdkCall(() =>
+              fetch(`${url}/resume`, { headers: { "Last-Event-ID": "forged" } }),
+            )).status,
+          ).toBe(400);
+        }),
+      ),
+  );
 });
+
+const sdkCall = Effect.fn("DurableStreamTest.sdkCall")(<A>(call: () => PromiseLike<A>) =>
+  Effect.tryPromise({
+    try: () => Promise.resolve(call()),
+    catch: (cause) => new Cause.UnknownError(cause),
+  }),
+);

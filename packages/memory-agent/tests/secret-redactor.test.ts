@@ -1,7 +1,5 @@
 import { Layer } from "effect";
 import { it as effectTest } from "@effect/vitest";
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off globalTimers:off newPromise:off
 import { Effect } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { SecretRedactor, mergeFindings } from "../src/secrets/redactor.ts";
@@ -26,68 +24,79 @@ const fake = {
 };
 
 const redact = (text: string) =>
-  Effect.runPromise(
-    Effect.flatMap(SecretRedactor, (redactor) => redactor.redactText(text)).pipe(
-      // Test entry point owns this Layer and its resource scope.
-      Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
-        const services = yield* Layer.build(SecretRedactor.layer);
-        return yield* Effect.provideContext(program, services);
-      }, Effect.scoped),
-    ),
+  Effect.flatMap(SecretRedactor, (redactor) => redactor.redactText(text)).pipe(
+    // Test entry point owns this Layer and its resource scope.
+    Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+      const services = yield* Layer.build(SecretRedactor.layer);
+      return yield* Effect.provideContext(program, services);
+    }, Effect.scoped),
   );
 
 describe("SecretRedactor", () => {
-  test("hides provider keys by their format", async () => {
-    const text = [
-      `client = OpenAI(api_key="${fake.openai}")`,
-      `anthropic ${fake.anthropic}`,
-      `remote: ${fake.github}`,
-      "postgres://app:hunter2hunter2@db.internal:5432/app",
-      fake.privateKey,
-    ].join("\n");
-    const { text: out, hidden } = await redact(text);
-    expect(out).not.toContain(fake.openai);
-    expect(out).not.toContain(fake.anthropic);
-    expect(out).not.toContain(fake.github);
-    expect(out).not.toContain("hunter2hunter2");
-    expect(out).not.toContain(repeat(64, "N"));
-    expect(out).toContain("[redacted:openai]");
-    expect(out).toContain("[redacted:github]");
-    expect(hidden).toBeGreaterThanOrEqual(5);
-  });
+  effectTest.live("hides provider keys by their format", () =>
+    Effect.gen(function* () {
+      const text = [
+        `client = OpenAI(api_key="${fake.openai}")`,
+        `anthropic ${fake.anthropic}`,
+        `remote: ${fake.github}`,
+        "postgres://app:hunter2hunter2@db.internal:5432/app",
+        fake.privateKey,
+      ].join("\n");
+      const { text: out, hidden } = yield* redact(text);
+      expect(out).not.toContain(fake.openai);
+      expect(out).not.toContain(fake.anthropic);
+      expect(out).not.toContain(fake.github);
+      expect(out).not.toContain("hunter2hunter2");
+      expect(out).not.toContain(repeat(64, "N"));
+      expect(out).toContain("[redacted:openai]");
+      expect(out).toContain("[redacted:github]");
+      expect(hidden).toBeGreaterThanOrEqual(5);
+    }),
+  );
 
-  test("hides a value printed next to a credential-looking name, whatever its format", async () => {
-    const cases = [
-      ["KAGI_API_KEY=kg9f2c4e1a7b", "KAGI_API_KEY=[redacted:credential]"],
-      ['export DB_PASSWORD="correct-horse-battery"', 'export DB_PASSWORD="[redacted:credential]"'],
-      ['{"SERVICE_TOKEN": "tk_live_0a1b2c3d"}', '{"SERVICE_TOKEN": "[redacted:credential]"}'],
-      ['password: "hunter2hunter2"', 'password: "[redacted:credential]"'],
-      ["api_key = 'ak-99887766'", "api_key = '[redacted:credential]'"],
-    ] as const;
-    for (const [input, expected] of cases) expect((await redact(input)).text).toBe(expected);
-  });
+  effectTest.live(
+    "hides a value printed next to a credential-looking name, whatever its format",
+    () =>
+      Effect.gen(function* () {
+        const cases = [
+          ["KAGI_API_KEY=kg9f2c4e1a7b", "KAGI_API_KEY=[redacted:credential]"],
+          [
+            'export DB_PASSWORD="correct-horse-battery"',
+            'export DB_PASSWORD="[redacted:credential]"',
+          ],
+          ['{"SERVICE_TOKEN": "tk_live_0a1b2c3d"}', '{"SERVICE_TOKEN": "[redacted:credential]"}'],
+          ['password: "hunter2hunter2"', 'password: "[redacted:credential]"'],
+          ["api_key = 'ak-99887766'", "api_key = '[redacted:credential]'"],
+        ] as const;
+        for (const [input, expected] of cases) expect((yield* redact(input)).text).toBe(expected);
+      }),
+  );
 
-  test("leaves the text a coding agent reads all day alone", async () => {
-    const untouched = [
-      "sha256 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-      "session 01a0a8f6-4a60-7f01-93e6-acf3b7f65b57 commit d36221d",
-      "const tokenCount = totalTokens;",
-      "const API_KEY = process.env.API_KEY;",
-      "OPENAI_API_KEY=${OPENAI_API_KEY}",
-      "password: getPassword()",
-      "PASSWORD=short",
-      "API_KEY=changeme",
-      "apiKey: config.apiKey,",
-      "The token limit is 2048 and the secret is to batch.",
-    ];
-    for (const text of untouched) expect(await redact(text)).toEqual({ text, hidden: 0 });
-  });
+  effectTest.live("leaves the text a coding agent reads all day alone", () =>
+    Effect.gen(function* () {
+      const untouched = [
+        "sha256 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        "session 01a0a8f6-4a60-7f01-93e6-acf3b7f65b57 commit d36221d",
+        "const tokenCount = totalTokens;",
+        "const API_KEY = process.env.API_KEY;",
+        "OPENAI_API_KEY=${OPENAI_API_KEY}",
+        "password: getPassword()",
+        "PASSWORD=short",
+        "API_KEY=changeme",
+        "apiKey: config.apiKey,",
+        "The token limit is 2048 and the secret is to batch.",
+      ];
+      for (const text of untouched) expect(yield* redact(text)).toEqual({ text, hidden: 0 });
+    }),
+  );
 
-  test("redacting twice changes nothing more", async () => {
-    const once = await redact(`OPENAI_API_KEY=${fake.openai}`);
-    expect(once.hidden).toBe(1);
-    expect(await redact(once.text)).toEqual({ text: once.text, hidden: 0 });
-  });
+  effectTest.live("redacting twice changes nothing more", () =>
+    Effect.gen(function* () {
+      const once = yield* redact(`OPENAI_API_KEY=${fake.openai}`);
+      expect(once.hidden).toBe(1);
+      expect(yield* redact(once.text)).toEqual({ text: once.text, hidden: 0 });
+    }),
+  );
 
   effectTest.effect(
     "keeps the structure of a tool result and hides secrets in any string of it",
@@ -122,22 +131,26 @@ describe("SecretRedactor", () => {
       }),
   );
 
-  test("large output stays fast", async () => {
-    const log = `${"2026-09-16T10:00:00Z INFO handled path=/api/items id=01a0a8f6 in 12ms\n".repeat(3000)}GITHUB_TOKEN=${fake.github}\n`;
-    const started = performance.now();
-    const { hidden } = await redact(log);
-    expect(hidden).toBe(1);
-    // About 4 ms on a laptop; the bound only catches a pathological regex.
-    expect(performance.now() - started).toBeLessThan(500);
-  });
+  effectTest.live("large output stays fast", () =>
+    Effect.gen(function* () {
+      const log = `${"2026-09-16T10:00:00Z INFO handled path=/api/items id=01a0a8f6 in 12ms\n".repeat(3000)}GITHUB_TOKEN=${fake.github}\n`;
+      const started = performance.now();
+      const { hidden } = yield* redact(log);
+      expect(hidden).toBe(1);
+      // About 4 ms on a laptop; the bound only catches a pathological regex.
+      expect(performance.now() - started).toBeLessThan(500);
+    }),
+  );
 
-  test("leaves nothing in the performance buffer, however many texts it checks", async () => {
-    // secretlint's profiler would add about 60 marks per check, and nothing ever clears them.
-    const before = performance.getEntriesByType("mark").length;
-    for (let i = 0; i < 20; i++) await redact(`line ${i} GITHUB_TOKEN=${fake.github}`);
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(performance.getEntriesByType("mark").length).toBe(before);
-  });
+  effectTest.live("leaves nothing in the performance buffer, however many texts it checks", () =>
+    Effect.gen(function* () {
+      // secretlint's profiler would add about 60 marks per check, and nothing ever clears them.
+      const before = performance.getEntriesByType("mark").length;
+      for (let i = 0; i < 20; i++) yield* redact(`line ${i} GITHUB_TOKEN=${fake.github}`);
+      yield* Effect.sleep(10);
+      expect(performance.getEntriesByType("mark").length).toBe(before);
+    }),
+  );
 });
 
 describe("mergeFindings", () => {

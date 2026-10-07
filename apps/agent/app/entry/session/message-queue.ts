@@ -1,4 +1,5 @@
-import { Function as EffectFunction } from "effect";
+import { runUiEffect, uiPromise } from "../shared/ui-effect";
+import { Effect, Function as EffectFunction } from "effect";
 import { isTruthy } from "../../truthy.ts";
 import { isApiError, type QueuedMessage, type QueueEdit, type QueueSnapshot } from "../api";
 import { useSessionEventScope } from "../events/context";
@@ -36,33 +37,38 @@ function useMessageQueueBody(sessionId: string, holder: string, _generating: boo
   const editQueue = useEditQueueMutation(projectId, sessionId, holder);
   const query = useQueueQuery(projectId, sessionId);
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const refresh = async () => {
-    const result = await query.refetch();
-    return result.data ?? null;
-  };
+  const refresh = () =>
+    runUiEffect(uiPromise(() => query.refetch()).pipe(Effect.map((result) => result.data ?? null)));
 
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const add = async (
+  const add = (
     text: string,
     attachmentIds: readonly string[],
     mode: "queue" | "steer",
-  ): Promise<AddOutcome> => {
-    try {
-      const message = await enqueue.mutateAsync({ text, attachmentIds, mode });
-      return mode === "steer" ? { kind: "steered", message } : { kind: "queued" };
-    } catch (failure) {
-      if (isApiError(failure) && failure.code === "not_running") return { kind: "not-running" };
-      if (isApiError(failure) && failure.code === "steer_unavailable")
-        return { kind: "steer-unavailable" };
-      return { kind: "failed" };
-    }
-  };
+  ): Promise<AddOutcome> =>
+    runUiEffect(
+      uiPromise(() => enqueue.mutateAsync({ text, attachmentIds, mode })).pipe(
+        Effect.map((message): AddOutcome =>
+          mode === "steer" ? { kind: "steered", message } : { kind: "queued" },
+        ),
+        Effect.catch((failure) =>
+          Effect.sync((): AddOutcome => {
+            if (isApiError(failure.cause) && failure.cause.code === "not_running")
+              return { kind: "not-running" };
+            if (isApiError(failure.cause) && failure.cause.code === "steer_unavailable")
+              return { kind: "steer-unavailable" };
+            return { kind: "failed" };
+          }),
+        ),
+      ),
+    );
 
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const change = async (id: string, edit: QueueEdit) => {
-    await editQueue.mutateAsync({ id, edit }).catch(() => null);
-    return refresh();
-  };
+  const change = (id: string, edit: QueueEdit) =>
+    runUiEffect(
+      uiPromise(() => editQueue.mutateAsync({ id, edit })).pipe(
+        Effect.orElseSucceed(() => null),
+        Effect.andThen(uiPromise(() => refresh())),
+      ),
+    );
 
   return {
     items: query.data?.items ?? [],

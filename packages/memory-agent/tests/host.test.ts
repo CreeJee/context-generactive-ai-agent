@@ -1,10 +1,7 @@
 import { HashSet } from "effect";
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, test } from "vite-plus/test";
+import { it } from "@effect/vitest";
+import { Cause, Effect, FileSystem, Path } from "effect";
+import { describe, expect, test } from "vite-plus/test";
 import { toolLocations } from "../src/acp/tool-view.ts";
 import {
   findExecutable,
@@ -13,11 +10,7 @@ import {
   shellInvocation,
   tarExecutable,
 } from "../src/runtime/host.ts";
-
-const cleanups: Array<() => void> = [];
-afterEach(() => {
-  for (const cleanup of cleanups.splice(0).reverse()) cleanup();
-});
+import { withTestPlatform } from "./support/platform.ts";
 
 const windowsEnv = {
   SystemRoot: "C:\\Windows",
@@ -32,25 +25,29 @@ const windowsEnv = {
 };
 
 describe("host differences", () => {
-  test("finds executables on absolute PATH entries only, with PATHEXT on Windows", () => {
-    const base = realpathSync(mkdtempSync(join(tmpdir(), "memory-agent-host-")));
-    cleanups.push(() => rmSync(base, { recursive: true, force: true }));
-    mkdirSync(join(base, "bin"));
-    writeFileSync(join(base, "bin", "git"), "");
-    expect(findExecutable("git", { PATH: `relative:${join(base, "bin")}` }, "linux")).toBe(
-      join(base, "bin", "git"),
-    );
-    expect(findExecutable("git", { PATH: "relative" }, "linux")).toBeNull();
+  it.live("finds executables on absolute PATH entries only, with PATHEXT on Windows", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "memory-agent-host-" });
+      const base = yield* fs.realPath(directory);
+      yield* fs.makeDirectory(path.join(base, "bin"));
+      yield* fs.writeFileString(path.join(base, "bin", "git"), "");
+      expect(findExecutable("git", { PATH: `relative:${path.join(base, "bin")}` }, "linux")).toBe(
+        path.join(base, "bin", "git"),
+      );
+      expect(findExecutable("git", { PATH: "relative" }, "linux")).toBeNull();
 
-    const existing = HashSet.fromIterable([
-      "C:\\Program Files\\Git\\cmd\\git.exe",
-      "C:\\Users\\me\\AppData\\Roaming\\npm\\npx.cmd",
-    ]);
-    const onWindows = (name: string) =>
-      findExecutable(name, windowsEnv, "win32", (path) => HashSet.has(existing, path));
-    expect(onWindows("git")).toBe("C:\\Program Files\\Git\\cmd\\git.exe");
-    expect(onWindows("npx")).toBe("C:\\Users\\me\\AppData\\Roaming\\npm\\npx.cmd");
-  });
+      const existing = HashSet.fromIterable([
+        "C:\\Program Files\\Git\\cmd\\git.exe",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\npx.cmd",
+      ]);
+      const onWindows = (name: string) =>
+        findExecutable(name, windowsEnv, "win32", (path) => HashSet.has(existing, path));
+      expect(onWindows("git")).toBe("C:\\Program Files\\Git\\cmd\\git.exe");
+      expect(onWindows("npx")).toBe("C:\\Users\\me\\AppData\\Roaming\\npm\\npx.cmd");
+    }).pipe(withTestPlatform),
+  );
 
   test("helper programs get the system folders and what Windows needs, never the user's secrets", () => {
     expect(
@@ -99,31 +96,43 @@ describe("host differences", () => {
     expect(tarExecutable(windowsEnv, "win32")).toBe("C:\\Windows\\System32\\tar.exe");
   });
 
-  test("a folder still held open by antivirus is renamed once released, on Windows only", async () => {
-    const busy = () => Object.assign(new Error("operation not permitted"), { code: "EPERM" });
-    const renameAfter = (failures: number) => {
-      let calls = 0;
-      return {
-        rename: () => {
-          calls++;
-          if (calls <= failures) throw busy();
-        },
-        calls: () => calls,
+  it.live("a folder still held open by antivirus is renamed once released, on Windows only", () =>
+    Effect.gen(function* () {
+      const busy = () => Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+      const renameAfter = (failures: number) => {
+        let calls = 0;
+        return {
+          rename: () => {
+            calls++;
+            if (calls <= failures) throw busy();
+          },
+          calls: () => calls,
+        };
       };
-    };
-    const windows = renameAfter(2);
-    await renameWhenReleased({ from: "a", to: "b", platform: "win32", rename: windows.rename });
-    expect(windows.calls()).toBe(3);
+      const windows = renameAfter(2);
+      yield* Effect.promise(() =>
+        renameWhenReleased({ from: "a", to: "b", platform: "win32", rename: windows.rename }),
+      );
+      expect(windows.calls()).toBe(3);
 
-    const posix = renameAfter(1);
-    await expect(
-      renameWhenReleased({ from: "a", to: "b", platform: "linux", rename: posix.rename }),
-    ).rejects.toMatchObject({
-      _tag: "DirectoryRenameFailed",
-      reason: { _tag: "RenameFailed", code: "EPERM" },
-    });
-    expect(posix.calls()).toBe(1);
-  });
+      const posix = renameAfter(1);
+      expect(
+        yield* Effect.flip(
+          Effect.tryPromise({
+            try: () =>
+              renameWhenReleased({ from: "a", to: "b", platform: "linux", rename: posix.rename }),
+            catch: (cause) => new Cause.UnknownError(cause),
+          }),
+        ),
+      ).toMatchObject({
+        cause: {
+          _tag: "DirectoryRenameFailed",
+          reason: { _tag: "RenameFailed", code: "EPERM" },
+        },
+      });
+      expect(posix.calls()).toBe(1);
+    }),
+  );
 
   test("ACP tool locations resolve project-relative paths and normalize them", () => {
     const args = (path: string) => JSON.stringify({ path });

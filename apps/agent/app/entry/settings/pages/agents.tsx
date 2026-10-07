@@ -1,3 +1,5 @@
+import { Effect } from "effect";
+import { runUiEffect, uiPromise } from "../../shared/ui-effect";
 import { BotIcon, RefreshCwIcon } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "~/components/ui/badge";
@@ -85,14 +87,19 @@ function AgentSettingsContent({ project }: { project: Project }) {
 
   const header = <PageHeader title="외부 에이전트" project={project} description={description} />;
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const apply = async (change: Parameters<typeof mutation.mutateAsync>[0]) => {
-    setError(null);
-    try {
-      await mutation.mutateAsync(change);
-    } catch {
-      setError("바꾸지 못했어요.");
-    }
-  };
+  const apply = (change: Parameters<typeof mutation.mutateAsync>[0]) =>
+    runUiEffect(
+      Effect.gen(function* () {
+        setError(null);
+        yield* uiPromise(() => mutation.mutateAsync(change)).pipe(
+          Effect.catch((_failure) =>
+            Effect.sync(() => {
+              setError("바꾸지 못했어요.");
+            }),
+          ),
+        );
+      }),
+    );
 
   return (
     <FieldGroup>

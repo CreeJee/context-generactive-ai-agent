@@ -72,12 +72,12 @@ export function migrateDatabase(sqlite: DatabaseSync) {
   }
 }
 
-const make = (file: string) =>
+const make = (file: string, open: (file: string) => DatabaseSync) =>
   Effect.acquireRelease(
     Effect.try({
       try: () => {
         if (file !== ":memory:") mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-        const sqlite = new DatabaseSync(file);
+        const sqlite = open(file);
         try {
           sqlite.exec("PRAGMA journal_mode = WAL");
           sqlite.exec("PRAGMA foreign_keys = ON");
@@ -101,18 +101,19 @@ const make = (file: string) =>
       return {
         sqlite,
         atomic(work) {
+          const outermost = depth === 0;
           const savepoint = `atomic_${depth}`;
-          sqlite.exec(depth === 0 ? "BEGIN IMMEDIATE" : `SAVEPOINT ${savepoint}`);
+          sqlite.exec(outermost ? "BEGIN IMMEDIATE" : `SAVEPOINT ${savepoint}`);
           depth += 1;
           try {
             const result = work();
-            depth -= 1;
-            sqlite.exec(depth === 0 ? "COMMIT" : `RELEASE ${savepoint}`);
+            sqlite.exec(outermost ? "COMMIT" : `RELEASE ${savepoint}`);
             return result;
           } catch (error) {
-            depth -= 1;
-            sqlite.exec(depth === 0 ? "ROLLBACK" : `ROLLBACK TO ${savepoint}`);
+            sqlite.exec(outermost ? "ROLLBACK" : `ROLLBACK TO ${savepoint}; RELEASE ${savepoint}`);
             throw error;
+          } finally {
+            depth -= 1;
           }
         },
       };
@@ -121,5 +122,8 @@ const make = (file: string) =>
 
 /** The single local SQLite database shared by every memory-agent module. */
 export class Database extends Context.Service<Database, DatabaseApi>()("memory-agent/db/database") {
-  static readonly layer = (file: string) => Layer.effect(Database, make(file));
+  static readonly layer = (
+    file: string,
+    open: (file: string) => DatabaseSync = (file) => new DatabaseSync(file),
+  ) => Layer.effect(Database, make(file, open));
 }

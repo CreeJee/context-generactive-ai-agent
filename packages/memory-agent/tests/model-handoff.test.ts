@@ -1,13 +1,11 @@
-import { Effect, MutableHashMap, Option, Schema } from "effect";
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics nodeBuiltinImport:off
+import { NodeCrypto } from "@effect/platform-node";
+import { Crypto, Effect, Layer, MutableHashMap, Option, Schema } from "effect";
 import {
   convertMessagesToModelMessages,
   modelMessagesToUIMessages,
   type MetadataStore,
   type ModelMessage,
 } from "@tanstack/ai";
-import { createHash } from "node:crypto";
 import { expect, test } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import {
@@ -212,12 +210,18 @@ it.effect("migrates a verified legacy boundary before replaying hydrated history
     const legacyBoundary = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
       stored.at(-1),
     );
+    const crypto = yield* Crypto.Crypto.pipe(
+      Effect.provideContext(yield* Layer.build(NodeCrypto.layer)),
+    );
+    const legacyAnchor = Buffer.from(
+      yield* crypto.digest("SHA-256", new TextEncoder().encode(legacyBoundary)),
+    ).toString("hex");
     yield* Effect.promise(() =>
       f.metadata.set(modelHandoffNamespace, "session", {
         _tag: "handoff",
         target: "new",
         through: stored.length,
-        anchor: createHash("sha256").update(legacyBoundary).digest("hex"),
+        anchor: legacyAnchor,
         context: "legacy evidence",
       }),
     );

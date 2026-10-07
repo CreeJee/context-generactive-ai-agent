@@ -1,3 +1,4 @@
+import { nativePromise, runNativeEffect } from "../src/runtime/native-effect.ts";
 import { isTruthy } from "../src/truthy.ts";
 // Memory use of the in-process models, one scenario per process so peaks do not mix:
 //   node --expose-gc --no-warnings eval/memory.ts            all scenarios
@@ -12,7 +13,7 @@ import { homedir } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Console, Effect, Layer, ManagedRuntime } from "effect";
+import { Console, Effect, Layer } from "effect";
 import { KiwiBuilder } from "kiwi-nlp";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { Embedder, type ModelVariant } from "../src/memory/embedding/embedder.ts";
@@ -32,51 +33,60 @@ const footprint = (field: "phys_footprint" | "phys_footprint_peak") => {
   return Math.round(Number(match[1]) * scale);
 };
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-const settle = async () => {
+const settle = Effect.fn("eval.settle")(function* () {
   for (let round = 0; round < 3; round++) {
     globalThis.gc?.();
     // Native callback heartbeat/debounce timing remains at the protocol boundary.
     // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    yield* Effect.sleep(300);
   }
   return footprint("phys_footprint");
-};
+});
 
 const sentence = "배포는 화요일과 목요일 오후에만 하기로 했고 로그 포맷은 logfmt로 바꿨다. ";
 /** About `tokens` tokens of Korean text. */
 const textOfTokens = (tokens: number) => sentence.repeat(Math.ceil(tokens / 20));
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function kiwi(options: { loadMultiDict: boolean; loadTypoDict: boolean }) {
+const kiwi = Effect.fn("eval.kiwi")(function* (options: {
+  loadMultiDict: boolean;
+  loadTypoDict: boolean;
+}) {
   const directory = join(home, "models", `kiwi-${kiwiModel.version}`, kiwiModel.directory);
   const wasm = join(dirname(runtimeRequire().resolve("kiwi-nlp")), "kiwi-wasm.wasm");
-  const builder = await KiwiBuilder.create(wasm);
+  const builder = yield* nativePromise(() => KiwiBuilder.create(wasm));
   const modelFiles = Object.fromEntries(
     readdirSync(directory).map((name) => [name, readFileSync(join(directory, name))]),
   );
-  const instance = await builder.build({ modelFiles, modelType: "cong", ...options });
+  const instance = yield* nativePromise(() =>
+    builder.build({ modelFiles, modelType: "cong", ...options }),
+  );
   instance.tokenize(sentence.repeat(50));
   return {};
-}
+});
 
 /** Embeds through the app's Embedder, then disposes it and reports what memory came back. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function embed(variant: ModelVariant, texts: readonly string[]) {
-  const runtime = ManagedRuntime.make(
-    Embedder.localVariant(variant).pipe(Layer.provide(StorageRoot.layer(home))),
-  );
-  await runtime.runPromise(Effect.flatMap(Embedder, (embedder) => embedder.embed(texts)));
-  const afterEmbedMB = await settle();
-  await runtime.dispose();
-  return { afterEmbedMB, afterReleaseMB: await settle() };
-}
+const embed = Effect.fn("eval.embed")(function* (variant: ModelVariant, texts: readonly string[]) {
+  const afterEmbedMB = yield* Effect.gen(function* () {
+    const services = yield* Layer.build(
+      Embedder.localVariant(variant).pipe(Layer.provide(StorageRoot.layer(home))),
+    );
+    yield* Effect.provideContext(
+      Effect.flatMap(Embedder, (embedder) => embedder.embed(texts)),
+      services,
+    );
+    return yield* settle();
+  }).pipe(Effect.scoped);
+  return { afterEmbedMB, afterReleaseMB: yield* settle() };
+});
 
 const mixed = [textOfTokens(8000), ...Array.from({ length: 15 }, () => textOfTokens(60))];
 const short = Array.from({ length: 16 }, () => textOfTokens(60));
 
 const scenarios = {
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  "node baseline": async () => ({}),
+  "node baseline": () => Effect.succeed({}),
   "kiwi cong (as used)": () => kiwi({ loadMultiDict: true, loadTypoDict: true }),
   "kiwi without multi/typo dict": () => kiwi({ loadMultiDict: false, loadTypoDict: false }),
   "embedder fp32, 16 short": () => embed("fp32", short),
@@ -84,19 +94,22 @@ const scenarios = {
   "embedder quint8, 16 short": () => embed("quint8", short),
   "embedder quint8, 1 long + 15 short": () => embed("quint8", mixed),
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  "embedder quint8, three reloads": async () => {
+  "embedder quint8, three reloads": Effect.fn("eval.reloads")(function* () {
     const rounds = [];
-    for (let round = 0; round < 3; round++) rounds.push(await embed("quint8", short));
+    for (let round = 0; round < 3; round++) rounds.push(yield* embed("quint8", short));
     return { rounds };
-  },
-} satisfies Record<string, () => Promise<object>>;
+  }),
+};
 
 const only = process.argv[2];
 if (isTruthy(only)) {
   const scenario = Object.entries(scenarios).find(([name]) => name === only)?.[1];
   if (!isTruthy(scenario)) throw new Error(`unknown scenario: ${only}`);
   const started = performance.now();
-  const details = await scenario();
+  const details = await runNativeEffect<
+    object,
+    Effect.Error<ReturnType<(typeof scenarios)[keyof typeof scenarios]>>
+  >(scenario());
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
   Effect.runSync(
     Console.log(

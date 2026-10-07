@@ -10,24 +10,31 @@ import type { Route } from "./+types/attachments._index";
  * WebP up to 20 MiB are accepted.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function action({ request }: Route.ActionArgs) {
-  const rejected = rejectCrossSite(request);
-  if (rejected !== null) return rejected;
-  const declared = Number(request.headers.get("Content-Length") ?? 0);
-  if (declared > maxAttachmentBytes)
-    return Response.json({ error: "attachment_rejected", reason: "too_large" }, { status: 413 });
+export function action({ request }: Route.ActionArgs) {
+  return agent.runPromise(
+    Effect.gen(function* () {
+      const rejected = rejectCrossSite(request);
+      if (rejected !== null) return rejected;
+      const declared = Number(request.headers.get("Content-Length") ?? 0);
+      if (declared > maxAttachmentBytes)
+        return Response.json(
+          { error: "attachment_rejected", reason: "too_large" },
+          { status: 413 },
+        );
 
-  const bytes = new Uint8Array(await request.arrayBuffer());
-  const response = Effect.flatMap(Attachments, (attachments) => attachments.save(bytes)).pipe(
-    Effect.map((attachment) => Response.json(attachment, { status: 201 })),
-    Effect.catchTag("AttachmentRejected", (error) =>
-      Effect.succeed(
-        Response.json(
-          { error: "attachment_rejected", reason: error.reason },
-          { status: error.reason === "too_large" ? 413 : 422 },
+      const bytes = new Uint8Array(yield* Effect.tryPromise(() => request.arrayBuffer()));
+      const response = Effect.flatMap(Attachments, (attachments) => attachments.save(bytes)).pipe(
+        Effect.map((attachment) => Response.json(attachment, { status: 201 })),
+        Effect.catchTag("AttachmentRejected", (error) =>
+          Effect.succeed(
+            Response.json(
+              { error: "attachment_rejected", reason: error.reason },
+              { status: error.reason === "too_large" ? 413 : 422 },
+            ),
+          ),
         ),
-      ),
-    ),
+      );
+      return yield* response;
+    }),
   );
-  return agent.runPromise(response);
 }

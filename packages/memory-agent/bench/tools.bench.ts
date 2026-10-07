@@ -1,16 +1,15 @@
 // Vitest benchmark entry points return Promises and use native process/filesystem fixtures.
-// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
 import { isTruthy } from "../src/truthy.ts";
 // Tool latency at the tool-execution seam (no model, HTTP or UI): `vp test bench`.
 // A synthetic repository is generated once per process in the OS temp directory.
 import { execFileSync } from "node:child_process";
 import { optionalProperty } from "../src/optional-property.ts";
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AnyServerTool } from "@tanstack/ai";
-import { Effect, ManagedRuntime } from "effect";
-import { test, describe } from "vite-plus/test";
+import { Cause, Effect, ManagedRuntime } from "effect";
+import { test, describe, afterAll } from "vite-plus/test";
 import { SecretStore } from "../src/config/secrets.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
 import { MorphAnalyzer } from "../src/memory/morph/analyzer.ts";
@@ -66,7 +65,10 @@ const runtime = ManagedRuntime.make(
   }),
 );
 
-const tools = await runtime.runPromise(
+afterAll(() => runtime.dispose().finally(() => rmSync(base, { recursive: true, force: true })));
+const runtimeServices = await runtime.context();
+const runNative = Effect.runPromiseWith(runtimeServices);
+const tools = await runNative(
   Effect.gen(function* () {
     const projects = yield* Projects;
     const files = yield* FileTools;
@@ -109,68 +111,78 @@ interface ReadInput {
 }
 
 /** Every page of a listing, as a model paging through it would. */
-async function listAll(list: (input: ListInput) => Promise<Page>) {
-  let page = await list({});
-  while (isTruthy(page.nextOffset))
-    page = await list({
+const listAll = Effect.fn("ToolBench.listAll")(function* (
+  list: (input: ListInput) => Promise<Page>,
+) {
+  let page = yield* sdkCall(() => list({}));
+  while (isTruthy(page.nextOffset)) {
+    const input = {
       ...optionalProperty("snapshot", page.snapshot),
       offset: page.nextOffset,
-    });
-}
+    };
+    page = yield* sdkCall(() => list(input));
+  }
+});
 
 /** Every page of a search. */
-async function searchAll(search: (input: SearchInput) => Promise<Page>, query: string) {
-  let page = await search({ query });
-  while (isTruthy(page.nextCursor)) page = await search({ query, cursor: page.nextCursor });
-}
+const searchAll = Effect.fn("ToolBench.searchAll")(function* (
+  search: (input: SearchInput) => Promise<Page>,
+  query: string,
+) {
+  let page = yield* sdkCall(() => search({ query }));
+  while (isTruthy(page.nextCursor)) {
+    const input = { query, cursor: page.nextCursor };
+    page = yield* sdkCall(() => search(input));
+  }
+});
 
-async function readAll(read: (input: ReadInput) => Promise<{ nextStartLine?: number | null }>) {
-  let page = await read({ path: "big.txt", maxLines: 2000 });
+const readAll = Effect.fn("ToolBench.readAll")(function* (
+  read: (input: ReadInput) => Promise<{ nextStartLine?: number | null }>,
+) {
+  let page = yield* sdkCall(() => read({ path: "big.txt", maxLines: 2000 }));
   let pages = 1;
   while (isTruthy(page.nextStartLine)) {
-    page = await read({ path: "big.txt", startLine: page.nextStartLine, maxLines: 2000 });
+    const input = { path: "big.txt", startLine: page.nextStartLine, maxLines: 2000 };
+    page = yield* sdkCall(() => read(input));
     pages++;
   }
   if (pages < 10) throw new Error(`expected many pages, got ${pages}`);
-}
+});
 
 describe("file tools (3,000 files)", () => {
-  test("list_files, plain directory", async ({ bench }) => {
-    await bench("list_files, plain directory", () => listAll(tools.plain.list)).run();
-  });
-  test("list_files, Git work tree", async ({ bench }) => {
-    await bench("list_files, Git work tree", () => listAll(tools.git.list)).run();
-  });
-  test("search_files all pages, plain (600 matches)", async ({ bench }) => {
-    await bench("search_files all pages, plain (600 matches)", () =>
-      searchAll(tools.plain.search, "needle")).run();
-  });
-  test("search_files all pages, Git (600 matches)", async ({ bench }) => {
-    await bench("search_files all pages, Git (600 matches)", () =>
-      searchAll(tools.git.search, "needle")).run();
-  });
-  test("search_files no match, plain", async ({ bench }) => {
-    await bench("search_files no match, plain", () =>
-      searchAll(tools.plain.search, "absent-text-xyz")).run();
-  });
-  test("search_files no match, Git", async ({ bench }) => {
-    await bench("search_files no match, Git", () =>
-      searchAll(tools.git.search, "absent-text-xyz")).run();
-  });
-  test("search_files one directory, plain", async ({ bench }) => {
-    await bench("search_files one directory, plain", () =>
-      searchAll(
-        (input) => tools.plain.search({ ...input, directory: "src/module-3" }),
-        "needle",
-      )).run();
-  });
-  test("read_file 6,000 lines, all pages", async ({ bench }) => {
-    await bench("read_file 6,000 lines, all pages", () => readAll(tools.plain.read)).run();
-  });
+  test("list_files, plain directory", ({ bench }) =>
+    bench("list_files, plain directory", () => runNative(listAll(tools.plain.list))).run());
+  test("list_files, Git work tree", ({ bench }) =>
+    bench("list_files, Git work tree", () => runNative(listAll(tools.git.list))).run());
+  test("search_files all pages, plain (600 matches)", ({ bench }) =>
+    bench("search_files all pages, plain (600 matches)", () =>
+      runNative(searchAll(tools.plain.search, "needle"))).run());
+  test("search_files all pages, Git (600 matches)", ({ bench }) =>
+    bench("search_files all pages, Git (600 matches)", () =>
+      runNative(searchAll(tools.git.search, "needle"))).run());
+  test("search_files no match, plain", ({ bench }) =>
+    bench("search_files no match, plain", () =>
+      runNative(searchAll(tools.plain.search, "absent-text-xyz"))).run());
+  test("search_files no match, Git", ({ bench }) =>
+    bench("search_files no match, Git", () =>
+      runNative(searchAll(tools.git.search, "absent-text-xyz"))).run());
+  test("search_files one directory, plain", ({ bench }) =>
+    bench("search_files one directory, plain", () =>
+      runNative(
+        searchAll((input) => tools.plain.search({ ...input, directory: "src/module-3" }), "needle"),
+      )).run());
+  test("read_file 6,000 lines, all pages", ({ bench }) =>
+    bench("read_file 6,000 lines, all pages", () => runNative(readAll(tools.plain.read))).run());
 });
 
 describe("shell", () => {
-  test("run_shell printf", async ({ bench }) => {
-    await bench("run_shell printf", () => tools.shell({ command: "printf ok" })).run();
-  });
+  test("run_shell printf", ({ bench }) =>
+    bench("run_shell printf", () => tools.shell({ command: "printf ok" })).run());
 });
+
+const sdkCall = Effect.fn("ToolBench.sdkCall")(<A>(call: () => PromiseLike<A>) =>
+  Effect.tryPromise({
+    try: () => Promise.resolve(call()),
+    catch: (cause) => new Cause.UnknownError(cause),
+  }),
+);

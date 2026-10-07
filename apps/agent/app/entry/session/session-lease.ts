@@ -1,3 +1,5 @@
+import { Effect } from "effect";
+import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { isTruthy } from "../../truthy.ts";
 import { useEffect, useState } from "react";
 import { api, type LeaseView, type SessionRunState } from "../api";
@@ -23,12 +25,11 @@ export function pageHolder() {
   try {
     const existing = sessionStorage.getItem(holderKey);
     if (isTruthy(existing)) return existing;
-    // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
+    // Browser boundary: session ownership requires a cryptographic token.
     const created = crypto.randomUUID();
     sessionStorage.setItem(holderKey, created);
     return created;
   } catch {
-    // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
     return crypto.randomUUID();
   }
 }
@@ -96,11 +97,14 @@ export function useSessionLease(sessionId: string) {
 
   /** "이어서 작업": claims the session if it is still free when asked. */
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const continueHere = async () => {
-    const view = await leaseAction(sessionId, holder, "claim");
-    setLease(view);
-    setRefused(view.state !== "mine");
-  };
+  const continueHere = () =>
+    runUiEffect(
+      Effect.gen(function* () {
+        const view = yield* uiPromise(() => leaseAction(sessionId, holder, "claim"));
+        setLease(view);
+        setRefused(view.state !== "mine");
+      }),
+    );
 
   return { holder, lease, revision, refused, continueHere };
 }

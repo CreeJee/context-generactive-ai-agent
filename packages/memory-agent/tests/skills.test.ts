@@ -1,8 +1,5 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { MutableHashMap, Random, Effect } from "effect";
+import { Cause, MutableHashMap, Random, Effect, FileSystem, Path, Schema } from "effect";
+import { it } from "@effect/vitest";
 import { describe, expect, test } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import {
@@ -14,13 +11,28 @@ import {
 import { SkillTools } from "../src/tools/skills.ts";
 import { Workflows } from "../src/workflow/workflow.ts";
 import { testRuntime } from "./support/runtime.ts";
+import { selectTestModel } from "./support/provider.ts";
+import { withTestPlatform } from "./support/platform.ts";
 
-function writeSkill(root: string, folder: string, frontMatter: string, body = "Do it well.") {
-  const directory = join(root, folder);
-  mkdirSync(directory, { recursive: true });
-  writeFileSync(join(directory, "SKILL.md"), `---\n${frontMatter}\n---\n${body}`);
+const writeSkill = Effect.fn("writeSkill")(function* (
+  root: string,
+  folder: string,
+  frontMatter: string,
+  body: string = "Do it well.",
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const directory = path.join(root, folder);
+  yield* fs.makeDirectory(directory, { recursive: true });
+  yield* fs.writeFileString(path.join(directory, "SKILL.md"), `---\n${frontMatter}\n---\n${body}`);
   return directory;
-}
+});
+const call = Effect.fn("skillSdkCall")(<A>(operation: () => A | PromiseLike<A>) =>
+  Effect.tryPromise({
+    try: () => Promise.resolve(operation()),
+    catch: (cause) => new Cause.UnknownError(cause),
+  }),
+);
 
 describe("parseFrontMatter", () => {
   test("reads plain, quoted and folded values and returns the body", () => {
@@ -39,140 +51,181 @@ describe("parseFrontMatter", () => {
 });
 
 describe("Skills", () => {
-  test("lists global and project skills; a project skill replaces a global one of the same name", async () => {
-    const { runtime, project, home, base } = await testRuntime();
-    const global = join(home, ".agents", "skills");
-    const local = join(project.root, ".agents", "skills");
-    writeSkill(global, "review", "name: review\ndescription: Global review.");
-    writeSkill(global, "deploy", "description: Deploy the app.");
-    writeSkill(global, "broken", "name: broken");
-    writeSkill(local, "review", "name: review\ndescription: Project review.", "Project rules.");
-    writeFileSync(join(local, "review", "checklist.md"), "- [ ] tests");
-    // A linked folder could point anywhere, so it is not a skill.
-    const outside = writeSkill(join(base, "elsewhere"), "linked", "description: Linked.");
-    symlinkSync(outside, join(global, "linked"));
-
-    const skills = await runtime.runPromise(Skills);
-    const catalog = skills.catalog(project);
-    expect(catalog.skills.map((skill) => [skill.name, skill.scope, skill.description])).toEqual([
-      ["deploy", "global", "Deploy the app."],
-      ["review", "project", "Project review."],
-    ]);
-    expect(catalog.problems).toEqual([
-      { scope: "global", directory: join(global, "broken"), problem: "no_description" },
-    ]);
-
-    const tools = await runtime.runPromise(Effect.map(SkillTools, (t) => t.forProject(project)));
-    expect(tools.instructions).toContain("- review (project): Project review.");
-    expect(tools.instructions).toContain("guidance, not permission");
-    const read = tools.tools[0]?.execute;
-    expect(await read?.({ name: "review" })).toMatchObject({
-      scope: "project",
-      directory: join(local, "review"),
-      files: ["checklist.md"],
-      instructions: "Project rules.",
-    });
-    expect(await read?.({ name: "linked" })).toEqual({ error: "skill_not_found", name: "linked" });
-  });
-
-  test("built-in skills are listed, and the user's or the project's replace them by name", async () => {
-    const { base, home } = await testRuntime();
-    const builtin = join(base, "builtin");
-    writeSkill(builtin, "draw", "name: draw\ndescription: App drawing.", "App rules.");
-    writeSkill(builtin, "tidy", "name: tidy\ndescription: App tidying.", "Tidy rules.");
-    writeFileSync(join(builtin, "tidy", "notes.md"), "not for the model");
-    writeSkill(join(home, ".agents", "skills"), "draw", "name: draw\ndescription: My drawing.");
-
-    const { runtime, project } = await testRuntime({ skillsBuiltin: builtin, skillsHome: home });
-    const skills = await runtime.runPromise(Skills);
-    expect(
-      skills.catalog(project).skills.map((skill) => [skill.name, skill.scope, skill.description]),
-    ).toEqual([
-      ["draw", "global", "My drawing."],
-      ["tidy", "builtin", "App tidying."],
-    ]);
-
-    // The executable unpacks built-in skills under the storage root, which the file tools refuse,
-    // so a built-in skill never points the model at files beside it.
-    expect(skills.read(project, "tidy")).toMatchObject({
-      scope: "builtin",
-      files: [],
-      body: "Tidy rules.",
-    });
-  });
-
-  test("the skills this app ships are readable and within limits", async () => {
-    const { runtime, project } = await testRuntime({ skillsBuiltin: builtinSkillsDirectory() });
-    const catalog = (await runtime.runPromise(Skills)).catalog(project);
-    expect(catalog.problems).toEqual([]);
-    const shipped = catalog.skills.filter((skill) => skill.scope === "builtin");
-    expect(shipped.map((skill) => skill.name)).toContain("draw");
-    for (const skill of shipped) {
-      expect(skill.description.length).toBeGreaterThan(0);
-      expect(skill.description.length).toBeLessThanOrEqual(maxDescriptionCharacters);
-    }
-  });
-
-  test.each(["chat", "goal"] as const)(
-    "a %s run lists skills and offers read_skill only when there are skills",
-    async (phase) => {
-      const context = await testRuntime({ testProvider: {} });
-      const { runtime, project, session } = context;
-      await context.provider!.select(runtime);
-      if (phase === "goal") {
-        const workflows = await runtime.runPromise(Workflows);
-        await runtime.runPromise(
-          workflows.updateGoal(session.id, {
-            statement: "Greet the user using the available skill",
-            outcomes: ["Say hello in Korean"],
-            constraints: [],
-            nonGoals: [],
-            assumptions: [],
-            openQuestions: [],
-            status: "active",
-          }),
+  it.live(
+    "lists global and project skills; a project skill replaces a global one of the same name",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { runtime, project, home, base } = yield* call(() => testRuntime());
+        const global = path.join(home, ".agents", "skills");
+        const local = path.join(project.root, ".agents", "skills");
+        yield* writeSkill(global, "review", "name: review\ndescription: Global review.");
+        yield* writeSkill(global, "deploy", "description: Deploy the app.");
+        yield* writeSkill(global, "broken", "name: broken");
+        yield* writeSkill(
+          local,
+          "review",
+          "name: review\ndescription: Project review.",
+          "Project rules.",
         );
-        await runtime.runPromise(workflows.setPhase(session.id, "goal"));
+        yield* fs.writeFileString(path.join(local, "review", "checklist.md"), "- [ ] tests");
+        // A linked folder could point anywhere, so it is not a skill.
+        const outside = yield* writeSkill(
+          path.join(base, "elsewhere"),
+          "linked",
+          "description: Linked.",
+        );
+        yield* fs.symlink(outside, path.join(global, "linked"));
+        const skills = yield* Effect.provideContext(Skills, yield* runtime.contextEffect);
+        const catalog = skills.catalog(project);
+        expect(catalog.skills.map((skill) => [skill.name, skill.scope, skill.description])).toEqual(
+          [
+            ["deploy", "global", "Deploy the app."],
+            ["review", "project", "Project review."],
+          ],
+        );
+        expect(catalog.problems).toEqual([
+          { scope: "global", directory: path.join(global, "broken"), problem: "no_description" },
+        ]);
+        const tools = yield* Effect.provideContext(
+          Effect.map(SkillTools, (t) => t.forProject(project)),
+          yield* runtime.contextEffect,
+        );
+        expect(tools.instructions).toContain("- review (project): Project review.");
+        expect(tools.instructions).toContain("guidance, not permission");
+        const read = tools.tools[0]?.execute;
+        expect(yield* call(() => read?.({ name: "review" }))).toMatchObject({
+          scope: "project",
+          directory: path.join(local, "review"),
+          files: ["checklist.md"],
+          instructions: "Project rules.",
+        });
+        expect(yield* call(() => read?.({ name: "linked" }))).toEqual({
+          error: "skill_not_found",
+          name: "linked",
+        });
+      }).pipe(withTestPlatform),
+  );
+
+  it.live("built-in skills are listed, and the user's or the project's replace them by name", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { base, home } = yield* call(() => testRuntime());
+      const builtin = path.join(base, "builtin");
+      yield* writeSkill(builtin, "draw", "name: draw\ndescription: App drawing.", "App rules.");
+      yield* writeSkill(builtin, "tidy", "name: tidy\ndescription: App tidying.", "Tidy rules.");
+      yield* fs.writeFileString(path.join(builtin, "tidy", "notes.md"), "not for the model");
+      yield* writeSkill(
+        path.join(home, ".agents", "skills"),
+        "draw",
+        "name: draw\ndescription: My drawing.",
+      );
+      const { runtime, project } = yield* call(() =>
+        testRuntime({ skillsBuiltin: builtin, skillsHome: home }),
+      );
+      const skills = yield* Effect.provideContext(Skills, yield* runtime.contextEffect);
+      expect(
+        skills.catalog(project).skills.map((skill) => [skill.name, skill.scope, skill.description]),
+      ).toEqual([
+        ["draw", "global", "My drawing."],
+        ["tidy", "builtin", "App tidying."],
+      ]);
+      // The executable unpacks built-in skills under the storage root, which the file tools refuse,
+      // so a built-in skill never points the model at files beside it.
+      expect(skills.read(project, "tidy")).toMatchObject({
+        scope: "builtin",
+        files: [],
+        body: "Tidy rules.",
+      });
+    }).pipe(withTestPlatform),
+  );
+
+  it.live("the skills this app ships are readable and within limits", () =>
+    Effect.gen(function* () {
+      const { runtime, project } = yield* call(() =>
+        testRuntime({ skillsBuiltin: builtinSkillsDirectory() }),
+      );
+      const catalog = (yield* Effect.provideContext(Skills, yield* runtime.contextEffect)).catalog(
+        project,
+      );
+      expect(catalog.problems).toEqual([]);
+      const shipped = catalog.skills.filter((skill) => skill.scope === "builtin");
+      expect(shipped.map((skill) => skill.name)).toContain("draw");
+      for (const skill of shipped) {
+        expect(skill.description.length).toBeGreaterThan(0);
+        expect(skill.description.length).toBeLessThanOrEqual(maxDescriptionCharacters);
       }
-      const send = async (text: string) => {
-        const invocationIndex = context.provider!.adapter.invocations.length;
-        const response = await runtime.runPromise(
-          Effect.flatMap(AgentChat, (agent) =>
-            agent.handle(
-              new Request("http://127.0.0.1/api/chat", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  threadId: session.id,
-                  runId: `run-${Effect.runSync(Random.next).toString(36).slice(2)}`,
-                  messages: [{ id: "m1", role: "user", content: text }],
-                  tools: [],
-                  context: [],
+    }).pipe(withTestPlatform),
+  );
+
+  it.live.each(["chat", "goal"] as const)(
+    "a %s run lists skills and offers read_skill only when there are skills",
+    (phase) =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const context = yield* call(() => testRuntime({ testProvider: {} }));
+        const { runtime, project, session } = context;
+        yield* selectTestModel().pipe(Effect.provideContext(yield* runtime.contextEffect));
+        if (phase === "goal") {
+          const workflows = yield* Effect.provideContext(Workflows, yield* runtime.contextEffect);
+          yield* Effect.provideContext(
+            workflows.updateGoal(session.id, {
+              statement: "Greet the user using the available skill",
+              outcomes: ["Say hello in Korean"],
+              constraints: [],
+              nonGoals: [],
+              assumptions: [],
+              openQuestions: [],
+              status: "active",
+            }),
+            yield* runtime.contextEffect,
+          );
+          yield* Effect.provideContext(
+            workflows.setPhase(session.id, "goal"),
+            yield* runtime.contextEffect,
+          );
+        }
+        const send = Effect.fn("skills.send")(function* (text: string) {
+          const invocationIndex = context.provider!.adapter.invocations.length;
+          const body = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+            threadId: session.id,
+            runId: `run-${(yield* Random.next).toString(36).slice(2)}`,
+            messages: [{ id: "m1", role: "user", content: text }],
+            tools: [],
+            context: [],
+          });
+          const response = yield* Effect.provideContext(
+            Effect.flatMap(AgentChat, (agent) =>
+              agent.handle(
+                new Request("http://127.0.0.1/api/chat", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body,
                 }),
-              }),
-              session.id,
+                session.id,
+              ),
             ),
-          ),
+            yield* runtime.contextEffect,
+          );
+          const events = yield* call(() => response.text());
+          return { events, invocation: context.provider!.adapter.invocations[invocationIndex] };
+        });
+        const without = yield* send("hello");
+        expect(without.invocation?.toolNames).not.toContain("read_skill");
+        yield* writeSkill(
+          path.join(project.root, ".agents", "skills"),
+          "greet",
+          "name: greet\ndescription: Greet warmly.",
+          "Say hello in Korean.",
         );
-        const events = await response.text();
-        return { events, invocation: context.provider!.adapter.invocations[invocationIndex] };
-      };
-
-      const without = await send("hello");
-      expect(without.invocation?.toolNames).not.toContain("read_skill");
-
-      writeSkill(
-        join(project.root, ".agents", "skills"),
-        "greet",
-        "name: greet\ndescription: Greet warmly.",
-        "Say hello in Korean.",
-      );
-      const withSkill = await send('call read_skill {"name":"greet"}');
-      expect(withSkill.invocation?.toolNames).toContain("read_skill");
-      expect(withSkill.invocation?.systemPrompts.join("\n")).toContain(
-        "- greet (project): Greet warmly.",
-      );
-      expect(withSkill.events).toContain("Say hello in Korean.");
-    },
+        const withSkill = yield* send('call read_skill {"name":"greet"}');
+        expect(withSkill.invocation?.toolNames).toContain("read_skill");
+        expect(withSkill.invocation?.systemPrompts.join("\n")).toContain(
+          "- greet (project): Greet warmly.",
+        );
+        expect(withSkill.events).toContain("Say hello in Korean.");
+      }).pipe(withTestPlatform),
   );
 });

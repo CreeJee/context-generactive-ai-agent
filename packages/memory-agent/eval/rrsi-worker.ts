@@ -1,3 +1,6 @@
+import { nativePromise, runNativeEffect } from "../src/runtime/native-effect.ts";
+import { nativeStream } from "../src/runtime/native-stream.ts";
+import { Stream } from "effect";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../src/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
@@ -50,7 +53,7 @@ const emit = (
     | { kind: "result"; results: { id: string; domain: string; score: number }[] }
     | { kind: "failure"; reason: string }
     | { kind: "progress"; completed: number; total: number },
-) => process.stdout.write(`RRSI:${JSON.stringify(value)}\n`);
+) => process.stdout.write(`RRSI:${stringifyJson(value)}\n`);
 const gateway = ManagedRuntime.make(WorkerGateway.layer(process.stdin, emit));
 const gatewayRequest = (
   kind: "request" | "subscription-request",
@@ -62,56 +65,69 @@ const gatewayRequest = (
     Predicate.isNotNullish(signal) ? { signal } : undefined,
   );
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-const transport: typeof fetch = async (_url, init) => {
-  const body = await gatewayRequest(
-    "request",
-    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    EffectFunction.flow(Schema.decodeUnknownResult(Schema.String), Result.getOrThrow)(init?.body),
-    init?.signal,
-  );
-  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  const request = EffectFunction.flow(
-    Schema.decodeResult(
-      Schema.fromJsonString(Schema.Struct({ stream: Schema.optionalKey(Schema.Boolean) })),
-    ),
-    Result.getOrThrow,
-  )(EffectFunction.flow(Schema.decodeUnknownResult(Schema.String), Result.getOrThrow)(init?.body));
-  if (!isTruthy(request.stream))
-    return new Response(body, { headers: { "content-type": "application/json" } });
-  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  const page = EffectFunction.flow(
-    Schema.decodeResult(
-      Schema.fromJsonString(
-        Schema.Struct({
-          id: Schema.String,
-          model: Schema.String,
-          choices: Schema.Array(
+const transport: typeof fetch = (_url, init) =>
+  runNativeEffect(
+    Effect.gen(function* () {
+      const body = yield* nativePromise(() =>
+        gatewayRequest(
+          "request",
+          // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+          EffectFunction.flow(
+            Schema.decodeUnknownResult(Schema.String),
+            Result.getOrThrow,
+          )(init?.body),
+          init?.signal,
+        ),
+      );
+      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+      const request = EffectFunction.flow(
+        Schema.decodeResult(
+          Schema.fromJsonString(Schema.Struct({ stream: Schema.optionalKey(Schema.Boolean) })),
+        ),
+        Result.getOrThrow,
+      )(
+        EffectFunction.flow(
+          Schema.decodeUnknownResult(Schema.String),
+          Result.getOrThrow,
+        )(init?.body),
+      );
+      if (!isTruthy(request.stream))
+        return new Response(body, { headers: { "content-type": "application/json" } });
+      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+      const page = EffectFunction.flow(
+        Schema.decodeResult(
+          Schema.fromJsonString(
             Schema.Struct({
-              message: Schema.Record(Schema.String, Schema.Unknown),
-              finish_reason: Schema.String,
+              id: Schema.String,
+              model: Schema.String,
+              choices: Schema.Array(
+                Schema.Struct({
+                  message: Schema.Record(Schema.String, Schema.Unknown),
+                  finish_reason: Schema.String,
+                }),
+              ),
+              usage: Schema.optionalKey(Schema.Unknown),
             }),
           ),
-          usage: Schema.optionalKey(Schema.Unknown),
-        }),
-      ),
-    ),
-    Result.getOrThrow,
-  )(body);
-  const chunks = page.choices
-    .map((choice, index) => {
-      const delta = { ...choice.message };
-      const calls = Schema.decodeUnknownOption(
-        Schema.Array(Schema.Record(Schema.String, Schema.Unknown)),
-      )(delta.tool_calls);
-      if (calls._tag === "Some")
-        delta.tool_calls = calls.value.map((call, i) => ({ ...call, index: i }));
-      return `data: ${JSON.stringify({ id: page.id, object: "chat.completion.chunk", model: page.model, choices: [{ index, delta, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ id: page.id, object: "chat.completion.chunk", model: page.model, choices: [{ index, delta: {}, finish_reason: choice.finish_reason }], usage: page.usage })}\n\n`;
-    })
-    .join("");
-  return new Response(`${chunks}data: [DONE]\n\n`, {
-    headers: { "content-type": "text/event-stream" },
-  });
-};
+        ),
+        Result.getOrThrow,
+      )(body);
+      const chunks = page.choices
+        .map((choice, index) => {
+          const delta = { ...choice.message };
+          const calls = Schema.decodeUnknownOption(
+            Schema.Array(Schema.Record(Schema.String, Schema.Unknown)),
+          )(delta.tool_calls);
+          if (calls._tag === "Some")
+            delta.tool_calls = calls.value.map((call, i) => ({ ...call, index: i }));
+          return `data: ${stringifyJson({ id: page.id, object: "chat.completion.chunk", model: page.model, choices: [{ index, delta, finish_reason: null }] })}\n\ndata: ${stringifyJson({ id: page.id, object: "chat.completion.chunk", model: page.model, choices: [{ index, delta: {}, finish_reason: choice.finish_reason }], usage: page.usage })}\n\n`;
+        })
+        .join("");
+      return new Response(`${chunks}data: [DONE]\n\n`, {
+        headers: { "content-type": "text/event-stream" },
+      });
+    }),
+  );
 
 const filesystem = <A>(operation: () => A) =>
   Effect.try({
@@ -140,7 +156,7 @@ const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
       writeFileSync(join(projectRoot, "notes.txt"), "Planning notes.\n".repeat(800));
       writeFileSync(
         join(storage, "config.json"),
-        JSON.stringify({
+        stringifyJson({
           openaiCompatible: {
             baseUrl: "http://127.0.0.1/v1",
             model: input.model,
@@ -156,7 +172,10 @@ const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
     });
     const compatibleLayer = OpenAICompatibleSettings.layerWith(
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      Layer.succeed(CompatibleKeyring, { get: async () => null, set: async () => undefined }),
+      Layer.succeed(CompatibleKeyring, {
+        get: () => Promise.resolve(null),
+        set: () => Promise.resolve(undefined),
+      }),
       Layer.succeed(CompatibleFetch, transport),
     );
     const registry = Layer.effect(
@@ -171,14 +190,18 @@ const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
                 selection.provider,
                 {
                   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-                  async *stream(body, signal) {
-                    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-                    const result = EffectFunction.flow(
-                      Schema.decodeResult(Schema.fromJsonString(SubscriptionResult)),
-                      Result.getOrThrow,
-                    )(await gatewayRequest("subscription-request", body, signal));
-                    for (const event of result.events) yield event;
-                  },
+                  stream: (body, signal) =>
+                    nativeStream(
+                      Stream.fromEffect(
+                        nativePromise(() =>
+                          gatewayRequest("subscription-request", body, signal),
+                        ).pipe(
+                          Effect.flatMap(
+                            Schema.decodeEffect(Schema.fromJsonString(SubscriptionResult)),
+                          ),
+                        ),
+                      ).pipe(Stream.flatMap((result) => Stream.fromIterable(result.events))),
+                    ),
                 },
                 () => 32000,
               );

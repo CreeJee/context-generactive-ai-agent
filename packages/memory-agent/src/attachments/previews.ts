@@ -1,3 +1,4 @@
+import { nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
 import { HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
@@ -34,7 +35,7 @@ export class DrawingPreviewReadFailed extends Data.TaggedError("DrawingPreviewRe
 const isDrawing = (path: string) => path.toLowerCase().endsWith(".svg");
 
 const make = Effect.gen(function* () {
-  const run = Effect.runPromiseWith(yield* Effect.context());
+  const run = runNativeEffectWith(yield* Effect.context());
   const attachments = yield* Attachments;
 
   /**
@@ -72,16 +73,19 @@ const make = Effect.gen(function* () {
         return {
           ...tool,
           // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          execute: async (...call: Parameters<typeof execute>) => {
-            const result = await execute(...call);
-            const written = Option.getOrUndefined(decodeWritten(result));
-            if (!(written !== undefined) || !isDrawing(written.path)) return result;
-            const preview = await run(previewOf(project, written.path));
-            return Option.match(preview, {
-              onNone: () => result,
-              onSome: (picture) => ({ ...result, preview: picture }),
-            });
-          },
+          execute: (...call: Parameters<typeof execute>) =>
+            run(
+              Effect.gen(function* () {
+                const result = yield* nativePromise(() => Promise.resolve(execute(...call)));
+                const written = Option.getOrUndefined(decodeWritten(result));
+                if (!(written !== undefined) || !isDrawing(written.path)) return result;
+                const preview = yield* previewOf(project, written.path);
+                return Option.match(preview, {
+                  onNone: () => result,
+                  onSome: (picture) => ({ ...result, preview: picture }),
+                });
+              }),
+            ),
         };
       });
     },

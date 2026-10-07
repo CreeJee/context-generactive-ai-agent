@@ -17,7 +17,7 @@ const keychainFailed = (operation: string) =>
 
 /** GET /api/settings/kagi: whether a key is registered and Kagi is on. The key is never returned. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function loader() {
+export function loader() {
   return agent.runPromise(
     Effect.flatMap(Kagi, (kagi) => kagi.status).pipe(
       Effect.map((status) => Response.json(status)),
@@ -35,33 +35,37 @@ export async function loader() {
  * - `remove`: deletes the key and turns Kagi off.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function action({ request }: Route.ActionArgs) {
-  const rejected = rejectCrossSite(request);
-  if (rejected !== null) return rejected;
-  const body = await readJson(request, KagiAction);
-  if (Result.isFailure(body))
-    return Response.json({ error: "invalid_kagi_action" }, { status: 400 });
+export function action({ request }: Route.ActionArgs) {
+  return agent.runPromise(
+    Effect.gen(function* () {
+      const rejected = rejectCrossSite(request);
+      if (rejected !== null) return rejected;
+      const body = yield* Effect.tryPromise(() => readJson(request, KagiAction));
+      if (Result.isFailure(body))
+        return Response.json({ error: "invalid_kagi_action" }, { status: 400 });
 
-  const response = Effect.gen(function* () {
-    const kagi = yield* Kagi;
-    const command = body.success;
-    switch (command.action) {
-      case "register":
-        yield* kagi.registerKey(command.key);
-        return Response.json(yield* kagi.status);
-      case "remove":
-        yield* kagi.removeKey;
-        return Response.json(yield* kagi.status);
-      case "enable":
-      case "disable":
-        return Response.json(yield* kagi.setEnabled(command.action === "enable"));
-    }
-  }).pipe(
-    Effect.catchTags({
-      SecretStoreFailed: (failure) => Effect.succeed(keychainFailed(failure.operation)),
-      KagiKeyMissing: () =>
-        Effect.succeed(Response.json({ error: "kagi_key_required" }, { status: 409 })),
+      const response = Effect.gen(function* () {
+        const kagi = yield* Kagi;
+        const command = body.success;
+        switch (command.action) {
+          case "register":
+            yield* kagi.registerKey(command.key);
+            return Response.json(yield* kagi.status);
+          case "remove":
+            yield* kagi.removeKey;
+            return Response.json(yield* kagi.status);
+          case "enable":
+          case "disable":
+            return Response.json(yield* kagi.setEnabled(command.action === "enable"));
+        }
+      }).pipe(
+        Effect.catchTags({
+          SecretStoreFailed: (failure) => Effect.succeed(keychainFailed(failure.operation)),
+          KagiKeyMissing: () =>
+            Effect.succeed(Response.json({ error: "kagi_key_required" }, { status: 409 })),
+        }),
+      );
+      return yield* response;
     }),
   );
-  return agent.runPromise(response);
 }

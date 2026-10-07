@@ -1,12 +1,10 @@
 import { Array as EffectArray } from "effect";
 import { Layer } from "effect";
 import { it as effectTest } from "@effect/vitest";
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off
 import { memoryTool } from "@tanstack/ai-anthropic/tools";
 import { optionalProperty } from "../src/optional-property.ts";
 import { OPENAI_CHAT_MODELS } from "@tanstack/ai-openai";
-import { Effect, Result } from "effect";
+import { Effect } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import {
   ProviderToolCapabilityRegistry,
@@ -17,24 +15,12 @@ import {
   type ProviderToolCapabilityRegistryApi,
 } from "../src/providers/tool-capabilities.ts";
 
-const runDefault = <A, E>(program: Effect.Effect<A, E, ProviderToolCapabilityRegistry>) =>
-  // Test entry point owns this Layer and its resource scope.
-  Effect.runPromise(
-    program.pipe(
-      Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
-        const services = yield* Layer.build(ProviderToolCapabilityRegistry.layer);
-        return yield* Effect.provideContext(program, services);
-      }, Effect.scoped),
-    ),
-  );
-
-const failure = <A, E>(effect: Effect.Effect<A, E>) =>
-  Effect.runPromise(
-    effect.pipe(
-      Effect.result,
-      Effect.map((result) => (Result.isFailure(result) ? result.failure : null)),
-    ),
-  );
+const withDefault = Effect.fnUntraced(function* <A, E>(
+  program: Effect.Effect<A, E, ProviderToolCapabilityRegistry>,
+) {
+  const services = yield* Layer.build(ProviderToolCapabilityRegistry.layer);
+  return yield* Effect.provideContext(program, services);
+}, Effect.scoped);
 
 describe("ProviderToolCapabilityRegistry", () => {
   test("contains all 18 provider-qualified tools without cross-provider collisions", () => {
@@ -65,117 +51,129 @@ describe("ProviderToolCapabilityRegistry", () => {
     expect(descriptor?.extension.factory).toBe(memoryTool);
   });
 
-  test("fails closed for unknown tools, unknown models, and Anthropic tools:[] models", async () => {
-    const result = await runDefault(
+  effectTest.effect(
+    "fails closed for unknown tools, unknown models, and Anthropic tools:[] models",
+    () =>
       Effect.gen(function* () {
-        const registry = yield* ProviderToolCapabilityRegistry;
-        const unknownTool = yield* Effect.result(registry.get("openai:not_real"));
-        const unknownModel = yield* Effect.result(
-          registry.resolve({ provider: "anthropic", model: "claude-not-real" }),
+        const result = yield* withDefault(
+          Effect.gen(function* () {
+            const registry = yield* ProviderToolCapabilityRegistry;
+            const unknownTool = yield* Effect.result(registry.get("openai:not_real"));
+            const unknownModel = yield* Effect.result(
+              registry.resolve({ provider: "anthropic", model: "claude-not-real" }),
+            );
+            const empty = yield* registry.resolve({
+              provider: "anthropic",
+              model: "claude-opus-5-fast",
+            });
+            return { unknownTool, unknownModel, empty };
+          }),
         );
-        const empty = yield* registry.resolve({
-          provider: "anthropic",
-          model: "claude-opus-5-fast",
+        expect(result.unknownTool).toMatchObject({
+          _tag: "Failure",
+          failure: { _tag: "UnknownProviderTool" },
         });
-        return { unknownTool, unknownModel, empty };
-      }),
-    );
-    expect(result.unknownTool).toMatchObject({
-      _tag: "Failure",
-      failure: { _tag: "UnknownProviderTool" },
-    });
-    expect(result.unknownModel).toMatchObject({
-      _tag: "Failure",
-      failure: { _tag: "UnknownProviderToolModel" },
-    });
-    expect(result.empty).toEqual([]);
-  });
-
-  test("resolves exact OpenAI full, subset, single, and empty capability tuples", async () => {
-    const openAIModels = installedProviderToolModelMetadata.filter(
-      (entry) => entry.provider === "openai",
-    );
-    expect(openAIModels.map((entry) => entry.model)).toEqual([...OPENAI_CHAT_MODELS]);
-
-    const resolved = await runDefault(
-      Effect.gen(function* () {
-        const registry = yield* ProviderToolCapabilityRegistry;
-        const ids = (model: string, accountToolKinds?: readonly string[]) =>
-          Effect.map(
-            registry.resolve({
-              provider: "openai",
-              model,
-              ...optionalProperty("accountToolKinds", accountToolKinds),
-            }),
-            (entries) => entries.map((entry) => entry.id),
-          );
-        return {
-          full: yield* ids("gpt-5.2"),
-          subset: yield* ids("gpt-5-codex"),
-          single: yield* ids("computer-use-preview"),
-          empty: yield* ids("gpt-audio"),
-          accountIntersection: yield* ids("gpt-5.2", ["web_search", "shell", "not_real"]),
-        };
-      }),
-    );
-
-    expect(resolved.full).toEqual([
-      "openai:apply_patch",
-      "openai:code_interpreter",
-      "openai:computer_use",
-      "openai:file_search",
-      "openai:image_generation",
-      "openai:local_shell",
-      "openai:mcp",
-      "openai:shell",
-      "openai:web_search",
-      "openai:web_search_preview",
-    ]);
-    expect(resolved.subset).toEqual([
-      "openai:apply_patch",
-      "openai:code_interpreter",
-      "openai:file_search",
-      "openai:local_shell",
-      "openai:mcp",
-      "openai:shell",
-    ]);
-    expect(resolved.single).toEqual(["openai:computer_use"]);
-    expect(resolved.empty).toEqual([]);
-    expect(resolved.accountIntersection).toEqual(["openai:shell", "openai:web_search"]);
-  });
-
-  test("filters and resolves deterministically, intersecting account capabilities", async () => {
-    const reversed = [...providerToolDescriptors].reverse();
-    expect(
-      filterProviderTools(reversed, { provider: "anthropic" }).map((entry) => entry.id),
-    ).toEqual(
-      filterProviderTools(providerToolDescriptors, { provider: "anthropic" }).map(
-        (entry) => entry.id,
-      ),
-    );
-    const ids = await runDefault(
-      Effect.gen(function* () {
-        const registry = yield* ProviderToolCapabilityRegistry;
-        const resolved = yield* registry.resolve({
-          provider: "anthropic",
-          model: "claude-opus-4-6",
-          categories: ["network.search", "network.fetch", "execution.shell"],
-          accountToolKinds: ["bash", "web_fetch"],
+        expect(result.unknownModel).toMatchObject({
+          _tag: "Failure",
+          failure: { _tag: "UnknownProviderToolModel" },
         });
-        return resolved.map((entry) => entry.id);
+        expect(result.empty).toEqual([]);
       }),
-    );
-    expect(ids).toEqual(["anthropic:bash", "anthropic:web_fetch"]);
-  });
+  );
 
-  test("reports descriptor collisions as typed metadata failures", async () => {
-    const first = providerToolDescriptors[0];
-    const error = await failure(makeProviderToolCapabilityRegistry([first, first], []));
-    expect(error).toMatchObject({
-      _tag: "ProviderToolMetadataFailure",
-      reason: `duplicate provider tool id: ${first.id}`,
-    });
-  });
+  effectTest.effect("resolves exact OpenAI full, subset, single, and empty capability tuples", () =>
+    Effect.gen(function* () {
+      const openAIModels = installedProviderToolModelMetadata.filter(
+        (entry) => entry.provider === "openai",
+      );
+      expect(openAIModels.map((entry) => entry.model)).toEqual([...OPENAI_CHAT_MODELS]);
+
+      const resolved = yield* withDefault(
+        Effect.gen(function* () {
+          const registry = yield* ProviderToolCapabilityRegistry;
+          const ids = (model: string, accountToolKinds?: readonly string[]) =>
+            Effect.map(
+              registry.resolve({
+                provider: "openai",
+                model,
+                ...optionalProperty("accountToolKinds", accountToolKinds),
+              }),
+              (entries) => entries.map((entry) => entry.id),
+            );
+          return {
+            full: yield* ids("gpt-5.2"),
+            subset: yield* ids("gpt-5-codex"),
+            single: yield* ids("computer-use-preview"),
+            empty: yield* ids("gpt-audio"),
+            accountIntersection: yield* ids("gpt-5.2", ["web_search", "shell", "not_real"]),
+          };
+        }),
+      );
+
+      expect(resolved.full).toEqual([
+        "openai:apply_patch",
+        "openai:code_interpreter",
+        "openai:computer_use",
+        "openai:file_search",
+        "openai:image_generation",
+        "openai:local_shell",
+        "openai:mcp",
+        "openai:shell",
+        "openai:web_search",
+        "openai:web_search_preview",
+      ]);
+      expect(resolved.subset).toEqual([
+        "openai:apply_patch",
+        "openai:code_interpreter",
+        "openai:file_search",
+        "openai:local_shell",
+        "openai:mcp",
+        "openai:shell",
+      ]);
+      expect(resolved.single).toEqual(["openai:computer_use"]);
+      expect(resolved.empty).toEqual([]);
+      expect(resolved.accountIntersection).toEqual(["openai:shell", "openai:web_search"]);
+    }),
+  );
+
+  effectTest.effect(
+    "filters and resolves deterministically, intersecting account capabilities",
+    () =>
+      Effect.gen(function* () {
+        const reversed = [...providerToolDescriptors].reverse();
+        expect(
+          filterProviderTools(reversed, { provider: "anthropic" }).map((entry) => entry.id),
+        ).toEqual(
+          filterProviderTools(providerToolDescriptors, { provider: "anthropic" }).map(
+            (entry) => entry.id,
+          ),
+        );
+        const ids = yield* withDefault(
+          Effect.gen(function* () {
+            const registry = yield* ProviderToolCapabilityRegistry;
+            const resolved = yield* registry.resolve({
+              provider: "anthropic",
+              model: "claude-opus-4-6",
+              categories: ["network.search", "network.fetch", "execution.shell"],
+              accountToolKinds: ["bash", "web_fetch"],
+            });
+            return resolved.map((entry) => entry.id);
+          }),
+        );
+        expect(ids).toEqual(["anthropic:bash", "anthropic:web_fetch"]);
+      }),
+  );
+
+  effectTest.effect("reports descriptor collisions as typed metadata failures", () =>
+    Effect.gen(function* () {
+      const first = providerToolDescriptors[0];
+      const error = yield* Effect.flip(makeProviderToolCapabilityRegistry([first, first], []));
+      expect(error).toMatchObject({
+        _tag: "ProviderToolMetadataFailure",
+        reason: `duplicate provider tool id: ${first.id}`,
+      });
+    }),
+  );
 
   effectTest.effect("supports a Context.Tag Layer override", () =>
     Effect.gen(function* () {

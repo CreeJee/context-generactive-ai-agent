@@ -1,3 +1,5 @@
+import { Effect } from "effect";
+import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { isTruthy } from "../../truthy.ts";
 import { SchemaTransformation } from "effect";
 import type { UIMessage } from "@tanstack/ai-react";
@@ -251,34 +253,43 @@ function TaskSummaryCard({
     "idle" | "requesting" | "confirm-uncertain" | "queued" | "failed"
   >("idle");
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const resume = async (confirmUncertain: boolean) => {
-    setResumeState("requesting");
-    const result = await onResume(task, confirmUncertain);
-    if (result.status === "queued") return setResumeState("queued");
-    if (result.status === "blocked" && result.reason === "uncertain_side_effect")
-      return setResumeState("confirm-uncertain");
-    setResumeState("failed");
-  };
+  const resume = (confirmUncertain: boolean) =>
+    runUiEffect(
+      Effect.gen(function* () {
+        setResumeState("requesting");
+        const result = yield* uiPromise(() => onResume(task, confirmUncertain));
+        if (result.status === "queued") return setResumeState("queued");
+        if (result.status === "blocked" && result.reason === "uncertain_side_effect")
+          return setResumeState("confirm-uncertain");
+        setResumeState("failed");
+      }),
+    );
   const [archiveState, setArchiveState] = useState<"idle" | "requesting" | "failed">("idle");
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const archive = async () => {
-    setArchiveState("requesting");
-    const result = await onArchive(task);
-    setArchiveState(result.status === "archived" ? "idle" : "failed");
-  };
+  const archive = () =>
+    runUiEffect(
+      Effect.gen(function* () {
+        setArchiveState("requesting");
+        const result = yield* uiPromise(() => onArchive(task));
+        setArchiveState(result.status === "archived" ? "idle" : "failed");
+      }),
+    );
   const [deleteState, setDeleteState] = useState<"idle" | "requesting" | "failed">("idle");
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const remove = async () => {
-    if (
-      !window.confirm(
-        "이 작업의 transcript·checkpoint·locator를 삭제할까요? 채택된 project memory와 provenance는 유지돼요.",
-      )
-    )
-      return;
-    setDeleteState("requesting");
-    const result = await onDelete(task);
-    setDeleteState(result.status === "deleted" ? "idle" : "failed");
-  };
+  const remove = () =>
+    runUiEffect(
+      Effect.gen(function* () {
+        if (
+          !window.confirm(
+            "이 작업의 transcript·checkpoint·locator를 삭제할까요? 채택된 project memory와 provenance는 유지돼요.",
+          )
+        )
+          return;
+        setDeleteState("requesting");
+        const result = yield* uiPromise(() => onDelete(task));
+        setDeleteState(result.status === "deleted" ? "idle" : "failed");
+      }),
+    );
   const openTrace = () =>
     window.dispatchEvent(new CustomEvent("work-trace:open", { detail: { taskId: task.id } }));
   return (

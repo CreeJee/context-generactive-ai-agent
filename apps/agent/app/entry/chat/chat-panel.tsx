@@ -1,3 +1,5 @@
+import { Effect } from "effect";
+import { runUiEffect, uiPromise, uiFailure } from "../shared/ui-effect";
 import { isTruthy } from "../../truthy.ts";
 import { fetchServerSentEvents, useChat } from "@tanstack/ai-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -22,7 +24,7 @@ import { renumberReferences, useDraftImages } from "./draft-images";
 import { missingDeliveredMessages } from "./delivered-messages";
 import { interruptContinuationState } from "../session/interrupt-recovery";
 import {
-  ApiError,
+  isApiError,
   chatFetch,
   compactErrorMessage,
   decodeContextEvent,
@@ -349,64 +351,85 @@ function ChatPanel({
     answered: endsWithText,
   });
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const changeWorkflowPhase = async (phase: WorkflowPhase) => {
-    try {
-      const state = await run.setWorkflowPhase(phase);
-      setNotice(done(`${phaseLabels[state.phase]} 모드로 바꿨어요.`));
-      return state;
-    } catch (failure) {
-      const message =
-        failure instanceof ApiError &&
-        (failure.code === "plan_not_ready" || failure.code === "plan_outdated")
-          ? "실행하려면 먼저 준비된 Plan이 필요해요."
-          : failure instanceof ApiError && failure.code === "run_in_progress"
-            ? "답변이 끝난 뒤 모드를 바꿀 수 있어요."
-            : "워크플로 모드를 바꾸지 못했어요.";
-      setNotice(problem(message));
-      return null;
-    }
-  };
-
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const revisePlan = async () => {
-    if (run.workflow?.phase !== "plan" && !isTruthy(await changeWorkflowPhase("plan"))) return;
-    composerInput.current?.focus();
-    setNotice(done("바꾸고 싶은 내용을 입력해 주세요."));
-  };
-
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const executePlan = async () => {
-    const retryingFailedVerification =
-      run.workflow?.plan?.status === "executing" &&
-      run.workflow.plan.verification.status === "failed";
-    // Even a continuation rechecks the current server policy before dispatching another turn.
-    if (!isTruthy(await changeWorkflowPhase("execute"))) return;
-    setNotice(null);
-    void sendMessage(
-      contentOf(
-        retryingFailedVerification
-          ? "저장된 검증 실패 evidence를 바탕으로 구현 결함을 수정하고 다시 검증해 줘."
-          : "승인한 Plan을 첫 번째 미완료 단계부터 실행하고 결과를 검증해 줘.",
-        [],
+  const changeWorkflowPhase = (phase: WorkflowPhase) =>
+    runUiEffect(
+      Effect.gen(function* () {
+        const state = yield* uiPromise(() => run.setWorkflowPhase(phase));
+        setNotice(done(`${phaseLabels[state.phase]} 모드로 바꿨어요.`));
+        return state;
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.sync(() => {
+            const failure = uiFailure(cause);
+            const message =
+              isApiError(failure) &&
+              (failure.code === "plan_not_ready" || failure.code === "plan_outdated")
+                ? "실행하려면 먼저 준비된 Plan이 필요해요."
+                : isApiError(failure) && failure.code === "run_in_progress"
+                  ? "답변이 끝난 뒤 모드를 바꿀 수 있어요."
+                  : "워크플로 모드를 바꾸지 못했어요.";
+            setNotice(problem(message));
+            return null;
+          }),
+        ),
       ),
     );
-  };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const controlGoal = async (action: "pause" | "resume" | "stop") => {
-    try {
-      await run.controlWorkflow(action);
-      if (action === "pause" || action === "stop") {
-        if (generating) stop();
-        setNotice(done(action === "pause" ? "Goal을 일시 중지했어요." : "Goal을 중단했어요."));
-        return;
-      }
-      setNotice(null);
-      void sendMessage(contentOf("일시 중지한 Goal을 현재 상태에서 이어서 진행해 줘.", []));
-    } catch {
-      setNotice(problem("Goal 상태를 바꾸지 못했어요."));
-    }
-  };
+  const revisePlan = () =>
+    runUiEffect(
+      Effect.gen(function* () {
+        if (
+          run.workflow?.phase !== "plan" &&
+          !isTruthy(yield* uiPromise(() => changeWorkflowPhase("plan")))
+        )
+          return;
+        composerInput.current?.focus();
+        setNotice(done("바꾸고 싶은 내용을 입력해 주세요."));
+      }),
+    );
+
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  const executePlan = () =>
+    runUiEffect(
+      Effect.gen(function* () {
+        const retryingFailedVerification =
+          run.workflow?.plan?.status === "executing" &&
+          run.workflow.plan.verification.status === "failed";
+        // Even a continuation rechecks the current server policy before dispatching another turn.
+        if (!isTruthy(yield* uiPromise(() => changeWorkflowPhase("execute")))) return;
+        setNotice(null);
+        void sendMessage(
+          contentOf(
+            retryingFailedVerification
+              ? "저장된 검증 실패 evidence를 바탕으로 구현 결함을 수정하고 다시 검증해 줘."
+              : "승인한 Plan을 첫 번째 미완료 단계부터 실행하고 결과를 검증해 줘.",
+            [],
+          ),
+        );
+      }),
+    );
+
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  const controlGoal = (action: "pause" | "resume" | "stop") =>
+    runUiEffect(
+      Effect.gen(function* () {
+        yield* uiPromise(() => run.controlWorkflow(action));
+        if (action === "pause" || action === "stop") {
+          if (generating) stop();
+          setNotice(done(action === "pause" ? "Goal을 일시 중지했어요." : "Goal을 중단했어요."));
+          return;
+        }
+        setNotice(null);
+        void sendMessage(contentOf("일시 중지한 Goal을 현재 상태에서 이어서 진행해 줘.", []));
+      }).pipe(
+        Effect.catchCause(() =>
+          Effect.sync(() => {
+            setNotice(problem("Goal 상태를 바꾸지 못했어요."));
+          }),
+        ),
+      ),
+    );
   // The server's view is read again once the run stops, and from then on it is the latest.
   useEffect(() => setLiveContext(null), [run.context]);
   const context = liveContext ?? run.context;
@@ -429,79 +452,102 @@ function ChatPanel({
   });
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const cancel = async () => {
-    // Stopping only the local stream would leave the run going on the server, so ask it first.
-    const result = await run.cancel();
-    if (result !== "failed") stop();
-    if (result === "idle") setNotice(problem("멈출 답변이 없어요."));
-    if (result === "failed") setNotice(problem("명령을 실행하지 못했어요."));
-  };
+  const cancel = () =>
+    runUiEffect(
+      Effect.gen(function* () {
+        // Stopping only the local stream would leave the run going on the server, so ask it first.
+        const result = yield* uiPromise(() => run.cancel());
+        if (result !== "failed") stop();
+        if (result === "idle") setNotice(problem("멈출 답변이 없어요."));
+        if (result === "failed") setNotice(problem("명령을 실행하지 못했어요."));
+      }),
+    );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const resumeTask = async (task: TraceTaskView, confirmUncertain: boolean) => {
-    if (!isTruthy(task.latestAttemptId)) return { status: "failed" as const };
-    try {
-      const result = await resumeTraceMutation.mutateAsync({
-        taskId: task.id,
-        attemptId: task.latestAttemptId,
-        confirmUncertain,
-      });
-      if (result.status === "queued") {
-        setNotice(done("재개 요청을 저장했어요. 다음 실행 연결에서 새 attempt로 이어가요."));
-        return { status: "queued" as const };
-      }
-      if (result.reason !== "uncertain_side_effect")
-        setNotice(
-          problem(
-            result.reason === "stale_attempt"
-              ? "작업 상태가 바뀌었어요. 최신 Work Trace를 확인해 주세요."
-              : result.reason === "attempt_alive"
-                ? "이미 실행 중인 attempt가 있어요."
-                : "이 작업은 현재 안전하게 재개할 수 없어요.",
+  const resumeTask = (task: TraceTaskView, confirmUncertain: boolean) =>
+    runUiEffect(
+      Effect.gen(function* () {
+        const attemptId = task.latestAttemptId;
+        if (!isTruthy(attemptId)) return { status: "failed" as const };
+        return yield* Effect.gen(function* () {
+          const result = yield* uiPromise(() =>
+            resumeTraceMutation.mutateAsync({
+              taskId: task.id,
+              attemptId,
+              confirmUncertain,
+            }),
+          );
+          if (result.status === "queued") {
+            setNotice(done("재개 요청을 저장했어요. 다음 실행 연결에서 새 attempt로 이어가요."));
+            return { status: "queued" as const };
+          }
+          if (result.reason !== "uncertain_side_effect")
+            setNotice(
+              problem(
+                result.reason === "stale_attempt"
+                  ? "작업 상태가 바뀌었어요. 최신 Work Trace를 확인해 주세요."
+                  : result.reason === "attempt_alive"
+                    ? "이미 실행 중인 attempt가 있어요."
+                    : "이 작업은 현재 안전하게 재개할 수 없어요.",
+              ),
+            );
+          return result;
+        }).pipe(
+          Effect.catchCause(() =>
+            Effect.sync(() => {
+              setNotice(problem("재개 요청을 저장하지 못했어요."));
+              return { status: "failed" as const };
+            }),
           ),
         );
-      return result;
-    } catch {
-      setNotice(problem("재개 요청을 저장하지 못했어요."));
-      return { status: "failed" as const };
-    }
-  };
+      }),
+    );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const archiveTask = async (task: TraceTaskView) => {
-    try {
-      const result = await archiveTraceMutation.mutateAsync(task.id);
-      if (result.status === "completed") {
-        setNotice(done("작업을 보관했어요. Work Trace 기록과 project provenance는 유지돼요."));
-        return { status: "archived" as const };
-      }
-      setNotice(problem("작업 중단을 기다리고 있어요. 완료 후 다시 확인해 주세요."));
-      return result.status === "blocked"
-        ? { status: "blocked" as const, reason: result.blocker }
-        : { status: "failed" as const };
-    } catch {
-      setNotice(problem("작업을 보관하지 못했어요."));
-      return { status: "failed" as const };
-    }
-  };
+  const archiveTask = (task: TraceTaskView) =>
+    runUiEffect(
+      Effect.gen(function* () {
+        const result = yield* uiPromise(() => archiveTraceMutation.mutateAsync(task.id));
+        if (result.status === "completed") {
+          setNotice(done("작업을 보관했어요. Work Trace 기록과 project provenance는 유지돼요."));
+          return { status: "archived" as const };
+        }
+        setNotice(problem("작업 중단을 기다리고 있어요. 완료 후 다시 확인해 주세요."));
+        return result.status === "blocked"
+          ? { status: "blocked" as const, reason: result.blocker }
+          : { status: "failed" as const };
+      }).pipe(
+        Effect.catchCause(() =>
+          Effect.sync(() => {
+            setNotice(problem("작업을 보관하지 못했어요."));
+            return { status: "failed" as const };
+          }),
+        ),
+      ),
+    );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const deleteTask = async (task: TraceTaskView) => {
-    try {
-      const result = await deleteTraceMutation.mutateAsync(task.id);
-      if (result.status === "completed") {
-        setNotice(done("작업 원본을 삭제했어요. 채택된 project memory와 provenance는 유지돼요."));
-        return { status: "deleted" as const };
-      }
-      setNotice(problem("작업 중단을 기다리고 있어요. 완료 후 다시 확인해 주세요."));
-      return result.status === "blocked"
-        ? { status: "blocked" as const, reason: result.blocker }
-        : { status: "failed" as const };
-    } catch {
-      setNotice(problem("작업 원본을 삭제하지 못했어요."));
-      return { status: "failed" as const };
-    }
-  };
+  const deleteTask = (task: TraceTaskView) =>
+    runUiEffect(
+      Effect.gen(function* () {
+        const result = yield* uiPromise(() => deleteTraceMutation.mutateAsync(task.id));
+        if (result.status === "completed") {
+          setNotice(done("작업 원본을 삭제했어요. 채택된 project memory와 provenance는 유지돼요."));
+          return { status: "deleted" as const };
+        }
+        setNotice(problem("작업 중단을 기다리고 있어요. 완료 후 다시 확인해 주세요."));
+        return result.status === "blocked"
+          ? { status: "blocked" as const, reason: result.blocker }
+          : { status: "failed" as const };
+      }).pipe(
+        Effect.catchCause(() =>
+          Effect.sync(() => {
+            setNotice(problem("작업 원본을 삭제하지 못했어요."));
+            return { status: "failed" as const };
+          }),
+        ),
+      ),
+    );
 
   const ready = draftImages.images.flatMap((image) => (image.status === "ready" ? [image] : []));
   const uploading = draftImages.images.some((image) => image.status === "uploading");
@@ -525,9 +571,15 @@ function ChatPanel({
     !waitingForApproval &&
     !mutationBlocked;
 
+  const pendingQueuedStart = useRef(false);
   /** The snapshot only hints when to start; the server selects the current queued turn. */
   const sendNextQueued = (snapshot: QueueSnapshot) => {
     if (snapshot.nextDelivery.kind !== "ready") return;
+    if (mutationBlocked) {
+      pendingQueuedStart.current = true;
+      return;
+    }
+    pendingQueuedStart.current = false;
     // A content-less placeholder is replaced by the server's current queued turn.
     void sendMessage(contentOf("", []), { body: { queuedNext: true } });
   };
@@ -536,34 +588,53 @@ function ChatPanel({
   // a normal finish, send what is waiting as the next turn (R03). Not after a cancel or failure.
   const wasGenerating = useRef(generating);
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const handleRunSettled = useEffectEvent(async () => {
-    setCatchingUp(true);
-    try {
-      const [snapshot, state] = await Promise.all([queue.refresh(), run.refresh()]);
-      if (
-        !isTruthy(snapshot) ||
-        !isTruthy(state) ||
-        isTruthy(state.running) ||
-        state.lastRun?.status === "interrupted"
-      )
-        return;
-      if (snapshot.items.some(isTakenIn))
-        setMessages(
-          (await queryClient.fetchQuery(sessionQueries.transcript(projectId, sessionId))).messages,
+  const handleRunSettled = useEffectEvent(() =>
+    runUiEffect(
+      Effect.gen(function* () {
+        setCatchingUp(true);
+        return yield* Effect.gen(function* () {
+          const [snapshot, state] = yield* uiPromise(() =>
+            Promise.all([queue.refresh(), run.refresh()]),
+          );
+          if (
+            !isTruthy(snapshot) ||
+            !isTruthy(state) ||
+            isTruthy(state.running) ||
+            state.lastRun?.status === "interrupted"
+          )
+            return;
+          if (snapshot.items.some(isTakenIn))
+            setMessages(
+              (yield* uiPromise(() =>
+                queryClient.fetchQuery(sessionQueries.transcript(projectId, sessionId)),
+              )).messages,
+            );
+          if (state.lastRun?.status === "completed" && snapshot.nextDelivery.kind === "ready")
+            sendNextQueued(snapshot);
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              setCatchingUp(false);
+              setPlacements({});
+            }),
+          ),
         );
-      if (state.lastRun?.status === "completed" && snapshot.nextDelivery.kind === "ready")
-        sendNextQueued(snapshot);
-    } finally {
-      setCatchingUp(false);
-      setPlacements({});
-    }
-  });
+      }),
+    ),
+  );
   useEffect(() => {
     const settled = wasGenerating.current && !generating;
     wasGenerating.current = generating;
     if (!settled || readOnly) return;
     void handleRunSettled();
   }, [generating, readOnly]);
+  useEffect(() => {
+    if (!pendingQueuedStart.current || mutationBlocked || generating || waitingForApproval) return;
+    pendingQueuedStart.current = false;
+    // Read current server run/queue state again; do not dispatch an old snapshot
+    // when provider readiness or ownership returns after the run finished.
+    void handleRunSettled();
+  }, [mutationBlocked, generating, waitingForApproval]);
 
   // Unsaved edit text is stored as it is typed, so a restart restores it as a draft.
   const saveEditDraft = useEffectEvent((id: string, text: string) =>
@@ -590,29 +661,40 @@ function ChatPanel({
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const finishEdit = async (outcome: "save" | "remove") => {
-    if (!(editing !== null)) return;
-    setComposer({ kind: "compose" });
-    const text = draft.trim();
-    const snapshot = await queue.change(
-      editing.id,
-      outcome === "save" && text.length > 0 ? { action: "save", text } : { action: "remove" },
+  const finishEdit = (outcome: "save" | "remove") =>
+    runUiEffect(
+      Effect.gen(function* () {
+        if (!(editing !== null)) return;
+        setComposer({ kind: "compose" });
+        const text = draft.trim();
+        const snapshot = yield* uiPromise(() =>
+          queue.change(
+            editing.id,
+            outcome === "save" && text.length > 0 ? { action: "save", text } : { action: "remove" },
+          ),
+        );
+        // Saved while nothing runs: the queue may be free to go now.
+        if (isTruthy(snapshot) && !generating && !waitingForApproval) sendNextQueued(snapshot);
+      }),
     );
-    // Saved while nothing runs: the queue may be free to go now.
-    if (isTruthy(snapshot) && !generating && !waitingForApproval) sendNextQueued(snapshot);
-  };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const confirmQueued = async (message: QueuedMessage) => {
-    const snapshot = await queue.change(message.id, { action: "confirm" });
-    if (isTruthy(snapshot) && !generating && !waitingForApproval) sendNextQueued(snapshot);
-  };
+  const confirmQueued = (message: QueuedMessage) =>
+    runUiEffect(
+      Effect.gen(function* () {
+        const snapshot = yield* uiPromise(() => queue.change(message.id, { action: "confirm" }));
+        if (isTruthy(snapshot) && !generating && !waitingForApproval) sendNextQueued(snapshot);
+      }),
+    );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const removeQueued = async (message: QueuedMessage) => {
-    if (editing?.id === message.id) return finishEdit("remove");
-    await queue.change(message.id, { action: "remove" });
-  };
+  const removeQueued = (message: QueuedMessage) =>
+    runUiEffect(
+      Effect.gen(function* () {
+        if (editing?.id === message.id) return yield* uiPromise(() => finishEdit("remove"));
+        yield* uiPromise(() => queue.change(message.id, { action: "remove" }));
+      }),
+    );
 
   /** Alt+↑ picks the last message still waiting, Alt+↓ the first. */
   const pickQueued = (direction: "up" | "down") => {
@@ -640,126 +722,145 @@ function ChatPanel({
    * next tool-call boundary, or with `steer` (Ctrl/⌘+Shift+Enter) sends it into the answer now.
    */
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const submit = async (mode: "queue" | "steer") => {
-    if (editing !== null) {
-      if (mode === "steer") setNotice(problem("편집을 끝낸 뒤 스티어링할 수 있어요."));
-      else await finishEdit("save");
-      return;
-    }
-    if (!canSend) return;
-    let text = renumberReferences(
-      draft.trim(),
-      ready.map((image) => image.number),
-    );
-    // A slash command runs instead of being sent; `skill` and `recall` become a message.
-    const parsed =
-      ready.length === 0 ? parseSlash(text, slash.context) : { kind: "not_command" as const };
-    switch (parsed.kind) {
-      case "not_command":
-        break;
-      case "incomplete":
-        return setNotice(problem(parsed.reason));
-      case "command": {
-        const command = parsed.command;
-        switch (command.kind) {
-          case "skill":
-          case "recall":
-            text = promptOf(command);
-            break;
-          case "workflow_status":
-            setDraft("");
-            return setNotice(workflowStatus(run.workflow));
-          case "workflow": {
-            const state = await changeWorkflowPhase(command.phase);
-            if (!isTruthy(state)) return;
-            const request =
-              command.request ||
-              (command.phase === "plan"
-                ? "요청에서 목표를 정리하고 실행 가능한 Plan을 읽기 전용으로 조사해 기록해 줘."
-                : command.phase === "execute"
-                  ? "승인한 Plan을 첫 번째 미완료 단계부터 실행해 줘."
-                  : "");
-            if (!(request.length > 0)) {
-              setDraft("");
-              return;
-            }
-            text = request;
-            break;
-          }
-          case "cancel":
-            setDraft("");
-            setNotice(null);
-            void cancel();
-            return;
-          case "compact":
-            setDraft("");
-            setNotice(null);
-            return compactMutation.mutateAsync().then(
-              (result) => setNotice(compacted(result)),
-              (error) =>
-                setNotice(
-                  problem(
-                    compactErrorMessage(error instanceof Error ? error : new Error(String(error))),
-                  ),
-                ),
-            );
-          case "new":
-          case "agent":
-          case "mode":
-          case "model":
-          case "settings":
-          case "report":
-            setDraft("");
-            setNotice(null);
-            return slash.run(command).catch(() => setNotice(problem("명령을 실행하지 못했어요.")));
+  const submit = (mode: "queue" | "steer") =>
+    runUiEffect(
+      Effect.gen(function* () {
+        if (editing !== null) {
+          if (mode === "steer") setNotice(problem("편집을 끝낸 뒤 스티어링할 수 있어요."));
+          else yield* uiPromise(() => finishEdit("save"));
+          return;
         }
-      }
-    }
-    const attachmentIds = ready.map((image) => image.attachment.id);
-    const clearDraft = () => {
-      setDraft("");
-      draftImages.clear();
-      media.clearIntent();
-      setNotice(null);
-    };
-    const sendTurn = () => {
-      clearDraft();
-      void sendMessage(contentOf(text, attachmentIds));
-    };
-    if (!generating && media.intent) {
-      if (attachmentIds.length > 0)
-        return setNotice(problem("첫 버전의 이미지 생성은 텍스트 프롬프트만 지원해요."));
-      if (!window.confirm("이미지 생성은 별도 유료 미디어 모델을 호출할 수 있어요. 실행할까요?"))
-        return;
-      if (await media.generate(text)) clearDraft();
-      return;
-    }
-    if (!generating) return sendTurn();
-    if (media.intent)
-      return setNotice(problem("이미지 생성 요청은 답변이 끝난 뒤 별도 요청으로 보내 주세요."));
+        if (!canSend) return;
+        let text = renumberReferences(
+          draft.trim(),
+          ready.map((image) => image.number),
+        );
+        // A slash command runs instead of being sent; `skill` and `recall` become a message.
+        const parsed =
+          ready.length === 0 ? parseSlash(text, slash.context) : { kind: "not_command" as const };
+        switch (parsed.kind) {
+          case "not_command":
+            break;
+          case "incomplete":
+            return setNotice(problem(parsed.reason));
+          case "command": {
+            const command = parsed.command;
+            switch (command.kind) {
+              case "skill":
+              case "recall":
+                text = promptOf(command);
+                break;
+              case "workflow_status":
+                setDraft("");
+                return setNotice(workflowStatus(run.workflow));
+              case "workflow": {
+                const state = yield* uiPromise(() => changeWorkflowPhase(command.phase));
+                if (!isTruthy(state)) return;
+                const request =
+                  command.request ||
+                  (command.phase === "plan"
+                    ? "요청에서 목표를 정리하고 실행 가능한 Plan을 읽기 전용으로 조사해 기록해 줘."
+                    : command.phase === "execute"
+                      ? "승인한 Plan을 첫 번째 미완료 단계부터 실행해 줘."
+                      : "");
+                if (!(request.length > 0)) {
+                  setDraft("");
+                  return;
+                }
+                text = request;
+                break;
+              }
+              case "cancel":
+                setDraft("");
+                setNotice(null);
+                void cancel();
+                return;
+              case "compact":
+                setDraft("");
+                setNotice(null);
+                return yield* uiPromise(() => compactMutation.mutateAsync()).pipe(
+                  Effect.map((result) => setNotice(compacted(result))),
+                  Effect.catch((failure) =>
+                    Effect.sync(() => {
+                      const error = failure.cause;
+                      setNotice(
+                        problem(
+                          compactErrorMessage(
+                            error instanceof Error ? error : new Error(String(error)),
+                          ),
+                        ),
+                      );
+                    }),
+                  ),
+                );
+              case "new":
+              case "agent":
+              case "mode":
+              case "model":
+              case "settings":
+              case "report":
+                setDraft("");
+                setNotice(null);
+                return yield* uiPromise(() => slash.run(command)).pipe(
+                  Effect.catch(() =>
+                    Effect.sync(() => setNotice(problem("명령을 실행하지 못했어요."))),
+                  ),
+                );
+            }
+          }
+        }
+        const attachmentIds = ready.map((image) => image.attachment.id);
+        const clearDraft = () => {
+          setDraft("");
+          draftImages.clear();
+          media.clearIntent();
+          setNotice(null);
+        };
+        const sendTurn = () => {
+          clearDraft();
+          void sendMessage(contentOf(text, attachmentIds));
+        };
+        if (!generating && media.intent) {
+          if (attachmentIds.length > 0)
+            return setNotice(problem("첫 버전의 이미지 생성은 텍스트 프롬프트만 지원해요."));
+          if (
+            !window.confirm("이미지 생성은 별도 유료 미디어 모델을 호출할 수 있어요. 실행할까요?")
+          )
+            return;
+          if (yield* uiPromise(() => media.generate(text))) clearDraft();
+          return;
+        }
+        if (!generating) return sendTurn();
+        if (media.intent)
+          return setNotice(problem("이미지 생성 요청은 답변이 끝난 뒤 별도 요청으로 보내 주세요."));
 
-    const outcome = await trackSubmission(queue.add(text, attachmentIds, mode));
-    switch (outcome.kind) {
-      case "queued":
-        return clearDraft();
-      case "steered": {
-        // The saved conversation puts a steered message before the answer it arrived during.
-        const last = messages.at(-1);
-        if (isTruthy(last))
-          place([outcome.message.id], {
-            side: last.role === "assistant" ? "before" : "after",
-            messageId: last.id,
-          });
-        return clearDraft();
-      }
-      case "not-running":
-        return sendTurn();
-      case "steer-unavailable":
-        return setNotice(problem("지금은 바로 전달할 수 없어요. Enter로 대기열에 넣을 수 있어요."));
-      case "failed":
-        return setNotice(problem("메시지를 넣지 못했어요. 다시 시도해 주세요."));
-    }
-  };
+        const outcome = yield* uiPromise(() =>
+          trackSubmission(queue.add(text, attachmentIds, mode)),
+        );
+        switch (outcome.kind) {
+          case "queued":
+            return clearDraft();
+          case "steered": {
+            // The saved conversation puts a steered message before the answer it arrived during.
+            const last = messages.at(-1);
+            if (isTruthy(last))
+              place([outcome.message.id], {
+                side: last.role === "assistant" ? "before" : "after",
+                messageId: last.id,
+              });
+            return clearDraft();
+          }
+          case "not-running":
+            return sendTurn();
+          case "steer-unavailable":
+            return setNotice(
+              problem("지금은 바로 전달할 수 없어요. Enter로 대기열에 넣을 수 있어요."),
+            );
+          case "failed":
+            return setNotice(problem("메시지를 넣지 못했어요. 다시 시도해 주세요."));
+        }
+      }),
+    );
 
   return (
     <div
@@ -882,9 +983,9 @@ function ChatPanel({
             <Alert variant="destructive">
               <AlertTitle>응답을 받지 못했어요</AlertTitle>
               <AlertDescription>
-                {error instanceof ApiError && error.code === "provider_auth_unavailable"
+                {isApiError(error) && error.code === "provider_auth_unavailable"
                   ? "인증 상태를 확인할 수 없어요. 잠시 후 다시 시도해 주세요."
-                  : error instanceof ApiError && error.code === "provider_unavailable"
+                  : isApiError(error) && error.code === "provider_unavailable"
                     ? "선택한 제공자를 사용할 수 없어요. 제공자 설정을 확인해 주세요."
                     : error.message}
               </AlertDescription>

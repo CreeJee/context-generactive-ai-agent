@@ -1,8 +1,9 @@
+import { runNativeEffect } from "../runtime/native-effect.ts";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { optionalProperty } from "../optional-property.ts";
 import type { ModelMessage } from "@tanstack/ai";
-import { Predicate, Effect, Schema } from "effect";
+import { Cause, Predicate, Effect, Schema, Stream } from "effect";
 import { GlobalConfig } from "../config/global-config.ts";
 import { ProviderId, type ModelSelection } from "../providers/contracts.ts";
 import { ProviderRegistry } from "../providers/registry.ts";
@@ -100,7 +101,10 @@ function subscriptionGatewayBody(
   client: StreamingOAuthClient,
 ): ModelGateway {
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const subscription = async (body: string, signal: AbortSignal) => {
+  const subscriptionEffect = Effect.fn("SubscriptionGateway.subscription")(function* (
+    body: string,
+    signal: AbortSignal,
+  ) {
     // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
     const payload = EffectFunction.flow(
       Schema.decodeResult(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))),
@@ -109,25 +113,41 @@ function subscriptionGatewayBody(
     const events: NormalizedStreamEvent[] = [];
     let promptTokens: number | undefined;
     let completionTokens: number | undefined;
-    for await (const event of client.stream(
-      JSON.stringify({ ...payload, model: selection.model }),
-      signal,
-    )) {
-      if (signal.aborted) throw new Error("experiment_stopped");
-      if (event.type === "error") throw new Error("provider_request_failed");
-      events.push(event);
-      if (event.type === "usage") {
-        promptTokens = event.promptTokens ?? promptTokens;
-        completionTokens = event.completionTokens ?? completionTokens;
-      }
-    }
-    if (signal.aborted) throw new Error("experiment_stopped");
+    yield* Stream.fromAsyncIterable(
+      client.stream(
+        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+          ...payload,
+          model: selection.model,
+        }),
+        signal,
+      ),
+      (cause) => new Cause.UnknownError(cause),
+    ).pipe(
+      Stream.runForEach((event) =>
+        Effect.gen(function* () {
+          if (signal.aborted) return yield* new Cause.UnknownError(new Error("experiment_stopped"));
+          if (event.type === "error")
+            return yield* new Cause.UnknownError(new Error("provider_request_failed"));
+          events.push(event);
+          if (event.type === "usage") {
+            promptTokens = event.promptTokens ?? promptTokens;
+            completionTokens = event.completionTokens ?? completionTokens;
+          }
+        }),
+      ),
+    );
+    if (signal.aborted) return yield* new Cause.UnknownError(new Error("experiment_stopped"));
     const usage =
       promptTokens !== undefined && completionTokens !== undefined
         ? { prompt_tokens: promptTokens, completion_tokens: completionTokens }
         : undefined;
-    return JSON.stringify({ events, ...optionalProperty("usage", usage) });
-  };
+    return yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+      events,
+      ...optionalProperty("usage", usage),
+    });
+  });
+  const subscription = (body: string, signal: AbortSignal) =>
+    runNativeEffect(subscriptionEffect(body, signal));
   return {
     protocol: "subscription",
     configuration: {
@@ -139,50 +159,53 @@ function subscriptionGatewayBody(
     release: () => client.releaseRun?.(),
     subscription,
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    complete: async (body, signal) => {
-      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      const request = EffectFunction.flow(
-        Schema.decodeResult(Schema.fromJsonString(ProposalRequest)),
-        Result.getOrThrow,
-      )(body);
-      if (selection.provider === "openai-compatible")
-        throw new Error("invalid_subscription_provider");
-      const raw = await subscription(
-        subscriptionRequest(selection.provider, selection, {
-          systemPrompts: request.messages
-            .filter((message) => message.role === "system")
-            .map((message) => message.content),
-          messages: request.messages.flatMap<ModelMessage>((message) => {
-            switch (message.role) {
-              case "system":
-                return [];
-              case "user":
-                return [{ role: "user" as const, content: message.content }];
-              case "assistant":
-                return [{ role: "assistant" as const, content: message.content }];
-            }
-          }),
+    complete: (body, signal) =>
+      runNativeEffect(
+        Effect.gen(function* () {
+          // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+          const request = EffectFunction.flow(
+            Schema.decodeResult(Schema.fromJsonString(ProposalRequest)),
+            Result.getOrThrow,
+          )(body);
+          if (selection.provider === "openai-compatible")
+            return yield* new Cause.UnknownError(new Error("invalid_subscription_provider"));
+          const raw = yield* subscriptionEffect(
+            subscriptionRequest(selection.provider, selection, {
+              systemPrompts: request.messages
+                .filter((message) => message.role === "system")
+                .map((message) => message.content),
+              messages: request.messages.flatMap<ModelMessage>((message) => {
+                switch (message.role) {
+                  case "system":
+                    return [];
+                  case "user":
+                    return [{ role: "user" as const, content: message.content }];
+                  case "assistant":
+                    return [{ role: "assistant" as const, content: message.content }];
+                }
+              }),
+            }),
+            signal,
+          );
+          // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+          const result = EffectFunction.flow(
+            Schema.decodeResult(Schema.fromJsonString(SubscriptionResult)),
+            Result.getOrThrow,
+          )(raw);
+          return yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+            choices: [
+              {
+                message: {
+                  content: result.events
+                    .flatMap((event) => (event.type === "text" ? [event.text] : []))
+                    .join(""),
+                },
+              },
+            ],
+            ...optionalProperty("usage", result.usage),
+          });
         }),
-        signal,
-      );
-      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      const result = EffectFunction.flow(
-        Schema.decodeResult(Schema.fromJsonString(SubscriptionResult)),
-        Result.getOrThrow,
-      )(raw);
-      return JSON.stringify({
-        choices: [
-          {
-            message: {
-              content: result.events
-                .flatMap((event) => (event.type === "text" ? [event.text] : []))
-                .join(""),
-            },
-          },
-        ],
-        ...optionalProperty("usage", result.usage),
-      });
-    },
+      ),
   };
 }
 

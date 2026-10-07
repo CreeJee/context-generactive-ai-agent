@@ -34,6 +34,7 @@ const packageMetadata = Schema.Struct({
 });
 
 const modules = ["full-loop-worker.ts", "full-loop-codec.ts", "full-loop-rpc-client.ts"] as const;
+const supportModules = ["native-effect.ts", "native-stream.ts"] as const;
 const digest = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
 
 export interface SavedGoalExecutionAssets {
@@ -95,7 +96,9 @@ export function makeGoalWorkerAssetsRegistry(
   options: {
     readonly sourceDirectory?: string;
     readonly sdkEntry?: string;
+    readonly supportDirectory?: string;
     readonly temporaryDirectory?: string;
+    readonly readFile?: (path: string) => Buffer;
   } = {},
 ) {
   const root = realpathSync(
@@ -152,6 +155,8 @@ export function makeGoalWorkerAssetsRegistry(
     // Resolve only for new capture: cold adoption never requires replacement live assets.
     const source = options.sourceDirectory ?? dirname(runtimeWorker("full-loop-worker"));
     const sdkEntry = options.sdkEntry ?? runtimeGoalSdkMetadata();
+    const support =
+      options.supportDirectory ?? join(dirname(runtimeWorker("full-loop-worker")), "..", "runtime");
     const files = MutableHashMap.empty<string, Buffer>();
     const packages = MutableHashMap.empty<
       string,
@@ -159,7 +164,7 @@ export function makeGoalWorkerAssetsRegistry(
     >();
     let size = 0;
     const put = (path: string) => {
-      const bytes = readFileSync(path);
+      const bytes = (options.readFile ?? readFileSync)(path);
       size += bytes.length;
       if (size > 64 * 1024 * 1024 || MutableHashMap.size(files) >= 20000)
         throw new Error("Goal asset snapshot exceeds bounded capture");
@@ -197,6 +202,17 @@ export function makeGoalWorkerAssetsRegistry(
         )) {
           if (entry.name === "node_modules" || entry.name === ".git") continue;
           const child = join(path, entry.name);
+          // Effect 4 exports its compiled dist/*.js modules. Source, declarations and maps
+          // never execute in this worker; copying them makes each Goal capture needlessly large.
+          if (directory === effectRoot) {
+            if (entry.isDirectory() && path === directory && entry.name !== "dist") continue;
+            if (
+              entry.isFile() &&
+              child !== join(directory, "package.json") &&
+              !child.endsWith(".js")
+            )
+              continue;
+          }
           if (entry.isDirectory()) walk(child);
           else if (entry.isFile()) put(child);
           else throw new Error("Unsupported SDK asset symlink or special file");
@@ -237,14 +253,17 @@ export function makeGoalWorkerAssetsRegistry(
       }
     }
     for (const name of modules) put(join(source, name));
+    for (const name of supportModules) put(join(support, name));
     const sdkRoot = packageRoot(sdkEntry);
+    const effectRoot = packageRoot(runtimeGoalSdkMetadata("effect"));
     visit(sdkRoot);
+    visit(effectRoot);
     const manifest = JSON.stringify({
       files: [...files].map(([path, bytes]) => [path, digest(bytes)]),
       packages: [...packages].map(([path, record]) => [path, [...record.dependencies]]),
       sdkEntry,
     });
-    return { source, files, packages, sdkRoot, hash: digest(manifest) };
+    return { source, support, files, packages, sdkRoot, effectRoot, hash: digest(manifest) };
   }
 
   return {
@@ -270,6 +289,8 @@ export function makeGoalWorkerAssetsRegistry(
           let output: string;
           if (modules.some((name) => path === join(captured.source, name)))
             output = join(destination, "worker", path.slice(captured.source.length + 1));
+          else if (supportModules.some((name) => path === join(captured.support, name)))
+            output = join(destination, "runtime", path.slice(captured.support.length + 1));
           else {
             const parent = [...MutableHashMap.keys(captured.packages)].find((directory) =>
               path.startsWith(directory + "/"),
@@ -294,6 +315,13 @@ export function makeGoalWorkerAssetsRegistry(
         const link = join(workerDirectory, "node_modules", "@tanstack", "ai");
         mkdirSync(dirname(link), { recursive: true });
         symlinkSync(packagePath(captured.sdkRoot), link, "dir");
+        // Both worker and support modules resolve Effect from this immutable generation.
+        mkdirSync(join(destination, "node_modules"), { recursive: true });
+        symlinkSync(
+          packagePath(captured.effectRoot),
+          join(destination, "node_modules", "effect"),
+          "dir",
+        );
         if (capture().hash !== captured.hash)
           throw new Error("Goal asset sources changed during capture");
         const workerUrlString = pathToFileURL(resolve(workerDirectory, modules[0])).href;

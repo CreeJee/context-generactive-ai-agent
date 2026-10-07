@@ -15,7 +15,11 @@ import {
   resolveOutsidePath,
   resolveProjectPath,
 } from "../files/paths.ts";
-import { createTextFile, deleteTextFile, replaceTextFile } from "../files/text.ts";
+import {
+  createTextFileEffect,
+  deleteTextFileEffect,
+  replaceTextFileEffect,
+} from "../files/text.ts";
 import type { Project } from "../projects/projects.ts";
 import { defaultTimeoutSeconds, maxTimeoutSeconds, runCommand } from "../shell/run.ts";
 import {
@@ -25,7 +29,7 @@ import {
   type RunShellInput,
   type WriteOutsideFileInput,
 } from "./definitions.ts";
-import { guarded, orThrow } from "./failure.ts";
+import { guarded } from "./failure.ts";
 
 const ShellResult = Schema.Struct({
   workdir: Schema.String,
@@ -78,8 +82,6 @@ function resolveShellWorkingDirectoryBody(
 const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
   const background = yield* BackgroundTasks;
-  const services = yield* Effect.context<never>();
-  const run = Effect.runPromiseWith(services);
 
   return {
     /**
@@ -97,24 +99,24 @@ const make = Effect.gen(function* () {
         context?: ToolExecutionContext,
       ) =>
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        guarded(workdir ?? ".", async () => {
-          const directory = orThrow(
-            resolveShellWorkingDirectory(project.root, storage.path, workdir ?? "."),
-          );
-          const seconds = Math.min(
-            Math.max(1, timeoutSeconds ?? defaultTimeoutSeconds),
-            maxTimeoutSeconds,
-          );
-          const execute = (signal: AbortSignal | undefined) =>
-            runCommand(command, {
-              cwd: directory.absolute,
-              timeoutSeconds: seconds,
-              signal,
-              env: process.env,
-            });
-          if (binding !== undefined) {
-            return run(
-              Effect.gen(function* () {
+        guarded(workdir ?? ".", () =>
+          Effect.gen(function* () {
+            const directory = yield* Effect.fromResult(
+              resolveShellWorkingDirectory(project.root, storage.path, workdir ?? "."),
+            );
+            const seconds = Math.min(
+              Math.max(1, timeoutSeconds ?? defaultTimeoutSeconds),
+              maxTimeoutSeconds,
+            );
+            const execute = (signal: AbortSignal | undefined) =>
+              runCommand(command, {
+                cwd: directory.absolute,
+                timeoutSeconds: seconds,
+                signal,
+                env: process.env,
+              });
+            if (binding !== undefined) {
+              return yield* Effect.gen(function* () {
                 const receipt = yield* background.start(
                   binding,
                   context?.toolCallId ?? randomUUID(),
@@ -137,12 +139,12 @@ const make = Effect.gen(function* () {
                   );
                 if (isTruthy(result)) return { taskId: receipt.taskId, ...result };
                 return receipt;
-              }),
-            );
-          }
-          const result = await execute(context?.abortSignal);
-          return { workdir: directory.relative, ...result };
-        });
+              });
+            }
+            const result = yield* Effect.tryPromise(() => execute(context?.abortSignal));
+            return { workdir: directory.relative, ...result };
+          }),
+        );
 
       const writeOutsideFile = ({
         path,
@@ -150,26 +152,46 @@ const make = Effect.gen(function* () {
         expectedSha256,
       }: typeof WriteOutsideFileInput.Type) =>
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        guarded(path, async () => {
-          const target = orThrow(
-            resolveOutsidePath(project.root, storage.path, path, "new-or-file"),
-          );
-          if (expectedSha256 === undefined) {
-            const created = await createTextFile(target.absolute, path, content);
-            return { path: target.absolute, created: true, ...created };
-          }
-          if (!(target.stats !== undefined)) throw new PathRejected({ path, reason: "not_found" });
-          const replaced = await replaceTextFile(target.absolute, path, expectedSha256, content);
-          return { path: target.absolute, created: false, ...replaced };
-        });
+        guarded(path, () =>
+          Effect.gen(function* () {
+            const target = yield* Effect.fromResult(
+              resolveOutsidePath(project.root, storage.path, path, "new-or-file"),
+            );
+            if (expectedSha256 === undefined) {
+              const created = yield* createTextFileEffect({
+                absolute: target.absolute,
+                path,
+                text: content,
+              });
+              return { path: target.absolute, created: true, ...created };
+            }
+            if (!(target.stats !== undefined))
+              return yield* new PathRejected({ path, reason: "not_found" });
+            const replaced = yield* replaceTextFileEffect({
+              absolute: target.absolute,
+              path,
+              expectedSha256,
+              text: content,
+            });
+            return { path: target.absolute, created: false, ...replaced };
+          }),
+        );
 
       const deleteOutsideFile = ({ path, expectedSha256 }: typeof DeleteOutsideFileInput.Type) =>
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        guarded(path, async () => {
-          const target = orThrow(resolveOutsidePath(project.root, storage.path, path, "file"));
-          const removed = await deleteTextFile(target.absolute, path, expectedSha256);
-          return { path: target.absolute, deleted: true, ...removed };
-        });
+        guarded(path, () =>
+          Effect.gen(function* () {
+            const target = yield* Effect.fromResult(
+              resolveOutsidePath(project.root, storage.path, path, "file"),
+            );
+            const removed = yield* deleteTextFileEffect({
+              absolute: target.absolute,
+              path,
+              expectedSha256,
+            });
+            return { path: target.absolute, deleted: true, ...removed };
+          }),
+        );
 
       if (approval === "gate") {
         const [shell, write, remove] = reviewedToolDefinitions;

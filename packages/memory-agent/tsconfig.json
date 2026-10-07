@@ -33,7 +33,7 @@
           "acquireReleaseDisposable": "error",
           "allOfMapToForEach": "error",
           "anyUnknownInErrorContext": "warning",
-          "asyncFunction": "warning",
+          "asyncFunction": "error",
           "catchAllTagDispatchToCatchTag": "error",
           "catchAllToMapError": "error",
           "catchChainToFirstSuccessOf": "error",

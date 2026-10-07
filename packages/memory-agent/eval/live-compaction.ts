@@ -1,3 +1,4 @@
+import { nativePromise, runNativeEffect } from "../src/runtime/native-effect.ts";
 import { Config, Console, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../src/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
@@ -8,7 +9,7 @@ import { tmpdir } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { join } from "node:path";
 import { maxIterations } from "@tanstack/ai";
-import { DateTime, Effect, Layer, ManagedRuntime, Schema } from "effect";
+import { DateTime, Effect, Layer, Schema } from "effect";
 import { AgentChat } from "../src/agent/chat.ts";
 import { ApiUsage } from "../src/agent/api-usage.ts";
 import { compactionState } from "../src/agent/compaction.ts";
@@ -26,6 +27,11 @@ import { estimateRequestTokens, exceedsRequestTokenBudget } from "./request-toke
 
 // Explicit, paid, serial pilot only. The adapter guard stops before a provider request, including
 // a summary request. It does not turn token estimates into reported usage.
+const stringifyJson = <A>(value: A, _replacer?: null, space?: number) =>
+  Result.getOrThrow(
+    Schema.encodeResult(Schema.fromJsonString(Schema.Unknown, { space: space ?? 0 }))(value),
+  );
+
 const maxCalls = 20;
 // Estimated BPE tokens, with an additional 25% margin in exceedsRequestTokenBudget.
 // This is not a provider usage or cached-token limit.
@@ -115,14 +121,17 @@ function answerFromSse(sse: string) {
 }
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function runArm(variant: "auto" | "auto-plus-manual") {
+const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-manual") {
   const base = mkdtempSync(join(tmpdir(), "memory-agent-paid-ab-"));
   const projectRoot = join(base, "project");
   const home = join(base, "home");
   mkdirSync(join(projectRoot, "src"), { recursive: true });
   mkdirSync(home);
   writeFileSync(join(projectRoot, "src/checksum.ts"), fixture);
-  const runtime = ManagedRuntime.make(
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => rmSync(base, { recursive: true, force: true })),
+  );
+  const servicesContext = yield* Layer.build(
     memoryAgentLayer(join(base, "storage"), {
       providerRegistry: guardedRegistry,
       embedder: fakeEmbedderLayer,
@@ -136,115 +145,119 @@ async function runArm(variant: "auto" | "auto-plus-manual") {
       skillsBuiltin: join(home, "builtin-skills"),
     }),
   );
-  try {
-    const services = await runtime.runPromise(
-      Effect.gen(function* () {
-        const provider = yield* (yield* ProviderRegistry).get("openai");
-        const auth = yield* provider.auth.status;
-        if (auth.status !== "signed-in") throw new Error("openai_not_signed_in");
-        yield* provider.models.select(model, effort);
-        const project = yield* (yield* Projects).add(projectRoot);
-        const session = yield* (yield* Sessions).create(project.id);
-        return {
-          agent: yield* AgentChat,
-          usage: yield* ApiUsage,
-          summaries: yield* TurnSummaries,
-          metadata: (yield* ChatState).persistence.stores.metadata,
-          sessionId: session.id,
-        };
-      }),
-    );
-    const started = DateTime.toEpochMillis(DateTime.nowUnsafe());
-    const answers: string[] = [];
-    let manual: {
-      cleared: number;
-      summarizedTurns: number;
-      summaryFailed: boolean;
-      tokensBefore: number;
-      tokensAfter: number;
-    } | null = null;
-    for (const [index, text] of prompts.entries()) {
-      if (index === 6) {
-        // Wait for equal automatic summary state; do not create a manual-only comparison.
-        await runtime.runPromise(services.summaries.catchUp(services.sessionId, true));
-        if (variant === "auto-plus-manual") {
-          const response = await runtime.runPromise(
-            services.agent.compact(services.sessionId, null),
-          );
-          if (response.status !== 200) throw new Error(`manual_compact_status_${response.status}`);
-          // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-          manual = EffectFunction.flow(
-            Schema.decodeUnknownResult(
-              Schema.Struct({
-                cleared: Schema.Finite,
-                summarizedTurns: Schema.Finite,
-                summaryFailed: Schema.Boolean,
-                tokensBefore: Schema.Finite,
-                tokensAfter: Schema.Finite,
-              }),
-            ),
-            Result.getOrThrow,
-          )(await response.json());
-          if (manual.cleared === 0 && manual.summarizedTurns === 0)
-            throw new Error("pilot_manual_compact_changed_nothing");
-        }
-      }
-      const response = await runtime.runPromise(
-        services.agent.handle(
-          new Request("http://localhost/api/chat", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            signal: AbortSignal.timeout(45_000),
-            body: JSON.stringify({
-              threadId: services.sessionId,
-              runId: randomUUID(),
-              messages: [{ id: randomUUID(), role: "user", content: text }],
-              tools: [],
-              context: [],
+  const services = yield* Effect.provideContext(
+    Effect.gen(function* () {
+      const provider = yield* (yield* ProviderRegistry).get("openai");
+      const auth = yield* provider.auth.status;
+      if (auth.status !== "signed-in") throw new Error("openai_not_signed_in");
+      yield* provider.models.select(model, effort);
+      const project = yield* (yield* Projects).add(projectRoot);
+      const session = yield* (yield* Sessions).create(project.id);
+      return {
+        agent: yield* AgentChat,
+        usage: yield* ApiUsage,
+        summaries: yield* TurnSummaries,
+        metadata: (yield* ChatState).persistence.stores.metadata,
+        sessionId: session.id,
+      };
+    }),
+    servicesContext,
+  );
+  const started = DateTime.toEpochMillis(DateTime.nowUnsafe());
+  const answers: string[] = [];
+  let manual: {
+    cleared: number;
+    summarizedTurns: number;
+    summaryFailed: boolean;
+    tokensBefore: number;
+    tokensAfter: number;
+  } | null = null;
+  for (const [index, text] of prompts.entries()) {
+    if (index === 6) {
+      // Wait for equal automatic summary state; do not create a manual-only comparison.
+      yield* Effect.provideContext(
+        services.summaries.catchUp(services.sessionId, true),
+        servicesContext,
+      );
+      if (variant === "auto-plus-manual") {
+        const response = yield* Effect.provideContext(
+          services.agent.compact(services.sessionId, null),
+          servicesContext,
+        );
+        if (response.status !== 200) throw new Error(`manual_compact_status_${response.status}`);
+        // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+        manual = EffectFunction.flow(
+          Schema.decodeUnknownResult(
+            Schema.Struct({
+              cleared: Schema.Finite,
+              summarizedTurns: Schema.Finite,
+              summaryFailed: Schema.Boolean,
+              tokensBefore: Schema.Finite,
+              tokensAfter: Schema.Finite,
             }),
-          }),
-          services.sessionId,
-        ),
-      );
-      if (response.status !== 200) throw new Error(`chat_status_${response.status}`);
-      answers.push(answerFromSse(await response.text()));
-      const statusResponse = await runtime.runPromise(
-        services.agent.status(services.sessionId, null),
-      );
-      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      const status = EffectFunction.flow(
-        Schema.decodeUnknownResult(
-          Schema.Struct({
-            lastRun: Schema.NullOr(Schema.Struct({ status: Schema.String })),
-          }),
-        ),
-        Result.getOrThrow,
-      )(await statusResponse.json());
-      if (status.lastRun?.status !== "completed")
-        throw new Error(`pilot_run_${status.lastRun?.status ?? "missing"}`);
-      if (calls >= maxCalls && index < prompts.length - 1)
-        throw new Error("pilot_provider_budget_exceeded");
+          ),
+          Result.getOrThrow,
+        )(yield* nativePromise(() => response.json()));
+        if (manual.cleared === 0 && manual.summarizedTurns === 0)
+          throw new Error("pilot_manual_compact_changed_nothing");
+      }
     }
-    const blocks = (await compactionState(services.metadata, services.sessionId)).blocks.length;
-    const final = answers.at(-1) ?? "";
-    return {
-      variant,
-      model,
-      effort,
-      turns: answers.length,
-      summaryBlocks: blocks,
-      manual,
-      usage: services.usage.byRootSession(services.sessionId),
-      evidenceCorrect: final.includes(phrase),
-      computationCorrect: /\b8\b/.test(final),
-      elapsedMs: DateTime.toEpochMillis(DateTime.nowUnsafe()) - started,
-      providerCallsSoFar: calls,
-    };
-  } finally {
-    await runtime.dispose();
-    rmSync(base, { recursive: true, force: true });
+    const response = yield* Effect.provideContext(
+      services.agent.handle(
+        new Request("http://localhost/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(45_000),
+          body: stringifyJson({
+            threadId: services.sessionId,
+            runId: randomUUID(),
+            messages: [{ id: randomUUID(), role: "user", content: text }],
+            tools: [],
+            context: [],
+          }),
+        }),
+        services.sessionId,
+      ),
+      servicesContext,
+    );
+    if (response.status !== 200) throw new Error(`chat_status_${response.status}`);
+    answers.push(answerFromSse(yield* nativePromise(() => response.text())));
+    const statusResponse = yield* Effect.provideContext(
+      services.agent.status(services.sessionId, null),
+      servicesContext,
+    );
+    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+    const status = EffectFunction.flow(
+      Schema.decodeUnknownResult(
+        Schema.Struct({
+          lastRun: Schema.NullOr(Schema.Struct({ status: Schema.String })),
+        }),
+      ),
+      Result.getOrThrow,
+    )(yield* nativePromise(() => statusResponse.json()));
+    if (status.lastRun?.status !== "completed")
+      throw new Error(`pilot_run_${status.lastRun?.status ?? "missing"}`);
+    if (calls >= maxCalls && index < prompts.length - 1)
+      throw new Error("pilot_provider_budget_exceeded");
   }
-}
+  const blocks = (yield* nativePromise(() =>
+    compactionState(services.metadata, services.sessionId),
+  )).blocks.length;
+  const final = answers.at(-1) ?? "";
+  return {
+    variant,
+    model,
+    effort,
+    turns: answers.length,
+    summaryBlocks: blocks,
+    manual,
+    usage: services.usage.byRootSession(services.sessionId),
+    evidenceCorrect: final.includes(phrase),
+    computationCorrect: /\b8\b/.test(final),
+    elapsedMs: DateTime.toEpochMillis(DateTime.nowUnsafe()) - started,
+    providerCallsSoFar: calls,
+  };
+}, Effect.scoped);
 
 // This historical A/B is invalid if automatic catch-up has already done manual /compact's work.
 // Do not accidentally repeat it. A redesigned comparator needs a fresh explicit paid opt-in.
@@ -256,14 +269,14 @@ if (
 ) {
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
   Effect.runSync(
-    Console.log(JSON.stringify({ stopped: true, reason: "paid_pilot_disabled_until_redesign" })),
+    Console.log(stringifyJson({ stopped: true, reason: "paid_pilot_disabled_until_redesign" })),
   );
 } else {
   try {
     for (const variant of ["auto", "auto-plus-manual"] as const) {
-      const outcome = await runArm(variant);
+      const outcome = await runNativeEffect(runArm(variant));
       // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-      Effect.runSync(Console.log(JSON.stringify(outcome)));
+      Effect.runSync(Console.log(stringifyJson(outcome)));
       // A comparison of failed coding/evidence tasks is not worth another paid arm.
       if (!outcome.evidenceCorrect || !outcome.computationCorrect)
         throw new Error("pilot_baseline_quality_failed");
@@ -272,7 +285,7 @@ if (
     // Native stdout/stderr or SDK logging boundary preserves the existing output format.
     Effect.runSync(
       Console.log(
-        JSON.stringify({
+        stringifyJson({
           stopped: true,
           reason: error instanceof Error ? error.message : "unknown",
           providerCallsSoFar: calls,

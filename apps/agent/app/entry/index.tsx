@@ -1,3 +1,5 @@
+import { Effect } from "effect";
+import { runUiEffect, uiPromise, uiFailure } from "./shared/ui-effect";
 import { isTruthy } from "../truthy.ts";
 import { useAuthQuery, useModelsQuery, useProjectsQuery } from "./queries/global";
 import {
@@ -172,83 +174,128 @@ export function App() {
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const archiveSession = async (id: string) => {
-    if (!isTruthy(projectId)) return;
-    try {
-      const result = await lifecycleMutation.mutateAsync({ kind: "archive", sessionId: id });
-      if (result.status !== "completed") return refreshPendingLifecycle(result.status);
-      setArchiveError(null);
-      const remaining = sessions.filter((item) => item.id !== id);
-      if (sessionId === id) void setLocation({ session: remaining[0]?.id ?? null });
-    } catch (error) {
-      setArchiveError(
-        archiveErrorMessage(error instanceof Error ? error : new Error(String(error))),
-      );
-    }
-  };
+  const archiveSession = (id: string) =>
+    runUiEffect(
+      Effect.gen(function* () {
+        if (!isTruthy(projectId)) return;
+        return yield* Effect.gen(function* () {
+          const result = yield* uiPromise(() =>
+            lifecycleMutation.mutateAsync({ kind: "archive", sessionId: id }),
+          );
+          if (result.status !== "completed") return refreshPendingLifecycle(result.status);
+          setArchiveError(null);
+          const remaining = sessions.filter((item) => item.id !== id);
+          if (sessionId === id) void setLocation({ session: remaining[0]?.id ?? null });
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.sync(() => {
+              const error = uiFailure(cause);
+              setArchiveError(
+                archiveErrorMessage(error instanceof Error ? error : new Error(String(error))),
+              );
+            }),
+          ),
+        );
+      }),
+    );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const deleteSession = async (id: string) => {
-    if (!isTruthy(projectId)) return;
-    try {
-      const result = await lifecycleMutation.mutateAsync({ kind: "delete", sessionId: id });
-      if (result.status !== "completed") return refreshPendingLifecycle(result.status);
-      setArchiveError(null);
-      const remaining = sessions.filter((item) => item.id !== id);
-      if (sessionId === id) void setLocation({ session: remaining[0]?.id ?? null });
-    } catch (error) {
-      setArchiveError(
-        archiveErrorMessage(error instanceof Error ? error : new Error(String(error))),
-      );
-    }
-  };
+  const deleteSession = (id: string) =>
+    runUiEffect(
+      Effect.gen(function* () {
+        if (!isTruthy(projectId)) return;
+        return yield* Effect.gen(function* () {
+          const result = yield* uiPromise(() =>
+            lifecycleMutation.mutateAsync({ kind: "delete", sessionId: id }),
+          );
+          if (result.status !== "completed") return refreshPendingLifecycle(result.status);
+          setArchiveError(null);
+          const remaining = sessions.filter((item) => item.id !== id);
+          if (sessionId === id) void setLocation({ session: remaining[0]?.id ?? null });
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.sync(() => {
+              const error = uiFailure(cause);
+              setArchiveError(
+                archiveErrorMessage(error instanceof Error ? error : new Error(String(error))),
+              );
+            }),
+          ),
+        );
+      }),
+    );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const restoreSession = async (id: string) => {
-    if (!isTruthy(projectId)) return;
-    try {
-      const result = await lifecycleMutation.mutateAsync({ kind: "restore", sessionId: id });
-      if (result.status !== "completed") return refreshPendingLifecycle(result.status);
-      setArchiveError(null);
-    } catch (error) {
-      setArchiveError(
-        archiveErrorMessage(error instanceof Error ? error : new Error(String(error))),
-      );
-    }
-  };
+  const restoreSession = (id: string) =>
+    runUiEffect(
+      Effect.gen(function* () {
+        if (!isTruthy(projectId)) return;
+        return yield* Effect.gen(function* () {
+          const result = yield* uiPromise(() =>
+            lifecycleMutation.mutateAsync({ kind: "restore", sessionId: id }),
+          );
+          if (result.status !== "completed") return refreshPendingLifecycle(result.status);
+          setArchiveError(null);
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.sync(() => {
+              const error = uiFailure(cause);
+              setArchiveError(
+                archiveErrorMessage(error instanceof Error ? error : new Error(String(error))),
+              );
+            }),
+          ),
+        );
+      }),
+    );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const authAction = async (intent: "login" | "cancel" | "logout") => {
-    const state = await authMutation.mutateAsync(intent);
-    if (state.status === "pending") window.open(state.authUrl, "_blank", "noopener");
-  };
+  const authAction = (intent: "login" | "cancel" | "logout") =>
+    runUiEffect(
+      Effect.gen(function* () {
+        const state = yield* uiPromise(() => authMutation.mutateAsync(intent));
+        if (state.status === "pending") window.open(state.authUrl, "_blank", "noopener");
+      }),
+    );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const addProject = async (root: string) => {
-    try {
-      const project = await addProjectMutation.mutateAsync(root);
-      void setLocation({ project: project.id, session: null }, { history: "push" });
-      return null;
-    } catch (error) {
-      return projectErrorMessage(error instanceof Error ? error : new Error(String(error)));
-    }
-  };
+  const addProject = (root: string) =>
+    runUiEffect(
+      Effect.gen(function* () {
+        const project = yield* uiPromise(() => addProjectMutation.mutateAsync(root));
+        void setLocation({ project: project.id, session: null }, { history: "push" });
+        return null;
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.sync(() => {
+            const error = uiFailure(cause);
+            return projectErrorMessage(error instanceof Error ? error : new Error(String(error)));
+          }),
+        ),
+      ),
+    );
 
   const openSettings = () =>
     openSettingsOverlay(projects.find((item) => item.id === projectId) ?? null);
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const selectModel = async (model: string, effort?: string) => {
-    const selected = await modelMutation.mutateAsync({ model, effort });
-    setSelection(selected);
-  };
+  const selectModel = (model: string, effort?: string) =>
+    runUiEffect(
+      Effect.gen(function* () {
+        const selected = yield* uiPromise(() => modelMutation.mutateAsync({ model, effort }));
+        setSelection(selected);
+      }),
+    );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const createSession = async (agent?: string) => {
-    if (!isTruthy(projectId)) return;
-    const session = await createSessionMutation.mutateAsync(agent);
-    void setLocation({ session: session.id }, { history: "push" });
-  };
+  const createSession = (agent?: string) =>
+    runUiEffect(
+      Effect.gen(function* () {
+        if (!isTruthy(projectId)) return;
+        const session = yield* uiPromise(() => createSessionMutation.mutateAsync(agent));
+        void setLocation({ session: session.id }, { history: "push" });
+      }),
+    );
 
   const slash: SlashSupport = {
     context: {
@@ -257,25 +304,29 @@ export function App() {
       skills: slashSkills,
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    run: async (command) => {
-      switch (command.kind) {
-        case "new":
-          return await createSession();
-        case "agent":
-          return await createSession(command.agent);
-        case "settings":
-          return openSettings();
-        case "report":
-          window.location.assign(reportHref(projectId, sessionId));
-          return;
-        case "mode":
-          if (isTruthy(projectId)) await permissionMutation.mutateAsync(command.mode);
-          return;
-        case "model":
-          await selectModel(command.model);
-          return;
-      }
-    },
+    run: (command) =>
+      runUiEffect(
+        Effect.gen(function* () {
+          switch (command.kind) {
+            case "new":
+              return yield* uiPromise(() => createSession());
+            case "agent":
+              return yield* uiPromise(() => createSession(command.agent));
+            case "settings":
+              return openSettings();
+            case "report":
+              window.location.assign(reportHref(projectId, sessionId));
+              return;
+            case "mode":
+              if (isTruthy(projectId))
+                yield* uiPromise(() => permissionMutation.mutateAsync(command.mode));
+              return;
+            case "model":
+              yield* uiPromise(() => selectModel(command.model));
+              return;
+          }
+        }),
+      ),
   };
 
   const main = match({ selection, signedIn, selectedSignedIn, projectId, sessionId })

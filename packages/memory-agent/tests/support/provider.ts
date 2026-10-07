@@ -1,10 +1,7 @@
 import { ProviderOperationFailed } from "../../src/providers/contracts.ts";
-import { Result, Function as EffectFunction } from "effect";
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off missingPipeableSignature:off newPromise:off schemaSync:off
 import { isTruthy } from "../../src/truthy.ts";
 import type { ModelMessage } from "@tanstack/ai";
-import { MutableHashMap, Option, Effect, Layer, Schema } from "effect";
+import { Cause, Deferred, Function, MutableHashMap, Option, Effect, Layer, Schema } from "effect";
 import {
   GlobalConfig,
   ModelUnavailable,
@@ -73,7 +70,9 @@ const call = (id: string, name: string, args: Json): ScriptedTurn => ({
 });
 
 /** Provider-neutral behavior shared by orchestration tests formerly backed by a child process. */
-export const defaultTestResponder: ScriptedResponder = async (invocation) => {
+export const defaultTestResponder = (
+  invocation: AdapterInvocation,
+): ScriptedTurn | Promise<ScriptedTurn> => {
   const instructions = invocation.systemPrompts.join("\n");
   const user = lastUserText(invocation.messages);
   const tools = trailingTools(invocation.messages);
@@ -166,25 +165,29 @@ export const defaultTestResponder: ScriptedResponder = async (invocation) => {
           timeoutMs: 30_000,
         });
       if (MutableHashMap.has(byId, "call-wait-children")) {
-        const result = EffectFunction.flow(
-          Schema.decodeResult(
-            Schema.fromJsonString(
-              Schema.Struct({
-                attempts: Schema.Array(
-                  Schema.Struct({ taskId: Schema.String, attemptId: Schema.String }),
-                ),
-              }),
-            ),
-          ),
-          Result.getOrThrow,
-        )(Option.getOrUndefined(MutableHashMap.get(byId, "call-wait-children"))!);
-        return {
-          toolCalls: result.attempts.map((attempt, index) => ({
-            id: `call-report-${index}`,
-            name: "get_subagent_report",
-            arguments: JSON.stringify(attempt),
-          })),
-        };
+        return Effect.runPromise(
+          Effect.gen(function* () {
+            const result = yield* Schema.decodeEffect(
+              Schema.fromJsonString(
+                Schema.Struct({
+                  attempts: Schema.Array(
+                    Schema.Struct({ taskId: Schema.String, attemptId: Schema.String }),
+                  ),
+                }),
+              ),
+            )(Option.getOrUndefined(MutableHashMap.get(byId, "call-wait-children"))!);
+            const toolCalls = yield* Effect.forEach(result.attempts, (attempt, index) =>
+              Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(attempt).pipe(
+                Effect.map((argumentsJson) => ({
+                  id: `call-report-${index}`,
+                  name: "get_subagent_report",
+                  arguments: argumentsJson,
+                })),
+              ),
+            );
+            return { toolCalls };
+          }).pipe(Effect.mapError((cause) => new Cause.UnknownError(cause))),
+        );
       }
       if ([...MutableHashMap.keys(byId)].some((id) => id.startsWith("call-report-")))
         return { text: [...MutableHashMap.values(byId)].join(" | ") };
@@ -275,15 +278,15 @@ export interface TestProviderOptions {
   readonly signedIn?: boolean;
   readonly responder?: ScriptedResponder;
   /** Replace scripted delays with a test-controlled gate. */
-  readonly delayedTurnGate?: Promise<void>;
+  readonly delayedTurnGate?: ScriptedTurn["waitFor"];
 }
 
 export function turnGate() {
-  let release = () => {};
-  const waitFor = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  return { waitFor, release: () => release() };
+  const gate = Deferred.makeUnsafe<void>();
+  return {
+    waitFor: Deferred.await(gate),
+    release: () => void Deferred.doneUnsafe(gate, Effect.void),
+  };
 }
 
 export interface TestProvider {
@@ -296,18 +299,50 @@ export interface TestProvider {
   ) => Promise<ModelSelection>;
 }
 
+/** Effect tests select a model in their current owner context; Promise fixtures keep the wrapper. */
+export const selectTestModel = Effect.fn("selectTestModel")(function* (
+  model: string = "fast-1",
+  effort: string = "low",
+) {
+  const config = yield* GlobalConfig;
+  yield* config
+    .update({ provider: "openai", model, reasoningEffort: effort })
+    .pipe(
+      Effect.mapError(
+        () => new ProviderOperationFailed({ provider: "openai", operation: "model" }),
+      ),
+    );
+  return { provider: "openai" as const, model, reasoningEffort: effort };
+});
+
 export function testProvider(options: TestProviderOptions = {}): TestProvider {
   let auth: AuthConnectionState = {
     provider: "openai",
     status: options.signedIn === false ? "signed-out" : "signed-in",
   };
   const responder = options.responder ?? defaultTestResponder;
-  const adapter = new ScriptedTextAdapter(async (invocation) => {
-    const turn = await responder(invocation);
-    if (!isTruthy(options.delayedTurnGate) || turn.delayMs === undefined) return turn;
-    const { delayMs: _delayMs, ...gatedTurn } = turn;
-    return { ...gatedTurn, waitFor: options.delayedTurnGate };
-  });
+  const adapter = new ScriptedTextAdapter(
+    Effect.fn("testProvider.responder")((invocation: AdapterInvocation) =>
+      Effect.try({
+        try: () => ({ response: responder(invocation) }),
+        catch: (cause) => new Cause.UnknownError(cause),
+      }).pipe(
+        Effect.flatMap(({ response }) =>
+          Effect.isEffect(response)
+            ? response
+            : Effect.tryPromise({
+                try: () => Promise.resolve(response),
+                catch: (cause) => new Cause.UnknownError(cause),
+              }),
+        ),
+        Effect.map((turn) => {
+          if (!isTruthy(options.delayedTurnGate) || turn.delayMs === undefined) return turn;
+          const { delayMs: _delayMs, ...gatedTurn } = turn;
+          return { ...gatedTurn, waitFor: options.delayedTurnGate };
+        }),
+      ),
+    ),
+  );
   const layer = Layer.effect(
     ProviderRegistry,
     Effect.gen(function* () {
@@ -374,7 +409,7 @@ export function testProvider(options: TestProviderOptions = {}): TestProvider {
             contextWindow: () => 200_000,
             agentLoop: subscriptionAgentLoop,
             runMiddleware: () => ({ name: "memory-agent/test-provider" }),
-            steer: async () => "no_turn" as const,
+            steer: () => Promise.resolve("no_turn" as const),
           }),
       };
     }),
@@ -382,25 +417,17 @@ export function testProvider(options: TestProviderOptions = {}): TestProvider {
   return {
     adapter,
     layer,
-    select: async (runtime, model = "fast-1", effort = "low") => {
-      await runtime.runPromise(
-        Effect.flatMap(GlobalConfig, (config) =>
-          config
-            .update({ provider: "openai", model, reasoningEffort: effort })
-            .pipe(
-              Effect.mapError(
-                () => new ProviderOperationFailed({ provider: "openai", operation: "model" }),
-              ),
-            ),
-        ),
-      );
-      return { provider: "openai", model, reasoningEffort: effort };
-    },
+    select: (runtime, model, effort) => runtime.runPromise(selectTestModel(model, effort)),
   };
 }
 
-export const providerInvocation = (
-  provider: TestProvider,
-  index = -1,
-): AdapterInvocation | undefined =>
-  index < 0 ? provider.adapter.invocations.at(index) : provider.adapter.invocations[index];
+const isProvider = Schema.is(Schema.Struct({ adapter: Schema.ObjectKeyword }));
+
+export const providerInvocation: {
+  (provider: TestProvider, index?: number): AdapterInvocation | undefined;
+  (index?: number): (provider: TestProvider) => AdapterInvocation | undefined;
+} = Function.dual(
+  (args) => isProvider(args[0]),
+  (provider: TestProvider, index = -1): AdapterInvocation | undefined =>
+    index < 0 ? provider.adapter.invocations.at(index) : provider.adapter.invocations[index],
+);

@@ -8,6 +8,6 @@ import type { Route } from "./+types/sessions.$session.approvals._index";
  * a subagent's, or an external agent's own permission requests.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function loader({ params }: Route.LoaderArgs) {
+export function loader({ params }: Route.LoaderArgs) {
   return agent.runPromise(Effect.flatMap(AgentChat, (chat) => chat.approvals(params.session)));
 }

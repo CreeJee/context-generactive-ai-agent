@@ -1,5 +1,5 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off
+import { it } from "@effect/vitest";
+import { Cause, Effect, Result } from "effect";
 import { isTruthy } from "../../truthy.ts";
 import { QueryClient, QueryClientProvider, QueryObserver } from "@tanstack/react-query";
 import type { SessionRunState } from "memory-agent/definitions";
@@ -11,6 +11,15 @@ import { SessionEventScopeContext } from "../events/context";
 import { createEventInvalidator } from "../events/invalidation";
 import { appQueryKeys } from "../events/query-keys";
 import { useRunState } from "./use-run-state";
+
+const sdkCall = Effect.fn("sessionHook.sdkCall")(function* <A>(
+  operation: () => A | PromiseLike<A>,
+) {
+  return yield* Effect.tryPromise({
+    try: () => Promise.resolve(operation()),
+    catch: (cause) => new Cause.UnknownError(cause),
+  });
+});
 
 const projectId = "project-1";
 const sessionId = "session-1";
@@ -96,114 +105,125 @@ describe("server mutation results", () => {
     return { client, run };
   }
 
-  test.each(["phase", "control"] as const)(
+  it.live.each(["phase", "control"] as const)(
     "%s changes refresh artifacts and decisions together, including refusals",
-    async (kind) => {
-      const { client, run } = mounted();
-      const fetchState = vi.spyOn(api, "sessionRunState").mockResolvedValue(snapshot(1));
-      const query = client.getQueryCache().find({ queryKey });
-      if (!(query !== undefined)) throw new Error("Missing query");
-      const observer = new QueryObserver(client, { ...query.options, queryKey });
-      const unsubscribe = observer.subscribe(() => {});
-      try {
-        await observer.refetch();
-        const latest: SessionRunState = {
-          ...snapshot(2),
-          actions: {
-            ...allowedWorkflowActions,
-            phases: {
-              ...allowedWorkflowActions.phases,
-              execute: { allowed: false, reason: "plan_outdated" },
+    (kind) =>
+      Effect.gen(function* () {
+        const { client, run } = mounted();
+        const fetchState = vi.spyOn(api, "sessionRunState").mockResolvedValue(snapshot(1));
+        const query = client.getQueryCache().find({ queryKey });
+        if (!(query !== undefined)) throw new Error("Missing query");
+        const observer = new QueryObserver(client, { ...query.options, queryKey });
+        const unsubscribe = observer.subscribe(() => {});
+        try {
+          yield* sdkCall(() => observer.refetch());
+          const latest: SessionRunState = {
+            ...snapshot(2),
+            actions: {
+              ...allowedWorkflowActions,
+              phases: {
+                ...allowedWorkflowActions.phases,
+                execute: { allowed: false, reason: "plan_outdated" },
+              },
             },
-          },
-        };
-        fetchState.mockResolvedValue(latest);
-        const phase = vi.spyOn(api, "setWorkflowPhase").mockResolvedValue(snapshot(2).workflow);
-        const control = vi.spyOn(api, "controlWorkflow").mockResolvedValue(snapshot(2).workflow);
-        const mutate = () =>
-          kind === "phase" ? run.setWorkflowPhase("plan") : run.controlWorkflow("pause");
-        await mutate();
-        expect(client.getQueryData(queryKey)).toEqual(latest);
-        const refusal = ApiError.make({ status: 409, code: "run_in_progress", reason: null });
-        phase.mockRejectedValue(refusal);
-        control.mockRejectedValue(refusal);
-        fetchState.mockResolvedValue(snapshot(3));
-        await expect(mutate()).rejects.toBe(refusal);
-        expect(client.getQueryData(queryKey)).toEqual(snapshot(3));
-      } finally {
-        unsubscribe();
-        client.clear();
-      }
-    },
+          };
+          fetchState.mockResolvedValue(latest);
+          const phase = vi.spyOn(api, "setWorkflowPhase").mockResolvedValue(snapshot(2).workflow);
+          const control = vi.spyOn(api, "controlWorkflow").mockResolvedValue(snapshot(2).workflow);
+          const mutate = () =>
+            kind === "phase" ? run.setWorkflowPhase("plan") : run.controlWorkflow("pause");
+          yield* sdkCall(() => mutate());
+          expect(client.getQueryData(queryKey)).toEqual(latest);
+          const refusal = ApiError.make({ status: 409, code: "run_in_progress", reason: null });
+          phase.mockRejectedValue(refusal);
+          control.mockRejectedValue(refusal);
+          fetchState.mockResolvedValue(snapshot(3));
+          expect(
+            Result.match(yield* Effect.result(sdkCall(() => mutate())), {
+              onSuccess: () => {
+                throw new Error("Expected SDK refusal");
+              },
+              onFailure: (error) => error.cause,
+            }),
+          ).toBe(refusal);
+          expect(client.getQueryData(queryKey)).toEqual(snapshot(3));
+        } finally {
+          unsubscribe();
+          client.clear();
+        }
+      }),
   );
 
-  test("cancel is submitted without local streaming and only no_running_run means idle", async () => {
-    const { client, run } = mounted();
-    const cancel = vi
-      .spyOn(api, "cancelRun")
-      .mockResolvedValue({ runId: "child-parent", stopped: true, status: null });
-    try {
-      expect(await run.cancel()).toBe("requested");
-      expect(cancel).toHaveBeenCalledWith(sessionId, "holder-1");
-      cancel.mockRejectedValue(
-        ApiError.make({ status: 409, code: "session_in_use", reason: null }),
-      );
-      expect(await run.cancel()).toBe("failed");
-      cancel.mockRejectedValue(
-        ApiError.make({ status: 409, code: "no_running_run", reason: null }),
-      );
-      expect(await run.cancel()).toBe("idle");
-      cancel.mockRejectedValue(new Error("offline"));
-      expect(await run.cancel()).toBe("failed");
-    } finally {
-      client.clear();
-    }
-  });
+  it.live("cancel is submitted without local streaming and only no_running_run means idle", () =>
+    Effect.gen(function* () {
+      const { client, run } = mounted();
+      const cancel = vi
+        .spyOn(api, "cancelRun")
+        .mockResolvedValue({ runId: "child-parent", stopped: true, status: null });
+      try {
+        expect(yield* sdkCall(() => run.cancel())).toBe("requested");
+        expect(cancel).toHaveBeenCalledWith(sessionId, "holder-1");
+        cancel.mockRejectedValue(
+          ApiError.make({ status: 409, code: "session_in_use", reason: null }),
+        );
+        expect(yield* sdkCall(() => run.cancel())).toBe("failed");
+        cancel.mockRejectedValue(
+          ApiError.make({ status: 409, code: "no_running_run", reason: null }),
+        );
+        expect(yield* sdkCall(() => run.cancel())).toBe("idle");
+        cancel.mockRejectedValue(new Error("offline"));
+        expect(yield* sdkCall(() => run.cancel())).toBe("failed");
+      } finally {
+        client.clear();
+      }
+    }),
+  );
 });
 
 describe("durable workflow refresh", () => {
-  test.each([true, false])(
+  it.live.each([true, false])(
     "run-state invalidation refreshes Goal while generating=%s",
-    async (generating) => {
-      vi.useFakeTimers();
-      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-      client.setQueryData(queryKey, snapshot(1));
-      const fetchState = vi.spyOn(api, "sessionRunState").mockResolvedValue(snapshot(1));
-      render(client, generating);
-      const query = client.getQueryCache().find({ queryKey });
-      if (!(query !== undefined)) throw new Error("useRunState did not register its query");
-      // SSR registers the hook's real options; subscribe with them to exercise React Query's
-      // active-query invalidation without requiring a browser DOM or mocking useQuery.
-      const observer = new QueryObserver(client, { ...query.options, queryKey });
-      const unsubscribe = observer.subscribe(() => {});
-      const invalidator = createEventInvalidator(
-        (key) => {
-          void client.invalidateQueries({ queryKey: key });
-        },
-        appQueryKeys.session.root(projectId, sessionId),
-      );
-      try {
-        await vi.advanceTimersByTimeAsync(0);
-        fetchState.mockClear();
-        fetchState.mockResolvedValue(snapshot(2));
-        invalidator.changed({
-          scope: "session",
-          projectId,
-          sessionId,
-          topic: "run-state",
-          revision: 1,
-        });
-        await vi.advanceTimersByTimeAsync(0);
-        expect(fetchState).toHaveBeenCalledOnce();
-        expect(fetchState).toHaveBeenCalledWith(sessionId, "holder-1");
-        expect(client.getQueryData<SessionRunState>(queryKey)?.workflow.goal?.version).toBe(2);
-        expect(client.getQueryData<SessionRunState>(queryKey)?.running).not.toBeNull();
-        expect(render(client, generating)).toContain("2");
-      } finally {
-        unsubscribe();
-        client.clear();
-      }
-    },
+    (generating) =>
+      Effect.gen(function* () {
+        vi.useFakeTimers();
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        client.setQueryData(queryKey, snapshot(1));
+        const fetchState = vi.spyOn(api, "sessionRunState").mockResolvedValue(snapshot(1));
+        render(client, generating);
+        const query = client.getQueryCache().find({ queryKey });
+        if (!(query !== undefined)) throw new Error("useRunState did not register its query");
+        // SSR registers the hook's real options; subscribe with them to exercise React Query's
+        // active-query invalidation without requiring a browser DOM or mocking useQuery.
+        const observer = new QueryObserver(client, { ...query.options, queryKey });
+        const unsubscribe = observer.subscribe(() => {});
+        const invalidator = createEventInvalidator(
+          (key) => {
+            void client.invalidateQueries({ queryKey: key });
+          },
+          appQueryKeys.session.root(projectId, sessionId),
+        );
+        try {
+          yield* sdkCall(() => vi.advanceTimersByTimeAsync(0));
+          fetchState.mockClear();
+          fetchState.mockResolvedValue(snapshot(2));
+          invalidator.changed({
+            scope: "session",
+            projectId,
+            sessionId,
+            topic: "run-state",
+            revision: 1,
+          });
+          yield* sdkCall(() => vi.advanceTimersByTimeAsync(0));
+          expect(fetchState).toHaveBeenCalledOnce();
+          expect(fetchState).toHaveBeenCalledWith(sessionId, "holder-1");
+          expect(client.getQueryData<SessionRunState>(queryKey)?.workflow.goal?.version).toBe(2);
+          expect(client.getQueryData<SessionRunState>(queryKey)?.running).not.toBeNull();
+          expect(render(client, generating)).toContain("2");
+        } finally {
+          unsubscribe();
+          client.clear();
+        }
+      }),
   );
 
   test("streaming is not reported as detached, but an idle page still reports it", () => {

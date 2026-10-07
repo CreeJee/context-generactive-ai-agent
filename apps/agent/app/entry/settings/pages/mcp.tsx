@@ -1,3 +1,5 @@
+import { Effect } from "effect";
+import { runUiEffect, uiPromise } from "../../shared/ui-effect";
 import { PlugIcon } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "~/components/ui/badge";
@@ -57,14 +59,21 @@ function McpSettingsContent({ project }: { project: Project }) {
 
   const header = <PageHeader title="MCP 서버" project={project} description={description} />;
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const trust = async (server: McpServerView, trusted: boolean) => {
-    setError(null);
-    try {
-      await mutation.mutateAsync({ scope: server.scope, name: server.name, trusted });
-    } catch {
-      setError("바꾸지 못했어요.");
-    }
-  };
+  const trust = (server: McpServerView, trusted: boolean) =>
+    runUiEffect(
+      Effect.gen(function* () {
+        setError(null);
+        yield* uiPromise(() =>
+          mutation.mutateAsync({ scope: server.scope, name: server.name, trusted }),
+        ).pipe(
+          Effect.catch((_failure) =>
+            Effect.sync(() => {
+              setError("바꾸지 못했어요.");
+            }),
+          ),
+        );
+      }),
+    );
 
   return (
     <FieldGroup>

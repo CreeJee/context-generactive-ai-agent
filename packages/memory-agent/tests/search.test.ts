@@ -1,9 +1,17 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
 import { chat } from "@tanstack/ai";
-import { MutableHashMap, Option, Random, Effect, Layer } from "effect";
+import {
+  Cause,
+  MutableHashMap,
+  Option,
+  Random,
+  Effect,
+  FileSystem,
+  Layer,
+  Path,
+  Schema,
+  Stream,
+} from "effect";
+import { it } from "@effect/vitest";
 import { describe, expect, test } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { Embedder, EmbeddingError } from "../src/memory/embedding/embedder.ts";
@@ -22,12 +30,17 @@ import { Sessions } from "../src/sessions/sessions.ts";
 import { ScriptedTextAdapter } from "../src/testing/scripted-adapter.ts";
 import { MemoryTools } from "../src/tools/memory.ts";
 import { testRuntime } from "./support/runtime.ts";
+import { withTestPlatform } from "./support/platform.ts";
 
 type Runtime = Awaited<ReturnType<typeof testRuntime>>["runtime"];
 
 /** An earlier session: a decision, then the assistant reads a file about it. */
-async function earlierSession(runtime: Runtime, projectId: string, sessionId: string) {
-  const nodes = await runtime.runPromise(Nodes);
+const earlierSession = Effect.fn("search.earlierSession")(function* (
+  runtime: Runtime,
+  projectId: string,
+  sessionId: string,
+) {
+  const nodes = yield* Effect.provideContext(Nodes, yield* runtime.contextEffect);
   const at = { projectId, sessionId };
   const decision = nodes.append({
     ...at,
@@ -57,13 +70,20 @@ async function earlierSession(runtime: Runtime, projectId: string, sessionId: st
     links: [{ kind: "returns", nodeId: call.id }],
   });
   return { decision, answer, call, result };
-}
+});
 
-async function otherProject(runtime: Runtime, base: string, text: string) {
-  return runtime.runPromise(
+const otherProject = Effect.fn("search.otherProject")(function* (
+  runtime: Runtime,
+  base: string,
+  text: string,
+) {
+  return yield* Effect.provideContext(
     Effect.gen(function* () {
-      const root = join(base, `other-${(yield* Random.next).toString(36).slice(2)}`);
-      mkdirSync(root);
+      const root = (yield* Path.Path).join(
+        base,
+        `other-${(yield* Random.next).toString(36).slice(2)}`,
+      );
+      yield* (yield* FileSystem.FileSystem).makeDirectory(root);
       const project = yield* (yield* Projects).add(root);
       const session = yield* (yield* Sessions).create(project.id);
       const node = (yield* Nodes).append({
@@ -74,8 +94,9 @@ async function otherProject(runtime: Runtime, base: string, text: string) {
       });
       return { project, node };
     }),
+    yield* runtime.contextEffect,
   );
-}
+});
 
 const indexAll = Effect.flatMap(Indexer, (indexer) => indexer.indexAll());
 
@@ -153,231 +174,282 @@ describe("namesSomethingExactly", () => {
 });
 
 describe("MemorySearch.find", () => {
-  test("ranks vectors inside the allowed project before applying the result limit", async () => {
-    const { runtime, project, session, base } = await testRuntime({
-      morphAnalyzer: MorphAnalyzer.disabled,
-    });
-    const excluded = await otherProject(runtime, base, "shared vector text");
-    const nodes = await runtime.runPromise(Nodes);
-    const distractors = Array.from({ length: 50 }, () =>
-      nodes.append({
-        projectId: excluded.project.id,
-        sessionId: excluded.node.sessionId,
+  it.live("ranks vectors inside the allowed project before applying the result limit", () =>
+    Effect.gen(function* () {
+      const { runtime, project, session, base } = yield* Effect.promise(() =>
+        testRuntime({
+          morphAnalyzer: MorphAnalyzer.disabled,
+        }),
+      );
+      const excluded = yield* otherProject(runtime, base, "shared vector text");
+      const nodes = yield* Effect.provideContext(Nodes, yield* runtime.contextEffect);
+      const distractors = Array.from({ length: 50 }, () =>
+        nodes.append({
+          projectId: excluded.project.id,
+          sessionId: excluded.node.sessionId,
+          kind: "user",
+          text: "shared vector text",
+        }),
+      );
+      const target = nodes.append({
+        projectId: project.id,
+        sessionId: session.id,
         kind: "user",
         text: "shared vector text",
-      }),
-    );
-    const target = nodes.append({
-      projectId: project.id,
-      sessionId: session.id,
-      kind: "user",
-      text: "shared vector text",
-    });
-    await runtime.runPromise(indexAll);
-
-    const result = await runtime.runPromise(
-      Effect.flatMap(MemorySearch, (search) =>
-        search.find({
-          query: "unrelated query",
-          projectId: project.id,
-          crossProject: false,
-          limit: 1,
-        }),
-      ),
-    );
-    expect(result.degraded).toEqual([]);
-    expect(result.matches[0]).toMatchObject({ id: target.id, foundBy: "vector" });
-    expect(result.matches.map((match) => match.id)).not.toContain(distractors[0]?.id);
-  });
-
-  test("seeds from vector and text matches, then reaches linked evidence through the graph", async () => {
-    const { runtime, project, session } = await testRuntime();
-    const earlier = await earlierSession(runtime, project.id, session.id);
-    await runtime.runPromise(indexAll);
-
-    const result = await runtime.runPromise(
-      Effect.flatMap(MemorySearch, (search) =>
-        search.find({ query: "SQLite로 결정했던 이유", projectId: project.id }),
-      ),
-    );
-    const byId = MutableHashMap.fromIterable(result.matches.map((match) => [match.id, match]));
-    expect(result.degraded).toEqual([]);
-    expect(result.unindexed).toBe(0);
-    expect(Option.getOrUndefined(MutableHashMap.get(byId, earlier.decision.id))?.foundBy).toMatch(
-      /vector|text/,
-    );
-    expect(Option.getOrUndefined(MutableHashMap.get(byId, earlier.result.id))).toMatchObject({
-      foundBy: "graph",
-      fromOtherProject: false,
-    });
-    expect(
-      Option.getOrUndefined(MutableHashMap.get(byId, earlier.result.id))?.path.map(
-        (hop) => hop.kind,
-      ),
-    ).toEqual(["reply", "calls", "returns"]);
-  });
-
-  test("a query naming something exactly finds the tool output ahead of the nearest statement", async () => {
-    const { runtime, project, session } = await testRuntime({
-      morphAnalyzer: MorphAnalyzer.disabled,
-    });
-    const found = await runtime.runPromise(
-      Effect.gen(function* () {
-        const nodes = yield* Nodes;
-        const at = { projectId: project.id, sessionId: session.id };
-        nodes.append({ ...at, kind: "user", text: "개발 서버를 띄워 줘" });
-        const output = nodes.append({
-          ...at,
-          kind: "tool_result",
-          text: "Error: listen EADDRINUSE: address already in use 127.0.0.1:5174",
-        });
-        nodes.append({ ...at, kind: "assistant", text: "다른 포트로 옮길게요." });
-        yield* (yield* Indexer).indexAll();
-        // Only the statements have vectors, so the vector ranking is all statements.
-        const search = yield* MemorySearch;
-        const result = yield* search.find({ query: "EADDRINUSE 5174", projectId: project.id });
-        return { first: result.matches[0], output: output.id };
-      }),
-    );
-    expect(found.first).toMatchObject({ id: found.output, foundBy: "text" });
-  });
-
-  test("falls back to text search when the embedder fails, and says so", async () => {
-    const broken = Layer.succeed(Embedder, {
-      identity: "broken",
-      dimensions: 64,
-      embed: () => Effect.fail(new EmbeddingError({ cause: new Error("model not downloaded") })),
-      runtime: () => ({ kind: "other" }),
-    });
-    const { runtime, project, session } = await testRuntime({ embedder: broken });
-    const earlier = await earlierSession(runtime, project.id, session.id);
-
-    const result = await runtime.runPromise(
-      Effect.flatMap(MemorySearch, (search) =>
-        search.find({ query: "Postgres", projectId: project.id }),
-      ),
-    );
-    expect(result.degraded).toEqual(["vector"]);
-    // The two statements; tool calls and results are never embedded.
-    expect(result.unindexed).toBe(2);
-    expect(result.matches[0]).toMatchObject({ id: earlier.decision.id, foundBy: "text" });
-  });
-
-  test("includes other projects unless they opted out of cross-project recall", async () => {
-    const { runtime, project, base } = await testRuntime();
-    const shared = await otherProject(runtime, base, "다른 프로젝트도 SQLite를 쓰기로 했다");
-    const excluded = await otherProject(runtime, base, "비공개 프로젝트의 SQLite 설정");
-    await runtime.runPromise(
-      Effect.flatMap(Projects, (projects) =>
-        projects.setCrossRecallExcluded(excluded.project.id, true),
-      ),
-    );
-    await runtime.runPromise(indexAll);
-
-    const find = (crossProject: boolean) =>
-      runtime.runPromise(
+      });
+      yield* Effect.provideContext(indexAll, yield* runtime.contextEffect);
+      const result = yield* Effect.provideContext(
         Effect.flatMap(MemorySearch, (search) =>
-          search.find({ query: "SQLite", projectId: project.id, crossProject }),
+          search.find({
+            query: "unrelated query",
+            projectId: project.id,
+            crossProject: false,
+            limit: 1,
+          }),
         ),
+        yield* runtime.contextEffect,
       );
-    const across = await find(true);
-    expect(across.matches.find((match) => match.id === shared.node.id)).toMatchObject({
-      fromOtherProject: true,
-      projectId: shared.project.id,
-    });
-    expect(across.matches.map((match) => match.id)).not.toContain(excluded.node.id);
-    expect((await find(false)).matches).toEqual([]);
-  });
+      expect(result.degraded).toEqual([]);
+      expect(result.matches[0]).toMatchObject({ id: target.id, foundBy: "vector" });
+      expect(result.matches.map((match) => match.id)).not.toContain(distractors[0]?.id);
+    }).pipe(withTestPlatform),
+  );
+
+  it.live(
+    "seeds from vector and text matches, then reaches linked evidence through the graph",
+    () =>
+      Effect.gen(function* () {
+        const { runtime, project, session } = yield* Effect.promise(() => testRuntime());
+        const earlier = yield* earlierSession(runtime, project.id, session.id);
+        yield* Effect.provideContext(indexAll, yield* runtime.contextEffect);
+        const result = yield* Effect.provideContext(
+          Effect.flatMap(MemorySearch, (search) =>
+            search.find({ query: "SQLite로 결정했던 이유", projectId: project.id }),
+          ),
+          yield* runtime.contextEffect,
+        );
+        const byId = MutableHashMap.fromIterable(result.matches.map((match) => [match.id, match]));
+        expect(result.degraded).toEqual([]);
+        expect(result.unindexed).toBe(0);
+        expect(
+          Option.getOrUndefined(MutableHashMap.get(byId, earlier.decision.id))?.foundBy,
+        ).toMatch(/vector|text/);
+        expect(Option.getOrUndefined(MutableHashMap.get(byId, earlier.result.id))).toMatchObject({
+          foundBy: "graph",
+          fromOtherProject: false,
+        });
+        expect(
+          Option.getOrUndefined(MutableHashMap.get(byId, earlier.result.id))?.path.map(
+            (hop) => hop.kind,
+          ),
+        ).toEqual(["reply", "calls", "returns"]);
+      }).pipe(withTestPlatform),
+  );
+
+  it.live(
+    "a query naming something exactly finds the tool output ahead of the nearest statement",
+    () =>
+      Effect.gen(function* () {
+        const { runtime, project, session } = yield* Effect.promise(() =>
+          testRuntime({
+            morphAnalyzer: MorphAnalyzer.disabled,
+          }),
+        );
+        const found = yield* Effect.provideContext(
+          Effect.gen(function* () {
+            const nodes = yield* Nodes;
+            const at = { projectId: project.id, sessionId: session.id };
+            nodes.append({ ...at, kind: "user", text: "개발 서버를 띄워 줘" });
+            const output = nodes.append({
+              ...at,
+              kind: "tool_result",
+              text: "Error: listen EADDRINUSE: address already in use 127.0.0.1:5174",
+            });
+            nodes.append({ ...at, kind: "assistant", text: "다른 포트로 옮길게요." });
+            yield* (yield* Indexer).indexAll();
+            // Only the statements have vectors, so the vector ranking is all statements.
+            const search = yield* MemorySearch;
+            const result = yield* search.find({ query: "EADDRINUSE 5174", projectId: project.id });
+            return { first: result.matches[0], output: output.id };
+          }),
+          yield* runtime.contextEffect,
+        );
+        expect(found.first).toMatchObject({ id: found.output, foundBy: "text" });
+      }).pipe(withTestPlatform),
+  );
+
+  it.live("falls back to text search when the embedder fails, and says so", () =>
+    Effect.gen(function* () {
+      const broken = Layer.succeed(Embedder, {
+        identity: "broken",
+        dimensions: 64,
+        embed: () => Effect.fail(new EmbeddingError({ cause: new Error("model not downloaded") })),
+        runtime: () => ({ kind: "other" }),
+      });
+      const { runtime, project, session } = yield* Effect.promise(() =>
+        testRuntime({ embedder: broken }),
+      );
+      const earlier = yield* earlierSession(runtime, project.id, session.id);
+      const result = yield* Effect.provideContext(
+        Effect.flatMap(MemorySearch, (search) =>
+          search.find({ query: "Postgres", projectId: project.id }),
+        ),
+        yield* runtime.contextEffect,
+      );
+      expect(result.degraded).toEqual(["vector"]);
+      // The two statements; tool calls and results are never embedded.
+      expect(result.unindexed).toBe(2);
+      expect(result.matches[0]).toMatchObject({ id: earlier.decision.id, foundBy: "text" });
+    }).pipe(withTestPlatform),
+  );
+
+  it.live("includes other projects unless they opted out of cross-project recall", () =>
+    Effect.gen(function* () {
+      const { runtime, project, base } = yield* Effect.promise(() => testRuntime());
+      const shared = yield* otherProject(runtime, base, "다른 프로젝트도 SQLite를 쓰기로 했다");
+      const excluded = yield* otherProject(runtime, base, "비공개 프로젝트의 SQLite 설정");
+      yield* Effect.provideContext(
+        Effect.flatMap(Projects, (projects) =>
+          projects.setCrossRecallExcluded(excluded.project.id, true),
+        ),
+        yield* runtime.contextEffect,
+      );
+      yield* Effect.provideContext(indexAll, yield* runtime.contextEffect);
+      const find = Effect.fn("search.find")(function* (crossProject: boolean) {
+        return yield* Effect.provideContext(
+          Effect.flatMap(MemorySearch, (search) =>
+            search.find({ query: "SQLite", projectId: project.id, crossProject }),
+          ),
+          yield* runtime.contextEffect,
+        );
+      });
+      const across = yield* find(true);
+      expect(across.matches.find((match) => match.id === shared.node.id)).toMatchObject({
+        fromOtherProject: true,
+        projectId: shared.project.id,
+      });
+      expect(across.matches.map((match) => match.id)).not.toContain(excluded.node.id);
+      expect((yield* find(false)).matches).toEqual([]);
+    }).pipe(withTestPlatform),
+  );
 });
 
 describe("memory tools", () => {
-  test("let the model find, read and trace earlier evidence inside a chat run", async () => {
-    const { runtime, project, session, base } = await testRuntime();
-    const earlier = await earlierSession(runtime, project.id, session.id);
-    const hidden = await otherProject(runtime, base, "비공개 메모");
-    await runtime.runPromise(
-      Effect.flatMap(Projects, (projects) =>
-        projects.setCrossRecallExcluded(hidden.project.id, true),
-      ),
-    );
-    await runtime.runPromise(indexAll);
-
-    const newSession = await runtime.runPromise(
-      Effect.flatMap(Sessions, (sessions) => sessions.create(project.id)),
-    );
-    const nodes = await runtime.runPromise(Nodes);
-    const recorder = await runtime.runPromise(Recorder);
-    const tools = (await runtime.runPromise(MemoryTools)).forProject(project.id);
-    const question = nodes.append({
-      projectId: project.id,
-      sessionId: newSession.id,
-      kind: "user",
-      text: "우리 DB 뭐로 하기로 했었지?",
-    });
-
-    const call = (id: string, name: string, args: Readonly<Record<string, string>>) => ({
-      id,
-      name,
-      arguments: JSON.stringify(args),
-    });
-    const stream = chat({
-      adapter: new ScriptedTextAdapter([
-        { toolCalls: [call("c1", "find_memory", { query: "SQLite 결정" })] },
-        {
-          toolCalls: [
-            call("c2", "read_evidence", { id: earlier.decision.id }),
-            call("c3", "trace_evidence", { id: earlier.result.id }),
-            call("c4", "read_evidence", { id: hidden.node.id }),
-          ],
-        },
-        { text: "이전 세션에서 SQLite로 결정했습니다." },
-      ]),
-      messages: [{ role: "user", content: question.text }],
-      tools,
-      runId: "new-run",
-      middleware: [
-        recorder.forRun({
-          projectId: project.id,
-          sessionId: newSession.id,
-          runId: "new-run",
-          userNodeId: question.id,
-        }),
-      ],
-    });
-    for await (const _chunk of stream) {
-      // drain
-    }
-
-    const results = MutableHashMap.fromIterable(
-      nodes
-        .session(newSession.id)
-        .filter((node) => node.kind === "tool_result")
-        .map((node) => [node.detail.toolCallId, JSON.parse(node.text)]),
-    );
-    expect(
-      Option.getOrUndefined(MutableHashMap.get(results, "c1")).matches.map(
-        (match: { id: string }) => match.id,
-      ),
-    ).toContain(earlier.decision.id);
-    expect(Option.getOrUndefined(MutableHashMap.get(results, "c2"))).toMatchObject({
-      text: earlier.decision.text,
-      nextOffset: null,
-      sessionId: session.id,
-    });
-    expect(
-      Option.getOrUndefined(MutableHashMap.get(results, "c3")).chain.map(
-        (node: { id: string }) => node.id,
-      ),
-    ).toEqual([earlier.result.id, earlier.call.id, earlier.answer.id, earlier.decision.id]);
-    expect(Option.getOrUndefined(MutableHashMap.get(results, "c4"))).toEqual({
-      error: "not_found",
-      id: hidden.node.id,
-    });
-  });
+  it.live("let the model find, read and trace earlier evidence inside a chat run", () =>
+    Effect.gen(function* () {
+      const { runtime, project, session, base } = yield* Effect.promise(() => testRuntime());
+      const earlier = yield* earlierSession(runtime, project.id, session.id);
+      const hidden = yield* otherProject(runtime, base, "비공개 메모");
+      yield* Effect.provideContext(
+        Effect.flatMap(Projects, (projects) =>
+          projects.setCrossRecallExcluded(hidden.project.id, true),
+        ),
+        yield* runtime.contextEffect,
+      );
+      yield* Effect.provideContext(indexAll, yield* runtime.contextEffect);
+      const newSession = yield* Effect.provideContext(
+        Effect.flatMap(Sessions, (sessions) => sessions.create(project.id)),
+        yield* runtime.contextEffect,
+      );
+      const nodes = yield* Effect.provideContext(Nodes, yield* runtime.contextEffect);
+      const recorder = yield* Effect.provideContext(Recorder, yield* runtime.contextEffect);
+      const tools = (yield* Effect.provideContext(
+        MemoryTools,
+        yield* runtime.contextEffect,
+      )).forProject(project.id);
+      const question = nodes.append({
+        projectId: project.id,
+        sessionId: newSession.id,
+        kind: "user",
+        text: "우리 DB 뭐로 하기로 했었지?",
+      });
+      const call = (id: string, name: string, args: Readonly<Record<string, string>>) => ({
+        id,
+        name,
+        arguments: JSON.stringify(args),
+      });
+      const stream = chat({
+        adapter: new ScriptedTextAdapter([
+          { toolCalls: [call("c1", "find_memory", { query: "SQLite 결정" })] },
+          {
+            toolCalls: [
+              call("c2", "read_evidence", { id: earlier.decision.id }),
+              call("c3", "trace_evidence", { id: earlier.result.id }),
+              call("c4", "read_evidence", { id: hidden.node.id }),
+            ],
+          },
+          { text: "이전 세션에서 SQLite로 결정했습니다." },
+        ]),
+        messages: [{ role: "user", content: question.text }],
+        tools,
+        runId: "new-run",
+        middleware: [
+          recorder.forRun({
+            projectId: project.id,
+            sessionId: newSession.id,
+            runId: "new-run",
+            userNodeId: question.id,
+          }),
+        ],
+      });
+      yield* Stream.runDrain(
+        Stream.fromAsyncIterable(stream, (cause) => new Cause.UnknownError(cause)),
+      );
+      const results = MutableHashMap.fromIterable(
+        nodes
+          .session(newSession.id)
+          .filter((node) => node.kind === "tool_result")
+          .map((node) => [node.detail.toolCallId, node.text]),
+      );
+      const found = yield* Schema.decodeEffect(
+        Schema.fromJsonString(
+          Schema.Struct({ matches: Schema.Array(Schema.Struct({ id: Schema.String })) }),
+        ),
+      )(Option.getOrUndefined(MutableHashMap.get(results, "c1")) ?? "{}");
+      const read = yield* Schema.decodeEffect(
+        Schema.fromJsonString(
+          Schema.Struct({
+            text: Schema.String,
+            nextOffset: Schema.Union([Schema.Null, Schema.Finite]),
+            sessionId: Schema.String,
+          }),
+        ),
+      )(Option.getOrUndefined(MutableHashMap.get(results, "c2")) ?? "{}");
+      const traced = yield* Schema.decodeEffect(
+        Schema.fromJsonString(
+          Schema.Struct({ chain: Schema.Array(Schema.Struct({ id: Schema.String })) }),
+        ),
+      )(Option.getOrUndefined(MutableHashMap.get(results, "c3")) ?? "{}");
+      const refused = yield* Schema.decodeEffect(
+        Schema.fromJsonString(Schema.Struct({ error: Schema.String, id: Schema.String })),
+      )(Option.getOrUndefined(MutableHashMap.get(results, "c4")) ?? "{}");
+      expect(found.matches.map((match) => match.id)).toContain(earlier.decision.id);
+      expect(read).toMatchObject({
+        text: earlier.decision.text,
+        nextOffset: null,
+        sessionId: session.id,
+      });
+      expect(traced.chain.map((node) => node.id)).toEqual([
+        earlier.result.id,
+        earlier.call.id,
+        earlier.answer.id,
+        earlier.decision.id,
+      ]);
+      expect(refused).toEqual({
+        error: "not_found",
+        id: hidden.node.id,
+      });
+    }).pipe(withTestPlatform),
+  );
 });
 
-test("Database is shared by every service in one runtime", async () => {
-  const { runtime } = await testRuntime();
-  const [a, b] = await runtime.runPromise(Effect.all([Database, Database]));
-  expect(a.sqlite).toBe(b.sqlite);
-});
+it.live("Database is shared by every service in one runtime", () =>
+  Effect.gen(function* () {
+    const { runtime } = yield* Effect.promise(() => testRuntime());
+    const [a, b] = yield* Effect.provideContext(
+      Effect.all([Database, Database]),
+      yield* runtime.contextEffect,
+    );
+    expect(a.sqlite).toBe(b.sqlite);
+  }).pipe(withTestPlatform),
+);

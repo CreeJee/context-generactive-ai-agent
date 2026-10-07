@@ -1,7 +1,5 @@
 import { Layer } from "effect";
 import { it as effectTest } from "@effect/vitest";
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off
 import { Effect, Result } from "effect";
 import {
   ImageRouteFacts,
@@ -13,7 +11,7 @@ import {
   type MediaRoute,
   type RouteCatalogSource,
 } from "memory-agent";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect } from "vite-plus/test";
 
 const chat: ChatRoute = {
   type: "chat",
@@ -111,111 +109,113 @@ const facts: readonly ImageRouteFact[] = [
 ];
 const intent = { operation: "generate" as const, sourceImageCount: 0, requiresMask: false };
 
-async function router(
+const router = Effect.fnUntraced(function* (
   factValues: readonly ImageRouteFact[] = facts,
   crossProviderConsent?: Parameters<typeof makeImageRouter>[2],
 ) {
   const source: RouteCatalogSource = {
     load: Effect.succeed({ chat: [chat], media: routes, execution: [] }),
   };
-  const catalog = await Effect.runPromise(makeRouteCatalog(source, () => 1));
-  await Effect.runPromise(catalog.refresh);
+  const catalog = yield* makeRouteCatalog(source, () => 1);
+  yield* catalog.refresh;
   return makeImageRouter(
     catalog,
     { forRoutes: () => Effect.succeed(factValues) },
     crossProviderConsent,
   );
-}
+});
 
 describe("image router", () => {
-  it("filters disabled cross-provider routes and marks ask routes for approval", async () => {
-    let mode: "disabled" | "ask" | "always" = "disabled";
-    const consent: NonNullable<Parameters<typeof makeImageRouter>[2]> = {
-      read: Effect.succeed({ version: 1, pairs: {} }),
-      decide: (pair) =>
-        Effect.succeed({
-          ...pair,
+  effectTest.effect(
+    "filters disabled cross-provider routes and marks ask routes for approval",
+    () =>
+      Effect.gen(function* () {
+        let mode: "disabled" | "ask" | "always" = "disabled";
+        const consent: NonNullable<Parameters<typeof makeImageRouter>[2]> = {
+          read: Effect.succeed({ version: 1, pairs: {} }),
+          decide: (pair) =>
+            Effect.succeed({
+              ...pair,
+              crossProvider: true,
+              mode,
+              allowedWithoutPrompt: mode === "always",
+              requiresApproval: mode === "ask",
+              reasons: [],
+              settingsVersion: 1,
+            }),
+          set: () => Effect.die("unused"),
+        };
+        const service = yield* router(facts, consent);
+        const request = {
+          initiatorChatRouteId: chat.id,
+          intent,
+          policy: { mode: "auto" as const },
+        };
+        expect(Result.isFailure(yield* Effect.result(service.select(request)))).toBe(true);
+        mode = "ask";
+        expect(yield* service.select(request)).toMatchObject({
+          initiatorProvider: "anthropic",
+          provider: "openai",
           crossProvider: true,
-          mode,
-          allowedWithoutPrompt: mode === "always",
-          requiresApproval: mode === "ask",
-          reasons: [],
-          settingsVersion: 1,
-        }),
-      set: () => Effect.die("unused"),
-    };
-    const service = await router(facts, consent);
-    const request = {
-      initiatorChatRouteId: chat.id,
-      intent,
-      policy: { mode: "auto" as const },
-    };
-    expect(Result.isFailure(await Effect.runPromise(Effect.result(service.select(request))))).toBe(
-      true,
-    );
-    mode = "ask";
-    expect(await Effect.runPromise(service.select(request))).toMatchObject({
-      initiatorProvider: "anthropic",
-      provider: "openai",
-      crossProvider: true,
-      crossProviderConsentMode: "ask",
-      crossProviderApprovalRequired: true,
-    });
-    mode = "always";
-    expect(await Effect.runPromise(service.select(request))).toMatchObject({
-      crossProviderConsentMode: "always",
-      crossProviderApprovalRequired: false,
-    });
-  });
+          crossProviderConsentMode: "ask",
+          crossProviderApprovalRequired: true,
+        });
+        mode = "always";
+        expect(yield* service.select(request)).toMatchObject({
+          crossProviderConsentMode: "always",
+          crossProviderApprovalRequired: false,
+        });
+      }),
+  );
 
-  it("is deterministic and defaults to balanced", async () => {
-    const service = await router();
-    const request = { initiatorChatRouteId: chat.id, intent, policy: { mode: "auto" as const } };
-    const first = await Effect.runPromise(service.select(request));
-    const second = await Effect.runPromise(service.select(request));
-    expect(first).toEqual(second);
-    expect(first.preference).toBe("balanced");
-    expect(first.executorMediaRouteId).toBe(quality.id);
-    expect(first.initiatorChatModel).toBe("claude-test");
-    expect(first.executorMediaModel).toEqual({ type: "explicit", model: "gpt-image-2" });
-  });
+  effectTest.effect("is deterministic and defaults to balanced", () =>
+    Effect.gen(function* () {
+      const service = yield* router();
+      const request = { initiatorChatRouteId: chat.id, intent, policy: { mode: "auto" as const } };
+      const first = yield* service.select(request);
+      const second = yield* service.select(request);
+      expect(first).toEqual(second);
+      expect(first.preference).toBe("balanced");
+      expect(first.executorMediaRouteId).toBe(quality.id);
+      expect(first.initiatorChatModel).toBe("claude-test");
+      expect(first.executorMediaModel).toEqual({ type: "explicit", model: "gpt-image-2" });
+    }),
+  );
 
-  it("changes route according to explicit quality, speed and cost preferences", async () => {
-    const service = await router();
-    const select = (preference: "quality" | "speed" | "cost") =>
-      Effect.runPromise(
+  effectTest.effect("changes route according to explicit quality, speed and cost preferences", () =>
+    Effect.gen(function* () {
+      const service = yield* router();
+      const select = (preference: "quality" | "speed" | "cost") =>
         service.select({
           initiatorChatRouteId: chat.id,
           intent,
           policy: { mode: "auto", preference },
-        }),
-      );
-    expect((await select("quality")).executorMediaRouteId).toBe(quality.id);
-    expect((await select("speed")).executorMediaRouteId).toBe(fast.id);
-    expect((await select("cost")).executorMediaRouteId).toBe(cheap.id);
-  });
+        });
+      expect((yield* select("quality")).executorMediaRouteId).toBe(quality.id);
+      expect((yield* select("speed")).executorMediaRouteId).toBe(fast.id);
+      expect((yield* select("cost")).executorMediaRouteId).toBe(cheap.id);
+    }),
+  );
 
-  it("supports fixed override without bypassing route policy", async () => {
-    const service = await router();
-    const selected = await Effect.runPromise(
-      service.select({
+  effectTest.effect("supports fixed override without bypassing route policy", () =>
+    Effect.gen(function* () {
+      const service = yield* router();
+      const selected = yield* service.select({
         initiatorChatRouteId: chat.id,
         intent,
         policy: { mode: "fixed", fixedRouteId: quality.id },
-      }),
-    );
-    expect(selected.executorMediaRouteId).toBe(quality.id);
-    const rejected = await Effect.runPromise(
-      Effect.result(
+      });
+      expect(selected.executorMediaRouteId).toBe(quality.id);
+      const rejected = yield* Effect.result(
         service.select({
           initiatorChatRouteId: chat.id,
           intent: { operation: "edit", sourceImageCount: 1, requiresMask: true },
           policy: { mode: "fixed", fixedRouteId: fast.id },
         }),
-      ),
-    );
-    expect(Result.isFailure(rejected) && rejected.failure._tag).toBe("FixedImageRouteRejected");
-  });
+      );
+      expect(Result.isFailure(rejected) && rejected.failure._tag).toBe("FixedImageRouteRejected");
+    }),
+  );
 
   effectTest.effect("excludes unknown cost under a strict ceiling unless explicitly allowed", () =>
     Effect.gen(function* () {
@@ -292,31 +292,41 @@ describe("image router", () => {
     }),
   );
 
-  it("returns typed failure with complete ranking when no route is eligible", async () => {
-    const service = await router(facts.map((fact) => ({ ...fact, available: false })));
-    const result = await Effect.runPromise(
-      Effect.result(
+  effectTest.effect("returns typed failure with complete ranking when no route is eligible", () =>
+    Effect.gen(function* () {
+      const service = yield* router(facts.map((fact) => ({ ...fact, available: false })));
+      const result = yield* Effect.result(
         service.select({ initiatorChatRouteId: chat.id, intent, policy: { mode: "auto" } }),
-      ),
-    );
-    expect(Result.isFailure(result) && result.failure).toMatchObject({
-      _tag: "ImageRouteUnavailable",
-      reasons: ["no eligible image route"],
-    });
-  });
+      );
+      expect(Result.isFailure(result) && result.failure).toMatchObject({
+        _tag: "ImageRouteUnavailable",
+        reasons: ["no eligible image route"],
+      });
+    }),
+  );
 
-  it("returns alternatives requiring confirmation instead of automatic fallback", async () => {
-    const service = await router();
-    const request = { initiatorChatRouteId: chat.id, intent, policy: { mode: "auto" as const } };
-    const decision = await Effect.runPromise(service.select(request));
-    const reroute = await Effect.runPromise(
-      service.rerouteAfterFailure(decision, "provider overloaded", request),
-    );
-    expect(reroute.type).toBe("confirmation_required");
-    expect(reroute.failedDecision).toBe(decision);
-    expect(reroute.alternatives.length).toBeGreaterThan(0);
-    expect(reroute.alternatives.every((candidate) => candidate.type === "selected")).toBe(true);
-  });
+  effectTest.effect(
+    "returns alternatives requiring confirmation instead of automatic fallback",
+    () =>
+      Effect.gen(function* () {
+        const service = yield* router();
+        const request = {
+          initiatorChatRouteId: chat.id,
+          intent,
+          policy: { mode: "auto" as const },
+        };
+        const decision = yield* service.select(request);
+        const reroute = yield* service.rerouteAfterFailure(
+          decision,
+          "provider overloaded",
+          request,
+        );
+        expect(reroute.type).toBe("confirmation_required");
+        expect(reroute.failedDecision).toBe(decision);
+        expect(reroute.alternatives.length).toBeGreaterThan(0);
+        expect(reroute.alternatives.every((candidate) => candidate.type === "selected")).toBe(true);
+      }),
+  );
 
   effectTest.effect("rejects malformed intent and scoring facts", () =>
     Effect.gen(function* () {

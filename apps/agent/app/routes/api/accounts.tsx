@@ -26,41 +26,44 @@ const reply = <A,>(value: A, status = 200) =>
   });
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function loader({ request }: Route.LoaderArgs) {
-  const provider = new URL(request.url).searchParams.get("provider");
-  if (!Schema.is(SubscriptionAccountProvider)(provider))
-    return reply({ error: "invalid_provider" }, 400);
-  try {
-    return await agent.runPromise(
-      Effect.gen(function* () {
+export function loader({ request }: Route.LoaderArgs) {
+  return agent.runPromise(
+    Effect.gen(function* () {
+      const provider = new URL(request.url).searchParams.get("provider");
+      if (!Schema.is(SubscriptionAccountProvider)(provider))
+        return reply({ error: "invalid_provider" }, 400);
+      return yield* Effect.gen(function* () {
         const { sqlite } = yield* Database;
         // Preserve existing auth even if OS keychain import fails. Subsequent requests retry.
         yield* Effect.promise(() => importLegacyOAuthProfile(sqlite, provider).catch(() => null));
         return reply(accountLoginManager(sqlite).profiles(provider));
-      }),
-    );
-  } catch {
-    return reply({ error: "account_list_unavailable" }, 503);
-  }
+      }).pipe(
+        Effect.catchCause(() => Effect.succeed(reply({ error: "account_list_unavailable" }, 503))),
+      );
+    }),
+  );
 }
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function action({ request }: Route.ActionArgs) {
-  const rejected = rejectCrossSite(request);
-  if (rejected !== null) return rejected;
-  const decoded = await readJson(request, Action);
-  if (Result.isFailure(decoded)) return reply({ error: "invalid_account_action" }, 400);
-  const { intent, provider, label, accountId } = decoded.success;
-  if ((intent === "add" || intent === "rename") && (!isTruthy(label?.trim()) || label.length > 80))
-    return reply({ error: "invalid_account_label" }, 400);
-  if (
-    (intent === "select" || intent === "remove" || intent === "rename") &&
-    (!isTruthy(accountId) || accountId.length > 128)
-  )
-    return reply({ error: "invalid_account_id" }, 400);
-  try {
-    return await agent.runPromise(
-      Effect.gen(function* () {
+export function action({ request }: Route.ActionArgs) {
+  return agent.runPromise(
+    Effect.gen(function* () {
+      const rejected = rejectCrossSite(request);
+      if (rejected !== null) return rejected;
+      const decoded = yield* Effect.tryPromise(() => readJson(request, Action));
+      if (Result.isFailure(decoded)) return reply({ error: "invalid_account_action" }, 400);
+      const { intent, provider, label, accountId } = decoded.success;
+      if (
+        (intent === "add" || intent === "rename") &&
+        (!isTruthy(label?.trim()) || label.length > 80)
+      )
+        return reply({ error: "invalid_account_label" }, 400);
+      if (
+        (intent === "select" || intent === "remove" || intent === "rename") &&
+        (!isTruthy(accountId) || accountId.length > 128)
+      )
+        return reply({ error: "invalid_account_id" }, 400);
+      return yield* Effect.gen(function* () {
         const { sqlite } = yield* Database;
         const manager = accountLoginManager(sqlite);
         if (intent === "add")
@@ -72,10 +75,10 @@ export async function action({ request }: Route.ActionArgs) {
         else if (intent === "rename") renameOAuthProfile(sqlite, provider, accountId!, label!);
         else yield* Effect.tryPromise(() => selectOAuthProfile(sqlite, provider, accountId!));
         return reply(manager.profiles(provider));
-      }),
-    );
-  } catch {
-    // Never expose keychain/native OAuth errors or tokens to the browser.
-    return reply({ error: "account_action_failed" }, 409);
-  }
+      }).pipe(
+        // Never expose keychain/native OAuth errors or tokens to the browser.
+        Effect.catchCause(() => Effect.succeed(reply({ error: "account_action_failed" }, 409))),
+      );
+    }),
+  );
 }

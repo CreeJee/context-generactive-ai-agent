@@ -1,4 +1,5 @@
-import { Function as EffectFunction } from "effect";
+import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
+import { Cause, Effect, Function as EffectFunction } from "effect";
 import { MutableHashMap, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
@@ -62,78 +63,94 @@ export const prepareCodeCandidate: {
     signal: AbortSignal,
   ): (repository: string) => ReturnType<typeof prepareCodeCandidateBody>;
 } & typeof prepareCodeCandidateBody = EffectFunction.dual(4, prepareCodeCandidateBody);
-async function prepareCodeCandidateBody(
+function prepareCodeCandidateBody(
   repository: string,
   experimentId: string,
   proposal: CodeProposal,
   signal: AbortSignal,
 ) {
-  const branch = `rrsi/${experimentId}/code`;
-  const directory = join(repository, ".rrsi-local/candidates", experimentId, "code");
-  mkdirSync(join(repository, ".rrsi-local/candidates", experimentId), { recursive: true });
-  await run("git", ["worktree", "add", "-b", branch, directory, "HEAD"], {
-    cwd: repository,
-    signal,
-  });
-  applyCodeProposal(directory, proposal);
-  const { stdout: diff } = await run("git", ["diff", "--", ...editableCode], {
-    cwd: directory,
-    signal,
-  });
-  if (!isTruthy(diff)) throw new Error("empty_code_candidate");
-  await run("git", ["add", "--", ...editableCode], { cwd: directory, signal });
-  await run(
-    "git",
-    [
-      "-c",
-      "core.hooksPath=/dev/null",
-      "commit",
-      "-m",
-      "experiment: propose harness code improvement",
-    ],
-    { cwd: directory, signal },
+  return runNativeEffect(
+    Effect.gen(function* () {
+      const branch = `rrsi/${experimentId}/code`;
+      const directory = join(repository, ".rrsi-local/candidates", experimentId, "code");
+      mkdirSync(join(repository, ".rrsi-local/candidates", experimentId), { recursive: true });
+      yield* nativePromise(() =>
+        run("git", ["worktree", "add", "-b", branch, directory, "HEAD"], {
+          cwd: repository,
+          signal,
+        }),
+      );
+      applyCodeProposal(directory, proposal);
+      const { stdout: diff } = yield* nativePromise(() =>
+        run("git", ["diff", "--", ...editableCode], {
+          cwd: directory,
+          signal,
+        }),
+      );
+      if (!isTruthy(diff)) return yield* new Cause.UnknownError(new Error("empty_code_candidate"));
+      yield* nativePromise(() =>
+        run("git", ["add", "--", ...editableCode], { cwd: directory, signal }),
+      );
+      yield* nativePromise(() =>
+        run(
+          "git",
+          [
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "-m",
+            "experiment: propose harness code improvement",
+          ],
+          { cwd: directory, signal },
+        ),
+      );
+      const { stdout: commit } = yield* nativePromise(() =>
+        run("git", ["rev-parse", "HEAD"], { cwd: directory, signal }),
+      );
+      const tag = `context-agent-rrsi:code-${createHash("sha256").update(commit).digest("hex").slice(0, 16)}`;
+      // Dockerfile/dependencies/evaluator are protected; no candidate command executes on the host.
+      yield* nativePromise(() =>
+        run("docker", ["build", "-f", "tools/rrsi/Dockerfile", "-t", tag, "."], {
+          cwd: directory,
+          signal,
+          maxBuffer: 16 * 1024 * 1024,
+        }),
+      );
+      const { stdout: imageId } = yield* nativePromise(() =>
+        run("docker", ["image", "inspect", tag, "--format", "{{.Id}}"], { signal }),
+      );
+      const image = imageId.trim();
+      yield* nativePromise(() =>
+        run(
+          "docker",
+          [
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--read-only",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--pids-limit",
+            "256",
+            "--memory",
+            "3g",
+            "--cpus",
+            "2",
+            "--tmpfs",
+            "/tmp:rw,nosuid,size=1g,mode=1777",
+            "--entrypoint",
+            "sh",
+            image,
+            "-c",
+            "pnpm exec vp check packages/memory-agent/src packages/memory-agent/eval && pnpm exec tsc -p packages/memory-agent/tsconfig.json --incremental false --composite false && pnpm exec vp test --run packages/memory-agent/tests/compaction.test.ts packages/memory-agent/tests/memory-tool-factory.test.ts packages/memory-agent/tests/full-loop-execution.test.ts --maxWorkers=1",
+          ],
+          { signal, maxBuffer: 16 * 1024 * 1024 },
+        ),
+      );
+      return { branch, commit: commit.trim(), diff, image };
+    }),
   );
-  const { stdout: commit } = await run("git", ["rev-parse", "HEAD"], { cwd: directory, signal });
-  const tag = `context-agent-rrsi:code-${createHash("sha256").update(commit).digest("hex").slice(0, 16)}`;
-  // Dockerfile/dependencies/evaluator are protected; no candidate command executes on the host.
-  await run("docker", ["build", "-f", "tools/rrsi/Dockerfile", "-t", tag, "."], {
-    cwd: directory,
-    signal,
-    maxBuffer: 16 * 1024 * 1024,
-  });
-  const { stdout: imageId } = await run(
-    "docker",
-    ["image", "inspect", tag, "--format", "{{.Id}}"],
-    { signal },
-  );
-  const image = imageId.trim();
-  await run(
-    "docker",
-    [
-      "run",
-      "--rm",
-      "--network",
-      "none",
-      "--read-only",
-      "--cap-drop",
-      "ALL",
-      "--security-opt",
-      "no-new-privileges",
-      "--pids-limit",
-      "256",
-      "--memory",
-      "3g",
-      "--cpus",
-      "2",
-      "--tmpfs",
-      "/tmp:rw,nosuid,size=1g,mode=1777",
-      "--entrypoint",
-      "sh",
-      image,
-      "-c",
-      "pnpm exec vp check packages/memory-agent/src packages/memory-agent/eval && pnpm exec tsc -p packages/memory-agent/tsconfig.json --incremental false --composite false && pnpm exec vp test --run packages/memory-agent/tests/compaction.test.ts packages/memory-agent/tests/memory-tool-factory.test.ts packages/memory-agent/tests/full-loop-execution.test.ts --maxWorkers=1",
-    ],
-    { signal, maxBuffer: 16 * 1024 * 1024 },
-  );
-  return { branch, commit: commit.trim(), diff, image };
 }

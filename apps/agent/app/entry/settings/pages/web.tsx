@@ -1,3 +1,5 @@
+import { Effect } from "effect";
+import { runUiEffect, uiPromise } from "../../shared/ui-effect";
 import { isTruthy } from "../../../truthy.ts";
 import { KeyRoundIcon, Trash2Icon } from "lucide-react";
 import { useState } from "react";
@@ -34,17 +36,30 @@ export function KagiSettings() {
   const [error, setError] = useState<string | null>(null);
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const apply = async (
+  const apply = (
     command: { action: "register"; key: string } | { action: "remove" | "enable" | "disable" },
-  ) => {
-    setError(null);
-    try {
-      await mutation.mutateAsync(command);
-      if (command.action === "register") setKey("");
-    } catch (failure) {
-      setError(errorMessage(failure instanceof Error ? failure : new Error(String(failure))));
-    }
-  };
+  ) =>
+    runUiEffect(
+      Effect.gen(function* () {
+        setError(null);
+        yield* uiPromise(() => mutation.mutateAsync(command)).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              if (command.action === "register") setKey("");
+            }),
+          ),
+          Effect.catch((failure) =>
+            Effect.sync(() => {
+              setError(
+                errorMessage(
+                  failure.cause instanceof Error ? failure.cause : new Error(String(failure.cause)),
+                ),
+              );
+            }),
+          ),
+        );
+      }),
+    );
 
   const header = (
     <PageHeader

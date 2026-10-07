@@ -12,23 +12,25 @@ const OpenReport = Schema.Struct({
 
 /** Explicit same-origin opening; no chat run or original-session mutation. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function action({ request }: Route.ActionArgs) {
-  const rejected = rejectCrossSite(request);
-  if (rejected !== null) return rejected;
-  const decoded = await readJson(request, OpenReport);
-  if (Result.isFailure(decoded))
-    return Response.json({ error: "invalid_report_source" }, { status: 400 });
-  const { projectId, sourceSessionId } = decoded.success;
-  if (projectId.length > 256 || sourceSessionId.length > 256)
-    return Response.json({ error: "invalid_report_source" }, { status: 400 });
+export function action({ request }: Route.ActionArgs) {
   return agent.runPromise(
     Effect.gen(function* () {
-      const { sqlite } = yield* Database;
-      const result = yield* openReportSession(sqlite, projectId, sourceSessionId);
-      if (!(result !== null))
-        return Response.json({ error: "report_source_not_found" }, { status: 404 });
-      (yield* AppEvents).publishProject(projectId, "sessions");
-      return Response.json(result, { headers: { "Cache-Control": "no-store" } });
+      const rejected = rejectCrossSite(request);
+      if (rejected !== null) return rejected;
+      const decoded = yield* Effect.tryPromise(() => readJson(request, OpenReport));
+      if (Result.isFailure(decoded))
+        return Response.json({ error: "invalid_report_source" }, { status: 400 });
+      const { projectId, sourceSessionId } = decoded.success;
+      if (projectId.length > 256 || sourceSessionId.length > 256)
+        return Response.json({ error: "invalid_report_source" }, { status: 400 });
+      return yield* Effect.gen(function* () {
+        const { sqlite } = yield* Database;
+        const result = yield* openReportSession(sqlite, projectId, sourceSessionId);
+        if (!(result !== null))
+          return Response.json({ error: "report_source_not_found" }, { status: 404 });
+        (yield* AppEvents).publishProject(projectId, "sessions");
+        return Response.json(result, { headers: { "Cache-Control": "no-store" } });
+      });
     }),
   );
 }

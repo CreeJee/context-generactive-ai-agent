@@ -25,72 +25,76 @@ const ImageMediaRequest = Schema.Struct({
 
 /** POST /api/media/image — paid direct media workflow, deliberately outside chat tool context. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function action({ request }: Route.ActionArgs) {
-  const rejected = rejectCrossSite(request);
-  if (rejected !== null) return rejected;
-  const body = await readJson(request, ImageMediaRequest);
-  if (Result.isFailure(body))
-    return Response.json({ error: "invalid_image_request" }, { status: 400 });
+export function action({ request }: Route.ActionArgs) {
+  return agent.runPromise(
+    Effect.gen(function* () {
+      const rejected = rejectCrossSite(request);
+      if (rejected !== null) return rejected;
+      const body = yield* Effect.tryPromise(() => readJson(request, ImageMediaRequest));
+      if (Result.isFailure(body))
+        return Response.json({ error: "invalid_image_request" }, { status: 400 });
 
-  const response = Effect.gen(function* () {
-    const active = yield* ActiveProvider;
-    const selected = yield* active.selected;
-    if (selected === null)
-      return Response.json(
-        { error: "image_route_unavailable", reason: "no chat model selected" },
-        { status: 422 },
-      );
-    const workflow = yield* ImageMediaWorkflow;
-    let baseRequest: ImageMediaRequest = {
-      initiatorChatRouteId: `chat:${selected.provider}:${selected.model}`,
-      prompt: body.success.prompt,
-      approved: body.success.approved,
-      signal: request.signal,
-    };
-    if (body.success.runId !== undefined)
-      baseRequest = { ...baseRequest, runId: body.success.runId };
-    if (body.success.crossProviderApproval !== undefined)
-      baseRequest = {
-        ...baseRequest,
-        crossProviderApproval: body.success.crossProviderApproval,
-      };
-    const mediaRequest: ImageMediaRequest =
-      body.success.maximumEstimatedCostUsd === undefined
-        ? baseRequest
-        : { ...baseRequest, maximumEstimatedCostUsd: body.success.maximumEstimatedCostUsd };
-    const asset = yield* workflow.generate(mediaRequest);
-    return Response.json({
-      ...asset,
-      url: `/api/attachments/${encodeURIComponent(asset.attachment.id)}`,
-    });
-  }).pipe(
-    Effect.catchTags({
-      ImageMediaApprovalRequired: (failure) =>
-        Effect.succeed(
-          Response.json(
-            {
-              error: "image_approval_required",
-              reason: failure.reason,
-              approval: failure.approval,
-            },
-            { status: 409 },
-          ),
-        ),
-      ImageMediaUnavailable: (failure) =>
-        Effect.succeed(
-          Response.json(
-            { error: "image_route_unavailable", reason: failure.reason },
+      const response = Effect.gen(function* () {
+        const active = yield* ActiveProvider;
+        const selected = yield* active.selected;
+        if (selected === null)
+          return Response.json(
+            { error: "image_route_unavailable", reason: "no chat model selected" },
             { status: 422 },
-          ),
-        ),
-      ImageMediaExecutionFailed: (failure) =>
-        Effect.succeed(
-          Response.json(
-            { error: "image_execution_failed", reroute: failure.reroute },
-            { status: 502 },
-          ),
-        ),
+          );
+        const workflow = yield* ImageMediaWorkflow;
+        let baseRequest: ImageMediaRequest = {
+          initiatorChatRouteId: `chat:${selected.provider}:${selected.model}`,
+          prompt: body.success.prompt,
+          approved: body.success.approved,
+          signal: request.signal,
+        };
+        if (body.success.runId !== undefined)
+          baseRequest = { ...baseRequest, runId: body.success.runId };
+        if (body.success.crossProviderApproval !== undefined)
+          baseRequest = {
+            ...baseRequest,
+            crossProviderApproval: body.success.crossProviderApproval,
+          };
+        const mediaRequest: ImageMediaRequest =
+          body.success.maximumEstimatedCostUsd === undefined
+            ? baseRequest
+            : { ...baseRequest, maximumEstimatedCostUsd: body.success.maximumEstimatedCostUsd };
+        const asset = yield* workflow.generate(mediaRequest);
+        return Response.json({
+          ...asset,
+          url: `/api/attachments/${encodeURIComponent(asset.attachment.id)}`,
+        });
+      }).pipe(
+        Effect.catchTags({
+          ImageMediaApprovalRequired: (failure) =>
+            Effect.succeed(
+              Response.json(
+                {
+                  error: "image_approval_required",
+                  reason: failure.reason,
+                  approval: failure.approval,
+                },
+                { status: 409 },
+              ),
+            ),
+          ImageMediaUnavailable: (failure) =>
+            Effect.succeed(
+              Response.json(
+                { error: "image_route_unavailable", reason: failure.reason },
+                { status: 422 },
+              ),
+            ),
+          ImageMediaExecutionFailed: (failure) =>
+            Effect.succeed(
+              Response.json(
+                { error: "image_execution_failed", reroute: failure.reroute },
+                { status: 502 },
+              ),
+            ),
+        }),
+      );
+      return yield* response;
     }),
   );
-  return agent.runPromise(response);
 }

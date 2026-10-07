@@ -1,9 +1,10 @@
+import { nativePromise, nativeFailure, runNativeEffect } from "../runtime/native-effect.ts";
 import { isTruthy } from "../truthy.ts";
 import type { AnyServerTool } from "@tanstack/ai";
 import { lintSource } from "@secretlint/core";
 import { secretLintProfiler } from "@secretlint/profiler";
 import { creator as recommendedRules } from "@secretlint/secretlint-rule-preset-recommend";
-import { Context, Data, Effect, Layer, Option, Schema } from "effect";
+import { Cause, Context, Data, Effect, Layer, Option, Schema } from "effect";
 import { JsonValue, type JsonValue as Json } from "../json.ts";
 
 /**
@@ -92,21 +93,25 @@ function assignmentFindings(text: string): Finding[] {
 const kindOf = (ruleId: string) => ruleId.replace(/^.*secretlint-rule-/u, "");
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function formatFindings(text: string): Promise<Finding[]> {
-  const result = await lintSource({
-    source: { filePath: "text.txt", content: text, ext: ".txt", contentType: "text" },
-    options: {
-      config: {
-        rules: [{ id: "@secretlint/secretlint-rule-preset-recommend", rule: recommendedRules }],
+const formatFindings = (text: string) =>
+  nativePromise(() =>
+    lintSource({
+      source: { filePath: "text.txt", content: text, ext: ".txt", contentType: "text" },
+      options: {
+        config: {
+          rules: [{ id: "@secretlint/secretlint-rule-preset-recommend", rule: recommendedRules }],
+        },
       },
-    },
-  });
-  return result.messages.map((message) => ({
-    start: message.range[0],
-    end: message.range[1],
-    kind: kindOf(message.ruleId),
-  }));
-}
+    }),
+  ).pipe(
+    Effect.map((result): Finding[] =>
+      result.messages.map((message) => ({
+        start: message.range[0],
+        end: message.range[1],
+        kind: kindOf(message.ruleId),
+      })),
+    ),
+  );
 
 /**
  * Overlapping findings joined into one span. Both detectors often report the same key; replacing
@@ -156,10 +161,9 @@ const make = Effect.sync(() => {
   const redactText = (text: string) =>
     Effect.gen(function* () {
       if (text.length === 0) return { text, hidden: 0 };
-      const detected = yield* Effect.tryPromise({
-        try: () => formatFindings(text),
-        catch: (cause) => new SecretRedactionFailed({ cause }),
-      });
+      const detected = yield* formatFindings(text).pipe(
+        Effect.mapError((failure) => new SecretRedactionFailed({ cause: failure.cause })),
+      );
       const findings = mergeFindings([...detected, ...assignmentFindings(text)]);
       if (findings.length === 0) return { text, hidden: 0 };
       return { text: replaceFindings(text, findings), hidden: findings.length };
@@ -187,9 +191,6 @@ const make = Effect.sync(() => {
       onSome: (json) => Effect.map(redactJson(json), (redacted): A | Json => redacted),
     });
 
-  const hide = (text: string) =>
-    Effect.runPromise(Effect.map(redactText(text), (redaction) => redaction.text));
-
   return {
     redactText,
     redactJson,
@@ -207,18 +208,27 @@ const make = Effect.sync(() => {
         return {
           ...tool,
           // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          execute: async (...call: Parameters<typeof execute>) => {
-            let result: Awaited<ReturnType<typeof execute>>;
-            try {
-              result = await execute(...call);
-            } catch (error) {
-              if (!(error instanceof Error)) throw error;
-              const message = await hide(error.message);
-              if (message === error.message) throw error;
-              throw new Error(message, { cause: "secret hidden from the message" });
-            }
-            return Effect.runPromise(redactResult(result));
-          },
+          execute: (...call: Parameters<typeof execute>) =>
+            runNativeEffect(
+              nativePromise(() => Promise.resolve(execute(...call))).pipe(
+                Effect.catchCause((cause) => {
+                  const error = nativeFailure(cause).cause;
+                  if (!(error instanceof Error)) return Effect.fail(new Cause.UnknownError(error));
+                  return redactText(error.message).pipe(
+                    Effect.flatMap(({ text }) =>
+                      Effect.fail(
+                        new Cause.UnknownError(
+                          text === error.message
+                            ? error
+                            : new Error(text, { cause: "secret hidden from the message" }),
+                        ),
+                      ),
+                    ),
+                  );
+                }),
+                Effect.flatMap(redactResult),
+              ),
+            ),
         };
       });
     },

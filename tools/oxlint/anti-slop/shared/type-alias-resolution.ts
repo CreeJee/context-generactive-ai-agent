@@ -218,7 +218,7 @@ export function resolvedTypeMatches(
 	const evaluate = (
 		current: ESTree.TSType,
 		substitutions: Substitutions,
-		resolvingAliases: HashSet.HashSet<ESTree.TSTypeAliasDeclaration>,
+		resolvingAliases: HashSet.HashSet<number>,
 	): boolean => {
 		if (current.type === "TSTypeReference") {
 			const name = typeReferenceName(current);
@@ -232,10 +232,11 @@ export function resolvedTypeMatches(
 					);
 				}
 				const alias = visibleTypeAlias(name, current, environment);
-				if (alias !== null && !HashSet.has(resolvingAliases, alias)) {
+				if (alias !== null && !HashSet.has(resolvingAliases, alias.start)) {
 					const nextSubstitutions = aliasSubstitutions(alias, current, substitutions);
 					if (nextSubstitutions !== null) {
-						const nextResolving = HashSet.add(resolvingAliases, alias);
+						// Alias offsets identify declarations in this program, including shadowed names.
+						const nextResolving = HashSet.add(resolvingAliases, alias.start);
 						return evaluate(alias.typeAnnotation, nextSubstitutions, nextResolving);
 					}
 				}
@@ -246,5 +247,5 @@ export function resolvedTypeMatches(
 		);
 	};
 
-	return evaluate(type, MutableHashMap.empty(), HashSet.empty<ESTree.TSTypeAliasDeclaration>());
+	return evaluate(type, MutableHashMap.empty(), HashSet.empty<number>());
 }

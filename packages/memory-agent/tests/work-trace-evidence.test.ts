@@ -1,32 +1,21 @@
-import { Result, Function as EffectFunction } from "effect";
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off schemaSync:off
 import { DateTime, Schema, Effect, Layer } from "effect";
-import { describe, expect, test } from "vite-plus/test";
+import { describe, expect } from "vite-plus/test";
+import { it } from "@effect/vitest";
 import { Database } from "../src/db/database.ts";
 import { WorkTraceStore } from "../src/work-trace/store.ts";
 
-const stringifyJson = EffectFunction.flow(
-  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
-  Result.getOrThrow,
-);
+const stringifyJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 const testLayer = () => {
   const database = Database.layer(":memory:");
   return Layer.merge(database, WorkTraceStore.layer.pipe(Layer.provide(database)));
 };
-const run = <A>(effect: Effect.Effect<A, never, Database | WorkTraceStore>) =>
-  // Test entry point owns this Layer and its resource scope.
-  Effect.runPromise(
-    Effect.scoped(
-      effect.pipe(
-        Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
-          const services = yield* Layer.build(testLayer());
-          return yield* Effect.provideContext(program, services);
-        }, Effect.scoped),
-      ),
-    ),
-  );
+const run = Effect.fnUntraced(function* <A, E>(
+  program: Effect.Effect<A, E, Database | WorkTraceStore>,
+) {
+  const services = yield* Layer.build(testLayer());
+  return yield* Effect.provideContext(program, services);
+}, Effect.scoped);
 const seed = (db: Database["Service"]) => {
   const iso = DateTime.formatIso(DateTime.makeUnsafe(0));
   db.sqlite
@@ -56,8 +45,8 @@ const start = (trace: WorkTraceStore["Service"]) =>
   });
 
 describe("Work Trace evidence and artifact provenance", () => {
-  test("stores typed locators without source payloads and projects them by task", async () => {
-    await run(
+  it.effect("stores typed locators without source payloads and projects them by task", () =>
+    run(
       Effect.gen(function* () {
         const db = yield* Database;
         const trace = yield* WorkTraceStore;
@@ -107,18 +96,18 @@ describe("Work Trace evidence and artifact provenance", () => {
             artifacts: [expect.objectContaining({ id: artifact.id, mediaType: "text/markdown" })],
           }),
         );
-        const persisted = stringifyJson({
+        const persisted = yield* stringifyJson({
           evidence: db.sqlite.prepare("SELECT * FROM evidence_refs").all(),
           artifacts: db.sqlite.prepare("SELECT * FROM work_artifacts").all(),
         });
         expect(persisted).not.toContain("secret transcript body");
         expect(persisted).not.toContain("tool result contents");
       }),
-    );
-  });
+    ),
+  );
 
-  test("uses explicit states and clears locator metadata in source-deleted tombstones", async () => {
-    await run(
+  it.effect("uses explicit states and clears locator metadata in source-deleted tombstones", () =>
+    run(
       Effect.gen(function* () {
         const db = yield* Database;
         const trace = yield* WorkTraceStore;
@@ -150,7 +139,7 @@ describe("Work Trace evidence and artifact provenance", () => {
             verification: "source_deleted",
           }),
         );
-        const raw = stringifyJson({
+        const raw = yield* stringifyJson({
           evidence: db.sqlite.prepare("SELECT * FROM evidence_refs WHERE id = ?").get(evidence.id),
           artifact: db.sqlite.prepare("SELECT * FROM work_artifacts WHERE id = ?").get(artifact.id),
         });
@@ -158,11 +147,11 @@ describe("Work Trace evidence and artifact provenance", () => {
         expect(raw).not.toContain("private-object-17");
         expect(raw).not.toContain("application/json");
       }),
-    );
-  });
+    ),
+  );
 
-  test("keeps project provenance after origin deletion and rejects unsafe file locators", async () => {
-    await run(
+  it.effect("keeps project provenance after origin deletion and rejects unsafe file locators", () =>
+    run(
       Effect.gen(function* () {
         const db = yield* Database;
         const trace = yield* WorkTraceStore;
@@ -230,55 +219,46 @@ describe("Work Trace evidence and artifact provenance", () => {
         );
         expect(trace.projectTaskDetail("other", handle.taskId)).toBeNull();
       }),
-    );
-  });
+    ),
+  );
 });
 
 describe("Work Trace report adoption", () => {
-  test("links a final answer to the used report, verified evidence, and reflected notification", async () => {
-    await run(
-      Effect.gen(function* () {
-        const db = yield* Database;
-        const trace = yield* WorkTraceStore;
-        seed(db);
-        const handle = start(trace);
-        const evidence = trace.recordEvidence({
-          handle,
-          locator: { kind: "message", threadId: handle.threadId, messageId: "child-answer" },
-          verification: "verified",
-        });
-        trace.recordReportDisposition({
-          handle,
-          sessionId: "s1",
-          disposition: "returned",
-          parentRunId: "parent-1",
-        });
-        trace.recordReportDisposition({
-          handle,
-          sessionId: "s1",
-          disposition: "reviewed",
-          parentRunId: "parent-1",
-        });
-        const notificationId = trace.notifyParent({
-          taskId: handle.taskId,
-          kind: "completed",
-          summary: "Subagent completed",
-          idempotencyKey: "test:completed",
-          deliveredImmediately: true,
-        });
-        expect(notificationId).not.toBeNull();
-        const claimId = trace.finalizeAnswerClaim({
-          projectId: "p1",
-          sessionId: "s1",
-          parentRunId: "parent-1",
-          parentMessageId: "parent-answer",
-          usedReports: [
-            { taskId: handle.taskId, attemptId: handle.id, evidenceRefIds: [evidence.id] },
-          ],
-          reflectedNotificationIds: [notificationId!],
-        });
-        expect(
-          trace.finalizeAnswerClaim({
+  it.effect(
+    "links a final answer to the used report, verified evidence, and reflected notification",
+    () =>
+      run(
+        Effect.gen(function* () {
+          const db = yield* Database;
+          const trace = yield* WorkTraceStore;
+          seed(db);
+          const handle = start(trace);
+          const evidence = trace.recordEvidence({
+            handle,
+            locator: { kind: "message", threadId: handle.threadId, messageId: "child-answer" },
+            verification: "verified",
+          });
+          trace.recordReportDisposition({
+            handle,
+            sessionId: "s1",
+            disposition: "returned",
+            parentRunId: "parent-1",
+          });
+          trace.recordReportDisposition({
+            handle,
+            sessionId: "s1",
+            disposition: "reviewed",
+            parentRunId: "parent-1",
+          });
+          const notificationId = trace.notifyParent({
+            taskId: handle.taskId,
+            kind: "completed",
+            summary: "Subagent completed",
+            idempotencyKey: "test:completed",
+            deliveredImmediately: true,
+          });
+          expect(notificationId).not.toBeNull();
+          const claimId = trace.finalizeAnswerClaim({
             projectId: "p1",
             sessionId: "s1",
             parentRunId: "parent-1",
@@ -287,39 +267,50 @@ describe("Work Trace report adoption", () => {
               { taskId: handle.taskId, attemptId: handle.id, evidenceRefIds: [evidence.id] },
             ],
             reflectedNotificationIds: [notificationId!],
-          }),
-        ).toBe(claimId);
-        const detail = trace.taskDetail("s1", handle.taskId)!;
-        expect(detail.adoptions.map((item) => item.disposition)).toEqual([
-          "returned",
-          "reviewed",
-          "used",
-        ]);
-        expect(detail.adoptions.at(-1)).toMatchObject({
-          claimId,
-          parentRunId: "parent-1",
-          parentMessageId: "parent-answer",
-        });
-        expect(detail.answerClaims).toEqual([
-          expect.objectContaining({
-            id: claimId,
+          });
+          expect(
+            trace.finalizeAnswerClaim({
+              projectId: "p1",
+              sessionId: "s1",
+              parentRunId: "parent-1",
+              parentMessageId: "parent-answer",
+              usedReports: [
+                { taskId: handle.taskId, attemptId: handle.id, evidenceRefIds: [evidence.id] },
+              ],
+              reflectedNotificationIds: [notificationId!],
+            }),
+          ).toBe(claimId);
+          const detail = trace.taskDetail("s1", handle.taskId)!;
+          expect(detail.adoptions.map((item) => item.disposition)).toEqual([
+            "returned",
+            "reviewed",
+            "used",
+          ]);
+          expect(detail.adoptions.at(-1)).toMatchObject({
+            claimId,
+            parentRunId: "parent-1",
             parentMessageId: "parent-answer",
-            notificationIds: [notificationId],
-            sources: [
-              {
-                taskId: handle.taskId,
-                attemptId: handle.id,
-                evidenceRefId: evidence.id,
-              },
-            ],
-          }),
-        ]);
-      }),
-    );
-  });
+          });
+          expect(detail.answerClaims).toEqual([
+            expect.objectContaining({
+              id: claimId,
+              parentMessageId: "parent-answer",
+              notificationIds: [notificationId],
+              sources: [
+                {
+                  taskId: handle.taskId,
+                  attemptId: handle.id,
+                  evidenceRefId: evidence.id,
+                },
+              ],
+            }),
+          ]);
+        }),
+      ),
+  );
 
-  test("records an omitted reviewed report as not used and rejects unreviewed use", async () => {
-    await run(
+  it.effect("records an omitted reviewed report as not used and rejects unreviewed use", () =>
+    run(
       Effect.gen(function* () {
         const db = yield* Database;
         const trace = yield* WorkTraceStore;
@@ -353,6 +344,6 @@ describe("Work Trace report adoption", () => {
           trace.taskDetail("s1", handle.taskId)!.adoptions.map((item) => item.disposition),
         ).toEqual(["reviewed", "not_used"]);
       }),
-    );
-  });
+    ),
+  );
 });

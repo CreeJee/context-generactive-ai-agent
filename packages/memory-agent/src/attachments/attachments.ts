@@ -1,6 +1,6 @@
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { HashMap, Option, DateTime, Clock, Semaphore } from "effect";
+import { HashMap, MutableHashMap, Option, DateTime, Clock, Semaphore, Fiber, Scope } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { createHash, randomUUID } from "node:crypto";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
@@ -109,6 +109,7 @@ const extensions = HashMap.fromIterable<AttachmentMimeType, string>([
 ]);
 
 const make = Effect.gen(function* () {
+  const conversionScope = yield* Scope.Scope;
   const run = Effect.runPromiseWith(yield* Effect.context());
   const { sqlite } = yield* Database;
   const storage = yield* StorageRoot;
@@ -145,31 +146,59 @@ const make = Effect.gen(function* () {
    * benefit. GIFs keep their animation. Concurrent conversions use distinct temporary files and
    * atomically publish the same content-addressed copy.
    */
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const encodeForModel = async (attachment: Attachment): Promise<ModelImage> => {
+  const io = <A>(operation: AttachmentStorageFailed["operation"], execute: () => Promise<A>) =>
+    Effect.tryPromise({
+      try: execute,
+      catch: (cause) => new AttachmentStorageFailed({ operation, cause }),
+    });
+
+  const publish = (
+    operation: AttachmentStorageFailed["operation"],
+    path: string,
+    bytes: Uint8Array,
+  ) =>
+    Effect.suspend(() => {
+      const temporary = `${path}.${randomUUID()}.tmp`;
+      return Effect.acquireUseRelease(
+        Effect.succeed(temporary),
+        (temp) =>
+          io(operation, () => writeFile(temp, bytes, { mode: 0o600, flag: "wx" })).pipe(
+            Effect.andThen(io(operation, () => rename(temp, path))),
+          ),
+        (temp) => io(operation, () => rm(temp, { force: true })),
+      ).pipe(Effect.uninterruptible);
+    });
+
+  const encodeForModel = Effect.fn("Attachments.encodeForModel")(function* (
+    attachment: Attachment,
+  ): Effect.fn.Return<ModelImage> {
     const upload: ModelImage = { path: fileOf(attachment), mimeType: attachment.mimeType };
     if (attachment.mimeType === "image/gif") return upload;
     const copy = join(directory, `${attachment.id}.model.webp`);
     const noCopy = join(directory, `${attachment.id}.model-original`);
-    const existingCopy = await stat(copy).catch(() => undefined);
-    if (isTruthy(existingCopy) && existingCopy.size <= maxModelImageBytes)
-      return { path: copy, mimeType: "image/webp" };
-    if (isTruthy(existingCopy)) await rm(copy, { force: true });
-    if (isTruthy(await stat(noCopy).catch(() => undefined))) return upload;
-    try {
-      const encoded = await Effect.tryPromise({
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        try: async () => {
-          const sharp = requireRuntime("sharp");
-          const attempts = [
-            { edge: modelImageEdge, quality: 86 },
-            { edge: 1600, quality: 78 },
-            { edge: 1280, quality: 70 },
-            { edge: 1024, quality: 64 },
-          ] as const;
-          let candidate: Uint8Array = new Uint8Array();
-          for (const attempt of attempts) {
-            candidate = await sharp(upload.path)
+    return yield* Effect.gen(function* () {
+      const existingCopy = yield* io("convert", () => stat(copy)).pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
+      if (existingCopy !== undefined && existingCopy.size <= maxModelImageBytes)
+        return { path: copy, mimeType: "image/webp" as const };
+      if (existingCopy !== undefined) yield* io("convert", () => rm(copy, { force: true }));
+      const original = yield* io("convert", () => stat(noCopy)).pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
+      if (original !== undefined) return upload;
+      const encoded = yield* Effect.gen(function* () {
+        const sharp = requireRuntime("sharp");
+        const attempts = [
+          { edge: modelImageEdge, quality: 86 },
+          { edge: 1600, quality: 78 },
+          { edge: 1280, quality: 70 },
+          { edge: 1024, quality: 64 },
+        ] as const;
+        let candidate: Uint8Array = new Uint8Array();
+        for (const attempt of attempts) {
+          candidate = yield* io("convert", () =>
+            sharp(upload.path)
               .rotate()
               .resize({
                 width: attempt.edge,
@@ -178,31 +207,46 @@ const make = Effect.gen(function* () {
                 withoutEnlargement: true,
               })
               .webp({ quality: attempt.quality, smartSubsample: true })
-              .toBuffer();
-            if (candidate.length <= maxModelImageBytes) break;
-          }
-          return candidate;
-        },
-        catch: (cause) => new AttachmentStorageFailed({ operation: "convert", cause }),
-      }).pipe(conversionPermits.withPermits(1), run);
+              .toBuffer(),
+          );
+          if (candidate.length <= maxModelImageBytes) break;
+        }
+        return candidate;
+      }).pipe(conversionPermits.withPermits(1));
       if (encoded.length >= attachment.bytes) {
-        await writeFile(noCopy, "", { mode: 0o600 });
+        yield* io("convert", () => writeFile(noCopy, "", { mode: 0o600 }));
         return upload;
       }
-      const temporary = `${copy}.${randomUUID()}.tmp`;
-      try {
-        await writeFile(temporary, encoded, { mode: 0o600, flag: "wx" });
-        await rename(temporary, copy);
-      } finally {
-        await rm(temporary, { force: true });
-      }
-      return { path: copy, mimeType: "image/webp" };
-    } catch {
-      return upload;
-    }
-  };
+      yield* publish("convert", copy, encoded);
+      return { path: copy, mimeType: "image/webp" as const };
+    }).pipe(Effect.catchCause(() => Effect.succeed(upload)));
+  });
 
-  const forModel = encodeForModel;
+  // The service owns native Sharp and filesystem work until it settles. These SDK operations
+  // cannot be aborted safely midway through publishing their files.
+  const conversions = MutableHashMap.empty<string, Fiber.Fiber<ModelImage>>();
+  const conversionLock = yield* Semaphore.make(1);
+  const conversionFor = Effect.fn("Attachments.conversionFor")(function* (attachment: Attachment) {
+    const existing = MutableHashMap.get(conversions, attachment.id);
+    if (Option.isSome(existing)) return existing.value;
+    const fiber = yield* Effect.forkIn(
+      encodeForModel(attachment).pipe(
+        Effect.uninterruptible,
+        Effect.ensuring(Effect.sync(() => MutableHashMap.remove(conversions, attachment.id))),
+      ),
+      conversionScope,
+      { startImmediately: true },
+    );
+    MutableHashMap.set(conversions, attachment.id, fiber);
+    return fiber;
+  }, conversionLock.withPermits(1));
+  const forModelEffect = (attachment: Attachment) =>
+    Effect.flatMap(conversionFor(attachment), Fiber.join);
+  const forModel = (attachment: Attachment): Promise<ModelImage> => run(forModelEffect(attachment));
+  const dataUrlEffect = (image: ModelImage) =>
+    io("convert", () => readFile(image.path)).pipe(
+      Effect.map((bytes) => `data:${image.mimeType};base64,${bytes.toString("base64")}`),
+    );
 
   /**
    * Stores an image by content hash (storing the same image twice keeps one copy). The type comes
@@ -223,21 +267,10 @@ const make = Effect.gen(function* () {
         createdAt: DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
       };
       const path = fileOf(attachment);
-      yield* Effect.tryPromise({
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        try: async () => {
-          const existing = await stat(path).catch(() => undefined);
-          if (existing?.size === bytes.length) return;
-          const temporary = `${path}.${randomUUID()}.tmp`;
-          try {
-            await writeFile(temporary, bytes, { mode: 0o600, flag: "wx" });
-            await rename(temporary, path);
-          } finally {
-            await rm(temporary, { force: true });
-          }
-        },
-        catch: (cause) => new AttachmentStorageFailed({ operation: "save", cause }),
-      });
+      const existing = yield* io("save", () => stat(path)).pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
+      if (existing?.size !== bytes.length) yield* publish("save", path, bytes);
       insertAttachment.run(
         attachment.id,
         attachment.mimeType,
@@ -247,7 +280,7 @@ const make = Effect.gen(function* () {
       const stored = get(attachment.id) ?? attachment;
       // Start eagerly without retaining the upload request buffer while Sharp waits in the queue.
       // An immediate chat call joins this same in-flight conversion through forModel.
-      void forModel(stored);
+      yield* conversionFor(stored);
       return stored;
     });
 
@@ -293,11 +326,12 @@ const make = Effect.gen(function* () {
 
     /** Model derivative, eagerly made on upload with a lazy fallback for pre-existing files. */
     forModel,
+    forModelEffect,
+    dataUrlEffect,
 
     /** `data:` URL of an image file, for replaying earlier turns to the model. */
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    dataUrl: async (image: ModelImage) =>
-      `data:${image.mimeType};base64,${(await readFile(image.path)).toString("base64")}`,
+    dataUrl: (image: ModelImage) => run(dataUrlEffect(image)),
 
     /** Records the images a message carried, in order. */
     link: (nodeId: string, attachments: readonly Attachment[]) => {
@@ -308,27 +342,25 @@ const make = Effect.gen(function* () {
     forNode: (nodeId: string): Attachment[] => selectForNode.all(nodeId).map(toAttachment),
 
     /** Removes content-addressed blobs only after their last message reference is gone. */
-    purgeOrphans: Effect.tryPromise({
-      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      try: async () => {
-        const orphaned = sqlite
-          .prepare(
-            `SELECT a.* FROM attachments a
-           WHERE NOT EXISTS (SELECT 1 FROM node_attachments n WHERE n.attachment_id = a.id)`,
-          )
-          .all()
-          .map(toAttachment);
-        for (const attachment of orphaned) {
-          sqlite.prepare("DELETE FROM attachments WHERE id = ?").run(attachment.id);
-          await Promise.all([
-            rm(fileOf(attachment), { force: true }),
-            rm(join(directory, `${attachment.id}.model.webp`), { force: true }),
-            rm(join(directory, `${attachment.id}.model-original`), { force: true }),
-          ]);
-        }
-        return orphaned.length;
-      },
-      catch: (cause) => new AttachmentStorageFailed({ operation: "purge", cause }),
+    purgeOrphans: Effect.gen(function* () {
+      const orphaned = sqlite
+        .prepare(`SELECT a.* FROM attachments a
+        WHERE NOT EXISTS (SELECT 1 FROM node_attachments n WHERE n.attachment_id = a.id)`)
+        .all()
+        .map(toAttachment);
+      for (const attachment of orphaned) {
+        sqlite.prepare("DELETE FROM attachments WHERE id = ?").run(attachment.id);
+        yield* Effect.forEach(
+          [
+            fileOf(attachment),
+            join(directory, `${attachment.id}.model.webp`),
+            join(directory, `${attachment.id}.model-original`),
+          ],
+          (path) => io("purge", () => rm(path, { force: true })),
+          { concurrency: 3, discard: true },
+        );
+      }
+      return orphaned.length;
     }),
   };
 });

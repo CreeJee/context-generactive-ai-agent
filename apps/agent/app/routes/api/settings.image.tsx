@@ -27,39 +27,43 @@ const imageSettingsView = Effect.gen(function* () {
 
 /** GET /api/settings/image: the image-generation preference and cross-provider consent. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function loader() {
+export function loader() {
   return agent.runPromise(Effect.map(imageSettingsView, (status) => Response.json(status)));
 }
 
 /** POST /api/settings/image: update an image-generation preference without restarting the app. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function action({ request }: Route.ActionArgs) {
-  const rejected = rejectCrossSite(request);
-  if (rejected !== null) return rejected;
-  const body = await readJson(request, ImageSettingsAction);
-  if (Result.isFailure(body))
-    return Response.json({ error: "invalid_image_settings_action" }, { status: 400 });
+export function action({ request }: Route.ActionArgs) {
+  return agent.runPromise(
+    Effect.gen(function* () {
+      const rejected = rejectCrossSite(request);
+      if (rejected !== null) return rejected;
+      const body = yield* Effect.tryPromise(() => readJson(request, ImageSettingsAction));
+      if (Result.isFailure(body))
+        return Response.json({ error: "invalid_image_settings_action" }, { status: 400 });
 
-  const response = Effect.gen(function* () {
-    const feature = yield* ImageFeature;
-    const crossProviderMediaConsent = yield* CrossProviderMediaConsent;
-    const command = body.success;
-    switch (command.action) {
-      case "image_generation":
-        yield* feature.setImageGenerationEnabled(command.enabled);
-        break;
-      case "cross_provider_media":
-        yield* crossProviderMediaConsent.set(
-          {
-            initiatorProvider: "anthropic",
-            executorProvider: "openai",
-            capability: "media.image.generate",
-          },
-          command.mode,
-        );
-        break;
-    }
-    return Response.json(yield* imageSettingsView);
-  });
-  return agent.runPromise(response);
+      const response = Effect.gen(function* () {
+        const feature = yield* ImageFeature;
+        const crossProviderMediaConsent = yield* CrossProviderMediaConsent;
+        const command = body.success;
+        switch (command.action) {
+          case "image_generation":
+            yield* feature.setImageGenerationEnabled(command.enabled);
+            break;
+          case "cross_provider_media":
+            yield* crossProviderMediaConsent.set(
+              {
+                initiatorProvider: "anthropic",
+                executorProvider: "openai",
+                capability: "media.image.generate",
+              },
+              command.mode,
+            );
+            break;
+        }
+        return Response.json(yield* imageSettingsView);
+      });
+      return yield* response;
+    }),
+  );
 }

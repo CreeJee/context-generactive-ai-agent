@@ -1,3 +1,5 @@
+import { Effect } from "effect";
+import { runUiEffect, uiPromise } from "../../shared/ui-effect";
 import { isTruthy } from "../../../truthy.ts";
 import { RefreshCwIcon } from "lucide-react";
 import { useState } from "react";
@@ -103,16 +105,23 @@ export function EmbeddingSettings() {
   const indexing = overview.unindexed > 0;
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const apply = async (
-    command: { action: "choose"; choice: EmbeddingChoice } | { action: "check" },
-  ) => {
-    setError(null);
-    try {
-      await mutation.mutateAsync(command);
-    } catch (failure) {
-      setError(errorMessage(failure instanceof Error ? failure : new Error(String(failure))));
-    }
-  };
+  const apply = (command: { action: "choose"; choice: EmbeddingChoice } | { action: "check" }) =>
+    runUiEffect(
+      Effect.gen(function* () {
+        setError(null);
+        yield* uiPromise(() => mutation.mutateAsync(command)).pipe(
+          Effect.catch((failure) =>
+            Effect.sync(() => {
+              setError(
+                errorMessage(
+                  failure.cause instanceof Error ? failure.cause : new Error(String(failure.cause)),
+                ),
+              );
+            }),
+          ),
+        );
+      }),
+    );
 
   const header = (
     <PageHeader

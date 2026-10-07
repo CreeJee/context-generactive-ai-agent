@@ -16,9 +16,10 @@ import {
 } from "@tanstack/ai/adapters";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { createHash, randomUUID } from "node:crypto";
-import { MutableHashMap, DateTime, Option, Schema } from "effect";
+import { Cause, Effect, Stream, MutableHashMap, DateTime, Option, Schema } from "effect";
 import {
   ProviderFeatureRejectedError,
+  ReasoningSummaryProtocolFailed,
   ToolArguments,
   type NormalizedStreamEvent,
   type OAuthProvider,
@@ -51,6 +52,31 @@ type WireContent = string | WireBlock[];
 
 const openAiReasoningPrefix = "openai-reasoning:";
 const maxEncryptedReasoningCharacters = 32 * 1024 * 1024;
+export const publicReasoningLimits = {
+  characters: 2 * 1024 * 1024,
+  parts: 256,
+  idCharacters: 512,
+} as const;
+
+export class SubscriptionStreamFailed extends Schema.TaggedError<SubscriptionStreamFailed>()(
+  "SubscriptionStreamFailed",
+  {
+    provider: Schema.Literals(["openai", "anthropic"]),
+    reason: Schema.Union([
+      Schema.TaggedStruct("ProviderRejected", {}),
+      Schema.TaggedStruct("TransportUnavailable", {}),
+      Schema.TaggedStruct("InvalidReasoning", {}),
+      Schema.TaggedStruct("InvalidToolCall", {}),
+      Schema.TaggedStruct("InvalidBlockEnd", {}),
+      Schema.TaggedStruct("IncompleteBlocks", {}),
+      Schema.TaggedStruct("EncryptedReasoningLimit", {}),
+    ]),
+  },
+) {
+  override get message() {
+    return "Subscription provider stream failed.";
+  }
+}
 const OpenAiReasoning = Schema.Struct({
   id: Schema.String,
   encryptedContent: Schema.String,
@@ -304,34 +330,46 @@ const isPromptCacheRejection = (event: NormalizedStreamEvent) =>
   );
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function* providerEventsWithPromptCacheFallback(
+function providerEventsWithPromptCacheFallback(
   client: StreamingOAuthClient,
   provider: OAuthProvider,
   body: string,
   baselineBody: string,
   signal: AbortSignal | undefined,
   onFallback: () => void,
-): AsyncGenerator<NormalizedStreamEvent> {
-  let emitted = false;
-  try {
-    for await (const event of client.stream(body, signal)) {
-      if (provider === "anthropic" && isPromptCacheRejection(event))
-        throw new ProviderFeatureRejectedError("anthropic", "prompt-cache");
-      emitted = true;
-      yield event;
-    }
-    return;
-  } catch (error) {
-    if (
-      provider !== "anthropic" ||
-      emitted ||
-      !(error instanceof ProviderFeatureRejectedError) ||
-      error.feature !== "prompt-cache"
-    )
-      throw error;
-  }
-  onFallback();
-  yield* client.stream(baselineBody, signal);
+) {
+  return Stream.suspend(() => {
+    let emitted = false;
+    const source = (request: string) =>
+      Stream.fromAsyncIterable(
+        client.stream(request, signal),
+        (cause) => new Cause.UnknownError(cause),
+      );
+    return source(body).pipe(
+      Stream.mapEffect((event) =>
+        Effect.gen(function* () {
+          if (provider === "anthropic" && isPromptCacheRejection(event))
+            return yield* new ProviderFeatureRejectedError("anthropic", "prompt-cache");
+          emitted = true;
+          return event;
+        }),
+      ),
+      Stream.catch((failure) => {
+        const error = failure instanceof Cause.UnknownError ? failure.cause : failure;
+        if (
+          provider !== "anthropic" ||
+          emitted ||
+          !(error instanceof ProviderFeatureRejectedError) ||
+          error.feature !== "prompt-cache"
+        )
+          return Stream.fail(failure);
+        return Stream.suspend(() => {
+          onFallback();
+          return source(baselineBody);
+        });
+      }),
+    );
+  });
 }
 
 export class SubscriptionTextAdapter extends BaseTextAdapter<
@@ -352,239 +390,436 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
   }
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  async *chatStream(options: TextOptions<Record<string, never>>): AsyncIterable<AdapterYieldChunk> {
-    const signal = options.abortController?.signal ?? options.request?.signal ?? undefined;
-    const runId = options.runId ?? randomUUID();
-    const threadId = options.threadId ?? randomUUID();
-    const messageId = randomUUID();
-    const stamp = () => ({
-      model: this.model,
-      timestamp: DateTime.toEpochMillis(DateTime.nowUnsafe()),
-    });
-    let textOpen = false;
-    let toolCalls = 0;
-    let promptTokens: number | undefined;
-    let completionTokens: number | undefined;
-    let cachedPromptTokens: number | undefined;
-    const streamingCalls = MutableHashMap.empty<
-      number,
-      { readonly id: string; readonly name: string }
-    >();
-    const streamingReasoning = MutableHashMap.empty<number, string>();
-
-    yield { ...stamp(), type: EventType.RUN_STARTED, runId, threadId };
-    const body = subscriptionRequest(this.name, this.#selection, options);
-    const baselineBody = subscriptionRequest(this.name, this.#selection, options, {
-      promptCache: "disabled",
-    });
-    const fingerprints = requestFingerprints(options);
-    options.logger.request("subscription model request", {
-      provider: this.name,
-      model: this.model,
-      messages: options.messages.length,
-      tools: options.tools?.length ?? 0,
-      ...fingerprints,
-    });
-    try {
-      for await (const event of providerEventsWithPromptCacheFallback(
-        this.#client,
-        this.name,
-        body,
-        baselineBody,
-        signal,
-        () =>
-          options.logger.provider("subscription prompt cache rejected; retrying baseline request", {
-            provider: this.name,
-          }),
-      )) {
-        if (signal?.aborted === true) return;
-        options.logger.provider("subscription stream event", {
-          provider: this.name,
-          eventType: event.type,
+  chatStream(options: TextOptions<Record<string, never>>): AsyncIterable<AdapterYieldChunk> {
+    return Stream.toAsyncIterable(
+      Stream.suspend(() => {
+        const providerName = this.name;
+        const signal = options.abortController?.signal ?? options.request?.signal ?? undefined;
+        const runId = options.runId ?? randomUUID();
+        const threadId = options.threadId ?? randomUUID();
+        const messageId = randomUUID();
+        const stamp = () => ({
+          model: this.model,
+          timestamp: DateTime.toEpochMillis(DateTime.nowUnsafe()),
         });
-        if (event.type === "usage") {
-          promptTokens = event.promptTokens ?? promptTokens;
-          completionTokens = event.completionTokens ?? completionTokens;
-          cachedPromptTokens = event.cachedPromptTokens ?? cachedPromptTokens;
-          continue;
-        }
-        if (event.type === "error") throw new Error(`${this.name} ${event.code}: ${event.message}`);
-        if (event.type === "reasoning") {
-          if (event.encryptedContent.length > maxEncryptedReasoningCharacters)
-            throw new Error("OpenAI returned an oversized encrypted reasoning item.");
-          yield {
-            ...stamp(),
-            type: EventType.REASONING_ENCRYPTED_VALUE,
-            subtype: "message",
-            entityId: event.id,
-            encryptedValue: encodeOpenAiReasoning(event.id, event.encryptedContent),
-          };
-          continue;
-        }
-        if (event.type === "text") {
-          if (!textOpen) {
-            textOpen = true;
+        let textOpen = false;
+        let toolCalls = 0;
+        let promptTokens: number | undefined;
+        let completionTokens: number | undefined;
+        let cachedPromptTokens: number | undefined;
+        const streamingCalls = MutableHashMap.empty<
+          number,
+          { readonly id: string; readonly name: string }
+        >();
+        const streamingReasoning = MutableHashMap.empty<number, string>();
+        let summaryCharacters = 0;
+        let summaryCount = 0;
+        let openSummaries = 0;
+        const summaries = MutableHashMap.empty<
+          string,
+          { readonly type: "open"; readonly text: string } | { readonly type: "closed" }
+        >();
+
+        const translate = function* (
+          event: NormalizedStreamEvent,
+        ): Generator<AdapterYieldChunk, void, unknown> {
+          if (signal?.aborted === true) return;
+          options.logger.provider("subscription stream event", {
+            provider: providerName,
+            eventType: event.type,
+          });
+          if (event.type === "usage") {
+            promptTokens = event.promptTokens ?? promptTokens;
+            completionTokens = event.completionTokens ?? completionTokens;
+            cachedPromptTokens = event.cachedPromptTokens ?? cachedPromptTokens;
+            return;
+          }
+          if (event.type === "error")
+            throw SubscriptionStreamFailed.make({
+              provider: providerName,
+              reason: { _tag: "ProviderRejected" },
+            });
+          // Public OpenAI summary parts are SDK reasoning messages, not Anthropic block ends.
+          switch (event.type) {
+            case "reasoning-summary-start": {
+              const summaryId = `reasoning-summary-${event.id}-${event.summaryIndex}`;
+              if (MutableHashMap.has(summaries, summaryId))
+                throw ReasoningSummaryProtocolFailed.make({
+                  reason: { _tag: "ConflictingSummary" },
+                });
+              if (
+                summaryCount >= publicReasoningLimits.parts ||
+                event.id.length > publicReasoningLimits.idCharacters ||
+                summaryCharacters + event.text.length > publicReasoningLimits.characters
+              )
+                throw ReasoningSummaryProtocolFailed.make({ reason: { _tag: "ResourceLimit" } });
+              summaryCount++;
+              openSummaries++;
+              summaryCharacters += event.text.length;
+              MutableHashMap.set(summaries, summaryId, { type: "open", text: event.text });
+              yield {
+                ...stamp(),
+                type: EventType.REASONING_MESSAGE_START,
+                messageId: summaryId,
+                role: "reasoning",
+              };
+              if (event.text.length > 0)
+                yield {
+                  ...stamp(),
+                  type: EventType.REASONING_MESSAGE_CONTENT,
+                  messageId: summaryId,
+                  delta: event.text,
+                };
+              return;
+            }
+            case "reasoning-summary-delta":
+            case "reasoning-summary-end": {
+              const summaryId = `reasoning-summary-${event.id}-${event.summaryIndex}`;
+              const summary = Option.getOrUndefined(MutableHashMap.get(summaries, summaryId));
+              if (summary === undefined)
+                throw ReasoningSummaryProtocolFailed.make({
+                  reason: { _tag: "ConflictingSummary" },
+                });
+              switch (summary.type) {
+                case "closed":
+                  throw ReasoningSummaryProtocolFailed.make({ reason: { _tag: "AlreadyEnded" } });
+                case "open": {
+                  switch (event.type) {
+                    case "reasoning-summary-delta":
+                      if (summaryCharacters + event.delta.length > publicReasoningLimits.characters)
+                        throw ReasoningSummaryProtocolFailed.make({
+                          reason: { _tag: "ResourceLimit" },
+                        });
+                      summaryCharacters += event.delta.length;
+                      MutableHashMap.set(summaries, summaryId, {
+                        type: "open",
+                        text: summary.text + event.delta,
+                      });
+                      yield {
+                        ...stamp(),
+                        type: EventType.REASONING_MESSAGE_CONTENT,
+                        messageId: summaryId,
+                        delta: event.delta,
+                      };
+                      break;
+                    case "reasoning-summary-end": {
+                      if (!event.text.startsWith(summary.text))
+                        throw ReasoningSummaryProtocolFailed.make({
+                          reason: { _tag: "ConflictingSummary" },
+                        });
+                      const remaining = event.text.slice(summary.text.length);
+                      if (summaryCharacters + remaining.length > publicReasoningLimits.characters)
+                        throw ReasoningSummaryProtocolFailed.make({
+                          reason: { _tag: "ResourceLimit" },
+                        });
+                      summaryCharacters += remaining.length;
+                      openSummaries--;
+                      if (remaining.length > 0)
+                        yield {
+                          ...stamp(),
+                          type: EventType.REASONING_MESSAGE_CONTENT,
+                          messageId: summaryId,
+                          delta: remaining,
+                        };
+                      MutableHashMap.set(summaries, summaryId, { type: "closed" });
+                      yield {
+                        ...stamp(),
+                        type: EventType.REASONING_MESSAGE_END,
+                        messageId: summaryId,
+                      };
+                      break;
+                    }
+                  }
+                  break;
+                }
+              }
+              return;
+            }
+            default:
+              break;
+          }
+          if (event.type === "reasoning") {
+            if (event.encryptedContent.length > maxEncryptedReasoningCharacters)
+              throw SubscriptionStreamFailed.make({
+                provider: providerName,
+                reason: { _tag: "EncryptedReasoningLimit" },
+              });
             yield {
               ...stamp(),
-              type: EventType.TEXT_MESSAGE_START,
-              messageId,
-              role: "assistant",
+              type: EventType.REASONING_ENCRYPTED_VALUE,
+              subtype: "message",
+              entityId: event.id,
+              encryptedValue: encodeOpenAiReasoning(event.id, event.encryptedContent),
             };
+            return;
           }
-          yield {
-            ...stamp(),
-            type: EventType.TEXT_MESSAGE_CONTENT,
-            messageId,
-            delta: event.text,
-          };
-          continue;
-        }
-        if (event.type === "content-block-end" && textOpen) {
-          textOpen = false;
-          yield { ...stamp(), type: EventType.TEXT_MESSAGE_END, messageId };
-          continue;
-        }
-        if (textOpen) {
-          textOpen = false;
-          yield { ...stamp(), type: EventType.TEXT_MESSAGE_END, messageId };
-        }
-        if (event.type === "tool-call") {
-          const index = toolCalls++;
-          yield {
-            ...stamp(),
-            type: EventType.TOOL_CALL_START,
-            toolCallId: event.id,
-            toolCallName: event.name,
-            parentMessageId: messageId,
-            index,
-          };
-          yield {
-            ...stamp(),
-            type: EventType.TOOL_CALL_ARGS,
-            toolCallId: event.id,
-            delta: JSON.stringify(event.arguments),
-          };
+          if (event.type === "text") {
+            if (!textOpen) {
+              textOpen = true;
+              yield {
+                ...stamp(),
+                type: EventType.TEXT_MESSAGE_START,
+                messageId,
+                role: "assistant",
+              };
+            }
+            yield {
+              ...stamp(),
+              type: EventType.TEXT_MESSAGE_CONTENT,
+              messageId,
+              delta: event.text,
+            };
+            return;
+          }
+          if (event.type === "content-block-end" && textOpen) {
+            textOpen = false;
+            yield { ...stamp(), type: EventType.TEXT_MESSAGE_END, messageId };
+            return;
+          }
+          if (textOpen) {
+            textOpen = false;
+            yield { ...stamp(), type: EventType.TEXT_MESSAGE_END, messageId };
+          }
+          if (event.type === "tool-call") {
+            const index = toolCalls++;
+            yield {
+              ...stamp(),
+              type: EventType.TOOL_CALL_START,
+              toolCallId: event.id,
+              toolCallName: event.name,
+              parentMessageId: messageId,
+              index,
+            };
+            yield {
+              ...stamp(),
+              type: EventType.TOOL_CALL_ARGS,
+              toolCallId: event.id,
+              delta: JSON.stringify(event.arguments),
+            };
+            yield {
+              ...stamp(),
+              type: EventType.TOOL_CALL_END,
+              toolCallId: event.id,
+              toolCallName: event.name,
+            };
+            return;
+          }
+          if (event.type === "tool-call-start") {
+            if (
+              MutableHashMap.has(streamingCalls, event.index) ||
+              MutableHashMap.has(streamingReasoning, event.index)
+            )
+              throw SubscriptionStreamFailed.make({
+                provider: providerName,
+                reason: { _tag: "InvalidToolCall" },
+              });
+            MutableHashMap.set(streamingCalls, event.index, { id: event.id, name: event.name });
+            toolCalls += 1;
+            yield {
+              ...stamp(),
+              type: EventType.TOOL_CALL_START,
+              toolCallId: event.id,
+              toolCallName: event.name,
+              parentMessageId: messageId,
+              index: event.index,
+            };
+            return;
+          }
+          if (event.type === "reasoning-start") {
+            if (
+              MutableHashMap.has(streamingReasoning, event.index) ||
+              MutableHashMap.has(streamingCalls, event.index)
+            )
+              throw SubscriptionStreamFailed.make({
+                provider: providerName,
+                reason: { _tag: "InvalidReasoning" },
+              });
+            const reasoningId = `reasoning-${event.index}`;
+            MutableHashMap.set(streamingReasoning, event.index, reasoningId);
+            yield {
+              ...stamp(),
+              type: EventType.REASONING_MESSAGE_START,
+              messageId: reasoningId,
+              role: "reasoning",
+            };
+            return;
+          }
+          if (event.type === "reasoning-delta") {
+            const reasoningId = Option.getOrUndefined(
+              MutableHashMap.get(streamingReasoning, event.index),
+            );
+            if (!isTruthy(reasoningId))
+              throw SubscriptionStreamFailed.make({
+                provider: providerName,
+                reason: { _tag: "InvalidReasoning" },
+              });
+            yield {
+              ...stamp(),
+              type: EventType.REASONING_MESSAGE_CONTENT,
+              messageId: reasoningId,
+              delta: event.delta,
+            };
+            return;
+          }
+          if (event.type === "reasoning-signature") {
+            const reasoningId = Option.getOrUndefined(
+              MutableHashMap.get(streamingReasoning, event.index),
+            );
+            if (!isTruthy(reasoningId))
+              throw SubscriptionStreamFailed.make({
+                provider: providerName,
+                reason: { _tag: "InvalidReasoning" },
+              });
+            yield {
+              ...stamp(),
+              type: EventType.REASONING_ENCRYPTED_VALUE,
+              subtype: "message",
+              entityId: reasoningId,
+              encryptedValue: event.signature,
+            };
+            return;
+          }
+          if (event.type === "tool-call-arguments") {
+            const call = Option.getOrUndefined(MutableHashMap.get(streamingCalls, event.index));
+            if (!isTruthy(call))
+              throw SubscriptionStreamFailed.make({
+                provider: providerName,
+                reason: { _tag: "InvalidToolCall" },
+              });
+            yield {
+              ...stamp(),
+              type: EventType.TOOL_CALL_ARGS,
+              toolCallId: call.id,
+              delta: event.delta,
+            };
+            return;
+          }
+          const reasoningId = Option.getOrUndefined(
+            MutableHashMap.get(streamingReasoning, event.index),
+          );
+          if (isTruthy(reasoningId)) {
+            MutableHashMap.remove(streamingReasoning, event.index);
+            yield {
+              ...stamp(),
+              type: EventType.REASONING_MESSAGE_END,
+              messageId: reasoningId,
+            };
+            return;
+          }
+          const call = Option.getOrUndefined(MutableHashMap.get(streamingCalls, event.index));
+          if (!isTruthy(call))
+            throw SubscriptionStreamFailed.make({
+              provider: providerName,
+              reason: { _tag: "InvalidBlockEnd" },
+            });
+          MutableHashMap.remove(streamingCalls, event.index);
           yield {
             ...stamp(),
             type: EventType.TOOL_CALL_END,
-            toolCallId: event.id,
-            toolCallName: event.name,
-          };
-          continue;
-        }
-        if (event.type === "tool-call-start") {
-          MutableHashMap.set(streamingCalls, event.index, { id: event.id, name: event.name });
-          toolCalls += 1;
-          yield {
-            ...stamp(),
-            type: EventType.TOOL_CALL_START,
-            toolCallId: event.id,
-            toolCallName: event.name,
-            parentMessageId: messageId,
-            index: event.index,
-          };
-          continue;
-        }
-        if (event.type === "reasoning-start") {
-          const reasoningId = `reasoning-${event.index}`;
-          MutableHashMap.set(streamingReasoning, event.index, reasoningId);
-          yield {
-            ...stamp(),
-            type: EventType.REASONING_MESSAGE_START,
-            messageId: reasoningId,
-            role: "reasoning",
-          };
-          continue;
-        }
-        if (event.type === "reasoning-delta") {
-          const reasoningId = Option.getOrUndefined(
-            MutableHashMap.get(streamingReasoning, event.index),
-          );
-          if (!isTruthy(reasoningId))
-            throw new Error(`${this.name} sent an invalid reasoning stream.`);
-          yield {
-            ...stamp(),
-            type: EventType.REASONING_MESSAGE_CONTENT,
-            messageId: reasoningId,
-            delta: event.delta,
-          };
-          continue;
-        }
-        if (event.type === "reasoning-signature") {
-          const reasoningId = Option.getOrUndefined(
-            MutableHashMap.get(streamingReasoning, event.index),
-          );
-          if (!isTruthy(reasoningId))
-            throw new Error(`${this.name} sent an invalid reasoning stream.`);
-          yield {
-            ...stamp(),
-            type: EventType.REASONING_ENCRYPTED_VALUE,
-            subtype: "message",
-            entityId: reasoningId,
-            encryptedValue: event.signature,
-          };
-          continue;
-        }
-        if (event.type === "tool-call-arguments") {
-          const call = Option.getOrUndefined(MutableHashMap.get(streamingCalls, event.index));
-          if (!isTruthy(call)) throw new Error(`${this.name} sent an invalid tool-call stream.`);
-          yield {
-            ...stamp(),
-            type: EventType.TOOL_CALL_ARGS,
             toolCallId: call.id,
-            delta: event.delta,
+            toolCallName: call.name,
           };
-          continue;
-        }
-        const reasoningId = Option.getOrUndefined(
-          MutableHashMap.get(streamingReasoning, event.index),
-        );
-        if (isTruthy(reasoningId)) {
-          MutableHashMap.remove(streamingReasoning, event.index);
-          yield {
-            ...stamp(),
-            type: EventType.REASONING_MESSAGE_END,
-            messageId: reasoningId,
-          };
-          continue;
-        }
-        const call = Option.getOrUndefined(MutableHashMap.get(streamingCalls, event.index));
-        if (!isTruthy(call)) throw new Error(`${this.name} sent an invalid content block end.`);
-        MutableHashMap.remove(streamingCalls, event.index);
-        yield {
-          ...stamp(),
-          type: EventType.TOOL_CALL_END,
-          toolCallId: call.id,
-          toolCallName: call.name,
         };
-      }
-    } catch (error) {
-      if (signal?.aborted === true) return;
-      options.logger.errors("subscription model request failed", {
-        provider: this.name,
-        message: error instanceof Error ? error.message : "unknown provider failure",
-      });
-      throw error;
-    }
-    if (textOpen) yield { ...stamp(), type: EventType.TEXT_MESSAGE_END, messageId };
-    const finished: AdapterYieldChunk = {
-      ...stamp(),
-      type: EventType.RUN_FINISHED,
-      runId,
-      threadId,
-      finishReason: toolCalls > 0 ? "tool_calls" : "stop",
-    };
-    if (promptTokens !== undefined || completionTokens !== undefined) {
-      const usage: TokenUsage = {
-        promptTokens: promptTokens ?? 0,
-        completionTokens: completionTokens ?? 0,
-        totalTokens: (promptTokens ?? 0) + (completionTokens ?? 0),
-      };
-      if (cachedPromptTokens !== undefined)
-        usage.promptTokensDetails = { cachedTokens: cachedPromptTokens };
-      finished.usage = usage;
-    }
-    yield finished;
+
+        const events = Stream.suspend(() => {
+          const body = subscriptionRequest(this.name, this.#selection, options);
+          const baselineBody = subscriptionRequest(this.name, this.#selection, options, {
+            promptCache: "disabled",
+          });
+          const fingerprints = requestFingerprints(options);
+          options.logger.request("subscription model request", {
+            provider: this.name,
+            model: this.model,
+            messages: options.messages.length,
+            tools: options.tools?.length ?? 0,
+            ...fingerprints,
+          });
+
+          return providerEventsWithPromptCacheFallback(
+            this.#client,
+            this.name,
+            body,
+            baselineBody,
+            signal,
+            () =>
+              options.logger.provider(
+                "subscription prompt cache rejected; retrying baseline request",
+                { provider: this.name },
+              ),
+          ).pipe(
+            Stream.takeWhile(() => signal?.aborted !== true),
+            Stream.flatMap((event) => Stream.fromIterable(translate(event))),
+            Stream.catchCause((cause) => {
+              if (signal?.aborted === true) return Stream.empty;
+              const squashed = Cause.squash(cause);
+              const error = squashed instanceof Cause.UnknownError ? squashed.cause : squashed;
+              // Native transport/SDK edge: never publish provider-controlled error text.
+              const failure =
+                Schema.is(ReasoningSummaryProtocolFailed)(error) ||
+                Schema.is(SubscriptionStreamFailed)(error) ||
+                error instanceof ProviderFeatureRejectedError
+                  ? error
+                  : SubscriptionStreamFailed.make({
+                      provider: this.name,
+                      reason: { _tag: "TransportUnavailable" },
+                    });
+              options.logger.errors("subscription model request failed", {
+                provider: this.name,
+                code: failure._tag,
+              });
+              return Stream.fail(failure);
+            }),
+          );
+        });
+        const finish = Stream.suspend(() =>
+          Stream.fromIterable(
+            (function* (): Generator<AdapterYieldChunk, void, unknown> {
+              if (signal?.aborted === true) return;
+              if (openSummaries > 0)
+                throw ReasoningSummaryProtocolFailed.make({
+                  reason: { _tag: "IncompleteSummary" },
+                });
+              if (
+                MutableHashMap.size(streamingCalls) > 0 ||
+                MutableHashMap.size(streamingReasoning) > 0
+              )
+                throw SubscriptionStreamFailed.make({
+                  provider: providerName,
+                  reason: { _tag: "IncompleteBlocks" },
+                });
+              if (textOpen) yield { ...stamp(), type: EventType.TEXT_MESSAGE_END, messageId };
+              const finished: AdapterYieldChunk = {
+                ...stamp(),
+                type: EventType.RUN_FINISHED,
+                runId,
+                threadId,
+                finishReason: toolCalls > 0 ? "tool_calls" : "stop",
+              };
+              if (promptTokens !== undefined || completionTokens !== undefined) {
+                const usage: TokenUsage = {
+                  promptTokens: promptTokens ?? 0,
+                  completionTokens: completionTokens ?? 0,
+                  totalTokens: (promptTokens ?? 0) + (completionTokens ?? 0),
+                };
+                if (cachedPromptTokens !== undefined)
+                  usage.promptTokensDetails = { cachedTokens: cachedPromptTokens };
+                finished.usage = usage;
+              }
+              yield finished;
+            })(),
+          ),
+        );
+        return Stream.concat(
+          Stream.make({
+            ...stamp(),
+            type: EventType.RUN_STARTED,
+            runId,
+            threadId,
+          }),
+          Stream.concat(events, finish),
+        );
+      }),
+    );
   }
 
   structuredOutput(

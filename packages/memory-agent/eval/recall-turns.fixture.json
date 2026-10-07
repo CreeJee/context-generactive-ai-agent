@@ -14,10 +14,10 @@
         {
           "id": "ev-tr-orbit-01",
           "project": "synthetic-orbit",
-          "text": "User: 이 프로젝트의 샘플 보고서는 표 제목을 한국어로 써 주세요."
+          "text": "사용자: 이 프로젝트의 샘플 보고서는 표 제목을 한국어로 써 주세요."
         }
       ],
-      "recentTurns": ["User: 아까 정한 표 제목 언어로 이번 샘플 보고서도 작성해 줘."],
+      "recentTurns": ["사용자: 아까 정한 표 제목 언어로 이번 샘플 보고서도 작성해 줘."],
       "searchEvidenceIds": ["ev-tr-orbit-01"],
       "recallNeeded": true,
       "goldEvidenceIds": ["ev-tr-orbit-01"],
@@ -34,15 +34,15 @@
         {
           "id": "ev-tr-lantern-01",
           "project": "synthetic-lantern",
-          "text": "User: Use blue for the sample banner."
+          "text": "사용자: 샘플 배너는 파란색으로 해 주세요."
         },
         {
           "id": "ev-tr-lantern-02",
           "project": "synthetic-lantern",
-          "text": "User: Correction: use amber, not blue, for the sample banner. The blue instruction is withdrawn."
+          "text": "사용자: 정정할게요. 샘플 배너는 파란색이 아니라 호박색으로 해 주세요. 파란색으로 해 달라는 요청은 철회합니다."
         }
       ],
-      "recentTurns": ["User: Which color did I settle on for this sample banner?"],
+      "recentTurns": ["사용자: 이 샘플 배너는 무슨 색으로 하기로 최종 결정했지?"],
       "searchEvidenceIds": ["ev-tr-lantern-01", "ev-tr-lantern-02"],
       "recallNeeded": true,
       "goldEvidenceIds": ["ev-tr-lantern-01", "ev-tr-lantern-02"],
@@ -59,10 +59,10 @@
         {
           "id": "ev-tr-copper-01",
           "project": "synthetic-copper",
-          "text": "User: An earlier sample total was 17."
+          "text": "사용자: 이전 샘플의 합계는 17이었어요."
         }
       ],
-      "recentTurns": ["User: Add 4 and 5. Reply with the sum only."],
+      "recentTurns": ["사용자: 4와 5를 더해 줘. 합계만 답해 줘."],
       "searchEvidenceIds": [],
       "recallNeeded": false,
       "goldEvidenceIds": [],
@@ -76,7 +76,7 @@
       "id": "tr-empty-search",
       "project": "synthetic-quartz",
       "priorEvidence": [],
-      "recentTurns": ["User: What was the exact sample release phrase I gave you earlier?"],
+      "recentTurns": ["사용자: 내가 아까 알려 준 샘플 출시 문구가 정확히 뭐였지?"],
       "searchEvidenceIds": [],
       "recallNeeded": true,
       "goldEvidenceIds": [],
@@ -93,15 +93,15 @@
         {
           "id": "ev-va-maple-old-01",
           "project": "synthetic-maple-old",
-          "text": "User: For the old project's sample card, use square corners."
+          "text": "사용자: 이전 프로젝트의 샘플 카드는 모서리를 각지게 해 주세요."
         },
         {
           "id": "ev-va-maple-new-01",
           "project": "synthetic-maple-new",
-          "text": "User: In this new project, use round corners on the sample card."
+          "text": "사용자: 이 새 프로젝트의 샘플 카드는 모서리를 둥글게 해 주세요."
         }
       ],
-      "recentTurns": ["User: For this project's sample card, which corners did I request?"],
+      "recentTurns": ["사용자: 이 프로젝트의 샘플 카드 모서리는 어떻게 해 달라고 했지?"],
       "searchEvidenceIds": ["ev-va-maple-old-01", "ev-va-maple-new-01"],
       "recallNeeded": true,
       "goldEvidenceIds": ["ev-va-maple-new-01"],
@@ -118,11 +118,11 @@
         {
           "id": "ev-va-river-01",
           "project": "synthetic-river",
-          "text": "User: Previously I chose a long format for sample notes."
+          "text": "사용자: 전에 샘플 메모는 긴 형식으로 작성하기로 했어요."
         }
       ],
       "recentTurns": [
-        "User: Don't consult prior preferences or memory for this turn. Write a two-word sample title from scratch."
+        "사용자: 이번에는 이전 선호나 기억을 참고하지 마. 두 단어로 된 샘플 제목을 새로 써 줘."
       ],
       "searchEvidenceIds": [],
       "recallNeeded": false,
@@ -140,15 +140,15 @@
         {
           "id": "ev-va-willow-01",
           "project": "synthetic-willow",
-          "text": "User: Put a star icon on the sample cover."
+          "text": "사용자: 샘플 표지에 별 아이콘을 넣어 주세요."
         },
         {
           "id": "ev-va-willow-02",
           "project": "synthetic-willow",
-          "text": "User: I retract the star-icon request. There should be no icon on the sample cover."
+          "text": "사용자: 별 아이콘을 넣어 달라는 요청은 철회할게요. 샘플 표지에는 아이콘을 넣지 마세요."
         }
       ],
-      "recentTurns": ["User: Should this sample cover have the icon we discussed?"],
+      "recentTurns": ["사용자: 이 샘플 표지에 우리가 얘기했던 아이콘을 넣어야 할까?"],
       "searchEvidenceIds": ["ev-va-willow-01", "ev-va-willow-02"],
       "recallNeeded": true,
       "goldEvidenceIds": ["ev-va-willow-01", "ev-va-willow-02"],
@@ -165,15 +165,15 @@
         {
           "id": "ev-ho-pine-01",
           "project": "synthetic-pine",
-          "text": "User: 샘플 카드의 버튼에는 '열기'라고 써 주세요."
+          "text": "사용자: 샘플 카드의 버튼에는 '열기'라고 써 주세요."
         },
         {
           "id": "ev-ho-pine-02",
           "project": "synthetic-pine",
-          "text": "User: 정정할게요. '열기'는 취소하고 버튼에는 '보기'라고 써 주세요."
+          "text": "사용자: 정정할게요. '열기'는 취소하고 버튼에는 '보기'라고 써 주세요."
         }
       ],
-      "recentTurns": ["User: 그때 고친 버튼 문구로 샘플 카드를 만들어 줘."],
+      "recentTurns": ["사용자: 그때 고친 버튼 문구로 샘플 카드를 만들어 줘."],
       "searchEvidenceIds": ["ev-ho-pine-01", "ev-ho-pine-02"],
       "recallNeeded": true,
       "goldEvidenceIds": ["ev-ho-pine-01", "ev-ho-pine-02"],
@@ -190,11 +190,11 @@
         {
           "id": "ev-ho-harbor-old-01",
           "project": "synthetic-harbor-old",
-          "text": "User: In the old project, sample labels were uppercase."
+          "text": "사용자: 이전 프로젝트에서는 샘플 라벨을 대문자로 썼어요."
         }
       ],
       "recentTurns": [
-        "User: This is a separate new project. For this sample, use lowercase labels. Do not carry over the old project's style."
+        "사용자: 여기는 별개의 새 프로젝트야. 이번 샘플의 라벨은 소문자로 써 줘. 이전 프로젝트의 스타일을 가져오지 마."
       ],
       "searchEvidenceIds": [],
       "recallNeeded": false,
@@ -212,12 +212,10 @@
         {
           "id": "ev-ho-cedar-01",
           "project": "synthetic-cedar",
-          "text": "User: I once asked for three sample rows."
+          "text": "사용자: 전에 샘플 행을 세 개 만들어 달라고 했어요."
         }
       ],
-      "recentTurns": [
-        "User: Explain what a row is in a table, without referring to any earlier examples."
-      ],
+      "recentTurns": ["사용자: 이전 예시는 참고하지 말고, 표에서 행이 무엇인지 설명해 줘."],
       "searchEvidenceIds": [],
       "recallNeeded": false,
       "goldEvidenceIds": [],

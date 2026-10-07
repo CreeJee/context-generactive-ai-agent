@@ -1,8 +1,10 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off newPromise:off
+import { nativePromise } from "../src/runtime/native-effect.ts";
+import { nativeStream } from "../src/runtime/native-stream.ts";
+import { it } from "@effect/vitest";
+// AsyncGenerator mocks implement the native subscription SDK contract; Effect owns test execution and gates.
 import { EventType, chat, toolDefinition, type TextOptions } from "@tanstack/ai";
 import { InternalLogger } from "@tanstack/ai/adapter-internals";
-import { Schema } from "effect";
+import { Cause, Deferred, Effect, Schema, Stream } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import {
   ProviderFeatureRejectedError,
@@ -20,6 +22,27 @@ import {
   subscriptionAgentLoop,
 } from "../src/providers/subscription-runtime.ts";
 
+const sdkCall = Effect.fn("subscriptionAdapterTest.sdkCall")(function* <A>(
+  operation: () => A | PromiseLike<A>,
+) {
+  return yield* Effect.tryPromise({
+    try: () => Promise.resolve(operation()),
+    catch: (cause) => new Cause.UnknownError(cause),
+  });
+});
+const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+const OpenAIContinuation = Schema.fromJsonString(
+  Schema.Struct({ input: Schema.Array(Schema.Unknown) }),
+);
+const AnthropicContinuation = Schema.fromJsonString(
+  Schema.Struct({ messages: Schema.Array(Schema.Unknown) }),
+);
+const AnthropicCache = Schema.fromJsonString(
+  Schema.Struct({
+    system: Schema.Union([Schema.String, Schema.Array(Schema.Unknown)]),
+    tools: Schema.Array(Schema.Unknown),
+  }),
+);
 const options = {
   systemPrompts: ["Follow the rules."],
   messages: [
@@ -75,6 +98,123 @@ const logger = new InternalLogger(
 );
 
 describe("subscription model adapters", () => {
+  it.live(
+    "streams OpenAI public reasoning summaries before tool calls and preserves encrypted reasoning",
+    () =>
+      Effect.gen(function* () {
+        const wireEvents = [
+          {
+            type: "response.reasoning_summary_part.added",
+            item_id: "rs-summary",
+            output_index: 0,
+            summary_index: 0,
+            part: { type: "summary_text", text: "" },
+          },
+          {
+            type: "response.reasoning_summary_text.delta",
+            item_id: "rs-summary",
+            output_index: 0,
+            summary_index: 0,
+            delta: "Checking",
+          },
+          {
+            type: "response.reasoning_summary_part.done",
+            item_id: "rs-summary",
+            output_index: 0,
+            summary_index: 0,
+            part: { type: "summary_text", text: "Checking details." },
+          },
+          {
+            type: "response.reasoning_summary_part.added",
+            item_id: "rs-summary",
+            output_index: 0,
+            summary_index: 1,
+            part: { type: "summary_text", text: "Next step." },
+          },
+          {
+            type: "response.reasoning_summary_part.done",
+            item_id: "rs-summary",
+            output_index: 0,
+            summary_index: 1,
+            part: { type: "summary_text", text: "Next step." },
+          },
+          {
+            type: "response.output_item.done",
+            item: { type: "reasoning", id: "rs-summary", encrypted_content: "encrypted-value" },
+          },
+          {
+            type: "response.output_item.done",
+            item: {
+              type: "function_call",
+              call_id: "call-summary",
+              name: "lookup",
+              arguments: '{"query":"x"}',
+            },
+          },
+          { type: "response.output_text.delta", delta: "Answer." },
+        ];
+        const client = {
+          stream() {
+            return nativeStream(
+              Stream.fromIterable(
+                (function* () {
+                  for (const wire of wireEvents) {
+                    const event = decodeProviderEvent("openai", JSON.stringify(wire));
+                    expect(event).not.toBeNull();
+                    if (event !== null) yield event;
+                  }
+                })(),
+                { chunkSize: 1 },
+              ),
+            );
+          },
+        };
+        const adapter = new SubscriptionTextAdapter(client, {
+          provider: "openai",
+          model: "model-1",
+          reasoningEffort: "medium",
+        });
+        const events = yield* Stream.runCollect(
+          Stream.fromAsyncIterable(
+            adapter.chatStream({ ...options, model: "model-1", logger }),
+            (cause) => new Cause.UnknownError(cause),
+          ),
+        );
+        expect(events.map((event) => event.type)).toEqual([
+          EventType.RUN_STARTED,
+          EventType.REASONING_MESSAGE_START,
+          EventType.REASONING_MESSAGE_CONTENT,
+          EventType.REASONING_MESSAGE_CONTENT,
+          EventType.REASONING_MESSAGE_END,
+          EventType.REASONING_MESSAGE_START,
+          EventType.REASONING_MESSAGE_CONTENT,
+          EventType.REASONING_MESSAGE_END,
+          EventType.REASONING_ENCRYPTED_VALUE,
+          EventType.TOOL_CALL_START,
+          EventType.TOOL_CALL_ARGS,
+          EventType.TOOL_CALL_END,
+          EventType.TEXT_MESSAGE_START,
+          EventType.TEXT_MESSAGE_CONTENT,
+          EventType.TEXT_MESSAGE_END,
+          EventType.RUN_FINISHED,
+        ]);
+        expect(
+          events.flatMap((event) =>
+            event.type === EventType.REASONING_MESSAGE_CONTENT ? [event.delta] : [],
+          ),
+        ).toEqual(["Checking", " details.", "Next step."]);
+        expect(
+          events
+            .filter((event) => event.type === EventType.REASONING_MESSAGE_START)
+            .map((event) => event.messageId),
+        ).toEqual(["reasoning-summary-rs-summary-0", "reasoning-summary-rs-summary-1"]);
+        expect(
+          events.find((event) => event.type === EventType.REASONING_ENCRYPTED_VALUE),
+        ).toMatchObject({ entityId: "rs-summary" });
+        expect(events.at(-1)).toMatchObject({ finishReason: "tool_calls" });
+      }),
+  );
+
   test("fingerprints messages and tool definitions without retaining their contents", () => {
     const first = requestFingerprints(options);
     expect(requestFingerprints(options)).toEqual(first);
@@ -183,173 +323,205 @@ describe("subscription model adapters", () => {
     });
   });
 
-  test("continues every tool boundary and refuses cross-provider adapter selection", async () => {
-    const client = { async *stream() {} };
-    const runtime = createSubscriptionRuntime("anthropic", client);
-    expect(
-      subscriptionAgentLoop({
-        iterationCount: 12,
-        toolCallCount: 12,
-        lastTurnToolCallCount: 1,
-        finishReason: "tool_calls",
-        messages: [],
-      }),
-    ).toBe(true);
-    expect(
-      subscriptionAgentLoop({
-        iterationCount: 13,
-        toolCallCount: 12,
-        lastTurnToolCallCount: 1,
-        finishReason: "stop",
-        messages: [],
-      }),
-    ).toBe(false);
-    expect(await runtime.steer("thread", { role: "user", content: "later" })).toBe("no_turn");
-    expect(() =>
-      runtime.adapter({
-        provider: "openai",
-        model: "wrong-provider",
-        reasoningEffort: "high",
-      }),
-    ).toThrow("Provider mismatch");
-  });
+  it.live("continues every tool boundary and refuses cross-provider adapter selection", () =>
+    Effect.gen(function* () {
+      const client = {
+        stream() {
+          return nativeStream(Stream.fromIterable((function* () {})(), { chunkSize: 1 }));
+        },
+      };
+      const runtime = createSubscriptionRuntime("anthropic", client);
+      expect(
+        subscriptionAgentLoop({
+          iterationCount: 12,
+          toolCallCount: 12,
+          lastTurnToolCallCount: 1,
+          finishReason: "tool_calls",
+          messages: [],
+        }),
+      ).toBe(true);
+      expect(
+        subscriptionAgentLoop({
+          iterationCount: 13,
+          toolCallCount: 12,
+          lastTurnToolCallCount: 1,
+          finishReason: "stop",
+          messages: [],
+        }),
+      ).toBe(false);
+      expect(
+        yield* sdkCall(() => runtime.steer("thread", { role: "user", content: "later" })),
+      ).toBe("no_turn");
+      expect(() =>
+        runtime.adapter({
+          provider: "openai",
+          model: "wrong-provider",
+          reasoningEffort: "high",
+        }),
+      ).toThrow("Provider mismatch");
+    }),
+  );
 
-  test("continues with tool results in a fresh provider request", async () => {
-    const bodies: string[] = [];
-    const client = {
-      async *stream(body: string) {
-        bodies.push(body);
-        if (bodies.length === 1) {
-          yield {
-            type: "reasoning" as const,
-            id: "rs-1",
-            encryptedContent: "encrypted-reasoning",
-          };
-          yield {
-            type: "tool-call" as const,
-            id: "call-1",
-            name: "lookup",
-            arguments: { query: "x" },
-          };
-          return;
-        }
-        yield { type: "text" as const, text: "done" };
-      },
-    };
-    const lookup = toolDefinition({
-      name: "lookup",
-      description: "Look up a value",
-      inputSchema: toToolSchema(Schema.Struct({ query: Schema.String })),
-    }).server(({ query }) => ({ query, found: true }));
-    const runtime = createSubscriptionRuntime("openai", client);
-    const chunks = [];
-    for await (const chunk of chat({
-      adapter: runtime.adapter({
-        provider: "openai",
-        model: "model-1",
-        reasoningEffort: "high",
-      }),
-      agentLoopStrategy: runtime.agentLoop,
-      messages: [{ role: "user", content: "find x" }],
-      tools: [lookup],
-      threadId: "thread-1",
-      middleware: [runtime.runMiddleware()],
-    }))
-      chunks.push(chunk);
+  it.live("continues with tool results in a fresh provider request", () =>
+    Effect.gen(function* () {
+      const bodies: string[] = [];
+      const client = {
+        stream(body: string) {
+          return nativeStream(
+            Stream.fromIterable(
+              (function* () {
+                bodies.push(body);
+                if (bodies.length === 1) {
+                  yield {
+                    type: "reasoning" as const,
+                    id: "rs-1",
+                    encryptedContent: "encrypted-reasoning",
+                  };
+                  yield {
+                    type: "tool-call" as const,
+                    id: "call-1",
+                    name: "lookup",
+                    arguments: { query: "x" },
+                  };
+                  return;
+                }
+                yield { type: "text" as const, text: "done" };
+              })(),
+              { chunkSize: 1 },
+            ),
+          );
+        },
+      };
+      const lookup = toolDefinition({
+        name: "lookup",
+        description: "Look up a value",
+        inputSchema: toToolSchema(Schema.Struct({ query: Schema.String })),
+      }).server(({ query }) => ({ query, found: true }));
+      const runtime = createSubscriptionRuntime("openai", client);
+      const chunks = yield* Stream.runCollect(
+        Stream.fromAsyncIterable(
+          chat({
+            adapter: runtime.adapter({
+              provider: "openai",
+              model: "model-1",
+              reasoningEffort: "high",
+            }),
+            agentLoopStrategy: runtime.agentLoop,
+            messages: [{ role: "user", content: "find x" }],
+            tools: [lookup],
+            threadId: "thread-1",
+            middleware: [runtime.runMiddleware()],
+          }),
+          (cause) => new Cause.UnknownError(cause),
+        ),
+      );
+      expect(bodies).toHaveLength(2);
+      const continuation = yield* Schema.decodeEffect(OpenAIContinuation)(bodies[1]!);
+      expect(continuation.input).toContainEqual({
+        type: "reasoning",
+        id: "rs-1",
+        summary: [],
+        encrypted_content: "encrypted-reasoning",
+      });
+      expect(continuation.input).toContainEqual({
+        type: "function_call_output",
+        call_id: "call-1",
+        output: '{"query":"x","found":true}',
+      });
+      expect(
+        chunks
+          .flatMap((chunk) => (chunk.type === EventType.TEXT_MESSAGE_CONTENT ? [chunk.delta] : []))
+          .join(""),
+      ).toBe("done");
+    }),
+  );
 
-    expect(bodies).toHaveLength(2);
-    const continuation = JSON.parse(bodies[1]!);
-    expect(continuation.input).toContainEqual({
-      type: "reasoning",
-      id: "rs-1",
-      summary: [],
-      encrypted_content: "encrypted-reasoning",
-    });
-    expect(continuation.input).toContainEqual({
-      type: "function_call_output",
-      call_id: "call-1",
-      output: '{"query":"x","found":true}',
-    });
-    expect(
-      chunks
-        .flatMap((chunk) => (chunk.type === EventType.TEXT_MESSAGE_CONTENT ? [chunk.delta] : []))
-        .join(""),
-    ).toBe("done");
-  });
-
-  test("round-trips Anthropic thinking signatures across a tool continuation", async () => {
-    const bodies: string[] = [];
-    const client = {
-      async *stream(body: string) {
-        bodies.push(body);
-        if (bodies.length === 1) {
-          yield { type: "reasoning-start" as const, index: 0 };
-          yield {
-            type: "reasoning-delta" as const,
-            index: 0,
-            delta: "private reasoning",
-          };
-          yield {
-            type: "reasoning-signature" as const,
-            index: 0,
+  it.live("round-trips Anthropic thinking signatures across a tool continuation", () =>
+    Effect.gen(function* () {
+      const bodies: string[] = [];
+      const client = {
+        stream(body: string) {
+          return nativeStream(
+            Stream.fromIterable(
+              (function* () {
+                bodies.push(body);
+                if (bodies.length === 1) {
+                  yield { type: "reasoning-start" as const, index: 0 };
+                  yield {
+                    type: "reasoning-delta" as const,
+                    index: 0,
+                    delta: "private reasoning",
+                  };
+                  yield {
+                    type: "reasoning-signature" as const,
+                    index: 0,
+                    signature: "signed-reasoning",
+                  };
+                  yield { type: "content-block-end" as const, index: 0 };
+                  yield {
+                    type: "tool-call-start" as const,
+                    index: 1,
+                    id: "call-1",
+                    name: "lookup",
+                  };
+                  yield {
+                    type: "tool-call-arguments" as const,
+                    index: 1,
+                    delta: '{"query":"x"}',
+                  };
+                  yield { type: "content-block-end" as const, index: 1 };
+                  return;
+                }
+                yield { type: "text" as const, text: "done" };
+              })(),
+              { chunkSize: 1 },
+            ),
+          );
+        },
+      };
+      const lookup = toolDefinition({
+        name: "lookup",
+        description: "Look up a value",
+        inputSchema: toToolSchema(Schema.Struct({ query: Schema.String })),
+      }).server(({ query }) => ({ query, found: true }));
+      const runtime = createSubscriptionRuntime("anthropic", client);
+      yield* Stream.runDrain(
+        Stream.fromAsyncIterable(
+          chat({
+            adapter: runtime.adapter({
+              provider: "anthropic",
+              model: "model-1",
+              reasoningEffort: "medium",
+            }),
+            agentLoopStrategy: runtime.agentLoop,
+            messages: [{ role: "user", content: "find x" }],
+            tools: [lookup],
+            threadId: "thread-1",
+            middleware: [runtime.runMiddleware()],
+          }),
+          (cause) => new Cause.UnknownError(cause),
+        ),
+      );
+      expect(
+        (yield* Schema.decodeEffect(AnthropicContinuation)(bodies[1]!)).messages,
+      ).toContainEqual({
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "private reasoning",
             signature: "signed-reasoning",
-          };
-          yield { type: "content-block-end" as const, index: 0 };
-          yield {
-            type: "tool-call-start" as const,
-            index: 1,
+          },
+          {
+            type: "tool_use",
             id: "call-1",
             name: "lookup",
-          };
-          yield {
-            type: "tool-call-arguments" as const,
-            index: 1,
-            delta: '{"query":"x"}',
-          };
-          yield { type: "content-block-end" as const, index: 1 };
-          return;
-        }
-        yield { type: "text" as const, text: "done" };
-      },
-    };
-    const lookup = toolDefinition({
-      name: "lookup",
-      description: "Look up a value",
-      inputSchema: toToolSchema(Schema.Struct({ query: Schema.String })),
-    }).server(({ query }) => ({ query, found: true }));
-    const runtime = createSubscriptionRuntime("anthropic", client);
-    for await (const _chunk of chat({
-      adapter: runtime.adapter({
-        provider: "anthropic",
-        model: "model-1",
-        reasoningEffort: "medium",
-      }),
-      agentLoopStrategy: runtime.agentLoop,
-      messages: [{ role: "user", content: "find x" }],
-      tools: [lookup],
-      threadId: "thread-1",
-      middleware: [runtime.runMiddleware()],
-    })) {
-      // Drain both model iterations.
-    }
-
-    expect(JSON.parse(bodies[1]!).messages).toContainEqual({
-      role: "assistant",
-      content: [
-        {
-          type: "thinking",
-          thinking: "private reasoning",
-          signature: "signed-reasoning",
-        },
-        {
-          type: "tool_use",
-          id: "call-1",
-          name: "lookup",
-          input: { query: "x" },
-        },
-      ],
-    });
-  });
+            input: { query: "x" },
+          },
+        ],
+      });
+    }),
+  );
 
   test("maps transcript and tool results to OpenAI Responses wire shape", () => {
     const request = JSON.parse(
@@ -416,36 +588,53 @@ describe("subscription model adapters", () => {
     });
   });
 
-  test("falls back once when Anthropic rejects the prompt-cache feature", async () => {
-    const bodies: string[] = [];
-    const client = {
-      async *stream(body: string) {
-        bodies.push(body);
-        if (bodies.length === 1)
-          throw new ProviderFeatureRejectedError("anthropic", "prompt-cache", 400);
-        yield { type: "text" as const, text: "fallback worked" };
-      },
-    };
-    const adapter = new SubscriptionTextAdapter(client, {
-      provider: "anthropic",
-      model: "model-1",
-      reasoningEffort: "medium",
-    });
-    const events = [];
-    for await (const event of adapter.chatStream({ ...options, model: "model-1", logger }))
-      events.push(event);
+  it.live("falls back once when Anthropic rejects the prompt-cache feature", () =>
+    Effect.gen(function* () {
+      const bodies: string[] = [];
+      const client = {
+        stream(body: string) {
+          return nativeStream(
+            Stream.fromIterable(
+              (function* () {
+                bodies.push(body);
+                if (bodies.length === 1)
+                  throw new ProviderFeatureRejectedError("anthropic", "prompt-cache", 400);
+                yield { type: "text" as const, text: "fallback worked" };
+              })(),
+              { chunkSize: 1 },
+            ),
+          );
+        },
+      };
+      const adapter = new SubscriptionTextAdapter(client, {
+        provider: "anthropic",
+        model: "model-1",
+        reasoningEffort: "medium",
+      });
 
-    expect(bodies).toHaveLength(2);
-    expect(JSON.parse(bodies[0]!).system[0]).toHaveProperty("cache_control");
-    expect(JSON.parse(bodies[0]!).tools.at(-1)).toHaveProperty("cache_control");
-    expect(JSON.parse(bodies[1]!).system).toBe("Follow the rules.");
-    expect(JSON.parse(bodies[1]!).tools.at(-1)).not.toHaveProperty("cache_control");
-    expect(
-      events
-        .flatMap((event) => (event.type === EventType.TEXT_MESSAGE_CONTENT ? [event.delta] : []))
-        .join(""),
-    ).toBe("fallback worked");
-  });
+      const events = yield* Stream.runCollect(
+        Stream.fromAsyncIterable(
+          adapter.chatStream({ ...options, model: "model-1", logger }),
+          (cause) => new Cause.UnknownError(cause),
+        ),
+      );
+      expect(bodies).toHaveLength(2);
+      const initial = yield* Schema.decodeEffect(AnthropicCache)(bodies[0]!);
+      const cachedSystem = yield* Schema.decodeUnknownEffect(Schema.Array(Schema.Unknown))(
+        initial.system,
+      );
+      const fallback = yield* Schema.decodeEffect(AnthropicCache)(bodies[1]!);
+      expect(cachedSystem[0]).toHaveProperty("cache_control");
+      expect(initial.tools.at(-1)).toHaveProperty("cache_control");
+      expect(fallback.system).toBe("Follow the rules.");
+      expect(fallback.tools.at(-1)).not.toHaveProperty("cache_control");
+      expect(
+        events
+          .flatMap((event) => (event.type === EventType.TEXT_MESSAGE_CONTENT ? [event.delta] : []))
+          .join(""),
+      ).toBe("fallback worked");
+    }),
+  );
 
   test("normalizes OpenAI history into valid alternating Anthropic turns", () => {
     const request = JSON.parse(
@@ -529,189 +718,259 @@ describe("subscription model adapters", () => {
     ]);
   });
 
-  test("does not retry unrelated provider failures", async () => {
-    let attempts = 0;
-    const client = {
-      async *stream() {
-        attempts += 1;
-        yield { type: "error" as const, code: "overloaded_error", message: "busy" };
-      },
-    };
-    const adapter = new SubscriptionTextAdapter(client, {
-      provider: "anthropic",
-      model: "model-1",
-      reasoningEffort: "medium",
-    });
-    const stream = adapter
-      .chatStream({ ...options, model: "model-1", logger })
-      [Symbol.asyncIterator]();
-
-    await stream.next();
-    await expect(stream.next()).rejects.toThrow("anthropic overloaded_error: busy");
-    expect(attempts).toBe(1);
-  });
-
-  test("accepts Anthropic content block end after streamed text", async () => {
-    const client = {
-      async *stream() {
-        yield { type: "text" as const, text: "Which option?" };
-        yield { type: "content-block-end" as const, index: 0 };
-      },
-    };
-    const adapter = new SubscriptionTextAdapter(client, {
-      provider: "anthropic",
-      model: "model-1",
-      reasoningEffort: "medium",
-    });
-    const events = [];
-    for await (const event of adapter.chatStream({
-      ...options,
-      model: "model-1",
-      logger,
-    }))
-      events.push(event);
-
-    expect(events.map((event) => event.type)).toEqual([
-      EventType.RUN_STARTED,
-      EventType.TEXT_MESSAGE_START,
-      EventType.TEXT_MESSAGE_CONTENT,
-      EventType.TEXT_MESSAGE_END,
-      EventType.RUN_FINISHED,
-    ]);
-    expect(events.at(-1)).toMatchObject({ finishReason: "stop" });
-  });
-
-  test("forwards abort to the provider request and ends without a model error", async () => {
-    let receivedSignal: AbortSignal | undefined;
-    const client = {
-      async *stream(_body: string, signal?: AbortSignal) {
-        receivedSignal = signal;
-        await new Promise<void>((_resolve, reject) => {
-          signal?.addEventListener(
-            "abort",
-            () => reject(new DOMException("aborted", "AbortError")),
-            { once: true },
+  it.live("does not retry unrelated provider failures", () =>
+    Effect.gen(function* () {
+      let attempts = 0;
+      const client = {
+        stream() {
+          return nativeStream(
+            Stream.fromIterable(
+              (function* () {
+                attempts += 1;
+                yield { type: "error" as const, code: "overloaded_error", message: "busy" };
+              })(),
+              { chunkSize: 1 },
+            ),
           );
-        });
-        yield { type: "text" as const, text: "unreachable" };
-      },
-    };
-    const controller = new AbortController();
-    const adapter = new SubscriptionTextAdapter(client, {
-      provider: "openai",
-      model: "model-1",
-      reasoningEffort: "high",
-    });
-    const stream = adapter
-      .chatStream({
-        ...options,
+        },
+      };
+      const adapter = new SubscriptionTextAdapter(client, {
+        provider: "anthropic",
         model: "model-1",
-        logger,
-        abortController: controller,
-      })
-      [Symbol.asyncIterator]();
+        reasoningEffort: "medium",
+      });
+      const stream = adapter
+        .chatStream({ ...options, model: "model-1", logger })
+        [Symbol.asyncIterator]();
+      yield* sdkCall(() => stream.next());
+      yield* sdkCall(() =>
+        expect(stream.next()).rejects.toMatchObject({
+          _tag: "SubscriptionStreamFailed",
+          provider: "anthropic",
+          reason: { _tag: "ProviderRejected" },
+        }),
+      );
+      expect(attempts).toBe(1);
+    }),
+  );
 
-    expect((await stream.next()).value).toMatchObject({
-      type: EventType.RUN_STARTED,
-    });
-    const pending = stream.next();
-    controller.abort();
-    expect(await pending).toEqual({ done: true, value: undefined });
-    expect(receivedSignal).toBe(controller.signal);
-  });
+  it.live("accepts Anthropic content block end after streamed text", () =>
+    Effect.gen(function* () {
+      const client = {
+        stream() {
+          return nativeStream(
+            Stream.fromIterable(
+              (function* () {
+                yield { type: "text" as const, text: "Which option?" };
+                yield { type: "content-block-end" as const, index: 0 };
+              })(),
+              { chunkSize: 1 },
+            ),
+          );
+        },
+      };
+      const adapter = new SubscriptionTextAdapter(client, {
+        provider: "anthropic",
+        model: "model-1",
+        reasoningEffort: "medium",
+      });
 
-  test("forwards Anthropic abort and drops provider chunks emitted after cancellation", async () => {
-    let receivedSignal: AbortSignal | undefined;
-    let releaseProvider!: () => void;
-    const providerReady = new Promise<void>((resolve) => {
-      releaseProvider = resolve;
-    });
-    const client = {
-      async *stream(_body: string, signal?: AbortSignal) {
-        receivedSignal = signal;
-        yield { type: "text" as const, text: "before abort" };
-        await providerReady;
-        yield { type: "text" as const, text: "after abort" };
-      },
-    };
+      const events = yield* Stream.runCollect(
+        Stream.fromAsyncIterable(
+          adapter.chatStream({
+            ...options,
+            model: "model-1",
+            logger,
+          }),
+          (cause) => new Cause.UnknownError(cause),
+        ),
+      );
+      expect(events.map((event) => event.type)).toEqual([
+        EventType.RUN_STARTED,
+        EventType.TEXT_MESSAGE_START,
+        EventType.TEXT_MESSAGE_CONTENT,
+        EventType.TEXT_MESSAGE_END,
+        EventType.RUN_FINISHED,
+      ]);
+      expect(events.at(-1)).toMatchObject({ finishReason: "stop" });
+    }),
+  );
+
+  it.live("forwards abort to the provider request and ends without a model error", () => {
     const controller = new AbortController();
-    const adapter = new SubscriptionTextAdapter(client, {
-      provider: "anthropic",
-      model: "model-1",
-      reasoningEffort: "medium",
-    });
-    const stream = adapter
-      .chatStream({ ...options, model: "model-1", logger, abortController: controller })
-      [Symbol.asyncIterator]();
+    return Effect.gen(function* () {
+      let receivedSignal: AbortSignal | undefined;
+      const client = {
+        stream(_body: string, signal?: AbortSignal) {
+          return nativeStream(
+            Stream.suspend(() => {
+              receivedSignal = signal;
+              return Stream.fromEffect(
+                Effect.callback<void, Cause.UnknownError>((resume) => {
+                  const onAbort = () =>
+                    resume(
+                      Effect.fail(
+                        new Cause.UnknownError(new DOMException("aborted", "AbortError")),
+                      ),
+                    );
+                  if (signal?.aborted) {
+                    onAbort();
+                    return;
+                  }
+                  signal?.addEventListener("abort", onAbort, { once: true });
+                  return Effect.sync(() => signal?.removeEventListener("abort", onAbort));
+                }),
+              ).pipe(
+                Stream.flatMap(() =>
+                  Stream.succeed({ type: "text" as const, text: "unreachable" }),
+                ),
+              );
+            }),
+          );
+        },
+      };
 
-    expect((await stream.next()).value).toMatchObject({ type: EventType.RUN_STARTED });
-    expect((await stream.next()).value).toMatchObject({ type: EventType.TEXT_MESSAGE_START });
-    expect((await stream.next()).value).toMatchObject({
-      type: EventType.TEXT_MESSAGE_CONTENT,
-      delta: "before abort",
+      const adapter = new SubscriptionTextAdapter(client, {
+        provider: "openai",
+        model: "model-1",
+        reasoningEffort: "high",
+      });
+      const stream = adapter
+        .chatStream({
+          ...options,
+          model: "model-1",
+          logger,
+          abortController: controller,
+        })
+        [Symbol.asyncIterator]();
+      expect((yield* sdkCall(() => stream.next())).value).toMatchObject({
+        type: EventType.RUN_STARTED,
+      });
+      const pending = stream.next();
+      controller.abort();
+      expect(yield* sdkCall(() => pending)).toEqual({ done: true, value: undefined });
+      expect(receivedSignal).toBe(controller.signal);
     });
-    expect(receivedSignal).toBe(controller.signal);
-    const pending = stream.next();
-    controller.abort();
-    releaseProvider();
-    expect(await pending).toEqual({ done: true, value: undefined });
-    expect(await stream.next()).toEqual({ done: true, value: undefined });
   });
 
-  test("emits streaming tool deltas and combined usage without provider secrets", async () => {
-    const client = {
-      async *stream() {
-        yield { type: "usage" as const, promptTokens: 10, cachedPromptTokens: 4 };
-        yield { type: "text" as const, text: "hello" };
-        yield {
-          type: "tool-call-start" as const,
-          index: 1,
-          id: "call-2",
-          name: "nested",
-        };
-        yield {
-          type: "tool-call-arguments" as const,
-          index: 1,
-          delta: '{"value":{"nested":true}}',
-        };
-        yield { type: "content-block-end" as const, index: 1 };
-        yield { type: "usage" as const, completionTokens: 3 };
-      },
-    };
-    const adapter = new SubscriptionTextAdapter(client, {
-      provider: "anthropic",
-      model: "model-1",
-      reasoningEffort: "medium",
-    });
-    const events = [];
-    for await (const event of adapter.chatStream({
-      ...options,
-      model: "model-1",
-      logger,
-    }))
-      events.push(event);
+  it.live("forwards Anthropic abort and drops provider chunks emitted after cancellation", () => {
+    const controller = new AbortController();
+    return Effect.gen(function* () {
+      let receivedSignal: AbortSignal | undefined;
+      const providerGate = yield* Deferred.make<void>();
+      const runNative = Effect.runPromiseWith(yield* Effect.context());
+      const providerReady = runNative(Deferred.await(providerGate));
+      const releaseProvider = () => Deferred.doneUnsafe(providerGate, Effect.void);
+      const client = {
+        stream(_body: string, signal?: AbortSignal) {
+          return nativeStream(
+            Stream.suspend(() => {
+              receivedSignal = signal;
+              return Stream.succeed({ type: "text" as const, text: "before abort" }).pipe(
+                Stream.concat(
+                  Stream.fromEffect(nativePromise(() => providerReady)).pipe(
+                    Stream.map(() => ({ type: "text" as const, text: "after abort" })),
+                  ),
+                ),
+              );
+            }),
+          );
+        },
+      };
 
-    expect(events.map((event) => event.type)).toEqual([
-      EventType.RUN_STARTED,
-      EventType.TEXT_MESSAGE_START,
-      EventType.TEXT_MESSAGE_CONTENT,
-      EventType.TEXT_MESSAGE_END,
-      EventType.TOOL_CALL_START,
-      EventType.TOOL_CALL_ARGS,
-      EventType.TOOL_CALL_END,
-      EventType.RUN_FINISHED,
-    ]);
-    expect(events.at(-1)).toMatchObject({
-      finishReason: "tool_calls",
-      usage: {
-        promptTokens: 10,
-        completionTokens: 3,
-        totalTokens: 13,
-        promptTokensDetails: { cachedTokens: 4 },
-      },
+      const adapter = new SubscriptionTextAdapter(client, {
+        provider: "anthropic",
+        model: "model-1",
+        reasoningEffort: "medium",
+      });
+      const stream = adapter
+        .chatStream({ ...options, model: "model-1", logger, abortController: controller })
+        [Symbol.asyncIterator]();
+      expect((yield* sdkCall(() => stream.next())).value).toMatchObject({
+        type: EventType.RUN_STARTED,
+      });
+      expect((yield* sdkCall(() => stream.next())).value).toMatchObject({
+        type: EventType.TEXT_MESSAGE_START,
+      });
+      expect((yield* sdkCall(() => stream.next())).value).toMatchObject({
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        delta: "before abort",
+      });
+      expect(receivedSignal).toBe(controller.signal);
+      const pending = stream.next();
+      controller.abort();
+      releaseProvider();
+      expect(yield* sdkCall(() => pending)).toEqual({ done: true, value: undefined });
+      expect(yield* sdkCall(() => stream.next())).toEqual({ done: true, value: undefined });
     });
-    expect(JSON.stringify(events)).not.toContain("Authorization");
   });
+
+  it.live("emits streaming tool deltas and combined usage without provider secrets", () =>
+    Effect.gen(function* () {
+      const client = {
+        stream() {
+          return nativeStream(
+            Stream.fromIterable(
+              (function* () {
+                yield { type: "usage" as const, promptTokens: 10, cachedPromptTokens: 4 };
+                yield { type: "text" as const, text: "hello" };
+                yield {
+                  type: "tool-call-start" as const,
+                  index: 1,
+                  id: "call-2",
+                  name: "nested",
+                };
+                yield {
+                  type: "tool-call-arguments" as const,
+                  index: 1,
+                  delta: '{"value":{"nested":true}}',
+                };
+                yield { type: "content-block-end" as const, index: 1 };
+                yield { type: "usage" as const, completionTokens: 3 };
+              })(),
+              { chunkSize: 1 },
+            ),
+          );
+        },
+      };
+      const adapter = new SubscriptionTextAdapter(client, {
+        provider: "anthropic",
+        model: "model-1",
+        reasoningEffort: "medium",
+      });
+
+      const events = yield* Stream.runCollect(
+        Stream.fromAsyncIterable(
+          adapter.chatStream({
+            ...options,
+            model: "model-1",
+            logger,
+          }),
+          (cause) => new Cause.UnknownError(cause),
+        ),
+      );
+      expect(events.map((event) => event.type)).toEqual([
+        EventType.RUN_STARTED,
+        EventType.TEXT_MESSAGE_START,
+        EventType.TEXT_MESSAGE_CONTENT,
+        EventType.TEXT_MESSAGE_END,
+        EventType.TOOL_CALL_START,
+        EventType.TOOL_CALL_ARGS,
+        EventType.TOOL_CALL_END,
+        EventType.RUN_FINISHED,
+      ]);
+      expect(events.at(-1)).toMatchObject({
+        finishReason: "tool_calls",
+        usage: {
+          promptTokens: 10,
+          completionTokens: 3,
+          totalTokens: 13,
+          promptTokensDetails: { cachedTokens: 4 },
+        },
+      });
+      expect(yield* encodeJson(events)).not.toContain("Authorization");
+    }),
+  );
 
   test("maps transcript and tool results to Anthropic Messages wire shape", () => {
     const request = JSON.parse(

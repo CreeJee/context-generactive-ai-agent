@@ -1,4 +1,4 @@
-import { Result, Function as EffectFunction } from "effect";
+import { Effect, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import type { ModelMessage, TokenUsage } from "@tanstack/ai";
@@ -187,6 +187,15 @@ function toInterrupt(row: Record<string, SQLOutputValue>): InterruptRecord {
   return record;
 }
 
+/** Synchronous SQLite/transaction boundary required by TanStack's Promise stores.
+ * Work still runs before this call returns; failures reject with the original SQLite/codec error.
+ */
+const storePromise = <A>(operation: () => A): Promise<A> =>
+  Result.match(Effect.runSync(Effect.result(Effect.try(operation))), {
+    onSuccess: (value) => Promise.resolve(value),
+    onFailure: (failure) => Promise.reject(failure.cause),
+  });
+
 /**
  * TanStack AI chat persistence on the app's SQLite database: the four state stores with the
  * contract's invariants (full-replace threads, insert-if-absent runs and interrupts, NULL clears
@@ -223,62 +232,66 @@ function makeSqliteChatPersistence(input: {
   );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  async function loadThread(threadId: string): Promise<ModelMessage[]>;
+  function loadThread(threadId: string): Promise<ModelMessage[]>;
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  async function loadThread(
+  function loadThread(
     threadId: string,
     options: { limit?: number; before?: string },
   ): Promise<ModelMessage[] | MessagePage>;
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  async function loadThread(threadId: string, options?: { limit?: number; before?: string }) {
-    if (projection !== undefined && options?.limit !== undefined) {
-      return options.before === undefined
-        ? projection.load({ type: "initial", threadId, limit: options.limit })
-        : projection.load({
-            type: "older",
-            threadId,
-            limit: options.limit,
-            before: options.before,
-          });
-    }
-    const row = selectThread.get(threadId);
-    const stored = isTruthy(row) ? parseMessages(decodeJsonText(row).value) : [];
-    if (options?.limit === undefined) return stored;
-    // Old imported transcripts may lack ids. Paging needs a cursor that survives each GET.
-    const messages = stored.map((message, index) =>
-      message.id === undefined ? { ...message, id: `stored:${threadId}:${index}` } : message,
-    );
-    const before = options.before;
-    if (before === undefined) return { messages, truncated: false } satisfies MessagePage;
-    const end = messages.findIndex((message) => message.id === before);
-    return {
-      messages: end < 0 ? [] : messages.slice(0, end),
-      truncated: false,
-    } satisfies MessagePage;
+  function loadThread(threadId: string, options?: { limit?: number; before?: string }) {
+    return storePromise(() => {
+      if (projection !== undefined && options?.limit !== undefined) {
+        return options.before === undefined
+          ? projection.load({ type: "initial", threadId, limit: options.limit })
+          : projection.load({
+              type: "older",
+              threadId,
+              limit: options.limit,
+              before: options.before,
+            });
+      }
+      const row = selectThread.get(threadId);
+      const stored = isTruthy(row) ? parseMessages(decodeJsonText(row).value) : [];
+      if (options?.limit === undefined) return stored;
+      // Old imported transcripts may lack ids. Paging needs a cursor that survives each GET.
+      const messages = stored.map((message, index) =>
+        message.id === undefined ? { ...message, id: `stored:${threadId}:${index}` } : message,
+      );
+      const before = options.before;
+      if (before === undefined) return { messages, truncated: false } satisfies MessagePage;
+      const end = messages.findIndex((message) => message.id === before);
+      return {
+        messages: end < 0 ? [] : messages.slice(0, end),
+        truncated: false,
+      } satisfies MessagePage;
+    });
   }
 
   const messages = defineMessageStore({
     loadThread,
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async saveThread(threadId, next) {
-      const models = next.filter((message) => !isEmptyUserText(message));
-      const sourceJSON = JSON.stringify(models);
-      const write = () => {
-        upsertThread.run(threadId, sourceJSON, DateTime.toEpochMillis(DateTime.nowUnsafe()));
-        if (projection !== undefined) {
-          try {
-            projection.replace({ threadId, sourceJSON, models });
-          } catch (failure) {
-            // Native SDK edge: valid original records must survive a UI-only ID
-            // collision; readiness remains stale and reads fail explicitly.
-            if (Schema.is(HistoryPageUnavailable)(failure) && failure.reason === "id-collision")
-              return;
-            throw failure;
+    saveThread(threadId, next) {
+      return storePromise(() => {
+        const models = next.filter((message) => !isEmptyUserText(message));
+        const sourceJSON = JSON.stringify(models);
+        const write = () => {
+          upsertThread.run(threadId, sourceJSON, DateTime.toEpochMillis(DateTime.nowUnsafe()));
+          if (projection !== undefined) {
+            try {
+              projection.replace({ threadId, sourceJSON, models });
+            } catch (failure) {
+              // Native SDK edge: valid original records must survive a UI-only ID
+              // collision; readiness remains stale and reads fail explicitly.
+              if (Schema.is(HistoryPageUnavailable)(failure) && failure.reason === "id-collision")
+                return;
+              throw failure;
+            }
           }
-        }
-      };
-      if (database === undefined) write();
-      else database.atomic(write);
+        };
+        if (database === undefined) write();
+        else database.atomic(write);
+      });
     },
   });
 
@@ -293,69 +306,79 @@ function makeSqliteChatPersistence(input: {
 
   const runs = defineRunStore({
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async createOrResume({ runId, threadId, startedAt, status }) {
-      insertRun.run(runId, threadId, status ?? "running", startedAt);
-      const stored = getRun(runId);
-      if (!(stored !== null)) throw new Error(`Run ${runId} was not stored.`);
-      return stored;
+    createOrResume({ runId, threadId, startedAt, status }) {
+      return storePromise(() => {
+        insertRun.run(runId, threadId, status ?? "running", startedAt);
+        const stored = getRun(runId);
+        if (!(stored !== null)) throw new Error(`Run ${runId} was not stored.`);
+        return stored;
+      });
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async update(runId, patch) {
-      const assignments: string[] = [];
-      const values: Array<string | number | null> = [];
-      const set = (column: string, value: string | number | null) => {
-        assignments.push(`${column} = ?`);
-        values.push(value);
-      };
-      if (patch.status !== undefined) set("status", patch.status);
-      if (patch.finishedAt !== undefined) set("finished_at", patch.finishedAt);
-      if (patch.error !== undefined) {
-        set("error", patch.error.message);
-        set("error_code", patch.error.code ?? null);
-      }
-      if (patch.usage !== undefined) set("usage", JSON.stringify(patch.usage));
-      // Durable-run fields: an explicit `undefined` clears the column, an absent key leaves it.
-      if ("sandboxKey" in patch) set("sandbox_key", patch.sandboxKey ?? null);
-      if ("detachedSince" in patch) set("detached_since", patch.detachedSince ?? null);
-      if ("cancelRequested" in patch)
-        set(
-          "cancel_requested",
-          patch.cancelRequested === undefined ? null : patch.cancelRequested ? 1 : 0,
-        );
-      if ("driverEpoch" in patch) set("driver_epoch", patch.driverEpoch ?? null);
-      if (assignments.length === 0) return;
-      sqlite
-        .prepare(`UPDATE chat_runs SET ${assignments.join(", ")} WHERE run_id = ?`)
-        .run(...values, runId);
+    update(runId, patch) {
+      return storePromise(() => {
+        const assignments: string[] = [];
+        const values: Array<string | number | null> = [];
+        const set = (column: string, value: string | number | null) => {
+          assignments.push(`${column} = ?`);
+          values.push(value);
+        };
+        if (patch.status !== undefined) set("status", patch.status);
+        if (patch.finishedAt !== undefined) set("finished_at", patch.finishedAt);
+        if (patch.error !== undefined) {
+          set("error", patch.error.message);
+          set("error_code", patch.error.code ?? null);
+        }
+        if (patch.usage !== undefined) set("usage", JSON.stringify(patch.usage));
+        // Durable-run fields: an explicit `undefined` clears the column, an absent key leaves it.
+        if ("sandboxKey" in patch) set("sandbox_key", patch.sandboxKey ?? null);
+        if ("detachedSince" in patch) set("detached_since", patch.detachedSince ?? null);
+        if ("cancelRequested" in patch)
+          set(
+            "cancel_requested",
+            patch.cancelRequested === undefined ? null : patch.cancelRequested ? 1 : 0,
+          );
+        if ("driverEpoch" in patch) set("driver_epoch", patch.driverEpoch ?? null);
+        if (assignments.length === 0) return;
+        sqlite
+          .prepare(`UPDATE chat_runs SET ${assignments.join(", ")} WHERE run_id = ?`)
+          .run(...values, runId);
+      });
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async get(runId) {
-      return getRun(runId);
+    get(runId) {
+      return storePromise(() => getRun(runId));
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async findActiveRun(threadId) {
-      const row = sqlite
-        .prepare(
-          "SELECT * FROM chat_runs WHERE thread_id = ? AND status = 'running' ORDER BY started_at DESC LIMIT 1",
-        )
-        .get(threadId);
-      return isTruthy(row) ? toRun(row) : null;
+    findActiveRun(threadId) {
+      return storePromise(() => {
+        const row = sqlite
+          .prepare(
+            "SELECT * FROM chat_runs WHERE thread_id = ? AND status = 'running' ORDER BY started_at DESC LIMIT 1",
+          )
+          .get(threadId);
+        return isTruthy(row) ? toRun(row) : null;
+      });
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async listByThread(threadId) {
-      return sqlite
-        .prepare("SELECT * FROM chat_runs WHERE thread_id = ? ORDER BY started_at, run_id")
-        .all(threadId)
-        .map(toRun);
+    listByThread(threadId) {
+      return storePromise(() =>
+        sqlite
+          .prepare("SELECT * FROM chat_runs WHERE thread_id = ? ORDER BY started_at, run_id")
+          .all(threadId)
+          .map(toRun),
+      );
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async listReclaimable({ now, ttlMs }) {
-      return sqlite
-        .prepare(
-          "SELECT * FROM chat_runs WHERE status = 'running' AND detached_since IS NOT NULL AND detached_since <= ?",
-        )
-        .all(now - ttlMs)
-        .map(toRun);
+    listReclaimable({ now, ttlMs }) {
+      return storePromise(() =>
+        sqlite
+          .prepare(
+            "SELECT * FROM chat_runs WHERE status = 'running' AND detached_since IS NOT NULL AND detached_since <= ?",
+          )
+          .all(now - ttlMs)
+          .map(toRun),
+      );
     },
   });
 
@@ -377,85 +400,95 @@ function makeSqliteChatPersistence(input: {
 
   const interrupts = defineInterruptStore({
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async create(record) {
-      insertInterrupt.run(
-        record.interruptId,
-        record.runId,
-        record.threadId,
-        record.requestedAt,
-        JSON.stringify(record.payload),
-      );
+    create(record) {
+      return storePromise(() => {
+        insertInterrupt.run(
+          record.interruptId,
+          record.runId,
+          record.threadId,
+          record.requestedAt,
+          JSON.stringify(record.payload),
+        );
+      });
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async resolve(interruptId, response) {
-      // `undefined` has no JSON form: the column stays NULL, which reads back as "no response".
-      resolveInterrupt.run(
-        DateTime.toEpochMillis(DateTime.nowUnsafe()),
-        response === undefined ? null : JSON.stringify(response),
-        interruptId,
-      );
+    resolve(interruptId, response) {
+      return storePromise(() => {
+        // `undefined` has no JSON form: the column stays NULL, which reads back as "no response".
+        resolveInterrupt.run(
+          DateTime.toEpochMillis(DateTime.nowUnsafe()),
+          response === undefined ? null : JSON.stringify(response),
+          interruptId,
+        );
+      });
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async cancel(interruptId) {
-      cancelInterrupt.run(DateTime.toEpochMillis(DateTime.nowUnsafe()), interruptId);
+    cancel(interruptId) {
+      return storePromise(() => {
+        cancelInterrupt.run(DateTime.toEpochMillis(DateTime.nowUnsafe()), interruptId);
+      });
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async commitBatch(entries) {
-      const ids = MutableHashSet.empty<string>();
-      for (const entry of entries) {
-        if (MutableHashSet.has(ids, entry.interruptId))
-          throw new Error(`Interrupt batch contains duplicate id: ${entry.interruptId}.`);
-        MutableHashSet.add(ids, entry.interruptId);
-        const row = selectInterrupt.get(entry.interruptId);
-        if (!isTruthy(row))
-          throw new Error(`Interrupt batch references missing id: ${entry.interruptId}.`);
-        if (toInterrupt(row).status !== "pending")
-          throw new Error(`Interrupt batch references non-pending id: ${entry.interruptId}.`);
-      }
-      const resolvedAt = DateTime.toEpochMillis(DateTime.nowUnsafe());
-      sqlite.exec("SAVEPOINT chat_interrupt_batch");
-      try {
+    commitBatch(entries) {
+      return storePromise(() => {
+        const ids = MutableHashSet.empty<string>();
         for (const entry of entries) {
-          switch (entry.status) {
-            case "resolved":
-              resolveInterrupt.run(
-                resolvedAt,
-                entry.response === undefined ? null : JSON.stringify(entry.response),
-                entry.interruptId,
-              );
-              break;
-            case "cancelled":
-              cancelInterrupt.run(resolvedAt, entry.interruptId);
-              break;
-          }
+          if (MutableHashSet.has(ids, entry.interruptId))
+            throw new Error(`Interrupt batch contains duplicate id: ${entry.interruptId}.`);
+          MutableHashSet.add(ids, entry.interruptId);
+          const row = selectInterrupt.get(entry.interruptId);
+          if (!isTruthy(row))
+            throw new Error(`Interrupt batch references missing id: ${entry.interruptId}.`);
+          if (toInterrupt(row).status !== "pending")
+            throw new Error(`Interrupt batch references non-pending id: ${entry.interruptId}.`);
         }
-        sqlite.exec("RELEASE chat_interrupt_batch");
-      } catch (error) {
-        sqlite.exec("ROLLBACK TO chat_interrupt_batch");
-        sqlite.exec("RELEASE chat_interrupt_batch");
-        throw error;
-      }
+        const resolvedAt = DateTime.toEpochMillis(DateTime.nowUnsafe());
+        sqlite.exec("SAVEPOINT chat_interrupt_batch");
+        try {
+          for (const entry of entries) {
+            switch (entry.status) {
+              case "resolved":
+                resolveInterrupt.run(
+                  resolvedAt,
+                  entry.response === undefined ? null : JSON.stringify(entry.response),
+                  entry.interruptId,
+                );
+                break;
+              case "cancelled":
+                cancelInterrupt.run(resolvedAt, entry.interruptId);
+                break;
+            }
+          }
+          sqlite.exec("RELEASE chat_interrupt_batch");
+        } catch (error) {
+          sqlite.exec("ROLLBACK TO chat_interrupt_batch");
+          sqlite.exec("RELEASE chat_interrupt_batch");
+          throw error;
+        }
+      });
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async get(interruptId) {
-      const row = selectInterrupt.get(interruptId);
-      return isTruthy(row) ? toInterrupt(row) : null;
+    get(interruptId) {
+      return storePromise(() => {
+        const row = selectInterrupt.get(interruptId);
+        return isTruthy(row) ? toInterrupt(row) : null;
+      });
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async list(threadId) {
-      return listed("thread_id = ?", threadId);
+    list(threadId) {
+      return storePromise(() => listed("thread_id = ?", threadId));
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async listPending(threadId) {
-      return listed("thread_id = ? AND status = 'pending'", threadId);
+    listPending(threadId) {
+      return storePromise(() => listed("thread_id = ? AND status = 'pending'", threadId));
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async listByRun(runId) {
-      return listed("run_id = ?", runId);
+    listByRun(runId) {
+      return storePromise(() => listed("run_id = ?", runId));
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async listPendingByRun(runId) {
-      return listed("run_id = ? AND status = 'pending'", runId);
+    listPendingByRun(runId) {
+      return storePromise(() => listed("run_id = ? AND status = 'pending'", runId));
     },
   });
 
@@ -464,25 +497,31 @@ function makeSqliteChatPersistence(input: {
   );
   const metadata = defineMetadataStore({
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async get(namespace, key) {
-      const row = selectMetadata.get(namespace, key);
-      return isTruthy(row) ? parseValue(decodeJsonText(row).value) : null;
+    get(namespace, key) {
+      return storePromise(() => {
+        const row = selectMetadata.get(namespace, key);
+        return isTruthy(row) ? parseValue(decodeJsonText(row).value) : null;
+      });
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async set(namespace, key, value) {
-      if (value === null || value === undefined)
-        throw new TypeError("Metadata values must not be null or undefined.");
-      sqlite
-        .prepare(
-          "INSERT INTO chat_metadata VALUES (?, ?, ?) ON CONFLICT(namespace, key) DO UPDATE SET value = excluded.value",
-        )
-        .run(namespace, key, JSON.stringify(value));
+    set(namespace, key, value) {
+      return storePromise(() => {
+        if (value === null || value === undefined)
+          throw new TypeError("Metadata values must not be null or undefined.");
+        sqlite
+          .prepare(
+            "INSERT INTO chat_metadata VALUES (?, ?, ?) ON CONFLICT(namespace, key) DO UPDATE SET value = excluded.value",
+          )
+          .run(namespace, key, JSON.stringify(value));
+      });
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async delete(namespace, key) {
-      sqlite
-        .prepare("DELETE FROM chat_metadata WHERE namespace = ? AND key = ?")
-        .run(namespace, key);
+    delete(namespace, key) {
+      return storePromise(() => {
+        sqlite
+          .prepare("DELETE FROM chat_metadata WHERE namespace = ? AND key = ?")
+          .run(namespace, key);
+      });
     },
   });
 

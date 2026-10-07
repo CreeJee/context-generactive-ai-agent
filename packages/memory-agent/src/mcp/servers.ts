@@ -1,4 +1,5 @@
-import { Result, Function as EffectFunction } from "effect";
+import { nativePromise, nativeFailure, runNativeEffect } from "../runtime/native-effect.ts";
+import { Cause, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { createHash } from "node:crypto";
@@ -129,18 +130,13 @@ const describeFailure = (error: Error) => {
   return `${error.message}${cause}`.slice(0, 300);
 };
 
-const withTimeout = <A>(promise: Promise<A>, ms: number, what: string) => {
-  let timer: NodeJS.Timeout | undefined;
-  // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-  const timeout = new Promise<never>((_, reject) => {
-    // Native callback heartbeat/debounce timing remains at the protocol boundary.
-    timer = setTimeout(() => reject(new Error(`${what} timed out`)), ms);
-    timer.unref();
-  });
-  return Promise.race([promise, timeout]).finally(() => {
-    if (timer !== undefined) clearTimeout(timer);
-  });
-};
+const withTimeout = <A>(promise: Promise<A>, ms: number, what: string) =>
+  nativePromise(() => promise).pipe(
+    Effect.timeoutOrElse({
+      duration: ms,
+      orElse: () => Effect.fail(new Cause.UnknownError(new Error(`${what} timed out`))),
+    }),
+  );
 
 const isText = Schema.is(Schema.String);
 
@@ -254,15 +250,18 @@ const make = Effect.gen(function* () {
     if (isTruthy(existing)) close(key);
     // Kept unwrapped: a start that outlives its timeout still gets closed with the connection.
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    const client = (async () =>
-      createMCPClient({
-        // SAFETY: The SDK's concrete HTTP transport declares sessionId as string | undefined while
-        // TanStack's TransportInput expects an exact optional string. Runtime contracts agree.
-        transport: transportFor(project, server.config) as Parameters<
-          typeof createMCPClient
-        >[0]["transport"],
-        name: "context-generactive-agent",
-      }))();
+    const client = runNativeEffect(
+      nativePromise(() =>
+        createMCPClient({
+          // SAFETY: The SDK's concrete HTTP transport declares sessionId as string | undefined while
+          // TanStack's TransportInput expects an exact optional string. Runtime contracts agree.
+          transport: transportFor(project, server.config) as Parameters<
+            typeof createMCPClient
+          >[0]["transport"],
+          name: "context-generactive-agent",
+        }),
+      ),
+    );
     client.catch(() => undefined);
     const connection: Connection = {
       fingerprint: server.fingerprint,
@@ -280,10 +279,10 @@ const make = Effect.gen(function* () {
     if (isTruthy(connection.discovering)) return connection.discovering;
     const key = connectionKey(project, server);
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    const pending = (async () => {
-      try {
-        const client = await withTimeout(connection.client, connectTimeoutMs, "connect");
-        const tools = await withTimeout(client.tools(), connectTimeoutMs, "tools/list");
+    const pending = runNativeEffect(
+      Effect.gen(function* () {
+        const client = yield* withTimeout(connection.client, connectTimeoutMs, "connect");
+        const tools = yield* withTimeout(client.tools(), connectTimeoutMs, "tools/list");
         if (Option.getOrUndefined(MutableHashMap.get(connections, key)) !== connection) return [];
         connection.state = { status: "connected", tools: tools.map((tool) => tool.name) };
         return tools.flatMap((tool): AnyServerTool[] => {
@@ -296,26 +295,40 @@ const make = Effect.gen(function* () {
               description: `[MCP ${server.name}] ${tool.description}`.trim(),
               needsApproval: false,
               // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-              execute: async (args, context) => {
-                const result = await execute(args, context);
-                return (
-                  truncated(isText(result) ? result : (JSON.stringify(result) ?? "")) ?? result
-                );
-              },
+              execute: (args, context) =>
+                runNativeEffect(
+                  nativePromise(() => Promise.resolve(execute(args, context))).pipe(
+                    Effect.flatMap((result) =>
+                      Effect.gen(function* () {
+                        const text = isText(result)
+                          ? result
+                          : yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
+                              result,
+                            );
+                        return truncated(text) ?? result;
+                      }),
+                    ),
+                  ),
+                ),
             },
           ];
         });
-      } catch (error) {
-        // Stop whatever did start; the next run starts it again.
-        void connection.client.then((client) => client.close()).catch(() => undefined);
-        if (Option.getOrUndefined(MutableHashMap.get(connections, key)) === connection)
-          connection.state = {
-            status: "failed",
-            error: describeFailure(error instanceof Error ? error : new Error(String(error))),
-          };
-        return [];
-      }
-    })();
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.sync(() => {
+            const error = nativeFailure(cause).cause;
+            // Stop whatever did start; the next run starts it again.
+            void connection.client.then((client) => client.close()).catch(() => undefined);
+            if (Option.getOrUndefined(MutableHashMap.get(connections, key)) === connection)
+              connection.state = {
+                status: "failed",
+                error: describeFailure(error instanceof Error ? error : new Error(String(error))),
+              };
+            return [];
+          }),
+        ),
+      ),
+    );
     connection.discovering = pending;
     void pending.finally(() => {
       if (connection.discovering === pending) connection.discovering = null;
@@ -359,12 +372,14 @@ const make = Effect.gen(function* () {
   };
 
   yield* Effect.addFinalizer(() =>
-    Effect.promise(() =>
-      Promise.allSettled(
-        [...MutableHashMap.values(connections)].map((connection) =>
-          connection.client.then((client) => client.close()),
+    Effect.forEach(
+      MutableHashMap.values(connections),
+      (connection) =>
+        nativePromise(() => connection.client).pipe(
+          Effect.flatMap((client) => nativePromise(() => client.close())),
+          Effect.ignore,
         ),
-      ),
+      { concurrency: "unbounded", discard: true },
     ),
   );
 

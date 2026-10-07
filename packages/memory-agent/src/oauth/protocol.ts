@@ -171,6 +171,49 @@ export interface StreamReasoningSignatureEvent {
   readonly signature: string;
 }
 
+export interface StreamReasoningSummaryStartEvent {
+  readonly type: "reasoning-summary-start";
+  readonly id: string;
+  readonly summaryIndex: number;
+  readonly text: string;
+}
+
+export interface StreamReasoningSummaryDeltaEvent {
+  readonly type: "reasoning-summary-delta";
+  readonly id: string;
+  readonly summaryIndex: number;
+  readonly delta: string;
+}
+
+export interface StreamReasoningSummaryEndEvent {
+  readonly type: "reasoning-summary-end";
+  readonly id: string;
+  readonly summaryIndex: number;
+  readonly text: string;
+}
+
+export class ReasoningSummaryProtocolFailed extends Schema.TaggedError<ReasoningSummaryProtocolFailed>()(
+  "ReasoningSummaryProtocolFailed",
+  {
+    reason: Schema.Union([
+      Schema.TaggedStruct("InterleavedItems", {}),
+      Schema.TaggedStruct("ConflictingSummary", {}),
+      Schema.TaggedStruct("AlreadyEnded", {}),
+      Schema.TaggedStruct("ResourceLimit", {}),
+      Schema.TaggedStruct("IncompleteSummary", {}),
+    ]),
+  },
+) {
+  override get message() {
+    return "Public reasoning summary protocol failed.";
+  }
+}
+
+export interface StreamReasoningItemEndEvent {
+  readonly type: "reasoning-item-end";
+  readonly id: string;
+}
+
 export interface StreamReasoningEvent {
   readonly type: "reasoning";
   readonly id: string;
@@ -200,10 +243,35 @@ export type NormalizedStreamEvent =
   | StreamReasoningDeltaEvent
   | StreamReasoningSignatureEvent
   | StreamReasoningEvent
+  | StreamReasoningSummaryStartEvent
+  | StreamReasoningSummaryDeltaEvent
+  | StreamReasoningSummaryEndEvent
   | StreamUsageEvent
   | StreamErrorEvent;
 
+const SummaryIndex = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 const OpenAiWireEvent = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("response.reasoning_summary_part.added"),
+    item_id: Schema.NonEmptyString,
+    output_index: SummaryIndex,
+    summary_index: SummaryIndex,
+    part: Schema.Struct({ type: Schema.Literal("summary_text"), text: Schema.String }),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("response.reasoning_summary_text.delta"),
+    item_id: Schema.NonEmptyString,
+    output_index: SummaryIndex,
+    summary_index: SummaryIndex,
+    delta: Schema.String,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("response.reasoning_summary_part.done"),
+    item_id: Schema.NonEmptyString,
+    output_index: SummaryIndex,
+    summary_index: SummaryIndex,
+    part: Schema.Struct({ type: Schema.Literal("summary_text"), text: Schema.String }),
+  }),
   Schema.Struct({
     type: Schema.Literal("response.output_text.delta"),
     delta: Schema.String,
@@ -341,6 +409,31 @@ function decodeProviderEventBody(
       return Option.match(Schema.decodeUnknownOption(OpenAiWireEvent)(json), {
         onNone: () => null,
         onSome: (event): NormalizedStreamEvent | null => {
+          switch (event.type) {
+            case "response.reasoning_summary_part.added":
+              return {
+                type: "reasoning-summary-start",
+                id: event.item_id,
+                summaryIndex: event.summary_index,
+                text: event.part.text,
+              };
+            case "response.reasoning_summary_text.delta":
+              return {
+                type: "reasoning-summary-delta",
+                id: event.item_id,
+                summaryIndex: event.summary_index,
+                delta: event.delta,
+              };
+            case "response.reasoning_summary_part.done":
+              return {
+                type: "reasoning-summary-end",
+                id: event.item_id,
+                summaryIndex: event.summary_index,
+                text: event.part.text,
+              };
+            default:
+              break;
+          }
           if (event.type === "response.output_text.delta")
             return { type: "text", text: event.delta };
           if (event.type === "response.completed")

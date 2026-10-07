@@ -1,4 +1,5 @@
-import { Schema } from "effect";
+import { runUiEffect, uiPromise } from "../../shared/ui-effect";
+import { Effect, Schema } from "effect";
 import { isTruthy } from "../../../truthy.ts";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -81,35 +82,41 @@ function reasonLabel(reason: string) {
   return Object.entries(reasons).find(([key]) => key === reason)?.[1];
 }
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function request(body?: {
+function request(body?: {
   action: string;
   settings?: Configuration;
   versionId?: string;
 }): Promise<Status> {
-  const response = await appFetch(
-    "/api/settings/rrsi",
-    body !== undefined
-      ? {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        }
-      : undefined,
+  return runUiEffect(
+    Effect.gen(function* () {
+      const response = yield* uiPromise(() =>
+        appFetch(
+          "/api/settings/rrsi",
+          body !== undefined
+            ? {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+              }
+            : undefined,
+        ),
+      );
+      if (!response.ok) {
+        if (response.status === 404)
+          return yield* ExperimentRequestFailed.make({
+            reason: "server_restart_required",
+            message:
+              "실행 중인 서버가 동작 개선 실험을 지원하지 않아요. 앱 서버를 재시작한 뒤 다시 시도하세요.",
+          });
+        const page: { error: string } = yield* uiPromise(() => response.json());
+        return yield* ExperimentRequestFailed.make({
+          reason: "request_failed",
+          message: reasonLabel(page.error) ?? "요청을 처리하지 못했어요",
+        });
+      }
+      return yield* uiPromise<Status>(() => response.json());
+    }),
   );
-  if (!response.ok) {
-    if (response.status === 404)
-      throw ExperimentRequestFailed.make({
-        reason: "server_restart_required",
-        message:
-          "실행 중인 서버가 동작 개선 실험을 지원하지 않아요. 앱 서버를 재시작한 뒤 다시 시도하세요.",
-      });
-    const page: { error: string } = await response.json();
-    throw ExperimentRequestFailed.make({
-      reason: "request_failed",
-      message: reasonLabel(page.error) ?? "요청을 처리하지 못했어요",
-    });
-  }
-  return response.json();
 }
 export function RrsiSettings() {
   const cache = useQueryClient();

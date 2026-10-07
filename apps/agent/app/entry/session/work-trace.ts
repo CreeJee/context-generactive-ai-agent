@@ -1,4 +1,5 @@
-import { Function as EffectFunction } from "effect";
+import { uiPromise } from "../shared/ui-effect";
+import { Effect, Fiber, Function as EffectFunction } from "effect";
 import { isTruthy } from "../../truthy.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import type { TraceTaskView } from "memory-agent";
@@ -30,21 +31,33 @@ export function useWorkTrace(sessionId: string) {
     let refreshing = false;
     let dirty = false;
     let source: EventSource | null = null;
+    let refreshFiber: Fiber.Fiber<void> | null = null;
     const refresh = () => {
       dirty = true;
       if (refreshing) return;
       refreshing = true;
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      void (async () => {
-        try {
+      refreshFiber = Effect.runFork(
+        Effect.gen(function* () {
           while (active && dirty) {
             dirty = false;
-            await queryClient.invalidateQueries({ queryKey: options.queryKey, exact: true });
+            yield* uiPromise(() =>
+              queryClient.invalidateQueries({ queryKey: options.queryKey, exact: true }),
+            );
           }
-        } finally {
-          refreshing = false;
-        }
-      })();
+        }).pipe(
+          Effect.catch(() =>
+            Effect.sync(() => {
+              if (active) setConnection("reconnecting");
+            }),
+          ),
+          Effect.ensuring(
+            Effect.sync(() => {
+              refreshing = false;
+            }),
+          ),
+        ),
+      );
     };
     const connect = () => {
       if (!active || document.hidden || source !== null) return;
@@ -71,6 +84,7 @@ export function useWorkTrace(sessionId: string) {
     visibilityChanged();
     return () => {
       active = false;
+      if (refreshFiber !== null) Effect.runFork(Fiber.interrupt(refreshFiber));
       window.removeEventListener("work-trace:changed", refresh);
       document.removeEventListener("visibilitychange", visibilityChanged);
       source?.close();

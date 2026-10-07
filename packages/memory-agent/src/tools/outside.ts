@@ -1,13 +1,14 @@
+import { Cause } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { toolDefinition } from "@tanstack/ai";
 import { Context, Effect, Result, Layer, Schema } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
-import { listOutsideFiles, createSnapshots } from "../files/listing.ts";
+import { listOutsideFilesEffect, createSnapshots } from "../files/listing.ts";
 import { resolveOutsidePath } from "../files/paths.ts";
-import { decodeSearchCursor, encodeSearchCursor, searchTextFiles } from "../files/search.ts";
-import { linePage, readFileBytesEffect, readTextFile } from "../files/text.ts";
+import { decodeSearchCursor, encodeSearchCursor, searchTextFilesEffect } from "../files/search.ts";
+import { linePage, readFileBytesEffect, readTextFileEffect } from "../files/text.ts";
 import type { Project } from "../projects/projects.ts";
-import { guarded, orThrow } from "./failure.ts";
+import { guarded } from "./failure.ts";
 import { listPageSize } from "./files.ts";
 import { toToolSchema } from "./schema.ts";
 
@@ -68,7 +69,7 @@ const make = Effect.gen(function* () {
       // Snapshots are keyed per project so one project's cursors never page another's listing.
       const snapshotKey = `outside:${project.id}`;
       const resolve = (path: string, kind: "file" | "directory") =>
-        orThrow(resolveOutsidePath(project.root, storage.path, path, kind));
+        Effect.fromResult(resolveOutsidePath(project.root, storage.path, path, kind));
       const readBytes = Effect.fnUntraced(function* (path: string) {
         const resolved = yield* Result.match(
           resolveOutsidePath(project.root, storage.path, path, "file"),
@@ -87,33 +88,37 @@ const make = Effect.gen(function* () {
         inputSchema: toToolSchema(listOutsideInput),
       }).server(({ directory, glob, snapshot, offset }) =>
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        guarded(directory, async () => {
-          let view;
-          if (snapshot === undefined) {
-            const { absolute } = resolve(directory, "directory");
-            view = snapshots.add(
-              snapshotKey,
-              absolute,
-              glob,
-              await listOutsideFiles(absolute, glob),
-            );
-          } else view = snapshots.get(snapshot, snapshotKey);
-          if (!isTruthy(view))
-            throw new Error("snapshot_expired: start again without snapshot and offset.");
-          const start = Math.max(0, offset ?? 0);
-          const paths = view.paths.slice(start, start + listPageSize);
-          const next = start + paths.length;
-          return {
-            snapshot: view.id,
-            directory: view.directory,
-            glob: view.glob ?? null,
-            total: view.paths.length,
-            excludedCredentialFiles: view.excluded,
-            truncated: view.truncated,
-            paths,
-            nextOffset: next < view.paths.length ? next : null,
-          };
-        }),
+        guarded(directory, () =>
+          Effect.gen(function* () {
+            let view;
+            if (snapshot === undefined) {
+              const { absolute } = yield* resolve(directory, "directory");
+              view = snapshots.add(
+                snapshotKey,
+                absolute,
+                glob,
+                yield* listOutsideFilesEffect(absolute, glob),
+              );
+            } else view = snapshots.get(snapshot, snapshotKey);
+            if (!isTruthy(view))
+              return yield* new Cause.UnknownError(
+                new Error("snapshot_expired: start again without snapshot and offset."),
+              );
+            const start = Math.max(0, offset ?? 0);
+            const paths = view.paths.slice(start, start + listPageSize);
+            const next = start + paths.length;
+            return {
+              snapshot: view.id,
+              directory: view.directory,
+              glob: view.glob ?? null,
+              total: view.paths.length,
+              excludedCredentialFiles: view.excluded,
+              truncated: view.truncated,
+              paths,
+              nextOffset: next < view.paths.length ? next : null,
+            };
+          }),
+        ),
       );
 
       const readOutsideFile = toolDefinition({
@@ -123,16 +128,18 @@ const make = Effect.gen(function* () {
         inputSchema: toToolSchema(readOutsideInput),
       }).server(({ path, startLine, maxLines }) =>
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        guarded(path, async () => {
-          const resolved = resolve(path, "file");
-          const file = await readTextFile(resolved.absolute, path);
-          const lines = Math.min(Math.max(1, maxLines ?? 400), 2000);
-          return {
-            path: resolved.absolute,
-            sha256: file.sha256,
-            ...linePage(file.text, startLine ?? 1, lines),
-          };
-        }),
+        guarded(path, () =>
+          Effect.gen(function* () {
+            const resolved = yield* resolve(path, "file");
+            const file = yield* readTextFileEffect({ absolute: resolved.absolute, path: path });
+            const lines = Math.min(Math.max(1, maxLines ?? 400), 2000);
+            return {
+              path: resolved.absolute,
+              sha256: file.sha256,
+              ...linePage(file.text, startLine ?? 1, lines),
+            };
+          }),
+        ),
       );
 
       const searchOutsideFile = toolDefinition({
@@ -142,58 +149,65 @@ const make = Effect.gen(function* () {
         inputSchema: toToolSchema(searchOutsideInput),
       }).server(({ path, query, glob, caseSensitive = true, cursor }) =>
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        guarded(path, async () => {
-          const position = cursor === undefined ? undefined : decodeSearchCursor(cursor);
-          if (
-            cursor !== undefined &&
-            (position?.query !== query || position.caseSensitive !== caseSensitive)
-          )
-            throw new Error(
-              "invalid_cursor: pass the same query and caseSensitive as the first page.",
-            );
+        guarded(path, () =>
+          Effect.gen(function* () {
+            const position = cursor === undefined ? undefined : decodeSearchCursor(cursor);
+            if (
+              cursor !== undefined &&
+              (position?.query !== query || position.caseSensitive !== caseSensitive)
+            )
+              return yield* new Cause.UnknownError(
+                new Error(
+                  "invalid_cursor: pass the same query and caseSensitive as the first page.",
+                ),
+              );
 
-          let view =
-            position !== undefined ? snapshots.get(position.snapshot, snapshotKey) : undefined;
-          if (!(position !== undefined)) {
-            const directory = resolveOutsidePath(project.root, storage.path, path, "directory");
-            view = await Result.match(directory, {
-              // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-              onSuccess: async ({ absolute }) =>
-                snapshots.add(snapshotKey, absolute, glob, await listOutsideFiles(absolute, glob)),
-              onFailure: (rejection) => {
-                // Not a directory: search the one file, with the file rules applied.
-                if (rejection.reason !== "not_directory") throw rejection;
-                const file = resolve(path, "file");
-                return snapshots.add(snapshotKey, file.absolute, undefined, {
-                  paths: [file.absolute],
-                  source: "walk",
-                  excluded: 0,
-                  truncated: false,
-                });
-              },
+            let view =
+              position !== undefined ? snapshots.get(position.snapshot, snapshotKey) : undefined;
+            if (!(position !== undefined)) {
+              const directory = resolveOutsidePath(project.root, storage.path, path, "directory");
+              view = yield* Result.match(directory, {
+                onSuccess: ({ absolute }) =>
+                  listOutsideFilesEffect(absolute, glob).pipe(
+                    Effect.map((listing) => snapshots.add(snapshotKey, absolute, glob, listing)),
+                  ),
+                onFailure: (rejection) =>
+                  Effect.gen(function* () {
+                    if (rejection.reason !== "not_directory") return yield* rejection;
+                    const file = yield* resolve(path, "file");
+                    return snapshots.add(snapshotKey, file.absolute, undefined, {
+                      paths: [file.absolute],
+                      source: "walk",
+                      excluded: 0,
+                      truncated: false,
+                    });
+                  }),
+              });
+            }
+            if (!isTruthy(view))
+              return yield* new Cause.UnknownError(
+                new Error("snapshot_expired: start the search again without cursor."),
+              );
+
+            const page = yield* searchTextFilesEffect({
+              paths: view.paths,
+              readBytes,
+              query,
+              caseSensitive,
+              start: position ?? { file: 0, line: 0 },
             });
-          }
-          if (!isTruthy(view))
-            throw new Error("snapshot_expired: start the search again without cursor.");
-
-          const page = await searchTextFiles({
-            paths: view.paths,
-            readBytes,
-            query,
-            caseSensitive,
-            start: position ?? { file: 0, line: 0 },
-          });
-          return {
-            filesInView: view.paths.length,
-            truncated: view.truncated,
-            matches: page.matches,
-            skipped: page.skipped,
-            nextCursor: isTruthy(page.next)
-              ? encodeSearchCursor({ snapshot: view.id, query, caseSensitive, ...page.next })
-              : null,
-            complete: page.next === null && page.skipped.length === 0 && !view.truncated,
-          };
-        }),
+            return {
+              filesInView: view.paths.length,
+              truncated: view.truncated,
+              matches: page.matches,
+              skipped: page.skipped,
+              nextCursor: isTruthy(page.next)
+                ? encodeSearchCursor({ snapshot: view.id, query, caseSensitive, ...page.next })
+                : null,
+              complete: page.next === null && page.skipped.length === 0 && !view.truncated,
+            };
+          }),
+        ),
       );
 
       return [listOutside, readOutsideFile, searchOutsideFile] as const;

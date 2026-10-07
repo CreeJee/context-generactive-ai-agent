@@ -1,7 +1,5 @@
 import { it as effectTest } from "@effect/vitest";
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off globalConsole:off processEnv:off
-import { Effect } from "effect";
+import { Config, Effect } from "effect";
 import { expect } from "vite-plus/test";
 import { evaluateRecallShadowSearch } from "../eval/recall-shadow-search.ts";
 
@@ -31,7 +29,14 @@ effectTest.effect(
     }),
 );
 
-effectTest.effect.skipIf(process.env.RECALL_SHADOW_REAL !== "1")(
+const realEnabled = Effect.runSync(
+  Config.String("RECALL_SHADOW_REAL").pipe(
+    Config.withDefault(""),
+    Config.map((value) => value === "1"),
+  ),
+);
+
+effectTest.effect.skipIf(!realEnabled)(
   "cached offline actual retrieval report",
   () =>
     Effect.gen(function* () {

@@ -24,6 +24,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./testing": "./src/testing/index.ts",
+    "./native-effect": "./src/runtime/native-effect.ts",
     "./definitions": "./src/tools/definitions.ts",
     "./provider-contracts": "./src/providers/contracts.ts",
     "./compatible-config": "./src/providers/openai-compatible-config.ts",

@@ -1,6 +1,4 @@
 import { it as effectTest } from "@effect/vitest";
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off
 import { Effect } from "effect";
 import {
   decideImageContext,

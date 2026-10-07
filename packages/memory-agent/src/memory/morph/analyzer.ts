@@ -52,19 +52,20 @@ const decodeReply = Schema.decodeUnknownOption(Reply);
 
 /** Downloads and extracts the model once, into `<storage>/models/kiwi-<version>`. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function ensureModel(storageRoot: string) {
+const ensureModel = Effect.fn("MorphAnalyzer.ensureModel")(function* (storageRoot: string) {
   const root = join(storageRoot, "models", `kiwi-${kiwiModel.version}`);
   const modelDirectory = join(root, kiwiModel.directory);
   if (existsSync(join(modelDirectory, "cong.mdl"))) return modelDirectory;
   mkdirSync(dirname(root), { recursive: true, mode: 0o700 });
-  const failure = await installArchive(
-    { url: kiwiModel.url, algorithm: "sha256", digest: kiwiModel.sha256 },
-    root,
+  const failure = yield* Effect.tryPromise(() =>
+    installArchive({ url: kiwiModel.url, algorithm: "sha256", digest: kiwiModel.sha256 }, root),
   );
   if (failure !== null)
-    throw new Error(`Kiwi model install failed (${failure.reason}): ${failure.detail}`);
+    return yield* new MorphAnalysisFailed({
+      reason: `Kiwi model install failed (${failure.reason}): ${failure.detail}`,
+    });
   return modelDirectory;
-}
+});
 
 /**
  * Kiwi in a worker, started on first use and kept. Building the model peaks at ~900 MB and settles
@@ -75,6 +76,7 @@ const makeKiwi = Effect.gen(function* () {
   const storage = yield* StorageRoot;
   const context = yield* Effect.context<never>();
   const runSync = Effect.runSyncWith(context);
+  const runPromise = Effect.runPromiseWith(context);
   let worker: Worker | null = null;
   let loaded = false;
   let starting: Promise<Worker> | null = null;
@@ -92,27 +94,33 @@ const makeKiwi = Effect.gen(function* () {
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const start = async () => {
-    const modelDirectory = await ensureModel(storage.path);
-    const created = new Worker(runtimeWorker("kiwi-worker"), { workerData: { modelDirectory } });
-    created.on("message", (message) => {
-      const decoded = decodeReply(message);
-      if (Option.isNone(decoded)) return lost();
-      const reply = decoded.value;
-      const done = Option.getOrUndefined(HashMap.get(runSync(Ref.get(pending)), reply.id));
-      runSync(Ref.update(pending, HashMap.remove(reply.id)));
-      if (isTruthy(done)) Deferred.doneUnsafe(done, Effect.succeed(reply));
-      // An idle worker must not keep the process alive; one with requests in flight must.
-      if (HashMap.isEmpty(runSync(Ref.get(pending)))) created.unref();
-    });
-    const lost = () => {
-      if (worker === created) void stop();
-    };
-    created.on("error", lost);
-    created.on("exit", lost);
-    created.unref();
-    return created;
-  };
+  const start = () =>
+    runPromise(
+      ensureModel(storage.path).pipe(
+        Effect.map((modelDirectory) => {
+          const created = new Worker(runtimeWorker("kiwi-worker"), {
+            workerData: { modelDirectory },
+          });
+          created.on("message", (message) => {
+            const decoded = decodeReply(message);
+            if (Option.isNone(decoded)) return lost();
+            const reply = decoded.value;
+            const done = Option.getOrUndefined(HashMap.get(runSync(Ref.get(pending)), reply.id));
+            runSync(Ref.update(pending, HashMap.remove(reply.id)));
+            if (isTruthy(done)) Deferred.doneUnsafe(done, Effect.succeed(reply));
+            // An idle worker must not keep the process alive; one with requests in flight must.
+            if (HashMap.isEmpty(runSync(Ref.get(pending)))) created.unref();
+          });
+          const lost = () => {
+            if (worker === created) void stop();
+          };
+          created.on("error", lost);
+          created.on("exit", lost);
+          created.unref();
+          return created;
+        }),
+      ),
+    );
 
   const running = () => {
     if (worker !== null) return Promise.resolve(worker);
@@ -176,12 +184,12 @@ const makeKiwi = Effect.gen(function* () {
   let closed = false;
   yield* Effect.addFinalizer(() =>
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    Effect.promise(async () => {
+    Effect.gen(function* () {
       closed = true;
-      await stop();
+      yield* Effect.promise(() => Promise.resolve(stop()));
       if (isTruthy(starting)) {
-        const created = await starting.catch(() => null);
-        await created?.terminate();
+        const created = yield* Effect.promise(() => starting!.catch(() => null));
+        if (created !== null) yield* Effect.promise(() => created.terminate());
       }
     }),
   );

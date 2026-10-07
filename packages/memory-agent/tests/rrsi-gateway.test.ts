@@ -1,136 +1,192 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
+import { nativeStream } from "../src/runtime/native-stream.ts";
+import { Stream } from "effect";
+// The worker gateway consumes a real Node stdin stream; this fixture keeps that transport boundary.
 import { PassThrough } from "node:stream";
-import { Deferred, Effect, ManagedRuntime } from "effect";
-import { expect, test } from "vite-plus/test";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect";
+import { it } from "@effect/vitest";
+import { expect } from "vite-plus/test";
 import { WorkerGateway, type GatewayRequest } from "../src/rrsi/worker-gateway.ts";
-import { subscriptionGateway } from "../src/rrsi/model-gateway.ts";
+import { subscriptionGateway, SubscriptionResult } from "../src/rrsi/model-gateway.ts";
 import { reportedTokens } from "../src/rrsi/sandbox.ts";
 import type { NormalizedStreamEvent } from "../src/oauth/protocol.ts";
 
 const request = (body: string) =>
   Effect.flatMap(WorkerGateway, (gateway) => gateway.request("request", body));
-
-test("worker response waits correlate parallel requests by ID and tolerate reversed completion", async () => {
-  const input = new PassThrough();
-  const sent: GatewayRequest[] = [];
-  const ready = Deferred.makeUnsafe<void>();
-  const runtime = ManagedRuntime.make(
-    WorkerGateway.layer(input, (frame) => {
-      sent.push(frame);
-      if (sent.length === 2) Deferred.doneUnsafe(ready, Effect.void);
+const inputFixture = Effect.acquireRelease(
+  Effect.sync(() => new PassThrough()),
+  (input) =>
+    Effect.sync(() => {
+      input.destroy();
     }),
-  );
-  try {
-    const completed = runtime.runPromise(
-      Effect.all([request("first"), request("second")], { concurrency: 2 }),
-    );
-    await Effect.runPromise(Deferred.await(ready));
-    input.write(
-      JSON.stringify({ kind: "response", id: sent[1]!.id, ok: true, body: "two" }) + "\n",
-    );
-    input.write(
-      JSON.stringify({ kind: "response", id: sent[0]!.id, ok: true, body: "one" }) + "\n",
-    );
-    expect(await completed).toEqual(["one", "two"]);
-  } finally {
-    await runtime.dispose();
-    input.destroy();
-  }
+);
+const reply = Effect.fn("workerGateway.reply")(function* (
+  input: PassThrough,
+  id: string,
+  body: string,
+) {
+  const json = yield* Schema.encodeEffect(
+    Schema.fromJsonString(
+      Schema.Struct({
+        kind: Schema.Literal("response"),
+        id: Schema.String,
+        ok: Schema.Literal(true),
+        body: Schema.String,
+      }),
+    ),
+  )({ kind: "response", id, ok: true, body });
+  input.write(json + "\n");
 });
 
-test("stdin close fails pending and future requests instead of leaving waiters parked", async () => {
-  const input = new PassThrough();
-  const ready = Deferred.makeUnsafe<void>();
-  const runtime = ManagedRuntime.make(
-    WorkerGateway.layer(input, () => Deferred.doneUnsafe(ready, Effect.void)),
-  );
-  try {
-    const completed = runtime.runPromise(request("waiting").pipe(Effect.result));
-    await Effect.runPromise(Deferred.await(ready));
+it.live(
+  "worker response waits correlate parallel requests by ID and tolerate reversed completion",
+  () =>
+    Effect.gen(function* () {
+      const input = yield* inputFixture;
+      const sent: GatewayRequest[] = [];
+      const ready = yield* Deferred.make<void>();
+      const services = yield* Layer.build(
+        WorkerGateway.layer(input, (frame) => {
+          sent.push(frame);
+          if (sent.length === 2) Deferred.doneUnsafe(ready, Effect.void);
+        }),
+      );
+      const completed = yield* Effect.forkChild(
+        Effect.provideContext(
+          Effect.all([request("first"), request("second")], { concurrency: 2 }),
+          services,
+        ),
+      );
+      yield* Deferred.await(ready);
+      yield* reply(input, sent[1]!.id, "two");
+      yield* reply(input, sent[0]!.id, "one");
+      expect(yield* Fiber.join(completed)).toEqual(["one", "two"]);
+    }),
+);
+
+it.live("stdin close fails pending and future requests instead of leaving waiters parked", () =>
+  Effect.gen(function* () {
+    const input = yield* inputFixture;
+    const ready = yield* Deferred.make<void>();
+    const services = yield* Layer.build(
+      WorkerGateway.layer(input, () => Deferred.doneUnsafe(ready, Effect.void)),
+    );
+    const completed = yield* Effect.forkChild(
+      Effect.provideContext(request("waiting").pipe(Effect.result), services),
+    );
+    yield* Deferred.await(ready);
     input.end();
-    expect((await completed)._tag).toBe("Failure");
-    expect((await runtime.runPromise(request("after-close").pipe(Effect.result)))._tag).toBe(
-      "Failure",
-    );
-  } finally {
-    await runtime.dispose();
-    input.destroy();
-  }
-});
+    expect((yield* Fiber.join(completed))._tag).toBe("Failure");
+    expect(
+      (yield* Effect.provideContext(request("after-close").pipe(Effect.result), services))._tag,
+    ).toBe("Failure");
+  }),
+);
 
-test("cancelled request cannot settle the following request through a late reply", async () => {
-  const input = new PassThrough();
-  const sent: GatewayRequest[] = [];
-  const first = Deferred.makeUnsafe<void>();
-  const second = Deferred.makeUnsafe<void>();
-  const runtime = ManagedRuntime.make(
-    WorkerGateway.layer(input, (frame) => {
-      sent.push(frame);
-      Deferred.doneUnsafe(sent.length === 1 ? first : second, Effect.void);
-    }),
-  );
-  try {
-    const abort = new AbortController();
-    const cancelled = runtime.runPromise(request("cancel"), { signal: abort.signal }).then(
-      () => false,
-      () => true,
+it.live("cancelled request cannot settle the following request through a late reply", () =>
+  Effect.gen(function* () {
+    const input = yield* inputFixture;
+    const sent: GatewayRequest[] = [];
+    const first = yield* Deferred.make<void>();
+    const second = yield* Deferred.make<void>();
+    const services = yield* Layer.build(
+      WorkerGateway.layer(input, (frame) => {
+        sent.push(frame);
+        Deferred.doneUnsafe(sent.length === 1 ? first : second, Effect.void);
+      }),
     );
-    await Effect.runPromise(Deferred.await(first));
-    abort.abort();
-    expect(await cancelled).toBe(true);
-    const completed = runtime.runPromise(request("next"));
-    await Effect.runPromise(Deferred.await(second));
-    input.write(
-      JSON.stringify({ kind: "response", id: sent[0]!.id, ok: true, body: "late" }) + "\n",
-    );
-    input.write(
-      JSON.stringify({ kind: "response", id: sent[1]!.id, ok: true, body: "current" }) + "\n",
-    );
-    expect(await completed).toBe("current");
-  } finally {
-    await runtime.dispose();
-    input.destroy();
-  }
-});
+    const cancelled = yield* Effect.forkChild(Effect.provideContext(request("cancel"), services));
+    yield* Deferred.await(first);
+    yield* Fiber.interrupt(cancelled);
+    expect((yield* Fiber.await(cancelled))._tag).toBe("Failure");
+    const completed = yield* Effect.forkChild(Effect.provideContext(request("next"), services));
+    yield* Deferred.await(second);
+    yield* reply(input, sent[0]!.id, "late");
+    yield* reply(input, sent[1]!.id, "current");
+    expect(yield* Fiber.join(completed)).toBe("current");
+  }),
+);
 
-test.each(["openai", "anthropic"] as const)(
+it.live.each(["openai", "anthropic"] as const)(
   "%s gateway pins the model and preserves native reasoning and usage",
-  async (provider) => {
-    let payload = "";
-    let released = 0;
-    const events: NormalizedStreamEvent[] = [
-      { type: "reasoning", id: "reason", encryptedContent: "opaque-signature" },
-      { type: "text", text: '{"approved":true}' },
-      { type: "tool-call", id: "call", name: "lookup", arguments: { query: "evidence" } },
-      { type: "usage", promptTokens: 2000000, completionTokens: 30, cachedPromptTokens: 10 },
-    ];
-    const gateway = subscriptionGateway(
-      { provider, model: "pinned", reasoningEffort: "low" },
-      {
-        async *stream(body) {
-          payload = body;
-          yield* events;
+  (provider) =>
+    Effect.gen(function* () {
+      let payload = "";
+      let released = 0;
+      const events: NormalizedStreamEvent[] = [
+        { type: "reasoning", id: "reason", encryptedContent: "opaque-signature" },
+        { type: "text", text: '{"approved":true}' },
+        { type: "tool-call", id: "call", name: "lookup", arguments: { query: "evidence" } },
+        { type: "usage", promptTokens: 2000000, completionTokens: 30, cachedPromptTokens: 10 },
+      ];
+      const gateway = subscriptionGateway(
+        { provider, model: "pinned", reasoningEffort: "low" },
+        {
+          // The SDK requires an AsyncGenerator rather than an arbitrary AsyncIterable.
+          stream: (body) =>
+            nativeStream(
+              Stream.suspend(() =>
+                Stream.fromIterable(
+                  (function* (): Generator<NormalizedStreamEvent> {
+                    payload = body;
+                    yield* events;
+                  })(),
+                ),
+              ),
+            ),
+          releaseRun: () => {
+            released++;
+          },
         },
-        releaseRun: () => {
-          released++;
-        },
-      },
-    );
-    if (gateway.protocol !== "subscription") throw new Error("expected native gateway");
-    const raw = await gateway.subscription(
-      JSON.stringify({ model: "candidate-model" }),
-      new AbortController().signal,
-    );
-    expect(JSON.parse(payload).model).toBe("pinned");
-    expect(JSON.parse(raw).events).toEqual(events);
-    expect(reportedTokens(raw)).toBe(2000030);
-    const proposal = await gateway.complete(
-      JSON.stringify({ messages: [{ role: "user", content: "Review this proposal." }] }),
-      new AbortController().signal,
-    );
-    expect(JSON.parse(proposal).choices[0].message.content).toBe('{"approved":true}');
-    gateway.release();
-    expect(released).toBe(1);
-  },
+      );
+      const gatewayScope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
+        Scope.close(scope, Exit.void),
+      );
+      yield* Scope.addFinalizer(
+        gatewayScope,
+        Effect.sync(() => gateway.release()),
+      );
+      if (gateway.protocol !== "subscription") throw new Error("expected native gateway");
+      const signal = yield* Effect.abortSignal;
+      const body = yield* Schema.encodeEffect(
+        Schema.fromJsonString(Schema.Struct({ model: Schema.String })),
+      )({ model: "candidate-model" });
+      const raw = yield* Effect.tryPromise({
+        try: () => gateway.subscription(body, signal),
+        catch: (cause) => new Cause.UnknownError(cause),
+      });
+      expect(
+        (yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Struct({ model: Schema.String })))(
+          payload,
+        )).model,
+      ).toBe("pinned");
+      expect(
+        (yield* Schema.decodeEffect(Schema.fromJsonString(SubscriptionResult))(raw)).events,
+      ).toEqual(events);
+      expect(reportedTokens(raw)).toBe(2000030);
+      const proposalBody = yield* Schema.encodeEffect(
+        Schema.fromJsonString(
+          Schema.Struct({
+            messages: Schema.Array(
+              Schema.Struct({ role: Schema.Literal("user"), content: Schema.String }),
+            ),
+          }),
+        ),
+      )({ messages: [{ role: "user", content: "Review this proposal." }] });
+      const proposal = yield* Effect.tryPromise({
+        try: () => gateway.complete(proposalBody, signal),
+        catch: (cause) => new Cause.UnknownError(cause),
+      });
+      const decoded = yield* Schema.decodeEffect(
+        Schema.fromJsonString(
+          Schema.Struct({
+            choices: Schema.Array(
+              Schema.Struct({ message: Schema.Struct({ content: Schema.String }) }),
+            ),
+          }),
+        ),
+      )(proposal);
+      expect(decoded.choices[0]!.message.content).toBe('{"approved":true}');
+      yield* Scope.close(gatewayScope, Exit.void);
+      expect(released).toBe(1);
+    }),
 );

@@ -1,6 +1,5 @@
 import { Result, Function as EffectFunction } from "effect";
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off processEnv:off schemaSync:off
+// Native child entry point: HOME, persisted bytes and PID are checked across two distinct owners.
 import { strict as assert } from "node:assert";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -108,8 +107,8 @@ try {
         .session(binding.sessionId)
         .filter((node) => node.runId === "first" || node.text === "first"),
     );
-  const oldRun = async () =>
-    JSON.stringify(await services.state.persistence.stores.runs.get("first"));
+  const oldRun = () =>
+    services.state.persistence.stores.runs.get("first").then((run) => JSON.stringify(run));
   if (previous !== undefined) {
     assert.notEqual(previous.pid, process.pid);
     assert.equal(oldNodes(), previous.nodes);

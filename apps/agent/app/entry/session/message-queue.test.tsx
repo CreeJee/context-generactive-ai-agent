@@ -1,5 +1,5 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off
+import { it } from "@effect/vitest";
+import { Cause, Effect } from "effect";
 import { isTruthy } from "../../truthy.ts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -9,6 +9,15 @@ import { api } from "../api";
 import { SessionEventScopeContext } from "../events/context";
 import { appQueryKeys } from "../events/query-keys";
 import { useMessageQueue } from "./message-queue";
+
+const sdkCall = Effect.fn("sessionHook.sdkCall")(function* <A>(
+  operation: () => A | PromiseLike<A>,
+) {
+  return yield* Effect.tryPromise({
+    try: () => Promise.resolve(operation()),
+    catch: (cause) => new Cause.UnknownError(cause),
+  });
+});
 
 const projectId = "project-1";
 const sessionId = "session-1";
@@ -60,17 +69,21 @@ describe("queue snapshot from server", () => {
     expect(ready.nextDelivery).toEqual({ kind: "ready" });
   });
 
-  test("a queue edit fetches the latest complete server snapshot", async () => {
-    const updated: QueueSnapshot = {
-      items: [{ ...item, state: { kind: "held", draft: null } }],
-      nextDelivery: { kind: "blocked", messageId: item.id, reason: "held" },
-    };
-    vi.spyOn(api, "editQueued").mockResolvedValue(null);
-    vi.spyOn(api, "queue").mockResolvedValue(updated);
-    const queue = readSnapshot({
-      items: [item],
-      nextDelivery: { kind: "ready" },
-    });
-    expect(await queue.change(item.id, { action: "edit", draft: item.text })).toEqual(updated);
-  });
+  it.live("a queue edit fetches the latest complete server snapshot", () =>
+    Effect.gen(function* () {
+      const updated: QueueSnapshot = {
+        items: [{ ...item, state: { kind: "held", draft: null } }],
+        nextDelivery: { kind: "blocked", messageId: item.id, reason: "held" },
+      };
+      vi.spyOn(api, "editQueued").mockResolvedValue(null);
+      vi.spyOn(api, "queue").mockResolvedValue(updated);
+      const queue = readSnapshot({
+        items: [item],
+        nextDelivery: { kind: "ready" },
+      });
+      expect(
+        yield* sdkCall(() => queue.change(item.id, { action: "edit", draft: item.text })),
+      ).toEqual(updated);
+    }),
+  );
 });

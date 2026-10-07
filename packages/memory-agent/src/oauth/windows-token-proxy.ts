@@ -1,4 +1,5 @@
-import { Function as EffectFunction } from "effect";
+import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
+import { Effect, Function as EffectFunction } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -46,26 +47,30 @@ export function classifyWindowsProxyOutput(output: string): ProxyResolution {
 
 /** Resolve only this fixed OAuth endpoint through the current Windows user's proxy policy. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function windowsTokenProxy(): Promise<ProxyResolution> {
-  if (process.platform !== "win32") return { route: "unavailable" };
-  const script =
-    "$u=[Uri]::new('https://auth.openai.com/oauth/token');" +
-    "$p=[System.Net.WebRequest]::GetSystemWebProxy();" +
-    "if($p.IsBypassed($u)){[Console]::Out.Write('DIRECT')}else{" +
-    "$r=$p.GetProxy($u);" +
-    "if($r -and $r.AbsoluteUri -eq $u.AbsoluteUri){[Console]::Out.Write('DIRECT')}" +
-    "elseif($r){[Console]::Out.Write($r.AbsoluteUri)}}";
-  try {
-    const { stdout } = await execFileAsync(
-      "powershell.exe",
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
-      { timeout: 5_000, maxBuffer: 2_048, windowsHide: true },
+const windowsTokenProxyEffect = Effect.fn("OAuth.windowsTokenProxy")(
+  function* (): Effect.fn.Return<ProxyResolution> {
+    if (process.platform !== "win32") return { route: "unavailable" };
+    const script =
+      "$u=[Uri]::new('https://auth.openai.com/oauth/token');" +
+      "$p=[System.Net.WebRequest]::GetSystemWebProxy();" +
+      "if($p.IsBypassed($u)){[Console]::Out.Write('DIRECT')}else{" +
+      "$r=$p.GetProxy($u);" +
+      "if($r -and $r.AbsoluteUri -eq $u.AbsoluteUri){[Console]::Out.Write('DIRECT')}" +
+      "elseif($r){[Console]::Out.Write($r.AbsoluteUri)}}";
+    return yield* Effect.tryPromise((signal) =>
+      execFileAsync(
+        "powershell.exe",
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+        { timeout: 5_000, maxBuffer: 2_048, windowsHide: true, signal },
+      ),
+    ).pipe(
+      Effect.map(({ stdout }) => classifyWindowsProxyOutput(stdout)),
+      Effect.orElseSucceed((): ProxyResolution => ({ route: "unavailable" })),
     );
-    return classifyWindowsProxyOutput(stdout);
-  } catch {
-    // No user proxy or failed discovery must never cause a request to an untrusted route.
-    return { route: "unavailable" };
-  }
+  },
+);
+export function windowsTokenProxy(): Promise<ProxyResolution> {
+  return runNativeEffect(windowsTokenProxyEffect());
 }
 
 /** One scoped fallback after a proven pre-connect timeout; never change global fetch routing. */
@@ -79,33 +84,40 @@ export const fetchOpenAiTokenViaSystemProxy: {
   3,
   fetchOpenAiTokenViaSystemProxyBody,
 );
-async function fetchOpenAiTokenViaSystemProxyBody(
+function fetchOpenAiTokenViaSystemProxyBody(
   url: string,
   body: string,
   contentType: string,
 ): Promise<TokenProxyResult> {
-  if (url !== tokenEndpoint) return { route: "unavailable", response: null };
-  const resolution = await windowsTokenProxy();
-  if (resolution.route !== "proxy") return { route: resolution.route, response: null };
-  let dispatcher: ProxyAgent;
-  try {
-    dispatcher = new ProxyAgent(resolution.url);
-  } catch {
-    return { route: "unavailable", response: null };
-  }
-  try {
-    const response = await undiciFetch(url, {
-      method: "POST",
-      headers: { Accept: "application/json", "Content-Type": contentType },
-      body,
-      redirect: "error",
-      signal: AbortSignal.timeout(30_000),
-      dispatcher,
-    });
-    // Fully consume before closing the per-request dispatcher. Never log the token body.
-    const text = await response.text();
-    return { route: "attempted", response: new Response(text, { status: response.status }) };
-  } finally {
-    await dispatcher.close();
-  }
+  return runNativeEffect(
+    Effect.gen(function* () {
+      if (url !== tokenEndpoint) return { route: "unavailable" as const, response: null };
+      const resolution = yield* windowsTokenProxyEffect();
+      if (resolution.route !== "proxy") return { route: resolution.route, response: null };
+      return yield* Effect.acquireUseRelease(
+        Effect.try(() => new ProxyAgent(resolution.url)).pipe(Effect.orElseSucceed(() => null)),
+        (dispatcher) =>
+          Effect.gen(function* () {
+            if (dispatcher === null) return { route: "unavailable" as const, response: null };
+            const response = yield* Effect.tryPromise((ownerSignal) =>
+              undiciFetch(url, {
+                method: "POST",
+                headers: { Accept: "application/json", "Content-Type": contentType },
+                body,
+                redirect: "error",
+                signal: AbortSignal.any([ownerSignal, AbortSignal.timeout(30_000)]),
+                dispatcher,
+              }),
+            );
+            const text = yield* nativePromise(() => response.text());
+            return {
+              route: "attempted" as const,
+              response: new Response(text, { status: response.status }),
+            };
+          }),
+        (dispatcher) =>
+          dispatcher === null ? Effect.void : Effect.promise(() => dispatcher.close()),
+      );
+    }),
+  );
 }

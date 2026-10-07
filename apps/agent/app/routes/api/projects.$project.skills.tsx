@@ -8,7 +8,7 @@ import type { Route } from "./+types/projects.$project.skills";
  * that conversations in this project can use, and folders that could not be read as skills.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function loader({ params }: Route.LoaderArgs) {
+export function loader({ params }: Route.LoaderArgs) {
   return agent.runPromise(
     Effect.gen(function* () {
       const project = yield* (yield* Projects).get(params.project);

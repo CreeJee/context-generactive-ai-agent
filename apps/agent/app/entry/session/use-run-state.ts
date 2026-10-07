@@ -1,4 +1,5 @@
-import { Function as EffectFunction } from "effect";
+import { runUiEffect, uiPromise } from "../shared/ui-effect";
+import { Cause, Effect, Function as EffectFunction } from "effect";
 import { isTruthy } from "../../truthy.ts";
 import { useState } from "react";
 import { isApiError, type WorkflowAction, type WorkflowPhase } from "../api";
@@ -25,28 +26,36 @@ function useRunStateBody(sessionId: string, holder: string, generating: boolean,
   const [cancelPending, setCancelPending] = useState(false);
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const refresh = async () => {
-    const result = await query.refetch();
-    if (result.data?.running === null) setCancelPending(false);
-    if (!isTruthy(result.data)) throw new Error("Run state refresh returned no snapshot");
-    return result.data;
-  };
+  const refresh = () =>
+    runUiEffect(
+      Effect.gen(function* () {
+        const result = yield* uiPromise(() => query.refetch());
+        if (result.data?.running === null) setCancelPending(false);
+        if (!isTruthy(result.data))
+          return yield* new Cause.UnknownError(new Error("Run state refresh returned no snapshot"));
+        return result.data;
+      }),
+    );
 
   /** The server may have running children even when this page has no streaming parent. */
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const cancel = async () => {
-    try {
-      const result = await cancelMutation.mutateAsync();
-      setCancelPending(!result.stopped);
-      return "requested" as const;
-    } catch (failure) {
-      if (isApiError(failure) && failure.code === "no_running_run") {
-        setCancelPending(false);
-        return "idle" as const;
-      }
-      return "failed" as const;
-    }
-  };
+  const cancel = () =>
+    runUiEffect(
+      uiPromise(() => cancelMutation.mutateAsync()).pipe(
+        Effect.map((result) => {
+          setCancelPending(!result.stopped);
+          return "requested" as const;
+        }),
+        Effect.catch((failure) =>
+          Effect.sync(() => {
+            if (isApiError(failure.cause) && failure.cause.code === "no_running_run") {
+              setCancelPending(false);
+              return "idle" as const;
+            }
+            return "failed" as const;
+          }),
+        ),
+      ),
+    );
 
   const setWorkflowPhase = (phase: WorkflowPhase) =>
     workflowMutation.mutateAsync({ kind: "phase", phase });

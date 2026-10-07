@@ -19,26 +19,6 @@ const run = promisify(execFile);
 /** File checks run at once when listing a Git work tree. */
 const statConcurrency = 64;
 
-/** Maps items with at most `limit` running at once, keeping the input order. */
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function mapLimit<A, B>(
-  items: readonly A[],
-  limit: number,
-  work: (item: A) => Promise<B>,
-): Promise<B[]> {
-  const results: B[] = [];
-  let next = 0;
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const worker = async () => {
-    while (next < items.length) {
-      const index = next++;
-      results[index] = await work(items[index]!);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
-}
-
 /** Directories skipped when walking a project that is not a Git work tree. */
 const walkSkips = HashSet.fromIterable([".git", "node_modules"]);
 
@@ -57,20 +37,22 @@ export interface FileListing {
 }
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function gitFiles(root: string, directory: string): Promise<string[] | null> {
+const gitFiles = Effect.fn("FileListing.gitFiles")(function* (root: string, directory: string) {
   const git = findExecutable("git");
   if (!isTruthy(git)) return null;
-  try {
-    const { stdout } = await run(
-      git,
-      ["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", directory],
-      { cwd: root, maxBuffer: 256 * 1024 * 1024, windowsHide: true, env: gitEnvironment(git) },
-    );
-    return stdout.split("\0").filter(Boolean);
-  } catch {
-    return null;
-  }
-}
+  return yield* Effect.tryPromise((signal) =>
+    run(git, ["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", directory], {
+      cwd: root,
+      maxBuffer: 256 * 1024 * 1024,
+      windowsHide: true,
+      env: gitEnvironment(git),
+      signal,
+    }),
+  ).pipe(
+    Effect.map(({ stdout }) => stdout.split("\0").filter(Boolean)),
+    Effect.orElseSucceed(() => null),
+  );
+});
 
 /**
  * Regular files below `directory` (relative to `base`), not following links and not descending
@@ -79,29 +61,35 @@ async function gitFiles(root: string, directory: string): Promise<string[] | nul
  * under an unusual name, and the absolute base outside, where `~/.config` + `gh` must still match.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function walkFiles(base: string, directory: string, credentialPrefix: string) {
+const walkFiles = Effect.fn("FileListing.walkFiles")(function* (
+  base: string,
+  directory: string,
+  credentialPrefix: string,
+) {
   const files: string[] = [];
   let excluded = 0;
   let truncated = false;
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const visit = async (relative: string) => {
-    const entries = await readdir(join(base, relative), { withFileTypes: true }).catch(() => []);
-    for (const entry of entries) {
-      if (files.length >= walkLimit) {
-        truncated = true;
-        return;
+  const visit = (relative: string): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      const entries = yield* Effect.tryPromise(() =>
+        readdir(join(base, relative), { withFileTypes: true }),
+      ).pipe(Effect.orElseSucceed(() => []));
+      for (const entry of entries) {
+        if (files.length >= walkLimit) {
+          truncated = true;
+          return;
+        }
+        const path = relative === "." ? entry.name : `${relative}/${entry.name}`;
+        if (entry.isDirectory()) {
+          if (HashSet.has(walkSkips, entry.name)) continue;
+          if (isCredentialPath(join(credentialPrefix, path))) excluded++;
+          else yield* visit(path);
+        } else if (entry.isFile()) files.push(path);
       }
-      const path = relative === "." ? entry.name : `${relative}/${entry.name}`;
-      if (entry.isDirectory()) {
-        if (HashSet.has(walkSkips, entry.name)) continue;
-        if (isCredentialPath(join(credentialPrefix, path))) excluded++;
-        else await visit(path);
-      } else if (entry.isFile()) files.push(path);
-    }
-  };
-  await visit(directory);
+    });
+  yield* visit(directory);
   return { files, excluded, truncated };
-}
+});
 
 /**
  * Every regular file below `directory` (project-relative, already validated), optionally filtered
@@ -115,13 +103,13 @@ export const listProjectFiles: {
     glob: string | undefined,
   ): (root: string) => ReturnType<typeof listProjectFilesBody>;
 } & typeof listProjectFilesBody = EffectFunction.dual(3, listProjectFilesBody);
-async function listProjectFilesBody(
+export const listProjectFilesEffect = Effect.fn("FileListing.project")(function* (
   root: string,
   directory: string,
   glob: string | undefined,
-): Promise<FileListing> {
-  const fromGit = await gitFiles(root, directory);
-  const walked = isTruthy(fromGit) ? undefined : await walkFiles(root, directory, "");
+) {
+  const fromGit = yield* gitFiles(root, directory);
+  const walked = isTruthy(fromGit) ? undefined : yield* walkFiles(root, directory, "");
   const prefix = directory === "." ? "" : `${directory}/`;
   let excluded = walked?.excluded ?? 0;
   const kept: string[] = [];
@@ -138,17 +126,15 @@ async function listProjectFilesBody(
   // A walk already saw regular files only. Git lists links and deleted files too, so check those,
   // many at a time.
   const paths = isTruthy(fromGit)
-    ? (
-        await mapLimit(
-          kept,
-          statConcurrency,
-          // Native filesystem Promise callback, consumed by this bounded adapter.
-          async (path) =>
-            isTruthy((await lstat(join(root, path)).catch(() => undefined))?.isFile())
-              ? path
-              : null,
-        )
-      ).filter((path) => path !== null)
+    ? (yield* Effect.forEach(
+        kept,
+        (path) =>
+          Effect.tryPromise(() => lstat(join(root, path))).pipe(
+            Effect.orElseSucceed(() => undefined),
+            Effect.map((entry) => (entry?.isFile() === true ? path : null)),
+          ),
+        { concurrency: statConcurrency },
+      )).filter((path) => path !== null)
     : kept;
   paths.sort();
   return {
@@ -156,7 +142,15 @@ async function listProjectFilesBody(
     source: isTruthy(fromGit) ? "git" : "walk",
     excluded,
     truncated: walked?.truncated ?? false,
-  };
+  } satisfies FileListing;
+});
+
+function listProjectFilesBody(
+  root: string,
+  directory: string,
+  glob: string | undefined,
+): Promise<FileListing> {
+  return Effect.runPromise(listProjectFilesEffect(root, directory, glob));
 }
 
 /**
@@ -168,11 +162,11 @@ async function listProjectFilesBody(
 export const listOutsideFiles: {
   (glob: string | undefined): (directory: string) => ReturnType<typeof listOutsideFilesBody>;
 } & typeof listOutsideFilesBody = EffectFunction.dual(2, listOutsideFilesBody);
-async function listOutsideFilesBody(
+export const listOutsideFilesEffect = Effect.fn("FileListing.outside")(function* (
   directory: string,
   glob: string | undefined,
-): Promise<FileListing> {
-  const walked = await walkFiles(directory, ".", directory);
+) {
+  const walked = yield* walkFiles(directory, ".", directory);
   let excluded = walked.excluded;
   const paths: string[] = [];
   for (const relative of walked.files) {
@@ -182,7 +176,11 @@ async function listOutsideFilesBody(
     else paths.push(absolute);
   }
   paths.sort();
-  return { paths, source: "walk", excluded, truncated: walked.truncated };
+  return { paths, source: "walk", excluded, truncated: walked.truncated } satisfies FileListing;
+});
+
+function listOutsideFilesBody(directory: string, glob: string | undefined): Promise<FileListing> {
+  return Effect.runPromise(listOutsideFilesEffect(directory, glob));
 }
 
 export interface Snapshot extends FileListing {

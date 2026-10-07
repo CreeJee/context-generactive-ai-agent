@@ -1,3 +1,4 @@
+import { runNativeEffect } from "../src/runtime/native-effect.ts";
 import { isTruthy } from "../src/truthy.ts";
 // Recall evaluation with the real embedding model and Kiwi, on two sets: Korean decisions
 // (recall-corpus.ts) and what coding sessions leave behind (recall-technical.ts).
@@ -10,7 +11,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:f
 import { homedir, tmpdir } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { join } from "node:path";
-import { Console, Effect, Layer, ManagedRuntime, MutableHashMap, Option } from "effect";
+import { Console, Effect, Layer, MutableHashMap, Option } from "effect";
 import { SecretStore } from "../src/config/secrets.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
@@ -89,11 +90,17 @@ const recallSets: readonly RecallSet[] = [
 ];
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function evaluate(configuration: Configuration, set: RecallSet) {
+const evaluate = Effect.fn("eval.evaluate")(function* (
+  configuration: Configuration,
+  set: RecallSet,
+) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "memory-agent-recall-")));
   const projectRoot = join(base, "project");
   mkdirSync(projectRoot);
-  const runtime = ManagedRuntime.make(
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => rmSync(base, { recursive: true, force: true })),
+  );
+  const servicesContext = yield* Layer.build(
     memoryAgentLayer(join(base, "storage"), {
       embedder: configuration.embedder,
       morphAnalyzer: configuration.morph,
@@ -102,81 +109,77 @@ async function evaluate(configuration: Configuration, set: RecallSet) {
       skillsHome: join(base, "home"),
     }),
   );
-  try {
-    return await runtime.runPromise(
-      Effect.gen(function* () {
-        const project = yield* (yield* Projects).add(projectRoot);
-        const nodes = yield* Nodes;
-        const keys = MutableHashMap.empty<string, string>();
-        for (const statements of set.sessions) {
-          const session = yield* (yield* Sessions).create(project.id);
-          for (const statement of statements) {
-            const node = nodes.append({
-              projectId: project.id,
-              sessionId: session.id,
-              kind: statement.kind ?? "user",
-              text: statement.text,
-            });
-            MutableHashMap.set(keys, node.id, statement.key);
-          }
-        }
-        const indexer = yield* Indexer;
-        const started = performance.now();
-        yield* Effect.ignore(indexer.indexAll());
-        yield* Effect.ignore(indexer.analyzeAll());
-        const indexedMs = Math.round(performance.now() - started);
-        const search = yield* configuration.text
-          ? MemorySearch
-          : // Evaluation entry point owns this Layer and its resource scope.
-            Effect.scoped(
-              Effect.flatMap(Layer.build(MemorySearch.tuned({ text: false })), (services) =>
-                Effect.provideContext(MemorySearch, services),
-              ),
-            );
-
-        let top1 = 0;
-        let top3 = 0;
-        let top5 = 0;
-        let reciprocal = 0;
-        const misses: string[] = [];
-        const searchStarted = performance.now();
-        for (const item of set.queries) {
-          const result = yield* search.find({
-            query: item.query,
+  return yield* Effect.provideContext(
+    Effect.gen(function* () {
+      const project = yield* (yield* Projects).add(projectRoot);
+      const nodes = yield* Nodes;
+      const keys = MutableHashMap.empty<string, string>();
+      for (const statements of set.sessions) {
+        const session = yield* (yield* Sessions).create(project.id);
+        for (const statement of statements) {
+          const node = nodes.append({
             projectId: project.id,
-            limit: 10,
+            sessionId: session.id,
+            kind: statement.kind ?? "user",
+            text: statement.text,
           });
-          const found = result.matches.map((match) =>
-            Option.getOrUndefined(MutableHashMap.get(keys, match.id)),
-          );
-          const rank = found.indexOf(item.expected);
-          if (rank === 0) top1++;
-          if (rank >= 0 && rank < 3) top3++;
-          if (rank >= 0 && rank < 5) top5++;
-          if (rank >= 0) reciprocal += 1 / (rank + 1);
-          if (rank !== 0)
-            misses.push(
-              `${item.query} → ${rank < 0 ? "없음" : `${rank + 1}위`} (1위 ${found[0] ?? "-"}, degraded ${result.degraded.join(",") || "-"})`,
-            );
+          MutableHashMap.set(keys, node.id, statement.key);
         }
-        const total = set.queries.length;
-        return {
-          name: `${set.name} · ${configuration.name}`,
-          top1: `${top1}/${total}`,
-          top3: `${top3}/${total}`,
-          top5: `${top5}/${total}`,
-          mrr: (reciprocal / total).toFixed(3),
-          indexedMs,
-          searchMs: Math.round((performance.now() - searchStarted) / total),
-          misses,
-        };
-      }),
-    );
-  } finally {
-    await runtime.dispose();
-    rmSync(base, { recursive: true, force: true });
-  }
-}
+      }
+      const indexer = yield* Indexer;
+      const started = performance.now();
+      yield* Effect.ignore(indexer.indexAll());
+      yield* Effect.ignore(indexer.analyzeAll());
+      const indexedMs = Math.round(performance.now() - started);
+      const search = yield* configuration.text
+        ? MemorySearch
+        : // Evaluation entry point owns this Layer and its resource scope.
+          Effect.scoped(
+            Effect.flatMap(Layer.build(MemorySearch.tuned({ text: false })), (services) =>
+              Effect.provideContext(MemorySearch, services),
+            ),
+          );
+
+      let top1 = 0;
+      let top3 = 0;
+      let top5 = 0;
+      let reciprocal = 0;
+      const misses: string[] = [];
+      const searchStarted = performance.now();
+      for (const item of set.queries) {
+        const result = yield* search.find({
+          query: item.query,
+          projectId: project.id,
+          limit: 10,
+        });
+        const found = result.matches.map((match) =>
+          Option.getOrUndefined(MutableHashMap.get(keys, match.id)),
+        );
+        const rank = found.indexOf(item.expected);
+        if (rank === 0) top1++;
+        if (rank >= 0 && rank < 3) top3++;
+        if (rank >= 0 && rank < 5) top5++;
+        if (rank >= 0) reciprocal += 1 / (rank + 1);
+        if (rank !== 0)
+          misses.push(
+            `${item.query} → ${rank < 0 ? "없음" : `${rank + 1}위`} (1위 ${found[0] ?? "-"}, degraded ${result.degraded.join(",") || "-"})`,
+          );
+      }
+      const total = set.queries.length;
+      return {
+        name: `${set.name} · ${configuration.name}`,
+        top1: `${top1}/${total}`,
+        top3: `${top3}/${total}`,
+        top5: `${top5}/${total}`,
+        mrr: (reciprocal / total).toFixed(3),
+        indexedMs,
+        searchMs: Math.round((performance.now() - searchStarted) / total),
+        misses,
+      };
+    }),
+    servicesContext,
+  );
+}, Effect.scoped);
 
 const only = process.argv[2];
 if (only === "--terms") {
@@ -185,13 +188,13 @@ if (only === "--terms") {
     ...recallSessions.flat().map((statement) => statement.text),
   ];
   const terms = await Effect.runPromise(
-    Effect.scoped(Effect.flatMap(MorphAnalyzer, (analyzer) => analyzer.terms(texts))).pipe(
-      // Evaluation entry point owns this Layer and its resource scope.
-      Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
-        const services = yield* Layer.build(kiwi);
-        return yield* Effect.provideContext(program, services);
-      }, Effect.scoped),
-    ),
+    Effect.gen(function* () {
+      const services = yield* Layer.build(kiwi);
+      return yield* Effect.provideContext(
+        Effect.flatMap(MorphAnalyzer, (analyzer) => analyzer.terms(texts)),
+        services,
+      );
+    }).pipe(Effect.scoped),
   );
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
   texts.forEach((text, index) =>
@@ -202,7 +205,7 @@ if (only === "--terms") {
 for (const set of recallSets)
   for (const configuration of configurations) {
     if (isTruthy(only) && configuration.name !== only) continue;
-    const result = await evaluate(configuration, set);
+    const result = await runNativeEffect(evaluate(configuration, set));
     // Native stdout/stderr or SDK logging boundary preserves the existing output format.
     Effect.runSync(
       Console.log(

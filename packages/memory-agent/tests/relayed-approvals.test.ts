@@ -1,8 +1,8 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off
-import { ManagedRuntime } from "effect";
-import { expect, test } from "vite-plus/test";
+import { it } from "@effect/vitest";
+import { Cause, Effect, Exit, Layer, Scope } from "effect";
+import { expect } from "vite-plus/test";
 import { RelayedApprovals, type RelayedRequest } from "../src/approvals/relayed.ts";
+import { sdkCancellation } from "./support/sdk-cancellation.ts";
 
 const request: RelayedRequest = {
   requester: { kind: "subagent", subagentId: "child", name: null },
@@ -11,14 +11,26 @@ const request: RelayedRequest = {
   reason: "Approve this write",
   askedBy: "every_call",
 };
+const relayFixture = Effect.fnUntraced(function* () {
+  const scope = yield* Scope.fork(yield* Effect.scope);
+  const services = yield* Layer.build(RelayedApprovals.layer).pipe(
+    Effect.provideService(Scope.Scope, scope),
+  );
+  const relay = yield* Effect.provideContext(RelayedApprovals, services);
+  return { relay, scope };
+});
+const result = <A>(promise: Promise<A>) =>
+  Effect.tryPromise({
+    try: () => promise,
+    catch: (cause) => new Cause.UnknownError(cause),
+  });
 
-test("correlates concurrent answers by request and session, and accepts each once", async () => {
-  const runtime = ManagedRuntime.make(RelayedApprovals.layer);
-  try {
-    const relay = await runtime.runPromise(RelayedApprovals);
-    const signal = new AbortController().signal;
-    const first = relay.ask("s", request, signal);
-    const second = relay.ask("s", request, signal);
+it.live("correlates concurrent answers by request and session, and accepts each once", () =>
+  Effect.gen(function* () {
+    const { relay } = yield* relayFixture();
+    const { controller } = yield* sdkCancellation;
+    const first = relay.ask("s", request, controller.signal);
+    const second = relay.ask("s", request, controller.signal);
     const [a, b] = relay.pending("s");
     expect(a).toBeDefined();
     expect(b).toBeDefined();
@@ -26,39 +38,43 @@ test("correlates concurrent answers by request and session, and accepts each onc
     expect(relay.answer("s", b!.id, true)).toBe(true);
     expect(relay.answer("s", b!.id, false)).toBe(false);
     expect(relay.answer("s", a!.id, false)).toBe(true);
-    expect(await Promise.all([first, second])).toEqual([false, true]);
+    expect(yield* Effect.forEach([first, second], result, { concurrency: 2 })).toEqual([
+      false,
+      true,
+    ]);
     expect(relay.pending("s")).toEqual([]);
-  } finally {
-    await runtime.dispose();
-  }
-});
+  }),
+);
 
-test("cancellation removes only its waiter and rejects a late approval", async () => {
-  const runtime = ManagedRuntime.make(RelayedApprovals.layer);
-  try {
-    const relay = await runtime.runPromise(RelayedApprovals);
-    const controller = new AbortController();
+it.live("cancellation removes only its waiter and rejects a late approval", () =>
+  Effect.gen(function* () {
+    const { relay } = yield* relayFixture();
+    const { controller } = yield* sdkCancellation;
+    const other = yield* sdkCancellation;
     const cancelled = relay.ask("s", request, controller.signal);
-    const survivor = relay.ask("s", request, new AbortController().signal);
+    const survivor = relay.ask("s", request, other.controller.signal);
     const [a, b] = relay.pending("s");
     controller.abort();
-    expect(await cancelled).toBe(false);
+    expect(yield* result(cancelled)).toBe(false);
     expect(relay.pending("s").map((entry) => entry.id)).toEqual([b!.id]);
     expect(relay.answer("s", a!.id, true)).toBe(false);
     expect(relay.answer("s", b!.id, true)).toBe(true);
-    expect(await survivor).toBe(true);
-  } finally {
-    await runtime.dispose();
-  }
-});
+    expect(yield* result(survivor)).toBe(true);
+  }),
+);
 
-test("scope disposal resolves all waits as denied and prevents new waits", async () => {
-  const runtime = ManagedRuntime.make(RelayedApprovals.layer);
-  const relay = await runtime.runPromise(RelayedApprovals);
-  const first = relay.ask("s", request, new AbortController().signal);
-  const second = relay.ask("other", request, new AbortController().signal);
-  await runtime.dispose();
-  expect(await Promise.all([first, second])).toEqual([false, false]);
-  expect(relay.pending("s")).toEqual([]);
-  expect(await relay.ask("s", request, new AbortController().signal)).toBe(false);
-});
+it.live("scope disposal resolves all waits as denied and prevents new waits", () =>
+  Effect.gen(function* () {
+    const { relay, scope } = yield* relayFixture();
+    const { controller } = yield* sdkCancellation;
+    const first = relay.ask("s", request, controller.signal);
+    const second = relay.ask("other", request, controller.signal);
+    yield* Scope.close(scope, Exit.void);
+    expect(yield* Effect.forEach([first, second], result, { concurrency: 2 })).toEqual([
+      false,
+      false,
+    ]);
+    expect(relay.pending("s")).toEqual([]);
+    expect(yield* result(relay.ask("s", request, controller.signal))).toBe(false);
+  }),
+);

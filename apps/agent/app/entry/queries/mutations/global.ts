@@ -1,3 +1,5 @@
+import { runUiEffect, uiPromise } from "../../shared/ui-effect";
+import { Effect } from "effect";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type ProviderId } from "../../api";
 import { globalQueries } from "../global";
@@ -49,12 +51,20 @@ export function useAuthActionMutation(provider: ProviderId) {
   return useMutation({
     mutationFn: (intent: "login" | "cancel" | "logout") => api.authAction(intent, provider),
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    onSuccess: async () => {
-      await Promise.all([
-        client.invalidateQueries({ queryKey: globalQueries.auth(provider).queryKey }),
-        client.invalidateQueries({ queryKey: appQueryKeys.global.models(provider) }),
-      ]);
-    },
+    onSuccess: () =>
+      runUiEffect(
+        Effect.all(
+          [
+            uiPromise(() =>
+              client.invalidateQueries({ queryKey: globalQueries.auth(provider).queryKey }),
+            ),
+            uiPromise(() =>
+              client.invalidateQueries({ queryKey: appQueryKeys.global.models(provider) }),
+            ),
+          ],
+          { concurrency: "unbounded" },
+        ).pipe(Effect.asVoid),
+      ),
   });
 }
 

@@ -41,6 +41,8 @@ release. Add a tool name to select part of the graph. For example, run
 - 변형은 리터럴 태그를 가진 서로소 유니온으로 표현하고 `switch`로 분기하시오. `"key" in obj` 식 판별은 쓰지 마시오.
 - 확정한 제품과 설계 결정은 [docs/decisions.md](docs/decisions.md)에 날짜와 함께 남기시오.
 
+- Set/Map을 Effect 컬렉션으로 전환할 때 키의 동등성 계약을 먼저 확인하시오. Effect 4의 `HashSet`/`HashMap` 및 mutable 버전은 객체를 구조적으로 해싱·비교하므로, AST·scope·변경 가능한 SDK 객체를 그대로 키로 넣지 마시오. 도메인의 안정적인 문자열/숫자 ID를 우선 사용하고, 참조 동일성이 필요하면 그 계약을 명시한 경계 구현을 사용하시오. `Equal.byReference`는 호출마다 새 프록시를 만들므로 매 조회마다 감싸면 같은 키가 되지 않으며, `byReferenceUnsafe`로 외부 객체의 전역 비교 의미를 바꾸지 마시오. 객체가 값으로 저장되는 경우와 키로 사용되는 경우를 구분하시오.
+
 ## CodeGraph로 코드 탐색하기
 
 - 저장소 루트에 `.codegraph/`가 있으면 코드의 위치·구조·호출 관계를 찾거나 수정할 코드를 읽을 때 `grep`, `rg`, `find`, 파일 직접 읽기보다 CodeGraph를 먼저 사용하시오. 셸을 사용할 수 있어도 이 순서를 지키시오.

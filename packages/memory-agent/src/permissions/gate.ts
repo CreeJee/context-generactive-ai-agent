@@ -1,3 +1,4 @@
+import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
 import { isTruthy } from "../truthy.ts";
 import type { ChatMiddleware, ModelMessage, ToolCall } from "@tanstack/ai";
 import { HashSet, Context, Effect, Layer } from "effect";
@@ -72,53 +73,59 @@ export const makePermissionGateMiddleware = Effect.fnUntraced(function* (
     name: "memory-agent/permission-gate",
 
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async onInterruptBoundary(ctx) {
-      if (ctx.phase !== "beforeTools") return undefined;
-      const asks = [];
-      const ask = (call: ToolCall, reason: string, askedBy: "review" | "every_call") =>
-        permissionReviewInterrupt.interrupt({
-          key: call.id,
-          reason: "permission_review",
-          message: reason,
-          payload: {
-            toolCallId: call.id,
-            toolName: call.function.name,
-            arguments: call.function.arguments,
-            reason,
-            askedBy,
-          },
-        });
-      for (const call of pendingGatedCalls(ctx.messages, gated)) {
-        const latest = reviews.latest(sessionId, call.id);
-        let review =
-          latest?.toolName === call.function.name && latest.input === call.function.arguments
-            ? latest
-            : null;
-        if (!isTruthy(review) && binding.decider === "user") {
-          asks.push(ask(call, askEveryCallReason, "every_call"));
-          continue;
-        }
-        if (!isTruthy(review)) {
-          const verdict = await classifier.classify({
-            project: binding.project,
-            sessionId,
-            selection: binding.selection,
-            toolName: call.function.name,
-            argumentsJson: call.function.arguments,
-          });
-          review = reviews.record({
-            sessionId,
-            toolCallId: call.id,
-            toolName: call.function.name,
-            input: call.function.arguments,
-            decision: verdict.decision,
-            decidedBy: verdict.decidedBy,
-            reason: verdict.reason,
-          });
-        }
-        if (review.decision === "ask") asks.push(ask(call, review.reason, "review"));
-      }
-      return asks.length > 0 ? { interrupts: asks } : undefined;
+    onInterruptBoundary(ctx) {
+      return runNativeEffect(
+        Effect.gen(function* () {
+          if (ctx.phase !== "beforeTools") return undefined;
+          const asks = [];
+          const ask = (call: ToolCall, reason: string, askedBy: "review" | "every_call") =>
+            permissionReviewInterrupt.interrupt({
+              key: call.id,
+              reason: "permission_review",
+              message: reason,
+              payload: {
+                toolCallId: call.id,
+                toolName: call.function.name,
+                arguments: call.function.arguments,
+                reason,
+                askedBy,
+              },
+            });
+          for (const call of pendingGatedCalls(ctx.messages, gated)) {
+            const latest = reviews.latest(sessionId, call.id);
+            let review =
+              latest?.toolName === call.function.name && latest.input === call.function.arguments
+                ? latest
+                : null;
+            if (!isTruthy(review) && binding.decider === "user") {
+              asks.push(ask(call, askEveryCallReason, "every_call"));
+              continue;
+            }
+            if (!isTruthy(review)) {
+              const verdict = yield* nativePromise(() =>
+                classifier.classify({
+                  project: binding.project,
+                  sessionId,
+                  selection: binding.selection,
+                  toolName: call.function.name,
+                  argumentsJson: call.function.arguments,
+                }),
+              );
+              review = reviews.record({
+                sessionId,
+                toolCallId: call.id,
+                toolName: call.function.name,
+                input: call.function.arguments,
+                decision: verdict.decision,
+                decidedBy: verdict.decidedBy,
+                reason: verdict.reason,
+              });
+            }
+            if (review.decision === "ask") asks.push(ask(call, review.reason, "review"));
+          }
+          return asks.length > 0 ? { interrupts: asks } : undefined;
+        }),
+      );
     },
 
     onInterruptResolution(_ctx, resolutions) {

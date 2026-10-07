@@ -1,10 +1,6 @@
+import { withTestPlatform } from "./support/platform.ts";
 import { it as effectTest } from "@effect/vitest";
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off globalTimers:off newPromise:off nodeBuiltinImport:off
-import { mkdtempSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { Effect, Result, Fiber, Layer } from "effect";
+import { Deferred, Effect, Result, Fiber, FileSystem, Layer, Path } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { makeModelFeatureFlags } from "../src/providers/model-feature-flags.ts";
 import {
@@ -31,19 +27,13 @@ import {
 const defaultPolicyLayer = ProviderToolPolicy.layer.pipe(
   Layer.provide(ProviderToolCapabilityRegistry.layer),
 );
-const run = <A, E>(
+const run = Effect.fn("providerPolicy.run")(function* <A, E>(
   effect: Effect.Effect<A, E, ProviderToolPolicy>,
   layer: Layer.Layer<ProviderToolPolicy, ProviderToolMetadataFailure> = defaultPolicyLayer,
-  // Test entry point owns this Layer and its resource scope.
-) =>
-  Effect.runPromise(
-    effect.pipe(
-      Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
-        const services = yield* Layer.build(layer);
-        return yield* Effect.provideContext(program, services);
-      }, Effect.scoped),
-    ),
-  );
+) {
+  const services = yield* Layer.build(layer);
+  return yield* Effect.provideContext(effect, services);
+});
 const errorOf = <A, E>(effect: Effect.Effect<A, E>) =>
   effect.pipe(
     Effect.result,
@@ -70,8 +60,12 @@ const execution = (
   approval: "granted",
   ...overrides,
 });
-const temporaryDirectory = (prefix = "provider-policy-") =>
-  realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+const temporaryDirectory = Effect.fn("providerPolicy.temporaryDirectory")(function* (
+  prefix: string = "provider-policy-",
+) {
+  const fs = yield* FileSystem.FileSystem;
+  return yield* fs.realPath(yield* fs.makeTempDirectoryScoped({ prefix }));
+});
 const sandbox = (root: string) => ({
   workspaceRoot: root,
   isolatedCompute: true,
@@ -92,17 +86,21 @@ const trustedPolicyLayer = (root: string) =>
   );
 
 describe("ProviderToolPolicy", () => {
-  test("exposes allowed read-only tools deterministically and intersects account capability", async () => {
-    const first = await run(
-      Effect.flatMap(ProviderToolPolicy, (policy) => policy.expose(basePolicy())),
-    );
-    const second = await run(
-      Effect.flatMap(ProviderToolPolicy, (policy) => policy.expose(basePolicy())),
-    );
-    expect(first).toEqual(second);
-    expect(first.tools.map((tool) => tool.id)).toEqual(["openai:web_search"]);
-    expect(first.tools[0]).toMatchObject({ risk: "read_only", requiresApproval: false });
-  });
+  effectTest.live(
+    "exposes allowed read-only tools deterministically and intersects account capability",
+    () =>
+      Effect.gen(function* () {
+        const first = yield* run(
+          Effect.flatMap(ProviderToolPolicy, (policy) => policy.expose(basePolicy())),
+        );
+        const second = yield* run(
+          Effect.flatMap(ProviderToolPolicy, (policy) => policy.expose(basePolicy())),
+        );
+        expect(first).toEqual(second);
+        expect(first.tools.map((tool) => tool.id)).toEqual(["openai:web_search"]);
+        expect(first.tools[0]).toMatchObject({ risk: "read_only", requiresApproval: false });
+      }).pipe(withTestPlatform),
+  );
 
   effectTest.effect("uses the same fresh feature flag policy for exposure and execution", () =>
     Effect.gen(function* () {
@@ -147,275 +145,320 @@ describe("ProviderToolPolicy", () => {
     }),
   );
 
-  test("does not expose local high-risk tools without trusted authority", async () => {
-    const enabled = basePolicy({
-      accountToolKinds: ["web_search", "local_shell", "apply_patch", "computer_use"],
-      app: { allowNetwork: true, allowHighRisk: true },
-      user: { allowNetwork: true, allowHighRisk: true },
-    });
-    const openAI = await run(
-      Effect.flatMap(ProviderToolPolicy, (policy) => policy.expose(enabled)),
-    );
-    const anthropic = await run(
-      Effect.flatMap(ProviderToolPolicy, (policy) =>
-        policy.expose({
-          ...enabled,
+  effectTest.live("does not expose local high-risk tools without trusted authority", () =>
+    Effect.gen(function* () {
+      const enabled = basePolicy({
+        accountToolKinds: ["web_search", "local_shell", "apply_patch", "computer_use"],
+        app: { allowNetwork: true, allowHighRisk: true },
+        user: { allowNetwork: true, allowHighRisk: true },
+      });
+      const openAI = yield* run(
+        Effect.flatMap(ProviderToolPolicy, (policy) => policy.expose(enabled)),
+      );
+      const anthropic = yield* run(
+        Effect.flatMap(ProviderToolPolicy, (policy) =>
+          policy.expose({
+            ...enabled,
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            accountToolKinds: ["computer_use", "memory"],
+          }),
+        ),
+      );
+      expect(openAI.tools.map((tool) => tool.id)).toEqual(["openai:web_search"]);
+      expect(anthropic.tools).toEqual([]);
+    }).pipe(withTestPlatform),
+  );
+
+  effectTest.live(
+    "trusted profiles expose only tools with matching authority and still require approval",
+    () =>
+      Effect.gen(function* () {
+        const root = yield* temporaryDirectory();
+        const enabled = basePolicy({
+          accountToolKinds: ["local_shell", "apply_patch", "computer_use"],
+          app: { allowHighRisk: true },
+          user: { allowHighRisk: true },
+        });
+        const workspaceOnly = ProviderToolPolicy.layerWithConfig({
+          sandbox: { ...sandbox(root), isolatedCompute: false },
+        }).pipe(Layer.provide(ProviderToolCapabilityRegistry.layer));
+        const compute = trustedPolicyLayer(root);
+        const desktop = ProviderToolPolicy.layerWithConfig({
+          sandbox: { ...sandbox(root), isolatedCompute: false, isolatedDesktop: true },
+        }).pipe(Layer.provide(ProviderToolCapabilityRegistry.layer));
+        const decisions = yield* Effect.forEach(
+          [workspaceOnly, compute, desktop],
+          (layer) =>
+            run(
+              Effect.flatMap(ProviderToolPolicy, (policy) => policy.expose(enabled)),
+              layer,
+            ),
+          { concurrency: "unbounded" },
+        );
+        expect(decisions.map((decision) => decision.tools.map((tool) => tool.id))).toEqual([
+          ["openai:apply_patch"],
+          ["openai:apply_patch", "openai:local_shell"],
+          ["openai:apply_patch", "openai:computer_use"],
+        ]);
+        const required = yield* run(
+          Effect.flatMap(ProviderToolPolicy, (policy) =>
+            errorOf(
+              policy.revalidateExecution(execution({ policy: enabled, approval: "not_requested" })),
+            ),
+          ),
+          trustedPolicyLayer(root),
+        );
+        expect(required).toMatchObject({ _tag: "ProviderToolApprovalRequired" });
+      }).pipe(withTestPlatform),
+  );
+
+  effectTest.live(
+    "principal storage authority exposes memory without granting desktop authority",
+    () =>
+      Effect.gen(function* () {
+        const context = basePolicy({
           provider: "anthropic",
           model: "claude-sonnet-4-6",
           accountToolKinds: ["computer_use", "memory"],
-        }),
-      ),
-    );
-    expect(openAI.tools.map((tool) => tool.id)).toEqual(["openai:web_search"]);
-    expect(anthropic.tools).toEqual([]);
-  });
-
-  test("trusted profiles expose only tools with matching authority and still require approval", async () => {
-    const root = temporaryDirectory();
-    const enabled = basePolicy({
-      accountToolKinds: ["local_shell", "apply_patch", "computer_use"],
-      app: { allowHighRisk: true },
-      user: { allowHighRisk: true },
-    });
-    const workspaceOnly = ProviderToolPolicy.layerWithConfig({
-      sandbox: { ...sandbox(root), isolatedCompute: false },
-    }).pipe(Layer.provide(ProviderToolCapabilityRegistry.layer));
-    const compute = trustedPolicyLayer(root);
-    const desktop = ProviderToolPolicy.layerWithConfig({
-      sandbox: { ...sandbox(root), isolatedCompute: false, isolatedDesktop: true },
-    }).pipe(Layer.provide(ProviderToolCapabilityRegistry.layer));
-    const decisions = await Promise.all(
-      [workspaceOnly, compute, desktop].map((layer) =>
-        run(
-          Effect.flatMap(ProviderToolPolicy, (policy) => policy.expose(enabled)),
+          app: { allowHighRisk: true },
+          user: { allowHighRisk: true },
+        });
+        const layer = ProviderToolPolicy.layerWithConfig({ principalStorage: true }).pipe(
+          Layer.provide(ProviderToolCapabilityRegistry.layer),
+        );
+        const decision = yield* run(
+          Effect.flatMap(ProviderToolPolicy, (policy) => policy.expose(context)),
           layer,
-        ),
-      ),
-    );
-    expect(decisions.map((decision) => decision.tools.map((tool) => tool.id))).toEqual([
-      ["openai:apply_patch"],
-      ["openai:apply_patch", "openai:local_shell"],
-      ["openai:apply_patch", "openai:computer_use"],
-    ]);
+        );
+        expect(decision.tools.map((tool) => tool.id)).toEqual(["anthropic:memory"]);
+      }).pipe(withTestPlatform),
+  );
 
-    const required = await run(
-      Effect.flatMap(ProviderToolPolicy, (policy) =>
-        errorOf(
-          policy.revalidateExecution(execution({ policy: enabled, approval: "not_requested" })),
-        ),
-      ),
-      trustedPolicyLayer(root),
-    );
-    expect(required).toMatchObject({ _tag: "ProviderToolApprovalRequired" });
-  });
-
-  test("principal storage authority exposes memory without granting desktop authority", async () => {
-    const context = basePolicy({
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      accountToolKinds: ["computer_use", "memory"],
-      app: { allowHighRisk: true },
-      user: { allowHighRisk: true },
-    });
-    const layer = ProviderToolPolicy.layerWithConfig({ principalStorage: true }).pipe(
-      Layer.provide(ProviderToolCapabilityRegistry.layer),
-    );
-    const decision = await run(
-      Effect.flatMap(ProviderToolPolicy, (policy) => policy.expose(context)),
-      layer,
-    );
-    expect(decision.tools.map((tool) => tool.id)).toEqual(["anthropic:memory"]);
-  });
-
-  test.each([
+  effectTest.live.each([
     ["denied", "ProviderToolApprovalDenied"],
     ["cancelled", "ProviderToolApprovalCancelled"],
-  ] as const)("returns typed %s approval outcomes", async (approval, tag) => {
-    const value = await run(
-      Effect.flatMap(ProviderToolPolicy, (policy) =>
-        errorOf(policy.revalidateExecution(execution({ approval }))),
-      ),
-    );
-    expect(value).toMatchObject({ _tag: tag });
-  });
-
-  test("trusted configuration grants local authority and canonicalizes its root", async () => {
-    const root = temporaryDirectory();
-    const decision = await run(
-      Effect.flatMap(ProviderToolPolicy, (policy) => policy.revalidateExecution(execution())),
-      trustedPolicyLayer(`${root}/.`),
-    );
-    expect(decision).toMatchObject({
-      workspaceRoot: root,
-      tool: { id: "openai:local_shell", requiresApproval: true },
-    });
-  });
-
-  test("default production Layer permits provider-hosted work without local authority", async () => {
-    const decision = await run(
-      Effect.flatMap(ProviderToolPolicy, (policy) =>
-        policy.revalidateExecution(
-          execution({
-            policy: basePolicy(),
-            toolId: "openai:web_search",
-            kind: "web_search",
-            options: { networkRequested: true },
-            approval: "not_requested",
-          }),
+  ] as const)("returns typed %s approval outcomes", ([approval, tag]) =>
+    Effect.gen(function* () {
+      const value = yield* run(
+        Effect.flatMap(ProviderToolPolicy, (policy) =>
+          errorOf(policy.revalidateExecution(execution({ approval }))),
         ),
-      ),
-    );
-    expect(decision).toMatchObject({
-      workspaceRoot: null,
-      tool: { id: "openai:web_search" },
-    });
-  });
+      );
+      expect(value).toMatchObject({ _tag: tag });
+    }).pipe(withTestPlatform),
+  );
 
-  test("default production Layer fails closed for app-managed tools", async () => {
-    const error = await run(
-      Effect.flatMap(ProviderToolPolicy, (policy) =>
-        errorOf(policy.revalidateExecution(execution())),
-      ),
-    );
-    expect(error).toMatchObject({
-      _tag: "ProviderToolSandboxViolation",
-      reason: "trusted_profile_required",
-    });
-  });
+  effectTest.live("trusted configuration grants local authority and canonicalizes its root", () =>
+    Effect.gen(function* () {
+      const root = yield* temporaryDirectory();
+      const decision = yield* run(
+        Effect.flatMap(ProviderToolPolicy, (policy) => policy.revalidateExecution(execution())),
+        trustedPolicyLayer(`${root}/.`),
+      );
+      expect(decision).toMatchObject({
+        workspaceRoot: root,
+        tool: { id: "openai:local_shell", requiresApproval: true },
+      });
+    }).pipe(withTestPlatform),
+  );
 
-  test("forged sandbox and workspace fields cannot grant authority", async () => {
-    const root = temporaryDirectory();
-    const options: ProviderToolExecutionRevalidationInput["options"] = {};
-    Reflect.set(options, "workspaceRoot", root);
-    Reflect.set(options, "sandbox", sandbox(root));
-    const error = await run(
-      Effect.flatMap(ProviderToolPolicy, (policy) =>
-        errorOf(policy.revalidateExecution(execution({ options }))),
-      ),
-    );
-    expect(error).toMatchObject({
-      _tag: "ProviderToolOptionsViolation",
-      reason: "unknown_policy_option",
-    });
-  });
-
-  test("fails closed for unsupported models, tools, model capability, and account capability", async () => {
-    const cases = [
-      execution({
-        policy: basePolicy({ model: "not-a-model" }),
-        toolId: "openai:web_search",
-        kind: "web_search",
-      }),
-      execution({ toolId: "openai:not-real", kind: "not-real" }),
-      execution({
-        policy: basePolicy({ model: "computer-use-preview" }),
-        toolId: "openai:web_search",
-        kind: "web_search",
-      }),
-      execution({ policy: basePolicy({ accountToolKinds: [] }) }),
-    ];
-    const errors = await Promise.all(
-      cases.map((input) =>
-        run(
+  effectTest.live(
+    "default production Layer permits provider-hosted work without local authority",
+    () =>
+      Effect.gen(function* () {
+        const decision = yield* run(
           Effect.flatMap(ProviderToolPolicy, (policy) =>
-            errorOf(policy.revalidateExecution(input)),
+            policy.revalidateExecution(
+              execution({
+                policy: basePolicy(),
+                toolId: "openai:web_search",
+                kind: "web_search",
+                options: { networkRequested: true },
+                approval: "not_requested",
+              }),
+            ),
           ),
-        ),
-      ),
-    );
-    expect(errors).toMatchObject([
-      { reason: "unknown_model" },
-      { reason: "unknown_tool" },
-      { reason: "model_unsupported" },
-      { _tag: "ProviderToolCapabilityDenied", reason: "account_unsupported" },
-    ]);
-  });
+        );
+        expect(decision).toMatchObject({
+          workspaceRoot: null,
+          tool: { id: "openai:web_search" },
+        });
+      }).pipe(withTestPlatform),
+  );
 
-  test("rejects tampered provider, kind, and policy options", async () => {
-    const kind = await run(
-      Effect.flatMap(ProviderToolPolicy, (policy) =>
-        errorOf(policy.revalidateExecution(execution({ kind: "web_search" }))),
-      ),
-    );
-    const provider = await run(
-      Effect.flatMap(ProviderToolPolicy, (policy) =>
-        errorOf(policy.revalidateExecution(execution({ provider: "anthropic" }))),
-      ),
-    );
-    expect(kind).toMatchObject({ _tag: "ProviderToolOptionsViolation" });
-    expect(provider).toMatchObject({ _tag: "ProviderToolOptionsViolation" });
-  });
-
-  test("checks traversal, absolute paths, symlinks, and credentials against the trusted root", async () => {
-    const root = temporaryDirectory();
-    const outside = temporaryDirectory("provider-policy-outside-");
-    writeFileSync(join(outside, "data.txt"), "not read");
-    symlinkSync(outside, join(root, "linked"));
-    const inputs = [
-      { paths: [{ path: "../x", access: "read" as const, target: "file" as const }] },
-      { paths: [{ path: join(root, "x"), access: "read" as const, target: "file" as const }] },
-      {
-        paths: [{ path: "linked/data.txt", access: "read" as const, target: "file" as const }],
-      },
-      { paths: [{ path: ".env", access: "read" as const, target: "file" as const }] },
-    ];
-    const errors = await Promise.all(
-      inputs.map((options) =>
-        run(
-          Effect.flatMap(ProviderToolPolicy, (policy) =>
-            errorOf(policy.revalidateExecution(execution({ options }))),
-          ),
-          trustedPolicyLayer(root),
-        ),
-      ),
-    );
-    expect(errors).toMatchObject([
-      { _tag: "ProviderToolPathViolation", reason: "invalid_path" },
-      { _tag: "ProviderToolPathViolation", reason: "absolute_path" },
-      { _tag: "ProviderToolPathViolation", reason: "symlink" },
-      { _tag: "ProviderToolPathViolation", reason: "credential_path" },
-    ]);
-  });
-
-  test("enforces trusted isolation, environment, network, and finite maxima", async () => {
-    const root = temporaryDirectory();
-    mkdirSync(join(root, "work"));
-    const restrictedLayer = trustedPolicyLayer(root);
-    const inputs = [
-      { networkRequested: true },
-      { environmentNames: ["TOKEN"] },
-      { timeoutMs: 5_001 },
-      { maxProcesses: Number.POSITIVE_INFINITY },
-    ];
-    const errors = await Promise.all(
-      inputs.map((options) =>
-        run(
-          Effect.flatMap(ProviderToolPolicy, (policy) =>
-            errorOf(policy.revalidateExecution(execution({ options }))),
-          ),
-          restrictedLayer,
-        ),
-      ),
-    );
-    const unisolated = ProviderToolPolicy.layerWithConfig({
-      sandbox: { ...sandbox(root), isolatedCompute: false },
-    }).pipe(Layer.provide(ProviderToolCapabilityRegistry.layer));
-    errors.push(
-      await run(
+  effectTest.live("default production Layer fails closed for app-managed tools", () =>
+    Effect.gen(function* () {
+      const error = yield* run(
         Effect.flatMap(ProviderToolPolicy, (policy) =>
           errorOf(policy.revalidateExecution(execution())),
         ),
-        unisolated,
-      ),
-    );
-    expect(errors).toMatchObject([
-      { _tag: "ProviderToolSandboxViolation", reason: "network_denied" },
-      { _tag: "ProviderToolSandboxViolation", reason: "environment_denied" },
-      { _tag: "ProviderToolOptionsViolation", reason: "timeout_limit_invalid" },
-      { _tag: "ProviderToolOptionsViolation", reason: "processes_limit_invalid" },
-      { _tag: "ProviderToolSandboxViolation", reason: "isolated_compute_required" },
-    ]);
-  });
+      );
+      expect(error).toMatchObject({
+        _tag: "ProviderToolSandboxViolation",
+        reason: "trusted_profile_required",
+      });
+    }).pipe(withTestPlatform),
+  );
+
+  effectTest.live("forged sandbox and workspace fields cannot grant authority", () =>
+    Effect.gen(function* () {
+      const root = yield* temporaryDirectory();
+      const options: ProviderToolExecutionRevalidationInput["options"] = {};
+      Reflect.set(options, "workspaceRoot", root);
+      Reflect.set(options, "sandbox", sandbox(root));
+      const error = yield* run(
+        Effect.flatMap(ProviderToolPolicy, (policy) =>
+          errorOf(policy.revalidateExecution(execution({ options }))),
+        ),
+      );
+      expect(error).toMatchObject({
+        _tag: "ProviderToolOptionsViolation",
+        reason: "unknown_policy_option",
+      });
+    }).pipe(withTestPlatform),
+  );
+
+  effectTest.live(
+    "fails closed for unsupported models, tools, model capability, and account capability",
+    () =>
+      Effect.gen(function* () {
+        const cases = [
+          execution({
+            policy: basePolicy({ model: "not-a-model" }),
+            toolId: "openai:web_search",
+            kind: "web_search",
+          }),
+          execution({ toolId: "openai:not-real", kind: "not-real" }),
+          execution({
+            policy: basePolicy({ model: "computer-use-preview" }),
+            toolId: "openai:web_search",
+            kind: "web_search",
+          }),
+          execution({ policy: basePolicy({ accountToolKinds: [] }) }),
+        ];
+        const errors = yield* Effect.forEach(
+          cases,
+          (input) =>
+            run(
+              Effect.flatMap(ProviderToolPolicy, (policy) =>
+                errorOf(policy.revalidateExecution(input)),
+              ),
+            ),
+          { concurrency: "unbounded" },
+        );
+        expect(errors).toMatchObject([
+          { reason: "unknown_model" },
+          { reason: "unknown_tool" },
+          { reason: "model_unsupported" },
+          { _tag: "ProviderToolCapabilityDenied", reason: "account_unsupported" },
+        ]);
+      }).pipe(withTestPlatform),
+  );
+
+  effectTest.live("rejects tampered provider, kind, and policy options", () =>
+    Effect.gen(function* () {
+      const kind = yield* run(
+        Effect.flatMap(ProviderToolPolicy, (policy) =>
+          errorOf(policy.revalidateExecution(execution({ kind: "web_search" }))),
+        ),
+      );
+      const provider = yield* run(
+        Effect.flatMap(ProviderToolPolicy, (policy) =>
+          errorOf(policy.revalidateExecution(execution({ provider: "anthropic" }))),
+        ),
+      );
+      expect(kind).toMatchObject({ _tag: "ProviderToolOptionsViolation" });
+      expect(provider).toMatchObject({ _tag: "ProviderToolOptionsViolation" });
+    }).pipe(withTestPlatform),
+  );
+
+  effectTest.live(
+    "checks traversal, absolute paths, symlinks, and credentials against the trusted root",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* temporaryDirectory();
+        const outside = yield* temporaryDirectory("provider-policy-outside-");
+        yield* fs.writeFileString(path.join(outside, "data.txt"), "not read");
+        yield* fs.symlink(outside, path.join(root, "linked"));
+        const inputs = [
+          { paths: [{ path: "../x", access: "read" as const, target: "file" as const }] },
+          {
+            paths: [
+              { path: path.join(root, "x"), access: "read" as const, target: "file" as const },
+            ],
+          },
+          {
+            paths: [{ path: "linked/data.txt", access: "read" as const, target: "file" as const }],
+          },
+          { paths: [{ path: ".env", access: "read" as const, target: "file" as const }] },
+        ];
+        const errors = yield* Effect.forEach(
+          inputs,
+          (options) =>
+            run(
+              Effect.flatMap(ProviderToolPolicy, (policy) =>
+                errorOf(policy.revalidateExecution(execution({ options }))),
+              ),
+              trustedPolicyLayer(root),
+            ),
+          { concurrency: "unbounded" },
+        );
+        expect(errors).toMatchObject([
+          { _tag: "ProviderToolPathViolation", reason: "invalid_path" },
+          { _tag: "ProviderToolPathViolation", reason: "absolute_path" },
+          { _tag: "ProviderToolPathViolation", reason: "symlink" },
+          { _tag: "ProviderToolPathViolation", reason: "credential_path" },
+        ]);
+      }).pipe(withTestPlatform),
+  );
+
+  effectTest.live("enforces trusted isolation, environment, network, and finite maxima", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* temporaryDirectory();
+      yield* fs.makeDirectory(path.join(root, "work"));
+      const restrictedLayer = trustedPolicyLayer(root);
+      const inputs = [
+        { networkRequested: true },
+        { environmentNames: ["TOKEN"] },
+        { timeoutMs: 5_001 },
+        { maxProcesses: Number.POSITIVE_INFINITY },
+      ];
+      const errors = yield* Effect.forEach(
+        inputs,
+        (options) =>
+          run(
+            Effect.flatMap(ProviderToolPolicy, (policy) =>
+              errorOf(policy.revalidateExecution(execution({ options }))),
+            ),
+            restrictedLayer,
+          ),
+        { concurrency: "unbounded" },
+      );
+      const unisolated = ProviderToolPolicy.layerWithConfig({
+        sandbox: { ...sandbox(root), isolatedCompute: false },
+      }).pipe(Layer.provide(ProviderToolCapabilityRegistry.layer));
+      errors.push(
+        yield* run(
+          Effect.flatMap(ProviderToolPolicy, (policy) =>
+            errorOf(policy.revalidateExecution(execution())),
+          ),
+          unisolated,
+        ),
+      );
+      expect(errors).toMatchObject([
+        { _tag: "ProviderToolSandboxViolation", reason: "network_denied" },
+        { _tag: "ProviderToolSandboxViolation", reason: "environment_denied" },
+        { _tag: "ProviderToolOptionsViolation", reason: "timeout_limit_invalid" },
+        { _tag: "ProviderToolOptionsViolation", reason: "processes_limit_invalid" },
+        { _tag: "ProviderToolSandboxViolation", reason: "isolated_compute_required" },
+      ]);
+    }).pipe(withTestPlatform),
+  );
 
   effectTest.effect("supports a deterministic test Layer override", () =>
     Effect.gen(function* () {
@@ -439,45 +482,45 @@ const runtimeLayer = ProviderToolRuntime.layer.pipe(
   Layer.provide(defaultPolicyLayer),
   Layer.provide(ProviderToolCapabilityRegistry.layer),
 );
-const runRuntime = <A, E>(effect: Effect.Effect<A, E, ProviderToolRuntime>) =>
-  // Test entry point owns this Layer and its resource scope.
-  Effect.runPromise(
-    effect.pipe(
-      Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
-        const services = yield* Layer.build(runtimeLayer);
-        return yield* Effect.provideContext(program, services);
-      }, Effect.scoped),
-    ),
-  );
+const runRuntime = Effect.fn("providerPolicy.runRuntime")(function* <A, E>(
+  effect: Effect.Effect<A, E, ProviderToolRuntime>,
+) {
+  const services = yield* Layer.build(runtimeLayer);
+  return yield* Effect.provideContext(effect, services);
+});
 
 describe("ProviderToolRuntime", () => {
-  test("composes allowed OpenAI and Anthropic hosted factories in deterministic order", async () => {
-    const openai = await runRuntime(
-      Effect.flatMap(ProviderToolRuntime, (runtime) =>
-        runtime.compose(basePolicy({ accountToolKinds: ["web_search"] }), [
-          { id: "openai:web_search", args: [{ type: "web_search" }] },
-        ]),
-      ),
-    );
-    const anthropic = await runRuntime(
-      Effect.flatMap(ProviderToolRuntime, (runtime) =>
-        runtime.compose(
-          {
-            provider: "anthropic",
-            model: "claude-opus-4-6",
-            accountToolKinds: ["web_fetch"],
-            app: { allowNetwork: true },
-            user: { allowNetwork: true },
-          },
-          [{ id: "anthropic:web_fetch", args: [] }],
-        ),
-      ),
-    );
-    expect(openai.map((entry) => entry.id)).toEqual(["openai:web_search"]);
-    expect(anthropic.map((entry) => entry.id)).toEqual(["anthropic:web_fetch"]);
-    expect(openai[0]?.tool).toBeDefined();
-    expect(anthropic[0]?.tool).toBeDefined();
-  });
+  effectTest.live(
+    "composes allowed OpenAI and Anthropic hosted factories in deterministic order",
+    () =>
+      Effect.gen(function* () {
+        const openai = yield* runRuntime(
+          Effect.flatMap(ProviderToolRuntime, (runtime) =>
+            runtime.compose(basePolicy({ accountToolKinds: ["web_search"] }), [
+              { id: "openai:web_search", args: [{ type: "web_search" }] },
+            ]),
+          ),
+        );
+        const anthropic = yield* runRuntime(
+          Effect.flatMap(ProviderToolRuntime, (runtime) =>
+            runtime.compose(
+              {
+                provider: "anthropic",
+                model: "claude-opus-4-6",
+                accountToolKinds: ["web_fetch"],
+                app: { allowNetwork: true },
+                user: { allowNetwork: true },
+              },
+              [{ id: "anthropic:web_fetch", args: [] }],
+            ),
+          ),
+        );
+        expect(openai.map((entry) => entry.id)).toEqual(["openai:web_search"]);
+        expect(anthropic.map((entry) => entry.id)).toEqual(["anthropic:web_fetch"]);
+        expect(openai[0]?.tool).toBeDefined();
+        expect(anthropic[0]?.tool).toBeDefined();
+      }).pipe(withTestPlatform),
+  );
 
   test("has a runtime factory validator for every installed provider tool", () => {
     expect(providerToolFactoryValidatorIds).toEqual(
@@ -487,76 +530,80 @@ describe("ProviderToolRuntime", () => {
   });
 
   /* oxlint-disable anti-slop/no-chained-type-assertions, anti-slop/require-safety-comment-for-type-assertion -- Deliberately malformed runtime inputs must bypass the public compile-time request union. */
-  test("rejects representative hosted and caller-loop factory option violations", async () => {
-    const invalid = [
-      [
-        basePolicy({ accountToolKinds: ["web_search"] }),
-        { id: "openai:web_search", args: [{ type: "web_search", unexpected: true }] },
-      ],
-      [
-        basePolicy({ accountToolKinds: ["local_shell"] }),
-        { id: "openai:local_shell", args: [{ type: "local_shell" }] },
-      ],
-      [
-        {
-          provider: "anthropic" as const,
-          model: "claude-opus-4-6",
-          accountToolKinds: ["web_search"],
-          app: { allowNetwork: true },
-          user: { allowNetwork: true },
-        },
-        { id: "anthropic:web_search", args: [{ type: "wrong_version" }] },
-      ],
-      [
-        {
-          provider: "anthropic" as const,
-          model: "claude-opus-4-6",
-          accountToolKinds: ["bash"],
-          app: { allowHighRisk: true },
-          user: { allowHighRisk: true },
-        },
-        { id: "anthropic:bash", args: [{ type: "bash_20250124", unexpected: true }] },
-      ],
-    ] as const;
-    const errors = await runRuntime(
-      Effect.flatMap(ProviderToolRuntime, (runtime) =>
-        Effect.all(
-          invalid.map(([policy, request]) =>
+  effectTest.live("rejects representative hosted and caller-loop factory option violations", () =>
+    Effect.gen(function* () {
+      const invalid = [
+        [
+          basePolicy({ accountToolKinds: ["web_search"] }),
+          { id: "openai:web_search", args: [{ type: "web_search", unexpected: true }] },
+        ],
+        [
+          basePolicy({ accountToolKinds: ["local_shell"] }),
+          { id: "openai:local_shell", args: [{ type: "local_shell" }] },
+        ],
+        [
+          {
+            provider: "anthropic" as const,
+            model: "claude-opus-4-6",
+            accountToolKinds: ["web_search"],
+            app: { allowNetwork: true },
+            user: { allowNetwork: true },
+          },
+          { id: "anthropic:web_search", args: [{ type: "wrong_version" }] },
+        ],
+        [
+          {
+            provider: "anthropic" as const,
+            model: "claude-opus-4-6",
+            accountToolKinds: ["bash"],
+            app: { allowHighRisk: true },
+            user: { allowHighRisk: true },
+          },
+          { id: "anthropic:bash", args: [{ type: "bash_20250124", unexpected: true }] },
+        ],
+      ] as const;
+      const errors = yield* runRuntime(
+        Effect.flatMap(ProviderToolRuntime, (runtime) =>
+          Effect.forEach(invalid, ([policy, request]) =>
             errorOf(runtime.compose(policy, [request as unknown as ProviderToolFactoryRequest])),
           ),
         ),
-      ),
-    );
-    expect(errors).toEqual(
-      errors.map(() =>
-        expect.objectContaining({
-          _tag: "ProviderToolOptionsViolation",
-          reason: "invalid_factory_options",
-        }),
-      ),
-    );
-  });
+      );
+      expect(errors).toEqual(
+        errors.map(() =>
+          expect.objectContaining({
+            _tag: "ProviderToolOptionsViolation",
+            reason: "invalid_factory_options",
+          }),
+        ),
+      );
+    }).pipe(withTestPlatform),
+  );
   /* oxlint-enable anti-slop/no-chained-type-assertions, anti-slop/require-safety-comment-for-type-assertion */
 
-  test("rejects requested IDs that exposure did not allow and defaults to no tools", async () => {
-    const result = await runRuntime(
-      Effect.flatMap(ProviderToolRuntime, (runtime) =>
-        Effect.all([
-          runtime.compose(basePolicy(), []),
-          errorOf(
-            runtime.compose(basePolicy({ accountToolKinds: ["web_search"] }), [
-              {
-                id: "openai:file_search",
-                args: [{ type: "file_search", vector_store_ids: ["vs_1"] }],
-              },
+  effectTest.live(
+    "rejects requested IDs that exposure did not allow and defaults to no tools",
+    () =>
+      Effect.gen(function* () {
+        const result = yield* runRuntime(
+          Effect.flatMap(ProviderToolRuntime, (runtime) =>
+            Effect.all([
+              runtime.compose(basePolicy(), []),
+              errorOf(
+                runtime.compose(basePolicy({ accountToolKinds: ["web_search"] }), [
+                  {
+                    id: "openai:file_search",
+                    args: [{ type: "file_search", vector_store_ids: ["vs_1"] }],
+                  },
+                ]),
+              ),
             ]),
           ),
-        ]),
-      ),
-    );
-    expect(result[0]).toEqual([]);
-    expect(result[1]).toMatchObject({ _tag: "ProviderToolNotExposed" });
-  });
+        );
+        expect(result[0]).toEqual([]);
+        expect(result[1]).toMatchObject({ _tag: "ProviderToolNotExposed" });
+      }).pipe(withTestPlatform),
+  );
 
   effectTest.effect(
     "turns synchronous factory throws into typed failures without changing arguments",
@@ -608,134 +655,149 @@ describe("ProviderToolRuntime", () => {
       }),
   );
 
-  test("preserves raw usage identity and exact attribution without estimating cost", async () => {
-    const raw = { variant: "future", nested: { untouched: true } };
-    const usage = {
-      input_tokens: 3,
-      output_tokens: 5,
-      cache_read_input_tokens: 2,
-      server_tool_use: { web_search_requests: 1 },
-      future_usage: 99,
-    };
-    const result = await runRuntime(
-      Effect.flatMap(ProviderToolRuntime, (runtime) =>
-        runtime.execute({
-          policy: basePolicy({ accountToolKinds: ["web_search"] }),
-          toolId: "openai:web_search",
-          kind: "web_search",
-          accountId: "account-1",
-          runId: "run-1",
-          options: { networkRequested: true },
-          approval: "not_requested",
-          operation: () => Promise.resolve({ raw, usage }),
-        }),
-      ),
-    );
-    expect(result).toMatchObject({
-      provider: "openai",
-      toolId: "openai:web_search",
-      model: "gpt-5.2",
-      accountId: "account-1",
-      execution: "provider_hosted",
-      status: "succeeded",
-      unknownKind: false,
-      usage: {
-        attribution: {
+  effectTest.live(
+    "preserves raw usage identity and exact attribution without estimating cost",
+    () =>
+      Effect.gen(function* () {
+        const raw = { variant: "future", nested: { untouched: true } };
+        const usage = {
+          input_tokens: 3,
+          output_tokens: 5,
+          cache_read_input_tokens: 2,
+          server_tool_use: { web_search_requests: 1 },
+          future_usage: 99,
+        };
+        const result = yield* runRuntime(
+          Effect.flatMap(ProviderToolRuntime, (runtime) =>
+            runtime.execute({
+              policy: basePolicy({ accountToolKinds: ["web_search"] }),
+              toolId: "openai:web_search",
+              kind: "web_search",
+              accountId: "account-1",
+              runId: "run-1",
+              options: { networkRequested: true },
+              approval: "not_requested",
+              operation: () => Promise.resolve({ raw, usage }),
+            }),
+          ),
+        );
+        expect(result).toMatchObject({
           provider: "openai",
+          toolId: "openai:web_search",
           model: "gpt-5.2",
           accountId: "account-1",
-          toolId: "openai:web_search",
-          runId: "run-1",
-        },
-        inputTokens: 3,
-        outputTokens: 5,
-        cacheReadTokens: 2,
-        serverToolRequests: { web_search_requests: 1 },
-      },
-    });
-    expect(result.raw).toBe(raw);
-    expect(result.usage?.raw).toBe(usage);
-    expect(result.cost).toBeUndefined();
-    expect(normalizeProviderToolUsage(usage)?.raw).toBe(usage);
-  });
+          execution: "provider_hosted",
+          status: "succeeded",
+          unknownKind: false,
+          usage: {
+            attribution: {
+              provider: "openai",
+              model: "gpt-5.2",
+              accountId: "account-1",
+              toolId: "openai:web_search",
+              runId: "run-1",
+            },
+            inputTokens: 3,
+            outputTokens: 5,
+            cacheReadTokens: 2,
+            serverToolRequests: { web_search_requests: 1 },
+          },
+        });
+        expect(result.raw).toBe(raw);
+        expect(result.usage?.raw).toBe(usage);
+        expect(result.cost).toBeUndefined();
+        expect(normalizeProviderToolUsage(usage)?.raw).toBe(usage);
+      }).pipe(withTestPlatform),
+  );
 
-  test("normalizes common states and preserves unknown provider result kinds losslessly", async () => {
-    const raw = Object.freeze({ type: "future_provider_event", payload: { value: 42 } });
-    const lifecycle: unknown[] = [];
-    const result = await runRuntime(
-      Effect.flatMap(ProviderToolRuntime, (runtime) =>
-        runtime.execute({
-          policy: basePolicy({ accountToolKinds: ["web_search"] }),
-          toolId: "openai:web_search",
-          kind: "web_search",
-          accountId: "account-unknown",
-          runId: "run-unknown",
-          options: { networkRequested: true },
-          approval: "not_requested",
-          operation: ({ progress }) => {
-            progress({ raw: { pending: true }, kind: "approval_required" });
-            return { raw, kind: "future_provider_event" };
-          },
-          onLifecycle: (event) => {
-            lifecycle.push(event);
-          },
-        }),
-      ),
-    );
-    expect(result).toMatchObject({
-      status: "succeeded",
-      providerKind: "future_provider_event",
-      unknownKind: true,
-    });
-    expect(result.raw).toBe(raw);
-    expect(lifecycle).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ status: "approval-required", unknownKind: false }),
-        expect.objectContaining({
+  effectTest.live(
+    "normalizes common states and preserves unknown provider result kinds losslessly",
+    () =>
+      Effect.gen(function* () {
+        const raw = Object.freeze({ type: "future_provider_event", payload: { value: 42 } });
+        const lifecycle: unknown[] = [];
+        const result = yield* runRuntime(
+          Effect.flatMap(ProviderToolRuntime, (runtime) =>
+            runtime.execute({
+              policy: basePolicy({ accountToolKinds: ["web_search"] }),
+              toolId: "openai:web_search",
+              kind: "web_search",
+              accountId: "account-unknown",
+              runId: "run-unknown",
+              options: { networkRequested: true },
+              approval: "not_requested",
+              operation: ({ progress }) => {
+                progress({ raw: { pending: true }, kind: "approval_required" });
+                return { raw, kind: "future_provider_event" };
+              },
+              onLifecycle: (event) => {
+                lifecycle.push(event);
+              },
+            }),
+          ),
+        );
+        expect(result).toMatchObject({
           status: "succeeded",
           providerKind: "future_provider_event",
           unknownKind: true,
-        }),
-      ]),
-    );
-  });
+        });
+        expect(result.raw).toBe(raw);
+        expect(lifecycle).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ status: "approval-required", unknownKind: false }),
+            expect.objectContaining({
+              status: "succeeded",
+              providerKind: "future_provider_event",
+              unknownKind: true,
+            }),
+          ]),
+        );
+      }).pipe(withTestPlatform),
+  );
 
-  test("emits ordered terminal lifecycle states for failure and interruption", async () => {
-    const failedLifecycle: string[] = [];
-    let rejectedReleases = 0;
-    const rejection = await runRuntime(
-      Effect.flatMap(ProviderToolRuntime, (runtime) =>
-        errorOf(
-          runtime.execute({
-            policy: basePolicy({ accountToolKinds: ["web_search"] }),
-            toolId: "openai:web_search",
-            kind: "web_search",
-            accountId: "account-1",
-            runId: "run-1",
-            options: { networkRequested: true },
-            approval: "not_requested",
-            acquire: () => ({
-              release: () => {
-                rejectedReleases++;
+  effectTest.live("emits ordered terminal lifecycle states for failure and interruption", () =>
+    Effect.gen(function* () {
+      const failedLifecycle: string[] = [];
+      let rejectedReleases = 0;
+      const rejection = yield* runRuntime(
+        Effect.flatMap(ProviderToolRuntime, (runtime) =>
+          errorOf(
+            runtime.execute({
+              policy: basePolicy({ accountToolKinds: ["web_search"] }),
+              toolId: "openai:web_search",
+              kind: "web_search",
+              accountId: "account-1",
+              runId: "run-1",
+              options: { networkRequested: true },
+              approval: "not_requested",
+              acquire: () => ({
+                release: () => {
+                  rejectedReleases++;
+                },
+              }),
+              operation: () => Promise.reject(new Error("provider rejected")),
+              onLifecycle: (event) => {
+                failedLifecycle.push(event.status);
               },
             }),
-            operation: () => Promise.reject(new Error("provider rejected")),
-            onLifecycle: (event) => {
-              failedLifecycle.push(event.status);
-            },
-          }),
+          ),
         ),
-      ),
-    );
-    expect(rejection).toMatchObject({ _tag: "ProviderToolOperationFailure" });
-    expect(rejectedReleases).toBe(1);
-    expect(failedLifecycle).toEqual(["running", "failed"]);
-
-    let aborted = false;
-    let cancelledReleases = 0;
-    const cancelledLifecycle: string[] = [];
-    await Effect.runPromise(
-      Effect.gen(function* () {
+      );
+      expect(rejection).toMatchObject({ _tag: "ProviderToolOperationFailure" });
+      expect(rejectedReleases).toBe(1);
+      expect(failedLifecycle).toEqual(["running", "failed"]);
+      let aborted = false;
+      let cancelledReleases = 0;
+      const cancelledLifecycle: string[] = [];
+      const operationContext = yield* Effect.context<never>();
+      const operationStarted = yield* Deferred.make<void>();
+      const operationCompleted = yield* Deferred.make<{ raw: null }>();
+      const lateAllowed = yield* Deferred.make<void>();
+      let lateProgress = () => {};
+      const lateFiber = yield* Effect.forkChild(
+        Deferred.await(lateAllowed).pipe(Effect.andThen(Effect.sync(() => lateProgress()))),
+      );
+      yield* Effect.gen(function* () {
         const runtime = yield* ProviderToolRuntime;
         const fiber = yield* Effect.forkChild(
           runtime.execute({
@@ -751,21 +813,23 @@ describe("ProviderToolRuntime", () => {
                 cancelledReleases++;
               },
             }),
-            operation: ({ signal, progress }) =>
-              new Promise<{ raw: null }>((resolve) => {
-                signal.addEventListener("abort", () => {
-                  aborted = true;
-                  progress({ raw: "before-cancel", kind: "progress" });
-                  setTimeout(() => progress({ raw: "too-late", kind: "progress" }), 5);
-                  resolve({ raw: null });
-                });
-              }),
+            operation: ({ signal, progress }) => {
+              signal.addEventListener("abort", () => {
+                aborted = true;
+                progress({ raw: "before-cancel", kind: "progress" });
+                lateProgress = () => progress({ raw: "too-late", kind: "progress" });
+                Deferred.doneUnsafe(operationCompleted, Effect.succeed({ raw: null }));
+              });
+              Deferred.doneUnsafe(operationStarted, Effect.void);
+              // The SDK operation returns a Promise; execution cancellation settles its Deferred.
+              return Effect.runPromiseWith(operationContext)(Deferred.await(operationCompleted));
+            },
             onLifecycle: (event) => {
               cancelledLifecycle.push(event.status);
             },
           }),
         );
-        yield* Effect.sleep("10 millis");
+        yield* Deferred.await(operationStarted);
         yield* Fiber.interrupt(fiber);
         // Test entry point owns this Layer and its resource scope.
       }).pipe(
@@ -773,68 +837,73 @@ describe("ProviderToolRuntime", () => {
           const services = yield* Layer.build(runtimeLayer);
           return yield* Effect.provideContext(program, services);
         }, Effect.scoped),
-      ),
-    );
-    expect(aborted).toBe(true);
-    expect(cancelledReleases).toBe(1);
-    const callbacksAtScopeEnd = cancelledLifecycle.length;
-    await new Promise((resolve) => setTimeout(resolve, 15));
-    expect(cancelledLifecycle.at(-1)).toBe("cancelled");
-    expect(cancelledLifecycle).toHaveLength(callbacksAtScopeEnd);
-  });
+      );
+      expect(aborted).toBe(true);
+      expect(cancelledReleases).toBe(1);
+      const callbacksAtScopeEnd = cancelledLifecycle.length;
+      yield* Deferred.succeed(lateAllowed, undefined);
+      yield* Fiber.join(lateFiber);
+      expect(cancelledLifecycle.at(-1)).toBe("cancelled");
+      expect(cancelledLifecycle).toHaveLength(callbacksAtScopeEnd);
+    }).pipe(withTestPlatform),
+  );
 
-  test("keeps release failures in the typed lease error channel", async () => {
-    const error = await runRuntime(
-      Effect.flatMap(ProviderToolRuntime, (runtime) =>
-        errorOf(
-          runtime.execute({
-            policy: basePolicy({ accountToolKinds: ["web_search"] }),
-            toolId: "openai:web_search",
-            kind: "web_search",
-            accountId: "account-release",
-            runId: "run-release",
-            options: { networkRequested: true },
-            approval: "not_requested",
-            acquire: () => ({
-              release: () => Promise.reject(new Error("release failed")),
+  effectTest.live("keeps release failures in the typed lease error channel", () =>
+    Effect.gen(function* () {
+      const error = yield* runRuntime(
+        Effect.flatMap(ProviderToolRuntime, (runtime) =>
+          errorOf(
+            runtime.execute({
+              policy: basePolicy({ accountToolKinds: ["web_search"] }),
+              toolId: "openai:web_search",
+              kind: "web_search",
+              accountId: "account-release",
+              runId: "run-release",
+              options: { networkRequested: true },
+              approval: "not_requested",
+              acquire: () => ({
+                release: () => Promise.reject(new Error("release failed")),
+              }),
+              operation: () => ({ raw: "completed" }),
             }),
-            operation: () => ({ raw: "completed" }),
-          }),
+          ),
         ),
-      ),
-    );
-    expect(error).toMatchObject({ _tag: "ProviderToolLeaseFailure", phase: "release" });
-  });
+      );
+      expect(error).toMatchObject({ _tag: "ProviderToolLeaseFailure", phase: "release" });
+    }).pipe(withTestPlatform),
+  );
 
-  test("rejects mismatched providers and unknown composition fields", async () => {
-    const unknownFields = {
-      id: "openai:web_search",
-      args: [{ type: "web_search" }],
-    } satisfies ProviderToolFactoryRequest;
-    Reflect.set(unknownFields, "unexpected", true);
-    const [unknown, mismatch] = await runRuntime(
-      Effect.flatMap(ProviderToolRuntime, (runtime) =>
-        Effect.all([
-          errorOf(runtime.compose(basePolicy(), [unknownFields])),
-          errorOf(runtime.compose(basePolicy(), [{ id: "anthropic:web_fetch", args: [] }])),
-        ]),
-      ),
-    );
-    expect(unknown).toMatchObject({
-      _tag: "ProviderToolFactoryOptionsFailure",
-      reason: "invalid_request",
-    });
-    expect(mismatch).toMatchObject({
-      _tag: "ProviderToolFactoryOptionsFailure",
-      reason: "provider_mismatch",
-    });
-  });
+  effectTest.live("rejects mismatched providers and unknown composition fields", () =>
+    Effect.gen(function* () {
+      const unknownFields = {
+        id: "openai:web_search",
+        args: [{ type: "web_search" }],
+      } satisfies ProviderToolFactoryRequest;
+      Reflect.set(unknownFields, "unexpected", true);
+      const [unknown, mismatch] = yield* runRuntime(
+        Effect.flatMap(ProviderToolRuntime, (runtime) =>
+          Effect.all([
+            errorOf(runtime.compose(basePolicy(), [unknownFields])),
+            errorOf(runtime.compose(basePolicy(), [{ id: "anthropic:web_fetch", args: [] }])),
+          ]),
+        ),
+      );
+      expect(unknown).toMatchObject({
+        _tag: "ProviderToolFactoryOptionsFailure",
+        reason: "invalid_request",
+      });
+      expect(mismatch).toMatchObject({
+        _tag: "ProviderToolFactoryOptionsFailure",
+        reason: "provider_mismatch",
+      });
+    }).pipe(withTestPlatform),
+  );
 
   effectTest.effect(
     "returns caller-loop action metadata without executing the supplied operation",
     () =>
       Effect.gen(function* () {
-        const root = temporaryDirectory();
+        const root = yield* temporaryDirectory();
         const policyLayer = trustedPolicyLayer(root);
         const layer = ProviderToolRuntime.layer.pipe(
           Layer.provide(policyLayer),
@@ -880,7 +949,7 @@ describe("ProviderToolRuntime", () => {
             workspaceRoot: root,
           },
         });
-      }),
+      }).pipe(withTestPlatform),
   );
 
   effectTest.effect("supports a runtime Layer override", () =>

@@ -1,13 +1,20 @@
-import { Result, Function as EffectFunction } from "effect";
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off newPromise:off nodeBuiltinImport:off processEnv:off schemaSync:off
-import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { Effect, Layer, ManagedRuntime, Schema } from "effect";
+import { it } from "@effect/vitest";
+import { NodeCrypto, NodeFileSystem, NodePath } from "@effect/platform-node";
+import {
+  Cause,
+  ConfigProvider,
+  Crypto,
+  Deferred,
+  Effect,
+  Fiber,
+  FileSystem,
+  Layer,
+  ManagedRuntime,
+  Path,
+  Schema,
+} from "effect";
 import { memoryAgentLayer } from "memory-agent";
-import { expect, test } from "vite-plus/test";
+import { expect } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { OwnerNativeBuild } from "../src/agent/owner-native-build.ts";
 import { SecretStore } from "../src/config/secrets.ts";
@@ -27,175 +34,205 @@ const Registration = Schema.Array(
   }),
 );
 
-test("real native changed-source builds isolate simultaneous Goals and retain V1 after reopen", async () => {
-  const previousNative = process.env.CONTEXT_AGENT_NATIVE_ARTIFACT;
-  const previousWorker = process.env.CONTEXT_AGENT_GOAL_WORKER;
-  process.env.CONTEXT_AGENT_NATIVE_ARTIFACT = "1";
-  process.env.CONTEXT_AGENT_GOAL_WORKER = "1";
-  let releaseFirst = () => {};
-  let startedFirst = () => {};
-  const held = new Promise<void>((resolve) => {
-    releaseFirst = resolve;
-  });
-  const started = new Promise<void>((resolve) => {
-    startedFirst = resolve;
-  });
-  let calls = 0;
-  const context = await testRuntime({
-    testProvider: {
-      responder: async () => {
-        if (calls++ === 0) {
-          startedFirst();
-          await held;
-        }
-        return { text: "actual native isolation answer" };
-      },
-    },
-  });
-  await context.runtime.dispose();
-  const entry = join(context.base, "controlled-native-entry.ts");
-  const observations = join(context.base, "native-observations.jsonl");
-  writeFileSync(observations, "");
-  const productionEntry = fileURLToPath(
-    new URL("../src/agent/native-artifact-entry.ts", import.meta.url),
-  );
-  const source = (version: string) => `
+it.live(
+  "real native changed-source builds isolate simultaneous Goals and retain V1 after reopen",
+  () =>
+    withPlatform(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const pathService = yield* Path.Path;
+        const crypto = yield* Crypto.Crypto;
+        const join = pathService.join;
+        const held = yield* Deferred.make<void>();
+        const started = yield* Deferred.make<void>();
+        let calls = 0;
+        const context = yield* sdkCall(() =>
+          testRuntime({
+            testProvider: {
+              responder: Effect.fn("NativeGenerationTest.responder")(function* () {
+                if (calls++ === 0) {
+                  yield* Deferred.succeed(started, undefined);
+                  yield* Deferred.await(held);
+                }
+                return { text: "actual native isolation answer" };
+              }),
+            },
+          }),
+        );
+        yield* sdkCall(() => context.runtime.dispose());
+        const entry = join(context.base, "controlled-native-entry.ts");
+        const observations = join(context.base, "native-observations.jsonl");
+        yield* fs.writeFileString(observations, "");
+        const productionEntry = yield* pathService.fromFileUrl(
+          new URL("../src/agent/native-artifact-entry.ts", import.meta.url),
+        );
+        const source = Effect.fn("NativeGenerationTest.source")(function* (version: string) {
+          return `
 import { appendFileSync } from "node:fs";
 import { Effect } from "effect";
-import { makeRecordingMiddleware as original } from ${JSON.stringify(productionEntry)};
-export { makePermissionGateMiddleware, createMemoryTools, createSubscriptionRuntimeImplementation } from ${JSON.stringify(productionEntry)};
+import { makeRecordingMiddleware as original } from ${yield* Schema.encodeEffect(Schema.fromJsonString(Schema.String))(productionEntry)};
+export { makePermissionGateMiddleware, createMemoryTools, createSubscriptionRuntimeImplementation } from ${yield* Schema.encodeEffect(Schema.fromJsonString(Schema.String))(productionEntry)};
 export const makeRecordingMiddleware = Effect.fnUntraced(function* (binding) {
-  appendFileSync(${JSON.stringify(observations)}, JSON.stringify({ run: binding.runId, version: ${JSON.stringify(version)} }) + "\\n");
+  appendFileSync(${yield* Schema.encodeEffect(Schema.fromJsonString(Schema.String))(observations)}, JSON.stringify({ run: binding.runId, version: ${yield* Schema.encodeEffect(Schema.fromJsonString(Schema.String))(version)} }) + "\\n");
   return yield* original(binding);
 });
 `;
-  writeFileSync(entry, source("V1"));
-  const open = () =>
-    ManagedRuntime.make(
-      memoryAgentLayer(context.storage, {
-        embedder: fakeEmbedderLayer,
-        morphAnalyzer: fakeMorphLayer,
-        secrets: SecretStore.memory,
-        providerRegistry: context.provider!.layer,
-        interpretAutomatically: false,
-        summarizeAutomatically: false,
-        skillsHome: context.home,
-        skillsBuiltin: join(context.base, "builtin-skills"),
-        importsHome: context.home,
-        importsWatching: false,
-        sweepSecrets: false,
-      }).pipe(Layer.provide(Layer.succeed(OwnerNativeBuild, { entry }))),
-    );
-  let runtime = open();
-  try {
-    await context.provider!.select(runtime);
-    const owner = await runtime.runPromise(
-      Effect.all({ db: Database, sessions: Sessions, workflows: Workflows }),
-    );
-    const second = await runtime.runPromise(owner.sessions.create(context.project.id));
-    for (const session of [context.session.id, second.id])
-      await runtime.runPromise(
-        owner.workflows.updateGoal(session, {
-          statement: "Native source isolation",
-          outcomes: ["Pin native source per Goal"],
-          constraints: [],
-          nonGoals: [],
-          assumptions: [],
-          openQuestions: [],
-          status: "active",
-        }),
-      );
-    const send = async (session: string, run: string) => {
-      const response = await runtime.runPromise(
-        Effect.flatMap(AgentChat, (chat) =>
-          chat.handle(
-            new Request("http://localhost/api/chat", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                threadId: session,
-                runId: run,
-                messages: [{ id: run, role: "user", content: "hello" }],
-                tools: [],
-                context: [],
-              }),
+        });
+        yield* fs.writeFileString(entry, yield* source("V1"));
+        const open = () =>
+          ManagedRuntime.make(
+            memoryAgentLayer(context.storage, {
+              embedder: fakeEmbedderLayer,
+              morphAnalyzer: fakeMorphLayer,
+              secrets: SecretStore.memory,
+              providerRegistry: context.provider!.layer,
+              interpretAutomatically: false,
+              summarizeAutomatically: false,
+              skillsHome: context.home,
+              skillsBuiltin: join(context.base, "builtin-skills"),
+              importsHome: context.home,
+              importsWatching: false,
+              sweepSecrets: false,
+            }).pipe(
+              Layer.provide(Layer.succeed(OwnerNativeBuild, { entry })),
+              Layer.provideMerge(
+                ConfigProvider.layerAdd(
+                  ConfigProvider.fromUnknown({
+                    CONTEXT_AGENT_NATIVE_ARTIFACT: "1",
+                    CONTEXT_AGENT_GOAL_WORKER: "1",
+                  }),
+                  { asPrimary: true },
+                ),
+              ),
+            ),
+          );
+        let runtime = open();
+        yield* Effect.addFinalizer(() => sdkCall(() => runtime.dispose()).pipe(Effect.orDie));
+        yield* Effect.addFinalizer(() => Deferred.succeed(held, undefined));
+        yield* sdkCall(() => context.provider!.select(runtime));
+        const owner = yield* Effect.provideContext(
+          Effect.all({ db: Database, sessions: Sessions, workflows: Workflows }),
+          yield* runtime.contextEffect,
+        );
+        const second = yield* Effect.provideContext(
+          owner.sessions.create(context.project.id),
+          yield* runtime.contextEffect,
+        );
+        for (const session of [context.session.id, second.id])
+          yield* Effect.provideContext(
+            owner.workflows.updateGoal(session, {
+              statement: "Native source isolation",
+              outcomes: ["Pin native source per Goal"],
+              constraints: [],
+              nonGoals: [],
+              assumptions: [],
+              openQuestions: [],
+              status: "active",
             }),
-            session,
+            yield* runtime.contextEffect,
+          );
+        const send = Effect.fn("NativeGenerationTest.send")(function* (
+          session: string,
+          run: string,
+        ) {
+          const request = new Request("http://localhost/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+              threadId: session,
+              runId: run,
+              messages: [{ id: run, role: "user", content: "hello" }],
+              tools: [],
+              context: [],
+            }),
+          });
+          const response = yield* Effect.provideContext(
+            Effect.flatMap(AgentChat, (chat) => chat.handle(request, session)),
+            yield* runtime.contextEffect,
+          );
+          expect(response.status).toBe(200);
+          const text = yield* sdkCall(() => response.text());
+          expect(text).not.toContain("RUN_ERROR");
+          expect(text).toContain("actual native isolation answer");
+        });
+        const first = yield* Effect.forkChild(send(context.session.id, "isolation-v1-held"), {
+          startImmediately: true,
+        });
+        yield* Deferred.await(started);
+        yield* fs.writeFileString(entry, yield* source("V2"));
+        yield* send(second.id, "isolation-v2");
+        yield* Deferred.succeed(held, undefined);
+        yield* Fiber.join(first);
+        yield* send(context.session.id, "isolation-v1-followup");
+        const registrations = Effect.fn("NativeGenerationTest.registrations")(function* (
+          db: Database["Service"],
+        ) {
+          return yield* Schema.decodeUnknownEffect(Registration)(
+            db.sqlite
+              .prepare(
+                "SELECT goal_instance_id, artifact_url, artifact_hash, source_hash FROM workflow_goal_native_artifacts ORDER BY goal_instance_id",
+              )
+              .all(),
+          );
+        });
+        const before = yield* registrations(owner.db);
+        expect(before).toHaveLength(2);
+        expect(before[0]!.artifact_hash).not.toBe(before[1]!.artifact_hash);
+        expect(before[0]!.source_hash).not.toBe(before[1]!.source_hash);
+        for (const registration of before) {
+          const path = yield* pathService.fromFileUrl(new URL(registration.artifact_url));
+          const bytes = yield* fs.readFile(path);
+          expect(Buffer.from(yield* crypto.digest("SHA-256", bytes)).toString("hex")).toBe(
+            registration.artifact_hash,
+          );
+        }
+        yield* sdkCall(() => runtime.dispose());
+        runtime = open();
+        yield* send(context.session.id, "isolation-v1-reopened");
+        expect(
+          yield* registrations(
+            yield* Effect.provideContext(Database, yield* runtime.contextEffect),
           ),
-        ),
-      );
-      expect(response.status).toBe(200);
-      const text = await response.text();
-      expect(text).not.toContain("RUN_ERROR");
-      expect(text).toContain("actual native isolation answer");
-    };
-    const first = send(context.session.id, "isolation-v1-held");
-    await started;
-    writeFileSync(entry, source("V2"));
-    await send(second.id, "isolation-v2");
-    releaseFirst();
-    await first;
-    await send(context.session.id, "isolation-v1-followup");
-    const registrations = (db: Database["Service"]) =>
-      EffectFunction.flow(
-        Schema.decodeUnknownResult(Registration),
-        Result.getOrThrow,
-      )(
-        db.sqlite
-          .prepare(
-            "SELECT goal_instance_id, artifact_url, artifact_hash, source_hash FROM workflow_goal_native_artifacts ORDER BY goal_instance_id",
-          )
-          .all(),
-      );
-    const before = registrations(owner.db);
-    expect(before).toHaveLength(2);
-    expect(before[0]!.artifact_hash).not.toBe(before[1]!.artifact_hash);
-    expect(before[0]!.source_hash).not.toBe(before[1]!.source_hash);
-    for (const registration of before)
-      expect(
-        createHash("sha256")
-          .update(readFileSync(fileURLToPath(registration.artifact_url)))
-          .digest("hex"),
-      ).toBe(registration.artifact_hash);
-    await runtime.dispose();
-    runtime = open();
-    await send(context.session.id, "isolation-v1-reopened");
-    expect(registrations(await runtime.runPromise(Database))).toEqual(before);
-    const seen = EffectFunction.flow(
-      Schema.decodeResult(
-        Schema.Array(Schema.Struct({ run: Schema.String, version: Schema.String })),
-      ),
-      Result.getOrThrow,
-    )(
-      readFileSync(observations, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line)),
-    );
-    expect(seen).toEqual([
-      { run: "isolation-v1-held", version: "V1" },
-      { run: "isolation-v2", version: "V2" },
-      { run: "isolation-v1-followup", version: "V1" },
-      { run: "isolation-v1-reopened", version: "V1" },
-    ]);
-    const links = await runtime.runPromise(
-      Effect.map(Database, (db) =>
-        db.sqlite
-          .prepare(
-            "SELECT run_id FROM workflow_run_bindings b JOIN workflow_goal_native_artifacts a USING(goal_instance_id) WHERE run_id LIKE 'isolation-%'",
-          )
-          .all(),
-      ),
-    );
-    expect(links).toHaveLength(4);
-  } finally {
-    releaseFirst();
-    await runtime.dispose();
-    if (previousNative === undefined)
-      Reflect.deleteProperty(process.env, "CONTEXT_AGENT_NATIVE_ARTIFACT");
-    else process.env.CONTEXT_AGENT_NATIVE_ARTIFACT = previousNative;
-    if (previousWorker === undefined)
-      Reflect.deleteProperty(process.env, "CONTEXT_AGENT_GOAL_WORKER");
-    else process.env.CONTEXT_AGENT_GOAL_WORKER = previousWorker;
-  }
-}, 60000);
+        ).toEqual(before);
+        const lines = (yield* fs.readFileString(observations)).trim().split("\n");
+        const seen = yield* Effect.forEach(lines, (line) =>
+          Schema.decodeEffect(
+            Schema.fromJsonString(Schema.Struct({ run: Schema.String, version: Schema.String })),
+          )(line),
+        );
+        expect(seen).toEqual([
+          { run: "isolation-v1-held", version: "V1" },
+          { run: "isolation-v2", version: "V2" },
+          { run: "isolation-v1-followup", version: "V1" },
+          { run: "isolation-v1-reopened", version: "V1" },
+        ]);
+        const links = yield* Effect.provideContext(
+          Effect.map(Database, (db) =>
+            db.sqlite
+              .prepare(
+                "SELECT run_id FROM workflow_run_bindings b JOIN workflow_goal_native_artifacts a USING(goal_instance_id) WHERE run_id LIKE 'isolation-%'",
+              )
+              .all(),
+          ),
+          yield* runtime.contextEffect,
+        );
+        expect(links).toHaveLength(4);
+      }),
+    ),
+  60000,
+);
+
+const sdkCall = Effect.fn("NativeGenerationTest.sdkCall")(<A>(call: () => A | PromiseLike<A>) =>
+  Effect.tryPromise({
+    try: () => Promise.resolve(call()),
+    catch: (cause) => new Cause.UnknownError(cause),
+  }),
+);
+const withPlatform = Effect.fn("NativeGenerationTest.platform")(function* <A, E, R>(
+  program: Effect.Effect<A, E, R>,
+) {
+  const services = yield* Layer.build(
+    Layer.mergeAll(NodeCrypto.layer, NodeFileSystem.layer, NodePath.layer),
+  );
+  return yield* Effect.provideContext(program, services);
+});

@@ -350,7 +350,7 @@ const makeLocal = (setup: ModelSetup, purpose: LocalPurpose) =>
     const model = modelWorker(join(storage.path, "models"), setup);
     yield* Effect.addFinalizer(() =>
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      Effect.promise(async () => void (await model.stop("embedder stopped"))),
+      Effect.promise(() => Promise.resolve(model.stop("embedder stopped"))).pipe(Effect.asVoid),
     );
     return {
       identity: `${localModel.id}@${setup.variant}/cls/${localModel.maxTokens}`,
@@ -384,7 +384,8 @@ export const checkGpu = (storageRoot: string) =>
           }),
         ),
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        (model) => Effect.promise(async () => void (await model.stop("GPU check done"))),
+        (model) =>
+          Effect.promise(() => Promise.resolve(model.stop("GPU check done"))).pipe(Effect.asVoid),
       );
       return yield* model.embed(["준비"]).pipe(
         Effect.map((): GpuCheck =>

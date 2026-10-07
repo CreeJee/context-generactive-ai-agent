@@ -1,4 +1,5 @@
-import { Function as EffectFunction } from "effect";
+import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
+import { Effect, Function as EffectFunction } from "effect";
 import { HashSet, MutableHashMap, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
 import {
@@ -88,15 +89,19 @@ function parallelReadsBody(tools: readonly AnyServerTool[], signal: AbortSignal)
     return {
       ...tool,
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      execute: async (...call: Parameters<typeof execute>) => {
-        const [args, context] = call;
-        const early = isTruthy(context?.toolCallId)
-          ? Option.getOrUndefined(MutableHashMap.get(started, context.toolCallId))
-          : undefined;
-        if (!isTruthy(early)) return execute(args, context);
-        MutableHashMap.remove(started, context?.toolCallId ?? "");
-        return early;
-      },
+      execute: (...call: Parameters<typeof execute>) =>
+        runNativeEffect(
+          Effect.gen(function* () {
+            const [args, context] = call;
+            const early = isTruthy(context?.toolCallId)
+              ? Option.getOrUndefined(MutableHashMap.get(started, context.toolCallId))
+              : undefined;
+            if (!isTruthy(early))
+              return yield* nativePromise(() => Promise.resolve(execute(args, context)));
+            MutableHashMap.remove(started, context?.toolCallId ?? "");
+            return yield* nativePromise(() => early);
+          }),
+        ),
     };
   });
 

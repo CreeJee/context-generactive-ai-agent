@@ -5,6 +5,6 @@ import type { Route } from "./+types/sessions.$session.subagents._index";
 
 /** GET /api/sessions/:session/subagents — the session's subagents. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function loader({ params }: Route.LoaderArgs) {
+export function loader({ params }: Route.LoaderArgs) {
   return agent.runPromise(Effect.flatMap(AgentChat, (chat) => chat.subagents(params.session)));
 }

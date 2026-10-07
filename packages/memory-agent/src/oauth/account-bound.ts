@@ -1,4 +1,5 @@
-import { MutableHashMap, Option } from "effect";
+import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
+import { Effect, MutableHashMap, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "node:crypto";
@@ -6,9 +7,9 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   createProfileCredentialStore,
   listOAuthProfiles,
-  publishOAuthProfile,
-  removeOAuthProfile,
-  selectOAuthProfile,
+  publishOAuthProfileEffect,
+  removeOAuthProfileEffect,
+  selectOAuthProfileEffect,
   type ProfileCredentialStore,
 } from "./accounts.ts";
 import { providerProtocols, type OAuthProvider } from "./protocol.ts";
@@ -89,71 +90,82 @@ export function createAccountBoundSubscriptionClients(
         selectedId() !== null || legacyAllowed()
           ? current().status()
           : Promise.resolve({ provider, connected: false, expiresAt: null }),
-      modelCatalog: () => current().modelCatalog(),
+      modelCatalog: (signal?: AbortSignal) => current().modelCatalog(signal),
       // Explicit login always creates a fresh slot, including after legacy account removal.
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      startLogin: async () => {
-        const id = randomUUID();
-        const attempt = await clientFor(id)
-          .startLogin()
-          .catch((error) => {
-            MutableHashMap.remove(cache, id);
-            throw error;
-          });
-        let cancelled = false;
-        const completed = attempt.completed
-          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          .then(async (connection) => {
-            if (cancelled) throw new OAuthHarnessError("cancelled");
-            if (!connection.connected) throw new OAuthHarnessError("not_connected");
-            await publishOAuthProfile(
-              sqlite,
-              provider,
-              id,
-              provider === "openai" ? "ChatGPT" : "Claude",
-              accounts,
+      startLogin: () =>
+        runNativeEffect(
+          Effect.gen(function* () {
+            const id = randomUUID();
+            const attempt = yield* nativePromise(() => clientFor(id).startLogin()).pipe(
+              Effect.catchCause((cause) =>
+                Effect.sync(() => MutableHashMap.remove(cache, id)).pipe(
+                  Effect.andThen(Effect.failCause(cause)),
+                ),
+              ),
             );
-            if (selectedId() === null) await selectOAuthProfile(sqlite, provider, id, accounts);
-            return connection;
-          })
-          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          .catch(async (error) => {
-            // A published account must survive a selection failure or late cancellation.
-            if (!listOAuthProfiles(sqlite, provider).some((profile) => profile.id === id)) {
-              await accounts.remove(provider, id);
+            let cancelled = false;
+            // The login SDK owns this completion and its explicit cancel callback across requests.
+            const completed = runNativeEffect(
+              nativePromise(() => attempt.completed).pipe(
+                Effect.flatMap((connection) =>
+                  Effect.gen(function* () {
+                    if (cancelled) return yield* new OAuthHarnessError("cancelled");
+                    if (!connection.connected) return yield* new OAuthHarnessError("not_connected");
+                    yield* publishOAuthProfileEffect(
+                      sqlite,
+                      provider,
+                      id,
+                      provider === "openai" ? "ChatGPT" : "Claude",
+                      accounts,
+                    );
+                    if (selectedId() === null)
+                      yield* selectOAuthProfileEffect(sqlite, provider, id, accounts);
+                    return connection;
+                  }),
+                ),
+                Effect.catchCause((cause) =>
+                  Effect.gen(function* () {
+                    // A published account survives a selection failure or late cancellation.
+                    if (!listOAuthProfiles(sqlite, provider).some((profile) => profile.id === id)) {
+                      yield* nativePromise(() => accounts.remove(provider, id));
+                      MutableHashMap.remove(cache, id);
+                    }
+                    return yield* Effect.failCause(cause);
+                  }),
+                ),
+              ),
+            );
+            return {
+              ...attempt,
+              completed,
+              cancel: () => {
+                cancelled = true;
+                attempt.cancel();
+              },
+            };
+          }),
+        ),
+      disconnect: () =>
+        runNativeEffect(
+          Effect.gen(function* () {
+            const id = selectedId();
+            if (id !== null) {
+              yield* removeOAuthProfileEffect(sqlite, provider, id, accounts, legacy);
               MutableHashMap.remove(cache, id);
-            }
-            throw error;
-          });
-        return {
-          ...attempt,
-          completed,
-          cancel: () => {
-            cancelled = true;
-            attempt.cancel();
-          },
-        };
-      },
-      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      disconnect: async () => {
-        const id = selectedId();
-        if (id !== null) {
-          await removeOAuthProfile(sqlite, provider, id, accounts, legacy);
-          MutableHashMap.remove(cache, id);
-        } else if (legacyAllowed()) {
-          const finishRemoval = beginOAuthProfileRemoval(sqlite, provider, "__legacy__");
-          try {
-            await clientFor(null).disconnect();
-            MutableHashMap.remove(cache, "__legacy__");
-          } finally {
-            finishRemoval();
-          }
-        } else throw new OAuthHarnessError("not_connected");
-        const next = selectedId();
-        return next !== null
-          ? clientFor(next).status()
-          : { provider, connected: false, expiresAt: null };
-      },
+            } else if (legacyAllowed()) {
+              const finishRemoval = beginOAuthProfileRemoval(sqlite, provider, "__legacy__");
+              yield* nativePromise(() => clientFor(null).disconnect()).pipe(
+                Effect.tap(() => Effect.sync(() => MutableHashMap.remove(cache, "__legacy__"))),
+                Effect.ensuring(Effect.sync(finishRemoval)),
+              );
+            } else return yield* new OAuthHarnessError("not_connected");
+            const next = selectedId();
+            return next !== null
+              ? yield* nativePromise(() => clientFor(next).status())
+              : { provider, connected: false, expiresAt: null };
+          }),
+        ),
     },
   };
 }

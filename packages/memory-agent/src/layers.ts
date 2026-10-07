@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { optionalProperty } from "./optional-property.ts";
 import { Effect, Layer } from "effect";
 import type { ProviderId } from "./providers/contracts.ts";
-import { AgentChat } from "./agent/chat.ts";
+import { AgentChat, GoalWorkerConfiguration, type GoalWorkerOptions } from "./agent/chat.ts";
 import { HarnessStore } from "./rrsi/store.ts";
 import { Rrsi } from "./rrsi/service.ts";
 import { ApiUsage } from "./agent/api-usage.ts";
@@ -77,6 +77,8 @@ import { WorkflowRules } from "./workflow/rules.ts";
 import { OpenAICompatibleSettings } from "./providers/openai-compatible.ts";
 
 export interface MemoryAgentLayerOptions {
+  readonly goalWorker?: GoalWorkerOptions;
+  readonly openDatabase?: Parameters<typeof Database.layer>[1];
   /** Isolated evaluation transport; production uses its endpoint-bound keyring. */
   readonly compatibleSettings?: Layer.Layer<OpenAICompatibleSettings, never, GlobalConfig>;
   /** Defaults to the local embedding model; tests pass a deterministic one. */
@@ -147,7 +149,10 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
   // The settings are read by services in every tier above, the embedder among them.
   const foundation = GlobalConfig.layer.pipe(
     Layer.provideMerge(
-      Layer.merge(StorageRoot.layer(storageRoot), Database.layer(join(storageRoot, "agent.db"))),
+      Layer.merge(
+        StorageRoot.layer(storageRoot),
+        Database.layer(join(storageRoot, "agent.db"), options.openDatabase),
+      ),
     ),
   );
   const harness = HarnessStore.layer.pipe(Layer.provide(foundation));
@@ -286,6 +291,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     TurnSummaries.layer(options.summarizeAutomatically),
   ).pipe(Layer.provideMerge(providers));
   return AgentChat.layer.pipe(
+    Layer.provide(Layer.succeed(GoalWorkerConfiguration, options.goalWorker ?? {})),
     Layer.provideMerge(
       Layer.mergeAll(
         MemoryTools.layer,

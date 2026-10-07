@@ -938,14 +938,26 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
               DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
             ),
           };
-          return {
+          const phase =
+            current.phase === "execute" || current.phase === "verify" ? "plan" : current.phase;
+          const revised = {
             ...current,
+            phase,
             goal,
             ledger: [
               ...current.ledger,
               event(current, "goal_updated", `goal v${goal.version} (${goal.status})`),
             ],
           };
+          return phase === current.phase
+            ? revised
+            : {
+                ...revised,
+                ledger: [
+                  ...revised.ledger,
+                  event(revised, "phase_changed", `${current.phase} -> plan (goal revised)`),
+                ],
+              };
         }),
 
       updatePlan: (sessionId: string, input: UpdatePlan) =>

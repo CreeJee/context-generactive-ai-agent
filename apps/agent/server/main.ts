@@ -1,3 +1,5 @@
+import { Effect } from "effect";
+import { runNativeEffect } from "memory-agent/native-effect";
 // The app's production entry: `context-agent [folder]` serves the web app, runs the agent in this
 // process and opens the folder (or the folder it was started from) as a project;
 // `context-agent acp` is the stdio ACP agent editors start, working through that server.
@@ -15,7 +17,7 @@ import { ndJsonStream } from "@agentclientprotocol/sdk";
 import { defaultStorageRoot } from "memory-agent";
 import { createAppApi, startAcpAgent } from "memory-agent/acp";
 import * as build from "#server-build";
-import { isThisApp, launchFolder, openProject, type LaunchFolder } from "./launch-project.ts";
+import { isThisApp, launchFolder, openProjectEffect, type LaunchFolder } from "./launch-project.ts";
 import { readReleaseInfo } from "./release-info.ts";
 import { unpackRuntime } from "./runtime-assets.ts";
 import { acquireStorageLock } from "./dev-safety.ts";
@@ -59,13 +61,13 @@ const baseUrl = `http://127.0.0.1:${port}`;
 
 /** Opens the launch folder on the app at `baseUrl` and returns the page to show. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function pageFor(folder: LaunchFolder) {
+const pageFor = Effect.fn("launch.pageFor")(function* (folder: LaunchFolder) {
   switch (folder.kind) {
     case "none":
     case "invalid":
       return baseUrl;
     case "folder": {
-      const opened = await openProject(baseUrl, folder.root);
+      const opened = yield* openProjectEffect(baseUrl, folder.root);
       switch (opened.kind) {
         case "opened":
           // Native stdout/stderr or SDK logging boundary preserves the existing output format.
@@ -80,7 +82,7 @@ async function pageFor(folder: LaunchFolder) {
       }
     }
   }
-}
+});
 
 if (positionals[0] === "acp") {
   // stdout is the protocol channel: nothing else may be written to it.
@@ -107,7 +109,7 @@ if (positionals[0] === "acp") {
 
   if (await isThisApp(baseUrl)) {
     // One server per storage root: a second start hands the folder to the running app.
-    const page = await pageFor(folder);
+    const page = await runNativeEffect(pageFor(folder));
     // Native stdout/stderr or SDK logging boundary preserves the existing output format.
     console.log(`이미 실행 중인 앱(${baseUrl})에서 열었어요.`);
     if (values.open) openInBrowser(page);
@@ -145,6 +147,6 @@ if (positionals[0] === "acp") {
   });
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
   console.log(`Context Agent가 ${baseUrl} 에서 실행 중이에요. 끝내려면 Ctrl+C.`);
-  const page = await pageFor(folder);
+  const page = await runNativeEffect(pageFor(folder));
   if (values.open) openInBrowser(page);
 }

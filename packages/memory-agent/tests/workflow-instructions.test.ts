@@ -19,6 +19,17 @@ const resolved = (phase: WorkflowPhase) => ({
 });
 
 describe("workflowInstructions", () => {
+  test.each(["execute", "verify"] as const)(
+    "%s synchronizes explicit Goal decisions rather than inventing an external blocker",
+    (phase) => {
+      const prompt = workflowInstructions(state(phase), resolved(phase));
+      expect(prompt).toContain("persist that decision with update_goal before proceeding");
+      expect(prompt).toContain("do not treat an artifact you can update as an external dependency");
+      expect(prompt).toContain("Do not ask again for an approval already explicitly given");
+      expect(prompt).toContain("never infer permission from a generic resume request");
+      expect(prompt).toContain("wait for execution confirmation");
+    },
+  );
   test("provides the owner-read Goal instance ID instead of inferring it from Goal version", () => {
     const prompt = workflowInstructions(state("completed"), resolved("completed"), "owner-id-123");
     expect(prompt).toContain("Current Goal instance ID: owner-id-123");

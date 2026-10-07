@@ -14,7 +14,7 @@ const EmbeddingAction = Schema.Union([
  * machine's memory, whether WebGPU works, and how many nodes wait to be embedded.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function loader() {
+export function loader() {
   return agent.runPromise(
     Effect.flatMap(EmbeddingSetup, (setup) => setup.overview).pipe(
       Effect.map((overview) => Response.json(overview)),
@@ -28,23 +28,25 @@ export async function loader() {
  * - `check`: checks WebGPU again, in the background.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function action({ request }: Route.ActionArgs) {
-  const rejected = rejectCrossSite(request);
-  if (rejected !== null) return rejected;
-  const body = await readJson(request, EmbeddingAction);
-  if (Result.isFailure(body))
-    return Response.json({ error: "invalid_embedding_action" }, { status: 400 });
-
+export function action({ request }: Route.ActionArgs) {
   return agent.runPromise(
     Effect.gen(function* () {
-      const setup = yield* EmbeddingSetup;
-      const command = body.success;
-      switch (command.action) {
-        case "choose":
-          return Response.json(yield* setup.choose(command.choice));
-        case "check":
-          return Response.json(yield* setup.recheck);
-      }
+      const rejected = rejectCrossSite(request);
+      if (rejected !== null) return rejected;
+      const body = yield* Effect.tryPromise(() => readJson(request, EmbeddingAction));
+      if (Result.isFailure(body))
+        return Response.json({ error: "invalid_embedding_action" }, { status: 400 });
+
+      return yield* Effect.gen(function* () {
+        const setup = yield* EmbeddingSetup;
+        const command = body.success;
+        switch (command.action) {
+          case "choose":
+            return Response.json(yield* setup.choose(command.choice));
+          case "check":
+            return Response.json(yield* setup.recheck);
+        }
+      });
     }),
   );
 }

@@ -5,7 +5,7 @@ import type { Route } from "./+types/projects.$project.trace";
 
 /** GET /api/projects/:project/trace — project-owned tasks, including deleted origins. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function loader({ params }: Route.LoaderArgs) {
+export function loader({ params }: Route.LoaderArgs) {
   return agent.runPromise(
     Effect.flatMap(AgentChat, (chat) => chat.projectTraceTree(params.project)),
   );

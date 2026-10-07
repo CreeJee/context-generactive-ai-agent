@@ -1,3 +1,5 @@
+import { Effect } from "effect";
+import { runUiEffect, uiPromise } from "../../shared/ui-effect";
 import { isTruthy } from "../../../truthy.ts";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { useState } from "react";
@@ -56,28 +58,31 @@ function CompatibleForm({
   const [models, setModels] = useState<readonly { id: string }[]>([]);
   const mutation = useMutation({
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    mutationFn: async (
+    mutationFn: (
       command: { action: "update"; value: CompatibleUpdate } | { action: "test" | "list" },
-    ) => {
-      setMessage(null);
-      if (command.action === "update") {
-        await compatibleClient.update(command.value);
-        setKey("");
-        setRemoveKey(false);
-        await client.invalidateQueries();
-        setMessage("저장했어요.");
-      } else if (command.action === "test") {
-        await compatibleClient.test();
-        setMessage("연결을 확인했어요.");
-      } else {
-        const result = await compatibleClient.list();
-        setModels(result.models);
-        await client.invalidateQueries({ queryKey: compatibleQueryKey });
-        setMessage(
-          `${result.models.length}개 모델을 불러왔어요. 목록에 없어도 모델 ID를 직접 입력할 수 있어요.`,
-        );
-      }
-    },
+    ) =>
+      runUiEffect(
+        Effect.gen(function* () {
+          setMessage(null);
+          if (command.action === "update") {
+            yield* uiPromise(() => compatibleClient.update(command.value));
+            setKey("");
+            setRemoveKey(false);
+            yield* uiPromise(() => client.invalidateQueries());
+            setMessage("저장했어요.");
+          } else if (command.action === "test") {
+            yield* uiPromise(() => compatibleClient.test());
+            setMessage("연결을 확인했어요.");
+          } else {
+            const result = yield* uiPromise(() => compatibleClient.list());
+            setModels(result.models);
+            yield* uiPromise(() => client.invalidateQueries({ queryKey: compatibleQueryKey }));
+            setMessage(
+              `${result.models.length}개 모델을 불러왔어요. 목록에 없어도 모델 ID를 직접 입력할 수 있어요.`,
+            );
+          }
+        }),
+      ),
   });
   const busy = mutation.isPending;
   return (

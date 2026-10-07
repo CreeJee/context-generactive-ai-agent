@@ -1,41 +1,30 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics nodeBuiltinImport:off
-import {
-  linkSync,
-  mkdirSync,
-  mkdtempSync,
-  realpathSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { Result } from "effect";
-import { afterEach, describe, expect, test } from "vite-plus/test";
+import { NodeFileSystem, NodePath } from "@effect/platform-node";
+import { it } from "@effect/vitest";
+import { Effect, FileSystem, Layer, Path, Result } from "effect";
+import { describe, expect, test } from "vite-plus/test";
 import { isCredentialPath, resolveOutsidePath, resolveProjectPath } from "../src/files/paths.ts";
 
-const directories: string[] = [];
-afterEach(() => {
-  for (const directory of directories.splice(0))
-    rmSync(directory, { recursive: true, force: true });
+const layout = Effect.fn("paths.layout")(function* () {
+  const context = yield* Layer.build(Layer.merge(NodeFileSystem.layer, NodePath.layer));
+  return yield* Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const base = yield* fs.realPath(
+      yield* fs.makeTempDirectoryScoped({ prefix: "memory-agent-paths-" }),
+    );
+    const project = path.join(base, "project");
+    const outside = path.join(base, "outside");
+    const storage = path.join(base, "storage");
+    yield* fs.makeDirectory(path.join(project, "src"), { recursive: true });
+    yield* fs.makeDirectory(path.join(project, ".git"));
+    yield* fs.makeDirectory(outside);
+    yield* fs.makeDirectory(storage);
+    yield* fs.writeFileString(path.join(project, "src", "app.ts"), "export {};\n");
+    yield* fs.writeFileString(path.join(project, ".gitignore"), "dist\n");
+    yield* fs.writeFileString(path.join(outside, "notes.md"), "# notes\n");
+    return { base, project, outside, storage, fs, path };
+  }).pipe(Effect.provideContext(context));
 });
-
-function layout() {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), "memory-agent-paths-")));
-  directories.push(base);
-  const project = join(base, "project");
-  const outside = join(base, "outside");
-  const storage = join(base, "storage");
-  mkdirSync(join(project, "src"), { recursive: true });
-  mkdirSync(join(project, ".git"));
-  mkdirSync(outside);
-  mkdirSync(storage);
-  writeFileSync(join(project, "src", "app.ts"), "export {};\n");
-  writeFileSync(join(project, ".gitignore"), "dist\n");
-  writeFileSync(join(outside, "notes.md"), "# notes\n");
-  return { base, project, outside, storage };
-}
 
 const reason = <A>(result: Result.Result<A, { reason: string }>) =>
   Result.isFailure(result) ? result.failure.reason : "ok";
@@ -68,98 +57,124 @@ describe("isCredentialPath", () => {
 });
 
 describe("resolveProjectPath", () => {
-  test("resolves files, directories and new files below the root", () => {
-    const { project } = layout();
-    const file = resolveProjectPath(project, "src/app.ts", "file");
-    expect(Result.getOrThrow(file).absolute).toBe(join(project, "src", "app.ts"));
-    expect(reason(resolveProjectPath(project, ".", "directory"))).toBe("ok");
-    expect(reason(resolveProjectPath(project, ".gitignore", "file"))).toBe("ok");
-    const created = Result.getOrThrow(
-      resolveProjectPath(project, "docs/new/plan.md", "new-or-file"),
-    );
-    expect(created).toMatchObject({
-      absolute: join(project, "docs", "new", "plan.md"),
-      stats: undefined,
-    });
-  });
+  it.live("resolves files, directories and new files below the root", () =>
+    Effect.gen(function* () {
+      const { project, path } = yield* layout();
+      const file = resolveProjectPath(project, "src/app.ts", "file");
+      expect(Result.getOrThrow(file).absolute).toBe(path.join(project, "src", "app.ts"));
+      expect(reason(resolveProjectPath(project, ".", "directory"))).toBe("ok");
+      expect(reason(resolveProjectPath(project, ".gitignore", "file"))).toBe("ok");
+      const created = Result.getOrThrow(
+        resolveProjectPath(project, "docs/new/plan.md", "new-or-file"),
+      );
+      expect(created).toMatchObject({
+        absolute: path.join(project, "docs", "new", "plan.md"),
+        stats: undefined,
+      });
+    }),
+  );
 
-  test("refuses escapes, .git, credentials and malformed spellings", () => {
-    const { project } = layout();
-    expect(reason(resolveProjectPath(project, "../outside/notes.md", "file"))).toBe("invalid_path");
-    expect(reason(resolveProjectPath(project, "/etc/hosts", "file"))).toBe("invalid_path");
-    expect(reason(resolveProjectPath(project, "src//app.ts", "file"))).toBe("invalid_path");
-    expect(reason(resolveProjectPath(project, "src\\app.ts", "file"))).toBe("invalid_path");
-    expect(reason(resolveProjectPath(project, ".git/config", "new-or-file"))).toBe("git_internal");
-    expect(reason(resolveProjectPath(project, ".GIT/HEAD", "file"))).toBe("git_internal");
-    expect(reason(resolveProjectPath(project, ".env", "new-or-file"))).toBe("credential");
-  });
+  it.live("refuses escapes, .git, credentials and malformed spellings", () =>
+    Effect.gen(function* () {
+      const { project } = yield* layout();
+      expect(reason(resolveProjectPath(project, "../outside/notes.md", "file"))).toBe(
+        "invalid_path",
+      );
+      expect(reason(resolveProjectPath(project, "/etc/hosts", "file"))).toBe("invalid_path");
+      expect(reason(resolveProjectPath(project, "src//app.ts", "file"))).toBe("invalid_path");
+      expect(reason(resolveProjectPath(project, "src\\app.ts", "file"))).toBe("invalid_path");
+      expect(reason(resolveProjectPath(project, ".git/config", "new-or-file"))).toBe(
+        "git_internal",
+      );
+      expect(reason(resolveProjectPath(project, ".GIT/HEAD", "file"))).toBe("git_internal");
+      expect(reason(resolveProjectPath(project, ".env", "new-or-file"))).toBe("credential");
+    }),
+  );
 
-  test("refuses symlinks anywhere on the path and hard-linked files", () => {
-    const { project, outside } = layout();
-    symlinkSync(outside, join(project, "linked"));
-    symlinkSync(join(outside, "notes.md"), join(project, "notes.md"));
-    linkSync(join(outside, "notes.md"), join(project, "hard.md"));
-    expect(reason(resolveProjectPath(project, "linked/notes.md", "file"))).toBe("symlink");
-    expect(reason(resolveProjectPath(project, "linked/new.md", "new-or-file"))).toBe("symlink");
-    expect(reason(resolveProjectPath(project, "notes.md", "file"))).toBe("symlink");
-    expect(reason(resolveProjectPath(project, "hard.md", "file"))).toBe("hard_link");
-  });
+  it.live("refuses symlinks anywhere on the path and hard-linked files", () =>
+    Effect.gen(function* () {
+      const { project, outside, fs, path } = yield* layout();
+      yield* fs.symlink(outside, path.join(project, "linked"));
+      yield* fs.symlink(path.join(outside, "notes.md"), path.join(project, "notes.md"));
+      yield* fs.link(path.join(outside, "notes.md"), path.join(project, "hard.md"));
+      expect(reason(resolveProjectPath(project, "linked/notes.md", "file"))).toBe("symlink");
+      expect(reason(resolveProjectPath(project, "linked/new.md", "new-or-file"))).toBe("symlink");
+      expect(reason(resolveProjectPath(project, "notes.md", "file"))).toBe("symlink");
+      expect(reason(resolveProjectPath(project, "hard.md", "file"))).toBe("hard_link");
+    }),
+  );
 
-  test("reports kind mismatches", () => {
-    const { project } = layout();
-    expect(reason(resolveProjectPath(project, "src", "file"))).toBe("not_file");
-    expect(reason(resolveProjectPath(project, "src/app.ts", "directory"))).toBe("not_directory");
-    expect(reason(resolveProjectPath(project, "src/app.ts/x", "new-or-file"))).toBe(
-      "not_directory",
-    );
-    expect(reason(resolveProjectPath(project, "missing.ts", "file"))).toBe("not_found");
-  });
+  it.live("reports kind mismatches", () =>
+    Effect.gen(function* () {
+      const { project } = yield* layout();
+      expect(reason(resolveProjectPath(project, "src", "file"))).toBe("not_file");
+      expect(reason(resolveProjectPath(project, "src/app.ts", "directory"))).toBe("not_directory");
+      expect(reason(resolveProjectPath(project, "src/app.ts/x", "new-or-file"))).toBe(
+        "not_directory",
+      );
+      expect(reason(resolveProjectPath(project, "missing.ts", "file"))).toBe("not_found");
+    }),
+  );
 });
 
 describe("resolveOutsidePath", () => {
-  test("resolves outside files and new files to canonical paths", () => {
-    const { project, outside, storage } = layout();
-    const read = Result.getOrThrow(
-      resolveOutsidePath(project, storage, join(outside, "notes.md"), "file"),
-    );
-    expect(read.absolute).toBe(join(outside, "notes.md"));
-    const created = Result.getOrThrow(
-      resolveOutsidePath(project, storage, join(outside, "a", "b.txt"), "new-or-file"),
-    );
-    expect(created).toMatchObject({ absolute: join(outside, "a", "b.txt"), stats: undefined });
-  });
+  it.live("resolves outside files and new files to canonical paths", () =>
+    Effect.gen(function* () {
+      const { project, outside, storage, path } = yield* layout();
+      const read = Result.getOrThrow(
+        resolveOutsidePath(project, storage, path.join(outside, "notes.md"), "file"),
+      );
+      expect(read.absolute).toBe(path.join(outside, "notes.md"));
+      const created = Result.getOrThrow(
+        resolveOutsidePath(project, storage, path.join(outside, "a", "b.txt"), "new-or-file"),
+      );
+      expect(created).toMatchObject({
+        absolute: path.join(outside, "a", "b.txt"),
+        stats: undefined,
+      });
+    }),
+  );
 
-  test("refuses relative paths, the project, the storage root and credentials", () => {
-    const { project, outside, storage } = layout();
-    expect(reason(resolveOutsidePath(project, storage, "notes.md", "file"))).toBe("invalid_path");
-    expect(reason(resolveOutsidePath(project, storage, join(project, "src/app.ts"), "file"))).toBe(
-      "inside_project",
-    );
-    expect(reason(resolveOutsidePath(project, storage, project, "directory"))).toBe(
-      "inside_project",
-    );
-    expect(
-      reason(resolveOutsidePath(project, storage, join(storage, "agent.db"), "new-or-file")),
-    ).toBe("credential");
-    expect(reason(resolveOutsidePath(project, storage, join(outside, ".env"), "new-or-file"))).toBe(
-      "credential",
-    );
-  });
+  it.live("refuses relative paths, the project, the storage root and credentials", () =>
+    Effect.gen(function* () {
+      const { project, outside, storage, path } = yield* layout();
+      expect(reason(resolveOutsidePath(project, storage, "notes.md", "file"))).toBe("invalid_path");
+      expect(
+        reason(resolveOutsidePath(project, storage, path.join(project, "src/app.ts"), "file")),
+      ).toBe("inside_project");
+      expect(reason(resolveOutsidePath(project, storage, project, "directory"))).toBe(
+        "inside_project",
+      );
+      expect(
+        reason(resolveOutsidePath(project, storage, path.join(storage, "agent.db"), "new-or-file")),
+      ).toBe("credential");
+      expect(
+        reason(resolveOutsidePath(project, storage, path.join(outside, ".env"), "new-or-file")),
+      ).toBe("credential");
+    }),
+  );
 
-  test("judges a symlink by where it points", () => {
-    const { base, project, outside, storage } = layout();
-    const secrets = join(base, ".ssh");
-    mkdirSync(secrets);
-    writeFileSync(join(secrets, "id_ed25519"), "secret");
-    symlinkSync(join(secrets, "id_ed25519"), join(outside, "harmless.txt"));
-    symlinkSync(project, join(outside, "project-link"));
-    expect(
-      reason(resolveOutsidePath(project, storage, join(outside, "harmless.txt"), "file")),
-    ).toBe("credential");
-    expect(
-      reason(
-        resolveOutsidePath(project, storage, join(outside, "project-link", "src"), "directory"),
-      ),
-    ).toBe("inside_project");
-  });
+  it.live("judges a symlink by where it points", () =>
+    Effect.gen(function* () {
+      const { base, project, outside, storage, fs, path } = yield* layout();
+      const secrets = path.join(base, ".ssh");
+      yield* fs.makeDirectory(secrets);
+      yield* fs.writeFileString(path.join(secrets, "id_ed25519"), "secret");
+      yield* fs.symlink(path.join(secrets, "id_ed25519"), path.join(outside, "harmless.txt"));
+      yield* fs.symlink(project, path.join(outside, "project-link"));
+      expect(
+        reason(resolveOutsidePath(project, storage, path.join(outside, "harmless.txt"), "file")),
+      ).toBe("credential");
+      expect(
+        reason(
+          resolveOutsidePath(
+            project,
+            storage,
+            path.join(outside, "project-link", "src"),
+            "directory",
+          ),
+        ),
+      ).toBe("inside_project");
+    }),
+  );
 });

@@ -1,10 +1,10 @@
-import { Result, Function as EffectFunction } from "effect";
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off schemaSync:off
 import { isTruthy } from "../src/truthy.ts";
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
-import { Effect, Schema } from "effect";
-import { describe, expect, test } from "vite-plus/test";
+import { Cause, Option, Schedule, Effect, Schema } from "effect";
+import { it } from "@effect/vitest";
+import { waitUntil } from "./support/wait-until.ts";
+import { selectTestModel } from "./support/provider.ts";
+import { describe, expect } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { MessageQueue } from "../src/queue/queue.ts";
@@ -30,30 +30,38 @@ const Queued = Schema.Struct({
     Schema.Struct({ kind: Schema.Literal("failed"), reason: Schema.String }),
   ]),
 });
-const decodeQueued = EffectFunction.flow(Schema.decodeUnknownResult(Queued), Result.getOrThrow);
+const decodeQueued = Schema.decodeUnknownEffect(Queued);
 
-async function until(condition: () => boolean, what: string) {
-  await expect.poll(condition, { message: what, timeout: 6_000, interval: 20 }).toBe(true);
-}
+const until = (condition: () => boolean, what: string) => waitUntil(condition, what, 6_000);
 
-function openTab(runtime: Runtime, sessionId: string, holder: string | null = null) {
-  const client = new ChatClient({
-    threadId: sessionId,
-    persistence: true,
-    history: { pageSize: 10_000 },
-    tools: approvalToolDefinitions,
-    connection: fetchServerSentEvents(`http://127.0.0.1/api/chat?session=${sessionId}`, {
-      headers: isTruthy(holder) ? { [sessionHolderHeader]: holder } : {},
-      fetchClient: (input, init) =>
-        runtime.runPromise(
-          Effect.flatMap(AgentChat, (agent) =>
-            (init?.method ?? "GET") === "POST"
-              ? agent.handle(new Request(input, init), sessionId)
-              : agent.hydrate(new Request(input, init), sessionId),
-          ),
-        ),
-    }),
-  });
+const openTab = Effect.fnUntraced(function* (
+  runtime: Runtime,
+  sessionId: string,
+  holder: string | null = null,
+) {
+  const client = yield* Effect.acquireRelease(
+    Effect.sync(
+      () =>
+        new ChatClient({
+          threadId: sessionId,
+          persistence: true,
+          history: { pageSize: 10_000 },
+          tools: approvalToolDefinitions,
+          connection: fetchServerSentEvents(`http://127.0.0.1/api/chat?session=${sessionId}`, {
+            headers: isTruthy(holder) ? { [sessionHolderHeader]: holder } : {},
+            fetchClient: (input, init) =>
+              runtime.runPromise(
+                Effect.flatMap(AgentChat, (agent) =>
+                  (init?.method ?? "GET") === "POST"
+                    ? agent.handle(new Request(input, init), sessionId)
+                    : agent.hydrate(new Request(input, init), sessionId),
+                ),
+              ),
+          }),
+        }),
+    ),
+    (client) => Effect.sync(() => client.dispose()),
+  );
   client.attach();
   const texts = (role: "user" | "assistant") =>
     client
@@ -63,144 +71,178 @@ function openTab(runtime: Runtime, sessionId: string, holder: string | null = nu
         message.parts.flatMap((part) => (part.type === "text" ? [part.content] : [])).join(""),
       );
   return { client, texts, answer: () => texts("assistant").join("") };
-}
+});
 
-async function setup(gateDelayedTurns = true) {
+const setup = Effect.fnUntraced(function* (gateDelayedTurns: boolean = true) {
   const gate = turnGate();
-  const context = await testRuntime({
-    testProvider: gateDelayedTurns ? { delayedTurnGate: gate.waitFor } : {},
+  const context = yield* call(() =>
+    testRuntime({
+      testProvider: gateDelayedTurns ? { delayedTurnGate: gate.waitFor } : {},
+    }),
+  );
+  yield* Effect.provideContext(selectTestModel(), yield* context.runtime.contextEffect);
+  const agent = yield* Effect.provideContext(AgentChat, yield* context.runtime.contextEffect);
+
+  const enqueue = Effect.fnUntraced(function* (
+    text: string,
+    mode: "queue" | "steer",
+    holder: string | null = null,
+  ) {
+    const response = yield* agent.enqueue(context.session.id, holder, {
+      text,
+      attachmentIds: [],
+      mode,
+    });
+    return { status: response.status, body: yield* call(() => response.json()) };
   });
-  await context.provider!.select(context.runtime);
-  const agent = await context.runtime.runPromise(AgentChat);
-  const run = <A, E>(effect: Effect.Effect<A, E>) => context.runtime.runPromise(effect);
-  const enqueue = async (text: string, mode: "queue" | "steer", holder: string | null = null) => {
-    const response = await run(
-      agent.enqueue(context.session.id, holder, { text, attachmentIds: [], mode }),
-    );
-    return { status: response.status, body: await response.json() };
-  };
-  const list = async () =>
-    EffectFunction.flow(
-      Schema.decodeUnknownResult(Schema.Struct({ items: Schema.Array(Queued) })),
-      Result.getOrThrow,
-    )(await (await run(agent.queued(context.session.id))).json()).items;
-  const running = async () => {
-    const status = await (await run(agent.status(context.session.id, null))).json();
-    return EffectFunction.flow(
-      Schema.decodeUnknownResult(
-        Schema.Struct({ running: Schema.NullOr(Schema.Struct({ runId: Schema.String })) }),
+  const list = Effect.fnUntraced(function* () {
+    return (yield* Schema.decodeUnknownEffect(Schema.Struct({ items: Schema.Array(Queued) }))(
+      yield* Effect.flatMap(agent.queued(context.session.id), (response) =>
+        call(() => response.json()),
       ),
-      Result.getOrThrow,
-    )(status).running;
-  };
-  return { ...context, agent, run, enqueue, list, running, releaseDelayedTurn: gate.release };
-}
+    )).items;
+  });
+  const running = Effect.fnUntraced(function* () {
+    const status = yield* Effect.flatMap(agent.status(context.session.id, null), (response) =>
+      call(() => response.json()),
+    );
+    return (yield* Schema.decodeUnknownEffect(
+      Schema.Struct({ running: Schema.NullOr(Schema.Struct({ runId: Schema.String })) }),
+    )(status)).running;
+  });
+  return { ...context, agent, enqueue, list, running, releaseDelayedTurn: gate.release };
+});
 
 describe("message queue", () => {
-  test("claim reserves the head against mutations, then release and delivery clear it", async () => {
-    const context = await setup();
-    const queue = await context.runtime.runPromise(MessageQueue);
-    const sessionId = context.session.id;
-    const first = queue.add(sessionId, "first", []);
-    const second = queue.add(sessionId, "second", []);
-    expect(queue.claimNext(sessionId)?.id).toBe(first.id);
-    expect(queue.claimNext(sessionId)).toBeNull();
-    for (const change of [
-      queue.edit(sessionId, first.id, "draft"),
-      queue.save(sessionId, first.id, "changed"),
-      queue.remove(sessionId, first.id),
-      queue.confirm(sessionId, first.id),
-    ]) {
-      expect(await Effect.runPromise(Effect.flip(change))).toMatchObject({ reason: "reserved" });
-    }
-    expect(queue.get(sessionId, first.id)?.text).toBe("first");
-    queue.releaseNext(sessionId, "wrong-id");
-    expect(queue.claimNext(sessionId)).toBeNull();
-    queue.releaseNext(sessionId, first.id);
-    expect(queue.claimNext(sessionId)?.id).toBe(first.id);
-    queue.markDelivered(first.id, "next_turn", null, true);
-    expect(queue.claimNext(sessionId)?.id).toBe(second.id);
-    queue.releaseNext(sessionId, second.id);
-    await Effect.runPromise(queue.remove(sessionId, second.id));
-  });
+  it.live("claim reserves the head against mutations, then release and delivery clear it", () =>
+    Effect.gen(function* () {
+      const context = yield* setup();
+      const queue = yield* Effect.provideContext(
+        MessageQueue,
+        yield* context.runtime.contextEffect,
+      );
+      const sessionId = context.session.id;
+      const first = queue.add(sessionId, "first", []);
+      const second = queue.add(sessionId, "second", []);
+      expect(queue.claimNext(sessionId)?.id).toBe(first.id);
+      expect(queue.claimNext(sessionId)).toBeNull();
+      for (const change of [
+        queue.edit(sessionId, first.id, "draft"),
+        queue.save(sessionId, first.id, "changed"),
+        queue.remove(sessionId, first.id),
+        queue.confirm(sessionId, first.id),
+      ]) {
+        expect(yield* Effect.flip(change)).toMatchObject({ reason: "reserved" });
+      }
+      expect(queue.get(sessionId, first.id)?.text).toBe("first");
+      queue.releaseNext(sessionId, "wrong-id");
+      expect(queue.claimNext(sessionId)).toBeNull();
+      queue.releaseNext(sessionId, first.id);
+      expect(queue.claimNext(sessionId)?.id).toBe(first.id);
+      queue.markDelivered(first.id, "next_turn", null, true);
+      expect(queue.claimNext(sessionId)?.id).toBe(second.id);
+      queue.releaseNext(sessionId, second.id);
+      yield* queue.remove(sessionId, second.id);
+    }),
+  );
 
-  test("claim only decodes the first pending item, respecting barriers and terminal entries", async () => {
-    const context = await setup();
-    const queue = await context.runtime.runPromise(MessageQueue);
-    const sessionId = context.session.id;
-    const terminal = queue.add(sessionId, "already delivered", []);
-    queue.markDelivered(terminal.id, "next_turn", null, true);
-    const failed = queue.add(sessionId, "already failed", []);
-    queue.markFailed(failed.id, "unavailable");
-    expect(queue.deliverable(sessionId)).toEqual([]);
-    const barrier = queue.add(sessionId, "editing", []);
-    const next = queue.add(sessionId, "waiting", []);
-    await Effect.runPromise(queue.edit(sessionId, barrier.id, "draft"));
-    expect(queue.snapshot(sessionId).nextDelivery).toEqual({
-      kind: "blocked",
-      messageId: barrier.id,
-      reason: "editing",
-    });
-    expect(queue.claimNext(sessionId)).toBeNull();
-    expect(queue.deliverable(sessionId)).toEqual([]);
-    await Effect.runPromise(queue.remove(sessionId, barrier.id));
-    expect(queue.snapshot(sessionId).nextDelivery).toEqual({ kind: "ready" });
-    expect(queue.deliverable(sessionId).map((message) => message.id)).toEqual([next.id]);
-    expect(queue.claimNext(sessionId)?.id).toBe(next.id);
-    queue.releaseNext(sessionId, next.id);
-  });
+  it.live(
+    "claim only decodes the first pending item, respecting barriers and terminal entries",
+    () =>
+      Effect.gen(function* () {
+        const context = yield* setup();
+        const queue = yield* Effect.provideContext(
+          MessageQueue,
+          yield* context.runtime.contextEffect,
+        );
+        const sessionId = context.session.id;
+        const terminal = queue.add(sessionId, "already delivered", []);
+        queue.markDelivered(terminal.id, "next_turn", null, true);
+        const failed = queue.add(sessionId, "already failed", []);
+        queue.markFailed(failed.id, "unavailable");
+        expect(queue.deliverable(sessionId)).toEqual([]);
+        const barrier = queue.add(sessionId, "editing", []);
+        const next = queue.add(sessionId, "waiting", []);
+        yield* queue.edit(sessionId, barrier.id, "draft");
+        expect(queue.snapshot(sessionId).nextDelivery).toEqual({
+          kind: "blocked",
+          messageId: barrier.id,
+          reason: "editing",
+        });
+        expect(queue.claimNext(sessionId)).toBeNull();
+        expect(queue.deliverable(sessionId)).toEqual([]);
+        yield* queue.remove(sessionId, barrier.id);
+        expect(queue.snapshot(sessionId).nextDelivery).toEqual({ kind: "ready" });
+        expect(queue.deliverable(sessionId).map((message) => message.id)).toEqual([next.id]);
+        expect(queue.claimNext(sessionId)?.id).toBe(next.id);
+        queue.releaseNext(sessionId, next.id);
+      }),
+  );
 
-  test("tool boundary streams only the waiting prefix across terminal rows", async () => {
-    const context = await setup();
-    const queue = await context.runtime.runPromise(MessageQueue);
-    const sessionId = context.session.id;
-    const first = queue.add(sessionId, "first", []);
-    const delivered = queue.add(sessionId, "delivered", []);
-    queue.markDelivered(delivered.id, "tool_boundary", null, true);
-    const failed = queue.add(sessionId, "failed", []);
-    queue.markFailed(failed.id, "unavailable");
-    const second = queue.add(sessionId, "second", []);
-    const barrier = queue.add(sessionId, "held", []);
-    const behind = queue.add(sessionId, "behind", []);
-    queue.holdWaiting(sessionId);
-    await Effect.runPromise(queue.confirm(sessionId, first.id));
-    await Effect.runPromise(queue.confirm(sessionId, second.id));
-    expect(queue.deliverable(sessionId).map((item) => item.id)).toEqual([first.id, second.id]);
-    expect(queue.claimNext(sessionId)?.id).toBe(first.id);
-    queue.releaseNext(sessionId, first.id);
-    await Effect.runPromise(queue.confirm(sessionId, barrier.id));
-    await Effect.runPromise(queue.confirm(sessionId, behind.id));
-    expect(queue.deliverable(sessionId).map((item) => item.id)).toEqual([
-      first.id,
-      second.id,
-      barrier.id,
-      behind.id,
-    ]);
-  });
+  it.live("tool boundary streams only the waiting prefix across terminal rows", () =>
+    Effect.gen(function* () {
+      const context = yield* setup();
+      const queue = yield* Effect.provideContext(
+        MessageQueue,
+        yield* context.runtime.contextEffect,
+      );
+      const sessionId = context.session.id;
+      const first = queue.add(sessionId, "first", []);
+      const delivered = queue.add(sessionId, "delivered", []);
+      queue.markDelivered(delivered.id, "tool_boundary", null, true);
+      const failed = queue.add(sessionId, "failed", []);
+      queue.markFailed(failed.id, "unavailable");
+      const second = queue.add(sessionId, "second", []);
+      const barrier = queue.add(sessionId, "held", []);
+      const behind = queue.add(sessionId, "behind", []);
+      queue.holdWaiting(sessionId);
+      yield* queue.confirm(sessionId, first.id);
+      yield* queue.confirm(sessionId, second.id);
+      expect(queue.deliverable(sessionId).map((item) => item.id)).toEqual([first.id, second.id]);
+      expect(queue.claimNext(sessionId)?.id).toBe(first.id);
+      queue.releaseNext(sessionId, first.id);
+      yield* queue.confirm(sessionId, barrier.id);
+      yield* queue.confirm(sessionId, behind.id);
+      expect(queue.deliverable(sessionId).map((item) => item.id)).toEqual([
+        first.id,
+        second.id,
+        barrier.id,
+        behind.id,
+      ]);
+    }),
+  );
 
-  test("holding during a claim keeps the item held after release", async () => {
-    const context = await setup();
-    const queue = await context.runtime.runPromise(MessageQueue);
-    const sessionId = context.session.id;
-    const item = queue.add(sessionId, "first", []);
-    expect(queue.claimNext(sessionId)?.id).toBe(item.id);
-    queue.holdWaiting(sessionId);
-    expect(queue.get(sessionId, item.id)?.state).toEqual({ kind: "waiting" });
-    expect(queue.claimNext(sessionId)).toBeNull();
-    queue.releaseNext(sessionId, item.id);
-    expect(queue.get(sessionId, item.id)?.state).toEqual({ kind: "held", draft: null });
-    expect(queue.claimNext(sessionId)).toBeNull();
-    await Effect.runPromise(queue.confirm(sessionId, item.id));
-    expect(queue.claimNext(sessionId)?.id).toBe(item.id);
-  });
+  it.live("holding during a claim keeps the item held after release", () =>
+    Effect.gen(function* () {
+      const context = yield* setup();
+      const queue = yield* Effect.provideContext(
+        MessageQueue,
+        yield* context.runtime.contextEffect,
+      );
+      const sessionId = context.session.id;
+      const item = queue.add(sessionId, "first", []);
+      expect(queue.claimNext(sessionId)?.id).toBe(item.id);
+      queue.holdWaiting(sessionId);
+      expect(queue.get(sessionId, item.id)?.state).toEqual({ kind: "waiting" });
+      expect(queue.claimNext(sessionId)).toBeNull();
+      queue.releaseNext(sessionId, item.id);
+      expect(queue.get(sessionId, item.id)?.state).toEqual({ kind: "held", draft: null });
+      expect(queue.claimNext(sessionId)).toBeNull();
+      yield* queue.confirm(sessionId, item.id);
+      expect(queue.claimNext(sessionId)?.id).toBe(item.id);
+    }),
+  );
 
-  test("queue endpoint returns the server-owned snapshot contract", async () => {
-    const context = await setup();
-    const queue = await context.runtime.runPromise(MessageQueue);
-    const sessionId = context.session.id;
-    const read = async () =>
-      EffectFunction.flow(
-        Schema.decodeUnknownResult(
+  it.live("queue endpoint returns the server-owned snapshot contract", () =>
+    Effect.gen(function* () {
+      const context = yield* setup();
+      const queue = yield* Effect.provideContext(
+        MessageQueue,
+        yield* context.runtime.contextEffect,
+      );
+      const sessionId = context.session.id;
+      const read = Effect.fnUntraced(function* () {
+        return yield* Schema.decodeUnknownEffect(
           Schema.Struct({
             items: Schema.Array(Queued),
             nextDelivery: Schema.Union([
@@ -213,246 +255,295 @@ describe("message queue", () => {
               Schema.Struct({ kind: Schema.Literal("empty") }),
             ]),
           }),
-        ),
-        Result.getOrThrow,
-      )(await (await context.run(context.agent.queued(sessionId))).json());
-    expect(await read()).toMatchObject({ items: [], nextDelivery: { kind: "empty" } });
-    const first = queue.add(sessionId, "first", []);
-    const second = queue.add(sessionId, "second", []);
-    expect(await read()).toMatchObject({
-      items: [{ id: first.id }, { id: second.id }],
-      nextDelivery: { kind: "ready" },
-    });
-    await Effect.runPromise(queue.edit(sessionId, first.id, "draft"));
-    expect((await read()).nextDelivery).toEqual({
-      kind: "blocked",
-      messageId: first.id,
-      reason: "editing",
-    });
-  });
+        )(
+          yield* Effect.flatMap(context.agent.queued(sessionId), (response) =>
+            call(() => response.json()),
+          ),
+        );
+      });
+      expect(yield* read()).toMatchObject({ items: [], nextDelivery: { kind: "empty" } });
+      const first = queue.add(sessionId, "first", []);
+      const second = queue.add(sessionId, "second", []);
+      expect(yield* read()).toMatchObject({
+        items: [{ id: first.id }, { id: second.id }],
+        nextDelivery: { kind: "ready" },
+      });
+      yield* queue.edit(sessionId, first.id, "draft");
+      expect((yield* read()).nextDelivery).toEqual({
+        kind: "blocked",
+        messageId: first.id,
+        reason: "editing",
+      });
+    }),
+  );
 
-  test("server-authoritative turns persist once instead of resending the whole transcript", async () => {
-    const context = await setup();
-    const tab = openTab(context.runtime, context.session.id);
+  it.live(
+    "server-authoritative turns persist once instead of resending the whole transcript",
+    () =>
+      Effect.gen(function* () {
+        const context = yield* setup();
+        const tab = yield* openTab(context.runtime, context.session.id);
 
-    await tab.client.sendMessage("first turn");
-    await until(() => !tab.client.getIsLoading(), "the first turn to finish");
-    await tab.client.sendMessage("second turn");
-    await until(() => !tab.client.getIsLoading(), "the second turn to finish");
+        yield* call(() => tab.client.sendMessage("first turn"));
+        yield* until(() => !tab.client.getIsLoading(), "the first turn to finish");
+        yield* call(() => tab.client.sendMessage("second turn"));
+        yield* until(() => !tab.client.getIsLoading(), "the second turn to finish");
 
-    const reloaded = openTab(context.runtime, context.session.id);
-    await until(() => reloaded.texts("user").length > 0, "the persisted turns");
-    expect(reloaded.texts("user")).toEqual(["first turn", "second turn"]);
-    tab.client.dispose();
-    reloaded.client.dispose();
-  }, 15_000);
+        const reloaded = yield* openTab(context.runtime, context.session.id);
+        yield* until(() => reloaded.texts("user").length > 0, "the persisted turns");
+        expect(reloaded.texts("user")).toEqual(["first turn", "second turn"]);
+        tab.client.dispose();
+        reloaded.client.dispose();
+      }),
+    15_000,
+  );
 
-  test("order holds behind a message being edited, and a restart holds everything for confirmation", async () => {
-    const context = await setup();
-    const queue = await context.runtime.runPromise(MessageQueue);
-    const sessionId = context.session.id;
-    const [a, b, c] = ["first", "second", "third"].map((text) => queue.add(sessionId, text, []));
-    const ids = () => queue.deliverable(sessionId).map((message) => message.text);
+  it.live(
+    "order holds behind a message being edited, and a restart holds everything for confirmation",
+    () =>
+      Effect.gen(function* () {
+        const context = yield* setup();
+        const queue = yield* Effect.provideContext(
+          MessageQueue,
+          yield* context.runtime.contextEffect,
+        );
+        const sessionId = context.session.id;
+        const [a, b, c] = ["first", "second", "third"].map((text) =>
+          queue.add(sessionId, text, []),
+        );
+        const ids = () => queue.deliverable(sessionId).map((message) => message.text);
 
-    expect(ids()).toEqual(["first", "second", "third"]);
-    expect(queue.snapshot(sessionId).nextDelivery).toEqual({ kind: "ready" });
-    await Effect.runPromise(queue.edit(sessionId, b!.id, "second, half typed"));
-    // The edited message and everything after it wait; unsaved text is not the message.
-    expect(ids()).toEqual(["first"]);
-    expect(queue.snapshot(sessionId).nextDelivery).toEqual({ kind: "ready" });
-    // A snapshot is advisory: delivery reselects after each edit.
-    await Effect.runPromise(queue.edit(sessionId, a!.id, "first draft"));
-    expect(queue.snapshot(sessionId).nextDelivery).toEqual({
-      kind: "blocked",
-      messageId: a!.id,
-      reason: "editing",
-    });
-    expect(queue.deliverable(sessionId)).toEqual([]);
-    await Effect.runPromise(queue.save(sessionId, a!.id, "first"));
-    expect(queue.get(sessionId, b!.id)).toMatchObject({
-      text: "second",
-      state: { kind: "editing", draft: "second, half typed" },
-    });
-    await Effect.runPromise(queue.save(sessionId, b!.id, "second, edited"));
-    expect(ids()).toEqual(["first", "second, edited", "third"]);
+        expect(ids()).toEqual(["first", "second", "third"]);
+        expect(queue.snapshot(sessionId).nextDelivery).toEqual({ kind: "ready" });
+        yield* queue.edit(sessionId, b!.id, "second, half typed");
+        // The edited message and everything after it wait; unsaved text is not the message.
+        expect(ids()).toEqual(["first"]);
+        expect(queue.snapshot(sessionId).nextDelivery).toEqual({ kind: "ready" });
+        // A snapshot is advisory: delivery reselects after each edit.
+        yield* queue.edit(sessionId, a!.id, "first draft");
+        expect(queue.snapshot(sessionId).nextDelivery).toEqual({
+          kind: "blocked",
+          messageId: a!.id,
+          reason: "editing",
+        });
+        expect(queue.deliverable(sessionId)).toEqual([]);
+        yield* queue.save(sessionId, a!.id, "first");
+        expect(queue.get(sessionId, b!.id)).toMatchObject({
+          text: "second",
+          state: { kind: "editing", draft: "second, half typed" },
+        });
+        yield* queue.save(sessionId, b!.id, "second, edited");
+        expect(ids()).toEqual(["first", "second, edited", "third"]);
 
-    await Effect.runPromise(queue.remove(sessionId, a!.id));
-    await Effect.runPromise(queue.edit(sessionId, c!.id, "third, unsaved"));
-    const restarted = await context.reopen();
-    const after = await restarted.runPromise(MessageQueue);
-    // Nothing goes out on its own after a restart; the unsaved edit is kept as a draft.
-    expect(after.deliverable(sessionId)).toEqual([]);
-    expect(after.snapshot(sessionId).nextDelivery).toEqual({
-      kind: "blocked",
-      messageId: b!.id,
-      reason: "held",
-    });
-    expect(after.list(sessionId, null).map((message) => message.state)).toEqual([
-      { kind: "held", draft: null },
-      { kind: "held", draft: "third, unsaved" },
-    ]);
-    await Effect.runPromise(after.confirm(sessionId, b!.id));
-    expect(after.deliverable(sessionId).map((message) => message.text)).toEqual(["second, edited"]);
-    after.markDelivered(b!.id, "next_turn", null, true);
-    expect(after.snapshot(sessionId).nextDelivery).toEqual({
-      kind: "blocked",
-      messageId: c!.id,
-      reason: "held",
-    });
-    await Effect.runPromise(after.remove(sessionId, c!.id));
-    expect(after.snapshot(sessionId).nextDelivery).toEqual({ kind: "empty" });
-  });
+        yield* queue.remove(sessionId, a!.id);
+        yield* queue.edit(sessionId, c!.id, "third, unsaved");
+        const restarted = yield* call(() => context.reopen());
+        const after = yield* Effect.provideContext(MessageQueue, yield* restarted.contextEffect);
+        // Nothing goes out on its own after a restart; the unsaved edit is kept as a draft.
+        expect(after.deliverable(sessionId)).toEqual([]);
+        expect(after.snapshot(sessionId).nextDelivery).toEqual({
+          kind: "blocked",
+          messageId: b!.id,
+          reason: "held",
+        });
+        expect(after.list(sessionId, null).map((message) => message.state)).toEqual([
+          { kind: "held", draft: null },
+          { kind: "held", draft: "third, unsaved" },
+        ]);
+        yield* after.confirm(sessionId, b!.id);
+        expect(after.deliverable(sessionId).map((message) => message.text)).toEqual([
+          "second, edited",
+        ]);
+        after.markDelivered(b!.id, "next_turn", null, true);
+        expect(after.snapshot(sessionId).nextDelivery).toEqual({
+          kind: "blocked",
+          messageId: c!.id,
+          reason: "held",
+        });
+        yield* after.remove(sessionId, c!.id);
+        expect(after.snapshot(sessionId).nextDelivery).toEqual({ kind: "empty" });
+      }),
+  );
 
-  test("a queued message reaches the agent when the next tool call returns", async () => {
-    const context = await setup();
-    const tab = openTab(context.runtime, context.session.id);
-    void tab.client.sendMessage("please check files");
-    await until(() => tab.client.getIsLoading(), "the run to start");
-    await expect.poll(() => context.running(), { timeout: 1_000, interval: 20 }).toBeTruthy();
+  it.live(
+    "a queued message reaches the agent when the next tool call returns",
+    () =>
+      Effect.gen(function* () {
+        const context = yield* setup();
+        const tab = yield* openTab(context.runtime, context.session.id);
+        void tab.client.sendMessage("please check files");
+        yield* until(() => tab.client.getIsLoading(), "the run to start");
+        const active = yield* context
+          .running()
+          .pipe(
+            Effect.repeat({ until: isTruthy, schedule: Schedule.spaced(20) }),
+            Effect.timeoutOption(1_000),
+          );
+        expect(Option.isSome(active)).toBe(true);
 
-    const queued = await context.enqueue("look in the tests folder", "queue");
-    expect(queued.status).toBe(201);
-    expect(decodeQueued(queued.body).state).toEqual({ kind: "waiting" });
-    context.releaseDelayedTurn();
+        const queued = yield* context.enqueue("look in the tests folder", "queue");
+        expect(queued.status).toBe(201);
+        expect((yield* decodeQueued(queued.body)).state).toEqual({ kind: "waiting" });
+        context.releaseDelayedTurn();
 
-    await until(
-      () => context.provider!.adapter.invocations.length === 2,
-      "the provider continuation",
-    );
-    await until(() => !tab.client.getIsLoading(), "the run to finish");
-    const continuation = context.provider!.adapter.invocations[1];
-    expect(
-      continuation?.messages.some(
-        (message) => message.role === "user" && message.content === "look in the tests folder",
-      ),
-    ).toBe(true);
-    const [delivered] = await context.list();
-    expect(delivered?.state).toMatchObject({ kind: "delivered", via: "tool_boundary" });
+        yield* until(
+          () => context.provider!.adapter.invocations.length === 2,
+          "the provider continuation",
+        );
+        yield* until(() => !tab.client.getIsLoading(), "the run to finish");
+        const continuation = context.provider!.adapter.invocations[1];
+        expect(
+          continuation?.messages.some(
+            (message) => message.role === "user" && message.content === "look in the tests folder",
+          ),
+        ).toBe(true);
+        const [delivered] = yield* context.list();
+        expect(delivered?.state).toMatchObject({ kind: "delivered", via: "tool_boundary" });
 
-    const nodes = await context.runtime.runPromise(Nodes);
-    expect(
-      nodes
-        .session(context.session.id)
-        .filter((node) => node.kind === "user")
-        .map((n) => n.text),
-    ).toEqual(["please check files", "look in the tests folder"]);
-    tab.client.dispose();
+        const nodes = yield* Effect.provideContext(Nodes, yield* context.runtime.contextEffect);
+        expect(
+          nodes
+            .session(context.session.id)
+            .filter((node) => node.kind === "user")
+            .map((n) => n.text),
+        ).toEqual(["please check files", "look in the tests folder"]);
+        tab.client.dispose();
 
-    // The saved conversation has it too, so the next send does not drop it.
-    const reloaded = openTab(context.runtime, context.session.id);
-    await until(() => reloaded.texts("user").length === 2, "the saved conversation");
-    expect(reloaded.texts("user")).toEqual(["please check files", "look in the tests folder"]);
-    reloaded.client.dispose();
-  }, 10_000);
+        // The saved conversation has it too, so the next send does not drop it.
+        const reloaded = yield* openTab(context.runtime, context.session.id);
+        yield* until(() => reloaded.texts("user").length === 2, "the saved conversation");
+        expect(reloaded.texts("user")).toEqual(["please check files", "look in the tests folder"]);
+        reloaded.client.dispose();
+      }),
+    10_000,
+  );
 
-  test("unavailable steering leaves the message for an explicit queue fallback", async () => {
-    const context = await setup();
-    const tab = openTab(context.runtime, context.session.id);
-    void tab.client.sendMessage("please be slow");
-    await until(() => context.provider!.adapter.invocations.length === 1, "the run to start");
+  it.live("unavailable steering leaves the message for an explicit queue fallback", () =>
+    Effect.gen(function* () {
+      const context = yield* setup();
+      const tab = yield* openTab(context.runtime, context.session.id);
+      void tab.client.sendMessage("please be slow");
+      yield* until(() => context.provider!.adapter.invocations.length === 1, "the run to start");
 
-    const steered = await context.enqueue("shorter please", "steer");
-    expect(steered.status).toBe(409);
-    expect(steered.body).toEqual({ error: "steer_unavailable" });
-    expect(await context.list()).toEqual([]);
+      const steered = yield* context.enqueue("shorter please", "steer");
+      expect(steered.status).toBe(409);
+      expect(steered.body).toEqual({ error: "steer_unavailable" });
+      expect(yield* context.list()).toEqual([]);
 
-    const queued = await context.enqueue("shorter please", "queue");
-    expect(queued.status).toBe(201);
-    expect(decodeQueued(queued.body).state).toEqual({ kind: "waiting" });
-    context.releaseDelayedTurn();
+      const queued = yield* context.enqueue("shorter please", "queue");
+      expect(queued.status).toBe(201);
+      expect((yield* decodeQueued(queued.body)).state).toEqual({ kind: "waiting" });
+      context.releaseDelayedTurn();
 
-    await until(() => tab.answer().includes("done"), "the answer to finish");
-    await until(() => !tab.client.getIsLoading(), "the run to finish");
-    const [held] = await context.list();
-    expect(held?.text).toBe("shorter please");
-    expect(held?.state).toEqual({ kind: "held", draft: null });
-    tab.client.dispose();
+      yield* until(() => tab.answer().includes("done"), "the answer to finish");
+      yield* until(() => !tab.client.getIsLoading(), "the run to finish");
+      const [held] = yield* context.list();
+      expect(held?.text).toBe("shorter please");
+      expect(held?.state).toEqual({ kind: "held", draft: null });
+      tab.client.dispose();
 
-    // With nothing answering there is nothing to queue for or steer into.
-    expect((await context.enqueue("too late", "steer")).status).toBe(409);
-    expect((await context.enqueue("too late", "queue")).status).toBe(409);
-  });
+      // With nothing answering there is nothing to queue for or steer into.
+      expect((yield* context.enqueue("too late", "steer")).status).toBe(409);
+      expect((yield* context.enqueue("too late", "queue")).status).toBe(409);
+    }),
+  );
 
-  test("after a normal finish the page sends the next queued message as a turn", async () => {
-    const context = await setup();
-    // The page holds the session, so waiting messages are left for it to send.
-    await context.run(context.agent.lease(context.session.id, "tab", "claim"));
-    const tab = openTab(context.runtime, context.session.id, "tab");
-    void tab.client.sendMessage("please be slow");
-    await until(() => context.provider!.adapter.invocations.length === 1, "the answer to start");
-    const first = decodeQueued((await context.enqueue("hello again", "queue", "tab")).body);
-    const second = decodeQueued((await context.enqueue("and once more", "queue", "tab")).body);
-    context.releaseDelayedTurn();
-    await until(() => tab.answer().includes("done"), "the first answer");
-    await until(() => !tab.client.getIsLoading(), "the run to finish");
-    // No tool call happened, so both are still waiting for the page.
-    expect((await context.list()).map((message) => message.state.kind)).toEqual([
-      "waiting",
-      "waiting",
-    ]);
+  it.live("after a normal finish the page sends the next queued message as a turn", () =>
+    Effect.gen(function* () {
+      const context = yield* setup();
+      // The page holds the session, so waiting messages are left for it to send.
+      yield* context.agent.lease(context.session.id, "tab", "claim");
+      const tab = yield* openTab(context.runtime, context.session.id, "tab");
+      void tab.client.sendMessage("please be slow");
+      yield* until(() => context.provider!.adapter.invocations.length === 1, "the answer to start");
+      const first = yield* decodeQueued(
+        (yield* context.enqueue("hello again", "queue", "tab")).body,
+      );
+      const second = yield* decodeQueued(
+        (yield* context.enqueue("and once more", "queue", "tab")).body,
+      );
+      context.releaseDelayedTurn();
+      yield* until(() => tab.answer().includes("done"), "the first answer");
+      yield* until(() => !tab.client.getIsLoading(), "the run to finish");
+      // No tool call happened, so both are still waiting for the page.
+      expect((yield* context.list()).map((message) => message.state.kind)).toEqual([
+        "waiting",
+        "waiting",
+      ]);
 
-    // Supplying an ID is no longer a valid request; the server alone picks the head.
-    await tab.client.sendMessage("and once more", { queuedMessageId: second.id });
-    expect(tab.client.getError()?.message).toContain("400");
+      // Supplying an ID is no longer a valid request; the server alone picks the head.
+      yield* call(() => tab.client.sendMessage("and once more", { queuedMessageId: second.id }));
+      expect(tab.client.getError()?.message).toContain("400");
 
-    // A snapshot captured `first`, but the server must select the current head after an edit.
-    const edited = await context.run(
-      context.agent.editQueued(context.session.id, "tab", first.id, {
+      // A snapshot captured `first`, but the server must select the current head after an edit.
+      const edited = yield* context.agent.editQueued(context.session.id, "tab", first.id, {
         action: "save",
         text: "hello, freshly edited",
-      }),
-    );
-    expect(edited.status).toBe(200);
-    await tab.client.sendMessage("stale client placeholder", { queuedNext: true });
-    await until(() => tab.answer().includes("Hello from fast-1"), "the next turn");
-    await until(() => !tab.client.getIsLoading(), "the next turn to finish");
-    const states = (await context.list()).map((message) => [message.text, message.state.kind]);
-    expect(states).toEqual([
-      ["hello, freshly edited", "delivered"],
-      ["and once more", "waiting"],
-    ]);
-    const nodes = await context.runtime.runPromise(Nodes);
-    expect(
-      nodes
-        .session(context.session.id)
-        .filter((node) => node.kind === "user")
-        .map((n) => n.text),
-    ).toEqual(["please be slow", "hello, freshly edited"]);
-    expect(
-      context.provider!.adapter.invocations[1]?.messages.some(
-        (message) => message.role === "user" && message.content === "hello, freshly edited",
-      ),
-    ).toBe(true);
-    tab.client.dispose();
-  });
+      });
+      expect(edited.status).toBe(200);
+      yield* call(() => tab.client.sendMessage("stale client placeholder", { queuedNext: true }));
+      yield* until(() => tab.answer().includes("Hello from fast-1"), "the next turn");
+      yield* until(() => !tab.client.getIsLoading(), "the next turn to finish");
+      const states = (yield* context.list()).map((message) => [message.text, message.state.kind]);
+      expect(states).toEqual([
+        ["hello, freshly edited", "delivered"],
+        ["and once more", "waiting"],
+      ]);
+      const nodes = yield* Effect.provideContext(Nodes, yield* context.runtime.contextEffect);
+      expect(
+        nodes
+          .session(context.session.id)
+          .filter((node) => node.kind === "user")
+          .map((n) => n.text),
+      ).toEqual(["please be slow", "hello, freshly edited"]);
+      expect(
+        context.provider!.adapter.invocations[1]?.messages.some(
+          (message) => message.role === "user" && message.content === "hello, freshly edited",
+        ),
+      ).toBe(true);
+      tab.client.dispose();
+    }),
+  );
 
-  test("queuedNext refuses an empty queue without persisting the placeholder", async () => {
-    const context = await setup();
-    const tab = openTab(context.runtime, context.session.id);
-    await tab.client.sendMessage("placeholder", { queuedNext: true });
-    expect(tab.client.getError()?.message).toContain("409");
-    const nodes = await context.runtime.runPromise(Nodes);
-    expect(nodes.session(context.session.id).filter((node) => node.kind === "user")).toEqual([]);
-    tab.client.dispose();
-  });
+  it.live("queuedNext refuses an empty queue without persisting the placeholder", () =>
+    Effect.gen(function* () {
+      const context = yield* setup();
+      const tab = yield* openTab(context.runtime, context.session.id);
+      yield* call(() => tab.client.sendMessage("placeholder", { queuedNext: true }));
+      expect(tab.client.getError()?.message).toContain("409");
+      const nodes = yield* Effect.provideContext(Nodes, yield* context.runtime.contextEffect);
+      expect(nodes.session(context.session.id).filter((node) => node.kind === "user")).toEqual([]);
+      tab.client.dispose();
+    }),
+  );
 
-  test("a cancel holds what was waiting until the user confirms it", async () => {
-    const context = await setup();
-    const tab = openTab(context.runtime, context.session.id);
-    void tab.client.sendMessage("please be slow");
-    await until(() => context.provider!.adapter.invocations.length === 1, "the answer to start");
-    await context.enqueue("never mind", "queue");
-    await context.run(context.agent.cancel(context.session.id, null));
-    await until(() => !tab.client.getIsLoading(), "the run to stop");
-    expect(context.provider!.adapter.invocations).toHaveLength(1);
-    tab.client.stop();
+  it.live("a cancel holds what was waiting until the user confirms it", () =>
+    Effect.gen(function* () {
+      const context = yield* setup();
+      const tab = yield* openTab(context.runtime, context.session.id);
+      void tab.client.sendMessage("please be slow");
+      yield* until(() => context.provider!.adapter.invocations.length === 1, "the answer to start");
+      yield* context.enqueue("never mind", "queue");
+      yield* context.agent.cancel(context.session.id, null);
+      yield* until(() => !tab.client.getIsLoading(), "the run to stop");
+      expect(context.provider!.adapter.invocations).toHaveLength(1);
+      tab.client.stop();
 
-    const [held] = await context.list();
-    expect(held?.state).toEqual({ kind: "held", draft: null });
-    const confirmed = await context.run(
-      context.agent.editQueued(context.session.id, null, held!.id, { action: "confirm" }),
-    );
-    expect(decodeQueued(await confirmed.json()).state).toEqual({ kind: "waiting" });
-    tab.client.dispose();
-  });
+      const [held] = yield* context.list();
+      expect(held?.state).toEqual({ kind: "held", draft: null });
+      const confirmed = yield* context.agent.editQueued(context.session.id, null, held!.id, {
+        action: "confirm",
+      });
+      expect((yield* decodeQueued(yield* call(() => confirmed.json()))).state).toEqual({
+        kind: "waiting",
+      });
+      tab.client.dispose();
+    }),
+  );
 });
+
+const call = <A>(execute: () => A) =>
+  Effect.tryPromise({
+    try: () => Promise.resolve(execute()),
+    catch: (cause) => new Cause.UnknownError(cause),
+  });

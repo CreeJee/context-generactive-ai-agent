@@ -1,32 +1,6 @@
-import { isTruthy } from "../../truthy.ts";
-import { AgentChat } from "memory-agent";
-import { Effect } from "effect";
 import { agent } from "~/.server/agent";
-import { rejectCrossSite } from "~/.server/http";
-import type { Route } from "./+types/chat";
+import { makeChatHandlers } from "~/.server/chat-handlers";
+const handlers = makeChatHandlers(agent);
 
-const sessionOf = (request: Request) => new URL(request.url).searchParams.get("session");
-
-/**
- * GET /api/chat?session=<sessionId>&threadId=<sessionId> — what `useChat({ persistence: true })`
- * hydrates from on mount: the stored transcript, a run still generating, and pending approvals.
- */
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function loader({ request }: Route.LoaderArgs) {
-  const sessionId = sessionOf(request);
-  if (!isTruthy(sessionId)) return Response.json({ error: "session_required" }, { status: 400 });
-  return agent.runPromise(Effect.flatMap(AgentChat, (chat) => chat.hydrate(request, sessionId)));
-}
-
-/**
- * POST /api/chat?session=<sessionId> with an AG-UI RunAgentInput body (what TanStack's
- * `fetchServerSentEvents` sends). Streams the run as Server-Sent Events.
- */
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function action({ request }: Route.ActionArgs) {
-  const rejected = rejectCrossSite(request);
-  if (rejected !== null) return rejected;
-  const sessionId = sessionOf(request);
-  if (!isTruthy(sessionId)) return Response.json({ error: "session_required" }, { status: 400 });
-  return agent.runPromise(Effect.flatMap(AgentChat, (chat) => chat.handle(request, sessionId)));
-}
+export const action = handlers.action;
+export const loader = handlers.loader;

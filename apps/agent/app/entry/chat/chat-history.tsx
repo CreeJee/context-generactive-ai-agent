@@ -1,3 +1,5 @@
+import { runUiEffect, uiPromise } from "../shared/ui-effect";
+import { Effect } from "effect";
 import type { UIMessage } from "@tanstack/ai-react";
 import { MessageSquareIcon } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -39,29 +41,34 @@ export function ChatHistory({
   const [olderLoadFailed, setOlderLoadFailed] = useState(false);
   const loadPreviousMessages = useCallback(
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async (retry = false) => {
-      const scroll = viewport.current;
-      if (
-        !(scroll !== null) ||
-        !hasOlderMessages ||
-        pendingPrepend.current !== null ||
-        (olderLoadFailed && !retry)
-      )
-        return;
-      pendingPrepend.current = {
-        count: messages.length,
-        scrollTop: scroll.scrollTop,
-        scrollHeight: scroll.scrollHeight,
-      };
-      pinnedToBottom.current = false;
-      setOlderLoadFailed(false);
-      try {
-        await loadOlderMessages();
-      } catch {
-        pendingPrepend.current = null;
-        setOlderLoadFailed(true);
-      }
-    },
+    (retry = false) =>
+      runUiEffect(
+        Effect.gen(function* () {
+          const scroll = viewport.current;
+          if (
+            !(scroll !== null) ||
+            !hasOlderMessages ||
+            pendingPrepend.current !== null ||
+            (olderLoadFailed && !retry)
+          )
+            return;
+          pendingPrepend.current = {
+            count: messages.length,
+            scrollTop: scroll.scrollTop,
+            scrollHeight: scroll.scrollHeight,
+          };
+          pinnedToBottom.current = false;
+          setOlderLoadFailed(false);
+          yield* uiPromise(loadOlderMessages).pipe(
+            Effect.catch(() =>
+              Effect.sync(() => {
+                pendingPrepend.current = null;
+                setOlderLoadFailed(true);
+              }),
+            ),
+          );
+        }),
+      ),
     [hasOlderMessages, loadOlderMessages, messages.length, olderLoadFailed],
   );
 

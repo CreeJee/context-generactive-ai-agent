@@ -239,7 +239,9 @@ const make = (watching: boolean, home: string) =>
 
     yield* Effect.addFinalizer(() =>
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      Effect.promise(async () => void (await stop("the importer stopped"))),
+      Effect.promise(
+        () => stop("the importer stopped")?.then(() => undefined) ?? Promise.resolve(),
+      ).pipe(Effect.asVoid),
     );
 
     /** Transcripts on disk per source, counted by the worker so the folders are walked there. */

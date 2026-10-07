@@ -1,8 +1,6 @@
-import { Result, Function as EffectFunction } from "effect";
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off schemaSync:off
 import { DateTime, Effect, Layer, Schema } from "effect";
-import { describe, expect, test } from "vite-plus/test";
+import { describe, expect } from "vite-plus/test";
+import { it } from "@effect/vitest";
 import { Database } from "../src/db/database.ts";
 import { WorkTraceStore } from "../src/work-trace/store.ts";
 
@@ -14,27 +12,18 @@ const AttemptLineage = Schema.Struct({
   resumed_from_attempt_id: Schema.NullOr(Schema.String),
   superseded_by_attempt_id: Schema.NullOr(Schema.String),
 });
-const decodeLineage = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Array(AttemptLineage)),
-  Result.getOrThrow,
-);
+const decodeLineage = Schema.decodeUnknownEffect(Schema.Array(AttemptLineage));
 
 const testLayer = () => {
   const database = Database.layer(":memory:");
   return Layer.merge(database, WorkTraceStore.layer.pipe(Layer.provide(database)));
 };
-const run = <A>(effect: Effect.Effect<A, never, Database | WorkTraceStore>) =>
-  // Test entry point owns this Layer and its resource scope.
-  Effect.runPromise(
-    Effect.scoped(
-      effect.pipe(
-        Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
-          const services = yield* Layer.build(testLayer());
-          return yield* Effect.provideContext(program, services);
-        }, Effect.scoped),
-      ),
-    ),
-  );
+const run = Effect.fnUntraced(function* <A, E>(
+  program: Effect.Effect<A, E, Database | WorkTraceStore>,
+) {
+  const services = yield* Layer.build(testLayer());
+  return yield* Effect.provideContext(program, services);
+}, Effect.scoped);
 
 const seed = (db: Database["Service"]) => {
   const iso = DateTime.formatIso(DateTime.makeUnsafe(0));
@@ -82,80 +71,82 @@ const interruptedAttempt = (
 };
 
 describe("Work Trace logical resume", () => {
-  test("creates a new child run under the same task and rejects a duplicate active resume", async () => {
-    await run(
-      Effect.gen(function* () {
-        const db = yield* Database;
-        const trace = yield* WorkTraceStore;
-        seed(db);
-        const previous = interruptedAttempt(trace);
-        const resumed = trace.claimResume({
-          sessionId: "s1",
-          taskId: previous.taskId,
-          expectedAttemptId: previous.id,
-          parentRunId: "parent-2",
-          parentToolCallId: "call-resume-1",
-          confirmUncertain: false,
-        });
-        expect(resumed.status).toBe("started");
-        if (resumed.status !== "started") return;
-        expect(resumed.handle.taskId).toBe(previous.taskId);
-        expect(resumed.handle.id).not.toBe(previous.id);
-        expect(resumed.handle.chatRunId).not.toBe(previous.chatRunId);
-        expect(resumed.context).toEqual({
-          originalRequest: "Research the code",
-          remainingWork: "Write the verified report.",
-          completedToolCallIds: ["tool-complete"],
-          uncertainToolCallIds: [],
-          expiredApprovalIds: ["approval-expired"],
-          checkpointId: expect.any(String),
-        });
-
-        expect(
-          trace.claimResume({
+  it.effect(
+    "creates a new child run under the same task and rejects a duplicate active resume",
+    () =>
+      run(
+        Effect.gen(function* () {
+          const db = yield* Database;
+          const trace = yield* WorkTraceStore;
+          seed(db);
+          const previous = interruptedAttempt(trace);
+          const resumed = trace.claimResume({
             sessionId: "s1",
             taskId: previous.taskId,
             expectedAttemptId: previous.id,
-            parentRunId: "parent-3",
-            parentToolCallId: "call-resume-2",
+            parentRunId: "parent-2",
+            parentToolCallId: "call-resume-1",
             confirmUncertain: false,
-          }),
-        ).toEqual({ status: "blocked", reason: "attempt_alive" });
+          });
+          expect(resumed.status).toBe("started");
+          if (resumed.status !== "started") return;
+          expect(resumed.handle.taskId).toBe(previous.taskId);
+          expect(resumed.handle.id).not.toBe(previous.id);
+          expect(resumed.handle.chatRunId).not.toBe(previous.chatRunId);
+          expect(resumed.context).toEqual({
+            originalRequest: "Research the code",
+            remainingWork: "Write the verified report.",
+            completedToolCallIds: ["tool-complete"],
+            uncertainToolCallIds: [],
+            expiredApprovalIds: ["approval-expired"],
+            checkpointId: expect.any(String),
+          });
 
-        expect(
-          decodeLineage(
-            db.sqlite
-              .prepare(
-                `SELECT id, attempt_number, chat_run_id, status, resumed_from_attempt_id,
+          expect(
+            trace.claimResume({
+              sessionId: "s1",
+              taskId: previous.taskId,
+              expectedAttemptId: previous.id,
+              parentRunId: "parent-3",
+              parentToolCallId: "call-resume-2",
+              confirmUncertain: false,
+            }),
+          ).toEqual({ status: "blocked", reason: "attempt_alive" });
+
+          expect(
+            yield* decodeLineage(
+              db.sqlite
+                .prepare(
+                  `SELECT id, attempt_number, chat_run_id, status, resumed_from_attempt_id,
                         superseded_by_attempt_id
                  FROM agent_run_attempts WHERE task_id = ? ORDER BY attempt_number`,
-              )
-              .all(previous.taskId),
-          ),
-        ).toEqual([
-          {
-            id: previous.id,
-            attempt_number: 1,
-            chat_run_id: previous.chatRunId,
-            status: "interrupted",
-            resumed_from_attempt_id: null,
-            superseded_by_attempt_id: resumed.handle.id,
-          },
-          {
-            id: resumed.handle.id,
-            attempt_number: 2,
-            chat_run_id: resumed.handle.chatRunId,
-            status: "queued",
-            resumed_from_attempt_id: previous.id,
-            superseded_by_attempt_id: null,
-          },
-        ]);
-      }),
-    );
-  });
+                )
+                .all(previous.taskId),
+            ),
+          ).toEqual([
+            {
+              id: previous.id,
+              attempt_number: 1,
+              chat_run_id: previous.chatRunId,
+              status: "interrupted",
+              resumed_from_attempt_id: null,
+              superseded_by_attempt_id: resumed.handle.id,
+            },
+            {
+              id: resumed.handle.id,
+              attempt_number: 2,
+              chat_run_id: resumed.handle.chatRunId,
+              status: "queued",
+              resumed_from_attempt_id: previous.id,
+              superseded_by_attempt_id: null,
+            },
+          ]);
+        }),
+      ),
+  );
 
-  test("only one parent run can claim a queued automatic recovery", async () => {
-    await run(
+  it.effect("only one parent run can claim a queued automatic recovery", () =>
+    run(
       Effect.gen(function* () {
         const db = yield* Database;
         const trace = yield* WorkTraceStore;
@@ -204,11 +195,11 @@ describe("Work Trace logical resume", () => {
             .get(handle.taskId),
         ).toEqual({ attempts: 2 });
       }),
-    );
-  });
+    ),
+  );
 
-  test("requires explicit confirmation when a checkpoint has uncertain side effects", async () => {
-    await run(
+  it.effect("requires explicit confirmation when a checkpoint has uncertain side effects", () =>
+    run(
       Effect.gen(function* () {
         const db = yield* Database;
         const trace = yield* WorkTraceStore;
@@ -230,11 +221,11 @@ describe("Work Trace logical resume", () => {
         if (confirmed.status === "started")
           expect(confirmed.context.uncertainToolCallIds).toEqual(["tool-uncertain"]);
       }),
-    );
-  });
+    ),
+  );
 
-  test("a confirmed server resume request is durably queued and claimed by one parent", async () => {
-    await run(
+  it.effect("a confirmed server resume request is durably queued and claimed by one parent", () =>
+    run(
       Effect.gen(function* () {
         const db = yield* Database;
         const trace = yield* WorkTraceStore;
@@ -267,11 +258,11 @@ describe("Work Trace logical resume", () => {
           expect(claimed.claim.context.uncertainToolCallIds).toEqual(["tool-uncertain"]);
         expect(trace.claimRecoveryJobs("s1", "parent-race")).toEqual([]);
       }),
-    );
-  });
+    ),
+  );
 
-  test("project review keeps task detail after the origin session and agent are deleted", async () => {
-    await run(
+  it.effect("project review keeps task detail after the origin session and agent are deleted", () =>
+    run(
       Effect.gen(function* () {
         const db = yield* Database;
         const trace = yield* WorkTraceStore;
@@ -298,11 +289,11 @@ describe("Work Trace logical resume", () => {
         });
         expect(trace.projectTaskDetail("another-project", handle.taskId)).toBeNull();
       }),
-    );
-  });
+    ),
+  );
 
-  test("archives only a settled task and keeps its trace while blocking resume", async () => {
-    await run(
+  it.effect("archives only a settled task and keeps its trace while blocking resume", () =>
+    run(
       Effect.gen(function* () {
         const db = yield* Database;
         const trace = yield* WorkTraceStore;
@@ -326,11 +317,11 @@ describe("Work Trace logical resume", () => {
           }),
         ).toEqual({ status: "blocked", reason: "task_archived" });
       }),
-    );
-  });
+    ),
+  );
 
-  test("rejects stale attempt ids and tasks without a durable checkpoint", async () => {
-    await run(
+  it.effect("rejects stale attempt ids and tasks without a durable checkpoint", () =>
+    run(
       Effect.gen(function* () {
         const db = yield* Database;
         const trace = yield* WorkTraceStore;
@@ -363,6 +354,6 @@ describe("Work Trace logical resume", () => {
           reason: "missing_checkpoint",
         });
       }),
-    );
-  });
+    ),
+  );
 });

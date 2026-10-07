@@ -1,3 +1,5 @@
+import { Effect } from "effect";
+import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { isTruthy } from "../../truthy.ts";
 import {
   ArchiveIcon,
@@ -431,17 +433,21 @@ function AddProjectDialog({ onAdd }: { onAdd: (root: string) => Promise<string |
         <form
           className="flex flex-col gap-3"
           // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          onSubmit={async (event) => {
-            event.preventDefault();
-            if (!isTruthy(root.trim())) return;
-            setAdding(true);
-            const failure = await onAdd(root.trim());
-            setAdding(false);
-            setError(failure);
-            if (isTruthy(failure)) return;
-            setRoot("");
-            setOpen(false);
-          }}
+          onSubmit={(event) =>
+            runUiEffect(
+              Effect.gen(function* () {
+                event.preventDefault();
+                if (!isTruthy(root.trim())) return;
+                setAdding(true);
+                const failure = yield* uiPromise(() => onAdd(root.trim()));
+                setAdding(false);
+                setError(failure);
+                if (isTruthy(failure)) return;
+                setRoot("");
+                setOpen(false);
+              }),
+            )
+          }
         >
           <Field>
             <FieldLabel htmlFor="project-root">폴더 경로</FieldLabel>

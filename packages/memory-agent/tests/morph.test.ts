@@ -1,11 +1,8 @@
 import { it as effectTest } from "@effect/vitest";
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
-import { existsSync } from "node:fs";
+import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { Effect, Layer, Schema } from "effect";
-import { describe, expect, test } from "vite-plus/test";
+import { Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { describe, expect } from "vite-plus/test";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { Database } from "../src/db/database.ts";
 import { Indexer } from "../src/memory/embedding/indexer.ts";
@@ -18,63 +15,95 @@ import { testRuntime } from "./support/runtime.ts";
 const Terms = Schema.Struct({ terms: Schema.String });
 
 describe("morpheme search terms", () => {
-  test("stores each node's terms once and lets particles and endings differ in a search", async () => {
-    const { runtime, project, session } = await testRuntime();
-    const found = await runtime.runPromise(
+  effectTest.live(
+    "stores each node's terms once and lets particles and endings differ in a search",
+    () =>
       Effect.gen(function* () {
-        const nodes = yield* Nodes;
-        const append = (text: string) =>
-          nodes.append({ projectId: project.id, sessionId: session.id, kind: "user", text });
-        const target = append("결제모듈은 토스페이먼츠로 연동하기로 했다");
-        append("회의실 예약은 금요일까지");
-        append("디자인 시안은 다음 주에 공유");
-        const indexer = yield* Indexer;
-        yield* indexer.indexAll();
-        const analyzed = yield* indexer.analyzeAll();
-        const again = yield* indexer.analyzeAll();
-        const { sqlite } = yield* Database;
-        const stored = yield* Schema.decodeUnknownEffect(Terms)(
-          sqlite.prepare("SELECT terms FROM nodes_morph WHERE rowid = ?").get(target.seq),
+        const { runtime, project, session } = yield* Effect.promise(() => testRuntime());
+        const found = yield* Effect.provideContext(
+          Effect.gen(function* () {
+            const nodes = yield* Nodes;
+            const append = (text: string) =>
+              nodes.append({ projectId: project.id, sessionId: session.id, kind: "user", text });
+            const target = append("결제모듈은 토스페이먼츠로 연동하기로 했다");
+            append("회의실 예약은 금요일까지");
+            append("디자인 시안은 다음 주에 공유");
+            const indexer = yield* Indexer;
+            yield* indexer.indexAll();
+            const analyzed = yield* indexer.analyzeAll();
+            const again = yield* indexer.analyzeAll();
+            const { sqlite } = yield* Database;
+            const stored = yield* Schema.decodeUnknownEffect(Terms)(
+              sqlite.prepare("SELECT terms FROM nodes_morph WHERE rowid = ?").get(target.seq),
+            );
+            // "결제모듈을" never occurs as text, so only the morpheme terms tie the question to it.
+            const result = yield* (yield* MemorySearch).find({
+              query: "결제모듈을 어디로 정했지",
+              projectId: project.id,
+            });
+            return { target, analyzed, again, stored, result };
+          }),
+          yield* runtime.contextEffect,
         );
-        // "결제모듈을" never occurs as text, so only the morpheme terms tie the question to it.
-        const result = yield* (yield* MemorySearch).find({
-          query: "결제모듈을 어디로 정했지",
-          projectId: project.id,
-        });
-        return { target, analyzed, again, stored, result };
+        expect(found.analyzed).toBe(3);
+        expect(found.again).toBe(0);
+        expect(found.stored.terms).toBe(
+          fakeTerms("결제모듈은 토스페이먼츠로 연동하기로 했다").join(" "),
+        );
+        expect(found.result.degraded).toEqual([]);
+        expect(found.result.matches[0]?.id).toBe(found.target.id);
       }),
-    );
-    expect(found.analyzed).toBe(3);
-    expect(found.again).toBe(0);
-    expect(found.stored.terms).toBe(
-      fakeTerms("결제모듈은 토스페이먼츠로 연동하기로 했다").join(" "),
-    );
-    expect(found.result.degraded).toEqual([]);
-    expect(found.result.matches[0]?.id).toBe(found.target.id);
-  });
+  );
 
-  test("a search does not wait for an analyzer that is still loading; it says so and warms it", async () => {
-    let warmed = 0;
-    const loading = Layer.succeed(MorphAnalyzer, {
-      identity: "loading",
-      ready: () => false,
-      warm: () => void warmed++,
-      terms: () => Effect.die("not loaded"),
-    });
-    const { runtime, project } = await testRuntime({ morphAnalyzer: loading });
-    const result = await runtime.runPromise(
-      Effect.flatMap(MemorySearch, (search) =>
-        search.find({ query: "아무거나", projectId: project.id }),
-      ),
-    );
-    expect(result.degraded).toEqual(["morph"]);
-    expect(warmed).toBe(1);
-  });
+  effectTest.live(
+    "a search does not wait for an analyzer that is still loading; it says so and warms it",
+    () =>
+      Effect.gen(function* () {
+        let warmed = 0;
+        const loading = Layer.succeed(MorphAnalyzer, {
+          identity: "loading",
+          ready: () => false,
+          warm: () => void warmed++,
+          terms: () => Effect.die("not loaded"),
+        });
+        const { runtime, project } = yield* Effect.promise(() =>
+          testRuntime({ morphAnalyzer: loading }),
+        );
+        const result = yield* Effect.provideContext(
+          Effect.flatMap(MemorySearch, (search) =>
+            search.find({ query: "아무거나", projectId: project.id }),
+          ),
+          yield* runtime.contextEffect,
+        );
+        expect(result.degraded).toEqual(["morph"]);
+        expect(warmed).toBe(1);
+      }),
+  );
 });
 
-const kiwiStorage = join(homedir(), ".context-generactive-agent");
-const kiwiCached = existsSync(
-  join(kiwiStorage, "models", `kiwi-${kiwiModel.version}`, kiwiModel.directory, "cong.mdl"),
+const { kiwiStorage, kiwiCached } = await Effect.runPromise(
+  Effect.scoped(
+    Effect.gen(function* () {
+      const services = yield* Layer.build(Layer.merge(NodeFileSystem.layer, NodePath.layer));
+      return yield* Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const kiwiStorage = path.join(homedir(), ".context-generactive-agent");
+        const kiwiCached = yield* fs
+          .exists(
+            path.join(
+              kiwiStorage,
+              "models",
+              `kiwi-${kiwiModel.version}`,
+              kiwiModel.directory,
+              "cong.mdl",
+            ),
+          )
+          .pipe(Effect.orElseSucceed(() => false));
+        return { kiwiStorage, kiwiCached };
+      }).pipe(Effect.provideContext(services));
+    }),
+  ),
 );
 
 describe.skipIf(!kiwiCached)("Kiwi (model already downloaded)", () => {

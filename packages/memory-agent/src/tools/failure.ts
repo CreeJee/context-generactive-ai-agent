@@ -1,5 +1,6 @@
+import { nativeFailure } from "../runtime/native-effect.ts";
 import { Function as EffectFunction } from "effect";
-import { HashMap, Result, Option, Schema } from "effect";
+import { Cause, Effect, Exit, HashMap, Result, Option, Schema } from "effect";
 import { PathRejected } from "../files/paths.ts";
 import { TextFileRejected, TextFileIoFailed } from "../files/text.ts";
 
@@ -57,15 +58,37 @@ function toolFailureBody(error: Error, path: string): Error {
 /** Runs one tool operation, rethrowing any failure as a model-facing message. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 export const guarded: {
-  <A>(operation: () => Promise<A>): (path: string) => ReturnType<typeof guardedBody<A>>;
+  <A, E = never>(operation: () => Promise<A> | Effect.Effect<A, E>): (path: string) => Promise<A>;
 } & typeof guardedBody = EffectFunction.dual(2, guardedBody);
-async function guardedBody<A>(path: string, operation: () => Promise<A>): Promise<A> {
-  try {
-    return await operation();
-  } catch (error) {
-    throw toolFailure(error instanceof Error ? error : new Error(String(error)), path);
-  }
+function guardedBody<A, E = never>(
+  path: string,
+  operation: () => Promise<A> | Effect.Effect<A, E>,
+): Promise<A> {
+  const work = Effect.suspend<A, E | Cause.UnknownError, never>(() => {
+    const result = operation();
+    return Effect.isEffect(result) ? result : Effect.tryPromise(() => result);
+  });
+  return Effect.runPromiseExit(guardedEffect(path, work)).then(
+    Exit.match({
+      onSuccess: (value) => value,
+      onFailure: (cause) => Promise.reject(nativeFailure(cause).cause),
+    }),
+  );
 }
+
+/** Keep model-facing path/error redaction at the SDK edge, including native callback exceptions. */
+export const guardedEffect = <A, E, R>(path: string, program: Effect.Effect<A, E, R>) =>
+  program.pipe(
+    Effect.catchCause((cause) => {
+      const failure = Cause.squash(cause);
+      const error = failure instanceof Cause.UnknownError ? failure.cause : failure;
+      return Effect.fail(
+        new Cause.UnknownError(
+          toolFailure(error instanceof Error ? error : new Error(String(error)), path),
+        ),
+      );
+    }),
+  );
 
 /** Unwraps a path resolution inside {@link guarded}, throwing the rejection. */
 export const orThrow = <A>(result: Result.Result<A, PathRejected>) =>

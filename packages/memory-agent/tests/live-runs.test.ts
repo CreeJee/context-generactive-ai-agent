@@ -1,48 +1,71 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off
-import { isTruthy } from "../src/truthy.ts";
-import { Effect } from "effect";
-import { describe, expect, test } from "vite-plus/test";
+import { Context, Deferred, Effect, Fiber, Layer, Stream } from "effect";
+import { describe, expect, it } from "@effect/vitest";
 import { createLiveRuns } from "../src/agent/live-runs.ts";
+import { SdkCancellations } from "../src/runtime/sdk-cancellation.ts";
+import { SdkRequestFailed } from "../src/runtime/sdk-promise.ts";
+
+const fixture = Effect.gen(function* () {
+  const cancellations = Context.get(yield* Layer.build(SdkCancellations.layer), SdkCancellations);
+  const first = yield* cancellations.allocate("service_shutdown");
+  const second = yield* cancellations.allocate("service_shutdown");
+  return { runs: yield* createLiveRuns, first: first.controller, second: second.controller };
+});
 
 describe("createLiveRuns", () => {
-  test("one session has one active stream and releases its claim on completion", async () => {
-    const runs = Effect.runSync(createLiveRuns);
-    const controller = new AbortController();
-    const claim = await Effect.runPromise(runs.claim("session", "first", controller));
-    if (!isTruthy(claim)) throw new Error("first run was not claimed");
-    expect(
-      await Effect.runPromise(runs.claim("session", "second", new AbortController())),
-    ).toBeNull();
+  it.effect("run end waits for settlement before releasing its lifetime", () =>
+    Effect.gen(function* () {
+      const { runs, first } = yield* fixture;
+      const settling = yield* Deferred.make<void>();
+      const complete = yield* Deferred.make<void>();
+      const claim = yield* runs.claim(
+        "session",
+        "first",
+        first,
+        undefined,
+        Effect.void,
+        undefined,
+        Deferred.succeed(settling, undefined).pipe(Effect.andThen(Deferred.await(complete))),
+      );
+      const active = runs.get("session");
+      if (claim === null || active === null) throw new Error("Missing active run");
+      const release = yield* Effect.forkChild(claim.release);
+      const ended = yield* Effect.forkChild(active.ended);
+      yield* Deferred.await(settling);
+      expect(release.pollUnsafe()).toBeUndefined();
+      expect(ended.pollUnsafe()).toBeUndefined();
+      yield* Deferred.succeed(complete, undefined);
+      yield* Fiber.join(release);
+      yield* Fiber.join(ended);
+      expect(runs.get("session")).toBeNull();
+    }),
+  );
+  it.effect("one session has one active stream and releases its claim on completion", () =>
+    Effect.gen(function* () {
+      const { runs, first, second } = yield* fixture;
+      const claim = yield* runs.claim("session", "first", first);
+      expect(claim).not.toBeNull();
+      if (claim === null) return;
+      expect(yield* runs.claim("session", "second", second)).toBeNull();
+      yield* Stream.runDrain(claim.track(Stream.empty));
+      expect(runs.get("session")).toBeNull();
+      expect(yield* runs.claim("session", "second", second)).not.toBeNull();
+    }),
+  );
 
-    async function* empty() {}
-    for await (const _ of claim.track(empty())) {
-      // The empty stream still reaches its finalizer.
-    }
-    expect(runs.get("session")).toBeNull();
-    expect(
-      await Effect.runPromise(runs.claim("session", "second", new AbortController())),
-    ).not.toBeNull();
-  });
-
-  test("a failing stream completes its Effect wait and frees the session", async () => {
-    const runs = Effect.runSync(createLiveRuns);
-    const claim = await Effect.runPromise(runs.claim("session", "first", new AbortController()));
-    if (!isTruthy(claim)) throw new Error("first run was not claimed");
-    const active = runs.get("session");
-    if (!(active !== null)) throw new Error("claimed run was not registered");
-    async function* failed() {
-      yield* [];
-      throw new Error("stream failed");
-    }
-    await expect(
-      (async () => {
-        for await (const _ of claim.track(failed())) {
-          // The source fails before yielding a chunk.
-        }
-      })(),
-    ).rejects.toThrow("stream failed");
-    await Effect.runPromise(active.ended);
-    expect(runs.get("session")).toBeNull();
-  });
+  it.effect("a failing stream preserves its typed failure and frees the session", () =>
+    Effect.gen(function* () {
+      const { runs, first } = yield* fixture;
+      const claim = yield* runs.claim("session", "first", first);
+      const active = runs.get("session");
+      expect(claim).not.toBeNull();
+      expect(active).not.toBeNull();
+      if (claim === null || active === null) return;
+      const failure = SdkRequestFailed.make({ cause: "stream failed" });
+      expect(yield* Stream.runDrain(claim.track(Stream.fail(failure))).pipe(Effect.flip)).toBe(
+        failure,
+      );
+      yield* active.ended;
+      expect(runs.get("session")).toBeNull();
+    }),
+  );
 });

@@ -1,4 +1,5 @@
-import { Result, Function as EffectFunction } from "effect";
+import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
+import { Cause, Effect, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { SubscriptionAccountProvider } from "../providers/contracts.ts";
 import { DateTime, Schema } from "effect";
@@ -6,6 +7,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { OAuthProvider } from "./protocol.ts";
 import { beginOAuthProfileRemoval, oauthProfileRemoving } from "./run-leases.ts";
 import {
+  StoredCredentialSchema,
   createKeychainCredentialStore,
   createKeychainProfileCredentialStore,
   type CredentialStore,
@@ -42,65 +44,87 @@ const profileIdPattern =
 
 /** Publish an already-authenticated per-profile vault slot; leave the current selection untouched. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function publishOAuthProfile(
+export const publishOAuthProfileEffect = Effect.fn("publishOAuthProfile")(function* (
   sqlite: DatabaseSync,
   provider: OAuthProvider,
   id: string,
   label: string,
   accounts: ProfileCredentialStore = createProfileCredentialStore(),
-): Promise<OAuthProfile> {
+) {
   if (
     !profileIdPattern.test(id) ||
     id.startsWith("legacy-") ||
     !isTruthy(label.trim()) ||
     label.length > 80
   )
-    throw new Error("invalid_oauth_profile");
-  if (!isTruthy(await accounts.read(provider, id)))
-    throw new Error("oauth_profile_missing_credential");
+    return yield* new Cause.UnknownError(new Error("invalid_oauth_profile"));
+  if (!isTruthy(yield* nativePromise(() => accounts.read(provider, id))))
+    return yield* new Cause.UnknownError(new Error("oauth_profile_missing_credential"));
   sqlite
     .prepare(`INSERT INTO oauth_profiles(id, provider, label, selected, created_at)
     VALUES (?, ?, ?, 0, ?)`)
     .run(id, provider, label.trim(), DateTime.toEpochMillis(DateTime.nowUnsafe()));
   return listOAuthProfiles(sqlite, provider).find((profile) => profile.id === id)!;
+});
+
+export function publishOAuthProfile(
+  sqlite: DatabaseSync,
+  provider: OAuthProvider,
+  id: string,
+  label: string,
+  accounts: ProfileCredentialStore = createProfileCredentialStore(),
+): Promise<OAuthProfile> {
+  return runNativeEffect(publishOAuthProfileEffect(sqlite, provider, id, label, accounts));
 }
 
 /** Selection is provider-scoped and committed atomically; vault contents are never copied. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function selectOAuthProfile(
+export const selectOAuthProfileEffect = Effect.fn("selectOAuthProfile")(function* (
+  sqlite: DatabaseSync,
+  provider: OAuthProvider,
+  id: string,
+  accounts: ProfileCredentialStore = createProfileCredentialStore(),
+) {
+  const target = listOAuthProfiles(sqlite, provider).find((profile) => profile.id === id);
+  if (!isTruthy(target)) return yield* new Cause.UnknownError(new Error("oauth_profile_not_found"));
+  if (oauthProfileRemoving(sqlite, provider, id))
+    return yield* new Cause.UnknownError(new Error("oauth_profile_removing"));
+  if (!isTruthy(yield* nativePromise(() => accounts.read(provider, id))))
+    return yield* new Cause.UnknownError(new Error("oauth_profile_missing_credential"));
+  yield* Effect.try(() => {
+    sqlite.exec("BEGIN IMMEDIATE");
+    try {
+      if (oauthProfileRemoving(sqlite, provider, id)) throw new Error("oauth_profile_removing");
+      if (
+        !isTruthy(
+          sqlite
+            .prepare("SELECT id FROM oauth_profiles WHERE id = ? AND provider = ?")
+            .get(id, provider),
+        )
+      )
+        throw new Error("oauth_profile_not_found");
+      sqlite
+        .prepare("UPDATE oauth_profiles SET selected = 0 WHERE provider = ? AND selected = 1")
+        .run(provider);
+      sqlite
+        .prepare("UPDATE oauth_profiles SET selected = 1 WHERE provider = ? AND id = ?")
+        .run(provider, id);
+      sqlite.exec("COMMIT");
+    } catch (error) {
+      sqlite.exec("ROLLBACK");
+      throw error;
+    }
+  });
+  return { ...target, selected: true };
+});
+
+export function selectOAuthProfile(
   sqlite: DatabaseSync,
   provider: OAuthProvider,
   id: string,
   accounts: ProfileCredentialStore = createProfileCredentialStore(),
 ): Promise<OAuthProfile> {
-  const target = listOAuthProfiles(sqlite, provider).find((profile) => profile.id === id);
-  if (!isTruthy(target)) throw new Error("oauth_profile_not_found");
-  if (oauthProfileRemoving(sqlite, provider, id)) throw new Error("oauth_profile_removing");
-  if (!isTruthy(await accounts.read(provider, id)))
-    throw new Error("oauth_profile_missing_credential");
-  sqlite.exec("BEGIN IMMEDIATE");
-  try {
-    if (oauthProfileRemoving(sqlite, provider, id)) throw new Error("oauth_profile_removing");
-    if (
-      !isTruthy(
-        sqlite
-          .prepare("SELECT id FROM oauth_profiles WHERE id = ? AND provider = ?")
-          .get(id, provider),
-      )
-    )
-      throw new Error("oauth_profile_not_found");
-    sqlite
-      .prepare("UPDATE oauth_profiles SET selected = 0 WHERE provider = ? AND selected = 1")
-      .run(provider);
-    sqlite
-      .prepare("UPDATE oauth_profiles SET selected = 1 WHERE provider = ? AND id = ?")
-      .run(provider, id);
-    sqlite.exec("COMMIT");
-  } catch (error) {
-    sqlite.exec("ROLLBACK");
-    throw error;
-  }
-  return { ...target, selected: true };
+  return runNativeEffect(selectOAuthProfileEffect(sqlite, provider, id, accounts));
 }
 
 export const renameOAuthProfile: {
@@ -125,23 +149,24 @@ function renameOAuthProfileBody(
 }
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function removeOAuthProfile(
+export const removeOAuthProfileEffect = Effect.fn("removeOAuthProfile")(function* (
   sqlite: DatabaseSync,
   provider: OAuthProvider,
   id: string,
   accounts: ProfileCredentialStore = createProfileCredentialStore(),
   legacy: CredentialStore = createKeychainCredentialStore(),
-): Promise<OAuthProfile[]> {
+) {
   const profile = listOAuthProfiles(sqlite, provider).find((item) => item.id === id);
-  if (!isTruthy(profile)) throw new Error("oauth_profile_not_found");
+  if (!isTruthy(profile))
+    return yield* new Cause.UnknownError(new Error("oauth_profile_not_found"));
   const finishRemoval = beginOAuthProfileRemoval(sqlite, provider, id);
-  try {
+  return yield* Effect.gen(function* () {
     let fallback: OAuthProfile | undefined;
     if (profile.selected) {
       for (const candidate of listOAuthProfiles(sqlite, provider).filter(
         (item) => item.id !== id,
       )) {
-        if (isTruthy(await accounts.read(provider, candidate.id))) {
+        if (isTruthy(yield* nativePromise(() => accounts.read(provider, candidate.id)))) {
           fallback = candidate;
           break;
         }
@@ -153,25 +178,37 @@ export async function removeOAuthProfile(
       sqlite
         .prepare("INSERT OR IGNORE INTO oauth_legacy_removed(provider, removed_at) VALUES (?, ?)")
         .run(provider, DateTime.toEpochMillis(DateTime.nowUnsafe()));
-      await legacy.remove(provider);
+      yield* nativePromise(() => legacy.remove(provider));
     }
-    await accounts.remove(provider, id);
-    sqlite.exec("BEGIN IMMEDIATE");
-    try {
-      sqlite.prepare("DELETE FROM oauth_profiles WHERE id = ? AND provider = ?").run(id, provider);
-      if (fallback !== undefined)
+    yield* nativePromise(() => accounts.remove(provider, id));
+    yield* Effect.try(() => {
+      sqlite.exec("BEGIN IMMEDIATE");
+      try {
         sqlite
-          .prepare("UPDATE oauth_profiles SET selected = 1 WHERE id = ? AND provider = ?")
-          .run(fallback.id, provider);
-      sqlite.exec("COMMIT");
-    } catch (error) {
-      sqlite.exec("ROLLBACK");
-      throw error;
-    }
+          .prepare("DELETE FROM oauth_profiles WHERE id = ? AND provider = ?")
+          .run(id, provider);
+        if (fallback !== undefined)
+          sqlite
+            .prepare("UPDATE oauth_profiles SET selected = 1 WHERE id = ? AND provider = ?")
+            .run(fallback.id, provider);
+        sqlite.exec("COMMIT");
+      } catch (error) {
+        sqlite.exec("ROLLBACK");
+        throw error;
+      }
+    });
     return listOAuthProfiles(sqlite, provider);
-  } finally {
-    finishRemoval();
-  }
+  }).pipe(Effect.ensuring(Effect.sync(finishRemoval)));
+});
+
+export function removeOAuthProfile(
+  sqlite: DatabaseSync,
+  provider: OAuthProvider,
+  id: string,
+  accounts: ProfileCredentialStore = createProfileCredentialStore(),
+  legacy: CredentialStore = createKeychainCredentialStore(),
+): Promise<OAuthProfile[]> {
+  return runNativeEffect(removeOAuthProfileEffect(sqlite, provider, id, accounts, legacy));
 }
 
 export function listOAuthProfiles(sqlite: DatabaseSync, provider?: OAuthProvider): OAuthProfile[] {
@@ -212,12 +249,12 @@ export function listOAuthProfiles(sqlite: DatabaseSync, provider?: OAuthProvider
 
 /** Copy first, verify the new slot, then publish secret-free metadata. Never delete the legacy slot. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function importLegacyOAuthProfile(
+export const importLegacyOAuthProfileEffect = Effect.fn("importLegacyOAuthProfile")(function* (
   sqlite: DatabaseSync,
   provider: OAuthProvider,
   accounts: ProfileCredentialStore = createProfileCredentialStore(),
   legacy: CredentialStore = createKeychainCredentialStore(),
-): Promise<OAuthProfile | null> {
+) {
   const id = `legacy-${provider}`;
   if (
     isTruthy(
@@ -226,36 +263,56 @@ export async function importLegacyOAuthProfile(
   )
     return null;
   const existing = listOAuthProfiles(sqlite, provider).find((item) => item.id === id);
-  const stored = await accounts.read(provider, id);
+  const stored = yield* nativePromise(() => accounts.read(provider, id));
   if (isTruthy(existing) && isTruthy(stored)) return existing;
-  const credential = await legacy.read(provider);
+  const credential = yield* nativePromise(() => legacy.read(provider));
   if (!isTruthy(credential)) {
-    if (isTruthy(existing)) throw new Error("oauth_profile_missing_credential");
+    if (isTruthy(existing))
+      return yield* new Cause.UnknownError(new Error("oauth_profile_missing_credential"));
     return null;
   }
-  if (isTruthy(stored) && JSON.stringify(stored) !== JSON.stringify(credential))
-    throw new Error("oauth_profile_conflicting_credential");
-  if (!isTruthy(stored)) await accounts.write(provider, id, credential);
-  const verified = await accounts.read(provider, id);
-  if (!isTruthy(verified) || JSON.stringify(verified) !== JSON.stringify(credential))
-    throw new Error("oauth_profile_copy_unverified");
+  if (
+    isTruthy(stored) &&
+    (yield* Schema.encodeEffect(Schema.fromJsonString(StoredCredentialSchema))(stored)) !==
+      (yield* Schema.encodeEffect(Schema.fromJsonString(StoredCredentialSchema))(credential))
+  )
+    return yield* new Cause.UnknownError(new Error("oauth_profile_conflicting_credential"));
+  if (!isTruthy(stored)) yield* nativePromise(() => accounts.write(provider, id, credential));
+  const verified = yield* nativePromise(() => accounts.read(provider, id));
+  if (
+    !isTruthy(verified) ||
+    (yield* Schema.encodeEffect(Schema.fromJsonString(StoredCredentialSchema))(verified)) !==
+      (yield* Schema.encodeEffect(Schema.fromJsonString(StoredCredentialSchema))(credential))
+  )
+    return yield* new Cause.UnknownError(new Error("oauth_profile_copy_unverified"));
   // No asynchronous work in this transaction. A second importer may win; the legacy slot survives either way.
-  sqlite.exec("BEGIN IMMEDIATE");
-  try {
-    sqlite
-      .prepare(`INSERT OR IGNORE INTO oauth_profiles(id, provider, label, selected, created_at)
+  yield* Effect.try(() => {
+    sqlite.exec("BEGIN IMMEDIATE");
+    try {
+      sqlite
+        .prepare(`INSERT OR IGNORE INTO oauth_profiles(id, provider, label, selected, created_at)
       VALUES (?, ?, ?, ?, ?)`)
-      .run(
-        id,
-        provider,
-        `${provider === "openai" ? "ChatGPT" : "Claude"} (이전 계정)`,
-        listOAuthProfiles(sqlite, provider).some((item) => item.selected) ? 0 : 1,
-        DateTime.toEpochMillis(DateTime.nowUnsafe()),
-      );
-    sqlite.exec("COMMIT");
-  } catch (error) {
-    sqlite.exec("ROLLBACK");
-    throw error;
-  }
+        .run(
+          id,
+          provider,
+          `${provider === "openai" ? "ChatGPT" : "Claude"} (이전 계정)`,
+          listOAuthProfiles(sqlite, provider).some((item) => item.selected) ? 0 : 1,
+          DateTime.toEpochMillis(DateTime.nowUnsafe()),
+        );
+      sqlite.exec("COMMIT");
+    } catch (error) {
+      sqlite.exec("ROLLBACK");
+      throw error;
+    }
+  });
   return listOAuthProfiles(sqlite, provider).find((item) => item.id === id) ?? null;
+});
+
+export function importLegacyOAuthProfile(
+  sqlite: DatabaseSync,
+  provider: OAuthProvider,
+  accounts: ProfileCredentialStore = createProfileCredentialStore(),
+  legacy: CredentialStore = createKeychainCredentialStore(),
+): Promise<OAuthProfile | null> {
+  return runNativeEffect(importLegacyOAuthProfileEffect(sqlite, provider, accounts, legacy));
 }

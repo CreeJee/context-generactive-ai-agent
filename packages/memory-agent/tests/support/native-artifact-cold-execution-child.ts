@@ -1,6 +1,5 @@
 import { Result, Function as EffectFunction } from "effect";
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics nodeBuiltinImport:off schemaSync:off
+// A separate native process verifies cold artifact imports and owner teardown after its runtime exits.
 import { strict as assert } from "node:assert";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

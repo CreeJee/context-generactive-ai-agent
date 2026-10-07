@@ -54,13 +54,13 @@ export type RuntimeWorker =
   | "full-loop-worker";
 
 /** File-backed SDK metadata, resolved with ESM conditions without importing owner code. */
-export function runtimeGoalSdkMetadata(): string {
+export function runtimeGoalSdkMetadata(name: "@tanstack/ai" | "effect" = "@tanstack/ai"): string {
   const root = runtimeRoot();
   const anchor =
     root === null
       ? createRequire(import.meta.url).resolve("memory-agent/package.json")
       : join(root, "package.json");
-  const metadata = findPackageJSON("@tanstack/ai", pathToFileURL(anchor));
+  const metadata = findPackageJSON(name, pathToFileURL(anchor));
   if (metadata === undefined) throw new Error("Unavailable Goal SDK package metadata");
   return metadata;
 }
@@ -75,5 +75,9 @@ export function runtimeWorker(name: RuntimeWorker) {
   const root = runtimeRoot();
   return root === null
     ? runtimeRequire().resolve(`memory-agent/${name}`)
-    : join(root, `${name}.${name === "import-worker" || name === "redact-worker" ? "mjs" : "ts"}`);
+    : join(
+        root,
+        name === "full-loop-worker" ? "agent" : "",
+        `${name}.${name === "import-worker" || name === "redact-worker" ? "mjs" : "ts"}`,
+      );
 }

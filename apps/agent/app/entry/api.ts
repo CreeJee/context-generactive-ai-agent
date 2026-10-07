@@ -1,3 +1,4 @@
+import { runUiEffect, uiPromise } from "./shared/ui-effect";
 import { isTruthy } from "../truthy.ts";
 import { Effect } from "effect";
 import { ProviderId } from "memory-agent/provider-contracts";
@@ -264,22 +265,70 @@ const decodeSessionSnapshot = Schema.decodeUnknownOption(SessionSnapshot);
 type PendingSessionLifecycle = Exclude<ArchiveTaskResult, { status: "completed" }>;
 type SessionArchiveResult = { status: "completed"; session: Session } | PendingSessionLifecycle;
 
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function changeSessionLifecycle(sessionId: string, holder: string, change: JsonBody) {
-  const response = await appFetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
-    method: "POST",
-    headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
-    // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
-    body: JSON.stringify({ ...change, idempotencyKey: crypto.randomUUID() }),
-  });
-  const body: unknown = await response.json();
-  const result = Option.getOrUndefined(decodeArchiveTaskResult(body));
-  if (response.status === 409 && result?.status === "blocked") return { response, body, result };
-  if (!response.ok) throw apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
-  // Accepted is not completed, even if a malformed response claims otherwise.
-  if (response.status === 202 && (!isTruthy(result) || result.status === "completed"))
-    throw apiError(502, undefined);
-  return { response, body, result };
+export function makeSessionLifecycleClient(appFetch: typeof fetch) {
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  function changeSessionLifecycle(sessionId: string, holder: string, change: JsonBody) {
+    return runUiEffect(
+      Effect.gen(function* () {
+        const response = yield* uiPromise(() =>
+          appFetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+            method: "POST",
+            headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
+            // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
+            body: JSON.stringify({ ...change, idempotencyKey: crypto.randomUUID() }),
+          }),
+        );
+        const body: unknown = yield* uiPromise(() => response.json());
+        const result = Option.getOrUndefined(decodeArchiveTaskResult(body));
+        if (response.status === 409 && result?.status === "blocked")
+          return { response, body, result };
+        if (!response.ok)
+          return yield* apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
+        // Accepted is not completed, even if a malformed response claims otherwise.
+        if (response.status === 202 && (!isTruthy(result) || result.status === "completed"))
+          return yield* apiError(502, undefined);
+        return { response, body, result };
+      }),
+    );
+  }
+
+  return {
+    /** Active parent/child runs are checkpointed and stopped before the conversation is archived. */
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    setArchived: (
+      sessionId: string,
+      holder: string,
+      archived: boolean,
+    ): Promise<SessionArchiveResult> =>
+      runUiEffect(
+        Effect.gen(function* () {
+          const { response, body, result } = yield* uiPromise(() =>
+            changeSessionLifecycle(sessionId, holder, {
+              archived,
+            }),
+          );
+          if (isTruthy(result) && result.status !== "completed") return result;
+          const session = Option.getOrUndefined(decodeSessionSnapshot(body));
+          if (response.status !== 200 || !isTruthy(session) || session.id !== sessionId)
+            return yield* apiError(502, undefined);
+          return { status: "completed", session };
+        }),
+      ),
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    deleteSession: (sessionId: string, holder: string): Promise<ArchiveTaskResult> =>
+      runUiEffect(
+        Effect.gen(function* () {
+          const { response, result } = yield* uiPromise(() =>
+            changeSessionLifecycle(sessionId, holder, {
+              delete: true,
+            }),
+          );
+          if (!isTruthy(result) || (result.status === "completed" && response.status !== 200))
+            return yield* apiError(502, undefined);
+          return result;
+        }),
+      ),
+  };
 }
 
 function apiError(
@@ -298,17 +347,22 @@ function apiError(
 /** Preserve the server's typed error code through the chat transport. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export const chatFetch: typeof fetch = async (...arguments_) => {
-  const response = await appFetch(...arguments_);
-  if (!response.ok) {
-    const body: unknown = await response
-      .clone()
-      .json()
-      .catch(() => null);
-    throw apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
-  }
-  return response;
-};
+export const chatFetch: typeof fetch = (...arguments_) =>
+  runUiEffect(
+    Effect.gen(function* () {
+      const response = yield* uiPromise(() => appFetch(...arguments_));
+      if (!response.ok) {
+        const body: unknown = yield* uiPromise(() =>
+          response
+            .clone()
+            .json()
+            .catch(() => null),
+        );
+        return yield* apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
+      }
+      return response;
+    }),
+  );
 
 type JsonValue =
   | string
@@ -320,28 +374,34 @@ type JsonValue =
 type JsonBody = Readonly<{ [key: string]: JsonValue | undefined }>;
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function call<T>(
+function call<T>(
   method: "GET" | "POST",
   path: string,
   body?: JsonBody,
   headers: Readonly<Record<string, string>> = {},
 ): Promise<T> {
-  const response = await appFetch(
-    path,
-    method === "POST"
-      ? {
-          method,
-          headers: { ...headers, "Content-Type": "application/json" },
-          body: JSON.stringify(body ?? {}),
-        }
-      : { method, headers },
+  return runUiEffect(
+    Effect.gen(function* () {
+      const response = yield* uiPromise(() =>
+        appFetch(
+          path,
+          method === "POST"
+            ? {
+                method,
+                headers: { ...headers, "Content-Type": "application/json" },
+                body: JSON.stringify(body ?? {}),
+              }
+            : { method, headers },
+        ),
+      );
+      const json: T & ErrorBody = yield* uiPromise(() => response.json());
+      if (!response.ok) {
+        const failure = apiError(response.status, Option.getOrUndefined(decodeErrorBody(json)));
+        return yield* failure;
+      }
+      return json;
+    }),
   );
-  const json: T & ErrorBody = await response.json();
-  if (!response.ok) {
-    const failure = apiError(response.status, Option.getOrUndefined(decodeErrorBody(json)));
-    throw failure;
-  }
-  return json;
 }
 
 export const api = {
@@ -377,29 +437,7 @@ export const api = {
     call<Session[]>("GET", `/api/sessions?project=${encodeURIComponent(projectId)}`),
   archivedSessions: (projectId: string) =>
     call<Session[]>("GET", `/api/sessions?project=${encodeURIComponent(projectId)}&archived=1`),
-  /** Active parent/child runs are checkpointed and stopped before the conversation is archived. */
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  setArchived: async (
-    sessionId: string,
-    holder: string,
-    archived: boolean,
-  ): Promise<SessionArchiveResult> => {
-    const { response, body, result } = await changeSessionLifecycle(sessionId, holder, {
-      archived,
-    });
-    if (isTruthy(result) && result.status !== "completed") return result;
-    const session = Option.getOrUndefined(decodeSessionSnapshot(body));
-    if (response.status !== 200 || !isTruthy(session) || session.id !== sessionId)
-      throw apiError(502, undefined);
-    return { status: "completed", session };
-  },
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  deleteSession: async (sessionId: string, holder: string): Promise<ArchiveTaskResult> => {
-    const { response, result } = await changeSessionLifecycle(sessionId, holder, { delete: true });
-    if (!isTruthy(result) || (result.status === "completed" && response.status !== 200))
-      throw apiError(502, undefined);
-    return result;
-  },
+  ...makeSessionLifecycleClient(appFetch),
   /** Refused while a run is active; execute requires a current Plan that is ready or executing. */
   setWorkflowPhase: (sessionId: string, holder: string, phase: WorkflowPhase) =>
     call<WorkflowState>(
@@ -567,86 +605,104 @@ export const api = {
       `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
     ),
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  resumeWorkTraceTask: async (
+  resumeWorkTraceTask: (
     sessionId: string,
     holder: string,
     taskId: string,
     expectedAttemptId: string,
     confirmUncertain = false,
-  ): Promise<ResumeTaskResult> => {
-    // Native Request/Response adapter preserves host and SDK stream semantics.
-    const response = await fetch(
-      `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
-      {
-        method: "POST",
-        headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
-        body: JSON.stringify({ intent: "resume", expectedAttemptId, confirmUncertain }),
-      },
-    );
-    const body: unknown = await response.json();
-    const result = Option.getOrUndefined(decodeResumeTaskResult(body));
-    // A safety refusal is an expected action result, not a transport failure.
-    if (response.status === 409 && result?.status === "blocked") return result;
-    if (!response.ok) throw apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
-    if (!isTruthy(result) || result.status !== "queued") throw apiError(502, undefined);
-    return result;
-  },
+  ): Promise<ResumeTaskResult> =>
+    runUiEffect(
+      Effect.gen(function* () {
+        // Native Request/Response adapter preserves host and SDK stream semantics.
+        const response = yield* uiPromise(() =>
+          fetch(
+            `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
+            {
+              method: "POST",
+              headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
+              body: JSON.stringify({ intent: "resume", expectedAttemptId, confirmUncertain }),
+            },
+          ),
+        );
+        const body: unknown = yield* uiPromise(() => response.json());
+        const result = Option.getOrUndefined(decodeResumeTaskResult(body));
+        // A safety refusal is an expected action result, not a transport failure.
+        if (response.status === 409 && result?.status === "blocked") return result;
+        if (!response.ok)
+          return yield* apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
+        if (!isTruthy(result) || result.status !== "queued") return yield* apiError(502, undefined);
+        return result;
+      }),
+    ),
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  archiveWorkTraceTask: async (
+  archiveWorkTraceTask: (
     sessionId: string,
     holder: string,
     taskId: string,
-  ): Promise<ArchiveTaskResult> => {
-    // Native Request/Response adapter preserves host and SDK stream semantics.
-    const response = await fetch(
-      `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
-      {
-        method: "POST",
-        headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
-        // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
-        body: JSON.stringify({ intent: "archive", idempotencyKey: crypto.randomUUID() }),
-      },
-    );
-    const body: unknown = await response.json();
-    const result = Option.getOrUndefined(decodeArchiveTaskResult(body));
-    if (response.status === 409 && result?.status === "blocked") return result;
-    if (!response.ok) throw apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
-    if (
-      !isTruthy(result) ||
-      (result.status !== "completed" && result.status !== "waiting_for_stop")
-    )
-      throw apiError(502, undefined);
-    window.dispatchEvent(new CustomEvent("work-trace:changed"));
-    return result;
-  },
+  ): Promise<ArchiveTaskResult> =>
+    runUiEffect(
+      Effect.gen(function* () {
+        // Native Request/Response adapter preserves host and SDK stream semantics.
+        const response = yield* uiPromise(() =>
+          fetch(
+            `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
+            {
+              method: "POST",
+              headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
+              // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
+              body: JSON.stringify({ intent: "archive", idempotencyKey: crypto.randomUUID() }),
+            },
+          ),
+        );
+        const body: unknown = yield* uiPromise(() => response.json());
+        const result = Option.getOrUndefined(decodeArchiveTaskResult(body));
+        if (response.status === 409 && result?.status === "blocked") return result;
+        if (!response.ok)
+          return yield* apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
+        if (
+          !isTruthy(result) ||
+          (result.status !== "completed" && result.status !== "waiting_for_stop")
+        )
+          return yield* apiError(502, undefined);
+        window.dispatchEvent(new CustomEvent("work-trace:changed"));
+        return result;
+      }),
+    ),
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  deleteWorkTraceTask: async (
+  deleteWorkTraceTask: (
     sessionId: string,
     holder: string,
     taskId: string,
-  ): Promise<ArchiveTaskResult> => {
-    // Native Request/Response adapter preserves host and SDK stream semantics.
-    const response = await fetch(
-      `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
-      {
-        method: "POST",
-        headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
-        // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
-        body: JSON.stringify({ intent: "delete", idempotencyKey: crypto.randomUUID() }),
-      },
-    );
-    const body: unknown = await response.json();
-    const result = Option.getOrUndefined(decodeArchiveTaskResult(body));
-    if (response.status === 409 && result?.status === "blocked") return result;
-    if (!response.ok) throw apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
-    if (
-      !isTruthy(result) ||
-      (result.status !== "completed" && result.status !== "waiting_for_stop")
-    )
-      throw apiError(502, undefined);
-    window.dispatchEvent(new CustomEvent("work-trace:changed"));
-    return result;
-  },
+  ): Promise<ArchiveTaskResult> =>
+    runUiEffect(
+      Effect.gen(function* () {
+        // Native Request/Response adapter preserves host and SDK stream semantics.
+        const response = yield* uiPromise(() =>
+          fetch(
+            `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
+            {
+              method: "POST",
+              headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
+              // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
+              body: JSON.stringify({ intent: "delete", idempotencyKey: crypto.randomUUID() }),
+            },
+          ),
+        );
+        const body: unknown = yield* uiPromise(() => response.json());
+        const result = Option.getOrUndefined(decodeArchiveTaskResult(body));
+        if (response.status === 409 && result?.status === "blocked") return result;
+        if (!response.ok)
+          return yield* apiError(response.status, Option.getOrUndefined(decodeErrorBody(body)));
+        if (
+          !isTruthy(result) ||
+          (result.status !== "completed" && result.status !== "waiting_for_stop")
+        )
+          return yield* apiError(502, undefined);
+        window.dispatchEvent(new CustomEvent("work-trace:changed"));
+        return result;
+      }),
+    ),
   workTraceStreamUrl: (sessionId: string, after = 0) =>
     `/api/sessions/${encodeURIComponent(sessionId)}/trace/stream?after=${after}`,
   subagents: (sessionId: string) =>
@@ -668,22 +724,27 @@ export const api = {
 
   /** Uploads one image as raw bytes; the server checks what it really is. */
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  uploadAttachment: async (file: File) => {
-    // Native Request/Response adapter preserves host and SDK stream semantics.
-    const response = await fetch("/api/attachments", {
-      method: "POST",
-      headers: { "Content-Type": file.type || "application/octet-stream" },
-      body: file,
-    });
-    const json: Attachment & ErrorBody = await response.json();
-    if (!response.ok)
-      throw apiError(
-        response.status,
-        Option.getOrUndefined(decodeErrorBody(json)),
-        "upload_failed",
-      );
-    return json;
-  },
+  uploadAttachment: (file: File) =>
+    runUiEffect(
+      Effect.gen(function* () {
+        // Native Request/Response adapter preserves host and SDK stream semantics.
+        const response = yield* uiPromise(() =>
+          fetch("/api/attachments", {
+            method: "POST",
+            headers: { "Content-Type": file.type || "application/octet-stream" },
+            body: file,
+          }),
+        );
+        const json: Attachment & ErrorBody = yield* uiPromise(() => response.json());
+        if (!response.ok)
+          return yield* apiError(
+            response.status,
+            Option.getOrUndefined(decodeErrorBody(json)),
+            "upload_failed",
+          );
+        return json;
+      }),
+    ),
 };
 
 const AttachmentRejection = Schema.Literals(["too_large", "unsupported_type", "empty"]);

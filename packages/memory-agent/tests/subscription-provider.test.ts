@@ -1,7 +1,6 @@
+import { nativeStream } from "../src/runtime/native-stream.ts";
 import { it as effectTest } from "@effect/vitest";
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off newPromise:off
-import { DateTime, Effect } from "effect";
+import { Stream, DateTime, Deferred, Effect, Exit, Fiber, Schema } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import type { Settings } from "../src/config/global-config.ts";
 import {
@@ -16,6 +15,26 @@ import {
 } from "../src/providers/subscription-provider.ts";
 import { createSubscriptionRuntime } from "../src/providers/subscription-runtime.ts";
 
+// Native SDK callbacks receive a stable Promise backed by a Deferred owned by this test Scope.
+const sdkGateFactory = Effect.fn("subscriptionProviderTest.sdkGateFactory")(function* () {
+  const scope = yield* Effect.scope;
+  const run = Effect.runPromiseWith(yield* Effect.context());
+  return <A, E = never>() => {
+    const deferred = Deferred.makeUnsafe<A, E>();
+    let promise: Promise<A> | undefined;
+    return {
+      get promise() {
+        if (promise === undefined)
+          promise = run(
+            Deferred.await(deferred).pipe(Effect.forkIn(scope), Effect.flatMap(Fiber.join)),
+          );
+        return promise;
+      },
+      release: (value: A) => Deferred.doneUnsafe(deferred, Effect.succeed(value)),
+      reject: (error: E) => Deferred.doneUnsafe(deferred, Effect.fail(error)),
+    };
+  };
+});
 const settingsStore = () => {
   let settings: Settings = {};
   return {
@@ -31,39 +50,46 @@ const settingsStore = () => {
   };
 };
 
-const fakeClient = (provider: "openai" | "anthropic", pages: ReadonlyArray<unknown>) => {
+const fakeClient = Effect.fn("subscriptionProviderTest.fakeClient")(function* (
+  provider: "openai" | "anthropic",
+  pages: ReadonlyArray<unknown>,
+) {
   let connected = false;
   let cancelled = false;
   let catalogRequests = 0;
-  let finish!: (status: OAuthConnectionStatus) => void;
-  const completed = new Promise<OAuthConnectionStatus>((resolve) => {
-    finish = resolve;
-  });
+  const makeGate = yield* sdkGateFactory();
+  const completion = makeGate<OAuthConnectionStatus>();
   const attempt: LoginAttempt = {
     provider,
     authorizationUrl: `https://example.test/${provider}/authorize`,
-    completed,
+    get completed() {
+      return completion.promise;
+    },
     cancel: () => {
       cancelled = true;
     },
   };
   return {
     client: {
-      status: async () => ({ provider, connected, expiresAt: null }),
-      startLogin: async () => attempt,
-      disconnect: async () => {
-        connected = false;
-        return { provider, connected, expiresAt: null };
+      status: () => Promise.resolve({ provider, connected, expiresAt: null }),
+      startLogin: () => Promise.resolve(attempt),
+      disconnect: () =>
+        Promise.resolve().then(() => {
+          connected = false;
+          return { provider, connected, expiresAt: null };
+        }),
+      modelCatalog: () =>
+        Promise.resolve().then(() => {
+          catalogRequests += 1;
+          return pages;
+        }),
+      stream() {
+        return nativeStream(Stream.fromIterable((function* () {})(), { chunkSize: 1 }));
       },
-      modelCatalog: async () => {
-        catalogRequests += 1;
-        return pages;
-      },
-      async *stream() {},
     },
     complete: () => {
       connected = true;
-      finish({
+      completion.release({
         provider,
         connected: true,
         expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 60_000,
@@ -76,7 +102,156 @@ const fakeClient = (provider: "openai" | "anthropic", pages: ReadonlyArray<unkno
       return catalogRequests;
     },
   };
-};
+});
+
+const catalogPages = (id: string, window = 400_000) => [
+  { models: [{ slug: id, context_window: window }] },
+];
+const gatedCatalog = Effect.fn("subscriptionProviderTest.gatedCatalog")(function* () {
+  const makeGate = yield* sdkGateFactory();
+  const gates: {
+    promise: Promise<ReadonlyArray<unknown>>;
+    release: (pages: ReadonlyArray<unknown>) => boolean;
+    reject: () => boolean;
+  }[] = [];
+  const signals: (AbortSignal | undefined)[] = [];
+  let key = "profile-a";
+  const fake = yield* fakeClient("openai", []);
+  const provider = createSubscriptionProvider({
+    protocol: providerProtocols.openai,
+    config: settingsStore(),
+    catalogKey: () => key,
+    client: {
+      ...fake.client,
+      modelCatalog: (signal) => {
+        signals.push(signal);
+        const completion = makeGate<ReadonlyArray<unknown>, OAuthHarnessError>();
+        const gate = {
+          get promise() {
+            return completion.promise;
+          },
+          release: completion.release,
+          reject: () => completion.reject(new OAuthHarnessError("transport_unavailable", null)),
+        };
+        gates.push(gate);
+        return gate.promise;
+      },
+    },
+  });
+  return {
+    provider,
+    gates,
+    signals,
+    changeProfile: (next: string) => {
+      key = next;
+    },
+  };
+});
+
+describe("subscription catalog concurrency", () => {
+  effectTest.live(
+    "coalesces eight concurrent cold calls into one invocation and retains success",
+    () =>
+      Effect.gen(function* () {
+        const { provider, gates } = yield* gatedCatalog();
+        const callers = yield* Effect.forEach(Array.from({ length: 8 }), () =>
+          Effect.forkChild(provider.models.list, { startImmediately: true }),
+        );
+        expect(gates).toHaveLength(1);
+        gates[0]!.release(catalogPages("shared"));
+        const results = yield* Effect.forEach(callers, (fiber) => Fiber.join(fiber));
+        expect(results.every((models) => models[0]?.id === "shared")).toBe(true);
+        expect((yield* provider.models.list)[0]?.id).toBe("shared");
+        expect(gates).toHaveLength(1);
+      }),
+  );
+
+  effectTest.live("shares a failure without retaining it for the next call", () =>
+    Effect.gen(function* () {
+      const { provider, gates } = yield* gatedCatalog();
+      const owner = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
+      const waiter = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
+      expect(gates).toHaveLength(1);
+      gates[0]!.reject();
+      for (const fiber of [owner, waiter]) {
+        const exit = yield* Fiber.await(fiber);
+        expect(Exit.isFailure(exit)).toBe(true);
+      }
+      const retry = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
+      expect(gates).toHaveLength(2);
+      gates[1]!.release(catalogPages("retry"));
+      expect((yield* Fiber.join(retry))[0]?.id).toBe("retry");
+    }),
+  );
+
+  effectTest.live("isolates changed profiles from a prior load and its late publication", () =>
+    Effect.gen(function* () {
+      const { provider, gates, changeProfile } = yield* gatedCatalog();
+      const old = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
+      changeProfile("profile-b");
+      const current = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
+      expect(gates).toHaveLength(2);
+      gates[1]!.release(catalogPages("current", 300_000));
+      yield* Fiber.join(current);
+      gates[0]!.release(catalogPages("old"));
+      yield* Fiber.join(old);
+      expect(provider.contextWindow("current")).toBe(300_000);
+      expect(provider.contextWindow("old")).toBeNull();
+      expect((yield* provider.models.list)[0]?.id).toBe("current");
+      expect(gates).toHaveLength(2);
+    }),
+  );
+
+  effectTest.live("disconnect prevents an already-running load from refilling the catalog", () =>
+    Effect.gen(function* () {
+      const { provider, gates } = yield* gatedCatalog();
+      const old = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
+      yield* provider.auth.disconnect;
+      gates[0]!.release(catalogPages("old"));
+      yield* Fiber.join(old);
+      expect(provider.contextWindow("old")).toBeNull();
+      const fresh = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
+      expect(gates).toHaveLength(2);
+      gates[1]!.release(catalogPages("fresh"));
+      expect((yield* Fiber.join(fresh))[0]?.id).toBe("fresh");
+    }),
+  );
+
+  effectTest.live(
+    "cancelling a shared waiter leaves its owner alive; owner interruption permits retry",
+    () =>
+      Effect.gen(function* () {
+        const { provider, gates, signals } = yield* gatedCatalog();
+        const owner = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
+        const waiter = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
+        const remaining = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
+        yield* Fiber.interrupt(waiter);
+        expect(signals[0]?.aborted).toBe(false);
+        expect(gates).toHaveLength(1);
+        gates[0]!.release(catalogPages("shared"));
+        for (const fiber of [owner, remaining]) {
+          expect((yield* Fiber.join(fiber))[0]?.id).toBe("shared");
+        }
+        yield* provider.auth.disconnect;
+        const interruptedOwner = yield* Effect.forkChild(provider.models.list, {
+          startImmediately: true,
+        });
+        const interruptedWaiter = yield* Effect.forkChild(provider.models.list, {
+          startImmediately: true,
+        });
+        yield* Fiber.interrupt(interruptedOwner);
+        expect(signals[1]?.aborted).toBe(true);
+        expect(Exit.isFailure(yield* Fiber.await(interruptedWaiter))).toBe(true);
+        gates[1]!.release(catalogPages("interrupted"));
+        const retry = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
+        expect(gates).toHaveLength(3);
+        gates[2]!.release(catalogPages("retry"));
+        yield* Fiber.join(retry);
+        expect(provider.contextWindow("interrupted")).toBeNull();
+        expect(provider.contextWindow("retry")).toBe(400_000);
+      }),
+  );
+});
 
 describe("subscription provider product services", () => {
   test("parses OpenAI catalog metadata without exposing transport fields", () => {
@@ -119,7 +294,7 @@ describe("subscription provider product services", () => {
     "uses each model's catalog window and labels an unknown window as a fallback",
     () =>
       Effect.gen(function* () {
-        const fake = fakeClient("openai", [
+        const fake = yield* fakeClient("openai", [
           {
             models: [
               { slug: "gpt-6-sol", context_window: 400_000 },
@@ -175,7 +350,7 @@ describe("subscription provider product services", () => {
     "uses installed Anthropic metadata without requesting the API-key-only model endpoint",
     () =>
       Effect.gen(function* () {
-        const fake = fakeClient("anthropic", []);
+        const fake = yield* fakeClient("anthropic", []);
         const provider = createSubscriptionProvider({
           protocol: providerProtocols.anthropic,
           config: settingsStore(),
@@ -190,125 +365,139 @@ describe("subscription provider product services", () => {
       }),
   );
 
-  test("returns pending immediately and keeps credentials out of the auth contract", async () => {
-    const fake = fakeClient("anthropic", []);
-    const provider = createSubscriptionProvider({
-      protocol: providerProtocols.anthropic,
-      config: settingsStore(),
-      client: fake.client,
-    });
-
-    expect(await Effect.runPromise(provider.auth.connect)).toEqual({
-      provider: "anthropic",
-      status: "pending",
-      authorizationUrl: "https://example.test/anthropic/authorize",
-    });
-    expect("token" in provider.auth).toBe(false);
-    expect("credential" in provider.auth).toBe(false);
-
-    fake.complete();
-    await Promise.resolve();
-    expect(await Effect.runPromise(provider.auth.status)).toEqual({
-      provider: "anthropic",
-      status: "signed-in",
-    });
-  });
-
-  test("reports safe login diagnostics and does not surface raw provider text", async () => {
-    let rejectLogin!: (error: OAuthHarnessError) => void;
-    const completed = new Promise<OAuthConnectionStatus>((_resolve, reject) => {
-      rejectLogin = reject;
-    });
-    const client = {
-      status: async () => ({ provider: "openai" as const, connected: false, expiresAt: null }),
-      startLogin: async (): Promise<LoginAttempt> => ({
-        provider: "openai",
-        authorizationUrl: "https://example.test/authorize",
-        completed,
-        cancel: () => {},
+  effectTest.live(
+    "returns pending immediately and keeps credentials out of the auth contract",
+    () =>
+      Effect.gen(function* () {
+        const fake = yield* fakeClient("anthropic", []);
+        const provider = createSubscriptionProvider({
+          protocol: providerProtocols.anthropic,
+          config: settingsStore(),
+          client: fake.client,
+        });
+        expect(yield* provider.auth.connect).toEqual({
+          provider: "anthropic",
+          status: "pending",
+          authorizationUrl: "https://example.test/anthropic/authorize",
+        });
+        expect(provider.auth).not.toHaveProperty("token");
+        expect(provider.auth).not.toHaveProperty("credential");
+        fake.complete();
+        yield* Effect.yieldNow;
+        expect(yield* provider.auth.status).toEqual({
+          provider: "anthropic",
+          status: "signed-in",
+        });
       }),
-      disconnect: async () => ({ provider: "openai" as const, connected: false, expiresAt: null }),
-      modelCatalog: async () => [],
-    };
-    const provider = createSubscriptionProvider({
-      protocol: providerProtocols.openai,
-      config: settingsStore(),
-      client,
-    });
-    expect((await Effect.runPromise(provider.auth.connect)).status).toBe("pending");
-    rejectLogin(
-      new OAuthHarnessError("provider_rejected", 403, {
+  );
+
+  effectTest.live("reports safe login diagnostics and does not surface raw provider text", () =>
+    Effect.gen(function* () {
+      const makeGate = yield* sdkGateFactory();
+      const completion = makeGate<OAuthConnectionStatus, OAuthHarnessError>();
+      const completed = completion.promise;
+      const rejectLogin = completion.reject;
+      const client = {
+        status: () =>
+          Promise.resolve({ provider: "openai" as const, connected: false, expiresAt: null }),
+        startLogin: () =>
+          Promise.resolve<LoginAttempt>({
+            provider: "openai",
+            authorizationUrl: "https://example.test/authorize",
+            completed,
+            cancel: () => {},
+          }),
+        disconnect: () =>
+          Promise.resolve({ provider: "openai" as const, connected: false, expiresAt: null }),
+        modelCatalog: () => Promise.resolve([]),
+      };
+      const provider = createSubscriptionProvider({
+        protocol: providerProtocols.openai,
+        config: settingsStore(),
+        client,
+      });
+      expect((yield* provider.auth.connect).status).toBe("pending");
+      rejectLogin(
+        new OAuthHarnessError("provider_rejected", 403, {
+          provider: "openai",
+          operation: "token_exchange",
+          providerCode: "access_denied",
+          proxyRoute: "attempted",
+          reason: "secret-from-provider",
+        }),
+      );
+      yield* Effect.yieldNow;
+      const state = yield* provider.auth.status;
+      expect(state).toMatchObject({
         provider: "openai",
+        status: "error",
+        code: "provider_rejected",
         operation: "token_exchange",
+        httpStatus: 403,
         providerCode: "access_denied",
         proxyRoute: "attempted",
-        reason: "secret-from-provider",
-      }),
-    );
-    await Promise.resolve();
-    const state = await Effect.runPromise(provider.auth.status);
-    expect(state).toMatchObject({
-      provider: "openai",
-      status: "error",
-      code: "provider_rejected",
-      operation: "token_exchange",
-      httpStatus: 403,
-      providerCode: "access_denied",
-      proxyRoute: "attempted",
-    });
-    expect(JSON.stringify(state)).not.toContain("secret-from-provider");
-  });
+      });
+      expect(
+        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(state),
+      ).not.toContain("secret-from-provider");
+    }),
+  );
 
-  test("shows a safe credential-store stage even when status reads also fail", async () => {
-    let rejectLogin!: (error: OAuthHarnessError) => void;
-    const completed = new Promise<OAuthConnectionStatus>((_resolve, reject) => {
-      rejectLogin = reject;
-    });
-    const provider = createSubscriptionProvider({
-      protocol: providerProtocols.openai,
-      config: settingsStore(),
-      client: {
-        status: async () => {
-          throw new OAuthHarnessError("credential_store_unavailable", null, {
-            provider: "openai",
-            operation: "credential_store",
-            credentialStage: "read",
-          });
+  effectTest.live("shows a safe credential-store stage even when status reads also fail", () =>
+    Effect.gen(function* () {
+      let rejectLogin!: (error: OAuthHarnessError) => void;
+      const completed = new Promise<OAuthConnectionStatus>((_resolve, reject) => {
+        rejectLogin = reject;
+      });
+      const provider = createSubscriptionProvider({
+        protocol: providerProtocols.openai,
+        config: settingsStore(),
+        client: {
+          status: () =>
+            Promise.resolve().then(() => {
+              throw new OAuthHarnessError("credential_store_unavailable", null, {
+                provider: "openai",
+                operation: "credential_store",
+                credentialStage: "read",
+              });
+            }),
+          startLogin: () =>
+            Promise.resolve<LoginAttempt>({
+              provider: "openai",
+              authorizationUrl: "https://example.test/authorize",
+              completed,
+              cancel: () => {},
+            }),
+          disconnect: () =>
+            Promise.resolve({ provider: "openai", connected: false, expiresAt: null }),
+          modelCatalog: () => Promise.resolve([]),
         },
-        startLogin: async (): Promise<LoginAttempt> => ({
+      });
+      expect(yield* provider.auth.status).toMatchObject({
+        status: "error",
+        credentialStage: "read",
+      });
+      expect((yield* provider.auth.connect).status).toBe("pending");
+      rejectLogin(
+        new OAuthHarnessError("credential_store_unavailable", null, {
           provider: "openai",
-          authorizationUrl: "https://example.test/authorize",
-          completed,
-          cancel: () => {},
+          operation: "credential_store",
+          credentialStage: "write",
         }),
-        disconnect: async () => ({ provider: "openai", connected: false, expiresAt: null }),
-        modelCatalog: async () => [],
-      },
-    });
-    expect(await Effect.runPromise(provider.auth.status)).toMatchObject({
-      status: "error",
-      credentialStage: "read",
-    });
-    expect((await Effect.runPromise(provider.auth.connect)).status).toBe("pending");
-    rejectLogin(
-      new OAuthHarnessError("credential_store_unavailable", null, {
-        provider: "openai",
-        operation: "credential_store",
+      );
+      yield* Effect.yieldNow;
+      expect(yield* provider.auth.status).toMatchObject({
+        status: "error",
+        code: "credential_store_unavailable",
         credentialStage: "write",
-      }),
-    );
-    await Promise.resolve();
-    expect(await Effect.runPromise(provider.auth.status)).toMatchObject({
-      status: "error",
-      code: "credential_store_unavailable",
-      credentialStage: "write",
-    });
-  });
+      });
+    }),
+  );
 
   effectTest.effect("cancels an in-flight login and validates provider/model/effort together", () =>
     Effect.gen(function* () {
       const config = settingsStore();
-      const fake = fakeClient("openai", [
+      const fake = yield* fakeClient("openai", [
         {
           models: [
             {

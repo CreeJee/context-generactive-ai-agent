@@ -29,7 +29,10 @@ export class OwnerNativeArtifacts extends Context.Service<
         ...database,
         files,
         builder,
-        entry: buildInput.entry,
+        // Source lookup belongs to an explicitly requested build, not service startup.
+        get entry() {
+          return buildInput.entry;
+        },
         directory: join(storage.path, "native-artifacts"),
       });
     }),
@@ -89,7 +92,8 @@ export function makeOwnerNativeArtifacts(owner: {
         if (isTruthy(historic.get(goalInstanceId, goalInstanceId)))
           throw new Error("Historical Goal has no native provenance; backfill refused");
       });
-      const generated = yield* builder.build(owner.entry ?? OwnerNativeBuild.production.entry);
+      const entry = yield* boundary(() => owner.entry ?? OwnerNativeBuild.production.entry);
+      const generated = yield* builder.build(entry);
       const lease = yield* Effect.acquireRelease(
         files.temporary(join(parent, "generation-")),
         (directory) =>

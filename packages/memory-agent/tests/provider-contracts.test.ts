@@ -1,11 +1,6 @@
 import { it as effectTest } from "@effect/vitest";
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { Effect, Result, Layer, ManagedRuntime, Schema } from "effect";
-import { afterEach, describe, expect, expectTypeOf, test } from "vite-plus/test";
+import { Effect, FileSystem, Path, Result, Layer, Schema } from "effect";
+import { describe, expect, expectTypeOf, test } from "vite-plus/test";
 import { GlobalConfig } from "../src/config/global-config.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { ActiveProvider } from "../src/providers/active-provider.ts";
@@ -22,11 +17,7 @@ import type { ProviderToolVendor } from "../src/providers/tool-capabilities.ts";
 import type { OAuthProvider } from "../src/oauth/protocol.ts";
 import type { ApiUsageProvider } from "../src/agent/api-usage.ts";
 import { ProviderRegistry, providerRegistryFrom } from "../src/providers/registry.ts";
-
-const cleanups: Array<() => Promise<void> | void> = [];
-afterEach(async () => {
-  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
-});
+import { withTestPlatform } from "./support/platform.ts";
 
 const fakeProvider = (provider: ProviderId): ProviderServices => ({
   provider,
@@ -57,7 +48,7 @@ const fakeProvider = (provider: ProviderId): ProviderServices => ({
     runMiddleware: () => {
       throw new Error("not used");
     },
-    steer: async () => "no_turn",
+    steer: () => Promise.resolve("no_turn"),
   },
 });
 
@@ -94,34 +85,43 @@ describe("provider-neutral contracts", () => {
     expectTypeOf<ProviderToolVendor>().toEqualTypeOf<ProviderVendor>();
     expectTypeOf<ApiUsageProvider>().toEqualTypeOf<ProviderId>();
   });
-  test("migrates a legacy model selection to an explicit OpenAI provider", async () => {
-    const storage = mkdtempSync(join(tmpdir(), "provider-config-"));
-    cleanups.push(() => rmSync(storage, { recursive: true, force: true }));
-    mkdirSync(storage, { recursive: true });
-    writeFileSync(
-      join(storage, "config.json"),
-      JSON.stringify({ model: "legacy-model", reasoningEffort: "high", kagiEnabled: true }),
-    );
+  effectTest.effect("migrates a legacy model selection to an explicit OpenAI provider", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const storage = yield* fs.makeTempDirectoryScoped({ prefix: "provider-config-" });
+      yield* fs.writeFileString(
+        path.join(storage, "config.json"),
+        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+          model: "legacy-model",
+          reasoningEffort: "high",
+          kagiEnabled: true,
+        }),
+      );
 
-    const runtime = ManagedRuntime.make(
-      GlobalConfig.layer.pipe(Layer.provide(StorageRoot.layer(storage))),
-    );
-    cleanups.push(() => runtime.dispose());
-    const config = await runtime.runPromise(GlobalConfig);
+      const services = yield* Layer.build(
+        GlobalConfig.layer.pipe(Layer.provide(StorageRoot.layer(storage))),
+      );
+      const config = yield* Effect.provideContext(GlobalConfig, services);
 
-    expect(await runtime.runPromise(config.read)).toEqual({
-      provider: "openai",
-      model: "legacy-model",
-      reasoningEffort: "high",
-      kagiEnabled: true,
-    });
-    expect(JSON.parse(readFileSync(join(storage, "config.json"), "utf8"))).toEqual({
-      provider: "openai",
-      model: "legacy-model",
-      reasoningEffort: "high",
-      kagiEnabled: true,
-    });
-  });
+      expect(yield* config.read).toEqual({
+        provider: "openai",
+        model: "legacy-model",
+        reasoningEffort: "high",
+        kagiEnabled: true,
+      });
+      expect(
+        yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(
+          yield* fs.readFileString(path.join(storage, "config.json")),
+        ),
+      ).toEqual({
+        provider: "openai",
+        model: "legacy-model",
+        reasoningEffort: "high",
+        kagiEnabled: true,
+      });
+    }).pipe(withTestPlatform),
+  );
 
   effectTest.effect("resolves only the requested provider and never falls back", () =>
     Effect.gen(function* () {
@@ -153,73 +153,75 @@ describe("provider-neutral contracts", () => {
     }),
   );
 
-  test("resolves the saved provider and its matching runtime as one active selection", async () => {
-    const storage = mkdtempSync(join(tmpdir(), "active-provider-"));
-    cleanups.push(() => rmSync(storage, { recursive: true, force: true }));
-    const openai = fakeProvider("openai");
-    const baseAnthropic = fakeProvider("anthropic");
-    const anthropic = {
-      ...baseAnthropic,
-      models: {
-        ...baseAnthropic.models,
-        selected: Effect.succeed({
-          provider: "anthropic" as const,
+  effectTest.effect(
+    "resolves the saved provider and its matching runtime as one active selection",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const storage = yield* fs.makeTempDirectoryScoped({ prefix: "active-provider-" });
+        const openai = fakeProvider("openai");
+        const baseAnthropic = fakeProvider("anthropic");
+        const anthropic = {
+          ...baseAnthropic,
+          models: {
+            ...baseAnthropic.models,
+            selected: Effect.succeed({
+              provider: "anthropic" as const,
+              model: "claude-test",
+              reasoningEffort: "high",
+            }),
+          },
+        };
+        const foundation = GlobalConfig.layer.pipe(Layer.provide(StorageRoot.layer(storage)));
+        const providers = ActiveProvider.layer.pipe(
+          Layer.provideMerge(
+            ProviderRegistry.layer([openai, anthropic], [openai.runtime, anthropic.runtime]),
+          ),
+          Layer.provideMerge(foundation),
+        );
+        const services = yield* Layer.build(providers);
+        const config = yield* Effect.provideContext(GlobalConfig, services);
+        yield* config.update({
+          provider: "anthropic",
           model: "claude-test",
           reasoningEffort: "high",
-        }),
-      },
-    };
-    const foundation = GlobalConfig.layer.pipe(Layer.provide(StorageRoot.layer(storage)));
-    const providers = ActiveProvider.layer.pipe(
-      Layer.provideMerge(
-        ProviderRegistry.layer([openai, anthropic], [openai.runtime, anthropic.runtime]),
-      ),
-      Layer.provideMerge(foundation),
-    );
-    const runtime = ManagedRuntime.make(providers);
-    cleanups.push(() => runtime.dispose());
-    const config = await runtime.runPromise(GlobalConfig);
-    await runtime.runPromise(
-      config.update({ provider: "anthropic", model: "claude-test", reasoningEffort: "high" }),
-    );
+        });
 
-    const active = await runtime.runPromise(ActiveProvider);
-    const selection = await runtime.runPromise(active.selected);
-    expect(selection).toEqual({
-      provider: "anthropic",
-      model: "claude-test",
-      reasoningEffort: "high",
-    });
-    expect(selection && (await runtime.runPromise(active.runtime(selection)))).toBe(
-      anthropic.runtime,
-    );
-  });
+        const active = yield* Effect.provideContext(ActiveProvider, services);
+        const selection = yield* active.selected;
+        expect(selection).toEqual({
+          provider: "anthropic",
+          model: "claude-test",
+          reasoningEffort: "high",
+        });
+        expect(selection && (yield* active.runtime(selection))).toBe(anthropic.runtime);
+      }).pipe(withTestPlatform),
+  );
 
-  test("keeps unavailable providers in the typed error channel", async () => {
-    const storage = mkdtempSync(join(tmpdir(), "active-provider-missing-"));
-    cleanups.push(() => rmSync(storage, { recursive: true, force: true }));
-    const runtime = ManagedRuntime.make(
-      ActiveProvider.layer.pipe(
-        Layer.provide(ProviderRegistry.layer([fakeProvider("openai")], [])),
-        Layer.provide(GlobalConfig.layer.pipe(Layer.provide(StorageRoot.layer(storage)))),
-      ),
-    );
-    cleanups.push(() => runtime.dispose());
+  effectTest.effect("keeps unavailable providers in the typed error channel", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const storage = yield* fs.makeTempDirectoryScoped({ prefix: "active-provider-missing-" });
+      const services = yield* Layer.build(
+        ActiveProvider.layer.pipe(
+          Layer.provide(ProviderRegistry.layer([fakeProvider("openai")], [])),
+          Layer.provide(GlobalConfig.layer.pipe(Layer.provide(StorageRoot.layer(storage)))),
+        ),
+      );
 
-    const active = await runtime.runPromise(ActiveProvider);
-    const missingRuntime = await runtime.runPromise(
-      Effect.result(
+      const active = yield* Effect.provideContext(ActiveProvider, services);
+      const missingRuntime = yield* Effect.result(
         active.runtime({ provider: "openai", model: "test", reasoningEffort: "medium" }),
-      ),
-    );
-    expect(Result.isFailure(missingRuntime) && missingRuntime.failure).toMatchObject({
-      _tag: "ProviderUnavailable",
-      provider: "openai",
-    });
-    expect(await runtime.runPromise(active.authFor("anthropic"))).toMatchObject({
-      status: "error",
-    });
-  });
+      );
+      expect(Result.isFailure(missingRuntime) && missingRuntime.failure).toMatchObject({
+        _tag: "ProviderUnavailable",
+        provider: "openai",
+      });
+      expect(yield* active.authFor("anthropic")).toMatchObject({
+        status: "error",
+      });
+    }).pipe(withTestPlatform),
+  );
 
   test("keeps credentials outside the authentication contract", () => {
     const auth = fakeProvider("openai").auth;

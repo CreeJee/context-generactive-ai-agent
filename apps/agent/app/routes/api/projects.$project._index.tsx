@@ -18,27 +18,32 @@ const ProjectSettings = Schema.Struct({
  *   the same folder again brings it back.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function action({ request, params }: Route.ActionArgs) {
-  const rejected = rejectCrossSite(request);
-  if (rejected !== null) return rejected;
-  const body = await readJson(request, ProjectSettings);
-  if (Result.isFailure(body)) return Response.json({ error: "invalid_settings" }, { status: 400 });
-  const { crossRecallExcluded, permissionMode, hidden } = body.success;
+export function action({ request, params }: Route.ActionArgs) {
+  return agent.runPromise(
+    Effect.gen(function* () {
+      const rejected = rejectCrossSite(request);
+      if (rejected !== null) return rejected;
+      const body = yield* Effect.tryPromise(() => readJson(request, ProjectSettings));
+      if (Result.isFailure(body))
+        return Response.json({ error: "invalid_settings" }, { status: 400 });
+      const { crossRecallExcluded, permissionMode, hidden } = body.success;
 
-  const response = Effect.gen(function* () {
-    const projects = yield* Projects;
-    let project = yield* projects.get(params.project);
-    if (crossRecallExcluded !== undefined)
-      project = yield* projects.setCrossRecallExcluded(project.id, crossRecallExcluded);
-    if (permissionMode !== undefined)
-      project = yield* projects.setPermissionMode(project.id, permissionMode);
-    if (hidden !== undefined) project = yield* projects.setHidden(project.id, hidden);
-    (yield* AppEvents).publishGlobal("projects");
-    return Response.json(project);
-  }).pipe(
-    Effect.catchTag("ProjectNotFound", () =>
-      Effect.succeed(Response.json({ error: "project_not_found" }, { status: 404 })),
-    ),
+      const response = Effect.gen(function* () {
+        const projects = yield* Projects;
+        let project = yield* projects.get(params.project);
+        if (crossRecallExcluded !== undefined)
+          project = yield* projects.setCrossRecallExcluded(project.id, crossRecallExcluded);
+        if (permissionMode !== undefined)
+          project = yield* projects.setPermissionMode(project.id, permissionMode);
+        if (hidden !== undefined) project = yield* projects.setHidden(project.id, hidden);
+        (yield* AppEvents).publishGlobal("projects");
+        return Response.json(project);
+      }).pipe(
+        Effect.catchTag("ProjectNotFound", () =>
+          Effect.succeed(Response.json({ error: "project_not_found" }, { status: 404 })),
+        ),
+      );
+      return yield* response;
+    }),
   );
-  return agent.runPromise(response);
 }

@@ -6,7 +6,7 @@ import type { Route } from "./+types/sessions.$session.queue._index";
 
 /** GET /api/sessions/:session/queue — messages waiting to reach the agent, and those just delivered. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function loader({ params }: Route.LoaderArgs) {
+export function loader({ params }: Route.LoaderArgs) {
   return agent.runPromise(Effect.flatMap(AgentChat, (chat) => chat.queued(params.session)));
 }
 
@@ -16,18 +16,22 @@ export async function loader({ params }: Route.LoaderArgs) {
  * `not_running` means nothing is answering and the page should send a normal turn.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function action({ request, params }: Route.ActionArgs) {
-  const rejected = rejectCrossSite(request);
-  if (rejected !== null) return rejected;
-  const body = await readJson(request, QueueRequest);
-  if (Result.isFailure(body))
-    return Response.json({ error: "invalid_queue_request" }, { status: 400 });
-  const holder = request.headers.get(sessionHolderHeader);
+export function action({ request, params }: Route.ActionArgs) {
   return agent.runPromise(
-    Effect.flatMap(AgentChat, (chat) => chat.enqueue(params.session, holder, body.success)).pipe(
-      Effect.tap(() =>
-        Effect.map(AppEvents, (events) => events.publishSession(params.session, "queue")),
-      ),
-    ),
+    Effect.gen(function* () {
+      const rejected = rejectCrossSite(request);
+      if (rejected !== null) return rejected;
+      const body = yield* Effect.tryPromise(() => readJson(request, QueueRequest));
+      if (Result.isFailure(body))
+        return Response.json({ error: "invalid_queue_request" }, { status: 400 });
+      const holder = request.headers.get(sessionHolderHeader);
+      return yield* Effect.flatMap(AgentChat, (chat) =>
+        chat.enqueue(params.session, holder, body.success),
+      ).pipe(
+        Effect.tap(() =>
+          Effect.map(AppEvents, (events) => events.publishSession(params.session, "queue")),
+        ),
+      );
+    }),
   );
 }

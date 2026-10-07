@@ -1,7 +1,8 @@
-import { Function as EffectFunction } from "effect";
+import { nativePromise } from "../runtime/native-effect.ts";
+import { Cause, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { ANTHROPIC_MODELS } from "@tanstack/ai-anthropic";
-import { MutableHashSet, DateTime, Effect, Option, Schema } from "effect";
+import { MutableHashSet, Effect, Exit, Option, Ref, Schema, Semaphore } from "effect";
 import type { Settings } from "../config/global-config.ts";
 import { optionalProperty } from "../optional-property.ts";
 import {
@@ -25,7 +26,7 @@ interface ProductOAuthClient {
   status(): Promise<OAuthConnectionStatus>;
   startLogin(): Promise<LoginAttempt>;
   disconnect(): Promise<OAuthConnectionStatus>;
-  modelCatalog(): Promise<ReadonlyArray<unknown>>;
+  modelCatalog(signal?: AbortSignal): Promise<ReadonlyArray<unknown>>;
 }
 
 interface SettingsStore {
@@ -223,7 +224,7 @@ const operationFailure = (
 const fromPromise = <A>(
   provider: SubscriptionAccountProvider,
   operation: "auth" | "catalog" | "model",
-  run: () => Promise<A>,
+  run: (signal: AbortSignal) => Promise<A>,
 ) =>
   Effect.tryPromise({
     try: run,
@@ -268,39 +269,41 @@ export function createSubscriptionProvider(
   };
   let catalogCache: {
     readonly key: string;
-    readonly loadedAt: number;
     readonly models: ReadonlyArray<ProviderModel>;
   } | null = null;
 
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const authState = async (): Promise<AuthConnectionState> => {
+  const authState = Effect.fn("SubscriptionProvider.authState")(function* (): Effect.fn.Return<
+    AuthConnectionState,
+    Cause.UnknownError
+  > {
     if (pending !== null)
       return { provider, status: "pending", authorizationUrl: pending.authorizationUrl };
-    if (isTruthy(loginError)) return loginError;
-    try {
-      const connection = await client.status();
-      if (connection.connected) return { provider, status: "signed-in" };
-    } catch (error) {
-      if (error instanceof OAuthHarnessError && error.code === "credential_store_unavailable")
-        return failureState(error);
-      throw error;
-    }
-    return { provider, status: "signed-out" };
-  };
-
-  const status = fromPromise(provider, "auth", authState);
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const connect = fromPromise(provider, "auth", async () => {
-    const current = await authState();
+    if (loginError !== null) return loginError;
+    return yield* nativePromise(() => client.status()).pipe(
+      Effect.map((connection): AuthConnectionState => ({
+        provider,
+        status: connection.connected ? "signed-in" : "signed-out",
+      })),
+      Effect.catchIf(
+        (failure): failure is Cause.UnknownError & { readonly cause: OAuthHarnessError } =>
+          failure.cause instanceof OAuthHarnessError &&
+          failure.cause.code === "credential_store_unavailable",
+        (failure) => Effect.succeed(failureState(failure.cause)),
+      ),
+    );
+  });
+  const status = authState().pipe(Effect.mapError(() => operationFailure(provider, "auth")));
+  const connect = Effect.gen(function* () {
+    const current = yield* authState();
     if (current.status === "signed-in" || current.status === "pending") return current;
     loginError = null;
-    let attempt: LoginAttempt;
-    try {
-      attempt = await client.startLogin();
-    } catch (error) {
+    const started = yield* Effect.result(nativePromise(() => client.startLogin()));
+    if (Result.isFailure(started)) {
+      const error = started.failure.cause;
       loginError = failureState(error instanceof OAuthHarnessError ? error : null);
       return loginError;
     }
+    const attempt = started.success;
     pending = attempt;
     void attempt.completed.then(
       () => {
@@ -317,47 +320,78 @@ export function createSubscriptionProvider(
       status: "pending",
       authorizationUrl: attempt.authorizationUrl,
     } satisfies AuthConnectionState;
-  });
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const cancel = fromPromise(provider, "auth", async () => {
+  }).pipe(Effect.mapError(() => operationFailure(provider, "auth")));
+  const cancel = Effect.sync(() => {
     const attempt = pending;
     pending = null;
     loginError = null;
     attempt?.cancel();
-    return authState();
-  });
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const disconnect = fromPromise(provider, "auth", async () => {
-    const attempt = pending;
-    pending = null;
-    loginError = null;
-    attempt?.cancel();
-    const connection = await client.disconnect();
-    catalogCache = null;
-    return {
-      provider,
-      status: connection.connected ? "signed-in" : "signed-out",
-    } satisfies AuthConnectionState;
-  });
-
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const load = async () => {
-    const key = options.catalogKey?.() ?? "__default__";
-    if (
-      catalogCache?.key === key &&
-      DateTime.toEpochMillis(DateTime.nowUnsafe()) - catalogCache.loadedAt < 30_000
-    )
-      return catalogCache.models;
-    const pages =
-      provider === "anthropic" ? anthropicInstalledCatalog : await client.modelCatalog();
-    const models = parseSubscriptionCatalog(provider, pages);
-    if (models.length === 0) throw new Error("empty_model_catalog");
-    if ((options.catalogKey?.() ?? "__default__") === key)
-      catalogCache = { key, loadedAt: DateTime.toEpochMillis(DateTime.nowUnsafe()), models };
-    return models;
+  }).pipe(
+    Effect.andThen(authState()),
+    Effect.mapError(() => operationFailure(provider, "auth")),
+  );
+  type CatalogEntry = {
+    readonly key: string;
+    readonly token: object;
+    readonly load: Effect.Effect<ReadonlyArray<ProviderModel>, ProviderOperationFailed>;
   };
+  const catalogEntry = Ref.makeUnsafe<CatalogEntry | null>(null);
+  const catalogLock = Semaphore.makeUnsafe(1);
+  const invalidateCatalog = catalogLock.withPermits(1)(
+    Effect.gen(function* () {
+      yield* Ref.set(catalogEntry, null);
+      catalogCache = null;
+    }),
+  );
+  const disconnect = Effect.gen(function* () {
+    yield* invalidateCatalog;
+    const attempt = pending;
+    pending = null;
+    loginError = null;
+    attempt?.cancel();
+    return yield* fromPromise(provider, "auth", () => client.disconnect()).pipe(
+      Effect.map((connection): AuthConnectionState => ({
+        provider,
+        status: connection.connected ? "signed-in" : "signed-out",
+      })),
+    );
+  }).pipe(Effect.ensuring(invalidateCatalog));
 
-  const list = fromPromise(provider, "catalog", load);
+  // The first caller owns the load in its existing fiber/scope. Cancelling a
+  // waiting caller only stops that wait; cancelling the owner interrupts all
+  // current waiters, and TTL 0 permits retry. The owner signal reaches the
+  // native catalog fetch; a cancelled waiter cannot abort the owner's transport.
+  const list = Effect.gen(function* () {
+    const entry = yield* catalogLock.withPermits(1)(
+      Effect.gen(function* () {
+        const key = options.catalogKey?.() ?? "__default__";
+        const current = yield* Ref.get(catalogEntry);
+        if (current?.key === key) return current;
+        const token = {};
+        const load = yield* Effect.cachedWithTTL(
+          Effect.gen(function* () {
+            const pages =
+              provider === "anthropic"
+                ? anthropicInstalledCatalog
+                : yield* fromPromise(provider, "catalog", (signal) => client.modelCatalog(signal));
+            const models = parseSubscriptionCatalog(provider, pages);
+            if (models.length === 0) return yield* operationFailure(provider, "catalog");
+            if (
+              Ref.getUnsafe(catalogEntry)?.token === token &&
+              (options.catalogKey?.() ?? "__default__") === key
+            )
+              catalogCache = { key, models };
+            return models;
+          }),
+          (exit) => (Exit.isSuccess(exit) ? "30 seconds" : 0),
+        );
+        const next = { key, token, load };
+        yield* Ref.set(catalogEntry, next);
+        return next;
+      }),
+    );
+    return yield* entry.load;
+  });
   const selected = Effect.map(options.config.read, (settings): ModelSelection | null =>
     settings.provider === provider && isTruthy(settings.model) && isTruthy(settings.reasoningEffort)
       ? {

@@ -65,23 +65,25 @@ function isStableConstVariable(variable: Variable, declarator: ESTree.VariableDe
 function hasKnownEvidence(
 	sourceCode: SourceCode,
 	expression: ESTree.Expression,
-	visitedVariables = MutableHashSet.empty<Variable>(),
+	visitedDeclarations = MutableHashSet.empty<number>(),
 ): boolean {
 	if (isKnownEvidenceExpression(expression)) return true;
 	const unwrapped = unwrapExpression(expression);
 	if (unwrapped.type !== "Identifier") return false;
 	const variable = resolveVariable(sourceCode, unwrapped);
-	if (variable === null || MutableHashSet.has(visitedVariables, variable)) return false;
+	if (variable === null) return false;
 	const declarator = variableDeclarator(variable);
 	if (
 		declarator === null ||
+		MutableHashSet.has(visitedDeclarations, declarator.start) ||
 		declarator.init === null ||
 		!isStableConstVariable(variable, declarator)
 	) {
 		return false;
 	}
-	MutableHashSet.add(visitedVariables, variable);
-	return hasKnownEvidence(sourceCode, declarator.init, visitedVariables);
+	// Declaration offsets are unique within this source file; do not hash mutable scope objects.
+	MutableHashSet.add(visitedDeclarations, declarator.start);
+	return hasKnownEvidence(sourceCode, declarator.init, visitedDeclarations);
 }
 
 function isFunctionExpression(node: ESTree.Node): node is FunctionExpression {
@@ -152,14 +154,14 @@ function hasKnownCallArgumentEvidence(
 	sourceCode: SourceCode,
 	expression: ESTree.Expression,
 	environment: TypeEnvironment,
-	visitedVariables = MutableHashSet.empty<Variable>(),
+	visitedDeclarations = MutableHashSet.empty<number>(),
 ): boolean {
 	if (expression.type === "ParenthesizedExpression" || expression.type === "TSNonNullExpression") {
 		return hasKnownCallArgumentEvidence(
 			sourceCode,
 			expression.expression,
 			environment,
-			visitedVariables,
+			visitedDeclarations,
 		);
 	}
 	if (expression.type === "TSAsExpression" || expression.type === "TSTypeAssertion") {
@@ -170,7 +172,7 @@ function hasKnownCallArgumentEvidence(
 			sourceCode,
 			expression.expression,
 			environment,
-			visitedVariables,
+			visitedDeclarations,
 		);
 	}
 	if (expression.type === "CallExpression") {
@@ -180,12 +182,13 @@ function hasKnownCallArgumentEvidence(
 	}
 	if (expression.type !== "Identifier") return isKnownEvidenceExpression(expression);
 	const variable = resolveVariable(sourceCode, expression);
-	if (variable === null || MutableHashSet.has(visitedVariables, variable)) return false;
+	if (variable === null) return false;
+	const declarator = variableDeclarator(variable);
+	if (declarator !== null && MutableHashSet.has(visitedDeclarations, declarator.start)) return false;
 	const annotation = variableTypeAnnotation(sourceCode, variable);
 	if (annotation !== null) {
 		return hasInformativeType(annotation.typeAnnotation, environment);
 	}
-	const declarator = variableDeclarator(variable);
 	if (
 		declarator === null ||
 		declarator.init === null ||
@@ -193,12 +196,12 @@ function hasKnownCallArgumentEvidence(
 	) {
 		return false;
 	}
-	MutableHashSet.add(visitedVariables, variable);
+	MutableHashSet.add(visitedDeclarations, declarator.start);
 	return hasKnownCallArgumentEvidence(
 		sourceCode,
 		declarator.init,
 		environment,
-		visitedVariables,
+		visitedDeclarations,
 	);
 }
 

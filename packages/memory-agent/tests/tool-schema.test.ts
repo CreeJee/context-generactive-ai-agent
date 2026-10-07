@@ -1,12 +1,11 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off
+import { it } from "@effect/vitest";
 import {
   convertSchemaToJsonSchema,
   toolDefinition,
   validateWithStandardSchema,
 } from "@tanstack/ai";
 import type { InferSchemaType } from "@tanstack/ai";
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { describe, expect, expectTypeOf, test } from "vite-plus/test";
 import { toToolSchema } from "../src/tools/schema.ts";
 
@@ -48,14 +47,20 @@ describe("toToolSchema", () => {
     });
   });
 
-  test("validates model arguments with Effect rules", async () => {
-    await expect(
-      validateWithStandardSchema(schema, { query: "저장소 결정", kinds: ["user"] }),
-    ).resolves.toMatchObject({ success: true, data: { query: "저장소 결정", kinds: ["user"] } });
-    await expect(
-      validateWithStandardSchema(schema, { query: "저장소 결정", kinds: ["system"] }),
-    ).resolves.toMatchObject({ success: false });
-  });
+  it.effect("validates model arguments with Effect rules", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* Effect.promise(() =>
+          validateWithStandardSchema(schema, { query: "저장소 결정", kinds: ["user"] }),
+        ),
+      ).toMatchObject({ success: true, data: { query: "저장소 결정", kinds: ["user"] } });
+      expect(
+        yield* Effect.promise(() =>
+          validateWithStandardSchema(schema, { query: "저장소 결정", kinds: ["system"] }),
+        ),
+      ).toMatchObject({ success: false });
+    }),
+  );
 
   test("keeps TanStack tool argument inference", () => {
     const tool = toolDefinition({

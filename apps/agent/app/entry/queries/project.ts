@@ -1,4 +1,5 @@
-import { Function as EffectFunction } from "effect";
+import { runUiEffect, uiPromise } from "../shared/ui-effect";
+import { Effect, Function as EffectFunction } from "effect";
 import { queryOptions, useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import { appQueryKeys } from "./keys";
@@ -8,10 +9,14 @@ export const projectQueries = {
     queryOptions({
       queryKey: appQueryKeys.project.sessions(projectId),
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      queryFn: async () => ({
-        active: await api.sessions(projectId),
-        archived: await api.archivedSessions(projectId),
-      }),
+      queryFn: () =>
+        runUiEffect(
+          Effect.gen(function* () {
+            const active = yield* uiPromise(() => api.sessions(projectId));
+            const archived = yield* uiPromise(() => api.archivedSessions(projectId));
+            return { active, archived };
+          }),
+        ),
     }),
   mcp: (projectId: string) =>
     queryOptions({

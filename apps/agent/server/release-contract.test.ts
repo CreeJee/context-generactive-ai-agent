@@ -1,5 +1,4 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics nodeBuiltinImport:off
+// Release signatures require Ed25519 PEM keys; Effect 4 Crypto does not expose key generation.
 import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, test } from "vite-plus/test";
 import {

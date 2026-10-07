@@ -3,7 +3,11 @@ import { Config, Effect, Layer, ManagedRuntime } from "effect";
 import { defaultStorageRoot, memoryAgentLayer, stopAllCommands } from "memory-agent";
 
 // Config is evaluated when the runtime first builds its services, after CLI options are applied.
-const agentLayer = Layer.unwrap(
+type MemoryAgentLayer = ReturnType<typeof memoryAgentLayer>;
+const agentLayer: Layer.Layer<
+  Layer.Success<MemoryAgentLayer>,
+  Layer.Error<MemoryAgentLayer> | Config.ConfigError
+> = Layer.unwrap(
   Config.String("CONTEXT_AGENT_HOME").pipe(
     Config.withDefault(defaultStorageRoot),
     Effect.map(memoryAgentLayer),

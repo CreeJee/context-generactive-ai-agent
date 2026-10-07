@@ -1,9 +1,7 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics nodeBuiltinImport:off
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, test } from "vite-plus/test";
+import { NodeFileSystem, NodePath } from "@effect/platform-node";
+import { Effect, FileSystem, Layer, Path } from "effect";
+import { it } from "@effect/vitest";
+import { describe, expect, test } from "vite-plus/test";
 import type { Project } from "../src/projects/projects.ts";
 import type { Skill } from "../src/skills/skills.ts";
 import {
@@ -13,14 +11,10 @@ import {
   structuredWorkflowRules,
 } from "../src/workflow/sources.ts";
 
-const roots: string[] = [];
-afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
-});
+const project = Effect.fnUntraced(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const root = yield* fs.makeTempDirectoryScoped({ prefix: "workflow-rules-" });
 
-function project() {
-  const root = mkdtempSync(join(tmpdir(), "workflow-rules-"));
-  roots.push(root);
   return {
     id: "project",
     root,
@@ -30,7 +24,7 @@ function project() {
     createdAt: "2026-01-01T00:00:00.000Z",
     hiddenAt: null,
   } satisfies Project;
-}
+});
 
 const ruleFile = (instruction: string) =>
   JSON.stringify({
@@ -48,36 +42,53 @@ const ruleFile = (instruction: string) =>
     ],
   });
 
+const withFileSystem = Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+  const services = yield* Layer.build(Layer.merge(NodeFileSystem.layer, NodePath.layer));
+  return yield* Effect.provideContext(program, services);
+}, Effect.scoped);
+
 describe("workflow rule sources", () => {
-  test("loads explicit project rules with a content-addressed source", () => {
-    const current = project();
-    const file = join(current.root, projectWorkflowRulesPath);
-    mkdirSync(join(current.root, ".agents"));
-    writeFileSync(file, ruleFile("Check supported versions"));
+  it.live("loads explicit project rules with a content-addressed source", () =>
+    withFileSystem(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const current = yield* project();
+        const file = path.join(current.root, projectWorkflowRulesPath);
+        yield* fs.makeDirectory(path.join(current.root, ".agents"));
+        yield* fs.writeFileString(file, ruleFile("Check supported versions"));
+        const first = projectWorkflowRules(current);
+        expect(first.problems).toEqual([]);
+        expect(first.rules[0]).toMatchObject({
+          id: "project.release-check",
+          priority: "required",
+          source: { kind: "project", path: projectWorkflowRulesPath },
+        });
+        yield* fs.writeFileString(file, ruleFile("Check supported versions and rollback"));
+        const second = projectWorkflowRules(current);
+        expect(second.rules[0]?.source).not.toEqual(first.rules[0]?.source);
+      }),
+    ),
+  );
 
-    const first = projectWorkflowRules(current);
-    expect(first.problems).toEqual([]);
-    expect(first.rules[0]).toMatchObject({
-      id: "project.release-check",
-      priority: "required",
-      source: { kind: "project", path: projectWorkflowRulesPath },
-    });
-
-    writeFileSync(file, ruleFile("Check supported versions and rollback"));
-    const second = projectWorkflowRules(current);
-    expect(second.rules[0]?.source).not.toEqual(first.rules[0]?.source);
-  });
-
-  test("rejects malformed project rule resources without inferring prose", () => {
-    const current = project();
-    mkdirSync(join(current.root, ".agents"));
-    writeFileSync(join(current.root, projectWorkflowRulesPath), '{"rules":[{"id":1}]}');
-
-    expect(projectWorkflowRules(current)).toMatchObject({
-      rules: [],
-      problems: [{ problem: "invalid" }],
-    });
-  });
+  it.live("rejects malformed project rule resources without inferring prose", () =>
+    withFileSystem(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const current = yield* project();
+        yield* fs.makeDirectory(path.join(current.root, ".agents"));
+        yield* fs.writeFileString(
+          path.join(current.root, projectWorkflowRulesPath),
+          '{"rules":[{"id":1}]}',
+        );
+        expect(projectWorkflowRules(current)).toMatchObject({
+          rules: [],
+          problems: [{ problem: "invalid" }],
+        });
+      }),
+    ),
+  );
 
   test("decodes the same resource format from an MCP source without elevating trust", () => {
     const loaded = structuredWorkflowRules(ruleFile("Review the remote compatibility matrix"), {

@@ -1,11 +1,25 @@
+import { nativePromise, nativeFailure, runNativeEffect } from "../runtime/native-effect.ts";
+import { nativeStream } from "../runtime/native-stream.ts";
+import { Result } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { createServer, type Server } from "node:http";
+import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import { optionalProperty } from "../optional-property.ts";
 import type { AddressInfo } from "node:net";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { HashSet, MutableHashSet, DateTime, Data, Option, Schema } from "effect";
+import {
+  Cause,
+  Effect,
+  Semaphore,
+  Stream,
+  HashSet,
+  MutableHashSet,
+  DateTime,
+  Data,
+  Option,
+  Schema,
+} from "effect";
 import { requireRuntime } from "../runtime/resources.ts";
 import { prepareAnthropicValidationBody } from "./anthropic-validation-adapter.ts";
 import { createChunkedPasswordEntry, type PasswordEntry } from "./chunked-password-entry.ts";
@@ -24,7 +38,7 @@ import {
   type ProviderProtocol,
 } from "./protocol.ts";
 
-const StoredCredentialSchema = Schema.Struct({
+export const StoredCredentialSchema = Schema.Struct({
   accessToken: Schema.String,
   refreshToken: Schema.String,
   idToken: Schema.optional(Schema.String),
@@ -88,48 +102,50 @@ const keychainEntry = (provider: OAuthProvider, account = "subscription-oauth") 
 export const createKeychainCredentialStore = (
   open: (provider: OAuthProvider) => PasswordEntry = keychainEntry,
 ): CredentialStore => ({
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  async read(provider: OAuthProvider): Promise<StoredCredential | null> {
-    const entry = open(provider);
-    let encoded: string | null | undefined;
-    try {
-      encoded = await entry.getPassword();
-    } catch {
-      throw credentialStoreFailure(provider, "read");
-    }
-    if (encoded == null) return null;
-    const credential = Option.getOrThrowWith(decodeStoredCredential(encoded), () =>
-      credentialStoreFailure(provider, "decode"),
-    );
-    return {
-      accessToken: credential.accessToken,
-      refreshToken: credential.refreshToken,
-      expiresAt: credential.expiresAt,
-      ...optionalProperty("idToken", credential.idToken),
-      ...optionalProperty("accountId", credential.accountId),
-    };
-  },
-
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  async write(provider: OAuthProvider, credential: StoredCredential): Promise<void> {
-    const entry = open(provider);
-    try {
-      await entry.setPassword(JSON.stringify(credential));
-    } catch {
-      throw credentialStoreFailure(provider, "write");
-    }
-  },
-
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  async remove(provider: OAuthProvider): Promise<void> {
-    const entry = open(provider);
-    try {
-      // Native backends make deletion idempotent: false means the credential is already absent.
-      await entry.deleteCredential();
-    } catch {
-      throw credentialStoreFailure(provider, "delete");
-    }
-  },
+  read: (provider) =>
+    runNativeEffect(
+      Effect.gen(function* () {
+        const entry = open(provider);
+        const encoded = yield* Effect.tryPromise({
+          try: () => entry.getPassword(),
+          catch: () => credentialStoreFailure(provider, "read"),
+        });
+        if (encoded == null) return null;
+        const decoded = decodeStoredCredential(encoded);
+        if (Option.isNone(decoded)) return yield* credentialStoreFailure(provider, "decode");
+        const credential = decoded.value;
+        return {
+          accessToken: credential.accessToken,
+          refreshToken: credential.refreshToken,
+          expiresAt: credential.expiresAt,
+          ...optionalProperty("idToken", credential.idToken),
+          ...optionalProperty("accountId", credential.accountId),
+        };
+      }),
+    ),
+  write: (provider, credential) =>
+    runNativeEffect(
+      Effect.gen(function* () {
+        const entry = open(provider);
+        const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(StoredCredentialSchema))(
+          credential,
+        );
+        yield* Effect.tryPromise({
+          try: () => entry.setPassword(encoded),
+          catch: () => credentialStoreFailure(provider, "write"),
+        });
+      }),
+    ),
+  remove: (provider) =>
+    runNativeEffect(
+      Effect.gen(function* () {
+        const entry = open(provider);
+        yield* Effect.tryPromise({
+          try: () => entry.deleteCredential(),
+          catch: () => credentialStoreFailure(provider, "delete"),
+        });
+      }),
+    ).then(() => undefined),
 });
 
 export const createKeychainProfileCredentialStore = (profileId: string): CredentialStore => {
@@ -418,35 +434,47 @@ const tokenBody = (protocol: ProviderProtocol, values: TokenGrant): EncodedToken
 };
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function* sseEvents(
-  provider: OAuthProvider,
-  response: Response,
-): AsyncGenerator<NormalizedStreamEvent> {
-  if (!(response.body !== null)) throw new OAuthHarnessError("transport_unavailable");
-  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
-  let buffer = "";
-  try {
-    for (;;) {
-      const part = await reader.read();
-      if (part.done) break;
-      buffer += part.value.replaceAll("\r\n", "\n");
-      for (;;) {
-        const boundary = buffer.indexOf("\n\n");
-        if (boundary < 0) break;
-        const frame = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
-        for (const line of frame.split("\n")) {
-          if (!line.startsWith("data:")) continue;
-          const data = line.slice(5).trim();
-          if (data === "[DONE]") return;
-          const event = decodeProviderEvent(provider, data);
-          if (event !== null) yield event;
+function sseEvents(provider: OAuthProvider, response: Response) {
+  return Stream.suspend<NormalizedStreamEvent, OAuthHarnessError | Cause.UnknownError, never>(
+    () => {
+      if (response.body === null)
+        return Stream.fail(new OAuthHarnessError("transport_unavailable"));
+      let buffer = "";
+      type Frame =
+        | { readonly _tag: "Event"; readonly event: NormalizedStreamEvent }
+        | { readonly _tag: "Done" };
+      const frames = function* (part: string): Generator<Frame, void, unknown> {
+        buffer += part.replaceAll("\r\n", "\n");
+        for (;;) {
+          const boundary = buffer.indexOf("\n\n");
+          if (boundary < 0) return;
+          const frame = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          for (const line of frame.split("\n")) {
+            if (!line.startsWith("data:")) continue;
+            const data = line.slice(5).trim();
+            if (data === "[DONE]") {
+              yield { _tag: "Done" };
+              return;
+            }
+            const event = decodeProviderEvent(provider, data);
+            if (event !== null) yield { _tag: "Event", event };
+          }
         }
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
+      };
+      const body = response.body;
+      return Stream.fromReadableStream({
+        evaluate: () => body.pipeThrough(new TextDecoderStream()),
+        onError: (cause) => new Cause.UnknownError(cause),
+      }).pipe(
+        Stream.flatMap((part) => Stream.fromIterable(frames(part))),
+        Stream.takeWhile(
+          (frame): frame is Extract<Frame, { _tag: "Event" }> => frame._tag === "Event",
+        ),
+        Stream.map((frame) => frame.event),
+      );
+    },
+  );
 }
 
 export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOptions) {
@@ -456,65 +484,75 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
   const now = options.now ?? Date.now;
   const anthropicSessionId = randomUUID();
   let loginActive = false;
-  let refreshing: Promise<StoredCredential> | null = null;
+  const refreshLock = Semaphore.makeUnsafe(1);
+  type Refresh = {
+    readonly token: object;
+    readonly load: Effect.Effect<StoredCredential, Cause.UnknownError | OAuthHarnessError>;
+  };
+  let refreshing: Refresh | null = null;
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  async function status(): Promise<OAuthConnectionStatus> {
-    let credential = await store.read(protocol.provider);
+  const statusEffect = Effect.fn("OAuth.status")(function* () {
+    let credential = yield* nativePromise(() => store.read(protocol.provider));
     if (credential !== null && credential.expiresAt <= now() + 30_000) {
-      try {
-        credential = await refresh(credential);
-      } catch (error) {
-        if (error instanceof OAuthHarnessError && invalidatesStoredCredential(error))
-          credential = null;
-        else throw error;
-      }
+      credential = yield* refreshEffect(credential).pipe(
+        Effect.catchIf(
+          (failure) => {
+            const error = failure instanceof Cause.UnknownError ? failure.cause : failure;
+            return error instanceof OAuthHarnessError && invalidatesStoredCredential(error);
+          },
+          () => Effect.succeed(null),
+        ),
+      );
     }
     return {
       provider: protocol.provider,
       connected: credential !== null,
       expiresAt: credential?.expiresAt ?? null,
     };
+  });
+  function status(): Promise<OAuthConnectionStatus> {
+    return runNativeEffect(statusEffect());
+  }
+  function disconnect(): Promise<OAuthConnectionStatus> {
+    return runNativeEffect(
+      nativePromise(() => store.remove(protocol.provider)).pipe(Effect.andThen(statusEffect())),
+    );
   }
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  async function disconnect(): Promise<OAuthConnectionStatus> {
-    await store.remove(protocol.provider);
-    return status();
-  }
-
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  async function startLogin(
+  const startLoginEffect = Effect.fn("OAuth.startLogin")(function* (
     options: {
       readonly timeoutMs?: number;
       readonly signal?: AbortSignal;
     } = {},
-  ): Promise<LoginAttempt> {
-    if (loginActive) throw new OAuthHarnessError("login_in_progress");
+  ): Effect.fn.Return<LoginAttempt, OAuthHarnessError> {
+    if (loginActive) return yield* new OAuthHarnessError("login_in_progress");
     loginActive = true;
     const pkce = createPkce();
     let verifier: string | null = pkce.verifier;
-    // Claude's CLI OAuth contract uses the PKCE verifier as state and returns it on callback.
     const state = protocol.provider === "anthropic" ? pkce.verifier : createOAuthState();
     const timeoutMs = options.timeoutMs ?? 120_000;
     const server = createServer();
-    try {
-      // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        // Bind the same loopback hostname used in the registered redirect URI. On Windows,
-        // `localhost` can prefer ::1, which cannot reach a server bound only to 127.0.0.1.
-        server.listen(protocol.callbackPort ?? 0, protocol.callbackRedirectHost, () => resolve());
-      });
-    } catch {
-      loginActive = false;
-      throw new OAuthHarnessError("transport_unavailable");
-    }
+    yield* Effect.tryPromise({
+      try: () =>
+        new Promise<void>((resolve, reject) => {
+          server.once("error", reject);
+          server.listen(protocol.callbackPort ?? 0, protocol.callbackRedirectHost, () => resolve());
+        }),
+      catch: () => new OAuthHarnessError("transport_unavailable"),
+    }).pipe(
+      Effect.tapError(() =>
+        Effect.sync(() => {
+          loginActive = false;
+        }),
+      ),
+    );
     const listeningAddress = server.address();
     if (listeningAddress === null) {
-      await close(server);
+      yield* Effect.promise(() => close(server));
       loginActive = false;
-      throw new OAuthHarnessError("transport_unavailable");
+      return yield* new OAuthHarnessError("transport_unavailable");
     }
     // SAFETY: this server was bound to a TCP host/port, never to an IPC pipe.
     const address = listeningAddress as AddressInfo;
@@ -535,145 +573,159 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
 
     let settle!: (value: OAuthConnectionStatus) => void;
     let reject!: (reason: OAuthHarnessError) => void;
-    // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
+    // LoginAttempt's native completion/cancel contract outlives the initiating HTTP request.
     const completed = new Promise<OAuthConnectionStatus>((resolve, fail) => {
       settle = resolve;
       reject = fail;
     });
     let finished = false;
     let callbackClaimed = false;
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    const finish = async (
-      result: { readonly status: OAuthConnectionStatus } | { readonly error: OAuthHarnessError },
-    ) => {
+    const finish = Effect.fn("OAuth.finishLogin")(function* (
+      result: Result.Result<OAuthConnectionStatus, OAuthHarnessError>,
+    ) {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", abort);
       verifier = null;
       loginActive = false;
-      await close(server);
-      if ("status" in result) settle(result.status);
-      else reject(result.error);
+      yield* Effect.promise(() => close(server));
+      Result.match(result, { onSuccess: settle, onFailure: reject });
+    });
+    const abort = () => {
+      void runNativeEffect(finish(Result.fail(new OAuthHarnessError("cancelled"))));
     };
-    const abort = () => void finish({ error: new OAuthHarnessError("cancelled") });
-    // Native callback heartbeat/debounce timing remains at the protocol boundary.
-    const timer = setTimeout(
-      () => void finish({ error: new OAuthHarnessError("callback_timeout") }),
-      timeoutMs,
-    );
+    const timer = setTimeout(() => {
+      void runNativeEffect(finish(Result.fail(new OAuthHarnessError("callback_timeout"))));
+    }, timeoutMs);
     options.signal?.addEventListener("abort", abort, { once: true });
     if (options.signal?.aborted === true) abort();
 
-    server.on("request", (request, response) => {
-      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      void (async () => {
-        // A one-shot callback must release its socket before finish closes the server.
-        response.setHeader("Connection", "close");
-        // Admission is synchronous: replays cannot exchange twice or cancel the accepted callback.
-        if (callbackClaimed || finished) {
-          response.writeHead(410).end("OAuth callback already consumed.");
-          return;
-        }
-        const callback = new URL(request.url ?? "/", redirectUri);
-        if (
-          request.method !== "GET" ||
-          callback.pathname !== protocol.callbackPath ||
-          request.headers.host !== redirectAuthority
-        ) {
-          response.writeHead(400).end("Invalid OAuth callback.");
-          return;
-        }
-        const returnedState = callback.searchParams.get("state");
-        const code = callback.searchParams.get("code");
-        if (returnedState === null || !safeEqual(returnedState, state)) {
-          response.writeHead(400).end("OAuth state mismatch.");
-          await finish({ error: new OAuthHarnessError("callback_state_mismatch") });
-          return;
-        }
-        if (code === null || code.length === 0 || verifier === null) {
-          const callbackCode = callback.searchParams.get("error");
-          response.writeHead(400).end("Invalid OAuth callback.");
-          await finish({
-            error:
-              callbackCode !== null && HashSet.has(safeOAuthCodes, callbackCode)
-                ? new OAuthHarnessError("provider_rejected", null, {
-                    provider: protocol.provider,
-                    operation: "login_callback",
-                    providerCode: callbackCode,
-                  })
-                : new OAuthHarnessError("callback_invalid"),
-          });
-          return;
-        }
-        callbackClaimed = true;
-        let previous: StoredCredential | null = null;
-        let written = false;
-        try {
-          if (finished) throw new OAuthHarnessError("cancelled");
-          const commonGrant = {
-            grant_type: "authorization_code",
-            code,
-            redirect_uri: redirectUri,
-            client_id: protocol.clientId,
-            code_verifier: verifier,
-          } as const;
-          const grant: AuthorizationCodeGrant =
-            protocol.provider === "anthropic" ? { ...commonGrant, state } : commonGrant;
-          const credential = await exchange(grant);
-          if (finished) throw new OAuthHarnessError("cancelled");
-          previous = await store.read(protocol.provider);
-          if (finished) throw new OAuthHarnessError("cancelled");
-          written = true;
-          await store.write(protocol.provider, credential);
-          if (finished) throw new OAuthHarnessError("cancelled");
-          const connection = await status();
-          if (finished) throw new OAuthHarnessError("cancelled");
-          response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-          response.end("Connected. You may close this window.");
-          await finish({ status: connection });
-        } catch (error) {
-          if (written) {
-            try {
-              if (previous === null) await store.remove(protocol.provider);
-              else await store.write(protocol.provider, previous);
-            } catch {
-              // Do not leak native keychain errors through the OAuth callback response.
+    const onCallback = Effect.fn("OAuth.loginCallback")(function* (
+      request: IncomingMessage,
+      response: ServerResponse,
+    ) {
+      response.setHeader("Connection", "close");
+      // Admission happens before any suspension; replay cannot exchange or settle twice.
+      if (callbackClaimed || finished) {
+        response.writeHead(410).end("OAuth callback already consumed.");
+        return;
+      }
+      const callback = new URL(request.url ?? "/", redirectUri);
+      if (
+        request.method !== "GET" ||
+        callback.pathname !== protocol.callbackPath ||
+        request.headers.host !== redirectAuthority
+      ) {
+        response.writeHead(400).end("Invalid OAuth callback.");
+        return;
+      }
+      const returnedState = callback.searchParams.get("state");
+      const code = callback.searchParams.get("code");
+      if (returnedState === null || !safeEqual(returnedState, state)) {
+        response.writeHead(400).end("OAuth state mismatch.");
+        yield* finish(Result.fail(new OAuthHarnessError("callback_state_mismatch")));
+        return;
+      }
+      if (code === null || code.length === 0 || verifier === null) {
+        const callbackCode = callback.searchParams.get("error");
+        response.writeHead(400).end("Invalid OAuth callback.");
+        yield* finish(
+          Result.fail(
+            callbackCode !== null && HashSet.has(safeOAuthCodes, callbackCode)
+              ? new OAuthHarnessError("provider_rejected", null, {
+                  provider: protocol.provider,
+                  operation: "login_callback",
+                  providerCode: callbackCode,
+                })
+              : new OAuthHarnessError("callback_invalid"),
+          ),
+        );
+        return;
+      }
+      callbackClaimed = true;
+      const codeVerifier = verifier;
+      let previous: StoredCredential | null = null;
+      let written = false;
+      yield* Effect.gen(function* () {
+        if (finished) return yield* new OAuthHarnessError("cancelled");
+        const commonGrant = {
+          grant_type: "authorization_code",
+          code,
+          redirect_uri: redirectUri,
+          client_id: protocol.clientId,
+          code_verifier: codeVerifier,
+        } as const;
+        const grant: AuthorizationCodeGrant =
+          protocol.provider === "anthropic" ? { ...commonGrant, state } : commonGrant;
+        const credential = yield* exchangeEffect(grant);
+        if (finished) return yield* new OAuthHarnessError("cancelled");
+        previous = yield* nativePromise(() => store.read(protocol.provider));
+        if (finished) return yield* new OAuthHarnessError("cancelled");
+        written = true;
+        yield* nativePromise(() => store.write(protocol.provider, credential));
+        if (finished) return yield* new OAuthHarnessError("cancelled");
+        const connection = yield* statusEffect();
+        if (finished) return yield* new OAuthHarnessError("cancelled");
+        response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+        response.end("Connected. You may close this window.");
+        yield* finish(Result.succeed(connection));
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.gen(function* () {
+            const error = nativeFailure(cause).cause;
+            if (written) {
+              const credential = previous;
+              yield* nativePromise(() =>
+                credential === null
+                  ? store.remove(protocol.provider)
+                  : store.write(protocol.provider, credential),
+              ).pipe(Effect.ignore);
             }
-          }
-          response
-            .writeHead(error instanceof OAuthHarnessError && error.code === "cancelled" ? 410 : 502)
-            .end(
-              error instanceof OAuthHarnessError && error.code === "credential_store_unavailable"
-                ? "Login succeeded, but the system credential store is unavailable. Return to the app for diagnostic details."
-                : "Login could not be completed. Return to the app for diagnostic details.",
+            response
+              .writeHead(
+                error instanceof OAuthHarnessError && error.code === "cancelled" ? 410 : 502,
+              )
+              .end(
+                error instanceof OAuthHarnessError && error.code === "credential_store_unavailable"
+                  ? "Login succeeded, but the system credential store is unavailable. Return to the app for diagnostic details."
+                  : "Login could not be completed. Return to the app for diagnostic details.",
+              );
+            yield* finish(
+              Result.fail(
+                error instanceof OAuthHarnessError
+                  ? error
+                  : new OAuthHarnessError("provider_rejected", null, {
+                      provider: protocol.provider,
+                      operation: "login_callback",
+                    }),
+              ),
             );
-          await finish({
-            error:
-              error instanceof OAuthHarnessError
-                ? error
-                : new OAuthHarnessError("provider_rejected", null, {
-                    provider: protocol.provider,
-                    operation: "login_callback",
-                  }),
-          });
-        }
-      })();
+          }),
+        ),
+      );
     });
-
+    server.on("request", (request, response) => {
+      void runNativeEffect(onCallback(request, response));
+    });
     return {
       provider: protocol.provider,
       authorizationUrl: authorize.toString(),
       completed,
       cancel: abort,
     };
+  });
+  function startLogin(
+    options: { readonly timeoutMs?: number; readonly signal?: AbortSignal } = {},
+  ): Promise<LoginAttempt> {
+    return runNativeEffect(startLoginEffect(options));
   }
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  async function exchange(
+  const exchangeEffect = Effect.fn("OAuth.exchange")(function* (
     values: TokenGrant,
     previous?: StoredCredential,
-  ): Promise<StoredCredential> {
+  ) {
     const context: OAuthHarnessErrorContext = {
       provider: protocol.provider,
       operation: values.grant_type === "refresh_token" ? "token_refresh" : "token_exchange",
@@ -682,122 +734,143 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
     let proxyRoute: ProxyRoute | null = null;
     const withProxyRoute = (details: OAuthHarnessErrorContext): OAuthHarnessErrorContext =>
       proxyRoute === null ? details : { ...details, proxyRoute };
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    const request = async (): Promise<Response> => {
-      try {
-        return await fetcher(protocol.tokenUrl, {
-          method: "POST",
-          headers: { Accept: "application/json", "Content-Type": encoded.contentType },
-          body: encoded.body,
-          redirect: "error",
-          signal: AbortSignal.timeout(30_000),
-        });
-      } catch (error) {
-        const transportCode = error instanceof Error ? safeTransportCode(error) : "other";
-        // A pre-connect timeout cannot consume an authorization code. Never retry after a
-        // response, redirect, TLS failure, or ambiguous timeout; never proxy injected fetches.
-        const proxyFetch =
-          options.tokenProxyFetch ??
-          (options.fetch === undefined ? fetchOpenAiTokenViaSystemProxy : undefined);
-        if (
-          protocol.provider === "openai" &&
-          values.grant_type === "authorization_code" &&
-          transportCode === "UND_ERR_CONNECT_TIMEOUT" &&
-          proxyFetch !== undefined
-        ) {
-          try {
-            const retry = await proxyFetch(protocol.tokenUrl, encoded.body, encoded.contentType);
+    const response = yield* nativePromise(() =>
+      fetcher(protocol.tokenUrl, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": encoded.contentType },
+        body: encoded.body,
+        redirect: "error",
+        signal: AbortSignal.timeout(30_000),
+      }),
+    ).pipe(
+      Effect.catch((failure) =>
+        Effect.gen(function* () {
+          const error = failure.cause;
+          const transportCode = error instanceof Error ? safeTransportCode(error) : "other";
+          const proxyFetch =
+            options.tokenProxyFetch ??
+            (options.fetch === undefined ? fetchOpenAiTokenViaSystemProxy : undefined);
+          if (
+            protocol.provider === "openai" &&
+            values.grant_type === "authorization_code" &&
+            transportCode === "UND_ERR_CONNECT_TIMEOUT" &&
+            proxyFetch !== undefined
+          ) {
+            const retry = yield* nativePromise(() =>
+              proxyFetch(protocol.tokenUrl, encoded.body, encoded.contentType),
+            ).pipe(
+              Effect.mapError(
+                (failure) =>
+                  new OAuthHarnessError("transport_unavailable", null, {
+                    ...context,
+                    transportCode:
+                      failure.cause instanceof Error ? safeTransportCode(failure.cause) : "other",
+                    proxyRoute: "attempted",
+                  }),
+              ),
+            );
             proxyRoute = retry.route;
             if (retry.response !== null) return retry.response;
-          } catch (proxyError) {
-            throw new OAuthHarnessError("transport_unavailable", null, {
-              ...context,
-              transportCode: proxyError instanceof Error ? safeTransportCode(proxyError) : "other",
-              proxyRoute: "attempted",
-            });
           }
-        }
-        throw new OAuthHarnessError(
-          "transport_unavailable",
-          null,
-          withProxyRoute({ ...context, transportCode }),
-        );
-      }
-    };
-    const response = await request();
+          return yield* new OAuthHarnessError(
+            "transport_unavailable",
+            null,
+            withProxyRoute({ ...context, transportCode }),
+          );
+        }),
+      ),
+    );
     if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      throw new OAuthHarnessError(
+      const body = yield* nativePromise(() => response.text()).pipe(Effect.orElseSucceed(() => ""));
+      return yield* new OAuthHarnessError(
         "provider_rejected",
         response.status,
         withProxyRoute({ ...context, ...optionalProperty("providerCode", providerCode(body)) }),
       );
     }
-    try {
-      const token = Option.getOrThrowWith(
-        decodeTokenResponse(await response.json()),
-        () => new OAuthHarnessError("invalid_token_response", response.status, context),
-      );
-      const parsed = parseTokens(token, previous);
-      return {
-        ...parsed,
-        expiresAt: now() + (parsed.expiresAt - DateTime.toEpochMillis(DateTime.nowUnsafe())),
-      };
-    } catch (error) {
-      if (error instanceof OAuthHarnessError) throw error;
-      throw new OAuthHarnessError("invalid_token_response", response.status, context);
-    }
-  }
-
-  /** Forces one refresh for an explicit live protocol check and returns no credentials. */
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  async function refreshForValidation(): Promise<OAuthConnectionStatus> {
-    const credential = await store.read(protocol.provider);
-    if (!isTruthy(credential)) throw new OAuthHarnessError("not_connected");
-    await refresh(credential);
-    return status();
-  }
-
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  async function refresh(credential: StoredCredential): Promise<StoredCredential> {
-    if (isTruthy(refreshing)) return refreshing;
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    refreshing = (async () => {
-      const commonGrant = {
-        grant_type: "refresh_token",
-        refresh_token: credential.refreshToken,
-        client_id: protocol.clientId,
-      } as const;
-      const grant: RefreshTokenGrant =
-        protocol.provider === "anthropic"
-          ? {
-              ...commonGrant,
-              scope: protocol.scopes.replace("org:create_api_key ", ""),
-            }
-          : commonGrant;
-      try {
-        const next = await exchange(grant, credential);
-        await store.write(protocol.provider, next);
+    return yield* nativePromise(() => response.json()).pipe(
+      Effect.flatMap((body) =>
+        Effect.try(() => {
+          const token = Option.getOrThrowWith(
+            decodeTokenResponse(body),
+            () => new OAuthHarnessError("invalid_token_response", response.status, context),
+          );
+          const parsed = parseTokens(token, previous);
+          return {
+            ...parsed,
+            expiresAt: now() + (parsed.expiresAt - DateTime.toEpochMillis(DateTime.nowUnsafe())),
+          };
+        }),
+      ),
+      Effect.mapError((failure) =>
+        failure.cause instanceof OAuthHarnessError
+          ? failure.cause
+          : new OAuthHarnessError("invalid_token_response", response.status, context),
+      ),
+    );
+  });
+  const refreshEffect = Effect.fn("OAuth.refresh")(function* (credential: StoredCredential) {
+    const entry = yield* refreshLock.withPermits(1)(
+      Effect.gen(function* () {
+        if (refreshing !== null) return refreshing;
+        const token = {};
+        const load = yield* Effect.cachedWithTTL(
+          Effect.gen(function* () {
+            const commonGrant = {
+              grant_type: "refresh_token",
+              refresh_token: credential.refreshToken,
+              client_id: protocol.clientId,
+            } as const;
+            const grant: RefreshTokenGrant =
+              protocol.provider === "anthropic"
+                ? { ...commonGrant, scope: protocol.scopes.replace("org:create_api_key ", "") }
+                : commonGrant;
+            const next = yield* exchangeEffect(grant, credential);
+            yield* nativePromise(() => store.write(protocol.provider, next));
+            return next;
+          }).pipe(
+            Effect.catch((failure) =>
+              Effect.gen(function* () {
+                const error = failure instanceof Cause.UnknownError ? failure.cause : failure;
+                if (error instanceof OAuthHarnessError && invalidatesStoredCredential(error))
+                  yield* nativePromise(() => store.remove(protocol.provider));
+                return yield* failure;
+              }),
+            ),
+            // An OS credential write cannot be cancelled; every waiter shares one owner operation.
+            Effect.uninterruptible,
+            Effect.ensuring(
+              Effect.sync(() => {
+                if (refreshing?.token === token) refreshing = null;
+              }),
+            ),
+          ),
+          0,
+        );
+        const next = { token, load };
+        refreshing = next;
         return next;
-      } catch (error) {
-        if (error instanceof OAuthHarnessError && invalidatesStoredCredential(error))
-          await store.remove(protocol.provider);
-        throw error;
-      }
-    })();
-    try {
-      return await refreshing;
-    } finally {
-      refreshing = null;
-    }
+      }),
+    );
+    return yield* entry.load;
+  });
+  function refreshForValidation(): Promise<OAuthConnectionStatus> {
+    return runNativeEffect(
+      Effect.gen(function* () {
+        const credential = yield* nativePromise(() => store.read(protocol.provider));
+        if (credential === null) return yield* new OAuthHarnessError("not_connected");
+        yield* refreshEffect(credential);
+        return yield* statusEffect();
+      }),
+    );
   }
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  async function authorizedCatalogRequest(
+  const authorizedCatalogRequest = Effect.fn("OAuth.catalogRequest")(function* (
     url: URL,
     credential: StoredCredential,
     signal: AbortSignal,
-  ): Promise<Response> {
+  ) {
     const headers = new Headers(protocol.modelHeaders);
     headers.set("Accept", "application/json");
     headers.delete("Content-Type");
@@ -808,32 +881,38 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       headers.set("x-client-request-id", randomUUID());
       headers.set("X-Claude-Code-Session-Id", anthropicSessionId);
     }
-    return fetcher(url, {
-      method: "GET",
-      headers,
-      redirect: "error",
-      signal,
-    }).catch(() => {
-      throw new OAuthHarnessError("transport_unavailable", null, {
-        provider: protocol.provider,
-        operation: "model_catalog",
-      });
+    return yield* Effect.tryPromise({
+      try: () =>
+        fetcher(url, {
+          method: "GET",
+          headers,
+          redirect: "error",
+          signal,
+        }),
+      catch: () =>
+        new OAuthHarnessError("transport_unavailable", null, {
+          provider: protocol.provider,
+          operation: "model_catalog",
+        }),
     });
-  }
+  });
 
   /** Fetches only the provider's fixed model-catalog endpoint and never returns credentials. */
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  async function modelCatalog(): Promise<ReadonlyArray<unknown>> {
+  const modelCatalogEffect = Effect.fn("OAuth.modelCatalog")(function* (ownerSignal?: AbortSignal) {
     const context: OAuthHarnessErrorContext = {
       provider: protocol.provider,
       operation: "model_catalog",
     };
-    let credential = await store.read(protocol.provider);
-    if (!isTruthy(credential)) throw new OAuthHarnessError("not_connected", null, context);
-    if (credential.expiresAt <= now() + 30_000) credential = await refresh(credential);
+    let credential = yield* nativePromise(() => store.read(protocol.provider));
+    if (!isTruthy(credential)) return yield* new OAuthHarnessError("not_connected", null, context);
+    if (credential.expiresAt <= now() + 30_000) credential = yield* refreshEffect(credential);
 
     const pages: unknown[] = [];
-    const signal = AbortSignal.timeout(30_000);
+    // Native HTTP boundary: keep the existing timeout and the Effect owner's
+    // interruption signal across every page/retry of this single catalog load.
+    const timeout = AbortSignal.timeout(30_000);
+    const signal = ownerSignal === undefined ? timeout : AbortSignal.any([ownerSignal, timeout]);
     const seenCursors = MutableHashSet.empty<string>();
     let afterId: string | undefined;
     for (;;) {
@@ -842,24 +921,22 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
         url.searchParams.set("limit", "1000");
         if (afterId !== undefined) url.searchParams.set("after_id", afterId);
       }
-      let response = await authorizedCatalogRequest(url, credential, signal);
+      let response = yield* authorizedCatalogRequest(url, credential, signal);
       if (protocol.refreshStatuses.includes(response.status)) {
-        credential = await refresh(credential);
-        response = await authorizedCatalogRequest(url, credential, signal);
+        credential = yield* refreshEffect(credential);
+        response = yield* authorizedCatalogRequest(url, credential, signal);
       }
-      if (!response.ok) throw new OAuthHarnessError("provider_rejected", response.status, context);
-      let page: unknown;
-      try {
-        page = await response.json();
-      } catch {
-        throw new OAuthHarnessError("provider_rejected", response.status, context);
-      }
+      if (!response.ok)
+        return yield* new OAuthHarnessError("provider_rejected", response.status, context);
+      const page = yield* nativePromise(() => response.json()).pipe(
+        Effect.mapError(() => new OAuthHarnessError("provider_rejected", response.status, context)),
+      );
       pages.push(page);
       if (protocol.provider !== "anthropic") break;
       const pagination = Option.getOrUndefined(decodeCatalogPage(page));
       if (pagination?.has_more !== true || pagination.last_id === undefined) break;
       if (pages.length >= 10 || MutableHashSet.has(seenCursors, pagination.last_id))
-        throw new OAuthHarnessError("provider_rejected", null, {
+        return yield* new OAuthHarnessError("provider_rejected", null, {
           ...context,
           reason: "Model catalog pagination did not terminate.",
         });
@@ -867,20 +944,23 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       afterId = pagination.last_id;
     }
     return pages;
+  });
+  function modelCatalog(ownerSignal?: AbortSignal): Promise<ReadonlyArray<unknown>> {
+    return runNativeEffect(modelCatalogEffect(ownerSignal));
   }
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  async function* stream(
+  const streamResponse = Effect.fn("OAuth.streamResponse")(function* (
     serializedBody: string,
     signal?: AbortSignal,
-  ): AsyncGenerator<NormalizedStreamEvent> {
+  ) {
     const context: OAuthHarnessErrorContext = {
       provider: protocol.provider,
       operation: "model_stream",
     };
-    let credential = await store.read(protocol.provider);
-    if (!isTruthy(credential)) throw new OAuthHarnessError("not_connected", null, context);
-    if (credential.expiresAt <= now() + 30_000) credential = await refresh(credential);
+    let credential = yield* nativePromise(() => store.read(protocol.provider));
+    if (!isTruthy(credential)) return yield* new OAuthHarnessError("not_connected", null, context);
+    if (credential.expiresAt <= now() + 30_000) credential = yield* refreshEffect(credential);
 
     const providerBody =
       protocol.provider === "anthropic"
@@ -907,40 +987,56 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
                 : process.platform,
         );
       }
-      return fetcher(protocol.modelUrl, {
-        method: "POST",
-        headers,
-        body: providerBody,
-        redirect: "error",
-        signal: signal ?? null,
-      }).catch(() => {
-        throw new OAuthHarnessError("transport_unavailable", null, context);
+      return Effect.tryPromise({
+        try: (ownerSignal) =>
+          fetcher(protocol.modelUrl, {
+            method: "POST",
+            headers,
+            body: providerBody,
+            redirect: "error",
+            // A supplied signal belongs to the SDK run; preserve its reference contract.
+            signal: signal ?? ownerSignal,
+          }),
+        catch: () => new OAuthHarnessError("transport_unavailable", null, context),
       });
     };
 
-    let response = await request(credential);
+    let response = yield* request(credential);
     if (protocol.refreshStatuses.includes(response.status)) {
-      credential = await refresh(credential);
-      response = await request(credential);
+      credential = yield* refreshEffect(credential);
+      response = yield* request(credential);
     }
     if (!response.ok) {
-      const responseText = await response
-        .clone()
-        .text()
-        .catch(() => "");
+      const responseText = yield* nativePromise(() => response.clone().text()).pipe(
+        Effect.orElseSucceed(() => ""),
+      );
       if (
         protocol.provider === "anthropic" &&
         (response.status === 400 || response.status === 422) &&
         /cache[_ -]?control|prompt[_ -]?cach/i.test(responseText)
       )
-        throw new ProviderFeatureRejectedError("anthropic", "prompt-cache", response.status);
+        return yield* new ProviderFeatureRejectedError(
+          "anthropic",
+          "prompt-cache",
+          response.status,
+        );
       const reason = providerReason(responseText);
-      throw new OAuthHarnessError("provider_rejected", response.status, {
+      return yield* new OAuthHarnessError("provider_rejected", response.status, {
         ...context,
         ...optionalProperty("reason", reason),
       });
     }
-    yield* sseEvents(protocol.provider, response);
+    return response;
+  });
+  function stream(
+    serializedBody: string,
+    signal?: AbortSignal,
+  ): AsyncGenerator<NormalizedStreamEvent> {
+    return nativeStream(
+      Stream.fromEffect(streamResponse(serializedBody, signal)).pipe(
+        Stream.flatMap((response) => sseEvents(protocol.provider, response)),
+      ),
+    );
   }
   return { status, disconnect, startLogin, refreshForValidation, modelCatalog, stream };
 }

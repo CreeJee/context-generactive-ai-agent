@@ -1,5 +1,5 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off
+import { it } from "@effect/vitest";
+import { Cause, Effect } from "effect";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ok } from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -9,34 +9,46 @@ import type { ExperimentRecord, HarnessVersion } from "memory-agent";
 import { RrsiSettings } from "./rrsi";
 
 afterEach(() => vi.unstubAllGlobals());
-
-test("settings remain visible while loading and a missing backend API reports restart guidance", async () => {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retryOnMount: false, gcTime: Infinity } },
+const sdkCall = Effect.fn("rrsiSettingsTest.sdkCall")(function* <A>(
+  operation: () => A | PromiseLike<A>,
+) {
+  return yield* Effect.tryPromise({
+    try: () => Promise.resolve(operation()),
+    catch: (cause) => new Cause.UnknownError(cause),
   });
-  const render = () =>
-    renderToStaticMarkup(
-      <QueryClientProvider client={client}>
-        <RrsiSettings />
-      </QueryClientProvider>,
-    );
-  try {
-    vi.stubGlobal("fetch", async () => new Response("Not Found", { status: 404 }));
-    const loading = render();
-    expect(loading).toContain("동작 개선 실험");
-    expect(loading).toContain("개선 실험 설정을 불러오는 중이에요.");
-    const query = client.getQueryCache().find({ queryKey: ["settings", "rrsi"] });
-    ok(query);
-    await expect(query.fetch()).rejects.toThrow("앱 서버를 재시작");
-    const failure = render();
-    expect(failure).toContain("동작 개선 실험");
-    expect(failure).toContain("앱 서버를 재시작");
-    expect(failure).toContain("다시 시도");
-    expect(failure).not.toContain("평가 시작");
-  } finally {
-    client.clear();
-  }
 });
+
+it.live(
+  "settings remain visible while loading and a missing backend API reports restart guidance",
+  () =>
+    Effect.gen(function* () {
+      const client = new QueryClient({
+        defaultOptions: { queries: { retryOnMount: false, gcTime: Infinity } },
+      });
+      const render = () =>
+        renderToStaticMarkup(
+          <QueryClientProvider client={client}>
+            <RrsiSettings />
+          </QueryClientProvider>,
+        );
+      try {
+        vi.stubGlobal("fetch", () => Promise.resolve(new Response("Not Found", { status: 404 })));
+        const loading = render();
+        expect(loading).toContain("동작 개선 실험");
+        expect(loading).toContain("개선 실험 설정을 불러오는 중이에요.");
+        const query = client.getQueryCache().find({ queryKey: ["settings", "rrsi"] });
+        ok(query);
+        yield* sdkCall(() => expect(query.fetch()).rejects.toThrow("앱 서버를 재시작"));
+        const failure = render();
+        expect(failure).toContain("동작 개선 실험");
+        expect(failure).toContain("앱 서버를 재시작");
+        expect(failure).toContain("다시 시도");
+        expect(failure).not.toContain("평가 시작");
+      } finally {
+        client.clear();
+      }
+    }),
+);
 
 test("high evaluation cost is not presented as an applied improvement", () => {
   const client = new QueryClient();
@@ -67,42 +79,46 @@ test("high evaluation cost is not presented as an applied improvement", () => {
   }
 });
 
-test("a failed query can recover and display experiment controls", async () => {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retryOnMount: false, gcTime: Infinity } },
-  });
-  const render = () =>
-    renderToStaticMarkup(
-      <QueryClientProvider client={client}>
-        <RrsiSettings />
-      </QueryClientProvider>,
-    );
-  try {
-    vi.stubGlobal("fetch", async () => Promise.reject(new TypeError("connection unavailable")));
-    render();
-    const query = client.getQueryCache().find({ queryKey: ["settings", "rrsi"] });
-    ok(query);
-    await expect(query.fetch()).rejects.toThrow("connection unavailable");
-    expect(render()).toContain("connection unavailable");
-    vi.stubGlobal("fetch", async () =>
-      Response.json({
-        settings: { enabled: false, maxMinutes: 30 },
-        current: { id: "baseline" },
-        versions: [],
-        experiments: [],
-        running: false,
-        configuredRepository: true,
-      }),
-    );
-    await query.fetch();
-    const recovered = render();
-    expect(recovered).toContain("평가 시작");
-    expect(recovered).toContain("아직 적용된 개선이 없어요");
-    expect(recovered).not.toContain("connection unavailable");
-  } finally {
-    client.clear();
-  }
-});
+it.live("a failed query can recover and display experiment controls", () =>
+  Effect.gen(function* () {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retryOnMount: false, gcTime: Infinity } },
+    });
+    const render = () =>
+      renderToStaticMarkup(
+        <QueryClientProvider client={client}>
+          <RrsiSettings />
+        </QueryClientProvider>,
+      );
+    try {
+      vi.stubGlobal("fetch", () => Promise.reject(new TypeError("connection unavailable")));
+      render();
+      const query = client.getQueryCache().find({ queryKey: ["settings", "rrsi"] });
+      ok(query);
+      yield* sdkCall(() => expect(query.fetch()).rejects.toThrow("connection unavailable"));
+      expect(render()).toContain("connection unavailable");
+      vi.stubGlobal("fetch", () =>
+        Promise.resolve(
+          Response.json({
+            settings: { enabled: false, maxMinutes: 30 },
+            current: { id: "baseline" },
+            versions: [],
+            experiments: [],
+            running: false,
+            configuredRepository: true,
+          }),
+        ),
+      );
+      yield* sdkCall(() => query.fetch());
+      const recovered = render();
+      expect(recovered).toContain("평가 시작");
+      expect(recovered).toContain("아직 적용된 개선이 없어요");
+      expect(recovered).not.toContain("connection unavailable");
+    } finally {
+      client.clear();
+    }
+  }),
+);
 
 const baseline: HarnessVersion = {
   id: "baseline",

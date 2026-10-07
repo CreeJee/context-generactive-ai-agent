@@ -1,9 +1,11 @@
+import { Cause, Clock, Effect } from "effect";
+import { nativePromise, runNativeEffect } from "memory-agent/native-effect";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../app/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { spawn, type ChildProcess } from "node:child_process";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -60,39 +62,46 @@ function completion(child: ChildProcess, label: string) {
 }
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function run(args: readonly string[], env: NodeJS.ProcessEnv, label: string) {
-  const code = await completion(packageCommand(args, env), label);
-  if (code !== 0) throw new Error(`${label} failed with exit code ${code}`);
-}
+const run = Effect.fn("dev.run")(function* (
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+  label: string,
+) {
+  const code = yield* nativePromise(() => completion(packageCommand(args, env), label));
+  if (code !== 0)
+    return yield* new Cause.UnknownError(new Error(`${label} failed with exit code ${code}`));
+});
 
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function waitForBackend(url: string, expectedBuildId: string) {
-  // React/native timestamps use the host Date contract outside Effect execution.
-  const deadline = Date.now() + 30_000;
-  // React/native timestamps use the host Date contract outside Effect execution.
-  while (Date.now() < deadline) {
-    try {
-      // Native Request/Response adapter preserves host and SDK stream semantics.
-      const response = await fetch(`${url}/api/health`, {
-        signal: AbortSignal.timeout(1_000),
-      });
-      const body: unknown = await response.json();
-      const Health = Schema.Struct({
-        buildId: Schema.String,
-        status: Schema.Literals(["ready", "draining"]),
-      });
-      if (response.ok && Schema.is(Health)(body) && body.buildId === expectedBuildId) return;
-    } catch {
-      // The stable backend is still starting.
+const waitForBackend = Effect.fn("dev.waitForBackend")(function* (
+  url: string,
+  expectedBuildId: string,
+) {
+  const deadline = (yield* Clock.currentTimeMillis) + 30_000;
+  const Health = Schema.Struct({
+    buildId: Schema.String,
+    status: Schema.Literals(["ready", "draining"]),
+  });
+  while ((yield* Clock.currentTimeMillis) < deadline) {
+    const response = yield* nativePromise(() =>
+      fetch(`${url}/api/health`, { signal: AbortSignal.timeout(1_000) }),
+    ).pipe(Effect.option);
+    if (Option.isSome(response)) {
+      const body = yield* nativePromise(() => response.value.json()).pipe(Effect.option);
+      if (
+        response.value.ok &&
+        Option.isSome(body) &&
+        Schema.is(Health)(body.value) &&
+        body.value.buildId === expectedBuildId
+      )
+        return;
     }
-    // Native callback heartbeat/debounce timing remains at the protocol boundary.
-    // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    yield* Effect.sleep(100);
   }
-  throw new Error(`stable backend did not become ready at ${url}`);
-}
+  return yield* new Cause.UnknownError(new Error(`stable backend did not become ready at ${url}`));
+});
 
 function writeManifest(manifest: typeof Manifest.Type) {
+  mkdirSync(join(app, "build"), { recursive: true });
   const temporary = `${manifestFile}.${process.pid}.tmp`;
   writeFileSync(temporary, JSON.stringify(manifest), { mode: 0o600 });
   renameSync(temporary, manifestFile);
@@ -144,88 +153,85 @@ function webFrontend(manifest: typeof Manifest.Type) {
 }
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function buildBackend(buildId: string) {
+const buildBackend = Effect.fn("dev.buildBackend")(function* (buildId: string) {
   const env = { CONTEXT_AGENT_BUILD_ID: buildId };
-  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
   console.log("Building the stable agent backend (HMR disabled)...");
-  await run(["exec", "vp", "run", "turbovec#build"], env, "turbovec native build");
-  await run(["exec", "react-router", "build"], env, "react-router build");
-  await run(["exec", "vp", "pack"], env, "vp pack");
-}
+  yield* run(["exec", "vp", "run", "turbovec#build"], env, "turbovec native build");
+  yield* run(["exec", "react-router", "build"], env, "react-router build");
+  yield* run(["exec", "vp", "pack"], env, "vp pack");
+});
 
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function stop(child: ChildProcess | null, signal: NodeJS.Signals) {
+const stop = Effect.fn("dev.stop")(function* (child: ChildProcess | null, signal: NodeJS.Signals) {
   if (child === null || child.exitCode !== null || child.signalCode !== null) return;
   child.kill(signal);
-  await Promise.race([
-    completion(child, "child process").catch(() => undefined),
-    // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-    new Promise<void>((resolve) =>
-      // Native callback heartbeat/debounce timing remains at the protocol boundary.
-      setTimeout(() => {
-        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-        resolve();
-      }, 5_000),
+  yield* nativePromise(() => completion(child, "child process")).pipe(
+    Effect.ignore,
+    Effect.timeoutOption(5_000),
+    Effect.tap((result) =>
+      Effect.sync(() => {
+        if (Option.isNone(result) && child.exitCode === null && child.signalCode === null)
+          child.kill("SIGKILL");
+      }),
     ),
-  ]);
-}
+  );
+});
 
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function runWebOnly() {
+const runWebOnly = Effect.fn("dev.runWebOnly")(function* () {
   const manifest = readManifest();
-  await waitForBackend(manifest.backendUrl, manifest.buildId);
-  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+  yield* waitForBackend(manifest.backendUrl, manifest.buildId);
   console.log(`Stable agent backend: ${manifest.backendUrl}`);
   const web = webFrontend(manifest);
-  process.exitCode = await completion(web, "HMR frontend");
-}
+  process.exitCode = yield* nativePromise(() => completion(web, "HMR frontend"));
+});
 
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-async function runWithBackend(includeWeb: boolean) {
+const runWithBackend = Effect.fn("dev.runWithBackend")(function* (includeWeb: boolean) {
   const buildId = developmentBuildId(app);
-  await buildBackend(buildId);
+  yield* buildBackend(buildId);
   const backend = stableBackend(buildId);
   let web: ChildProcess | null = null;
   let stopping = false;
-
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const shutdown = async (signal: NodeJS.Signals) => {
+  const shutdown = Effect.fn("dev.shutdown")(function* (signal: NodeJS.Signals) {
     if (stopping) return;
     stopping = true;
-    await Promise.all([stop(web, signal), stop(backend, signal)]);
+    yield* Effect.forEach([web, backend], (child) => stop(child, signal), {
+      concurrency: "unbounded",
+      discard: true,
+    });
     removeManifest(buildId);
-  };
-  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const)
-    process.once(signal, () => void shutdown(signal));
-
-  try {
-    await waitForBackend(backendUrl, buildId);
-    writeManifest({ backendUrl, buildId });
-    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-    console.log(`Stable agent backend: ${backendUrl}`);
-
-    if (!includeWeb) {
-      process.exitCode = await completion(backend, "stable backend");
-      return;
-    }
-
-    web = webFrontend({ backendUrl, buildId });
-    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-    console.log(`HMR frontend: http://127.0.0.1:${webPort}`);
-    const first = await Promise.race([
-      completion(backend, "stable backend").then((code) => ({ child: "backend", code })),
-      completion(web, "HMR frontend").then((code) => ({ child: "web", code })),
-    ]);
-    process.exitCode = first.code;
-    await shutdown("SIGTERM");
-  } finally {
-    removeManifest(buildId);
+  });
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+  const handlers = signals.map((signal) => () => void runNativeEffect(shutdown(signal)));
+  signals.forEach((signal, index) => process.once(signal, handlers[index]!));
+  yield* Effect.addFinalizer(() =>
+    shutdown("SIGTERM").pipe(
+      Effect.ensuring(
+        Effect.sync(() =>
+          signals.forEach((signal, index) => process.removeListener(signal, handlers[index]!)),
+        ),
+      ),
+    ),
+  );
+  yield* waitForBackend(backendUrl, buildId);
+  writeManifest({ backendUrl, buildId });
+  console.log(`Stable agent backend: ${backendUrl}`);
+  if (!includeWeb) {
+    process.exitCode = yield* nativePromise(() => completion(backend, "stable backend"));
+    return;
   }
-}
+  web = webFrontend({ backendUrl, buildId });
+  console.log(`HMR frontend: http://127.0.0.1:${webPort}`);
+  const first = yield* nativePromise(() =>
+    Promise.race([
+      completion(backend, "stable backend").then((code) => ({ child: "backend", code })),
+      completion(web!, "HMR frontend").then((code) => ({ child: "web", code })),
+    ]),
+  );
+  process.exitCode = first.code;
+}, Effect.scoped);
 
 try {
-  if (mode === "web") await runWebOnly();
-  else await runWithBackend(mode === "all");
+  if (mode === "web") await runNativeEffect(runWebOnly());
+  else await runNativeEffect(runWithBackend(mode === "all"));
 } catch (error) {
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
   console.error(error instanceof Error ? error.message : "development server failed");

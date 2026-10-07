@@ -16,7 +16,7 @@ const ImportAction = Schema.Union([
  * here yet. File paths are shown; transcript contents are not.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function loader() {
+export function loader() {
   return agent.runPromise(
     Effect.flatMap(Importer, (importer) => importer.overview).pipe(
       Effect.map((overview) => Response.json(overview)),
@@ -32,30 +32,32 @@ export async function loader() {
  * - `interpret` { interpret }: whether migrated statements are interpreted like statements said here.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function action({ request }: Route.ActionArgs) {
-  const rejected = rejectCrossSite(request);
-  if (rejected !== null) return rejected;
-  const body = await readJson(request, ImportAction);
-  if (Result.isFailure(body))
-    return Response.json({ error: "invalid_import_action" }, { status: 400 });
-
+export function action({ request }: Route.ActionArgs) {
   return agent.runPromise(
     Effect.gen(function* () {
-      const importer = yield* Importer;
-      const command = body.success;
-      switch (command.action) {
-        case "run":
-          // Answered at once; the page follows the pass through `activity`.
-          yield* importer.start;
-          break;
-        case "enable":
-        case "disable":
-          yield* importer.setEnabled(command.action === "enable");
-          break;
-        case "interpret":
-          yield* importer.setInterpret(command.interpret);
-      }
-      return Response.json(yield* importer.overview);
+      const rejected = rejectCrossSite(request);
+      if (rejected !== null) return rejected;
+      const body = yield* Effect.tryPromise(() => readJson(request, ImportAction));
+      if (Result.isFailure(body))
+        return Response.json({ error: "invalid_import_action" }, { status: 400 });
+
+      return yield* Effect.gen(function* () {
+        const importer = yield* Importer;
+        const command = body.success;
+        switch (command.action) {
+          case "run":
+            // Answered at once; the page follows the pass through `activity`.
+            yield* importer.start;
+            break;
+          case "enable":
+          case "disable":
+            yield* importer.setEnabled(command.action === "enable");
+            break;
+          case "interpret":
+            yield* importer.setInterpret(command.interpret);
+        }
+        return Response.json(yield* importer.overview);
+      });
     }),
   );
 }

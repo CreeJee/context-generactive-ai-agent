@@ -12,10 +12,18 @@ import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/sessions.$session._index";
 
 const ChangeSession = Schema.Union([
-  Schema.Struct({ archived: Schema.Boolean, idempotencyKey: Schema.optional(Schema.String) }),
-  Schema.Struct({ delete: Schema.Literal(true), idempotencyKey: Schema.String }),
-  Schema.Struct({ phase: WorkflowPhase }),
-  Schema.Struct({ workflowAction: WorkflowAction }),
+  Schema.Struct({
+    _tag: Schema.tagDefaultOmit("Archive"),
+    archived: Schema.Boolean,
+    idempotencyKey: Schema.optional(Schema.String),
+  }),
+  Schema.Struct({
+    _tag: Schema.tagDefaultOmit("Delete"),
+    delete: Schema.Literal(true),
+    idempotencyKey: Schema.String,
+  }),
+  Schema.Struct({ _tag: Schema.tagDefaultOmit("Phase"), phase: WorkflowPhase }),
+  Schema.Struct({ _tag: Schema.tagDefaultOmit("Control"), workflowAction: WorkflowAction }),
 ]);
 
 /**
@@ -24,9 +32,13 @@ const ChangeSession = Schema.Union([
  * whether the asking page holds the session.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function loader({ request, params }: Route.LoaderArgs) {
-  const holder = new URL(request.url).searchParams.get("holder");
-  return agent.runPromise(Effect.flatMap(AgentChat, (chat) => chat.status(params.session, holder)));
+export function loader({ request, params }: Route.LoaderArgs) {
+  return agent.runPromise(
+    Effect.gen(function* () {
+      const holder = new URL(request.url).searchParams.get("holder");
+      return yield* Effect.flatMap(AgentChat, (chat) => chat.status(params.session, holder));
+    }),
+  );
 }
 
 /**
@@ -34,42 +46,53 @@ export async function loader({ request, params }: Route.LoaderArgs) {
  * while it is answering (409) or another page holds it (423).
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function action({ request, params }: Route.ActionArgs) {
-  const rejected = rejectCrossSite(request);
-  if (rejected !== null) return rejected;
-  const body = await readJson(request, ChangeSession);
-  if (Result.isFailure(body))
-    return Response.json({ error: "invalid_session_change" }, { status: 400 });
-  const holder = request.headers.get(sessionHolderHeader);
+export function action({ request, params }: Route.ActionArgs) {
   return agent.runPromise(
     Effect.gen(function* () {
-      const chat = yield* AgentChat;
-      const events = yield* AppEvents;
-      const sessions = yield* Sessions;
-      const session = yield* sessions.get(params.session);
-      const change = body.success;
-      if ("archived" in change) {
-        const result = yield* chat.archive(
-          params.session,
-          holder,
-          change.archived,
-          // HTTP/SDK boundary assigns a cryptographic idempotency token when the caller omitted one.
-          change.idempotencyKey ?? crypto.randomUUID(),
-        );
-        events.publishProject(session.projectId, "sessions");
-        return result;
-      }
-      if ("delete" in change) {
-        const result = yield* chat.deleteSession(params.session, holder, change.idempotencyKey);
-        events.publishProject(session.projectId, "sessions");
-        return result;
-      }
-      const workflow =
-        "phase" in change
-          ? yield* chat.setWorkflowPhase(params.session, holder, change.phase)
-          : yield* chat.controlWorkflow(params.session, holder, change.workflowAction);
-      events.publishSession(params.session, "run-state");
-      return workflow;
+      const rejected = rejectCrossSite(request);
+      if (rejected !== null) return rejected;
+      const body = yield* Effect.tryPromise(() => readJson(request, ChangeSession));
+      if (Result.isFailure(body))
+        return Response.json({ error: "invalid_session_change" }, { status: 400 });
+      const holder = request.headers.get(sessionHolderHeader);
+      return yield* Effect.gen(function* () {
+        const chat = yield* AgentChat;
+        const events = yield* AppEvents;
+        const sessions = yield* Sessions;
+        const session = yield* sessions.get(params.session);
+        const change = body.success;
+        switch (change._tag) {
+          case "Archive": {
+            const result = yield* chat.archive(
+              params.session,
+              holder,
+              change.archived,
+              change.idempotencyKey ?? crypto.randomUUID(),
+            );
+            events.publishProject(session.projectId, "sessions");
+            return result;
+          }
+          case "Delete": {
+            const result = yield* chat.deleteSession(params.session, holder, change.idempotencyKey);
+            events.publishProject(session.projectId, "sessions");
+            return result;
+          }
+          case "Phase": {
+            const workflow = yield* chat.setWorkflowPhase(params.session, holder, change.phase);
+            events.publishSession(params.session, "run-state");
+            return workflow;
+          }
+          case "Control": {
+            const workflow = yield* chat.controlWorkflow(
+              params.session,
+              holder,
+              change.workflowAction,
+            );
+            events.publishSession(params.session, "run-state");
+            return workflow;
+          }
+        }
+      });
     }),
   );
 }

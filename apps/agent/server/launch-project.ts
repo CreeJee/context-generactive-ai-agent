@@ -1,3 +1,5 @@
+import { Effect, Result } from "effect";
+import { nativePromise, runNativeEffect } from "memory-agent/native-effect";
 import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../app/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
@@ -76,15 +78,16 @@ export type OpenedProject =
 
 /** Whether something answering on this address is this app (it lists projects). */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function isThisApp(baseUrl: string) {
-  try {
-    // Native Request/Response adapter preserves host and SDK stream semantics.
-    const response = await fetch(`${baseUrl}/api/projects`, { signal: AbortSignal.timeout(3_000) });
-    return response.ok && Schema.is(Schema.Array(Project))(await response.json());
-  } catch {
-    return false;
-  }
-}
+const isThisAppEffect = Effect.fn("launch.isThisApp")(function* (baseUrl: string) {
+  const response = yield* nativePromise(() =>
+    fetch(`${baseUrl}/api/projects`, { signal: AbortSignal.timeout(3_000) }),
+  );
+  return (
+    response.ok && Schema.is(Schema.Array(Project))(yield* nativePromise(() => response.json()))
+  );
+});
+export const isThisApp = (baseUrl: string) =>
+  runNativeEffect(isThisAppEffect(baseUrl).pipe(Effect.orElseSucceed(() => false)));
 
 /**
  * Registers the folder as a project on the running app, or finds it if it is registered already.
@@ -94,24 +97,40 @@ export async function isThisApp(baseUrl: string) {
 export const openProject: {
   (root: string): (baseUrl: string) => ReturnType<typeof openProjectBody>;
 } & typeof openProjectBody = EffectFunction.dual(2, openProjectBody);
-async function openProjectBody(baseUrl: string, root: string): Promise<OpenedProject> {
-  // Native Request/Response adapter preserves host and SDK stream semantics.
-  const response = await fetch(`${baseUrl}/api/projects`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ root }),
-  });
-  const body: unknown = await response.json();
+function openProjectBody(baseUrl: string, root: string): Promise<OpenedProject> {
+  return runNativeEffect(openProjectEffect(baseUrl, root));
+}
+export const openProjectEffect = Effect.fn("launch.openProject")(function* (
+  baseUrl: string,
+  root: string,
+) {
+  const response = yield* nativePromise(() =>
+    fetch(`${baseUrl}/api/projects`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: Result.getOrThrow(
+        Schema.encodeResult(Schema.fromJsonString(Schema.Struct({ root: Schema.String })))({
+          root,
+        }),
+      ),
+    }),
+  );
+  const body: unknown = yield* nativePromise(() => response.json());
   if (response.status === 201 && Schema.is(Project)(body))
-    return { kind: "opened", projectId: body.id, added: true };
-  if (!Schema.is(Rejected)(body)) return { kind: "rejected", reason: `status ${response.status}` };
-  if (body.reason !== "already_registered") return { kind: "rejected", reason: body.reason };
-  // Native Request/Response adapter preserves host and SDK stream semantics.
-  const projects: unknown = await (await fetch(`${baseUrl}/api/projects`)).json();
+    return { kind: "opened", projectId: body.id, added: true } as const satisfies OpenedProject;
+  if (!Schema.is(Rejected)(body))
+    return {
+      kind: "rejected",
+      reason: `status ${response.status}`,
+    } as const satisfies OpenedProject;
+  if (body.reason !== "already_registered")
+    return { kind: "rejected", reason: body.reason } as const satisfies OpenedProject;
+  const listing = yield* nativePromise(() => fetch(`${baseUrl}/api/projects`));
+  const projects: unknown = yield* nativePromise(() => listing.json());
   const existing = Schema.is(Schema.Array(Project))(projects)
     ? projects.find((project) => project.root === root)
     : undefined;
   return isTruthy(existing)
-    ? { kind: "opened", projectId: existing.id, added: false }
-    : { kind: "rejected", reason: "already_registered" };
-}
+    ? ({ kind: "opened", projectId: existing.id, added: false } as const satisfies OpenedProject)
+    : ({ kind: "rejected", reason: "already_registered" } as const satisfies OpenedProject);
+});

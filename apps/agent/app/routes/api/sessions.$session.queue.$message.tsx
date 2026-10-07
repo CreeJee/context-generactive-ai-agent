@@ -16,20 +16,22 @@ const QueueEdit = Schema.Union([
  * or confirm a held message. Only the page holding the session may change the queue.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function action({ request, params }: Route.ActionArgs) {
-  const rejected = rejectCrossSite(request);
-  if (rejected !== null) return rejected;
-  const body = await readJson(request, QueueEdit);
-  if (Result.isFailure(body))
-    return Response.json({ error: "invalid_queue_edit" }, { status: 400 });
-  const holder = request.headers.get(sessionHolderHeader);
+export function action({ request, params }: Route.ActionArgs) {
   return agent.runPromise(
-    Effect.flatMap(AgentChat, (chat) =>
-      chat.editQueued(params.session, holder, params.message, body.success),
-    ).pipe(
-      Effect.tap(() =>
-        Effect.map(AppEvents, (events) => events.publishSession(params.session, "queue")),
-      ),
-    ),
+    Effect.gen(function* () {
+      const rejected = rejectCrossSite(request);
+      if (rejected !== null) return rejected;
+      const body = yield* Effect.tryPromise(() => readJson(request, QueueEdit));
+      if (Result.isFailure(body))
+        return Response.json({ error: "invalid_queue_edit" }, { status: 400 });
+      const holder = request.headers.get(sessionHolderHeader);
+      return yield* Effect.flatMap(AgentChat, (chat) =>
+        chat.editQueued(params.session, holder, params.message, body.success),
+      ).pipe(
+        Effect.tap(() =>
+          Effect.map(AppEvents, (events) => events.publishSession(params.session, "queue")),
+        ),
+      );
+    }),
   );
 }

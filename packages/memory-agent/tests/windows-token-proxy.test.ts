@@ -1,5 +1,5 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off
+import { it } from "@effect/vitest";
+import { Effect } from "effect";
 import { expect, test } from "vite-plus/test";
 import {
   classifyWindowsProxyOutput,
@@ -33,9 +33,8 @@ test("distinguishes direct, unavailable and usable proxy decisions without retur
   });
 });
 
-test.skipIf(process.platform === "win32")(
-  "never queries Windows settings on another OS",
-  async () => {
-    expect(await windowsTokenProxy()).toEqual({ route: "unavailable" });
-  },
+it.effect.skipIf(process.platform === "win32")("never queries Windows settings on another OS", () =>
+  Effect.gen(function* () {
+    expect(yield* Effect.promise(() => windowsTokenProxy())).toEqual({ route: "unavailable" });
+  }),
 );

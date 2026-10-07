@@ -1,4 +1,5 @@
-import { MutableHashSet, HashMap, MutableHashMap, Effect } from "effect";
+import { nativeFailure, nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
+import { Cause, Function, Result, MutableHashSet, HashMap, MutableHashMap, Effect } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "node:crypto";
@@ -51,6 +52,10 @@ interface BridgeSession {
   turn: PromptTurn | null;
 }
 
+const stringifyJson = Function.flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
 const requestError = (message: string) => acp.RequestError.internalError(undefined, message);
 
 const failureMessages = HashMap.fromIterable([
@@ -188,7 +193,7 @@ export function startAcpAgent(options: {
                 text: cut(
                   Schema.is(Schema.String)(chunk.content)
                     ? chunk.content
-                    : JSON.stringify(chunk.content),
+                    : stringifyJson(chunk.content),
                 ),
               },
             },
@@ -204,16 +209,22 @@ export function startAcpAgent(options: {
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const open = async (sessionId: string, project: ProjectSummary, messages: UIMessage[]) => {
+  const open = Effect.fn("AcpAgent.open")(function* (
+    sessionId: string,
+    project: ProjectSummary,
+    messages: UIMessage[],
+  ) {
     const holder = `acp-${randomUUID()}`;
-    const lease = await api.lease(sessionId, holder, "claim");
+    const lease = yield* nativePromise(() => api.lease(sessionId, holder, "claim"));
     if (lease.state !== "mine")
-      throw AppRequestFailed.make({
-        status: 423,
-        code: "session_in_use",
-        message: "session_in_use (423)",
-        reason: { _tag: "RequestRejected" },
-      });
+      return yield* new Cause.UnknownError(
+        AppRequestFailed.make({
+          status: 423,
+          code: "session_in_use",
+          message: "session_in_use (423)",
+          reason: { _tag: "RequestRejected" },
+        }),
+      );
     // Native callback heartbeat/debounce timing remains at the protocol boundary.
     const renew = setInterval(
       () => void api.lease(sessionId, holder, "claim").catch(() => undefined),
@@ -239,39 +250,40 @@ export function startAcpAgent(options: {
     };
     MutableHashMap.set(sessions, sessionId, session);
     return session;
-  };
+  });
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const projectFor = async (cwd: string) => {
-    let root: string;
-    try {
-      root = realpathSync(cwd);
-    } catch {
-      throw requestError(`폴더를 찾을 수 없어요: ${cwd}`);
-    }
-    const project = (await api.projects()).find((candidate) => candidate.root === root);
+  const projectFor = Effect.fn("AcpAgent.projectFor")(function* (cwd: string) {
+    const root = yield* Effect.try({
+      try: () => realpathSync(cwd),
+      catch: () => new Cause.UnknownError(requestError(`폴더를 찾을 수 없어요: ${cwd}`)),
+    });
+    const project = (yield* nativePromise(() => api.projects())).find(
+      (candidate) => candidate.root === root,
+    );
     // Registering a project widens what the file tools may touch, so only the app's page does it.
     if (!isTruthy(project))
-      throw requestError(`등록된 프로젝트가 아니에요. 앱에서 ${root}를 먼저 추가하세요.`);
+      return yield* new Cause.UnknownError(
+        requestError(`등록된 프로젝트가 아니에요. 앱에서 ${root}를 먼저 추가하세요.`),
+      );
     return project;
-  };
+  });
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const waitIdle = async (chat: Chat) => {
-    while (chat.getIsLoading()) await Effect.runPromise(Effect.sleep(50));
-  };
+  const waitIdle = Effect.fn("AcpAgent.waitIdle")(function* (chat: Chat) {
+    while (chat.getIsLoading()) yield* Effect.sleep(50);
+  });
 
   /** Asks the editor about one call; anything but an explicit allow is a no. */
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const askEditor = async (
+  const askEditor = Effect.fn("AcpAgent.askEditor")(function* (
     turn: PromptTurn,
     sessionId: string,
     call: { toolCallId: string; toolName: string; argumentsJson: string; requester?: string },
-  ) => {
+  ) {
     const view = toolView(call.toolName);
-    const response: RequestPermissionResponse = await turn.client.request(
-      acp.methods.client.session.requestPermission,
-      {
+    const response: RequestPermissionResponse = yield* nativePromise(() =>
+      turn.client.request(acp.methods.client.session.requestPermission, {
         sessionId,
         toolCall: {
           toolCallId: call.toolCallId,
@@ -284,10 +296,10 @@ export function startAcpAgent(options: {
           { optionId: "allow", name: "이번 한 번 허용", kind: "allow_once" },
           { optionId: "reject", name: "거부", kind: "reject_once" },
         ],
-      },
+      }),
     );
     return response.outcome.outcome === "selected" && response.outcome.optionId === "allow";
-  };
+  });
 
   /** Relays calls of subagents and external agents that wait for approval, while the turn runs. */
   const relayApprovals = (session: BridgeSession, turn: PromptTurn) => {
@@ -300,12 +312,14 @@ export function startAcpAgent(options: {
           for (const approval of approvals) {
             if (MutableHashSet.has(asked, approval.id)) continue;
             MutableHashSet.add(asked, approval.id);
-            void askEditor(turn, session.id, {
-              toolCallId: approval.id,
-              toolName: approval.toolName,
-              argumentsJson: approval.argumentsJson,
-              requester: requesterLabel(approval.requester),
-            })
+            void runNativeEffect(
+              askEditor(turn, session.id, {
+                toolCallId: approval.id,
+                toolName: approval.toolName,
+                argumentsJson: approval.argumentsJson,
+                requester: requesterLabel(approval.requester),
+              }),
+            )
               .then((approved) =>
                 api.answerApproval(session.id, session.holder, approval.id, approved),
               )
@@ -320,169 +334,210 @@ export function startAcpAgent(options: {
   const app = acp
     .agent({ name: "context-generactive-agent" })
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    .onRequest(acp.methods.agent.initialize, async () => ({
-      protocolVersion: acp.PROTOCOL_VERSION,
-      agentCapabilities: {
-        loadSession: true,
-        promptCapabilities: { image: false, audio: false, embeddedContext: true },
-      },
-      agentInfo: { name: "context-generactive-agent", version: "0.0.0" },
-      authMethods: [],
-    }))
+    .onRequest(acp.methods.agent.initialize, () =>
+      Promise.resolve({
+        protocolVersion: acp.PROTOCOL_VERSION,
+        agentCapabilities: {
+          loadSession: true,
+          promptCapabilities: { image: false, audio: false, embeddedContext: true },
+        },
+        agentInfo: { name: "context-generactive-agent", version: "0.0.0" },
+        authMethods: [],
+      }),
+    )
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    .onRequest(acp.methods.agent.authenticate, async () => ({}))
+    .onRequest(acp.methods.agent.authenticate, () => Promise.resolve({}))
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    .onRequest(acp.methods.agent.session.new, async (ctx) => {
-      try {
-        const auth = await api.auth();
-        if (auth.status !== "signed-in")
-          throw AppRequestFailed.make({
-            status: 401,
-            code: "login_required",
-            message: "login_required (401)",
-            reason: { _tag: "RequestRejected" },
-          });
-        const project = await projectFor(ctx.params.cwd);
-        // MCP servers an editor offers are not trusted here; the app's own MCP settings apply.
-        const created = await api.createSession(project.id, "ACP");
-        await open(created.id, project, []);
-        return { sessionId: created.id };
-      } catch (error) {
-        throw explain(error instanceof Error ? error : new Error(String(error)));
-      }
-    })
+    .onRequest(acp.methods.agent.session.new, (ctx) =>
+      runNativeEffect(
+        Effect.gen(function* () {
+          const auth = yield* nativePromise(() => api.auth());
+          if (auth.status !== "signed-in")
+            return yield* new Cause.UnknownError(
+              AppRequestFailed.make({
+                status: 401,
+                code: "login_required",
+                message: "login_required (401)",
+                reason: { _tag: "RequestRejected" },
+              }),
+            );
+          const project = yield* projectFor(ctx.params.cwd);
+          // MCP servers an editor offers are not trusted here; the app's own MCP settings apply.
+          const created = yield* nativePromise(() => api.createSession(project.id, "ACP"));
+          yield* open(created.id, project, []);
+          return { sessionId: created.id };
+        }).pipe(
+          Effect.catchCause((cause) => {
+            const error = nativeFailure(cause).cause;
+            return Effect.fail(
+              new Cause.UnknownError(
+                explain(error instanceof Error ? error : new Error(String(error))),
+              ),
+            );
+          }),
+        ),
+      ),
+    )
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    .onRequest(acp.methods.agent.session.load, async (ctx) => {
-      try {
-        const project = await projectFor(ctx.params.cwd);
-        const messages = await api.transcript(ctx.params.sessionId);
-        const session =
-          Option.getOrUndefined(MutableHashMap.get(sessions, ctx.params.sessionId)) ??
-          (await open(ctx.params.sessionId, project, messages));
-        // Replays the saved conversation, so the editor shows what the page shows.
-        for (const message of messages)
-          for (const part of message.parts)
-            switch (part.type) {
-              case "text":
-                await ctx.client.notify(acp.methods.client.session.update, {
-                  sessionId: session.id,
-                  update: {
-                    sessionUpdate:
-                      message.role === "user" ? "user_message_chunk" : "agent_message_chunk",
-                    content: { type: "text", text: part.content },
-                    messageId: message.id,
-                  },
-                });
-                break;
-              case "tool-call": {
-                const view = toolView(part.name);
-                await ctx.client.notify(acp.methods.client.session.update, {
-                  sessionId: session.id,
-                  update: {
-                    sessionUpdate: "tool_call",
-                    toolCallId: part.id,
-                    title: toolDetail(part.arguments) ?? view.title,
-                    kind: view.kind,
-                    status: "completed",
-                    rawInput: part.arguments,
-                  },
-                });
-                break;
+    .onRequest(acp.methods.agent.session.load, (ctx) =>
+      runNativeEffect(
+        Effect.gen(function* () {
+          const project = yield* projectFor(ctx.params.cwd);
+          const messages = yield* nativePromise(() => api.transcript(ctx.params.sessionId));
+          const session =
+            Option.getOrUndefined(MutableHashMap.get(sessions, ctx.params.sessionId)) ??
+            (yield* open(ctx.params.sessionId, project, messages));
+          // Replays the saved conversation, so the editor shows what the page shows.
+          for (const message of messages)
+            for (const part of message.parts)
+              switch (part.type) {
+                case "text":
+                  yield* nativePromise(() =>
+                    ctx.client.notify(acp.methods.client.session.update, {
+                      sessionId: session.id,
+                      update: {
+                        sessionUpdate:
+                          message.role === "user" ? "user_message_chunk" : "agent_message_chunk",
+                        content: { type: "text", text: part.content },
+                        messageId: message.id,
+                      },
+                    }),
+                  );
+                  break;
+                case "tool-call": {
+                  const view = toolView(part.name);
+                  yield* nativePromise(() =>
+                    ctx.client.notify(acp.methods.client.session.update, {
+                      sessionId: session.id,
+                      update: {
+                        sessionUpdate: "tool_call",
+                        toolCallId: part.id,
+                        title: toolDetail(part.arguments) ?? view.title,
+                        kind: view.kind,
+                        status: "completed",
+                        rawInput: part.arguments,
+                      },
+                    }),
+                  );
+                  break;
+                }
+                default:
+                  break;
               }
-              default:
-                break;
-            }
-        return {};
-      } catch (error) {
-        throw explain(error instanceof Error ? error : new Error(String(error)));
-      }
-    })
+          return {};
+        }).pipe(
+          Effect.catchCause((cause) => {
+            const error = nativeFailure(cause).cause;
+            return Effect.fail(
+              new Cause.UnknownError(
+                explain(error instanceof Error ? error : new Error(String(error))),
+              ),
+            );
+          }),
+        ),
+      ),
+    )
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    .onRequest(acp.methods.agent.session.prompt, async (ctx) => {
-      const session = Option.getOrUndefined(MutableHashMap.get(sessions, ctx.params.sessionId));
-      if (!isTruthy(session))
-        throw requestError("그런 세션이 없어요. 새로 시작하거나 다시 불러오세요.");
-      if (isTruthy(session.turn)) throw requestError("이미 답하는 중이에요.");
-      const turn: PromptTurn = {
-        client: ctx.client,
-        args: MutableHashMap.empty(),
-        cancelled: false,
-        failure: null,
-      };
-      session.turn = turn;
-      const stopRelay = relayApprovals(session, turn);
-      try {
-        await session.chat.sendMessage(promptText(ctx.params.prompt));
-        await waitIdle(session.chat);
-        // Approvals: the run pauses; the editor answers each, and the run continues.
-        for (;;) {
-          const interrupts = session.chat.getInterrupts();
-          if (interrupts.length === 0 || turn.cancelled) break;
-          const answers = MutableHashMap.empty<string, boolean>();
-          for (const interrupt of interrupts)
-            switch (interrupt.kind) {
-              case "tool-approval":
-                MutableHashMap.set(
-                  answers,
-                  interrupt.id,
-                  await askEditor(turn, session.id, {
-                    toolCallId: interrupt.toolCallId,
-                    toolName: interrupt.toolName,
-                    argumentsJson: JSON.stringify(interrupt.originalArgs),
-                  }),
-                );
-                break;
-              case "generic": {
-                const review = Option.getOrUndefined(decodeReview(interrupt));
-                if (!(review !== undefined)) break;
-                MutableHashMap.set(
-                  answers,
-                  interrupt.id,
-                  await askEditor(turn, session.id, {
-                    toolCallId: review.payload.toolCallId,
-                    toolName: review.payload.toolName,
-                    argumentsJson: review.payload.arguments,
-                  }),
-                );
-                break;
-              }
-              case "unbound":
-                break;
+    .onRequest(acp.methods.agent.session.prompt, (ctx) =>
+      runNativeEffect(
+        Effect.gen(function* () {
+          const session = Option.getOrUndefined(MutableHashMap.get(sessions, ctx.params.sessionId));
+          if (!isTruthy(session))
+            return yield* new Cause.UnknownError(
+              requestError("그런 세션이 없어요. 새로 시작하거나 다시 불러오세요."),
+            );
+          if (isTruthy(session.turn))
+            return yield* new Cause.UnknownError(requestError("이미 답하는 중이에요."));
+          const turn: PromptTurn = {
+            client: ctx.client,
+            args: MutableHashMap.empty(),
+            cancelled: false,
+            failure: null,
+          };
+          session.turn = turn;
+          const stopRelay = relayApprovals(session, turn);
+          return yield* Effect.gen(function* () {
+            yield* nativePromise(() => session.chat.sendMessage(promptText(ctx.params.prompt)));
+            yield* waitIdle(session.chat);
+            // Approvals: the run pauses; the editor answers each, and the run continues.
+            for (;;) {
+              const interrupts = session.chat.getInterrupts();
+              if (interrupts.length === 0 || turn.cancelled) break;
+              const answers = MutableHashMap.empty<string, boolean>();
+              for (const interrupt of interrupts)
+                switch (interrupt.kind) {
+                  case "tool-approval":
+                    MutableHashMap.set(
+                      answers,
+                      interrupt.id,
+                      yield* askEditor(turn, session.id, {
+                        toolCallId: interrupt.toolCallId,
+                        toolName: interrupt.toolName,
+                        argumentsJson: stringifyJson(interrupt.originalArgs),
+                      }),
+                    );
+                    break;
+                  case "generic": {
+                    const review = Option.getOrUndefined(decodeReview(interrupt));
+                    if (!(review !== undefined)) break;
+                    MutableHashMap.set(
+                      answers,
+                      interrupt.id,
+                      yield* askEditor(turn, session.id, {
+                        toolCallId: review.payload.toolCallId,
+                        toolName: review.payload.toolName,
+                        argumentsJson: review.payload.arguments,
+                      }),
+                    );
+                    break;
+                  }
+                  case "unbound":
+                    break;
+                }
+              session.chat.resolveInterrupts((interrupt) => {
+                const approved =
+                  Option.getOrUndefined(MutableHashMap.get(answers, interrupt.id)) ?? false;
+                switch (interrupt.kind) {
+                  case "tool-approval":
+                    interrupt.resolveInterrupt(approved);
+                    break;
+                  case "generic":
+                    if (interrupt.binding.definitionId === permissionReviewInterrupt.id)
+                      interrupt.resolveInterrupt({ approved });
+                    break;
+                }
+                return undefined;
+              });
+              yield* Effect.sleep(50);
+              yield* waitIdle(session.chat);
             }
-          session.chat.resolveInterrupts((interrupt) => {
-            const approved =
-              Option.getOrUndefined(MutableHashMap.get(answers, interrupt.id)) ?? false;
-            switch (interrupt.kind) {
-              case "tool-approval":
-                interrupt.resolveInterrupt(approved);
-                break;
-              case "generic":
-                if (interrupt.binding.definitionId === permissionReviewInterrupt.id)
-                  interrupt.resolveInterrupt({ approved });
-                break;
-            }
-            return undefined;
-          });
-          await Effect.runPromise(Effect.sleep(50));
-          await waitIdle(session.chat);
-        }
-        if (turn.cancelled) return { stopReason: "cancelled" satisfies StopReason };
-        const failure = turn.failure ?? session.chat.getError()?.message ?? null;
-        if (isTruthy(failure)) throw requestError(failure);
-        return { stopReason: "end_turn" satisfies StopReason };
-      } finally {
-        stopRelay();
-        session.turn = null;
-      }
-    })
+            if (turn.cancelled) return { stopReason: "cancelled" as const satisfies StopReason };
+            const failure = turn.failure ?? session.chat.getError()?.message ?? null;
+            if (isTruthy(failure)) return yield* new Cause.UnknownError(requestError(failure));
+            return { stopReason: "end_turn" as const satisfies StopReason };
+          }).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                stopRelay();
+                session.turn = null;
+              }),
+            ),
+          );
+        }),
+      ),
+    )
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    .onNotification(acp.methods.agent.session.cancel, async (ctx) => {
-      const session = Option.getOrUndefined(MutableHashMap.get(sessions, ctx.params.sessionId));
-      if (!isTruthy(session?.turn)) return;
-      session.turn.cancelled = true;
-      // The app's cancel stops the run for good; closing the stream alone would not (R10).
-      await api.cancel(session.id, session.holder).catch(() => undefined);
-    });
+    .onNotification(acp.methods.agent.session.cancel, (ctx) =>
+      runNativeEffect(
+        Effect.gen(function* () {
+          const session = Option.getOrUndefined(MutableHashMap.get(sessions, ctx.params.sessionId));
+          if (!isTruthy(session?.turn)) return;
+          session.turn.cancelled = true;
+          // The app's cancel stops the run for good; closing the stream alone would not (R10).
+          yield* nativePromise(() => api.cancel(session.id, session.holder)).pipe(Effect.ignore);
+        }),
+      ),
+    );
 
   const connection = app.connect(options.stream);
   void connection.closed.finally(() => {

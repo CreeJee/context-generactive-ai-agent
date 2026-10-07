@@ -1,7 +1,6 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off
+import { it } from "@effect/vitest";
 import { isTruthy } from "../src/truthy.ts";
-import { Schema } from "effect";
+import { Cause, Effect, Schema } from "effect";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, test } from "vite-plus/test";
 import {
@@ -31,7 +30,7 @@ function fixture() {
     db,
     "report",
     "p",
-    async (text) => text.replaceAll("SECRET", "[redacted]"),
+    (text) => Promise.resolve(text.replaceAll("SECRET", "[redacted]")),
     () => [
       {
         id: "task",
@@ -55,12 +54,16 @@ function fixture() {
       },
     ],
   );
-  const invoke = async (name: string, input: Schema.Json): Promise<any> => {
-    const tool = tools.find((entry) => entry.name === name);
-    if (!isTruthy(tool?.execute)) throw new Error(`Missing tool ${name}`);
-    // SAFETY: each tool server decodes its own input schema, including invalid-input test cases.
-    return tool.execute(input as never);
-  };
+  const invoke = (name: string, input: Schema.Json) =>
+    Effect.tryPromise({
+      try: () => {
+        const tool = tools.find((entry) => entry.name === name);
+        if (!isTruthy(tool?.execute)) throw new Error(`Missing tool ${name}`);
+        // SAFETY: each tool server decodes its own input schema, including invalid-input test cases.
+        return Promise.resolve(tool.execute(input as never));
+      },
+      catch: (cause) => new Cause.UnknownError(cause),
+    });
   return { db, tools, invoke };
 }
 
@@ -85,135 +88,154 @@ describe("report evidence tools", () => {
         db,
         "bad-report",
         "p",
-        async (x) => x,
+        (x) => Promise.resolve(x),
         () => [],
       ),
     ).toEqual([]);
     db.close();
   });
 
-  test("cannot read other sessions, projects or arbitrary ids", async () => {
-    const { db, invoke } = fixture();
-    for (const [section, id] of [
-      ["run", "other-run"],
-      ["approval", "2"],
-      ["approval", "1xyz"],
-      ["node", "other-node"],
-      ["node", "foreign-node"],
-      ["trace", "foreign-task"],
-      ["node", "unknown"],
-    ]) {
-      expect(await invoke("read_report_item", { section, id })).toEqual({ error: "not_found" });
-    }
-    await expect(
-      invoke("list_report_evidence", { section: "calls", offset: 201 }),
-    ).rejects.toThrow();
-    db.close();
-  });
+  it.effect("cannot read other sessions, projects or arbitrary ids", () =>
+    Effect.gen(function* () {
+      const { invoke } = yield* Effect.acquireRelease(Effect.sync(fixture), (resource) =>
+        Effect.sync(() => resource.db.close()),
+      );
+      for (const [section, id] of [
+        ["run", "other-run"],
+        ["approval", "2"],
+        ["approval", "1xyz"],
+        ["node", "other-node"],
+        ["node", "foreign-node"],
+        ["trace", "foreign-task"],
+        ["node", "unknown"],
+      ]) {
+        expect(yield* invoke("read_report_item", { section, id })).toEqual({ error: "not_found" });
+      }
+      expect(
+        (yield* Effect.flip(invoke("list_report_evidence", { section: "calls", offset: 201 })))
+          .cause,
+      ).toBeInstanceOf(Error);
+    }),
+  );
 
-  test("initial context contains bounded source calls/results, gaps, and redacted provenance", async () => {
-    const { db } = fixture();
-    db.prepare(
-      'UPDATE nodes SET detail = \'{"toolCallId":"call-1","ok":false}\' WHERE id = \'result\'',
-    ).run();
-    for (let i = 0; i < 15; i++) {
-      db.prepare(
-        "INSERT INTO nodes(id,seq,session_id,project_id,kind,created_at,text,detail) VALUES (?,?, 'source','p','tool_result','2026-01-06','recent success','{\"ok\":true}')",
-      ).run(`success-${i}`, 10 + i);
-    }
-    db.prepare(
-      "INSERT INTO nodes(id,seq,session_id,project_id,kind,created_at,text,detail) VALUES ('failed',0,'source','p','tool_result','2026-01-01','old failed output','{\"ok\":false}')",
-    ).run();
-    const context = await initialReportEvidence(
-      db,
-      "report",
-      "p",
-      async (text) => text.replaceAll("SECRET", "[redacted]"),
-      () => [
-        {
-          id: "source-task",
-          projectId: "p",
-          originSessionId: "source",
-          status: "failed",
-          title: "SECRET trace",
-          request: "",
-          parentToolCallId: "call-1",
-          createdAt: 12,
-        },
-        {
-          id: "private-task",
-          projectId: "q",
-          originSessionId: "foreign",
-          status: "failed",
-          title: "private",
-          request: "",
-          parentToolCallId: "x",
-          createdAt: 13,
-        },
-      ],
-    );
-    expect(context).toContain("old failed output");
-    expect(context).toContain("[redacted] result");
-    expect(context).not.toContain("[redacted] invocation");
-    expect(context).toContain("toolCallId");
-    expect(context).toContain("source-task");
-    expect(context).toContain("transcript: available");
-    expect(context).not.toContain("SECRET");
-    expect(context).not.toContain("private");
-    expect(context.length).toBeLessThanOrEqual(20_100);
-    db.exec("DROP TABLE permission_reviews");
-    const missing = await initialReportEvidence(
-      db,
-      "report",
-      "p",
-      async (x) => x,
-      () => [],
-    );
-    expect(missing).toContain("approvals: failed");
-    db.close();
-  });
+  it.effect(
+    "initial context contains bounded source calls/results, gaps, and redacted provenance",
+    () =>
+      Effect.gen(function* () {
+        const { db } = yield* Effect.acquireRelease(Effect.sync(fixture), (resource) =>
+          Effect.sync(() => resource.db.close()),
+        );
+        db.prepare(
+          'UPDATE nodes SET detail = \'{"toolCallId":"call-1","ok":false}\' WHERE id = \'result\'',
+        ).run();
+        for (let i = 0; i < 15; i++) {
+          db.prepare(
+            "INSERT INTO nodes(id,seq,session_id,project_id,kind,created_at,text,detail) VALUES (?,?, 'source','p','tool_result','2026-01-06','recent success','{\"ok\":true}')",
+          ).run(`success-${i}`, 10 + i);
+        }
+        db.prepare(
+          "INSERT INTO nodes(id,seq,session_id,project_id,kind,created_at,text,detail) VALUES ('failed',0,'source','p','tool_result','2026-01-01','old failed output','{\"ok\":false}')",
+        ).run();
+        const context = yield* Effect.promise(() =>
+          initialReportEvidence(
+            db,
+            "report",
+            "p",
+            (text) => Promise.resolve(text.replaceAll("SECRET", "[redacted]")),
+            () => [
+              {
+                id: "source-task",
+                projectId: "p",
+                originSessionId: "source",
+                status: "failed",
+                title: "SECRET trace",
+                request: "",
+                parentToolCallId: "call-1",
+                createdAt: 12,
+              },
+              {
+                id: "private-task",
+                projectId: "q",
+                originSessionId: "foreign",
+                status: "failed",
+                title: "private",
+                request: "",
+                parentToolCallId: "x",
+                createdAt: 13,
+              },
+            ],
+          ),
+        );
+        expect(context).toContain("old failed output");
+        expect(context).toContain("[redacted] result");
+        expect(context).not.toContain("[redacted] invocation");
+        expect(context).toContain("toolCallId");
+        expect(context).toContain("source-task");
+        expect(context).toContain("transcript: available");
+        expect(context).not.toContain("SECRET");
+        expect(context).not.toContain("private");
+        expect(context.length).toBeLessThanOrEqual(20_100);
+        db.exec("DROP TABLE permission_reviews");
+        const missing = yield* Effect.promise(() =>
+          initialReportEvidence(
+            db,
+            "report",
+            "p",
+            (x) => Promise.resolve(x),
+            () => [],
+          ),
+        );
+        expect(missing).toContain("approvals: failed");
+      }),
+  );
 
-  test("revoking or rebinding the source invalidates an already issued tool", async () => {
-    const { db, invoke } = fixture();
-    db.exec(
-      "UPDATE report_sessions SET source_session_id = 'other' WHERE report_session_id = 'report'",
-    );
-    expect(await invoke("read_report_item", { section: "node", id: "call" })).toEqual({
-      error: "not_found",
-    });
-    expect(await invoke("list_report_evidence", { section: "calls", offset: 0 })).toEqual({
-      error: "not_found",
-    });
-    db.close();
-  });
+  it.effect("revoking or rebinding the source invalidates an already issued tool", () =>
+    Effect.gen(function* () {
+      const { db, invoke } = yield* Effect.acquireRelease(Effect.sync(fixture), (resource) =>
+        Effect.sync(() => resource.db.close()),
+      );
+      db.exec(
+        "UPDATE report_sessions SET source_session_id = 'other' WHERE report_session_id = 'report'",
+      );
+      expect(yield* invoke("read_report_item", { section: "node", id: "call" })).toEqual({
+        error: "not_found",
+      });
+      expect(yield* invoke("list_report_evidence", { section: "calls", offset: 0 })).toEqual({
+        error: "not_found",
+      });
+    }),
+  );
 
-  test("read and list cap text, redact it and attribute calls and status/time", async () => {
-    const { db, invoke } = fixture();
-    const call = await invoke("read_report_item", { section: "node", id: "result" });
-    expect(call).toMatchObject({
-      id: "result",
-      section: "node",
-      status: "tool_result",
-      time: "2026-01-02",
-      toolCallId: "call-1",
-      text: "[redacted] result",
-      truncated: false,
-    });
-    const approval = await invoke("read_report_item", { section: "approval", id: "1" });
-    expect(approval.text).toContain("[redacted]");
-    expect(approval.toolCallId).toBe("call-1");
-    const run = await invoke("read_report_item", { section: "run", id: "run" });
-    expect(run).toMatchObject({ status: "failed", time: 10, text: "[redacted] failure" });
-    const long = await invoke("read_report_item", { section: "node", id: "long" });
-    expect(long.text).toHaveLength(8000);
-    expect(long.truncated).toBe(true);
-    const calls = await invoke("list_report_evidence", { section: "calls" });
-    expect(calls.items.map((item: { id: string }) => item.id)).toEqual(["result", "call"]);
-    expect(calls.items[0].toolCallId).toBe("call-1");
-    const trace = await invoke("read_report_item", { section: "trace", id: "task" });
-    expect(trace.text).toContain("[redacted] request");
-    expect(trace.toolCallId).toBe("call-1");
-    expect((await invoke("list_report_evidence", { section: "trace" })).items).toHaveLength(1);
-    db.close();
-  });
+  it.effect("read and list cap text, redact it and attribute calls and status/time", () =>
+    Effect.gen(function* () {
+      const { invoke } = yield* Effect.acquireRelease(Effect.sync(fixture), (resource) =>
+        Effect.sync(() => resource.db.close()),
+      );
+      const call = yield* invoke("read_report_item", { section: "node", id: "result" });
+      expect(call).toMatchObject({
+        id: "result",
+        section: "node",
+        status: "tool_result",
+        time: "2026-01-02",
+        toolCallId: "call-1",
+        text: "[redacted] result",
+        truncated: false,
+      });
+      const approval = yield* invoke("read_report_item", { section: "approval", id: "1" });
+      expect(approval.text).toContain("[redacted]");
+      expect(approval.toolCallId).toBe("call-1");
+      const run = yield* invoke("read_report_item", { section: "run", id: "run" });
+      expect(run).toMatchObject({ status: "failed", time: 10, text: "[redacted] failure" });
+      const long = yield* invoke("read_report_item", { section: "node", id: "long" });
+      expect(long.text).toHaveLength(8000);
+      expect(long.truncated).toBe(true);
+      const calls = yield* invoke("list_report_evidence", { section: "calls" });
+      expect(calls.items.map((item: { id: string }) => item.id)).toEqual(["result", "call"]);
+      expect(calls.items[0].toolCallId).toBe("call-1");
+      const trace = yield* invoke("read_report_item", { section: "trace", id: "task" });
+      expect(trace.text).toContain("[redacted] request");
+      expect(trace.toolCallId).toBe("call-1");
+      expect((yield* invoke("list_report_evidence", { section: "trace" })).items).toHaveLength(1);
+    }),
+  );
 });

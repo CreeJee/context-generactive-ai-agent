@@ -17,15 +17,18 @@ const CreateSession = Schema.Struct({
  * `archived=1`, only the archived ones.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function loader({ request }: Route.LoaderArgs) {
-  const params = new URL(request.url).searchParams;
-  const projectId = params.get("project");
-  if (!isTruthy(projectId)) return Response.json({ error: "project_required" }, { status: 400 });
-  const archived = params.get("archived") === "1";
-  return Response.json(
-    await agent.runPromise(
-      Effect.flatMap(Sessions, (sessions) => sessions.list(projectId, archived)),
-    ),
+export function loader({ request }: Route.LoaderArgs) {
+  return agent.runPromise(
+    Effect.gen(function* () {
+      const params = new URL(request.url).searchParams;
+      const projectId = params.get("project");
+      if (!isTruthy(projectId))
+        return Response.json({ error: "project_required" }, { status: 400 });
+      const archived = params.get("archived") === "1";
+      return Response.json(
+        yield* Effect.flatMap(Sessions, (sessions) => sessions.list(projectId, archived)),
+      );
+    }),
   );
 }
 
@@ -34,26 +37,31 @@ export async function loader({ request }: Route.LoaderArgs) {
  * the app's model or directly with a trusted external agent.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function action({ request }: Route.ActionArgs) {
-  const rejected = rejectCrossSite(request);
-  if (rejected !== null) return rejected;
-  const body = await readJson(request, CreateSession);
-  if (Result.isFailure(body)) return Response.json({ error: "invalid_session" }, { status: 400 });
+export function action({ request }: Route.ActionArgs) {
+  return agent.runPromise(
+    Effect.gen(function* () {
+      const rejected = rejectCrossSite(request);
+      if (rejected !== null) return rejected;
+      const body = yield* Effect.tryPromise(() => readJson(request, CreateSession));
+      if (Result.isFailure(body))
+        return Response.json({ error: "invalid_session" }, { status: 400 });
 
-  const { projectId, title, agent: external } = body.success;
-  const response = Effect.gen(function* () {
-    if (isTruthy(external)) {
-      const project = yield* (yield* Projects).get(projectId);
-      if (!(yield* ExternalAgents).available(project).includes(external))
-        return Response.json({ error: "external_agent_unavailable" }, { status: 409 });
-    }
-    const session = yield* (yield* Sessions).create(projectId, title ?? null, external ?? null);
-    (yield* AppEvents).publishProject(projectId, "sessions");
-    return Response.json(session, { status: 201 });
-  }).pipe(
-    Effect.catchTag("ProjectNotFound", () =>
-      Effect.succeed(Response.json({ error: "project_not_found" }, { status: 404 })),
-    ),
+      const { projectId, title, agent: external } = body.success;
+      const response = Effect.gen(function* () {
+        if (isTruthy(external)) {
+          const project = yield* (yield* Projects).get(projectId);
+          if (!(yield* ExternalAgents).available(project).includes(external))
+            return Response.json({ error: "external_agent_unavailable" }, { status: 409 });
+        }
+        const session = yield* (yield* Sessions).create(projectId, title ?? null, external ?? null);
+        (yield* AppEvents).publishProject(projectId, "sessions");
+        return Response.json(session, { status: 201 });
+      }).pipe(
+        Effect.catchTag("ProjectNotFound", () =>
+          Effect.succeed(Response.json({ error: "project_not_found" }, { status: 404 })),
+        ),
+      );
+      return yield* response;
+    }),
   );
-  return agent.runPromise(response);
 }

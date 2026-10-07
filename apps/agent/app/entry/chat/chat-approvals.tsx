@@ -1,3 +1,5 @@
+import { runUiEffect, uiPromise } from "../shared/ui-effect";
+import { Effect } from "effect";
 import { RefreshCwIcon } from "lucide-react";
 import { useState } from "react";
 import { useLoading } from "react-simplikit";
@@ -58,18 +60,21 @@ export function ChatApprovals({
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const discard = async () => {
-    try {
-      await trackDiscard(api.discardInterrupts(sessionId, holder));
-      onResync();
-    } catch (failure) {
-      onProblem(
-        isApiError(failure) && failure.code === "run_in_progress"
-          ? "실행 중인 응답이 끝난 뒤 다시 시도해 주세요."
-          : "끊어진 승인 요청을 폐기하지 못했어요.",
-      );
-    }
-  };
+  const discard = () =>
+    runUiEffect(
+      uiPromise(() => trackDiscard(api.discardInterrupts(sessionId, holder))).pipe(
+        Effect.tap(() => Effect.sync(onResync)),
+        Effect.catch((failure) =>
+          Effect.sync(() =>
+            onProblem(
+              isApiError(failure.cause) && failure.cause.code === "run_in_progress"
+                ? "실행 중인 응답이 끝난 뒤 다시 시도해 주세요."
+                : "끊어진 승인 요청을 폐기하지 못했어요.",
+            ),
+          ),
+        ),
+      ),
+    );
 
   return (
     <>

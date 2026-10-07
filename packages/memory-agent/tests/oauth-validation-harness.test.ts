@@ -1,9 +1,20 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off globalFetch:off globalTimers:off newPromise:off nodeBuiltinImport:off
-import { MutableHashMap, Option, DateTime } from "effect";
+import { it } from "@effect/vitest";
+// OAuth clients retain native HTTP/credential Promise boundaries; test ownership uses Scope.
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Fiber,
+  Function as EffectFunction,
+  MutableHashMap,
+  Option,
+  DateTime,
+  Result,
+  Schema,
+  Stream,
+} from "effect";
 import { createServer, type IncomingMessage } from "node:http";
-import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, test } from "vite-plus/test";
+import { describe, expect, test } from "vite-plus/test";
 import {
   createSubscriptionOAuthClient,
   OAuthHarnessError,
@@ -22,90 +33,185 @@ import {
 class MemoryCredentialStore implements CredentialStore {
   readonly values = MutableHashMap.empty<OAuthProvider, StoredCredential>();
   writes = 0;
-  async read(provider: OAuthProvider) {
-    return Option.getOrUndefined(MutableHashMap.get(this.values, provider)) ?? null;
+  read(provider: OAuthProvider) {
+    return Promise.resolve(
+      Option.getOrUndefined(MutableHashMap.get(this.values, provider)) ?? null,
+    );
   }
-  async write(provider: OAuthProvider, credential: StoredCredential) {
+  write(provider: OAuthProvider, credential: StoredCredential) {
     this.writes += 1;
     MutableHashMap.set(this.values, provider, credential);
+    return Promise.resolve();
   }
-  async remove(provider: OAuthProvider) {
+  remove(provider: OAuthProvider) {
     MutableHashMap.remove(this.values, provider);
+    return Promise.resolve();
   }
 }
 
-test.each(["cancel", "timeout"] as const)(
-  "%s after callback admission never writes late token results",
-  async (mode) => {
-    const store = new MemoryCredentialStore();
-    const previous = {
-      accessToken: "previous",
-      refreshToken: "previous-refresh",
-      expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 3600_000,
-    };
-    await store.write("openai", previous);
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let entered!: () => void;
-    const exchanging = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
-    const client = createSubscriptionOAuthClient({
-      protocol: { ...providerProtocols.openai, callbackPort: null },
-      store,
-      fetch: async () => {
-        entered();
-        await gate;
-        return Response.json({
-          access_token: "late",
-          refresh_token: "late-refresh",
-          expires_in: 3600,
+it.live(
+  "catalog owner cancellation reaches the native HTTP signal without credential writes",
+  () => {
+    const callerOwner = new AbortController();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const scope = yield* Effect.scope;
+        const runNative = Effect.runPromiseWith(yield* Effect.context());
+        const runSdk = <A>(program: Effect.Effect<A, Cause.UnknownError>) =>
+          runNative(
+            Effect.forkIn(Effect.result(program), scope).pipe(Effect.flatMap(Fiber.join)),
+          ).then(
+            Result.match({
+              onSuccess: (value) => value,
+              onFailure: (failure) => Promise.reject(failure.cause),
+            }),
+          );
+
+        const store = new MemoryCredentialStore();
+        yield* sdkCall(() =>
+          store.write("openai", {
+            accessToken: "fixture",
+            refreshToken: "fixture",
+            expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 3600_000,
+          }),
+        );
+        const owner = callerOwner;
+        let observed: AbortSignal | null | undefined;
+        const starting = yield* Deferred.make<void>();
+        const client = createSubscriptionOAuthClient({
+          protocol: providerProtocols.openai,
+          store,
+          fetch: (_url, init) =>
+            runSdk(
+              Effect.gen(function* () {
+                observed = init?.signal;
+                yield* Deferred.succeed(starting, undefined);
+                return yield* Effect.callback<Response, Cause.UnknownError>((resume) => {
+                  const abort = () =>
+                    resume(
+                      Effect.fail(
+                        new Cause.UnknownError(new DOMException("Aborted fixture", "AbortError")),
+                      ),
+                    );
+                  observed?.addEventListener("abort", abort, { once: true });
+                  if (observed?.aborted === true) abort();
+                  return Effect.sync(() => observed?.removeEventListener("abort", abort));
+                });
+              }),
+            ),
         });
-      },
-    });
-    const login = await client.startLogin({ timeoutMs: mode === "timeout" ? 100 : 5000 });
-    const completed = login.completed.catch((error: OAuthHarnessError) => error);
-    const authorize = new URL(login.authorizationUrl);
-    const callback = new URL(authorize.searchParams.get("redirect_uri")!);
-    callback.searchParams.set("code", "accepted-code");
-    callback.searchParams.set("state", authorize.searchParams.get("state")!);
-    const response = fetch(callback);
-    try {
-      await exchanging;
-      if (mode === "cancel") login.cancel();
-      else await new Promise((resolve) => setTimeout(resolve, 150));
-      release();
-      const rejected = await response;
-      expect(rejected.status).toBe(410);
-      await rejected.text();
-      expect(await completed).toMatchObject({
-        code: mode === "cancel" ? "cancelled" : "callback_timeout",
-      });
-      expect(await store.read("openai")).toEqual(previous);
-      expect(store.writes).toBe(1);
-    } finally {
-      release();
-      login.cancel();
-      await response.then((result) => result.text()).catch(() => {});
-      await completed;
-    }
+        const outcome = client
+          .modelCatalog(owner.signal)
+          .catch((failure: OAuthHarnessError) => failure);
+        yield* Deferred.await(starting);
+        owner.abort();
+        expect(observed?.aborted).toBe(true);
+        expect(yield* sdkCall(() => outcome)).toMatchObject({
+          code: "transport_unavailable",
+          operation: "model_catalog",
+        });
+        expect(store.writes).toBe(1);
+      }),
+    );
   },
 );
 
-const closers: Array<() => Promise<void>> = [];
-afterEach(async () => {
-  for (const close of closers.splice(0)) await close();
+it.live.each(["cancel", "timeout"] as const)(
+  "%s after callback admission never writes late token results",
+  (mode) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scope = yield* Effect.scope;
+        const runNative = Effect.runPromiseWith(yield* Effect.context());
+        const runSdk = <A>(program: Effect.Effect<A, Cause.UnknownError>) =>
+          runNative(
+            Effect.forkIn(Effect.result(program), scope).pipe(Effect.flatMap(Fiber.join)),
+          ).then(
+            Result.match({
+              onSuccess: (value) => value,
+              onFailure: (failure) => Promise.reject(failure.cause),
+            }),
+          );
+
+        const store = new MemoryCredentialStore();
+        const previous = {
+          accessToken: "previous",
+          refreshToken: "previous-refresh",
+          expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 3600_000,
+        };
+        yield* sdkCall(() => store.write("openai", previous));
+        const gate = yield* Deferred.make<void>();
+        const exchanging = yield* Deferred.make<void>();
+        yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
+        const client = createSubscriptionOAuthClient({
+          protocol: { ...providerProtocols.openai, callbackPort: null },
+          store,
+          fetch: () =>
+            runSdk(
+              Effect.gen(function* () {
+                yield* Deferred.succeed(exchanging, undefined);
+                yield* Deferred.await(gate);
+                return Response.json({
+                  access_token: "late",
+                  refresh_token: "late-refresh",
+                  expires_in: 3600,
+                });
+              }),
+            ),
+        });
+        const login = yield* sdkCall(() =>
+          client.startLogin({ timeoutMs: mode === "timeout" ? 100 : 5000 }),
+        );
+        const completed = login.completed.catch((error: OAuthHarnessError) => error);
+        const authorize = new URL(login.authorizationUrl);
+        const callback = new URL(authorize.searchParams.get("redirect_uri")!);
+        callback.searchParams.set("code", "accepted-code");
+        callback.searchParams.set("state", authorize.searchParams.get("state")!);
+        const response = yield* Effect.forkChild(
+          sdkCall(() => fetch(callback)),
+          { startImmediately: true },
+        );
+        try {
+          yield* Deferred.await(exchanging);
+          if (mode === "cancel") login.cancel();
+          else yield* Effect.sleep("150 millis");
+          yield* Deferred.succeed(gate, undefined);
+          const rejected = yield* Fiber.join(response);
+          expect(rejected.status).toBe(410);
+          yield* sdkCall(() => rejected.text());
+          expect(yield* sdkCall(() => completed)).toMatchObject({
+            code: mode === "cancel" ? "cancelled" : "callback_timeout",
+          });
+          expect(yield* sdkCall(() => store.read("openai"))).toEqual(previous);
+          expect(store.writes).toBe(1);
+        } finally {
+          yield* Deferred.succeed(gate, undefined);
+          login.cancel();
+          yield* Fiber.join(response).pipe(
+            Effect.flatMap((result) => sdkCall(() => result.text())),
+            Effect.orElseSucceed(() => ""),
+          );
+          yield* sdkCall(() => completed);
+        }
+      }),
+    ),
+);
+
+const sdkCall = <A>(call: () => A | PromiseLike<A>) =>
+  Effect.tryPromise(() => Promise.resolve(call()));
+const jsonStringify = EffectFunction.flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
+const body = Effect.fn("readOAuthFixtureBody")(function* (request: IncomingMessage) {
+  const chunks = yield* Stream.runCollect(
+    Stream.fromAsyncIterable(request, (cause) => new Cause.UnknownError(cause)),
+  );
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
 });
 
-const body = async (request: IncomingMessage) => {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) chunks.push(Buffer.from(chunk));
-  return Buffer.concat(chunks).toString("utf8");
-};
-
-async function fakeProvider(provider: OAuthProvider) {
+const fakeProvider = Effect.fn("fakeOAuthProvider")(function* (provider: OAuthProvider) {
+  const runNative = Effect.runPromiseWith(yield* Effect.context());
   let tokenRequests = 0;
   let refreshRequests = 0;
   let modelRequests = 0;
@@ -118,106 +224,127 @@ async function fakeProvider(provider: OAuthProvider) {
   const modelHeaders: Array<Record<string, string | string[] | undefined>> = [];
   const catalogHeaders: Array<Record<string, string | string[] | undefined>> = [];
   const catalogUrls: string[] = [];
-  const server = createServer(async (request, response) => {
-    const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    if (url.pathname === "/authorize") {
-      authorizations.push(url.search);
-      const redirect = new URL(url.searchParams.get("redirect_uri") ?? "");
-      redirect.searchParams.set("code", "authorization-code-secret");
-      redirect.searchParams.set("state", url.searchParams.get("state") ?? "");
-      response.writeHead(302, { Location: redirect.toString() }).end();
-      return;
-    }
-    if (url.pathname === "/token") {
-      tokenRequests += 1;
-      const raw = await body(request);
-      tokenBodies.push(raw);
-      const isRefresh =
-        request.headers["content-type"] === "application/json"
-          ? raw.includes('"grant_type":"refresh_token"')
-          : new URLSearchParams(raw).get("grant_type") === "refresh_token";
-      if (isRefresh) refreshRequests += 1;
-      if (isRefresh && rejectRefresh) {
-        response.writeHead(401).end();
-        return;
-      }
-      const suffix = isRefresh ? "2" : "1";
-      const claims = Buffer.from(
-        JSON.stringify({
-          "https://api.openai.com/auth": { chatgpt_account_id: "account-internal-1" },
-        }),
-      ).toString("base64url");
-      response.writeHead(200, { "Content-Type": "application/json" }).end(
-        JSON.stringify({
-          access_token: `access-secret-${suffix}`,
-          refresh_token: `refresh-secret-${suffix}`,
-          id_token: `header.${claims}.signature`,
-          expires_in: 3_600,
-        }),
-      );
-      return;
-    }
-    if (url.pathname === "/catalog") {
-      catalogRequests += 1;
-      catalogHeaders.push(request.headers);
-      catalogUrls.push(url.toString());
-      if (forceUnauthorized && request.headers.authorization === "Bearer access-secret-1") {
-        response.writeHead(provider === "openai" ? 401 : 403).end();
-        return;
-      }
-      response.writeHead(200, { "Content-Type": "application/json" });
-      if (provider === "openai") response.end(JSON.stringify({ models: [{ slug: "gpt-test" }] }));
-      else if (url.searchParams.get("after_id") === "page-1")
-        response.end(JSON.stringify({ data: [{ id: "claude-page-2" }], has_more: false }));
-      else
-        response.end(
-          JSON.stringify({
-            data: [{ id: "claude-page-1" }],
-            has_more: true,
-            last_id: "page-1",
+  const server = createServer((request, response) => {
+    void runNative(
+      Effect.gen(function* () {
+        const url = new URL(request.url ?? "/", "http://127.0.0.1");
+        if (url.pathname === "/authorize") {
+          authorizations.push(url.search);
+          const redirect = new URL(url.searchParams.get("redirect_uri") ?? "");
+          redirect.searchParams.set("code", "authorization-code-secret");
+          redirect.searchParams.set("state", url.searchParams.get("state") ?? "");
+          response.writeHead(302, { Location: redirect.toString() }).end();
+          return;
+        }
+        if (url.pathname === "/token") {
+          tokenRequests += 1;
+          const raw = yield* body(request);
+          tokenBodies.push(raw);
+          const isRefresh =
+            request.headers["content-type"] === "application/json"
+              ? raw.includes('"grant_type":"refresh_token"')
+              : new URLSearchParams(raw).get("grant_type") === "refresh_token";
+          if (isRefresh) refreshRequests += 1;
+          if (isRefresh && rejectRefresh) {
+            response.writeHead(401).end();
+            return;
+          }
+          const suffix = isRefresh ? "2" : "1";
+          const claims = Buffer.from(
+            jsonStringify({
+              "https://api.openai.com/auth": { chatgpt_account_id: "account-internal-1" },
+            }),
+          ).toString("base64url");
+          response.writeHead(200, { "Content-Type": "application/json" }).end(
+            jsonStringify({
+              access_token: `access-secret-${suffix}`,
+              refresh_token: `refresh-secret-${suffix}`,
+              id_token: `header.${claims}.signature`,
+              expires_in: 3_600,
+            }),
+          );
+          return;
+        }
+        if (url.pathname === "/catalog") {
+          catalogRequests += 1;
+          catalogHeaders.push(request.headers);
+          catalogUrls.push(url.toString());
+          if (forceUnauthorized && request.headers.authorization === "Bearer access-secret-1") {
+            response.writeHead(provider === "openai" ? 401 : 403).end();
+            return;
+          }
+          response.writeHead(200, { "Content-Type": "application/json" });
+          if (provider === "openai")
+            response.end(jsonStringify({ models: [{ slug: "gpt-test" }] }));
+          else if (url.searchParams.get("after_id") === "page-1")
+            response.end(jsonStringify({ data: [{ id: "claude-page-2" }], has_more: false }));
+          else
+            response.end(
+              jsonStringify({
+                data: [{ id: "claude-page-1" }],
+                has_more: true,
+                last_id: "page-1",
+              }),
+            );
+          return;
+        }
+        if (url.pathname === "/model") {
+          modelRequests += 1;
+          modelHeaders.push(request.headers);
+          modelBodies.push(yield* body(request));
+          if (forceUnauthorized && request.headers.authorization === "Bearer access-secret-1") {
+            response.writeHead(401).end();
+            return;
+          }
+          response.writeHead(200, { "Content-Type": "text/event-stream" });
+          if (provider === "openai") {
+            response.write('data: {"type":"response.output_text.delta","delta":"hello"}\n\n');
+            response.write(
+              'data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call-1","name":"lookup","arguments":"{\\\"q\\\":\\\"x\\\"}"}}\n\n',
+            );
+          } else {
+            response.write(
+              'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}\n\n',
+            );
+            response.write(
+              'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call-1","name":"lookup","input":{}}}\n\n',
+            );
+            response.write(
+              `data: ${jsonStringify({
+                type: "content_block_delta",
+                index: 1,
+                delta: { type: "input_json_delta", partial_json: '{"q":"x"}' },
+              })}\n\n`,
+            );
+            response.write('data: {"type":"content_block_stop","index":1}\n\n');
+          }
+          response.end("data: [DONE]\n\n");
+          return;
+        }
+        response.writeHead(404).end();
+      }).pipe(
+        Effect.catchCause(() =>
+          Effect.sync(() => {
+            response.writeHead(500).end();
           }),
-        );
-      return;
-    }
-    if (url.pathname === "/model") {
-      modelRequests += 1;
-      modelHeaders.push(request.headers);
-      modelBodies.push(await body(request));
-      if (forceUnauthorized && request.headers.authorization === "Bearer access-secret-1") {
-        response.writeHead(401).end();
-        return;
-      }
-      response.writeHead(200, { "Content-Type": "text/event-stream" });
-      if (provider === "openai") {
-        response.write('data: {"type":"response.output_text.delta","delta":"hello"}\n\n');
-        response.write(
-          'data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call-1","name":"lookup","arguments":"{\\\"q\\\":\\\"x\\\"}"}}\n\n',
-        );
-      } else {
-        response.write(
-          'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}\n\n',
-        );
-        response.write(
-          'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call-1","name":"lookup","input":{}}}\n\n',
-        );
-        response.write(
-          `data: ${JSON.stringify({
-            type: "content_block_delta",
-            index: 1,
-            delta: { type: "input_json_delta", partial_json: '{"q":"x"}' },
-          })}\n\n`,
-        );
-        response.write('data: {"type":"content_block_stop","index":1}\n\n');
-      }
-      response.end("data: [DONE]\n\n");
-      return;
-    }
-    response.writeHead(404).end();
+        ),
+      ),
+    ).catch(() => {
+      response.destroy();
+    });
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  closers.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
-  // SAFETY: the fake server was bound to a TCP host/port, never to an IPC pipe.
-  const { port } = server.address() as AddressInfo;
+  yield* Effect.addFinalizer(() =>
+    Effect.callback<void>((resume) => {
+      server.closeAllConnections();
+      server.close(() => resume(Effect.void));
+    }),
+  );
+  yield* Effect.callback<void>((resume) => {
+    server.listen(0, "127.0.0.1", () => resume(Effect.void));
+  });
+  const { port } = yield* Schema.decodeUnknownEffect(Schema.Struct({ port: Schema.Int }))(
+    server.address(),
+  );
   const base = `http://127.0.0.1:${port}`;
   const original = providerProtocols[provider];
   const protocol: ProviderProtocol = {
@@ -246,14 +373,14 @@ async function fakeProvider(provider: OAuthProvider) {
       rejectRefresh = true;
     },
   };
-}
+});
 
-async function login(harness: OAuthValidationHarness) {
-  const attempt = await harness.startLogin({ timeoutMs: 1_000 });
-  const browser = await fetch(attempt.authorizationUrl);
+const login = Effect.fn("loginOAuthFixture")(function* (harness: OAuthValidationHarness) {
+  const attempt = yield* sdkCall(() => harness.startLogin({ timeoutMs: 1_000 }));
+  const browser = yield* sdkCall(() => fetch(attempt.authorizationUrl));
   expect(browser.status).toBe(200);
-  return attempt.completed;
-}
+  return yield* sdkCall(() => attempt.completed);
+});
 
 test("identifies the provider, operation and HTTP status without exposing response data", () => {
   const error = new OAuthHarnessError("provider_rejected", 429, {
@@ -272,379 +399,569 @@ test("identifies the provider, operation and HTTP status without exposing respon
   );
 });
 
-test("reports a browser denial without exposing OAuth callback parameters", async () => {
-  const fake = await fakeProvider("openai");
-  const harness = OAuthValidationHarness({
-    protocol: fake.protocol,
-    store: new MemoryCredentialStore(),
-  });
-  const attempt = await harness.startLogin({ timeoutMs: 1_000 });
-  const completion = expect(attempt.completed).rejects.toMatchObject({
-    code: "provider_rejected",
-    operation: "login_callback",
-    providerCode: "access_denied",
-  });
-  const authorize = new URL(attempt.authorizationUrl);
-  const callback = new URL(authorize.searchParams.get("redirect_uri")!);
-  callback.searchParams.set("state", authorize.searchParams.get("state")!);
-  callback.searchParams.set("error", "access_denied");
-  callback.searchParams.set("error_description", "secret-from-browser");
-  expect((await fetch(callback)).status).toBe(400);
-  await completion;
-});
+it.live("reports a browser denial without exposing OAuth callback parameters", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fake = yield* fakeProvider("openai");
+      const harness = OAuthValidationHarness({
+        protocol: fake.protocol,
+        store: new MemoryCredentialStore(),
+      });
+      const attempt = yield* sdkCall(() => harness.startLogin({ timeoutMs: 1_000 }));
+      const completion = expect(attempt.completed).rejects.toMatchObject({
+        code: "provider_rejected",
+        operation: "login_callback",
+        providerCode: "access_denied",
+      });
+      const authorize = new URL(attempt.authorizationUrl);
+      const callback = new URL(authorize.searchParams.get("redirect_uri")!);
+      callback.searchParams.set("state", authorize.searchParams.get("state")!);
+      callback.searchParams.set("error", "access_denied");
+      callback.searchParams.set("error_description", "secret-from-browser");
+      expect((yield* sdkCall(() => fetch(callback))).status).toBe(400);
+      yield* sdkCall(() => completion);
+    }),
+  ),
+);
 
-test("reports credential write failure without blaming the provider or exposing tokens", async () => {
-  const fake = await fakeProvider("openai");
-  const store: CredentialStore = {
-    read: async () => null,
-    write: async () => {
-      throw new OAuthHarnessError("credential_store_unavailable", null, {
-        provider: "openai",
+it.live("reports credential write failure without blaming the provider or exposing tokens", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const scope = yield* Effect.scope;
+      const runNative = Effect.runPromiseWith(yield* Effect.context());
+      const runSdk = <A>(program: Effect.Effect<A, Cause.UnknownError>) =>
+        runNative(
+          Effect.forkIn(Effect.result(program), scope).pipe(Effect.flatMap(Fiber.join)),
+        ).then(
+          Result.match({
+            onSuccess: (value) => value,
+            onFailure: (failure) => Promise.reject(failure.cause),
+          }),
+        );
+
+      const fake = yield* fakeProvider("openai");
+      const store: CredentialStore = {
+        read: () => Promise.resolve(null),
+        write: () =>
+          runSdk(
+            Effect.fail(
+              new Cause.UnknownError(
+                new OAuthHarnessError("credential_store_unavailable", null, {
+                  provider: "openai",
+                  operation: "credential_store",
+                  credentialStage: "write",
+                  reason: "private-native-error",
+                }),
+              ),
+            ),
+          ),
+        remove: () => Promise.resolve(),
+      };
+      const harness = OAuthValidationHarness({ protocol: fake.protocol, store });
+      const attempt = yield* sdkCall(() => harness.startLogin({ timeoutMs: 1_000 }));
+      const completion = expect(attempt.completed).rejects.toMatchObject({
+        code: "credential_store_unavailable",
         operation: "credential_store",
         credentialStage: "write",
-        reason: "private-native-error",
       });
-    },
-    remove: async () => {},
-  };
-  const harness = OAuthValidationHarness({ protocol: fake.protocol, store });
-  const attempt = await harness.startLogin({ timeoutMs: 1_000 });
-  const completion = expect(attempt.completed).rejects.toMatchObject({
-    code: "credential_store_unavailable",
-    operation: "credential_store",
-    credentialStage: "write",
-  });
-  const browser = await fetch(attempt.authorizationUrl);
-  expect(browser.status).toBe(502);
-  const text = await browser.text();
-  expect(text).toContain("credential store is unavailable");
-  expect(text).not.toContain("private-native-error");
-  expect(text).not.toContain("access-secret");
-  await completion;
-});
+      const browser = yield* sdkCall(() => fetch(attempt.authorizationUrl));
+      expect(browser.status).toBe(502);
+      const text = yield* sdkCall(() => browser.text());
+      expect(text).toContain("credential store is unavailable");
+      expect(text).not.toContain("private-native-error");
+      expect(text).not.toContain("access-secret");
+      yield* sdkCall(() => completion);
+    }),
+  ),
+);
 
-test("classifies token exchange transport failures without exposing native error text", async () => {
-  const fake = await fakeProvider("openai");
-  const harness = OAuthValidationHarness({
-    protocol: fake.protocol,
-    store: new MemoryCredentialStore(),
-    fetch: async () => {
-      throw new TypeError("private network detail", {
-        cause: Object.assign(new Error("private host detail"), { code: "ENETUNREACH" }),
-      });
-    },
-  });
-  const attempt = await harness.startLogin({ timeoutMs: 1_000 });
-  const completion = attempt.completed.catch((error: OAuthHarnessError) => error);
-  expect((await fetch(attempt.authorizationUrl)).status).toBe(502);
-  const failure = await completion;
-  expect(failure).toMatchObject({
-    code: "transport_unavailable",
-    operation: "token_exchange",
-    transportCode: "ENETUNREACH",
-  });
-  expect(JSON.stringify(failure)).not.toContain("private network detail");
-  expect(JSON.stringify(failure)).not.toContain("private host detail");
-});
+it.live("classifies token exchange transport failures without exposing native error text", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const scope = yield* Effect.scope;
+      const runNative = Effect.runPromiseWith(yield* Effect.context());
+      const runSdk = <A>(program: Effect.Effect<A, Cause.UnknownError>) =>
+        runNative(
+          Effect.forkIn(Effect.result(program), scope).pipe(Effect.flatMap(Fiber.join)),
+        ).then(
+          Result.match({
+            onSuccess: (value) => value,
+            onFailure: (failure) => Promise.reject(failure.cause),
+          }),
+        );
 
-test("retries an OpenAI pre-connect timeout once on a scoped proxy route", async () => {
-  const fake = await fakeProvider("openai");
-  let proxyCalls = 0;
-  const harness = OAuthValidationHarness({
-    protocol: fake.protocol,
-    store: new MemoryCredentialStore(),
-    fetch: async () => {
-      throw new TypeError("fetch failed", {
-        cause: Object.assign(new Error("connect timeout"), { code: "UND_ERR_CONNECT_TIMEOUT" }),
+      const fake = yield* fakeProvider("openai");
+      const harness = OAuthValidationHarness({
+        protocol: fake.protocol,
+        store: new MemoryCredentialStore(),
+        fetch: () =>
+          runSdk(
+            Effect.fail(
+              new Cause.UnknownError(
+                new TypeError("private network detail", {
+                  cause: Object.assign(new Error("private host detail"), { code: "ENETUNREACH" }),
+                }),
+              ),
+            ),
+          ),
       });
-    },
-    tokenProxyFetch: async (url, body, contentType) => {
-      proxyCalls += 1;
-      expect(url).toBe(fake.protocol.tokenUrl);
-      return {
-        route: "attempted",
-        response: await fetch(url, {
-          method: "POST",
-          body,
-          headers: { "Content-Type": contentType },
-        }),
-      };
-    },
-  });
-  expect(await login(harness)).toMatchObject({ provider: "openai", connected: true });
-  expect(proxyCalls).toBe(1);
-  expect(fake.counts().tokenRequests).toBe(1);
-});
+      const attempt = yield* sdkCall(() => harness.startLogin({ timeoutMs: 1_000 }));
+      const completion = attempt.completed.catch((error: OAuthHarnessError) => error);
+      expect((yield* sdkCall(() => fetch(attempt.authorizationUrl))).status).toBe(502);
+      const failure = yield* sdkCall(() => completion);
+      expect(failure).toMatchObject({
+        code: "transport_unavailable",
+        operation: "token_exchange",
+        transportCode: "ENETUNREACH",
+      });
+      expect(jsonStringify(failure)).not.toContain("private network detail");
+      expect(jsonStringify(failure)).not.toContain("private host detail");
+    }),
+  ),
+);
+
+it.live("retries an OpenAI pre-connect timeout once on a scoped proxy route", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const scope = yield* Effect.scope;
+      const runNative = Effect.runPromiseWith(yield* Effect.context());
+      const runSdk = <A>(program: Effect.Effect<A, Cause.UnknownError>) =>
+        runNative(
+          Effect.forkIn(Effect.result(program), scope).pipe(Effect.flatMap(Fiber.join)),
+        ).then(
+          Result.match({
+            onSuccess: (value) => value,
+            onFailure: (failure) => Promise.reject(failure.cause),
+          }),
+        );
+
+      const fake = yield* fakeProvider("openai");
+      let proxyCalls = 0;
+      const harness = OAuthValidationHarness({
+        protocol: fake.protocol,
+        store: new MemoryCredentialStore(),
+        fetch: () =>
+          runSdk(
+            Effect.fail(
+              new Cause.UnknownError(
+                new TypeError("fetch failed", {
+                  cause: Object.assign(new Error("connect timeout"), {
+                    code: "UND_ERR_CONNECT_TIMEOUT",
+                  }),
+                }),
+              ),
+            ),
+          ),
+        tokenProxyFetch: (url, body, contentType) =>
+          runSdk(
+            Effect.gen(function* () {
+              proxyCalls += 1;
+              expect(url).toBe(fake.protocol.tokenUrl);
+              return {
+                route: "attempted" as const,
+                response: yield* sdkCall(() =>
+                  fetch(url, {
+                    method: "POST",
+                    body,
+                    headers: { "Content-Type": contentType },
+                  }),
+                ),
+              };
+            }),
+          ),
+      });
+      expect(yield* login(harness)).toMatchObject({ provider: "openai", connected: true });
+      expect(proxyCalls).toBe(1);
+      expect(fake.counts().tokenRequests).toBe(1);
+    }),
+  ),
+);
 
 for (const route of ["direct", "unavailable", "attempted"] as const) {
-  test(`reports proxy route ${route} without exposing the proxy address`, async () => {
-    const fake = await fakeProvider("openai");
-    const harness = OAuthValidationHarness({
-      protocol: fake.protocol,
-      store: new MemoryCredentialStore(),
-      fetch: async () => {
-        throw new TypeError("fetch failed", {
-          cause: Object.assign(new Error("connect timeout"), { code: "UND_ERR_CONNECT_TIMEOUT" }),
-        });
-      },
-      tokenProxyFetch: async () => {
-        if (route === "attempted")
-          throw new TypeError("http://private-proxy.example", {
-            cause: Object.assign(new Error("connect timeout"), {
-              code: "UND_ERR_CONNECT_TIMEOUT",
+  it.live(`reports proxy route ${route} without exposing the proxy address`, () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scope = yield* Effect.scope;
+        const runNative = Effect.runPromiseWith(yield* Effect.context());
+        const runSdk = <A>(program: Effect.Effect<A, Cause.UnknownError>) =>
+          runNative(
+            Effect.forkIn(Effect.result(program), scope).pipe(Effect.flatMap(Fiber.join)),
+          ).then(
+            Result.match({
+              onSuccess: (value) => value,
+              onFailure: (failure) => Promise.reject(failure.cause),
             }),
-          });
-        return { route, response: null };
-      },
-    });
-    const attempt = await harness.startLogin({ timeoutMs: 1_000 });
-    const completion = attempt.completed.catch((error: OAuthHarnessError) => error);
-    expect((await fetch(attempt.authorizationUrl)).status).toBe(502);
-    const failure = await completion;
-    expect(failure).toMatchObject({
-      code: "transport_unavailable",
-      transportCode: "UND_ERR_CONNECT_TIMEOUT",
-      proxyRoute: route,
-    });
-    expect(JSON.stringify(failure)).not.toContain("private-proxy.example");
-  });
+          );
+
+        const fake = yield* fakeProvider("openai");
+        const harness = OAuthValidationHarness({
+          protocol: fake.protocol,
+          store: new MemoryCredentialStore(),
+          fetch: () =>
+            runSdk(
+              Effect.fail(
+                new Cause.UnknownError(
+                  new TypeError("fetch failed", {
+                    cause: Object.assign(new Error("connect timeout"), {
+                      code: "UND_ERR_CONNECT_TIMEOUT",
+                    }),
+                  }),
+                ),
+              ),
+            ),
+          tokenProxyFetch: () =>
+            runSdk(
+              Effect.gen(function* () {
+                if (route === "attempted")
+                  return yield* new Cause.UnknownError(
+                    new TypeError("http://private-proxy.example", {
+                      cause: Object.assign(new Error("connect timeout"), {
+                        code: "UND_ERR_CONNECT_TIMEOUT",
+                      }),
+                    }),
+                  );
+                return { route, response: null };
+              }),
+            ),
+        });
+        const attempt = yield* sdkCall(() => harness.startLogin({ timeoutMs: 1_000 }));
+        const completion = attempt.completed.catch((error: OAuthHarnessError) => error);
+        expect((yield* sdkCall(() => fetch(attempt.authorizationUrl))).status).toBe(502);
+        const failure = yield* sdkCall(() => completion);
+        expect(failure).toMatchObject({
+          code: "transport_unavailable",
+          transportCode: "UND_ERR_CONNECT_TIMEOUT",
+          proxyRoute: route,
+        });
+        expect(jsonStringify(failure)).not.toContain("private-proxy.example");
+      }),
+    ),
+  );
 }
 
-test("does not replay an authorization code after a non-connect failure", async () => {
-  const fake = await fakeProvider("openai");
-  let proxyCalls = 0;
-  const harness = OAuthValidationHarness({
-    protocol: fake.protocol,
-    store: new MemoryCredentialStore(),
-    fetch: async () => {
-      throw new DOMException("timed out", "TimeoutError");
-    },
-    tokenProxyFetch: async () => {
-      proxyCalls += 1;
-      return { route: "unavailable", response: null };
-    },
-  });
-  const attempt = await harness.startLogin({ timeoutMs: 1_000 });
-  const completion = expect(attempt.completed).rejects.toMatchObject({
-    code: "transport_unavailable",
-    transportCode: "timeout",
-  });
-  expect((await fetch(attempt.authorizationUrl)).status).toBe(502);
-  await completion;
-  expect(proxyCalls).toBe(0);
-});
+it.live("does not replay an authorization code after a non-connect failure", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const scope = yield* Effect.scope;
+      const runNative = Effect.runPromiseWith(yield* Effect.context());
+      const runSdk = <A>(program: Effect.Effect<A, Cause.UnknownError>) =>
+        runNative(
+          Effect.forkIn(Effect.result(program), scope).pipe(Effect.flatMap(Fiber.join)),
+        ).then(
+          Result.match({
+            onSuccess: (value) => value,
+            onFailure: (failure) => Promise.reject(failure.cause),
+          }),
+        );
 
-test("exposes only a validated provider error code from a failed token exchange", async () => {
-  const fake = await fakeProvider("openai");
-  const harness = OAuthValidationHarness({
-    protocol: fake.protocol,
-    store: new MemoryCredentialStore(),
-    fetch: async (input, init) =>
-      input === fake.protocol.tokenUrl
-        ? new Response(
-            JSON.stringify({
-              error: { code: "access_denied", message: "private-user-data" },
-              access_token: "secret-token",
+      const fake = yield* fakeProvider("openai");
+      let proxyCalls = 0;
+      const harness = OAuthValidationHarness({
+        protocol: fake.protocol,
+        store: new MemoryCredentialStore(),
+        fetch: () =>
+          runSdk(
+            Effect.fail(new Cause.UnknownError(new DOMException("timed out", "TimeoutError"))),
+          ),
+        tokenProxyFetch: () =>
+          runSdk(
+            Effect.sync(() => {
+              proxyCalls += 1;
+              return { route: "unavailable" as const, response: null };
             }),
-            { status: 403 },
-          )
-        : fetch(input, init),
-  });
-  const attempt = await harness.startLogin({ timeoutMs: 1_000 });
-  const completion = expect(attempt.completed).rejects.toMatchObject({
-    code: "provider_rejected",
-    operation: "token_exchange",
-    status: 403,
-    providerCode: "access_denied",
-  });
-  expect((await fetch(attempt.authorizationUrl)).status).toBe(502);
-  await completion;
-});
+          ),
+      });
+      const attempt = yield* sdkCall(() => harness.startLogin({ timeoutMs: 1_000 }));
+      const completion = expect(attempt.completed).rejects.toMatchObject({
+        code: "transport_unavailable",
+        transportCode: "timeout",
+      });
+      expect((yield* sdkCall(() => fetch(attempt.authorizationUrl))).status).toBe(502);
+      yield* sdkCall(() => completion);
+      expect(proxyCalls).toBe(0);
+    }),
+  ),
+);
+
+it.live("exposes only a validated provider error code from a failed token exchange", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const scope = yield* Effect.scope;
+      const runNative = Effect.runPromiseWith(yield* Effect.context());
+      const runSdk = <A>(program: Effect.Effect<A, Cause.UnknownError>) =>
+        runNative(
+          Effect.forkIn(Effect.result(program), scope).pipe(Effect.flatMap(Fiber.join)),
+        ).then(
+          Result.match({
+            onSuccess: (value) => value,
+            onFailure: (failure) => Promise.reject(failure.cause),
+          }),
+        );
+
+      const fake = yield* fakeProvider("openai");
+      const harness = OAuthValidationHarness({
+        protocol: fake.protocol,
+        store: new MemoryCredentialStore(),
+        fetch: (input, init) =>
+          runSdk(
+            sdkCall(() =>
+              input === fake.protocol.tokenUrl
+                ? new Response(
+                    jsonStringify({
+                      error: { code: "access_denied", message: "private-user-data" },
+                      access_token: "secret-token",
+                    }),
+                    { status: 403 },
+                  )
+                : fetch(input, init),
+            ),
+          ),
+      });
+      const attempt = yield* sdkCall(() => harness.startLogin({ timeoutMs: 1_000 }));
+      const completion = expect(attempt.completed).rejects.toMatchObject({
+        code: "provider_rejected",
+        operation: "token_exchange",
+        status: 403,
+        providerCode: "access_denied",
+      });
+      expect((yield* sdkCall(() => fetch(attempt.authorizationUrl))).status).toBe(502);
+      yield* sdkCall(() => completion);
+    }),
+  ),
+);
 
 for (const provider of ["openai", "anthropic"] as const) {
   describe(`${provider} OAuth validation harness`, () => {
-    test("uses PKCE/state, exchanges the callback internally, and exposes only status", async () => {
-      const fake = await fakeProvider(provider);
-      const store = new MemoryCredentialStore();
-      const harness = OAuthValidationHarness({ protocol: fake.protocol, store });
-      const status = await login(harness);
+    it.live("uses PKCE/state, exchanges the callback internally, and exposes only status", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fake = yield* fakeProvider(provider);
+          const store = new MemoryCredentialStore();
+          const harness = OAuthValidationHarness({ protocol: fake.protocol, store });
+          const status = yield* login(harness);
 
-      expect(status).toMatchObject({ provider, connected: true });
-      expect(JSON.stringify(status)).not.toContain("secret");
-      const auth = new URLSearchParams(fake.authorizations[0]);
-      const redirect = new URL(auth.get("redirect_uri")!);
-      expect(redirect.hostname).toBe(provider === "openai" ? "127.0.0.1" : "localhost");
-      expect(redirect.pathname).toBe(fake.protocol.callbackPath);
-      expect(fake.tokenBodies[0]).toContain(
-        provider === "openai" ? encodeURIComponent(redirect.toString()) : redirect.toString(),
-      );
-      expect(auth.get("code_challenge_method")).toBe("S256");
-      expect(auth.get("code_challenge")).toMatch(/^[A-Za-z0-9_-]{43}$/);
-      expect(auth.get("state")).toMatch(/^[A-Za-z0-9_-]{40,}$/);
-      expect(auth.get("scope")).toContain(
-        provider === "anthropic" ? "user:inference" : "offline_access",
-      );
-      expect(fake.tokenBodies[0]).toContain("code_verifier");
-      expect(fake.tokenBodies[0]).toContain("authorization-code-secret");
-      if (provider === "anthropic") {
-        const expectedState = auth.get("state");
-        expect(fake.tokenBodies[0]).toContain(`"state":"${expectedState}"`);
-        expect(fake.tokenBodies[0]).toContain(`"code_verifier":"${expectedState}"`);
-      }
-      expect(await harness.disconnect()).toEqual({ provider, connected: false, expiresAt: null });
-    });
+          expect(status).toMatchObject({ provider, connected: true });
+          expect(jsonStringify(status)).not.toContain("secret");
+          const auth = new URLSearchParams(fake.authorizations[0]);
+          const redirect = new URL(auth.get("redirect_uri")!);
+          expect(redirect.hostname).toBe(provider === "openai" ? "127.0.0.1" : "localhost");
+          expect(redirect.pathname).toBe(fake.protocol.callbackPath);
+          expect(fake.tokenBodies[0]).toContain(
+            provider === "openai" ? encodeURIComponent(redirect.toString()) : redirect.toString(),
+          );
+          expect(auth.get("code_challenge_method")).toBe("S256");
+          expect(auth.get("code_challenge")).toMatch(/^[A-Za-z0-9_-]{43}$/);
+          expect(auth.get("state")).toMatch(/^[A-Za-z0-9_-]{40,}$/);
+          expect(auth.get("scope")).toContain(
+            provider === "anthropic" ? "user:inference" : "offline_access",
+          );
+          expect(fake.tokenBodies[0]).toContain("code_verifier");
+          expect(fake.tokenBodies[0]).toContain("authorization-code-secret");
+          if (provider === "anthropic") {
+            const expectedState = auth.get("state");
+            expect(fake.tokenBodies[0]).toContain(`"state":"${expectedState}"`);
+            expect(fake.tokenBodies[0]).toContain(`"code_verifier":"${expectedState}"`);
+          }
+          expect(yield* sdkCall(() => harness.disconnect())).toEqual({
+            provider,
+            connected: false,
+            expiresAt: null,
+          });
+        }),
+      ),
+    );
 
-    test("streams text and one tool call with provider headers", async () => {
-      const fake = await fakeProvider(provider);
-      const harness = OAuthValidationHarness({
-        protocol: fake.protocol,
-        store: new MemoryCredentialStore(),
-      });
-      await login(harness);
-      const events = [];
-      for await (const event of harness.stream('{"model":"test","stream":true}'))
-        events.push(event);
+    it.live("streams text and one tool call with provider headers", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fake = yield* fakeProvider(provider);
+          const harness = OAuthValidationHarness({
+            protocol: fake.protocol,
+            store: new MemoryCredentialStore(),
+          });
+          yield* login(harness);
 
-      expect(events).toEqual(
-        provider === "openai"
-          ? [
-              { type: "text", text: "hello" },
-              {
-                type: "tool-call",
-                id: "call-1",
-                name: "lookup",
-                arguments: { q: "x" },
-              },
-            ]
-          : [
-              { type: "text", text: "hello" },
-              {
-                type: "tool-call-start",
-                index: 1,
-                id: "call-1",
-                name: "lookup",
-              },
-              {
-                type: "tool-call-arguments",
-                index: 1,
-                delta: '{"q":"x"}',
-              },
-              { type: "content-block-end", index: 1 },
-            ],
-      );
-      expect(fake.modelHeaders[0]?.authorization).toBe("Bearer access-secret-1");
-      if (provider === "openai")
-        expect(fake.modelHeaders[0]?.["chatgpt-account-id"]).toBe("account-internal-1");
-      if (provider === "anthropic") {
-        expect(fake.modelHeaders[0]?.["anthropic-version"]).toBe("2023-06-01");
-        expect(fake.modelHeaders[0]?.["anthropic-beta"]).toContain("claude-code-20250219");
-        expect(fake.modelHeaders[0]?.["anthropic-beta"]).toContain("oauth-2025-04-20");
-        expect(fake.modelHeaders[0]?.["x-claude-code-session-id"]).toBeTruthy();
-        expect(fake.modelHeaders[0]?.["x-client-request-id"]).toBeTruthy();
-        expect(fake.modelHeaders[0]?.["anthropic-dangerous-direct-browser-access"]).toBe("true");
-        expect(fake.modelBodies[0]).toContain("x-anthropic-billing-header");
-        expect(fake.modelBodies[0]).toContain("Claude Agent SDK");
-        expect(fake.modelBodies[0]).toContain('\\"account_uuid\\":\\"unknown-account\\"');
-        expect(fake.modelBodies[0]).toContain('"metadata":{"user_id":');
-        expect(fake.modelBodies[0]).not.toContain("access-secret");
-      }
-    });
+          const events = yield* Stream.runCollect(
+            Stream.fromAsyncIterable(
+              harness.stream('{"model":"test","stream":true}'),
+              (cause) => new Cause.UnknownError(cause),
+            ),
+          );
 
-    test("fetches the fixed catalog, paginates, and returns no credentials", async () => {
-      const fake = await fakeProvider(provider);
-      const harness = OAuthValidationHarness({
-        protocol: fake.protocol,
-        store: new MemoryCredentialStore(),
-      });
-      await login(harness);
-      const pages = await harness.modelCatalog();
+          expect(events).toEqual(
+            provider === "openai"
+              ? [
+                  { type: "text", text: "hello" },
+                  {
+                    type: "tool-call",
+                    id: "call-1",
+                    name: "lookup",
+                    arguments: { q: "x" },
+                  },
+                ]
+              : [
+                  { type: "text", text: "hello" },
+                  {
+                    type: "tool-call-start",
+                    index: 1,
+                    id: "call-1",
+                    name: "lookup",
+                  },
+                  {
+                    type: "tool-call-arguments",
+                    index: 1,
+                    delta: '{"q":"x"}',
+                  },
+                  { type: "content-block-end", index: 1 },
+                ],
+          );
+          expect(fake.modelHeaders[0]?.authorization).toBe("Bearer access-secret-1");
+          if (provider === "openai")
+            expect(fake.modelHeaders[0]?.["chatgpt-account-id"]).toBe("account-internal-1");
+          if (provider === "anthropic") {
+            expect(fake.modelHeaders[0]?.["anthropic-version"]).toBe("2023-06-01");
+            expect(fake.modelHeaders[0]?.["anthropic-beta"]).toContain("claude-code-20250219");
+            expect(fake.modelHeaders[0]?.["anthropic-beta"]).toContain("oauth-2025-04-20");
+            expect(fake.modelHeaders[0]?.["x-claude-code-session-id"]).toBeTruthy();
+            expect(fake.modelHeaders[0]?.["x-client-request-id"]).toBeTruthy();
+            expect(fake.modelHeaders[0]?.["anthropic-dangerous-direct-browser-access"]).toBe(
+              "true",
+            );
+            expect(fake.modelBodies[0]).toContain("x-anthropic-billing-header");
+            expect(fake.modelBodies[0]).toContain("Claude Agent SDK");
+            expect(fake.modelBodies[0]).toContain('\\"account_uuid\\":\\"unknown-account\\"');
+            expect(fake.modelBodies[0]).toContain('"metadata":{"user_id":');
+            expect(fake.modelBodies[0]).not.toContain("access-secret");
+          }
+        }),
+      ),
+    );
 
-      expect(pages).toHaveLength(provider === "anthropic" ? 2 : 1);
-      expect(JSON.stringify(pages)).not.toContain("secret");
-      expect(fake.catalogHeaders[0]?.authorization).toBe("Bearer access-secret-1");
-      expect(fake.catalogHeaders[0]?.accept).toBe("application/json");
-      expect(fake.catalogHeaders[0]?.["content-type"]).toBeUndefined();
-      if (provider === "anthropic") {
-        expect(fake.catalogUrls[0]).toContain("limit=1000");
-        expect(fake.catalogUrls[1]).toContain("after_id=page-1");
-      }
-    });
+    it.live("fetches the fixed catalog, paginates, and returns no credentials", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fake = yield* fakeProvider(provider);
+          const harness = OAuthValidationHarness({
+            protocol: fake.protocol,
+            store: new MemoryCredentialStore(),
+          });
+          yield* login(harness);
+          const pages = yield* sdkCall(() => harness.modelCatalog());
 
-    test("refreshes once when the fixed catalog rejects the current token", async () => {
-      const fake = await fakeProvider(provider);
-      const harness = OAuthValidationHarness({
-        protocol: fake.protocol,
-        store: new MemoryCredentialStore(),
-      });
-      await login(harness);
-      fake.requireRefresh();
-      await harness.modelCatalog();
+          expect(pages).toHaveLength(provider === "anthropic" ? 2 : 1);
+          expect(jsonStringify(pages)).not.toContain("secret");
+          expect(fake.catalogHeaders[0]?.authorization).toBe("Bearer access-secret-1");
+          expect(fake.catalogHeaders[0]?.accept).toBe("application/json");
+          expect(fake.catalogHeaders[0]?.["content-type"]).toBeUndefined();
+          if (provider === "anthropic") {
+            expect(fake.catalogUrls[0]).toContain("limit=1000");
+            expect(fake.catalogUrls[1]).toContain("after_id=page-1");
+          }
+        }),
+      ),
+    );
 
-      expect(fake.counts().refreshRequests).toBe(1);
-      expect(fake.catalogHeaders.at(-1)?.authorization).toBe("Bearer access-secret-2");
-    });
+    it.live("refreshes once when the fixed catalog rejects the current token", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fake = yield* fakeProvider(provider);
+          const harness = OAuthValidationHarness({
+            protocol: fake.protocol,
+            store: new MemoryCredentialStore(),
+          });
+          yield* login(harness);
+          fake.requireRefresh();
+          yield* sdkCall(() => harness.modelCatalog());
 
-    test("rotates refresh tokens once for concurrent 401/403 retries", async () => {
-      const fake = await fakeProvider(provider);
-      const store = new MemoryCredentialStore();
-      const harness = OAuthValidationHarness({ protocol: fake.protocol, store });
-      await login(harness);
-      fake.requireRefresh();
+          expect(fake.counts().refreshRequests).toBe(1);
+          expect(fake.catalogHeaders.at(-1)?.authorization).toBe("Bearer access-secret-2");
+        }),
+      ),
+    );
 
-      const collect = async () => {
-        const events = [];
-        for await (const event of harness.stream('{"stream":true}')) events.push(event);
-        return events;
-      };
-      const [first, second] = await Promise.all([collect(), collect()]);
+    it.live("rotates refresh tokens once for concurrent 401/403 retries", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fake = yield* fakeProvider(provider);
+          const store = new MemoryCredentialStore();
+          const harness = OAuthValidationHarness({ protocol: fake.protocol, store });
+          yield* login(harness);
+          fake.requireRefresh();
 
-      expect(first).toHaveLength(provider === "openai" ? 2 : 4);
-      expect(second).toHaveLength(provider === "openai" ? 2 : 4);
-      expect(fake.counts().refreshRequests).toBe(1);
-      expect(Option.getOrUndefined(MutableHashMap.get(store.values, provider))?.refreshToken).toBe(
-        "refresh-secret-2",
-      );
-      expect(fake.modelHeaders.at(-1)?.authorization).toBe("Bearer access-secret-2");
-    });
+          const collect = Effect.fn("collectOAuthStream")(function* () {
+            const events = yield* Stream.runCollect(
+              Stream.fromAsyncIterable(
+                harness.stream('{"stream":true}'),
+                (cause) => new Cause.UnknownError(cause),
+              ),
+            );
+            return events;
+          });
+          const [first, second] = yield* Effect.all([collect(), collect()], {
+            concurrency: "unbounded",
+          });
 
-    test("refreshes an expiring credential while checking connection status", async () => {
-      const fake = await fakeProvider(provider);
-      const store = new MemoryCredentialStore();
-      const harness = OAuthValidationHarness({ protocol: fake.protocol, store });
-      await login(harness);
-      const credential = Option.getOrUndefined(MutableHashMap.get(store.values, provider))!;
-      MutableHashMap.set(store.values, provider, {
-        ...credential,
-        expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 20_000,
-      });
+          expect(first).toHaveLength(provider === "openai" ? 2 : 4);
+          expect(second).toHaveLength(provider === "openai" ? 2 : 4);
+          expect(fake.counts().refreshRequests).toBe(1);
+          expect(
+            Option.getOrUndefined(MutableHashMap.get(store.values, provider))?.refreshToken,
+          ).toBe("refresh-secret-2");
+          expect(fake.modelHeaders.at(-1)?.authorization).toBe("Bearer access-secret-2");
+        }),
+      ),
+    );
 
-      await expect(harness.status()).resolves.toMatchObject({ provider, connected: true });
-      expect(fake.counts().refreshRequests).toBe(1);
-      expect(Option.getOrUndefined(MutableHashMap.get(store.values, provider))?.accessToken).toBe(
-        "access-secret-2",
-      );
-    });
+    it.live("refreshes an expiring credential while checking connection status", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fake = yield* fakeProvider(provider);
+          const store = new MemoryCredentialStore();
+          const harness = OAuthValidationHarness({ protocol: fake.protocol, store });
+          yield* login(harness);
+          const credential = Option.getOrUndefined(MutableHashMap.get(store.values, provider))!;
+          MutableHashMap.set(store.values, provider, {
+            ...credential,
+            expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 20_000,
+          });
 
-    test("signs out after the provider permanently rejects an expired credential", async () => {
-      const fake = await fakeProvider(provider);
-      const store = new MemoryCredentialStore();
-      const harness = OAuthValidationHarness({ protocol: fake.protocol, store });
-      await login(harness);
-      const credential = Option.getOrUndefined(MutableHashMap.get(store.values, provider))!;
-      MutableHashMap.set(store.values, provider, {
-        ...credential,
-        expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) - 1,
-      });
-      fake.rejectRefresh();
+          yield* sdkCall(() =>
+            expect(harness.status()).resolves.toMatchObject({ provider, connected: true }),
+          );
+          expect(fake.counts().refreshRequests).toBe(1);
+          expect(
+            Option.getOrUndefined(MutableHashMap.get(store.values, provider))?.accessToken,
+          ).toBe("access-secret-2");
+        }),
+      ),
+    );
 
-      await expect(harness.status()).resolves.toEqual({
-        provider,
-        connected: false,
-        expiresAt: null,
-      });
-      expect(fake.counts().refreshRequests).toBe(1);
-      expect(MutableHashMap.has(store.values, provider)).toBe(false);
-    });
+    it.live("signs out after the provider permanently rejects an expired credential", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fake = yield* fakeProvider(provider);
+          const store = new MemoryCredentialStore();
+          const harness = OAuthValidationHarness({ protocol: fake.protocol, store });
+          yield* login(harness);
+          const credential = Option.getOrUndefined(MutableHashMap.get(store.values, provider))!;
+          MutableHashMap.set(store.values, provider, {
+            ...credential,
+            expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) - 1,
+          });
+          fake.rejectRefresh();
+
+          yield* sdkCall(() =>
+            expect(harness.status()).resolves.toEqual({
+              provider,
+              connected: false,
+              expiresAt: null,
+            }),
+          );
+          expect(fake.counts().refreshRequests).toBe(1);
+          expect(MutableHashMap.has(store.values, provider)).toBe(false);
+        }),
+      ),
+    );
   });
 }
 
@@ -666,115 +983,178 @@ describe("provider wire contracts", () => {
     );
   });
 
-  test("classifies only Anthropic cache-feature HTTP rejection for safe fallback", async () => {
-    const store = new MemoryCredentialStore();
-    MutableHashMap.set(store.values, "anthropic", {
-      accessToken: "access-secret",
-      refreshToken: "refresh-secret",
-      expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 60_000,
-    });
-    const cacheRejected = OAuthValidationHarness({
-      protocol: providerProtocols.anthropic,
-      store,
-      fetch: async () =>
-        new Response('{"error":{"message":"cache_control is unsupported"}}', { status: 400 }),
-    });
-    const unrelated = OAuthValidationHarness({
-      protocol: providerProtocols.anthropic,
-      store,
-      fetch: async () => new Response('{"error":{"message":"invalid model"}}', { status: 400 }),
-    });
-    const drain = async (harness: OAuthValidationHarness) => {
-      for await (const _event of harness.stream('{"model":"test","stream":true}')) {
-        // Drain the deterministic mock response.
-      }
-    };
+  it.live("classifies only Anthropic cache-feature HTTP rejection for safe fallback", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scope = yield* Effect.scope;
+        const runNative = Effect.runPromiseWith(yield* Effect.context());
+        const runSdk = <A>(program: Effect.Effect<A, Cause.UnknownError>) =>
+          runNative(
+            Effect.forkIn(Effect.result(program), scope).pipe(Effect.flatMap(Fiber.join)),
+          ).then(
+            Result.match({
+              onSuccess: (value) => value,
+              onFailure: (failure) => Promise.reject(failure.cause),
+            }),
+          );
 
-    await expect(drain(cacheRejected)).rejects.toBeInstanceOf(ProviderFeatureRejectedError);
-    await expect(drain(unrelated)).rejects.toMatchObject({
-      message:
-        "oauth_provider_rejected [provider=Anthropic, operation=model_stream, status=400]: The provider rejected the request. invalid model",
-    });
-  });
+        const store = new MemoryCredentialStore();
+        MutableHashMap.set(store.values, "anthropic", {
+          accessToken: "access-secret",
+          refreshToken: "refresh-secret",
+          expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 60_000,
+        });
+        const cacheRejected = OAuthValidationHarness({
+          protocol: providerProtocols.anthropic,
+          store,
+          fetch: () =>
+            runSdk(
+              sdkCall(
+                () =>
+                  new Response('{"error":{"message":"cache_control is unsupported"}}', {
+                    status: 400,
+                  }),
+              ),
+            ),
+        });
+        const unrelated = OAuthValidationHarness({
+          protocol: providerProtocols.anthropic,
+          store,
+          fetch: () =>
+            runSdk(
+              sdkCall(() => new Response('{"error":{"message":"invalid model"}}', { status: 400 })),
+            ),
+        });
+        const drain = Effect.fn("drainOAuthStream")(function* (harness: OAuthValidationHarness) {
+          yield* Stream.runDrain(
+            Stream.fromAsyncIterable(
+              harness.stream('{"model":"test","stream":true}'),
+              (cause) => new Cause.UnknownError(cause),
+            ),
+          );
+        });
+
+        expect((yield* Effect.flip(drain(cacheRejected))).cause).toBeInstanceOf(
+          ProviderFeatureRejectedError,
+        );
+        expect((yield* Effect.flip(drain(unrelated))).cause).toMatchObject({
+          message:
+            "oauth_provider_rejected [provider=Anthropic, operation=model_stream, status=400]: The provider rejected the request. invalid model",
+        });
+      }),
+    ),
+  );
 });
 
 describe("OAuth callback safety", () => {
-  test("rejects a mismatched state without including code, state, or tokens in the error", async () => {
-    const fake = await fakeProvider("openai");
-    const harness = OAuthValidationHarness({
-      protocol: fake.protocol,
-      store: new MemoryCredentialStore(),
-    });
-    const attempt = await harness.startLogin({ timeoutMs: 1_000 });
-    const completion = attempt.completed.catch((error: OAuthHarnessError) => error);
-    const authorization = new URL(attempt.authorizationUrl);
-    const callback = new URL(authorization.searchParams.get("redirect_uri") ?? "");
-    callback.searchParams.set("code", "authorization-code-secret");
-    callback.searchParams.set("state", "attacker-state-secret");
-    await fetch(callback);
+  it.live("rejects a mismatched state without including code, state, or tokens in the error", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = yield* fakeProvider("openai");
+        const harness = OAuthValidationHarness({
+          protocol: fake.protocol,
+          store: new MemoryCredentialStore(),
+        });
+        const attempt = yield* sdkCall(() => harness.startLogin({ timeoutMs: 1_000 }));
+        const completion = attempt.completed.catch((error: OAuthHarnessError) => error);
+        const authorization = new URL(attempt.authorizationUrl);
+        const callback = new URL(authorization.searchParams.get("redirect_uri") ?? "");
+        callback.searchParams.set("code", "authorization-code-secret");
+        callback.searchParams.set("state", "attacker-state-secret");
+        yield* sdkCall(() => fetch(callback));
 
-    const thrown = await completion;
-    expect(thrown).toBeInstanceOf(OAuthHarnessError);
-    const message = thrown instanceof OAuthHarnessError ? String(thrown) : "";
-    expect(message).toContain("state_mismatch");
-    expect(message).not.toContain("authorization-code-secret");
-    expect(message).not.toContain("attacker-state-secret");
-  });
+        const thrown = yield* sdkCall(() => completion);
+        expect(thrown).toBeInstanceOf(OAuthHarnessError);
+        const message = thrown instanceof OAuthHarnessError ? String(thrown) : "";
+        expect(message).toContain("state_mismatch");
+        expect(message).not.toContain("authorization-code-secret");
+        expect(message).not.toContain("attacker-state-secret");
+      }),
+    ),
+  );
 
-  test("supports timeout and explicit cancellation with sanitized errors", async () => {
-    const fake = await fakeProvider("openai");
-    const timeoutHarness = OAuthValidationHarness({
-      protocol: fake.protocol,
-      store: new MemoryCredentialStore(),
-    });
-    const timed = await timeoutHarness.startLogin({ timeoutMs: 10 });
-    await expect(timed.completed).rejects.toMatchObject({ code: "callback_timeout" });
+  it.live("supports timeout and explicit cancellation with sanitized errors", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = yield* fakeProvider("openai");
+        const timeoutHarness = OAuthValidationHarness({
+          protocol: fake.protocol,
+          store: new MemoryCredentialStore(),
+        });
+        const timed = yield* sdkCall(() => timeoutHarness.startLogin({ timeoutMs: 10 }));
+        expect((yield* Effect.flip(sdkCall(() => timed.completed))).cause).toMatchObject({
+          code: "callback_timeout",
+        });
 
-    const cancelHarness = OAuthValidationHarness({
-      protocol: fake.protocol,
-      store: new MemoryCredentialStore(),
-    });
-    const cancelled = await cancelHarness.startLogin({ timeoutMs: 1_000 });
-    cancelled.cancel();
-    await expect(cancelled.completed).rejects.toMatchObject({ code: "cancelled" });
-  });
+        const cancelHarness = OAuthValidationHarness({
+          protocol: fake.protocol,
+          store: new MemoryCredentialStore(),
+        });
+        const cancelled = yield* sdkCall(() => cancelHarness.startLogin({ timeoutMs: 1_000 }));
+        cancelled.cancel();
+        expect((yield* Effect.flip(sdkCall(() => cancelled.completed))).cause).toMatchObject({
+          code: "cancelled",
+        });
+      }),
+    ),
+  );
 
-  test("cancelling while a callback writes restores the prior credential, not the cancelled login", async () => {
-    const fake = await fakeProvider("anthropic");
-    let entered!: () => void;
-    const writing = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const prior: StoredCredential = {
-      accessToken: "prior-access",
-      refreshToken: "prior-refresh",
-      expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 300_000,
-    };
-    const store = new MemoryCredentialStore();
-    MutableHashMap.set(store.values, "anthropic", prior);
-    const deferred: CredentialStore = {
-      read: (provider) => store.read(provider),
-      write: async (provider, value) => {
-        await store.write(provider, value);
-        entered();
-        await held;
-      },
-      remove: (provider) => store.remove(provider),
-    };
-    const harness = OAuthValidationHarness({ protocol: fake.protocol, store: deferred });
-    const attempt = await harness.startLogin({ timeoutMs: 5_000 });
-    const browser = fetch(attempt.authorizationUrl);
-    await writing;
-    attempt.cancel();
-    release();
-    await expect(attempt.completed).rejects.toMatchObject({ code: "cancelled" });
-    await browser;
-    expect(Option.getOrUndefined(MutableHashMap.get(store.values, "anthropic"))).toEqual(prior);
-  });
+  it.live(
+    "cancelling while a callback writes restores the prior credential, not the cancelled login",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const scope = yield* Effect.scope;
+          const runNative = Effect.runPromiseWith(yield* Effect.context());
+          const runSdk = <A>(program: Effect.Effect<A, Cause.UnknownError>) =>
+            runNative(
+              Effect.forkIn(Effect.result(program), scope).pipe(Effect.flatMap(Fiber.join)),
+            ).then(
+              Result.match({
+                onSuccess: (value) => value,
+                onFailure: (failure) => Promise.reject(failure.cause),
+              }),
+            );
+
+          const fake = yield* fakeProvider("anthropic");
+          const writing = yield* Deferred.make<void>();
+          const held = yield* Deferred.make<void>();
+          yield* Effect.addFinalizer(() => Deferred.succeed(held, undefined));
+          const prior: StoredCredential = {
+            accessToken: "prior-access",
+            refreshToken: "prior-refresh",
+            expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 300_000,
+          };
+          const store = new MemoryCredentialStore();
+          MutableHashMap.set(store.values, "anthropic", prior);
+          const deferred: CredentialStore = {
+            read: (provider) => store.read(provider),
+            write: (provider, value) =>
+              runSdk(
+                Effect.gen(function* () {
+                  yield* sdkCall(() => store.write(provider, value));
+                  yield* Deferred.succeed(writing, undefined);
+                  yield* Deferred.await(held);
+                }),
+              ),
+            remove: (provider) => store.remove(provider),
+          };
+          const harness = OAuthValidationHarness({ protocol: fake.protocol, store: deferred });
+          const attempt = yield* sdkCall(() => harness.startLogin({ timeoutMs: 5_000 }));
+          const browser = fetch(attempt.authorizationUrl);
+          yield* Deferred.await(writing);
+          attempt.cancel();
+          yield* Deferred.succeed(held, undefined);
+          expect((yield* Effect.flip(sdkCall(() => attempt.completed))).cause).toMatchObject({
+            code: "cancelled",
+          });
+          yield* sdkCall(() => browser);
+          expect(Option.getOrUndefined(MutableHashMap.get(store.values, "anthropic"))).toEqual(
+            prior,
+          );
+        }),
+      ),
+  );
 
   test("uses separate OS-keychain namespaces and has no file fallback contract", () => {
     expect(providerKeychainService("openai")).toBe("com.context-agent.oauth.openai");

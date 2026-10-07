@@ -9,30 +9,34 @@ import type { Route } from "./+types/attachments.$attachment";
  * conversation evidence, not public assets.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function loader({ request, params }: Route.LoaderArgs) {
-  const site = request.headers.get("Sec-Fetch-Site");
-  if (site === "cross-site") return Response.json({ error: "cross_site_request" }, { status: 403 });
+export function loader({ request, params }: Route.LoaderArgs) {
+  return agent.runPromise(
+    Effect.gen(function* () {
+      const site = request.headers.get("Sec-Fetch-Site");
+      if (site === "cross-site")
+        return Response.json({ error: "cross_site_request" }, { status: 403 });
 
-  const found = await agent.runPromise(
-    Effect.flatMap(Attachments, (attachments) =>
-      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      Effect.promise(async () => {
-        const attachment = attachments.get(params.attachment);
-        return isTruthy(attachment)
-          ? { attachment, bytes: await attachments.read(attachment) }
-          : null;
-      }),
-    ),
+      const found = yield* Effect.flatMap(Attachments, (attachments) =>
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        Effect.gen(function* () {
+          const attachment = attachments.get(params.attachment);
+          return isTruthy(attachment)
+            ? { attachment, bytes: yield* Effect.promise(() => attachments.read(attachment)) }
+            : null;
+        }),
+      );
+      if (!isTruthy(found))
+        return Response.json({ error: "attachment_not_found" }, { status: 404 });
+      return new Response(new Uint8Array(found.bytes), {
+        headers: {
+          "Content-Type": found.attachment.mimeType,
+          "Content-Length": String(found.attachment.bytes),
+          // Content-addressed: the same id always has the same bytes.
+          "Cache-Control": "private, max-age=31536000, immutable",
+          "X-Content-Type-Options": "nosniff",
+          "Cross-Origin-Resource-Policy": "same-origin",
+        },
+      });
+    }),
   );
-  if (!isTruthy(found)) return Response.json({ error: "attachment_not_found" }, { status: 404 });
-  return new Response(new Uint8Array(found.bytes), {
-    headers: {
-      "Content-Type": found.attachment.mimeType,
-      "Content-Length": String(found.attachment.bytes),
-      // Content-addressed: the same id always has the same bytes.
-      "Cache-Control": "private, max-age=31536000, immutable",
-      "X-Content-Type-Options": "nosniff",
-      "Cross-Origin-Resource-Policy": "same-origin",
-    },
-  });
 }

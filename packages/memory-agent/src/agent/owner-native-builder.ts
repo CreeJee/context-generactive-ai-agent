@@ -1,3 +1,4 @@
+import { runNativeEffectWith } from "../runtime/native-effect.ts";
 import { Result, Function as EffectFunction } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { createHash } from "node:crypto";
@@ -21,7 +22,8 @@ const buildNative = Effect.fn("OwnerNativeBuilder.build")(function* (
   entry: string,
   files: OwnerNativeFiles["Service"],
 ) {
-  const context = yield* Effect.context<never>();
+  const run = runNativeEffectWith(yield* Effect.context<never>());
+  const signal = yield* Effect.abortSignal;
   const sources = MutableHashMap.empty<string, string>();
   const allowed = HashSet.fromIterable([
     "effect",
@@ -32,12 +34,14 @@ const buildNative = Effect.fn("OwnerNativeBuilder.build")(function* (
     "@secretlint/secretlint-rule-preset-recommend",
   ]);
   // Vite and its transform callback are the only Promise interoperability boundary.
+  const builderUrl = pathToFileURL(runtimeRequire().resolve("vite")).href;
+  const { build }: typeof import("vite") = yield* Effect.tryPromise({
+    try: () => import(/* @vite-ignore */ builderUrl),
+    catch: (cause) => NativeRegistrationError.make({ cause }),
+  });
   const result = yield* Effect.tryPromise({
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    try: async (signal) => {
-      const builderUrl = pathToFileURL(runtimeRequire().resolve("vite")).href;
-      const { build }: typeof import("vite") = await import(/* @vite-ignore */ builderUrl);
-      return build({
+    try: () =>
+      build({
         configFile: false,
         root: dirname(entry),
         logLevel: "silent",
@@ -45,13 +49,17 @@ const buildNative = Effect.fn("OwnerNativeBuilder.build")(function* (
           {
             name: "owner-native-provenance",
             // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-            async transform(_code, id) {
-              if (id.startsWith("/") && !id.includes("?"))
-                MutableHashMap.set(
-                  sources,
-                  id,
-                  nativeDigest(await Effect.runPromiseWith(context)(files.read(id), { signal })),
-                );
+            transform(_code, id) {
+              if (!id.startsWith("/") || id.includes("?")) return;
+              return run(
+                files.read(id).pipe(
+                  Effect.tap((content) =>
+                    Effect.sync(() => MutableHashMap.set(sources, id, nativeDigest(content))),
+                  ),
+                  Effect.asVoid,
+                ),
+                { signal },
+              );
             },
           },
         ],
@@ -71,8 +79,7 @@ const buildNative = Effect.fn("OwnerNativeBuilder.build")(function* (
             },
           },
         },
-      });
-    },
+      }),
     catch: (cause) => NativeRegistrationError.make({ cause }),
   });
   const code = yield* Effect.try({
@@ -98,7 +105,7 @@ const buildNative = Effect.fn("OwnerNativeBuilder.build")(function* (
     code,
     sourceHash: nativeDigest(stringifyJson([...sources].sort(([a], [b]) => a.localeCompare(b)))),
   };
-});
+}, Effect.scoped);
 export class OwnerNativeBuilder extends Context.Service<
   OwnerNativeBuilder,
   {
