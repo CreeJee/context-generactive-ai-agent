@@ -1,5 +1,5 @@
+import { Function as EffectFunction } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
@@ -11,10 +11,8 @@ import {
   unlinkSync,
   writeFileSync,
   // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-  // @effect-diagnostics-next-line nodeBuiltinImport:off
 } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join, relative, resolve } from "node:path";
 import { Option, Schema } from "effect";
 
@@ -91,8 +89,6 @@ export interface DevelopmentBoundary {
   readonly beginDrain: () => void;
 }
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function createDevelopmentBoundary(
   buildId: string,
   instanceId: string = randomUUID(),
@@ -102,7 +98,6 @@ export function createDevelopmentBoundary(
     buildId,
     instanceId,
     // React/native timestamps use the host Date contract outside Effect execution.
-    // @effect-diagnostics-next-line globalDate:off
     startedAt: new Date().toISOString(),
     draining: () => isDraining,
     beginDrain: () => {
@@ -123,9 +118,14 @@ export type DevelopmentRequestDecision =
       readonly body: string;
     };
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function developmentRequestDecision(
+export const developmentRequestDecision: {
+  (
+    method: string | undefined,
+    pathname: string,
+    presentedBuildId: string | undefined,
+  ): (boundary: DevelopmentBoundary) => ReturnType<typeof developmentRequestDecisionBody>;
+} & typeof developmentRequestDecisionBody = EffectFunction.dual(4, developmentRequestDecisionBody);
+function developmentRequestDecisionBody(
   boundary: DevelopmentBoundary,
   method: string | undefined,
   pathname: string,
@@ -182,9 +182,13 @@ function processIsAlive(pid: number) {
 }
 
 /** Acquires one backend owner for a storage root. The returned release is idempotent. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function acquireStorageLock(storageRoot: string, port: number, instanceId: string) {
+export const acquireStorageLock: {
+  (
+    port: number,
+    instanceId: string,
+  ): (storageRoot: string) => ReturnType<typeof acquireStorageLockBody>;
+} & typeof acquireStorageLockBody = EffectFunction.dual(3, acquireStorageLockBody);
+function acquireStorageLockBody(storageRoot: string, port: number, instanceId: string) {
   mkdirSync(storageRoot, { recursive: true, mode: 0o700 });
   const file = join(storageRoot, "backend.lock");
   const record = { pid: process.pid, instanceId, port };

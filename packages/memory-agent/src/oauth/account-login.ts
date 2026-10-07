@@ -1,7 +1,6 @@
 import { MutableHashMap, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -33,7 +32,6 @@ export type AccountLoginState =
 
 /** Each login gets a fresh keychain slot; the legacy provider client is never used to add accounts. */
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function createOAuthAccountLoginManager(
   sqlite: DatabaseSync,
   accounts: ProfileCredentialStore = createProfileCredentialStore(),
@@ -85,7 +83,6 @@ export function createOAuthAccountLoginManager(
     login: state(provider),
   });
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const start = async (provider: OAuthProvider, label: string) => {
     if (!isTruthy(label.trim()) || label.length > 80) throw new Error("invalid_oauth_profile");
     if (isTruthy(activeAttempt(provider))) throw new Error("oauth_login_in_progress");
@@ -100,7 +97,6 @@ export function createOAuthAccountLoginManager(
       if (attempt.cancelled) attempt.login.cancel();
       attempt.completed = attempt.login.completed
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         .then(async (connection) => {
           if (!connection.connected || attempt.cancelled) throw new Error("login_failed");
           // The callback has already persisted and verified the new slot at this point.
@@ -110,7 +106,6 @@ export function createOAuthAccountLoginManager(
           recordResult(provider, { status: "completed" });
         })
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         .catch(async () => {
           // Never delete an account that was published while a cancellation raced the final read.
           if (!listOAuthProfiles(sqlite, provider).some((profile) => profile.id === attempt.id)) {
@@ -140,7 +135,6 @@ export function createOAuthAccountLoginManager(
     }
   };
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const cancel = async (provider: OAuthProvider) => {
     const attempt = activeAttempt(provider);
     if (isTruthy(attempt)) {

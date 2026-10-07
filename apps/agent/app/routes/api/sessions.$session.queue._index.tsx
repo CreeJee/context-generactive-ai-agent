@@ -6,7 +6,6 @@ import type { Route } from "./+types/sessions.$session.queue._index";
 
 /** GET /api/sessions/:session/queue — messages waiting to reach the agent, and those just delivered. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function loader({ params }: Route.LoaderArgs) {
   return agent.runPromise(Effect.flatMap(AgentChat, (chat) => chat.queued(params.session)));
 }
@@ -17,7 +16,6 @@ export async function loader({ params }: Route.LoaderArgs) {
  * `not_running` means nothing is answering and the page should send a normal turn.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request, params }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected !== null) return rejected;

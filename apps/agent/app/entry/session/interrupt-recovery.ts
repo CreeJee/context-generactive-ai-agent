@@ -1,12 +1,16 @@
+import { Function as EffectFunction } from "effect";
 export const interruptContinuationError = "Interrupt continuation could not be started.";
 
 /**
  * TanStack reports a continuation as not started when its child run pauses for another approval.
  * A new pending interrupt proves that continuation did start; only an empty batch is actually lost.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function interruptContinuationState(
+export const interruptContinuationState: {
+  (
+    pendingInterrupts: number,
+  ): (errorMessage: string | undefined) => ReturnType<typeof interruptContinuationStateBody>;
+} & typeof interruptContinuationStateBody = EffectFunction.dual(2, interruptContinuationStateBody);
+function interruptContinuationStateBody(
   errorMessage: string | undefined,
   pendingInterrupts: number,
 ): "none" | "continued" | "lost" {

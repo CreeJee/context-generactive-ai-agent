@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import type { ChatMiddleware } from "@tanstack/ai";
 import { optionalProperty } from "../optional-property.ts";
 import { Clock, Context, Effect, Layer, Schema } from "effect";
@@ -41,8 +42,7 @@ const CountRow = Schema.Struct({
   total_input_tokens: Schema.NullOr(Schema.Finite),
 });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeCount = Schema.decodeUnknownSync(CountRow);
+const decodeCount = EffectFunction.flow(Schema.decodeUnknownResult(CountRow), Result.getOrThrow);
 
 function count(value: number | null | undefined): number | null {
   if (value == null) return null;
@@ -123,9 +123,7 @@ const make = Effect.gen(function* () {
 });
 
 /** Counts-only provider response capture; never persist prompts, messages or tool arguments. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export const collectApiUsage = (
+const collectApiUsageBody = (
   ledger: { record: (response: ApiUsageResponse) => number },
   source: Pick<ApiUsageResponse, "rootSessionId" | "purpose" | "provider" | "model">,
 ): ChatMiddleware => ({
@@ -142,6 +140,13 @@ export const collectApiUsage = (
     });
   },
 });
+export const collectApiUsage: {
+  (
+    source: Pick<ApiUsageResponse, "rootSessionId" | "purpose" | "provider" | "model">,
+  ): (ledger: {
+    record: (response: ApiUsageResponse) => number;
+  }) => ReturnType<typeof collectApiUsageBody>;
+} & typeof collectApiUsageBody = EffectFunction.dual(2, collectApiUsageBody);
 
 export class ApiUsage extends Context.Service<ApiUsage, Effect.Success<typeof make>>()(
   "memory-agent/agent/api-usage/ApiUsage",

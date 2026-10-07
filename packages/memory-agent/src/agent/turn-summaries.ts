@@ -1,7 +1,6 @@
 import { isTruthy } from "../truthy.ts";
 import { Semaphore } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import { chat, type ChatMiddleware } from "@tanstack/ai";
 import { Context, Data, Effect, Layer } from "effect";
@@ -87,7 +86,6 @@ const make = (automatic: boolean) =>
         const answer = yield* summaryPromise("model", () => {
           const abortController = new AbortController();
           // Native callback heartbeat/debounce timing remains at the protocol boundary.
-          // @effect-diagnostics-next-line globalTimers:off
           const timer = setTimeout(() => abortController.abort(), summaryTimeoutMs);
           return chat({
             adapter: services.runtime.adapter(cheap),

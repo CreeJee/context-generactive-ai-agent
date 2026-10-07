@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import type { MessagePort } from "node:worker_threads";
 import {
   Cause,
@@ -73,11 +74,12 @@ const replyFrame = Schema.Struct({
   reply: replySchema,
 });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeRequest = Schema.decodeUnknownSync(requestFrame);
+const decodeRequest = EffectFunction.flow(
+  Schema.decodeUnknownResult(requestFrame),
+  Result.getOrThrow,
+);
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeReply = Schema.decodeUnknownSync(replyFrame);
+const decodeReply = EffectFunction.flow(Schema.decodeUnknownResult(replyFrame), Result.getOrThrow);
 
 /** No frame contents or decoder errors are exposed: capabilities contain secrets. */
 export class OwnerRpcTransportError extends Schema.TaggedError<OwnerRpcTransportError>()(
@@ -317,17 +319,26 @@ const acquireOwnerRpcPort = Effect.fn("OwnerRpcPort.acquire")(function* <
   return { close };
 });
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export const serveOwnerRpcPortEffect = <M extends OwnerRpcOperations, E = never, R = never>(
+const serveOwnerRpcPortEffectBody = <M extends OwnerRpcOperations, E = never, R = never>(
   port: MessagePort,
   options: OwnerRpcEffectOptions<M, E, R>,
 ) => acquireOwnerRpcPort(port, options, false);
+export const serveOwnerRpcPortEffect: {
+  <M extends OwnerRpcOperations, E = never, R = never>(
+    options: OwnerRpcEffectOptions<M, E, R>,
+  ): (port: MessagePort) => ReturnType<typeof serveOwnerRpcPortEffectBody<M, E, R>>;
+} & typeof serveOwnerRpcPortEffectBody = EffectFunction.dual(2, serveOwnerRpcPortEffectBody);
 
 /** Synchronous full-loop adapter; Promise handlers cannot reverse dispatched external work. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function serveOwnerRpcPort<M extends OwnerRpcOperations>(
+export const serveOwnerRpcPort: {
+  <M extends OwnerRpcOperations>(options: {
+    readonly permits: (capability: OwnerRpcCapability) => boolean;
+    readonly permitsFinalization?: (capability: OwnerRpcCapability) => boolean;
+    readonly ledger: OwnerRpcLedger;
+    readonly handlers: OwnerRpcHandlers<M>;
+  }): (port: MessagePort) => ReturnType<typeof serveOwnerRpcPortBody<M>>;
+} & typeof serveOwnerRpcPortBody = EffectFunction.dual(2, serveOwnerRpcPortBody);
+function serveOwnerRpcPortBody<M extends OwnerRpcOperations>(
   port: MessagePort,
   options: {
     readonly permits: (capability: OwnerRpcCapability) => boolean;

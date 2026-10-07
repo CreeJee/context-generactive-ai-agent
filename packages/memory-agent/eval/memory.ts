@@ -5,14 +5,11 @@ import { isTruthy } from "../src/truthy.ts";
 // Needs the models under ~/.context-generactive-agent/models. Reports macOS physical footprint
 // (`footprint`), which is what memory pressure counts; compare scenarios run together.
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { spawnSync } from "node:child_process";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Effect, Layer, ManagedRuntime } from "effect";
@@ -35,13 +32,11 @@ const footprint = (field: "phys_footprint" | "phys_footprint_peak") => {
   return Math.round(Number(match[1]) * scale);
 };
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 const settle = async () => {
   for (let round = 0; round < 3; round++) {
     globalThis.gc?.();
     // Native callback heartbeat/debounce timing remains at the protocol boundary.
     // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-    // @effect-diagnostics-next-line globalTimers:off newPromise:off
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
   return footprint("phys_footprint");
@@ -52,7 +47,6 @@ const sentence = "배포는 화요일과 목요일 오후에만 하기로 했고
 const textOfTokens = (tokens: number) => sentence.repeat(Math.ceil(tokens / 20));
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 async function kiwi(options: { loadMultiDict: boolean; loadTypoDict: boolean }) {
   const directory = join(home, "models", `kiwi-${kiwiModel.version}`, kiwiModel.directory);
   const wasm = join(dirname(runtimeRequire().resolve("kiwi-nlp")), "kiwi-wasm.wasm");
@@ -67,7 +61,6 @@ async function kiwi(options: { loadMultiDict: boolean; loadTypoDict: boolean }) 
 
 /** Embeds through the app's Embedder, then disposes it and reports what memory came back. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 async function embed(variant: ModelVariant, texts: readonly string[]) {
   const runtime = ManagedRuntime.make(
     Embedder.localVariant(variant).pipe(Layer.provide(StorageRoot.layer(home))),
@@ -83,7 +76,6 @@ const short = Array.from({ length: 16 }, () => textOfTokens(60));
 
 const scenarios = {
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   "node baseline": async () => ({}),
   "kiwi cong (as used)": () => kiwi({ loadMultiDict: true, loadTypoDict: true }),
   "kiwi without multi/typo dict": () => kiwi({ loadMultiDict: false, loadTypoDict: false }),
@@ -92,7 +84,6 @@ const scenarios = {
   "embedder quint8, 16 short": () => embed("quint8", short),
   "embedder quint8, 1 long + 15 short": () => embed("quint8", mixed),
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   "embedder quint8, three reloads": async () => {
     const rounds = [];
     for (let round = 0; round < 3; round++) rounds.push(await embed("quint8", short));
@@ -107,7 +98,6 @@ if (isTruthy(only)) {
   const started = performance.now();
   const details = await scenario();
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  // @effect-diagnostics-next-line globalConsole:off
   console.log(
     JSON.stringify({
       scenario: only,
@@ -125,7 +115,6 @@ if (isTruthy(only)) {
     );
     const line = result.stdout.trim().split("\n").at(-1) ?? "";
     // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-    // @effect-diagnostics-next-line globalConsole:off
     console.log(result.status === 0 ? line : `${name}: failed (${result.signal ?? result.status})`);
   }
 }

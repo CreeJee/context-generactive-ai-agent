@@ -1,19 +1,23 @@
-import { Layer, ManagedRuntime } from "effect";
+import { NodeCrypto } from "@effect/platform-node";
+import { Config, Effect, Layer, ManagedRuntime } from "effect";
 import { defaultStorageRoot, memoryAgentLayer, stopAllCommands } from "memory-agent";
 
+// Config is evaluated when the runtime first builds its services, after CLI options are applied.
+const agentLayer = Layer.unwrap(
+  Config.String("CONTEXT_AGENT_HOME").pipe(
+    Config.withDefault(defaultStorageRoot),
+    Effect.map(memoryAgentLayer),
+  ),
+);
 type AgentRuntime = ManagedRuntime.ManagedRuntime<
-  Layer.Success<ReturnType<typeof memoryAgentLayer>>,
-  Layer.Error<ReturnType<typeof memoryAgentLayer>>
+  Layer.Success<typeof agentLayer> | import("effect").Crypto.Crypto,
+  Layer.Error<typeof agentLayer>
 >;
 
 function createAgentRuntime(): AgentRuntime {
   // The storage root is read when the first request builds the layer, so the executable can set
   // CONTEXT_AGENT_HOME (its --storage option) after this module is loaded.
-  const runtime = ManagedRuntime.make(
-    // Native host/SDK configuration boundary reads or forwards the host environment.
-    // @effect-diagnostics-next-line processEnv:off
-    Layer.suspend(() => memoryAgentLayer(process.env.CONTEXT_AGENT_HOME ?? defaultStorageRoot)),
-  );
+  const runtime = ManagedRuntime.make(Layer.merge(agentLayer, NodeCrypto.layer));
   // Stop child commands and release the vector index lock with the server. SIGHUP is a closed
   // terminal, and on Windows a closed console window (it has no SIGTERM).
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const)

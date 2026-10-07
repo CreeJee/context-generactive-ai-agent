@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off processEnv:off schemaSync:off
 import { Effect, Schema } from "effect";
@@ -97,7 +98,10 @@ describe("real AgentChat worker opt-in rollback", { concurrent: false }, () => {
       const before = snapshot(owner.db);
       const historyRequest = () =>
         new Request(`http://localhost/api/chat?threadId=${context.session.id}`);
-      const initialHistory = Schema.decodeUnknownSync(History)(
+      const initialHistory = EffectFunction.flow(
+        Schema.decodeUnknownResult(History),
+        Result.getOrThrow,
+      )(
         await (
           await context.runtime.runPromise(owner.chat.hydrate(historyRequest(), context.session.id))
         ).json(),
@@ -107,7 +111,10 @@ describe("real AgentChat worker opt-in rollback", { concurrent: false }, () => {
           .prepare("SELECT * FROM chat_threads WHERE thread_id = ?")
           .get(context.session.id),
       );
-      const repeatedHistory = Schema.decodeUnknownSync(History)(
+      const repeatedHistory = EffectFunction.flow(
+        Schema.decodeUnknownResult(History),
+        Result.getOrThrow,
+      )(
         await (
           await context.runtime.runPromise(owner.chat.hydrate(historyRequest(), context.session.id))
         ).json(),
@@ -115,7 +122,10 @@ describe("real AgentChat worker opt-in rollback", { concurrent: false }, () => {
       expect(JSON.stringify(repeatedHistory.messages)).toBe(
         JSON.stringify(initialHistory.messages),
       );
-      const newestPage = Schema.decodeUnknownSync(History)(
+      const newestPage = EffectFunction.flow(
+        Schema.decodeUnknownResult(History),
+        Result.getOrThrow,
+      )(
         await (
           await context.runtime.runPromise(
             owner.chat.hydrate(new Request(`${historyRequest().url}&limit=1`), context.session.id),
@@ -184,7 +194,10 @@ describe("real AgentChat worker opt-in rollback", { concurrent: false }, () => {
       );
       expect(replay.status).toBe(200);
       expect(await replay.text()).toBe(delivered.slice(delivered.indexOf("\n\n") + 2));
-      const history = Schema.decodeUnknownSync(History)(
+      const history = EffectFunction.flow(
+        Schema.decodeUnknownResult(History),
+        Result.getOrThrow,
+      )(
         await (
           await reopened.runPromise(after.chat.hydrate(historyRequest(), context.session.id))
         ).json(),

@@ -48,8 +48,12 @@ describe("WorkflowRules", () => {
       yield* rules.resolve({ phase: "plan", text: "schema backfill" });
       expect(calls).toEqual([expect.any(Number), 1, 1]);
       // Test entry point owns this Layer and its resource scope.
-      // @effect-diagnostics-next-line strictEffectProvide:off
-    }).pipe(Effect.provide(countingLayer));
+    }).pipe(
+      Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+        const services = yield* Layer.build(countingLayer);
+        return yield* Effect.provideContext(program, services);
+      }, Effect.scoped),
+    );
   });
 
   it.effect("retries rule vectors after a failed embedding", () => {
@@ -76,7 +80,11 @@ describe("WorkflowRules", () => {
       expect(first.degraded).toEqual(["embedding"]);
       expect(second.degraded).toEqual([]);
       // Test entry point owns this Layer and its resource scope.
-      // @effect-diagnostics-next-line strictEffectProvide:off
-    }).pipe(Effect.provide(recoveringLayer));
+    }).pipe(
+      Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+        const services = yield* Layer.build(recoveringLayer);
+        return yield* Effect.provideContext(program, services);
+      }, Effect.scoped),
+    );
   });
 });

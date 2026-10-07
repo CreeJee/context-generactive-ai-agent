@@ -1,9 +1,7 @@
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { lstat } from "node:fs/promises";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join, posix } from "node:path";
 import { toolDefinition } from "@tanstack/ai";
 import { MutableHashMap, Option, Context, Effect, Result, Layer, Schema } from "effect";
@@ -153,7 +151,6 @@ const make = Effect.gen(function* () {
    * unchanged, so paging through a big file does not re-read and re-hash it on every page.
    */
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const readLines = async (absolute: string, path: string) => {
     const stats = await lstat(absolute, { bigint: true });
     const stamp = `${stats.size}:${stats.ctimeNs}:${stats.mtimeNs}:${stats.ino}`;
@@ -171,7 +168,6 @@ const make = Effect.gen(function* () {
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const snapshotFor = async (
     root: string,
     directory: string | undefined,
@@ -201,7 +197,6 @@ const make = Effect.gen(function* () {
         inputSchema: toToolSchema(listFilesInput),
       }).server(({ directory, glob, snapshot, offset }) =>
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         guarded(directory ?? ".", async () => {
           const view = !isTruthy(snapshot)
             ? await snapshotFor(root, directory, glob)
@@ -232,7 +227,6 @@ const make = Effect.gen(function* () {
         inputSchema: toToolSchema(searchFilesInput),
       }).server(({ query, directory, glob, caseSensitive = true, cursor }) =>
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         guarded(directory ?? ".", async () => {
           const position = isTruthy(cursor) ? decodeSearchCursor(cursor) : undefined;
           if (
@@ -266,7 +260,6 @@ const make = Effect.gen(function* () {
           const page = await searchTextFiles(
             view.paths,
             // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-            // @effect-diagnostics-next-line asyncFunction:off
             async (path) => {
               const directory = posix.dirname(path);
               let checked = Option.getOrUndefined(MutableHashMap.get(directories, directory));
@@ -303,7 +296,6 @@ const make = Effect.gen(function* () {
         inputSchema: toToolSchema(readFileInput),
       }).server(({ path, startLine, maxLines }) =>
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         guarded(path, async () => {
           const resolved = orThrow(resolveProjectPath(root, path, "file"));
           const file = await readLines(resolved.absolute, path);
@@ -319,7 +311,6 @@ const make = Effect.gen(function* () {
         inputSchema: toToolSchema(writeFileInput),
       }).server(({ path, content, expectedSha256 }) =>
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         guarded(path, async () => {
           const resolved = orThrow(resolveProjectPath(root, path, "new-or-file"));
           if (expectedSha256 === undefined) {
@@ -340,7 +331,6 @@ const make = Effect.gen(function* () {
         inputSchema: toToolSchema(editFileInput),
       }).server(({ path, oldText, newText, replaceAll = false, expectedSha256 }) =>
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         guarded(path, async () => {
           const resolved = orThrow(resolveProjectPath(root, path, "file"));
           const file = await readTextFile(resolved.absolute, path);
@@ -369,7 +359,6 @@ const make = Effect.gen(function* () {
         inputSchema: toToolSchema(deleteFileInput),
       }).server(({ path, expectedSha256 }) =>
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         guarded(path, async () => {
           const resolved = orThrow(resolveProjectPath(root, path, "file"));
           const removed = await deleteTextFile(resolved.absolute, path, expectedSha256);

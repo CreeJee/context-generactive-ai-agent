@@ -1,8 +1,7 @@
+import { Function as EffectFunction } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { lstatSync, realpathSync, type Stats } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Data, Result } from "effect";
 
@@ -133,9 +132,10 @@ const hasControlCharacter = (path: string) =>
   });
 
 /** True when one absolute path equals or contains the other, compared by spelling. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function pathsOverlap(left: string, right: string): boolean {
+export const pathsOverlap: {
+  (right: string): (left: string) => ReturnType<typeof pathsOverlapBody>;
+} & typeof pathsOverlapBody = EffectFunction.dual(2, pathsOverlapBody);
+function pathsOverlapBody(left: string, right: string): boolean {
   const contains = (root: string, candidate: string) => {
     const path = relative(root, candidate);
     return path === "" || (path !== ".." && !path.startsWith(".." + sep) && !isAbsolute(path));
@@ -191,9 +191,13 @@ export interface ProjectPath {
  * `new-or-file` target whose missing parents the caller may create. This is a local capability
  * check, not an OS sandbox against a concurrent directory swap.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function resolveProjectPath(
+export const resolveProjectPath: {
+  (
+    path: string,
+    kind: "file" | "directory" | "new-or-file",
+  ): (root: string) => ReturnType<typeof resolveProjectPathBody>;
+} & typeof resolveProjectPathBody = EffectFunction.dual(3, resolveProjectPathBody);
+function resolveProjectPathBody(
   root: string,
   path: string,
   kind: "file" | "directory" | "new-or-file",
@@ -252,9 +256,14 @@ export interface OutsidePath {
  * symlink cannot reach `~/.ssh`. Paths inside the project, or inside the app storage root, are
  * refused: project files have their own tools with their own link rules.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function resolveOutsidePath(
+export const resolveOutsidePath: {
+  (
+    storageRoot: string,
+    path: string,
+    kind: "file" | "directory" | "new-or-file",
+  ): (projectRoot: string) => ReturnType<typeof resolveOutsidePathBody>;
+} & typeof resolveOutsidePathBody = EffectFunction.dual(4, resolveOutsidePathBody);
+function resolveOutsidePathBody(
   projectRoot: string,
   storageRoot: string,
   path: string,

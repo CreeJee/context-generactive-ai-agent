@@ -1,6 +1,6 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import { Clock, Context, Data, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
@@ -88,23 +88,35 @@ const UsageRow = Schema.Struct({
   created_at: Schema.Finite,
 });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeClaimSource = Schema.decodeUnknownSync(ClaimSourceRow);
+const decodeClaimSource = EffectFunction.flow(
+  Schema.decodeUnknownResult(ClaimSourceRow),
+  Result.getOrThrow,
+);
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeExisting = Schema.decodeUnknownSync(ExistingRow);
+const decodeExisting = EffectFunction.flow(
+  Schema.decodeUnknownResult(ExistingRow),
+  Result.getOrThrow,
+);
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeCandidates = Schema.decodeUnknownSync(Schema.Array(CandidateRow));
+const decodeCandidates = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Array(CandidateRow)),
+  Result.getOrThrow,
+);
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeCandidateEvidence = Schema.decodeUnknownSync(Schema.Array(CandidateEvidenceRow));
+const decodeCandidateEvidence = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Array(CandidateEvidenceRow)),
+  Result.getOrThrow,
+);
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeCandidateIdentities = Schema.decodeUnknownSync(Schema.Array(CandidateIdentityRow));
+const decodeCandidateIdentities = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Array(CandidateIdentityRow)),
+  Result.getOrThrow,
+);
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeUsage = Schema.decodeUnknownSync(Schema.Array(UsageRow));
+const decodeUsage = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Array(UsageRow)),
+  Result.getOrThrow,
+);
 
 type MemoryPromotionReason =
   | "empty_proposed_text"

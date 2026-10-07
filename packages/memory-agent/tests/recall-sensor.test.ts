@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off newPromise:off nodeBuiltinImport:off schemaSync:off
 import { createServer } from "node:http";
@@ -50,7 +51,9 @@ test("HTTP posts typed noul only to loopback and does not follow redirects", asy
     expect(url).toBe(endpoint);
     expect(init?.method).toBe("POST");
     expect(init?.redirect).toBe("manual");
-    expect(Schema.decodeUnknownSync(requestBody)(init?.body)).toEqual({
+    expect(
+      EffectFunction.flow(Schema.decodeUnknownResult(requestBody), Result.getOrThrow)(init?.body),
+    ).toEqual({
       state: input.redactedText,
       questions: {
         recall_useful: {
@@ -89,14 +92,22 @@ test("HTTP transport works with a short-lived loopback-only synthetic server", a
   const server = createServer(async (request, response) => {
     const parts: Buffer[] = [];
     for await (const part of request) parts.push(Buffer.from(part));
-    requests.push(Schema.decodeSync(requestBody)(Buffer.concat(parts).toString("utf8")));
+    requests.push(
+      EffectFunction.flow(
+        Schema.decodeResult(requestBody),
+        Result.getOrThrow,
+      )(Buffer.concat(parts).toString("utf8")),
+    );
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({ answers: { recall_useful: { type: "noul", noul: 0.6 } } }));
   });
   server.listen(0, "127.0.0.1");
   try {
     await once(server, "listening");
-    const address = Schema.decodeUnknownSync(Schema.Struct({ port: Schema.Int }))(server.address());
+    const address = EffectFunction.flow(
+      Schema.decodeUnknownResult(Schema.Struct({ port: Schema.Int })),
+      Result.getOrThrow,
+    )(server.address());
     const sensor = createRecallSensor({
       mode: "http",
       endpoint: `http://127.0.0.1:${address.port}/v1/systemone`,

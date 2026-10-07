@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { MutableHashMap, Option, Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
@@ -71,7 +72,6 @@ const fusionK = 60;
  * ahead.
  */
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function fuseRanks(
   lists: readonly (readonly string[])[],
   weights: readonly number[] = lists.map(() => 1),
@@ -111,26 +111,32 @@ export function namesSomethingExactly(query: string) {
 
 const IdProject = Schema.Struct({ id: Schema.String, project_id: Schema.String });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeIdProject = Schema.decodeUnknownSync(IdProject);
+const decodeIdProject = EffectFunction.flow(
+  Schema.decodeUnknownResult(IdProject),
+  Result.getOrThrow,
+);
 const Id = Schema.Struct({ id: Schema.String });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeId = Schema.decodeUnknownSync(Id);
+const decodeId = EffectFunction.flow(Schema.decodeUnknownResult(Id), Result.getOrThrow);
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeSeq = Schema.decodeUnknownSync(Schema.Struct({ seq: Schema.Finite }));
+const decodeSeq = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Struct({ seq: Schema.Finite })),
+  Result.getOrThrow,
+);
 const Count = Schema.Struct({ count: Schema.Finite });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeCount = Schema.decodeUnknownSync(Count);
+const decodeCount = EffectFunction.flow(Schema.decodeUnknownResult(Count), Result.getOrThrow);
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeName = Schema.decodeUnknownSync(Schema.Struct({ name: Schema.String }));
+const decodeName = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Struct({ name: Schema.String })),
+  Result.getOrThrow,
+);
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeChallenge = Schema.decodeUnknownSync(
-  Schema.Struct({ from_id: Schema.String, kind: Schema.Literals(["corrects", "retracts"]) }),
+const decodeChallenge = EffectFunction.flow(
+  Schema.decodeUnknownResult(
+    Schema.Struct({ from_id: Schema.String, kind: Schema.Literals(["corrects", "retracts"]) }),
+  ),
+  Result.getOrThrow,
 );
 
 /** Splits a question into search terms; trigram FTS needs 3+ characters, shorter terms use LIKE. */

@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off processEnv:off schemaSync:off
 import { Effect, Schema } from "effect";
@@ -71,20 +72,31 @@ test.each([false, true])(
       } else {
         expect(body).not.toContain("RUN_ERROR");
         // The ledger persists canonical {operation,input} in fingerprint, not input_json.
-        const receipts = Schema.decodeUnknownSync(
-          Schema.Array(Schema.Struct({ fingerprint: Schema.String, status: Schema.String })),
+        const receipts = EffectFunction.flow(
+          Schema.decodeUnknownResult(
+            Schema.Array(Schema.Struct({ fingerprint: Schema.String, status: Schema.String })),
+          ),
+          Result.getOrThrow,
         )(
           db.sqlite
             .prepare("SELECT fingerprint, status FROM owner_rpc_operations WHERE run_id = ?")
             .all("worker-real"),
         );
         const completedHooks = receipts.flatMap((receipt) => {
-          const frame = Schema.decodeSync(
-            Schema.fromJsonString(Schema.Struct({ operation: Schema.String, input: Schema.Json })),
+          const frame = EffectFunction.flow(
+            Schema.decodeResult(
+              Schema.fromJsonString(
+                Schema.Struct({ operation: Schema.String, input: Schema.Json }),
+              ),
+            ),
+            Result.getOrThrow,
           )(receipt.fingerprint);
           if (frame.operation !== "middleware") return [];
-          const input = Schema.decodeUnknownSync(
-            Schema.Struct({ index: Schema.Finite, hook: Schema.String }),
+          const input = EffectFunction.flow(
+            Schema.decodeUnknownResult(
+              Schema.Struct({ index: Schema.Finite, hook: Schema.String }),
+            ),
+            Result.getOrThrow,
           )(decodeFullLoopValue(frame.input));
           return [{ name: middlewareNames[input.index], hook: input.hook, status: receipt.status }];
         });
@@ -297,7 +309,10 @@ test("a real AgentChat turn keeps the owner-bound Goal version after the owner r
       status: "active",
     }),
   );
-  const revision = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.Finite }))(
+  const revision = EffectFunction.flow(
+    Schema.decodeUnknownResult(Schema.Struct({ id: Schema.Finite })),
+    Result.getOrThrow,
+  )(
     db.sqlite
       .prepare(
         "SELECT id FROM workflow_state_revisions WHERE session_id = ? ORDER BY id DESC LIMIT 1",
@@ -478,7 +493,10 @@ test("an unresolved bound run cannot be bypassed with a new unbound ID", async (
       status: "active",
     }),
   );
-  const revision = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.Finite }))(
+  const revision = EffectFunction.flow(
+    Schema.decodeUnknownResult(Schema.Struct({ id: Schema.Finite })),
+    Result.getOrThrow,
+  )(
     db.sqlite
       .prepare(
         "SELECT id FROM workflow_state_revisions WHERE session_id = ? ORDER BY id DESC LIMIT 1",
@@ -536,7 +554,10 @@ test("a pre-bound run ID cannot be used by another session before SDK run creati
       status: "active",
     }),
   );
-  const revision = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.Finite }))(
+  const revision = EffectFunction.flow(
+    Schema.decodeUnknownResult(Schema.Struct({ id: Schema.Finite })),
+    Result.getOrThrow,
+  )(
     db.sqlite
       .prepare(
         "SELECT id FROM workflow_state_revisions WHERE session_id = ? ORDER BY id DESC LIMIT 1",
@@ -590,7 +611,10 @@ test("an unstarted bound run refuses a changed Goal before persisting a user tur
     status: "active" as const,
   };
   await context.runtime.runPromise(workflows.updateGoal(context.session.id, goal));
-  const revision = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.Finite }))(
+  const revision = EffectFunction.flow(
+    Schema.decodeUnknownResult(Schema.Struct({ id: Schema.Finite })),
+    Result.getOrThrow,
+  )(
     db.sqlite
       .prepare(
         "SELECT id FROM workflow_state_revisions WHERE session_id = ? ORDER BY id DESC LIMIT 1",

@@ -1,9 +1,8 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { Context, Effect, Layer, Schema } from "effect";
 import { ProviderId } from "../providers/contracts.ts";
@@ -78,8 +77,10 @@ export const Settings = Schema.Struct({
 export type Settings = typeof Settings.Type;
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeSettings = Schema.decodeUnknownSync(Schema.fromJsonString(Settings));
+const decodeSettings = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.fromJsonString(Settings)),
+  Result.getOrThrow,
+);
 
 const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;

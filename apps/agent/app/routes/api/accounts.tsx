@@ -26,7 +26,6 @@ const reply = <A,>(value: A, status = 200) =>
   });
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function loader({ request }: Route.LoaderArgs) {
   const provider = new URL(request.url).searchParams.get("provider");
   if (!Schema.is(SubscriptionAccountProvider)(provider))
@@ -46,7 +45,6 @@ export async function loader({ request }: Route.LoaderArgs) {
 }
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected !== null) return rejected;

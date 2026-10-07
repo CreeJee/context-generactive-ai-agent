@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { isDeepStrictEqual } from "node:util";
 import { MutableHashMap, Option, Schema } from "effect";
@@ -68,8 +69,10 @@ export function makeOwnerToolGrants() {
     // oxlint-disable-next-line anti-slop/no-unknown-parameters
     observed(input: unknown): Invocation {
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      const invocation = Schema.decodeUnknownSync(Invocation, { onExcessProperty: "error" })(input);
+      const invocation = EffectFunction.flow(
+        Schema.decodeUnknownResult(Invocation, { onExcessProperty: "error" }),
+        Result.getOrThrow,
+      )(input);
       const call = Option.getOrUndefined(MutableHashMap.get(calls, invocation.toolCallId));
       if (
         !isTruthy(call?.complete) ||
@@ -82,8 +85,10 @@ export function makeOwnerToolGrants() {
     },
     approve(input: Invocation, args: Invocation["args"]) {
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      const invocation = Schema.decodeSync(Invocation, { onExcessProperty: "error" })(input);
+      const invocation = EffectFunction.flow(
+        Schema.decodeResult(Invocation, { onExcessProperty: "error" }),
+        Result.getOrThrow,
+      )(input);
       const call = Option.getOrUndefined(MutableHashMap.get(calls, invocation.toolCallId));
       if (
         !isTruthy(call?.complete) ||
@@ -102,10 +107,10 @@ export function makeOwnerToolGrants() {
     validate(input: unknown): boolean {
       try {
         // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        // @effect-diagnostics-next-line schemaSync:off
-        const invocation = Schema.decodeUnknownSync(Invocation, { onExcessProperty: "error" })(
-          input,
-        );
+        const invocation = EffectFunction.flow(
+          Schema.decodeUnknownResult(Invocation, { onExcessProperty: "error" }),
+          Result.getOrThrow,
+        )(input);
         const call = Option.getOrUndefined(MutableHashMap.get(calls, invocation.toolCallId));
         return !!isTruthy(call?.grant) && !call.used && isDeepStrictEqual(call.grant, invocation);
       } catch {
@@ -116,8 +121,10 @@ export function makeOwnerToolGrants() {
     // oxlint-disable-next-line anti-slop/no-unknown-parameters
     start(input: unknown): Invocation {
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      const invocation = Schema.decodeUnknownSync(Invocation, { onExcessProperty: "error" })(input);
+      const invocation = EffectFunction.flow(
+        Schema.decodeUnknownResult(Invocation, { onExcessProperty: "error" }),
+        Result.getOrThrow,
+      )(input);
       const call = Option.getOrUndefined(MutableHashMap.get(calls, invocation.toolCallId));
       if (!isTruthy(call?.grant) || call.started || !isDeepStrictEqual(call.grant, invocation))
         throw new Error("Invalid or repeated owner tool implementation grant");
@@ -128,8 +135,10 @@ export function makeOwnerToolGrants() {
     // oxlint-disable-next-line anti-slop/no-unknown-parameters
     consume(input: unknown): Invocation {
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      const invocation = Schema.decodeUnknownSync(Invocation, { onExcessProperty: "error" })(input);
+      const invocation = EffectFunction.flow(
+        Schema.decodeUnknownResult(Invocation, { onExcessProperty: "error" }),
+        Result.getOrThrow,
+      )(input);
       const call = Option.getOrUndefined(MutableHashMap.get(calls, invocation.toolCallId));
       if (!isTruthy(call?.grant) || call.used || !isDeepStrictEqual(call.grant, invocation))
         throw new Error("Invalid owner tool grant");

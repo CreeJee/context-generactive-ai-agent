@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { Schema } from "effect";
 
 /**
@@ -78,9 +79,10 @@ export interface InjectedText {
   readonly prefixes: readonly string[];
 }
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function isInjectedText(text: string, injected: InjectedText): boolean {
+export const isInjectedText: {
+  (injected: InjectedText): (text: string) => ReturnType<typeof isInjectedTextBody>;
+} & typeof isInjectedTextBody = EffectFunction.dual(2, isInjectedTextBody);
+function isInjectedTextBody(text: string, injected: InjectedText): boolean {
   const start = text.trimStart();
   const opening = /^<([a-z_-]+)[\s>/]/u.exec(start);
   if (opening !== null && injected.tags.has(opening[1] ?? "")) return true;

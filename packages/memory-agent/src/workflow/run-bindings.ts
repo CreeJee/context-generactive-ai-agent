@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { DateTime, Schema } from "effect";
 import type { DatabaseSync } from "node:sqlite";
@@ -58,22 +59,26 @@ export function workflowRunBindings({ sqlite, atomic }: OwnerDatabase) {
   const bind = (sessionId: string, runId: string, expectedRevisionId: number): Admission =>
     atomic(() => {
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      const goal = Schema.decodeUnknownSync(
-        Schema.UndefinedOr(Schema.Struct({ goal_instance_id: Schema.String })),
+      const goal = EffectFunction.flow(
+        Schema.decodeUnknownResult(
+          Schema.UndefinedOr(Schema.Struct({ goal_instance_id: Schema.String })),
+        ),
+        Result.getOrThrow,
       )(identity.get(sessionId));
       if (!isTruthy(goal)) return { status: "refused", reason: "legacy_unbound" };
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      const state = Schema.decodeUnknownSync(
-        Schema.UndefinedOr(
-          Schema.Struct({
-            id: Schema.Finite,
-            goal_instance_id: Schema.NullOr(Schema.String),
-            goal_version: Schema.NullOr(Schema.Finite),
-            plan_version: Schema.NullOr(Schema.Finite),
-          }),
+      const state = EffectFunction.flow(
+        Schema.decodeUnknownResult(
+          Schema.UndefinedOr(
+            Schema.Struct({
+              id: Schema.Finite,
+              goal_instance_id: Schema.NullOr(Schema.String),
+              goal_version: Schema.NullOr(Schema.Finite),
+              plan_version: Schema.NullOr(Schema.Finite),
+            }),
+          ),
         ),
+        Result.getOrThrow,
       )(latest.get(sessionId));
       if (
         !isTruthy(state) ||

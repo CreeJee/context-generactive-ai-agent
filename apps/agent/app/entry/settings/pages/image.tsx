@@ -38,7 +38,6 @@ export function ImageSettings() {
   const [error, setError] = useState<string | null>(null);
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const setImageGenerationEnabled = async (enabled: boolean) => {
     setError(null);
     try {
@@ -49,7 +48,6 @@ export function ImageSettings() {
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const applyCrossProviderMode = async (mode: CrossProviderMediaConsentMode) => {
     setError(null);
     try {

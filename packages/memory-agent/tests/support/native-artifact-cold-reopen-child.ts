@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off processEnv:off schemaSync:off
 import { strict as assert } from "node:assert";
@@ -19,12 +20,15 @@ import { fakeVector } from "../../src/testing/fake-embedder.ts";
 import { fakeMorphLayer } from "../../src/testing/fake-morph.ts";
 import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
 
-const [base, artifactPath, phase] = Schema.decodeUnknownSync(
-  Schema.Tuple([
-    Schema.NonEmptyString,
-    Schema.NonEmptyString,
-    Schema.Literals(["first", "second"]),
-  ]),
+const [base, artifactPath, phase] = EffectFunction.flow(
+  Schema.decodeUnknownResult(
+    Schema.Tuple([
+      Schema.NonEmptyString,
+      Schema.NonEmptyString,
+      Schema.Literals(["first", "second"]),
+    ]),
+  ),
+  Result.getOrThrow,
 )(process.argv.slice(2));
 assert.equal(existsSync(join(base, "src")), false);
 assert.equal(existsSync(join(base, "storage", "agent.db")), phase === "second");
@@ -84,9 +88,10 @@ try {
   sqlite = services.db.sqlite;
   const previous =
     phase === "second"
-      ? Schema.decodeSync(Schema.fromJsonString(Snapshot))(
-          readFileSync(join(base, "snapshot.json"), "utf8"),
-        )
+      ? EffectFunction.flow(
+          Schema.decodeResult(Schema.fromJsonString(Snapshot)),
+          Result.getOrThrow,
+        )(readFileSync(join(base, "snapshot.json"), "utf8"))
       : undefined;
   const binding =
     previous ??

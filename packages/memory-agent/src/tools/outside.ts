@@ -70,7 +70,6 @@ const make = Effect.gen(function* () {
       const resolve = (path: string, kind: "file" | "directory") =>
         orThrow(resolveOutsidePath(project.root, storage.path, path, kind));
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      // @effect-diagnostics-next-line asyncFunction:off
       const readBytes = async (path: string) =>
         (await readFileBytes(resolve(path, "file").absolute, path)).bytes;
 
@@ -81,7 +80,6 @@ const make = Effect.gen(function* () {
         inputSchema: toToolSchema(listOutsideInput),
       }).server(({ directory, glob, snapshot, offset }) =>
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         guarded(directory, async () => {
           let view;
           if (snapshot === undefined) {
@@ -118,7 +116,6 @@ const make = Effect.gen(function* () {
         inputSchema: toToolSchema(readOutsideInput),
       }).server(({ path, startLine, maxLines }) =>
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         guarded(path, async () => {
           const resolved = resolve(path, "file");
           const file = await readTextFile(resolved.absolute, path);
@@ -138,7 +135,6 @@ const make = Effect.gen(function* () {
         inputSchema: toToolSchema(searchOutsideInput),
       }).server(({ path, query, glob, caseSensitive = true, cursor }) =>
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         guarded(path, async () => {
           const position = cursor === undefined ? undefined : decodeSearchCursor(cursor);
           if (
@@ -155,7 +151,6 @@ const make = Effect.gen(function* () {
             const directory = resolveOutsidePath(project.root, storage.path, path, "directory");
             view = await Result.match(directory, {
               // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-              // @effect-diagnostics-next-line asyncFunction:off
               onSuccess: async ({ absolute }) =>
                 snapshots.add(snapshotKey, absolute, glob, await listOutsideFiles(absolute, glob)),
               onFailure: (rejection) => {

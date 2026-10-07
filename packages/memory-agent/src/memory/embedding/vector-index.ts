@@ -1,11 +1,9 @@
+import { Result, Function as EffectFunction } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash } from "node:crypto";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { existsSync, mkdirSync, renameSync } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { Context, Data, Effect, Layer, Option, Schema } from "effect";
 import { StorageRoot } from "../../config/storage-root.ts";
@@ -45,8 +43,10 @@ const quantizationBits = 4;
 
 const Count = Schema.Struct({ count: Schema.Finite });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeSeq = Schema.decodeUnknownSync(Schema.Struct({ seq: Schema.Finite }));
+const decodeSeq = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Struct({ seq: Schema.Finite })),
+  Result.getOrThrow,
+);
 
 /** Writes a new file then swaps it in, so a crash never leaves a half-written index. */
 function write(index: { save(path: string): void }, file: string) {
@@ -56,8 +56,7 @@ function write(index: { save(path: string): void }, file: string) {
 }
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeVectorCount = Schema.decodeUnknownSync(Count);
+const decodeVectorCount = EffectFunction.flow(Schema.decodeUnknownResult(Count), Result.getOrThrow);
 const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
   const { sqlite, atomic } = yield* Database;

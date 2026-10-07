@@ -167,7 +167,6 @@ function elapsed(task: TraceTaskView) {
   const milliseconds = Math.max(
     0,
     // React/native timestamps use the host Date contract outside Effect execution.
-    // @effect-diagnostics-next-line globalDate:off
     (activeTaskStatuses.includes(task.status) ? Date.now() : task.updatedAt) - task.createdAt,
   );
   const seconds = Math.round(milliseconds / 1_000);
@@ -251,7 +250,6 @@ function TaskSummaryCard({
     "idle" | "requesting" | "confirm-uncertain" | "queued" | "failed"
   >("idle");
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const resume = async (confirmUncertain: boolean) => {
     setResumeState("requesting");
     const result = await onResume(task, confirmUncertain);
@@ -262,7 +260,6 @@ function TaskSummaryCard({
   };
   const [archiveState, setArchiveState] = useState<"idle" | "requesting" | "failed">("idle");
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const archive = async () => {
     setArchiveState("requesting");
     const result = await onArchive(task);
@@ -270,7 +267,6 @@ function TaskSummaryCard({
   };
   const [deleteState, setDeleteState] = useState<"idle" | "requesting" | "failed">("idle");
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const remove = async () => {
     if (
       !window.confirm(

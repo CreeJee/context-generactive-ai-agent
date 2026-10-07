@@ -1,5 +1,4 @@
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import { isTruthy } from "../truthy.ts";
 import { toolDefinition, type AnyServerTool } from "@tanstack/ai";

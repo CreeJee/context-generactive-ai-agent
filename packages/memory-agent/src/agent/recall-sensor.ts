@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { MutableHashMap, Cause, Effect, Exit, Option, Schema } from "effect";
 
@@ -27,8 +28,10 @@ export interface RecallSensorInput {
 
 class SensorFailed extends Schema.TaggedError<SensorFailed>()("SensorFailed", {}) {}
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const encodeRequest = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
+const encodeRequest = EffectFunction.flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Json)),
+  Result.getOrThrow,
+);
 
 type MockEvaluator = (text: string, signal?: AbortSignal) => Promise<number> | number;
 export type RecallSensorConfig =
@@ -80,7 +83,6 @@ function validScore(value: number) {
 }
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 async function boundedScore(response: Response, signal: AbortSignal): Promise<number | null> {
   if (!(response.body !== null)) throw new Error("empty response");
   const reader = response.body.getReader();

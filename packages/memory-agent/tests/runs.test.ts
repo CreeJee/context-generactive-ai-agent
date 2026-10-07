@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off schemaSync:off
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
@@ -84,7 +85,10 @@ const statusOf = async (runtime: Runtime, sessionId: string) => {
   const response = await runtime.runPromise(
     Effect.flatMap(AgentChat, (agent) => agent.status(sessionId, null)),
   );
-  return Schema.decodeUnknownSync(Status)(await response.json());
+  return EffectFunction.flow(
+    Schema.decodeUnknownResult(Status),
+    Result.getOrThrow,
+  )(await response.json());
 };
 
 describe("runs across reloads, cancels and restarts", () => {
@@ -126,7 +130,10 @@ describe("runs across reloads, cancels and restarts", () => {
     const response = await runtime.runPromise(
       Effect.flatMap(AgentChat, (agent) => agent.cancel(session.id, null)),
     );
-    const cancelled = Schema.decodeUnknownSync(Cancelled)(await response.json());
+    const cancelled = EffectFunction.flow(
+      Schema.decodeUnknownResult(Cancelled),
+      Result.getOrThrow,
+    )(await response.json());
     expect(cancelled).toMatchObject({ stopped: true, status: "aborted" });
     expect(provider!.adapter.invocations).toHaveLength(1);
     expect(tab.text()).not.toContain("done");
@@ -166,7 +173,12 @@ describe("runs across reloads, cancels and restarts", () => {
 
     const response = await runtime.runPromise(agent.cancel(session.id, null));
     expect(response.status).toBe(200);
-    expect(Schema.decodeUnknownSync(Cancelled)(await response.json())).toMatchObject({
+    expect(
+      EffectFunction.flow(
+        Schema.decodeUnknownResult(Cancelled),
+        Result.getOrThrow,
+      )(await response.json()),
+    ).toMatchObject({
       runId: running.running!.runId,
       stopped: true,
       status: "aborted",

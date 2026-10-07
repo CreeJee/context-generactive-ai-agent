@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off processEnv:off schemaSync:off
 import { Effect, Schema } from "effect";
@@ -62,15 +63,18 @@ test("real AgentChat workers link two Goal runs to separate native registrations
     await send(context.session.id, "native-a");
     await send(b.id, "native-b");
     const provenance = (db: Database["Service"]) =>
-      Schema.decodeUnknownSync(
-        Schema.Array(
-          Schema.Struct({
-            run_id: Schema.String,
-            goal_instance_id: Schema.String,
-            artifact_url: Schema.String,
-            artifact_hash: Schema.String,
-          }),
+      EffectFunction.flow(
+        Schema.decodeUnknownResult(
+          Schema.Array(
+            Schema.Struct({
+              run_id: Schema.String,
+              goal_instance_id: Schema.String,
+              artifact_url: Schema.String,
+              artifact_hash: Schema.String,
+            }),
+          ),
         ),
+        Result.getOrThrow,
       )(
         db.sqlite
           .prepare(`SELECT b.run_id, b.goal_instance_id, a.artifact_url, a.artifact_hash

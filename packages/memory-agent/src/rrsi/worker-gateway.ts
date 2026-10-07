@@ -1,10 +1,8 @@
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import type { Readable } from "node:stream";
 import { HashMap, Ref, Option, Context, Deferred, Effect, Layer, Schema, Stream } from "effect";
 import { HarnessProfile } from "./contracts.ts";

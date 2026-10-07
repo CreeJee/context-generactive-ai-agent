@@ -49,7 +49,6 @@ export function useAuthActionMutation(provider: ProviderId) {
   return useMutation({
     mutationFn: (intent: "login" | "cancel" | "logout") => api.authAction(intent, provider),
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     onSuccess: async () => {
       await Promise.all([
         client.invalidateQueries({ queryKey: globalQueries.auth(provider).queryKey }),

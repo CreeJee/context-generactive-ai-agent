@@ -28,13 +28,15 @@ const run = <A, E>(storage: string, program: Effect.Effect<A, E, Projects>) =>
   Effect.runPromise(
     program.pipe(
       // Test entry point owns this Layer and its resource scope.
-      // @effect-diagnostics-next-line strictEffectProvide:off
-      Effect.provide(
-        Projects.layer.pipe(
-          Layer.provide(Database.layer(join(storage, "agent.db"))),
-          Layer.provide(StorageRoot.layer(storage)),
-        ),
-      ),
+      Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+        const services = yield* Layer.build(
+          Projects.layer.pipe(
+            Layer.provide(Database.layer(join(storage, "agent.db"))),
+            Layer.provide(StorageRoot.layer(storage)),
+          ),
+        );
+        return yield* Effect.provideContext(program, services);
+      }, Effect.scoped),
     ),
   );
 

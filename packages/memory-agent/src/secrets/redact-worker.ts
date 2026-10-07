@@ -1,3 +1,5 @@
+import { Layer } from "effect";
+import { Result, Function as EffectFunction } from "effect";
 // Hiding secrets in stored text, in a worker thread. The sweep reads every node a start has not
 // seen yet, and secretlint checks one text after another without giving the event loop a turn: on
 // the server's main thread that held up every request meanwhile. In a checkout Node runs this file
@@ -10,13 +12,20 @@ import { SecretRedactor, type Redaction, type SecretRedactionFailed } from "./re
 const port = parentPort;
 if (!(port !== null)) throw new Error("the redaction worker runs only as a worker thread");
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeRequest = Schema.decodeUnknownSync(RedactRequest);
+const decodeRequest = EffectFunction.flow(
+  Schema.decodeUnknownResult(RedactRequest),
+  Result.getOrThrow,
+);
 const decodeJsonText = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 
 // Worker entry point owns this Layer and its resource scope.
-// @effect-diagnostics-next-line strictEffectProvide:off
-const redactor = Effect.runSync(Effect.provide(SecretRedactor, SecretRedactor.layer));
+const redactor = Effect.runSync(
+  Effect.scoped(
+    Effect.flatMap(Layer.build(SecretRedactor.layer), (services) =>
+      Effect.provideContext(SecretRedactor, services),
+    ),
+  ),
+);
 
 /** A JSON column's text with secrets hidden in its strings, or the text as it was. */
 const hideJson = (text: string): Effect.Effect<Redaction, SecretRedactionFailed> =>

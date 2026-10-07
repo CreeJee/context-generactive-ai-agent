@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { Schema } from "effect";
 
 export const CancellationReason = Schema.Literals([
@@ -26,9 +27,10 @@ export class EvaluationFailed extends Schema.TaggedError<EvaluationFailed>()("Ev
 export class ActivityFailed extends Schema.TaggedError<ActivityFailed>()("ActivityFailed", {}) {}
 
 // Persist only known categories. Provider errors and abort reasons may contain credentials or text.
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function experimentFailure(error: Error | null, signal: AbortSignal): string {
+export const experimentFailure: {
+  (signal: AbortSignal): (error: Error | null) => ReturnType<typeof experimentFailureBody>;
+} & typeof experimentFailureBody = EffectFunction.dual(2, experimentFailureBody);
+function experimentFailureBody(error: Error | null, signal: AbortSignal): string {
   if (signal.aborted)
     return Schema.is(CancellationReason)(signal.reason) ? signal.reason : "experiment_stopped";
   if (Schema.is(EvaluationFailed)(error)) return error.reason;

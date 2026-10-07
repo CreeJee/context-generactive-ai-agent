@@ -24,13 +24,11 @@ export function pageHolder() {
     const existing = sessionStorage.getItem(holderKey);
     if (isTruthy(existing)) return existing;
     // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
-    // @effect-diagnostics-next-line cryptoRandomUUID:off
     const created = crypto.randomUUID();
     sessionStorage.setItem(holderKey, created);
     return created;
   } catch {
     // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
-    // @effect-diagnostics-next-line cryptoRandomUUID:off
     return crypto.randomUUID();
   }
 }
@@ -89,7 +87,6 @@ export function useSessionLease(sessionId: string) {
     const tick = () =>
       leaseAction(sessionId, holder, "claim").then((view) => current && setLease(view));
     // Native callback heartbeat/debounce timing remains at the protocol boundary.
-    // @effect-diagnostics-next-line globalTimers:off
     const timer = setInterval(() => void tick().catch(() => {}), renewMs);
     return () => {
       current = false;
@@ -99,7 +96,6 @@ export function useSessionLease(sessionId: string) {
 
   /** "이어서 작업": claims the session if it is still free when asked. */
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const continueHere = async () => {
     const view = await leaseAction(sessionId, holder, "claim");
     setLease(view);

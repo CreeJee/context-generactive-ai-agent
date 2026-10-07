@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { Cause, Context, Data, Effect, Layer } from "effect";
 import {
   GlobalConfig,
@@ -30,9 +31,17 @@ const emptySettings = (): CrossProviderMediaConsentSettings => ({ version: 1, pa
 export const crossProviderMediaConsentKey = (pair: CrossProviderMediaConsentPair) =>
   `${pair.initiatorProvider}->${pair.executorProvider}:${pair.capability}`;
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function decideCrossProviderMediaConsent(
+export const decideCrossProviderMediaConsent: {
+  (
+    pair: CrossProviderMediaConsentPair,
+  ): (
+    settings: CrossProviderMediaConsentSettings | undefined,
+  ) => ReturnType<typeof decideCrossProviderMediaConsentBody>;
+} & typeof decideCrossProviderMediaConsentBody = EffectFunction.dual(
+  2,
+  decideCrossProviderMediaConsentBody,
+);
+function decideCrossProviderMediaConsentBody(
   settings: CrossProviderMediaConsentSettings | undefined,
   pair: CrossProviderMediaConsentPair,
 ): CrossProviderMediaConsentDecision {

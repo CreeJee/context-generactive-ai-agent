@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { Cache, Effect } from "effect";
 import { encodingForModel, getEncoding, getEncodingNameForModel } from "js-tiktoken";
 
@@ -19,9 +20,7 @@ const encoders = Effect.runSync(
 const encoderFor = (name: Parameters<typeof getEncoding>[0]) =>
   Effect.runSync(Cache.get(encoders, name));
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export const estimateRequestTokens = (
+const estimateRequestTokensBody = (
   serializedRequest: string,
   model: string,
 ): RequestTokenEstimate => {
@@ -41,10 +40,11 @@ export const estimateRequestTokens = (
     fallback,
   };
 };
+export const estimateRequestTokens: {
+  (model: string): (serializedRequest: string) => ReturnType<typeof estimateRequestTokensBody>;
+} & typeof estimateRequestTokensBody = EffectFunction.dual(2, estimateRequestTokensBody);
 
 /** A conservative pilot stop, not a guarantee about server-side tokens or cache hits. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export const exceedsRequestTokenBudget = (
   estimate: RequestTokenEstimate,
   maxEstimatedTokens: number,

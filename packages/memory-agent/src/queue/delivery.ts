@@ -72,7 +72,6 @@ const make = Effect.gen(function* () {
 
   /** Puts steered messages into the saved conversation, before the answer they arrived during. */
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const saveSteered = async (binding: DeliveryBinding) => {
     const steered = queue.steeredOutsideTranscript(binding.sessionId, binding.runId);
     if (steered.length === 0) return;
@@ -117,7 +116,6 @@ const make = Effect.gen(function* () {
       return {
         name: "memory-agent/queue-delivery",
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         async onConfig(ctx, config) {
           if (ctx.phase !== "beforeModel") return;
           const added: ModelMessage[] = [];

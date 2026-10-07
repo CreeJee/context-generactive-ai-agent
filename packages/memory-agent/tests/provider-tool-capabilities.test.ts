@@ -1,3 +1,5 @@
+import { Layer } from "effect";
+import { it as effectTest } from "@effect/vitest";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off
 import { memoryTool } from "@tanstack/ai-anthropic/tools";
@@ -16,8 +18,14 @@ import {
 
 const runDefault = <A, E>(program: Effect.Effect<A, E, ProviderToolCapabilityRegistry>) =>
   // Test entry point owns this Layer and its resource scope.
-  // @effect-diagnostics-next-line strictEffectProvide:off
-  Effect.runPromise(program.pipe(Effect.provide(ProviderToolCapabilityRegistry.layer)));
+  Effect.runPromise(
+    program.pipe(
+      Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+        const services = yield* Layer.build(ProviderToolCapabilityRegistry.layer);
+        return yield* Effect.provideContext(program, services);
+      }, Effect.scoped),
+    ),
+  );
 
 const failure = <A, E>(effect: Effect.Effect<A, E>) =>
   Effect.runPromise(
@@ -168,21 +176,21 @@ describe("ProviderToolCapabilityRegistry", () => {
     });
   });
 
-  test("supports a Context.Tag Layer override", async () => {
-    const override: ProviderToolCapabilityRegistryApi = {
-      descriptors: [],
-      get: (id) =>
-        providerToolDescriptors.length > 0
-          ? Effect.succeed(providerToolDescriptors[0])
-          : Effect.die(id),
-      filter: () => [],
-      resolve: () => Effect.succeed([]),
-    };
-    const value = await Effect.runPromise(
-      Effect.map(ProviderToolCapabilityRegistry, (registry) => registry).pipe(
+  effectTest.effect("supports a Context.Tag Layer override", () =>
+    Effect.gen(function* () {
+      const override: ProviderToolCapabilityRegistryApi = {
+        descriptors: [],
+        get: (id) =>
+          providerToolDescriptors.length > 0
+            ? Effect.succeed(providerToolDescriptors[0])
+            : Effect.die(id),
+        filter: () => [],
+        resolve: () => Effect.succeed([]),
+      };
+      const value = yield* Effect.map(ProviderToolCapabilityRegistry, (registry) => registry).pipe(
         Effect.provideService(ProviderToolCapabilityRegistry, override),
-      ),
-    );
-    expect(value).toBe(override);
-  });
+      );
+      expect(value).toBe(override);
+    }),
+  );
 });

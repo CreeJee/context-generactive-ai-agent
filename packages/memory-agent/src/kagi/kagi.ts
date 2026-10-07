@@ -1,11 +1,14 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Context, Data, Effect, Layer, Schema } from "effect";
 import { GlobalConfig } from "../config/global-config.ts";
 import { SecretStore, type SecretStoreFailed } from "../config/secrets.ts";
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const stringifyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const stringifyJson = EffectFunction.flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
 
 /** The server the Kagi TypeScript SDK targets (`servers.ts`). */
 export const kagiBaseUrl = "https://kagi.com/api/v1";
@@ -156,7 +159,6 @@ const make = (options: KagiOptions) =>
         const response = yield* Effect.tryPromise({
           try: () =>
             // Native fetch I/O boundary preserves RequestInit semantics; scoped AbortSignal owns interruption.
-            // @effect-diagnostics-next-line globalFetchInEffect:off
             fetch(`${baseUrl}${path}`, {
               method: "POST",
               headers: {

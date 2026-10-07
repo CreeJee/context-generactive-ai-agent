@@ -1,13 +1,10 @@
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash } from "node:crypto";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { dirname, join } from "node:path";
 import { MutableHashMap, Option, Context, Effect, Layer, Schema } from "effect";
 import type { Project } from "../projects/projects.ts";

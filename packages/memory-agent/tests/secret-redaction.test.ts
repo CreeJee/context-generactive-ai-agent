@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -12,12 +13,18 @@ import { Nodes } from "../src/memory/nodes.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
 import { testRuntime } from "./support/runtime.ts";
 
-const stringifyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const stringifyJson = EffectFunction.flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
 
 /** Assembled at run time so no key-shaped text sits in the repository. */
 const githubToken = `${"gh"}p_${"Z9y8X7w6V5u4T3s2R1q0P9o8N7m6L5k4J3i2"}`;
 
-const decodeRefs = Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ ref: Schema.String })));
+const decodeRefs = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Array(Schema.Struct({ ref: Schema.String }))),
+  Result.getOrThrow,
+);
 const line = (entry: { readonly [key: string]: JsonValue }) => JSON.stringify(entry);
 
 const send = (

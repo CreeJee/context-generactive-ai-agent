@@ -1,5 +1,5 @@
+import { Function as EffectFunction } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { isAbsolute, resolve } from "node:path";
 import { optionalProperty } from "../optional-property.ts";
 import {
@@ -253,8 +253,6 @@ const noTrustedAuthority: ProviderToolTrustedAuthority = Object.freeze({
   isolatedDesktop: false,
   principalStorage: false,
 });
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function hasRequiredProviderToolAuthority(
   tool: AnyProviderToolDescriptor,
   authority: ProviderToolTrustedAuthority = noTrustedAuthority,
@@ -274,8 +272,6 @@ export function hasRequiredProviderToolAuthority(
     }
   });
 }
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function decideProviderToolExposure(
   tools: readonly AnyProviderToolDescriptor[],
   context: ProviderToolPolicyContext,
@@ -433,8 +429,6 @@ const trustedSandbox = (
     limits: Object.freeze({ ...sandbox.limits }),
   });
 };
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function makeProviderToolPolicy(
   registry: ProviderToolCapabilityRegistry["Service"],
   config: ProviderToolPolicyConfig = {},
@@ -778,8 +772,6 @@ const numberRecord = (value: unknown): Readonly<Record<string, number>> | undefi
   return entries.length === 0 ? undefined : Object.freeze(Object.fromEntries(entries));
 };
 /** Normalize reported values only; never estimate absent tokens or cost. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function normalizeProviderToolUsage(
   raw: unknown,
   attribution?: ProviderToolUsageAttribution,
@@ -851,9 +843,15 @@ const providerStatus = HashMap.fromIterable<string, ProviderToolLifecycleStatus>
   ["cancelled", "cancelled"],
   ["canceled", "cancelled"],
 ]);
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function normalizeProviderToolLifecycleStatus(
+export const normalizeProviderToolLifecycleStatus: {
+  (
+    fallback: ProviderToolLifecycleStatus,
+  ): (kind: string | undefined) => ReturnType<typeof normalizeProviderToolLifecycleStatusBody>;
+} & typeof normalizeProviderToolLifecycleStatusBody = EffectFunction.dual(
+  2,
+  normalizeProviderToolLifecycleStatusBody,
+);
+function normalizeProviderToolLifecycleStatusBody(
   kind: string | undefined,
   fallback: ProviderToolLifecycleStatus,
 ): ProviderToolLifecycleStatus {
@@ -1045,9 +1043,14 @@ const invokeProviderFactory = (
   return factory(...args);
 };
 /* oxlint-enable anti-slop/no-unknown-parameters */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function makeProviderToolRuntime(
+export const makeProviderToolRuntime: {
+  (
+    policyService: ProviderToolPolicy["Service"],
+  ): (
+    registry: ProviderToolCapabilityRegistry["Service"],
+  ) => ReturnType<typeof makeProviderToolRuntimeBody>;
+} & typeof makeProviderToolRuntimeBody = EffectFunction.dual(2, makeProviderToolRuntimeBody);
+function makeProviderToolRuntimeBody(
   registry: ProviderToolCapabilityRegistry["Service"],
   policyService: ProviderToolPolicy["Service"],
 ): ProviderToolRuntimeApi {

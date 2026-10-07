@@ -1,10 +1,8 @@
 import { HashMap, MutableHashMap, Effect } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { realpathSync } from "node:fs";
 import * as acp from "@agentclientprotocol/sdk";
 import type {
@@ -206,13 +204,11 @@ export function startAcpAgent(options: {
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const open = async (sessionId: string, project: ProjectSummary, messages: UIMessage[]) => {
     const holder = `acp-${randomUUID()}`;
     const lease = await api.lease(sessionId, holder, "claim");
     if (lease.state !== "mine") throw new AppRequestFailed(423, "session_in_use");
     // Native callback heartbeat/debounce timing remains at the protocol boundary.
-    // @effect-diagnostics-next-line globalTimers:off
     const renew = setInterval(
       () => void api.lease(sessionId, holder, "claim").catch(() => undefined),
       leaseRenewMs,
@@ -240,7 +236,6 @@ export function startAcpAgent(options: {
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const projectFor = async (cwd: string) => {
     let root: string;
     try {
@@ -256,14 +251,12 @@ export function startAcpAgent(options: {
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const waitIdle = async (chat: Chat) => {
     while (chat.getIsLoading()) await Effect.runPromise(Effect.sleep(50));
   };
 
   /** Asks the editor about one call; anything but an explicit allow is a no. */
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const askEditor = async (
     turn: PromptTurn,
     sessionId: string,
@@ -294,7 +287,6 @@ export function startAcpAgent(options: {
   const relayApprovals = (session: BridgeSession, turn: PromptTurn) => {
     const asked = new Set<string>();
     // Native callback heartbeat/debounce timing remains at the protocol boundary.
-    // @effect-diagnostics-next-line globalTimers:off
     const timer = setInterval(() => {
       void api
         .approvals(session.id)
@@ -322,7 +314,6 @@ export function startAcpAgent(options: {
   const app = acp
     .agent({ name: "context-generactive-agent" })
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     .onRequest(acp.methods.agent.initialize, async () => ({
       protocolVersion: acp.PROTOCOL_VERSION,
       agentCapabilities: {
@@ -333,10 +324,8 @@ export function startAcpAgent(options: {
       authMethods: [],
     }))
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     .onRequest(acp.methods.agent.authenticate, async () => ({}))
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     .onRequest(acp.methods.agent.session.new, async (ctx) => {
       try {
         const auth = await api.auth();
@@ -351,7 +340,6 @@ export function startAcpAgent(options: {
       }
     })
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     .onRequest(acp.methods.agent.session.load, async (ctx) => {
       try {
         const project = await projectFor(ctx.params.cwd);
@@ -398,7 +386,6 @@ export function startAcpAgent(options: {
       }
     })
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     .onRequest(acp.methods.agent.session.prompt, async (ctx) => {
       const session = Option.getOrUndefined(MutableHashMap.get(sessions, ctx.params.sessionId));
       if (!isTruthy(session))
@@ -477,7 +464,6 @@ export function startAcpAgent(options: {
       }
     })
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     .onNotification(acp.methods.agent.session.cancel, async (ctx) => {
       const session = Option.getOrUndefined(MutableHashMap.get(sessions, ctx.params.sessionId));
       if (!isTruthy(session?.turn)) return;

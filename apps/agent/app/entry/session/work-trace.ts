@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../../truthy.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import type { TraceTaskView } from "memory-agent";
@@ -9,10 +10,11 @@ import { sessionQueries, useSessionTraceQuery } from "../queries/session";
 export type TraceConnection = "connecting" | "live" | "reconnecting";
 
 /** Match a call to its latest durable task, including after a resumed attempt. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export const taskForToolCall = (tasks: readonly TraceTaskView[], toolCallId: string) =>
+const taskForToolCallBody = (tasks: readonly TraceTaskView[], toolCallId: string) =>
   tasks.findLast((task) => task.parentToolCallId === toolCallId);
+export const taskForToolCall: {
+  (toolCallId: string): (tasks: readonly TraceTaskView[]) => ReturnType<typeof taskForToolCallBody>;
+} & typeof taskForToolCallBody = EffectFunction.dual(2, taskForToolCallBody);
 
 /** One session-level subscription shared by every in-conversation task card. */
 export function useWorkTrace(sessionId: string) {
@@ -33,7 +35,6 @@ export function useWorkTrace(sessionId: string) {
       if (refreshing) return;
       refreshing = true;
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      // @effect-diagnostics-next-line asyncFunction:off
       void (async () => {
         try {
           while (active && dirty) {

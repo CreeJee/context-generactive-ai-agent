@@ -1,18 +1,16 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "./app/truthy.ts";
 import { reactRouter } from "@react-router/dev/vite";
 import { reactCompilerPreset } from "@vitejs/plugin-react";
 import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { readFileSync } from "node:fs";
 import { Schema } from "effect";
 import { lazyPlugins, defineConfig } from "vite-plus";
 
 /** Preserve an explicit browser contract; only legacy/headerless requests borrow startup ID. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export const developmentApiProxy = (
+const developmentApiProxyBody = (
   target: string,
   backendBuildId: string,
 ): import("vite-plus").ProxyOptions => ({
@@ -24,20 +22,20 @@ export const developmentApiProxy = (
     });
   },
 });
+export const developmentApiProxy: {
+  (backendBuildId: string): (target: string) => ReturnType<typeof developmentApiProxyBody>;
+} & typeof developmentApiProxyBody = EffectFunction.dual(2, developmentApiProxyBody);
 
 export default defineConfig(({ command }) => {
   // Native host/SDK configuration boundary reads or forwards the host environment.
-  // @effect-diagnostics-next-line processEnv:off
   const developmentBackend = process.env.CONTEXT_AGENT_DEV_BACKEND;
   // Native host/SDK configuration boundary reads or forwards the host environment.
-  // @effect-diagnostics-next-line processEnv:off
   const backendBuildId = process.env.CONTEXT_AGENT_BUILD_ID ?? "missing";
 
   return {
     define: {
       "import.meta.env.VITE_CONTEXT_AGENT_BUILD_ID": JSON.stringify(
         // Native host/SDK configuration boundary reads or forwards the host environment.
-        // @effect-diagnostics-next-line processEnv:off
         process.env.CONTEXT_AGENT_BUILD_ID ?? "",
       ),
     },
@@ -112,23 +110,21 @@ export default defineConfig(({ command }) => {
       // `vp run package` (scripts/package.ts) sets these to also build the executable with the
       // runtime files it has collected as SEA assets.
       // Native host/SDK configuration boundary reads or forwards the host environment.
-      // @effect-diagnostics-next-line processEnv:off
       exe: isTruthy(process.env.CONTEXT_AGENT_EXE_ASSETS)
         ? {
             fileName: "context-agent",
             // Native host/SDK configuration boundary reads or forwards the host environment.
-            // @effect-diagnostics-next-line processEnv:off
             outDir: process.env.CONTEXT_AGENT_EXE_DIR,
             seaConfig: {
               // The shipped app ignores NODE_OPTIONS, so a developer's or tool's Node flags (preloads,
               // --conditions) cannot change or break it.
               execArgvExtension: "none",
               // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-              // @effect-diagnostics-next-line schemaSync:off
-              assets: Schema.decodeSync(
-                Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)),
-                // Native host/SDK configuration boundary reads or forwards the host environment.
-                // @effect-diagnostics-next-line processEnv:off
+              assets: EffectFunction.flow(
+                Schema.decodeResult(
+                  Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)),
+                ),
+                Result.getOrThrow,
               )(readFileSync(process.env.CONTEXT_AGENT_EXE_ASSETS, "utf8")),
             },
           }

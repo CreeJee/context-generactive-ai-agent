@@ -1,8 +1,8 @@
+import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Effect } from "effect";
 import type { ChatMiddleware, MetadataStore } from "@tanstack/ai";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import { Option, Schema } from "effect";
 import { budgetFor } from "./compaction.ts";
@@ -30,8 +30,6 @@ const ContextUsage = Schema.Struct({
 const decodeContextUsage = Schema.decodeUnknownOption(ContextUsage);
 export type StoredContextUsage = typeof ContextUsage.Type;
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export const contextView = (
   usedTokens: number | null,
   windowTokens: number,
@@ -53,30 +51,35 @@ export const contextView = (
 
 /** The latest provider-reported prompt/cache usage in a session, if it has made a request. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
-export const lastContextUsage = async (
+const lastContextUsageBody = async (
   metadata: MetadataStore,
   threadId: string,
 ): Promise<StoredContextUsage | null> =>
   Option.getOrNull(decodeContextUsage(await metadata.get(contextUsageNamespace, threadId)));
+export const lastContextUsage: {
+  (threadId: string): (metadata: MetadataStore) => ReturnType<typeof lastContextUsageBody>;
+} & typeof lastContextUsageBody = EffectFunction.dual(2, lastContextUsageBody);
 
 /** A provider-reported zero is distinct from no report; each observation may trigger only once. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export const coldObservationId = (
+const coldObservationIdBody = (
   usage: StoredContextUsage | null,
   consumedId: string | null,
 ): string | null =>
   usage?.cachedTokens === 0 && isTruthy(usage.observationId) && usage.observationId !== consumedId
     ? usage.observationId
     : null;
+export const coldObservationId: {
+  (
+    consumedId: string | null,
+  ): (usage: StoredContextUsage | null) => ReturnType<typeof coldObservationIdBody>;
+} & typeof coldObservationIdBody = EffectFunction.dual(2, coldObservationIdBody);
 
 /** Read the pending observation without treating legacy/unknown usage as a cache miss. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
-export async function pendingColdObservation(
+export const pendingColdObservation: {
+  (threadId: string): (metadata: MetadataStore) => ReturnType<typeof pendingColdObservationBody>;
+} & typeof pendingColdObservationBody = EffectFunction.dual(2, pendingColdObservationBody);
+async function pendingColdObservationBody(
   metadata: MetadataStore,
   threadId: string,
 ): Promise<string | null> {
@@ -89,27 +92,30 @@ export async function pendingColdObservation(
 }
 
 /** Consume an observation when the request has attempted its early compact. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export const consumeColdObservation = (
+const consumeColdObservationBody = (
   metadata: MetadataStore,
   threadId: string,
   observationId: string,
 ): Promise<void> => metadata.set(consumedColdUsageNamespace, threadId, observationId);
+export const consumeColdObservation: {
+  (
+    threadId: string,
+    observationId: string,
+  ): (metadata: MetadataStore) => ReturnType<typeof consumeColdObservationBody>;
+} & typeof consumeColdObservationBody = EffectFunction.dual(3, consumeColdObservationBody);
 
 /** The tokens the model read in its latest request in a session, if it has made one. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
-export const lastInputTokens = async (metadata: MetadataStore, threadId: string) =>
+const lastInputTokensBody = async (metadata: MetadataStore, threadId: string) =>
   (await lastContextUsage(metadata, threadId))?.inputTokens ?? null;
+export const lastInputTokens: {
+  (threadId: string): (metadata: MetadataStore) => ReturnType<typeof lastInputTokensBody>;
+} & typeof lastInputTokensBody = EffectFunction.dual(2, lastInputTokensBody);
 
 /**
  * Keeps how much each model request of a run read, and tells the page as it happens.
  * The window and its provenance are read on each request from the current model catalog.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function recordContextUsage(
   metadata: MetadataStore,
   windowTokens: () => number,
@@ -119,7 +125,6 @@ export function recordContextUsage(
   return {
     name: "memory-agent/context-usage",
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async onUsage(ctx, usage) {
       const cachedTokens = usage.promptTokensDetails?.cachedTokens ?? null;
       const stored: StoredContextUsage = {

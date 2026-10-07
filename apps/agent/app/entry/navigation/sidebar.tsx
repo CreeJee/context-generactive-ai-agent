@@ -431,7 +431,6 @@ function AddProjectDialog({ onAdd }: { onAdd: (root: string) => Promise<string |
         <form
           className="flex flex-col gap-3"
           // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          // @effect-diagnostics-next-line asyncFunction:off
           onSubmit={async (event) => {
             event.preventDefault();
             if (!isTruthy(root.trim())) return;

@@ -1,20 +1,17 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../app/truthy.ts";
 // Runs the built executable from a folder outside the repository (so nothing resolves from the
 // repo's node_modules) against a throwaway storage root, and checks what a user's first start
 // needs. Run with `vp run smoke-package` after `vp run package`.
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { request as httpRequest } from "node:http";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
@@ -42,40 +39,32 @@ cpSync(built, executable);
 const failures: string[] = [];
 function check(name: string, ok: boolean, detail = "") {
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  // @effect-diagnostics-next-line globalConsole:off
   console.log(`${ok ? "✓" : "✗"} ${name}${detail.length > 0 ? ` — ${detail}` : ""}`);
   if (!ok) failures.push(name);
 }
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 async function freePort() {
   const server = createServer();
   // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-  // @effect-diagnostics-next-line newPromise:off
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   // SAFETY: a server listening on a TCP port reports an AddressInfo, never a pipe name.
   const { port } = server.address() as AddressInfo;
   // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-  // @effect-diagnostics-next-line newPromise:off
   await new Promise<void>((resolve) => server.close(() => resolve()));
   return port;
 }
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 async function until<T>(what: string, probe: () => Promise<T | null>, timeoutMs: number) {
   // React/native timestamps use the host Date contract outside Effect execution.
-  // @effect-diagnostics-next-line globalDate:off
   const deadline = Date.now() + timeoutMs;
   // React/native timestamps use the host Date contract outside Effect execution.
-  // @effect-diagnostics-next-line globalDate:off
   while (Date.now() < deadline) {
     const value = await probe().catch(() => null);
     if (value !== null) return value;
     // Native callback heartbeat/debounce timing remains at the protocol boundary.
     // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-    // @effect-diagnostics-next-line globalTimers:off newPromise:off
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error(`timed out waiting for ${what}`);
@@ -96,10 +85,8 @@ function start(port: number) {
 }
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 async function stop(child: ChildProcess) {
   // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-  // @effect-diagnostics-next-line newPromise:off
   const exited = new Promise<number | null>((resolve) =>
     child.once("exit", (code) => resolve(code)),
   );
@@ -120,13 +107,15 @@ const Catalog = Schema.Struct({
 });
 const json = <A, I>(schema: Schema.Codec<A, I>, response: Response) =>
   // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  // @effect-diagnostics-next-line schemaSync:off
-  response.json().then((body) => Schema.decodeUnknownSync(schema)(body));
+  response
+    .json()
+    .then((body) =>
+      EffectFunction.flow(Schema.decodeUnknownResult(schema), Result.getOrThrow)(body),
+    );
 
 /** A request with a Host header fetch() does not allow setting. */
 const statusWithHost = (url: string, host: string) =>
   // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-  // @effect-diagnostics-next-line newPromise:off
   new Promise<number>((resolve, reject) => {
     const request = httpRequest(url, { headers: { host } }, (response) => {
       response.resume();
@@ -142,7 +131,6 @@ try {
   const url = `http://127.0.0.1:${port}`;
   const post = (path: string, body: Record<string, string>, headers: Record<string, string> = {}) =>
     // Native Request/Response adapter preserves host and SDK stream semantics.
-    // @effect-diagnostics-next-line globalFetch:off
     fetch(`${url}${path}`, {
       method: "POST",
       headers: { "content-type": "application/json", ...headers },
@@ -150,26 +138,21 @@ try {
     });
 
   // React/native timestamps use the host Date contract outside Effect execution.
-  // @effect-diagnostics-next-line globalDate:off
   let started = Date.now();
   server = start(port);
   await until(
     "the server",
     // Native Request/Response adapter preserves host and SDK stream semantics.
-    // @effect-diagnostics-next-line globalFetch:off
     () => fetch(url).then((response) => (response.ok ? response : null)),
     60_000,
   );
   // React/native timestamps use the host Date contract outside Effect execution.
-  // @effect-diagnostics-next-line globalDate:off
   check("first start serves the app", true, `${Date.now() - started} ms`);
 
   // Native Request/Response adapter preserves host and SDK stream semantics.
-  // @effect-diagnostics-next-line globalFetch:off
   const page = await fetch(url).then((response) => response.text());
   const asset = /\/assets\/[^"]+\.js/.exec(page)?.[0];
   // Native Request/Response adapter preserves host and SDK stream semantics.
-  // @effect-diagnostics-next-line globalFetch:off
   const assetResponse = isTruthy(asset) ? await fetch(`${url}${asset}`) : null;
   check(
     "client assets with immutable caching",
@@ -187,7 +170,6 @@ try {
   check("cross-site POST refused", crossSite.status === 403, String(crossSite.status));
 
   // Native Request/Response adapter preserves host and SDK stream semantics.
-  // @effect-diagnostics-next-line globalFetch:off
   const authResponse = await fetch(`${url}/api/auth?provider=invalid`);
   const authError = await json(ErrorResponse, authResponse);
   check(
@@ -202,12 +184,10 @@ try {
   const session = await post("/api/sessions", { projectId });
   check("session created", session.status === 201, String(session.status));
   // Native Request/Response adapter preserves host and SDK stream semantics.
-  // @effect-diagnostics-next-line globalFetch:off
   const kagi = await fetch(`${url}/api/settings/kagi`);
   check("keychain addon loads (Kagi status)", kagi.status === 200, String(kagi.status));
   // Built-in skills are found next to the unpacked runtime, a path only the executable takes.
   // Native Request/Response adapter preserves host and SDK stream semantics.
-  // @effect-diagnostics-next-line globalFetch:off
   const catalog = await json(Catalog, await fetch(`${url}/api/projects/${projectId}/skills`));
   const builtin = catalog.skills.filter((skill) => skill.scope === "builtin");
   check(
@@ -241,7 +221,6 @@ try {
           "INSERT INTO nodes (id, project_id, session_id, kind, text, created_at) VALUES ('smoke-secret', ?, ?, 'tool_result', ?, ?)",
         )
         // React/native timestamps use the host Date contract outside Effect execution.
-        // @effect-diagnostics-next-line globalDate:off
         .run(projectId, sessionId, `GITHUB_TOKEN=${smokeToken}`, new Date().toISOString());
       return true;
     } finally {
@@ -253,25 +232,23 @@ try {
   await until(
     "the second start",
     // Native Request/Response adapter preserves host and SDK stream semantics.
-    // @effect-diagnostics-next-line globalFetch:off
     () => fetch(url).then((response) => (response.ok ? response : null)),
     60_000,
   );
   // The agent (and the sweep it starts) is made on the first API request, as the page makes one.
   // Native Request/Response adapter preserves host and SDK stream semantics.
-  // @effect-diagnostics-next-line globalFetch:off
   await fetch(`${url}/api/auth`);
   const swept = await until(
     "the secret sweep",
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async () => {
       const database = new DatabaseSync(join(storage, "agent.db"), { readOnly: true });
       try {
         const row = database.prepare("SELECT text FROM nodes WHERE id = 'smoke-secret'").get();
         // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        // @effect-diagnostics-next-line schemaSync:off
-        const text = isTruthy(row) ? Schema.decodeUnknownSync(Text)(row).text : "";
+        const text = isTruthy(row)
+          ? EffectFunction.flow(Schema.decodeUnknownResult(Text), Result.getOrThrow)(row).text
+          : "";
         return text.includes(smokeToken) ? null : text;
       } finally {
         database.close();
@@ -292,7 +269,6 @@ try {
 
 if (failures.length > 0) {
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  // @effect-diagnostics-next-line globalConsole:off
   console.error(`${failures.length} check(s) failed`);
   process.exit(1);
 }

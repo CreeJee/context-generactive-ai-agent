@@ -134,7 +134,6 @@ const retrieval = {
 };
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 async function currentRequest(messages: readonly ModelMessage[]): Promise<ModelMessage[]> {
   const state: CompactionState = {
     manual: { clearedThrough: 0, summarizedTurns: 0 },
@@ -147,7 +146,6 @@ async function currentRequest(messages: readonly ModelMessage[]): Promise<ModelM
       toolResultId: (toolCallId) => (toolCallId === "long-tool" ? "node-tool-result" : null),
       nodeText,
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      // @effect-diagnostics-next-line asyncFunction:off
       retrievalAppendix: async () => retrieval,
     },
     { compactAt: 1, leaveOutAt: 1_000_000 },
@@ -191,7 +189,6 @@ function profile(
 }
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function evaluateCompaction(): Promise<CompactionEvaluation> {
   const conversations = checkpoints.map(conversation);
   const legacyRequests = conversations.map(legacyRequest);

@@ -41,7 +41,6 @@ export class SessionLeases extends Context.Service<SessionLeases, ReturnType<typ
 }
 
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function makeLeases(ttlMs: number, now: () => number = Date.now) {
   const leases = MutableHashMap.empty<string, Lease>();
   const live = (sessionId: string) => {

@@ -1,3 +1,4 @@
+import { it as effectTest } from "@effect/vitest";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off
 import { Effect, Result, Layer, ManagedRuntime } from "effect";
@@ -110,80 +111,88 @@ const loaded: Omit<RouteCatalogSnapshot, "revision" | "refreshedAt"> = {
 const source = (value = loaded): RouteCatalogSource => ({ load: Effect.succeed(value) });
 
 describe("RouteCatalog", () => {
-  it("refreshes an immutable and deterministically sorted snapshot", async () => {
-    const catalog = await Effect.runPromise(makeRouteCatalog(source(), () => 123));
-    const first = await Effect.runPromise(catalog.refresh);
-    const second = await Effect.runPromise(catalog.refresh);
-    expect(first).toMatchObject({ revision: 1, refreshedAt: 123 });
-    expect(second.revision).toBe(2);
-    expect(Object.isFrozen(second)).toBe(true);
-    expect(Object.isFrozen(second.chat)).toBe(true);
-  });
+  effectTest.effect("refreshes an immutable and deterministically sorted snapshot", () =>
+    Effect.gen(function* () {
+      const catalog = yield* makeRouteCatalog(source(), () => 123);
+      const first = yield* catalog.refresh;
+      const second = yield* catalog.refresh;
+      expect(first).toMatchObject({ revision: 1, refreshedAt: 123 });
+      expect(second.revision).toBe(2);
+      expect(Object.isFrozen(second)).toBe(true);
+      expect(Object.isFrozen(second.chat)).toBe(true);
+    }),
+  );
 
-  it("represents a cross-provider chat and media pairing without changing either model", async () => {
-    const catalog = await Effect.runPromise(makeRouteCatalog(source()));
-    await Effect.runPromise(catalog.refresh);
-    const pair = await Effect.runPromise(catalog.pairChatWithMedia(chat.id, media.id));
-    expect(pair).toEqual({
-      initiatorChatRouteId: chat.id,
-      executorMediaRouteId: media.id,
-      initiatorChatProvider: "anthropic",
-      executorMediaProvider: "openai",
-      crossProvider: true,
-    });
-    expect(chat.model).toBe("claude-test");
-    expect(media.executorModel).toEqual({ type: "explicit", model: "gpt-image-2" });
-  });
-
-  it("keeps provider-managed media model provenance explicit", async () => {
-    const managed = {
-      ...media,
-      id: "media:openai:provider_tool:image_generation" as const,
-      executionMode: "provider_tool" as const,
-      executorModel: { type: "provider_managed" as const },
-      billingAttribution: "provider_managed" as const,
-    };
-    const catalog = await Effect.runPromise(
-      makeRouteCatalog(source({ ...loaded, media: [managed] })),
-    );
-    const snapshot = await Effect.runPromise(catalog.refresh);
-    expect(snapshot.media[0]?.executorModel).toEqual({ type: "provider_managed" });
-    expect(snapshot.media[0]?.billingAttribution).toBe("provider_managed");
-  });
-
-  it("does not replace the previous snapshot when refresh fails", async () => {
-    let attempt = 0;
-    const changing: RouteCatalogSource = {
-      load: Effect.suspend(() => {
-        attempt += 1;
-        return attempt === 1
-          ? Effect.succeed(loaded)
-          : Effect.fail(
-              new RouteCatalogRefreshFailed({
-                operation: "models",
-                cause: new Error("unavailable"),
-              }),
-            );
+  effectTest.effect(
+    "represents a cross-provider chat and media pairing without changing either model",
+    () =>
+      Effect.gen(function* () {
+        const catalog = yield* makeRouteCatalog(source());
+        yield* catalog.refresh;
+        const pair = yield* catalog.pairChatWithMedia(chat.id, media.id);
+        expect(pair).toEqual({
+          initiatorChatRouteId: chat.id,
+          executorMediaRouteId: media.id,
+          initiatorChatProvider: "anthropic",
+          executorMediaProvider: "openai",
+          crossProvider: true,
+        });
+        expect(chat.model).toBe("claude-test");
+        expect(media.executorModel).toEqual({ type: "explicit", model: "gpt-image-2" });
       }),
-    };
-    const catalog = await Effect.runPromise(makeRouteCatalog(changing, () => attempt));
-    const first = await Effect.runPromise(catalog.refresh);
-    const failure = await Effect.runPromise(Effect.result(catalog.refresh));
-    expect(Result.isFailure(failure) && failure.failure._tag).toBe("RouteCatalogRefreshFailed");
-    expect(await Effect.runPromise(catalog.snapshot)).toBe(first);
-  });
+  );
 
-  it("fails typed lookup for unknown routes", async () => {
-    const catalog = await Effect.runPromise(makeRouteCatalog(source()));
-    await Effect.runPromise(catalog.refresh);
-    const result = await Effect.runPromise(
-      Effect.result(catalog.media("media:openai:direct_adapter:missing")),
-    );
-    expect(Result.isFailure(result) && result.failure).toMatchObject({
-      _tag: "UnknownCatalogRoute",
-      routeType: "media",
-    });
-  });
+  effectTest.effect("keeps provider-managed media model provenance explicit", () =>
+    Effect.gen(function* () {
+      const managed = {
+        ...media,
+        id: "media:openai:provider_tool:image_generation" as const,
+        executionMode: "provider_tool" as const,
+        executorModel: { type: "provider_managed" as const },
+        billingAttribution: "provider_managed" as const,
+      };
+      const catalog = yield* makeRouteCatalog(source({ ...loaded, media: [managed] }));
+      const snapshot = yield* catalog.refresh;
+      expect(snapshot.media[0]?.executorModel).toEqual({ type: "provider_managed" });
+      expect(snapshot.media[0]?.billingAttribution).toBe("provider_managed");
+    }),
+  );
+
+  effectTest.effect("does not replace the previous snapshot when refresh fails", () =>
+    Effect.gen(function* () {
+      let attempt = 0;
+      const changing: RouteCatalogSource = {
+        load: Effect.suspend(() => {
+          attempt += 1;
+          return attempt === 1
+            ? Effect.succeed(loaded)
+            : Effect.fail(
+                new RouteCatalogRefreshFailed({
+                  operation: "models",
+                  cause: new Error("unavailable"),
+                }),
+              );
+        }),
+      };
+      const catalog = yield* makeRouteCatalog(changing, () => attempt);
+      const first = yield* catalog.refresh;
+      const failure = yield* Effect.result(catalog.refresh);
+      expect(Result.isFailure(failure) && failure.failure._tag).toBe("RouteCatalogRefreshFailed");
+      expect(yield* catalog.snapshot).toBe(first);
+    }),
+  );
+
+  effectTest.effect("fails typed lookup for unknown routes", () =>
+    Effect.gen(function* () {
+      const catalog = yield* makeRouteCatalog(source());
+      yield* catalog.refresh;
+      const result = yield* Effect.result(catalog.media("media:openai:direct_adapter:missing"));
+      expect(Result.isFailure(result) && result.failure).toMatchObject({
+        _tag: "UnknownCatalogRoute",
+        routeType: "media",
+      });
+    }),
+  );
 
   it.each([
     {

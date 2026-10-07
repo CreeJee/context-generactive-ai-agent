@@ -1,3 +1,4 @@
+import { Layer } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -23,8 +24,12 @@ afterEach(() => {
 const withDatabase = <A>(file: string, use: (db: Database["Service"]) => A) =>
   Effect.runPromise(
     // Test entry point owns this Layer and closes its resources.
-    // @effect-diagnostics-next-line strictEffectProvide:off
-    Effect.scoped(Effect.map(Database, use)).pipe(Effect.provide(Database.layer(file))),
+    Effect.scoped(Effect.map(Database, use)).pipe(
+      Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+        const services = yield* Layer.build(Database.layer(file));
+        return yield* Effect.provideContext(program, services);
+      }, Effect.scoped),
+    ),
   );
 
 // Build a genuinely older schema rather than downgrading user_version on newer tables.

@@ -1,13 +1,11 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../src/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { DateTime, Clock, Effect, Layer, ManagedRuntime, Schema } from "effect";
@@ -46,10 +44,10 @@ const Selection = Schema.Struct({
   reasoningEffort: Schema.NonEmptyString,
 });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const selection = Schema.decodeSync(Schema.fromJsonString(Selection))(
-  readFileSync(join(defaultStorageRoot, "config.json"), "utf8"),
-);
+const selection = EffectFunction.flow(
+  Schema.decodeResult(Schema.fromJsonString(Selection)),
+  Result.getOrThrow,
+)(readFileSync(join(defaultStorageRoot, "config.json"), "utf8"));
 const accountDatabase = new DatabaseSync(join(defaultStorageRoot, "agent.db"), { readOnly: true });
 const selectedProfile = listOAuthProfiles(accountDatabase, selection.provider).find(
   (profile) => profile.selected,
@@ -74,7 +72,6 @@ let totalCalls = 0;
 let estimatedInputTokens = 0;
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 async function arm(variant: "baseline-guidance" | "optimized-guidance") {
   const base = mkdtempSync(join(tmpdir(), "delegation-live-eval-"));
   const projectRoot = join(base, "project");
@@ -226,8 +223,9 @@ async function arm(variant: "baseline-guidance" | "optimized-guidance") {
     if (!response.ok) throw new Error(`pilot_http_${response.status}: ${sse}`);
     const events = sse.split("\n").flatMap((line) =>
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      line.startsWith("data: ") ? [Schema.decodeSync(frames)(line.slice(6))] : [],
+      line.startsWith("data: ")
+        ? [EffectFunction.flow(Schema.decodeResult(frames), Result.getOrThrow)(line.slice(6))]
+        : [],
     );
     const errors = events.filter((event) => event.type === "RUN_ERROR" || event.type === "error");
     if (errors.length > 0) throw new Error(`pilot_run_failed: ${JSON.stringify(errors)}`);
@@ -235,8 +233,9 @@ async function arm(variant: "baseline-guidance" | "optimized-guidance") {
       .split("\n")
       .flatMap((line) =>
         // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        // @effect-diagnostics-next-line schemaSync:off
-        line.startsWith("data: ") ? [Schema.decodeSync(frames)(line.slice(6))] : [],
+        line.startsWith("data: ")
+          ? [EffectFunction.flow(Schema.decodeResult(frames), Result.getOrThrow)(line.slice(6))]
+          : [],
       )
       .flatMap((chunk) =>
         chunk.type === "TEXT_MESSAGE_CONTENT" && isTruthy(chunk.delta) ? [chunk.delta] : [],
@@ -280,7 +279,6 @@ async function arm(variant: "baseline-guidance" | "optimized-guidance") {
 }
 const results = [await arm("baseline-guidance"), await arm("optimized-guidance")];
 // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-// @effect-diagnostics-next-line globalConsole:off
 console.log(
   JSON.stringify(
     {

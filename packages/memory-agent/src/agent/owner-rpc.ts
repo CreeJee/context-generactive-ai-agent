@@ -1,10 +1,13 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { MutableHashMap, Exit, Option, Cause, Effect, Predicate, Schema } from "effect";
 import type { RunBinding } from "../workflow/run-bindings.ts";
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const parseJson = Schema.decodeSync(Schema.fromJsonString(Schema.Json));
+const parseJson = EffectFunction.flow(
+  Schema.decodeResult(Schema.fromJsonString(Schema.Json)),
+  Result.getOrThrow,
+);
 
 /** Owner infrastructure failures are not protocol replies or proof of settlement. */
 export class OwnerRpcFailure extends Schema.TaggedError<OwnerRpcFailure>()("OwnerRpcFailure", {

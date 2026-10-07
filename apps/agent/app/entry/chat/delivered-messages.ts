@@ -1,10 +1,14 @@
+import { Function as EffectFunction } from "effect";
 import type { UIMessage } from "@tanstack/ai-react";
 import { attachmentIdOf, type QueuedMessage } from "memory-agent/definitions";
 
 /** A delivered queue item is temporary UI only until its user turn appears in the transcript. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function missingDeliveredMessages(
+export const missingDeliveredMessages: {
+  (
+    messages: readonly UIMessage[],
+  ): (items: readonly QueuedMessage[]) => ReturnType<typeof missingDeliveredMessagesBody>;
+} & typeof missingDeliveredMessagesBody = EffectFunction.dual(2, missingDeliveredMessagesBody);
+function missingDeliveredMessagesBody(
   items: readonly QueuedMessage[],
   messages: readonly UIMessage[],
 ): QueuedMessage[] {

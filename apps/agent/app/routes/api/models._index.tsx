@@ -5,7 +5,6 @@ import type { Route } from "./+types/models._index";
 
 /** Lists the signed-in subscription provider's catalog and its current global selection. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function loader({ request }: Route.LoaderArgs) {
   const requested = new URL(request.url).searchParams.get("provider");
   if (requested === null || !Schema.is(ProviderId)(requested))

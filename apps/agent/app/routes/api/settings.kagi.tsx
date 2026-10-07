@@ -17,7 +17,6 @@ const keychainFailed = (operation: string) =>
 
 /** GET /api/settings/kagi: whether a key is registered and Kagi is on. The key is never returned. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function loader() {
   return agent.runPromise(
     Effect.flatMap(Kagi, (kagi) => kagi.status).pipe(
@@ -36,7 +35,6 @@ export async function loader() {
  * - `remove`: deletes the key and turns Kagi off.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected !== null) return rejected;

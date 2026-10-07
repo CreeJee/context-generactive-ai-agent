@@ -10,7 +10,6 @@ import type { Route } from "./+types/attachments._index";
  * WebP up to 20 MiB are accepted.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected !== null) return rejected;

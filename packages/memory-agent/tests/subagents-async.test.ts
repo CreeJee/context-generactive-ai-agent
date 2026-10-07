@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off newPromise:off nodeBuiltinImport:off schemaSync:off
 import { isTruthy } from "../src/truthy.ts";
@@ -30,9 +31,15 @@ const Chunk = Schema.fromJsonString(
   Schema.Struct({ type: Schema.String, delta: Schema.optional(Schema.String) }),
 );
 const receiptFrom = (answer: string) =>
-  Schema.decodeSync(Schema.fromJsonString(Receipt))(answer.slice(answer.indexOf("{")));
+  EffectFunction.flow(
+    Schema.decodeResult(Schema.fromJsonString(Receipt)),
+    Result.getOrThrow,
+  )(answer.slice(answer.indexOf("{")));
 const reportFrom = (answer: string) =>
-  Schema.decodeSync(Schema.fromJsonString(Report))(answer.slice(answer.indexOf("{")));
+  EffectFunction.flow(
+    Schema.decodeResult(Schema.fromJsonString(Report)),
+    Result.getOrThrow,
+  )(answer.slice(answer.indexOf("{")));
 const idsOf = ({ taskId, attemptId }: typeof Ids.Type) => ({ taskId, attemptId });
 async function until(condition: () => boolean, description: string) {
   await expect.poll(condition, { message: description, timeout: 6_000, interval: 20 }).toBe(true);
@@ -52,13 +59,17 @@ async function setup() {
           prompt.includes("This is an automatic task completion follow-up"),
         );
         if (!internal && user.startsWith("review-batch ")) {
-          const attempts = Schema.decodeSync(Schema.fromJsonString(Schema.Array(Ids)))(
-            user.slice("review-batch ".length),
-          );
+          const attempts = EffectFunction.flow(
+            Schema.decodeResult(Schema.fromJsonString(Schema.Array(Ids))),
+            Result.getOrThrow,
+          )(user.slice("review-batch ".length));
           const last = invocation.messages.at(-1);
           if (last?.role === "tool" && last.toolCallId === "call-review-batch") {
-            const { reports } = Schema.decodeSync(
-              Schema.fromJsonString(Schema.Struct({ reports: Schema.Array(Report) })),
+            const { reports } = EffectFunction.flow(
+              Schema.decodeResult(
+                Schema.fromJsonString(Schema.Struct({ reports: Schema.Array(Report) })),
+              ),
+              Result.getOrThrow,
             )(messageText(last));
             return {
               toolCalls: [
@@ -91,7 +102,10 @@ async function setup() {
           const last = invocation.messages.at(-1);
           switch (last?.role === "tool" ? last.toolCallId : undefined) {
             case "call-background": {
-              const receipt = Schema.decodeSync(Schema.fromJsonString(Receipt))(messageText(last!));
+              const receipt = EffectFunction.flow(
+                Schema.decodeResult(Schema.fromJsonString(Receipt)),
+                Result.getOrThrow,
+              )(messageText(last!));
               return {
                 toolCalls: [
                   {
@@ -143,12 +157,16 @@ async function setup() {
           };
         }
         if (!internal && user.startsWith("review-and-adopt ")) {
-          const ids = Schema.decodeSync(Schema.fromJsonString(Ids))(
-            user.slice("review-and-adopt ".length),
-          );
+          const ids = EffectFunction.flow(
+            Schema.decodeResult(Schema.fromJsonString(Ids)),
+            Result.getOrThrow,
+          )(user.slice("review-and-adopt ".length));
           const last = invocation.messages.at(-1);
           if (last?.role === "tool" && last.toolCallId === "call-review-report") {
-            const report = Schema.decodeSync(Schema.fromJsonString(Report))(messageText(last));
+            const report = EffectFunction.flow(
+              Schema.decodeResult(Schema.fromJsonString(Report)),
+              Result.getOrThrow,
+            )(messageText(last));
             return {
               toolCalls: [
                 {
@@ -191,7 +209,10 @@ async function setup() {
   const trace = await context.runtime.runPromise(WorkTraceStore);
   const db = await context.runtime.runPromise(Database);
   const count = (query: string) =>
-    Schema.decodeUnknownSync(Count)(db.sqlite.prepare(query).get()).count;
+    EffectFunction.flow(
+      Schema.decodeUnknownResult(Count),
+      Result.getOrThrow,
+    )(db.sqlite.prepare(query).get()).count;
   const idle = () =>
     count(
       `SELECT count(*) AS count FROM chat_runs WHERE thread_id = '${context.session.id}' AND status = 'running'`,
@@ -218,7 +239,9 @@ async function setup() {
     return (await response.text())
       .split("\n")
       .flatMap((line) =>
-        line.startsWith("data: ") ? [Schema.decodeSync(Chunk)(line.slice(6))] : [],
+        line.startsWith("data: ")
+          ? [EffectFunction.flow(Schema.decodeResult(Chunk), Result.getOrThrow)(line.slice(6))]
+          : [],
       )
       .flatMap((chunk) =>
         chunk.type === "TEXT_MESSAGE_CONTENT" && isTruthy(chunk.delta) ? [chunk.delta] : [],
@@ -346,8 +369,11 @@ describe("asynchronous subagents", () => {
         ) === 2 && idle(),
       "post-parent notification",
     );
-    const runs = Schema.decodeUnknownSync(
-      Schema.Array(Schema.Struct({ started_at: Schema.Finite, finished_at: Schema.Finite })),
+    const runs = EffectFunction.flow(
+      Schema.decodeUnknownResult(
+        Schema.Array(Schema.Struct({ started_at: Schema.Finite, finished_at: Schema.Finite })),
+      ),
+      Result.getOrThrow,
     )(
       db.sqlite
         .prepare(

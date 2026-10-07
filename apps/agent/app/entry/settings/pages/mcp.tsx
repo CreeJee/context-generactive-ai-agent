@@ -57,7 +57,6 @@ function McpSettingsContent({ project }: { project: Project }) {
 
   const header = <PageHeader title="MCP 서버" project={project} description={description} />;
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const trust = async (server: McpServerView, trusted: boolean) => {
     setError(null);
     try {

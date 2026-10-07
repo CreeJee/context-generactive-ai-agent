@@ -1,8 +1,7 @@
+import { Result, Function as EffectFunction } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { dirname, join } from "node:path";
 import { getAsset, getRawAsset, isSea } from "node:sea";
 import { Schema } from "effect";
@@ -29,10 +28,10 @@ const completeMarker = ".complete";
 export function unpackRuntime(storageRoot: string): string | null {
   if (!isSea()) return null;
   // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  // @effect-diagnostics-next-line schemaSync:off
-  const manifest = Schema.decodeSync(Schema.fromJsonString(RuntimeManifest))(
-    getAsset(runtimeManifestAsset, "utf8"),
-  );
+  const manifest = EffectFunction.flow(
+    Schema.decodeResult(Schema.fromJsonString(RuntimeManifest)),
+    Result.getOrThrow,
+  )(getAsset(runtimeManifestAsset, "utf8"));
   const runtimeFolder = join(storageRoot, "runtime");
   const root = join(runtimeFolder, manifest.hash);
 

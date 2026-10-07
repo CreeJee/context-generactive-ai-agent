@@ -103,7 +103,6 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
     // between, so two hooks never both decide a node is still missing.
 
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async onIteration(ctx) {
       // Results the client wrote itself (a declined approval) never pass a server tool phase.
       const written = ctx.messages.flatMap((message) => {
@@ -145,7 +144,6 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
     },
 
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async onToolPhaseComplete(ctx, info) {
       // A declined approval fires no after-call hook, and a call skipped by middleware reports
       // ok; the result itself says whether the tool really ran.
@@ -213,13 +211,11 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
     },
 
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async onFinish(_ctx, info) {
       if (info.content.length > 0) appendAssistant(await hide(info.content));
     },
 
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async onAbort(ctx, info) {
       if (ctx.accumulatedContent.length > 0)
         appendAssistant(await hide(ctx.accumulatedContent), {
@@ -228,7 +224,6 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (
     },
 
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async onError(ctx, info) {
       if (ctx.accumulatedContent.length > 0)
         appendAssistant(await hide(ctx.accumulatedContent), {

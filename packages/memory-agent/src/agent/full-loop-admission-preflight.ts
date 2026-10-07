@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Schema } from "effect";
 
@@ -15,7 +16,6 @@ function reject(member: string, reason: string): never {
  * functions, accessors, symbols, prototypes or cyclic values. Does not invoke getters. */
 // Decoding a struct first would erase evidence at this descriptor boundary.
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function assertFullLoopPortable(
   // oxlint-disable-next-line anti-slop/no-unknown-parameters
   value: unknown,
@@ -39,8 +39,10 @@ export function assertFullLoopPortable(
   }
   if (value === null) return;
   // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  // @effect-diagnostics-next-line schemaSync:off
-  const object = Schema.decodeSync(TransportObject)(value);
+  const object = EffectFunction.flow(
+    Schema.decodeResult(TransportObject),
+    Result.getOrThrow,
+  )(value);
   if (stack.has(object)) reject(member, "cyclic value");
   if (
     !Array.isArray(object) &&

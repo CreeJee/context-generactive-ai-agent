@@ -39,7 +39,6 @@ export function ChatHistory({
   const [olderLoadFailed, setOlderLoadFailed] = useState(false);
   const loadPreviousMessages = useCallback(
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async (retry = false) => {
       const scroll = viewport.current;
       if (

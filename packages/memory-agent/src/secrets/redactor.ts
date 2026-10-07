@@ -92,7 +92,6 @@ function assignmentFindings(text: string): Finding[] {
 const kindOf = (ruleId: string) => ruleId.replace(/^.*secretlint-rule-/u, "");
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 async function formatFindings(text: string): Promise<Finding[]> {
   const result = await lintSource({
     source: { filePath: "text.txt", content: text, ext: ".txt", contentType: "text" },
@@ -208,7 +207,6 @@ const make = Effect.sync(() => {
         return {
           ...tool,
           // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          // @effect-diagnostics-next-line asyncFunction:off
           execute: async (...call: Parameters<typeof execute>) => {
             let result: Awaited<ReturnType<typeof execute>>;
             try {

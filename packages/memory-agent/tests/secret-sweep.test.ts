@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off schemaSync:off
 import { Effect, Schema } from "effect";
@@ -8,14 +9,26 @@ import { Nodes } from "../src/memory/nodes.ts";
 import { SecretSweep } from "../src/secrets/sweep.ts";
 import { testRuntime } from "./support/runtime.ts";
 
-const stringifyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const stringifyJson = EffectFunction.flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
 
 /** Assembled at run time so no key-shaped text sits in the repository. */
 const githubToken = `${"gh"}p_${"Q1w2E3r4T5y6U7i8O9p0A1s2D3f4G5h6J7k8"}`;
 
-const decodeCount = Schema.decodeUnknownSync(Schema.Struct({ count: Schema.Finite }));
-const decodeText = Schema.decodeUnknownSync(Schema.Struct({ text: Schema.String }));
-const decodeValue = Schema.decodeUnknownSync(Schema.Struct({ value: Schema.String }));
+const decodeCount = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Struct({ count: Schema.Finite })),
+  Result.getOrThrow,
+);
+const decodeText = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Struct({ text: Schema.String })),
+  Result.getOrThrow,
+);
+const decodeValue = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Struct({ value: Schema.String })),
+  Result.getOrThrow,
+);
 
 describe("SecretSweep", () => {
   test("hides secrets stored before redaction, in the text and in everything made from it", async () => {

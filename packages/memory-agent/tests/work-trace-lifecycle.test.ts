@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off schemaSync:off
 import { isTruthy } from "../src/truthy.ts";
@@ -6,7 +7,10 @@ import { describe, expect, test } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { WorkTraceStore } from "../src/work-trace/store.ts";
 
-const stringifyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const stringifyJson = EffectFunction.flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
 
 const testLayer = () => {
   const database = Database.layer(":memory:");
@@ -14,8 +18,16 @@ const testLayer = () => {
 };
 const run = <A>(effect: Effect.Effect<A, never, Database | WorkTraceStore>) =>
   // Test entry point owns this Layer and its resource scope.
-  // @effect-diagnostics-next-line strictEffectProvide:off
-  Effect.runPromise(Effect.scoped(effect.pipe(Effect.provide(testLayer()))));
+  Effect.runPromise(
+    Effect.scoped(
+      effect.pipe(
+        Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+          const services = yield* Layer.build(testLayer());
+          return yield* Effect.provideContext(program, services);
+        }, Effect.scoped),
+      ),
+    ),
+  );
 
 const seed = (db: Database["Service"]) => {
   const iso = DateTime.formatIso(DateTime.makeUnsafe(0));

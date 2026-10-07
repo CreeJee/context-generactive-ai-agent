@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
 import { execFile } from "node:child_process";
@@ -94,9 +95,10 @@ test("cold native reopen reads exact completed run before one explicit fresh sav
           maxBuffer: 1_000_000,
         },
       );
-      const report = Schema.decodeSync(Report)(
-        await readFile(join(temporary, `${phase}.json`), "utf8"),
-      );
+      const report = EffectFunction.flow(
+        Schema.decodeResult(Report),
+        Result.getOrThrow,
+      )(await readFile(join(temporary, `${phase}.json`), "utf8"));
       expect(report).toMatchObject({
         acquired: 1,
         released: 1,

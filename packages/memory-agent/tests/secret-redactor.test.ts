@@ -1,3 +1,5 @@
+import { Layer } from "effect";
+import { it as effectTest } from "@effect/vitest";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off globalTimers:off newPromise:off
 import { Effect } from "effect";
@@ -27,8 +29,10 @@ const redact = (text: string) =>
   Effect.runPromise(
     Effect.flatMap(SecretRedactor, (redactor) => redactor.redactText(text)).pipe(
       // Test entry point owns this Layer and its resource scope.
-      // @effect-diagnostics-next-line strictEffectProvide:off
-      Effect.provide(SecretRedactor.layer),
+      Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+        const services = yield* Layer.build(SecretRedactor.layer);
+        return yield* Effect.provideContext(program, services);
+      }, Effect.scoped),
     ),
   );
 
@@ -85,32 +89,38 @@ describe("SecretRedactor", () => {
     expect(await redact(once.text)).toEqual({ text: once.text, hidden: 0 });
   });
 
-  test("keeps the structure of a tool result and hides secrets in any string of it", async () => {
-    const result = await Effect.runPromise(
-      Effect.flatMap(
-        SecretRedactor,
-        (redactor) =>
-          redactor.redactResult({
-            command: "env",
-            exitCode: 0,
-            truncated: false,
-            stdout: `HOME=/Users/someone\nGITHUB_TOKEN=${fake.github}`,
-            files: [{ path: "a.txt", note: `token ${fake.github}` }],
-            signal: null,
-          }),
-        // Test entry point owns this Layer and its resource scope.
-        // @effect-diagnostics-next-line strictEffectProvide:off
-      ).pipe(Effect.provide(SecretRedactor.layer)),
-    );
-    expect(result).toEqual({
-      command: "env",
-      exitCode: 0,
-      truncated: false,
-      stdout: "HOME=/Users/someone\nGITHUB_TOKEN=[redacted:github]",
-      files: [{ path: "a.txt", note: "token [redacted:github]" }],
-      signal: null,
-    });
-  });
+  effectTest.effect(
+    "keeps the structure of a tool result and hides secrets in any string of it",
+    () =>
+      Effect.gen(function* () {
+        const result = yield* Effect.flatMap(
+          SecretRedactor,
+          (redactor) =>
+            redactor.redactResult({
+              command: "env",
+              exitCode: 0,
+              truncated: false,
+              stdout: `HOME=/Users/someone\nGITHUB_TOKEN=${fake.github}`,
+              files: [{ path: "a.txt", note: `token ${fake.github}` }],
+              signal: null,
+            }),
+          // Test entry point owns this Layer and its resource scope.
+        ).pipe(
+          Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+            const services = yield* Layer.build(SecretRedactor.layer);
+            return yield* Effect.provideContext(program, services);
+          }, Effect.scoped),
+        );
+        expect(result).toEqual({
+          command: "env",
+          exitCode: 0,
+          truncated: false,
+          stdout: "HOME=/Users/someone\nGITHUB_TOKEN=[redacted:github]",
+          files: [{ path: "a.txt", note: "token [redacted:github]" }],
+          signal: null,
+        });
+      }),
+  );
 
   test("large output stays fast", async () => {
     const log = `${"2026-09-16T10:00:00Z INFO handled path=/api/items id=01a0a8f6 in 12ms\n".repeat(3000)}GITHUB_TOKEN=${fake.github}\n`;

@@ -1,16 +1,13 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../src/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { execFileSync } from "node:child_process";
 import { Predicate, Cause, Effect, Layer, ManagedRuntime, Option, Schema } from "effect";
 import { memoryAgentLayer } from "../src/layers.ts";
@@ -35,8 +32,10 @@ import { EvaluationFailed } from "../src/rrsi/failure.ts";
 import { corpus } from "./rrsi-corpus.ts";
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const stringifyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const stringifyJson = EffectFunction.flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
 
 class CodingVerificationFailed extends Schema.TaggedError<CodingVerificationFailed>()(
   "CodingVerificationFailed",
@@ -63,40 +62,40 @@ const gatewayRequest = (
     Predicate.isNotNullish(signal) ? { signal } : undefined,
   );
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 const transport: typeof fetch = async (_url, init) => {
   const body = await gatewayRequest(
     "request",
     // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    // @effect-diagnostics-next-line schemaSync:off
-    Schema.decodeUnknownSync(Schema.String)(init?.body),
+    EffectFunction.flow(Schema.decodeUnknownResult(Schema.String), Result.getOrThrow)(init?.body),
     init?.signal,
   );
   // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  // @effect-diagnostics-next-line schemaSync:off
-  const request = Schema.decodeSync(
-    Schema.fromJsonString(Schema.Struct({ stream: Schema.optionalKey(Schema.Boolean) })),
-    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    // @effect-diagnostics-next-line schemaSync:off
-  )(Schema.decodeUnknownSync(Schema.String)(init?.body));
+  const request = EffectFunction.flow(
+    Schema.decodeResult(
+      Schema.fromJsonString(Schema.Struct({ stream: Schema.optionalKey(Schema.Boolean) })),
+    ),
+    Result.getOrThrow,
+  )(EffectFunction.flow(Schema.decodeUnknownResult(Schema.String), Result.getOrThrow)(init?.body));
   if (!isTruthy(request.stream))
     return new Response(body, { headers: { "content-type": "application/json" } });
   // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  // @effect-diagnostics-next-line schemaSync:off
-  const page = Schema.decodeSync(
-    Schema.fromJsonString(
-      Schema.Struct({
-        id: Schema.String,
-        model: Schema.String,
-        choices: Schema.Array(
-          Schema.Struct({
-            message: Schema.Record(Schema.String, Schema.Unknown),
-            finish_reason: Schema.String,
-          }),
-        ),
-        usage: Schema.optionalKey(Schema.Unknown),
-      }),
+  const page = EffectFunction.flow(
+    Schema.decodeResult(
+      Schema.fromJsonString(
+        Schema.Struct({
+          id: Schema.String,
+          model: Schema.String,
+          choices: Schema.Array(
+            Schema.Struct({
+              message: Schema.Record(Schema.String, Schema.Unknown),
+              finish_reason: Schema.String,
+            }),
+          ),
+          usage: Schema.optionalKey(Schema.Unknown),
+        }),
+      ),
     ),
+    Result.getOrThrow,
   )(body);
   const chunks = page.choices
     .map((choice, index) => {
@@ -157,7 +156,6 @@ const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
     });
     const compatibleLayer = OpenAICompatibleSettings.layerWith(
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      // @effect-diagnostics-next-line asyncFunction:off
       Layer.succeed(CompatibleKeyring, { get: async () => null, set: async () => undefined }),
       Layer.succeed(CompatibleFetch, transport),
     );
@@ -173,13 +171,12 @@ const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
                 selection.provider,
                 {
                   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-                  // @effect-diagnostics-next-line asyncFunction:off
                   async *stream(body, signal) {
                     // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-                    // @effect-diagnostics-next-line schemaSync:off
-                    const result = Schema.decodeSync(Schema.fromJsonString(SubscriptionResult))(
-                      await gatewayRequest("subscription-request", body, signal),
-                    );
+                    const result = EffectFunction.flow(
+                      Schema.decodeResult(Schema.fromJsonString(SubscriptionResult)),
+                      Result.getOrThrow,
+                    )(await gatewayRequest("subscription-request", body, signal));
                     for (const event of result.events) yield event;
                   },
                 },
@@ -282,8 +279,12 @@ const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
       }
       return correct;
       // Evaluation entry point owns this Layer and its resource scope.
-      // @effect-diagnostics-next-line strictEffectProvide:off
-    }).pipe(Effect.provide(trialLayer));
+    }).pipe(
+      Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+        const services = yield* Layer.build(trialLayer);
+        return yield* Effect.provideContext(program, services);
+      }, Effect.scoped),
+    );
     results.push({ id: task.id, domain: task.domain, score: correct ? 1 : 0 });
     emit({ kind: "progress", completed: results.length, total: tasks.length });
   }

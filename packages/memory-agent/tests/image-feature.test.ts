@@ -1,3 +1,4 @@
+import { it as effectTest } from "@effect/vitest";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off
 import { Effect } from "effect";
@@ -94,19 +95,23 @@ describe("ImageFeature settings", () => {
     };
   }
 
-  it("defaults image generation off", async () => {
-    const { feature } = fixture();
-    expect(await Effect.runPromise(feature.status)).toEqual({ imageGenerationEnabled: false });
-  });
+  effectTest.effect("defaults image generation off", () =>
+    Effect.gen(function* () {
+      const { feature } = fixture();
+      expect(yield* feature.status).toEqual({ imageGenerationEnabled: false });
+    }),
+  );
 
-  it("persists the single image generation setting", async () => {
-    const { feature, read } = fixture();
-    expect(await Effect.runPromise(feature.setImageGenerationEnabled(true))).toEqual({
-      imageGenerationEnabled: true,
-    });
-    expect(read()).toMatchObject({ imageGenerationEnabled: true });
-    expect(await Effect.runPromise(feature.setImageGenerationEnabled(false))).toEqual({
-      imageGenerationEnabled: false,
-    });
-  });
+  effectTest.effect("persists the single image generation setting", () =>
+    Effect.gen(function* () {
+      const { feature, read } = fixture();
+      expect(yield* feature.setImageGenerationEnabled(true)).toEqual({
+        imageGenerationEnabled: true,
+      });
+      expect(read()).toMatchObject({ imageGenerationEnabled: true });
+      expect(yield* feature.setImageGenerationEnabled(false)).toEqual({
+        imageGenerationEnabled: false,
+      });
+    }),
+  );
 });

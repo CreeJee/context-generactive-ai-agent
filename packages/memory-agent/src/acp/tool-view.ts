@@ -1,6 +1,6 @@
+import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { resolve } from "node:path";
 import type { ToolKind } from "@agentclientprotocol/sdk";
 import { HashMap, Option, Schema } from "effect";
@@ -64,9 +64,10 @@ export function toolDetail(argumentsJson: string): string | null {
 }
 
 /** Absolute paths a call touches, for editors that follow along. Project-relative ones are resolved. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function toolLocations(argumentsJson: string, projectRoot: string) {
+export const toolLocations: {
+  (projectRoot: string): (argumentsJson: string) => ReturnType<typeof toolLocationsBody>;
+} & typeof toolLocationsBody = EffectFunction.dual(2, toolLocationsBody);
+function toolLocationsBody(argumentsJson: string, projectRoot: string) {
   return Option.match(decodePathArguments(argumentsJson), {
     onNone: () => [],
     // resolve() keeps an absolute path (`/x`, `C:\x`) and joins a relative one to the project,

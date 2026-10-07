@@ -1,3 +1,7 @@
+import { it as effectTest } from "@effect/vitest";
+import { assertFailure } from "@effect/vitest/utils";
+import { TestClock } from "effect/testing";
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off globalTimers:off newPromise:off nodeBuiltinImport:off schemaSync:off
 import { isTruthy } from "../src/truthy.ts";
@@ -18,8 +22,18 @@ import { migrations } from "../src/db/migrations.ts";
 import {
   makeOpenAICompatibleSettings,
   CompatibleCompletionRejected,
+  OpenAICompatibleFailed,
   validateCompatibleConfiguration,
 } from "../src/providers/openai-compatible.ts";
+
+/** Native fetch fixture: interruption comes from the Effect running model discovery. */
+const stalledFetch =
+  (observe: (signal: AbortSignal | undefined) => void): typeof fetch =>
+  (_url, init) => {
+    const signal = init?.signal ?? undefined;
+    observe(signal);
+    return Effect.runPromise(Effect.never, { signal });
+  };
 
 const configuration = {
   baseUrl: "http://127.0.0.1:1234/v1",
@@ -99,7 +113,12 @@ describe("OpenAI compatible settings", () => {
     const f = fixture(
       async (url, options) => {
         expect(url).toBe("https://compatible.example/v1/chat/completions");
-        seen.push(Schema.decodeUnknownSync(Schema.String)(options?.body));
+        seen.push(
+          EffectFunction.flow(
+            Schema.decodeUnknownResult(Schema.String),
+            Result.getOrThrow,
+          )(options?.body),
+        );
         return Response.json({
           choices: [{ message: { content: "OK" } }],
           usage: { prompt_tokens: 2000000, completion_tokens: 1 },
@@ -171,31 +190,36 @@ describe("OpenAI compatible settings", () => {
       adapter.releaseRun?.();
     }
   });
-  it("uses the provider-normalized effort for chat when the stored effort is unsupported", async () => {
-    const f = fixture(undefined, {
-      provider: "openai-compatible",
-      model: configuration.model,
-      reasoningEffort: "low",
-      openaiCompatible: configuration,
-    });
-    const layer = ActiveProvider.layer.pipe(
-      Layer.provide(ProviderRegistry.layer([f.api.services], [f.api.services.runtime])),
-      Layer.provide(Layer.succeed(GlobalConfig, f.config)),
-    );
-    const selection = await Effect.runPromise(
-      // Test entry point owns this Layer and its resource scope.
-      // @effect-diagnostics-next-line strictEffectProvide:off
-      Effect.flatMap(ActiveProvider, (active) => active.selected).pipe(Effect.provide(layer)),
-    );
-    expect(selection).toEqual({
-      provider: "openai-compatible",
-      model: configuration.model,
-      reasoningEffort: "default",
-    });
-    expect(f.saved().reasoningEffort).toBe("low");
-    const adapter = f.api.services.runtime.adapter(selection!);
-    adapter.releaseRun?.();
-  });
+  effectTest.effect(
+    "uses the provider-normalized effort for chat when the stored effort is unsupported",
+    () =>
+      Effect.gen(function* () {
+        const f = fixture(undefined, {
+          provider: "openai-compatible",
+          model: configuration.model,
+          reasoningEffort: "low",
+          openaiCompatible: configuration,
+        });
+        const layer = ActiveProvider.layer.pipe(
+          Layer.provide(ProviderRegistry.layer([f.api.services], [f.api.services.runtime])),
+          Layer.provide(Layer.succeed(GlobalConfig, f.config)),
+        );
+        const selection = yield* Effect.flatMap(ActiveProvider, (active) => active.selected).pipe(
+          Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+            const services = yield* Layer.build(layer);
+            return yield* Effect.provideContext(program, services);
+          }, Effect.scoped),
+        );
+        expect(selection).toEqual({
+          provider: "openai-compatible",
+          model: configuration.model,
+          reasoningEffort: "default",
+        });
+        expect(f.saved().reasoningEffort).toBe("low");
+        const adapter = f.api.services.runtime.adapter(selection!);
+        adapter.releaseRun?.();
+      }),
+  );
   it("ignores and clears cached capabilities from the removed LM Studio probe", async () => {
     const f = fixture(
       async (url) => {
@@ -278,82 +302,91 @@ describe("OpenAI compatible settings", () => {
       Effect.runPromise(f.api.services.models.select(configuration.model, "none")),
     ).rejects.toThrow();
   });
-  it("does not infer levels from a public supported-parameter list", async () => {
-    const paths: string[] = [];
-    const f = fixture(async (url) => {
-      const address = url instanceof Request ? url.url : url instanceof URL ? url.href : url;
-      paths.push(new URL(address).pathname);
-      return Response.json({
-        data: [{ id: configuration.model, supported_parameters: ["reasoning", "temperature"] }],
-      });
-    });
-    await Effect.runPromise(f.api.update(configuration));
-    const model = (await Effect.runPromise(f.api.services.models.list))[0];
-    expect(model?.capabilities.reasoning).toBe(true);
-    expect(model?.supportedReasoningEfforts).toEqual(["default"]);
-    expect(paths).toEqual(["/v1/models"]);
-  });
-  it.each(["vllm", "organization_owner", "unknown"])(
-    "only reads /models for owner %s without capabilities",
-    async (owner) => {
+  effectTest.effect("does not infer levels from a public supported-parameter list", () =>
+    Effect.gen(function* () {
       const paths: string[] = [];
       const f = fixture(async (url) => {
         const address = url instanceof Request ? url.url : url instanceof URL ? url.href : url;
         paths.push(new URL(address).pathname);
-        return Response.json({ data: [{ id: configuration.model, owned_by: owner }] });
+        return Response.json({
+          data: [{ id: configuration.model, supported_parameters: ["reasoning", "temperature"] }],
+        });
       });
-      await Effect.runPromise(f.api.update(configuration));
-      expect(
-        (await Effect.runPromise(f.api.services.models.list))[0]?.supportedReasoningEfforts,
-      ).toEqual(["default"]);
+      yield* f.api.update(configuration);
+      const model = (yield* f.api.services.models.list)[0];
+      expect(model?.capabilities.reasoning).toBe(true);
+      expect(model?.supportedReasoningEfforts).toEqual(["default"]);
       expect(paths).toEqual(["/v1/models"]);
-    },
+    }),
   );
-  it("keeps model listing usable when extension fields are unsupported", async () => {
-    const f = fixture(async (url) => {
-      const address = url instanceof Request ? url.url : url instanceof URL ? url.href : url;
-      expect(new URL(address).pathname).toBe("/v1/models");
-      return Response.json({
-        data: [
-          {
-            id: configuration.model,
-            capabilities: { reasoning: true },
-            supported_parameters: null,
-          },
-        ],
-      });
-    });
-    await Effect.runPromise(f.api.update(configuration));
-    expect(await Effect.runPromise(f.api.listModels)).toEqual([configuration.model]);
-    expect(
-      (await Effect.runPromise(f.api.services.models.list))[0]?.supportedReasoningEfforts,
-    ).toEqual(["default"]);
-    expect(f.saved().openaiCompatible?.reasoning).toBeUndefined();
-  });
-  it("keeps the legacy omitted effort as the server default when discovering none support", async () => {
-    const f = fixture(
-      async () =>
-        Response.json({
+  effectTest.effect.each(["vllm", "organization_owner", "unknown"])(
+    "only reads /models for owner %s without capabilities",
+    (owner) =>
+      Effect.gen(function* () {
+        const paths: string[] = [];
+        const f = fixture(async (url) => {
+          const address = url instanceof Request ? url.url : url instanceof URL ? url.href : url;
+          paths.push(new URL(address).pathname);
+          return Response.json({ data: [{ id: configuration.model, owned_by: owner }] });
+        });
+        yield* f.api.update(configuration);
+        expect((yield* f.api.services.models.list)[0]?.supportedReasoningEfforts).toEqual([
+          "default",
+        ]);
+        expect(paths).toEqual(["/v1/models"]);
+      }),
+  );
+  effectTest.effect("keeps model listing usable when extension fields are unsupported", () =>
+    Effect.gen(function* () {
+      const f = fixture(async (url) => {
+        const address = url instanceof Request ? url.url : url instanceof URL ? url.href : url;
+        expect(new URL(address).pathname).toBe("/v1/models");
+        return Response.json({
           data: [
             {
               id: configuration.model,
-              capabilities: { reasoning: { allowed_options: ["none", "low"], default: "low" } },
+              capabilities: { reasoning: true },
+              supported_parameters: null,
             },
           ],
-        }),
-      {
-        provider: "openai-compatible",
-        model: configuration.model,
-        reasoningEffort: "none",
-        openaiCompatible: configuration,
-      },
-    );
-    await Effect.runPromise(f.api.services.models.list);
-    expect(f.saved().reasoningEffort).toBe("default");
-    await Effect.runPromise(f.api.services.models.select(configuration.model, "none"));
-    await Effect.runPromise(f.api.services.models.list);
-    expect(f.saved().reasoningEffort).toBe("none");
-  });
+        });
+      });
+      yield* f.api.update(configuration);
+      expect(yield* f.api.listModels).toEqual([configuration.model]);
+      expect((yield* f.api.services.models.list)[0]?.supportedReasoningEfforts).toEqual([
+        "default",
+      ]);
+      expect(f.saved().openaiCompatible?.reasoning).toBeUndefined();
+    }),
+  );
+  effectTest.effect(
+    "keeps the legacy omitted effort as the server default when discovering none support",
+    () =>
+      Effect.gen(function* () {
+        const f = fixture(
+          async () =>
+            Response.json({
+              data: [
+                {
+                  id: configuration.model,
+                  capabilities: { reasoning: { allowed_options: ["none", "low"], default: "low" } },
+                },
+              ],
+            }),
+          {
+            provider: "openai-compatible",
+            model: configuration.model,
+            reasoningEffort: "none",
+            openaiCompatible: configuration,
+          },
+        );
+        yield* f.api.services.models.list;
+        expect(f.saved().reasoningEffort).toBe("default");
+        yield* f.api.services.models.select(configuration.model, "none");
+        yield* f.api.services.models.list;
+        expect(f.saved().reasoningEffort).toBe("none");
+      }),
+  );
   it("discovers model-specific reasoning levels, restores selection and sends only supported effort", async () => {
     const Body = Schema.fromJsonString(
       Schema.Struct({ reasoning_effort: Schema.optional(Schema.String) }),
@@ -375,7 +408,9 @@ describe("OpenAI compatible settings", () => {
             },
           ],
         });
-      bodies.push(Schema.decodeUnknownSync(Body)(init?.body));
+      bodies.push(
+        EffectFunction.flow(Schema.decodeUnknownResult(Body), Result.getOrThrow)(init?.body),
+      );
       return new Response(
         'data: {"id":"x","object":"chat.completion.chunk","created":1,"model":"manual-model","choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
         { headers: { "Content-Type": "text/event-stream" } },
@@ -487,35 +522,35 @@ describe("OpenAI compatible settings", () => {
       }
     },
   );
-  it("validates endpoint, limits, and never persists keys", async () => {
-    const f = fixture();
-    const status = await Effect.runPromise(
-      f.api.update({ ...configuration, apiKey: "test-only-key" }),
-    );
-    expect(status.hasApiKey).toBe(true);
-    expect(JSON.stringify(f.saved())).not.toContain("[redacted:credential]");
-    await Effect.runPromise(f.api.update(configuration));
-    expect((await Effect.runPromise(f.api.status)).hasApiKey).toBe(true);
-    const rejected = await Effect.runPromise(
-      Effect.flip(
+  effectTest.effect("validates endpoint, limits, and never persists keys", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const status = yield* f.api.update({ ...configuration, apiKey: "test-only-key" });
+      expect(status.hasApiKey).toBe(true);
+      expect(
+        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(f.saved()),
+      ).not.toContain("[redacted:credential]");
+      yield* f.api.update(configuration);
+      expect((yield* f.api.status).hasApiKey).toBe(true);
+      const rejected = yield* Effect.flip(
         f.api.update({
           ...configuration,
           baseUrl: "http://127.0.0.1:9876/v1",
         }),
-      ),
-    );
-    expect(rejected.operation).toBe("validation");
-    await Effect.runPromise(f.api.update({ ...configuration, apiKey: null }));
-    expect((await Effect.runPromise(f.api.status)).hasApiKey).toBe(false);
-    for (const patch of [
-      { baseUrl: "file:///tmp/server" },
-      { baseUrl: "https://user:password@example.com/v1" },
-      { contextWindow: 0 },
-      { outputBudget: 8192 },
-      { outputBudget: -1 },
-    ])
-      expect(() => validateCompatibleConfiguration({ ...configuration, ...patch })).toThrow();
-  });
+      );
+      expect(rejected.operation).toBe("validation");
+      yield* f.api.update({ ...configuration, apiKey: null });
+      expect((yield* f.api.status).hasApiKey).toBe(false);
+      for (const patch of [
+        { baseUrl: "file:///tmp/server" },
+        { baseUrl: "https://user:password@example.com/v1" },
+        { contextWindow: 0 },
+        { outputBudget: 8192 },
+        { outputBudget: -1 },
+      ])
+        expect(() => validateCompatibleConfiguration({ ...configuration, ...patch })).toThrow();
+    }),
+  );
   it("restores a manual model without discovery and isolates discovery errors", async () => {
     const f = fixture(async () => new Response("private provider diagnostic", { status: 503 }));
     await Effect.runPromise(f.api.update(configuration));
@@ -549,64 +584,75 @@ describe("OpenAI compatible settings", () => {
     await Effect.runPromise(Fiber.interrupt(fiber));
     expect(signal?.aborted).toBe(true);
   });
-  it("times out discovery with a typed failure and aborts the request", async () => {
-    let signal: AbortSignal | undefined;
-    const f = fixture(async (_url, init) => {
-      signal = init?.signal ?? undefined;
-      return new Promise<Response>((_resolve, reject) => {
-        signal?.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
-      });
-    });
-    await Effect.runPromise(f.api.update(configuration));
-    const error = await Effect.runPromise(Effect.flip(f.api.listModels));
-    expect(error.operation).toBe("models");
-    expect(signal?.aborted).toBe(true);
-  }, 20_000);
-  it("reports an uncertain keyring write as partial without writing settings", async () => {
-    let saved: Settings = {};
-    const api = makeOpenAICompatibleSettings(
-      {
-        read: Effect.sync(() => saved),
-        update: (patch: Partial<Settings>) => Effect.sync(() => (saved = { ...saved, ...patch })),
-      },
-      {
-        get: async () => null,
-        set: async () => {
-          throw new Error("private keyring detail");
+  effectTest.effect("times out discovery with a typed failure and aborts the request", () =>
+    Effect.gen(function* () {
+      let signal: AbortSignal | undefined;
+      const f = fixture(
+        stalledFetch((observed) => {
+          signal = observed;
+        }),
+      );
+      yield* f.api.update(configuration);
+      const discovery = yield* Effect.forkChild(Effect.result(f.api.listModels));
+      yield* TestClock.adjust("15 seconds");
+      assertFailure(
+        yield* Fiber.join(discovery),
+        new OpenAICompatibleFailed({ operation: "models" }),
+      );
+      expect(signal?.aborted).toBe(true);
+    }),
+  );
+  effectTest.effect("reports an uncertain keyring write as partial without writing settings", () =>
+    Effect.gen(function* () {
+      let saved: Settings = {};
+      const api = makeOpenAICompatibleSettings(
+        {
+          read: Effect.sync(() => saved),
+          update: (patch: Partial<Settings>) => Effect.sync(() => (saved = { ...saved, ...patch })),
         },
-      },
-    );
-    const result = await Effect.runPromise(
-      Effect.flip(api.update({ ...configuration, apiKey: "secret" })),
-    );
-    expect(result.operation).toBe("partial");
-    expect(JSON.stringify(saved)).not.toContain("secret");
-    expect(saved.openaiCompatible).toBeUndefined();
-  });
-  it("reports config failure after a key write as partial without persisting a secret", async () => {
-    let key: string | null = null;
-    const api = makeOpenAICompatibleSettings(
-      {
-        read: Effect.succeed({}),
-        update: () =>
-          Effect.sync(() => {
-            throw new Error("private config detail");
-          }),
-      },
-      {
-        get: async () => key,
-        set: async (value) => {
-          key = value;
+        {
+          get: async () => null,
+          set: async () => {
+            throw new Error("private keyring detail");
+          },
         },
-      },
-    );
-    const error = await Effect.runPromise(
-      Effect.flip(api.update({ ...configuration, apiKey: "secret" })),
-    );
-    expect(error.operation).toBe("partial");
-    expect(key).toContain("secret");
-    expect(JSON.stringify(error)).not.toContain("secret");
-  });
+      );
+      const result = yield* Effect.flip(api.update({ ...configuration, apiKey: "secret" }));
+      expect(result.operation).toBe("partial");
+      expect(
+        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(saved),
+      ).not.toContain("secret");
+      expect(saved.openaiCompatible).toBeUndefined();
+    }),
+  );
+  effectTest.effect(
+    "reports config failure after a key write as partial without persisting a secret",
+    () =>
+      Effect.gen(function* () {
+        let key: string | null = null;
+        const api = makeOpenAICompatibleSettings(
+          {
+            read: Effect.succeed({}),
+            update: () =>
+              Effect.sync(() => {
+                throw new Error("private config detail");
+              }),
+          },
+          {
+            get: async () => key,
+            set: async (value) => {
+              key = value;
+            },
+          },
+        );
+        const error = yield* Effect.flip(api.update({ ...configuration, apiKey: "secret" }));
+        expect(error.operation).toBe("partial");
+        expect(key).toContain("secret");
+        expect(
+          yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(error),
+        ).not.toContain("secret");
+      }),
+  );
   it("never sends a new key to the old endpoint while settings update is in flight", async () => {
     let saved: Settings = {};
     let key: string | null = null;
@@ -662,56 +708,58 @@ describe("OpenAI compatible settings", () => {
       },
     ]);
   });
-  it("keeps the old endpoint unauthenticated after an uncertain changed key", async () => {
-    let saved: Settings = {};
-    let key: string | null = null;
-    let rejectWrite = false;
-    const headers: Array<string | null> = [];
-    const api = makeOpenAICompatibleSettings(
-      {
-        read: Effect.sync(() => saved),
-        update: (patch: Partial<Settings>) => Effect.sync(() => (saved = { ...saved, ...patch })),
-      },
-      {
-        get: async () => key,
-        set: async (value) => {
-          key = value;
-          if (rejectWrite) throw new Error("uncertain keyring outcome");
+  effectTest.effect("keeps the old endpoint unauthenticated after an uncertain changed key", () =>
+    Effect.gen(function* () {
+      let saved: Settings = {};
+      let key: string | null = null;
+      let rejectWrite = false;
+      const headers: Array<string | null> = [];
+      const api = makeOpenAICompatibleSettings(
+        {
+          read: Effect.sync(() => saved),
+          update: (patch: Partial<Settings>) => Effect.sync(() => (saved = { ...saved, ...patch })),
         },
-      },
-      async (_url, init) => {
-        headers.push(new Headers(init?.headers).get("authorization"));
-        return Response.json({ choices: [{ message: { content: "OK" } }] });
-      },
-    );
-    await Effect.runPromise(api.update({ ...configuration, apiKey: "first" }));
-    rejectWrite = true;
-    const error = await Effect.runPromise(
-      Effect.flip(
+        {
+          get: async () => key,
+          set: async (value) => {
+            key = value;
+            if (rejectWrite) throw new Error("uncertain keyring outcome");
+          },
+        },
+        async (_url, init) => {
+          headers.push(new Headers(init?.headers).get("authorization"));
+          return Response.json({ choices: [{ message: { content: "OK" } }] });
+        },
+      );
+      yield* api.update({ ...configuration, apiKey: "first" });
+      rejectWrite = true;
+      const error = yield* Effect.flip(
         api.update({
           ...configuration,
           baseUrl: "http://127.0.0.1:9876/v1",
           apiKey: "second",
         }),
-      ),
-    );
-    expect(error.operation).toBe("partial");
-    // A stored key remains visible for explicit removal, but is not sent to the old URL.
-    expect((await Effect.runPromise(api.status)).hasApiKey).toBe(true);
-    await Effect.runPromise(api.test);
-    expect(headers).toEqual([null]);
-  });
-  it("updates an active model selection when its manual model ID changes", async () => {
-    const f = fixture();
-    await Effect.runPromise(f.api.update(configuration));
-    await Effect.runPromise(f.api.services.models.select(configuration.model));
-    await Effect.runPromise(f.api.update({ ...configuration, model: "changed-manual-model" }));
-    expect(await Effect.runPromise(f.api.services.models.selected)).toEqual({
-      provider: "openai-compatible",
-      model: "changed-manual-model",
-      reasoningEffort: "default",
-    });
-  });
+      );
+      expect(error.operation).toBe("partial");
+      // A stored key remains visible for explicit removal, but is not sent to the old URL.
+      expect((yield* api.status).hasApiKey).toBe(true);
+      yield* api.test;
+      expect(headers).toEqual([null]);
+    }),
+  );
+  effectTest.effect("updates an active model selection when its manual model ID changes", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      yield* f.api.update(configuration);
+      yield* f.api.services.models.select(configuration.model);
+      yield* f.api.update({ ...configuration, model: "changed-manual-model" });
+      expect(yield* f.api.services.models.selected).toEqual({
+        provider: "openai-compatible",
+        model: "changed-manual-model",
+        reasoningEffort: "default",
+      });
+    }),
+  );
   it("serializes model selection with an in-flight settings update", async () => {
     let saved: Settings = {};
     let unblock: (() => void) | undefined;
@@ -844,7 +892,10 @@ describe("OpenAI compatible settings", () => {
         observed.push({
           url: url instanceof Request ? url.url : url instanceof URL ? url.href : url,
           authorization: new Headers(init?.headers).get("authorization"),
-          body: Schema.decodeUnknownSync(Schema.String)(init?.body ?? "{}"),
+          body: EffectFunction.flow(
+            Schema.decodeUnknownResult(Schema.String),
+            Result.getOrThrow,
+          )(init?.body ?? "{}"),
         });
         return new Response(
           'data: {"id":"x","object":"chat.completion.chunk","created":1,"model":"manual-model","choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
@@ -891,7 +942,10 @@ describe("OpenAI compatible settings", () => {
       requests.push({
         path: request.url ?? "",
         authorization: request.headers.authorization,
-        body: Schema.decodeSync(Schema.fromJsonString(ChatRequest))(body || "{}"),
+        body: EffectFunction.flow(
+          Schema.decodeResult(Schema.fromJsonString(ChatRequest)),
+          Result.getOrThrow,
+        )(body || "{}"),
       });
       if (request.url === "/v1/models") {
         response.setHeader("Content-Type", "application/json");
@@ -940,9 +994,10 @@ describe("OpenAI compatible settings", () => {
     server.listen(0, "127.0.0.1");
     await once(server, "listening");
     try {
-      const address = Schema.decodeUnknownSync(Schema.Struct({ port: Schema.Int }))(
-        server.address(),
-      );
+      const address = EffectFunction.flow(
+        Schema.decodeUnknownResult(Schema.Struct({ port: Schema.Int })),
+        Result.getOrThrow,
+      )(server.address());
       const f = fixture();
       const settings = { ...configuration, baseUrl: `http://127.0.0.1:${address.port}/v1` };
       await Effect.runPromise(f.api.update(settings));

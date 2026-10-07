@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../../truthy.ts";
 import { ApiError, type QueuedMessage, type QueueEdit, type QueueSnapshot } from "../api";
 import { useSessionEventScope } from "../events/context";
@@ -22,23 +23,25 @@ export const isTakenIn = (message: QueuedMessage) =>
   message.state.kind === "delivered" && message.state.via !== "next_turn";
 
 /** The authoritative queue snapshot, refreshed by session SSE invalidations. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function useMessageQueue(sessionId: string, holder: string, _generating: boolean) {
+export const useMessageQueue: {
+  (
+    holder: string,
+    _generating: boolean,
+  ): (sessionId: string) => ReturnType<typeof useMessageQueueBody>;
+} & typeof useMessageQueueBody = EffectFunction.dual(3, useMessageQueueBody);
+function useMessageQueueBody(sessionId: string, holder: string, _generating: boolean) {
   const { projectId } = useSessionEventScope();
   if (!isTruthy(projectId)) throw new Error("Message queue requires an active project");
   const enqueue = useEnqueueMutation(projectId, sessionId, holder);
   const editQueue = useEditQueueMutation(projectId, sessionId, holder);
   const query = useQueueQuery(projectId, sessionId);
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const refresh = async () => {
     const result = await query.refetch();
     return result.data ?? null;
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const add = async (
     text: string,
     attachmentIds: readonly string[],
@@ -57,7 +60,6 @@ export function useMessageQueue(sessionId: string, holder: string, _generating: 
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const change = async (id: string, edit: QueueEdit) => {
     await editQueue.mutateAsync({ id, edit }).catch(() => null);
     return refresh();

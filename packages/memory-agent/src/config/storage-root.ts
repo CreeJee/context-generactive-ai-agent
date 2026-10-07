@@ -1,6 +1,5 @@
 import { homedir } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { Context, Layer } from "effect";
 

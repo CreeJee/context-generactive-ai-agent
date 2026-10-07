@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
 import { appendFileSync, chmodSync, mkdirSync, writeFileSync } from "node:fs";
@@ -99,13 +100,23 @@ const NodeRow = Schema.Struct({
   created_at: Schema.String,
   run_id: Schema.NullOr(Schema.String),
 });
-const decodeNodes = Schema.decodeUnknownSync(Schema.Array(NodeRow));
-const decodeEdges = Schema.decodeUnknownSync(
-  Schema.Array(Schema.Struct({ kind: Schema.String, from_kind: Schema.String })),
+const decodeNodes = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Array(NodeRow)),
+  Result.getOrThrow,
 );
-const decodeCount = Schema.decodeUnknownSync(Schema.Struct({ count: Schema.Finite }));
-const decodeIndexed = Schema.decodeUnknownSync(
-  Schema.Array(Schema.Struct({ text: Schema.String })),
+const decodeEdges = EffectFunction.flow(
+  Schema.decodeUnknownResult(
+    Schema.Array(Schema.Struct({ kind: Schema.String, from_kind: Schema.String })),
+  ),
+  Result.getOrThrow,
+);
+const decodeCount = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Struct({ count: Schema.Finite })),
+  Result.getOrThrow,
+);
+const decodeIndexed = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Array(Schema.Struct({ text: Schema.String }))),
+  Result.getOrThrow,
 );
 
 const nodeRows = (sqlite: Database["Service"]["sqlite"], sessionId: string) =>

@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../../truthy.ts";
 import { type ApprovalRequester, type RelayedApprovalView, type SubagentView } from "../api";
 import { useSessionEventScope } from "../events/context";
@@ -9,9 +10,10 @@ interface DelegatedState {
 }
 
 /** Subagent and relayed-approval snapshots, refreshed by their session SSE topics. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function useDelegatedWork(sessionId: string, _generating: boolean) {
+export const useDelegatedWork: {
+  (_generating: boolean): (sessionId: string) => ReturnType<typeof useDelegatedWorkBody>;
+} & typeof useDelegatedWorkBody = EffectFunction.dual(2, useDelegatedWorkBody);
+function useDelegatedWorkBody(sessionId: string, _generating: boolean) {
   const { projectId } = useSessionEventScope();
   if (!isTruthy(projectId)) throw new Error("Delegated work requires an active project");
   const subagents = useSubagentsQuery(projectId, sessionId);

@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off newPromise:off nodeBuiltinImport:off processEnv:off schemaSync:off
 import {
@@ -159,7 +160,10 @@ for (const damage of ["missing", "tampered"] as const) {
       expect(streamA).toContain("[loop-v1]");
       expect(streamA).not.toContain("[loop-v2]");
       const binding = (db: Database["Service"], run: string) =>
-        Schema.decodeUnknownSync(Binding)(
+        EffectFunction.flow(
+          Schema.decodeUnknownResult(Binding),
+          Result.getOrThrow,
+        )(
           db.sqlite
             .prepare(
               "SELECT goal_instance_id, goal_version, plan_version FROM workflow_run_bindings WHERE run_id = ?",
@@ -167,7 +171,10 @@ for (const damage of ["missing", "tampered"] as const) {
             .get(run),
         );
       const pin = (db: Database["Service"], id: string) =>
-        Schema.decodeUnknownSync(Pin)(
+        EffectFunction.flow(
+          Schema.decodeUnknownResult(Pin),
+          Result.getOrThrow,
+        )(
           db.sqlite
             .prepare(
               "SELECT goal_instance_id, source_generation, manifest_hash, worker_url FROM workflow_goal_worker_generations WHERE goal_instance_id = ?",
@@ -175,7 +182,10 @@ for (const damage of ["missing", "tampered"] as const) {
             .get(id),
         );
       const dispatch = (db: Database["Service"], run: string) =>
-        Schema.decodeUnknownSync(Dispatch)(
+        EffectFunction.flow(
+          Schema.decodeUnknownResult(Dispatch),
+          Result.getOrThrow,
+        )(
           db.sqlite
             .prepare("SELECT generation FROM workflow_worker_dispatches WHERE run_id = ?")
             .get(run),

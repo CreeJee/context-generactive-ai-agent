@@ -24,7 +24,6 @@ const ChangeSession = Schema.Union([
  * whether the asking page holds the session.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function loader({ request, params }: Route.LoaderArgs) {
   const holder = new URL(request.url).searchParams.get("holder");
   return agent.runPromise(Effect.flatMap(AgentChat, (chat) => chat.status(params.session, holder)));
@@ -35,7 +34,6 @@ export async function loader({ request, params }: Route.LoaderArgs) {
  * while it is answering (409) or another page holds it (423).
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request, params }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected !== null) return rejected;
@@ -56,7 +54,6 @@ export async function action({ request, params }: Route.ActionArgs) {
           holder,
           change.archived,
           // HTTP/SDK boundary assigns a cryptographic idempotency token when the caller omitted one.
-          // @effect-diagnostics-next-line cryptoRandomUUIDInEffect:off
           change.idempotencyKey ?? crypto.randomUUID(),
         );
         events.publishProject(session.projectId, "sessions");

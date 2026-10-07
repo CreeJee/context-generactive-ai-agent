@@ -27,14 +27,12 @@ const imageSettingsView = Effect.gen(function* () {
 
 /** GET /api/settings/image: the image-generation preference and cross-provider consent. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function loader() {
   return agent.runPromise(Effect.map(imageSettingsView, (status) => Response.json(status)));
 }
 
 /** POST /api/settings/image: update an image-generation preference without restarting the app. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected !== null) return rejected;

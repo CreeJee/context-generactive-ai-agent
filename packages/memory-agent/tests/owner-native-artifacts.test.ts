@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
 import {
@@ -37,7 +38,10 @@ test("owner builds and registers once, cold acquisition revalidates bytes and re
         status: "active",
       }),
     );
-    const id = Schema.decodeUnknownSync(Schema.Struct({ goal_instance_id: Schema.String }))(
+    const id = EffectFunction.flow(
+      Schema.decodeUnknownResult(Schema.Struct({ goal_instance_id: Schema.String })),
+      Result.getOrThrow,
+    )(
       owner.db.sqlite
         .prepare("SELECT goal_instance_id FROM workflow_goal_instances WHERE session_id = ?")
         .get(context.session.id),
@@ -46,14 +50,17 @@ test("owner builds and registers once, cold acquisition revalidates bytes and re
     const acquire = () => Effect.scoped(makeOwnerNativeArtifacts(options).acquire(id));
     await context.runtime.runPromise(acquire());
     const read = () =>
-      Schema.decodeUnknownSync(
-        Schema.Struct({
-          artifact_url: Schema.String,
-          artifact_hash: Schema.String,
-          source_hash: Schema.String,
-          contract_version: Schema.String,
-          created_at: Schema.String,
-        }),
+      EffectFunction.flow(
+        Schema.decodeUnknownResult(
+          Schema.Struct({
+            artifact_url: Schema.String,
+            artifact_hash: Schema.String,
+            source_hash: Schema.String,
+            contract_version: Schema.String,
+            created_at: Schema.String,
+          }),
+        ),
+        Result.getOrThrow,
       )(
         owner.db.sqlite
           .prepare("SELECT * FROM workflow_goal_native_artifacts WHERE goal_instance_id = ?")
@@ -121,7 +128,10 @@ test("first registration refuses SDK-only history committed during the build", a
         status: "active",
       }),
     );
-    const id = Schema.decodeUnknownSync(Schema.Struct({ goal_instance_id: Schema.String }))(
+    const id = EffectFunction.flow(
+      Schema.decodeUnknownResult(Schema.Struct({ goal_instance_id: Schema.String })),
+      Result.getOrThrow,
+    )(
       owner.db.sqlite
         .prepare("SELECT goal_instance_id FROM workflow_goal_instances WHERE session_id = ?")
         .get(context.session.id),
@@ -185,7 +195,10 @@ for (const fault of [
           status: "active",
         }),
       );
-      const id = Schema.decodeUnknownSync(Schema.Struct({ goal_instance_id: Schema.String }))(
+      const id = EffectFunction.flow(
+        Schema.decodeUnknownResult(Schema.Struct({ goal_instance_id: Schema.String })),
+        Result.getOrThrow,
+      )(
         owner.db.sqlite
           .prepare("SELECT goal_instance_id FROM workflow_goal_instances WHERE session_id = ?")
           .get(context.session.id),
@@ -299,7 +312,10 @@ for (const kind of ["unknown", "sdk-only"] as const) {
           status: "active",
         }),
       );
-      const id = Schema.decodeUnknownSync(Schema.Struct({ goal_instance_id: Schema.String }))(
+      const id = EffectFunction.flow(
+        Schema.decodeUnknownResult(Schema.Struct({ goal_instance_id: Schema.String })),
+        Result.getOrThrow,
+      )(
         owner.db.sqlite
           .prepare("SELECT goal_instance_id FROM workflow_goal_instances WHERE session_id = ?")
           .get(context.session.id),

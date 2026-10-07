@@ -18,7 +18,6 @@ const TaskAction = Schema.Union([
 
 /** GET /api/sessions/:session/trace/tasks/:task — task attempt and checkpoint detail. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function loader({ params }: Route.LoaderArgs) {
   return agent.runPromise(
     Effect.flatMap(AgentChat, (chat) => chat.traceTask(params.session, params.task)),
@@ -27,7 +26,6 @@ export async function loader({ params }: Route.LoaderArgs) {
 
 /** POST queues a safe logical resume for execution under the next valid parent run binding. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request, params }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected !== null) return rejected;
@@ -51,7 +49,6 @@ export async function action({ request, params }: Route.ActionArgs) {
             params.task,
             body.success.intent,
             // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
-            // @effect-diagnostics-next-line cryptoRandomUUID:off
             body.success.idempotencyKey ?? crypto.randomUUID(),
           ),
     ),

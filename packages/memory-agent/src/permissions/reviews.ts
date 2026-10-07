@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import type { SQLOutputValue } from "node:sqlite";
 import { DateTime, Clock, Context, Effect, Layer, Schema } from "effect";
@@ -40,8 +41,10 @@ const ReviewRow = Schema.Struct({
   created_at: Schema.String,
 });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeReviewRow = Schema.decodeUnknownSync(ReviewRow);
+const decodeReviewRow = EffectFunction.flow(
+  Schema.decodeUnknownResult(ReviewRow),
+  Result.getOrThrow,
+);
 
 function toReview(row: Record<string, SQLOutputValue>): PermissionReview {
   const decoded = decodeReviewRow(row);

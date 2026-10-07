@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { DateTime, Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
@@ -93,7 +94,6 @@ const make = (projectForSession: (sessionId: string) => string | null): AppEvent
         if (request.signal.aborted) return close();
         send(frame("ready", { revision }));
         // Native callback heartbeat/debounce timing remains at the protocol boundary.
-        // @effect-diagnostics-next-line globalTimers:off
         heartbeat = setInterval(
           () => send(frame("heartbeat", { at: DateTime.toEpochMillis(DateTime.nowUnsafe()) })),
           heartbeatMs,
@@ -135,8 +135,10 @@ export const makeAppEvents: Effect.Effect<AppEventsApi> = Effect.sync(() => make
 
 const liveAppEvents = Effect.map(Database, ({ sqlite }) => {
   // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  // @effect-diagnostics-next-line schemaSync:off
-  const decodeProject = Schema.decodeUnknownSync(Schema.Struct({ project_id: Schema.String }));
+  const decodeProject = EffectFunction.flow(
+    Schema.decodeUnknownResult(Schema.Struct({ project_id: Schema.String })),
+    Result.getOrThrow,
+  );
   const statement = sqlite.prepare("SELECT project_id FROM sessions WHERE id = ?");
   return make((sessionId) => {
     const row = statement.get(sessionId);

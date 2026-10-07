@@ -1,16 +1,13 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import {
@@ -61,14 +58,18 @@ const Completion = Schema.Struct({
 });
 const completionText = (raw: string) =>
   // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  // @effect-diagnostics-next-line schemaSync:off
-  Schema.decodeSync(Schema.fromJsonString(Completion))(raw).choices[0]?.message.content ?? "";
+  EffectFunction.flow(
+    Schema.decodeResult(Schema.fromJsonString(Completion)),
+    Result.getOrThrow,
+  )(raw).choices[0]?.message.content ?? "";
 const Critique = Schema.Struct({ approved: Schema.Boolean });
 const Activity = Schema.Struct({ busy: Schema.Finite, latest: Schema.NullOr(Schema.Finite) });
 function activity(sqlite: DatabaseSync) {
   // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  // @effect-diagnostics-next-line schemaSync:off
-  return Schema.decodeUnknownSync(Activity)(sqlite.prepare(activitySql).get());
+  return EffectFunction.flow(
+    Schema.decodeUnknownResult(Activity),
+    Result.getOrThrow,
+  )(sqlite.prepare(activitySql).get());
 }
 const mean = (measurements: readonly Measurement[]): Measurement => {
   const average = (field: "score" | "coding" | "memory") =>
@@ -122,7 +123,6 @@ const make = Effect.gen(function* () {
     configuredRepository: repo !== null,
   });
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const branchCandidate = async (
     experimentId: string,
     round: number,
@@ -145,7 +145,6 @@ const make = Effect.gen(function* () {
     return { branch, commit: stdout.trim() };
   };
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const execute = async (
     record: MutableExperiment,
     client: ModelGateway,
@@ -172,7 +171,6 @@ const make = Effect.gen(function* () {
     const bounded: ModelGateway = {
       ...client,
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      // @effect-diagnostics-next-line asyncFunction:off
       complete: async (body, signal) => {
         if (effectClock.currentTimeMillisUnsafe() >= deadline) abort.abort("time_limit");
         if (signal.aborted || abort.signal.aborted)
@@ -181,7 +179,6 @@ const make = Effect.gen(function* () {
       },
     };
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     const request = async (instruction: string) => {
       const raw = await bounded.complete(
         JSON.stringify({
@@ -194,7 +191,6 @@ const make = Effect.gen(function* () {
       return completionText(raw);
     };
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     const evaluate = async (
       profile: HarnessProfile,
       split: "evolve" | "validation" | "sealed",
@@ -224,7 +220,6 @@ const make = Effect.gen(function* () {
       return mean(measurements);
     };
     // Native callback heartbeat/debounce timing remains at the protocol boundary.
-    // @effect-diagnostics-next-line globalTimers:off
     const timer = setTimeout(() => abort.abort("time_limit"), settings.maxMinutes * 60000);
     try {
       const base = store.get(record.baseVersion);
@@ -249,8 +244,10 @@ const make = Effect.gen(function* () {
         for (let index = 0; index < 2; index++) {
           progress("proposal", 0, 1);
           // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-          // @effect-diagnostics-next-line schemaSync:off
-          const proposal = Schema.decodeSync(Schema.fromJsonString(Proposal))(
+          const proposal = EffectFunction.flow(
+            Schema.decodeResult(Schema.fromJsonString(Proposal)),
+            Result.getOrThrow,
+          )(
             await request(
               [
                 "Propose one reusable agent harness improvement. Return JSON {profile:{rolePrompt,memoryToolDescription,retrievalLeadLimit,retrievalTokenLimit},edits:[{component,hypothesis}]}.",
@@ -299,8 +296,10 @@ const make = Effect.gen(function* () {
           if (decision !== "pending") continue;
           progress("critique", 0, 1);
           // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-          // @effect-diagnostics-next-line schemaSync:off
-          const critique = Schema.decodeSync(Schema.fromJsonString(Critique))(
+          const critique = EffectFunction.flow(
+            Schema.decodeResult(Schema.fromJsonString(Critique)),
+            Result.getOrThrow,
+          )(
             await request(
               `Review candidate diff for task-specific logic, contradictory tool behavior, disabled verification or overridden permissions. Return only {"approved":true|false}. Diff: ${candidate.diff}`,
             ),
@@ -396,8 +395,10 @@ const make = Effect.gen(function* () {
         try {
           progress("code_proposal", 0, 1);
           // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-          // @effect-diagnostics-next-line schemaSync:off
-          const proposal = Schema.decodeSync(Schema.fromJsonString(CodeProposal))(
+          const proposal = EffectFunction.flow(
+            Schema.decodeResult(Schema.fromJsonString(CodeProposal)),
+            Result.getOrThrow,
+          )(
             await request(
               [
                 "Propose one reusable code improvement. Return JSON {edits:[{component,hypothesis}],files:[{path,before,after}]}. Use exact unique replacement anchors; touch at most three allowed files. Do not modify permissions, authentication, evaluator, tests, runtime version management or user instructions.",
@@ -424,8 +425,10 @@ const make = Effect.gen(function* () {
           store.saveExperiment(record);
           progress("critique", 0, 1);
           // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-          // @effect-diagnostics-next-line schemaSync:off
-          const critique = Schema.decodeSync(Schema.fromJsonString(Critique))(
+          const critique = EffectFunction.flow(
+            Schema.decodeResult(Schema.fromJsonString(Critique)),
+            Result.getOrThrow,
+          )(
             await request(
               `Review the code replacements for benchmark leakage, altered verification, credentials, changed permissions or inert machinery. Return {"approved":true|false}. ${candidate.diff}`,
             ),
@@ -491,7 +494,6 @@ const make = Effect.gen(function* () {
       return yield* RrsiFailed.make({ reason: "sealed_corpus_exhausted" });
     const baselineImage = yield* Effect.tryPromise({
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      // @effect-diagnostics-next-line asyncFunction:off
       try: async () => {
         const { stdout } = await run("docker", [
           "image",
@@ -517,7 +519,6 @@ const make = Effect.gen(function* () {
       return yield* RrsiFailed.make({ reason: "experiment_running" });
     }
     // The SDK experiment outlives start(); activity cancellation and the service finalizer own this controller.
-    // @effect-diagnostics-next-line abortControllerInEffect:off
     const abort = new AbortController();
     const record: MutableExperiment = {
       id: randomUUID(),
@@ -561,10 +562,8 @@ const make = Effect.gen(function* () {
     return { experimentId: record.id };
   });
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const tick = async () => {
     // Native host/SDK configuration boundary reads or forwards the host environment.
-    // @effect-diagnostics-next-line processEnv:off
     if (disposed || process.env.CONTEXT_AGENT_RRSI_WORKER === "1") return;
     const local = activity(sqlite);
     const remote = original !== null ? activity(original) : { busy: 0, latest: null };
@@ -606,7 +605,6 @@ const make = Effect.gen(function* () {
   );
   yield* Effect.addFinalizer(() =>
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     Effect.promise(async () => {
       disposed = true;
       controller?.abort("app_shutdown");

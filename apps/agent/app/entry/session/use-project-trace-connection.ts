@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../../truthy.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useEffectEvent, useState } from "react";
@@ -6,13 +7,13 @@ import { projectQueries } from "../queries/project";
 import type { TraceConnection } from "./work-trace";
 
 /** Keep the project trace query current while the live panel is visible. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function useProjectTraceConnection(
-  projectId: string,
-  sessionId: string | null,
-  live: boolean,
-) {
+export const useProjectTraceConnection: {
+  (
+    sessionId: string | null,
+    live: boolean,
+  ): (projectId: string) => ReturnType<typeof useProjectTraceConnectionBody>;
+} & typeof useProjectTraceConnectionBody = EffectFunction.dual(3, useProjectTraceConnectionBody);
+function useProjectTraceConnectionBody(projectId: string, sessionId: string | null, live: boolean) {
   const client = useQueryClient();
   const [connection, setConnection] = useState<TraceConnection>("connecting");
   const refresh = useEffectEvent(() =>

@@ -1,3 +1,4 @@
+import { it as effectTest } from "@effect/vitest";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off newPromise:off
 import { DatabaseSync } from "node:sqlite";
@@ -333,53 +334,59 @@ describe("account-bound subscription provider", () => {
     }
   });
 
-  test("OpenAI model cache and context window cannot leak across selected profiles", async () => {
-    const db = dbFixture();
-    const requests: string[] = [];
-    try {
-      const bound = createAccountBoundSubscriptionClients(db, "openai", (id) => ({
-        status: async () => ({ provider: "openai", connected: true, expiresAt: null }),
-        modelCatalog: async () => {
-          requests.push(id!);
-          return [
-            {
-              models: [
-                {
-                  slug: id === ids[0] ? "model-a" : "model-b",
-                  context_window: id === ids[0] ? 100_000 : 200_000,
-                },
-              ],
-            },
-          ];
-        },
-        async *stream() {},
-        refreshForValidation: async () => ({
-          provider: "openai",
-          connected: true,
-          expiresAt: null,
-        }),
-        disconnect: async () => ({ provider: "openai", connected: false, expiresAt: null }),
-        startLogin: async () => {
-          throw new Error("unexpected login");
-        },
-      }));
-      const provider = createSubscriptionProvider({
-        protocol: providerProtocols.openai,
-        config: { read: Effect.succeed({}), update: (patch) => Effect.succeed(patch) },
-        client: bound.client,
-        catalogKey: bound.catalogKey,
-      });
-      expect((await Effect.runPromise(provider.models.list)).map((m) => m.id)).toEqual(["model-a"]);
-      expect(provider.contextWindow("model-a")).toBe(100_000);
-      select(db, ids[1]);
-      expect(provider.contextWindow("model-a")).toBeNull();
-      expect((await Effect.runPromise(provider.models.list)).map((m) => m.id)).toEqual(["model-b"]);
-      expect(provider.contextWindow("model-b")).toBe(200_000);
-      expect(requests).toEqual([ids[0], ids[1]]);
-    } finally {
-      db.close();
-    }
-  });
+  effectTest.effect(
+    "OpenAI model cache and context window cannot leak across selected profiles",
+    () =>
+      Effect.gen(function* () {
+        const db = dbFixture();
+        const requests: string[] = [];
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            db.close();
+          }),
+        );
+
+        const bound = createAccountBoundSubscriptionClients(db, "openai", (id) => ({
+          status: async () => ({ provider: "openai", connected: true, expiresAt: null }),
+          modelCatalog: async () => {
+            requests.push(id!);
+            return [
+              {
+                models: [
+                  {
+                    slug: id === ids[0] ? "model-a" : "model-b",
+                    context_window: id === ids[0] ? 100_000 : 200_000,
+                  },
+                ],
+              },
+            ];
+          },
+          async *stream() {},
+          refreshForValidation: async () => ({
+            provider: "openai",
+            connected: true,
+            expiresAt: null,
+          }),
+          disconnect: async () => ({ provider: "openai", connected: false, expiresAt: null }),
+          startLogin: async () => {
+            throw new Error("unexpected login");
+          },
+        }));
+        const provider = createSubscriptionProvider({
+          protocol: providerProtocols.openai,
+          config: { read: Effect.succeed({}), update: (patch) => Effect.succeed(patch) },
+          client: bound.client,
+          catalogKey: bound.catalogKey,
+        });
+        expect((yield* provider.models.list).map((m) => m.id)).toEqual(["model-a"]);
+        expect(provider.contextWindow("model-a")).toBe(100_000);
+        select(db, ids[1]);
+        expect(provider.contextWindow("model-a")).toBeNull();
+        expect((yield* provider.models.list).map((m) => m.id)).toEqual(["model-b"]);
+        expect(provider.contextWindow("model-b")).toBe(200_000);
+        expect(requests).toEqual([ids[0], ids[1]]);
+      }),
+  );
 
   test("an active run blocks only its own profile deletion until released, even after A/B switch", async () => {
     const db = dbFixture();

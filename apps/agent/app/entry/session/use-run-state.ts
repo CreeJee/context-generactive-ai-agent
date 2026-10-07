@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../../truthy.ts";
 import { useState } from "react";
 import { ApiError, type WorkflowAction, type WorkflowPhase } from "../api";
@@ -7,14 +8,14 @@ import { useRunStateQuery } from "../queries/session";
 import { useCancelRunMutation, useWorkflowMutation } from "../queries/mutations/session";
 
 /** The authoritative durable run/workflow snapshot, refreshed by session SSE invalidations. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function useRunState(
-  sessionId: string,
-  holder: string,
-  generating: boolean,
-  page: PageView,
-) {
+export const useRunState: {
+  (
+    holder: string,
+    generating: boolean,
+    page: PageView,
+  ): (sessionId: string) => ReturnType<typeof useRunStateBody>;
+} & typeof useRunStateBody = EffectFunction.dual(4, useRunStateBody);
+function useRunStateBody(sessionId: string, holder: string, generating: boolean, page: PageView) {
   const { projectId } = useSessionEventScope();
   if (!isTruthy(projectId)) throw new Error("Run state requires an active project");
   const cancelMutation = useCancelRunMutation(projectId, sessionId, holder);
@@ -24,7 +25,6 @@ export function useRunState(
   const [cancelPending, setCancelPending] = useState(false);
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const refresh = async () => {
     const result = await query.refetch();
     if (result.data?.running === null) setCancelPending(false);
@@ -34,7 +34,6 @@ export function useRunState(
 
   /** The server may have running children even when this page has no streaming parent. */
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const cancel = async () => {
     try {
       const result = await cancelMutation.mutateAsync();

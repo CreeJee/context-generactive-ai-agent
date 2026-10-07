@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import { appQueryKeys } from "./keys";
@@ -37,31 +38,44 @@ export const sessionQueries = {
     }),
 };
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export const useRunStateQuery = (projectId: string, sessionId: string, holder: string) =>
+const useRunStateQueryBody = (projectId: string, sessionId: string, holder: string) =>
   useQuery(sessionQueries.runState(projectId, sessionId, holder));
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export const useQueueQuery = (projectId: string, sessionId: string) =>
+export const useRunStateQuery: {
+  (
+    sessionId: string,
+    holder: string,
+  ): (projectId: string) => ReturnType<typeof useRunStateQueryBody>;
+} & typeof useRunStateQueryBody = EffectFunction.dual(3, useRunStateQueryBody);
+const useQueueQueryBody = (projectId: string, sessionId: string) =>
   useQuery(sessionQueries.queue(projectId, sessionId));
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export const useSubagentsQuery = (projectId: string, sessionId: string) =>
+export const useQueueQuery: {
+  (sessionId: string): (projectId: string) => ReturnType<typeof useQueueQueryBody>;
+} & typeof useQueueQueryBody = EffectFunction.dual(2, useQueueQueryBody);
+const useSubagentsQueryBody = (projectId: string, sessionId: string) =>
   useQuery(sessionQueries.subagents(projectId, sessionId));
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export const useApprovalsQuery = (projectId: string, sessionId: string) =>
+export const useSubagentsQuery: {
+  (sessionId: string): (projectId: string) => ReturnType<typeof useSubagentsQueryBody>;
+} & typeof useSubagentsQueryBody = EffectFunction.dual(2, useSubagentsQueryBody);
+const useApprovalsQueryBody = (projectId: string, sessionId: string) =>
   useQuery(sessionQueries.approvals(projectId, sessionId));
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export const useObservedRunStateQuery = (
+export const useApprovalsQuery: {
+  (sessionId: string): (projectId: string) => ReturnType<typeof useApprovalsQueryBody>;
+} & typeof useApprovalsQueryBody = EffectFunction.dual(2, useApprovalsQueryBody);
+const useObservedRunStateQueryBody = (
   projectId: string,
   sessionId: string,
   holder: string,
   enabled: boolean,
 ) => useQuery({ ...sessionQueries.runState(projectId, sessionId, holder), enabled });
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export const useSessionTraceQuery = (projectId: string, sessionId: string) =>
+export const useObservedRunStateQuery: {
+  (
+    sessionId: string,
+    holder: string,
+    enabled: boolean,
+  ): (projectId: string) => ReturnType<typeof useObservedRunStateQueryBody>;
+} & typeof useObservedRunStateQueryBody = EffectFunction.dual(4, useObservedRunStateQueryBody);
+const useSessionTraceQueryBody = (projectId: string, sessionId: string) =>
   useQuery(sessionQueries.trace(projectId, sessionId));
+export const useSessionTraceQuery: {
+  (sessionId: string): (projectId: string) => ReturnType<typeof useSessionTraceQueryBody>;
+} & typeof useSessionTraceQueryBody = EffectFunction.dual(2, useSessionTraceQueryBody);

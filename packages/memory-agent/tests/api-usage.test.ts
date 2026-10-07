@@ -1,15 +1,21 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off
-import assert from "node:assert/strict";
-import { test } from "vite-plus/test";
-import { Effect, Layer } from "effect";
+import { it as effectTest } from "@effect/vitest";
+import {
+  deepStrictEqual,
+  strictEqual,
+  assertTrue,
+  assertInstanceOf,
+  throws,
+} from "@effect/vitest/utils";
+import { Context, Effect, Layer } from "effect";
 import { ApiUsage } from "../src/agent/api-usage.ts";
 import { Database } from "../src/db/database.ts";
 
-test("OpenAI-compatible usage includes cache reads and preserves missing counters", async () => {
-  await Effect.runPromise(
+effectTest.effect(
+  "OpenAI-compatible usage includes cache reads and preserves missing counters",
+  () =>
     Effect.gen(function* () {
-      const usage = yield* ApiUsage;
+      const services = yield* Layer.build(layer);
+      const usage = Context.get(services, ApiUsage);
       usage.record({
         rootSessionId: "compatible",
         purpose: "main",
@@ -20,7 +26,7 @@ test("OpenAI-compatible usage includes cache reads and preserves missing counter
         cacheReadTokens: 60,
         cacheWriteTokens: 0,
       });
-      assert.deepEqual(usage.byRootSession("compatible"), {
+      deepStrictEqual(usage.byRootSession("compatible"), {
         responses: 1,
         inputTokens: 100,
         outputTokens: 20,
@@ -29,7 +35,7 @@ test("OpenAI-compatible usage includes cache reads and preserves missing counter
         uncachedInputTokens: 40,
         totalInputTokens: 100,
       });
-      assert.throws(
+      throws(
         () =>
           usage.record({
             rootSessionId: "compatible",
@@ -39,7 +45,10 @@ test("OpenAI-compatible usage includes cache reads and preserves missing counter
             inputTokens: 1,
             cacheReadTokens: 2,
           }),
-        RangeError,
+        (error) => {
+          assertInstanceOf(error, RangeError);
+          return undefined;
+        },
       );
       usage.record({
         rootSessionId: "compatible",
@@ -49,7 +58,7 @@ test("OpenAI-compatible usage includes cache reads and preserves missing counter
         inputTokens: 10,
         outputTokens: 2,
       });
-      assert.deepEqual(usage.byRootSession("compatible"), {
+      deepStrictEqual(usage.byRootSession("compatible"), {
         responses: 2,
         inputTokens: 110,
         outputTokens: 22,
@@ -58,63 +67,59 @@ test("OpenAI-compatible usage includes cache reads and preserves missing counter
         uncachedInputTokens: null,
         totalInputTokens: null,
       });
-      // Test entry point owns this Layer and its resource scope.
-      // @effect-diagnostics-next-line strictEffectProvide:off
-    }).pipe(Effect.provide(layer)),
-  );
-});
+    }),
+);
 
 const database = Database.layer(":memory:");
 const layer = Layer.provideMerge(ApiUsage.layer, database);
 
-test("records individual provider responses and sums cache exactly once", async () => {
-  await Effect.runPromise(
-    Effect.gen(function* () {
-      const usage = yield* ApiUsage;
-      const first = usage.record({
-        rootSessionId: "root",
-        runId: "run",
-        threadId: "thread",
-        purpose: "main",
-        provider: "openai",
-        model: "gpt",
-        inputTokens: 100,
-        cacheReadTokens: 60,
-        cacheWriteTokens: 0,
-        outputTokens: 20,
-      });
-      const second = usage.record({
-        rootSessionId: "root",
-        purpose: "summary",
-        provider: "anthropic",
-        model: "claude",
-        inputTokens: 10,
-        cacheReadTokens: 30,
-        cacheWriteTokens: 5,
-        outputTokens: 8,
-      });
-      assert.notEqual(first, second);
-      assert.deepEqual(usage.byRootSession("root"), {
-        responses: 2,
-        inputTokens: 110,
-        outputTokens: 28,
-        cacheReadTokens: 90,
-        cacheWriteTokens: 5,
-        uncachedInputTokens: 50,
-        totalInputTokens: 145,
-      });
-      assert.equal(usage.byRootSession("other").responses, 0);
-      // Test entry point owns this Layer and its resource scope.
-      // @effect-diagnostics-next-line strictEffectProvide:off
-    }).pipe(Effect.provide(layer)),
-  );
-});
+effectTest.effect("records individual provider responses and sums cache exactly once", () =>
+  Effect.gen(function* () {
+    const services = yield* Layer.build(layer);
+    const usage = Context.get(services, ApiUsage);
+    const first = usage.record({
+      rootSessionId: "root",
+      runId: "run",
+      threadId: "thread",
+      purpose: "main",
+      provider: "openai",
+      model: "gpt",
+      inputTokens: 100,
+      cacheReadTokens: 60,
+      cacheWriteTokens: 0,
+      outputTokens: 20,
+    });
+    const second = usage.record({
+      rootSessionId: "root",
+      purpose: "summary",
+      provider: "anthropic",
+      model: "claude",
+      inputTokens: 10,
+      cacheReadTokens: 30,
+      cacheWriteTokens: 5,
+      outputTokens: 8,
+    });
+    assertTrue(first !== second);
+    deepStrictEqual(usage.byRootSession("root"), {
+      responses: 2,
+      inputTokens: 110,
+      outputTokens: 28,
+      cacheReadTokens: 90,
+      cacheWriteTokens: 5,
+      uncachedInputTokens: 50,
+      totalInputTokens: 145,
+    });
+    strictEqual(usage.byRootSession("other").responses, 0);
+  }),
+);
 
-test("unknown counters remain unknown rather than becoming zero; only counts are stored", async () => {
-  await Effect.runPromise(
+effectTest.effect(
+  "unknown counters remain unknown rather than becoming zero; only counts are stored",
+  () =>
     Effect.gen(function* () {
-      const usage = yield* ApiUsage;
-      const { sqlite } = yield* Database;
+      const services = yield* Layer.build(layer);
+      const usage = Context.get(services, ApiUsage);
+      const { sqlite } = Context.get(services, Database);
       usage.record({
         rootSessionId: "root",
         purpose: "tool",
@@ -131,7 +136,7 @@ test("unknown counters remain unknown rather than becoming zero; only counts are
         provider: "anthropic",
         model: "claude",
       });
-      assert.deepEqual(usage.byRootSession("root"), {
+      deepStrictEqual(usage.byRootSession("root"), {
         responses: 2,
         inputTokens: null,
         outputTokens: null,
@@ -141,8 +146,8 @@ test("unknown counters remain unknown rather than becoming zero; only counts are
         totalInputTokens: null,
       });
       const columns = sqlite.prepare("SELECT * FROM api_usage_responses ORDER BY id").all();
-      assert.equal(columns.length, 2);
-      assert.deepEqual(
+      strictEqual(columns.length, 2);
+      deepStrictEqual(
         Object.keys(columns[0]).sort(),
         [
           "id",
@@ -160,8 +165,8 @@ test("unknown counters remain unknown rather than becoming zero; only counts are
           "created_at",
         ].sort(),
       );
-      assert.equal(columns[1]?.input_tokens, null);
-      assert.throws(
+      strictEqual(columns[1]?.input_tokens, null);
+      throws(
         () =>
           usage.record({
             rootSessionId: "root",
@@ -171,11 +176,11 @@ test("unknown counters remain unknown rather than becoming zero; only counts are
             inputTokens: 1,
             cacheReadTokens: 2,
           }),
-        RangeError,
+        (error) => {
+          assertInstanceOf(error, RangeError);
+          return undefined;
+        },
       );
-      assert.equal(usage.byRootSession("root").responses, 2);
-      // Test entry point owns this Layer and its resource scope.
-      // @effect-diagnostics-next-line strictEffectProvide:off
-    }).pipe(Effect.provide(layer)),
-  );
-});
+      strictEqual(usage.byRootSession("root").responses, 2);
+    }),
+);

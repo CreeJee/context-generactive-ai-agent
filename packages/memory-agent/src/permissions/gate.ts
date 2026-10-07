@@ -71,7 +71,6 @@ export const makePermissionGateMiddleware = Effect.fnUntraced(function* (
     name: "memory-agent/permission-gate",
 
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async onInterruptBoundary(ctx) {
       if (ctx.phase !== "beforeTools") return undefined;
       const asks = [];

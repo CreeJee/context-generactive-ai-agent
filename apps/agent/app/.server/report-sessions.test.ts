@@ -1,5 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, test } from "vite-plus/test";
+import { describe, expect, it } from "@effect/vitest";
+import { NodeCrypto } from "@effect/platform-node";
+import { Context, Crypto, Effect, Layer } from "effect";
 import { openReportSession } from "./report-sessions";
 
 function fixture() {
@@ -20,38 +22,52 @@ function fixture() {
 }
 
 describe("dedicated report session", () => {
-  test("binds source on server and reuses the same separate session on repeat opens", () => {
-    const db = fixture();
-    try {
-      const first = openReportSession(db, "p1", "s1");
-      expect(first?.reportSessionId).toBeTruthy();
-      expect(first?.reportSessionId).not.toBe("s1");
-      expect(openReportSession(db, "p1", "s1")).toEqual(first);
-      expect(
-        db
-          .prepare(
-            "SELECT report_session_id AS reportSessionId, source_session_id AS sourceSessionId, project_id AS projectId FROM report_sessions",
-          )
-          .get(),
-      ).toEqual(first);
-      expect(first).toMatchObject({ sourceSessionId: "s1", projectId: "p1" });
-      expect(db.prepare("SELECT count(*) AS n FROM report_sessions").get()?.n).toBe(1);
-      expect(db.prepare("SELECT count(*) AS n FROM chat_runs").get()?.n).toBe(0);
-    } finally {
-      db.close();
-    }
-  });
+  it.effect("binds source on server and reuses the same separate session on repeat opens", () =>
+    Effect.gen(function* () {
+      const db = yield* Effect.acquireRelease(Effect.sync(fixture), (db) =>
+        Effect.sync(() => db.close()),
+      );
+      const crypto = Context.get(yield* Layer.build(NodeCrypto.layer), Crypto.Crypto);
+      const open = (projectId: string, sourceSessionId: string) =>
+        openReportSession(db, projectId, sourceSessionId).pipe(
+          Effect.provideService(Crypto.Crypto, crypto),
+        );
+      {
+        const first = yield* open("p1", "s1");
+        expect(first?.reportSessionId).toBeTruthy();
+        expect(first?.reportSessionId).not.toBe("s1");
+        expect(yield* open("p1", "s1")).toEqual(first);
+        expect(
+          db
+            .prepare(
+              "SELECT report_session_id AS reportSessionId, source_session_id AS sourceSessionId, project_id AS projectId FROM report_sessions",
+            )
+            .get(),
+        ).toEqual(first);
+        expect(first).toMatchObject({ sourceSessionId: "s1", projectId: "p1" });
+        expect(db.prepare("SELECT count(*) AS n FROM report_sessions").get()?.n).toBe(1);
+        expect(db.prepare("SELECT count(*) AS n FROM chat_runs").get()?.n).toBe(0);
+      }
+    }),
+  );
 
-  test("rejects cross-project, missing, and nested sources without creating a session", () => {
-    const db = fixture();
-    try {
-      expect(openReportSession(db, "p2", "s1")).toBeNull();
-      expect(openReportSession(db, "p1", "missing")).toBeNull();
-      const first = openReportSession(db, "p1", "s1");
-      expect(openReportSession(db, "p1", first?.reportSessionId ?? "")).toBeNull();
-      expect(db.prepare("SELECT count(*) AS n FROM report_sessions").get()?.n).toBe(1);
-    } finally {
-      db.close();
-    }
-  });
+  it.effect("rejects cross-project, missing, and nested sources without creating a session", () =>
+    Effect.gen(function* () {
+      const db = yield* Effect.acquireRelease(Effect.sync(fixture), (db) =>
+        Effect.sync(() => db.close()),
+      );
+      const crypto = Context.get(yield* Layer.build(NodeCrypto.layer), Crypto.Crypto);
+      const open = (projectId: string, sourceSessionId: string) =>
+        openReportSession(db, projectId, sourceSessionId).pipe(
+          Effect.provideService(Crypto.Crypto, crypto),
+        );
+      {
+        expect(yield* open("p2", "s1")).toBeNull();
+        expect(yield* open("p1", "missing")).toBeNull();
+        const first = yield* open("p1", "s1");
+        expect(yield* open("p1", first?.reportSessionId ?? "")).toBeNull();
+        expect(db.prepare("SELECT count(*) AS n FROM report_sessions").get()?.n).toBe(1);
+      }
+    }),
+  );
 });

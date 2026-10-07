@@ -9,7 +9,6 @@ import type { Route } from "./+types/attachments.$attachment";
  * conversation evidence, not public assets.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function loader({ request, params }: Route.LoaderArgs) {
   const site = request.headers.get("Sec-Fetch-Site");
   if (site === "cross-site") return Response.json({ error: "cross_site_request" }, { status: 403 });
@@ -17,7 +16,6 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   const found = await agent.runPromise(
     Effect.flatMap(Attachments, (attachments) =>
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      // @effect-diagnostics-next-line asyncFunction:off
       Effect.promise(async () => {
         const attachment = attachments.get(params.attachment);
         return isTruthy(attachment)

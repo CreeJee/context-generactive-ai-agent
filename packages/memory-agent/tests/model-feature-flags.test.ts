@@ -1,3 +1,4 @@
+import { it as effectTest } from "@effect/vitest";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off
 import { Effect, Result } from "effect";
@@ -63,29 +64,36 @@ describe("ModelFeatureFlags service", () => {
     return { service, settings: () => settings };
   }
 
-  it("persists versioned global/provider/capability/model/route scopes", async () => {
-    const { service, settings } = fixture();
-    await Effect.runPromise(service.set({ type: "global" }, true));
-    await Effect.runPromise(service.set({ type: "provider", provider: "openai" }, true));
-    await Effect.runPromise(service.set({ type: "capability", capability }, true));
-    await Effect.runPromise(
-      service.set({ type: "model", provider: "openai", model: "gpt-test", capability }, true),
-    );
-    await Effect.runPromise(service.set({ type: "route", route: "chat:openai:gpt-test" }, true));
-    expect(settings().modelFeatureFlags).toMatchObject({ version: 1, global: true });
-    expect((await Effect.runPromise(service.decide(query))).allowed).toBe(true);
-  });
+  effectTest.effect("persists versioned global/provider/capability/model/route scopes", () =>
+    Effect.gen(function* () {
+      const { service, settings } = fixture();
+      yield* service.set({ type: "global" }, true);
+      yield* service.set({ type: "provider", provider: "openai" }, true);
+      yield* service.set({ type: "capability", capability }, true);
+      yield* service.set(
+        { type: "model", provider: "openai", model: "gpt-test", capability },
+        true,
+      );
+      yield* service.set({ type: "route", route: "chat:openai:gpt-test" }, true);
+      expect(settings().modelFeatureFlags).toMatchObject({ version: 1, global: true });
+      expect((yield* service.decide(query)).allowed).toBe(true);
+    }),
+  );
 
-  it("returns typed failures for unknown capabilities and storage defects", async () => {
-    const unknown = await Effect.runPromise(
-      Effect.result(fixture().service.decide({ ...query, capability: "unknown" })),
-    );
-    expect(Result.isFailure(unknown) && unknown.failure._tag).toBe("UnknownModelFeatureCapability");
-    const failed = makeModelFeatureFlags(
-      { read: Effect.die("broken"), update: () => Effect.die("broken") },
-      [capability],
-    );
-    const result = await Effect.runPromise(Effect.result(failed.read));
-    expect(Result.isFailure(result) && result.failure._tag).toBe("ModelFeatureFlagStoreFailed");
-  });
+  effectTest.effect("returns typed failures for unknown capabilities and storage defects", () =>
+    Effect.gen(function* () {
+      const unknown = yield* Effect.result(
+        fixture().service.decide({ ...query, capability: "unknown" }),
+      );
+      expect(Result.isFailure(unknown) && unknown.failure._tag).toBe(
+        "UnknownModelFeatureCapability",
+      );
+      const failed = makeModelFeatureFlags(
+        { read: Effect.die("broken"), update: () => Effect.die("broken") },
+        [capability],
+      );
+      const result = yield* Effect.result(failed.read);
+      expect(Result.isFailure(result) && result.failure._tag).toBe("ModelFeatureFlagStoreFailed");
+    }),
+  );
 });

@@ -1,7 +1,9 @@
+import { Function as EffectFunction } from "effect";
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
-export async function copyReportText(
+export const copyReportText: {
+  (write: (text: string) => Promise<void>): (text: string) => ReturnType<typeof copyReportTextBody>;
+} & typeof copyReportTextBody = EffectFunction.dual(2, copyReportTextBody);
+async function copyReportTextBody(
   text: string,
   write: (text: string) => Promise<void>,
 ): Promise<boolean> {

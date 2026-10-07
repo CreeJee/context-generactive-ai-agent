@@ -397,8 +397,12 @@ test("tampered worker RPC name/args/ID/context is rejected before durable reserv
         });
       }).pipe(
         // Test entry point owns this Layer and its resource scope.
-        // @effect-diagnostics-next-line strictEffectProvide:off
-        Effect.provide(PermissionGate.layer.pipe(Layer.provideMerge(PermissionReviews.layer))),
+        Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+          const services = yield* Layer.build(
+            PermissionGate.layer.pipe(Layer.provideMerge(PermissionReviews.layer)),
+          );
+          return yield* Effect.provideContext(program, services);
+        }, Effect.scoped),
         Effect.provideService(PermissionClassifier, {
           classify: async () => {
             throw new Error("Existing review must be reused only for the observed call");

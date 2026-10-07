@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { useEffect, useRef, useState } from "react";
 import { api, attachmentErrorMessage, type Attachment } from "../api";
 
@@ -55,7 +56,6 @@ export function useDraftImages() {
     for (const file of files) {
       const base: DraftImageBase = {
         // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
-        // @effect-diagnostics-next-line cryptoRandomUUID:off
         key: crypto.randomUUID(),
         number: nextNumber.current++,
         previewUrl: URL.createObjectURL(file),
@@ -103,9 +103,10 @@ export function useDraftImages() {
  * The text as sent: draft numbers become positions among the images actually sent, so `#3`
  * written after removing `#2` still points at the right image.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function renumberReferences(text: string, sentNumbers: readonly number[]) {
+export const renumberReferences: {
+  (sentNumbers: readonly number[]): (text: string) => ReturnType<typeof renumberReferencesBody>;
+} & typeof renumberReferencesBody = EffectFunction.dual(2, renumberReferencesBody);
+function renumberReferencesBody(text: string, sentNumbers: readonly number[]) {
   return text.replace(/#(\d+)/g, (token, digits: string) => {
     const index = sentNumbers.indexOf(Number(digits));
     return index < 0 ? token : `#${index + 1}`;

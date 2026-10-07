@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off schemaSync:off
 import { performance } from "node:perf_hooks";
@@ -8,7 +9,10 @@ import { WorkTraceStore } from "../src/work-trace/store.ts";
 import { testRuntime } from "./support/runtime.ts";
 
 const QueryPlanRow = Schema.Struct({ detail: Schema.String });
-const decodeQueryPlanRow = Schema.decodeUnknownSync(QueryPlanRow);
+const decodeQueryPlanRow = EffectFunction.flow(
+  Schema.decodeUnknownResult(QueryPlanRow),
+  Result.getOrThrow,
+);
 const planDetails = (rows: readonly unknown[]) =>
   rows
     .map((row) => decodeQueryPlanRow(row))

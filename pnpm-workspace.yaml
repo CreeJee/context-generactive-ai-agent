@@ -64,6 +64,7 @@ catalog:
   "@vitest/browser-playwright": 5.0.1
   playwright: ^1.63.0
   vitest-browser-react: ^2.3.0
+  "@effect/platform-node": 4.0.0
 overrides:
   vite@*: "catalog:"
   vitest: 5.0.1

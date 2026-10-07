@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off schemaSync:off
 import { isTruthy } from "../src/truthy.ts";
@@ -29,7 +30,7 @@ const Queued = Schema.Struct({
     Schema.Struct({ kind: Schema.Literal("failed"), reason: Schema.String }),
   ]),
 });
-const decodeQueued = Schema.decodeUnknownSync(Queued);
+const decodeQueued = EffectFunction.flow(Schema.decodeUnknownResult(Queued), Result.getOrThrow);
 
 async function until(condition: () => boolean, what: string) {
   await expect.poll(condition, { message: what, timeout: 6_000, interval: 20 }).toBe(true);
@@ -79,13 +80,17 @@ async function setup(gateDelayedTurns = true) {
     return { status: response.status, body: await response.json() };
   };
   const list = async () =>
-    Schema.decodeUnknownSync(Schema.Struct({ items: Schema.Array(Queued) }))(
-      await (await run(agent.queued(context.session.id))).json(),
-    ).items;
+    EffectFunction.flow(
+      Schema.decodeUnknownResult(Schema.Struct({ items: Schema.Array(Queued) })),
+      Result.getOrThrow,
+    )(await (await run(agent.queued(context.session.id))).json()).items;
   const running = async () => {
     const status = await (await run(agent.status(context.session.id, null))).json();
-    return Schema.decodeUnknownSync(
-      Schema.Struct({ running: Schema.NullOr(Schema.Struct({ runId: Schema.String })) }),
+    return EffectFunction.flow(
+      Schema.decodeUnknownResult(
+        Schema.Struct({ running: Schema.NullOr(Schema.Struct({ runId: Schema.String })) }),
+      ),
+      Result.getOrThrow,
     )(status).running;
   };
   return { ...context, agent, run, enqueue, list, running, releaseDelayedTurn: gate.release };
@@ -194,19 +199,22 @@ describe("message queue", () => {
     const queue = await context.runtime.runPromise(MessageQueue);
     const sessionId = context.session.id;
     const read = async () =>
-      Schema.decodeUnknownSync(
-        Schema.Struct({
-          items: Schema.Array(Queued),
-          nextDelivery: Schema.Union([
-            Schema.Struct({ kind: Schema.Literal("ready") }),
-            Schema.Struct({
-              kind: Schema.Literal("blocked"),
-              messageId: Schema.String,
-              reason: Schema.Literals(["editing", "held"]),
-            }),
-            Schema.Struct({ kind: Schema.Literal("empty") }),
-          ]),
-        }),
+      EffectFunction.flow(
+        Schema.decodeUnknownResult(
+          Schema.Struct({
+            items: Schema.Array(Queued),
+            nextDelivery: Schema.Union([
+              Schema.Struct({ kind: Schema.Literal("ready") }),
+              Schema.Struct({
+                kind: Schema.Literal("blocked"),
+                messageId: Schema.String,
+                reason: Schema.Literals(["editing", "held"]),
+              }),
+              Schema.Struct({ kind: Schema.Literal("empty") }),
+            ]),
+          }),
+        ),
+        Result.getOrThrow,
       )(await (await context.run(context.agent.queued(sessionId))).json());
     expect(await read()).toMatchObject({ items: [], nextDelivery: { kind: "empty" } });
     const first = queue.add(sessionId, "first", []);

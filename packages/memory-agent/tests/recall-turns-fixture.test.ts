@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics nodeBuiltinImport:off schemaSync:off
 import { isTruthy } from "../src/truthy.ts";
@@ -38,9 +39,10 @@ const Fixture = Schema.Struct({
   cases: Schema.Array(Case),
 });
 
-const fixture = Schema.decodeSync(Schema.fromJsonString(Fixture))(
-  readFileSync(new URL("../eval/recall-turns.fixture.json", import.meta.url), "utf8"),
-);
+const fixture = EffectFunction.flow(
+  Schema.decodeResult(Schema.fromJsonString(Fixture)),
+  Result.getOrThrow,
+)(readFileSync(new URL("../eval/recall-turns.fixture.json", import.meta.url), "utf8"));
 const splits: Split[] = ["train", "validation", "holdout"];
 const prefix: Record<Split, string> = { train: "tr", validation: "va", holdout: "ho" };
 const handlings = [

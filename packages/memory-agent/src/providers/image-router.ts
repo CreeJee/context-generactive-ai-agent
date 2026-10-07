@@ -305,7 +305,6 @@ export interface ImageRouterApi {
 }
 
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function makeImageRouter(
   catalog: RouteCatalogApi,
   factsService: ImageRouteFactsApi,

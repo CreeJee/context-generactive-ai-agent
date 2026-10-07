@@ -10,7 +10,6 @@ import type { Route } from "./+types/sessions.$session.compact";
  * `run_in_progress` while the session is answering. Only the page holding the session may do it.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request, params }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected !== null) return rejected;

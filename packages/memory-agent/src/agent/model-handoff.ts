@@ -1,6 +1,6 @@
+import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash } from "node:crypto";
 import type { MetadataStore, ModelMessage } from "@tanstack/ai";
 import { Option, Predicate, Schema } from "effect";
@@ -20,9 +20,12 @@ function boundedLines(lines: readonly string[], limit: number): string {
   return kept.toReversed().join("\n\n");
 }
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function handoffEvidenceContext(
+export const handoffEvidenceContext: {
+  (
+    nodes: readonly Node[],
+  ): (blocks: readonly SummaryBlock[]) => ReturnType<typeof handoffEvidenceContextBody>;
+} & typeof handoffEvidenceContextBody = EffectFunction.dual(2, handoffEvidenceContextBody);
+function handoffEvidenceContextBody(
   blocks: readonly SummaryBlock[],
   nodes: readonly Node[],
 ): string {
@@ -86,9 +89,12 @@ const fingerprint = (message: ModelMessage | undefined) =>
     .digest("hex");
 
 /** A new model reads evidence context, never the old model's reasoning/tool protocol. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function handoffHistory(
+export const handoffHistory: {
+  (
+    state: Extract<HandoffState, { _tag: "handoff" }>,
+  ): (messages: readonly ModelMessage[]) => ReturnType<typeof handoffHistoryBody>;
+} & typeof handoffHistoryBody = EffectFunction.dual(2, handoffHistoryBody);
+function handoffHistoryBody(
   messages: readonly ModelMessage[],
   state: Extract<HandoffState, { _tag: "handoff" }>,
 ): readonly ModelMessage[] | null {
@@ -142,7 +148,6 @@ export function modelHandoffHistory(options: {
 }) {
   let prepared: Promise<HandoffState> | undefined;
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const prepare = async (): Promise<HandoffState> => {
     const saved = Option.getOrUndefined(
       decodeState(await options.metadata.get(modelHandoffNamespace, options.threadId)),
@@ -187,7 +192,6 @@ export function modelHandoffHistory(options: {
     return state;
   };
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   return async (messages: readonly ModelMessage[]) => {
     const state = await (prepared ??= prepare());
     switch (state._tag) {

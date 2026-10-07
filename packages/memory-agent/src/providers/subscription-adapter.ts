@@ -15,7 +15,6 @@ import {
   type StructuredOutputResult,
 } from "@tanstack/ai/adapters";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash, randomUUID } from "node:crypto";
 import { MutableHashMap, DateTime, Option, Schema } from "effect";
 import {
@@ -247,7 +246,6 @@ export function requestFingerprints(
 }
 
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function subscriptionRequest(
   provider: OAuthProvider,
   selection: ModelSelection,
@@ -306,7 +304,6 @@ const isPromptCacheRejection = (event: NormalizedStreamEvent) =>
   );
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 async function* providerEventsWithPromptCacheFallback(
   client: StreamingOAuthClient,
   provider: OAuthProvider,
@@ -355,7 +352,6 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
   }
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   async *chatStream(options: TextOptions<Record<string, never>>): AsyncIterable<AdapterYieldChunk> {
     const signal = options.abortController?.signal ?? options.request?.signal ?? undefined;
     const runId = options.runId ?? randomUUID();

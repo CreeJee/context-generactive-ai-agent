@@ -1,17 +1,14 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { HashMap, Option, DateTime, Clock, Semaphore } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash, randomUUID } from "node:crypto";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { mkdirSync } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import type { SQLOutputValue } from "node:sqlite";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { Context, Data, Effect, Layer, Schema } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
@@ -54,8 +51,10 @@ const AttachmentRow = Schema.Struct({
   created_at: Schema.String,
 });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeAttachmentRow = Schema.decodeUnknownSync(AttachmentRow);
+const decodeAttachmentRow = EffectFunction.flow(
+  Schema.decodeUnknownResult(AttachmentRow),
+  Result.getOrThrow,
+);
 
 function toAttachment(row: Record<string, SQLOutputValue>): Attachment {
   const decoded = decodeAttachmentRow(row);
@@ -147,7 +146,6 @@ const make = Effect.gen(function* () {
    * atomically publish the same content-addressed copy.
    */
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const encodeForModel = async (attachment: Attachment): Promise<ModelImage> => {
     const upload: ModelImage = { path: fileOf(attachment), mimeType: attachment.mimeType };
     if (attachment.mimeType === "image/gif") return upload;
@@ -161,7 +159,6 @@ const make = Effect.gen(function* () {
     try {
       const encoded = await Effect.tryPromise({
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         try: async () => {
           const sharp = requireRuntime("sharp");
           const attempts = [
@@ -228,7 +225,6 @@ const make = Effect.gen(function* () {
       const path = fileOf(attachment);
       yield* Effect.tryPromise({
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         try: async () => {
           const existing = await stat(path).catch(() => undefined);
           if (existing?.size === bytes.length) return;
@@ -300,7 +296,6 @@ const make = Effect.gen(function* () {
 
     /** `data:` URL of an image file, for replaying earlier turns to the model. */
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     dataUrl: async (image: ModelImage) =>
       `data:${image.mimeType};base64,${(await readFile(image.path)).toString("base64")}`,
 
@@ -315,7 +310,6 @@ const make = Effect.gen(function* () {
     /** Removes content-addressed blobs only after their last message reference is gone. */
     purgeOrphans: Effect.tryPromise({
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      // @effect-diagnostics-next-line asyncFunction:off
       try: async () => {
         const orphaned = sqlite
           .prepare(

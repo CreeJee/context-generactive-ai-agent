@@ -1,9 +1,7 @@
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { basename, join } from "node:path";
 import { readClaudeCodeLine } from "./claude-code.ts";
 import { codexReader } from "./codex.ts";

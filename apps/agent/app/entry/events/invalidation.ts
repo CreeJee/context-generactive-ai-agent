@@ -1,12 +1,16 @@
+import { Function as EffectFunction } from "effect";
 import type { AppChangedEvent } from "./contracts";
 import { invalidationKeys } from "./query-keys";
 
 export type QueryKey = readonly unknown[];
 
 /** SSE changes invalidate their query immediately; ready repairs missed events. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function createEventInvalidator(invalidate: (key: QueryKey) => void, root: QueryKey) {
+export const createEventInvalidator: {
+  (
+    root: QueryKey,
+  ): (invalidate: (key: QueryKey) => void) => ReturnType<typeof createEventInvalidatorBody>;
+} & typeof createEventInvalidatorBody = EffectFunction.dual(2, createEventInvalidatorBody);
+function createEventInvalidatorBody(invalidate: (key: QueryKey) => void, root: QueryKey) {
   let revision: number | null = null;
 
   return {

@@ -58,7 +58,6 @@ export function ChatApprovals({
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const discard = async () => {
     try {
       await trackDiscard(api.discardInterrupts(sessionId, holder));

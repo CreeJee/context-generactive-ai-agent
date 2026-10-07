@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { Schema } from "effect";
 import { AppChangedEvent, AppReadyEvent } from "./contracts";
 
@@ -19,14 +20,20 @@ export interface ConnectAppEventsOptions {
 }
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const changedDecode = Schema.decodeUnknownSync(AppChangedEvent);
+const changedDecode = EffectFunction.flow(
+  Schema.decodeUnknownResult(AppChangedEvent),
+  Result.getOrThrow,
+);
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const readyDecode = Schema.decodeUnknownSync(AppReadyEvent);
+const readyDecode = EffectFunction.flow(
+  Schema.decodeUnknownResult(AppReadyEvent),
+  Result.getOrThrow,
+);
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const textDecode = Schema.decodeUnknownSync(Schema.String);
+const textDecode = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.String),
+  Result.getOrThrow,
+);
 
 const payloadOf = (event: Event) => {
   if (!(event instanceof MessageEvent)) throw new Error("SSE payload is not a MessageEvent");

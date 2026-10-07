@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import type { Worker } from "node:worker_threads";
 import { Effect, Queue, Schema } from "effect";
 
@@ -28,8 +29,10 @@ export const acquireFullLoopWorkerEvents = Effect.fnUntraced(function* (
     if (terminal) return;
     try {
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      const frame = Schema.decodeUnknownSync(WorkerFrame)(input);
+      const frame = EffectFunction.flow(
+        Schema.decodeUnknownResult(WorkerFrame),
+        Result.getOrThrow,
+      )(input);
       if (frame.type !== "chunk") terminal = true;
       Queue.offerUnsafe(queue, frame);
     } catch {

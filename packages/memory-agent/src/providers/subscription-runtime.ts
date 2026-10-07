@@ -70,7 +70,6 @@ export function createSubscriptionRuntimeImplementation(provider: SubscriptionAc
         // Subscription APIs do not expose live-turn steering. The central transcript middleware
         // retains queued messages; do not create a per-Goal steering registry here.
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         steer: async () => "no_turn",
       };
     },
@@ -78,7 +77,6 @@ export function createSubscriptionRuntimeImplementation(provider: SubscriptionAc
 }
 
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function createSubscriptionRuntime(
   provider: SubscriptionAccountProvider,
   client: StreamingOAuthClient | (() => StreamingOAuthClient),

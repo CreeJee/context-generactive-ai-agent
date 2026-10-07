@@ -1,8 +1,7 @@
+import { Result, Function as EffectFunction } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash } from "node:crypto";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { MutableHashMap, Schema, Context, Effect, Layer } from "effect";
@@ -11,8 +10,10 @@ import { OwnerNativeFiles } from "./owner-native-files.ts";
 import { NativeRegistrationError } from "./owner-native-error.ts";
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const stringifyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const stringifyJson = EffectFunction.flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
 
 export const nativeDigest = (bytes: string | Buffer) =>
   createHash("sha256").update(bytes).digest("hex");
@@ -32,7 +33,6 @@ const buildNative = Effect.fn("OwnerNativeBuilder.build")(function* (
   // Vite and its transform callback are the only Promise interoperability boundary.
   const result = yield* Effect.tryPromise({
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     try: async (signal) => {
       const builderUrl = pathToFileURL(runtimeRequire().resolve("vite")).href;
       const { build }: typeof import("vite") = await import(/* @vite-ignore */ builderUrl);
@@ -44,7 +44,6 @@ const buildNative = Effect.fn("OwnerNativeBuilder.build")(function* (
           {
             name: "owner-native-provenance",
             // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-            // @effect-diagnostics-next-line asyncFunction:off
             async transform(_code, id) {
               if (id.startsWith("/") && !id.includes("?"))
                 MutableHashMap.set(

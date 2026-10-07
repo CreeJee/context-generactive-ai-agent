@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { DateTime, Clock, Semaphore } from "effect";
 import { homedir } from "node:os";
@@ -98,19 +99,25 @@ export class ImportWorkerFailed extends Data.TaggedError("ImportWorkerFailed")<{
 
 const decodeReply = Schema.decodeUnknownOption(ImportWorkerReply);
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeSourceTotals = Schema.decodeUnknownSync(
-  Schema.Struct({ migrated: Schema.Finite, nodes: Schema.Finite, failed: Schema.Finite }),
+const decodeSourceTotals = EffectFunction.flow(
+  Schema.decodeUnknownResult(
+    Schema.Struct({ migrated: Schema.Finite, nodes: Schema.Finite, failed: Schema.Finite }),
+  ),
+  Result.getOrThrow,
 );
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeFailure = Schema.decodeUnknownSync(
-  Schema.Struct({ source: ImportSourceName, path: Schema.String, reason: Schema.String }),
+const decodeFailure = EffectFunction.flow(
+  Schema.decodeUnknownResult(
+    Schema.Struct({ source: ImportSourceName, path: Schema.String, reason: Schema.String }),
+  ),
+  Result.getOrThrow,
 );
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeSkipped = Schema.decodeUnknownSync(
-  Schema.Struct({ cwd: Schema.String, reason: Schema.String, transcripts: Schema.Finite }),
+const decodeSkipped = EffectFunction.flow(
+  Schema.decodeUnknownResult(
+    Schema.Struct({ cwd: Schema.String, reason: Schema.String, transcripts: Schema.Finite }),
+  ),
+  Result.getOrThrow,
 );
 
 const progressOf = (reply: PassProgress): PassProgress => ({
@@ -232,7 +239,6 @@ const make = (watching: boolean, home: string) =>
 
     yield* Effect.addFinalizer(() =>
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      // @effect-diagnostics-next-line asyncFunction:off
       Effect.promise(async () => void (await stop("the importer stopped"))),
     );
 

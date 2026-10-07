@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { ANTHROPIC_MODELS } from "@tanstack/ai-anthropic";
 import { DateTime, Effect, Option, Schema } from "effect";
@@ -146,9 +147,12 @@ const anthropicEfforts = (model: string) => {
   return ["none"];
 };
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function parseSubscriptionCatalog(
+export const parseSubscriptionCatalog: {
+  (
+    pages: ReadonlyArray<unknown>,
+  ): (provider: SubscriptionAccountProvider) => ReturnType<typeof parseSubscriptionCatalogBody>;
+} & typeof parseSubscriptionCatalogBody = EffectFunction.dual(2, parseSubscriptionCatalogBody);
+function parseSubscriptionCatalogBody(
   provider: SubscriptionAccountProvider,
   pages: ReadonlyArray<unknown>,
 ): ReadonlyArray<ProviderModel> {
@@ -267,7 +271,6 @@ export function createSubscriptionProvider(
   } | null = null;
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const authState = async (): Promise<AuthConnectionState> => {
     if (pending !== null)
       return { provider, status: "pending", authorizationUrl: pending.authorizationUrl };
@@ -285,7 +288,6 @@ export function createSubscriptionProvider(
 
   const status = fromPromise(provider, "auth", authState);
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const connect = fromPromise(provider, "auth", async () => {
     const current = await authState();
     if (current.status === "signed-in" || current.status === "pending") return current;
@@ -315,7 +317,6 @@ export function createSubscriptionProvider(
     } satisfies AuthConnectionState;
   });
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const cancel = fromPromise(provider, "auth", async () => {
     const attempt = pending;
     pending = null;
@@ -324,7 +325,6 @@ export function createSubscriptionProvider(
     return authState();
   });
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const disconnect = fromPromise(provider, "auth", async () => {
     const attempt = pending;
     pending = null;
@@ -339,7 +339,6 @@ export function createSubscriptionProvider(
   });
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const load = async () => {
     const key = options.catalogKey?.() ?? "__default__";
     if (

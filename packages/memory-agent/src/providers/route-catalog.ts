@@ -318,7 +318,6 @@ const sourceFromServices = Effect.gen(function* () {
 });
 
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function makeRouteCatalog(
   source: RouteCatalogSource,
   now: () => number = Date.now,

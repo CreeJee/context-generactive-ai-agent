@@ -1,9 +1,7 @@
 import { isTruthy } from "../../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { existsSync, mkdirSync } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { dirname, join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { Context, Data, Deferred, HashMap, Ref, Effect, Layer, Option, Schema } from "effect";
@@ -54,7 +52,6 @@ const decodeReply = Schema.decodeUnknownOption(Reply);
 
 /** Downloads and extracts the model once, into `<storage>/models/kiwi-<version>`. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 async function ensureModel(storageRoot: string) {
   const root = join(storageRoot, "models", `kiwi-${kiwiModel.version}`);
   const modelDirectory = join(root, kiwiModel.directory);
@@ -95,7 +92,6 @@ const makeKiwi = Effect.gen(function* () {
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const start = async () => {
     const modelDirectory = await ensureModel(storage.path);
     const created = new Worker(runtimeWorker("kiwi-worker"), { workerData: { modelDirectory } });
@@ -180,7 +176,6 @@ const makeKiwi = Effect.gen(function* () {
   let closed = false;
   yield* Effect.addFinalizer(() =>
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     Effect.promise(async () => {
       closed = true;
       await stop();

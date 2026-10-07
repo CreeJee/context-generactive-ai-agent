@@ -17,8 +17,17 @@ const testLayer = () => {
 const run = <A, E>(
   effect: Effect.Effect<A, E, Database | Nodes | WorkTraceStore | KnowledgePromotions>,
   // Test entry point owns this Layer and its resource scope.
-  // @effect-diagnostics-next-line strictEffectProvide:off
-) => Effect.runPromise(Effect.scoped(effect.pipe(Effect.provide(testLayer()))));
+) =>
+  Effect.runPromise(
+    Effect.scoped(
+      effect.pipe(
+        Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+          const services = yield* Layer.build(testLayer());
+          return yield* Effect.provideContext(program, services);
+        }, Effect.scoped),
+      ),
+    ),
+  );
 
 const seed = (db: Database["Service"]) => {
   const iso = DateTime.formatIso(DateTime.makeUnsafe(0));

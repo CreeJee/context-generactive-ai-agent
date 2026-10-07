@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { DateTime, Schema } from "effect";
@@ -24,15 +25,16 @@ export function makeGoalWorkerGenerationStore(owner: {
     (goal_instance_id, source_generation, manifest_hash, worker_url, created_at)
     VALUES (?, ?, ?, ?, ?)`);
   // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  // @effect-diagnostics-next-line schemaSync:off
-  const decode = Schema.decodeUnknownSync(Schema.UndefinedOr(Pin));
+  const decode = EffectFunction.flow(
+    Schema.decodeUnknownResult(Schema.UndefinedOr(Pin)),
+    Result.getOrThrow,
+  );
   return {
     get: (goalInstanceId: string) => decode(read.get(goalInstanceId)),
     hasUnpinnedDispatch: (goalInstanceId: string) => Boolean(oldDispatch.get(goalInstanceId)),
     record(pin: GoalWorkerGenerationPin): GoalWorkerGenerationPin {
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      const expected = Schema.decodeSync(Pin)(pin);
+      const expected = EffectFunction.flow(Schema.decodeResult(Pin), Result.getOrThrow)(pin);
       return owner.atomic(() => {
         const existing = decode(read.get(expected.goalInstanceId));
         if (isTruthy(existing)) {

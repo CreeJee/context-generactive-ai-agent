@@ -293,7 +293,8 @@ function ChatPanel({
     persistence: true,
     // Enables TanStack's server-authoritative delta protocol: hydrated and completed message ids are
     // remembered, so the next turn sends only messages the server has not persisted already.
-    history: { pageSize: 50 },
+    // Keep first delivery bounded; earlier turns remain available via loadOlderMessages.
+    history: { pageSize: 20 },
     // The same definitions the server uses, so approval requests can be matched and answered:
     // tool approvals in `ask` mode, permission reviews in `auto` mode.
     tools: approvalToolDefinitions,
@@ -348,7 +349,6 @@ function ChatPanel({
     answered: endsWithText,
   });
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const changeWorkflowPhase = async (phase: WorkflowPhase) => {
     try {
       const state = await run.setWorkflowPhase(phase);
@@ -368,7 +368,6 @@ function ChatPanel({
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const revisePlan = async () => {
     if (run.workflow?.phase !== "plan" && !isTruthy(await changeWorkflowPhase("plan"))) return;
     composerInput.current?.focus();
@@ -376,7 +375,6 @@ function ChatPanel({
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const executePlan = async () => {
     const retryingFailedVerification =
       run.workflow?.plan?.status === "executing" &&
@@ -395,7 +393,6 @@ function ChatPanel({
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const controlGoal = async (action: "pause" | "resume" | "stop") => {
     try {
       await run.controlWorkflow(action);
@@ -432,7 +429,6 @@ function ChatPanel({
   });
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const cancel = async () => {
     // Stopping only the local stream would leave the run going on the server, so ask it first.
     const result = await run.cancel();
@@ -442,7 +438,6 @@ function ChatPanel({
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const resumeTask = async (task: TraceTaskView, confirmUncertain: boolean) => {
     if (!isTruthy(task.latestAttemptId)) return { status: "failed" as const };
     try {
@@ -473,7 +468,6 @@ function ChatPanel({
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const archiveTask = async (task: TraceTaskView) => {
     try {
       const result = await archiveTraceMutation.mutateAsync(task.id);
@@ -492,7 +486,6 @@ function ChatPanel({
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const deleteTask = async (task: TraceTaskView) => {
     try {
       const result = await deleteTraceMutation.mutateAsync(task.id);
@@ -543,7 +536,6 @@ function ChatPanel({
   // a normal finish, send what is waiting as the next turn (R03). Not after a cancel or failure.
   const wasGenerating = useRef(generating);
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const handleRunSettled = useEffectEvent(async () => {
     setCatchingUp(true);
     try {
@@ -580,7 +572,6 @@ function ChatPanel({
   useEffect(() => {
     if (!(editing !== null)) return;
     // Native callback heartbeat/debounce timing remains at the protocol boundary.
-    // @effect-diagnostics-next-line globalTimers:off
     const timer = setTimeout(() => void saveEditDraft(editing.id, draft), editDraftSaveMs);
     return () => clearTimeout(timer);
   }, [draft, editing?.id]);
@@ -599,7 +590,6 @@ function ChatPanel({
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const finishEdit = async (outcome: "save" | "remove") => {
     if (!(editing !== null)) return;
     setComposer({ kind: "compose" });
@@ -613,14 +603,12 @@ function ChatPanel({
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const confirmQueued = async (message: QueuedMessage) => {
     const snapshot = await queue.change(message.id, { action: "confirm" });
     if (isTruthy(snapshot) && !generating && !waitingForApproval) sendNextQueued(snapshot);
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const removeQueued = async (message: QueuedMessage) => {
     if (editing?.id === message.id) return finishEdit("remove");
     await queue.change(message.id, { action: "remove" });
@@ -652,7 +640,6 @@ function ChatPanel({
    * next tool-call boundary, or with `steer` (Ctrl/⌘+Shift+Enter) sends it into the answer now.
    */
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const submit = async (mode: "queue" | "steer") => {
     if (editing !== null) {
       if (mode === "steer") setNotice(problem("편집을 끝낸 뒤 스티어링할 수 있어요."));

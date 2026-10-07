@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { MutableHashMap, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
 import {
@@ -40,9 +41,10 @@ export interface ParallelReads {
  * Only the read-only calls before the first other call are started early: a read that follows a
  * write in the same step still runs after that write.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function parallelReads(tools: readonly AnyServerTool[], signal: AbortSignal): ParallelReads {
+export const parallelReads: {
+  (signal: AbortSignal): (tools: readonly AnyServerTool[]) => ReturnType<typeof parallelReadsBody>;
+} & typeof parallelReadsBody = EffectFunction.dual(2, parallelReadsBody);
+function parallelReadsBody(tools: readonly AnyServerTool[], signal: AbortSignal): ParallelReads {
   const started = MutableHashMap.empty<string, Promise<unknown>>();
   const byName = MutableHashMap.fromIterable(tools.map((tool) => [tool.name, tool]));
   // SDK results stay until their ordered tool call consumes them, including already settled calls.
@@ -86,7 +88,6 @@ export function parallelReads(tools: readonly AnyServerTool[], signal: AbortSign
     return {
       ...tool,
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      // @effect-diagnostics-next-line asyncFunction:off
       execute: async (...call: Parameters<typeof execute>) => {
         const [args, context] = call;
         const early = isTruthy(context?.toolCallId)

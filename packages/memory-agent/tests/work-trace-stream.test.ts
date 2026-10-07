@@ -1,7 +1,6 @@
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off
-import { DateTime, Effect, Layer } from "effect";
-import { describe, expect, test } from "vite-plus/test";
+import { it } from "@effect/vitest";
+import { DateTime, Effect, Exit, Layer, Scope } from "effect";
+import { describe, expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
 import { WorkTraceStore } from "../src/work-trace/store.ts";
 
@@ -10,10 +9,12 @@ const testLayer = () => {
   return Layer.merge(database, WorkTraceStore.layer.pipe(Layer.provide(database)));
 };
 
-const run = <A>(effect: Effect.Effect<A, never, Database | WorkTraceStore>) =>
-  // Test entry point owns this Layer and its resource scope.
-  // @effect-diagnostics-next-line strictEffectProvide:off
-  Effect.runPromise(Effect.scoped(effect.pipe(Effect.provide(testLayer()))));
+const run = Effect.fnUntraced(function* <A>(
+  effect: Effect.Effect<A, never, Database | WorkTraceStore | Scope.Scope>,
+) {
+  const services = yield* Layer.build(testLayer());
+  return yield* Effect.provideContext(effect, services);
+});
 
 const seed = (db: Database["Service"]) => {
   const iso = DateTime.formatIso(DateTime.makeUnsafe(0));
@@ -35,8 +36,8 @@ const seed = (db: Database["Service"]) => {
 };
 
 describe("Work Trace durable stream source", () => {
-  test("replays visible events by durable cursor and redacts payloads", async () => {
-    await run(
+  it.live("replays visible events by durable cursor and redacts payloads", () =>
+    run(
       Effect.gen(function* () {
         const db = yield* Database;
         const trace = yield* WorkTraceStore;
@@ -111,11 +112,11 @@ describe("Work Trace durable stream source", () => {
           }),
         );
       }),
-    );
-  });
+    ),
+  );
 
-  test("wakes a live tail on an appended event and emits an idle heartbeat", async () => {
-    await run(
+  it.live("wakes a live tail on an appended event and emits an idle heartbeat", () =>
+    run(
       Effect.gen(function* () {
         const db = yield* Database;
         const trace = yield* WorkTraceStore;
@@ -131,10 +132,9 @@ describe("Work Trace durable stream source", () => {
           threadId: "subagent-agent-1",
         });
         const cursor = trace.latestCursor("s1");
-        // This test explicitly aborts a caller-owned signal at the Promise/SDK boundary.
-        // @effect-diagnostics-next-line abortControllerInEffect:off
-        const controller = new AbortController();
-        const waiting = trace.waitForChange("s1", cursor, controller.signal, 1_000);
+        const signalScope = yield* Scope.fork(yield* Scope.Scope, "sequential");
+        const signal = yield* Effect.provideService(Effect.abortSignal, Scope.Scope, signalScope);
+        const waiting = trace.waitForChange("s1", cursor, signal, 1_000);
         queueMicrotask(() =>
           trace.appendEvent({
             handle,
@@ -146,14 +146,14 @@ describe("Work Trace durable stream source", () => {
         expect(yield* Effect.promise(() => waiting)).toBe("event");
         const latest = trace.latestCursor("s1");
         expect(trace.events("s1", cursor)).toHaveLength(1);
-        expect(
-          yield* Effect.promise(() => trace.waitForChange("s1", latest, controller.signal, 5)),
-        ).toBe("heartbeat");
-        controller.abort();
-        expect(
-          yield* Effect.promise(() => trace.waitForChange("s1", latest, controller.signal, 5)),
-        ).toBe("aborted");
+        expect(yield* Effect.promise(() => trace.waitForChange("s1", latest, signal, 5))).toBe(
+          "heartbeat",
+        );
+        yield* Scope.close(signalScope, Exit.void);
+        expect(yield* Effect.promise(() => trace.waitForChange("s1", latest, signal, 5))).toBe(
+          "aborted",
+        );
       }),
-    );
-  });
+    ),
+  );
 });

@@ -1,6 +1,6 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import type { SQLOutputValue } from "node:sqlite";
 import { DateTime, Clock, Context, Data, Effect, Layer, Schema } from "effect";
@@ -32,11 +32,15 @@ const SessionRow = Schema.Struct({
   imported_from: Schema.NullOr(Schema.String),
 });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeFirstMessage = Schema.decodeUnknownSync(Schema.Struct({ text: Schema.String }));
+const decodeFirstMessage = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Struct({ text: Schema.String })),
+  Result.getOrThrow,
+);
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeSessionRow = Schema.decodeUnknownSync(SessionRow);
+const decodeSessionRow = EffectFunction.flow(
+  Schema.decodeUnknownResult(SessionRow),
+  Result.getOrThrow,
+);
 
 function toSession(row: Record<string, SQLOutputValue>): Session {
   const decoded = decodeSessionRow(row);

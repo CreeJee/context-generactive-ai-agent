@@ -34,7 +34,6 @@ export function KagiSettings() {
   const [error, setError] = useState<string | null>(null);
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const apply = async (
     command: { action: "register"; key: string } | { action: "remove" | "enable" | "disable" },
   ) => {

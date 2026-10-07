@@ -13,9 +13,10 @@
     "dev:rrsi": "node apps/agent/scripts/dev-rrsi.ts",
     "dev:agent": "pnpm --filter agent dev:agent",
     "dev:web": "pnpm --filter agent dev:web",
-    "prepare": "vp config && effect-tsgo patch --typescript"
+    "prepare": "vp config && effect-tsgo patch --typescript --oxlint"
   },
   "devDependencies": {
+    "@effect/platform-node": "catalog:",
     "@effect/tsgo": "catalog:",
     "@shadcn/lint": "catalog:",
     "@vitest/browser-playwright": "catalog:",

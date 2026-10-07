@@ -1,6 +1,6 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import type { SQLOutputValue } from "node:sqlite";
 import { MutableHashMap, Option, Clock, Context, Data, Effect, Layer, Schema } from "effect";
@@ -20,8 +20,7 @@ const Row = Schema.Struct({
   created_at: Schema.Finite,
 });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeRow = Schema.decodeUnknownSync(Row);
+const decodeRow = EffectFunction.flow(Schema.decodeUnknownResult(Row), Result.getOrThrow);
 
 function toMessage(raw: Record<string, SQLOutputValue>): QueuedMessage {
   const row = decodeRow(raw);

@@ -1,9 +1,8 @@
+import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { execFile } from "node:child_process";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { dirname } from "node:path";
 import { Schema } from "effect";
 import { findExecutable, helperEnvironment } from "../runtime/host.ts";
@@ -22,9 +21,14 @@ const isAscii = (text: string) => /^[\x20-\x7e]*$/.test(text);
  * (not a work tree, git missing, or a case-insensitive query with non-ASCII letters), so the caller
  * searches every file instead. Lines are matched afterwards by the caller; this only narrows files.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function gitGrepFiles(
+export const gitGrepFiles: {
+  (
+    directory: string,
+    query: string,
+    caseSensitive: boolean,
+  ): (root: string) => ReturnType<typeof gitGrepFilesBody>;
+} & typeof gitGrepFilesBody = EffectFunction.dual(4, gitGrepFilesBody);
+function gitGrepFilesBody(
   root: string,
   directory: string,
   query: string,
@@ -47,7 +51,6 @@ export function gitGrepFiles(
     directory,
   ];
   // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-  // @effect-diagnostics-next-line newPromise:off
   return new Promise((resolve) => {
     execFile(
       git,

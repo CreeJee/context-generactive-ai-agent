@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off schemaSync:off
 import { isTruthy } from "../src/truthy.ts";
@@ -117,7 +118,9 @@ describe("AgentChat.handle", () => {
     const answer = (await response.text())
       .split("\n")
       .flatMap((line) =>
-        line.startsWith("data: ") ? [Schema.decodeSync(Delta)(line.slice(6))] : [],
+        line.startsWith("data: ")
+          ? [EffectFunction.flow(Schema.decodeResult(Delta), Result.getOrThrow)(line.slice(6))]
+          : [],
       )
       .flatMap((event) =>
         event.type === "TEXT_MESSAGE_CONTENT" && isTruthy(event.delta) ? [event.delta] : [],
@@ -139,7 +142,10 @@ describe("AgentChat.handle", () => {
     // Indexing runs in the background after the run; wait for it to catch up.
     const db = await runtime.runPromise(Database);
     const unindexed = () =>
-      Schema.decodeUnknownSync(Count)(
+      EffectFunction.flow(
+        Schema.decodeUnknownResult(Count),
+        Result.getOrThrow,
+      )(
         db.sqlite
           .prepare(
             `SELECT count(*) AS count FROM nodes n LEFT JOIN node_vectors v ON v.node_seq = n.seq WHERE v.node_seq IS NULL AND length(n.text) > 0 AND ${embeddedKindFilter}`,

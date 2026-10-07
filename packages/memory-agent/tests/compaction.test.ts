@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
 import { isTruthy } from "../src/truthy.ts";
@@ -46,28 +47,34 @@ function canonical() {
   return { saved: () => latest, middleware };
 }
 
-const decodeCompact = Schema.decodeUnknownSync(
-  Schema.Struct({
-    cleared: Schema.Finite,
-    summarizedTurns: Schema.Finite,
-    summaryFailed: Schema.Boolean,
-    tokensBefore: Schema.Finite,
-    tokensAfter: Schema.Finite,
-  }),
-);
-const decodeStatus = Schema.decodeUnknownSync(
-  Schema.Struct({
-    context: Schema.Struct({
-      usedTokens: Schema.NullOr(Schema.Finite),
-      cachedTokens: Schema.NullOr(Schema.Finite),
-      cacheRatio: Schema.NullOr(Schema.Finite),
-      compactionStage: Schema.NullOr(
-        Schema.Literals(["none", "clear-answered", "summarize", "leave-out"]),
-      ),
-      windowTokens: Schema.Finite,
-      compactAtTokens: Schema.Finite,
+const decodeCompact = EffectFunction.flow(
+  Schema.decodeUnknownResult(
+    Schema.Struct({
+      cleared: Schema.Finite,
+      summarizedTurns: Schema.Finite,
+      summaryFailed: Schema.Boolean,
+      tokensBefore: Schema.Finite,
+      tokensAfter: Schema.Finite,
     }),
-  }),
+  ),
+  Result.getOrThrow,
+);
+const decodeStatus = EffectFunction.flow(
+  Schema.decodeUnknownResult(
+    Schema.Struct({
+      context: Schema.Struct({
+        usedTokens: Schema.NullOr(Schema.Finite),
+        cachedTokens: Schema.NullOr(Schema.Finite),
+        cacheRatio: Schema.NullOr(Schema.Finite),
+        compactionStage: Schema.NullOr(
+          Schema.Literals(["none", "clear-answered", "summarize", "leave-out"]),
+        ),
+        windowTokens: Schema.Finite,
+        compactAtTokens: Schema.Finite,
+      }),
+    }),
+  ),
+  Result.getOrThrow,
 );
 const StreamEvent = Schema.fromJsonString(
   Schema.Struct({
@@ -1053,7 +1060,14 @@ describe("compaction", () => {
       return (await response.text())
         .split("\n")
         .flatMap((line) =>
-          line.startsWith("data: ") ? [Schema.decodeSync(StreamEvent)(line.slice(6))] : [],
+          line.startsWith("data: ")
+            ? [
+                EffectFunction.flow(
+                  Schema.decodeResult(StreamEvent),
+                  Result.getOrThrow,
+                )(line.slice(6)),
+              ]
+            : [],
         );
     };
 

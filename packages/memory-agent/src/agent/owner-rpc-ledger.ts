@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { Schema } from "effect";
@@ -67,8 +68,10 @@ export function makeSqliteOwnerRpcLedger({
     WHERE run_id = ? AND operation_id = ? AND run_key = ? AND status = 'pending'`);
   const identify = (runKey: string) => {
     // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    // @effect-diagnostics-next-line schemaSync:off
-    const b = Schema.decodeSync(Schema.fromJsonString(Binding))(runKey);
+    const b = EffectFunction.flow(
+      Schema.decodeResult(Schema.fromJsonString(Binding)),
+      Result.getOrThrow,
+    )(runKey);
     if (
       !isTruthy(
         bound.get(
@@ -97,22 +100,26 @@ export function makeSqliteOwnerRpcLedger({
       return atomic(() => {
         const { runId, sessionId, goalInstanceId } = identify(runKey);
         // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        // @effect-diagnostics-next-line schemaSync:off
-        const row = Schema.decodeUnknownSync(Row)(existing.get(runId, operationId, runKey));
+        const row = EffectFunction.flow(
+          Schema.decodeUnknownResult(Row),
+          Result.getOrThrow,
+        )(existing.get(runId, operationId, runKey));
         if (isTruthy(row))
           return {
             type: "existing",
             record: {
               fingerprint: row.fingerprint,
               // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-              // @effect-diagnostics-next-line schemaSync:off
-              reply: Schema.decodeSync(Schema.fromJsonString(Reply))(row.reply_json),
+              reply: EffectFunction.flow(
+                Schema.decodeResult(Schema.fromJsonString(Reply)),
+                Result.getOrThrow,
+              )(row.reply_json),
             },
           };
         // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        // @effect-diagnostics-next-line schemaSync:off
-        const water = Schema.decodeUnknownSync(
-          Schema.Struct({ high_water: Schema.NullOr(Schema.Finite) }),
+        const water = EffectFunction.flow(
+          Schema.decodeUnknownResult(Schema.Struct({ high_water: Schema.NullOr(Schema.Finite) })),
+          Result.getOrThrow,
         )(highWater.get(runId));
         if (operationId <= (water.high_water ?? 0))
           return { type: "rejected", reason: "non_monotonic" };
@@ -132,8 +139,7 @@ export function makeSqliteOwnerRpcLedger({
     settle(runKey, operationId, reply) {
       requireStandalone();
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      const validated = Schema.decodeSync(Reply)(reply);
+      const validated = EffectFunction.flow(Schema.decodeResult(Reply), Result.getOrThrow)(reply);
       if (validated.operationId !== operationId) throw new Error("Owner RPC reply ID mismatch");
       atomic(() => {
         const { runId } = identify(runKey);

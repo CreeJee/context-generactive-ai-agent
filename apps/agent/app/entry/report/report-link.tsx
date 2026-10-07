@@ -1,9 +1,11 @@
+import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../../truthy.ts";
 import { FlagIcon } from "lucide-react";
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function reportHref(projectId: string | null, sessionId: string | null): string {
+export const reportHref: {
+  (sessionId: string | null): (projectId: string | null) => ReturnType<typeof reportHrefBody>;
+} & typeof reportHrefBody = EffectFunction.dual(2, reportHrefBody);
+function reportHrefBody(projectId: string | null, sessionId: string | null): string {
   if (!isTruthy(projectId)) return "/report";
   const query = new URLSearchParams({ project: projectId });
   if (isTruthy(sessionId)) query.set("session", sessionId);

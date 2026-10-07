@@ -1,6 +1,6 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { DateTime, Context, Effect, Layer, Schema } from "effect";
@@ -18,11 +18,15 @@ import {
 
 const Row = Schema.Struct({ payload: Schema.String });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeVersion = Schema.decodeUnknownSync(Schema.fromJsonString(Version));
+const decodeVersion = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.fromJsonString(Version)),
+  Result.getOrThrow,
+);
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeExperiment = Schema.decodeUnknownSync(Schema.fromJsonString(Experiment));
+const decodeExperiment = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.fromJsonString(Experiment)),
+  Result.getOrThrow,
+);
 export const profileHash = (profile: HarnessProfile) =>
   createHash("sha256").update(JSON.stringify(profile)).digest("hex");
 export function makeHarnessStore(db: { sqlite: DatabaseSync; atomic: <A>(work: () => A) => A }) {
@@ -33,8 +37,9 @@ export function makeHarnessStore(db: { sqlite: DatabaseSync; atomic: <A>(work: (
   const pin = sqlite.prepare("SELECT version_id FROM rrsi_goal_pins WHERE goal_id=?");
   const get = (id: string): HarnessVersion => {
     // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    // @effect-diagnostics-next-line schemaSync:off
-    const version = decodeVersion(Schema.decodeUnknownSync(Row)(read.get(id)).payload);
+    const version = decodeVersion(
+      EffectFunction.flow(Schema.decodeUnknownResult(Row), Result.getOrThrow)(read.get(id)).payload,
+    );
     if (version.artifactHash !== profileHash(version.profile))
       throw new Error("harness_integrity_failed");
     return version;
@@ -66,8 +71,9 @@ export function makeHarnessStore(db: { sqlite: DatabaseSync; atomic: <A>(work: (
       .all();
     for (const row of interrupted) {
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      const prior = decodeExperiment(Schema.decodeUnknownSync(Row)(row).payload);
+      const prior = decodeExperiment(
+        EffectFunction.flow(Schema.decodeUnknownResult(Row), Result.getOrThrow)(row).payload,
+      );
       sqlite.prepare("UPDATE rrsi_experiments SET payload=? WHERE id=?").run(
         JSON.stringify({
           ...prior,
@@ -81,18 +87,23 @@ export function makeHarnessStore(db: { sqlite: DatabaseSync; atomic: <A>(work: (
   });
   const settings = () =>
     // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    // @effect-diagnostics-next-line schemaSync:off
-    Schema.decodeSync(Schema.fromJsonString(Settings))(
+    EffectFunction.flow(
+      Schema.decodeResult(Schema.fromJsonString(Settings)),
+      Result.getOrThrow,
+    )(
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      Schema.decodeUnknownSync(Schema.Struct({ settings: Schema.String }))(state.get()).settings,
+      EffectFunction.flow(
+        Schema.decodeUnknownResult(Schema.Struct({ settings: Schema.String })),
+        Result.getOrThrow,
+      )(state.get()).settings,
     );
   const current = () =>
     get(
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      Schema.decodeUnknownSync(Schema.Struct({ version_id: Schema.String }))(state.get())
-        .version_id,
+      EffectFunction.flow(
+        Schema.decodeUnknownResult(Schema.Struct({ version_id: Schema.String })),
+        Result.getOrThrow,
+      )(state.get()).version_id,
     );
   return {
     get,
@@ -103,24 +114,33 @@ export function makeHarnessStore(db: { sqlite: DatabaseSync; atomic: <A>(work: (
         .prepare("SELECT payload FROM rrsi_versions ORDER BY rowid DESC")
         .all()
         // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        // @effect-diagnostics-next-line schemaSync:off
-        .map((row) => get(decodeVersion(Schema.decodeUnknownSync(Row)(row).payload).id)),
+        .map((row) =>
+          get(
+            decodeVersion(
+              EffectFunction.flow(Schema.decodeUnknownResult(Row), Result.getOrThrow)(row).payload,
+            ).id,
+          ),
+        ),
     configure: (input: typeof Settings.Type) =>
       sqlite
         .prepare("UPDATE rrsi_state SET settings=? WHERE id=1")
         // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        // @effect-diagnostics-next-line schemaSync:off
-        .run(JSON.stringify(Schema.decodeSync(Settings)(input))),
+        .run(
+          JSON.stringify(
+            EffectFunction.flow(Schema.decodeResult(Settings), Result.getOrThrow)(input),
+          ),
+        ),
     forGoal: (goalId: string | null) =>
       atomic(() => {
         if (!isTruthy(goalId))
           // Native host/SDK configuration boundary reads or forwards the host environment.
-          // @effect-diagnostics-next-line processEnv:off
           return process.env.CONTEXT_AGENT_RRSI_WORKER === "1" ? current() : get("baseline");
         // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        // @effect-diagnostics-next-line schemaSync:off
-        const saved = Schema.decodeUnknownSync(
-          Schema.UndefinedOr(Schema.Struct({ version_id: Schema.String })),
+        const saved = EffectFunction.flow(
+          Schema.decodeUnknownResult(
+            Schema.UndefinedOr(Schema.Struct({ version_id: Schema.String })),
+          ),
+          Result.getOrThrow,
         )(pin.get(goalId));
         if (isTruthy(saved)) return get(saved.version_id);
         // Old Goals retain baseline semantics even if their first run with this build is a resume.
@@ -151,8 +171,10 @@ export function makeHarnessStore(db: { sqlite: DatabaseSync; atomic: <A>(work: (
       }),
     saveExperiment: (record: ExperimentRecord) => {
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      const parsed = Schema.decodeSync(Experiment)(record);
+      const parsed = EffectFunction.flow(
+        Schema.decodeResult(Experiment),
+        Result.getOrThrow,
+      )(record);
       sqlite
         .prepare(
           "INSERT INTO rrsi_experiments VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
@@ -164,8 +186,11 @@ export function makeHarnessStore(db: { sqlite: DatabaseSync; atomic: <A>(work: (
         .prepare("SELECT payload FROM rrsi_experiments ORDER BY rowid DESC LIMIT 30")
         .all()
         // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        // @effect-diagnostics-next-line schemaSync:off
-        .map((row) => decodeExperiment(Schema.decodeUnknownSync(Row)(row).payload)),
+        .map((row) =>
+          decodeExperiment(
+            EffectFunction.flow(Schema.decodeUnknownResult(Row), Result.getOrThrow)(row).payload,
+          ),
+        ),
   };
 }
 export class HarnessStore extends Context.Service<

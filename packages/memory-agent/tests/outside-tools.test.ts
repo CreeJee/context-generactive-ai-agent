@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -34,10 +35,11 @@ function layout() {
 async function outsideTools(project: string, storage: string) {
   const service = await Effect.runPromise(
     // Test entry point owns this Layer and its resource scope.
-    // @effect-diagnostics-next-line strictEffectProvide:off
-    Effect.provide(
-      OutsideTools,
-      OutsideTools.layer.pipe(Layer.provide(StorageRoot.layer(storage))),
+    Effect.scoped(
+      Effect.flatMap(
+        Layer.build(OutsideTools.layer.pipe(Layer.provide(StorageRoot.layer(storage)))),
+        (services) => Effect.provideContext(OutsideTools, services),
+      ),
     ),
   );
   const [listOutside, readOutside, searchOutside] = service.forProject({
@@ -93,9 +95,10 @@ describe("outside tools", () => {
       nextStartLine: 2,
     });
 
-    const inDirectory = Schema.decodeUnknownSync(Matches)(
-      await run(searchOutside, { path: docs, query: "deploy", caseSensitive: false }),
-    );
+    const inDirectory = EffectFunction.flow(
+      Schema.decodeUnknownResult(Matches),
+      Result.getOrThrow,
+    )(await run(searchOutside, { path: docs, query: "deploy", caseSensitive: false }));
     expect(inDirectory.matches).toEqual([
       { path: join(docs, "guide", "intro.md"), line: 2, text: "Deploy with care." },
       { path: join(docs, "notes.txt"), line: 1, text: "deploy on friday" },

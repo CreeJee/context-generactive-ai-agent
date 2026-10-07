@@ -1,9 +1,8 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { Option, Schema } from "effect";
@@ -37,7 +36,6 @@ const Frame = Schema.Union([
 ]);
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function evaluateSandbox(
   client: ModelGateway,
   profile: HarnessProfile,
@@ -99,13 +97,14 @@ export async function evaluateSandbox(
     if (!line.startsWith("RRSI:")) return;
     requests = requests
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      // @effect-diagnostics-next-line asyncFunction:off
       .then(async () => {
         let frame: typeof Frame.Type;
         try {
           // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-          // @effect-diagnostics-next-line schemaSync:off
-          frame = Schema.decodeSync(Schema.fromJsonString(Frame))(line.slice(5));
+          frame = EffectFunction.flow(
+            Schema.decodeResult(Schema.fromJsonString(Frame)),
+            Result.getOrThrow,
+          )(line.slice(5));
         } catch {
           throw EvaluationFailed.make({ reason: "protocol_invalid" });
         }
@@ -189,7 +188,6 @@ export async function evaluateSandbox(
   child.stderr.resume();
   try {
     // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-    // @effect-diagnostics-next-line newPromise:off
     const code = await new Promise<number | null>((resolve, reject) => {
       child.once("error", reject);
       child.once("close", resolve);
@@ -216,7 +214,9 @@ const Usage = Schema.Struct({
 });
 export function reportedTokens(raw: string): number | null {
   // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  // @effect-diagnostics-next-line schemaSync:off
-  const page = Schema.decodeSync(Schema.fromJsonString(Usage))(raw);
+  const page = EffectFunction.flow(
+    Schema.decodeResult(Schema.fromJsonString(Usage)),
+    Result.getOrThrow,
+  )(raw);
   return isTruthy(page.usage) ? page.usage.prompt_tokens + page.usage.completion_tokens : null;
 }

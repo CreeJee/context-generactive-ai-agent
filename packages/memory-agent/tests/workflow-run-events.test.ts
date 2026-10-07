@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off schemaSync:off
 import { Effect, Schema } from "effect";
@@ -26,7 +27,10 @@ test("the owner journals bound output with idempotent keys and replays it after 
       status: "active",
     }),
   );
-  const latest = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.Finite }))(
+  const latest = EffectFunction.flow(
+    Schema.decodeUnknownResult(Schema.Struct({ id: Schema.Finite })),
+    Result.getOrThrow,
+  )(
     db.sqlite
       .prepare(
         "SELECT id FROM workflow_state_revisions WHERE session_id = ? ORDER BY id DESC LIMIT 1",

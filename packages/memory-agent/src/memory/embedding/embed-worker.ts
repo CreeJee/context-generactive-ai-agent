@@ -16,7 +16,6 @@ const { AutoModel, AutoTokenizer, env }: typeof import("@huggingface/transformer
 const { cacheDir, modelId, modelFileName, maxTokens, devices } = workerData;
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 async function load() {
   env.cacheDir = cacheDir;
   env.allowLocalModels = false;
@@ -58,7 +57,6 @@ const tokenCount = ({ tokenizer }: LoadedModel, text: string) =>
 
 /** The batch's sentence vectors, one row per text, not yet normalized. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 async function embed({ tokenizer, model }: LoadedModel, texts: string[]) {
   const inputs = tokenizer(texts, { padding: true, truncation: true, max_length: maxTokens });
   const { last_hidden_state: hidden } = await model(inputs);
@@ -75,7 +73,6 @@ async function embed({ tokenizer, model }: LoadedModel, texts: string[]) {
 parent.on(
   "message",
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   async ({ id, kind, texts }: { id: number; kind: "count" | "embed"; texts: string[] }) => {
     const state = await ready;
     if (state.kind === "failed")

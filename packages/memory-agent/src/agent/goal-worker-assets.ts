@@ -1,6 +1,6 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
@@ -15,11 +15,9 @@ import {
   symlinkSync,
   writeFileSync,
   // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-  // @effect-diagnostics-next-line nodeBuiltinImport:off
 } from "node:fs";
 import { tmpdir } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { MutableHashMap, Option, Schema } from "effect";
@@ -127,8 +125,10 @@ export function makeGoalWorkerAssetsRegistry(
     if (digest(bytes) !== saved.manifestHash)
       throw new Error("Goal snapshot manifest hash mismatch");
     // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    // @effect-diagnostics-next-line schemaSync:off
-    const manifest = Schema.decodeUnknownSync(snapshotManifest)(JSON.parse(bytes.toString("utf8")));
+    const manifest = EffectFunction.flow(
+      Schema.decodeUnknownResult(snapshotManifest),
+      Result.getOrThrow,
+    )(JSON.parse(bytes.toString("utf8")));
     if (
       manifest.goalInstanceId !== saved.goalInstanceId ||
       manifest.sourceGeneration !== saved.sourceGeneration ||
@@ -204,8 +204,10 @@ export function makeGoalWorkerAssetsRegistry(
       }
       walk(directory);
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      const metadata = Schema.decodeUnknownSync(packageMetadata)(
+      const metadata = EffectFunction.flow(
+        Schema.decodeUnknownResult(packageMetadata),
+        Result.getOrThrow,
+      )(
         JSON.parse(
           Option.getOrUndefined(
             MutableHashMap.get(files, join(directory, "package.json")),

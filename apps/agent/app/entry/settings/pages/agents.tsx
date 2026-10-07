@@ -85,7 +85,6 @@ function AgentSettingsContent({ project }: { project: Project }) {
 
   const header = <PageHeader title="외부 에이전트" project={project} description={description} />;
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const apply = async (change: Parameters<typeof mutation.mutateAsync>[0]) => {
     setError(null);
     try {

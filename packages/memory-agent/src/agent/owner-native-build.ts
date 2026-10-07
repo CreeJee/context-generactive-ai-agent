@@ -1,5 +1,4 @@
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { dirname, join } from "node:path";
 import { Context, Layer } from "effect";
 import { runtimeRequire } from "../runtime/resources.ts";

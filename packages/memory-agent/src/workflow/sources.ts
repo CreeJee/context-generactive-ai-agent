@@ -1,11 +1,9 @@
+import { Result, Function as EffectFunction } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash } from "node:crypto";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { Schema, Struct } from "effect";
 import type { Project } from "../projects/projects.ts";
@@ -22,8 +20,10 @@ const ProjectRuleFile = Schema.Struct({
   rules: Schema.Array(WorkflowRule.mapFields(Struct.omit(["source"]))),
 });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeProjectRules = Schema.decodeUnknownSync(Schema.fromJsonString(ProjectRuleFile));
+const decodeProjectRules = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.fromJsonString(ProjectRuleFile)),
+  Result.getOrThrow,
+);
 
 export interface RuleSourceProblem {
   readonly source: string;
@@ -49,9 +49,10 @@ const sourceName = (origin: StructuredRuleOrigin) =>
   origin.kind === "project" ? origin.path : `${origin.serverId}/${origin.name}`;
 
 /** Decode the structured rule resource format shared by project files and selected MCP content. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function structuredWorkflowRules(
+export const structuredWorkflowRules: {
+  (origin: StructuredRuleOrigin): (text: string) => ReturnType<typeof structuredWorkflowRulesBody>;
+} & typeof structuredWorkflowRulesBody = EffectFunction.dual(2, structuredWorkflowRulesBody);
+function structuredWorkflowRulesBody(
   text: string,
   origin: StructuredRuleOrigin,
 ): LoadedRuleSources {
@@ -131,9 +132,10 @@ export function skillWorkflowRules(skills: readonly Skill[]): readonly WorkflowR
  * TODO(organization-workflows): let admins opt into trusted MCP resources/prompts as centrally
  * managed recommended guidance. Keep discovery, trust review and source status out of the MVP.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function localWorkflowRules(project: Project, skills: readonly Skill[]): LoadedRuleSources {
+export const localWorkflowRules: {
+  (skills: readonly Skill[]): (project: Project) => ReturnType<typeof localWorkflowRulesBody>;
+} & typeof localWorkflowRulesBody = EffectFunction.dual(2, localWorkflowRulesBody);
+function localWorkflowRulesBody(project: Project, skills: readonly Skill[]): LoadedRuleSources {
   const projectRules = projectWorkflowRules(project);
   return {
     rules: [...projectRules.rules, ...skillWorkflowRules(skills)],

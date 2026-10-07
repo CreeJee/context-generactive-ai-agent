@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off globalTimers:off newPromise:off nodeBuiltinImport:off processEnv:off schemaSync:off
 import { isTruthy } from "../../src/truthy.ts";
@@ -132,7 +133,10 @@ const server = createServer(async (incoming, outgoing) => {
 });
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 const address = server.address();
-const { port } = Schema.decodeUnknownSync(Schema.Struct({ port: Schema.Int }))(address);
+const { port } = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Struct({ port: Schema.Int })),
+  Result.getOrThrow,
+)(address);
 process.send?.({ type: "ready", port, sessionId, pid: process.pid });
 let stopping = false;
 async function stop() {

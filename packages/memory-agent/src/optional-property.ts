@@ -1,7 +1,11 @@
+import { Function as EffectFunction } from "effect";
 /** Include a property only when its value is present, preserving exact optional types. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function optionalProperty<K extends string, V>(
+export const optionalProperty: {
+  <K extends string, V>(
+    value: V | undefined,
+  ): (key: K) => ReturnType<typeof optionalPropertyBody<K, V>>;
+} & typeof optionalPropertyBody = EffectFunction.dual(2, optionalPropertyBody);
+function optionalPropertyBody<K extends string, V>(
   key: K,
   value: V | undefined,
 ): Partial<Record<K, V>> {

@@ -14,7 +14,6 @@ const EmbeddingAction = Schema.Union([
  * machine's memory, whether WebGPU works, and how many nodes wait to be embedded.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function loader() {
   return agent.runPromise(
     Effect.flatMap(EmbeddingSetup, (setup) => setup.overview).pipe(
@@ -29,7 +28,6 @@ export async function loader() {
  * - `check`: checks WebGPU again, in the background.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected !== null) return rejected;

@@ -1,3 +1,5 @@
+import { Layer } from "effect";
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
 import { execFileSync } from "node:child_process";
@@ -36,8 +38,13 @@ function project(files: MutableHashMap.MutableHashMap<string, string | Buffer>) 
 
 async function fileTools(root: string) {
   // Test entry point owns this Layer and its resource scope.
-  // @effect-diagnostics-next-line strictEffectProvide:off
-  const service = await Effect.runPromise(Effect.provide(FileTools, FileTools.layer));
+  const service = await Effect.runPromise(
+    Effect.scoped(
+      Effect.flatMap(Layer.build(FileTools.layer), (services) =>
+        Effect.provideContext(FileTools, services),
+      ),
+    ),
+  );
   const [listFiles, searchFiles, readFile, writeFile, editFile, deleteFile] = service.forProject({
     id: "p1",
     root,
@@ -115,12 +122,16 @@ describe("list_files", () => {
     const { root } = project(files);
     const { listFiles } = await fileTools(root);
 
-    const first = Schema.decodeUnknownSync(ListPage)(await run(listFiles, {}));
+    const first = EffectFunction.flow(
+      Schema.decodeUnknownResult(ListPage),
+      Result.getOrThrow,
+    )(await run(listFiles, {}));
     expect(first).toMatchObject({ nextOffset: 500 });
     writeFileSync(join(root, "notes", "000-new.md"), "added between pages\n");
-    const second = Schema.decodeUnknownSync(ListPage)(
-      await run(listFiles, { snapshot: first.snapshot, offset: 500 }),
-    );
+    const second = EffectFunction.flow(
+      Schema.decodeUnknownResult(ListPage),
+      Result.getOrThrow,
+    )(await run(listFiles, { snapshot: first.snapshot, offset: 500 }));
     expect(second.paths).toHaveLength(10);
     expect(second.nextOffset).toBeNull();
   });
@@ -157,15 +168,17 @@ describe("search_files", () => {
       complete: true,
     });
 
-    const first = Schema.decodeUnknownSync(SearchPage)(
-      await run(searchFiles, { query: "todo", caseSensitive: false }),
-    );
+    const first = EffectFunction.flow(
+      Schema.decodeUnknownResult(SearchPage),
+      Result.getOrThrow,
+    )(await run(searchFiles, { query: "todo", caseSensitive: false }));
     expect(first.matches).toHaveLength(100);
     const cursor = first.nextCursor ?? "";
     expect(cursor).not.toBe("");
-    const second = Schema.decodeUnknownSync(SearchPage)(
-      await run(searchFiles, { query: "todo", caseSensitive: false, cursor }),
-    );
+    const second = EffectFunction.flow(
+      Schema.decodeUnknownResult(SearchPage),
+      Result.getOrThrow,
+    )(await run(searchFiles, { query: "todo", caseSensitive: false, cursor }));
     expect(second.matches).toHaveLength(52);
     expect(second.nextCursor).toBeNull();
     expect(await failure(run(searchFiles, { query: "other", cursor }))).toBe("invalid_cursor");
@@ -223,14 +236,17 @@ describe("read, write, edit and delete", () => {
   test("paging a file reuses the read only while the file is unchanged", async () => {
     const { root } = project(MutableHashMap.fromIterable([["log.txt", "a\nb\nc\n"]]));
     const { readFile } = await fileTools(root);
-    const first = Schema.decodeUnknownSync(WithSha)(
-      await run(readFile, { path: "log.txt", maxLines: 1 }),
-    );
+    const first = EffectFunction.flow(
+      Schema.decodeUnknownResult(WithSha),
+      Result.getOrThrow,
+    )(await run(readFile, { path: "log.txt", maxLines: 1 }));
     // Same size, different content: the second page must see the new file.
     writeFileSync(join(root, "log.txt"), "x\ny\nz\n");
     const second = await run(readFile, { path: "log.txt", startLine: 2, maxLines: 1 });
     expect(second).toMatchObject({ content: "y\n" });
-    expect(Schema.decodeUnknownSync(WithSha)(second).sha256).not.toBe(first.sha256);
+    expect(
+      EffectFunction.flow(Schema.decodeUnknownResult(WithSha), Result.getOrThrow)(second).sha256,
+    ).not.toBe(first.sha256);
   });
 
   test("reads line pages exactly, including CRLF, with a sha256", async () => {
@@ -253,7 +269,10 @@ describe("read, write, edit and delete", () => {
     const { readFile, writeFile, deleteFile } = await fileTools(root);
     const plan = join(root, "docs", "plan.md");
     const shaOf = async () =>
-      Schema.decodeUnknownSync(WithSha)(await run(readFile, { path: "docs/plan.md" })).sha256;
+      EffectFunction.flow(
+        Schema.decodeUnknownResult(WithSha),
+        Result.getOrThrow,
+      )(await run(readFile, { path: "docs/plan.md" })).sha256;
 
     const created = await run(writeFile, { path: "docs/plan.md", content: "v1\n" });
     expect(created).toMatchObject({ created: true, bytes: 3 });

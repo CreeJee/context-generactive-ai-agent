@@ -1,6 +1,6 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import { optionalProperty } from "../optional-property.ts";
 import { MutableHashMap, DateTime, Clock, Context, Effect, Layer, Option, Schema } from "effect";
@@ -251,105 +251,156 @@ const StoredEventRow = Schema.Struct({
   occurred_at: Schema.Finite,
 });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeAttempt = Schema.decodeUnknownSync(AttemptRow);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeRecoveryRows = Schema.decodeUnknownSync(Schema.Array(RecoveryRow));
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeRecoveryAssessment = Schema.decodeUnknownSync(RecoveryAssessment);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeRecoveryJobRows = Schema.decodeUnknownSync(Schema.Array(RecoveryJobRow));
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeNotificationTask = Schema.decodeUnknownSync(NotificationTaskRow);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeParentNotificationRows = Schema.decodeUnknownSync(Schema.Array(ParentNotificationRow));
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeSequence = Schema.decodeUnknownSync(SequenceRow);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeCursor = Schema.decodeUnknownSync(CursorRow);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeId = Schema.decodeUnknownSync(IdRow);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeTaskId = Schema.decodeUnknownSync(TaskIdRow);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeAttemptId = Schema.decodeUnknownSync(AttemptIdRow);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeAttemptNumber = Schema.decodeUnknownSync(AttemptNumberRow);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeLifecycleOperation = Schema.decodeUnknownSync(LifecycleOperationRow);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeLifecycleTask = Schema.decodeUnknownSync(LifecycleTaskRow);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeTaskViewRows = Schema.decodeUnknownSync(Schema.Array(TaskViewRow));
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeAttemptViewRows = Schema.decodeUnknownSync(Schema.Array(AttemptViewRow));
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeCheckpointViewRows = Schema.decodeUnknownSync(Schema.Array(CheckpointViewRow));
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeStoredEventRows = Schema.decodeUnknownSync(Schema.Array(StoredEventRow));
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeResumeTask = Schema.decodeUnknownSync(ResumeTaskRow);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeCheckpoint = Schema.decodeUnknownSync(CheckpointRow);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeEvidenceRows = Schema.decodeUnknownSync(Schema.Array(EvidenceRow));
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeEvidenceRow = Schema.decodeUnknownSync(EvidenceRow);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeArtifactRows = Schema.decodeUnknownSync(Schema.Array(ArtifactRow));
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeArtifactRow = Schema.decodeUnknownSync(ArtifactRow);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeReportAdoptionRows = Schema.decodeUnknownSync(Schema.Array(ReportAdoptionRow));
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeFinalAnswerClaimRows = Schema.decodeUnknownSync(Schema.Array(FinalAnswerClaimRow));
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeFinalAnswerSourceRows = Schema.decodeUnknownSync(Schema.Array(FinalAnswerSourceRow));
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeFinalAnswerNotificationRows = Schema.decodeUnknownSync(
-  Schema.Array(FinalAnswerNotificationRow),
+const decodeAttempt = EffectFunction.flow(
+  Schema.decodeUnknownResult(AttemptRow),
+  Result.getOrThrow,
 );
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeEvidenceLocator = Schema.decodeUnknownSync(Schema.fromJsonString(EvidenceLocator));
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeArtifactLocator = Schema.decodeUnknownSync(Schema.fromJsonString(ArtifactLocator));
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeStringArray = Schema.decodeUnknownSync(
-  Schema.fromJsonString(Schema.Array(Schema.String)),
+const decodeRecoveryRows = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Array(RecoveryRow)),
+  Result.getOrThrow,
 );
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodePayload = Schema.decodeUnknownSync(Schema.fromJsonString(JsonValue));
+const decodeRecoveryAssessment = EffectFunction.flow(
+  Schema.decodeUnknownResult(RecoveryAssessment),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeRecoveryJobRows = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Array(RecoveryJobRow)),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeNotificationTask = EffectFunction.flow(
+  Schema.decodeUnknownResult(NotificationTaskRow),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeParentNotificationRows = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Array(ParentNotificationRow)),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeSequence = EffectFunction.flow(
+  Schema.decodeUnknownResult(SequenceRow),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeCursor = EffectFunction.flow(Schema.decodeUnknownResult(CursorRow), Result.getOrThrow);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeId = EffectFunction.flow(Schema.decodeUnknownResult(IdRow), Result.getOrThrow);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeTaskId = EffectFunction.flow(Schema.decodeUnknownResult(TaskIdRow), Result.getOrThrow);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeAttemptId = EffectFunction.flow(
+  Schema.decodeUnknownResult(AttemptIdRow),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeAttemptNumber = EffectFunction.flow(
+  Schema.decodeUnknownResult(AttemptNumberRow),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeLifecycleOperation = EffectFunction.flow(
+  Schema.decodeUnknownResult(LifecycleOperationRow),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeLifecycleTask = EffectFunction.flow(
+  Schema.decodeUnknownResult(LifecycleTaskRow),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeTaskViewRows = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Array(TaskViewRow)),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeAttemptViewRows = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Array(AttemptViewRow)),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeCheckpointViewRows = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Array(CheckpointViewRow)),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeStoredEventRows = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Array(StoredEventRow)),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeResumeTask = EffectFunction.flow(
+  Schema.decodeUnknownResult(ResumeTaskRow),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeCheckpoint = EffectFunction.flow(
+  Schema.decodeUnknownResult(CheckpointRow),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeEvidenceRows = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Array(EvidenceRow)),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeEvidenceRow = EffectFunction.flow(
+  Schema.decodeUnknownResult(EvidenceRow),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeArtifactRows = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Array(ArtifactRow)),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeArtifactRow = EffectFunction.flow(
+  Schema.decodeUnknownResult(ArtifactRow),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeReportAdoptionRows = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Array(ReportAdoptionRow)),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeFinalAnswerClaimRows = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Array(FinalAnswerClaimRow)),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeFinalAnswerSourceRows = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Array(FinalAnswerSourceRow)),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeFinalAnswerNotificationRows = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Array(FinalAnswerNotificationRow)),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeEvidenceLocator = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.fromJsonString(EvidenceLocator)),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeArtifactLocator = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.fromJsonString(ArtifactLocator)),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeStringArray = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Array(Schema.String))),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodePayload = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.fromJsonString(JsonValue)),
+  Result.getOrThrow,
+);
 
 export interface TraceTaskView {
   readonly id: string;
@@ -684,8 +735,10 @@ const make = Effect.gen(function* () {
     atomic(() => {
       assertHandle(input.handle);
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      const locator = Schema.decodeSync(EvidenceLocator)(input.locator);
+      const locator = EffectFunction.flow(
+        Schema.decodeResult(EvidenceLocator),
+        Result.getOrThrow,
+      )(input.locator);
       if (locator.kind !== input.locator.kind)
         throw new Error("Evidence locator kind changed during decoding");
       if (locator.kind === "file") assertSafeFile(locator);
@@ -783,8 +836,10 @@ const make = Effect.gen(function* () {
     atomic(() => {
       assertHandle(input.handle);
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      const locator = Schema.decodeSync(ArtifactLocator)(input.locator);
+      const locator = EffectFunction.flow(
+        Schema.decodeResult(ArtifactLocator),
+        Result.getOrThrow,
+      )(input.locator);
       if (locator.kind !== input.kind) throw new Error("Artifact kind must match its locator");
       if (locator.kind === "file") assertSafeFile(locator);
       const encoded = JSON.stringify(locator);
@@ -2673,10 +2728,10 @@ const make = Effect.gen(function* () {
           task.id,
         );
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      const queued = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(
-        sqlite.prepare("SELECT id FROM work_recovery_jobs WHERE task_id = ?").get(task.id),
-      );
+      const queued = EffectFunction.flow(
+        Schema.decodeUnknownResult(Schema.Struct({ id: Schema.String })),
+        Result.getOrThrow,
+      )(sqlite.prepare("SELECT id FROM work_recovery_jobs WHERE task_id = ?").get(task.id));
       return {
         status: "queued" as const,
         jobId: queued.id,
@@ -2811,7 +2866,6 @@ const make = Effect.gen(function* () {
     if (signal.aborted) return Promise.resolve("aborted");
     if (latestCursor(sessionId) > afterCursor) return Promise.resolve("event");
     // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-    // @effect-diagnostics-next-line newPromise:off
     return new Promise((resolve) => {
       let settled = false;
       const done = (result: "event" | "heartbeat" | "aborted") => {
@@ -2827,7 +2881,6 @@ const make = Effect.gen(function* () {
       };
       const aborted = () => done("aborted");
       // Native callback heartbeat/debounce timing remains at the protocol boundary.
-      // @effect-diagnostics-next-line globalTimers:off
       const timer = setTimeout(() => done("heartbeat"), Math.max(1, heartbeatMs));
       listeners.add(listener);
       signal.addEventListener("abort", aborted, { once: true });
@@ -2896,8 +2949,12 @@ const make = Effect.gen(function* () {
     /** Durable wake-up source. Reading does not mark a notification delivered. */
     pendingParentNotificationSessions: () =>
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ origin_session_id: Schema.String })))(
+      EffectFunction.flow(
+        Schema.decodeUnknownResult(
+          Schema.Array(Schema.Struct({ origin_session_id: Schema.String })),
+        ),
+        Result.getOrThrow,
+      )(
         sqlite
           .prepare(
             `SELECT DISTINCT origin_session_id FROM parent_notifications n
@@ -2935,8 +2992,10 @@ const make = Effect.gen(function* () {
         .get(attemptId, taskId, sessionId);
       if (!isTruthy(row)) throw new Error("Subagent attempt not found in this session");
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      return Schema.decodeUnknownSync(Schema.Struct({ status: AttemptStatus }))(row).status;
+      return EffectFunction.flow(
+        Schema.decodeUnknownResult(Schema.Struct({ status: AttemptStatus })),
+        Result.getOrThrow,
+      )(row).status;
     },
     projectTaskDetail,
     claimResume,

@@ -1,5 +1,5 @@
+import { Result, Function as EffectFunction } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import { isTruthy } from "../truthy.ts";
 import { Config, ConfigProvider, Option, Context, Data, Effect, Layer, Schema } from "effect";
@@ -19,8 +19,10 @@ import {
 import { RouteCatalog, type ChatRoute, type RouteCatalogApi } from "./route-catalog.ts";
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const stringifyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const stringifyJson = EffectFunction.flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
 
 const maximumGeneratedImageBytes = 25 * 1024 * 1024;
 const supportedOutputTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
@@ -78,7 +80,6 @@ export class DirectImageExecutor extends Context.Service<
         const response = yield* Effect.tryPromise({
           try: () =>
             // Native fetch I/O boundary preserves RequestInit semantics; scoped AbortSignal owns interruption.
-            // @effect-diagnostics-next-line globalFetchInEffect:off
             fetch("https://api.openai.com/v1/images/generations", {
               method: "POST",
               headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
@@ -164,7 +165,6 @@ export interface ImageMediaWorkflowApi {
 }
 
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function makeImageMediaWorkflow(
   feature: ImageFeatureApi,
   router: ImageRouterApi,

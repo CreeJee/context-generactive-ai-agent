@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off schemaSync:off
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
@@ -68,14 +69,20 @@ describe("session leases", () => {
     await context.provider!.select(runtime);
     const agent = await runtime.runPromise(AgentChat);
     const leaseOf = async (holder: string) =>
-      Schema.decodeUnknownSync(StatusLease)(
-        await (await runtime.runPromise(agent.status(session.id, holder))).json(),
-      ).lease;
+      EffectFunction.flow(
+        Schema.decodeUnknownResult(StatusLease),
+        Result.getOrThrow,
+      )(await (await runtime.runPromise(agent.status(session.id, holder))).json()).lease;
 
     await runtime.runPromise(agent.lease(session.id, "tab-a", "claim"));
     // A second tab asks too and is refused.
     const refused = await runtime.runPromise(agent.lease(session.id, "tab-b", "claim"));
-    expect(Schema.decodeUnknownSync(Lease)(await refused.json()).state).toBe("other");
+    expect(
+      EffectFunction.flow(
+        Schema.decodeUnknownResult(Lease),
+        Result.getOrThrow,
+      )(await refused.json()).state,
+    ).toBe("other");
     expect(await leaseOf("tab-a")).toEqual({ state: "mine" });
 
     const tab = (holder: string) => {

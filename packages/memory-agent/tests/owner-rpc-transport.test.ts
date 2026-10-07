@@ -1,3 +1,5 @@
+import { Schema } from "effect";
+import { it as effectTest } from "@effect/vitest";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off newPromise:off nodeBuiltinImport:off
 import { makeOwnerRpcPortClient as makeFrozenOwnerRpcPortClient } from "../src/agent/full-loop-rpc-client.ts";
@@ -162,35 +164,43 @@ describe("owner MessagePort RPC", () => {
     }
   });
 
-  it("sanitizes acquisition failure and removes partially registered listeners", async () => {
-    const { port1, port2 } = new MessageChannel();
-    const scope = Scope.makeUnsafe();
-    port1.start = () => {
-      throw new Error("private-start-secret");
-    };
-    const acquire = Effect.provide(
-      serveOwnerRpcPortEffect<Operations>(port1, {
-        permits: () => true,
-        ledger: makeInMemoryOwnerRpcLedger(),
-        handlers: { tool: { sideEffect: true, execute: () => Effect.succeed("done") } },
+  effectTest.effect(
+    "sanitizes acquisition failure and removes partially registered listeners",
+    () =>
+      Effect.gen(function* () {
+        const { port1, port2 } = new MessageChannel();
+        const scope = Scope.makeUnsafe();
+        port1.start = () => {
+          throw new Error("private-start-secret");
+        };
+        const acquire = Effect.provide(
+          serveOwnerRpcPortEffect<Operations>(port1, {
+            permits: () => true,
+            ledger: makeInMemoryOwnerRpcLedger(),
+            handlers: { tool: { sideEffect: true, execute: () => Effect.succeed("done") } },
+          }),
+          Context.make(Scope.Scope, scope),
+        );
+        yield* Effect.addFinalizer(() =>
+          Effect.gen(function* () {
+            yield* Scope.close(scope, Exit.void);
+            port2.close();
+          }),
+        );
+
+        const error = yield* acquire.pipe(Effect.flip);
+        expect(error).toMatchObject({
+          reason: "protocol",
+          message: "Owner RPC transport protocol; dispatched effects may be uncertain",
+        });
+        expect(
+          yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(error),
+        ).not.toContain("private-start-secret");
+        expect(port1.listenerCount("message")).toBe(0);
+        expect(port1.listenerCount("close")).toBe(0);
+        expect(port1.listenerCount("messageerror")).toBe(0);
       }),
-      Context.make(Scope.Scope, scope),
-    );
-    try {
-      const error = await Effect.runPromise(acquire.pipe(Effect.flip));
-      expect(error).toMatchObject({
-        reason: "protocol",
-        message: "Owner RPC transport protocol; dispatched effects may be uncertain",
-      });
-      expect(JSON.stringify(error)).not.toContain("private-start-secret");
-      expect(port1.listenerCount("message")).toBe(0);
-      expect(port1.listenerCount("close")).toBe(0);
-      expect(port1.listenerCount("messageerror")).toBe(0);
-    } finally {
-      await Effect.runPromise(Scope.close(scope, Exit.void));
-      port2.close();
-    }
-  });
+  );
 
   it("close before delivery never reserves or dispatches", async () => {
     const { port1, port2 } = new MessageChannel();

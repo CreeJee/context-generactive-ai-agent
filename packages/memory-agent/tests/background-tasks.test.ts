@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
 import { randomUUID } from "node:crypto";
@@ -218,7 +219,10 @@ describe("background task lifecycle", () => {
       abortSignal: controller.signal,
     });
     const command = `node -e 'const fs=require("fs");const t=setInterval(()=>{if(fs.existsSync("release")){clearInterval(t);console.log("finished")}},20)'`;
-    const receipt = Schema.decodeUnknownSync(Receipt)(
+    const receipt = EffectFunction.flow(
+      Schema.decodeUnknownResult(Receipt),
+      Result.getOrThrow,
+    )(
       await shell.execute!(
         { command, yieldMs: 0, timeoutSeconds: 5 },
         {
@@ -239,9 +243,10 @@ describe("background task lifecycle", () => {
       background.waitResult(session.id, receipt.taskId, 4000),
     );
     expect(finished?.result).toContain("finished");
-    const page = Schema.decodeUnknownSync(Page)(
-      await resultTool.execute!({ taskId: receipt.taskId }),
-    );
+    const page = EffectFunction.flow(
+      Schema.decodeUnknownResult(Page),
+      Result.getOrThrow,
+    )(await resultTool.execute!({ taskId: receipt.taskId }));
     expect(page.status).toBe("completed");
     const other = await runtime.runPromise(
       Effect.flatMap(Sessions, (sessions) => sessions.create(project.id)),

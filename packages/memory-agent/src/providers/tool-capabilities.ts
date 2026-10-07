@@ -413,7 +413,6 @@ export interface ProviderToolCapabilityRegistryApi {
 const compareDescriptor = (left: AnyProviderToolDescriptor, right: AnyProviderToolDescriptor) =>
   left.id.localeCompare(right.id);
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function filterProviderTools(
   descriptors: readonly AnyProviderToolDescriptor[],
   filter: ProviderToolFilter = {},
@@ -448,7 +447,6 @@ function installedModelMetadata(): readonly ProviderToolModelMetadata[] {
   return installedProviderToolModelMetadata;
 }
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function makeProviderToolCapabilityRegistry(
   descriptors: readonly AnyProviderToolDescriptor[] = providerToolDescriptors,
   models: readonly ProviderToolModelMetadata[] = installedModelMetadata(),

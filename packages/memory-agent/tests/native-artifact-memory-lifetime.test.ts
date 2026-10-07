@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -178,8 +179,9 @@ test("late-first native memory bundles preserve helpers and isolate populated ru
       userNodeId: () => user.id,
     });
     if (promotion.tools.length !== 6) throw new Error("Expected run tools");
-    const promoted = Schema.decodeUnknownSync(
-      Schema.Struct({ memoryNodeId: Schema.NonEmptyString }),
+    const promoted = EffectFunction.flow(
+      Schema.decodeUnknownResult(Schema.Struct({ memoryNodeId: Schema.NonEmptyString })),
+      Result.getOrThrow,
     )(
       await promotion.tools[4].execute!({
         claimId,

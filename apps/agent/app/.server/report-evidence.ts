@@ -1,6 +1,6 @@
 import { isTruthy } from "../truthy.ts";
 import type { DatabaseSync } from "node:sqlite";
-import { Schema } from "effect";
+import { Function as EffectFunction, Result, Schema } from "effect";
 
 const MAX_NODES = 16;
 const MAX_TEXT = 1200;
@@ -8,8 +8,10 @@ const MAX_DETAIL_TEXT = 8000;
 const MAX_TRANSCRIPT = 8;
 const MAX_RUNS = 3;
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const optionalText = Schema.decodeUnknownSync(Schema.NullOr(Schema.String));
+const optionalText = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.NullOr(Schema.String)),
+  Result.getOrThrow,
+);
 
 export type EvidenceStatus = "available" | "empty" | "failed";
 export interface EvidenceSection<T> {
@@ -61,9 +63,13 @@ export interface ReportEvidence {
   }>;
 }
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function reportEvidenceResponse(
+export const reportEvidenceResponse: {
+  (
+    request: Request,
+    traceTasks: (sessionId: string) => ReportEvidence["trace"]["items"],
+  ): (sqlite: DatabaseSync) => ReturnType<typeof reportEvidenceResponseBody>;
+} & typeof reportEvidenceResponseBody = EffectFunction.dual(3, reportEvidenceResponseBody);
+function reportEvidenceResponseBody(
   sqlite: DatabaseSync,
   request: Request,
   traceTasks: (sessionId: string) => ReportEvidence["trace"]["items"],
@@ -88,9 +94,10 @@ export function reportEvidenceResponse(
   );
 }
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function reportEvidenceItemResponse(sqlite: DatabaseSync, request: Request): Response {
+export const reportEvidenceItemResponse: {
+  (request: Request): (sqlite: DatabaseSync) => ReturnType<typeof reportEvidenceItemResponseBody>;
+} & typeof reportEvidenceItemResponseBody = EffectFunction.dual(2, reportEvidenceItemResponseBody);
+function reportEvidenceItemResponseBody(sqlite: DatabaseSync, request: Request): Response {
   const url = new URL(request.url);
   const projectId = url.searchParams.get("project");
   const sessionId = url.searchParams.get("session");
@@ -132,9 +139,13 @@ export function reportEvidenceItemResponse(sqlite: DatabaseSync, request: Reques
   );
 }
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function reportSession(
+export const reportSession: {
+  (
+    projectId: string,
+    sessionId: string,
+  ): (sqlite: DatabaseSync) => ReturnType<typeof reportSessionBody>;
+} & typeof reportSessionBody = EffectFunction.dual(3, reportSessionBody);
+function reportSessionBody(
   sqlite: DatabaseSync,
   projectId: string,
   sessionId: string,
@@ -167,9 +178,13 @@ function guarded<T>(load: () => EvidenceSection<T>): EvidenceSection<T> {
 }
 
 /** Read only bounded excerpts, not entire transcript blobs or unredacted provider wire output. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function collectReportEvidence(
+export const collectReportEvidence: {
+  (
+    session: ReportEvidence["session"],
+    traceTasks: () => ReportEvidence["trace"]["items"],
+  ): (sqlite: DatabaseSync) => ReturnType<typeof collectReportEvidenceBody>;
+} & typeof collectReportEvidenceBody = EffectFunction.dual(3, collectReportEvidenceBody);
+function collectReportEvidenceBody(
   sqlite: DatabaseSync,
   session: ReportEvidence["session"],
   traceTasks: () => ReportEvidence["trace"]["items"],

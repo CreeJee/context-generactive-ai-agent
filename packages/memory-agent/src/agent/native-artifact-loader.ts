@@ -1,5 +1,4 @@
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash } from "node:crypto";
 import {
   constants,
@@ -12,10 +11,8 @@ import {
   rmSync,
   writeFileSync,
   // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-  // @effect-diagnostics-next-line nodeBuiltinImport:off
 } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Effect, Predicate, Schema } from "effect";

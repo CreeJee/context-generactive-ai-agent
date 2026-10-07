@@ -1,11 +1,10 @@
+import { Function as EffectFunction } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import { isTruthy } from "../truthy.ts";
 import type { ToolExecutionContext } from "@tanstack/ai";
 import { tmpdir } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { isAbsolute, relative, sep } from "node:path";
 import { Context, Effect, Result, Layer, Schema } from "effect";
 import { BackgroundTasks, backgroundOperation, type BackgroundBinding } from "./background.ts";
@@ -48,9 +47,16 @@ const isSameOrBelow = (root: string, candidate: string) => {
 };
 
 /** Project-relative directories plus host temp directories are valid shell working directories. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function resolveShellWorkingDirectory(
+export const resolveShellWorkingDirectory: {
+  (
+    storageRoot: string,
+    workdir: string,
+  ): (projectRoot: string) => ReturnType<typeof resolveShellWorkingDirectoryBody>;
+} & typeof resolveShellWorkingDirectoryBody = EffectFunction.dual(
+  3,
+  resolveShellWorkingDirectoryBody,
+);
+function resolveShellWorkingDirectoryBody(
   projectRoot: string,
   storageRoot: string,
   workdir: string,
@@ -91,7 +97,6 @@ const make = Effect.gen(function* () {
         context?: ToolExecutionContext,
       ) =>
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         guarded(workdir ?? ".", async () => {
           const directory = orThrow(
             resolveShellWorkingDirectory(project.root, storage.path, workdir ?? "."),
@@ -145,7 +150,6 @@ const make = Effect.gen(function* () {
         expectedSha256,
       }: typeof WriteOutsideFileInput.Type) =>
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         guarded(path, async () => {
           const target = orThrow(
             resolveOutsidePath(project.root, storage.path, path, "new-or-file"),
@@ -161,7 +165,6 @@ const make = Effect.gen(function* () {
 
       const deleteOutsideFile = ({ path, expectedSha256 }: typeof DeleteOutsideFileInput.Type) =>
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         guarded(path, async () => {
           const target = orThrow(resolveOutsidePath(project.root, storage.path, path, "file"));
           const removed = await deleteTextFile(target.absolute, path, expectedSha256);

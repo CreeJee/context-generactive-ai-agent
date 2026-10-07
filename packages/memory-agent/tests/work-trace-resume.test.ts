@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off schemaSync:off
 import { DateTime, Effect, Layer, Schema } from "effect";
@@ -13,7 +14,10 @@ const AttemptLineage = Schema.Struct({
   resumed_from_attempt_id: Schema.NullOr(Schema.String),
   superseded_by_attempt_id: Schema.NullOr(Schema.String),
 });
-const decodeLineage = Schema.decodeUnknownSync(Schema.Array(AttemptLineage));
+const decodeLineage = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Array(AttemptLineage)),
+  Result.getOrThrow,
+);
 
 const testLayer = () => {
   const database = Database.layer(":memory:");
@@ -21,8 +25,16 @@ const testLayer = () => {
 };
 const run = <A>(effect: Effect.Effect<A, never, Database | WorkTraceStore>) =>
   // Test entry point owns this Layer and its resource scope.
-  // @effect-diagnostics-next-line strictEffectProvide:off
-  Effect.runPromise(Effect.scoped(effect.pipe(Effect.provide(testLayer()))));
+  Effect.runPromise(
+    Effect.scoped(
+      effect.pipe(
+        Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+          const services = yield* Layer.build(testLayer());
+          return yield* Effect.provideContext(program, services);
+        }, Effect.scoped),
+      ),
+    ),
+  );
 
 const seed = (db: Database["Service"]) => {
   const iso = DateTime.formatIso(DateTime.makeUnsafe(0));

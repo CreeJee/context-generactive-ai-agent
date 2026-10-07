@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
 import { randomUUID } from "node:crypto";
@@ -24,7 +25,10 @@ import { MemoryTools } from "../src/tools/memory.ts";
 import { Workflows } from "../src/workflow/workflow.ts";
 import { testRuntime } from "./support/runtime.ts";
 
-const stringifyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const stringifyJson = EffectFunction.flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
 
 test("Goal factory references bind fresh native SDK capabilities and deferred attribution", async () => {
   const registry = createGoalNativeImplementations();

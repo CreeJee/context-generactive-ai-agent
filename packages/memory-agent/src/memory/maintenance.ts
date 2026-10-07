@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Context, Data, Effect, Layer, Schema, Semaphore } from "effect";
 import { GlobalConfig } from "../config/global-config.ts";
@@ -14,23 +15,27 @@ export class MemoryGraphRepairFailed extends Data.TaggedError("MemoryGraphRepair
 export const memoryGraphRepairVersion = 1;
 const batchSize = 64;
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeProgress = Schema.decodeUnknownSync(
-  Schema.Struct({
-    through_seq: Schema.Finite,
-    after_seq: Schema.Finite,
-    status: Schema.Literals(["pending", "running", "completed", "failed"]),
-    scanned: Schema.Finite,
-    repaired_edges: Schema.Finite,
-    suppressed_edges: Schema.Finite,
-    retired_topics: Schema.Finite,
-    error: Schema.NullOr(Schema.String),
-  }),
+const decodeProgress = EffectFunction.flow(
+  Schema.decodeUnknownResult(
+    Schema.Struct({
+      through_seq: Schema.Finite,
+      after_seq: Schema.Finite,
+      status: Schema.Literals(["pending", "running", "completed", "failed"]),
+      scanned: Schema.Finite,
+      repaired_edges: Schema.Finite,
+      suppressed_edges: Schema.Finite,
+      retired_topics: Schema.Finite,
+      error: Schema.NullOr(Schema.String),
+    }),
+  ),
+  Result.getOrThrow,
 );
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeBatch = Schema.decodeUnknownSync(
-  Schema.Array(Schema.Struct({ seq: Schema.Finite, id: Schema.String })),
+const decodeBatch = EffectFunction.flow(
+  Schema.decodeUnknownResult(
+    Schema.Array(Schema.Struct({ seq: Schema.Finite, id: Schema.String })),
+  ),
+  Result.getOrThrow,
 );
 
 const make = Effect.gen(function* () {

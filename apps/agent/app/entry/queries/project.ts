@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { queryOptions, useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import { appQueryKeys } from "./keys";
@@ -7,7 +8,6 @@ export const projectQueries = {
     queryOptions({
       queryKey: appQueryKeys.project.sessions(projectId),
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      // @effect-diagnostics-next-line asyncFunction:off
       queryFn: async () => ({
         active: await api.sessions(projectId),
         archived: await api.archivedSessions(projectId),
@@ -50,16 +50,18 @@ export function useProjectSessionsQuery(projectId: string | null) {
 
 export const useAgentsQuery = (projectId: string | null) =>
   useQuery({ ...projectQueries.agents(projectId ?? ""), enabled: projectId !== null });
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export const useSkillsQuery = (projectId: string, enabled: boolean) =>
+const useSkillsQueryBody = (projectId: string, enabled: boolean) =>
   useQuery({ ...projectQueries.skills(projectId), enabled });
+export const useSkillsQuery: {
+  (enabled: boolean): (projectId: string) => ReturnType<typeof useSkillsQueryBody>;
+} & typeof useSkillsQueryBody = EffectFunction.dual(2, useSkillsQueryBody);
 export const useProjectTraceQuery = (projectId: string) =>
   useQuery(projectQueries.trace(projectId));
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export const useProjectTraceTaskQuery = (projectId: string, taskId: string | null) =>
+const useProjectTraceTaskQueryBody = (projectId: string, taskId: string | null) =>
   useQuery({ ...projectQueries.traceTask(projectId, taskId ?? ""), enabled: taskId !== null });
+export const useProjectTraceTaskQuery: {
+  (taskId: string | null): (projectId: string) => ReturnType<typeof useProjectTraceTaskQueryBody>;
+} & typeof useProjectTraceTaskQueryBody = EffectFunction.dual(2, useProjectTraceTaskQueryBody);
 export const useSuspenseMcpQuery = (projectId: string) =>
   useSuspenseQuery(projectQueries.mcp(projectId));
 export const useSuspenseAgentsQuery = (projectId: string) =>

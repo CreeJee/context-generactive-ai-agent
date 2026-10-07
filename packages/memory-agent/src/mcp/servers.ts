@@ -1,6 +1,6 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash } from "node:crypto";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -70,9 +70,10 @@ export class McpOperationFailed extends Data.TaggedError("McpOperationFailed")<{
 }> {}
 
 /** OpenAI function names allow at most 64 characters of [A-Za-z0-9_-]. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function mcpToolName(server: string, tool: string) {
+export const mcpToolName: {
+  (tool: string): (server: string) => ReturnType<typeof mcpToolNameBody>;
+} & typeof mcpToolNameBody = EffectFunction.dual(2, mcpToolNameBody);
+function mcpToolNameBody(server: string, tool: string) {
   const plain = `${mcpToolPrefix}${server}__${tool.replace(/[^A-Za-z0-9_-]/g, "_")}`;
   if (plain.length <= 64) return plain;
   const hash = createHash("sha256").update(tool).digest("hex").slice(0, 8);
@@ -110,8 +111,10 @@ const TrustRow = Schema.Struct({
   fingerprint: Schema.String,
 });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeTrustRows = Schema.decodeUnknownSync(Schema.Array(TrustRow));
+const decodeTrustRows = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Array(TrustRow)),
+  Result.getOrThrow,
+);
 
 interface Connection {
   readonly fingerprint: string;
@@ -128,10 +131,8 @@ const describeFailure = (error: Error) => {
 const withTimeout = <A>(promise: Promise<A>, ms: number, what: string) => {
   let timer: NodeJS.Timeout | undefined;
   // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-  // @effect-diagnostics-next-line newPromise:off
   const timeout = new Promise<never>((_, reject) => {
     // Native callback heartbeat/debounce timing remains at the protocol boundary.
-    // @effect-diagnostics-next-line globalTimers:off
     timer = setTimeout(() => reject(new Error(`${what} timed out`)), ms);
     timer.unref();
   });
@@ -252,7 +253,6 @@ const make = Effect.gen(function* () {
     if (isTruthy(existing)) close(key);
     // Kept unwrapped: a start that outlives its timeout still gets closed with the connection.
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     const client = (async () =>
       createMCPClient({
         // SAFETY: The SDK's concrete HTTP transport declares sessionId as string | undefined while
@@ -279,7 +279,6 @@ const make = Effect.gen(function* () {
     if (isTruthy(connection.discovering)) return connection.discovering;
     const key = connectionKey(project, server);
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     const pending = (async () => {
       try {
         const client = await withTimeout(connection.client, connectTimeoutMs, "connect");
@@ -296,7 +295,6 @@ const make = Effect.gen(function* () {
               description: `[MCP ${server.name}] ${tool.description}`.trim(),
               needsApproval: false,
               // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-              // @effect-diagnostics-next-line asyncFunction:off
               execute: async (args, context) => {
                 const result = await execute(args, context);
                 return (

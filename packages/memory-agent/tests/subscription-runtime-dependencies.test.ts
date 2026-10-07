@@ -192,14 +192,22 @@ test("native registry exports fresh account dependencies without selecting until
           });
           yield* verification.pipe(
             // Test entry point owns this Layer and its resource scope.
-            // @effect-diagnostics-next-line strictEffectProvide:off
-            Effect.provide(ProviderRegistry.layer([provider], [compatibility], resolver)),
+            Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+              const services = yield* Layer.build(
+                ProviderRegistry.layer([provider], [compatibility], resolver),
+              );
+              return yield* Effect.provideContext(program, services);
+            }, Effect.scoped),
           );
         });
         yield* program.pipe(
           // Test entry point owns this Layer and its resource scope.
-          // @effect-diagnostics-next-line strictEffectProvide:off
-          Effect.provide(GlobalConfig.layer.pipe(Layer.provide(StorageRoot.layer(storage)))),
+          Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+            const services = yield* Layer.build(
+              GlobalConfig.layer.pipe(Layer.provide(StorageRoot.layer(storage))),
+            );
+            return yield* Effect.provideContext(program, services);
+          }, Effect.scoped),
         );
       }),
     ),
@@ -221,8 +229,12 @@ test("default layer stays unavailable and native subscription layer exports with
           }
         });
         // Test entry point owns this Layer and its resource scope.
-        // @effect-diagnostics-next-line strictEffectProvide:off
-        yield* unavailable.pipe(Effect.provide(ProviderRegistry.layer([])));
+        yield* unavailable.pipe(
+          Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+            const services = yield* Layer.build(ProviderRegistry.layer([]));
+            return yield* Effect.provideContext(program, services);
+          }, Effect.scoped),
+        );
         const storage = yield* temporary;
         yield* Effect.gen(function* () {
           const registry = yield* ProviderRegistry;
@@ -238,12 +250,14 @@ test("default layer stays unavailable and native subscription layer exports with
           }
         }).pipe(
           // Test entry point owns this Layer and its resource scope.
-          // @effect-diagnostics-next-line strictEffectProvide:off
-          Effect.provide(
-            SubscriptionProviderRegistry.pipe(
-              Layer.provide(GlobalConfig.layer.pipe(Layer.provide(StorageRoot.layer(storage)))),
-            ),
-          ),
+          Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+            const services = yield* Layer.build(
+              SubscriptionProviderRegistry.pipe(
+                Layer.provide(GlobalConfig.layer.pipe(Layer.provide(StorageRoot.layer(storage)))),
+              ),
+            );
+            return yield* Effect.provideContext(program, services);
+          }, Effect.scoped),
         );
       }),
     ),

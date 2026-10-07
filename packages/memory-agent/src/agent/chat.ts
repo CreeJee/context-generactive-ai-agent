@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { MutableHashMap, DateTime, SchemaTransformation } from "effect";
 import { projectInstructions } from "./project-instructions.ts";
@@ -20,10 +21,8 @@ import {
   type ModelMessage,
 } from "@tanstack/ai";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import dayjs from "dayjs";
 import {
@@ -153,8 +152,10 @@ import {
 } from "../tools/report-evidence.ts";
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const stringifyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const stringifyJson = EffectFunction.flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
 
 /** Standing instructions: how to use memory without mistaking leads for facts or permission. */
 export const memoryInstructions = `You are a local assistant that remembers conversations across sessions and projects.
@@ -225,7 +226,6 @@ function settingsInstructions(project: Project, places: SettingsPlaces) {
  * date and shell, and where the app keeps its own settings.
  */
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function workspaceInstructions(
   project: Project,
   places: SettingsPlaces,
@@ -564,14 +564,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
   // then dispose the registry while retaining every durable snapshot for cold adoption.
   yield* Effect.addFinalizer(() =>
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     Effect.promise(async () => {
       workerScopeAlive = false;
       const workers = [...ownedSDKWorkers];
       for (const [, owned] of workers) workerAuthority.revoke(owned.runId);
       await Promise.all(
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         workers.map(async ([worker, owned]) => {
           await worker.terminate();
           owned.release();
@@ -612,7 +610,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
     return {
       ...base,
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      // @effect-diagnostics-next-line asyncFunction:off
       retrievalAppendix: async (
         sent: Parameters<NonNullable<CompactionSources["retrievalAppendix"]>>[0],
       ) => {
@@ -682,7 +679,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
   const modelImages = (): ChatMiddleware => ({
     name: "memory-agent/model-images",
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async onConfig(ctx, config) {
       if (ctx.phase === "init") return;
       let changed = false;
@@ -699,12 +695,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
       >();
       const providerMessages = await Promise.all(
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         modelBoundMessages(config).map(async (message) => {
           if (!Array.isArray(message.content)) return message;
           const content = await Promise.all(
             // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-            // @effect-diagnostics-next-line asyncFunction:off
             message.content.map(async (part) => {
               if (part.type !== "image" || part.source.type !== "url") return part;
               const id = attachmentIdOf(part.source.value);
@@ -716,7 +710,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
               const known = Option.getOrUndefined(MutableHashMap.get(inlineImages, id));
               if (isTruthy(known)) return known;
               // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-              // @effect-diagnostics-next-line asyncFunction:off
               const inline = (async () => {
                 const image = await attachments.forModel(attachment);
                 const prefix = `data:${image.mimeType};base64,`;
@@ -769,7 +762,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const settleQueue = async (sessionId: string, runId: string) => {
     try {
       const run = await chatState.run(sessionId, runId);
@@ -1032,13 +1024,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
         if (requestedCursor === null) return json(400, { error: "invalid_trace_cursor" });
         const encoder = new TextEncoder();
         // The HTTP/SDK stream outlives this handler; its owner and explicit cancel retain this controller.
-        // @effect-diagnostics-next-line abortControllerInEffect:off
         const abortController = new AbortController();
         const body = new ReadableStream<Uint8Array>({
           start(controller) {
             const write = (frame: string) => controller.enqueue(encoder.encode(frame));
             // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-            // @effect-diagnostics-next-line asyncFunction:off
             const pump = async () => {
               let cursor = requestedCursor;
               const initial = workTrace.snapshot(sessionId, cursor);
@@ -1134,7 +1124,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
         }
 
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         const params = yield* Effect.tryPromise(async () =>
           chatParamsFromRequestBody(await request.json()),
         ).pipe(Effect.option);
@@ -1323,7 +1312,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
 
         if (external !== null) {
           // The HTTP/SDK stream outlives this handler; its owner and explicit cancel retain this controller.
-          // @effect-diagnostics-next-line abortControllerInEffect:off
           const abortController = new AbortController();
           const claim = yield* liveRuns.claim(
             sessionId,
@@ -1346,7 +1334,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
                 signal,
                 onUpdate,
                 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-                // @effect-diagnostics-next-line asyncFunction:off
                 askPermission: async (permission) => {
                   const decision = relayed.ask(
                     sessionId,
@@ -1481,7 +1468,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
           ),
           loadHistory: () => chatState.persistence.stores.messages.loadThread(sessionId),
           // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          // @effect-diagnostics-next-line asyncFunction:off
           evidenceContext: async (storedForHandoff) => {
             const saved = await compactionState(metadata, sessionId);
             const blocks = linedUp(
@@ -1568,7 +1554,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
         // Not tied to the request: a reload or a closed tab must not stop the run (R10). Only an
         // explicit cancel aborts it.
         // The HTTP/SDK stream outlives this handler; its owner and explicit cancel retain this controller.
-        // @effect-diagnostics-next-line abortControllerInEffect:off
         const abortController = new AbortController();
         if (notificationFollowup) {
           const current = yield* sessions.get(sessionId);
@@ -1697,7 +1682,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
                 sessionId,
                 projectId,
                 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-                // @effect-diagnostics-next-line asyncFunction:off
                 async (text: string) => (await runEffect(redactor.redactText(text))).text,
                 () => workTrace.taskTree(reportSource.sourceSessionId),
               )
@@ -1748,7 +1732,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
                   sessionId,
                   projectId,
                   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-                  // @effect-diagnostics-next-line asyncFunction:off
                   async (text) => (await runEffect(redactor.redactText(text))).text,
                   () => workTrace.taskTree(reportSource.sourceSessionId),
                 ).catch(
@@ -2089,7 +2072,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
         const stream =
           workerCapability !== null
             ? // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-              // @effect-diagnostics-next-line asyncFunction:off
               (async function* () {
                 let errorDelivered = false;
                 const failure = () => ({
@@ -2131,7 +2113,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
         // Keep the selected vault slot until ALL tool iterations finish, not just the first stream.
         const recorded = isTruthy(boundRun)
           ? // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-            // @effect-diagnostics-next-line asyncFunction:off
             (async function* () {
               let sequence = 0;
               for await (const chunk of stream) {
@@ -2148,13 +2129,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
         // failure. A client delivery cancellation does cancel the worker, one-way.
         // The HTTP/SDK stream outlives this handler; its owner and explicit cancel retain this controller.
         const deliveryAbortController =
-          // @effect-diagnostics-next-line abortControllerInEffect:off
           workerCapability !== null ? new AbortController() : abortController;
         const cancelExecution = () => abortController.abort(deliveryAbortController.signal.reason);
         if (workerCapability !== null)
           deliveryAbortController.signal.addEventListener("abort", cancelExecution, { once: true });
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         const withAccountLease = (async function* () {
           try {
             for await (const event of tracked) yield event;
@@ -2671,7 +2650,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
       }
       if (response.ok)
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         yield* agentPromise("drain-followup", async () => {
           const reader = response.body?.getReader();
           if (!isTruthy(reader)) return;

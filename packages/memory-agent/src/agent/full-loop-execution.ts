@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import type { Worker } from "node:worker_threads";
 import {
@@ -14,7 +15,6 @@ import { HashMap, MutableHashMap, Option, Effect, Exit, Queue, Schema, Scope } f
 import { acquireFullLoopWorkerEvents } from "./full-loop-worker-events.ts";
 
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import {
   convertSchemaToJsonSchema,
@@ -84,9 +84,14 @@ import {
   preflightFullLoopExecution as basePreflight,
 } from "./full-loop-preflight.ts";
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function preflightFullLoopExecution<TAdapter extends AnyTextAdapter>(
+export const preflightFullLoopExecution: {
+  <TAdapter extends AnyTextAdapter>(
+    capabilities: ChatExecutionCapabilities<TAdapter>,
+  ): (
+    turn: ChatExecutionTurn<TAdapter>,
+  ) => ReturnType<typeof preflightFullLoopExecutionBody<TAdapter>>;
+} & typeof preflightFullLoopExecutionBody = EffectFunction.dual(2, preflightFullLoopExecutionBody);
+function preflightFullLoopExecutionBody<TAdapter extends AnyTextAdapter>(
   turn: ChatExecutionTurn<TAdapter>,
   capabilities: ChatExecutionCapabilities<TAdapter>,
 ): void {
@@ -127,7 +132,6 @@ const json = (value: unknown): OwnerRpcJson => encodeFullLoopValue(value);
 export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: FullLoopOwner) {
   return {
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async *execute(
       turn: ChatExecutionTurn<TAdapter>,
       capabilities: ChatExecutionCapabilities<TAdapter>,
@@ -336,7 +340,6 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
           ...tool,
           __toolSide: "server" as const,
           // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          // @effect-diagnostics-next-line asyncFunction:off
           execute: async (args: any, context: any) => {
             if (
               closed ||
@@ -455,7 +458,6 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
               modelOpen: {
                 sideEffect: false,
                 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-                // @effect-diagnostics-next-line asyncFunction:off
                 execute: async (input: any) => {
                   input = decodeFullLoopValue(input);
                   const id = randomUUID();
@@ -491,7 +493,6 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
               modelNext: {
                 sideEffect: false,
                 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-                // @effect-diagnostics-next-line asyncFunction:off
                 execute: async (input: any) => {
                   input = decodeFullLoopValue(input);
                   const iterator = Option.getOrUndefined(MutableHashMap.get(models, input.id));
@@ -552,7 +553,6 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                 sideEffect: true,
                 authorize: (wire) => authorizeRequest("toolAuthorize", wire),
                 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-                // @effect-diagnostics-next-line asyncFunction:off
                 execute: async (wire: any) => {
                   const invocation = grants.observed(decodeFullLoopValue(wire));
                   const tool = ownerTools.find((tool) => tool.name === invocation.name);
@@ -682,7 +682,6 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                 sideEffect: true,
                 authorize: (wire) => authorizeRequest("tool", wire),
                 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-                // @effect-diagnostics-next-line asyncFunction:off
                 execute: async (input: any) => {
                   input = grants.consume(decodeFullLoopValue(input));
                   const tool = ownerTools.find((tool) => tool.name === input.name);
@@ -717,7 +716,6 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
               routedPersistence: {
                 sideEffect: true,
                 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-                // @effect-diagnostics-next-line asyncFunction:off
                 execute: async (input: any) => {
                   input = decodeFullLoopValue(input);
                   const mw = ownerMiddleware[input.index];
@@ -738,7 +736,6 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
               strategy: {
                 sideEffect: false,
                 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-                // @effect-diagnostics-next-line asyncFunction:off
                 execute: async (input: any) => {
                   input = decodeFullLoopValue(input);
                   return json(
@@ -753,7 +750,6 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                 authorize: (wire) => authorizeRequest("middleware", wire),
                 finalization: finalizationInput,
                 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-                // @effect-diagnostics-next-line asyncFunction:off
                 execute: async (input: any) => {
                   input = decodeFullLoopValue(input);
                   const mw = ownerMiddleware[input.index];

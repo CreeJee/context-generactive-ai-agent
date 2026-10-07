@@ -1,6 +1,6 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { MutableHashMap, Option, DateTime, Schema } from "effect";
@@ -39,17 +39,19 @@ export function goalWorkerAuthority(owner: {
   `);
   const active = (claim: RunBinding, finalization = false) => {
     // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    // @effect-diagnostics-next-line schemaSync:off
-    const row = Schema.decodeUnknownSync(
-      Schema.UndefinedOr(
-        Schema.Struct({
-          session_id: Schema.String,
-          goal_instance_id: Schema.String,
-          goal_version: Schema.Finite,
-          plan_version: Schema.NullOr(Schema.Finite),
-          workflow_revision_id: Schema.Finite,
-        }),
+    const row = EffectFunction.flow(
+      Schema.decodeUnknownResult(
+        Schema.UndefinedOr(
+          Schema.Struct({
+            session_id: Schema.String,
+            goal_instance_id: Schema.String,
+            goal_version: Schema.Finite,
+            plan_version: Schema.NullOr(Schema.Finite),
+            workflow_revision_id: Schema.Finite,
+          }),
+        ),
       ),
+      Result.getOrThrow,
     )(binding.get(claim.runId));
     if (
       !isTruthy(row) ||
@@ -61,9 +63,9 @@ export function goalWorkerAuthority(owner: {
     )
       return false;
     // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    // @effect-diagnostics-next-line schemaSync:off
-    const run = Schema.decodeUnknownSync(
-      Schema.UndefinedOr(Schema.Struct({ status: Schema.String })),
+    const run = EffectFunction.flow(
+      Schema.decodeUnknownResult(Schema.UndefinedOr(Schema.Struct({ status: Schema.String }))),
+      Result.getOrThrow,
     )(status.get(claim.runId));
     // A completed/failed/aborted run must never accept a late chunk or tool RPC.
     return (
@@ -82,10 +84,12 @@ export function goalWorkerAuthority(owner: {
         ([key, value]) => value === claim[key as keyof GoalWorkerCapability],
       ) &&
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      Schema.decodeUnknownSync(Schema.UndefinedOr(Schema.Struct({ generation: Schema.String })))(
-        dispatch.get(claim.runId),
-      )?.generation === claim.generation &&
+      EffectFunction.flow(
+        Schema.decodeUnknownResult(
+          Schema.UndefinedOr(Schema.Struct({ generation: Schema.String })),
+        ),
+        Result.getOrThrow,
+      )(dispatch.get(claim.runId))?.generation === claim.generation &&
       active(claim, finalization),
     );
   };

@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { Semaphore } from "effect";
 import { Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../../db/database.ts";
@@ -20,11 +21,12 @@ export const embeddedKindFilter = `n.kind IN (${embeddedKinds.map((kind) => `'${
 
 const Pending = Schema.Struct({ seq: Schema.Finite, text: Schema.String });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodePending = Schema.decodeUnknownSync(Pending);
+const decodePending = EffectFunction.flow(Schema.decodeUnknownResult(Pending), Result.getOrThrow);
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeCount = Schema.decodeUnknownSync(Schema.Struct({ count: Schema.Finite }));
+const decodeCount = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Struct({ count: Schema.Finite })),
+  Result.getOrThrow,
+);
 
 const make = Effect.gen(function* () {
   const { sqlite, atomic } = yield* Database;

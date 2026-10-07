@@ -7,7 +7,6 @@ import type { Route } from "./+types/reports.evidence";
 
 /** Local-server-only, bounded, read-only report evidence. Query identifiers are never authority. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function loader({ request }: Route.LoaderArgs) {
   const url = new URL(request.url);
   const projectId = url.searchParams.get("project");

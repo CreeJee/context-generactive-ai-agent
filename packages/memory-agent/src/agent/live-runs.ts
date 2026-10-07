@@ -1,5 +1,5 @@
 import type { StreamChunk } from "@tanstack/ai";
-import { MutableHashMap, Option, Deferred, Effect } from "effect";
+import { MutableHashMap, Option, Deferred, Effect, Stream } from "effect";
 
 /** A run whose model stream is still being produced in this process. */
 export interface LiveRun {
@@ -41,15 +41,12 @@ export const createLiveRuns = Effect.sync(() => {
             }
           };
           return {
-            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-            // @effect-diagnostics-next-line asyncFunction:off
-            track: async function* (stream) {
-              try {
-                yield* stream;
-              } finally {
-                release();
-              }
-            },
+            track: (stream) =>
+              Stream.toAsyncIterable(
+                Stream.fromAsyncIterable(stream, (error) => error).pipe(
+                  Stream.ensuring(Effect.sync(release)),
+                ),
+              ),
           };
         }),
       ),

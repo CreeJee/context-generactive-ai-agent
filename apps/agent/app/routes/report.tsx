@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Schema } from "effect";
 import { useEffect, useState } from "react";
@@ -20,7 +21,6 @@ export default function ReportPage() {
   const [editedText, setEditedText] = useState<string | null>(null);
   const [createdAt, setCreatedAt] = useState("작성 중");
   // React/native timestamps use the host Date contract outside Effect execution.
-  // @effect-diagnostics-next-line globalDate:off
   useEffect(() => setCreatedAt(new Date().toLocaleString("ko-KR")), []);
   const [evidence, setEvidence] = useState<ReportEvidence | null>(null);
   const [selected, setSelected] = useState<ReviewSelection>({});
@@ -40,21 +40,19 @@ export default function ReportPage() {
     let active = true;
     setSessionFailed(false);
     // Native Request/Response adapter preserves host and SDK stream semantics.
-    // @effect-diagnostics-next-line globalFetch:off
     fetch("/api/reports/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ projectId, sourceSessionId }),
     })
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      // @effect-diagnostics-next-line asyncFunction:off
       .then(async (response) => {
         if (!response.ok) throw new Error("report session unavailable");
         // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-        // @effect-diagnostics-next-line schemaSync:off
-        return Schema.decodeUnknownSync(Schema.Struct({ reportSessionId: Schema.String }))(
-          await response.json(),
-        );
+        return EffectFunction.flow(
+          Schema.decodeUnknownResult(Schema.Struct({ reportSessionId: Schema.String })),
+          Result.getOrThrow,
+        )(await response.json());
       })
       .then(({ reportSessionId }) => {
         if (active) setAnalysisSession({ projectId, reportSessionId });
@@ -90,7 +88,6 @@ export default function ReportPage() {
   const text = editedText ?? generatedText;
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const loadEvidence = async () => {
     const params = new URLSearchParams(window.location.search);
     const project = params.get("project");
@@ -104,7 +101,6 @@ export default function ReportPage() {
     try {
       const query = new URLSearchParams({ project, session });
       // Native Request/Response adapter preserves host and SDK stream semantics.
-      // @effect-diagnostics-next-line globalFetch:off
       const response = await fetch(`/api/reports/evidence?${query}`, { cache: "no-store" });
       if (!response.ok) throw new Error(`조회 실패 (${response.status})`);
       const result: ReportEvidence = await response.json();
@@ -119,7 +115,6 @@ export default function ReportPage() {
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const copy = async () => {
     const copied = await copyReportText(text, (value) => navigator.clipboard.writeText(value));
     setStatus(
@@ -136,7 +131,6 @@ export default function ReportPage() {
     link.download = "context-agent-report.txt";
     link.click();
     // Native callback heartbeat/debounce timing remains at the protocol boundary.
-    // @effect-diagnostics-next-line globalTimers:off
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 

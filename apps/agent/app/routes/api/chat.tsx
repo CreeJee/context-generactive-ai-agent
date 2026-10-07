@@ -12,7 +12,6 @@ const sessionOf = (request: Request) => new URL(request.url).searchParams.get("s
  * hydrates from on mount: the stored transcript, a run still generating, and pending approvals.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function loader({ request }: Route.LoaderArgs) {
   const sessionId = sessionOf(request);
   if (!isTruthy(sessionId)) return Response.json({ error: "session_required" }, { status: 400 });
@@ -24,7 +23,6 @@ export async function loader({ request }: Route.LoaderArgs) {
  * `fetchServerSentEvents` sends). Streams the run as Server-Sent Events.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected !== null) return rejected;

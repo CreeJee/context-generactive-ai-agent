@@ -1,7 +1,7 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { MutableHashMap, DateTime, Clock, Semaphore } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import type { SQLOutputValue } from "node:sqlite";
 import { chat } from "@tanstack/ai";
@@ -16,8 +16,10 @@ import { meaningfulNodeFilter } from "./quality.ts";
 import { MemorySearch } from "./search.ts";
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const stringifyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const stringifyJson = EffectFunction.flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+);
 
 /** Standing instructions for the interpreter. It labels statements; it never decides for the user. */
 export const interpretInstructions = `You label statements from a person's conversations with a coding assistant, so a memory graph can find them later and tell current decisions from outdated ones.
@@ -61,16 +63,13 @@ export class InterpretationFailed extends Data.TaggedError("InterpretationFailed
 
 const Job = Schema.Struct({ node_id: Schema.String, session_id: Schema.NullOr(Schema.String) });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeJob = Schema.decodeUnknownSync(Job);
+const decodeJob = EffectFunction.flow(Schema.decodeUnknownResult(Job), Result.getOrThrow);
 const Id = Schema.Struct({ id: Schema.String });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeId = Schema.decodeUnknownSync(Id);
+const decodeId = EffectFunction.flow(Schema.decodeUnknownResult(Id), Result.getOrThrow);
 const Label = Schema.Struct({ text: Schema.String });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeLabel = Schema.decodeUnknownSync(Label);
+const decodeLabel = EffectFunction.flow(Schema.decodeUnknownResult(Label), Result.getOrThrow);
 
 /** Statements per model call; they share one session, so the model sees them in order. */
 const batchSize = 8;

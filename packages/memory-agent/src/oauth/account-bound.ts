@@ -1,7 +1,6 @@
 import { MutableHashMap, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -24,7 +23,6 @@ import {
 
 /** Synchronous selection at request/run creation; each profile owns its client and refresh lock. */
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function createAccountBoundSubscriptionClients(
   sqlite: DatabaseSync,
   provider: OAuthProvider,
@@ -94,7 +92,6 @@ export function createAccountBoundSubscriptionClients(
       modelCatalog: () => current().modelCatalog(),
       // Explicit login always creates a fresh slot, including after legacy account removal.
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      // @effect-diagnostics-next-line asyncFunction:off
       startLogin: async () => {
         const id = randomUUID();
         const attempt = await clientFor(id)
@@ -106,7 +103,6 @@ export function createAccountBoundSubscriptionClients(
         let cancelled = false;
         const completed = attempt.completed
           // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          // @effect-diagnostics-next-line asyncFunction:off
           .then(async (connection) => {
             if (cancelled) throw new OAuthHarnessError("cancelled");
             if (!connection.connected) throw new OAuthHarnessError("not_connected");
@@ -121,7 +117,6 @@ export function createAccountBoundSubscriptionClients(
             return connection;
           })
           // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          // @effect-diagnostics-next-line asyncFunction:off
           .catch(async (error) => {
             // A published account must survive a selection failure or late cancellation.
             if (!listOAuthProfiles(sqlite, provider).some((profile) => profile.id === id)) {
@@ -140,7 +135,6 @@ export function createAccountBoundSubscriptionClients(
         };
       },
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      // @effect-diagnostics-next-line asyncFunction:off
       disconnect: async () => {
         const id = selectedId();
         if (id !== null) {

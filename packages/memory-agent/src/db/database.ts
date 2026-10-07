@@ -1,9 +1,8 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { mkdirSync } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Context, Data, Effect, Layer, Schema } from "effect";
@@ -25,10 +24,10 @@ const UserVersion = Schema.Struct({ user_version: Schema.Finite });
 /** Startup-only: call before handing this connection to any service or writer. */
 export function migrateDatabase(sqlite: DatabaseSync) {
   // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  // @effect-diagnostics-next-line schemaSync:off
-  const { user_version: applied } = Schema.decodeUnknownSync(UserVersion)(
-    sqlite.prepare("PRAGMA user_version").get(),
-  );
+  const { user_version: applied } = EffectFunction.flow(
+    Schema.decodeUnknownResult(UserVersion),
+    Result.getOrThrow,
+  )(sqlite.prepare("PRAGMA user_version").get());
   if (applied > migrations.length)
     throw new Error(`Database schema ${applied} is newer than this build (${migrations.length})`);
   for (const [index, step] of migrations.entries()) {
@@ -43,10 +42,10 @@ export function migrateDatabase(sqlite: DatabaseSync) {
         ),
       );
     // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    // @effect-diagnostics-next-line schemaSync:off
-    const foreignKeys = Schema.decodeUnknownSync(Schema.Struct({ foreign_keys: Schema.Finite }))(
-      sqlite.prepare("PRAGMA foreign_keys").get(),
-    ).foreign_keys;
+    const foreignKeys = EffectFunction.flow(
+      Schema.decodeUnknownResult(Schema.Struct({ foreign_keys: Schema.Finite })),
+      Result.getOrThrow,
+    )(sqlite.prepare("PRAGMA foreign_keys").get()).foreign_keys;
     if (rebuild) sqlite.exec("PRAGMA foreign_keys = OFF");
     let started = false;
     try {

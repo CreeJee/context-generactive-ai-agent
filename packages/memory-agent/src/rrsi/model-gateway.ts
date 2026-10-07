@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { optionalProperty } from "../optional-property.ts";
 import type { ModelMessage } from "@tanstack/ai";
@@ -89,19 +90,21 @@ const ProposalRequest = Schema.Struct({
 });
 
 /** Keep account/model credentials in the host; preserve native reasoning/tool events in worker replies. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function subscriptionGateway(
+export const subscriptionGateway: {
+  (
+    client: StreamingOAuthClient,
+  ): (selection: ModelSelection) => ReturnType<typeof subscriptionGatewayBody>;
+} & typeof subscriptionGatewayBody = EffectFunction.dual(2, subscriptionGatewayBody);
+function subscriptionGatewayBody(
   selection: ModelSelection,
   client: StreamingOAuthClient,
 ): ModelGateway {
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const subscription = async (body: string, signal: AbortSignal) => {
     // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    // @effect-diagnostics-next-line schemaSync:off
-    const payload = Schema.decodeSync(
-      Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+    const payload = EffectFunction.flow(
+      Schema.decodeResult(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))),
+      Result.getOrThrow,
     )(body);
     const events: NormalizedStreamEvent[] = [];
     let promptTokens: number | undefined;
@@ -136,11 +139,12 @@ export function subscriptionGateway(
     release: () => client.releaseRun?.(),
     subscription,
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     complete: async (body, signal) => {
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      const request = Schema.decodeSync(Schema.fromJsonString(ProposalRequest))(body);
+      const request = EffectFunction.flow(
+        Schema.decodeResult(Schema.fromJsonString(ProposalRequest)),
+        Result.getOrThrow,
+      )(body);
       if (selection.provider === "openai-compatible")
         throw new Error("invalid_subscription_provider");
       const raw = await subscription(
@@ -162,8 +166,10 @@ export function subscriptionGateway(
         signal,
       );
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      const result = Schema.decodeSync(Schema.fromJsonString(SubscriptionResult))(raw);
+      const result = EffectFunction.flow(
+        Schema.decodeResult(Schema.fromJsonString(SubscriptionResult)),
+        Result.getOrThrow,
+      )(raw);
       return JSON.stringify({
         choices: [
           {

@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off schemaSync:off
 import { DateTime, Effect, Schema } from "effect";
@@ -24,7 +25,10 @@ test("owner capability fences session, revision, generation and completed runs",
     Effect.all({ db: Database, workflows: Workflows }),
   );
   await context.runtime.runPromise(workflows.updateGoal(context.session.id, goal));
-  const revision = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.Finite }))(
+  const revision = EffectFunction.flow(
+    Schema.decodeUnknownResult(Schema.Struct({ id: Schema.Finite })),
+    Result.getOrThrow,
+  )(
     db.sqlite
       .prepare(
         "SELECT id FROM workflow_state_revisions WHERE session_id = ? ORDER BY id DESC LIMIT 1",

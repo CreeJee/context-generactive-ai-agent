@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { SubscriptionAccountProvider } from "../providers/contracts.ts";
 import { DateTime, Schema } from "effect";
@@ -41,8 +42,6 @@ const profileIdPattern =
 
 /** Publish an already-authenticated per-profile vault slot; leave the current selection untouched. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function publishOAuthProfile(
   sqlite: DatabaseSync,
   provider: OAuthProvider,
@@ -68,8 +67,6 @@ export async function publishOAuthProfile(
 
 /** Selection is provider-scoped and committed atomically; vault contents are never copied. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function selectOAuthProfile(
   sqlite: DatabaseSync,
   provider: OAuthProvider,
@@ -106,9 +103,14 @@ export async function selectOAuthProfile(
   return { ...target, selected: true };
 }
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function renameOAuthProfile(
+export const renameOAuthProfile: {
+  (
+    provider: OAuthProvider,
+    id: string,
+    label: string,
+  ): (sqlite: DatabaseSync) => ReturnType<typeof renameOAuthProfileBody>;
+} & typeof renameOAuthProfileBody = EffectFunction.dual(4, renameOAuthProfileBody);
+function renameOAuthProfileBody(
   sqlite: DatabaseSync,
   provider: OAuthProvider,
   id: string,
@@ -123,8 +125,6 @@ export function renameOAuthProfile(
 }
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function removeOAuthProfile(
   sqlite: DatabaseSync,
   provider: OAuthProvider,
@@ -174,8 +174,6 @@ export async function removeOAuthProfile(
   }
 }
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function listOAuthProfiles(sqlite: DatabaseSync, provider?: OAuthProvider): OAuthProfile[] {
   const rows = isTruthy(provider)
     ? sqlite
@@ -189,17 +187,19 @@ export function listOAuthProfiles(sqlite: DatabaseSync, provider?: OAuthProvider
         )
         .all();
   // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  // @effect-diagnostics-next-line schemaSync:off
-  const profiles = Schema.decodeUnknownSync(
-    Schema.Array(
-      Schema.Struct({
-        id: Schema.String,
-        provider: SubscriptionAccountProvider,
-        label: Schema.String,
-        selected: Schema.Literals([0, 1]),
-        created_at: Schema.Finite,
-      }),
+  const profiles = EffectFunction.flow(
+    Schema.decodeUnknownResult(
+      Schema.Array(
+        Schema.Struct({
+          id: Schema.String,
+          provider: SubscriptionAccountProvider,
+          label: Schema.String,
+          selected: Schema.Literals([0, 1]),
+          created_at: Schema.Finite,
+        }),
+      ),
     ),
+    Result.getOrThrow,
   )(rows);
   return profiles.map((row) => ({
     id: row.id,
@@ -212,8 +212,6 @@ export function listOAuthProfiles(sqlite: DatabaseSync, provider?: OAuthProvider
 
 /** Copy first, verify the new slot, then publish secret-free metadata. Never delete the legacy slot. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function importLegacyOAuthProfile(
   sqlite: DatabaseSync,
   provider: OAuthProvider,

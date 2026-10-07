@@ -1,10 +1,8 @@
 import { isTruthy } from "../src/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { Array as EffectArray, Effect, Layer, Schema, MutableHashMap, Option } from "effect";
 import { memoryAgentLayer } from "../src/layers.ts";
@@ -89,7 +87,6 @@ const offlineEmbedding = (cacheDir: string) =>
         embed: (texts) =>
           Effect.tryPromise({
             // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-            // @effect-diagnostics-next-line asyncFunction:off
             try: async () => {
               if (!isTruthy(texts.length)) return [];
               const output = await model(
@@ -245,8 +242,12 @@ export const evaluateRecallShadowSearch = Effect.fnUntraced(function* (
       cases,
     };
     // Evaluation entry point owns this Layer and its resource scope.
-    // @effect-diagnostics-next-line strictEffectProvide:off
-  }).pipe(Effect.provide(layer));
+  }).pipe(
+    Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+      const services = yield* Layer.build(layer);
+      return yield* Effect.provideContext(program, services);
+    }, Effect.scoped),
+  );
 });
 
 if (import.meta.main) {
@@ -254,6 +255,5 @@ if (import.meta.main) {
     Effect.scoped(evaluateRecallShadowSearch({ textOnly: process.argv.includes("--text-only") })),
   );
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  // @effect-diagnostics-next-line globalConsole:off
   console.log(JSON.stringify(result, null, 2));
 }

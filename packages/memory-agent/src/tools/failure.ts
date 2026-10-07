@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { HashMap, Result, Option, Schema } from "effect";
 import { PathRejected } from "../files/paths.ts";
 import { TextFileRejected } from "../files/text.ts";
@@ -30,9 +31,10 @@ const decodeSystemError = Schema.decodeUnknownOption(SystemError);
  * Turns a failure into the message the model sees, `reason: path. hint`. Host errors keep only
  * their code, so absolute paths and system messages do not leak into the conversation.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function toolFailure(error: Error, path: string): Error {
+export const toolFailure: {
+  (path: string): (error: Error) => ReturnType<typeof toolFailureBody>;
+} & typeof toolFailureBody = EffectFunction.dual(2, toolFailureBody);
+function toolFailureBody(error: Error, path: string): Error {
   if (error instanceof PathRejected || error instanceof TextFileRejected)
     return new Error(
       `${error.reason}: ${path}. ${Option.getOrUndefined(HashMap.get(refusalHints, error.reason)) ?? ""}`.trim(),
@@ -46,9 +48,10 @@ export function toolFailure(error: Error, path: string): Error {
 
 /** Runs one tool operation, rethrowing any failure as a model-facing message. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
-export async function guarded<A>(path: string, operation: () => Promise<A>): Promise<A> {
+export const guarded: {
+  <A>(operation: () => Promise<A>): (path: string) => ReturnType<typeof guardedBody<A>>;
+} & typeof guardedBody = EffectFunction.dual(2, guardedBody);
+async function guardedBody<A>(path: string, operation: () => Promise<A>): Promise<A> {
   try {
     return await operation();
   } catch (error) {

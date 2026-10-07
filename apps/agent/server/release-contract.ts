@@ -1,6 +1,6 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../app/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { sign, verify } from "node:crypto";
 import { Predicate, Schema } from "effect";
 
@@ -78,20 +78,26 @@ export function canonicalJson(value: Json): string {
     .join(",")}}`;
 }
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line missingPipeableSignature:off schemaSync:off
-export const decodeReleaseManifest = Schema.decodeSync(ReleaseManifest);
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+export const decodeReleaseManifest = EffectFunction.flow(
+  Schema.decodeResult(ReleaseManifest),
+  Result.getOrThrow,
+);
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line missingPipeableSignature:off schemaSync:off
-export const decodeManifestSignature = Schema.decodeSync(ManifestSignature);
+export const decodeManifestSignature = EffectFunction.flow(
+  Schema.decodeResult(ManifestSignature),
+  Result.getOrThrow,
+);
 
 const unsigned = (manifest: ReleaseManifest) => Buffer.from(canonicalJson(manifest), "utf8");
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function signReleaseManifest(
+export const signReleaseManifest: {
+  (
+    keyId: string,
+    privateKey: string,
+  ): (manifest: ReleaseManifest) => ReturnType<typeof signReleaseManifestBody>;
+} & typeof signReleaseManifestBody = EffectFunction.dual(3, signReleaseManifestBody);
+function signReleaseManifestBody(
   manifest: ReleaseManifest,
   keyId: string,
   privateKey: string,
@@ -99,9 +105,13 @@ export function signReleaseManifest(
   return { keyId, signature: sign(null, unsigned(manifest), privateKey).toString("base64") };
 }
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function verifyManifestSignature(
+export const verifyManifestSignature: {
+  (
+    signature: ManifestSignature,
+    trustedKeys: Readonly<Record<string, string>>,
+  ): (manifest: ReleaseManifest) => ReturnType<typeof verifyManifestSignatureBody>;
+} & typeof verifyManifestSignatureBody = EffectFunction.dual(3, verifyManifestSignatureBody);
+function verifyManifestSignatureBody(
   manifest: ReleaseManifest,
   signature: ManifestSignature,
   trustedKeys: Readonly<Record<string, string>>,
@@ -120,8 +130,7 @@ interface ParsedVersion {
 
 function parseVersion(version: string): ParsedVersion {
   // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  // @effect-diagnostics-next-line schemaSync:off
-  const valid = Schema.decodeSync(SemVer)(version);
+  const valid = EffectFunction.flow(Schema.decodeResult(SemVer), Result.getOrThrow)(version);
   const withoutBuild = valid.split("+", 1)[0]!;
   const [core, suffix] = withoutBuild.split("-", 2);
   const [major, minor, patch] = core!.split(".").map(Number);
@@ -132,9 +141,10 @@ function parseVersion(version: string): ParsedVersion {
 }
 
 /** SemVer precedence, ignoring build metadata. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function compareVersions(left: string, right: string) {
+export const compareVersions: {
+  (right: string): (left: string) => ReturnType<typeof compareVersionsBody>;
+} & typeof compareVersionsBody = EffectFunction.dual(2, compareVersionsBody);
+function compareVersionsBody(left: string, right: string) {
   const a = parseVersion(left);
   const b = parseVersion(right);
   for (let index = 0; index < a.core.length; index++) {
@@ -158,12 +168,15 @@ export function compareVersions(left: string, right: string) {
   return 0;
 }
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function releaseAssetName(version: string, target: string) {
+export const releaseAssetName: {
+  (target: string): (version: string) => ReturnType<typeof releaseAssetNameBody>;
+} & typeof releaseAssetNameBody = EffectFunction.dual(2, releaseAssetNameBody);
+function releaseAssetNameBody(version: string, target: string) {
   // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  // @effect-diagnostics-next-line schemaSync:off
-  const normalized = Schema.decodeSync(SemVer)(version.replace(/^v/, ""));
+  const normalized = EffectFunction.flow(
+    Schema.decodeResult(SemVer),
+    Result.getOrThrow,
+  )(version.replace(/^v/, ""));
   const extension = target.startsWith("win32-") ? "zip" : "tar.gz";
   return `context-agent-v${normalized}-${target}.${extension}`;
 }
@@ -177,9 +190,13 @@ export interface UpdateDecisionOptions {
 }
 
 /** Verifies trust and policy before returning the exact platform asset that may be downloaded. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function acceptRelease(
+export const acceptRelease: {
+  (
+    trustedKeys: Readonly<Record<string, string>>,
+    options: UpdateDecisionOptions,
+  ): (envelope: ReleaseEnvelope) => ReturnType<typeof acceptReleaseBody>;
+} & typeof acceptReleaseBody = EffectFunction.dual(3, acceptReleaseBody);
+function acceptReleaseBody(
   envelope: ReleaseEnvelope,
   trustedKeys: Readonly<Record<string, string>>,
   options: UpdateDecisionOptions,

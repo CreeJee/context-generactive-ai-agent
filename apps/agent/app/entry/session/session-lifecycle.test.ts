@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off schemaSync:off
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
@@ -78,7 +79,12 @@ describe("server-authoritative session lifecycle client", () => {
         body: expect.any(String),
       });
       const requestBody = vi.mocked(appFetch).mock.calls[0]?.[1]?.body;
-      const body = JSON.parse(Schema.decodeUnknownSync(Schema.String)(requestBody));
+      const body = JSON.parse(
+        EffectFunction.flow(
+          Schema.decodeUnknownResult(Schema.String),
+          Result.getOrThrow,
+        )(requestBody),
+      );
       expect(body).toEqual({ ...change, idempotencyKey: expect.any(String) });
       expect(body.idempotencyKey).not.toBe("");
     });

@@ -1,15 +1,11 @@
 import { isTruthy } from "../app/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { spawn } from "node:child_process";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createReadStream, statSync } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { extname, resolve, sep } from "node:path";
 import { createRequestListener } from "@react-router/node";
 import { Schema } from "effect";
@@ -129,7 +125,6 @@ export function serve(options: ServeOptions) {
       if (decision.kind !== "allow") {
         if (decision.kind === "reject")
           // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-          // @effect-diagnostics-next-line globalConsole:off
           console.warn(
             `[dev-backend] blocked ${request.method ?? "UNKNOWN"} ${pathname}: ${decision.error} ` +
               `(backend=${decision.backendBuildId}, browser=${decision.presentedBuildId ?? "missing"})`,
@@ -169,7 +164,6 @@ export function serve(options: ServeOptions) {
   }
 
   // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-  // @effect-diagnostics-next-line newPromise:off
   return new Promise<void>((resolveListening, reject) => {
     server.once("error", reject);
     server.listen(options.port, "127.0.0.1", () => resolveListening());

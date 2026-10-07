@@ -52,7 +52,6 @@ export function makeOwnerRpcPortClient(port: MessagePort) {
       }
       const requestId = ++nextId;
       // Native MessagePort callback handshake; close rejects every pending request.
-      // @effect-diagnostics-next-line newPromise:off
       return new Promise((resolve, reject) => {
         pending[requestId] = { resolve, reject, operationId: request.operationId };
         try {

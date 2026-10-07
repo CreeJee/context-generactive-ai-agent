@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off schemaSync:off
 import { chat } from "@tanstack/ai";
@@ -208,7 +209,10 @@ test("populated promoted-memory retrieval and use state never leak into a fresh 
     !(second.middleware !== null)
   )
     throw new Error("Expected run tools and middleware");
-  const promoted = Schema.decodeUnknownSync(Schema.Struct({ memoryNodeId: Schema.NonEmptyString }))(
+  const promoted = EffectFunction.flow(
+    Schema.decodeUnknownResult(Schema.Struct({ memoryNodeId: Schema.NonEmptyString })),
+    Result.getOrThrow,
+  )(
     await first.tools[4].execute!({
       claimId,
       taskId: handle.taskId,

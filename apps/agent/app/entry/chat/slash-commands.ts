@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../../truthy.ts";
 import type { PermissionMode } from "../api";
 
@@ -127,9 +128,10 @@ const skillNamed = (word: string, context: SlashContext) =>
     : context.skills.find((skill) => skill.name.toLowerCase() === word.toLowerCase());
 
 /** Suggestions for the draft, or none when it is not a command being typed. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function suggest(draft: string, context: SlashContext): Suggestion[] {
+export const suggest: {
+  (context: SlashContext): (draft: string) => ReturnType<typeof suggestBody>;
+} & typeof suggestBody = EffectFunction.dual(2, suggestBody);
+function suggestBody(draft: string, context: SlashContext): Suggestion[] {
   const parts = split(draft);
   if (!(parts !== null)) return [];
   if (!parts.hasSpace) {
@@ -192,9 +194,10 @@ export type SlashParse =
   | { readonly kind: "command"; readonly command: SlashCommand };
 
 /** Reads a complete command from the draft. Text that does not start with `/` is a message. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function parseSlash(draft: string, context: SlashContext): SlashParse {
+export const parseSlash: {
+  (context: SlashContext): (draft: string) => ReturnType<typeof parseSlashBody>;
+} & typeof parseSlashBody = EffectFunction.dual(2, parseSlashBody);
+function parseSlashBody(draft: string, context: SlashContext): SlashParse {
   const parts = split(draft.trim());
   if (!(parts !== null)) return { kind: "not_command" };
   const skill = skillNamed(parts.word, context);

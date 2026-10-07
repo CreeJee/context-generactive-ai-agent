@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { MutableHashMap, Option, Schema } from "effect";
 import { PathRejected } from "./paths.ts";
@@ -102,7 +103,6 @@ function* lineMatches(text: string, needle: string, caseSensitive: boolean, from
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function searchTextFiles(
   paths: readonly string[],
   readBytes: (path: string) => Promise<Uint8Array>,
@@ -201,8 +201,9 @@ export type SearchCursor = typeof Cursor.Type;
 /** An opaque continuation token for the model. */
 export const encodeSearchCursor = (cursor: SearchCursor) =>
   // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  // @effect-diagnostics-next-line schemaSync:off
-  Buffer.from(Schema.encodeSync(Cursor)(cursor)).toString("base64url");
+  Buffer.from(EffectFunction.flow(Schema.encodeResult(Cursor), Result.getOrThrow)(cursor)).toString(
+    "base64url",
+  );
 
 export const decodeSearchCursor = (text: string) =>
   Option.getOrUndefined(

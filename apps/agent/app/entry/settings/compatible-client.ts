@@ -29,7 +29,6 @@ type CompatibleCommand =
   | { action: "list" };
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 async function request<T>(body?: CompatibleCommand): Promise<T> {
   const response = await appFetch(
     "/api/settings/compatible",

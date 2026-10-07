@@ -1,13 +1,11 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { realpathSync, statSync } from "node:fs";
 import type { SQLOutputValue } from "node:sqlite";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { basename, resolve } from "node:path";
 import { DateTime, Clock, Context, Data, Effect, Layer, Schema } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
@@ -45,8 +43,10 @@ const ProjectRow = Schema.Struct({
   hidden_at: Schema.NullOr(Schema.String),
 });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeProjectRow = Schema.decodeUnknownSync(ProjectRow);
+const decodeProjectRow = EffectFunction.flow(
+  Schema.decodeUnknownResult(ProjectRow),
+  Result.getOrThrow,
+);
 
 function toProject(row: Record<string, SQLOutputValue>): Project {
   const decoded = decodeProjectRow(row);

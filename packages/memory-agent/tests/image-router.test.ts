@@ -1,3 +1,5 @@
+import { Layer } from "effect";
+import { it as effectTest } from "@effect/vitest";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off
 import { Effect, Result } from "effect";
@@ -215,18 +217,16 @@ describe("image router", () => {
     expect(Result.isFailure(rejected) && rejected.failure._tag).toBe("FixedImageRouteRejected");
   });
 
-  it("excludes unknown cost under a strict ceiling unless explicitly allowed", async () => {
-    const strict = await Effect.runPromise(
-      rankImageRoutes({
+  effectTest.effect("excludes unknown cost under a strict ceiling unless explicitly allowed", () =>
+    Effect.gen(function* () {
+      const strict = yield* rankImageRoutes({
         routes,
         facts,
         intent,
         policy: { mode: "auto", preference: "speed", maximumEstimatedCostUsd: 1 },
-      }),
-    );
-    expect(strict.find((score) => score.routeId === fast.id)).toMatchObject({ eligible: false });
-    const allowed = await Effect.runPromise(
-      rankImageRoutes({
+      });
+      expect(strict.find((score) => score.routeId === fast.id)).toMatchObject({ eligible: false });
+      const allowed = yield* rankImageRoutes({
         routes,
         facts,
         intent,
@@ -236,47 +236,49 @@ describe("image router", () => {
           maximumEstimatedCostUsd: 1,
           allowUnknownCost: true,
         },
+      });
+      expect(allowed.find((score) => score.routeId === fast.id)).toMatchObject({ eligible: true });
+    }),
+  );
+
+  effectTest.effect(
+    "treats configured direct routes as attemptable without an operator verification flag",
+    () =>
+      Effect.gen(function* () {
+        const service = yield* Effect.scoped(
+          Effect.flatMap(Layer.build(ImageRouteFacts.authenticatedRoutesLayer), (services) =>
+            Effect.provideContext(ImageRouteFacts, services),
+          ),
+        );
+        const routeFacts = yield* service.forRoutes([
+          quality,
+          { ...cheap, authentication: { ...cheap.authentication, verified: false } },
+        ]);
+        expect(routeFacts[0]).toMatchObject({
+          routeId: quality.id,
+          available: true,
+          accountId: "openai-api-key",
+        });
+        expect(routeFacts[1]).toMatchObject({ routeId: cheap.id, available: false });
       }),
-    );
-    expect(allowed.find((score) => score.routeId === fast.id)).toMatchObject({ eligible: true });
-  });
+  );
 
-  it("treats configured direct routes as attemptable without an operator verification flag", async () => {
-    const service = await Effect.runPromise(
-      // Test entry point owns this Layer and its resource scope.
-      // @effect-diagnostics-next-line strictEffectProvide:off
-      Effect.provide(ImageRouteFacts, ImageRouteFacts.authenticatedRoutesLayer),
-    );
-    const routeFacts = await Effect.runPromise(
-      service.forRoutes([
-        quality,
-        { ...cheap, authentication: { ...cheap.authentication, verified: false } },
-      ]),
-    );
-    expect(routeFacts[0]).toMatchObject({
-      routeId: quality.id,
-      available: true,
-      accountId: "openai-api-key",
-    });
-    expect(routeFacts[1]).toMatchObject({ routeId: cheap.id, available: false });
-  });
-
-  it("does not treat unverified account entitlement as implementation failure", async () => {
-    const [score] = await Effect.runPromise(
-      rankImageRoutes({
+  effectTest.effect("does not treat unverified account entitlement as implementation failure", () =>
+    Effect.gen(function* () {
+      const [score] = yield* rankImageRoutes({
         routes: [{ ...quality, entitlement: { ...quality.entitlement, status: "unverified" } }],
         facts: [facts[0]!],
         intent,
         policy: { mode: "auto" },
-      }),
-    );
-    expect(score?.eligible).toBe(true);
-  });
+      });
+      expect(score?.eligible).toBe(true);
+    }),
+  );
 
-  it("filters unauthenticated, disabled and unavailable routes", async () => {
-    const disabled = media("gpt-image-2", { production: false });
-    const ranking = await Effect.runPromise(
-      rankImageRoutes({
+  effectTest.effect("filters unauthenticated, disabled and unavailable routes", () =>
+    Effect.gen(function* () {
+      const disabled = media("gpt-image-2", { production: false });
+      const ranking = yield* rankImageRoutes({
         routes: [
           disabled,
           { ...cheap, authentication: { ...cheap.authentication, verified: false } },
@@ -285,10 +287,10 @@ describe("image router", () => {
         facts: facts.map((fact) => ({ ...fact, available: false })),
         intent,
         policy: { mode: "auto" },
-      }),
-    );
-    expect(ranking.every((score) => !score.eligible)).toBe(true);
-  });
+      });
+      expect(ranking.every((score) => !score.eligible)).toBe(true);
+    }),
+  );
 
   it("returns typed failure with complete ranking when no route is eligible", async () => {
     const service = await router(facts.map((fact) => ({ ...fact, available: false })));
@@ -316,32 +318,30 @@ describe("image router", () => {
     expect(reroute.alternatives.every((candidate) => candidate.type === "selected")).toBe(true);
   });
 
-  it("rejects malformed intent and scoring facts", async () => {
-    const invalidIntent = await Effect.runPromise(
-      Effect.result(
+  effectTest.effect("rejects malformed intent and scoring facts", () =>
+    Effect.gen(function* () {
+      const invalidIntent = yield* Effect.result(
         rankImageRoutes({
           routes,
           facts,
           intent: { ...intent, sourceImageCount: -1 },
           policy: { mode: "auto" },
         }),
-      ),
-    );
-    expect(Result.isFailure(invalidIntent) && invalidIntent.failure._tag).toBe(
-      "ImageRoutingInvalidRequest",
-    );
-    const invalidFact = await Effect.runPromise(
-      Effect.result(
+      );
+      expect(Result.isFailure(invalidIntent) && invalidIntent.failure._tag).toBe(
+        "ImageRoutingInvalidRequest",
+      );
+      const invalidFact = yield* Effect.result(
         rankImageRoutes({
           routes,
           facts: [{ ...facts[0]!, quality: 2 }],
           intent,
           policy: { mode: "auto" },
         }),
-      ),
-    );
-    expect(Result.isFailure(invalidFact) && invalidFact.failure._tag).toBe(
-      "ImageRoutingInvalidRequest",
-    );
-  });
+      );
+      expect(Result.isFailure(invalidFact) && invalidFact.failure._tag).toBe(
+        "ImageRoutingInvalidRequest",
+      );
+    }),
+  );
 });

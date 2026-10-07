@@ -1,15 +1,12 @@
+import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { execFile } from "node:child_process";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { lstat, readdir } from "node:fs/promises";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join, posix } from "node:path";
 import { promisify } from "node:util";
 import { MutableHashMap, Option, Effect } from "effect";
@@ -24,7 +21,6 @@ const statConcurrency = 64;
 
 /** Maps items with at most `limit` running at once, keeping the input order. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 async function mapLimit<A, B>(
   items: readonly A[],
   limit: number,
@@ -33,7 +29,6 @@ async function mapLimit<A, B>(
   const results: B[] = [];
   let next = 0;
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const worker = async () => {
     while (next < items.length) {
       const index = next++;
@@ -62,7 +57,6 @@ export interface FileListing {
 }
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 async function gitFiles(root: string, directory: string): Promise<string[] | null> {
   const git = findExecutable("git");
   if (!isTruthy(git)) return null;
@@ -85,13 +79,11 @@ async function gitFiles(root: string, directory: string): Promise<string[] | nul
  * under an unusual name, and the absolute base outside, where `~/.config` + `gh` must still match.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 async function walkFiles(base: string, directory: string, credentialPrefix: string) {
   const files: string[] = [];
   let excluded = 0;
   let truncated = false;
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const visit = async (relative: string) => {
     const entries = await readdir(join(base, relative), { withFileTypes: true }).catch(() => []);
     for (const entry of entries) {
@@ -117,9 +109,13 @@ async function walkFiles(base: string, directory: string, credentialPrefix: stri
  * a tracked file deleted from disk is not listed.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
-export async function listProjectFiles(
+export const listProjectFiles: {
+  (
+    directory: string,
+    glob: string | undefined,
+  ): (root: string) => ReturnType<typeof listProjectFilesBody>;
+} & typeof listProjectFilesBody = EffectFunction.dual(3, listProjectFilesBody);
+async function listProjectFilesBody(
   root: string,
   directory: string,
   glob: string | undefined,
@@ -147,7 +143,6 @@ export async function listProjectFiles(
           kept,
           statConcurrency,
           // Native filesystem Promise callback, consumed by this bounded adapter.
-          // @effect-diagnostics-next-line asyncFunction:off
           async (path) =>
             isTruthy((await lstat(join(root, path)).catch(() => undefined))?.isFile())
               ? path
@@ -170,9 +165,10 @@ export async function listProjectFiles(
  * listings show what is on disk, minus links, `.git`, `node_modules` and credentials.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
-export async function listOutsideFiles(
+export const listOutsideFiles: {
+  (glob: string | undefined): (directory: string) => ReturnType<typeof listOutsideFilesBody>;
+} & typeof listOutsideFilesBody = EffectFunction.dual(2, listOutsideFilesBody);
+async function listOutsideFilesBody(
   directory: string,
   glob: string | undefined,
 ): Promise<FileListing> {

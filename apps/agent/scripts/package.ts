@@ -1,13 +1,12 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../app/truthy.ts";
 // Builds the executable for this machine's platform:
 //   dist/context-agent-<platform>-<arch>/context-agent (+ .sha256)
 // Run with `vp run package`, which builds the app and its workspace dependencies first. Other platforms are built on
 // their own machines (turbovec and the optional platform packages exist only for the host).
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { spawnSync } from "node:child_process";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash } from "node:crypto";
 import {
   cpSync,
@@ -20,10 +19,8 @@ import {
   statSync,
   writeFileSync,
   // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-  // @effect-diagnostics-next-line nodeBuiltinImport:off
 } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { basename, dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MutableHashMap, Option, Schema } from "effect";
@@ -50,10 +47,10 @@ const PackageJson = Schema.Struct({
 });
 const readPackage = (directory: string) =>
   // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  // @effect-diagnostics-next-line schemaSync:off
-  Schema.decodeSync(Schema.fromJsonString(PackageJson))(
-    readFileSync(join(directory, "package.json"), "utf8"),
-  );
+  EffectFunction.flow(
+    Schema.decodeResult(Schema.fromJsonString(PackageJson)),
+    Result.getOrThrow,
+  )(readFileSync(join(directory, "package.json"), "utf8"));
 
 const ReleaseVersion = Schema.String.pipe(
   Schema.check(
@@ -63,20 +60,21 @@ const ReleaseVersion = Schema.String.pipe(
   ),
 );
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const releaseVersion = Schema.decodeSync(ReleaseVersion)(
+const releaseVersion = EffectFunction.flow(
+  Schema.decodeResult(ReleaseVersion),
+  Result.getOrThrow,
+)(
   // Native host/SDK configuration boundary reads or forwards the host environment.
-  // @effect-diagnostics-next-line processEnv:off
   (process.env.CONTEXT_AGENT_VERSION ?? readPackage(repo).version).replace(/^v/, ""),
 );
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const releaseChannel = Schema.decodeUnknownSync(Schema.Literals(["stable", "prerelease"]))(
+const releaseChannel = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Literals(["stable", "prerelease"])),
+  Result.getOrThrow,
+)(
   // Native host/SDK configuration boundary reads or forwards the host environment.
-  // @effect-diagnostics-next-line processEnv:off
   process.env.CONTEXT_AGENT_RELEASE_CHANNEL ??
     // Native host/SDK configuration boundary reads or forwards the host environment.
-    // @effect-diagnostics-next-line processEnv:off
     (isTruthy(process.env.CONTEXT_AGENT_VERSION) && !releaseVersion.includes("-")
       ? "stable"
       : "prerelease"),
@@ -248,7 +246,6 @@ function verifyNativeFiles() {
  */
 function signMacos(executable: string) {
   // Native host/SDK configuration boundary reads or forwards the host environment.
-  // @effect-diagnostics-next-line processEnv:off
   const identity = process.env.CONTEXT_AGENT_SIGN_IDENTITY;
   run("codesign", [
     "--sign",
@@ -264,7 +261,6 @@ function signMacos(executable: string) {
   ]);
   run("codesign", ["--verify", "--strict", "--verbose=2", executable]);
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  // @effect-diagnostics-next-line globalConsole:off
   console.log(isTruthy(identity) ? `signed with ${identity}` : "signed ad-hoc (not distributable)");
 }
 
@@ -342,7 +338,6 @@ writeFileSync(
 assets["release/info.json"] = releaseInfoFile;
 writeFileSync(assetsFile, JSON.stringify(assets));
 // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-// @effect-diagnostics-next-line globalConsole:off
 console.log(
   `runtime: ${files.length} files, ${(bytes / 1e6).toFixed(1)} MB; release: ${releaseVersion} (${releaseChannel}, ${target})`,
 );
@@ -364,5 +359,4 @@ if (process.platform === "darwin") signMacos(executable);
 const digest = createHash("sha256").update(readFileSync(executable)).digest("hex");
 writeFileSync(`${executable}.sha256`, `${digest}  ${basename(executable)}\n`);
 // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-// @effect-diagnostics-next-line globalConsole:off
 console.log(`${relative(app, executable)}: ${(statSync(executable).size / 1e6).toFixed(1)} MB`);

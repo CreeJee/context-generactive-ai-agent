@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { MutableHashMap, Schema } from "effect";
@@ -49,8 +50,10 @@ const Binding = Schema.Struct({
   workflow_revision_id: Schema.Int,
 });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const optionalBinding = Schema.decodeUnknownSync(Schema.UndefinedOr(Binding));
+const optionalBinding = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.UndefinedOr(Binding)),
+  Result.getOrThrow,
+);
 const Registration = Schema.Struct({
   artifactHash: Schema.String,
   sourceHash: Schema.String,
@@ -60,8 +63,10 @@ const Registration = Schema.Struct({
 /** Owner-side DB boundary; no code, credentials or artifact bytes enter the snapshot. */
 export function completionEvidence(sqlite: DatabaseSync) {
   // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  // @effect-diagnostics-next-line schemaSync:off
-  const optionalString = Schema.decodeUnknownSync(Schema.UndefinedOr(Schema.String));
+  const optionalString = EffectFunction.flow(
+    Schema.decodeUnknownResult(Schema.UndefinedOr(Schema.String)),
+    Result.getOrThrow,
+  );
   const identity = (sessionId: string) =>
     optionalString(
       sqlite
@@ -185,8 +190,10 @@ export function completionEvidence(sqlite: DatabaseSync) {
       FROM workflow_goal_worker_generations WHERE goal_instance_id = ?`)
       .get(goalId);
     // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    // @effect-diagnostics-next-line schemaSync:off
-    const registration = Schema.decodeUnknownSync(Schema.UndefinedOr(Registration))(
+    const registration = EffectFunction.flow(
+      Schema.decodeUnknownResult(Schema.UndefinedOr(Registration)),
+      Result.getOrThrow,
+    )(
       sqlite
         .prepare(`SELECT artifact_hash AS artifactHash, source_hash AS sourceHash,
         contract_version AS contractVersion FROM workflow_goal_native_artifacts

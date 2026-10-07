@@ -199,7 +199,6 @@ export const ApiErrorCode = Schema.Literals([
 export type ApiErrorCode = typeof ApiErrorCode.Type;
 
 // React/query clients consume this native Error contract outside Effect failure channels.
-// @effect-diagnostics-next-line extendsNativeError:off
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -267,13 +266,11 @@ type PendingSessionLifecycle = Exclude<ArchiveTaskResult, { status: "completed" 
 type SessionArchiveResult = { status: "completed"; session: Session } | PendingSessionLifecycle;
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 async function changeSessionLifecycle(sessionId: string, holder: string, change: JsonBody) {
   const response = await appFetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
     method: "POST",
     headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
     // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
-    // @effect-diagnostics-next-line cryptoRandomUUID:off
     body: JSON.stringify({ ...change, idempotencyKey: crypto.randomUUID() }),
   });
   const body: unknown = await response.json();
@@ -297,7 +294,6 @@ function apiError(
 /** Preserve the server's typed error code through the chat transport. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export const chatFetch: typeof fetch = async (...arguments_) => {
   const response = await appFetch(...arguments_);
   if (!response.ok) {
@@ -320,7 +316,6 @@ type JsonValue =
 type JsonBody = Readonly<{ [key: string]: JsonValue | undefined }>;
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 async function call<T>(
   method: "GET" | "POST",
   path: string,
@@ -380,7 +375,6 @@ export const api = {
     call<Session[]>("GET", `/api/sessions?project=${encodeURIComponent(projectId)}&archived=1`),
   /** Active parent/child runs are checkpointed and stopped before the conversation is archived. */
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   setArchived: async (
     sessionId: string,
     holder: string,
@@ -396,7 +390,6 @@ export const api = {
     return { status: "completed", session };
   },
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   deleteSession: async (sessionId: string, holder: string): Promise<ArchiveTaskResult> => {
     const { response, result } = await changeSessionLifecycle(sessionId, holder, { delete: true });
     if (!isTruthy(result) || (result.status === "completed" && response.status !== 200))
@@ -570,7 +563,6 @@ export const api = {
       `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
     ),
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   resumeWorkTraceTask: async (
     sessionId: string,
     holder: string,
@@ -579,7 +571,6 @@ export const api = {
     confirmUncertain = false,
   ): Promise<ResumeTaskResult> => {
     // Native Request/Response adapter preserves host and SDK stream semantics.
-    // @effect-diagnostics-next-line globalFetch:off
     const response = await fetch(
       `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
       {
@@ -597,21 +588,18 @@ export const api = {
     return result;
   },
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   archiveWorkTraceTask: async (
     sessionId: string,
     holder: string,
     taskId: string,
   ): Promise<ArchiveTaskResult> => {
     // Native Request/Response adapter preserves host and SDK stream semantics.
-    // @effect-diagnostics-next-line globalFetch:off
     const response = await fetch(
       `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
       {
         method: "POST",
         headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
         // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
-        // @effect-diagnostics-next-line cryptoRandomUUID:off
         body: JSON.stringify({ intent: "archive", idempotencyKey: crypto.randomUUID() }),
       },
     );
@@ -628,21 +616,18 @@ export const api = {
     return result;
   },
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   deleteWorkTraceTask: async (
     sessionId: string,
     holder: string,
     taskId: string,
   ): Promise<ArchiveTaskResult> => {
     // Native Request/Response adapter preserves host and SDK stream semantics.
-    // @effect-diagnostics-next-line globalFetch:off
     const response = await fetch(
       `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
       {
         method: "POST",
         headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
         // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
-        // @effect-diagnostics-next-line cryptoRandomUUID:off
         body: JSON.stringify({ intent: "delete", idempotencyKey: crypto.randomUUID() }),
       },
     );
@@ -679,10 +664,8 @@ export const api = {
 
   /** Uploads one image as raw bytes; the server checks what it really is. */
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   uploadAttachment: async (file: File) => {
     // Native Request/Response adapter preserves host and SDK stream semantics.
-    // @effect-diagnostics-next-line globalFetch:off
     const response = await fetch("/api/attachments", {
       method: "POST",
       headers: { "Content-Type": file.type || "application/octet-stream" },
@@ -751,14 +734,12 @@ export function archiveErrorMessage(error: Error) {
 
 /** Which queued messages a run just took in at a tool call. */
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export const decodeDeliveredEvent = Schema.decodeUnknownOption(
   Schema.Struct({ ids: Schema.Array(Schema.String) }),
 );
 
 /** A context update a run sends while it answers. */
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export const decodeContextEvent = Schema.decodeUnknownOption(
   Schema.Struct({
     usedTokens: Schema.NullOr(Schema.Finite),

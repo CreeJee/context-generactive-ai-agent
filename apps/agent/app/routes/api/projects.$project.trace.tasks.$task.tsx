@@ -5,7 +5,6 @@ import type { Route } from "./+types/projects.$project.trace.tasks.$task";
 
 /** GET /api/projects/:project/trace/tasks/:task — project-owned immutable task detail. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function loader({ params }: Route.LoaderArgs) {
   return agent.runPromise(
     Effect.flatMap(AgentChat, (chat) => chat.projectTraceTask(params.project, params.task)),

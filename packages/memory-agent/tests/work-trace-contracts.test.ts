@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics schemaSync:off
 import { Schema } from "effect";
@@ -38,7 +39,10 @@ describe("Work Trace domain contracts", () => {
   });
 
   test("represents resume lineage without changing the previous attempt", () => {
-    const decode = Schema.decodeUnknownSync(AgentRunAttempt);
+    const decode = EffectFunction.flow(
+      Schema.decodeUnknownResult(AgentRunAttempt),
+      Result.getOrThrow,
+    );
     const previous = decode({
       id: "attempt-1",
       taskId: "task-1",
@@ -78,7 +82,7 @@ describe("Work Trace domain contracts", () => {
   });
 
   test("keeps internal reasoning and omitted sensitive events out of user projections", () => {
-    const decode = Schema.decodeUnknownSync(RunEvent);
+    const decode = EffectFunction.flow(Schema.decodeUnknownResult(RunEvent), Result.getOrThrow);
     const base = {
       id: "event-1",
       originSessionId: "session-1",

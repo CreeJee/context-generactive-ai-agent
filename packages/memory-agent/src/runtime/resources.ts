@@ -1,6 +1,5 @@
 import { createRequire, findPackageJSON } from "node:module";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -21,7 +20,6 @@ interface RuntimePackages {
  * checkout. The executable sets it before the agent starts.
  */
 // Native host/SDK configuration boundary reads or forwards the host environment.
-// @effect-diagnostics-next-line processEnv:off
 export const runtimeRoot = () => process.env.CONTEXT_AGENT_RUNTIME ?? null;
 
 /**

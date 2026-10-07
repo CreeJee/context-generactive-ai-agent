@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off schemaSync:off
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
@@ -88,17 +89,29 @@ describe("archived conversations", () => {
     client.attach();
     void client.sendMessage("please be slow");
     const running = async () =>
-      Schema.decodeUnknownSync(Running)(
-        await (await runtime.runPromise(agent.status(session.id, "tab-a"))).json(),
-      ).running !== null;
+      EffectFunction.flow(
+        Schema.decodeUnknownResult(Running),
+        Result.getOrThrow,
+      )(await (await runtime.runPromise(agent.status(session.id, "tab-a"))).json()).running !==
+      null;
     await until(running, "the run to start");
     const done = await archive("tab-a");
     expect(done.status).toBe(200);
     await until(async () => !(await running()), "the run to stop");
     client.dispose();
 
-    expect(Schema.decodeUnknownSync(Archived)(await done.json()).archivedAt).not.toBeNull();
+    expect(
+      EffectFunction.flow(
+        Schema.decodeUnknownResult(Archived),
+        Result.getOrThrow,
+      )(await done.json()).archivedAt,
+    ).not.toBeNull();
     const back = await archive("tab-a", false);
-    expect(Schema.decodeUnknownSync(Archived)(await back.json()).archivedAt).toBeNull();
+    expect(
+      EffectFunction.flow(
+        Schema.decodeUnknownResult(Archived),
+        Result.getOrThrow,
+      )(await back.json()).archivedAt,
+    ).toBeNull();
   });
 });

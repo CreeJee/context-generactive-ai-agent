@@ -195,7 +195,6 @@ const ruleSource = (rule: ResolvedRules["rules"][number]) => {
 };
 
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function workflowInstructions(
   state: WorkflowState,
   resolved: ResolvedRules,

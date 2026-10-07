@@ -18,7 +18,6 @@ const projectNotFound = () =>
  * with whether each is trusted and running. Environment and header values are never included.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function loader({ params }: Route.LoaderArgs) {
   return agent.runPromise(
     Effect.gen(function* () {
@@ -33,7 +32,6 @@ export async function loader({ params }: Route.LoaderArgs) {
  * Trusting starts that exact configuration; it does not approve any tool call.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request, params }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected !== null) return rejected;

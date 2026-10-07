@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import type { ChatMiddleware, MetadataStore, ModelMessage } from "@tanstack/ai";
 import { evictOldest } from "@tanstack/ai-compaction";
@@ -114,17 +115,22 @@ export const userTurns = (messages: readonly ModelMessage[]) =>
  * Whether a user message is the turn a node recorded. Memory keeps a turn without a pasted key,
  * so a node with a hidden secret matches whatever the message says.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export const sameTurn = (message: ModelMessage | undefined, recorded: string | null) =>
+const sameTurnBody = (message: ModelMessage | undefined, recorded: string | null) =>
   message?.role === "user" &&
   recorded !== null &&
   (messageText(message) === recorded || recorded.includes("[redacted:"));
+export const sameTurn: {
+  (recorded: string | null): (message: ModelMessage | undefined) => ReturnType<typeof sameTurnBody>;
+} & typeof sameTurnBody = EffectFunction.dual(2, sameTurnBody);
 
 /** The summaries that fit this conversation, oldest first, up to the first that does not. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function linedUp(
+export const linedUp: {
+  (
+    blocks: readonly SummaryBlock[],
+    nodeText: (id: string) => string | null,
+  ): (messages: readonly ModelMessage[]) => ReturnType<typeof linedUpBody>;
+} & typeof linedUpBody = EffectFunction.dual(3, linedUpBody);
+function linedUpBody(
   messages: readonly ModelMessage[],
   blocks: readonly SummaryBlock[],
   nodeText: (id: string) => string | null,
@@ -179,9 +185,10 @@ export interface CompactionState {
 }
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
-export async function compactionState(
+export const compactionState: {
+  (threadId: string): (metadata: MetadataStore) => ReturnType<typeof compactionStateBody>;
+} & typeof compactionStateBody = EffectFunction.dual(2, compactionStateBody);
+async function compactionStateBody(
   metadata: MetadataStore,
   threadId: string,
 ): Promise<CompactionState> {
@@ -256,8 +263,6 @@ export interface Compacted {
  * `leaveOutAt` the oldest messages are left out. The saved conversation is never changed.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line asyncFunction:off missingPipeableSignature:off
 export async function compact(
   messages: readonly ModelMessage[],
   state: CompactionState,
@@ -387,9 +392,12 @@ const largeReportResult = Schema.fromJsonString(
 );
 
 /** Purpose-specific provider previews for recorded results; original history stays unchanged. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function lightweightToolResults(
+export const lightweightToolResults: {
+  (
+    toolResultId: (toolCallId: string) => string | null,
+  ): (messages: readonly ModelMessage[]) => ReturnType<typeof lightweightToolResultsBody>;
+} & typeof lightweightToolResultsBody = EffectFunction.dual(2, lightweightToolResultsBody);
+function lightweightToolResultsBody(
   messages: readonly ModelMessage[],
   toolResultId: (toolCallId: string) => string | null,
 ): readonly ModelMessage[] {
@@ -478,8 +486,6 @@ export function lightweightToolResults(
  * Compacts what one session sends to the model (see {@link compact}), before every model call of
  * a run. Goes last among the middleware that shape the conversation.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function compaction(
   metadata: MetadataStore,
   sources: CompactionSources,
@@ -490,7 +496,6 @@ export function compaction(
   return {
     name: "memory-agent/compaction",
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     async onConfig(ctx, config) {
       if (ctx.phase === "init") {
         const restored = await historyForModel?.(config.messages);
@@ -593,9 +598,7 @@ const compactionPromise = <A>(
  * call the model has answered from and sends the turns before the latest few as their summaries,
  * whatever the budget, for this and every later run.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export const compactByHand = <E>(
+const compactByHandBody = <E>(
   metadata: MetadataStore,
   threadId: string,
   messages: readonly ModelMessage[],
@@ -633,3 +636,12 @@ export const compactByHand = <E>(
       tokensAfter: estimateConversation(after.messages),
     };
   });
+export const compactByHand: {
+  <E>(
+    threadId: string,
+    messages: readonly ModelMessage[],
+    sources: CompactionSources,
+    budget: Budget,
+    summarize: () => Effect.Effect<SummaryOutcome, E>,
+  ): (metadata: MetadataStore) => ReturnType<typeof compactByHandBody<E>>;
+} & typeof compactByHandBody = EffectFunction.dual(6, compactByHandBody);

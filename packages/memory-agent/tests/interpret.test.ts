@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off schemaSync:off
 import { Effect, Schema } from "effect";
@@ -57,11 +58,14 @@ async function setup() {
     sqlite
       .prepare("SELECT from_id, to_id, kind FROM edges WHERE kind = ? AND origin = 'llm'")
       .all(kind)
-      .map((row) => Schema.decodeUnknownSync(EdgeRow)(row));
+      .map((row) =>
+        EffectFunction.flow(Schema.decodeUnknownResult(EdgeRow), Result.getOrThrow)(row),
+      );
   const job = (nodeId: string) =>
-    Schema.decodeUnknownSync(JobRow)(
-      sqlite.prepare("SELECT status, attempts FROM interpret_jobs WHERE node_id = ?").get(nodeId),
-    );
+    EffectFunction.flow(
+      Schema.decodeUnknownResult(JobRow),
+      Result.getOrThrow,
+    )(sqlite.prepare("SELECT status, attempts FROM interpret_jobs WHERE node_id = ?").get(nodeId));
   return { ...context, nodes, sqlite, say, interpret, edges, job };
 }
 
@@ -96,7 +100,10 @@ describe("llm-interpret", () => {
     expect(found.uninterpreted).toBe(0);
 
     const tools = (await context.runtime.runPromise(MemoryTools)).forProject(context.project.id);
-    const trace = Schema.decodeUnknownSync(Trace)(
+    const trace = EffectFunction.flow(
+      Schema.decodeUnknownResult(Trace),
+      Result.getOrThrow,
+    )(
       await run(
         tools.find((tool) => tool.name === "trace_evidence")!,
         { id: decision.id },
@@ -124,7 +131,10 @@ describe("llm-interpret", () => {
     expect(match?.unconfirmedChallenges).toBe(1);
 
     const tools = (await context.runtime.runPromise(MemoryTools)).forProject(context.project.id);
-    const trace = Schema.decodeUnknownSync(Trace)(
+    const trace = EffectFunction.flow(
+      Schema.decodeUnknownResult(Trace),
+      Result.getOrThrow,
+    )(
       await run(
         tools.find((tool) => tool.name === "trace_evidence")!,
         { id: decision.id },

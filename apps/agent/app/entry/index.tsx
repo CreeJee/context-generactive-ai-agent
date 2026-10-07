@@ -172,7 +172,6 @@ export function App() {
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const archiveSession = async (id: string) => {
     if (!isTruthy(projectId)) return;
     try {
@@ -189,7 +188,6 @@ export function App() {
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const deleteSession = async (id: string) => {
     if (!isTruthy(projectId)) return;
     try {
@@ -206,7 +204,6 @@ export function App() {
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const restoreSession = async (id: string) => {
     if (!isTruthy(projectId)) return;
     try {
@@ -221,14 +218,12 @@ export function App() {
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const authAction = async (intent: "login" | "cancel" | "logout") => {
     const state = await authMutation.mutateAsync(intent);
     if (state.status === "pending") window.open(state.authUrl, "_blank", "noopener");
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const addProject = async (root: string) => {
     try {
       const project = await addProjectMutation.mutateAsync(root);
@@ -243,14 +238,12 @@ export function App() {
     openSettingsOverlay(projects.find((item) => item.id === projectId) ?? null);
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const selectModel = async (model: string, effort?: string) => {
     const selected = await modelMutation.mutateAsync({ model, effort });
     setSelection(selected);
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const createSession = async (agent?: string) => {
     if (!isTruthy(projectId)) return;
     const session = await createSessionMutation.mutateAsync(agent);
@@ -264,7 +257,6 @@ export function App() {
       skills: slashSkills,
     },
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     run: async (command) => {
       switch (command.kind) {
         case "new":

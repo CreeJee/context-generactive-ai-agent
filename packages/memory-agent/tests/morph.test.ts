@@ -1,3 +1,4 @@
+import { it as effectTest } from "@effect/vitest";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
 import { existsSync } from "node:fs";
@@ -77,27 +78,34 @@ const kiwiCached = existsSync(
 );
 
 describe.skipIf(!kiwiCached)("Kiwi (model already downloaded)", () => {
-  test("keeps nouns and stems and drops particles and endings", async () => {
-    const terms = await Effect.runPromise(
-      Effect.scoped(
-        Effect.flatMap(MorphAnalyzer, (analyzer) =>
-          analyzer.terms([
-            "로그 포맷은 JSON Lines로 하기로 했다.",
-            "로그 형식을 뭐로 정했었지?",
-            "메인 데이터베이스는 PostgreSQL, 대시보드는 Grafana.",
-          ]),
-        ),
-      ).pipe(
-        // Test entry point owns this Layer and its resource scope.
-        // @effect-diagnostics-next-line strictEffectProvide:off
-        Effect.provide(MorphAnalyzer.kiwi.pipe(Layer.provide(StorageRoot.layer(kiwiStorage)))),
-      ),
-    );
-    expect(terms[0]).toEqual(expect.arrayContaining(["로그", "포맷", "json", "lines"]));
-    expect(terms[1]).toEqual(expect.arrayContaining(["로그", "형식", "정하"]));
-    // Split compounds also count whole; Latin words come from the text, not Kiwi's pieces.
-    expect(terms[2]).toEqual(expect.arrayContaining(["데이터베이스", "postgresql", "grafana"]));
-    expect(terms.flat()).not.toContain("은");
-    expect(terms.flat()).not.toContain("하");
-  }, 60_000);
+  effectTest.effect(
+    "keeps nouns and stems and drops particles and endings",
+    () =>
+      Effect.gen(function* () {
+        const terms = yield* Effect.scoped(
+          Effect.flatMap(MorphAnalyzer, (analyzer) =>
+            analyzer.terms([
+              "로그 포맷은 JSON Lines로 하기로 했다.",
+              "로그 형식을 뭐로 정했었지?",
+              "메인 데이터베이스는 PostgreSQL, 대시보드는 Grafana.",
+            ]),
+          ),
+        ).pipe(
+          // Test entry point owns this Layer and its resource scope.
+          Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+            const services = yield* Layer.build(
+              MorphAnalyzer.kiwi.pipe(Layer.provide(StorageRoot.layer(kiwiStorage))),
+            );
+            return yield* Effect.provideContext(program, services);
+          }, Effect.scoped),
+        );
+        expect(terms[0]).toEqual(expect.arrayContaining(["로그", "포맷", "json", "lines"]));
+        expect(terms[1]).toEqual(expect.arrayContaining(["로그", "형식", "정하"]));
+        // Split compounds also count whole; Latin words come from the text, not Kiwi's pieces.
+        expect(terms[2]).toEqual(expect.arrayContaining(["데이터베이스", "postgresql", "grafana"]));
+        expect(terms.flat()).not.toContain("은");
+        expect(terms.flat()).not.toContain("하");
+      }),
+    60_000,
+  );
 });

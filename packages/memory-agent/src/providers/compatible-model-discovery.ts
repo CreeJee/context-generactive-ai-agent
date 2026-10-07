@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Option, Schema } from "effect";
 import { CompatibleReasoning } from "./openai-compatible-config.ts";
@@ -19,9 +20,12 @@ const isChatReasoningEffort = Schema.is(
   Schema.Literals(["none", "minimal", "low", "medium", "high", "xhigh"]),
 );
 /** Only explicit model-list extensions establish reasoning controls. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function readCompatibleReasoning(
+export const readCompatibleReasoning: {
+  (
+    page: typeof CompatibleModelPage.Type,
+  ): (model: string) => ReturnType<typeof readCompatibleReasoningBody>;
+} & typeof readCompatibleReasoningBody = EffectFunction.dual(2, readCompatibleReasoningBody);
+function readCompatibleReasoningBody(
   model: string,
   page: typeof CompatibleModelPage.Type,
 ): typeof CompatibleReasoning.Type | undefined {
@@ -34,8 +38,10 @@ export function readCompatibleReasoning(
   const metadata = capabilities?.reasoning;
   if (isTruthy(metadata)) {
     // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    // @effect-diagnostics-next-line schemaSync:off
-    const reasoning = Schema.decodeSync(CompatibleReasoning)({
+    const reasoning = EffectFunction.flow(
+      Schema.decodeResult(CompatibleReasoning),
+      Result.getOrThrow,
+    )({
       source: "models",
       model,
       options: [...new Set(metadata.allowed_options.filter(isChatReasoningEffort))],

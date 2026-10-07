@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import type { Measurement, Component } from "./contracts.ts";
 
 export interface SelectionPolicy {
@@ -7,9 +8,13 @@ export interface SelectionPolicy {
   beta1: number;
 }
 export type Selection = { kind: "accepted" } | { kind: "rejected"; reason: string };
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function selectCandidate(
+export const selectCandidate: {
+  (
+    candidate: Measurement,
+    policy: SelectionPolicy,
+  ): (base: Measurement) => ReturnType<typeof selectCandidateBody>;
+} & typeof selectCandidateBody = EffectFunction.dual(3, selectCandidateBody);
+function selectCandidateBody(
   base: Measurement,
   candidate: Measurement,
   policy: SelectionPolicy,
@@ -31,10 +36,11 @@ export function selectCandidate(
   } else if (cost >= 0) return { kind: "rejected", reason: "within_noise_without_savings" };
   return { kind: "accepted" };
 }
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export const editBudget = (round: number, rounds: number) =>
+const editBudgetBody = (round: number, rounds: number) =>
   Math.ceil(1 + ((3 - 1) * (1 + Math.cos((Math.PI * round) / Math.max(1, rounds - 1)))) / 2);
+export const editBudget: {
+  (rounds: number): (round: number) => ReturnType<typeof editBudgetBody>;
+} & typeof editBudgetBody = EffectFunction.dual(2, editBudgetBody);
 export function exploration(
   history: readonly {
     edits: readonly { component: Component }[];

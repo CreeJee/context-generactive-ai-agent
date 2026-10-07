@@ -32,7 +32,6 @@ export interface WorkflowActionContext {
 
 /** Shared by snapshots and serialized mutations against the latest durable state. */
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function evaluateWorkflowAction(
   state: WorkflowState,
   request: WorkflowActionRequest,
@@ -68,7 +67,6 @@ export function evaluateWorkflowAction(
 }
 
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function workflowActions(
   state: WorkflowState,
   context: WorkflowActionContext = {},

@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { serverRestartedCode, type SessionRunState } from "memory-agent/definitions";
 
 /** How a session's last run ended, or that it is still going, when that is worth telling the user. */
@@ -21,9 +22,10 @@ export interface PageView {
 }
 
 /** The notice for a run record while this page is not generating; null when all is as it looks. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function noticeOf(state: SessionRunState | null, page: PageView): RunNotice | null {
+export const noticeOf: {
+  (page: PageView): (state: SessionRunState | null) => ReturnType<typeof noticeOfBody>;
+} & typeof noticeOfBody = EffectFunction.dual(2, noticeOfBody);
+function noticeOfBody(state: SessionRunState | null, page: PageView): RunNotice | null {
   if (!(state !== null)) return null;
   if (state.running !== null) return { kind: "detached" };
   const lastRun = state.lastRun;

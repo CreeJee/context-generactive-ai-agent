@@ -1,6 +1,6 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import type { SQLOutputValue } from "node:sqlite";
 import { Context, Effect, Layer, Schema } from "effect";
@@ -28,14 +28,18 @@ export interface MigrationCount {
 }
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeId = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }));
+const decodeId = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Struct({ id: Schema.String })),
+  Result.getOrThrow,
+);
 const idOf = (row: Record<string, SQLOutputValue> | undefined) =>
   isTruthy(row) ? decodeId(row).id : null;
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeCall = Schema.decodeUnknownSync(
-  Schema.Struct({ id: Schema.String, tool_name: Schema.NullOr(Schema.String) }),
+const decodeCall = EffectFunction.flow(
+  Schema.decodeUnknownResult(
+    Schema.Struct({ id: Schema.String, tool_name: Schema.NullOr(Schema.String) }),
+  ),
+  Result.getOrThrow,
 );
 
 /** Statements worth interpreting, the same rule live nodes follow: tool output is not a claim. */

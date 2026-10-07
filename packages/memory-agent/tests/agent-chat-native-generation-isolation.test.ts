@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off newPromise:off nodeBuiltinImport:off processEnv:off schemaSync:off
 import { createHash } from "node:crypto";
@@ -136,7 +137,10 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (binding) {
     await first;
     await send(context.session.id, "isolation-v1-followup");
     const registrations = (db: Database["Service"]) =>
-      Schema.decodeUnknownSync(Registration)(
+      EffectFunction.flow(
+        Schema.decodeUnknownResult(Registration),
+        Result.getOrThrow,
+      )(
         db.sqlite
           .prepare(
             "SELECT goal_instance_id, artifact_url, artifact_hash, source_hash FROM workflow_goal_native_artifacts ORDER BY goal_instance_id",
@@ -157,8 +161,11 @@ export const makeRecordingMiddleware = Effect.fnUntraced(function* (binding) {
     runtime = open();
     await send(context.session.id, "isolation-v1-reopened");
     expect(registrations(await runtime.runPromise(Database))).toEqual(before);
-    const seen = Schema.decodeSync(
-      Schema.Array(Schema.Struct({ run: Schema.String, version: Schema.String })),
+    const seen = EffectFunction.flow(
+      Schema.decodeResult(
+        Schema.Array(Schema.Struct({ run: Schema.String, version: Schema.String })),
+      ),
+      Result.getOrThrow,
     )(
       readFileSync(observations, "utf8")
         .trim()

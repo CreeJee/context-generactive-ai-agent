@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import type { SQLOutputValue } from "node:sqlite";
 import { DateTime, Clock, Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
@@ -30,8 +31,7 @@ const Row = Schema.Struct({
   created_at: Schema.String,
 });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeRow = Schema.decodeUnknownSync(Row);
+const decodeRow = EffectFunction.flow(Schema.decodeUnknownResult(Row), Result.getOrThrow);
 const toInterpretation = (row: Record<string, SQLOutputValue>): Interpretation => {
   const decoded = decodeRow(row);
   return {
@@ -46,8 +46,10 @@ const toInterpretation = (row: Record<string, SQLOutputValue>): Interpretation =
 };
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeCount = Schema.decodeUnknownSync(Schema.Struct({ count: Schema.Finite }));
+const decodeCount = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Struct({ count: Schema.Finite })),
+  Result.getOrThrow,
+);
 
 const make = Effect.gen(function* () {
   const effectClock = yield* Clock.Clock;

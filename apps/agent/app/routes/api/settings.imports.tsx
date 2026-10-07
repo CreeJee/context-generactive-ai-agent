@@ -16,7 +16,6 @@ const ImportAction = Schema.Union([
  * here yet. File paths are shown; transcript contents are not.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function loader() {
   return agent.runPromise(
     Effect.flatMap(Importer, (importer) => importer.overview).pipe(
@@ -33,7 +32,6 @@ export async function loader() {
  * - `interpret` { interpret }: whether migrated statements are interpreted like statements said here.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected !== null) return rejected;

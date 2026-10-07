@@ -1,9 +1,9 @@
+import { Result, Function as EffectFunction } from "effect";
 // The import pass in a worker thread. Reading transcripts, hiding secrets in them and writing them
 // as nodes is steady CPU work; on the server's main thread it held up every request meanwhile.
 // In a checkout Node runs this file as TypeScript; the executable ships it bundled
 // (`scripts/package.ts`).
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import { DateTime, Cause, Effect, Exit, Layer, ManagedRuntime, Schema } from "effect";
@@ -27,11 +27,15 @@ const progressEveryMs = 100;
 const port = parentPort;
 if (!(port !== null)) throw new Error("the import worker runs only as a worker thread");
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const setup = Schema.decodeUnknownSync(ImportWorkerSetup)(workerData);
+const setup = EffectFunction.flow(
+  Schema.decodeUnknownResult(ImportWorkerSetup),
+  Result.getOrThrow,
+)(workerData);
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeRequest = Schema.decodeUnknownSync(ImportWorkerRequest);
+const decodeRequest = EffectFunction.flow(
+  Schema.decodeUnknownResult(ImportWorkerRequest),
+  Result.getOrThrow,
+);
 
 // Its own connection to the same database; WAL lets the server read while this writes.
 const runtime = ManagedRuntime.make(

@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off globalFetch:off globalTimers:off newPromise:off nodeBuiltinImport:off schemaSync:off
 import { fork, type ChildProcess } from "node:child_process";
@@ -17,7 +18,10 @@ const inspection = Schema.Struct({
   runs: Schema.Array(Schema.Struct({ status: Schema.String })),
 });
 const inspect = async (owner: Owner) =>
-  Schema.decodeUnknownSync(inspection)(
+  EffectFunction.flow(
+    Schema.decodeUnknownResult(inspection),
+    Result.getOrThrow,
+  )(
     await fetch(`${owner.url}/inspect`, { signal: AbortSignal.timeout(10_000) }).then((value) =>
       value.json(),
     ),

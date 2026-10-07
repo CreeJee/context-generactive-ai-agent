@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { queryOptions, useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { api, type ProviderId } from "../api";
 import { appQueryKeys } from "./keys";
@@ -30,7 +31,8 @@ export const useSuspenseImageSettingsQuery = () => useSuspenseQuery(globalQuerie
 export const useImportsQuery = () => useSuspenseQuery(globalQueries.imports());
 export const useEmbeddingQuery = () => useSuspenseQuery(globalQueries.embedding());
 export const useKagiQuery = () => useSuspenseQuery(globalQueries.kagi());
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export const useModelsQuery = (provider: ProviderId, enabled: boolean) =>
+const useModelsQueryBody = (provider: ProviderId, enabled: boolean) =>
   useQuery({ ...globalQueries.models(provider), enabled });
+export const useModelsQuery: {
+  (enabled: boolean): (provider: ProviderId) => ReturnType<typeof useModelsQueryBody>;
+} & typeof useModelsQueryBody = EffectFunction.dual(2, useModelsQueryBody);

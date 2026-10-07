@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { MutableHashMap, Option, Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
@@ -63,14 +64,16 @@ const causeOf: Partial<Record<Node["kind"], { kind: EdgeKind; direction: Hop["di
 };
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeNeighbor = Schema.decodeUnknownSync(
-  Schema.Struct({
-    nodeId: Schema.String,
-    kind: EdgeKind,
-    direction: Schema.Literals(["out", "in"]),
-    weight: Schema.Finite,
-  }),
+const decodeNeighbor = EffectFunction.flow(
+  Schema.decodeUnknownResult(
+    Schema.Struct({
+      nodeId: Schema.String,
+      kind: EdgeKind,
+      direction: Schema.Literals(["out", "in"]),
+      weight: Schema.Finite,
+    }),
+  ),
+  Result.getOrThrow,
 );
 
 const make = Effect.gen(function* () {

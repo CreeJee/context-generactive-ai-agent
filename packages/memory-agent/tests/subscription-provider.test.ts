@@ -1,3 +1,4 @@
+import { it as effectTest } from "@effect/vitest";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off newPromise:off
 import { DateTime, Effect } from "effect";
@@ -114,31 +115,35 @@ describe("subscription provider product services", () => {
     expect(JSON.stringify(models)).not.toContain("Authorization");
   });
 
-  test("uses each model's catalog window and labels an unknown window as a fallback", async () => {
-    const fake = fakeClient("openai", [
-      {
-        models: [
-          { slug: "gpt-6-sol", context_window: 400_000 },
-          { slug: "gpt-6-astra", context_window: 300_000 },
-          { slug: "unknown-window", context_window: -1 },
-        ],
-      },
-    ]);
-    const provider = createSubscriptionProvider({
-      protocol: providerProtocols.openai,
-      config: settingsStore(),
-      client: fake.client,
-    });
-    const runtime = createSubscriptionRuntime("openai", fake.client, provider.contextWindow);
-    expect(runtime.contextWindowKnown?.("gpt-6-sol")).toBe(false);
-    expect(runtime.contextWindow("gpt-6-sol")).toBe(258_400);
-    await Effect.runPromise(provider.models.list);
-    expect(runtime.contextWindow("gpt-6-sol")).toBe(400_000);
-    expect(runtime.contextWindow("gpt-6-astra")).toBe(300_000);
-    expect(runtime.contextWindowKnown?.("gpt-6-sol")).toBe(true);
-    expect(runtime.contextWindowKnown?.("unknown-window")).toBe(false);
-    expect(runtime.contextWindow("unknown-window")).toBe(258_400);
-  });
+  effectTest.effect(
+    "uses each model's catalog window and labels an unknown window as a fallback",
+    () =>
+      Effect.gen(function* () {
+        const fake = fakeClient("openai", [
+          {
+            models: [
+              { slug: "gpt-6-sol", context_window: 400_000 },
+              { slug: "gpt-6-astra", context_window: 300_000 },
+              { slug: "unknown-window", context_window: -1 },
+            ],
+          },
+        ]);
+        const provider = createSubscriptionProvider({
+          protocol: providerProtocols.openai,
+          config: settingsStore(),
+          client: fake.client,
+        });
+        const runtime = createSubscriptionRuntime("openai", fake.client, provider.contextWindow);
+        expect(runtime.contextWindowKnown?.("gpt-6-sol")).toBe(false);
+        expect(runtime.contextWindow("gpt-6-sol")).toBe(258_400);
+        yield* provider.models.list;
+        expect(runtime.contextWindow("gpt-6-sol")).toBe(400_000);
+        expect(runtime.contextWindow("gpt-6-astra")).toBe(300_000);
+        expect(runtime.contextWindowKnown?.("gpt-6-sol")).toBe(true);
+        expect(runtime.contextWindowKnown?.("unknown-window")).toBe(false);
+        expect(runtime.contextWindow("unknown-window")).toBe(258_400);
+      }),
+  );
 
   test("merges Anthropic pages, removes duplicates, and derives reasoning capabilities", () => {
     const models = parseSubscriptionCatalog("anthropic", [
@@ -166,20 +171,24 @@ describe("subscription provider product services", () => {
     expect(models[2]?.supportedReasoningEfforts).toEqual(["low", "medium", "high", "max"]);
   });
 
-  test("uses installed Anthropic metadata without requesting the API-key-only model endpoint", async () => {
-    const fake = fakeClient("anthropic", []);
-    const provider = createSubscriptionProvider({
-      protocol: providerProtocols.anthropic,
-      config: settingsStore(),
-      client: fake.client,
-    });
+  effectTest.effect(
+    "uses installed Anthropic metadata without requesting the API-key-only model endpoint",
+    () =>
+      Effect.gen(function* () {
+        const fake = fakeClient("anthropic", []);
+        const provider = createSubscriptionProvider({
+          protocol: providerProtocols.anthropic,
+          config: settingsStore(),
+          client: fake.client,
+        });
 
-    const models = await Effect.runPromise(provider.models.list);
+        const models = yield* provider.models.list;
 
-    expect(models.map((model) => model.id)).toContain("claude-sonnet-4-6");
-    expect(models.map((model) => model.id)).toContain("claude-opus-5");
-    expect(fake.catalogRequests).toBe(0);
-  });
+        expect(models.map((model) => model.id)).toContain("claude-sonnet-4-6");
+        expect(models.map((model) => model.id)).toContain("claude-opus-5");
+        expect(fake.catalogRequests).toBe(0);
+      }),
+  );
 
   test("returns pending immediately and keeps credentials out of the auth contract", async () => {
     const fake = fakeClient("anthropic", []);
@@ -296,53 +305,53 @@ describe("subscription provider product services", () => {
     });
   });
 
-  test("cancels an in-flight login and validates provider/model/effort together", async () => {
-    const config = settingsStore();
-    const fake = fakeClient("openai", [
-      {
-        models: [
-          {
-            slug: "gpt-6-astra",
-            supported_reasoning_levels: ["low", "high"],
-            default_reasoning_level: "high",
-          },
-        ],
-      },
-    ]);
-    const provider = createSubscriptionProvider({
-      protocol: providerProtocols.openai,
-      config,
-      client: fake.client,
-    });
+  effectTest.effect("cancels an in-flight login and validates provider/model/effort together", () =>
+    Effect.gen(function* () {
+      const config = settingsStore();
+      const fake = fakeClient("openai", [
+        {
+          models: [
+            {
+              slug: "gpt-6-astra",
+              supported_reasoning_levels: ["low", "high"],
+              default_reasoning_level: "high",
+            },
+          ],
+        },
+      ]);
+      const provider = createSubscriptionProvider({
+        protocol: providerProtocols.openai,
+        config,
+        client: fake.client,
+      });
 
-    await Effect.runPromise(provider.auth.connect);
-    expect(await Effect.runPromise(provider.auth.cancel)).toEqual({
-      provider: "openai",
-      status: "signed-out",
-    });
-    expect(fake.cancelled).toBe(true);
+      yield* provider.auth.connect;
+      expect(yield* provider.auth.cancel).toEqual({
+        provider: "openai",
+        status: "signed-out",
+      });
+      expect(fake.cancelled).toBe(true);
 
-    expect(await Effect.runPromise(provider.models.select("gpt-6-astra"))).toEqual({
-      provider: "openai",
-      model: "gpt-6-astra",
-      reasoningEffort: "high",
-    });
-    expect(config.value).toMatchObject({
-      provider: "openai",
-      model: "gpt-6-astra",
-      reasoningEffort: "high",
-    });
-
-    const invalid = await Effect.runPromise(
-      Effect.result(provider.models.select("gpt-6-astra", "medium")),
-    );
-    expect(invalid._tag).toBe("Failure");
-    if (invalid._tag === "Failure")
-      expect(invalid.failure).toMatchObject({
-        _tag: "ModelUnavailable",
+      expect(yield* provider.models.select("gpt-6-astra")).toEqual({
         provider: "openai",
         model: "gpt-6-astra",
-        reasoningEffort: "medium",
+        reasoningEffort: "high",
       });
-  });
+      expect(config.value).toMatchObject({
+        provider: "openai",
+        model: "gpt-6-astra",
+        reasoningEffort: "high",
+      });
+
+      const invalid = yield* Effect.result(provider.models.select("gpt-6-astra", "medium"));
+      expect(invalid._tag).toBe("Failure");
+      if (invalid._tag === "Failure")
+        expect(invalid.failure).toMatchObject({
+          _tag: "ModelUnavailable",
+          provider: "openai",
+          model: "gpt-6-astra",
+          reasoningEffort: "medium",
+        });
+    }),
+  );
 });

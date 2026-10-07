@@ -8,7 +8,6 @@ const AddProject = Schema.Struct({ root: Schema.NonEmptyString });
 
 /** GET /api/projects — registered project roots. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function loader() {
   return Response.json(
     await agent.runPromise(Effect.flatMap(Projects, (projects) => projects.list)),
@@ -20,7 +19,6 @@ export async function loader() {
  * it, so the path is canonicalized and must not overlap the app's storage directory.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected !== null) return rejected;

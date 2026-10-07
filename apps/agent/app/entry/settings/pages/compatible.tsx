@@ -56,7 +56,6 @@ function CompatibleForm({
   const [models, setModels] = useState<readonly { id: string }[]>([]);
   const mutation = useMutation({
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     mutationFn: async (
       command: { action: "update"; value: CompatibleUpdate } | { action: "test" | "list" },
     ) => {

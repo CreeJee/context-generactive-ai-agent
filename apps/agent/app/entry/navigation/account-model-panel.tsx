@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { CircleAlertIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { Collapsible, CollapsibleContent } from "~/components/ui/collapsible";
@@ -6,9 +7,14 @@ import { SidebarDisclosureTrigger } from "./sidebar-disclosure-trigger";
 
 import { providerLabels as providerLabel } from "./providers";
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function accountSummary(
+export const accountSummary: {
+  (
+    auth: ProviderAuthState | null,
+    selection: ModelSelection | null,
+    modelName: string | undefined,
+  ): (provider: ProviderId) => ReturnType<typeof accountSummaryBody>;
+} & typeof accountSummaryBody = EffectFunction.dual(4, accountSummaryBody);
+function accountSummaryBody(
   provider: ProviderId,
   auth: ProviderAuthState | null,
   selection: ModelSelection | null,

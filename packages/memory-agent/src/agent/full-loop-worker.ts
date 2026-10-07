@@ -64,7 +64,6 @@ const client = makeOwnerRpcPortClient(port);
 const controller = new AbortController();
 let operationId = lastOperationId;
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 async function rpc(operation: string, input: any): Promise<any> {
   const reply = await client.request({
     type: "owner-rpc-request",
@@ -80,7 +79,6 @@ function toolProxy(tool: any) {
   const proxy = { ...tool };
   if (tool.server === true)
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     proxy.execute = async (args: any, context: ChatMiddlewareContext & { toolCallId?: string }) => {
       const result = await rpc("tool", {
         name: tool.name,
@@ -131,7 +129,6 @@ const hooks = middleware.map(
       // selected individual hooks. Keep the middleware's other SDK hooks intact.
       if (hook === "onBeforeToolCall") continue;
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      // @effect-diagnostics-next-line asyncFunction:off
       proxy[hook] = async (ctx: ChatMiddlewareContext, info: any) => {
         let payload = info ?? null;
         if (hook === "onConfig") payload = { ...info, tools: tools };
@@ -156,7 +153,6 @@ const hooks = middleware.map(
 const adapter: AnyTextAdapter = {
   ...identity,
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   async *chatStream(options) {
     const { request: _request, logger: _logger, capabilities: _capabilities, ...input } = options;
     const opened = await rpc("modelOpen", {
@@ -191,7 +187,6 @@ try {
       {
         name: "owner-tool-grant",
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         onBeforeToolCall: async (ctx, info) => {
           const response = await rpc("toolAuthorize", {
             name: info.toolName,
@@ -215,7 +210,6 @@ try {
     // ordered behind the owner's stream consumer.
     parentPort.postMessage({ type: "chunk", chunk });
     // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-    // @effect-diagnostics-next-line newPromise:off
     await new Promise((resolve) => parent.once("message", resolve));
   }
   parentPort.postMessage({ type: "done" });

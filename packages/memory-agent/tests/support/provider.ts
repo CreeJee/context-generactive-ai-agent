@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off missingPipeableSignature:off newPromise:off schemaSync:off
 import { isTruthy } from "../../src/truthy.ts";
@@ -164,14 +165,17 @@ export const defaultTestResponder: ScriptedResponder = async (invocation) => {
           timeoutMs: 30_000,
         });
       if (MutableHashMap.has(byId, "call-wait-children")) {
-        const result = Schema.decodeSync(
-          Schema.fromJsonString(
-            Schema.Struct({
-              attempts: Schema.Array(
-                Schema.Struct({ taskId: Schema.String, attemptId: Schema.String }),
-              ),
-            }),
+        const result = EffectFunction.flow(
+          Schema.decodeResult(
+            Schema.fromJsonString(
+              Schema.Struct({
+                attempts: Schema.Array(
+                  Schema.Struct({ taskId: Schema.String, attemptId: Schema.String }),
+                ),
+              }),
+            ),
           ),
+          Result.getOrThrow,
         )(Option.getOrUndefined(MutableHashMap.get(byId, "call-wait-children"))!);
         return {
           toolCalls: result.attempts.map((attempt, index) => ({

@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { MutableHashMap, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
 import type { DatabaseSync } from "node:sqlite";
@@ -19,9 +20,13 @@ const profilesFor = (sqlite: DatabaseSync) => {
 };
 const key = (provider: OAuthProvider, id: string) => `${provider}:${id}`;
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function acquireOAuthProfileRun(
+export const acquireOAuthProfileRun: {
+  (
+    provider: OAuthProvider,
+    id: string,
+  ): (sqlite: DatabaseSync) => ReturnType<typeof acquireOAuthProfileRunBody>;
+} & typeof acquireOAuthProfileRunBody = EffectFunction.dual(3, acquireOAuthProfileRunBody);
+function acquireOAuthProfileRunBody(
   sqlite: DatabaseSync,
   provider: OAuthProvider,
   id: string,
@@ -56,13 +61,13 @@ export function acquireOAuthProfileRun(
   };
 }
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function oauthProfileInUse(
-  sqlite: DatabaseSync,
-  provider: OAuthProvider,
-  id: string,
-): boolean {
+export const oauthProfileInUse: {
+  (
+    provider: OAuthProvider,
+    id: string,
+  ): (sqlite: DatabaseSync) => ReturnType<typeof oauthProfileInUseBody>;
+} & typeof oauthProfileInUseBody = EffectFunction.dual(3, oauthProfileInUseBody);
+function oauthProfileInUseBody(sqlite: DatabaseSync, provider: OAuthProvider, id: string): boolean {
   return (
     Option.getOrUndefined(
       Option.flatMap(Option.fromNullishOr(states.get(sqlite)), (map) =>
@@ -72,9 +77,13 @@ export function oauthProfileInUse(
   );
 }
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function oauthProfileRemoving(
+export const oauthProfileRemoving: {
+  (
+    provider: OAuthProvider,
+    id: string,
+  ): (sqlite: DatabaseSync) => ReturnType<typeof oauthProfileRemovingBody>;
+} & typeof oauthProfileRemovingBody = EffectFunction.dual(3, oauthProfileRemovingBody);
+function oauthProfileRemovingBody(
   sqlite: DatabaseSync,
   provider: OAuthProvider,
   id: string,
@@ -89,9 +98,13 @@ export function oauthProfileRemoving(
 }
 
 /** Synchronous admission gate before any asynchronous vault operation. Always release in finally. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function beginOAuthProfileRemoval(
+export const beginOAuthProfileRemoval: {
+  (
+    provider: OAuthProvider,
+    id: string,
+  ): (sqlite: DatabaseSync) => ReturnType<typeof beginOAuthProfileRemovalBody>;
+} & typeof beginOAuthProfileRemovalBody = EffectFunction.dual(3, beginOAuthProfileRemovalBody);
+function beginOAuthProfileRemovalBody(
   sqlite: DatabaseSync,
   provider: OAuthProvider,
   id: string,

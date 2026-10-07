@@ -1,3 +1,4 @@
+import { it as effectTest } from "@effect/vitest";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -122,31 +123,35 @@ describe("provider-neutral contracts", () => {
     });
   });
 
-  test("resolves only the requested provider and never falls back", async () => {
-    const openai = fakeProvider("openai");
-    const registry = providerRegistryFrom([openai]);
+  effectTest.effect("resolves only the requested provider and never falls back", () =>
+    Effect.gen(function* () {
+      const openai = fakeProvider("openai");
+      const registry = providerRegistryFrom([openai]);
 
-    expect(registry.providers).toEqual(["openai"]);
-    expect(await Effect.runPromise(registry.get("openai"))).toBe(openai);
-    const missing = await Effect.runPromise(Effect.result(registry.get("anthropic")));
-    expect(Result.isFailure(missing) && missing.failure).toMatchObject({
-      _tag: "ProviderUnavailable",
-      provider: "anthropic",
-    });
-  });
+      expect(registry.providers).toEqual(["openai"]);
+      expect(yield* registry.get("openai")).toBe(openai);
+      const missing = yield* Effect.result(registry.get("anthropic"));
+      expect(Result.isFailure(missing) && missing.failure).toMatchObject({
+        _tag: "ProviderUnavailable",
+        provider: "anthropic",
+      });
+    }),
+  );
 
-  test("does not route a configured provider through another provider's runtime", async () => {
-    const openai = fakeProvider("openai");
-    const anthropic = fakeProvider("anthropic");
-    const registry = providerRegistryFrom([openai, anthropic], [openai.runtime]);
+  effectTest.effect("does not route a configured provider through another provider's runtime", () =>
+    Effect.gen(function* () {
+      const openai = fakeProvider("openai");
+      const anthropic = fakeProvider("anthropic");
+      const registry = providerRegistryFrom([openai, anthropic], [openai.runtime]);
 
-    expect(await Effect.runPromise(registry.runtime("openai"))).toBe(openai.runtime);
-    const missing = await Effect.runPromise(Effect.result(registry.runtime("anthropic")));
-    expect(Result.isFailure(missing) && missing.failure).toMatchObject({
-      _tag: "ProviderUnavailable",
-      provider: "anthropic",
-    });
-  });
+      expect(yield* registry.runtime("openai")).toBe(openai.runtime);
+      const missing = yield* Effect.result(registry.runtime("anthropic"));
+      expect(Result.isFailure(missing) && missing.failure).toMatchObject({
+        _tag: "ProviderUnavailable",
+        provider: "anthropic",
+      });
+    }),
+  );
 
   test("resolves the saved provider and its matching runtime as one active selection", async () => {
     const storage = mkdtempSync(join(tmpdir(), "active-provider-"));

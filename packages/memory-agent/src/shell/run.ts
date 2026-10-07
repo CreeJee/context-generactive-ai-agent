@@ -1,7 +1,7 @@
+import { Function as EffectFunction } from "effect";
 import { DateTime } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { spawn } from "node:child_process";
 import { shellInvocation, stopProcessTree } from "../runtime/host.ts";
 
@@ -140,9 +140,10 @@ export interface CommandOptions {
  * stop everything it started (SIGTERM, then SIGKILL; the whole tree at once on Windows). This is
  * host execution: path rules do not sandbox it.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function runCommand(command: string, options: CommandOptions): Promise<CommandResult> {
+export const runCommand: {
+  (options: CommandOptions): (command: string) => ReturnType<typeof runCommandBody>;
+} & typeof runCommandBody = EffectFunction.dual(2, runCommandBody);
+function runCommandBody(command: string, options: CommandOptions): Promise<CommandResult> {
   const invocation = shellInvocation(command, options.env);
   const shell = invocation.file;
   const windows = process.platform === "win32";
@@ -151,7 +152,6 @@ export function runCommand(command: string, options: CommandOptions): Promise<Co
   const stderr = makeCapture();
 
   // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-  // @effect-diagnostics-next-line newPromise:off
   return new Promise((resolve, reject) => {
     if (options.signal?.aborted === true) {
       resolve({
@@ -186,7 +186,6 @@ export function runCommand(command: string, options: CommandOptions): Promise<Co
     let active: ActiveCommand | undefined;
 
     // Native callback heartbeat/debounce timing remains at the protocol boundary.
-    // @effect-diagnostics-next-line globalTimers:off
     const timeout = setTimeout(() => stop("timed_out"), options.timeoutSeconds * 1000);
     const onAbort = () => stop("cancelled");
 
@@ -227,7 +226,6 @@ export function runCommand(command: string, options: CommandOptions): Promise<Co
       if (killTimer !== undefined) clearTimeout(killTimer);
       stopProcessTree(pid, true);
       // Native callback heartbeat/debounce timing remains at the protocol boundary.
-      // @effect-diagnostics-next-line globalTimers:off
       closeTimer = setTimeout(abandonPipes, closeGraceMs);
     };
     function stop(reason: "timed_out" | "cancelled") {
@@ -239,7 +237,6 @@ export function runCommand(command: string, options: CommandOptions): Promise<Co
       stopProcessTree(pid, false);
       if (child.exitCode !== null || child.signalCode !== null) force(pid);
       // Native callback heartbeat/debounce timing remains at the protocol boundary.
-      // @effect-diagnostics-next-line globalTimers:off
       else killTimer = setTimeout(() => force(pid), killGraceMs);
     }
 

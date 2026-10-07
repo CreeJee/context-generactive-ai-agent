@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
 import { execFile } from "node:child_process";
@@ -101,15 +102,18 @@ test("fresh Node executes saved recording factory after source removal and persi
         maxBuffer: 1_000_000,
       },
     );
-    const report = Schema.decodeSync(
-      Schema.fromJsonString(
-        Schema.Struct({
-          acquired: Schema.Finite,
-          released: Schema.Finite,
-          sqliteClosed: Schema.Boolean,
-          pid: Schema.Finite,
-        }),
+    const report = EffectFunction.flow(
+      Schema.decodeResult(
+        Schema.fromJsonString(
+          Schema.Struct({
+            acquired: Schema.Finite,
+            released: Schema.Finite,
+            sqliteClosed: Schema.Boolean,
+            pid: Schema.Finite,
+          }),
+        ),
       ),
+      Result.getOrThrow,
     )(await readFile(join(temporary, "result.json"), "utf8"));
     expect(report).toMatchObject({ acquired: 1, released: 1, sqliteClosed: true });
     expect(report.pid).not.toBe(process.pid);

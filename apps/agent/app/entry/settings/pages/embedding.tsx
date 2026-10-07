@@ -103,7 +103,6 @@ export function EmbeddingSettings() {
   const indexing = overview.unindexed > 0;
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const apply = async (
     command: { action: "choose"; choice: EmbeddingChoice } | { action: "check" },
   ) => {

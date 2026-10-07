@@ -17,7 +17,6 @@ const CreateSession = Schema.Struct({
  * `archived=1`, only the archived ones.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function loader({ request }: Route.LoaderArgs) {
   const params = new URL(request.url).searchParams;
   const projectId = params.get("project");
@@ -35,7 +34,6 @@ export async function loader({ request }: Route.LoaderArgs) {
  * the app's model or directly with a trusted external agent.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected !== null) return rejected;

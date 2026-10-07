@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import type { MessagePart, UIMessage } from "@tanstack/ai";
 import type { Attachment } from "../attachments/attachments.ts";
 import { attachmentUrl } from "../attachments/urls.ts";
@@ -8,9 +9,12 @@ import type { Node } from "../memory/nodes.ts";
  * streams: one user message per user turn (its text, then its images in attachment order), and
  * one assistant message per run holding its text, tool calls and tool results in order.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function sessionMessages(
+export const sessionMessages: {
+  (
+    attachmentsOf: (nodeId: string) => readonly Attachment[],
+  ): (nodes: readonly Node[]) => ReturnType<typeof sessionMessagesBody>;
+} & typeof sessionMessagesBody = EffectFunction.dual(2, sessionMessagesBody);
+function sessionMessagesBody(
   nodes: readonly Node[],
   attachmentsOf: (nodeId: string) => readonly Attachment[],
 ): UIMessage[] {
@@ -32,7 +36,6 @@ export function sessionMessages(
           ...images,
         ],
         // The native SDK/fixture requires a JavaScript Date; this converts a timestamp, not an Effect clock read.
-        // @effect-diagnostics-next-line globalDate:off
         createdAt: new Date(node.createdAt),
       });
       continue;
@@ -44,7 +47,6 @@ export function sessionMessages(
       current = {
         runId: node.runId,
         // The native SDK/fixture requires a JavaScript Date; this converts a timestamp, not an Effect clock read.
-        // @effect-diagnostics-next-line globalDate:off
         message: { id: node.id, role: "assistant", parts: [], createdAt: new Date(node.createdAt) },
       };
       messages.push(current.message);

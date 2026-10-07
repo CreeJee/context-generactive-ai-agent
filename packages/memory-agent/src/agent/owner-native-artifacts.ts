@@ -1,6 +1,6 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -78,8 +78,10 @@ export function makeOwnerNativeArtifacts(owner: {
     const parent = yield* files.parent(owner.directory);
     const saved = yield* boundary(() =>
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      Schema.decodeUnknownSync(Schema.UndefinedOr(Registration))(read.get(goalInstanceId)),
+      EffectFunction.flow(
+        Schema.decodeUnknownResult(Schema.UndefinedOr(Registration)),
+        Result.getOrThrow,
+      )(read.get(goalInstanceId)),
     );
     let registration = saved;
     if (!isTruthy(registration)) {
@@ -95,8 +97,10 @@ export function makeOwnerNativeArtifacts(owner: {
             // Even an atomic adapter that throws after committing must retain registered bytes.
             const saved = yield* boundary(() =>
               // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-              // @effect-diagnostics-next-line schemaSync:off
-              Schema.decodeUnknownSync(Schema.UndefinedOr(Registration))(read.get(goalInstanceId)),
+              EffectFunction.flow(
+                Schema.decodeUnknownResult(Schema.UndefinedOr(Registration)),
+                Result.getOrThrow,
+              )(read.get(goalInstanceId)),
             );
             if (saved?.fileUrl === pathToFileURL(join(directory, "native.mjs")).href) return;
             yield* files.remove(directory);
@@ -127,10 +131,10 @@ export function makeOwnerNativeArtifacts(owner: {
         owner.atomic(() => {
           files.verifyAtFence(fileURLToPath(verified.fileUrl), parent, verified.sha256);
           // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-          // @effect-diagnostics-next-line schemaSync:off
-          const existing = Schema.decodeUnknownSync(Schema.UndefinedOr(Registration))(
-            read.get(goalInstanceId),
-          );
+          const existing = EffectFunction.flow(
+            Schema.decodeUnknownResult(Schema.UndefinedOr(Registration)),
+            Result.getOrThrow,
+          )(read.get(goalInstanceId));
           if (isTruthy(existing) && JSON.stringify(existing) !== JSON.stringify(verified))
             throw new Error("Conflicting native generation");
           if (!isTruthy(existing)) {

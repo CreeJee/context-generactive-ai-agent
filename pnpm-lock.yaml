@@ -170,6 +170,9 @@ catalogs:
     '@base-ui/react':
       specifier: ^1.8.0
       version: 1.8.0
+    '@effect/platform-node':
+      specifier: 4.0.0
+      version: 4.0.0
     '@effect/tsgo':
       specifier: 0.48.1
       version: 0.48.1
@@ -332,6 +335,9 @@ importers:
 
   .:
     devDependencies:
+      '@effect/platform-node':
+        specifier: 'catalog:'
+        version: 4.0.0(effect@4.0.0)(redis@6.3.0)
       '@effect/tsgo':
         specifier: 'catalog:'
         version: 0.48.1
@@ -368,6 +374,9 @@ importers:
       '@base-ui/react':
         specifier: 'catalog:'
         version: 1.8.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@effect/platform-node':
+        specifier: 'catalog:'
+        version: 4.0.0(effect@4.0.0)(redis@6.3.0)
       '@fontsource-variable/inter':
         specifier: 'catalog:'
         version: 5.3.0
@@ -459,6 +468,9 @@ importers:
       '@babel/core':
         specifier: ^7.29.7
         version: 7.29.7
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.0.0(effect@4.0.0)(vitest@5.0.1)
       '@react-router/dev':
         specifier: ^8
         version: 8.3.1(@react-router/serve@8.3.1(react-router@8.3.1(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(typescript@7.0.2))(@voidzero-dev/vite-plus-core@1.0.0(@types/node@26.5.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))(react-router@8.3.1(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(typescript@7.0.2)
@@ -504,6 +516,9 @@ importers:
       '@agentclientprotocol/sdk':
         specifier: 'catalog:'
         version: 1.4.0(zod@4.6.5)
+      '@effect/platform-node':
+        specifier: 'catalog:'
+        version: 4.0.0(effect@4.0.0)(redis@6.3.0)
       '@effect/tsgo':
         specifier: 'catalog:'
         version: 0.48.1
@@ -819,6 +834,19 @@ packages:
 
   '@dotenvx/primitives@0.8.0':
     resolution: {integrity: sha512-VYJy0uhFm9zTJ1TxBaW/pA8bjbOM/OttaNMwZ1RHG4JKyRG7DhSdiqD1ipQoAyoD22olUtxbP78W9xY3Wd11bg==}
+
+  '@effect/platform-node-shared@4.0.1':
+    resolution: {integrity: sha512-VanaejudEhKJ4mpmqnEzdncVUhN6sGSO9ZDND54mRxAlZxj+4dYAWjDTYAy9o4tJo9aALeP2U8cVcOFzEdSeLg==}
+    engines: {node: '>=18.0.0'}
+    peerDependencies:
+      effect: ^4.0.1
+
+  '@effect/platform-node@4.0.0':
+    resolution: {integrity: sha512-/L+4MUbl8FejPKLHLROYSOebvHnfixkP8KiblSD/DE5uH5xENZBHaux4nH6XMnRP+lr8ajpEJFS8sUrmmxFJeQ==}
+    engines: {node: '>=18.0.0'}
+    peerDependencies:
+      effect: ^4.0.0
+      redis: '>=5.0.0 <7.0.0'
 
   '@effect/tsgo-darwin-arm64@0.48.1':
     resolution: {integrity: sha512-DVLF9H0L+2cUqDnrkQjYYe1GyuBehYILQ1EUF3KHFafR/iBSDfZreezW5K+5zLZsLy/gJ5PV5AhbWCLTjZYqFA==}
@@ -1907,6 +1935,42 @@ packages:
     peerDependencies:
       react-router: 8.3.1
 
+  '@redis/bloom@6.3.0':
+    resolution: {integrity: sha512-NQ5poYpZr0jv6zazN1cy6JY5kIipKFZ3R9GTL4kOUTX3a9YAfY29U8bsE4lWhVQEM+G4V0BXVC57mubIdDijeA==}
+    engines: {node: '>= 20.0.0'}
+    peerDependencies:
+      '@redis/client': ^6.3.0
+
+  '@redis/client@6.3.0':
+    resolution: {integrity: sha512-fHrjwGCBvAANGi+TuRuwKi83sIOzgHr8eh+Uf48w3fSX7Hhrz174NrWqfJhAC2vnN0d/tfaZpdr6+o6JC3QHwg==}
+    engines: {node: '>= 20.0.0'}
+    peerDependencies:
+      '@node-rs/xxhash': ^1.1.0
+      '@opentelemetry/api': '>=1 <2'
+    peerDependenciesMeta:
+      '@node-rs/xxhash':
+        optional: true
+      '@opentelemetry/api':
+        optional: true
+
+  '@redis/json@6.3.0':
+    resolution: {integrity: sha512-yt6vRfPBXtW/3qm53cF81TSQpLMjWdW4/2E9WQ2GgbvsKkuCKCFQIcMiKlil1ZMnezK+IQuS795xKU5psbaegw==}
+    engines: {node: '>= 20.0.0'}
+    peerDependencies:
+      '@redis/client': ^6.3.0
+
+  '@redis/search@6.3.0':
+    resolution: {integrity: sha512-RPXAZmKjZZG7Tm7m1w9keFdXzbL91PiSHQBfQRe9xwW40jNsTRbG0FwhIz4QlHPU4gKDAsCy8IQHj4yZl4H9rw==}
+    engines: {node: '>= 20.0.0'}
+    peerDependencies:
+      '@redis/client': ^6.3.0
+
+  '@redis/time-series@6.3.0':
+    resolution: {integrity: sha512-+fJOB8mN1z5WRakCJNh5lVdz1KqvHGSOistsKeitD24QsCtPwyRQXWC0iq6T/i/ubLE/YcguZqPm8F598MKk4A==}
+    engines: {node: '>= 20.0.0'}
+    peerDependencies:
+      '@redis/client': ^6.3.0
+
   '@remix-run/node-fetch-server@0.14.1':
     resolution: {integrity: sha512-pKenF5ysIN5lDCnCyvoUxDhKP0tfnGagvGbZh01xxHG6DJXSIXWVC9NpLSDGjxcxd1CKdCOKuZFleXBF3pChIg==}
 
@@ -2361,6 +2425,9 @@ packages:
 
   '@types/validate-npm-package-name@4.0.2':
     resolution: {integrity: sha512-lrpDziQipxCEeK5kWxvljWYhUvOiB2A9izZd9B2AFarYAkqZshb4lPbRs7zKEic6eGtH8V/2qJW+dPp9OtF6bw==}
+
+  '@types/ws@8.18.2':
+    resolution: {integrity: sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==}
 
   '@typescript-eslint/parser@8.70.0':
     resolution: {integrity: sha512-zYvrmj9Yxd63UGaXw+kdt6A0F0s0qveJyuatIM77bYC2DE4pgmg7a50u8LR7PRtXd0x+h+Tl3eXabGm06SWd3Q==}
@@ -4755,6 +4822,10 @@ packages:
     resolution: {integrity: sha512-mFAyJq9vUbSTARLZUvAEf1z3YxlvAwswbmxMx2mPA/MSm4KmpwvwvhsH/NIrZhyOuwD60Lzyw2qh83uCbgTPYw==}
     engines: {node: '>= 4'}
 
+  redis@6.3.0:
+    resolution: {integrity: sha512-XFQbPie1lGpKeUZ8ySYY43yLnQy/iIQtHNvIr/1XdaABpb96rUSdm3Mfl+98FEVbv9ZJIzINMno5s0Nh8E5LEw==}
+    engines: {node: '>= 20.0.0'}
+
   regex-recursion@6.0.2:
     resolution: {integrity: sha512-0YCaSCq2VRIebiaUviZNs0cBz1kg5kVS2UKUfNIx8YVs1cN3AV7NTctO5FOKBA+UT2BPJIWZauYHPqJODG50cg==}
 
@@ -5143,6 +5214,10 @@ packages:
     resolution: {integrity: sha512-RYONW2MeafgYlkVOKYKkA/Ag7BmXqgIWCa8t1m0JcxrQg9pI9lEqRhAOruOBCbAohOa/gkCF+iPi9hrgvTzu6Q==}
     engines: {node: '>=20.18.1'}
 
+  undici@8.11.2:
+    resolution: {integrity: sha512-u4UB2/IrKdU6lFxumHmmo1a3fCQO5tzQllRorfoRS63txhrB7xTpSn1PftwC4qEHkOaqP95fCWW4lJzwErwzhQ==}
+    engines: {node: '>=22.19.0'}
+
   unicorn-magic@0.3.0:
     resolution: {integrity: sha512-+QBBXBCvifc56fsbuxZQ6Sic3wqqc3WWaqxs58gvJrcOuN83HGTCwz3oS5phzU9LthRNE9VrJCFCLUgHeeFnfA==}
     engines: {node: '>=18'}
@@ -5330,6 +5405,18 @@ packages:
 
   ws@8.21.3:
     resolution: {integrity: sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
+  ws@8.22.0:
+    resolution: {integrity: sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -5649,6 +5736,25 @@ snapshots:
       yocto-spinner: 1.2.2
 
   '@dotenvx/primitives@0.8.0': {}
+
+  '@effect/platform-node-shared@4.0.1(effect@4.0.0)':
+    dependencies:
+      '@types/ws': 8.18.2
+      effect: 4.0.0
+      ws: 8.22.0
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+
+  '@effect/platform-node@4.0.0(effect@4.0.0)(redis@6.3.0)':
+    dependencies:
+      '@effect/platform-node-shared': 4.0.1(effect@4.0.0)
+      effect: 4.0.0
+      redis: 6.3.0
+      undici: 8.11.2
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
 
   '@effect/tsgo-darwin-arm64@0.48.1':
     optional: true
@@ -6441,6 +6547,24 @@ snapshots:
       - typescript
     optional: true
 
+  '@redis/bloom@6.3.0(@redis/client@6.3.0)':
+    dependencies:
+      '@redis/client': 6.3.0
+
+  '@redis/client@6.3.0': {}
+
+  '@redis/json@6.3.0(@redis/client@6.3.0)':
+    dependencies:
+      '@redis/client': 6.3.0
+
+  '@redis/search@6.3.0(@redis/client@6.3.0)':
+    dependencies:
+      '@redis/client': 6.3.0
+
+  '@redis/time-series@6.3.0(@redis/client@6.3.0)':
+    dependencies:
+      '@redis/client': 6.3.0
+
   '@remix-run/node-fetch-server@0.14.1': {}
 
   '@rolldown/binding-android-arm-eabi@1.2.8':
@@ -6856,6 +6980,10 @@ snapshots:
 
   '@types/validate-npm-package-name@4.0.2': {}
 
+  '@types/ws@8.18.2':
+    dependencies:
+      '@types/node': 26.5.1
+
   '@typescript-eslint/parser@8.70.0(eslint@10.10.0(jiti@2.7.0))(typescript@7.0.2)':
     dependencies:
       '@typescript-eslint/scope-manager': 8.70.0
@@ -7014,7 +7142,7 @@ snapshots:
       sirv: 3.0.2
       tinyrainbow: 3.1.1
       vitest: 5.0.1(@types/node@26.5.1)(@vitest/browser-playwright@5.0.1)(@vitest/browser-preview@5.0.1)(@vitest/ui@5.0.1)(@voidzero-dev/vite-plus-core@1.0.0(@types/node@26.5.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))
-      ws: 8.21.3
+      ws: 8.22.0
     transitivePeerDependencies:
       - bufferutil
       - msw
@@ -9253,6 +9381,17 @@ snapshots:
       tiny-invariant: 1.3.3
       tslib: 2.8.1
 
+  redis@6.3.0:
+    dependencies:
+      '@redis/bloom': 6.3.0(@redis/client@6.3.0)
+      '@redis/client': 6.3.0
+      '@redis/json': 6.3.0(@redis/client@6.3.0)
+      '@redis/search': 6.3.0(@redis/client@6.3.0)
+      '@redis/time-series': 6.3.0(@redis/client@6.3.0)
+    transitivePeerDependencies:
+      - '@node-rs/xxhash'
+      - '@opentelemetry/api'
+
   regex-recursion@6.0.2:
     dependencies:
       regex-utilities: 2.3.0
@@ -9785,6 +9924,8 @@ snapshots:
 
   undici@7.29.1: {}
 
+  undici@8.11.2: {}
+
   unicorn-magic@0.3.0: {}
 
   unified@11.0.5:
@@ -9986,7 +10127,10 @@ snapshots:
 
   wrappy@1.0.2: {}
 
-  ws@8.21.3: {}
+  ws@8.21.3:
+    optional: true
+
+  ws@8.22.0: {}
 
   wsl-utils@1.0.0:
     dependencies:

@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { Cause, Context, Data, Effect, Layer } from "effect";
 import {
   GlobalConfig,
@@ -46,9 +47,15 @@ const emptySettings = (): ModelFeatureFlagSettings => ({
 });
 const modelKey = (provider: ProviderId, model: string) => `${provider}:${model}`;
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function decideModelFeatureFlag(
+export const decideModelFeatureFlag: {
+  (
+    query: ModelFeatureFlagQuery,
+    known: ReadonlySet<string>,
+  ): (
+    settings: ModelFeatureFlagSettings | undefined,
+  ) => ReturnType<typeof decideModelFeatureFlagBody>;
+} & typeof decideModelFeatureFlagBody = EffectFunction.dual(3, decideModelFeatureFlagBody);
+function decideModelFeatureFlagBody(
   settings: ModelFeatureFlagSettings | undefined,
   query: ModelFeatureFlagQuery,
   known: ReadonlySet<string>,
@@ -90,9 +97,12 @@ export interface ModelFeatureFlagsApi {
     enabled: boolean,
   ) => Effect.Effect<ModelFeatureFlagSettings, ModelFeatureFlagStoreFailed>;
 }
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function makeModelFeatureFlags(
+export const makeModelFeatureFlags: {
+  (
+    capabilities: Iterable<string>,
+  ): (config: GlobalConfigApi) => ReturnType<typeof makeModelFeatureFlagsBody>;
+} & typeof makeModelFeatureFlagsBody = EffectFunction.dual(2, makeModelFeatureFlagsBody);
+function makeModelFeatureFlagsBody(
   config: GlobalConfigApi,
   capabilities: Iterable<string>,
 ): ModelFeatureFlagsApi {

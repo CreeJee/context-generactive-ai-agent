@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off schemaSync:off
 import { Effect, Schema } from "effect";
@@ -10,7 +11,10 @@ import { Workflows } from "../src/workflow/workflow.ts";
 import { testRuntime } from "./support/runtime.ts";
 
 const goalId = (db: typeof Database.Service, sessionId: string) =>
-  Schema.decodeUnknownSync(Schema.Struct({ goal_instance_id: Schema.String }))(
+  EffectFunction.flow(
+    Schema.decodeUnknownResult(Schema.Struct({ goal_instance_id: Schema.String })),
+    Result.getOrThrow,
+  )(
     db.sqlite
       .prepare("SELECT goal_instance_id FROM workflow_goal_identities WHERE session_id = ?")
       .get(sessionId),
@@ -78,7 +82,10 @@ test("a source pin is immutable and replacement cannot erase its evidence", asyn
 
 test("historical unpinned dispatch stays unbound instead of silently acquiring current code", async () => {
   const { context, db } = await setup();
-  const revision = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.Finite }))(
+  const revision = EffectFunction.flow(
+    Schema.decodeUnknownResult(Schema.Struct({ id: Schema.Finite })),
+    Result.getOrThrow,
+  )(
     db.sqlite
       .prepare(
         "SELECT id FROM workflow_state_revisions WHERE session_id = ? ORDER BY id DESC LIMIT 1",

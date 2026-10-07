@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { DateTime, Clock, Semaphore } from "effect";
 import { Worker } from "node:worker_threads";
@@ -86,24 +87,27 @@ const Progress = Schema.Struct({
   hidden: Schema.Finite,
 });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeProgress = Schema.decodeUnknownSync(Progress);
+const decodeProgress = EffectFunction.flow(Schema.decodeUnknownResult(Progress), Result.getOrThrow);
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeNodeRow = Schema.decodeUnknownSync(
-  Schema.Struct({ seq: Schema.Finite, text: Schema.String }),
+const decodeNodeRow = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Struct({ seq: Schema.Finite, text: Schema.String })),
+  Result.getOrThrow,
 );
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeRefRow = Schema.decodeUnknownSync(
-  Schema.Struct({ row_key: Schema.Finite, ref: Schema.String }),
+const decodeRefRow = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Struct({ row_key: Schema.Finite, ref: Schema.String })),
+  Result.getOrThrow,
 );
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeRowKey = Schema.decodeUnknownSync(Schema.Struct({ row_key: Schema.Finite }));
+const decodeRowKey = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Struct({ row_key: Schema.Finite })),
+  Result.getOrThrow,
+);
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeCell = Schema.decodeUnknownSync(Schema.NullOr(Schema.String));
+const decodeCell = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.NullOr(Schema.String)),
+  Result.getOrThrow,
+);
 const decodeReply = Schema.decodeUnknownOption(RedactReply);
 
 /** A column value after sweeping; `null` stays `null`. */

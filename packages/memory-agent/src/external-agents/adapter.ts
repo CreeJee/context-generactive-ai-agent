@@ -1,7 +1,6 @@
 import { MutableHashMap, Option, Cause, Effect, Exit, Queue, DateTime } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import {
   EventType,
@@ -69,7 +68,6 @@ export class ExternalAgentAdapter extends BaseTextAdapter<
   }
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   async *chatStream(options: TextOptions<Record<string, never>>): AsyncIterable<AdapterYieldChunk> {
     const signal =
       options.abortController?.signal ?? options.request?.signal ?? new AbortController().signal;

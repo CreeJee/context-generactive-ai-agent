@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off schemaSync:off
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
@@ -101,8 +102,11 @@ describe("server-selected queued next turn", () => {
         ),
       ),
     );
-    const history = Schema.decodeUnknownSync(
-      Schema.Struct({ messages: Schema.Array(Schema.Struct({ id: Schema.String })) }),
+    const history = EffectFunction.flow(
+      Schema.decodeUnknownResult(
+        Schema.Struct({ messages: Schema.Array(Schema.Struct({ id: Schema.String })) }),
+      ),
+      Result.getOrThrow,
     )(await hydrated.json());
     expect(history.messages.some((message) => message.id === stale.id)).toBe(true);
     client.dispose();

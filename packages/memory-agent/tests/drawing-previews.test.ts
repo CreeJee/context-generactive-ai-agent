@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -107,7 +108,7 @@ const Written = Schema.Struct({
   sha256: Schema.String,
   preview: Schema.optional(Schema.Struct({ attachmentId: Schema.String, mimeType: Schema.String })),
 });
-const decodeWritten = Schema.decodeUnknownSync(Written);
+const decodeWritten = EffectFunction.flow(Schema.decodeUnknownResult(Written), Result.getOrThrow);
 
 describe("DrawingPreviews", () => {
   const toolsFor = async () => {
@@ -219,9 +220,12 @@ describe("DrawingPreviews", () => {
     // A tool that is not a writer is left alone even when it reads an SVG.
     writeFileSync(join(project.root, "read.svg"), svg(""));
     const read = await call("read_file", { path: "read.svg" });
-    expect(Schema.decodeUnknownSync(Schema.Struct({ path: Schema.String }))(read).path).toBe(
-      "read.svg",
-    );
+    expect(
+      EffectFunction.flow(
+        Schema.decodeUnknownResult(Schema.Struct({ path: Schema.String })),
+        Result.getOrThrow,
+      )(read).path,
+    ).toBe("read.svg");
     expect(JSON.stringify(read)).not.toContain("preview");
   });
 

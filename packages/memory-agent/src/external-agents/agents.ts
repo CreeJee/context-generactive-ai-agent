@@ -1,9 +1,8 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import type { ChildProcess } from "node:child_process";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import type {
@@ -144,8 +143,10 @@ const TrustRow = Schema.Struct({
   fingerprint: Schema.String,
 });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeTrustRows = Schema.decodeUnknownSync(Schema.Array(TrustRow));
+const decodeTrustRows = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Array(TrustRow)),
+  Result.getOrThrow,
+);
 
 const DataMessage = Schema.Struct({ message: Schema.String });
 const decodeDataMessage = Schema.decodeUnknownOption(DataMessage);
@@ -243,7 +244,6 @@ const make = Effect.gen(function* () {
   };
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const startProcess = async (
     project: Project,
     agent: ConfiguredAgent,
@@ -266,7 +266,6 @@ const make = Effect.gen(function* () {
       { cwd: project.root, env, stdio: ["pipe", "pipe", "ignore"], windowsHide: true },
     );
     // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-    // @effect-diagnostics-next-line newPromise:off
     const spawned = new Promise<void>((resolve, reject) => {
       child.once("spawn", resolve);
       child.once("error", reject);
@@ -282,7 +281,6 @@ const make = Effect.gen(function* () {
         );
       })
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      // @effect-diagnostics-next-line asyncFunction:off
       .onRequest(acp.methods.client.session.requestPermission, async (ctx) => {
         const handler = Option.getOrUndefined(MutableHashMap.get(handlers, ctx.params.sessionId));
         return isTruthy(handler)
@@ -300,10 +298,8 @@ const make = Effect.gen(function* () {
     try {
       let timer: NodeJS.Timeout | undefined;
       // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-      // @effect-diagnostics-next-line newPromise:off
       const timeout = new Promise<never>((_, reject) => {
         // Native callback heartbeat/debounce timing remains at the protocol boundary.
-        // @effect-diagnostics-next-line globalTimers:off
         timer = setTimeout(() => reject(new Error("initialize timed out")), connectTimeoutMs);
         timer.unref();
       });
@@ -383,12 +379,10 @@ const make = Effect.gen(function* () {
       if (link.retired || link.live !== null || link.failures >= maxConsecutiveFailures) return;
       void attempt(project, agent, link).catch(() => {
         // Native callback heartbeat/debounce timing remains at the protocol boundary.
-        // @effect-diagnostics-next-line globalTimers:off
         if (link.failures < maxConsecutiveFailures) setTimeout(retry, retryDelayMs).unref();
       });
     };
     // Native callback heartbeat/debounce timing remains at the protocol boundary.
-    // @effect-diagnostics-next-line globalTimers:off
     setTimeout(retry, retryDelayMs).unref();
   };
 
@@ -502,7 +496,6 @@ const make = Effect.gen(function* () {
      * time, or after the process restarted) and waits for its answer.
      */
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     prompt: async (
       project: Project,
       name: string,
@@ -574,7 +567,6 @@ const make = Effect.gen(function* () {
           hooks.onUpdate?.(update);
         },
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         askPermission: async (request) =>
           permissionAnswer(request, await hooks.askPermission(request)),
       });

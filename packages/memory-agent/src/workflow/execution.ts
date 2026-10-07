@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
@@ -62,12 +63,16 @@ const storage = <A>(operation: "read" | "write", evaluate: () => A) =>
 
 const namespace = "memory-agent/workflow-execution";
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const encode = Schema.encodeSync(Schema.fromJsonString(WorkflowExecutionState));
+const encode = EffectFunction.flow(
+  Schema.encodeResult(Schema.fromJsonString(WorkflowExecutionState)),
+  Result.getOrThrow,
+);
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decode = Schema.decodeUnknownSync(
-  Schema.Struct({ value: Schema.fromJsonString(WorkflowExecutionState) }),
+const decode = EffectFunction.flow(
+  Schema.decodeUnknownResult(
+    Schema.Struct({ value: Schema.fromJsonString(WorkflowExecutionState) }),
+  ),
+  Result.getOrThrow,
 );
 const progressOf = (
   state: WorkflowState,
@@ -118,8 +123,13 @@ const make = Effect.gen(function* () {
           )
           .all(namespace)
           // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-          // @effect-diagnostics-next-line schemaSync:off
-          .map((row) => Schema.decodeUnknownSync(Schema.Struct({ key: Schema.String }))(row).key),
+          .map(
+            (row) =>
+              EffectFunction.flow(
+                Schema.decodeUnknownResult(Schema.Struct({ key: Schema.String })),
+                Result.getOrThrow,
+              )(row).key,
+          ),
       ),
     ),
 

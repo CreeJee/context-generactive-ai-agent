@@ -1,9 +1,8 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { statSync } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { isAbsolute, relative, sep } from "node:path";
 import { Clock, DateTime, Cause, Context, Effect, Layer, Schema } from "effect";
 import { GlobalConfig } from "../config/global-config.ts";
@@ -44,13 +43,17 @@ export type TranscriptCounts = ReadonlyArray<{
 }>;
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeCursor = Schema.decodeUnknownSync(
-  Schema.Struct({ byte_offset: Schema.Finite, size: Schema.Finite, mtime_ms: Schema.Finite }),
+const decodeCursor = EffectFunction.flow(
+  Schema.decodeUnknownResult(
+    Schema.Struct({ byte_offset: Schema.Finite, size: Schema.Finite, mtime_ms: Schema.Finite }),
+  ),
+  Result.getOrThrow,
 );
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeSessionId = Schema.decodeUnknownSync(Schema.Struct({ session_id: Schema.String }));
+const decodeSessionId = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Struct({ session_id: Schema.String })),
+  Result.getOrThrow,
+);
 
 /** What settings says went wrong: the error's message, never the transcript's content. */
 const failureOf = (cause: Cause.Cause<unknown>) => {

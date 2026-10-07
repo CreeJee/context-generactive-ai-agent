@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../../truthy.ts";
 import { CheckIcon, CopyIcon, FolderIcon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -90,9 +91,10 @@ export function shortPath(path: string) {
 }
 
 /** A file of the project named from the project, a file elsewhere by its shortened path. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function pathIn(project: Project, path: string) {
+export const pathIn: {
+  (path: string): (project: Project) => ReturnType<typeof pathInBody>;
+} & typeof pathInBody = EffectFunction.dual(2, pathInBody);
+function pathInBody(project: Project, path: string) {
   const inside = path.startsWith(`${project.root}/`) || path.startsWith(`${project.root}\\`);
   return inside ? `${project.name}${path.slice(project.root.length)}` : shortPath(path);
 }
@@ -105,7 +107,6 @@ function CopyPathButton({ path }: { path: string }) {
   useEffect(() => {
     if (!copied) return;
     // Native callback heartbeat/debounce timing remains at the protocol boundary.
-    // @effect-diagnostics-next-line globalTimers:off
     const timer = setTimeout(() => setCopied(false), copiedForMs);
     return () => clearTimeout(timer);
   }, [copied]);

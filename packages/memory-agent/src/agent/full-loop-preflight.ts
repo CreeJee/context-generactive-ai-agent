@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { convertSchemaToJsonSchema, type AnyTextAdapter } from "@tanstack/ai";
 import type { ChatExecutionCapabilities, ChatExecutionTurn } from "./chat-execution.ts";
@@ -24,9 +25,14 @@ export const fullLoopHooks = new Set([
  * not dispatch SDK hooks or model/tool calls and grants no owner authority.
  * Prepare the complete owner capability set first; admission is a separate commit.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function preflightFullLoopExecution<TAdapter extends AnyTextAdapter>(
+export const preflightFullLoopExecution: {
+  <TAdapter extends AnyTextAdapter>(
+    capabilities: ChatExecutionCapabilities<TAdapter>,
+  ): (
+    turn: ChatExecutionTurn<TAdapter>,
+  ) => ReturnType<typeof preflightFullLoopExecutionBody<TAdapter>>;
+} & typeof preflightFullLoopExecutionBody = EffectFunction.dual(2, preflightFullLoopExecutionBody);
+function preflightFullLoopExecutionBody<TAdapter extends AnyTextAdapter>(
   turn: ChatExecutionTurn<TAdapter>,
   capabilities: ChatExecutionCapabilities<TAdapter>,
 ): void {

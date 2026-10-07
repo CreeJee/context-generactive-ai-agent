@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { Option, Schema } from "effect";
 
 const CLAUDE_CODE_BILLING =
@@ -18,12 +19,7 @@ const decodeRequest = Schema.decodeUnknownOption(
   Schema.fromJsonString(AnthropicValidationRequestSchema),
 );
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export const prepareAnthropicValidationBody = (
-  serializedBody: string,
-  sessionId: string,
-): string => {
+const prepareAnthropicValidationBodyBody = (serializedBody: string, sessionId: string): string => {
   const decoded = Option.getOrThrowWith(
     decodeRequest(serializedBody),
     () => new Error("invalid_anthropic_request"),
@@ -52,3 +48,11 @@ export const prepareAnthropicValidationBody = (
     metadata: { user_id: userId },
   });
 };
+export const prepareAnthropicValidationBody: {
+  (
+    sessionId: string,
+  ): (serializedBody: string) => ReturnType<typeof prepareAnthropicValidationBodyBody>;
+} & typeof prepareAnthropicValidationBodyBody = EffectFunction.dual(
+  2,
+  prepareAnthropicValidationBodyBody,
+);

@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off nodeBuiltinImport:off schemaSync:off
 import { isTruthy } from "../src/truthy.ts";
@@ -53,7 +54,11 @@ const TraceSummary = Schema.Struct({
 const answerOf = (events: string) =>
   events
     .split("\n")
-    .flatMap((line) => (line.startsWith("data: ") ? [Schema.decodeSync(Delta)(line.slice(6))] : []))
+    .flatMap((line) =>
+      line.startsWith("data: ")
+        ? [EffectFunction.flow(Schema.decodeResult(Delta), Result.getOrThrow)(line.slice(6))]
+        : [],
+    )
     .flatMap((event) =>
       event.type === "TEXT_MESSAGE_CONTENT" && isTruthy(event.delta) ? [event.delta] : [],
     )
@@ -173,7 +178,10 @@ describe("subagents", () => {
     expect(transcript?.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
 
     const db = await runtime.runPromise(Database);
-    const trace = Schema.decodeUnknownSync(TraceSummary)(
+    const trace = EffectFunction.flow(
+      Schema.decodeUnknownResult(TraceSummary),
+      Result.getOrThrow,
+    )(
       db.sqlite
         .prepare(
           `SELECT t.id AS task_id, a.id AS attempt_id,
@@ -358,7 +366,10 @@ describe("subagents", () => {
     for (const child of children) {
       const transcript = await subagents.transcript(session.id, child.id);
       const persisted = JSON.stringify(transcript?.messages ?? []);
-      const locators = Schema.decodeUnknownSync(LocatorRows)(
+      const locators = EffectFunction.flow(
+        Schema.decodeUnknownResult(LocatorRows),
+        Result.getOrThrow,
+      )(
         db.sqlite
           .prepare(
             `SELECT e.locator FROM evidence_refs e
@@ -368,8 +379,9 @@ describe("subagents", () => {
           .all(child.id),
       );
       for (const { locator } of locators) {
-        const toolCallId = Schema.decodeSync(
-          Schema.fromJsonString(Schema.Struct({ toolCallId: Schema.String })),
+        const toolCallId = EffectFunction.flow(
+          Schema.decodeResult(Schema.fromJsonString(Schema.Struct({ toolCallId: Schema.String }))),
+          Result.getOrThrow,
         )(locator).toolCallId;
         expect(persisted).toContain(toolCallId);
       }
@@ -384,7 +396,10 @@ describe("subagents", () => {
     expect(answer).toContain("write_file said");
 
     const db = await runtime.runPromise(Database);
-    const artifact = Schema.decodeUnknownSync(ArtifactSummary)(
+    const artifact = EffectFunction.flow(
+      Schema.decodeUnknownResult(ArtifactSummary),
+      Result.getOrThrow,
+    )(
       db.sqlite
         .prepare(
           `SELECT w.kind, w.locator FROM work_artifacts w
@@ -407,7 +422,10 @@ describe("subagents", () => {
     const { send, session, runtime } = await subagentSetup();
     await send('call run_subagent {"task":"collect facts"}');
     const db = await runtime.runPromise(Database);
-    const ids = Schema.decodeUnknownSync(ResumeIds)(
+    const ids = EffectFunction.flow(
+      Schema.decodeUnknownResult(ResumeIds),
+      Result.getOrThrow,
+    )(
       db.sqlite
         .prepare(
           `SELECT t.id AS task_id, a.id AS attempt_id
@@ -432,7 +450,10 @@ describe("subagents", () => {
     );
     expect(resumed).toContain('"status":"completed"');
     expect(resumed).toContain("Resume the interrupted task as a new execution attempt");
-    const result = Schema.decodeUnknownSync(ResumeResult)(
+    const result = EffectFunction.flow(
+      Schema.decodeUnknownResult(ResumeResult),
+      Result.getOrThrow,
+    )(
       db.sqlite
         .prepare(
           `SELECT count(*) AS attempts,
@@ -449,7 +470,10 @@ describe("subagents", () => {
     const { send, session, runtime, reopen } = await subagentSetup();
     await send('call run_subagent {"task":"write externally"}');
     const db = await runtime.runPromise(Database);
-    const ids = Schema.decodeUnknownSync(ResumeIds)(
+    const ids = EffectFunction.flow(
+      Schema.decodeUnknownResult(ResumeIds),
+      Result.getOrThrow,
+    )(
       db.sqlite
         .prepare(
           `SELECT t.id AS task_id, a.id AS attempt_id
@@ -555,7 +579,10 @@ describe("subagents", () => {
     const after = await reopened.runPromise(Effect.map(Subagents, (s) => s.list(session.id)));
     expect(after[0]?.status).toBe("interrupted");
     const reopenedDb = await reopened.runPromise(Database);
-    const restartedTrace = Schema.decodeUnknownSync(RestartedTrace)(
+    const restartedTrace = EffectFunction.flow(
+      Schema.decodeUnknownResult(RestartedTrace),
+      Result.getOrThrow,
+    )(
       reopenedDb.sqlite
         .prepare(
           `SELECT a.status AS attempt_status, a.resume_reason, t.status AS task_status,
@@ -598,7 +625,10 @@ describe("subagents", () => {
     await until(
       () =>
         ["completed", "failed", "blocked"].includes(
-          Schema.decodeUnknownSync(JobStatus)(
+          EffectFunction.flow(
+            Schema.decodeUnknownResult(JobStatus),
+            Result.getOrThrow,
+          )(
             reopenedDb.sqlite
               .prepare("SELECT status FROM work_recovery_jobs ORDER BY created_at DESC LIMIT 1")
               .get(),
@@ -607,7 +637,10 @@ describe("subagents", () => {
       "the recovery job to finish",
     );
     expect(
-      Schema.decodeUnknownSync(JobStatus)(
+      EffectFunction.flow(
+        Schema.decodeUnknownResult(JobStatus),
+        Result.getOrThrow,
+      )(
         reopenedDb.sqlite
           .prepare("SELECT status FROM work_recovery_jobs ORDER BY created_at DESC LIMIT 1")
           .get(),

@@ -1,5 +1,4 @@
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { optionalProperty } from "./optional-property.ts";
 import { Effect, Layer } from "effect";
@@ -136,7 +135,6 @@ export interface MemoryAgentLayerOptions {
 
 /** Composition root: every memory-agent service backed by one storage directory. */
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function memoryAgentLayer(storageRoot: string, options: MemoryAgentLayerOptions = {}) {
   // Each tier only depends on the tiers below it.
   // The settings are read by services in every tier above, the embedder among them.

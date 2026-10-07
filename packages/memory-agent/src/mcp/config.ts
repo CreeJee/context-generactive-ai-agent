@@ -1,12 +1,10 @@
+import { Function as EffectFunction } from "effect";
 import { SchemaTransformation } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { createHash } from "node:crypto";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { existsSync, readFileSync } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { Data, Result, Schema } from "effect";
 
@@ -105,13 +103,17 @@ export interface McpFileRead {
 export const fingerprintOf = (config: McpServerConfig) =>
   createHash("sha256")
     // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    // @effect-diagnostics-next-line schemaSync:off
-    .update(JSON.stringify(Schema.encodeSync(McpServerConfig)(config)))
+    .update(
+      JSON.stringify(
+        EffectFunction.flow(Schema.encodeResult(McpServerConfig), Result.getOrThrow)(config),
+      ),
+    )
     .digest("hex");
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function readMcpFile(path: string, scope: McpScope): McpFileRead {
+export const readMcpFile: {
+  (scope: McpScope): (path: string) => ReturnType<typeof readMcpFileBody>;
+} & typeof readMcpFileBody = EffectFunction.dual(2, readMcpFileBody);
+function readMcpFileBody(path: string, scope: McpScope): McpFileRead {
   if (!existsSync(path)) return { path, servers: [], error: null };
   let text: string;
   try {
@@ -153,9 +155,10 @@ export class MissingVariable extends Data.TaggedError("MissingVariable")<{
 }
 
 /** Replaces `${NAME}` with the app's environment, so secrets can stay out of the file. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function expandVariables(value: string, env: NodeJS.ProcessEnv): string {
+export const expandVariables: {
+  (env: NodeJS.ProcessEnv): (value: string) => ReturnType<typeof expandVariablesBody>;
+} & typeof expandVariablesBody = EffectFunction.dual(2, expandVariablesBody);
+function expandVariablesBody(value: string, env: NodeJS.ProcessEnv): string {
   return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name: string) => {
     const found = env[name];
     if (found === undefined) throw new MissingVariable(name);

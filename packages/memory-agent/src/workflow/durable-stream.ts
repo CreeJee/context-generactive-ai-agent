@@ -3,7 +3,6 @@ import { isTruthy } from "../truthy.ts";
 import type { StreamChunk, StreamDurability } from "@tanstack/ai";
 import type { DatabaseSync } from "node:sqlite";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { setTimeout } from "node:timers/promises";
 
 const namespace = "sdk-stream:v1:";
@@ -67,7 +66,6 @@ export function sqliteStreamDurability(input: {
   return {
     resumeFrom: () => input.resumeOffset ?? null,
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     append: async (chunks) =>
       atomic(() => {
         check();
@@ -114,14 +112,12 @@ export function sqliteStreamDurability(input: {
         return offsets;
       }),
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     snapshot: async () =>
       atomic(() => {
         check();
         return entries(0);
       }),
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     close: async () =>
       atomic(() => {
         check();
@@ -135,7 +131,6 @@ export function sqliteStreamDurability(input: {
           );
       }),
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     read: async function* (offset, signal) {
       check();
       let cursor = parse(offset);

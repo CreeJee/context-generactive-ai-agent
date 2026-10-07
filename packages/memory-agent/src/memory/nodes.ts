@@ -1,6 +1,6 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { randomUUID } from "node:crypto";
 import type { SQLOutputValue } from "node:sqlite";
 import { DateTime, Clock, Context, Effect, Layer, Schema } from "effect";
@@ -95,8 +95,7 @@ const NodeRow = Schema.Struct({
   created_at: Schema.String,
 });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeNodeRow = Schema.decodeUnknownSync(NodeRow);
+const decodeNodeRow = EffectFunction.flow(Schema.decodeUnknownResult(NodeRow), Result.getOrThrow);
 
 export function toNode(row: Record<string, SQLOutputValue>): Node {
   const decoded = decodeNodeRow(row);
@@ -122,8 +121,7 @@ const EdgeRow = Schema.Struct({
   created_at: Schema.String,
 });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-// @effect-diagnostics-next-line schemaSync:off
-const decodeEdgeRow = Schema.decodeUnknownSync(EdgeRow);
+const decodeEdgeRow = EffectFunction.flow(Schema.decodeUnknownResult(EdgeRow), Result.getOrThrow);
 
 export function toEdge(row: Record<string, SQLOutputValue>): Edge {
   const decoded = decodeEdgeRow(row);
@@ -173,8 +171,12 @@ const make = Effect.gen(function* () {
 
   const idOf = (row: Record<string, SQLOutputValue> | undefined) =>
     // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    // @effect-diagnostics-next-line schemaSync:off
-    isTruthy(row) ? Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String }))(row).id : null;
+    isTruthy(row)
+      ? EffectFunction.flow(
+          Schema.decodeUnknownResult(Schema.Struct({ id: Schema.String })),
+          Result.getOrThrow,
+        )(row).id
+      : null;
 
   function link(fromId: string, toId: string, kind: EdgeKind, createdAt: string) {
     insertEdge.run(fromId, toId, kind, edgeWeights[kind], createdAt);

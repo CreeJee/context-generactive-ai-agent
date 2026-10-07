@@ -1,3 +1,4 @@
+import { it as effectTest } from "@effect/vitest";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off globalTimers:off newPromise:off nodeBuiltinImport:off
 import { mkdtempSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
@@ -34,8 +35,15 @@ const run = <A, E>(
   effect: Effect.Effect<A, E, ProviderToolPolicy>,
   layer: Layer.Layer<ProviderToolPolicy, ProviderToolMetadataFailure> = defaultPolicyLayer,
   // Test entry point owns this Layer and its resource scope.
-  // @effect-diagnostics-next-line strictEffectProvide:off
-) => Effect.runPromise(effect.pipe(Effect.provide(layer)));
+) =>
+  Effect.runPromise(
+    effect.pipe(
+      Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+        const services = yield* Layer.build(layer);
+        return yield* Effect.provideContext(program, services);
+      }, Effect.scoped),
+    ),
+  );
 const errorOf = <A, E>(effect: Effect.Effect<A, E>) =>
   effect.pipe(
     Effect.result,
@@ -96,33 +104,33 @@ describe("ProviderToolPolicy", () => {
     expect(first.tools[0]).toMatchObject({ risk: "read_only", requiresApproval: false });
   });
 
-  test("uses the same fresh feature flag policy for exposure and execution", async () => {
-    let allowed = true;
-    const flags = makeModelFeatureFlags(
-      {
-        read: Effect.sync(() => ({
-          modelFeatureFlags: {
-            version: 1 as const,
-            global: allowed,
-            providers: { openai: allowed },
-            capabilities: { "openai:web_search": allowed },
-            models: {},
-            routes: {},
-          },
-        })),
-        update: (patch) => Effect.succeed(patch),
-      },
-      providerToolDescriptors.map((descriptor) => descriptor.id),
-    );
-    const registry = await Effect.runPromise(makeProviderToolCapabilityRegistry());
-    const policy = makeProviderToolPolicy(registry, {}, flags);
-    expect(
-      (await Effect.runPromise(policy.expose(basePolicy()))).tools.map((tool) => tool.id),
-    ).toEqual(["openai:web_search"]);
-    allowed = false;
-    expect((await Effect.runPromise(policy.expose(basePolicy()))).tools).toEqual([]);
-    const denied = await Effect.runPromise(
-      errorOf(
+  effectTest.effect("uses the same fresh feature flag policy for exposure and execution", () =>
+    Effect.gen(function* () {
+      let allowed = true;
+      const flags = makeModelFeatureFlags(
+        {
+          read: Effect.sync(() => ({
+            modelFeatureFlags: {
+              version: 1 as const,
+              global: allowed,
+              providers: { openai: allowed },
+              capabilities: { "openai:web_search": allowed },
+              models: {},
+              routes: {},
+            },
+          })),
+          update: (patch) => Effect.succeed(patch),
+        },
+        providerToolDescriptors.map((descriptor) => descriptor.id),
+      );
+      const registry = yield* makeProviderToolCapabilityRegistry();
+      const policy = makeProviderToolPolicy(registry, {}, flags);
+      expect((yield* policy.expose(basePolicy())).tools.map((tool) => tool.id)).toEqual([
+        "openai:web_search",
+      ]);
+      allowed = false;
+      expect((yield* policy.expose(basePolicy())).tools).toEqual([]);
+      const denied = yield* errorOf(
         policy.revalidateExecution({
           policy: basePolicy(),
           toolId: "openai:web_search",
@@ -131,13 +139,13 @@ describe("ProviderToolPolicy", () => {
           options: {},
           approval: "not_requested",
         }),
-      ),
-    );
-    expect(denied).toMatchObject({
-      _tag: "ProviderToolPolicyDenied",
-      reason: "feature_flag_disabled",
-    });
-  });
+      );
+      expect(denied).toMatchObject({
+        _tag: "ProviderToolPolicyDenied",
+        reason: "feature_flag_disabled",
+      });
+    }),
+  );
 
   test("does not expose local high-risk tools without trusted authority", async () => {
     const enabled = basePolicy({
@@ -409,20 +417,22 @@ describe("ProviderToolPolicy", () => {
     ]);
   });
 
-  test("supports a deterministic test Layer override", async () => {
-    const override: ProviderToolPolicyApi = {
-      expose: () => Effect.succeed({ tools: [] }),
-      revalidateExecution: () => Effect.die("unused"),
-    };
-    const value = await Effect.runPromise(
-      Effect.map(ProviderToolPolicy, (service) => service).pipe(
+  effectTest.effect("supports a deterministic test Layer override", () =>
+    Effect.gen(function* () {
+      const override: ProviderToolPolicyApi = {
+        expose: () => Effect.succeed({ tools: [] }),
+        revalidateExecution: () => Effect.die("unused"),
+      };
+      const value = yield* Effect.map(ProviderToolPolicy, (service) => service).pipe(
         // Test entry point owns this Layer and its resource scope.
-        // @effect-diagnostics-next-line strictEffectProvide:off
-        Effect.provide(ProviderToolPolicy.layerFrom(override)),
-      ),
-    );
-    expect(value).toBe(override);
-  });
+        Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+          const services = yield* Layer.build(ProviderToolPolicy.layerFrom(override));
+          return yield* Effect.provideContext(program, services);
+        }, Effect.scoped),
+      );
+      expect(value).toBe(override);
+    }),
+  );
 });
 
 const runtimeLayer = ProviderToolRuntime.layer.pipe(
@@ -431,8 +441,14 @@ const runtimeLayer = ProviderToolRuntime.layer.pipe(
 );
 const runRuntime = <A, E>(effect: Effect.Effect<A, E, ProviderToolRuntime>) =>
   // Test entry point owns this Layer and its resource scope.
-  // @effect-diagnostics-next-line strictEffectProvide:off
-  Effect.runPromise(effect.pipe(Effect.provide(runtimeLayer)));
+  Effect.runPromise(
+    effect.pipe(
+      Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+        const services = yield* Layer.build(runtimeLayer);
+        return yield* Effect.provideContext(program, services);
+      }, Effect.scoped),
+    ),
+  );
 
 describe("ProviderToolRuntime", () => {
   test("composes allowed OpenAI and Anthropic hosted factories in deterministic order", async () => {
@@ -542,53 +558,55 @@ describe("ProviderToolRuntime", () => {
     expect(result[1]).toMatchObject({ _tag: "ProviderToolNotExposed" });
   });
 
-  test("turns synchronous factory throws into typed failures without changing arguments", async () => {
-    const original = providerToolDescriptors.find((entry) => entry.id === "openai:web_search");
-    if (original === undefined) throw new Error("missing fixture descriptor");
-    const expected: Parameters<typeof original.extension.factory>[0] = { type: "web_search" };
-    let received: unknown;
-    const throwing: typeof original = {
-      ...original,
-      extension: {
-        factory: (value) => {
-          received = value;
-          throw new Error("factory failed");
-        },
-      },
-    };
-    const registry: ProviderToolCapabilityRegistryApi = {
-      descriptors: [throwing],
-      get: () => Effect.succeed(throwing),
-      filter: () => [throwing],
-      resolve: () => Effect.succeed([throwing]),
-    };
-    const policy: ProviderToolPolicyApi = {
-      expose: () =>
-        Effect.succeed({
-          tools: [
-            {
-              id: throwing.id,
-              provider: throwing.provider,
-              kind: throwing.kind,
-              category: throwing.category,
-              risk: "read_only",
-              requiresApproval: false,
-              sandbox: throwing.sandbox,
+  effectTest.effect(
+    "turns synchronous factory throws into typed failures without changing arguments",
+    () =>
+      Effect.gen(function* () {
+        const original = providerToolDescriptors.find((entry) => entry.id === "openai:web_search");
+        if (original === undefined) throw new Error("missing fixture descriptor");
+        const expected: Parameters<typeof original.extension.factory>[0] = { type: "web_search" };
+        let received: unknown;
+        const throwing: typeof original = {
+          ...original,
+          extension: {
+            factory: (value) => {
+              received = value;
+              throw new Error("factory failed");
             },
-          ],
-        }),
-      revalidateExecution: () => Effect.die("unused"),
-    };
-    const error = await Effect.runPromise(
-      errorOf(
-        makeProviderToolRuntime(registry, policy).compose(basePolicy(), [
-          { id: "openai:web_search", args: [expected] },
-        ]),
-      ),
-    );
-    expect(received).toBe(expected);
-    expect(error).toMatchObject({ _tag: "ProviderToolFactoryFailure" });
-  });
+          },
+        };
+        const registry: ProviderToolCapabilityRegistryApi = {
+          descriptors: [throwing],
+          get: () => Effect.succeed(throwing),
+          filter: () => [throwing],
+          resolve: () => Effect.succeed([throwing]),
+        };
+        const policy: ProviderToolPolicyApi = {
+          expose: () =>
+            Effect.succeed({
+              tools: [
+                {
+                  id: throwing.id,
+                  provider: throwing.provider,
+                  kind: throwing.kind,
+                  category: throwing.category,
+                  risk: "read_only",
+                  requiresApproval: false,
+                  sandbox: throwing.sandbox,
+                },
+              ],
+            }),
+          revalidateExecution: () => Effect.die("unused"),
+        };
+        const error = yield* errorOf(
+          makeProviderToolRuntime(registry, policy).compose(basePolicy(), [
+            { id: "openai:web_search", args: [expected] },
+          ]),
+        );
+        expect(received).toBe(expected);
+        expect(error).toMatchObject({ _tag: "ProviderToolFactoryFailure" });
+      }),
+  );
 
   test("preserves raw usage identity and exact attribution without estimating cost", async () => {
     const raw = { variant: "future", nested: { untouched: true } };
@@ -750,8 +768,12 @@ describe("ProviderToolRuntime", () => {
         yield* Effect.sleep("10 millis");
         yield* Fiber.interrupt(fiber);
         // Test entry point owns this Layer and its resource scope.
-        // @effect-diagnostics-next-line strictEffectProvide:off
-      }).pipe(Effect.provide(runtimeLayer)),
+      }).pipe(
+        Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+          const services = yield* Layer.build(runtimeLayer);
+          return yield* Effect.provideContext(program, services);
+        }, Effect.scoped),
+      ),
     );
     expect(aborted).toBe(true);
     expect(cancelledReleases).toBe(1);
@@ -808,65 +830,73 @@ describe("ProviderToolRuntime", () => {
     });
   });
 
-  test("returns caller-loop action metadata without executing the supplied operation", async () => {
-    const root = temporaryDirectory();
-    const policyLayer = trustedPolicyLayer(root);
-    const layer = ProviderToolRuntime.layer.pipe(
-      Layer.provide(policyLayer),
-      Layer.provide(ProviderToolCapabilityRegistry.layer),
-    );
-    let executed = false;
-    const result = await Effect.runPromise(
-      Effect.flatMap(
-        ProviderToolRuntime,
-        (runtime) =>
-          runtime.execute({
-            policy: basePolicy({
-              accountToolKinds: ["local_shell"],
-              app: { allowHighRisk: true },
-              user: { allowHighRisk: true },
+  effectTest.effect(
+    "returns caller-loop action metadata without executing the supplied operation",
+    () =>
+      Effect.gen(function* () {
+        const root = temporaryDirectory();
+        const policyLayer = trustedPolicyLayer(root);
+        const layer = ProviderToolRuntime.layer.pipe(
+          Layer.provide(policyLayer),
+          Layer.provide(ProviderToolCapabilityRegistry.layer),
+        );
+        let executed = false;
+        const result = yield* Effect.flatMap(
+          ProviderToolRuntime,
+          (runtime) =>
+            runtime.execute({
+              policy: basePolicy({
+                accountToolKinds: ["local_shell"],
+                app: { allowHighRisk: true },
+                user: { allowHighRisk: true },
+              }),
+              toolId: "openai:local_shell",
+              kind: "local_shell",
+              accountId: "account-local",
+              runId: "run-local",
+              options: {},
+              approval: "granted",
+              operation: () => {
+                executed = true;
+                return { raw: "must-not-run" };
+              },
             }),
+          // Test entry point owns this Layer and its resource scope.
+        ).pipe(
+          Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+            const services = yield* Layer.build(layer);
+            return yield* Effect.provideContext(program, services);
+          }, Effect.scoped),
+        );
+        expect(executed).toBe(false);
+        expect(result).toMatchObject({
+          status: "pending",
+          runId: "run-local",
+          action: {
+            mode: "future_executor",
+            provider: "openai",
             toolId: "openai:local_shell",
             kind: "local_shell",
-            accountId: "account-local",
-            runId: "run-local",
-            options: {},
-            approval: "granted",
-            operation: () => {
-              executed = true;
-              return { raw: "must-not-run" };
-            },
-          }),
-        // Test entry point owns this Layer and its resource scope.
-        // @effect-diagnostics-next-line strictEffectProvide:off
-      ).pipe(Effect.provide(layer)),
-    );
-    expect(executed).toBe(false);
-    expect(result).toMatchObject({
-      status: "pending",
-      runId: "run-local",
-      action: {
-        mode: "future_executor",
-        provider: "openai",
-        toolId: "openai:local_shell",
-        kind: "local_shell",
-        workspaceRoot: root,
-      },
-    });
-  });
+            workspaceRoot: root,
+          },
+        });
+      }),
+  );
 
-  test("supports a runtime Layer override", async () => {
-    const override: ProviderToolRuntimeApi = {
-      compose: () => Effect.succeed([]),
-      execute: () => Effect.die("unused"),
-    };
-    const value = await Effect.runPromise(
-      Effect.map(ProviderToolRuntime, (runtime) => runtime).pipe(
+  effectTest.effect("supports a runtime Layer override", () =>
+    Effect.gen(function* () {
+      const override: ProviderToolRuntimeApi = {
+        compose: () => Effect.succeed([]),
+        execute: () => Effect.die("unused"),
+      };
+      const value = yield* Effect.map(ProviderToolRuntime, (runtime) => runtime).pipe(
         // Test entry point owns this Layer and its resource scope.
-        // @effect-diagnostics-next-line strictEffectProvide:off
-        Effect.provide(ProviderToolRuntime.layerFrom(override)),
-      ),
-    );
-    expect(value).toBe(override);
-  });
+        Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+          const services = yield* Layer.build(ProviderToolRuntime.layerFrom(override));
+          return yield* Effect.provideContext(program, services);
+        }, Effect.scoped),
+      );
+      expect(value).toBe(override);
+    }),
+  );
 });

@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { Schema } from "effect";
 
 /** Stable identity of a child agent. One-off agents have no reusable name. */
@@ -374,9 +375,7 @@ export const isActiveAttemptStatus = (status: AttemptStatus) => activeAttemptSta
 export const isTerminalAttemptStatus = (status: AttemptStatus) =>
   terminalAttemptStatuses.has(status);
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export const canTransitionAttempt = (from: AttemptStatus, to: AttemptStatus) => {
+const canTransitionAttemptBody = (from: AttemptStatus, to: AttemptStatus) => {
   if (from === to) return true;
   switch (from) {
     case "queued":
@@ -400,6 +399,9 @@ export const canTransitionAttempt = (from: AttemptStatus, to: AttemptStatus) => 
       return false;
   }
 };
+export const canTransitionAttempt: {
+  (to: AttemptStatus): (from: AttemptStatus) => ReturnType<typeof canTransitionAttemptBody>;
+} & typeof canTransitionAttemptBody = EffectFunction.dual(2, canTransitionAttemptBody);
 
 /** A resume always creates a new attempt; terminal attempts themselves never return to running. */
 export const resumeCreatesNewAttempt = (kind: InvocationKind) => kind === "resume";

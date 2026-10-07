@@ -1,3 +1,4 @@
+import { Function as EffectFunction } from "effect";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type ExternalAgentView, type McpScope } from "../../api";
 import { projectQueries } from "../project";
@@ -71,9 +72,13 @@ export function useCreateSessionMutation(projectId: string) {
   });
 }
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
-export function useSessionLifecycleMutation(projectId: string, holder: () => string) {
+export const useSessionLifecycleMutation: {
+  (holder: () => string): (projectId: string) => ReturnType<typeof useSessionLifecycleMutationBody>;
+} & typeof useSessionLifecycleMutationBody = EffectFunction.dual(
+  2,
+  useSessionLifecycleMutationBody,
+);
+function useSessionLifecycleMutationBody(projectId: string, holder: () => string) {
   const client = useQueryClient();
   return useMutation<
     Awaited<ReturnType<typeof api.setArchived>> | Awaited<ReturnType<typeof api.deleteSession>>,
@@ -81,7 +86,6 @@ export function useSessionLifecycleMutation(projectId: string, holder: () => str
     { kind: "archive" | "restore" | "delete"; sessionId: string }
   >({
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     mutationFn: async (request) => {
       switch (request.kind) {
         case "archive":

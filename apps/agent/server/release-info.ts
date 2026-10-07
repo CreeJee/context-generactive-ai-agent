@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { getAsset, isSea } from "node:sea";
 import { Schema } from "effect";
 import { ReleaseChannel } from "./release-contract.ts";
@@ -21,6 +22,8 @@ const development: ReleaseInfo = {
 export function readReleaseInfo(): ReleaseInfo {
   if (!isSea()) return development;
   // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  // @effect-diagnostics-next-line schemaSync:off
-  return Schema.decodeSync(Schema.fromJsonString(ReleaseInfo))(getAsset(releaseInfoAsset, "utf8"));
+  return EffectFunction.flow(
+    Schema.decodeResult(Schema.fromJsonString(ReleaseInfo)),
+    Result.getOrThrow,
+  )(getAsset(releaseInfoAsset, "utf8"));
 }

@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 // Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
 // @effect-diagnostics asyncFunction:off schemaSync:off
 import type { DatabaseSync } from "node:sqlite";
@@ -68,7 +69,10 @@ const goal = {
 
 const latestRevision = (db: { readonly sqlite: DatabaseSync }, sessionId: string) =>
   Number(
-    Schema.decodeUnknownSync(Schema.Struct({ id: Schema.Finite }))(
+    EffectFunction.flow(
+      Schema.decodeUnknownResult(Schema.Struct({ id: Schema.Finite })),
+      Result.getOrThrow,
+    )(
       db.sqlite
         .prepare("SELECT max(id) AS id FROM workflow_state_revisions WHERE session_id = ?")
         .get(sessionId),
@@ -132,8 +136,11 @@ test("a run ID and an unresolved side effect cannot be silently adopted by anoth
   const other = await context.runtime.runPromise(sessions.create(context.project.id));
   await context.runtime.runPromise(workflows.updateGoal(context.session.id, goal));
   await context.runtime.runPromise(workflows.updateGoal(other.id, goal));
-  const identities = Schema.decodeUnknownSync(
-    Schema.Array(Schema.Struct({ session_id: Schema.String, goal_instance_id: Schema.String })),
+  const identities = EffectFunction.flow(
+    Schema.decodeUnknownResult(
+      Schema.Array(Schema.Struct({ session_id: Schema.String, goal_instance_id: Schema.String })),
+    ),
+    Result.getOrThrow,
   )(
     db.sqlite
       .prepare(
@@ -177,7 +184,10 @@ test("the schema rejects a binding assembled from another session's Goal and rev
   const other = await context.runtime.runPromise(sessions.create(context.project.id));
   await context.runtime.runPromise(workflows.updateGoal(context.session.id, goal));
   await context.runtime.runPromise(workflows.updateGoal(other.id, goal));
-  const identity = Schema.decodeUnknownSync(Schema.Struct({ goal_instance_id: Schema.String }))(
+  const identity = EffectFunction.flow(
+    Schema.decodeUnknownResult(Schema.Struct({ goal_instance_id: Schema.String })),
+    Result.getOrThrow,
+  )(
     db.sqlite
       .prepare("SELECT goal_instance_id FROM workflow_goal_identities WHERE session_id = ?")
       .get(context.session.id),

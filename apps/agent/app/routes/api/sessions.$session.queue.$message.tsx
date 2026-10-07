@@ -16,7 +16,6 @@ const QueueEdit = Schema.Union([
  * or confirm a held message. Only the page holding the session may change the queue.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 export async function action({ request, params }: Route.ActionArgs) {
   const rejected = rejectCrossSite(request);
   if (rejected !== null) return rejected;

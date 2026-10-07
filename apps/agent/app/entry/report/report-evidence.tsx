@@ -1,3 +1,4 @@
+import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../../truthy.ts";
 import { Schema } from "effect";
 import { useState } from "react";
@@ -19,20 +20,16 @@ export function evidenceItems(data: ReportEvidence): ReviewItem[] {
       id: `run:${run.runId}`,
       label: `run ${run.runId}`,
       // React/native timestamps use the host Date contract outside Effect execution.
-      // @effect-diagnostics-next-line globalDate:off
       source: `chat_runs · ${new Date(run.startedAt).toISOString()}`,
       // React/native timestamps use the host Date contract outside Effect execution.
-      // @effect-diagnostics-next-line globalDate:off
       text: `상태: ${run.status}; 종료: ${isTruthy(run.finishedAt) ? new Date(run.finishedAt).toISOString() : "미기록"}; 오류: ${run.error ?? "없음"}${run.truncated ? " [truncated]" : ""}`,
     })),
     ...data.approvals.items.map((item, index) => ({
       id: `approval:${index}:${item.runId}`,
       label: `승인 ${item.status}`,
       // React/native timestamps use the host Date contract outside Effect execution.
-      // @effect-diagnostics-next-line globalDate:off
       source: `chat_interrupts · run ${item.runId} · ${new Date(item.requestedAt).toISOString()}`,
       // React/native timestamps use the host Date contract outside Effect execution.
-      // @effect-diagnostics-next-line globalDate:off
       text: `상태: ${item.status}; 응답: ${isTruthy(item.resolvedAt) ? new Date(item.resolvedAt).toISOString() : "미기록"}`,
     })),
     ...data.transcript.items.map((item) => ({
@@ -51,7 +48,6 @@ export function evidenceItems(data: ReportEvidence): ReviewItem[] {
       id: `trace:${item.id}`,
       label: `Work Trace ${item.status}`,
       // React/native timestamps use the host Date contract outside Effect execution.
-      // @effect-diagnostics-next-line globalDate:off
       source: `trace/${item.id} · ${new Date(item.updatedAt).toISOString()}`,
       text: `부모 run ${item.parentRunId}, 도구 호출 ${item.parentToolCallId} (작업 locator이며 호출 원문이 아닙니다)`,
     })),
@@ -87,7 +83,6 @@ export function ReportEvidenceReview({
     Record<string, { text: string; truncated: boolean } | "loading" | "failed">
   >({});
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const loadDetail = async (itemId: string) => {
     setDetail((current) => ({ ...current, [itemId]: "loading" }));
     try {
@@ -97,17 +92,18 @@ export function ReportEvidenceReview({
         item: itemId,
       });
       // Native Request/Response adapter preserves host and SDK stream semantics.
-      // @effect-diagnostics-next-line globalFetch:off
       const response = await fetch(`/api/reports/evidence?${query}`, { cache: "no-store" });
       if (!response.ok) throw new Error("detail unavailable");
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      // @effect-diagnostics-next-line schemaSync:off
-      const value = Schema.decodeUnknownSync(
-        Schema.Struct({
-          id: Schema.Literal(itemId),
-          text: Schema.String,
-          truncated: Schema.Boolean,
-        }),
+      const value = EffectFunction.flow(
+        Schema.decodeUnknownResult(
+          Schema.Struct({
+            id: Schema.Literal(itemId),
+            text: Schema.String,
+            truncated: Schema.Boolean,
+          }),
+        ),
+        Result.getOrThrow,
       )(await response.json());
       setDetail((current) => ({
         ...current,

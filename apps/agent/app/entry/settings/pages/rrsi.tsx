@@ -26,7 +26,6 @@ interface Status {
   configuredRepository: boolean;
 }
 // React/query clients consume this native Error contract outside Effect failure channels.
-// @effect-diagnostics-next-line extendsNativeError:off
 class ExperimentRequestFailed extends Error {
   readonly _tag = "ExperimentRequestFailed";
   constructor(
@@ -85,7 +84,6 @@ function reasonLabel(reason: string) {
   return Object.entries(reasons).find(([key]) => key === reason)?.[1];
 }
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// @effect-diagnostics-next-line asyncFunction:off
 async function request(body?: {
   action: string;
   settings?: Configuration;
@@ -233,10 +231,15 @@ export function RrsiSettings() {
       {status.experiments.map((experiment) => (
         <Collapsible key={experiment.id}>
           <CollapsibleTrigger render={<Button variant="ghost" />}>
-            // The native SDK/fixture requires a JavaScript Date; this converts a timestamp, not an
-            Effect clock read. // @effect-diagnostics-next-line globalDate:off
-            {new Date(experiment.startedAt).toLocaleString()} · {statusLabels[experiment.status]} ·{" "}
-            {experiment.tokens.toLocaleString()} 토큰
+            {new Intl.DateTimeFormat(undefined, {
+              year: "numeric",
+              month: "numeric",
+              day: "numeric",
+              hour: "numeric",
+              minute: "numeric",
+              second: "numeric",
+            }).format(experiment.startedAt)}{" "}
+            · {statusLabels[experiment.status]} · {experiment.tokens.toLocaleString()} 토큰
           </CollapsibleTrigger>
           <CollapsibleContent>
             <ExperimentSummary

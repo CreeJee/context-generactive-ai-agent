@@ -146,8 +146,10 @@ test("explicit new identity preserves prior revisions, bindings, receipts and ev
     Effect.runPromise(
       Effect.flatMap(Workflows, (w) => w.startNewGoal(f.sessionId, transition(newId))).pipe(
         // Test entry point owns this Layer and its resource scope.
-        // @effect-diagnostics-next-line strictEffectProvide:off
-        Effect.provide(disabled),
+        Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
+          const services = yield* Layer.build(disabled);
+          return yield* Effect.provideContext(program, services);
+        }, Effect.scoped),
       ),
     ),
   ).rejects.toMatchObject({ reason: "disabled" });

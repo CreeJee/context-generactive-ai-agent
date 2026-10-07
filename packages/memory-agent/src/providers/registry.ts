@@ -23,7 +23,6 @@ export interface ProviderRegistryApi {
 }
 
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export const providerRegistryFrom = (
   configurations: ReadonlyArray<ProviderConfiguration>,
   runtimes: ReadonlyArray<AgentModelRuntime> = [],

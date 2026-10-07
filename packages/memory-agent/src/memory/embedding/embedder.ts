@@ -1,6 +1,5 @@
 import { totalmem } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-// @effect-diagnostics-next-line nodeBuiltinImport:off
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import {
@@ -102,7 +101,6 @@ export function normalize(vector: Float32Array): Float32Array {
  * {@link localModel.batchCost}.
  */
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function planBatches(
   tokenCounts: readonly number[],
   limits: { readonly size: number; readonly cost: number } = {
@@ -179,7 +177,6 @@ export const gpuMemoryThreshold = 16 * 1024 ** 3;
 
 /** The mode the app runs with, given the settings it starts with. */
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-// @effect-diagnostics-next-line missingPipeableSignature:off
 export function embeddingModeFor(
   settings: Settings,
   memoryBytes: number = totalmem(),
@@ -346,7 +343,6 @@ const makeLocal = (setup: ModelSetup, purpose: LocalPurpose) =>
     const model = modelWorker(join(storage.path, "models"), setup);
     yield* Effect.addFinalizer(() =>
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      // @effect-diagnostics-next-line asyncFunction:off
       Effect.promise(async () => void (await model.stop("embedder stopped"))),
     );
     return {
@@ -381,7 +377,6 @@ export const checkGpu = (storageRoot: string) =>
           }),
         ),
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         (model) => Effect.promise(async () => void (await model.stop("GPU check done"))),
       );
       return yield* model.embed(["준비"]).pipe(

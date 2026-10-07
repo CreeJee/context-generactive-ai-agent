@@ -39,16 +39,13 @@ const make = Effect.gen(function* () {
   // persisted SDK IDs (including assistant segments) untouched so their live-stream identity
   // survives. This is a read-only view: no transcript rewrite, provider input or SSE ID changes.
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   async function loadHydrationThread(threadId: string): Promise<ModelMessage[]>;
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   async function loadHydrationThread(
     threadId: string,
     options: { limit?: number; before?: string },
   ): Promise<ModelMessage[] | MessagePage>;
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   async function loadHydrationThread(
     threadId: string,
     options?: { limit?: number; before?: string },
@@ -97,7 +94,6 @@ const make = Effect.gen(function* () {
    * may not have reached the messages yet. Saves the messages with that answer in them.
    */
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  // @effect-diagnostics-next-line asyncFunction:off
   const keepPartialAnswer = async (ctx: ChatMiddlewareContext) => {
     const answer = ctx.accumulatedContent;
     if (answer.length === 0) return;
@@ -137,14 +133,12 @@ const make = Effect.gen(function* () {
       migrateMissingChatThread(sqlite, sessionId, fallbackThread);
       return reconstructChat(hydrationPersistence, request, {
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        // @effect-diagnostics-next-line asyncFunction:off
         authorize: async (threadId) => threadId === sessionId,
       });
     },
 
     /** The run record, when it belongs to the session. */
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     run: async (sessionId: string, runId: string) => {
       const run = await persistence.stores.runs.get(runId);
       return run?.threadId === sessionId ? run : null;
@@ -156,7 +150,6 @@ const make = Effect.gen(function* () {
      * mistaken for approving and executing the gated tool.
      */
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     discardPendingInterrupts: async (sessionId: string) => {
       const pending = await persistence.stores.interrupts.listPending(sessionId);
       if (pending.length === 0) return 0;
@@ -192,7 +185,6 @@ const make = Effect.gen(function* () {
 
     /** The session's most recent run, if any. */
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    // @effect-diagnostics-next-line asyncFunction:off
     lastRun: async (sessionId: string) => lastRun(sessionId),
   };
 });
