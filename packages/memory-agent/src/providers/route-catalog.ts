@@ -1,5 +1,8 @@
 import { providerConnection, type ProviderVendor } from "./contracts.ts";
 import {
+  Clock,
+  Function as EffectFunction,
+  Predicate,
   MutableHashMap,
   ConfigProvider,
   Option,
@@ -317,25 +320,28 @@ const sourceFromServices = Effect.gen(function* () {
   } satisfies RouteCatalogSource;
 });
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function makeRouteCatalog(
+export const makeRouteCatalog: {
+  (source: RouteCatalogSource, now?: () => number): Effect.Effect<RouteCatalogApi>;
+  (now?: () => number): (source: RouteCatalogSource) => Effect.Effect<RouteCatalogApi>;
+} = EffectFunction.dual(
+  (args) => args.length > 1 || (args[0] !== undefined && !Predicate.isFunction(args[0])),
+  makeRouteCatalogBody,
+);
+function makeRouteCatalogBody(
   source: RouteCatalogSource,
-  now: () => number = Date.now,
+  now?: () => number,
 ): Effect.Effect<RouteCatalogApi> {
   return Effect.gen(function* () {
+    const clock = yield* Clock.Clock;
     const state = yield* Ref.make<RouteCatalogSnapshot>(
       freezeSnapshot({ revision: 0, refreshedAt: 0, chat: [], media: [], execution: [] }),
     );
     const refresh = Effect.gen(function* () {
       const loaded = yield* source.load;
-      const previous = yield* Ref.get(state);
-      const next = freezeSnapshot({
-        ...loaded,
-        revision: previous.revision + 1,
-        refreshedAt: now(),
-      });
-      yield* Ref.set(state, next);
-      return next;
+      const refreshedAt = now === undefined ? clock.currentTimeMillisUnsafe() : now();
+      return yield* Ref.updateAndGet(state, (previous) =>
+        freezeSnapshot({ ...loaded, revision: previous.revision + 1, refreshedAt }),
+      );
     });
     const find = <Route extends { readonly id: string }>(
       routeType: UnknownCatalogRoute["routeType"],

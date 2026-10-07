@@ -254,7 +254,15 @@ const noTrustedAuthority: ProviderToolTrustedAuthority = Object.freeze({
   isolatedDesktop: false,
   principalStorage: false,
 });
-export function hasRequiredProviderToolAuthority(
+export const hasRequiredProviderToolAuthority: {
+  (tool: AnyProviderToolDescriptor, authority?: ProviderToolTrustedAuthority): boolean;
+  (authority?: ProviderToolTrustedAuthority): (tool: AnyProviderToolDescriptor) => boolean;
+} = EffectFunction.dual(
+  (args) =>
+    args.length > 1 || (Predicate.isReadonlyObject(args[0]) && Array.isArray(args[0].sandbox)),
+  hasRequiredProviderToolAuthorityBody,
+);
+function hasRequiredProviderToolAuthorityBody(
   tool: AnyProviderToolDescriptor,
   authority: ProviderToolTrustedAuthority = noTrustedAuthority,
 ): boolean {
@@ -273,7 +281,25 @@ export function hasRequiredProviderToolAuthority(
     }
   });
 }
-export function decideProviderToolExposure(
+export const decideProviderToolExposure: {
+  (
+    tools: readonly AnyProviderToolDescriptor[],
+    context: ProviderToolPolicyContext,
+  ): ProviderToolExposureDecision;
+  (
+    tools: readonly AnyProviderToolDescriptor[],
+    context: ProviderToolPolicyContext,
+    authority: ProviderToolTrustedAuthority | undefined,
+  ): ProviderToolExposureDecision;
+  (
+    context: ProviderToolPolicyContext,
+  ): (tools: readonly AnyProviderToolDescriptor[]) => ProviderToolExposureDecision;
+  (
+    context: ProviderToolPolicyContext,
+    authority: ProviderToolTrustedAuthority | undefined,
+  ): (tools: readonly AnyProviderToolDescriptor[]) => ProviderToolExposureDecision;
+} = EffectFunction.dual((args) => Array.isArray(args[0]), decideProviderToolExposureBody);
+function decideProviderToolExposureBody(
   tools: readonly AnyProviderToolDescriptor[],
   context: ProviderToolPolicyContext,
   authority: ProviderToolTrustedAuthority = noTrustedAuthority,

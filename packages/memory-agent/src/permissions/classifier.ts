@@ -1,14 +1,14 @@
 import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { chat } from "@tanstack/ai";
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Cause, Context, Crypto, Effect, Layer, Option, Schema } from "effect";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import { ApiUsage, collectApiUsage } from "../agent/api-usage.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
 import { Nodes } from "../memory/nodes.ts";
 import type { Project } from "../projects/projects.ts";
+import { sdkPromise } from "../runtime/sdk-promise.ts";
 
 /** Standing instructions for the reviewer. It sees the call and the user's words, nothing else. */
 export const reviewInstructions = `You review one tool call that an AI coding agent wants to run on the user's computer, and decide whether it may run without asking the user.
@@ -103,6 +103,7 @@ const make = Effect.gen(function* () {
   const active = yield* ActiveProvider;
   const usageLedger = yield* ApiUsage;
   const nodes = yield* Nodes;
+  const crypto = yield* Crypto.Crypto;
 
   const prompt = (request: ReviewRequest) => {
     const turns = nodes
@@ -117,27 +118,24 @@ const make = Effect.gen(function* () {
     ].join("\n\n");
   };
 
-  return {
-    /**
-     * Asks the selected model (at its cheapest reasoning effort, with no tools) for a verdict.
-     * Any failure — timeout, provider error, unreadable answer — becomes `ask`, never `allow`.
-     */
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    async classify(request: ReviewRequest): Promise<Verdict> {
+  const fallback: Verdict = {
+    decision: "ask",
+    reason: "자동 판단을 받지 못해서 직접 확인이 필요해요.",
+    decidedBy: "fallback",
+  };
+  const classify = Effect.fn("PermissionClassifier.classify")(
+    function* (request: ReviewRequest) {
       const routine = routineShellVerdict(request.toolName, request.argumentsJson);
       if (isTruthy(routine)) return routine;
-      const abortController = new AbortController();
-      // Native callback heartbeat/debounce timing remains at the protocol boundary.
-      const timer = setTimeout(() => abortController.abort(), reviewTimeoutMs);
-      try {
-        // The review runs on every gated call, so it uses the cheapest effort.
-        const { services } = await run(active.resolve(request.selection));
-        const cheap = await run(services.models.cheapestEffort(request.selection));
-        const answer = await chat({
+      const { services } = yield* active.resolve(request.selection);
+      const cheap = yield* services.models.cheapestEffort(request.selection);
+      const threadId = yield* crypto.randomUUIDv4;
+      const answer = yield* sdkPromise((abortController) =>
+        chat({
           adapter: services.runtime.adapter(cheap),
           messages: [{ role: "user", content: prompt(request) }],
           systemPrompts: [reviewInstructions],
-          threadId: randomUUID(),
+          threadId,
           middleware: [
             collectApiUsage(usageLedger, {
               rootSessionId: request.sessionId,
@@ -148,21 +146,22 @@ const make = Effect.gen(function* () {
           ],
           abortController,
           stream: false,
-        });
-        const json = answer.match(/\{[\s\S]*\}/)?.[0] ?? "";
-        const verdict = Option.getOrUndefined(decodeVerdict(json));
-        if (verdict !== undefined) return { ...verdict, decidedBy: "classifier" };
-      } catch {
-        // Fall through to asking the user.
-      } finally {
-        clearTimeout(timer);
-      }
-      return {
-        decision: "ask",
-        reason: "자동 판단을 받지 못해서 직접 확인이 필요해요.",
-        decidedBy: "fallback",
-      };
+        }),
+      );
+      const json = answer.match(/\{[\s\S]*\}/)?.[0] ?? "";
+      const verdict = Option.getOrUndefined(decodeVerdict(json));
+      return verdict === undefined ? fallback : { ...verdict, decidedBy: "classifier" as const };
     },
+    Effect.timeoutOrElse({ duration: reviewTimeoutMs, orElse: () => Effect.succeed(fallback) }),
+    Effect.catchCauseIf(
+      (cause) => !Cause.hasInterrupts(cause),
+      () => Effect.succeed(fallback),
+    ),
+  );
+
+  return {
+    /** Timeout, provider errors and unreadable output always require user review. */
+    classify: (request: ReviewRequest): Promise<Verdict> => run(classify(request)),
   };
 });
 
@@ -171,5 +170,6 @@ export class PermissionClassifier extends Context.Service<
   PermissionClassifier,
   Effect.Success<typeof make>
 >()("memory-agent/permissions/classifier/PermissionClassifier") {
-  static readonly layer = Layer.effect(PermissionClassifier, make);
+  static readonly layerNoDeps = Layer.effect(PermissionClassifier, make);
+  static readonly layer = PermissionClassifier.layerNoDeps.pipe(Layer.provide(NodeCrypto.layer));
 }

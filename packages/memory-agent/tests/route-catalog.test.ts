@@ -1,7 +1,5 @@
 import { it as effectTest } from "@effect/vitest";
-// Test/benchmark SDK boundary uses native Promise callbacks, I/O fixtures and synchronous codec assertions.
-// @effect-diagnostics asyncFunction:off
-import { Effect, Result, Layer, ManagedRuntime } from "effect";
+import { Context, Effect, Result, Layer, pipe } from "effect";
 import {
   ProviderRegistry,
   ProviderToolCapabilityRegistry,
@@ -13,6 +11,7 @@ import {
   type RouteCatalogSnapshot,
 } from "memory-agent";
 import { describe, expect, it } from "vite-plus/test";
+import { TestClock } from "effect/testing";
 
 const chat = {
   type: "chat" as const,
@@ -194,7 +193,7 @@ describe("RouteCatalog", () => {
     }),
   );
 
-  it.each([
+  effectTest.effect.each([
     {
       providerId: "openai" as const,
       modelId: "future-model-not-in-installed-metadata",
@@ -203,66 +202,79 @@ describe("RouteCatalog", () => {
     { providerId: "openai-compatible" as const, modelId: "gpt-5", mechanism: "openai_compatible" },
   ])(
     "keeps $providerId models as chat without inventing native tools",
-    async ({ providerId, modelId, mechanism }) => {
-      const provider: ProviderConfiguration = {
-        provider: providerId,
-        auth: {
+    ({ providerId, modelId, mechanism }) =>
+      Effect.gen(function* () {
+        const provider: ProviderConfiguration = {
           provider: providerId,
-          status: Effect.succeed({ provider: providerId, status: "signed-in" }),
-          connect: Effect.succeed({ provider: providerId, status: "signed-in" }),
-          cancel: Effect.succeed({ provider: providerId, status: "signed-out" }),
-          disconnect: Effect.succeed({ provider: providerId, status: "signed-out" }),
-        },
-        models: {
-          provider: providerId,
-          list: Effect.succeed([
-            {
-              provider: providerId,
-              id: modelId,
-              displayName: "Future model",
-              isDefault: true,
-              defaultReasoningEffort: "medium",
-              supportedReasoningEfforts: ["medium"],
-              capabilities: { inputModalities: ["text"], toolCalling: true, reasoning: true },
-            },
-          ]),
-          selected: Effect.succeed(null),
-          acceptsImages: () => Effect.succeed(false),
-          cheapestEffort: (selection) => Effect.succeed(selection),
-          select: (model) =>
-            Effect.succeed({ provider: providerId, model, reasoningEffort: "medium" }),
-        },
-      };
-      const layer = RouteCatalog.layer.pipe(
-        Layer.provide(ProviderRegistry.layer([provider])),
-        Layer.provide(ProviderToolCapabilityRegistry.layer),
-      );
-      const runtime = ManagedRuntime.make(layer);
-      const catalog = await runtime.runPromise(RouteCatalog);
-      const snapshot = await runtime.runPromise(catalog.refresh);
-      expect(snapshot.chat.map((route) => route.model)).toEqual([modelId]);
-      expect(snapshot.chat[0]?.authentication).toMatchObject({
-        mechanism,
-        verified: providerId === "openai",
-      });
-      expect(snapshot.chat[0]?.entitlement).toMatchObject({
-        status: providerId === "openai" ? "verified" : "unverified",
-        source: providerId === "openai" ? "provider_model_catalog" : "endpoint_configuration",
-      });
-      expect(snapshot.execution).toEqual([]);
-      await runtime.dispose();
-    },
+          auth: {
+            provider: providerId,
+            status: Effect.succeed({ provider: providerId, status: "signed-in" }),
+            connect: Effect.succeed({ provider: providerId, status: "signed-in" }),
+            cancel: Effect.succeed({ provider: providerId, status: "signed-out" }),
+            disconnect: Effect.succeed({ provider: providerId, status: "signed-out" }),
+          },
+          models: {
+            provider: providerId,
+            list: Effect.succeed([
+              {
+                provider: providerId,
+                id: modelId,
+                displayName: "Future model",
+                isDefault: true,
+                defaultReasoningEffort: "medium",
+                supportedReasoningEfforts: ["medium"],
+                capabilities: { inputModalities: ["text"], toolCalling: true, reasoning: true },
+              },
+            ]),
+            selected: Effect.succeed(null),
+            acceptsImages: () => Effect.succeed(false),
+            cheapestEffort: (selection) => Effect.succeed(selection),
+            select: (model) =>
+              Effect.succeed({ provider: providerId, model, reasoningEffort: "medium" }),
+          },
+        };
+        const layer = RouteCatalog.layer.pipe(
+          Layer.provide(ProviderRegistry.layer([provider])),
+          Layer.provide(ProviderToolCapabilityRegistry.layer),
+        );
+        const services = yield* Layer.build(layer);
+        const catalog = Context.get(services, RouteCatalog);
+        const snapshot = yield* catalog.refresh;
+        expect(snapshot.chat.map((route) => route.model)).toEqual([modelId]);
+        expect(snapshot.chat[0]?.authentication).toMatchObject({
+          mechanism,
+          verified: providerId === "openai",
+        });
+        expect(snapshot.chat[0]?.entitlement).toMatchObject({
+          status: providerId === "openai" ? "verified" : "unverified",
+          source: providerId === "openai" ? "provider_model_catalog" : "endpoint_configuration",
+        });
+        expect(snapshot.execution).toEqual([]);
+      }),
   );
 
-  it("supports a deterministic Layer override", async () => {
-    const runtime = ManagedRuntime.make(RouteCatalog.layerFrom(source(), () => 7));
-    const catalog = await runtime.runPromise(RouteCatalog);
-    expect(await runtime.runPromise(catalog.refresh)).toMatchObject({
-      revision: 1,
-      refreshedAt: 7,
-    });
-    await runtime.dispose();
-  });
+  effectTest.effect("supports a deterministic Layer override", () =>
+    Effect.gen(function* () {
+      const services = yield* Layer.build(RouteCatalog.layerFrom(source(), () => 7));
+      const catalog = Context.get(services, RouteCatalog);
+      expect(yield* catalog.refresh).toMatchObject({ revision: 1, refreshedAt: 7 });
+    }),
+  );
+
+  effectTest.effect("uses the runtime clock and accepts both pipeable factory forms", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(1_000);
+      const catalog = yield* pipe(source(), makeRouteCatalog());
+      expect(yield* catalog.refresh).toMatchObject({ revision: 1, refreshedAt: 1_000 });
+      yield* TestClock.adjust("1 second");
+      expect(yield* catalog.refresh).toMatchObject({ revision: 2, refreshedAt: 2_000 });
+      const override = yield* pipe(
+        source(),
+        makeRouteCatalog(() => 7),
+      );
+      expect(yield* override.refresh).toMatchObject({ refreshedAt: 7 });
+    }),
+  );
 
   it("keeps entitlement evidence separate from authentication", () => {
     expect(chat.authentication).toMatchObject({ status: "signed-in", verified: true });

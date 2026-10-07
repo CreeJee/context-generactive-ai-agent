@@ -1,9 +1,9 @@
 import { isTruthy } from "../truthy.ts";
 import { Semaphore } from "effect";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { chat, type ChatMiddleware } from "@tanstack/ai";
-import { Context, Data, Effect, Layer } from "effect";
+import { Context, Crypto, Effect, Layer, Schema } from "effect";
+import { sdkPromise } from "../runtime/sdk-promise.ts";
 import { ChatState } from "../chat-state/chat-state.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
@@ -33,10 +33,13 @@ Reply with the bullet points and nothing else.`;
 
 const summaryTimeoutMs = 120_000;
 
-export class TurnSummaryFailed extends Data.TaggedError("TurnSummaryFailed")<{
-  readonly operation: "model" | "load-messages" | "load-state" | "persist" | "empty-answer";
-  readonly cause?: unknown;
-}> {}
+export class TurnSummaryFailed extends Schema.TaggedError<TurnSummaryFailed>()(
+  "TurnSummaryFailed",
+  {
+    operation: Schema.Literals(["model", "load-messages", "load-state", "persist", "empty-answer"]),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
 
 const summaryPromise = <A>(
   operation: TurnSummaryFailed["operation"],
@@ -44,7 +47,7 @@ const summaryPromise = <A>(
 ) =>
   Effect.tryPromise({
     try: evaluate,
-    catch: (cause) => new TurnSummaryFailed({ operation, cause }),
+    catch: (cause) => TurnSummaryFailed.make({ operation, cause }),
   });
 const inputCharacters = 60_000;
 const summaryCharacters = 6_000;
@@ -64,123 +67,131 @@ const shorten = (text: string, limit: number) =>
 const nodeLine = (node: Node) =>
   `[${node.kind} ${node.id}${node.detail.ok === false ? " failed" : ""}]\n${shorten(node.text, nodeCharacters[node.kind])}`;
 
-const make = (automatic: boolean) =>
-  Effect.gen(function* () {
-    const run = Effect.runPromiseWith(yield* Effect.context());
-    const nodes = yield* Nodes;
-    const chatState = yield* ChatState;
-    const active = yield* ActiveProvider;
-    const usageLedger = yield* ApiUsage;
-    const oneAtATime = yield* Semaphore.make(1);
-    const { messages: messageStore, metadata } = chatState.persistence.stores;
+const make = Effect.fnUntraced(function* (automatic: boolean) {
+  const run = Effect.runPromiseWith(yield* Effect.context());
+  const scope = yield* Effect.scope;
+  const nodes = yield* Nodes;
+  const chatState = yield* ChatState;
+  const active = yield* ActiveProvider;
+  const usageLedger = yield* ApiUsage;
+  const crypto = yield* Crypto.Crypto;
+  const oneAtATime = yield* Semaphore.make(1);
+  const { messages: messageStore, metadata } = chatState.persistence.stores;
 
-    const summarize = (sessionId: string, part: readonly Node[], selection: ModelSelection) =>
-      Effect.gen(function* () {
-        const { services } = yield* active.resolve(selection);
-        const cheap = yield* services.models.cheapestEffort(selection);
-        const input = part
-          .filter((node) => nodeCharacters[node.kind] > 0)
-          .map(nodeLine)
-          .join("\n\n")
-          .slice(0, inputCharacters);
-        const answer = yield* summaryPromise("model", () => {
-          const abortController = new AbortController();
-          // Native callback heartbeat/debounce timing remains at the protocol boundary.
-          const timer = setTimeout(() => abortController.abort(), summaryTimeoutMs);
-          return chat({
-            adapter: services.runtime.adapter(cheap),
-            messages: [{ role: "user", content: `Nodes:\n\n${input}` }],
-            systemPrompts: [summaryInstructions],
-            threadId: randomUUID(),
-            middleware: [
-              collectApiUsage(usageLedger, {
-                rootSessionId: sessionId,
-                purpose: "summary",
-                provider: cheap.provider,
-                model: cheap.model,
-              }),
-            ],
-            abortController,
-            stream: false,
-          }).finally(() => clearTimeout(timer));
-        });
-        const text = answer.trim();
-        if (text.length === 0) return yield* new TurnSummaryFailed({ operation: "empty-answer" });
-        return text.slice(0, summaryCharacters);
-      });
-
-    /**
-     * Summarizes the session's turns that have no summary yet, except the latest few, which are
-     * always sent as they are. In blocks of four turns as the conversation grows, or, for
-     * `/compact` (`whole`), up to the latest few in one go. A saved conversation that does not
-     * match what memory recorded (an imported one, say) is left alone.
-     */
-    const catchUp = (sessionId: string, whole: boolean): Effect.Effect<SummaryOutcome> =>
-      Effect.gen(function* () {
-        const selection = yield* active.selected;
-        if (!isTruthy(selection)) return "unavailable" as const;
-        const auth = yield* active.auth(selection);
-        if (auth.status !== "signed-in") return "unavailable" as const;
-
-        const messages = yield* summaryPromise("load-messages", () =>
-          messageStore.loadThread(sessionId),
-        );
-        const nodeText = (id: string) => nodes.get(id)?.text ?? null;
-        const state = yield* summaryPromise("load-state", () =>
-          compactionState(metadata, sessionId),
-        );
-        const blocks: SummaryBlock[] = linedUp(messages, state.blocks, nodeText);
-        const turns = userTurns(messages);
-        const sessionNodes = nodes.session(sessionId);
-        const turnNodes = sessionNodes.filter((node) => node.kind === "user");
-        const limit = Math.min(turns.length, turnNodes.length) - recentRawUserTurns;
-        const lines = (index: number) => {
-          const at = turns[index];
-          return at !== undefined && sameTurn(messages[at], turnNodes[index]?.text ?? null);
-        };
-
-        for (;;) {
-          const start = blocks.at(-1)?.end ?? 0;
-          const end = whole
-            ? Math.min(start + summaryBlockTurns, limit)
-            : start + summaryBlockTurns;
-          if (end <= start || end > limit) break;
-          const first = turnNodes[start];
-          const next = turnNodes[end];
-          if (!isTruthy(first) || !isTruthy(next) || !lines(start) || !lines(end)) break;
-          const part = sessionNodes.filter((node) => node.seq >= first.seq && node.seq < next.seq);
-          const text = yield* summarize(sessionId, part, selection);
-          blocks.push({ end, nextTurnNodeId: next.id, text });
-          yield* summaryPromise("persist", () =>
-            metadata.set(turnSummariesNamespace, sessionId, { blocks }),
-          );
-        }
-        return "done" as const;
-      }).pipe(
-        // What was summarized before the failure is kept; the rest is tried again next time.
-        Effect.orElseSucceed(() => "failed" as const),
-        oneAtATime.withPermits(1),
-      );
-
-    return {
-      catchUp,
-
-      /** Summarizes in the background once a run has finished, so compaction never waits for it. */
-      afterRun: (sessionId: string): ChatMiddleware => ({
-        name: "memory-agent/turn-summaries",
-        onFinish: () => {
-          if (!automatic) return;
-          // Retried after the next run; a failure here never reaches the conversation.
-          void run(Effect.catchCause(catchUp(sessionId, false), () => Effect.void));
-        },
+  const summarize = Effect.fn("TurnSummaries.summarize")(function* (
+    sessionId: string,
+    part: readonly Node[],
+    selection: ModelSelection,
+  ) {
+    const { services } = yield* active.resolve(selection);
+    const cheap = yield* services.models.cheapestEffort(selection);
+    const input = part
+      .filter((node) => nodeCharacters[node.kind] > 0)
+      .map(nodeLine)
+      .join("\n\n")
+      .slice(0, inputCharacters);
+    const threadId = yield* crypto.randomUUIDv4;
+    const answer = yield* sdkPromise((abortController) =>
+      chat({
+        adapter: services.runtime.adapter(cheap),
+        messages: [{ role: "user", content: `Nodes:\n\n${input}` }],
+        systemPrompts: [summaryInstructions],
+        threadId,
+        middleware: [
+          collectApiUsage(usageLedger, {
+            rootSessionId: sessionId,
+            purpose: "summary",
+            provider: cheap.provider,
+            model: cheap.model,
+          }),
+        ],
+        abortController,
+        stream: false,
       }),
-    };
+    ).pipe(
+      Effect.timeout(summaryTimeoutMs),
+      Effect.mapError((cause) => TurnSummaryFailed.make({ operation: "model", cause })),
+    );
+    const text = answer.trim();
+    if (text.length === 0) return yield* TurnSummaryFailed.make({ operation: "empty-answer" });
+    return text.slice(0, summaryCharacters);
   });
+
+  /**
+   * Summarizes the session's turns that have no summary yet, except the latest few, which are
+   * always sent as they are. In blocks of four turns as the conversation grows, or, for
+   * `/compact` (`whole`), up to the latest few in one go. A saved conversation that does not
+   * match what memory recorded (an imported one, say) is left alone.
+   */
+  const catchUp = (sessionId: string, whole: boolean): Effect.Effect<SummaryOutcome> =>
+    Effect.gen(function* () {
+      const selection = yield* active.selected;
+      if (!isTruthy(selection)) return "unavailable" as const;
+      const auth = yield* active.auth(selection);
+      if (auth.status !== "signed-in") return "unavailable" as const;
+
+      const messages = yield* summaryPromise("load-messages", () =>
+        messageStore.loadThread(sessionId),
+      );
+      const nodeText = (id: string) => nodes.get(id)?.text ?? null;
+      const state = yield* summaryPromise("load-state", () => compactionState(metadata, sessionId));
+      const blocks: SummaryBlock[] = linedUp(messages, state.blocks, nodeText);
+      const turns = userTurns(messages);
+      const sessionNodes = nodes.session(sessionId);
+      const turnNodes = sessionNodes.filter((node) => node.kind === "user");
+      const limit = Math.min(turns.length, turnNodes.length) - recentRawUserTurns;
+      const lines = (index: number) => {
+        const at = turns[index];
+        return at !== undefined && sameTurn(messages[at], turnNodes[index]?.text ?? null);
+      };
+
+      for (;;) {
+        const start = blocks.at(-1)?.end ?? 0;
+        const end = whole ? Math.min(start + summaryBlockTurns, limit) : start + summaryBlockTurns;
+        if (end <= start || end > limit) break;
+        const first = turnNodes[start];
+        const next = turnNodes[end];
+        if (!isTruthy(first) || !isTruthy(next) || !lines(start) || !lines(end)) break;
+        const part = sessionNodes.filter((node) => node.seq >= first.seq && node.seq < next.seq);
+        const text = yield* summarize(sessionId, part, selection);
+        blocks.push({ end, nextTurnNodeId: next.id, text });
+        yield* summaryPromise("persist", () =>
+          metadata.set(turnSummariesNamespace, sessionId, { blocks }),
+        );
+      }
+      return "done" as const;
+    }).pipe(
+      // What was summarized before the failure is kept; the rest is tried again next time.
+      Effect.orElseSucceed(() => "failed" as const),
+      oneAtATime.withPermits(1),
+    );
+
+  return {
+    catchUp,
+
+    /** Summarizes in the background once a run has finished, so compaction never waits for it. */
+    afterRun: (sessionId: string): ChatMiddleware => ({
+      name: "memory-agent/turn-summaries",
+      onFinish: () => {
+        if (!automatic) return;
+        // Retried after the next run; a failure here never reaches the conversation.
+        void run(
+          Effect.forkIn(
+            Effect.catchCause(catchUp(sessionId, false), () => Effect.void),
+            scope,
+          ),
+        );
+      },
+    }),
+  };
+});
 
 /** Summaries of earlier turns, for compaction to send in their place. */
 export class TurnSummaries extends Context.Service<
   TurnSummaries,
   Effect.Success<ReturnType<typeof make>>
 >()("memory-agent/agent/turn-summaries/TurnSummaries") {
-  static readonly layer = (automatic = true) => Layer.effect(TurnSummaries, make(automatic));
+  static readonly layerNoDeps = (automatic = true) => Layer.effect(TurnSummaries, make(automatic));
+  static readonly layer = (automatic = true) =>
+    TurnSummaries.layerNoDeps(automatic).pipe(Layer.provide(NodeCrypto.layer));
 }

@@ -1054,3 +1054,9 @@
 - 파일 삭제 재시도는 기존 errno 목록·횟수·지연을 Schedule로 유지한다. 취소할 수 없는 단일 Node 파일 작업은 완료를 기다린 뒤 staging을 해제하되 재시도 사이의 대기는 중단할 수 있다.
 - native factory의 명시적 호스트 패키지 목록에 기존 의존성인 `@effect/platform-node`를 추가한다. 외부 패키지 전부를 허용하지 않으며, 빌드와 소스 제거 후 새 프로세스 실행으로 호스트 해석을 검증한다.
 - `O_NOFOLLOW`와 동기 transaction fence처럼 설치된 플랫폼 API로 동일하게 표현할 수 없는 보호 계약은 그대로 유지한다. 프로세스·HTTP의 unstable API 정책과 진단 설정은 이 변경에서 낮추지 않는다.
+
+## 2026-10-07: 보조 모델 호출의 취소와 시간 제한
+
+- 권한 분류와 턴 요약의 모델 호출은 Effect가 시간 제한과 취소를 소유한다. AbortController를 요구하는 SDK에는 호출 Fiber의 신호를 연결하고, SDK rejection과 동기 예외를 typed error로 변환한다.
+- 권한 분류의 60초 제한은 provider 준비를 포함한다. timeout과 요청 실패, 예상하지 못한 결함은 사용자 확인으로 돌아가며, Fiber interruption은 전파한다. 턴 요약의 백그라운드 작업은 서비스 Scope 종료 시 취소한다.
+- 보조 호출의 UUID는 Crypto 서비스를 사용하고 기본 Node Layer는 NodeCrypto로 제공한다. RouteCatalog의 기본 시각은 런타임 Clock을 사용하고 snapshot 갱신은 Ref의 원자적 변경으로 기록한다.
