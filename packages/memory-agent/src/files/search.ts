@@ -1,8 +1,16 @@
 import { Result, Function as EffectFunction } from "effect";
-import { isTruthy } from "../truthy.ts";
-import { HashSet, MutableHashMap, Option, Schema } from "effect";
+import {
+  Array as EffectArray,
+  Cache,
+  Effect,
+  HashSet,
+  MutableHashSet,
+  Option,
+  Schema,
+  Scope,
+} from "effect";
 import { PathRejected } from "./paths.ts";
-import { decodeText, TextFileRejected } from "./text.ts";
+import { decodeTextEffect, TextFileIoFailed, TextFileRejected } from "./text.ts";
 
 export interface SearchMatch {
   readonly path: string;
@@ -101,44 +109,119 @@ function* lineMatches(text: string, needle: string, caseSensitive: boolean, from
  * A file whose bytes do not contain a case-sensitive query cannot match, so it is not decoded, and
  * a binary or non-UTF-8 file is only reported as skipped when it might have matched.
  */
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export async function searchTextFiles(
-  paths: readonly string[],
-  readBytes: (path: string) => Promise<Uint8Array>,
-  query: string,
-  caseSensitive: boolean,
-  start: SearchPosition,
-  options: SearchOptions = {},
-): Promise<SearchPage> {
+type ReadFailure = PathRejected | TextFileRejected | TextFileIoFailed;
+type NativeRead = (path: string, signal: AbortSignal) => Promise<Uint8Array>;
+
+export interface SearchTextInput<R = never> extends SearchOptions {
+  readonly paths: readonly string[];
+  readonly readBytes: (path: string) => Effect.Effect<Uint8Array, ReadFailure, R>;
+  readonly query: string;
+  readonly caseSensitive: boolean;
+  readonly start: SearchPosition;
+}
+
+const nodeCode = Schema.is(Schema.Struct({ code: Schema.String }));
+const nativeRead = (readBytes: NativeRead, path: string) =>
+  Effect.tryPromise({
+    try: (signal) => readBytes(path, signal),
+    catch: (cause): ReadFailure => {
+      if (
+        cause instanceof PathRejected ||
+        Schema.is(TextFileRejected)(cause) ||
+        Schema.is(TextFileIoFailed)(cause)
+      )
+        return cause;
+      if (nodeCode(cause))
+        return TextFileIoFailed.make({
+          path,
+          reason: { _tag: "IoFailed", operation: "read", code: cause.code, cause },
+        });
+      throw cause;
+    },
+  });
+
+/** Native SDK entry point; Effect callers use searchTextFilesEffect directly. */
+export const searchTextFiles: {
+  (input: SearchTextInput): Promise<SearchPage>;
+  (
+    readBytes: NativeRead,
+    query: string,
+    caseSensitive: boolean,
+    start: SearchPosition,
+    options?: SearchOptions,
+  ): (paths: readonly string[]) => Promise<SearchPage>;
+  (
+    paths: readonly string[],
+    readBytes: NativeRead,
+    query: string,
+    caseSensitive: boolean,
+    start: SearchPosition,
+    options?: SearchOptions,
+  ): Promise<SearchPage>;
+} = EffectFunction.dual(
+  (args) =>
+    EffectArray.isArray(args[0]) ||
+    Schema.is(Schema.Struct({ paths: Schema.Array(Schema.String) }))(args[0]),
+  (
+    input: SearchTextInput | readonly string[],
+    readBytes?: NativeRead,
+    query = "",
+    caseSensitive = true,
+    start: SearchPosition = { file: 0, line: 0 },
+    options: SearchOptions = {},
+  ) => {
+    if (!Schema.is(Schema.Array(Schema.String))(input))
+      return Effect.runPromise(searchTextFilesEffect(input));
+    if (readBytes === undefined) throw new Error("Missing native file reader");
+    return Effect.runPromise(
+      searchTextFilesEffect({
+        paths: input,
+        readBytes: (path) => nativeRead(readBytes, path),
+        query,
+        caseSensitive,
+        start,
+        ...options,
+      }),
+    );
+  },
+);
+
+export const searchTextFilesEffect = Effect.fn("searchTextFiles")(function* <R>(
+  input: SearchTextInput<R>,
+): Effect.fn.Return<SearchPage, never, R | Scope.Scope> {
+  const { paths, readBytes, query, caseSensitive, start } = input;
   const needle = caseSensitive ? query : query.toLowerCase();
   const needleBytes = Buffer.from(query, "utf8");
-  const candidates = options.candidates ?? null;
+  const candidates = input.candidates ?? null;
   const matches: SearchMatch[] = [];
   const skipped: SearchSkip[] = [];
   let characters = 0;
   let opened = 0;
 
-  const reads = MutableHashMap.empty<number, Promise<FileRead>>();
-  const read = (file: number) => {
-    const existing = Option.getOrUndefined(MutableHashMap.get(reads, file));
-    if (isTruthy(existing)) return existing;
-    const path = paths[file]!;
-    const pending = readBytes(path).then(
-      (bytes): FileRead => ({ kind: "bytes", bytes }),
-      (error): FileRead => {
-        const reason =
-          error instanceof PathRejected
-            ? error.reason
-            : Schema.is(TextFileRejected)(error)
-              ? error.reason._tag
-              : "unreadable";
-        return reason === "not_found" ? { kind: "gone" } : { kind: "skipped", reason };
-      },
-    );
-    MutableHashMap.set(reads, file, pending);
-    return pending;
-  };
+  const reads = yield* Cache.make({
+    capacity: readAhead + 1,
+    lookup: (file: number) =>
+      readBytes(paths[file]!).pipe(
+        Effect.map((bytes): FileRead => ({ kind: "bytes", bytes })),
+        Effect.catchTags({
+          PathRejected: (error) =>
+            Effect.succeed<FileRead>(
+              error.reason === "not_found"
+                ? { kind: "gone" }
+                : { kind: "skipped", reason: error.reason },
+            ),
+          TextFileRejected: (error) =>
+            Effect.succeed<FileRead>({ kind: "skipped", reason: error.reason._tag }),
+          TextFileIoFailed: (error) =>
+            Effect.succeed<FileRead>(
+              error.reason.code === "ENOENT"
+                ? { kind: "gone" }
+                : { kind: "skipped", reason: "unreadable" },
+            ),
+        }),
+      ),
+  });
+  const started = MutableHashSet.empty<number>();
   // The files this page may open, in order: every file, or only the candidates.
   const order: number[] = [];
   for (let file = start.file; file < paths.length; file++)
@@ -149,10 +232,14 @@ export async function searchTextFiles(
     if (opened === filesPerPage) return { matches, skipped, next: { file, line: 0 } };
     opened++;
     // Start the next few reads now, so the disk works while this file is matched.
-    for (const ahead of order.slice(position + 1, position + 1 + readAhead)) void read(ahead);
+    for (const ahead of order.slice(position + 1, position + 1 + readAhead)) {
+      if (MutableHashSet.has(started, ahead)) continue;
+      MutableHashSet.add(started, ahead);
+      yield* Effect.forkScoped(Cache.get(reads, ahead));
+    }
     const path = paths[file]!;
-    const result = await read(file);
-    MutableHashMap.remove(reads, file);
+    const result = yield* Cache.get(reads, file);
+    yield* Cache.invalidate(reads, file);
     switch (result.kind) {
       case "gone":
         continue;
@@ -163,16 +250,15 @@ export async function searchTextFiles(
         break;
     }
     if (caseSensitive && Buffer.from(result.bytes).indexOf(needleBytes) < 0) continue;
-    let text: string;
-    try {
-      text = decodeText(result.bytes, path);
-    } catch (error) {
-      skipped.push({
-        path,
-        reason: Schema.is(TextFileRejected)(error) ? error.reason._tag : "unreadable",
-      });
-      continue;
+    const decoded = yield* Effect.result(decodeTextEffect({ bytes: result.bytes, path }));
+    switch (decoded._tag) {
+      case "Failure":
+        skipped.push({ path, reason: decoded.failure.reason._tag });
+        continue;
+      case "Success":
+        break;
     }
+    const text = decoded.success;
     const fromLine = file === start.file ? start.line : 0;
     for (const found of lineMatches(text, needle, caseSensitive, fromLine)) {
       const match = { path, line: found.line + 1, text: snippet(found.content, found.column) };
@@ -187,7 +273,7 @@ export async function searchTextFiles(
     }
   }
   return { matches, skipped, next: null };
-}
+}, Effect.scoped);
 
 const Cursor = Schema.fromJsonString(
   Schema.Struct({

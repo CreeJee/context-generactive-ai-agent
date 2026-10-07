@@ -14,7 +14,7 @@ import {
   createTextFile,
   deleteTextFile,
   linePageOf,
-  readFileBytes,
+  readFileBytesEffect,
   readTextFile,
   splitLines,
   replaceTextFile,
@@ -258,26 +258,32 @@ const make = Effect.gen(function* () {
           // itself is checked on the opened handle, so thousands of files do not mean thousands of
           // synchronous path walks.
           const directories = MutableHashMap.empty<string, Result.Result<unknown, PathRejected>>();
-          const page = await searchTextFiles(
-            view.paths,
-            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-            async (path) => {
+          const candidates = await candidatesFor(view, query, caseSensitive, started);
+          const page = await searchTextFiles({
+            paths: view.paths,
+            readBytes: Effect.fnUntraced(function* (path: string) {
               const directory = posix.dirname(path);
               let checked = Option.getOrUndefined(MutableHashMap.get(directories, directory));
               if (!isTruthy(checked)) {
                 checked = resolveProjectPath(root, directory, "directory");
                 MutableHashMap.set(directories, directory, checked);
               }
-              Result.getOrElse(checked, (rejection) => {
-                throw new PathRejected({ path, reason: rejection.reason });
+              yield* Result.match(checked, {
+                onSuccess: Effect.succeed,
+                onFailure: (rejection) =>
+                  Effect.fail(new PathRejected({ path, reason: rejection.reason })),
               });
-              return (await readFileBytes(join(root, path), path, true)).bytes;
-            },
+              return (yield* readFileBytesEffect({
+                absolute: join(root, path),
+                path,
+                checkLeaf: true,
+              })).bytes;
+            }),
             query,
             caseSensitive,
-            position ?? { file: 0, line: 0 },
-            { candidates: await candidatesFor(view, query, caseSensitive, started) },
-          );
+            start: position ?? { file: 0, line: 0 },
+            candidates,
+          });
           return {
             filesInView: view.paths.length,
             matches: page.matches,

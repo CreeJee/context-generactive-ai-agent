@@ -5,7 +5,7 @@ import { StorageRoot } from "../config/storage-root.ts";
 import { listOutsideFiles, createSnapshots } from "../files/listing.ts";
 import { resolveOutsidePath } from "../files/paths.ts";
 import { decodeSearchCursor, encodeSearchCursor, searchTextFiles } from "../files/search.ts";
-import { linePage, readFileBytes, readTextFile } from "../files/text.ts";
+import { linePage, readFileBytesEffect, readTextFile } from "../files/text.ts";
 import type { Project } from "../projects/projects.ts";
 import { guarded, orThrow } from "./failure.ts";
 import { listPageSize } from "./files.ts";
@@ -69,9 +69,16 @@ const make = Effect.gen(function* () {
       const snapshotKey = `outside:${project.id}`;
       const resolve = (path: string, kind: "file" | "directory") =>
         orThrow(resolveOutsidePath(project.root, storage.path, path, kind));
-      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      const readBytes = async (path: string) =>
-        (await readFileBytes(resolve(path, "file").absolute, path)).bytes;
+      const readBytes = Effect.fnUntraced(function* (path: string) {
+        const resolved = yield* Result.match(
+          resolveOutsidePath(project.root, storage.path, path, "file"),
+          {
+            onSuccess: Effect.succeed,
+            onFailure: Effect.fail,
+          },
+        );
+        return (yield* readFileBytesEffect({ absolute: resolved.absolute, path })).bytes;
+      });
 
       const listOutside = toolDefinition({
         name: "list_outside_files",
@@ -169,13 +176,13 @@ const make = Effect.gen(function* () {
           if (!isTruthy(view))
             throw new Error("snapshot_expired: start the search again without cursor.");
 
-          const page = await searchTextFiles(
-            view.paths,
+          const page = await searchTextFiles({
+            paths: view.paths,
             readBytes,
             query,
             caseSensitive,
-            position ?? { file: 0, line: 0 },
-          );
+            start: position ?? { file: 0, line: 0 },
+          });
           return {
             filesInView: view.paths.length,
             truncated: view.truncated,
