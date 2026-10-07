@@ -1,4 +1,4 @@
-import { Result, Function as EffectFunction } from "effect";
+import { Console, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../src/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "node:crypto";
@@ -202,7 +202,7 @@ async function arm(variant: "baseline-guidance" | "optimized-guidance") {
       }),
     );
     const started = DateTime.toEpochMillis(DateTime.nowUnsafe());
-    const prompt = `Audit two independent files without modifying them. Delegate child.ts to one subagent; its task must first run the finite command node -e 'setTimeout(()=>console.log("ready"),10000)' and then read child.ts and report childTotal. You personally read main.ts and calculate mainTotal while the child runs. Retrieve and review the child's report before giving both totals. Do not change the Goal or Plan. Do not create another delegation to poll.`;
+    const prompt = `Audit two independent files without modifying them. Delegate child.ts to one subagent; its task must first run the finite command node -e 'setTimeout(()=>Effect.runSync(Console.log("ready")),10000)' and then read child.ts and report childTotal. You personally read main.ts and calculate mainTotal while the child runs. Retrieve and review the child's report before giving both totals. Do not change the Goal or Plan. Do not create another delegation to poll.`;
     const response = await runtime.runPromise(
       services.agent.handle(
         new Request("http://local/api/chat", {
@@ -279,15 +279,17 @@ async function arm(variant: "baseline-guidance" | "optimized-guidance") {
 }
 const results = [await arm("baseline-guidance"), await arm("optimized-guidance")];
 // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-console.log(
-  JSON.stringify(
-    {
-      results,
-      totalCalls,
-      estimatedInputTokens,
-      note: "A serial two-arm pilot, not statistically significant. The preflight estimate is not billed usage.",
-    },
-    null,
-    2,
+Effect.runSync(
+  Console.log(
+    JSON.stringify(
+      {
+        results,
+        totalCalls,
+        estimatedInputTokens,
+        note: "A serial two-arm pilot, not statistically significant. The preflight estimate is not billed usage.",
+      },
+      null,
+      2,
+    ),
   ),
 );

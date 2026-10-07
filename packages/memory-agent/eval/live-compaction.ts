@@ -1,4 +1,4 @@
-import { Result, Function as EffectFunction } from "effect";
+import { Config, Console, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../src/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "node:crypto";
@@ -249,27 +249,35 @@ async function runArm(variant: "auto" | "auto-plus-manual") {
 // This historical A/B is invalid if automatic catch-up has already done manual /compact's work.
 // Do not accidentally repeat it. A redesigned comparator needs a fresh explicit paid opt-in.
 // Native host/SDK configuration boundary reads or forwards the host environment.
-if (process.env.MEMORY_AGENT_ENABLE_PAID_COMPACTION_PILOT !== "1") {
+if (
+  Effect.runSync(
+    Config.String("MEMORY_AGENT_ENABLE_PAID_COMPACTION_PILOT").pipe(Config.withDefault("")),
+  ) !== "1"
+) {
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  console.log(JSON.stringify({ stopped: true, reason: "paid_pilot_disabled_until_redesign" }));
+  Effect.runSync(
+    Console.log(JSON.stringify({ stopped: true, reason: "paid_pilot_disabled_until_redesign" })),
+  );
 } else {
   try {
     for (const variant of ["auto", "auto-plus-manual"] as const) {
       const outcome = await runArm(variant);
       // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-      console.log(JSON.stringify(outcome));
+      Effect.runSync(Console.log(JSON.stringify(outcome)));
       // A comparison of failed coding/evidence tasks is not worth another paid arm.
       if (!outcome.evidenceCorrect || !outcome.computationCorrect)
         throw new Error("pilot_baseline_quality_failed");
     }
   } catch (error) {
     // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-    console.log(
-      JSON.stringify({
-        stopped: true,
-        reason: error instanceof Error ? error.message : "unknown",
-        providerCallsSoFar: calls,
-      }),
+    Effect.runSync(
+      Console.log(
+        JSON.stringify({
+          stopped: true,
+          reason: error instanceof Error ? error.message : "unknown",
+          providerCallsSoFar: calls,
+        }),
+      ),
     );
     process.exitCode = 1;
   }

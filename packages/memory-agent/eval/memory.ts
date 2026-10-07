@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Effect, Layer, ManagedRuntime } from "effect";
+import { Console, Effect, Layer, ManagedRuntime } from "effect";
 import { KiwiBuilder } from "kiwi-nlp";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { Embedder, type ModelVariant } from "../src/memory/embedding/embedder.ts";
@@ -98,13 +98,15 @@ if (isTruthy(only)) {
   const started = performance.now();
   const details = await scenario();
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  console.log(
-    JSON.stringify({
-      scenario: only,
-      peakMB: footprint("phys_footprint_peak"),
-      ...details,
-      ms: Math.round(performance.now() - started),
-    }),
+  Effect.runSync(
+    Console.log(
+      JSON.stringify({
+        scenario: only,
+        peakMB: footprint("phys_footprint_peak"),
+        ...details,
+        ms: Math.round(performance.now() - started),
+      }),
+    ),
   );
 } else {
   for (const name of Object.keys(scenarios)) {
@@ -115,6 +117,10 @@ if (isTruthy(only)) {
     );
     const line = result.stdout.trim().split("\n").at(-1) ?? "";
     // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-    console.log(result.status === 0 ? line : `${name}: failed (${result.signal ?? result.status})`);
+    Effect.runSync(
+      Console.log(
+        result.status === 0 ? line : `${name}: failed (${result.signal ?? result.status})`,
+      ),
+    );
   }
 }

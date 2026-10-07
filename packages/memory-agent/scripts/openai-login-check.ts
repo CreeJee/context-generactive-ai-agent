@@ -1,3 +1,5 @@
+import { Console, Effect } from "effect";
+import { OAuthCheckFailed } from "./oauth-check-failure.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -13,16 +15,18 @@ import { providerProtocols } from "../src/oauth/protocol.ts";
 let credential: StoredCredential | null = null;
 const store: CredentialStore = {
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  async read() {
-    return credential;
+  read() {
+    return Promise.resolve(credential);
   },
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  async write(_provider, value) {
+  write(_provider, value) {
     credential = value;
+    return Promise.resolve();
   },
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  async remove() {
+  remove() {
     credential = null;
+    return Promise.resolve();
   },
 };
 
@@ -38,27 +42,31 @@ try {
   // Register a rejection handler before opening the browser (which can itself fail).
   void attempt.completed.catch(() => {});
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  console.log("OPENAI_LOGIN_CHECK waiting_for_browser");
+  Effect.runSync(Console.log("OPENAI_LOGIN_CHECK waiting_for_browser"));
   try {
     await openBrowser("open", [attempt.authorizationUrl]);
   } catch {
     attempt.cancel();
-    throw new Error("browser_open_failed");
+    throw OAuthCheckFailed.make({ reason: { _tag: "browser_open_failed" } });
   }
   const result = await attempt.completed;
-  if (!result.connected) throw new Error("login_not_connected");
+  if (!result.connected) throw OAuthCheckFailed.make({ reason: { _tag: "login_not_connected" } });
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  console.log("OPENAI_LOGIN_CHECK passed");
+  Effect.runSync(Console.log("OPENAI_LOGIN_CHECK passed"));
 } catch (error) {
   if (error instanceof OAuthHarnessError)
     // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-    console.error(
-      `OPENAI_LOGIN_CHECK failed code=${error.code} operation=${error.operation ?? "none"} status=${error.status ?? "none"}`,
+    Effect.runSync(
+      Console.error(
+        `OPENAI_LOGIN_CHECK failed code=${error.code} operation=${error.operation ?? "none"} status=${error.status ?? "none"}`,
+      ),
     );
   else
     // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-    console.error(
-      `OPENAI_LOGIN_CHECK failed ${error instanceof Error ? error.message : "unexpected_error"}`,
+    Effect.runSync(
+      Console.error(
+        `OPENAI_LOGIN_CHECK failed ${error instanceof Error ? error.message : "unexpected_error"}`,
+      ),
     );
   process.exitCode = 1;
 } finally {

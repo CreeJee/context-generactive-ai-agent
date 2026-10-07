@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:f
 import { homedir, tmpdir } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { join } from "node:path";
-import { Effect, Layer, ManagedRuntime, MutableHashMap, Option } from "effect";
+import { Console, Effect, Layer, ManagedRuntime, MutableHashMap, Option } from "effect";
 import { SecretStore } from "../src/config/secrets.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
@@ -194,7 +194,9 @@ if (only === "--terms") {
     ),
   );
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  texts.forEach((text, index) => console.log(`${text} | ${terms[index]?.join(" ")}`));
+  texts.forEach((text, index) =>
+    Effect.runSync(Console.log(`${text} | ${terms[index]?.join(" ")}`)),
+  );
   process.exit(0);
 }
 for (const set of recallSets)
@@ -202,9 +204,11 @@ for (const set of recallSets)
     if (isTruthy(only) && configuration.name !== only) continue;
     const result = await evaluate(configuration, set);
     // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-    console.log(
-      `## ${result.name}: top1 ${result.top1}, top3 ${result.top3}, top5 ${result.top5}, MRR ${result.mrr} (index ${result.indexedMs} ms, ${result.searchMs} ms/query)`,
+    Effect.runSync(
+      Console.log(
+        `## ${result.name}: top1 ${result.top1}, top3 ${result.top3}, top5 ${result.top5}, MRR ${result.mrr} (index ${result.indexedMs} ms, ${result.searchMs} ms/query)`,
+      ),
     );
     // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-    for (const miss of result.misses) console.log(`  - ${miss}`);
+    for (const miss of result.misses) Effect.runSync(Console.log(`  - ${miss}`));
   }

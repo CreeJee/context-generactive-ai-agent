@@ -1,10 +1,17 @@
-import { isTruthy } from "../src/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { join } from "node:path";
-import { Array as EffectArray, Effect, Layer, Schema, MutableHashMap, Option } from "effect";
+import {
+  Console,
+  Array as EffectArray,
+  Effect,
+  Layer,
+  Schema,
+  MutableHashMap,
+  Option,
+} from "effect";
 import { memoryAgentLayer } from "../src/layers.ts";
 import { SecretStore } from "../src/config/secrets.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
@@ -49,6 +56,13 @@ const disabledEmbedding = Layer.succeed(Embedder, {
   embed: () => Effect.fail(new EmbeddingError({ cause: "text-only baseline" })),
 });
 
+const EmbeddingOutput = Schema.Struct({
+  last_hidden_state: Schema.Struct({
+    dims: Schema.Tuple([Schema.Int, Schema.Int, Schema.Int]),
+    data: Schema.instanceOf(Float32Array),
+  }),
+});
+
 // Unlike the production worker, both loaders explicitly forbid remote model files.
 const offlineEmbedding = (cacheDir: string) =>
   Layer.effect(
@@ -85,31 +99,33 @@ const offlineEmbedding = (cacheDir: string) =>
         dimensions: 384,
         runtime: () => ({ kind: "other" }),
         embed: (texts) =>
-          Effect.tryPromise({
-            // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-            try: async () => {
-              if (!isTruthy(texts.length)) return [];
-              const output = await model(
-                tokenizer([...texts], {
-                  padding: true,
-                  truncation: true,
-                  max_length: localModel.maxTokens,
-                }),
-              );
-              const hidden = output.last_hidden_state;
-              const [, tokens, dimensions] = hidden.dims;
-              return texts.map((_, row) =>
-                normalize(
-                  Float32Array.from(
-                    hidden.data.slice(
-                      row * tokens * dimensions,
-                      row * tokens * dimensions + dimensions,
-                    ),
+          Effect.gen(function* () {
+            if (texts.length === 0) return [];
+            const output = yield* Effect.tryPromise({
+              try: () =>
+                model(
+                  tokenizer([...texts], {
+                    padding: true,
+                    truncation: true,
+                    max_length: localModel.maxTokens,
+                  }),
+                ),
+              catch: (cause) => new EmbeddingError({ cause }),
+            });
+            const { last_hidden_state: hidden } = yield* Schema.decodeUnknownEffect(
+              EmbeddingOutput,
+            )(output).pipe(Effect.mapError((cause) => new EmbeddingError({ cause })));
+            const [, tokens, dimensions] = hidden.dims;
+            return texts.map((_, row) =>
+              normalize(
+                Float32Array.from(
+                  hidden.data.slice(
+                    row * tokens * dimensions,
+                    row * tokens * dimensions + dimensions,
                   ),
                 ),
-              );
-            },
-            catch: (cause) => new EmbeddingError({ cause }),
+              ),
+            );
           }),
       });
     }),
@@ -255,5 +271,5 @@ if (import.meta.main) {
     Effect.scoped(evaluateRecallShadowSearch({ textOnly: process.argv.includes("--text-only") })),
   );
   // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  console.log(JSON.stringify(result, null, 2));
+  Effect.runSync(Console.log(JSON.stringify(result, null, 2)));
 }
