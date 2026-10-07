@@ -1,5 +1,5 @@
 import { isTruthy } from "../truthy.ts";
-import { Predicate, Schema } from "effect";
+import { Function as EffectFunction, Predicate, Schema } from "effect";
 import type { AgentLoopStrategy, ChatMiddleware } from "@tanstack/ai";
 import { SubscriptionTextAdapter, type StreamingOAuthClient } from "./subscription-adapter.ts";
 import {
@@ -36,6 +36,21 @@ export interface SubscriptionRuntimeDependencies {
   readonly catalogWindow?: (model: string) => number | null;
 }
 
+export class SubscriptionRuntimeRejected extends Schema.TaggedError<SubscriptionRuntimeRejected>()(
+  "SubscriptionRuntimeRejected",
+  {
+    reason: Schema.TaggedStruct("ProviderMismatch", {
+      expected: Schema.String,
+      actual: Schema.String,
+      model: Schema.String,
+    }),
+  },
+) {
+  override get message(): string {
+    return `Provider mismatch: ${this.reason.expected} runtime cannot run ${this.reason.actual}/${this.reason.model}.`;
+  }
+}
+
 /**
  * Retain code, not a runtime bound to an account or run. The central owner supplies dependencies
  * anew at bind time; account selection still happens once per adapter through client.forRun.
@@ -55,9 +70,14 @@ export function createSubscriptionRuntimeImplementation(provider: SubscriptionAc
         provider,
         adapter: (selection: ModelSelection) => {
           if (!Schema.is(SubscriptionModelSelection)(selection) || selection.provider !== provider)
-            throw new Error(
-              `Provider mismatch: ${provider} runtime cannot run ${selection.provider}/${selection.model}.`,
-            );
+            throw SubscriptionRuntimeRejected.make({
+              reason: {
+                _tag: "ProviderMismatch",
+                expected: provider,
+                actual: selection.provider,
+                model: selection.model,
+              },
+            });
           const pinned = Predicate.isFunction(client) ? client() : client;
           const adapter = new Adapter(pinned, selection);
           const releaseRun = pinned.releaseRun;
@@ -70,14 +90,31 @@ export function createSubscriptionRuntimeImplementation(provider: SubscriptionAc
         // Subscription APIs do not expose live-turn steering. The central transcript middleware
         // retains queued messages; do not create a per-Goal steering registry here.
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        steer: async () => "no_turn",
+        steer: () => Promise.resolve("no_turn"),
       };
     },
   });
 }
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function createSubscriptionRuntime(
+type SubscriptionClient = SubscriptionRuntimeDependencies["client"];
+type CatalogWindow = NonNullable<SubscriptionRuntimeDependencies["catalogWindow"]>;
+export const createSubscriptionRuntime: {
+  (client: SubscriptionClient): (provider: SubscriptionAccountProvider) => AgentModelRuntime;
+  (
+    client: SubscriptionClient,
+    catalogWindow: CatalogWindow | undefined,
+  ): (provider: SubscriptionAccountProvider) => AgentModelRuntime;
+  (provider: SubscriptionAccountProvider, client: SubscriptionClient): AgentModelRuntime;
+  (
+    provider: SubscriptionAccountProvider,
+    client: SubscriptionClient,
+    catalogWindow: CatalogWindow | undefined,
+  ): AgentModelRuntime;
+} = EffectFunction.dual(
+  (args) => Schema.is(Schema.Literals(["openai", "anthropic"]))(args[0]),
+  createSubscriptionRuntimeBody,
+);
+function createSubscriptionRuntimeBody(
   provider: SubscriptionAccountProvider,
   client: StreamingOAuthClient | (() => StreamingOAuthClient),
   catalogWindow: (model: string) => number | null = () => null,
