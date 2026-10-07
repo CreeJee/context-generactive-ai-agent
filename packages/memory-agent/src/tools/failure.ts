@@ -1,7 +1,7 @@
 import { Function as EffectFunction } from "effect";
 import { HashMap, Result, Option, Schema } from "effect";
 import { PathRejected } from "../files/paths.ts";
-import { TextFileRejected } from "../files/text.ts";
+import { TextFileRejected, TextFileIoFailed } from "../files/text.ts";
 
 const refusalHints = HashMap.fromIterable<string, string>([
   [
@@ -35,10 +35,18 @@ export const toolFailure: {
   (path: string): (error: Error) => ReturnType<typeof toolFailureBody>;
 } & typeof toolFailureBody = EffectFunction.dual(2, toolFailureBody);
 function toolFailureBody(error: Error, path: string): Error {
-  if (error instanceof PathRejected || error instanceof TextFileRejected)
+  const reason =
+    error instanceof PathRejected
+      ? error.reason
+      : Schema.is(TextFileRejected)(error)
+        ? error.reason._tag
+        : null;
+  if (reason !== null)
     return new Error(
-      `${error.reason}: ${path}. ${Option.getOrUndefined(HashMap.get(refusalHints, error.reason)) ?? ""}`.trim(),
+      `${reason}: ${path}. ${Option.getOrUndefined(HashMap.get(refusalHints, reason)) ?? ""}`.trim(),
     );
+  if (Schema.is(TextFileIoFailed)(error))
+    return new Error(`io_error: ${path} (${error.reason.code})`);
   const systemError = Option.getOrUndefined(decodeSystemError(error));
   if (systemError !== undefined) return new Error(`io_error: ${path} (${systemError.code})`);
   // Tool-authored messages already follow the `reason: detail` form.

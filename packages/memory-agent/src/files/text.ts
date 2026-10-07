@@ -7,7 +7,7 @@ import { constants } from "node:fs";
 import { mkdir, open, rename, rm } from "node:fs/promises";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { basename, dirname, join } from "node:path";
-import { Data, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { PathRejected } from "./paths.ts";
 
 /** Largest text file the file tools read, search or rewrite. */
@@ -17,10 +17,56 @@ export const maxTextBytes = 2 * 1024 * 1024;
  * A file that is not editable text: over {@link maxTextBytes}, containing NUL bytes, or not UTF-8.
  * `changed` means its content no longer matches the version the caller last read.
  */
-export class TextFileRejected extends Data.TaggedError("TextFileRejected")<{
-  readonly path: string;
-  readonly reason: "too_large" | "binary" | "invalid_utf8" | "changed" | "exists";
-}> {}
+export class TextFileRejected extends Schema.TaggedError<TextFileRejected>()("TextFileRejected", {
+  path: Schema.String,
+  reason: Schema.Union([
+    Schema.TaggedStruct("too_large", {}),
+    Schema.TaggedStruct("binary", {}),
+    Schema.TaggedStruct("invalid_utf8", {}),
+    Schema.TaggedStruct("changed", {}),
+    Schema.TaggedStruct("exists", {}),
+  ]),
+}) {}
+
+export class TextFileIoFailed extends Schema.TaggedError<TextFileIoFailed>()("TextFileIoFailed", {
+  path: Schema.String,
+  reason: Schema.TaggedStruct("IoFailed", {
+    operation: Schema.Literals([
+      "open",
+      "stat",
+      "read",
+      "mkdir",
+      "write",
+      "sync",
+      "close",
+      "rename",
+      "remove",
+    ]),
+    code: Schema.String,
+    cause: Schema.Defect(),
+  }),
+}) {}
+
+const systemCode = Schema.decodeUnknownOption(Schema.Struct({ code: Schema.String }));
+// FileSystem.open cannot request O_NOFOLLOW. Keep the secure Node handle boundary narrow.
+const io = <A>(
+  path: string,
+  operation: TextFileIoFailed["reason"]["operation"],
+  work: (signal: AbortSignal) => Promise<A>,
+) =>
+  Effect.tryPromise({
+    try: work,
+    catch: (cause) =>
+      TextFileIoFailed.make({
+        path,
+        reason: {
+          _tag: "IoFailed",
+          operation,
+          code: Option.getOrUndefined(systemCode(cause))?.code ?? "unknown",
+          cause,
+        },
+      }),
+  });
 
 export interface TextFile {
   readonly text: string;
@@ -48,37 +94,59 @@ export interface FileBytes {
  * that validated the directories but not the file).
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-export async function readFileBytes(
-  absolute: string,
-  path: string,
-  checkLeaf = false,
-): Promise<FileBytes> {
-  const handle = await open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    const stats = await handle.stat();
-    if (checkLeaf && !stats.isFile()) throw new PathRejected({ path, reason: "not_file" });
-    if (checkLeaf && stats.nlink !== 1) throw new PathRejected({ path, reason: "hard_link" });
-    if (stats.size > maxTextBytes) throw new TextFileRejected({ path, reason: "too_large" });
-    const bytes = await handle.readFile();
-    if (bytes.length > maxTextBytes) throw new TextFileRejected({ path, reason: "too_large" });
-    return { bytes, mode: stats.mode & 0o7777 };
-  } finally {
-    await handle.close();
-  }
-}
+export const readFileBytesEffect = Effect.fn("readFileBytes")(function* (options: {
+  readonly absolute: string;
+  readonly path: string;
+  readonly checkLeaf?: boolean;
+}) {
+  const { absolute, path, checkLeaf = false } = options;
+  return yield* Effect.acquireUseRelease(
+    io(path, "open", () => open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW)),
+    Effect.fnUntraced(function* (handle) {
+      const stats = yield* io(path, "stat", () => handle.stat());
+      if (checkLeaf && !stats.isFile())
+        return yield* new PathRejected({ path, reason: "not_file" });
+      if (checkLeaf && stats.nlink !== 1)
+        return yield* new PathRejected({ path, reason: "hard_link" });
+      if (stats.size > maxTextBytes)
+        return yield* TextFileRejected.make({ path, reason: { _tag: "too_large" } });
+      const bytes = yield* io(path, "read", (signal) => handle.readFile({ signal }));
+      if (bytes.length > maxTextBytes)
+        return yield* TextFileRejected.make({ path, reason: { _tag: "too_large" } });
+      return { bytes, mode: stats.mode & 0o7777 };
+    }),
+    (handle) => io(path, "close", () => handle.close()),
+  );
+});
+
+export const readFileBytes: {
+  (path: string, checkLeaf?: boolean): (absolute: string) => Promise<FileBytes>;
+  (absolute: string, path: string, checkLeaf?: boolean): Promise<FileBytes>;
+} = EffectFunction.dual(
+  (args) => Schema.is(Schema.String)(args[1]),
+  (absolute: string, path: string, checkLeaf = false) =>
+    Effect.runPromise(readFileBytesEffect({ absolute, path, checkLeaf })),
+);
 
 /** Decodes bytes as UTF-8 text, throwing {@link TextFileRejected} for binary or invalid content. */
 export const decodeText: {
   (path: string): (bytes: Uint8Array) => ReturnType<typeof decodeTextBody>;
 } & typeof decodeTextBody = EffectFunction.dual(2, decodeTextBody);
 function decodeTextBody(bytes: Uint8Array, path: string): string {
-  if (bytes.includes(0)) throw new TextFileRejected({ path, reason: "binary" });
-  try {
-    return decoder.decode(bytes);
-  } catch {
-    throw new TextFileRejected({ path, reason: "invalid_utf8" });
-  }
+  return Effect.runSync(decodeTextEffect({ bytes, path }));
 }
+
+export const decodeTextEffect = Effect.fnUntraced(function* (options: {
+  readonly bytes: Uint8Array;
+  readonly path: string;
+}) {
+  const { bytes, path } = options;
+  if (bytes.includes(0)) return yield* TextFileRejected.make({ path, reason: { _tag: "binary" } });
+  return yield* Effect.try({
+    try: () => decoder.decode(bytes),
+    catch: () => TextFileRejected.make({ path, reason: { _tag: "invalid_utf8" } }),
+  });
+});
 
 /**
  * Reads a UTF-8 text file without following a symlink at the leaf. `path` is only used in errors.
@@ -88,39 +156,61 @@ function decodeTextBody(bytes: Uint8Array, path: string): string {
 export const readTextFile: {
   (path: string): (absolute: string) => ReturnType<typeof readTextFileBody>;
 } & typeof readTextFileBody = EffectFunction.dual(2, readTextFileBody);
-async function readTextFileBody(absolute: string, path: string): Promise<TextFile> {
-  const { bytes, mode } = await readFileBytes(absolute, path);
-  const text = decodeText(bytes, path);
-  return { text, sha256: sha256(bytes), bytes: bytes.length, mode };
+function readTextFileBody(absolute: string, path: string): Promise<TextFile> {
+  return Effect.runPromise(readTextFileEffect({ absolute, path }));
 }
+
+export const readTextFileEffect = Effect.fn("readTextFile")(function* (options: {
+  readonly absolute: string;
+  readonly path: string;
+}) {
+  const { bytes, mode } = yield* readFileBytesEffect(options);
+  const text = yield* decodeTextEffect({ bytes, path: options.path });
+  return { text, sha256: sha256(bytes), bytes: bytes.length, mode };
+});
 
 /** Creates a new file, failing if anything already exists at that name. Parents are created. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 export const createTextFile: {
   (path: string, text: string): (absolute: string) => ReturnType<typeof createTextFileBody>;
 } & typeof createTextFileBody = EffectFunction.dual(3, createTextFileBody);
-async function createTextFileBody(absolute: string, path: string, text: string) {
-  await mkdir(dirname(absolute), { recursive: true });
-  const bytes = Buffer.from(text, "utf8");
-  let handle;
-  try {
-    handle = await open(
-      absolute,
-      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-      0o644,
-    );
-  } catch (error) {
-    if (isAlreadyExists(error)) throw new TextFileRejected({ path, reason: "exists" });
-    throw error;
-  }
-  try {
-    await handle.writeFile(bytes);
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  return { sha256: sha256(bytes), bytes: bytes.length };
+function createTextFileBody(absolute: string, path: string, text: string) {
+  return Effect.runPromise(createTextFileEffect({ absolute, path, text }));
 }
+
+export const createTextFileEffect = Effect.fn("createTextFile")(function* (options: {
+  readonly absolute: string;
+  readonly path: string;
+  readonly text: string;
+}) {
+  const { absolute, path, text } = options;
+  yield* io(path, "mkdir", () => mkdir(dirname(absolute), { recursive: true }));
+  const bytes = Buffer.from(text, "utf8");
+  yield* Effect.acquireUseRelease(
+    io(path, "open", () =>
+      open(
+        absolute,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+        0o644,
+      ),
+    ).pipe(
+      Effect.catchReason(
+        "TextFileIoFailed",
+        "IoFailed",
+        (reason): Effect.Effect<never, TextFileIoFailed | TextFileRejected> =>
+          isAlreadyExists(reason.cause)
+            ? Effect.fail(TextFileRejected.make({ path, reason: { _tag: "exists" } }))
+            : Effect.fail(TextFileIoFailed.make({ path, reason })),
+      ),
+    ),
+    Effect.fnUntraced(function* (handle) {
+      yield* io(path, "write", (signal) => handle.writeFile(bytes, { signal }));
+      yield* io(path, "sync", () => handle.sync());
+    }),
+    (handle) => io(path, "close", () => handle.close()),
+  );
+  return { sha256: sha256(bytes), bytes: bytes.length };
+});
 
 /**
  * Replaces a file's content atomically (temp file in the same directory, then rename), but only
@@ -134,36 +224,49 @@ export const replaceTextFile: {
     text: string,
   ): (absolute: string) => ReturnType<typeof replaceTextFileBody>;
 } & typeof replaceTextFileBody = EffectFunction.dual(4, replaceTextFileBody);
-async function replaceTextFileBody(
-  absolute: string,
-  path: string,
-  expectedSha256: string,
-  text: string,
-) {
-  const current = await readTextFile(absolute, path);
-  if (current.sha256 !== expectedSha256) throw new TextFileRejected({ path, reason: "changed" });
+function replaceTextFileBody(absolute: string, path: string, expectedSha256: string, text: string) {
+  return Effect.runPromise(replaceTextFileEffect({ absolute, path, expectedSha256, text }));
+}
+
+export const replaceTextFileEffect = Effect.fn("replaceTextFile")(function* (options: {
+  readonly absolute: string;
+  readonly path: string;
+  readonly expectedSha256: string;
+  readonly text: string;
+}) {
+  const { absolute, path, expectedSha256, text } = options;
+  const current = yield* readTextFileEffect({ absolute, path });
+  if (current.sha256 !== expectedSha256)
+    return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
   const bytes = Buffer.from(text, "utf8");
   const temporary = join(dirname(absolute), `.${basename(absolute)}.${randomUUID()}.tmp`);
-  const handle = await open(
-    temporary,
-    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-    current.mode,
+  yield* Effect.acquireUseRelease(
+    io(path, "open", () =>
+      open(
+        temporary,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+        current.mode,
+      ),
+    ),
+    Effect.fnUntraced(function* (handle) {
+      yield* io(path, "write", (signal) => handle.writeFile(bytes, { signal }));
+      yield* io(path, "sync", () => handle.sync());
+      yield* io(path, "close", () => handle.close());
+      const latest = yield* readTextFileEffect({ absolute, path });
+      if (latest.sha256 !== expectedSha256)
+        return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
+      // A committed swap must complete before interruption releases its temporary file.
+      yield* Effect.uninterruptible(io(path, "rename", () => rename(temporary, absolute)));
+    }),
+    Effect.fnUntraced(function* (handle) {
+      const closed = yield* Effect.exit(io(path, "close", () => handle.close()));
+      const removed = yield* Effect.exit(io(path, "remove", () => rm(temporary, { force: true })));
+      yield* closed;
+      yield* removed;
+    }),
   );
-  try {
-    await handle.writeFile(bytes);
-    await handle.sync();
-    await handle.close();
-    // Re-check right before the swap: a user edit made while we wrote must not be overwritten.
-    const latest = await readTextFile(absolute, path);
-    if (latest.sha256 !== expectedSha256) throw new TextFileRejected({ path, reason: "changed" });
-    await rename(temporary, absolute);
-  } catch (error) {
-    await handle.close().catch(() => undefined);
-    await rm(temporary, { force: true });
-    throw error;
-  }
   return { sha256: sha256(bytes), bytes: bytes.length };
-}
+});
 
 /** Removes a file only when it still has the content the caller read. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -173,12 +276,22 @@ export const deleteTextFile: {
     expectedSha256: string,
   ): (absolute: string) => ReturnType<typeof deleteTextFileBody>;
 } & typeof deleteTextFileBody = EffectFunction.dual(3, deleteTextFileBody);
-async function deleteTextFileBody(absolute: string, path: string, expectedSha256: string) {
-  const current = await readTextFile(absolute, path);
-  if (current.sha256 !== expectedSha256) throw new TextFileRejected({ path, reason: "changed" });
-  await rm(absolute);
-  return { bytes: current.bytes };
+function deleteTextFileBody(absolute: string, path: string, expectedSha256: string) {
+  return Effect.runPromise(deleteTextFileEffect({ absolute, path, expectedSha256 }));
 }
+
+export const deleteTextFileEffect = Effect.fn("deleteTextFile")(function* (options: {
+  readonly absolute: string;
+  readonly path: string;
+  readonly expectedSha256: string;
+}) {
+  const { absolute, path, expectedSha256 } = options;
+  const current = yield* readTextFileEffect({ absolute, path });
+  if (current.sha256 !== expectedSha256)
+    return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
+  yield* io(path, "remove", () => rm(absolute));
+  return { bytes: current.bytes };
+});
 
 export interface LinePage {
   readonly content: string;

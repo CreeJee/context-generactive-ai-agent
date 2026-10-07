@@ -128,9 +128,11 @@ export async function searchTextFiles(
       (bytes): FileRead => ({ kind: "bytes", bytes }),
       (error): FileRead => {
         const reason =
-          error instanceof PathRejected || error instanceof TextFileRejected
+          error instanceof PathRejected
             ? error.reason
-            : "unreadable";
+            : Schema.is(TextFileRejected)(error)
+              ? error.reason._tag
+              : "unreadable";
         return reason === "not_found" ? { kind: "gone" } : { kind: "skipped", reason };
       },
     );
@@ -167,7 +169,7 @@ export async function searchTextFiles(
     } catch (error) {
       skipped.push({
         path,
-        reason: error instanceof TextFileRejected ? error.reason : "unreadable",
+        reason: Schema.is(TextFileRejected)(error) ? error.reason._tag : "unreadable",
       });
       continue;
     }

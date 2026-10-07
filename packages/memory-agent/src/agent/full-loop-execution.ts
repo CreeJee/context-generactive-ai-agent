@@ -37,14 +37,20 @@ import {
   type StreamChunk,
 } from "@tanstack/ai";
 import type { ChatExecutionCapabilities, ChatExecutionTurn } from "./chat-execution.ts";
-import { assertFullLoopPortable } from "./full-loop-admission-preflight.ts";
+import {
+  assertFullLoopPortable,
+  FullLoopAdmissionRejected,
+} from "./full-loop-admission-preflight.ts";
 
 // Descriptor inspection rejects accessors without invoking owner-supplied getters.
 function ownerData<T extends object>(value: T): T {
   for (const key of Reflect.ownKeys(value)) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (!isTruthy(descriptor) || descriptor.get !== undefined || descriptor.set !== undefined)
-      throw new Error("Unsupported owner snapshot accessor");
+      throw FullLoopAdmissionRejected.make({
+        member: "owner snapshot",
+        reason: { _tag: "Accessor" },
+      });
   }
   // All own string/symbol accessors were rejected above. Object.assign retains the
   // SDK-derived structural type; descriptor copying also retains non-enumerable data.
@@ -52,7 +58,10 @@ function ownerData<T extends object>(value: T): T {
   for (const key of Reflect.ownKeys(value)) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (!isTruthy(descriptor) || descriptor.get !== undefined || descriptor.set !== undefined)
-      throw new Error("Unsupported owner snapshot accessor");
+      throw FullLoopAdmissionRejected.make({
+        member: "owner snapshot",
+        reason: { _tag: "Accessor" },
+      });
     Object.defineProperty(snapshot, key, { ...descriptor, writable: true, configurable: true });
   }
   return snapshot;
@@ -61,7 +70,7 @@ function ownerData<T extends object>(value: T): T {
 // Plain configuration only: SDK schemas/capability handles stay owner services.
 // oxlint-disable-next-line anti-slop/no-unknown-parameters
 function ownerConfigSnapshot(value: unknown): any {
-  assertFullLoopPortable(value, "owner configuration");
+  assertFullLoopPortable({ value, member: "owner configuration" });
   return decodeFullLoopValue(encodeFullLoopValue(value));
 }
 
@@ -73,10 +82,10 @@ function ownerMember(receiver: object, key: string): any {
     const descriptor = Object.getOwnPropertyDescriptor(current, key);
     if (!isTruthy(descriptor)) continue;
     if (descriptor.get !== undefined || descriptor.set !== undefined)
-      throw new Error(`Unsupported owner snapshot accessor: ${key}`);
+      throw FullLoopAdmissionRejected.make({ member: key, reason: { _tag: "Accessor" } });
     return descriptor.value;
   }
-  throw new Error(`Missing owner member: ${key}`);
+  throw FullLoopAdmissionRejected.make({ member: key, reason: { _tag: "MissingMember" } });
 }
 
 // Same descriptor-reflection boundary; bind the captured callable to its original
@@ -84,7 +93,8 @@ function ownerMember(receiver: object, key: string): any {
 // oxlint-disable-next-line anti-slop/no-object-parameters
 function ownerMethod(receiver: object, key: string): any {
   const method = ownerMember(receiver, key);
-  if (!(method instanceof Function)) throw new Error(`Unsupported owner callable: ${key}`);
+  if (!(method instanceof Function))
+    throw FullLoopAdmissionRejected.make({ member: key, reason: { _tag: "NotCallable" } });
   return method.bind(receiver);
 }
 import { resolveDebugOption } from "@tanstack/ai/adapter-internals";
@@ -110,7 +120,10 @@ function preflightFullLoopExecutionBody<TAdapter extends AnyTextAdapter>(
   const names = MutableHashSet.empty<string>();
   for (const tool of capabilities.tools) {
     if (!isTruthy(tool.execute) || MutableHashSet.has(names, tool.name))
-      throw new Error(`Unsupported owner tool grant capability: ${tool.name}`);
+      throw FullLoopAdmissionRejected.make({
+        member: tool.name,
+        reason: { _tag: "UnsupportedTool" },
+      });
     MutableHashSet.add(names, tool.name);
   }
 }

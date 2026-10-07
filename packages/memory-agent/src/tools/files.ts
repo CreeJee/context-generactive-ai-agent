@@ -336,7 +336,7 @@ const make = Effect.gen(function* () {
           const resolved = orThrow(resolveProjectPath(root, path, "file"));
           const file = await readTextFile(resolved.absolute, path);
           if (expectedSha256 !== undefined && expectedSha256 !== file.sha256)
-            throw new TextFileRejected({ path, reason: "changed" });
+            throw TextFileRejected.make({ path, reason: { _tag: "changed" } });
           const crlf = file.text.includes("\r\n") && !oldText.includes("\r\n");
           const find = crlf ? oldText.replaceAll("\n", "\r\n") : oldText;
           const replacement = crlf ? newText.replaceAll("\n", "\r\n") : newText;
