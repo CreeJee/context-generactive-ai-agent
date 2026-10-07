@@ -233,8 +233,16 @@ function settingsInstructions(project: Project, places: SettingsPlaces) {
  * Where the file tools work, how to change files without losing the user's edits, the current
  * date and shell, and where the app keeps its own settings.
  */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function workspaceInstructions(
+export const workspaceInstructions: {
+  (places: SettingsPlaces): (project: Project) => string;
+  (places: SettingsPlaces, now: Date | undefined): (project: Project) => string;
+  (project: Project, places: SettingsPlaces): string;
+  (project: Project, places: SettingsPlaces, now: Date | undefined): string;
+} = EffectFunction.dual(
+  (args) => Schema.is(Schema.Struct({ root: Schema.String }))(args[0]),
+  workspaceInstructionsBody,
+);
+function workspaceInstructionsBody(
   project: Project,
   places: SettingsPlaces,
   now: Date = DateTime.toDateUtc(DateTime.nowUnsafe()),

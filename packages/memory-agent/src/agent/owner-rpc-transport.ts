@@ -329,23 +329,25 @@ export const serveOwnerRpcPortEffect: {
   ): (port: MessagePort) => ReturnType<typeof serveOwnerRpcPortEffectBody<M, E, R>>;
 } & typeof serveOwnerRpcPortEffectBody = EffectFunction.dual(2, serveOwnerRpcPortEffectBody);
 
+type OwnerRpcPortOptions<M extends OwnerRpcOperations> = {
+  readonly permits: (capability: OwnerRpcCapability) => boolean;
+  readonly permitsFinalization?: (capability: OwnerRpcCapability) => boolean;
+  readonly ledger: OwnerRpcLedger;
+  readonly handlers: OwnerRpcHandlers<M>;
+};
 /** Synchronous full-loop adapter; Promise handlers cannot reverse dispatched external work. */
 export const serveOwnerRpcPort: {
-  <M extends OwnerRpcOperations>(options: {
-    readonly permits: (capability: OwnerRpcCapability) => boolean;
-    readonly permitsFinalization?: (capability: OwnerRpcCapability) => boolean;
-    readonly ledger: OwnerRpcLedger;
-    readonly handlers: OwnerRpcHandlers<M>;
-  }): (port: MessagePort) => ReturnType<typeof serveOwnerRpcPortBody<M>>;
-} & typeof serveOwnerRpcPortBody = EffectFunction.dual(2, serveOwnerRpcPortBody);
+  <M extends OwnerRpcOperations>(
+    options: OwnerRpcPortOptions<M>,
+  ): (port: MessagePort) => { readonly close: () => void };
+  <M extends OwnerRpcOperations>(
+    port: MessagePort,
+    options: OwnerRpcPortOptions<M>,
+  ): { readonly close: () => void };
+} = EffectFunction.dual(2, serveOwnerRpcPortBody);
 function serveOwnerRpcPortBody<M extends OwnerRpcOperations>(
   port: MessagePort,
-  options: {
-    readonly permits: (capability: OwnerRpcCapability) => boolean;
-    readonly permitsFinalization?: (capability: OwnerRpcCapability) => boolean;
-    readonly ledger: OwnerRpcLedger;
-    readonly handlers: OwnerRpcHandlers<M>;
-  },
+  options: OwnerRpcPortOptions<M>,
 ) {
   // SAFETY: operation input/output pairing is unchanged at this legacy SDK boundary.
   const handlers = Object.fromEntries(
