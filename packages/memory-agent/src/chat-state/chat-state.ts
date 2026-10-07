@@ -16,13 +16,14 @@ import {
   latestChatRun,
   migrateLegacyChatThreads,
   migrateMissingChatThread,
-  sqliteChatPersistence,
+  ownedSqliteChatPersistence,
 } from "./persistence.ts";
 
 const make = Effect.gen(function* () {
   const effectClock = yield* Clock.Clock;
 
-  const { sqlite, atomic } = yield* Database;
+  const database = yield* Database;
+  const { sqlite, atomic } = database;
   const nodes = yield* Nodes;
   const attachments = yield* Attachments;
 
@@ -31,7 +32,7 @@ const make = Effect.gen(function* () {
   const fallbackThread = (threadId: string) =>
     convertMessagesToModelMessages(sessionMessages(nodes.session(threadId), attachments.forNode));
   migrateLegacyChatThreads(sqlite, fallbackThread);
-  const persistence = sqliteChatPersistence(sqlite);
+  const persistence = ownedSqliteChatPersistence(database);
   const lastRun = latestChatRun(sqlite);
 
   // Reconstruction otherwise gives id-less stored messages random IDs on every GET. Use the
@@ -130,7 +131,9 @@ const make = Effect.gen(function* () {
      */
     hydrate: (request: Request, sessionId: string) => {
       // Imports may create sessions after this service's startup migration has already run.
-      migrateMissingChatThread(sqlite, sessionId, fallbackThread);
+      if (migrateMissingChatThread(sqlite, sessionId, fallbackThread)) {
+        persistence.prepareThread(sessionId);
+      }
       return reconstructChat(hydrationPersistence, request, {
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
         authorize: async (threadId) => threadId === sessionId,

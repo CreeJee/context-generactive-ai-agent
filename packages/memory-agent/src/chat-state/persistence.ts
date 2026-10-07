@@ -15,6 +15,8 @@ import {
 } from "@tanstack/ai-persistence";
 import { MutableHashSet, DateTime, Schema } from "effect";
 import { isEmptyUserText } from "../messages/empty-user.ts";
+import type { Database } from "../db/database.ts";
+import { nativeHistoryProjection, HistoryPageUnavailable } from "./history-projection-native.ts";
 type Json = string | number | boolean | null | Json[] | { readonly [key: string]: Json };
 
 const RunRow = Schema.Struct({
@@ -194,6 +196,25 @@ function toInterrupt(row: Record<string, SQLOutputValue>): InterruptRecord {
  * `AgentChat` records immediately before a first run and duplicate that incoming message.
  */
 export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
+  return makeSqliteChatPersistence({ sqlite });
+}
+
+/** Production factory: keeps projection writes in the existing Database owner transaction. */
+export function ownedSqliteChatPersistence(database: Database["Service"]) {
+  const projection = nativeHistoryProjection({ database, decodeMessages: parseMessages });
+  projection.prepare();
+  return {
+    ...makeSqliteChatPersistence({ sqlite: database.sqlite, database, projection }),
+    prepareThread: (threadId: string) => projection.prepare(threadId),
+  };
+}
+
+function makeSqliteChatPersistence(input: {
+  sqlite: DatabaseSync;
+  database?: Database["Service"];
+  projection?: ReturnType<typeof nativeHistoryProjection>;
+}): ChatPersistence {
+  const { sqlite, database, projection } = input;
   const selectThread = sqlite.prepare(
     "SELECT messages AS value FROM chat_threads WHERE thread_id = ?",
   );
@@ -210,6 +231,16 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
   ): Promise<ModelMessage[] | MessagePage>;
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   async function loadThread(threadId: string, options?: { limit?: number; before?: string }) {
+    if (projection !== undefined && options?.limit !== undefined) {
+      return options.before === undefined
+        ? projection.load({ type: "initial", threadId, limit: options.limit })
+        : projection.load({
+            type: "older",
+            threadId,
+            limit: options.limit,
+            before: options.before,
+          });
+    }
     const row = selectThread.get(threadId);
     const stored = isTruthy(row) ? parseMessages(decodeJsonText(row).value) : [];
     if (options?.limit === undefined) return stored;
@@ -230,11 +261,24 @@ export function sqliteChatPersistence(sqlite: DatabaseSync): ChatPersistence {
     loadThread,
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
     async saveThread(threadId, next) {
-      upsertThread.run(
-        threadId,
-        JSON.stringify(next.filter((message) => !isEmptyUserText(message))),
-        DateTime.toEpochMillis(DateTime.nowUnsafe()),
-      );
+      const models = next.filter((message) => !isEmptyUserText(message));
+      const sourceJSON = JSON.stringify(models);
+      const write = () => {
+        upsertThread.run(threadId, sourceJSON, DateTime.toEpochMillis(DateTime.nowUnsafe()));
+        if (projection !== undefined) {
+          try {
+            projection.replace({ threadId, sourceJSON, models });
+          } catch (failure) {
+            // Native SDK edge: valid original records must survive a UI-only ID
+            // collision; readiness remains stale and reads fail explicitly.
+            if (Schema.is(HistoryPageUnavailable)(failure) && failure.reason === "id-collision")
+              return;
+            throw failure;
+          }
+        }
+      };
+      if (database === undefined) write();
+      else database.atomic(write);
     },
   });
 

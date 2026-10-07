@@ -1060,3 +1060,10 @@
 - 권한 분류와 턴 요약의 모델 호출은 Effect가 시간 제한과 취소를 소유한다. AbortController를 요구하는 SDK에는 호출 Fiber의 신호를 연결하고, SDK rejection과 동기 예외를 typed error로 변환한다.
 - 권한 분류의 60초 제한은 provider 준비를 포함한다. timeout과 요청 실패, 예상하지 못한 결함은 사용자 확인으로 돌아가며, Fiber interruption은 전파한다. 턴 요약의 백그라운드 작업은 서비스 Scope 종료 시 취소한다.
 - 보조 호출의 UUID는 Crypto 서비스를 사용하고 기본 Node Layer는 NodeCrypto로 제공한다. RouteCatalog의 기본 시각은 런타임 Clock을 사용하고 snapshot 갱신은 Ref의 원자적 변경으로 기록한다.
+
+## 2026-10-08: History projection의 반복 assistant ID
+
+- 같은 assistant 그룹에서 반복되는 원본 ID는 projection 뷰에서만 `${assistantId}-segment-history-${modelOrdinal}`로 변환한다. SDK의 segment 합치기를 이용하여 도구 호출·결과·후속 텍스트의 순서와 하나의 UI cursor를 유지한다.
+- chat_threads 원본, 모델 컨텍스트와 실시간 스트림 ID는 변경하지 않는다. 명시적 원본 ID가 서로 다른 assistant 그룹이나 사용자 메시지에서 충돌하거나 생성한 segment ID와 명시적 ID가 충돌하면 기존 id-collision 오류를 유지한다.
+- ID가 없는 메시지는 기본 `stored:${threadId}:${modelOrdinal}`을 유지하되 명시적 ID와 충돌하면 예약되지 않은 첫 `:fallback:${n}` 접미사를 선택한다. 이미 projection에 발행된 fallback cursor는 재사용하며, 새 명시적 ID가 그 cursor와 충돌하면 cursor를 바꾸거나 서로 다른 답변을 합치지 않고 오류를 유지한다. ID 조회 컬렉션의 키는 문자열 ID와 숫자 ordinal이다.
+- 기존 미준비 projection은 수정된 초기화 경로에서 준비한다. 페이지 읽기에 전체 원본 파싱이나 자동 backfill을 추가하지 않는다.
