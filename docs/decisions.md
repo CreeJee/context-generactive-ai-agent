@@ -1067,3 +1067,4 @@
 - chat_threads 원본, 모델 컨텍스트와 실시간 스트림 ID는 변경하지 않는다. 명시적 원본 ID가 서로 다른 assistant 그룹이나 사용자 메시지에서 충돌하거나 생성한 segment ID와 명시적 ID가 충돌하면 기존 id-collision 오류를 유지한다.
 - ID가 없는 메시지는 기본 `stored:${threadId}:${modelOrdinal}`을 유지하되 명시적 ID와 충돌하면 예약되지 않은 첫 `:fallback:${n}` 접미사를 선택한다. 이미 projection에 발행된 fallback cursor는 재사용하며, 새 명시적 ID가 그 cursor와 충돌하면 cursor를 바꾸거나 서로 다른 답변을 합치지 않고 오류를 유지한다. ID 조회 컬렉션의 키는 문자열 ID와 숫자 ordinal이다.
 - 기존 미준비 projection은 수정된 초기화 경로에서 준비한다. 페이지 읽기에 전체 원본 파싱이나 자동 backfill을 추가하지 않는다.
+- `stored:` 형식만으로 합성 cursor의 소유자를 판단하지 않는다. assistant에 연결되는 tool 결과는 독립 UI cursor를 갖지 않으므로, 해당 tool의 원본 ordinal을 가리키는 다른 명시적 cursor를 합성 cursor로 재사용하거나 충돌로 거부하지 않는다. 연결된 tool의 fallback은 명시적 ID를 피해서 생성하고 assistant cursor와 toolCallId 연결을 보존한다.

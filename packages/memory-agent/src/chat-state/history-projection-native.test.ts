@@ -255,6 +255,77 @@ it.effect("prepares fallback ID collisions as separate answers with stable page 
   }).pipe(provideFixture(Database.layer(":memory:"))),
 );
 
+it.effect(
+  "does not mistake an explicit standalone tool cursor for a linked result's fallback",
+  () =>
+    Effect.gen(function* () {
+      const db = yield* Database;
+      const models: ModelMessage[] = [
+        {
+          id: "answer",
+          role: "assistant",
+          content: "Checking",
+          toolCalls: [
+            { id: "call", type: "function", function: { name: "read", arguments: "{}" } },
+          ],
+        },
+        { role: "tool", toolCallId: "call", content: "Linked result" },
+        { id: "user", role: "user", content: "Next question" },
+        { id: "stored:a:1", role: "tool", toolCallId: "other-call", content: "Standalone result" },
+      ];
+      const original = encodeJson(models);
+      yield* Effect.try(() =>
+        db.sqlite.prepare("INSERT INTO chat_threads VALUES(?,?,?)").run("a", original, 1),
+      );
+      const store = ownedSqliteChatPersistence(db);
+      yield* Effect.tryPromise(() => store.stores.messages.saveThread("a", models));
+      // Preparation must also recover the unchanged original after an external invalidation.
+      yield* Effect.try(() =>
+        db.sqlite
+          .prepare("UPDATE chat_threads SET messages=? WHERE thread_id=?")
+          .run(original, "a"),
+      );
+      store.prepareThread("a");
+      const initial = yield* Effect.tryPromise(() =>
+        reconstructChat(store, new Request("http://fixture/chat?threadId=a&limit=1")),
+      );
+      expect(initial.status).toBe(200);
+      const newest = yield* Effect.tryPromise(() => initial.json()).pipe(
+        Effect.flatMap(decodePage),
+      );
+      expect(newest.messages.map((message) => message.id)).toEqual(["stored:a:1"]);
+      expect(newest.page.cursor).toBe("stored:a:1");
+      const older = yield* Effect.tryPromise(() =>
+        reconstructChat(
+          store,
+          new Request("http://fixture/chat?threadId=a&limit=1&before=stored:a:1"),
+        ),
+      );
+      const previous = yield* Effect.tryPromise(() => older.json()).pipe(
+        Effect.flatMap(decodePage),
+      );
+      expect(previous.messages.map((message) => message.id)).toEqual(["user"]);
+      const first = yield* Effect.tryPromise(() =>
+        reconstructChat(store, new Request("http://fixture/chat?threadId=a&limit=1&before=user")),
+      );
+      const oldest = yield* Effect.tryPromise(() => first.json()).pipe(Effect.flatMap(decodePage));
+      expect(oldest.messages.map((message) => message.id)).toEqual(["answer"]);
+      expect(oldest.page.truncated).toBe(false);
+      const again = yield* Effect.tryPromise(() =>
+        reconstructChat(store, new Request("http://fixture/chat?threadId=a&limit=1")),
+      );
+      expect(yield* Effect.tryPromise(() => again.json()).pipe(Effect.flatMap(decodePage))).toEqual(
+        newest,
+      );
+      expect(yield* Effect.tryPromise(() => store.stores.messages.loadThread("a"))).toEqual(models);
+      expect(
+        yield* Effect.try(() =>
+          db.sqlite.prepare("SELECT messages FROM chat_threads WHERE thread_id=?").get("a"),
+        ),
+      ).toEqual({ messages: original });
+    }).pipe(provideFixture(Database.layer(":memory:"))),
+);
+
 it.effect("keeps a newly empty thread valid and does not full-load a stale transcript", () =>
   Effect.gen(function* () {
     const db = yield* Database;

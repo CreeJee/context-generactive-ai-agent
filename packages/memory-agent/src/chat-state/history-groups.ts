@@ -56,13 +56,30 @@ function historyProjectionMessagesBody(
     }
   }
   const normalized: ModelMessage[] = [];
+  let hasAssistant = false;
   for (const [ordinal, message] of messages.entries()) {
+    let ownsCursor = true;
+    switch (message.role) {
+      case "assistant":
+        hasAssistant = true;
+        break;
+      case "user":
+        hasAssistant = false;
+        break;
+      case "tool":
+        ownsCursor = message.toolCallId === undefined || !hasAssistant;
+        break;
+    }
     if (message.id !== undefined) {
       normalized.push(message);
       continue;
     }
     const base = `stored:${threadId}:${ordinal}`;
-    const retained = Option.getOrUndefined(MutableHashMap.get(retainedByOrdinal, ordinal));
+    // Linked tool results belong to the assistant's cursor. A stored-looking
+    // explicit cursor elsewhere must not reserve the tool result's source ordinal.
+    const retained = ownsCursor
+      ? Option.getOrUndefined(MutableHashMap.get(retainedByOrdinal, ordinal))
+      : undefined;
     let id = retained ?? base;
     if (retained !== undefined && MutableHashSet.has(reservedIds, retained))
       return { type: "id-collision", id: retained };
