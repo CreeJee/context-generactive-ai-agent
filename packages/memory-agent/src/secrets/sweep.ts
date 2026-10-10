@@ -3,6 +3,7 @@ import { isTruthy } from "../truthy.ts";
 import { DateTime, Clock, Semaphore } from "effect";
 import { Worker } from "node:worker_threads";
 import { Context, Data, Deferred, HashMap, Ref, Effect, Layer, Option, Schema } from "effect";
+import { Nodes } from "../memory/nodes.ts";
 import { Database } from "../db/database.ts";
 import { Indexer } from "../memory/embedding/indexer.ts";
 import { VectorIndex } from "../memory/embedding/vector-index.ts";
@@ -217,6 +218,7 @@ const make = (running: boolean) =>
   Effect.gen(function* () {
     const { sqlite, atomic } = yield* Database;
     const indexer = yield* Indexer;
+    const nodes = yield* Nodes;
     const vectors = yield* VectorIndex;
     const onePassAtATime = yield* Semaphore.make(1);
 
@@ -274,6 +276,7 @@ const make = (running: boolean) =>
               yield* vectors.save;
             }
             atomic(() => {
+              if (changed.length > 0) nodes.invalidateResultPages();
               for (const row of changed) {
                 grant.run(row.seq);
                 unindexText.run(row.seq, row.text);

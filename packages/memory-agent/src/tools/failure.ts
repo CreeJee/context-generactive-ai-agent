@@ -59,16 +59,17 @@ function toolFailureBody(error: Error, path: string): Error {
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 export const guarded: {
   <A, E = never>(operation: () => Promise<A> | Effect.Effect<A, E>): (path: string) => Promise<A>;
-} & typeof guardedBody = EffectFunction.dual(2, guardedBody);
+} & typeof guardedBody = EffectFunction.dual((args) => args.length >= 2, guardedBody);
 function guardedBody<A, E = never>(
   path: string,
   operation: () => Promise<A> | Effect.Effect<A, E>,
+  signal?: AbortSignal,
 ): Promise<A> {
   const work = Effect.suspend<A, E | Cause.UnknownError, never>(() => {
     const result = operation();
     return Effect.isEffect(result) ? result : Effect.tryPromise(() => result);
   });
-  return Effect.runPromiseExit(guardedEffect(path, work)).then(
+  return Effect.runPromiseExit(guardedEffect(path, work), { signal }).then(
     Exit.match({
       onSuccess: (value) => value,
       onFailure: (cause) => Promise.reject(nativeFailure(cause).cause),
@@ -79,7 +80,8 @@ function guardedBody<A, E = never>(
 /** Keep model-facing path/error redaction at the SDK edge, including native callback exceptions. */
 export const guardedEffect = <A, E, R>(path: string, program: Effect.Effect<A, E, R>) =>
   program.pipe(
-    Effect.catchCause((cause) => {
+    Effect.catchCause((cause): Effect.Effect<never, E | Cause.UnknownError> => {
+      if (Cause.hasInterrupts(cause)) return Effect.failCause(cause);
       const failure = Cause.squash(cause);
       const error = failure instanceof Cause.UnknownError ? failure.cause : failure;
       return Effect.fail(

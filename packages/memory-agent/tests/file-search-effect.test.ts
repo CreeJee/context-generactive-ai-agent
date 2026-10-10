@@ -49,7 +49,7 @@ it.effect("finishing a page interrupts all pending read-ahead work", () =>
     let active = 0;
     let finished = 0;
     const page = yield* searchTextFilesEffect({
-      paths: Array.from({ length: 33 }, (_, index) => String(index)),
+      paths: Array.from({ length: 5 }, (_, index) => String(index)),
       query: "match",
       caseSensitive: true,
       start: { file: 0, line: 0 },
@@ -66,14 +66,14 @@ it.effect("finishing a page interrupts all pending read-ahead work", () =>
                 }),
               );
               active++;
-              if (active === 32) yield* Deferred.succeed(started, undefined);
+              if (active === 4) yield* Deferred.succeed(started, undefined);
               return yield* Effect.never;
             }),
     });
     expect(page.matches).toHaveLength(100);
     expect(page.next).toEqual({ file: 0, line: 100 });
     expect(active).toBe(0);
-    expect(finished).toBe(32);
+    expect(finished).toBe(4);
   }),
 );
 

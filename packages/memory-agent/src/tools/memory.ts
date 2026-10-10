@@ -247,20 +247,14 @@ export const createMemoryTools = (
       "Read a bounded page of the saved, redacted original result behind a compact tool summary. Only tool results from this project and conversation are accessible; use nextOffset for later pages.",
     inputSchema: toToolSchema(readToolResultInput),
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  }).server(({ id, offset }) =>
+  }).server(({ id, offset }, context) =>
     run(
       Effect.gen(function* () {
         const nodes = yield* Nodes;
-        const node = nodes.get(id);
-        if (
-          !isTruthy(node) ||
-          node.kind !== "tool_result" ||
-          node.projectId !== projectId ||
-          node.sessionId !== binding.sessionId
-        )
-          return notFound(id);
-        return nodes.read(id, offset ?? 0);
+        const page = yield* nodes.readToolResultPage(id, projectId, binding.sessionId, offset ?? 0);
+        return page ?? notFound(id);
       }),
+      { signal: context?.abortSignal },
     ),
   );
 

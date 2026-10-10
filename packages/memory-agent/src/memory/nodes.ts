@@ -13,6 +13,7 @@ import {
   HashSet,
   Array as EffectArray,
 } from "effect";
+import { createResultPageReader } from "./result-pages.ts";
 import { hasStatementText } from "./quality.ts";
 import { firstMessageTitle } from "../sessions/title.ts";
 import { Database } from "../db/database.ts";
@@ -154,6 +155,7 @@ const make = Effect.gen(function* () {
   const effectClock = yield* Clock.Clock;
 
   const { sqlite, atomic } = yield* Database;
+  const resultPages = createResultPageReader(sqlite);
   const insertNode = sqlite.prepare(
     "INSERT INTO nodes (id, project_id, session_id, run_id, kind, text, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
   );
@@ -209,6 +211,7 @@ const make = Effect.gen(function* () {
       );
       if (!isTruthy(row)) throw new Error("Node insert returned no row");
       const node = toNode(row);
+      if (node.kind === "tool_result") resultPages.remember(node.id, node.text);
       // Only the first accepted, redacted user message names a local conversation.
       if (
         input.kind === "user" &&
@@ -242,6 +245,8 @@ const make = Effect.gen(function* () {
 
   return {
     append,
+    readToolResultPage: resultPages.read,
+    invalidateResultPages: resultPages.invalidate,
 
     get: (id: string): Node | null => {
       const row = selectNode.get(id);
@@ -298,6 +303,7 @@ const make = Effect.gen(function* () {
       const row = selectNode.get(id);
       if (!isTruthy(row)) return null;
       const node = toNode(row);
+      if (node.kind === "tool_result") resultPages.remember(node.id, node.text);
       const start = Math.min(Math.max(0, Math.trunc(offset)), node.text.length);
       let end = Math.min(start + evidencePageLength, node.text.length);
       const last = node.text.charCodeAt(end - 1);

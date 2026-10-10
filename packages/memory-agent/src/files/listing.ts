@@ -5,16 +5,29 @@ import { execFile } from "node:child_process";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID } from "node:crypto";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { lstat, readdir } from "node:fs/promises";
+import { lstat, opendir } from "node:fs/promises";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { join, posix } from "node:path";
-import { promisify } from "node:util";
-import { MutableHashMap, Option, Effect, HashSet, Array as EffectArray } from "effect";
+import {
+  Deferred,
+  MutableHashMap,
+  Option,
+  Effect,
+  HashSet,
+  Schema,
+  Array as EffectArray,
+} from "effect";
 import { findExecutable } from "../runtime/host.ts";
 import { gitEnvironment } from "./git-grep.ts";
 import { isCredentialPath } from "./paths.ts";
 
-const run = promisify(execFile);
+export class FileListingIoFailed extends Schema.TaggedError<FileListingIoFailed>()(
+  "FileListingIoFailed",
+  {
+    path: Schema.String,
+    reason: Schema.TaggedStruct("CloseFailed", { cause: Schema.Defect() }),
+  },
+) {}
 
 /** File checks run at once when listing a Git work tree. */
 const statConcurrency = 64;
@@ -40,18 +53,21 @@ export interface FileListing {
 const gitFiles = Effect.fn("FileListing.gitFiles")(function* (root: string, directory: string) {
   const git = findExecutable("git");
   if (!isTruthy(git)) return null;
-  return yield* Effect.tryPromise((signal) =>
-    run(git, ["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", directory], {
-      cwd: root,
-      maxBuffer: 256 * 1024 * 1024,
-      windowsHide: true,
-      env: gitEnvironment(git),
-      signal,
-    }),
-  ).pipe(
-    Effect.map(({ stdout }) => stdout.split("\0").filter(Boolean)),
-    Effect.orElseSucceed(() => null),
-  );
+  return yield* Effect.callback<string[] | null>((resume) => {
+    const closed = Deferred.makeUnsafe<void>();
+    const child = execFile(
+      git,
+      ["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", directory],
+      { cwd: root, maxBuffer: 256 * 1024 * 1024, windowsHide: true, env: gitEnvironment(git) },
+      (error, stdout) =>
+        resume(Effect.succeed(error === null ? stdout.split("\0").filter(Boolean) : null)),
+    );
+    child.once("close", () => Deferred.doneUnsafe(closed, Effect.void));
+    return Effect.gen(function* () {
+      child.kill();
+      yield* Deferred.await(closed);
+    });
+  });
 });
 
 /**
@@ -69,25 +85,48 @@ const walkFiles = Effect.fn("FileListing.walkFiles")(function* (
   const files: string[] = [];
   let excluded = 0;
   let truncated = false;
-  const visit = (relative: string): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      const entries = yield* Effect.tryPromise(() =>
-        readdir(join(base, relative), { withFileTypes: true }),
-      ).pipe(Effect.orElseSucceed(() => []));
-      for (const entry of entries) {
-        if (files.length >= walkLimit) {
-          truncated = true;
-          return;
+  const pending = [directory];
+  while (pending.length > 0) {
+    if (files.length >= walkLimit) {
+      truncated = true;
+      break;
+    }
+    const relative = pending.pop()!;
+    // Finish and close this directory before visiting children, so depth never consumes more FDs.
+    yield* Effect.acquireUseRelease(
+      Effect.tryPromise(() => opendir(join(base, relative))).pipe(Effect.orElseSucceed(() => null)),
+      Effect.fnUntraced(function* (handle) {
+        if (handle === null) return;
+        while (true) {
+          const entry = yield* Effect.uninterruptible(Effect.tryPromise(() => handle.read())).pipe(
+            Effect.orElseSucceed(() => null),
+          );
+          if (entry === null) return;
+          if (files.length >= walkLimit) {
+            truncated = true;
+            return;
+          }
+          const path = relative === "." ? entry.name : `${relative}/${entry.name}`;
+          if (entry.isDirectory()) {
+            if (HashSet.has(walkSkips, entry.name)) continue;
+            if (isCredentialPath(join(credentialPrefix, path))) excluded++;
+            else pending.push(path);
+          } else if (entry.isFile()) files.push(path);
         }
-        const path = relative === "." ? entry.name : `${relative}/${entry.name}`;
-        if (entry.isDirectory()) {
-          if (HashSet.has(walkSkips, entry.name)) continue;
-          if (isCredentialPath(join(credentialPrefix, path))) excluded++;
-          else yield* visit(path);
-        } else if (entry.isFile()) files.push(path);
-      }
-    });
-  yield* visit(directory);
+      }),
+      (handle) =>
+        handle === null
+          ? Effect.void
+          : Effect.tryPromise({
+              try: () => handle.close(),
+              catch: (cause) =>
+                FileListingIoFailed.make({
+                  path: join(base, relative),
+                  reason: { _tag: "CloseFailed", cause },
+                }),
+            }),
+    );
+  }
   return { files, excluded, truncated };
 });
 

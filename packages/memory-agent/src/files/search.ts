@@ -10,7 +10,7 @@ import {
   Scope,
 } from "effect";
 import { PathRejected } from "./paths.ts";
-import { decodeTextEffect, TextFileIoFailed, TextFileRejected } from "./text.ts";
+import { decodeTextEffect, type LinePage, TextFileIoFailed, TextFileRejected } from "./text.ts";
 
 export interface SearchMatch {
   readonly path: string;
@@ -43,7 +43,7 @@ const pageCharacters = 12_000;
 const filesPerPage = 2_000;
 const snippetCharacters = 300;
 /** Files read ahead at once; results are still taken in order. */
-const readAhead = 32;
+const readAhead = 4;
 
 function snippet(line: string, index: number) {
   if (line.length <= snippetCharacters) return line;
@@ -118,6 +118,7 @@ export interface SearchTextInput<R = never> extends SearchOptions {
   readonly query: string;
   readonly caseSensitive: boolean;
   readonly start: SearchPosition;
+  readonly readPage?: (path: string, startLine: number) => Effect.Effect<LinePage, ReadFailure, R>;
 }
 
 const nodeCode = Schema.is(Schema.Struct({ code: Schema.String }));
@@ -189,6 +190,8 @@ export const searchTextFiles: {
 export const searchTextFilesEffect = Effect.fn("searchTextFiles")(function* <R>(
   input: SearchTextInput<R>,
 ): Effect.fn.Return<SearchPage, never, R | Scope.Scope> {
+  if (input.readPage !== undefined && !input.query.includes("\n"))
+    return yield* searchPagedFiles(input, input.readPage);
   const { paths, readBytes, query, caseSensitive, start } = input;
   const needle = caseSensitive ? query : query.toLowerCase();
   const needleBytes = Buffer.from(query, "utf8");
@@ -249,7 +252,13 @@ export const searchTextFilesEffect = Effect.fn("searchTextFiles")(function* <R>(
       case "bytes":
         break;
     }
-    if (caseSensitive && Buffer.from(result.bytes).indexOf(needleBytes) < 0) continue;
+    if (
+      caseSensitive &&
+      Buffer.from(result.bytes.buffer, result.bytes.byteOffset, result.bytes.byteLength).indexOf(
+        needleBytes,
+      ) < 0
+    )
+      continue;
     const decoded = yield* Effect.result(decodeTextEffect({ bytes: result.bytes, path }));
     switch (decoded._tag) {
       case "Failure":
@@ -297,3 +306,97 @@ export const decodeSearchCursor = (text: string) =>
   Option.getOrUndefined(
     Schema.decodeOption(Cursor)(Buffer.from(text, "base64url").toString("utf8")),
   );
+
+/** Validates once per file revision, then reads only the next line range. No speculative handles. */
+const searchPagedFiles = Effect.fnUntraced(function* <R>(
+  input: SearchTextInput<R>,
+  readPage: NonNullable<SearchTextInput<R>["readPage"]>,
+): Effect.fn.Return<SearchPage, never, R | Scope.Scope> {
+  const matches: SearchMatch[] = [];
+  const skipped: SearchSkip[] = [];
+  const needle = input.caseSensitive ? input.query : input.query.toLowerCase();
+  let characters = 0;
+  let opened = 0;
+  for (let file = input.start.file; file < input.paths.length; file++) {
+    const path = input.paths[file]!;
+    if (input.candidates != null && !HashSet.has(input.candidates, path)) continue;
+    if (opened++ === filesPerPage) return { matches, skipped, next: { file, line: 0 } };
+    let line = file === input.start.file ? input.start.line : 0;
+    while (true) {
+      const result = yield* Effect.result(readPage(path, line + 1));
+      switch (result._tag) {
+        case "Failure": {
+          // Keep the original binary/UTF-8 candidate filtering and skip semantics.
+          const fallback = yield* searchTextFilesEffect({
+            paths: [path],
+            readBytes: input.readBytes,
+            query: input.query,
+            caseSensitive: input.caseSensitive,
+            start: { file: 0, line },
+          });
+          skipped.push(...fallback.skipped);
+          for (const match of fallback.matches) {
+            matches.push(match);
+            characters += match.path.length + match.text.length + 32;
+            if (matches.length >= matchLimit || characters >= pageCharacters)
+              return { matches, skipped, next: { file, line: match.line } };
+          }
+          if (fallback.next !== null)
+            return { matches, skipped, next: { file, line: fallback.next.line } };
+          break;
+        }
+        case "Success": {
+          const page = result.success;
+          if (page.lineTruncated) {
+            // A long line may match beyond the preview; retain the bounded whole-file fallback.
+            const fallback = yield* searchTextFilesEffect({
+              paths: [path],
+              readBytes: input.readBytes,
+              query: input.query,
+              caseSensitive: input.caseSensitive,
+              start: { file: 0, line },
+            });
+            skipped.push(...fallback.skipped);
+            for (const match of fallback.matches) {
+              matches.push(match);
+              characters += match.path.length + match.text.length + 32;
+              if (matches.length >= matchLimit || characters >= pageCharacters)
+                return { matches, skipped, next: { file, line: match.line } };
+            }
+            if (fallback.next !== null)
+              return { matches, skipped, next: { file, line: fallback.next.line } };
+            break;
+          }
+          for (const found of lineMatches(page.content, needle, input.caseSensitive, 0)) {
+            const match = {
+              path,
+              line: line + found.line + 1,
+              text: snippet(found.content, found.column),
+            };
+            matches.push(match);
+            characters += match.path.length + match.text.length + 32;
+            if (matches.length >= matchLimit || characters >= pageCharacters) {
+              const next =
+                match.line < page.totalLines
+                  ? { file, line: match.line }
+                  : { file: file + 1, line: 0 };
+              return { matches, skipped, next: next.file < input.paths.length ? next : null };
+            }
+          }
+          if (page.nextStartLine !== null) {
+            line = page.nextStartLine - 1;
+            yield* Effect.yieldNow;
+            continue;
+          }
+          break;
+        }
+      }
+      break;
+    }
+    if (matches.length >= matchLimit) {
+      const next = file + 1 < input.paths.length ? { file: file + 1, line: 0 } : null;
+      return { matches, skipped, next };
+    }
+  }
+  return { matches, skipped, next: null };
+});

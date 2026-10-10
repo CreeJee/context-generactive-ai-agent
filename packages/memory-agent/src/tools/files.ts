@@ -2,22 +2,19 @@ import { Cause } from "effect";
 import { HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { lstat } from "node:fs/promises";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { join, posix } from "node:path";
 import { toolDefinition } from "@tanstack/ai";
-import { MutableHashMap, Option, Context, Effect, Result, Layer, Schema } from "effect";
-import { gitGrepFiles } from "../files/git-grep.ts";
+import { MutableHashMap, Option, Context, Effect, Fiber, Result, Layer, Schema } from "effect";
+import { gitGrepFilesEffect } from "../files/git-grep.ts";
 import { listProjectFilesEffect, createSnapshots, type Snapshot } from "../files/listing.ts";
 import { PathRejected, resolveProjectPath } from "../files/paths.ts";
 import { decodeSearchCursor, encodeSearchCursor, searchTextFilesEffect } from "../files/search.ts";
 import {
   createTextFileEffect,
   deleteTextFileEffect,
-  linePageOf,
+  createTextPageReader,
   readFileBytesEffect,
   readTextFileEffect,
-  splitLines,
   replaceTextFileEffect,
   TextFileRejected,
 } from "../files/text.ts";
@@ -110,63 +107,43 @@ export const listPageSize = 500;
 
 /** Search candidates kept per snapshot and query, so later pages do not ask Git again. */
 const candidateCacheSize = 32;
-/** Files whose read pages are kept between calls, checked against the file's current stat. */
-const readCacheSize = 8;
-
-interface CachedRead {
-  /** Size, change time and inode at the read; any difference means the file changed. */
-  readonly stamp: string;
-  readonly sha256: string;
-  readonly lines: readonly string[];
-}
-
 const make = Effect.gen(function* () {
   const snapshots = yield* createSnapshots();
-  const candidateCache = MutableHashMap.empty<string, Promise<HashSet.HashSet<string> | null>>();
-  const readCache = MutableHashMap.empty<string, CachedRead>();
+  const candidateCache = MutableHashMap.empty<string, HashSet.HashSet<string> | null>();
+  const readPage = createTextPageReader();
 
   /**
    * In a Git work tree, the files that can match at all; null means search every file. The first
-   * page starts `git grep` together with the listing and hands it over as `started`.
+   * page starts `git grep` together with the listing and owns its Fiber as `started`.
    */
-  const candidatesFor = (
+  const candidatesFor = Effect.fnUntraced(function* (
     view: Snapshot,
     query: string,
     caseSensitive: boolean,
-    started?: Promise<HashSet.HashSet<string> | null>,
-  ) => {
-    if (view.source !== "git") return Promise.resolve(null);
+    started?: Fiber.Fiber<HashSet.HashSet<string> | null>,
+  ) {
+    if (view.source !== "git") {
+      if (started !== undefined) yield* Fiber.interrupt(started);
+      return null;
+    }
     const key = `${view.id}\u0000${caseSensitive}\u0000${query}`;
     const cached = Option.getOrUndefined(MutableHashMap.get(candidateCache, key));
-    if (isTruthy(cached)) return cached;
-    const pending = started ?? gitGrepFiles(view.root, view.directory, query, caseSensitive);
-    MutableHashMap.set(candidateCache, key, pending);
+    if (cached !== undefined) return cached;
+    const candidates =
+      started === undefined
+        ? yield* gitGrepFilesEffect({
+            root: view.root,
+            directory: view.directory,
+            query,
+            caseSensitive,
+          })
+        : yield* Fiber.join(started);
+    MutableHashMap.set(candidateCache, key, candidates);
     for (const old of MutableHashMap.keys(candidateCache)) {
       if (MutableHashMap.size(candidateCache) <= candidateCacheSize) break;
       MutableHashMap.remove(candidateCache, old);
     }
-    return pending;
-  };
-
-  /**
-   * A text file split into lines, reusing the last read while size, change time (ns) and inode are
-   * unchanged, so paging through a big file does not re-read and re-hash it on every page.
-   */
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const readLines = Effect.fn("FileTools.readLines")(function* (absolute: string, path: string) {
-    const stats = yield* Effect.tryPromise(() => lstat(absolute, { bigint: true }));
-    const stamp = `${stats.size}:${stats.ctimeNs}:${stats.mtimeNs}:${stats.ino}`;
-    const cached = Option.getOrUndefined(MutableHashMap.get(readCache, absolute));
-    if (cached?.stamp === stamp) return cached;
-    const file = yield* readTextFileEffect({ absolute: absolute, path: path });
-    const entry: CachedRead = { stamp, sha256: file.sha256, lines: splitLines(file.text) };
-    MutableHashMap.remove(readCache, absolute);
-    MutableHashMap.set(readCache, absolute, entry);
-    for (const old of MutableHashMap.keys(readCache)) {
-      if (MutableHashMap.size(readCache) <= readCacheSize) break;
-      MutableHashMap.remove(readCache, old);
-    }
-    return entry;
+    return candidates;
   });
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -199,32 +176,35 @@ const make = Effect.gen(function* () {
         description:
           "List files in the project, recursively, honouring .gitignore in Git projects. Page with snapshot + nextOffset; a snapshot is a fixed view taken on the first page.",
         inputSchema: toToolSchema(listFilesInput),
-      }).server(({ directory, glob, snapshot, offset }) =>
+      }).server(({ directory, glob, snapshot, offset }, context) =>
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        guarded(directory ?? ".", () =>
-          Effect.gen(function* () {
-            const view = !isTruthy(snapshot)
-              ? yield* snapshotFor(root, directory, glob)
-              : snapshots.get(snapshot, root);
-            if (!isTruthy(view))
-              return yield* new Cause.UnknownError(
-                new Error("snapshot_expired: start again without snapshot and offset."),
-              );
-            const start = Math.max(0, offset ?? 0);
-            const paths = view.paths.slice(start, start + listPageSize);
-            const next = start + paths.length;
-            return {
-              snapshot: view.id,
-              directory: view.directory,
-              glob: view.glob ?? null,
-              source: view.source,
-              total: view.paths.length,
-              excludedCredentialFiles: view.excluded,
-              truncated: view.truncated,
-              paths,
-              nextOffset: next < view.paths.length ? next : null,
-            };
-          }),
+        guarded(
+          directory ?? ".",
+          () =>
+            Effect.gen(function* () {
+              const view = !isTruthy(snapshot)
+                ? yield* snapshotFor(root, directory, glob)
+                : snapshots.get(snapshot, root);
+              if (!isTruthy(view))
+                return yield* new Cause.UnknownError(
+                  new Error("snapshot_expired: start again without snapshot and offset."),
+                );
+              const start = Math.max(0, offset ?? 0);
+              const paths = view.paths.slice(start, start + listPageSize);
+              const next = start + paths.length;
+              return {
+                snapshot: view.id,
+                directory: view.directory,
+                glob: view.glob ?? null,
+                source: view.source,
+                total: view.paths.length,
+                excludedCredentialFiles: view.excluded,
+                truncated: view.truncated,
+                paths,
+                nextOffset: next < view.paths.length ? next : null,
+              };
+            }),
+          context?.abortSignal,
         ),
       );
 
@@ -233,86 +213,99 @@ const make = Effect.gen(function* () {
         description:
           "Find literal text across project files and return matching lines with line numbers. Narrow with directory and glob. Page with nextCursor; skipped files are listed, so an empty result only covers the files actually searched.",
         inputSchema: toToolSchema(searchFilesInput),
-      }).server(({ query, directory, glob, caseSensitive = true, cursor }) =>
+      }).server(({ query, directory, glob, caseSensitive = true, cursor }, context) =>
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        guarded(directory ?? ".", () =>
-          Effect.gen(function* () {
-            const position = isTruthy(cursor) ? decodeSearchCursor(cursor) : undefined;
-            if (
-              isTruthy(cursor) &&
-              (position?.query !== query || position.caseSensitive !== caseSensitive)
-            )
-              return yield* new Cause.UnknownError(
-                new Error(
-                  "invalid_cursor: pass the same query and caseSensitive as the first page.",
-                ),
-              );
-            // On the first page, ask Git for candidate files while the listing is being taken.
-            const started =
-              position !== undefined
-                ? undefined
-                : gitGrepFiles(
-                    root,
-                    (yield* Effect.fromResult(
-                      resolveProjectPath(root, directory ?? ".", "directory"),
-                    )).relative,
-                    query,
-                    caseSensitive,
-                  );
-            const view =
-              position !== undefined
-                ? snapshots.get(position.snapshot, root)
-                : yield* snapshotFor(root, directory, glob);
-            if (!isTruthy(view))
-              return yield* new Cause.UnknownError(
-                new Error("snapshot_expired: start the search again without cursor."),
-              );
+        guarded(
+          directory ?? ".",
+          () =>
+            Effect.gen(function* () {
+              const position = isTruthy(cursor) ? decodeSearchCursor(cursor) : undefined;
+              if (
+                isTruthy(cursor) &&
+                (position?.query !== query || position.caseSensitive !== caseSensitive)
+              )
+                return yield* new Cause.UnknownError(
+                  new Error(
+                    "invalid_cursor: pass the same query and caseSensitive as the first page.",
+                  ),
+                );
+              // On the first page, ask Git for candidate files while the listing is being taken.
+              const started =
+                position !== undefined
+                  ? undefined
+                  : yield* Effect.forkChild(
+                      gitGrepFilesEffect({
+                        root,
+                        directory: (yield* Effect.fromResult(
+                          resolveProjectPath(root, directory ?? ".", "directory"),
+                        )).relative,
+                        query,
+                        caseSensitive,
+                      }),
+                    );
+              const view =
+                position !== undefined
+                  ? snapshots.get(position.snapshot, root)
+                  : yield* snapshotFor(root, directory, glob);
+              if (!isTruthy(view))
+                return yield* new Cause.UnknownError(
+                  new Error("snapshot_expired: start the search again without cursor."),
+                );
 
-            // Each directory is checked once per page (no links, still inside the project); the file
-            // itself is checked on the opened handle, so thousands of files do not mean thousands of
-            // synchronous path walks.
-            const directories = MutableHashMap.empty<
-              string,
-              Result.Result<unknown, PathRejected>
-            >();
-            const candidates = yield* Effect.tryPromise(() =>
-              candidatesFor(view, query, caseSensitive, started),
-            );
-            const page = yield* searchTextFilesEffect({
-              paths: view.paths,
-              readBytes: Effect.fnUntraced(function* (path: string) {
-                const directory = posix.dirname(path);
-                let checked = Option.getOrUndefined(MutableHashMap.get(directories, directory));
-                if (!isTruthy(checked)) {
-                  checked = resolveProjectPath(root, directory, "directory");
-                  MutableHashMap.set(directories, directory, checked);
-                }
-                yield* Result.match(checked, {
-                  onSuccess: Effect.succeed,
-                  onFailure: (rejection) =>
-                    Effect.fail(new PathRejected({ path, reason: rejection.reason })),
-                });
-                return (yield* readFileBytesEffect({
-                  absolute: join(root, path),
-                  path,
-                  checkLeaf: true,
-                })).bytes;
-              }),
-              query,
-              caseSensitive,
-              start: position ?? { file: 0, line: 0 },
-              candidates,
-            });
-            return {
-              filesInView: view.paths.length,
-              matches: page.matches,
-              skipped: page.skipped,
-              nextCursor: isTruthy(page.next)
-                ? encodeSearchCursor({ snapshot: view.id, query, caseSensitive, ...page.next })
-                : null,
-              complete: page.next === null && page.skipped.length === 0,
-            };
-          }),
+              // Each directory is checked once per page (no links, still inside the project); the file
+              // itself is checked on the opened handle, so thousands of files do not mean thousands of
+              // synchronous path walks.
+              const directories = MutableHashMap.empty<
+                string,
+                Result.Result<unknown, PathRejected>
+              >();
+              const candidates = yield* candidatesFor(view, query, caseSensitive, started);
+              const page = yield* searchTextFilesEffect({
+                paths: view.paths,
+                readBytes: Effect.fnUntraced(function* (path: string) {
+                  const directory = posix.dirname(path);
+                  let checked = Option.getOrUndefined(MutableHashMap.get(directories, directory));
+                  if (!isTruthy(checked)) {
+                    checked = resolveProjectPath(root, directory, "directory");
+                    MutableHashMap.set(directories, directory, checked);
+                  }
+                  yield* Result.match(checked, {
+                    onSuccess: Effect.succeed,
+                    onFailure: (rejection) =>
+                      Effect.fail(new PathRejected({ path, reason: rejection.reason })),
+                  });
+                  return (yield* readFileBytesEffect({
+                    absolute: join(root, path),
+                    path,
+                    checkLeaf: true,
+                  })).bytes;
+                }),
+                readPage: Effect.fnUntraced(function* (path: string, startLine: number) {
+                  const resolved = yield* Effect.fromResult(resolveProjectPath(root, path, "file"));
+                  return yield* readPage({
+                    absolute: resolved.absolute,
+                    path,
+                    startLine,
+                    maxLines: 2000,
+                    checkLeaf: true,
+                  });
+                }),
+                query,
+                caseSensitive,
+                start: position ?? { file: 0, line: 0 },
+                candidates,
+              });
+              return {
+                filesInView: view.paths.length,
+                matches: page.matches,
+                skipped: page.skipped,
+                nextCursor: isTruthy(page.next)
+                  ? encodeSearchCursor({ snapshot: view.id, query, caseSensitive, ...page.next })
+                  : null,
+                complete: page.next === null && page.skipped.length === 0,
+              };
+            }),
+          context?.abortSignal,
         ),
       );
 
@@ -321,15 +314,26 @@ const make = Effect.gen(function* () {
         description:
           "Read a project text file by line range. Returns the exact content (line endings kept) and the file's sha256, which write_file, edit_file and delete_file use to avoid overwriting newer changes.",
         inputSchema: toToolSchema(readFileInput),
-      }).server(({ path, startLine, maxLines }) =>
+      }).server(({ path, startLine, maxLines }, context) =>
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        guarded(path, () =>
-          Effect.gen(function* () {
-            const resolved = yield* Effect.fromResult(resolveProjectPath(root, path, "file"));
-            const file = yield* readLines(resolved.absolute, path);
-            const lines = Math.min(Math.max(1, maxLines ?? 400), 2000);
-            return { path, sha256: file.sha256, ...linePageOf(file.lines, startLine ?? 1, lines) };
-          }),
+        guarded(
+          path,
+          () =>
+            Effect.gen(function* () {
+              const resolved = yield* Effect.fromResult(resolveProjectPath(root, path, "file"));
+              const lines = Math.min(Math.max(1, maxLines ?? 400), 2000);
+              return {
+                path,
+                ...(yield* readPage({
+                  absolute: resolved.absolute,
+                  path,
+                  startLine: startLine ?? 1,
+                  maxLines: lines,
+                  checkLeaf: true,
+                })),
+              };
+            }),
+          context?.abortSignal,
         ),
       );
 

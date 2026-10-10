@@ -4,7 +4,7 @@ import { isTruthy } from "../truthy.ts";
 import { execFile } from "node:child_process";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { dirname } from "node:path";
-import { Effect, HashSet, Schema } from "effect";
+import { Deferred, Effect, HashSet, Schema } from "effect";
 import { findExecutable, helperEnvironment } from "../runtime/host.ts";
 
 /** Git runs with its own folder and the system folders on its search path, and nothing else. */
@@ -62,6 +62,7 @@ export const gitGrepFilesEffect = (options: {
       directory,
     ];
     return Effect.callback<HashSet.HashSet<string> | null>((resume) => {
+      const closed = Deferred.makeUnsafe<void>();
       const child = execFile(
         git,
         args,
@@ -77,8 +78,10 @@ export const gitGrepFilesEffect = (options: {
           else resume(Effect.succeed(noFileMatched(error) ? HashSet.empty<string>() : null));
         },
       );
-      return Effect.sync(() => {
+      child.once("close", () => Deferred.doneUnsafe(closed, Effect.void));
+      return Effect.gen(function* () {
         child.kill();
+        yield* Deferred.await(closed);
       });
     });
   });

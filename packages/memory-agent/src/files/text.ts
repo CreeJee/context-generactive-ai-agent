@@ -7,7 +7,7 @@ import { constants } from "node:fs";
 import { mkdir, open, rename, rm } from "node:fs/promises";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { basename, dirname, join } from "node:path";
-import { Effect, Option, Schema } from "effect";
+import { Effect, MutableHashMap, Option, Schema } from "effect";
 import { PathRejected } from "./paths.ts";
 
 /** Largest text file the file tools read, search or rewrite. */
@@ -110,9 +110,21 @@ export const readFileBytesEffect = Effect.fn("readFileBytes")(function* (options
         return yield* new PathRejected({ path, reason: "hard_link" });
       if (stats.size > maxTextBytes)
         return yield* TextFileRejected.make({ path, reason: { _tag: "too_large" } });
-      const bytes = yield* io(path, "read", (signal) => handle.readFile({ signal }));
-      if (bytes.length > maxTextBytes)
-        return yield* TextFileRejected.make({ path, reason: { _tag: "too_large" } });
+      const chunks: Buffer[] = [];
+      let size = 0;
+      while (true) {
+        const buffer = Buffer.alloc(Math.min(64 * 1024, maxTextBytes + 1 - size));
+        const read = yield* Effect.uninterruptible(
+          io(path, "read", () => handle.read(buffer, 0, buffer.length, size)),
+        );
+        if (read.bytesRead === 0) break;
+        size += read.bytesRead;
+        if (size > maxTextBytes)
+          return yield* TextFileRejected.make({ path, reason: { _tag: "too_large" } });
+        chunks.push(buffer.subarray(0, read.bytesRead));
+        yield* Effect.yieldNow;
+      }
+      const bytes = Buffer.concat(chunks, size);
       return { bytes, mode: stats.mode & 0o7777 };
     }),
     (handle) => io(path, "close", () => handle.close()),
@@ -363,3 +375,119 @@ function linePageOfBody(lines: readonly string[], startLine: number, maxLines: n
     lineTruncated: false,
   };
 }
+
+interface LineIndex {
+  readonly stamp: string;
+  readonly sha256: string;
+  readonly offsets: Uint32Array;
+  readonly size: number;
+}
+
+/** Only offsets and a digest survive a call; handles and decoded text belong to that call's Scope. */
+export const createTextPageReader = () => {
+  const cache = MutableHashMap.empty<string, LineIndex>();
+  return Effect.fn("readTextPage")(function* (options: {
+    readonly absolute: string;
+    readonly path: string;
+    readonly startLine: number;
+    readonly maxLines: number;
+    readonly checkLeaf?: boolean;
+  }) {
+    const { absolute, path, startLine, maxLines, checkLeaf = false } = options;
+    return yield* Effect.acquireUseRelease(
+      io(path, "open", () => open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW)),
+      Effect.fnUntraced(function* (handle) {
+        const stats = yield* io(path, "stat", () => handle.stat({ bigint: true }));
+        if (!stats.isFile()) return yield* new PathRejected({ path, reason: "not_file" });
+        if (checkLeaf && stats.nlink !== 1n)
+          return yield* new PathRejected({ path, reason: "hard_link" });
+        if (stats.size > BigInt(maxTextBytes))
+          return yield* TextFileRejected.make({ path, reason: { _tag: "too_large" } });
+        const stampOf = (stat: typeof stats) =>
+          `${stat.dev}:${stat.ino}:${stat.size}:${stat.ctimeNs}:${stat.mtimeNs}`;
+        const stamp = stampOf(stats);
+        let index = Option.getOrUndefined(MutableHashMap.get(cache, absolute));
+        if (index?.stamp !== stamp) {
+          const size = Number(stats.size);
+          const offsets: number[] = size === 0 ? [] : [0];
+          const hash = createHash("sha256");
+          const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+          const buffer = Buffer.alloc(64 * 1024);
+          let position = 0;
+          while (position < size) {
+            // Positional reads cannot be aborted by Node: await each native read before Scope closes.
+            const read = yield* Effect.uninterruptible(
+              io(path, "read", () =>
+                handle.read(buffer, 0, Math.min(buffer.length, size - position), position),
+              ),
+            );
+            if (read.bytesRead === 0)
+              return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
+            const bytes = buffer.subarray(0, read.bytesRead);
+            if (bytes.includes(0))
+              return yield* TextFileRejected.make({ path, reason: { _tag: "binary" } });
+            yield* Effect.try({
+              try: () => utf8.decode(bytes, { stream: true }),
+              catch: () => TextFileRejected.make({ path, reason: { _tag: "invalid_utf8" } }),
+            });
+            hash.update(bytes);
+            for (let i = 0; i < bytes.length; i++)
+              if (bytes[i] === 10 && position + i + 1 < size) offsets.push(position + i + 1);
+            position += read.bytesRead;
+            yield* Effect.yieldNow;
+          }
+          yield* Effect.try({
+            try: () => utf8.decode(),
+            catch: () => TextFileRejected.make({ path, reason: { _tag: "invalid_utf8" } }),
+          });
+          index = { stamp, size, offsets: Uint32Array.from(offsets), sha256: hash.digest("hex") };
+        }
+        const totalLines = index.offsets.length;
+        const first = Math.max(1, Math.min(startLine, totalLines + 1));
+        const begin = index.offsets[first - 1] ?? index.size;
+        const end = index.offsets[Math.min(first - 1 + maxLines, totalLines)] ?? index.size;
+        // Enough bytes for the UTF-16 page budget, plus an incomplete UTF-8 boundary.
+        const buffer = Buffer.alloc(Math.min(end - begin, readPageCharacters * 4 + 4));
+        let consumed = 0;
+        while (consumed < buffer.length) {
+          const read = yield* Effect.uninterruptible(
+            io(path, "read", () =>
+              handle.read(buffer, consumed, buffer.length - consumed, begin + consumed),
+            ),
+          );
+          if (read.bytesRead === 0)
+            return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
+          consumed += read.bytesRead;
+        }
+        const text = yield* Effect.try({
+          try: () =>
+            new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer, {
+              stream: begin + buffer.length < end,
+            }),
+          catch: () => TextFileRejected.make({ path, reason: { _tag: "invalid_utf8" } }),
+        });
+        const latest = yield* io(path, "stat", () => handle.stat({ bigint: true }));
+        if (stampOf(latest) !== stamp)
+          return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
+        MutableHashMap.remove(cache, absolute);
+        MutableHashMap.set(cache, absolute, index);
+        for (const old of MutableHashMap.keys(cache)) {
+          if (MutableHashMap.size(cache) <= 8) break;
+          MutableHashMap.remove(cache, old);
+        }
+        const page = linePage(text, 1, maxLines);
+        const endLine = first + page.endLine - 1;
+        return {
+          sha256: index.sha256,
+          content: page.content,
+          startLine: first,
+          endLine,
+          totalLines,
+          nextStartLine: endLine < totalLines ? endLine + 1 : null,
+          lineTruncated: page.lineTruncated,
+        };
+      }),
+      (handle) => io(path, "close", () => handle.close()),
+    );
+  });
+};
