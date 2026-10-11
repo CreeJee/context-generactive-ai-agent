@@ -123,3 +123,16 @@ const makeTestEnv = Effect.fnUntraced(function* (overrides: TestEnvOptions) {
  */
 export const testAgent = (options?: TestEnvOptions) =>
   layer(TestEnv.layer(options), { excludeTestServices: true });
+
+/**
+ * A new session in the test project. Tests that share one agent each take their own session, so
+ * workflow, queue and run state never leak between them; it is read through `use`, so it also
+ * works after `reopen`.
+ */
+export const freshSession = Effect.gen(function* () {
+  const env = yield* TestEnv;
+  const session = yield* env.use(
+    Effect.flatMap(Sessions, (sessions) => sessions.create(env.project.id)),
+  );
+  return session.id;
+});

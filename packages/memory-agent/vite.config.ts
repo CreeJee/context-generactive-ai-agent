@@ -3,6 +3,12 @@ import { defineConfig } from "vite-plus";
 export default defineConfig({
   test: {
     clearMocks: true,
+    // unit: one module's logic beside its source, without a running agent.
+    // feature: slices under tests/ that prepare a real agent (TestEnv) or other real resources.
+    projects: [
+      { extends: true, test: { name: "unit", include: ["src/**/*.test.ts"] } },
+      { extends: true, test: { name: "feature", include: ["tests/**/*.test.ts"] } },
+    ],
   },
   pack: {
     deps: {
@@ -32,6 +38,14 @@ export default defineConfig({
       },
       test: {
         command: "vp test --maxWorkers=4",
+        dependsOn: [{ task: "build", from: "dependencies" }],
+      },
+      "test:unit": {
+        command: "vp test --project unit",
+        dependsOn: [{ task: "build", from: "dependencies" }],
+      },
+      "test:feature": {
+        command: "vp test --project feature --maxWorkers=4",
         dependsOn: [{ task: "build", from: "dependencies" }],
       },
       // Never cached: Vite Task does not see the files TypeScript 7's native tsc reads, so a cached

@@ -5,16 +5,9 @@ import { PermissionClassifier } from "../../src/permissions/classifier.ts";
 import { PermissionGate, type GateBinding } from "../../src/permissions/gate.ts";
 import { PermissionReviews } from "../../src/permissions/reviews.ts";
 import { sdkPromise } from "../../src/runtime/sdk-promise.ts";
-import { Sessions } from "../../src/sessions/sessions.ts";
 import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
 import { permissionReviewInterrupt } from "../../src/tools/definitions.ts";
-import { TestEnv, testAgent } from "../support/test-env.ts";
-
-/** A fresh session in the shared agent, so review records never leak between tests. */
-const freshSession = Effect.gen(function* () {
-  const { project } = yield* TestEnv;
-  return (yield* (yield* Sessions).create(project.id)).id;
-});
+import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
 
 /** Who decides a gated call: the classifier in `auto` mode, the user in `ask` mode. */
 const binding = Effect.fnUntraced(function* (

@@ -1523,5 +1523,5 @@
 - 테스트는 목적에 따라 나눈다. 외부 자원 없이 한 모듈의 로직을 검증하는 unit 테스트는 `src/**`의 모듈 옆에 두고, 실제 에이전트 준비가 필요한 테스트는 `tests/<기능>/` 기능 슬라이스에 모은다. 실제 프로세스·OS 자원을 다루는 테스트는 별도 슬라이스로 분리한다.
 - 기능 슬라이스는 `tests/support/test-env.ts`의 `TestEnv` Layer를 쓴다. 임시 저장소, 프로젝트, 세션을 가진 실제 에이전트를 Layer로 제공하고 에이전트 서비스를 테스트에서 직접 `yield*`한다. 재시작은 `TestEnv.reopen`이 이전 에이전트의 Scope를 닫은 뒤 같은 저장소로 다시 열고, 그 뒤의 서비스는 `TestEnv.use`로 얻는다.
 - 슬라이스는 `testAgent()` 블록마다 에이전트 하나를 공유하고, 각 테스트는 새 세션으로 상태를 격리한다. 데이터베이스 전체에 영향을 주는 테스트(트리거 추가 등)는 자기 블록을 따로 둔다. 저장 시각과 lease를 검증하므로 블록은 실제 Clock을 쓴다.
-- 테스트 안에서 `Effect.provide(layer)`, `Layer.build`, `ManagedRuntime`, `Effect.runPromise`로 런타임을 직접 다루지 않는다. 다른 Layer 구성이 필요하면 `@effect/vitest`의 `layer(...)` 블록을 진입점으로 둔다. 이전 Promise 기반 `testRuntime()`은 모든 슬라이스가 옮겨진 뒤 제거한다.
+- 테스트 안에서 `Effect.provide(layer)`, `Layer.build`, `ManagedRuntime`, `Effect.runPromise`로 런타임을 직접 다루지 않는다. 다른 Layer 구성이 필요하면 `@effect/vitest`의 `layer(...)` 블록을 진입점으로 둔다. 이전 Promise 기반 `testRuntime()`은 모든 사용처를 옮긴 뒤 제거했다(2026-10-12).
 - 버그 수정마다 회귀 테스트 파일을 새로 만들지 않는다. 해당 기능 슬라이스에 계약 단위로 추가하고, 같은 계약을 중복 검증하거나 타입으로 이미 보장되는 테스트는 합치거나 지운다.

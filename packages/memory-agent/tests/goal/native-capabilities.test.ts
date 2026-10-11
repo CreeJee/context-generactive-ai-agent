@@ -17,13 +17,12 @@ import { PermissionReviews } from "../../src/permissions/reviews.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { ProviderRegistry } from "../../src/providers/registry.ts";
 import { nativeStream } from "../../src/runtime/native-stream.ts";
-import { Sessions } from "../../src/sessions/sessions.ts";
 import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
 import { permissionReviewInterrupt } from "../../src/tools/definitions.ts";
 import { MemoryTools } from "../../src/tools/memory.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { selectTestModel } from "../support/provider.ts";
-import { TestEnv, testAgent } from "../support/test-env.ts";
+import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
 
 const goal = {
   statement: "native capabilities",
@@ -40,11 +39,6 @@ const sdkCall = <A>(call: () => A | PromiseLike<A>) =>
     try: () => Promise.resolve(call()),
     catch: (cause) => new Cause.UnknownError(cause),
   });
-
-const freshSession = Effect.gen(function* () {
-  const { project } = yield* TestEnv;
-  return (yield* (yield* Sessions).create(project.id)).id;
-});
 
 type GoalImplementation = ReturnType<ReturnType<typeof createGoalNativeImplementations>["forGoal"]>;
 

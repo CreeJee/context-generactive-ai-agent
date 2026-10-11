@@ -5,12 +5,7 @@ import { Nodes } from "../../src/memory/nodes.ts";
 import { PermissionReviews } from "../../src/permissions/reviews.ts";
 import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
-import {
-  chatClient,
-  scopedCallId,
-  sdk,
-  sessionScopedResponder,
-} from "../permission/chat-client.ts";
+import { chatClient, scopedCallId, sdk, sessionScopedResponder } from "../support/chat-client.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { waitUntil } from "../support/wait-until.ts";

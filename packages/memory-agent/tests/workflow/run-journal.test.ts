@@ -2,11 +2,10 @@ import { DateTime, Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { makeSqliteOwnerRpcLedger } from "../../src/agent/owner-rpc-ledger.ts";
 import { Database } from "../../src/db/database.ts";
-import { Sessions } from "../../src/sessions/sessions.ts";
 import { type Admission, workflowRunBindings } from "../../src/workflow/run-bindings.ts";
 import { workflowRunEvents } from "../../src/workflow/run-events.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
-import { TestEnv, testAgent } from "../support/test-env.ts";
+import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
 
 const goal = {
   statement: "Preserve an active Goal",
@@ -17,12 +16,6 @@ const goal = {
   openQuestions: [],
   status: "active" as const,
 };
-
-/** Each test gets its own session in the shared agent; run IDs are global, so they carry it. */
-const freshSession = Effect.gen(function* () {
-  const { project } = yield* TestEnv;
-  return (yield* (yield* Sessions).create(project.id)).id;
-});
 
 /** A fresh session with an active Goal. */
 const withGoal = Effect.fnUntraced(function* (outcomes = goal.outcomes) {

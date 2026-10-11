@@ -3,9 +3,9 @@ import { Cause, Effect } from "effect";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { approvalToolDefinitions, permissionReviewInterrupt } from "../../src/tools/definitions.ts";
 import type { ScriptedResponder, ScriptedTurn } from "../../src/testing/scripted-adapter.ts";
-import { defaultTestResponder } from "../support/provider.ts";
-import type { AgentServices } from "../support/test-env.ts";
-import { waitUntil } from "../support/wait-until.ts";
+import { defaultTestResponder } from "./provider.ts";
+import type { AgentServices } from "./test-env.ts";
+import { waitUntil } from "./wait-until.ts";
 
 /**
  * Interrupt IDs come from tool-call IDs and are unique across the database, as provider call IDs

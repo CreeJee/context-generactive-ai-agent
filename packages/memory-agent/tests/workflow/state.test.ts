@@ -4,12 +4,11 @@ import { AgentChat } from "../../src/agent/chat.ts";
 import type { SessionRunState } from "../../src/agent/run-state.ts";
 import { Database } from "../../src/db/database.ts";
 import { AppEvents } from "../../src/events/app-events.ts";
-import { Sessions } from "../../src/sessions/sessions.ts";
 import { isTruthy } from "../../src/truthy.ts";
 import { evaluateWorkflowAction, workflowActions } from "../../src/workflow/actions.ts";
 import { WorkflowTools } from "../../src/workflow/tools.ts";
 import { Workflows, type WorkflowState } from "../../src/workflow/workflow.ts";
-import { TestEnv, testAgent } from "../support/test-env.ts";
+import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
 
 const goal = {
   statement: "Ship a durable planning workflow",
@@ -39,12 +38,6 @@ const plan = {
 };
 
 const noProgress = { steps: [], goalEvidence: [], planEvidence: [] };
-
-/** Each test gets its own session in the shared agent, so workflow state never leaks. */
-const freshSession = Effect.gen(function* () {
-  const { project } = yield* TestEnv;
-  return (yield* (yield* Sessions).create(project.id)).id;
-});
 
 /** Goal and ready Plan recorded, with Execute started. */
 const executing = Effect.fnUntraced(function* (sessionId: string) {

@@ -7,7 +7,7 @@ import { Sessions } from "../../src/sessions/sessions.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
-import { chatClient, json, sdk, sessionScopedResponder } from "./chat-client.ts";
+import { chatClient, json, sdk, sessionScopedResponder } from "../support/chat-client.ts";
 
 /** A fresh session in the shared `ask`-mode agent, with the test model selected. */
 const freshSession = Effect.gen(function* () {

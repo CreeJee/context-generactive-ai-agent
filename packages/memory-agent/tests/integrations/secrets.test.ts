@@ -9,7 +9,7 @@ import { Nodes } from "../../src/memory/nodes.ts";
 import { SecretSweep } from "../../src/secrets/sweep.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { selectTestModel } from "../support/provider.ts";
-import { TestEnv, testAgent } from "../support/test-env.ts";
+import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
 
 const stringifyJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const parseJson = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
@@ -25,12 +25,6 @@ const decodeRefs = Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ ref: 
 const value = Effect.fnUntraced(function* (sql: string, ...values: Array<string | number>) {
   const { sqlite } = yield* Database;
   return (yield* decodeValue(sqlite.prepare(sql).get(...values))).value;
-});
-
-/** Each test gets its own session in the shared agent. */
-const freshSession = Effect.gen(function* () {
-  const { project } = yield* TestEnv;
-  return (yield* (yield* Sessions).create(project.id)).id;
 });
 
 /** Post one user message to AgentChat and read the run's whole event stream. */

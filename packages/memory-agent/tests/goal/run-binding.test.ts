@@ -6,12 +6,11 @@ import * as workerPreflight from "../../src/agent/full-loop-preflight.ts";
 import { ChatState } from "../../src/chat-state/chat-state.ts";
 import { Database } from "../../src/db/database.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
-import { Sessions } from "../../src/sessions/sessions.ts";
 import { workflowRunBindings } from "../../src/workflow/run-bindings.ts";
 import { workflowRunEvents } from "../../src/workflow/run-events.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { selectTestModel, turnGate } from "../support/provider.ts";
-import { TestEnv, testAgent } from "../support/test-env.ts";
+import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
 
 const goal = {
   statement: "Run safely in worker",
@@ -28,11 +27,6 @@ const sdkCall = <A>(call: () => PromiseLike<A>) =>
     try: () => Promise.resolve(call()),
     catch: (cause) => new Cause.UnknownError(cause),
   });
-
-const freshSession = Effect.gen(function* () {
-  const { project } = yield* TestEnv;
-  return (yield* (yield* Sessions).create(project.id)).id;
-});
 
 /** A fresh session with an active Goal and the test model selected. Run IDs carry the session. */
 const withGoal = Effect.gen(function* () {

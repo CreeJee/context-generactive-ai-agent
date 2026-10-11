@@ -9,7 +9,7 @@ import { ApprovedTools } from "../../src/tools/approved.ts";
 import { permissionReviewInterrupt } from "../../src/tools/definitions.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
-import { chatClient, scopedCallId, sessionScopedResponder } from "./chat-client.ts";
+import { chatClient, scopedCallId, sessionScopedResponder } from "../support/chat-client.ts";
 
 /** A fresh session in a project set to `auto`, with the test model selected. */
 const autoSession = Effect.gen(function* () {

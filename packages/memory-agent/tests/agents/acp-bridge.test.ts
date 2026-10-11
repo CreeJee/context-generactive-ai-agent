@@ -5,7 +5,7 @@ import { expect } from "vite-plus/test";
 import { createAppApi } from "../../src/acp/app-api.ts";
 import { startAcpAgent } from "../../src/acp/agent-bridge.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
-import { sessionScopedResponder } from "../permission/chat-client.ts";
+import { sessionScopedResponder } from "../support/chat-client.ts";
 import { selectTestModel, turnGate } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 import { appFetch } from "./app-fetch.ts";
