@@ -1,0 +1,589 @@
+import { layer } from "@effect/vitest";
+import { Cause, Effect, Layer, Schema } from "effect";
+import { expect } from "vite-plus/test";
+import { Database } from "../../src/db/database.ts";
+import { Sessions } from "../../src/sessions/sessions.ts";
+import { isTruthy } from "../../src/truthy.ts";
+import { workflowRunBindings } from "../../src/workflow/run-bindings.ts";
+import { WorkflowTools } from "../../src/workflow/tools.ts";
+import { Workflows, type WorkflowState } from "../../src/workflow/workflow.ts";
+import { TestEnv, testAgent } from "../support/test-env.ts";
+
+const goal = {
+  statement: "first",
+  outcomes: ["first success"],
+  constraints: [],
+  nonGoals: [],
+  assumptions: [],
+  openQuestions: [],
+  status: "active" as const,
+};
+
+const plan = {
+  summary: "method",
+  steps: [],
+  risks: [],
+  openQuestions: [],
+  status: "ready" as const,
+};
+
+const transition = (previousGoalInstanceId: string | null) => ({
+  action: "new_independent_goal" as const,
+  previousGoalInstanceId,
+  reason: "explicit independent task",
+  goal: { ...goal, statement: "second", outcomes: ["different success"] },
+});
+
+const closingProgress = {
+  goalStatus: "completed" as const,
+  goalEvidence: ["old proof"],
+  planEvidence: [],
+  steps: [],
+  verification: { status: "passed" as const, summary: "old success", evidence: ["old proof"] },
+  detail: "verified first",
+};
+
+/** Rows a session owns; run-keyed tables are reached through the session's run bindings. */
+const sessionRows = {
+  revisions: "SELECT * FROM workflow_state_revisions WHERE session_id = ? ORDER BY id",
+  bindings: "SELECT * FROM workflow_run_bindings WHERE session_id = ? ORDER BY rowid",
+  events: `SELECT * FROM workflow_run_events WHERE run_id IN
+    (SELECT run_id FROM workflow_run_bindings WHERE session_id = ?) ORDER BY cursor`,
+  dispatches: `SELECT * FROM workflow_worker_dispatches WHERE run_id IN
+    (SELECT run_id FROM workflow_run_bindings WHERE session_id = ?) ORDER BY rowid`,
+  receipts: `SELECT * FROM owner_rpc_operations WHERE run_id IN
+    (SELECT run_id FROM workflow_run_bindings WHERE session_id = ?) ORDER BY rowid`,
+  goalInstances: "SELECT * FROM workflow_goal_instances WHERE session_id = ? ORDER BY rowid",
+  requests: "SELECT * FROM workflow_new_goal_requests WHERE session_id = ? ORDER BY rowid",
+} as const;
+
+const rows = (db: Database["Service"], table: keyof typeof sessionRows, session: string) =>
+  db.sqlite.prepare(sessionRows[table]).all(session);
+
+/** Everything a new Goal must leave as it was: earlier revisions and every bound run's record. */
+const history = ["revisions", "bindings", "events", "dispatches", "receipts"] as const;
+const snapshot = (db: Database["Service"], session: string) =>
+  history.map((table) => rows(db, table, session));
+const expectHistoryKept = (
+  db: Database["Service"],
+  session: string,
+  before: ReturnType<typeof snapshot>,
+) =>
+  history.forEach((table, index) => {
+    const actual = rows(db, table, session);
+    // A new Goal appends revisions; the ones before it stay untouched.
+    expect(table === "revisions" ? actual.slice(0, before[index]?.length) : actual).toEqual(
+      before[index],
+    );
+  });
+
+const identity = (db: Database["Service"], session: string) =>
+  Schema.decodeUnknownEffect(Schema.Struct({ goal_instance_id: Schema.String }))(
+    db.sqlite
+      .prepare("SELECT goal_instance_id FROM workflow_goal_identities WHERE session_id = ?")
+      .get(session),
+  ).pipe(Effect.map((row) => row.goal_instance_id));
+
+const latestRevision = (db: Database["Service"], session: string) =>
+  Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.Finite }))(
+    db.sqlite
+      .prepare("SELECT max(id) AS id FROM workflow_state_revisions WHERE session_id = ?")
+      .get(session),
+  ).pipe(Effect.map((row) => row.id));
+
+const bindRun = Effect.fnUntraced(function* (
+  db: Database["Service"],
+  session: string,
+  runId: string,
+) {
+  expect(
+    workflowRunBindings(db).bind(session, runId, yield* latestRevision(db, session)).status,
+  ).toBe("bound");
+});
+
+const startRun = (db: Database["Service"], session: string, runId: string, status: string) =>
+  db.sqlite
+    .prepare("INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES (?, ?, ?, 1)")
+    .run(runId, session, status);
+
+const setRun = (db: Database["Service"], runId: string, status: string) =>
+  db.sqlite.prepare("UPDATE chat_runs SET status = ? WHERE run_id = ?").run(status, runId);
+
+/**
+ * A fresh session in Goal with a ready Plan, whose completed run is bound to the first Goal and
+ * left its journal, worker dispatch and owner receipt. Run IDs are global, so they carry the
+ * session.
+ */
+const withHistory = Effect.fnUntraced(function* () {
+  const { project } = yield* TestEnv;
+  const db = yield* Database;
+  const workflows = yield* Workflows;
+  const session = (yield* (yield* Sessions).create(project.id)).id;
+  yield* workflows.setPhase(session, "goal");
+  yield* workflows.updateGoal(session, goal);
+  yield* workflows.updatePlan(session, plan);
+  const historical = `${session}:historical`;
+  yield* bindRun(db, session, historical);
+  startRun(db, session, historical, "completed");
+  db.sqlite
+    .prepare(
+      `INSERT INTO workflow_run_events (run_id, event_key, kind, payload_json, created_at)
+        VALUES (?, 'done', 'run_completed', '{"bytes":"old\\r\\n"}', 'old')`,
+    )
+    .run(historical);
+  db.sqlite
+    .prepare("INSERT INTO workflow_worker_dispatches VALUES (?, 'old-generation', 'old')")
+    .run(historical);
+  db.sqlite
+    .prepare(
+      `INSERT INTO owner_rpc_operations VALUES (?, 'key', 1, 'fingerprint', 1, '{"status":"old"}', 'succeeded')`,
+    )
+    .run(historical);
+  return { db, workflows, session, historical, old: yield* identity(db, session) };
+});
+
+/** `withHistory`, plus the bound run that asks for the new Goal and is still running. */
+const withInvokingRun = Effect.fnUntraced(function* () {
+  const f = yield* withHistory();
+  const invoking = `${f.session}:invoking`;
+  yield* bindRun(f.db, f.session, invoking);
+  startRun(f.db, f.session, invoking, "running");
+  const request = (runId = invoking) =>
+    f.workflows.requestNewGoal(f.session, runId, transition(f.old));
+  const settle = () => f.workflows.settleNewGoalRequest(f.session, invoking);
+  return { ...f, invoking, request, settle };
+});
+
+type Admission =
+  | { readonly type: "applied" }
+  | { readonly type: "refused"; readonly reason: string };
+
+const applied: Admission = { type: "applied" };
+const refused = (reason: string): Admission => ({ type: "refused", reason });
+
+/** Goal phase, the earlier run completed with a settled receipt, and the current Goal named. */
+const admissible = {
+  phase: "goal",
+  closed: false,
+  historicalRun: "completed",
+  ownerEffect: "succeeded",
+  previous: "current",
+} as const;
+
+const transitionCases: ReadonlyArray<{
+  readonly name: string;
+  readonly phase: WorkflowState["phase"];
+  /** Verify passed before the transition; a `completed` phase also finishes the run. */
+  readonly closed: boolean;
+  readonly historicalRun: "completed" | "running" | "failed" | "missing";
+  readonly ownerEffect: "succeeded" | "pending" | "uncertain";
+  readonly previous: "current" | "stale" | "none";
+  readonly admission: Admission;
+}> = [
+  { ...admissible, name: "goal with an existing Goal", admission: applied },
+  { ...admissible, name: "plan with an existing Goal", phase: "plan", admission: applied },
+  { ...admissible, name: "closed verify", phase: "verify", closed: true, admission: applied },
+  {
+    ...admissible,
+    name: "completed workflow",
+    phase: "completed",
+    closed: true,
+    admission: applied,
+  },
+  {
+    ...admissible,
+    name: "unclosed verify",
+    phase: "verify",
+    admission: refused("phase_not_authorized"),
+  },
+  { ...admissible, name: "execute", phase: "execute", admission: refused("phase_not_authorized") },
+  { ...admissible, name: "chat", phase: "chat", admission: refused("phase_not_authorized") },
+  ...(["running", "failed", "missing"] as const).map((historicalRun) => ({
+    ...admissible,
+    name: `${historicalRun} bound worker execution`,
+    historicalRun,
+    admission: refused("run_outcome_uncertain"),
+  })),
+  {
+    ...admissible,
+    name: "closed verify while its run is still active",
+    phase: "verify",
+    closed: true,
+    historicalRun: "running",
+    admission: refused("run_outcome_uncertain"),
+  },
+  ...(["pending", "uncertain"] as const).map((ownerEffect) => ({
+    ...admissible,
+    name: `completed run with ${ownerEffect} owner effect`,
+    ownerEffect,
+    admission: refused("owner_effect_uncertain"),
+  })),
+  ...(["stale", "none"] as const).map((previous) => ({
+    ...admissible,
+    name: `${previous} previous Goal ID`,
+    previous,
+    admission: refused("workflow_changed"),
+  })),
+];
+
+const goalTool = Effect.fnUntraced(function* (session: string) {
+  const tool = (yield* WorkflowTools)
+    .forSession(session, "goal")
+    .find((t) => t.name === "start_new_goal");
+  if (!isTruthy(tool?.execute)) throw new Error("owner action missing");
+  const execute = tool.execute;
+  return (input: Parameters<typeof execute>[0]) =>
+    Effect.tryPromise({
+      try: () => Promise.resolve(execute(input)),
+      catch: (cause) => new Cause.UnknownError(cause),
+    });
+});
+
+testAgent()("explicit new Goal transition", (it) => {
+  it.effect.each(transitionCases)("startNewGoal from $name", (c) =>
+    Effect.gen(function* () {
+      const { db, workflows, session, historical, old } = yield* withHistory();
+      if (c.closed) {
+        yield* workflows.setPhase(session, "verify");
+        yield* workflows.updateProgress(session, closingProgress);
+        if (c.phase === "completed") yield* workflows.finishRun(session, "verify");
+      } else if (c.phase !== "goal") yield* workflows.setPhase(session, c.phase);
+      expect((yield* workflows.get(session)).phase).toBe(c.phase);
+      switch (c.historicalRun) {
+        case "completed":
+          break;
+        case "running":
+        case "failed":
+          setRun(db, historical, c.historicalRun);
+          break;
+        case "missing":
+          db.sqlite.prepare("DELETE FROM chat_runs WHERE run_id = ?").run(historical);
+          break;
+      }
+      db.sqlite
+        .prepare("UPDATE owner_rpc_operations SET status = ? WHERE run_id = ?")
+        .run(c.ownerEffect, historical);
+      const previous = (() => {
+        switch (c.previous) {
+          case "current":
+            return old;
+          case "stale":
+            return "stale";
+          case "none":
+            return null;
+        }
+      })();
+      const before = rows(db, "revisions", session);
+      switch (c.admission.type) {
+        case "applied":
+          expect(yield* workflows.startNewGoal(session, transition(previous))).toMatchObject({
+            goal: { version: 1 },
+            plan: null,
+          });
+          expect(yield* identity(db, session)).not.toBe(old);
+          break;
+        case "refused":
+          expect(
+            yield* Effect.flip(workflows.startNewGoal(session, transition(previous))),
+          ).toMatchObject({ reason: c.admission.reason });
+          expect(yield* identity(db, session)).toBe(old);
+          expect(rows(db, "revisions", session)).toEqual(before);
+          break;
+      }
+    }),
+  );
+
+  it.effect("owner tool is exposed at potential source phases and checks latest state", () =>
+    Effect.gen(function* () {
+      const { workflows, session, old } = yield* withHistory();
+      const tools = yield* WorkflowTools;
+      const exposed = (phase: WorkflowState["phase"]) =>
+        tools.forSession(session, phase).some((tool) => tool.name === "start_new_goal");
+      for (const phase of ["chat", "execute"] as const) expect(exposed(phase)).toBe(false);
+      for (const phase of ["goal", "plan", "verify", "completed"] as const)
+        expect(exposed(phase)).toBe(true);
+      const execute = yield* goalTool(session);
+      yield* workflows.setPhase(session, "execute");
+      expect(yield* execute(transition(old))).toMatchObject({
+        error: "new_goal_transition_refused",
+        reason: "phase_not_authorized",
+      });
+      yield* workflows.setPhase(session, "plan");
+      expect(yield* execute(transition(old))).toMatchObject({ goal: { version: 1 }, plan: null });
+    }),
+  );
+
+  it.effect("legacy historical Goal and revisions remain unbound after explicit new Goal", () =>
+    Effect.gen(function* () {
+      const { project } = yield* TestEnv;
+      const db = yield* Database;
+      const workflows = yield* Workflows;
+      const session = (yield* (yield* Sessions).create(project.id)).id;
+      yield* workflows.setPhase(session, "goal");
+      // Represent a real legacy artifact directly, without assigning any historical ID.
+      db.sqlite.prepare("UPDATE session_workflows SET state_json = ? WHERE session_id = ?").run(
+        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+          phase: "goal",
+          goal: {
+            ...goal,
+            version: 4,
+            evidence: ["legacy"],
+            verification: {
+              status: "passed",
+              summary: "old",
+              evidence: ["legacy"],
+              recoveryPhase: null,
+              updatedAt: null,
+            },
+            updatedAt: "old",
+          },
+          plan: null,
+          ledger: [],
+        }),
+        session,
+      );
+      const before = rows(db, "revisions", session);
+      expect(yield* workflows.startNewGoal(session, transition(null))).toMatchObject({
+        goal: { version: 1, evidence: [] },
+      });
+      expect(rows(db, "revisions", session).slice(0, before.length)).toEqual(before);
+      expect(rows(db, "goalInstances", session)).toHaveLength(1);
+    }),
+  );
+});
+
+testAgent()("deferred new Goal request", (it) => {
+  it.effect.each(["failed", "aborted", "missing", "interrupted"] as const)(
+    "%s invoking run never applies accepted new Goal",
+    (status) =>
+      Effect.gen(function* () {
+        const f = yield* withInvokingRun();
+        expect(yield* f.request()).toMatchObject({ status: "accepted" });
+        const before = rows(f.db, "revisions", f.session);
+        switch (status) {
+          case "missing":
+            f.db.sqlite.prepare("DELETE FROM chat_runs WHERE run_id = ?").run(f.invoking);
+            break;
+          case "failed":
+          case "aborted":
+          case "interrupted":
+            setRun(f.db, f.invoking, status);
+            break;
+        }
+        const result = yield* f.settle();
+        expect(result).toEqual(
+          status === "interrupted"
+            ? { status: "accepted" }
+            : { status: "rejected", reason: "run_outcome_uncertain" },
+        );
+        expect(yield* f.settle()).toEqual(result);
+        expect(yield* identity(f.db, f.session)).toBe(f.old);
+        expect(rows(f.db, "revisions", f.session)).toEqual(before);
+      }),
+  );
+
+  it.effect("stale ID, competing request and active foreign run cannot be admitted", () =>
+    Effect.gen(function* () {
+      const f = yield* withInvokingRun();
+      const before = rows(f.db, "revisions", f.session);
+      for (const stale of ["stale", null])
+        expect(
+          yield* Effect.flip(
+            f.workflows.requestNewGoal(f.session, f.invoking, {
+              ...transition(f.old),
+              previousGoalInstanceId: stale,
+            }),
+          ),
+        ).toMatchObject({ reason: "workflow_changed" });
+      expect(rows(f.db, "requests", f.session)).toEqual([]);
+      const other = `${f.session}:other`;
+      startRun(f.db, f.session, other, "running");
+      expect(yield* Effect.flip(f.request())).toMatchObject({ reason: "run_outcome_uncertain" });
+      setRun(f.db, other, "completed");
+      expect(yield* f.request()).toMatchObject({ status: "accepted" });
+      expect(yield* Effect.flip(f.request(other))).toMatchObject({
+        reason: "run_outcome_uncertain",
+      });
+      const competing = `${f.session}:competing`;
+      startRun(f.db, f.session, competing, "running");
+      expect(yield* Effect.flip(f.request(competing))).toMatchObject({
+        reason: "transition_pending",
+      });
+      expect(
+        yield* Effect.flip(f.workflows.startNewGoal(f.session, transition(f.old))),
+      ).toMatchObject({ reason: "transition_pending" });
+      expect(rows(f.db, "requests", f.session)).toHaveLength(1);
+      expect(yield* identity(f.db, f.session)).toBe(f.old);
+      expect(rows(f.db, "revisions", f.session)).toEqual(before);
+    }),
+  );
+
+  it.effect.each(["pending", "uncertain"] as const)(
+    "%s owner effect blocks settlement without altering old history",
+    (ownerStatus) =>
+      Effect.gen(function* () {
+        const f = yield* withInvokingRun();
+        yield* f.request();
+        f.db.sqlite
+          .prepare("UPDATE owner_rpc_operations SET status = ? WHERE run_id = ?")
+          .run(ownerStatus, f.historical);
+        setRun(f.db, f.invoking, "completed");
+        const before = rows(f.db, "revisions", f.session);
+        expect(yield* f.settle()).toEqual({ status: "rejected", reason: "owner_effect_uncertain" });
+        expect(yield* identity(f.db, f.session)).toBe(f.old);
+        expect(rows(f.db, "revisions", f.session)).toEqual(before);
+      }),
+  );
+});
+
+// Reopening replaces the agent, so these tests read every service through `env.use`.
+testAgent()("new Goal transition across reopening", (it) => {
+  it.effect(
+    "explicit new identity preserves prior revisions, bindings, receipts and evidence through reopen",
+    () =>
+      Effect.gen(function* () {
+        const env = yield* TestEnv;
+        const { db, workflows, session, old } = yield* env.use(withHistory());
+        yield* workflows.updateProgress(session, closingProgress);
+        yield* workflows.setPhase(session, "verify");
+        const before = snapshot(db, session);
+        const next = yield* workflows.startNewGoal(session, transition(old));
+        const newId = yield* identity(db, session);
+        expect(newId).not.toBe(old);
+        expect(next).toMatchObject({
+          phase: "goal",
+          plan: null,
+          goal: { version: 1, evidence: [], verification: { status: "not_run", evidence: [] } },
+        });
+        expectHistoryKept(db, session, before);
+        expect(rows(db, "goalInstances", session)).toHaveLength(2);
+        yield* workflows.updatePlan(session, plan);
+        expect(yield* identity(db, session)).toBe(newId);
+        expect((yield* workflows.get(session)).goal?.version).toBe(1);
+        yield* workflows.updateGoal(session, { ...goal, outcomes: ["revised second purpose"] });
+        expect(yield* identity(db, session)).toBe(newId);
+        expect((yield* workflows.get(session)).goal?.version).toBe(2);
+        yield* env.reopen;
+        const reopened = yield* env.use(Database);
+        expect(yield* identity(reopened, session)).toBe(newId);
+        expect(
+          reopened.sqlite
+            .prepare("SELECT goal_instance_id FROM workflow_run_bindings WHERE run_id = ?")
+            .get(`${session}:historical`),
+        ).toEqual({ goal_instance_id: old });
+        const revisionsOf = (goalInstanceId: string) =>
+          reopened.sqlite
+            .prepare("SELECT id FROM workflow_state_revisions WHERE goal_instance_id = ?")
+            .all(goalInstanceId);
+        // The first revision, recorded before any Goal existed, belongs to neither identity.
+        expect(revisionsOf(old)).toHaveLength(before[0]!.length - 1);
+        expect(revisionsOf(newId)).toHaveLength(3);
+        expect(reopened.sqlite.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      }),
+  );
+
+  it.effect(
+    "accepted request leaves identity, state, revision and history untouched until completed settlement; applies once",
+    () =>
+      Effect.gen(function* () {
+        const env = yield* TestEnv;
+        const f = yield* env.use(withInvokingRun());
+        const before = snapshot(f.db, f.session);
+        const state = yield* f.workflows.get(f.session);
+        expect(yield* f.request()).toEqual({ status: "accepted", runId: f.invoking });
+        expect(yield* f.request()).toEqual({ status: "accepted", runId: f.invoking });
+        expect(yield* f.settle()).toEqual({ status: "accepted" });
+        expect(yield* identity(f.db, f.session)).toBe(f.old);
+        expect(yield* f.workflows.get(f.session)).toEqual(state);
+        const source = yield* latestRevision(f.db, f.session);
+        expect(rows(f.db, "revisions", f.session)).toEqual(before[0]);
+        expect(rows(f.db, "requests", f.session)).toMatchObject([
+          { status: "accepted", source_revision_id: source },
+        ]);
+        setRun(f.db, f.invoking, "completed");
+        const applied = yield* f.settle();
+        expect(applied).toMatchObject({ status: "applied" });
+        const newId = yield* identity(f.db, f.session);
+        expect(newId).not.toBe(f.old);
+        expect(applied).toMatchObject({ goalInstanceId: newId });
+        expect(yield* f.settle()).toEqual(applied);
+        expect(rows(f.db, "goalInstances", f.session)).toHaveLength(2);
+        expectHistoryKept(f.db, f.session, before);
+        expect(yield* f.workflows.get(f.session)).toMatchObject({
+          phase: "goal",
+          goal: { statement: "second", version: 1 },
+          plan: null,
+        });
+        yield* env.reopen;
+        const db = yield* env.use(Database);
+        const workflows = yield* env.use(Workflows);
+        expect(yield* workflows.settleNewGoalRequest(f.session, f.invoking)).toEqual(applied);
+        expect(yield* identity(db, f.session)).toBe(newId);
+        expect(db.sqlite.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      }),
+  );
+
+  it.effect("revision race rejects accepted request; persisted rejection survives reopen", () =>
+    Effect.gen(function* () {
+      const env = yield* TestEnv;
+      const f = yield* env.use(withInvokingRun());
+      yield* f.request();
+      yield* f.workflows.updatePlan(f.session, { ...plan, summary: "concurrent revision" });
+      const before = rows(f.db, "revisions", f.session);
+      setRun(f.db, f.invoking, "completed");
+      expect(yield* f.settle()).toEqual({ status: "rejected", reason: "workflow_changed" });
+      expect(yield* identity(f.db, f.session)).toBe(f.old);
+      expect(rows(f.db, "revisions", f.session)).toEqual(before);
+      yield* env.reopen;
+      const workflows = yield* env.use(Workflows);
+      expect(yield* workflows.settleNewGoalRequest(f.session, f.invoking)).toEqual({
+        status: "rejected",
+        reason: "workflow_changed",
+      });
+    }),
+  );
+
+  it.effect(
+    "restart recovers an unfinished run without silently applying its accepted intent",
+    () =>
+      Effect.gen(function* () {
+        const env = yield* TestEnv;
+        const f = yield* env.use(withInvokingRun());
+        yield* f.request();
+        const before = rows(f.db, "revisions", f.session);
+        yield* env.reopen;
+        const db = yield* env.use(Database);
+        const workflows = yield* env.use(Workflows);
+        // Startup resolves orphaned running chat runs; it cannot infer a successful outcome.
+        expect(
+          db.sqlite.prepare("SELECT status FROM chat_runs WHERE run_id = ?").get(f.invoking),
+        ).not.toEqual({ status: "completed" });
+        const result = yield* workflows.settleNewGoalRequest(f.session, f.invoking);
+        expect(result).toMatchObject({ status: "rejected", reason: "run_outcome_uncertain" });
+        expect(yield* workflows.settleNewGoalRequest(f.session, f.invoking)).toEqual(result);
+        expect(yield* identity(db, f.session)).toBe(f.old);
+        expect(rows(db, "goalInstances", f.session)).toHaveLength(1);
+        expect(rows(db, "revisions", f.session)).toEqual(before);
+      }),
+  );
+});
+
+// Compatible code rollback only disables the new action, retaining the pointer and history.
+layer(
+  Workflows.layerWithOptions({ allowNewGoal: false }).pipe(Layer.provideMerge(TestEnv.layer())),
+  { excludeTestServices: true },
+)("new Goal transition disabled by rollback", (it) => {
+  it.effect("refuses the action and keeps the current identity and history", () =>
+    Effect.gen(function* () {
+      const { db, workflows, session, old } = yield* withHistory();
+      const before = snapshot(db, session);
+      expect(yield* Effect.flip(workflows.startNewGoal(session, transition(old)))).toMatchObject({
+        reason: "disabled",
+      });
+      expect(yield* identity(db, session)).toBe(old);
+      expect(rows(db, "goalInstances", session)).toHaveLength(1);
+      expectHistoryKept(db, session, before);
+      expect(rows(db, "revisions", session)).toEqual(before[0]);
+    }),
+  );
+});
