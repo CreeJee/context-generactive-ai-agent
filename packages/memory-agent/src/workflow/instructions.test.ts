@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vite-plus/test";
-import { workflowActions } from "../src/workflow/actions.ts";
-import { builtInWorkflowRules } from "../src/workflow/rules.ts";
-import { workflowInstructions } from "../src/workflow/tools.ts";
-import type { WorkflowPhase, WorkflowState } from "../src/workflow/workflow.ts";
+import { workflowActions } from "./actions.ts";
+import { builtInWorkflowRules } from "./rules.ts";
+import { workflowInstructions } from "./tools.ts";
+import type { WorkflowPhase, WorkflowState } from "./workflow.ts";
 
 const state = (phase: WorkflowPhase): WorkflowState => ({
   phase,

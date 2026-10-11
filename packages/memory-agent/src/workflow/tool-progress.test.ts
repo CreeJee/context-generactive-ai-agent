@@ -1,5 +1,5 @@
 import { expect, test } from "vite-plus/test";
-import { toolProgressFingerprint as fingerprint } from "../src/workflow/tool-progress.ts";
+import { toolProgressFingerprint as fingerprint } from "./tool-progress.ts";
 
 test("successful modifications count but no-op writes and edits do not", () => {
   expect(

@@ -1,15 +1,15 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { Effect, FileSystem, Layer, Path } from "effect";
-import { it } from "@effect/vitest";
+import { layer } from "@effect/vitest";
 import { describe, expect, test } from "vite-plus/test";
-import type { Project } from "../src/projects/projects.ts";
-import type { Skill } from "../src/skills/skills.ts";
+import type { Project } from "../projects/projects.ts";
+import type { Skill } from "../skills/skills.ts";
 import {
   projectWorkflowRules,
   projectWorkflowRulesPath,
   skillWorkflowRules,
   structuredWorkflowRules,
-} from "../src/workflow/sources.ts";
+} from "./sources.ts";
 
 const project = Effect.fnUntraced(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -42,14 +42,11 @@ const ruleFile = (instruction: string) =>
     ],
   });
 
-const withFileSystem = Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
-  const services = yield* Layer.build(Layer.merge(NodeFileSystem.layer, NodePath.layer));
-  return yield* Effect.provideContext(program, services);
-}, Effect.scoped);
+const fileSystem = Layer.merge(NodeFileSystem.layer, NodePath.layer);
 
 describe("workflow rule sources", () => {
-  it.live("loads explicit project rules with a content-addressed source", () =>
-    withFileSystem(
+  layer(fileSystem, { excludeTestServices: true })("project rule files", (it) => {
+    it.effect("loads explicit project rules with a content-addressed source", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
@@ -68,11 +65,9 @@ describe("workflow rule sources", () => {
         const second = yield* projectWorkflowRules(current);
         expect(second.rules[0]?.source).not.toEqual(first.rules[0]?.source);
       }),
-    ),
-  );
+    );
 
-  it.live("rejects malformed project rule resources without inferring prose", () =>
-    withFileSystem(
+    it.effect("rejects malformed project rule resources without inferring prose", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
@@ -87,8 +82,8 @@ describe("workflow rule sources", () => {
           problems: [{ problem: "invalid" }],
         });
       }),
-    ),
-  );
+    );
+  });
 
   test("decodes the same resource format from an MCP source without elevating trust", () => {
     const loaded = structuredWorkflowRules(ruleFile("Review the remote compatibility matrix"), {
