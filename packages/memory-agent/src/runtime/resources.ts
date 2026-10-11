@@ -1,7 +1,10 @@
-import { createRequire, findPackageJSON } from "node:module";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
+import * as NodePath from "@effect/platform-node/NodePath";
+import { Config, ConfigProvider, Effect, ManagedRuntime, Path, Option, Schema } from "effect";
+import { workerData } from "node:worker_threads";
+
+const pathRuntime = ManagedRuntime.make(NodePath.layer);
+const path = pathRuntime.runSync(Path.Path);
 
 /**
  * Packages this app loads from disk at run time rather than bundling: native addons (vector index,
@@ -19,8 +22,35 @@ interface RuntimePackages {
  * The runtime folder the executable unpacked into the storage root, or null when running from a
  * checkout. The executable sets it before the agent starts.
  */
-// Native host/SDK configuration boundary reads or forwards the host environment.
-export const runtimeRoot = () => process.env.CONTEXT_AGENT_RUNTIME ?? null;
+const WorkerRuntime = Schema.Struct({
+  contextAgentRuntime: Schema.Struct({ root: Schema.NullOr(Schema.String) }),
+});
+const inheritedRuntime = Schema.decodeUnknownOption(WorkerRuntime)(workerData);
+let configuredRuntime: { readonly root: string | null } | undefined =
+  Option.getOrUndefined(inheritedRuntime)?.contextAgentRuntime;
+
+/** Explicit host bootstrap; worker copies receive the same value through workerData. */
+export function configureRuntimeRoot(root: string | null): void {
+  configuredRuntime = { root };
+}
+
+export const runtimeRoot = () =>
+  configuredRuntime !== undefined
+    ? configuredRuntime.root
+    : Effect.runSync(
+        Config.String("CONTEXT_AGENT_RUNTIME").pipe(
+          Config.withDefault(null),
+          Effect.provideService(
+            ConfigProvider.ConfigProvider,
+            ConfigProvider.fromEnv({ preserveEmptyStrings: true }),
+          ),
+        ),
+      );
+
+/** Preserve worker setup and inherited SDK environment without mutating process.env. */
+export function runtimeWorkerOptions<A extends object>(setup: A) {
+  return { workerData: { ...setup, contextAgentRuntime: { root: runtimeRoot() } } };
+}
 
 /**
  * `require` rooted where runtime packages live: the unpacked runtime folder, or this package in a
@@ -29,7 +59,7 @@ export const runtimeRoot = () => process.env.CONTEXT_AGENT_RUNTIME ?? null;
  */
 export function runtimeRequire() {
   const root = runtimeRoot();
-  if (root !== null) return createRequire(join(root, "package.json"));
+  if (root !== null) return createRequire(path.join(root, "package.json"));
   return createRequire(createRequire(import.meta.url).resolve("memory-agent/package.json"));
 }
 
@@ -51,18 +81,20 @@ export type RuntimeWorker =
   | "embed-worker"
   | "import-worker"
   | "redact-worker"
-  | "full-loop-worker";
+  | "native-search-worker";
 
 /** File-backed SDK metadata, resolved with ESM conditions without importing owner code. */
-export function runtimeGoalSdkMetadata(name: "@tanstack/ai" | "effect" = "@tanstack/ai"): string {
+export function runtimeArtifact(name: "artifact-manifest.json" | "native.mjs") {
   const root = runtimeRoot();
-  const anchor =
-    root === null
-      ? createRequire(import.meta.url).resolve("memory-agent/package.json")
-      : join(root, "package.json");
-  const metadata = findPackageJSON(name, pathToFileURL(anchor));
-  if (metadata === undefined) throw new Error("Unavailable Goal SDK package metadata");
-  return metadata;
+  return root === null
+    ? path.join(
+        createRequire(import.meta.url).resolve("memory-agent/package.json"),
+        "..",
+        "dist",
+        "runtime",
+        name,
+      )
+    : path.join(root, name);
 }
 
 /**
@@ -75,9 +107,8 @@ export function runtimeWorker(name: RuntimeWorker) {
   const root = runtimeRoot();
   return root === null
     ? runtimeRequire().resolve(`memory-agent/${name}`)
-    : join(
+    : path.join(
         root,
-        name === "full-loop-worker" ? "agent" : "",
-        `${name}.${name === "import-worker" || name === "redact-worker" ? "mjs" : "ts"}`,
+        `${name}.${name === "kiwi-worker" || name === "embed-worker" ? "ts" : "mjs"}`,
       );
 }

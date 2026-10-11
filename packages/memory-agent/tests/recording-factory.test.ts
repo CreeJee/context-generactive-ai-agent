@@ -1,3 +1,4 @@
+import { Cause } from "effect";
 import { it } from "@effect/vitest";
 import { chat, toolDefinition } from "@tanstack/ai";
 import { Effect, Schema, Stream } from "effect";
@@ -13,7 +14,7 @@ import { testRuntime } from "./support/runtime.ts";
 const secret = `${"gh"}p_${"Z9y8X7w6V5u4T3s2R1q0P9o8N7m6L5k4J3i2"}`;
 
 const drain = (stream: AsyncIterable<unknown>) =>
-  Stream.runDrain(Stream.fromAsyncIterable(stream, (cause) => cause));
+  Stream.runDrain(Stream.fromAsyncIterable(stream, (cause) => new Cause.UnknownError(cause)));
 
 it.live(
   "native recording factories isolate reused call IDs and defer user binding on central services",

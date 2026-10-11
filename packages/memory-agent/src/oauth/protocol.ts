@@ -1,6 +1,5 @@
-import { Function as EffectFunction } from "effect";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { createHash, randomBytes } from "node:crypto";
+import { Effect, Function as EffectFunction } from "effect";
+import { oauthProtocolCrypto } from "./node-runtime.ts";
 import { optionalProperty } from "../optional-property.ts";
 import { Data, Option, Schema } from "effect";
 import { JsonValue } from "../json.ts";
@@ -112,14 +111,17 @@ export interface Pkce {
 const base64Url = (value: Uint8Array) => Buffer.from(value).toString("base64url");
 
 export function createPkce(): Pkce {
-  const verifier = base64Url(randomBytes(48));
+  const verifier = base64Url(Effect.runSync(oauthProtocolCrypto.randomBytes(48)));
   return {
     verifier,
-    challenge: createHash("sha256").update(verifier, "ascii").digest("base64url"),
+    challenge: base64Url(
+      Effect.runSync(oauthProtocolCrypto.digest("SHA-256", new TextEncoder().encode(verifier))),
+    ),
   };
 }
 
-export const createOAuthState = () => base64Url(randomBytes(32));
+export const createOAuthState = () =>
+  base64Url(Effect.runSync(oauthProtocolCrypto.randomBytes(32)));
 
 export const ToolArguments = Schema.Record(Schema.String, JsonValue);
 export type ToolArguments = typeof ToolArguments.Type;

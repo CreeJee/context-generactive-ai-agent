@@ -10,7 +10,7 @@ export function accountLoginManager(
 ): ReturnType<typeof createOAuthAccountLoginManager> {
   let manager = managers.get(sqlite);
   if (!isTruthy(manager)) {
-    manager = createOAuthAccountLoginManager(sqlite);
+    manager = createOAuthAccountLoginManager({ sqlite: sqlite });
     managers.set(sqlite, manager);
   }
   return manager;

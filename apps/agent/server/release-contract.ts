@@ -1,6 +1,7 @@
 import { Result, Function as EffectFunction } from "effect";
+import { Base64 } from "effect/encoding";
 import { isTruthy } from "../app/truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// Effect Crypto and NodeCrypto provide digests/randomness, not Ed25519 sign/verify with PEM keys.
 import { sign, verify } from "node:crypto";
 import { Predicate, Schema } from "effect";
 
@@ -89,7 +90,8 @@ export const decodeManifestSignature = EffectFunction.flow(
   Result.getOrThrow,
 );
 
-const unsigned = (manifest: ReleaseManifest) => Buffer.from(canonicalJson(manifest), "utf8");
+const encoder = new TextEncoder();
+const unsigned = (manifest: ReleaseManifest) => encoder.encode(canonicalJson(manifest));
 
 export const signReleaseManifest: {
   (
@@ -102,7 +104,7 @@ function signReleaseManifestBody(
   keyId: string,
   privateKey: string,
 ): ManifestSignature {
-  return { keyId, signature: sign(null, unsigned(manifest), privateKey).toString("base64") };
+  return { keyId, signature: Base64.encode(sign(null, unsigned(manifest), privateKey)) };
 }
 
 export const verifyManifestSignature: {
@@ -118,6 +120,7 @@ function verifyManifestSignatureBody(
 ) {
   const publicKey = trustedKeys[signature.keyId];
   if (!isTruthy(publicKey)) throw new Error(`untrusted release key: ${signature.keyId}`);
+  // Preserve Node's accepted unpadded/base64url/whitespace input; Base64.decode is stricter.
   const bytes = Buffer.from(signature.signature, "base64");
   if (!verify(null, unsigned(manifest), publicKey, bytes))
     throw new Error("release manifest signature is invalid");

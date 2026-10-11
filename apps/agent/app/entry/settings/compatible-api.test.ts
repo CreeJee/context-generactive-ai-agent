@@ -17,14 +17,14 @@ const { action, loader } = makeCompatibleHandlers({
 
 beforeEach(() => {
   let saved: Settings = {};
-  testApi = makeOpenAICompatibleSettings(
-    {
+  testApi = makeOpenAICompatibleSettings({
+    config: {
       read: Effect.sync(() => saved),
       update: (patch) => Effect.sync(() => (saved = { ...saved, ...patch })),
     },
-    { get: () => Promise.resolve(null), set: () => Promise.resolve() },
-    () => Promise.resolve(new Response("private upstream diagnostic", { status: 503 })),
-  );
+    keys: { get: () => Promise.resolve(null), set: () => Promise.resolve() },
+    fetcher: () => Promise.resolve(new Response("private upstream diagnostic", { status: 503 })),
+  });
 });
 
 const call = <A>(execute: () => Promise<A>) =>
@@ -51,8 +51,8 @@ it.effect("rejects cross-site and invalid JSON without invoking provider or leak
 );
 it.effect("returns a safe partial-save response without credential or provider details", () =>
   Effect.gen(function* () {
-    testApi = makeOpenAICompatibleSettings(
-      {
+    testApi = makeOpenAICompatibleSettings({
+      config: {
         read: Effect.succeed({}),
         update: () =>
           Effect.fail(
@@ -63,8 +63,8 @@ it.effect("returns a safe partial-save response without credential or provider d
             }),
           ),
       },
-      { get: () => Promise.resolve(null), set: () => Promise.resolve() },
-    );
+      keys: { get: () => Promise.resolve(null), set: () => Promise.resolve() },
+    });
     const response = yield* Effect.flatMap(
       Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
         action: "update",

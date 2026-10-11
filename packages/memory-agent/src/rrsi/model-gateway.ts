@@ -170,20 +170,24 @@ function subscriptionGatewayBody(
           if (selection.provider === "openai-compatible")
             return yield* new Cause.UnknownError(new Error("invalid_subscription_provider"));
           const raw = yield* subscriptionEffect(
-            subscriptionRequest(selection.provider, selection, {
-              systemPrompts: request.messages
-                .filter((message) => message.role === "system")
-                .map((message) => message.content),
-              messages: request.messages.flatMap<ModelMessage>((message) => {
-                switch (message.role) {
-                  case "system":
-                    return [];
-                  case "user":
-                    return [{ role: "user" as const, content: message.content }];
-                  case "assistant":
-                    return [{ role: "assistant" as const, content: message.content }];
-                }
-              }),
+            subscriptionRequest({
+              provider: selection.provider,
+              selection: selection,
+              options: {
+                systemPrompts: request.messages
+                  .filter((message) => message.role === "system")
+                  .map((message) => message.content),
+                messages: request.messages.flatMap<ModelMessage>((message) => {
+                  switch (message.role) {
+                    case "system":
+                      return [];
+                    case "user":
+                      return [{ role: "user" as const, content: message.content }];
+                    case "assistant":
+                      return [{ role: "assistant" as const, content: message.content }];
+                  }
+                }),
+              },
             }),
             signal,
           );

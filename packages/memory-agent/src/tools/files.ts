@@ -1,8 +1,8 @@
 import { Cause } from "effect";
 import { HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { join, posix } from "node:path";
+import { path as platformPath, posix } from "../runtime/synchronous-path.ts";
+const { join } = platformPath;
 import { toolDefinition } from "@tanstack/ai";
 import { MutableHashMap, Option, Context, Effect, Fiber, Result, Layer, Schema } from "effect";
 import { gitGrepFilesEffect } from "../files/git-grep.ts";

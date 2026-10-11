@@ -4,13 +4,11 @@ import { assertFailure } from "@effect/vitest/utils";
 import { TestClock } from "effect/testing";
 import { Result, Function as EffectFunction } from "effect";
 // Native SDK fetch, keyring and AsyncGenerator adapters remain explicit Promise boundaries.
-import { isTruthy } from "../src/truthy.ts";
-import { createServer } from "node:http";
+import { testHttpServer, HttpServerRequest, HttpServerResponse } from "./support/http.ts";
 import { DatabaseSync } from "node:sqlite";
 import { chat } from "@tanstack/ai";
 import { reconstructChat, withPersistence } from "@tanstack/ai-persistence";
 import { resolveDebugOption } from "@tanstack/ai/adapter-internals";
-import { once } from "node:events";
 import { Cause, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
 import { GlobalConfig } from "../src/config/global-config.ts";
 import { ActiveProvider } from "../src/providers/active-provider.ts";
@@ -95,8 +93,8 @@ function fixture(fetcher?: typeof fetch, initial: Settings = {}) {
   };
   return {
     config,
-    api: makeOpenAICompatibleSettings(config, keys, fetcher),
-    restore: () => makeOpenAICompatibleSettings(config, keys, fetcher),
+    api: makeOpenAICompatibleSettings({ config: config, keys: keys, fetcher: fetcher }),
+    restore: () => makeOpenAICompatibleSettings({ config: config, keys: keys, fetcher: fetcher }),
     saved: () => saved,
   };
 }
@@ -783,18 +781,18 @@ describe("OpenAI compatible settings", () => {
   effectTest.effect("reports an uncertain keyring write as partial without writing settings", () =>
     Effect.gen(function* () {
       let saved: Settings = {};
-      const api = makeOpenAICompatibleSettings(
-        {
+      const api = makeOpenAICompatibleSettings({
+        config: {
           read: Effect.sync(() => saved),
           update: (patch: Partial<Settings>) => Effect.sync(() => (saved = { ...saved, ...patch })),
         },
-        {
+        keys: {
           get: () => Promise.resolve(null),
           set: nativeWrite(() =>
             Effect.fail(new Cause.UnknownError(new Error("private keyring detail"))),
           ),
         },
-      );
+      });
       const result = yield* Effect.flip(api.update({ ...configuration, apiKey: "secret" }));
       expect(result.operation).toBe("partial");
       expect(
@@ -808,8 +806,8 @@ describe("OpenAI compatible settings", () => {
     () =>
       Effect.gen(function* () {
         let key: string | null = null;
-        const api = makeOpenAICompatibleSettings(
-          {
+        const api = makeOpenAICompatibleSettings({
+          config: {
             read: Effect.succeed({}),
             update: () =>
               Effect.fail(
@@ -820,7 +818,7 @@ describe("OpenAI compatible settings", () => {
                 }),
               ),
           },
-          {
+          keys: {
             get: () => Promise.resolve(key),
             set: nativeWrite((value) =>
               Effect.sync(() => {
@@ -828,7 +826,7 @@ describe("OpenAI compatible settings", () => {
               }),
             ),
           },
-        );
+        });
         const error = yield* Effect.flip(api.update({ ...configuration, apiKey: "secret" }));
         expect(error.operation).toBe("partial");
         expect(key).toContain("secret");
@@ -848,17 +846,17 @@ describe("OpenAI compatible settings", () => {
           const gate = yield* Deferred.make<void>();
           yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
           const seen: Array<{ url: string; authorization: string | null }> = [];
-          const api = makeOpenAICompatibleSettings(
-            {
+          const api = makeOpenAICompatibleSettings({
+            config: {
               read: Effect.sync(() => saved),
               update: (patch: Partial<Settings>) =>
                 Effect.sync(() => (saved = { ...saved, ...patch })),
             },
-            {
+            keys: {
               get: () => Promise.resolve(key),
               set: nativeWrite((value) =>
                 Effect.gen(function* () {
-                  if (isTruthy(value?.includes('"key":"second"'))) {
+                  if (value?.includes('"key":"second"') === true) {
                     yield* Deferred.succeed(writing, undefined);
                     yield* Deferred.await(gate);
                   }
@@ -866,7 +864,7 @@ describe("OpenAI compatible settings", () => {
                 }),
               ),
             },
-            nativeFetch((url, init) =>
+            fetcher: nativeFetch((url, init) =>
               Effect.sync(() => {
                 seen.push({
                   url: url instanceof Request ? url.url : url instanceof URL ? url.href : url,
@@ -875,7 +873,7 @@ describe("OpenAI compatible settings", () => {
                 return Response.json({ choices: [{ message: { content: "OK" } }] });
               }),
             ),
-          );
+          });
           yield* api.update({ ...configuration, apiKey: "first" });
           const pending = yield* Effect.forkChild(
             api.update({
@@ -905,12 +903,12 @@ describe("OpenAI compatible settings", () => {
       let key: string | null = null;
       let rejectWrite = false;
       const headers: Array<string | null> = [];
-      const api = makeOpenAICompatibleSettings(
-        {
+      const api = makeOpenAICompatibleSettings({
+        config: {
           read: Effect.sync(() => saved),
           update: (patch: Partial<Settings>) => Effect.sync(() => (saved = { ...saved, ...patch })),
         },
-        {
+        keys: {
           get: () => Promise.resolve(key),
           set: nativeWrite((value) =>
             Effect.gen(function* () {
@@ -920,13 +918,13 @@ describe("OpenAI compatible settings", () => {
             }),
           ),
         },
-        nativeFetch((_url, init) =>
+        fetcher: nativeFetch((_url, init) =>
           Effect.sync(() => {
             headers.push(new Headers(init?.headers).get("authorization"));
             return Response.json({ choices: [{ message: { content: "OK" } }] });
           }),
         ),
-      );
+      });
       yield* api.update({ ...configuration, apiKey: "first" });
       rejectWrite = true;
       const error = yield* Effect.flip(
@@ -963,13 +961,13 @@ describe("OpenAI compatible settings", () => {
         const writing = yield* Deferred.make<void>();
         const gate = yield* Deferred.make<void>();
         yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
-        const api = makeOpenAICompatibleSettings(
-          {
+        const api = makeOpenAICompatibleSettings({
+          config: {
             read: Effect.sync(() => saved),
             update: (patch: Partial<Settings>) =>
               Effect.sync(() => (saved = { ...saved, ...patch })),
           },
-          {
+          keys: {
             get: () => Promise.resolve(null),
             set: nativeWrite(() =>
               Effect.gen(function* () {
@@ -978,7 +976,7 @@ describe("OpenAI compatible settings", () => {
               }),
             ),
           },
-        );
+        });
         yield* api.update(configuration);
         const changing = yield* Effect.forkChild(
           api.update({
@@ -1006,20 +1004,20 @@ describe("OpenAI compatible settings", () => {
       Effect.gen(function* () {
         const neverRead = yield* Effect.forkChild(Effect.never, { startImmediately: true });
         let saved: Settings = { openaiCompatible: configuration };
-        const api = makeOpenAICompatibleSettings(
-          {
+        const api = makeOpenAICompatibleSettings({
+          config: {
             read: Effect.sync(() => saved),
             update: (patch: Partial<Settings>) =>
               Effect.sync(() => (saved = { ...saved, ...patch })),
           },
-          {
+          keys: {
             get: () => nativeEffect(Fiber.join(neverRead)),
             set: nativeWrite(() => Effect.sync(() => {})),
           },
-          nativeFetch(() =>
+          fetcher: nativeFetch(() =>
             Effect.fail(new Cause.UnknownError(new Error("must not reach network"))),
           ),
-        );
+        });
         const adapter = api.services.runtime.adapter({
           provider: "openai-compatible",
           model: configuration.model,
@@ -1090,13 +1088,13 @@ describe("OpenAI compatible settings", () => {
           let saved: Settings = {};
           let key: string | null = null;
           const observed: Array<{ url: string; authorization: string | null; body: string }> = [];
-          const api = makeOpenAICompatibleSettings(
-            {
+          const api = makeOpenAICompatibleSettings({
+            config: {
               read: Effect.sync(() => saved),
               update: (patch: Partial<Settings>) =>
                 Effect.sync(() => (saved = { ...saved, ...patch })),
             },
-            {
+            keys: {
               get: () => Promise.resolve(key),
               set: nativeWrite((value) =>
                 Effect.sync(() => {
@@ -1104,7 +1102,7 @@ describe("OpenAI compatible settings", () => {
                 }),
               ),
             },
-            nativeFetch((url, init) =>
+            fetcher: nativeFetch((url, init) =>
               Effect.sync(() => {
                 observed.push({
                   url: url instanceof Request ? url.url : url instanceof URL ? url.href : url,
@@ -1120,7 +1118,7 @@ describe("OpenAI compatible settings", () => {
                 );
               }),
             ),
-          );
+          });
           yield* api.update({ ...configuration, apiKey: "first" });
           const adapter = api.services.runtime.adapter({
             provider: "openai-compatible",
@@ -1170,94 +1168,62 @@ describe("OpenAI compatible settings", () => {
             authorization: string | undefined;
             body: typeof ChatRequest.Type;
           }> = [];
-          const server = createServer((request, response) => {
-            void nativeEffect(
-              Effect.gen(function* () {
-                let body = "";
-                yield* Stream.runForEach(
-                  Stream.fromAsyncIterable(request, (cause) => new Cause.UnknownError(cause)),
-                  (chunk) =>
-                    Effect.sync(() => {
-                      body += String(chunk);
-                    }),
-                );
-                requests.push({
-                  path: request.url ?? "",
-                  authorization: request.headers.authorization,
-                  body: EffectFunction.flow(
-                    Schema.decodeResult(Schema.fromJsonString(ChatRequest)),
-                    Result.getOrThrow,
-                  )(body || "{}"),
-                });
-                if (request.url === "/v1/models") {
-                  response.setHeader("Content-Type", "application/json");
-                  response.end(jsonStringify({ data: [{ id: "discovered" }] }));
-                  return;
-                }
-                response.setHeader("Content-Type", "text/event-stream");
-                const toolsEnabled = requests.at(-1)?.body.tools !== undefined;
-                const deltas = toolsEnabled
-                  ? [
-                      {
-                        tool_calls: [
-                          {
-                            index: 0,
-                            id: "call_lookup",
-                            type: "function",
-                            function: { name: "lookup", arguments: "{" },
-                          },
-                        ],
-                      },
-                      { tool_calls: [{ index: 0, function: { arguments: "}" } }] },
-                    ]
-                  : [{ role: "assistant", content: "OK" }];
-                const chunks = [
-                  ...deltas.map((delta) => ({ delta, finish_reason: null })),
-                  {
-                    delta: {},
-                    finish_reason: toolsEnabled ? "tool_calls" : "stop",
-                  },
-                ];
-                response.end(
-                  chunks
-                    .map(
-                      (chunk) =>
-                        `data: ${jsonStringify({
-                          id: "test",
-                          object: "chat.completion.chunk",
-                          created: 1,
-                          model: "manual-model",
-                          choices: [{ index: 0, ...chunk }],
-                        })}\n\n`,
-                    )
-                    .join("") + "data: [DONE]\n\n",
-                );
-              }).pipe(
-                Effect.catchCause(() =>
-                  Effect.sync(() => {
-                    response.writeHead(500).end();
-                  }),
+          const { url } = yield* testHttpServer(
+            Effect.gen(function* () {
+              const request = yield* HttpServerRequest.HttpServerRequest;
+              const body = yield* request.text;
+              requests.push({
+                path: request.url,
+                authorization: request.headers.authorization,
+                body: yield* Schema.decodeEffect(Schema.fromJsonString(ChatRequest))(
+                  body === "" ? "{}" : body,
                 ),
-              ),
-            );
-          });
-          yield* Effect.addFinalizer(() =>
-            server.listening
-              ? Effect.callback<void>((resume) => {
-                  server.closeAllConnections();
-                  server.close(() => resume(Effect.void));
-                })
-              : Effect.void,
+              });
+              if (request.url === "/v1/models")
+                return yield* HttpServerResponse.json({ data: [{ id: "discovered" }] });
+              const toolsEnabled = requests.at(-1)?.body.tools !== undefined;
+              const deltas = toolsEnabled
+                ? [
+                    {
+                      tool_calls: [
+                        {
+                          index: 0,
+                          id: "call_lookup",
+                          type: "function",
+                          function: { name: "lookup", arguments: "{" },
+                        },
+                      ],
+                    },
+                    { tool_calls: [{ index: 0, function: { arguments: "}" } }] },
+                  ]
+                : [{ role: "assistant", content: "OK" }];
+              const chunks = [
+                ...deltas.map((delta) => ({ delta, finish_reason: null })),
+                {
+                  delta: {},
+                  finish_reason: toolsEnabled ? "tool_calls" : "stop",
+                },
+              ];
+              return HttpServerResponse.text(
+                chunks
+                  .map(
+                    (chunk) =>
+                      `data: ${jsonStringify({
+                        id: "test",
+                        object: "chat.completion.chunk",
+                        created: 1,
+                        model: "manual-model",
+                        choices: [{ index: 0, ...chunk }],
+                      })}\n\n`,
+                  )
+                  .join("") + "data: [DONE]\n\n",
+                { contentType: "text/event-stream" },
+              );
+            }),
           );
-          server.listen(0, "127.0.0.1");
-          yield* sdkCall(() => once(server, "listening"));
-          try {
-            const address = EffectFunction.flow(
-              Schema.decodeUnknownResult(Schema.Struct({ port: Schema.Int })),
-              Result.getOrThrow,
-            )(server.address());
+          {
             const f = fixture();
-            const settings = { ...configuration, baseUrl: `http://127.0.0.1:${address.port}/v1` };
+            const settings = { ...configuration, baseUrl: `${url}/v1` };
             yield* f.api.update(settings);
             expect(yield* f.api.listModels).toEqual(["discovered"]);
             const selection = yield* f.api.services.models.select(configuration.model);
@@ -1318,9 +1284,6 @@ describe("OpenAI compatible settings", () => {
             );
             expect(chunks.some((chunk) => chunk.type === "RUN_ERROR")).toBe(true);
             expect(requests.length).toBe(before);
-          } finally {
-            server.close();
-            yield* sdkCall(() => once(server, "close"));
           }
         }),
       ),

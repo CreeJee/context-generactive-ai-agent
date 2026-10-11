@@ -14,20 +14,36 @@ vp install
 개발 서버를 실행합니다:
 
 ```bash
-cd apps/agent
-pnpm dev
+vp run agent#dev
 ```
 
-개발 모드에서는 에이전트 backend(`127.0.0.1:5180`)를 한 번 build한 뒤 HMR 없이 실행하고, UI(`127.0.0.1:5173`)만 React Router HMR로 실행합니다. `/api`는 UI 서버가 backend로 전달합니다.
+개발 모드에서는 에이전트 backend(`127.0.0.1:5180`)를 한 번 build한 뒤 HMR 없이 실행하고, UI(`localhost:5173`)만 React Router HMR로 실행합니다. `/api`는 UI 서버가 backend로 전달합니다.
 
-`pnpm dev`와 `pnpm dev:agent`는 backend 빌드 전에 `turbovec` 네이티브 애드온을 빌드하거나 캐시에서 복원합니다. 첫 빌드에는 Rust의 `cargo`가 PATH에 있어야 하며, Windows에서는 Visual Studio의 C++ 빌드 도구도 필요합니다. 준비물은 [빌드 가이드](../../docs/building.md)를 참고하세요.
+기존 dev 서버가 같은 포트를 쓰고 있으면 포트 충돌을 알리고 종료 코드 1로 종료합니다. 기존 터미널에서 Ctrl+C로 종료한 뒤 다시 실행하거나, 아래 예시처럼 별도 포트와 storage를 지정하세요. `vp run`의 cache hit 안내는 실패 원인이 아니므로 앞선 오류와 종료 코드를 확인하세요.
+
+`vp run agent#dev`와 `vp run agent#dev:agent`는 backend 빌드 전에 `memory-agent`의 native/worker 런타임과 `turbovec` 네이티브 애드온을 빌드하거나 캐시에서 복원합니다. 첫 빌드에는 Rust의 `cargo`가 PATH에 있어야 하며, Windows에서는 Visual Studio의 C++ 빌드 도구도 필요합니다. 준비물은 [빌드 가이드](../../docs/building.md)를 참고하세요.
 
 - UI 코드 변경은 HMR로 바로 반영됩니다.
-- `memory-agent`, API route, OAuth/provider 또는 server 코드가 바뀌면 새 mutation과 OAuth callback을 차단하고 화면 상단에 재시작 안내를 표시합니다. 실행 중 요청을 새 코드로 자동 재전송하지 않습니다. 터미널에서 `pnpm dev`를 다시 시작하세요.
-- 두 터미널로 나누려면 먼저 `pnpm dev:agent`, 이어서 `pnpm dev:web`을 실행합니다.
-- 포트는 `CONTEXT_AGENT_DEV_BACKEND_PORT`와 `CONTEXT_AGENT_DEV_WEB_PORT`, 저장 위치는 `CONTEXT_AGENT_HOME` 환경 변수로 바꿀 수 있습니다.
+- `memory-agent`, API route, OAuth/provider 또는 server 코드가 바뀌면 새 mutation과 OAuth callback을 차단하고 화면 상단에 재시작 안내를 표시합니다. 실행 중 요청을 새 코드로 자동 재전송하지 않습니다. 터미널에서 `vp run agent#dev`를 다시 시작하세요.
+- 두 터미널로 나누려면 먼저 `vp run agent#dev:agent`, 이어서 `vp run agent#dev:web`을 실행합니다.
+- CLI의 `--backend-port`, `--web-port`, `--storage`, `--manifest`로 설정합니다. CLI가 `CONTEXT_AGENT_DEV_BACKEND_PORT`, `CONTEXT_AGENT_DEV_WEB_PORT`, `CONTEXT_AGENT_HOME`, `CONTEXT_AGENT_DEV_MANIFEST` 환경 변수보다 우선합니다. 포트는 1–65535 정수이며 통합 모드에서 서로 달라야 합니다.
+- 기본 연결 manifest는 `build/dev-backend-<backend-port>.json`입니다. 두 터미널은 같은 backend 포트 또는 같은 `--manifest`를 사용해야 합니다. backend의 build ID와 `ready` 상태를 확인한 뒤 UI를 시작합니다.
 - 같은 저장 위치를 사용하는 backend는 하나만 실행됩니다. 종료 시 신규 mutation을 막고 실행 중인 모델 요청과 명령을 정리합니다.
 - ChatGPT 로그인과 모델 호출은 앱의 provider OAuth 연결을 사용합니다.
+
+사용자 기억과 분리한 개발 환경의 예시입니다:
+
+```bash
+vp run agent#dev --backend-port 15180 --web-port 15173 --storage /tmp/context-agent-dev
+# UI: http://localhost:15173/ — API는 127.0.0.1:15180으로 프록시됩니다.
+```
+
+별도 터미널 구성은 다음과 같습니다:
+
+```bash
+vp run agent#dev:agent --backend-port 15180 --storage /tmp/context-agent-dev --manifest /tmp/context-agent-dev.json
+vp run agent#dev:web --web-port 15173 --manifest /tmp/context-agent-dev.json
+```
 
 데이터는 `~/.context-generactive-agent`에 저장됩니다(SQLite, 벡터 인덱스, 임베딩 모델과 Kiwi 모델, 설정, 실행 파일이 푼 `runtime/`).
 

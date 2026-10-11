@@ -1,4 +1,4 @@
-import { Function as EffectFunction } from "effect";
+import { Effect, Fiber, Function as EffectFunction } from "effect";
 import { isTruthy } from "../../truthy.ts";
 import { CheckIcon, CopyIcon, FolderIcon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -106,9 +106,12 @@ function CopyPathButton({ path }: { path: string }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
-    // Native callback heartbeat/debounce timing remains at the protocol boundary.
-    const timer = setTimeout(() => setCopied(false), copiedForMs);
-    return () => clearTimeout(timer);
+    const task = Effect.runFork(
+      Effect.sleep(copiedForMs).pipe(Effect.andThen(Effect.sync(() => setCopied(false)))),
+    );
+    return () => {
+      void Effect.runFork(Fiber.interrupt(task));
+    };
   }, [copied]);
   return (
     <Button

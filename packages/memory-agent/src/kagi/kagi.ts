@@ -1,6 +1,7 @@
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Context, Data, Effect, Layer, Schema } from "effect";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { GlobalConfig } from "../config/global-config.ts";
 import { SecretStore, type SecretStoreFailed } from "../config/secrets.ts";
 
@@ -130,6 +131,7 @@ export interface KagiOptions {
 
 const make = (options: KagiOptions) =>
   Effect.gen(function* () {
+    const client = yield* HttpClient.HttpClient;
     const config = yield* GlobalConfig;
     const secrets = yield* SecretStore;
     const baseUrl = options.baseUrl ?? kagiBaseUrl;
@@ -158,30 +160,36 @@ const make = (options: KagiOptions) =>
         const key = yield* Effect.orElseSucceed(secrets.get("kagi-api-key"), () => null);
         if (!isTruthy(settings.kagiEnabled) || key === null)
           return yield* new KagiFailed({ reason: "not_enabled", status: null });
-        const fiberSignal = yield* Effect.abortSignal;
-        const response = yield* Effect.tryPromise({
-          try: () =>
-            // Native fetch I/O boundary preserves RequestInit semantics; scoped AbortSignal owns interruption.
-            fetch(`${baseUrl}${path}`, {
-              method: "POST",
-              headers: {
+        const fetch = yield* FetchHttpClient.Fetch;
+        const response = yield* client
+          .execute(
+            HttpClientRequest.post(`${baseUrl}${path}`).pipe(
+              HttpClientRequest.setHeaders({
                 Authorization: `Bearer ${key}`,
-                "Content-Type": "application/json",
                 Accept: "application/json",
-              },
-              body: stringifyJson(body),
-              // A redirect could carry the key to another host.
-              redirect: "error",
-              signal: signal === undefined ? fiberSignal : AbortSignal.any([signal, fiberSignal]),
+              }),
+              HttpClientRequest.bodyText(stringifyJson(body), "application/json"),
+            ),
+          )
+          .pipe(
+            // Never redirect credentials; the client owns interruption while the caller signal remains effective.
+            Effect.provideService(FetchHttpClient.RequestInit, { redirect: "error" }),
+            Effect.provideService(FetchHttpClient.Fetch, (url, init) => {
+              if (signal === undefined) return fetch(url, init);
+              return fetch(url, {
+                ...init,
+                signal: AbortSignal.any(init?.signal == null ? [signal] : [signal, init.signal]),
+              });
             }),
-          // The transport error can quote the request, so only the reason is kept.
-          catch: () => new KagiFailed({ reason: "unavailable", status: null }),
-        });
-        if (!response.ok) return yield* failureForStatus(response.status);
-        const json: unknown = yield* Effect.tryPromise({
-          try: () => response.json(),
-          catch: () => new KagiFailed({ reason: "invalid_response", status: response.status }),
-        });
+            Effect.mapError(() => new KagiFailed({ reason: "unavailable", status: null })),
+          );
+        if (response.status < 200 || response.status >= 300)
+          return yield* failureForStatus(response.status);
+        const json = yield* response.json.pipe(
+          Effect.mapError(
+            () => new KagiFailed({ reason: "invalid_response", status: response.status }),
+          ),
+        );
         return yield* Schema.decodeUnknownEffect(schema)(json).pipe(
           Effect.mapError(() => new KagiFailed({ reason: "invalid_response", status: 200 })),
         );
@@ -226,5 +234,6 @@ const make = (options: KagiOptions) =>
 export class Kagi extends Context.Service<Kagi, Effect.Success<ReturnType<typeof make>>>()(
   "memory-agent/kagi/kagi",
 ) {
-  static readonly layer = (options: KagiOptions = {}) => Layer.effect(Kagi, make(options));
+  static readonly layer = (options: KagiOptions = {}) =>
+    Layer.effect(Kagi, make(options)).pipe(Layer.provide(FetchHttpClient.layer));
 }

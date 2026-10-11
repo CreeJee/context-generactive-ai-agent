@@ -1,7 +1,7 @@
-import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
-import { Cause, Effect, Exit, Function as EffectFunction } from "effect";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { createHash, randomUUID } from "node:crypto";
+import { nativePromise } from "../runtime/native-effect.ts";
+import { runOAuthNodeEffect } from "./node-runtime.ts";
+import { Cause, Crypto, Effect, Exit, Function as EffectFunction } from "effect";
+
 import { Option, Schema } from "effect";
 
 export interface PasswordEntry {
@@ -21,7 +21,12 @@ const Manifest = Schema.Struct({
 });
 type Manifest = typeof Manifest.Type;
 const decodeManifest = Schema.decodeUnknownOption(Schema.fromJsonString(Manifest));
-const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+const digest = Effect.fnUntraced(function* (value: string) {
+  const crypto = yield* Crypto.Crypto;
+  return Buffer.from(yield* crypto.digest("SHA-256", new TextEncoder().encode(value))).toString(
+    "hex",
+  );
+});
 
 function manifest(value: string | null | undefined): Manifest | null {
   if (value == null || !value.startsWith(manifestPrefix)) return null;
@@ -56,7 +61,7 @@ function createChunkedPasswordEntryBody(
   });
   return {
     getPassword: () =>
-      runNativeEffect(
+      runOAuthNodeEffect(
         Effect.gen(function* () {
           let encoded = (yield* nativePromise(() => root.getPassword())) ?? undefined;
           for (let attempt = 0; attempt < 2; attempt++) {
@@ -71,7 +76,10 @@ function createChunkedPasswordEntryBody(
               { concurrency: "unbounded" },
             );
             const password = Buffer.from(parts.join(""), "base64").toString("utf8");
-            if (parts.every((part) => part !== undefined) && digest(password) === current.digest)
+            if (
+              parts.every((part) => part !== undefined) &&
+              (yield* digest(password)) === current.digest
+            )
               return password;
             const latest = (yield* nativePromise(() => root.getPassword())) ?? undefined;
             if (latest === encoded)
@@ -82,7 +90,7 @@ function createChunkedPasswordEntryBody(
         }),
       ),
     setPassword: (password) =>
-      runNativeEffect(
+      runOAuthNodeEffect(
         Effect.gen(function* () {
           const previous = yield* nativePromise(() => root.getPassword()).pipe(
             Effect.flatMap((encoded) => Effect.try(() => manifest(encoded))),
@@ -92,9 +100,9 @@ function createChunkedPasswordEntryBody(
           else {
             const encoded = Buffer.from(password).toString("base64");
             const next: Manifest = {
-              generation: randomUUID(),
+              generation: yield* (yield* Crypto.Crypto).randomUUIDv4(),
               count: Math.ceil(encoded.length / passwordLimit),
-              digest: digest(password),
+              digest: yield* digest(password),
             };
             if (next.count > 256)
               return yield* new Cause.UnknownError(
@@ -123,7 +131,7 @@ function createChunkedPasswordEntryBody(
         }),
       ),
     deleteCredential: () =>
-      runNativeEffect(
+      runOAuthNodeEffect(
         Effect.gen(function* () {
           const previous = yield* nativePromise(() => root.getPassword()).pipe(
             Effect.flatMap((encoded) => Effect.try(() => manifest(encoded))),

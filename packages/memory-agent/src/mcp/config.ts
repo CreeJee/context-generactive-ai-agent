@@ -1,12 +1,11 @@
 import { Function as EffectFunction } from "effect";
 import { SchemaTransformation } from "effect";
+import { sha256 as hashSha256 } from "../runtime/synchronous-crypto.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { createHash } from "node:crypto";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { existsSync, readFileSync } from "node:fs";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { join } from "node:path";
-import { Data, Result, Schema } from "effect";
+import { path as platformPath } from "../runtime/synchronous-path.ts";
+const { join } = platformPath;
+import { Data, Effect, FileSystem, Result, Schema } from "effect";
 
 /** Where MCP servers are configured: user-wide in the storage root, or in a project. */
 export const McpScope = Schema.Literals(["global", "project"]);
@@ -101,27 +100,20 @@ export interface McpFileRead {
 }
 
 export const fingerprintOf = (config: McpServerConfig) =>
-  createHash("sha256")
-    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-    .update(
-      JSON.stringify(
-        EffectFunction.flow(Schema.encodeResult(McpServerConfig), Result.getOrThrow)(config),
-      ),
-    )
-    .digest("hex");
+  hashSha256(
+    JSON.stringify(
+      EffectFunction.flow(Schema.encodeResult(McpServerConfig), Result.getOrThrow)(config),
+    ),
+  );
 
-export const readMcpFile: {
-  (scope: McpScope): (path: string) => ReturnType<typeof readMcpFileBody>;
-} & typeof readMcpFileBody = EffectFunction.dual(2, readMcpFileBody);
-function readMcpFileBody(path: string, scope: McpScope): McpFileRead {
-  if (!existsSync(path)) return { path, servers: [], error: null };
-  let text: string;
-  try {
-    text = readFileSync(path, "utf8");
-  } catch {
-    return { path, servers: [], error: "unreadable" };
-  }
-  return Result.match(decodeMcpFile(text), {
+const readMcpFileBody = Effect.fn("mcp.readConfig")(function* (path: string, scope: McpScope) {
+  const fs = yield* FileSystem.FileSystem;
+  if (!(yield* fs.exists(path).pipe(Effect.orElseSucceed(() => false))))
+    return { path, servers: [], error: null } satisfies McpFileRead;
+  const text = yield* fs.readFileString(path).pipe(Effect.result);
+  if (Result.isFailure(text))
+    return { path, servers: [], error: "unreadable" } satisfies McpFileRead;
+  return Result.match(decodeMcpFile(text.success), {
     onFailure: (error) => ({
       path,
       servers: [],
@@ -143,7 +135,11 @@ function readMcpFileBody(path: string, scope: McpScope): McpFileRead {
       };
     },
   });
-}
+});
+
+export const readMcpFile: {
+  (scope: McpScope): (path: string) => ReturnType<typeof readMcpFileBody>;
+} & typeof readMcpFileBody = EffectFunction.dual(2, readMcpFileBody);
 
 export class MissingVariable extends Data.TaggedError("MissingVariable")<{
   readonly variable: string;

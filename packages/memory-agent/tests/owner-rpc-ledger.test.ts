@@ -6,6 +6,11 @@ import { expect } from "vite-plus/test";
 import { makeSqliteOwnerRpcLedger } from "../src/agent/owner-rpc-ledger.ts";
 import { makeOwnerRpc, type OwnerRpcCapability } from "../src/agent/owner-rpc.ts";
 import { migrations } from "../src/db/migrations.ts";
+import {
+  ownerRpcCanonicalJson,
+  compactLegacyOwnerRpcFingerprint,
+} from "../src/agent/owner-rpc-fingerprint.ts";
+import { migrateOwnerRpcFingerprintBatch } from "../src/agent/owner-rpc-fingerprint-migration.ts";
 
 const sdkCall = Effect.fn("ownerLedgerTest.sdkCall")(function* <A>(
   operation: () => A | PromiseLike<A>,
@@ -115,6 +120,82 @@ it.live("pending and uncertain effects survive reopen and never reset with a new
     expect(() =>
       owner(f.sqlite).reserve(key.replace('"goal"', '"other"'), 3, "forged", false),
     ).toThrow();
+  }).pipe(withTestPlatform),
+);
+
+it.live("legacy and compact persisted requests replay identically without executing again", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture();
+    const runKey = ownerRpcCanonicalJson(keyValue);
+    const input = { context: "history".repeat(1000) };
+    const legacy = ownerRpcCanonicalJson({ operation: "effect", input });
+    const ledger = owner(f.sqlite);
+    ledger.reserve(runKey, 1, legacy, true);
+    ledger.settle(runKey, 1, { type: "succeeded", operationId: 1, output: "original result" });
+    let calls = 0;
+    const endpoint = () =>
+      makeOwnerRpc<{ effect: { input: { context: string }; output: string } }>({
+        ledger: owner(f.sqlite),
+        permits: () => true,
+        handlers: {
+          effect: {
+            sideEffect: true,
+            execute: () => {
+              calls++;
+              return Promise.resolve("must not execute");
+            },
+          },
+        },
+      });
+    const request = {
+      type: "owner-rpc-request" as const,
+      capability,
+      operationId: 1,
+      operation: "effect" as const,
+      input,
+    };
+    f.reopen();
+    expect(yield* sdkCall(() => endpoint()(request))).toMatchObject({ output: "original result" });
+    const before = f.sqlite
+      .prepare(
+        "SELECT run_id,run_key,operation_id,side_effect,reply_json,status FROM owner_rpc_operations",
+      )
+      .all();
+    const migration = yield* migrateOwnerRpcFingerprintBatch(
+      {
+        sqlite: f.sqlite,
+        atomic(work) {
+          f.sqlite.exec("BEGIN IMMEDIATE");
+          try {
+            const result = work();
+            f.sqlite.exec("COMMIT");
+            return result;
+          } catch (cause) {
+            f.sqlite.exec("ROLLBACK");
+            throw cause;
+          }
+        },
+      },
+      0,
+      1,
+    );
+    expect(migration.migrated).toBe(1);
+    expect(
+      f.sqlite
+        .prepare(
+          "SELECT run_id,run_key,operation_id,side_effect,reply_json,status FROM owner_rpc_operations",
+        )
+        .all(),
+    ).toEqual(before);
+    expect(f.sqlite.prepare("SELECT fingerprint FROM owner_rpc_operations").get()).toEqual({
+      fingerprint: compactLegacyOwnerRpcFingerprint(legacy),
+    });
+    f.reopen();
+    expect(yield* sdkCall(() => endpoint()(request))).toMatchObject({ output: "original result" });
+    expect(
+      yield* sdkCall(() => endpoint()({ ...request, input: { context: "different" } })),
+    ).toMatchObject({ reason: "operation_conflict" });
+    expect(calls).toBe(0);
   }).pipe(withTestPlatform),
 );
 

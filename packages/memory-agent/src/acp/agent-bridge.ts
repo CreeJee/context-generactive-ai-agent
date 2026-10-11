@@ -1,10 +1,17 @@
 import { nativeFailure, nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
-import { Cause, Function, Result, MutableHashSet, HashMap, MutableHashMap, Effect } from "effect";
+import {
+  Cause,
+  Function,
+  Result,
+  MutableHashSet,
+  HashMap,
+  MutableHashMap,
+  Effect,
+  Fiber,
+} from "effect";
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { realpathSync } from "node:fs";
+import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
+import { oauthProtocolFileSystem } from "../oauth/node-runtime.ts";
 import * as acp from "@agentclientprotocol/sdk";
 import type {
   AgentContext,
@@ -48,7 +55,7 @@ interface BridgeSession {
   readonly holder: string;
   readonly project: ProjectSummary;
   readonly chat: Chat;
-  readonly renew: NodeJS.Timeout;
+  readonly renew: Fiber.Fiber<void>;
   turn: PromptTurn | null;
 }
 
@@ -214,7 +221,7 @@ export function startAcpAgent(options: {
     project: ProjectSummary,
     messages: UIMessage[],
   ) {
-    const holder = `acp-${randomUUID()}`;
+    const holder = `acp-${yield* oauthProtocolCrypto.randomUUIDv4().pipe(Effect.orDie)}`;
     const lease = yield* nativePromise(() => api.lease(sessionId, holder, "claim"));
     if (lease.state !== "mine")
       return yield* new Cause.UnknownError(
@@ -225,12 +232,12 @@ export function startAcpAgent(options: {
           reason: { _tag: "RequestRejected" },
         }),
       );
-    // Native callback heartbeat/debounce timing remains at the protocol boundary.
-    const renew = setInterval(
-      () => void api.lease(sessionId, holder, "claim").catch(() => undefined),
-      leaseRenewMs,
-    );
-    renew.unref();
+    const renew = yield* Effect.forever(
+      Effect.sleep(leaseRenewMs).pipe(
+        Effect.andThen(nativePromise(() => api.lease(sessionId, holder, "claim"))),
+        Effect.ignore,
+      ),
+    ).pipe(Effect.forkDetach);
     const session: BridgeSession = {
       id: sessionId,
       holder,
@@ -254,10 +261,13 @@ export function startAcpAgent(options: {
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const projectFor = Effect.fn("AcpAgent.projectFor")(function* (cwd: string) {
-    const root = yield* Effect.try({
-      try: () => realpathSync(cwd),
-      catch: () => new Cause.UnknownError(requestError(`폴더를 찾을 수 없어요: ${cwd}`)),
-    });
+    const root = yield* oauthProtocolFileSystem
+      .realPath(cwd)
+      .pipe(
+        Effect.mapError(
+          () => new Cause.UnknownError(requestError(`폴더를 찾을 수 없어요: ${cwd}`)),
+        ),
+      );
     const project = (yield* nativePromise(() => api.projects())).find(
       (candidate) => candidate.root === root,
     );
@@ -304,31 +314,42 @@ export function startAcpAgent(options: {
   /** Relays calls of subagents and external agents that wait for approval, while the turn runs. */
   const relayApprovals = (session: BridgeSession, turn: PromptTurn) => {
     const asked = MutableHashSet.empty<string>();
-    // Native callback heartbeat/debounce timing remains at the protocol boundary.
-    const timer = setInterval(() => {
-      void api
-        .approvals(session.id)
-        .then((approvals) => {
-          for (const approval of approvals) {
-            if (MutableHashSet.has(asked, approval.id)) continue;
-            MutableHashSet.add(asked, approval.id);
-            void runNativeEffect(
-              askEditor(turn, session.id, {
-                toolCallId: approval.id,
-                toolName: approval.toolName,
-                argumentsJson: approval.argumentsJson,
-                requester: requesterLabel(approval.requester),
-              }),
-            )
-              .then((approved) =>
-                api.answerApproval(session.id, session.holder, approval.id, approved),
-              )
-              .catch(() => undefined);
-          }
-        })
-        .catch(() => undefined);
-    }, relayPollMs);
-    return () => clearInterval(timer);
+    const timer = Effect.runFork(
+      Effect.forever(
+        Effect.sleep(relayPollMs).pipe(
+          Effect.andThen(
+            Effect.gen(function* () {
+              const approvals = yield* nativePromise(() => api.approvals(session.id));
+              yield* Effect.forEach(
+                approvals,
+                (approval) => {
+                  if (MutableHashSet.has(asked, approval.id)) return Effect.void;
+                  MutableHashSet.add(asked, approval.id);
+                  return askEditor(turn, session.id, {
+                    toolCallId: approval.id,
+                    toolName: approval.toolName,
+                    argumentsJson: approval.argumentsJson,
+                    requester: requesterLabel(approval.requester),
+                  }).pipe(
+                    Effect.flatMap((approved) =>
+                      nativePromise(() =>
+                        api.answerApproval(session.id, session.holder, approval.id, approved),
+                      ),
+                    ),
+                    Effect.ignore,
+                  );
+                },
+                { concurrency: "unbounded", discard: true },
+              );
+            }),
+          ),
+          Effect.ignore,
+        ),
+      ),
+    );
+    return () => {
+      void runNativeEffect(Fiber.interrupt(timer));
+    };
   };
 
   const app = acp
@@ -542,7 +563,7 @@ export function startAcpAgent(options: {
   const connection = app.connect(options.stream);
   void connection.closed.finally(() => {
     for (const session of MutableHashMap.values(sessions)) {
-      clearInterval(session.renew);
+      void runNativeEffect(Fiber.interrupt(session.renew));
       void api.lease(session.id, session.holder, "release").catch(() => undefined);
     }
     MutableHashMap.clear(sessions);

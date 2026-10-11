@@ -36,26 +36,26 @@ describe("stable development backend safety", () => {
       yield* fs.makeDirectory(uiSource, { recursive: true });
       yield* fs.writeFileString(path.join(app, "server", "main.ts"), "export const server = 1;");
       yield* fs.writeFileString(path.join(backendSource, "index.ts"), "export const runtime = 1;");
-      const initial = developmentBuildId(app);
+      const initial = yield* Effect.tryPromise(() => developmentBuildId(app));
       yield* fs.writeFileString(path.join(uiSource, "chat-panel.tsx"), "export const ui = 2;");
-      const uiBuildId = developmentBuildId(app);
+      const uiBuildId = yield* Effect.tryPromise(() => developmentBuildId(app));
       expect(uiBuildId).toBe(initial);
       // A UI-only HMR update must not block an otherwise valid mutation.
       expect(
         developmentRequestDecision(
-          createDevelopmentBoundary(initial),
+          createDevelopmentBoundary({ buildId: initial }),
           "POST",
           "/api/projects",
           uiBuildId,
         ),
       ).toEqual({ kind: "allow" });
       yield* fs.writeFileString(path.join(backendSource, "index.ts"), "export const runtime = 2;");
-      const changedBackendId = developmentBuildId(app);
+      const changedBackendId = yield* Effect.tryPromise(() => developmentBuildId(app));
       expect(changedBackendId).not.toBe(initial);
       // Editing disk sources does not change the running backend's identity.
       expect(
         developmentRequestDecision(
-          createDevelopmentBoundary(initial),
+          createDevelopmentBoundary({ buildId: initial }),
           "POST",
           "/api/chat",
           initial,
@@ -64,7 +64,7 @@ describe("stable development backend safety", () => {
       // An unvalidated UI/backend contract must not silently mutate the old backend.
       expect(
         developmentRequestDecision(
-          createDevelopmentBoundary(initial),
+          createDevelopmentBoundary({ buildId: initial }),
           "POST",
           "/api/projects",
           changedBackendId,
@@ -87,19 +87,19 @@ describe("stable development backend safety", () => {
         path.join(source, "full-loop-codec.ts"),
         "export const codec = 'v1';",
       );
-      const initial = developmentBuildId(app);
-      const boundary = createDevelopmentBoundary(initial);
+      const initial = yield* Effect.tryPromise(() => developmentBuildId(app));
+      const boundary = createDevelopmentBoundary({ buildId: initial });
       yield* fs.writeFileString(
         path.join(source, "full-loop-worker.ts"),
         "export const worker = 'v2';",
       );
-      const changedWorker = developmentBuildId(app);
+      const changedWorker = yield* Effect.tryPromise(() => developmentBuildId(app));
       expect(changedWorker).not.toBe(initial);
       yield* fs.writeFileString(
         path.join(source, "full-loop-codec.ts"),
         "export const codec = 'v2';",
       );
-      const changedCodec = developmentBuildId(app);
+      const changedCodec = yield* Effect.tryPromise(() => developmentBuildId(app));
       expect(changedCodec).not.toBe(changedWorker);
       expect(affectsDevelopmentBackend(path.join(source, "full-loop-worker.ts"))).toBe(true);
       expect(affectsDevelopmentBackend(path.join(source, "full-loop-codec.ts"))).toBe(true);
@@ -125,7 +125,7 @@ describe("stable development backend safety", () => {
   );
 
   test("reports its build and rejects stale or draining mutations", () => {
-    const boundary = createDevelopmentBoundary("build-a");
+    const boundary = createDevelopmentBoundary({ buildId: "build-a" });
     expect(developmentRequestDecision(boundary, "GET", "/api/health", undefined)).toMatchObject({
       kind: "health",
       status: 200,
@@ -165,14 +165,20 @@ describe("stable development backend safety", () => {
   it.live("allows only one live backend owner for a storage root", () =>
     Effect.gen(function* () {
       const { root: storage } = yield* fixture("context-agent-dev-lock-");
-      const release = acquireStorageLock(storage, 5180, "instance-a");
-      yield* Effect.addFinalizer(() => Effect.sync(release));
-      expect(() => acquireStorageLock(storage, 5181, "instance-b")).toThrow(
-        "backend already owns this storage root on port 5180",
+      const release = yield* Effect.tryPromise(() =>
+        acquireStorageLock(storage, 5180, "instance-a"),
       );
-      release();
-      const releaseAgain = acquireStorageLock(storage, 5181, "instance-b");
-      releaseAgain();
+      yield* Effect.addFinalizer(() => Effect.promise(release));
+      yield* Effect.tryPromise(() =>
+        expect(acquireStorageLock(storage, 5181, "instance-b")).rejects.toThrow(
+          "backend already owns this storage root on port 5180",
+        ),
+      );
+      yield* Effect.promise(release);
+      const releaseAgain = yield* Effect.tryPromise(() =>
+        acquireStorageLock(storage, 5181, "instance-b"),
+      );
+      yield* Effect.promise(releaseAgain);
     }),
   );
 });

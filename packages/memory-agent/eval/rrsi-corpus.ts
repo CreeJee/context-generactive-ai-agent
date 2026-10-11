@@ -1,12 +1,15 @@
 export type EvalSplit = "evolve" | "validation" | "sealed";
-export interface EvalTask {
+interface EvalTaskBase {
   id: string;
-  domain: "coding" | "memory";
   turns: readonly string[];
   fixture: string;
   expected: string;
   verification: string;
 }
+
+export type EvalTask =
+  | (EvalTaskBase & { readonly domain: "coding" })
+  | (EvalTaskBase & { readonly domain: "memory"; readonly correctionTurnIndex: number });
 // Verifiers stay outside proposer feedback. Each suite has distinct inputs; sealed coding uses new families.
 export function corpus(split: EvalSplit): EvalTask[] {
   const offset = split === "evolve" ? 10 : split === "validation" ? 100 : 1000;
@@ -86,13 +89,14 @@ export function corpus(split: EvalSplit): EvalTask[] {
       {
         id: `${split}-memory-${index}`,
         domain: "memory" as const,
+        correctionTurnIndex: 1,
         fixture: "",
         verification: "",
         turns: [
           `Remember this exact user decision: obsolete-${offset + index}.`,
           `Correction: replace my previous decision with ${phrase}.`,
           "Read notes.txt and describe its topic in one short sentence.",
-          "What is my current decision? Retrieve original evidence if necessary. Give the exact phrase and cite its node ID.",
+          'What is my current decision? Retrieve original evidence if necessary. Return only JSON with exactly two fields: "decision" (the exact current phrase) and "evidenceIds" (an array containing only the original user correction node ID). Do not cite an assistant response, summary, or the superseded decision.',
         ],
         expected: phrase,
       },

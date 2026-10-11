@@ -1,9 +1,24 @@
+import {
+  Context as PlatformContext,
+  Effect as PlatformEffect,
+  Layer as PlatformLayer,
+  Path,
+} from "effect";
 import { Function as EffectFunction } from "effect";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// FileSystem.stat follows links; synchronous capability checks require lstat and device/inode identity.
 import { lstatSync, realpathSync, type Stats } from "node:fs";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import * as NodePath from "@effect/platform-node/NodePath";
 import { Data, HashSet, Result } from "effect";
+
+// Path operations remain synchronous at these public host boundaries.
+const { basename, dirname, isAbsolute, join, relative, resolve, sep } = PlatformEffect.runSync(
+  PlatformEffect.scoped(
+    PlatformEffect.gen(function* () {
+      const services = yield* PlatformLayer.build(NodePath.layer);
+      return PlatformContext.get(services, Path.Path);
+    }),
+  ),
+);
 
 /**
  * Why a path was refused. Messages the model sees name the reason, never file contents.

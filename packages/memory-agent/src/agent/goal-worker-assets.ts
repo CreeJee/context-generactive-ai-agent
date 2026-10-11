@@ -1,41 +1,42 @@
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { createHash, randomUUID } from "node:crypto";
-import {
-  existsSync,
-  lstatSync,
-  readlinkSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-  // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-} from "node:fs";
-import { tmpdir } from "node:os";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { dirname, join, resolve } from "node:path";
+// Native host/SDK boundary uses Node filesystem contracts for immutable artifact publication.
+import { sha256 as hashSha256 } from "../runtime/synchronous-crypto.ts";
+// Only the immediate Worker-construction fence must inspect bytes synchronously.
+import { readFileSync, realpathSync } from "node:fs";
+import { path as platformPath } from "../runtime/synchronous-path.ts";
+const { basename, dirname, join, resolve } = platformPath;
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { Array as EffectArray, MutableHashMap, Option, Schema } from "effect";
-import { runtimeGoalSdkMetadata, runtimeWorker } from "../runtime/resources.ts";
+import { Effect, FileSystem, MutableHashMap, Option, Schema, Semaphore } from "effect";
+import { runtimeArtifact } from "../runtime/resources.ts";
 
-const dependencyMap = Schema.Record(Schema.String, Schema.String);
-const packageMetadata = Schema.Struct({
-  dependencies: Schema.optional(dependencyMap),
-  peerDependencies: Schema.optional(dependencyMap),
-  optionalDependencies: Schema.optional(dependencyMap),
-  peerDependenciesMeta: Schema.optional(
-    Schema.Record(Schema.String, Schema.Struct({ optional: Schema.optional(Schema.Boolean) })),
-  ),
+const sha256 = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/));
+const buildManifest = Schema.Struct({
+  version: Schema.Literal(1),
+  native: Schema.Struct({
+    file: Schema.Literal("native.mjs"),
+    sha256,
+    sourceHash: sha256,
+    contractVersion: Schema.Literal("native-factories/v1"),
+  }),
+  worker: Schema.Struct({ file: Schema.Literal("full-loop-worker.mjs"), sha256 }),
 });
-
-const modules = ["full-loop-worker.ts", "full-loop-codec.ts", "full-loop-rpc-client.ts"] as const;
-const supportModules = ["native-effect.ts", "native-stream.ts"] as const;
-const digest = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
+const snapshotManifest = Schema.Struct({
+  goalInstanceId: Schema.String,
+  sourceGeneration: sha256,
+  canonicalWorkerUrl: Schema.String,
+  workerHash: sha256,
+});
+const manifestName = "goal-assets-manifest.json";
+const digest = (bytes: Uint8Array | string) => hashSha256(bytes);
+// SQLite reserves a globally unique source pin. Identical build bytes still belong to distinct Goals.
+const generationForGoal = (goalInstanceId: string, workerHash: string) =>
+  digest(
+    EffectFunction.flow(
+      Schema.encodeResult(Schema.fromJsonString(Schema.Tuple([Schema.String, Schema.String]))),
+      Result.getOrThrow,
+    )([goalInstanceId, workerHash]),
+  );
 
 export interface SavedGoalExecutionAssets {
   readonly goalInstanceId: string;
@@ -44,101 +45,116 @@ export interface SavedGoalExecutionAssets {
   readonly canonicalWorkerUrl: string;
 }
 
-const snapshotManifest = Schema.Struct({
-  goalInstanceId: Schema.String,
-  sourceGeneration: Schema.String,
-  canonicalWorkerUrl: Schema.String,
-  tree: Schema.Array(Schema.Array(Schema.String)),
-});
-const manifestName = "goal-assets-manifest.json";
-
-/** Enumerate without following links; every link must resolve to a canonical copied directory. */
-function snapshotTree(root: string): string[][] {
-  if (realpathSync(root) !== resolve(root)) throw new Error("Noncanonical Goal snapshot root");
-  const tree: string[][] = [];
-  let bytes = 0;
-  function walk(directory: string) {
-    for (const name of readdirSync(directory).sort()) {
-      if (directory === root && name === manifestName) continue;
-      const path = join(directory, name);
-      const relative = path.slice(root.length + 1);
-      const stat = lstatSync(path);
-      if (tree.length >= 30000) throw new Error("Goal snapshot tree exceeds bounds");
-      if (stat.isSymbolicLink()) {
-        const target = realpathSync(path);
-        if (!target.startsWith(root + "/") || !lstatSync(target).isDirectory())
-          throw new Error("Goal snapshot link escapes copied tree");
-        tree.push([relative, "link", readlinkSync(path), target.slice(root.length + 1)]);
-      } else if (stat.isDirectory()) {
-        tree.push([relative, "directory"]);
-        walk(path);
-      } else if (stat.isFile()) {
-        bytes += stat.size;
-        if (bytes > 64 * 1024 * 1024) throw new Error("Goal snapshot bytes exceed bounds");
-        tree.push([relative, "file", digest(readFileSync(path))]);
-      } else throw new Error("Unsupported Goal snapshot file");
-    }
-  }
-  walk(root);
-  return tree;
-}
-
 export interface GoalExecutionAssets extends SavedGoalExecutionAssets {
-  readonly goalInstanceId: string;
-  /** Independent of Goal/Plan revisions and per-run capability generations. */
+  /** Goal/build pin, independent of Goal/Plan revisions and per-run capability generations. */
   readonly sourceGeneration: string;
   readonly workerUrl: URL;
-  readonly manifestHash: string;
 }
 
-/** Owner-local registry. No run admission, owner/tool code pinning or automatic adoption. */
-export function makeGoalWorkerAssetsRegistry(
+/** Owner-local registry backed only by the build-produced worker manifest.
+ * Each Goal receives a durable immutable pin of the same content-addressed worker bytes; no source
+ * tree, SDK dependency tree or TypeScript entry is captured at first request.
+ */
+export class GoalWorkerAssetsFailed extends Schema.TaggedError<GoalWorkerAssetsFailed>()(
+  "GoalWorkerAssetsFailed",
+  { cause: Schema.Defect() },
+) {}
+const attempt = <A>(run: () => A) =>
+  Effect.try({ try: run, catch: (cause) => GoalWorkerAssetsFailed.make({ cause }) });
+const failure = (cause: import("effect/PlatformError").PlatformError) =>
+  GoalWorkerAssetsFailed.make({ cause });
+
+export const makeGoalWorkerAssetsRegistry = Effect.fn("makeGoalWorkerAssetsRegistry")(function* (
   options: {
-    readonly sourceDirectory?: string;
-    readonly sdkEntry?: string;
-    readonly supportDirectory?: string;
+    readonly artifactManifest?: string;
     readonly temporaryDirectory?: string;
-    readonly readFile?: (path: string) => Buffer;
+    readonly readFile?: (path: string) => Uint8Array;
   } = {},
 ) {
-  const root = realpathSync(
-    mkdtempSync(join(options.temporaryDirectory ?? tmpdir(), "goal-worker-assets-")),
-  );
+  const fs = yield* FileSystem.FileSystem;
+  const mutex = yield* Semaphore.make(1);
+  const temporary = yield* fs
+    .makeTempDirectory({ directory: options.temporaryDirectory, prefix: "goal-worker-assets-" })
+    .pipe(Effect.mapError(failure));
+  const root = yield* fs.realPath(temporary).pipe(Effect.mapError(failure));
   const goals = MutableHashMap.empty<string, GoalExecutionAssets>();
   let disposed = false;
   let activeLeases = 0;
+  const customRead = options.readFile;
+  const read =
+    customRead === undefined
+      ? (path: string) => fs.readFile(path).pipe(Effect.mapError(failure))
+      : (path: string) => attempt(() => customRead(path));
+  const decodeText = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+  const active = (goalInstanceId: string) => {
+    if (disposed || !(goalInstanceId.length > 0)) throw new Error("Inactive Goal asset registry");
+  };
 
-  function verify(saved: SavedGoalExecutionAssets): GoalExecutionAssets {
-    if (disposed || !(saved.goalInstanceId.length > 0) || !(saved.sourceGeneration.length > 0))
+  const buildWorker = Effect.fn("GoalWorkerAssets.buildWorker")(function* () {
+    const manifestPath = yield* fs
+      .realPath(options.artifactManifest ?? runtimeArtifact("artifact-manifest.json"))
+      .pipe(Effect.mapError(failure));
+    const manifest = yield* Schema.decodeEffect(Schema.fromJsonString(buildManifest))(
+      decodeText(yield* read(manifestPath)),
+    ).pipe(Effect.mapError((cause) => GoalWorkerAssetsFailed.make({ cause })));
+    const path = yield* fs
+      .realPath(join(dirname(manifestPath), manifest.worker.file))
+      .pipe(Effect.mapError(failure));
+    yield* attempt(() => {
+      if (dirname(path) !== dirname(manifestPath))
+        throw new Error("Goal worker escaped build root");
+    });
+    const bytes = yield* read(path);
+    yield* attempt(() => {
+      if (digest(bytes) !== manifest.worker.sha256) throw new Error("Goal worker SHA256 mismatch");
+    });
+    return { path, bytes, hash: manifest.worker.sha256 };
+  });
+
+  const snapshotLocation = (saved: SavedGoalExecutionAssets) => {
+    active(saved.goalInstanceId);
+    if (!/^[a-f0-9]{64}$/.test(saved.sourceGeneration))
       throw new Error("Inactive Goal asset registry");
     const url = new URL(saved.canonicalWorkerUrl);
     if (url.protocol !== "file:" || url.href !== saved.canonicalWorkerUrl)
       throw new Error("Noncanonical Goal worker URL");
     const workerPath = fileURLToPath(url);
-    const destination = dirname(dirname(workerPath));
+    const destination = dirname(workerPath);
     if (
-      destination.slice(destination.lastIndexOf("/") + 1) !== saved.sourceGeneration ||
-      workerPath !== join(destination, "worker", modules[0]) ||
+      workerPath !== join(destination, "full-loop-worker.mjs") ||
+      basename(dirname(destination)) !== saved.sourceGeneration ||
       pathToFileURL(workerPath).href !== saved.canonicalWorkerUrl
     )
       throw new Error("Goal snapshot identity mismatch");
-    const manifestPath = join(destination, manifestName);
-    if (!lstatSync(manifestPath).isFile()) throw new Error("Invalid Goal snapshot manifest");
-    const bytes = readFileSync(manifestPath);
+    return { workerPath, destination };
+  };
+  const snapshotIdentity = (
+    saved: SavedGoalExecutionAssets,
+    canonical: string,
+    workerBytes: Uint8Array,
+    bytes: Uint8Array,
+  ): GoalExecutionAssets => {
+    const { workerPath } = snapshotLocation(saved);
+    if (canonical !== workerPath) throw new Error("Goal snapshot identity mismatch");
+    const workerHash = digest(workerBytes);
+    if (
+      workerHash !== saved.sourceGeneration &&
+      generationForGoal(saved.goalInstanceId, workerHash) !== saved.sourceGeneration
+    )
+      throw new Error("Goal worker hash mismatch");
     if (digest(bytes) !== saved.manifestHash)
       throw new Error("Goal snapshot manifest hash mismatch");
-    // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
     const manifest = EffectFunction.flow(
-      Schema.decodeUnknownResult(snapshotManifest),
+      Schema.decodeUnknownResult(Schema.fromJsonString(snapshotManifest)),
       Result.getOrThrow,
-    )(JSON.parse(bytes.toString("utf8")));
+    )(decodeText(bytes));
     if (
       manifest.goalInstanceId !== saved.goalInstanceId ||
       manifest.sourceGeneration !== saved.sourceGeneration ||
       manifest.canonicalWorkerUrl !== saved.canonicalWorkerUrl ||
-      JSON.stringify(manifest.tree) !== JSON.stringify(snapshotTree(destination))
+      manifest.workerHash !== workerHash
     )
-      throw new Error("Goal snapshot identity or tree mismatch");
+      throw new Error("Goal snapshot identity mismatch");
     const canonicalWorkerUrl = saved.canonicalWorkerUrl;
     return Object.freeze({
       goalInstanceId: saved.goalInstanceId,
@@ -149,219 +165,102 @@ export function makeGoalWorkerAssetsRegistry(
         return new URL(canonicalWorkerUrl);
       },
     });
-  }
-
-  function capture() {
-    // Resolve only for new capture: cold adoption never requires replacement live assets.
-    const source = options.sourceDirectory ?? dirname(runtimeWorker("full-loop-worker"));
-    const sdkEntry = options.sdkEntry ?? runtimeGoalSdkMetadata();
-    const support =
-      options.supportDirectory ?? join(dirname(runtimeWorker("full-loop-worker")), "..", "runtime");
-    const files = MutableHashMap.empty<string, Buffer>();
-    const packages = MutableHashMap.empty<
-      string,
-      { index: number; dependencies: MutableHashMap.MutableHashMap<string, string> }
-    >();
-    let size = 0;
-    const put = (path: string) => {
-      const bytes = (options.readFile ?? readFileSync)(path);
-      size += bytes.length;
-      if (size > 64 * 1024 * 1024 || MutableHashMap.size(files) >= 20000)
-        throw new Error("Goal asset snapshot exceeds bounded capture");
-      MutableHashMap.set(files, path, bytes);
-    };
-    function packageRoot(entry: string): string {
-      let cursor = dirname(entry);
-      while (!existsSync(join(cursor, "package.json"))) {
-        const parent = dirname(cursor);
-        if (parent === cursor) throw new Error("Unavailable SDK package metadata");
-        cursor = parent;
-      }
-      return realpathSync(cursor);
-    }
-    function dependencyRoot(from: string, name: string): string | undefined {
-      let cursor = from;
-      while (true) {
-        const candidate = join(cursor, "node_modules", name);
-        if (existsSync(join(candidate, "package.json"))) return realpathSync(candidate);
-        const parent = dirname(cursor);
-        if (parent === cursor) return undefined;
-        cursor = parent;
-      }
-    }
-    function visit(directory: string) {
-      if (MutableHashMap.has(packages, directory)) return;
-      const record = {
-        index: MutableHashMap.size(packages),
-        dependencies: MutableHashMap.empty<string, string>(),
-      };
-      MutableHashMap.set(packages, directory, record);
-      function walk(path: string) {
-        for (const entry of readdirSync(path, { withFileTypes: true }).sort((a, b) =>
-          a.name.localeCompare(b.name),
-        )) {
-          if (entry.name === "node_modules" || entry.name === ".git") continue;
-          const child = join(path, entry.name);
-          // Effect 4 exports its compiled dist/*.js modules. Source, declarations and maps
-          // never execute in this worker; copying them makes each Goal capture needlessly large.
-          if (directory === effectRoot) {
-            if (entry.isDirectory() && path === directory && entry.name !== "dist") continue;
-            if (
-              entry.isFile() &&
-              child !== join(directory, "package.json") &&
-              !child.endsWith(".js")
-            )
-              continue;
-          }
-          if (entry.isDirectory()) walk(child);
-          else if (entry.isFile()) put(child);
-          else throw new Error("Unsupported SDK asset symlink or special file");
-        }
-      }
-      walk(directory);
-      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-      const metadata = EffectFunction.flow(
-        Schema.decodeUnknownResult(packageMetadata),
-        Result.getOrThrow,
-      )(
-        JSON.parse(
-          Option.getOrUndefined(
-            MutableHashMap.get(files, join(directory, "package.json")),
-          )!.toString("utf8"),
-        ),
-      );
-      const names = EffectArray.dedupe([
-        ...Object.keys(metadata.dependencies ?? {}),
-        ...Object.keys(metadata.peerDependencies ?? {}),
-        ...Object.keys(metadata.optionalDependencies ?? {}),
-      ]);
-      for (const name of names.sort()) {
-        // npm module names, never traversal paths or absolute filesystem names.
-        if (!/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/.test(name))
-          throw new Error(`Invalid SDK dependency name: ${name}`);
-        const dependency = dependencyRoot(directory, name);
-        if (!isTruthy(dependency)) {
-          if (
-            isTruthy(metadata.peerDependenciesMeta?.[name]?.optional) ||
-            isTruthy(metadata.optionalDependencies?.[name])
-          )
-            continue;
-          throw new Error(`Unavailable SDK dependency: ${name}`);
-        }
-        MutableHashMap.set(record.dependencies, name, dependency);
-        visit(dependency);
-      }
-    }
-    for (const name of modules) put(join(source, name));
-    for (const name of supportModules) put(join(support, name));
-    const sdkRoot = packageRoot(sdkEntry);
-    const effectRoot = packageRoot(runtimeGoalSdkMetadata("effect"));
-    visit(sdkRoot);
-    visit(effectRoot);
-    const manifest = JSON.stringify({
-      files: [...files].map(([path, bytes]) => [path, digest(bytes)]),
-      packages: [...packages].map(([path, record]) => [path, [...record.dependencies]]),
-      sdkEntry,
-    });
-    return { source, support, files, packages, sdkRoot, effectRoot, hash: digest(manifest) };
-  }
+  };
+  const verify = Effect.fn("GoalWorkerAssets.verify")(function* (saved: SavedGoalExecutionAssets) {
+    const { workerPath, destination } = yield* attempt(() => snapshotLocation(saved));
+    const canonical = yield* fs.realPath(workerPath).pipe(Effect.mapError(failure));
+    const workerBytes = yield* fs.readFile(workerPath).pipe(Effect.mapError(failure));
+    const bytes = yield* fs
+      .readFile(join(destination, manifestName))
+      .pipe(Effect.mapError(failure));
+    return yield* attempt(() => snapshotIdentity(saved, canonical, workerBytes, bytes));
+  });
+  // NodeWorker's factory cannot suspend: verify and increment the lease immediately
+  // before new Worker, without an owner event-loop turn between those operations.
+  const verifyAtFence = (saved: SavedGoalExecutionAssets) => {
+    const { workerPath, destination } = snapshotLocation(saved);
+    return snapshotIdentity(
+      saved,
+      realpathSync(workerPath),
+      readFileSync(workerPath),
+      readFileSync(join(destination, manifestName)),
+    );
+  };
 
   return {
-    resolve(goalInstanceId: string): GoalExecutionAssets {
-      if (disposed || !(goalInstanceId.length > 0)) throw new Error("Inactive Goal asset registry");
-      const existing = Option.getOrUndefined(MutableHashMap.get(goals, goalInstanceId));
-      if (isTruthy(existing)) {
-        verify(existing);
-        return existing;
-      }
-      const captured = capture();
-      const generation = randomUUID();
-      const destination = join(root, generation);
-      mkdirSync(destination);
-      try {
-        const packagePath = (path: string) =>
-          join(
-            destination,
-            "packages",
-            String(Option.getOrUndefined(MutableHashMap.get(captured.packages, path))!.index),
+    resolve: Effect.fn("GoalWorkerAssets.resolve")(
+      function* (goalInstanceId: string) {
+        yield* attempt(() => active(goalInstanceId));
+        const existing = Option.getOrUndefined(MutableHashMap.get(goals, goalInstanceId));
+        if (isTruthy(existing)) {
+          yield* verify(existing);
+          return existing;
+        }
+        const source = yield* buildWorker();
+        const sourceGeneration = generationForGoal(goalInstanceId, source.hash);
+        const destination = resolve(root, sourceGeneration, digest(goalInstanceId));
+        yield* fs
+          .makeDirectory(destination, { recursive: true, mode: 0o700 })
+          .pipe(Effect.mapError(failure));
+        return yield* Effect.gen(function* () {
+          const workerPath = join(destination, "full-loop-worker.mjs");
+          yield* fs.copyFile(source.path, workerPath).pipe(Effect.mapError(failure));
+          const copied = yield* fs.readFile(workerPath).pipe(Effect.mapError(failure));
+          yield* attempt(() => {
+            if (digest(copied) !== source.hash)
+              throw new Error("Goal worker copy differs from build manifest");
+          });
+          const canonicalWorkerUrl = pathToFileURL(workerPath).href;
+          const encodedManifest = yield* Schema.encodeEffect(
+            Schema.fromJsonString(snapshotManifest),
+          )({ goalInstanceId, sourceGeneration, canonicalWorkerUrl, workerHash: source.hash }).pipe(
+            Effect.mapError((cause) => GoalWorkerAssetsFailed.make({ cause })),
           );
-        for (const [path, bytes] of captured.files) {
-          let output: string;
-          if (modules.some((name) => path === join(captured.source, name)))
-            output = join(destination, "worker", path.slice(captured.source.length + 1));
-          else if (supportModules.some((name) => path === join(captured.support, name)))
-            output = join(destination, "runtime", path.slice(captured.support.length + 1));
-          else {
-            const parent = [...MutableHashMap.keys(captured.packages)].find((directory) =>
-              path.startsWith(directory + "/"),
-            );
-            if (!isTruthy(parent)) throw new Error("Unmapped SDK asset");
-            output = join(packagePath(parent), path.slice(parent.length + 1));
-          }
-          mkdirSync(dirname(output), { recursive: true });
-          writeFileSync(output, bytes, { mode: 0o400 });
-          if (digest(readFileSync(output)) !== digest(bytes))
-            throw new Error("Goal asset copy differs from captured manifest");
-        }
-        for (const [path, record] of captured.packages) {
-          for (const [name, target] of record.dependencies) {
-            const link = join(packagePath(path), "node_modules", name);
-            mkdirSync(dirname(link), { recursive: true });
-            // Only immutable copies inside this generation; never live node_modules.
-            symlinkSync(packagePath(target), link, "dir");
-          }
-        }
-        const workerDirectory = join(destination, "worker");
-        const link = join(workerDirectory, "node_modules", "@tanstack", "ai");
-        mkdirSync(dirname(link), { recursive: true });
-        symlinkSync(packagePath(captured.sdkRoot), link, "dir");
-        // Both worker and support modules resolve Effect from this immutable generation.
-        mkdirSync(join(destination, "node_modules"), { recursive: true });
-        symlinkSync(
-          packagePath(captured.effectRoot),
-          join(destination, "node_modules", "effect"),
-          "dir",
+          const manifest = `${encodedManifest}\n`;
+          yield* fs
+            .writeFileString(join(destination, manifestName), manifest, { flag: "wx", mode: 0o400 })
+            .pipe(Effect.mapError(failure));
+          const assets = yield* verify({
+            goalInstanceId,
+            sourceGeneration,
+            canonicalWorkerUrl,
+            manifestHash: digest(manifest),
+          });
+          MutableHashMap.set(goals, goalInstanceId, assets);
+          return assets;
+        }).pipe(
+          Effect.onError(() =>
+            Effect.sync(() => MutableHashMap.remove(goals, goalInstanceId)).pipe(
+              Effect.andThen(fs.remove(destination, { recursive: true, force: true })),
+              Effect.orDie,
+            ),
+          ),
         );
-        if (capture().hash !== captured.hash)
-          throw new Error("Goal asset sources changed during capture");
-        const workerUrlString = pathToFileURL(resolve(workerDirectory, modules[0])).href;
-        const manifest = JSON.stringify({
-          goalInstanceId,
-          sourceGeneration: generation,
-          canonicalWorkerUrl: workerUrlString,
-          tree: snapshotTree(destination),
-        });
-        writeFileSync(join(destination, manifestName), manifest, { mode: 0o400 });
-        const assets = verify({
-          goalInstanceId,
-          sourceGeneration: generation,
-          canonicalWorkerUrl: workerUrlString,
-          manifestHash: digest(manifest),
-        });
-        MutableHashMap.set(goals, goalInstanceId, assets);
-        return assets;
-      } catch (error) {
-        rmSync(destination, { recursive: true, force: true });
-        throw error;
-      }
-    },
+      },
+      (effect) => mutex.withPermit(effect),
+    ),
     verify,
     /** Cold completed-Goal adoption only: validates saved bytes, never captures replacement code. */
-    adopt(saved: SavedGoalExecutionAssets): GoalExecutionAssets {
-      const verified = verify(saved);
-      const existing = Option.getOrUndefined(MutableHashMap.get(goals, saved.goalInstanceId));
-      if (isTruthy(existing)) {
-        if (
-          existing.manifestHash !== verified.manifestHash ||
-          existing.canonicalWorkerUrl !== verified.canonicalWorkerUrl ||
-          existing.sourceGeneration !== verified.sourceGeneration
-        )
-          throw new Error("Goal asset pin conflict");
-        return existing;
-      }
-      MutableHashMap.set(goals, verified.goalInstanceId, verified);
-      return verified;
-    },
+    adopt: Effect.fn("GoalWorkerAssets.adopt")(
+      function* (saved: SavedGoalExecutionAssets) {
+        const verified = yield* verify(saved);
+        const existing = Option.getOrUndefined(MutableHashMap.get(goals, saved.goalInstanceId));
+        if (isTruthy(existing)) {
+          yield* attempt(() => {
+            if (
+              existing.manifestHash !== verified.manifestHash ||
+              existing.canonicalWorkerUrl !== verified.canonicalWorkerUrl ||
+              existing.sourceGeneration !== verified.sourceGeneration
+            )
+              throw new Error("Goal asset pin conflict");
+          });
+          return existing;
+        }
+        MutableHashMap.set(goals, verified.goalInstanceId, verified);
+        return verified;
+      },
+      (effect) => mutex.withPermit(effect),
+    ),
     /** Acquire before Worker construction; release only after termination/exit (or boot failure). */
     use(assets: GoalExecutionAssets) {
       if (
@@ -369,7 +268,7 @@ export function makeGoalWorkerAssetsRegistry(
         Option.getOrUndefined(MutableHashMap.get(goals, assets.goalInstanceId)) !== assets
       )
         throw new Error("Unregistered Goal execution assets");
-      verify(assets);
+      verifyAtFence(assets);
       activeLeases++;
       let released = false;
       return Object.freeze({
@@ -382,13 +281,17 @@ export function makeGoalWorkerAssetsRegistry(
       });
     },
     /** Refuses disposal until every owner-tracked Worker lease has been released. */
-    dispose(options: { readonly remove?: boolean } = {}): void {
-      if (activeLeases !== 0) throw new Error("Goal asset workers are still active");
-      disposed = true;
-      MutableHashMap.clear(goals);
-      // Production shutdown retains immutable pins. Explicit removal is for test-owned roots only;
-      // this registry never deletes adopted snapshots owned by another registry.
-      if (options.remove === true) rmSync(root, { recursive: true, force: true });
-    },
+    dispose: Effect.fn("GoalWorkerAssets.dispose")(
+      function* (options: { readonly remove?: boolean } = {}) {
+        yield* attempt(() => {
+          if (activeLeases !== 0) throw new Error("Goal asset workers are still active");
+          disposed = true;
+          MutableHashMap.clear(goals);
+        });
+        if (options.remove === true)
+          yield* fs.remove(root, { recursive: true, force: true }).pipe(Effect.mapError(failure));
+      },
+      (effect, _options?: { readonly remove?: boolean }) => mutex.withPermit(effect),
+    ),
   };
-}
+});

@@ -1,7 +1,7 @@
-import { Cause, Deferred, Effect, Fiber, Schema, Stream } from "effect";
+import { Cause, Deferred, Effect, Fiber, Schema } from "effect";
 import { it } from "@effect/vitest";
 // Native fetch and HTTP server fixtures exercise the actual SDK transport.
-import { createServer } from "node:http";
+import { testHttpServer, HttpServerRequest, HttpServerResponse } from "./support/http.ts";
 import { expect, vi } from "vite-plus/test";
 import { createRecallSensor, layaSensorVersion } from "../src/agent/recall-sensor.ts";
 
@@ -102,62 +102,18 @@ it.live("HTTP posts typed noul only to loopback and does not follow redirects", 
 it.live("HTTP transport works with a short-lived loopback-only synthetic server", () =>
   Effect.gen(function* () {
     const requests: unknown[] = [];
-    const runNative = Effect.runPromiseWith(yield* Effect.context<never>());
-    const server = createServer((request, response) => {
-      void runNative(
-        Effect.gen(function* () {
-          const parts = yield* Stream.runCollect(
-            Stream.fromAsyncIterable(request, (cause) => new Cause.UnknownError(cause)),
-          );
-          requests.push(
-            yield* Schema.decodeEffect(requestBody)(
-              Buffer.concat(parts.map((part) => Buffer.from(part))).toString("utf8"),
-            ),
-          );
-          response.writeHead(200, { "content-type": "application/json" });
-          response.end(
-            yield* Schema.encodeEffect(
-              Schema.fromJsonString(
-                Schema.Struct({
-                  answers: Schema.Struct({
-                    recall_useful: Schema.Struct({
-                      type: Schema.Literal("noul"),
-                      noul: Schema.Finite,
-                    }),
-                  }),
-                }),
-              ),
-            )({ answers: { recall_useful: { type: "noul", noul: 0.6 } } }),
-          );
-        }).pipe(
-          Effect.catchCause(() =>
-            Effect.sync(() => {
-              response.writeHead(400);
-              response.end();
-            }),
-          ),
-        ),
-      );
-    });
-    yield* Effect.acquireRelease(
-      Effect.callback<void, Cause.UnknownError>((resume) => {
-        const failed = (cause: Error) => resume(Effect.fail(new Cause.UnknownError(cause)));
-        server.once("error", failed);
-        server.listen(0, "127.0.0.1", () => resume(Effect.void));
-        return Effect.sync(() => server.off("error", failed));
+    const { url } = yield* testHttpServer(
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        requests.push(yield* Schema.decodeEffect(requestBody)(yield* request.text));
+        return yield* HttpServerResponse.json({
+          answers: { recall_useful: { type: "noul", noul: 0.6 } },
+        });
       }),
-      () =>
-        Effect.callback<void>((resume) => {
-          server.closeAllConnections();
-          server.close(() => resume(Effect.void));
-        }),
-    );
-    const address = yield* Schema.decodeUnknownEffect(Schema.Struct({ port: Schema.Int }))(
-      server.address(),
     );
     const sensor = createRecallSensor({
       mode: "http",
-      endpoint: `http://127.0.0.1:${address.port}/v1/systemone`,
+      endpoint: `${url}/v1/systemone`,
     });
     expect(yield* sdkCall(() => sensor.evaluate(input))).toEqual({
       status: "evaluated",

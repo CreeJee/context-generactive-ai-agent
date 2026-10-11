@@ -1,10 +1,11 @@
+import { NodeServices } from "@effect/platform-node";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { Context, Layer, Stream } from "effect";
 import { it } from "@effect/vitest";
 import { Cause, FileSystem, Path } from "effect";
 import { withTestPlatform } from "./support/platform.ts";
 import { HashSet } from "effect";
-import { execFile } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
-import { promisify } from "node:util";
 import { Effect, Schema } from "effect";
 import { build } from "vite";
 import { expect } from "vite-plus/test";
@@ -15,6 +16,8 @@ it.live(
   () =>
     withTestPlatform(
       Effect.gen(function* () {
+        const platform = yield* Layer.build(NodeServices.layer);
+        const spawner = Context.get(platform, ChildProcessSpawner.ChildProcessSpawner);
         const fs = yield* FileSystem.FileSystem;
         const pathService = yield* Path.Path;
         const join = pathService.join;
@@ -100,9 +103,9 @@ it.live(
         expect(yield* fs.readFileString(a.path)).toBe(a.code);
         yield* fs.remove(source, { recursive: true });
         // Existing verified loader transforms host TS and loads real native addons; saved .mjs is native ESM.
-        // execFile waits for child close/reap; finite timeout kills with SIGKILL, no background process.
-        yield* sdkCall(() =>
-          promisify(execFile)(
+        // Scope owns and reaps the child; the finite timeout closes it with SIGKILL.
+        const handle = yield* spawner.spawn(
+          ChildProcess.make(
             process.execPath,
             [
               "--experimental-strip-types",
@@ -115,13 +118,22 @@ it.live(
             ],
             {
               cwd: root,
-              env: { ...process.env, NODE_OPTIONS: "" },
-              timeout: 30_000,
+              env: { NODE_OPTIONS: "" },
+              extendEnv: true,
+
               killSignal: "SIGKILL",
-              maxBuffer: 1_000_000,
             },
           ),
         );
+        const [, stderr, exitCode] = yield* Effect.all(
+          [
+            Stream.runDrain(handle.stdout),
+            Stream.runCollect(handle.stderr.pipe(Stream.decodeText())),
+            handle.exitCode,
+          ],
+          { concurrency: "unbounded" },
+        ).pipe(Effect.timeout("30 seconds"));
+        expect(exitCode, stderr.join("")).toBe(0);
         const report = yield* Schema.decodeEffect(
           Schema.fromJsonString(
             Schema.Struct({

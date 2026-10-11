@@ -2,8 +2,7 @@ import { nativePromise, nativeFailure } from "../runtime/native-effect.ts";
 import { nativeStream } from "../runtime/native-stream.ts";
 import { MutableHashMap, Option, Cause, Effect, Stream, Queue, DateTime } from "effect";
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
+import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import {
   EventType,
   type AdapterYieldChunk,

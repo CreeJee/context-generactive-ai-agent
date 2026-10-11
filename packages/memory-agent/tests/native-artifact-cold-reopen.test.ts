@@ -1,10 +1,11 @@
+import { NodeServices } from "@effect/platform-node";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { Context, Layer, Stream } from "effect";
 import { it } from "@effect/vitest";
 import { Cause, FileSystem, Path } from "effect";
 import { withTestPlatform } from "./support/platform.ts";
 import { HashSet } from "effect";
-import { execFile } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
-import { promisify } from "node:util";
 import { Effect, Schema } from "effect";
 import { build } from "vite";
 import { expect } from "vite-plus/test";
@@ -15,6 +16,8 @@ it.live(
   () =>
     withTestPlatform(
       Effect.gen(function* () {
+        const platform = yield* Layer.build(NodeServices.layer);
+        const spawner = Context.get(platform, ChildProcessSpawner.ChildProcessSpawner);
         const fs = yield* FileSystem.FileSystem;
         const pathService = yield* Path.Path;
         const join = pathService.join;
@@ -95,8 +98,8 @@ it.live(
         const reports = [];
         for (const phase of ["first", "second"] as const) {
           // Await close/reap before starting next process or deleting owned fixtures.
-          yield* sdkCall(() =>
-            promisify(execFile)(
+          const handle = yield* spawner.spawn(
+            ChildProcess.make(
               process.execPath,
               [
                 "--experimental-strip-types",
@@ -109,13 +112,22 @@ it.live(
               ],
               {
                 cwd: root,
-                env: { ...process.env, NODE_OPTIONS: "", HOME: join(temporary, "home") },
-                timeout: 30_000,
+                env: { NODE_OPTIONS: "", HOME: join(temporary, "home") },
+                extendEnv: true,
+
                 killSignal: "SIGKILL",
-                maxBuffer: 1_000_000,
               },
             ),
           );
+          const [, stderr, exitCode] = yield* Effect.all(
+            [
+              Stream.runDrain(handle.stdout),
+              Stream.runCollect(handle.stderr.pipe(Stream.decodeText())),
+              handle.exitCode,
+            ],
+            { concurrency: "unbounded" },
+          ).pipe(Effect.timeout("30 seconds"));
+          expect(exitCode, stderr.join("")).toBe(0);
           const report = yield* Schema.decodeEffect(Report)(
             yield* fs.readFileString(join(temporary, `${phase}.json`)),
           );

@@ -126,7 +126,7 @@ describe("provider-neutral contracts", () => {
   effectTest.effect("resolves only the requested provider and never falls back", () =>
     Effect.gen(function* () {
       const openai = fakeProvider("openai");
-      const registry = providerRegistryFrom([openai]);
+      const registry = providerRegistryFrom({ configurations: [openai] });
 
       expect(registry.providers).toEqual(["openai"]);
       expect(yield* registry.get("openai")).toBe(openai);
@@ -142,7 +142,10 @@ describe("provider-neutral contracts", () => {
     Effect.gen(function* () {
       const openai = fakeProvider("openai");
       const anthropic = fakeProvider("anthropic");
-      const registry = providerRegistryFrom([openai, anthropic], [openai.runtime]);
+      const registry = providerRegistryFrom({
+        configurations: [openai, anthropic],
+        runtimes: [openai.runtime],
+      });
 
       expect(yield* registry.runtime("openai")).toBe(openai.runtime);
       const missing = yield* Effect.result(registry.runtime("anthropic"));

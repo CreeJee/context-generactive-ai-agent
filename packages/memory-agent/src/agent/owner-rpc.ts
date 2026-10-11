@@ -3,6 +3,11 @@ import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { MutableHashMap, Exit, Option, Cause, Effect, Predicate, Schema } from "effect";
 import type { RunBinding } from "../workflow/run-bindings.ts";
+import {
+  ownerRpcCanonicalJson as canonical,
+  ownerRpcFingerprint,
+  ownerRpcFingerprintDigest,
+} from "./owner-rpc-fingerprint.ts";
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
 const parseJson = EffectFunction.flow(
@@ -152,28 +157,6 @@ export function makeInMemoryOwnerRpcLedger(): OwnerRpcLedger {
   };
 }
 
-function canonical(value: OwnerRpcJson): string {
-  if (value === null) return "null";
-  // This is the JSON serialization boundary, not domain-value discrimination.
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof
-  switch (typeof value) {
-    case "boolean":
-    case "string":
-      return JSON.stringify(value);
-    case "number":
-      if (!Number.isFinite(value)) throw new Error("Non-finite RPC number");
-      return JSON.stringify(value);
-    case "object":
-      if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-      return `{${Object.entries(value)
-        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-        .map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`)
-        .join(",")}}`;
-    default:
-      throw new Error("Non-JSON RPC value");
-  }
-}
-
 export type OwnerRpcHandlers<M extends OwnerRpcOperations> = {
   readonly [K in keyof M]: {
     /** Trusted owner classification, never supplied by a worker. */
@@ -242,7 +225,7 @@ export function makeOwnerRpcEffect<M extends OwnerRpcOperations, E = never, R = 
     )
       return reject("invalid_operation");
     const prepared = yield* Effect.try(() => ({
-      fingerprint: canonical({ operation, input: request.input }),
+      fingerprint: ownerRpcFingerprint(operation, request.input),
       input: freezeJson(parseJson(canonical(request.input))),
     })).pipe(Effect.option);
     if (Option.isNone(prepared)) return reject("invalid_operation");
@@ -279,7 +262,8 @@ export function makeOwnerRpcEffect<M extends OwnerRpcOperations, E = never, R = 
         return reject(admission.reason);
       case "existing":
         if (!initiallyActive) return reject("unauthorized");
-        return admission.record.fingerprint === fingerprint
+        return ownerRpcFingerprintDigest(admission.record.fingerprint) ===
+          ownerRpcFingerprintDigest(fingerprint)
           ? structuredClone(admission.record.reply)
           : reject("operation_conflict");
       case "reserved":

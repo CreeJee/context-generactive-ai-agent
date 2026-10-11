@@ -1,13 +1,21 @@
+import {
+  FetchHttpClient,
+  HttpBody,
+  HttpClient,
+  HttpServer,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/http";
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import { Array as EffectArray } from "effect";
 // Native server integration test uses host environment, SDK Promise callbacks and I/O fixtures.
-import { isTruthy } from "../../app/truthy.ts";
-import { createServer as createHttpServer, type Server } from "node:http";
-import { Cause, Effect, FileSystem, Layer, Path, Predicate, Schema, Stream } from "effect";
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import { createServer as createHttpServer } from "node:http";
+import { Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { AgentChat, Database, Sessions, Workflows } from "memory-agent";
 import { createServer } from "vite-plus";
-import { expect, vi } from "vite-plus/test";
+import { expect } from "vite-plus/test";
 import { testRuntime } from "../../../../packages/memory-agent/tests/support/runtime.ts";
 import { developmentApiProxy } from "../../vite.config";
 import { createDevelopmentBoundary, developmentRequestDecision } from "../dev-safety";
@@ -19,43 +27,24 @@ const sdkCall = <A>(call: () => A | PromiseLike<A>) =>
 const withPlatform = Effect.fn("DevHmrTest.platform")(function* <A, E, R>(
   program: Effect.Effect<A, E, R>,
 ) {
-  const services = yield* Layer.build(Layer.merge(NodeFileSystem.layer, NodePath.layer));
+  const services = yield* Layer.build(
+    Layer.mergeAll(NodeFileSystem.layer, NodePath.layer, FetchHttpClient.layer),
+  );
   return yield* Effect.provideContext(program, services);
 });
-const listen = Effect.fn("listenDevFixture")(function* (server: Server) {
-  yield* Effect.callback<void, Cause.UnknownError>((resume) => {
-    const onError = (error: Error) => resume(Effect.fail(new Cause.UnknownError(error)));
-    server.once("error", onError);
-    server.listen(0, "127.0.0.1", () => resume(Effect.void));
-    return Effect.sync(() => {
-      server.off("error", onError);
-    });
-  });
-  const { port } = yield* Schema.decodeUnknownEffect(Schema.Struct({ port: Schema.Int }))(
-    server.address(),
-  );
-  return `http://127.0.0.1:${port}`;
-});
-const close = (server: Server) =>
-  Effect.callback<void>((resume) => {
-    server.closeAllConnections();
-    server.close(() => resume(Effect.void));
-  });
 
 it.live(
   "real two-listener Vite proxy preserves contracts through UI edits and durable SSE reconnect",
-  () => {
-    vi.stubEnv("CONTEXT_AGENT_GOAL_WORKER", "1");
-    return Effect.scoped(
+  () =>
+    Effect.scoped(
       withPlatform(
         Effect.gen(function* () {
-          yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllEnvs()));
+          const http = yield* HttpClient.HttpClient;
           const fs = yield* FileSystem.FileSystem;
           const path = yield* Path.Path;
           const context = yield* sdkCall(() => testRuntime({ testProvider: {} }));
           yield* sdkCall(() => context.provider!.select(context.runtime));
           const services = yield* context.runtime.contextEffect;
-          const runNative = Effect.runPromiseWith(services);
           const { chat, db, sessions, workflows } = yield* Effect.provideContext(
             Effect.all({ chat: AgentChat, db: Database, sessions: Sessions, workflows: Workflows }),
             services,
@@ -81,80 +70,61 @@ it.live(
             path.join(context.project.root, "ui.tsx"),
             "export const label = 'initial UI';\n",
           );
-          const boundary = createDevelopmentBoundary("startup-contract", "finite-test-owner");
+          const boundary = createDevelopmentBoundary({
+            buildId: "startup-contract",
+            instanceId: "finite-test-owner",
+          });
           yield* Effect.scoped(
             Effect.gen(function* () {
-              const backend = yield* Effect.acquireRelease(
-                Effect.sync(() =>
-                  createHttpServer((incoming, outgoing) => {
-                    void runNative(
-                      Effect.scoped(
-                        Effect.gen(function* () {
-                          const url = new URL(incoming.url ?? "/", "http://localhost");
-                          const header = incoming.headers["x-context-agent-build-id"];
-                          const decision = developmentRequestDecision(
-                            boundary,
-                            incoming.method,
-                            url.pathname,
-                            Predicate.isString(header) ? header : undefined,
-                          );
-                          if (decision.kind !== "allow") {
-                            outgoing.writeHead(decision.status, {
-                              "Content-Type": "application/json",
-                            });
-                            outgoing.end(decision.body);
-                            return;
-                          }
-                          const chunks = yield* Stream.runCollect(
-                            Stream.fromAsyncIterable(
-                              incoming,
-                              (cause) => new Cause.UnknownError(cause),
-                            ),
-                          );
-                          const headers = new Headers();
-                          for (const [key, value] of Object.entries(incoming.headers))
-                            if (Predicate.isString(value)) headers.set(key, value);
-                          const init: RequestInit = { method: incoming.method, headers };
-                          if (incoming.method === "POST")
-                            init.body = Buffer.concat(
-                              chunks.map((chunk) => Buffer.from(chunk)),
-                            ).toString();
-                          const request = new Request(url, init);
-                          const sessionId = url.searchParams.get("session")!;
-                          const response = yield* Effect.provideContext(
-                            incoming.method === "POST"
-                              ? chat.handle(request, sessionId)
-                              : chat.hydrate(request, sessionId),
-                            services,
-                          );
-                          outgoing.writeHead(response.status, Object.fromEntries(response.headers));
-                          if (isTruthy(response.body))
-                            yield* Stream.runForEach(
-                              Stream.fromAsyncIterable(
-                                response.body,
-                                (cause) => new Cause.UnknownError(cause),
-                              ),
-                              (chunk) =>
-                                Effect.sync(() => {
-                                  outgoing.write(chunk);
-                                }),
-                            );
-                          outgoing.end();
-                        }),
-                      ).pipe(
-                        Effect.catchCause(() =>
-                          Effect.sync(() => {
-                            outgoing.writeHead(500);
-                            outgoing.end("finite test HTTP adapter failed");
-                          }),
-                        ),
-                      ),
-                    );
+              const backendServices = yield* Layer.build(
+                Layer.fresh(
+                  NodeHttpServer.layer(createHttpServer, {
+                    port: 0,
+                    host: "127.0.0.1",
+                    gracefulShutdownTimeout: "100 millis",
                   }),
                 ),
-                close,
               );
-              const backendUrl = yield* listen(backend);
+              const backend = yield* Effect.provideContext(HttpServer.HttpServer, backendServices);
+              yield* Effect.provideContext(
+                HttpServer.serveEffect(
+                  Effect.gen(function* () {
+                    const incoming = yield* HttpServerRequest.HttpServerRequest;
+                    const url = new URL(incoming.url, "http://localhost");
+                    const decision = developmentRequestDecision(
+                      boundary,
+                      incoming.method,
+                      url.pathname,
+                      incoming.headers["x-context-agent-build-id"],
+                    );
+                    if (decision.kind !== "allow")
+                      return HttpServerResponse.text(decision.body, {
+                        status: decision.status,
+                        contentType: "application/json",
+                      });
+                    const request = yield* HttpServerRequest.toWeb(incoming);
+                    const sessionId = url.searchParams.get("session")!;
+                    const response = yield* Effect.provideContext(
+                      incoming.method === "POST"
+                        ? chat.handle(request, sessionId)
+                        : chat.hydrate(request, sessionId),
+                      services,
+                    );
+                    return HttpServerResponse.fromWeb(response);
+                  }).pipe(
+                    Effect.catchCause(() =>
+                      Effect.succeed(
+                        HttpServerResponse.text("finite test HTTP adapter failed", { status: 500 }),
+                      ),
+                    ),
+                  ),
+                ),
+                backendServices,
+              );
+              const backendAddress = backend.address;
+              if (backendAddress._tag === "UnixPathAddress")
+                return yield* Effect.die(new Error("HTTP fixture requires TCP"));
+              const backendUrl = `http://127.0.0.1:${backendAddress.port}`;
               const frontend = yield* Effect.acquireRelease(
                 sdkCall(() =>
                   createServer({
@@ -191,21 +161,19 @@ it.live(
                   tools: [],
                   context: [],
                 });
-                return yield* sdkCall(() =>
-                  fetch(`${base}/api/chat?session=${sessionId}`, {
-                    method: "POST",
-                    signal: AbortSignal.timeout(10000),
+                return yield* http
+                  .post(`${base}/api/chat?session=${sessionId}`, {
                     headers,
-                    body,
-                  }),
-                );
+                    body: HttpBody.text(body, "application/json"),
+                  })
+                  .pipe(Effect.timeout(10000));
               });
               const rejected = yield* post(context.session.id, "incompatible", "other-contract");
               expect(rejected.status).toBe(409);
               expect(context.provider!.adapter.invocations).toHaveLength(0);
               const first = yield* post(context.session.id, "run-a");
               expect(first.status).toBe(200);
-              const firstStream = yield* sdkCall(() => first.text());
+              const firstStream = yield* first.text;
               expect(firstStream).toContain("Hello from fast-1");
               // A real UI-only file edit must not revoke the backend's startup contract.
               yield* fs.writeFileString(
@@ -213,8 +181,8 @@ it.live(
                 "export const label = 'edited UI';\n",
               );
               const valid = yield* post(second.id, "run-b", boundary.buildId);
-              expect(valid.status).toBe(200);
-              yield* sdkCall(() => valid.text());
+              expect(valid.status, valid.status === 200 ? "" : yield* valid.text).toBe(200);
+              yield* valid.text;
               const direct = yield* post(
                 second.id,
                 "direct-mismatch",
@@ -225,22 +193,19 @@ it.live(
               const calls = context.provider!.adapter.invocations.length;
               const duplicate = yield* post(context.session.id, "run-a", boundary.buildId);
               expect(duplicate.status).toBe(409);
-              yield* sdkCall(() => duplicate.text());
+              yield* duplicate.text;
               const wrongGoal = yield* post(second.id, "run-a", boundary.buildId);
               expect(wrongGoal.status).toBe(409);
               const ids = [...firstStream.matchAll(/^id: (.+)$/gm)].map((match) => match[1]!);
               expect(ids.length).toBeGreaterThan(1);
-              const reconnect = yield* sdkCall(() =>
-                fetch(
+              const reconnect = yield* http
+                .get(
                   `${frontendUrl}/api/chat?session=${context.session.id}&runId=run-a&offset=-1`,
-                  {
-                    headers: { "Last-Event-ID": ids[0]! },
-                    signal: AbortSignal.timeout(10000),
-                  },
-                ),
-              );
+                  { headers: { "Last-Event-ID": ids[0]! } },
+                )
+                .pipe(Effect.timeout(10000));
               expect(reconnect.status).toBe(200);
-              const resumed = yield* sdkCall(() => reconnect.text());
+              const resumed = yield* reconnect.text;
               const resumedIds = [...resumed.matchAll(/^id: (.+)$/gm)].map((match) => match[1]!);
               expect(resumedIds).toEqual(ids.slice(1));
               expect(EffectArray.dedupe(resumedIds).length).toBe(resumedIds.length);
@@ -257,7 +222,6 @@ it.live(
           );
         }),
       ),
-    );
-  },
+    ),
   30000,
 );

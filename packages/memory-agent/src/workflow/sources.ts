@@ -1,11 +1,9 @@
 import { Result, Function as EffectFunction } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { createHash } from "node:crypto";
+import { sha256 } from "../runtime/synchronous-crypto.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { existsSync, lstatSync, readFileSync } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { join } from "node:path";
-import { HashSet, Schema, Struct } from "effect";
+import { Effect, FileSystem, HashSet, Path, Schema, Struct } from "effect";
 import type { Project } from "../projects/projects.ts";
 import type { Skill } from "../skills/skills.ts";
 import {
@@ -43,7 +41,7 @@ export type StructuredRuleOrigin =
       readonly name: string;
     };
 
-const digest = (text: string) => createHash("sha256").update(text).digest("hex");
+const digest = (text: string) => sha256(text);
 const ruleName = (value: string) => value.toLocaleLowerCase().replace(/[^a-z0-9._-]+/g, "-");
 const sourceName = (origin: StructuredRuleOrigin) =>
   origin.kind === "project" ? origin.path : `${origin.serverId}/${origin.name}`;
@@ -84,28 +82,34 @@ function structuredWorkflowRulesBody(
  * Explicit project rules are data, not inferred prose. AGENTS.md remains human/model guidance;
  * machine-enforced workflow rules live in this bounded, schema-checked resource.
  */
-export function projectWorkflowRules(project: Project): LoadedRuleSources {
-  const absolute = join(project.root, projectWorkflowRulesPath);
-  if (!existsSync(absolute)) return { rules: [], problems: [] };
-  let text: string;
-  try {
-    const stats = lstatSync(absolute);
-    if (!stats.isFile())
-      return { rules: [], problems: [{ source: absolute, problem: "unreadable" }] };
-    if (stats.size > maxProjectRuleBytes)
-      return { rules: [], problems: [{ source: absolute, problem: "too_large" }] };
-    text = readFileSync(absolute, "utf8");
-  } catch {
-    return { rules: [], problems: [{ source: absolute, problem: "unreadable" }] };
-  }
-  const loaded = structuredWorkflowRules(text, {
-    kind: "project",
-    path: projectWorkflowRulesPath,
+export const projectWorkflowRules = Effect.fn("projectWorkflowRules")(function* (project: Project) {
+  const fs = yield* FileSystem.FileSystem;
+  const paths = yield* Path.Path;
+  const absolute = paths.join(project.root, projectWorkflowRulesPath);
+  const problem = (kind: RuleSourceProblem["problem"]): LoadedRuleSources => ({
+    rules: [],
+    problems: [{ source: absolute, problem: kind }],
   });
-  return loaded.problems.length === 0
-    ? loaded
-    : { rules: [], problems: [{ source: absolute, problem: "invalid" }] };
-}
+  const read = Effect.gen(function* (): Effect.fn.Return<
+    LoadedRuleSources,
+    import("effect/PlatformError").PlatformError
+  > {
+    if (!(yield* fs.exists(absolute))) return { rules: [], problems: [] };
+    // Preserve lstat's regular-file-only contract; FileSystem.stat follows symbolic links.
+    if ((yield* fs.readLink(absolute).pipe(Effect.result))._tag === "Success")
+      return problem("unreadable");
+    const stats = yield* fs.stat(absolute);
+    if (stats.type !== "File") return problem("unreadable");
+    if (stats.size > BigInt(maxProjectRuleBytes)) return problem("too_large");
+    const text = yield* fs.readFileString(absolute);
+    const loaded = structuredWorkflowRules(text, {
+      kind: "project",
+      path: projectWorkflowRulesPath,
+    });
+    return loaded.problems.length === 0 ? loaded : problem("invalid");
+  });
+  return yield* read.pipe(Effect.orElseSucceed(() => problem("unreadable")));
+});
 
 /**
  * A skill description becomes a searchable recommendation to read that skill, not an eagerly
@@ -138,10 +142,11 @@ export function skillWorkflowRules(skills: readonly Skill[]): readonly WorkflowR
 export const localWorkflowRules: {
   (skills: readonly Skill[]): (project: Project) => ReturnType<typeof localWorkflowRulesBody>;
 } & typeof localWorkflowRulesBody = EffectFunction.dual(2, localWorkflowRulesBody);
-function localWorkflowRulesBody(project: Project, skills: readonly Skill[]): LoadedRuleSources {
-  const projectRules = projectWorkflowRules(project);
-  return {
-    rules: [...projectRules.rules, ...skillWorkflowRules(skills)],
-    problems: projectRules.problems,
-  };
+function localWorkflowRulesBody(project: Project, skills: readonly Skill[]) {
+  return projectWorkflowRules(project).pipe(
+    Effect.map((projectRules): LoadedRuleSources => ({
+      rules: [...projectRules.rules, ...skillWorkflowRules(skills)],
+      problems: projectRules.problems,
+    })),
+  );
 }

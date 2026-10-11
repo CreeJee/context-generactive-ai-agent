@@ -112,8 +112,9 @@ describe("report evidence tools", () => {
         expect(yield* invoke("read_report_item", { section, id })).toEqual({ error: "not_found" });
       }
       expect(
-        (yield* Effect.flip(invoke("list_report_evidence", { section: "calls", offset: 201 })))
-          .cause,
+        (yield* Effect.flip(
+          Effect.asVoid(invoke("list_report_evidence", { section: "calls", offset: 201 })),
+        )).cause,
       ).toBeInstanceOf(Error);
     }),
   );

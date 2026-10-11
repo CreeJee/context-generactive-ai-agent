@@ -1,10 +1,11 @@
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { statSync } from "node:fs";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { isAbsolute, relative, sep } from "node:path";
-import { Clock, DateTime, Cause, Context, Effect, Layer, Schema } from "effect";
+import { path as platformPath } from "../runtime/synchronous-path.ts";
+const { isAbsolute, relative, sep } = platformPath;
+import { Option, Clock, DateTime, Cause, Context, Effect, FileSystem, Layer, Schema } from "effect";
 import { GlobalConfig } from "../config/global-config.ts";
 import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
@@ -78,6 +79,8 @@ const firstLine = (text: string) => text.replace(/\s+/gu, " ").trim().slice(0, t
 const make = (home: string) =>
   Effect.gen(function* () {
     const effectClock = yield* Clock.Clock;
+    const fs = yield* FileSystem.FileSystem;
+    const filesystemContext = yield* Effect.context<FileSystem.FileSystem>();
     const { sqlite, atomic } = yield* Database;
     const storage = yield* StorageRoot;
     const projects = yield* Projects;
@@ -201,7 +204,11 @@ const make = (home: string) =>
     /** Reads what is new in one transcript. Returns how many nodes it wrote. */
     const migrate = (transcript: Transcript, interpret: boolean) =>
       Effect.gen(function* () {
-        const stats = yield* Effect.try(() => statSync(transcript.path)).pipe(
+        const stats = yield* fs.stat(transcript.path).pipe(
+          Effect.map((info) => ({
+            size: Number(info.size),
+            mtimeMs: Option.getOrUndefined(info.mtime)?.getTime() ?? 0,
+          })),
           Effect.orElseSucceed(() => null),
         );
         if (!isTruthy(stats)) return 0;
@@ -217,9 +224,9 @@ const make = (home: string) =>
         if (!isTruthy(source)) return 0;
         const read = source.reader(transcript.externalId);
         const lines: TranscriptItem[] = [];
-        const { offset } = readLinesFrom(transcript.path, from, (line) => {
+        const { offset } = yield* readLinesFrom(transcript.path, from, (line) => {
           for (const item of read(line)) lines.push(item);
-        });
+        }).pipe(Effect.provideContext(filesystemContext));
         // Another agent's transcript holds whatever its shell printed; memory keeps none of it.
         const items = yield* Effect.forEach(lines, hideSecrets);
 
@@ -279,8 +286,11 @@ const make = (home: string) =>
 
     /** Transcripts of every source, minus anything inside this app's own storage. */
     const transcripts = () =>
-      findTranscripts(home).filter(
-        (transcript) => !isWithin(storageRoot, canonicalPath(transcript.path)),
+      findTranscripts(home).pipe(
+        Effect.provideContext(filesystemContext),
+        Effect.map((found) =>
+          found.filter((transcript) => !isWithin(storageRoot, canonicalPath(transcript.path))),
+        ),
       );
 
     const countsOf = (found: readonly Transcript[]): TranscriptCounts =>
@@ -290,7 +300,7 @@ const make = (home: string) =>
       }));
 
     return {
-      counts: Effect.sync(() => countsOf(transcripts())),
+      counts: transcripts().pipe(Effect.map(countsOf)),
 
       /**
        * Reads what is new in every transcript. A file that cannot be read, or a line that cannot be
@@ -300,7 +310,7 @@ const make = (home: string) =>
         Effect.gen(function* () {
           const settings = yield* config.read;
           const interpret = settings.importsInterpret ?? true;
-          const found = transcripts();
+          const found = yield* transcripts();
           let progress: PassProgress = { checked: 0, total: found.length, written: 0, failed: 0 };
           onProgress(progress);
           for (const transcript of found) {
@@ -332,5 +342,6 @@ export class TranscriptPass extends Context.Service<
   TranscriptPass,
   Effect.Success<ReturnType<typeof make>>
 >()("memory-agent/imports/pass/TranscriptPass") {
-  static readonly layer = (home: string) => Layer.effect(TranscriptPass, make(home));
+  static readonly layer = (home: string) =>
+    Layer.effect(TranscriptPass, make(home)).pipe(Layer.provide(NodeFileSystem.layer));
 }

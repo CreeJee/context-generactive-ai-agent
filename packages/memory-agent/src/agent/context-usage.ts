@@ -2,8 +2,7 @@ import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Effect } from "effect";
 import type { ChatMiddleware, MetadataStore } from "@tanstack/ai";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
+import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import { Option, Schema } from "effect";
 import { budgetFor } from "./compaction.ts";
 import { contextUsageEvent, type CompactionStage, type ContextView } from "./run-state.ts";

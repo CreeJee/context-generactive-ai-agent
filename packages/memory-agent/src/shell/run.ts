@@ -3,6 +3,7 @@ import { Clock, Deferred, Effect, Fiber, MutableHashSet, Option, Schema, Scope }
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { spawn } from "node:child_process";
+import { runOAuthNodeEffect } from "../oauth/node-runtime.ts";
 import { shellInvocation, stopProcessTree } from "../runtime/host.ts";
 
 /** Output bytes kept from the start of each stream once it is too long. */
@@ -74,8 +75,8 @@ export function commandEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv
 }
 
 /** The shell a command runs in: the user's login shell or `/bin/sh`, `cmd.exe` on Windows. */
-export function hostShell(source: NodeJS.ProcessEnv): string {
-  return shellInvocation("", source).file;
+export function hostShell(source: NodeJS.ProcessEnv) {
+  return Effect.map(shellInvocation("", source), (invocation) => invocation.file);
 }
 
 /** Keeps the first and last bytes of a stream and counts what was dropped in between. */
@@ -152,7 +153,17 @@ export class CommandStartFailed extends Schema.TaggedError<CommandStartFailed>()
 ) {}
 
 function runCommandBody(command: string, options: CommandOptions): Promise<CommandResult> {
-  return Effect.runPromise(runCommandEffect({ command, ...options }));
+  // Register the request before asynchronous runtime/host-shell resolution so shutdown cannot miss it.
+  const pending = new AbortController();
+  const entry: ActiveCommand = { cancel: () => pending.abort(), force: () => pending.abort() };
+  MutableHashSet.add(activeCommands, entry);
+  const signal =
+    options.signal === undefined
+      ? pending.signal
+      : AbortSignal.any([pending.signal, options.signal]);
+  return runOAuthNodeEffect(runCommandEffect({ command, ...options, signal })).finally(() => {
+    MutableHashSet.remove(activeCommands, entry);
+  });
 }
 
 export const runCommandEffect = (options: CommandOptions & { readonly command: string }) =>
@@ -169,7 +180,7 @@ export const runCommandEffect = (options: CommandOptions & { readonly command: s
             scope,
           ),
         );
-      const invocation = shellInvocation(command, options.env);
+      const invocation = yield* shellInvocation(command, options.env);
       const shell = invocation.file;
       const windows = process.platform === "win32";
       const started = effectClock.currentTimeMillisUnsafe();

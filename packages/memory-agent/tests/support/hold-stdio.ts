@@ -1,17 +1,32 @@
-// Native OS lifecycle probe: publish the detached PID before the command's short timeout.
-// Keeping this entry point free of runtime initialization makes it measure inherited pipe cleanup.
-import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+// A deliberately detached child retains inherited pipes; the parent test owns its final SIGKILL.
+import { NodeServices } from "@effect/platform-node";
+import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-if (process.argv[2] === "child") {
-  setInterval(() => undefined, 60_000);
-} else {
-  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "child"], {
-    detached: true,
-    stdio: ["ignore", process.stdout, process.stderr],
-  });
-  if (child.pid === undefined) throw new Error("child did not start");
-  writeFileSync(process.argv[2], String(child.pid));
-  child.unref();
-}
+await Effect.runPromise(
+  Effect.scoped(
+    Effect.gen(function* () {
+      const argument = yield* Schema.decodeEffect(Schema.NonEmptyString)(process.argv[2] ?? "");
+      if (argument === "child") {
+        return yield* Effect.sleep("60 seconds").pipe(Effect.forever);
+      }
+      const platform = yield* Layer.build(NodeServices.layer);
+      const fs = Context.get(platform, FileSystem.FileSystem);
+      const path = Context.get(platform, Path.Path);
+      const spawner = Context.get(platform, ChildProcessSpawner.ChildProcessSpawner);
+      const executable = yield* path.fromFileUrl(new URL(import.meta.url));
+      const child = yield* spawner.spawn(
+        ChildProcess.make(process.execPath, [executable, "child"], {
+          detached: true,
+          stdin: "ignore",
+          stdout: "inherit",
+          stderr: "inherit",
+        }),
+      );
+      yield* fs.writeFileString(argument, String(child.pid));
+      // The official unref operation also prevents the spawner Scope from killing the detached child.
+      const rereference = yield* child.unref;
+      void rereference;
+    }),
+  ),
+);

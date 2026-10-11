@@ -18,6 +18,7 @@ import { webSearchTool } from "@tanstack/ai-openai/tools";
 import { expect, vi } from "vite-plus/test";
 import {
   Cause,
+  Context,
   Deferred,
   Fiber,
   FileSystem,
@@ -31,6 +32,7 @@ import {
   Stream,
 } from "effect";
 import { Database } from "../src/db/database.ts";
+import { ExecutionAdmission } from "../src/runtime/execution-admission.ts";
 import { PermissionGate } from "../src/permissions/gate.ts";
 import { PermissionReviews } from "../src/permissions/reviews.ts";
 import { PermissionClassifier } from "../src/permissions/classifier.ts";
@@ -45,25 +47,66 @@ import { ScriptedTextAdapter } from "../src/testing/scripted-adapter.ts";
 import { parallelReads } from "../src/tools/parallel-reads.ts";
 import { compaction } from "../src/agent/compaction.ts";
 import { modelHandoffHistory } from "../src/agent/model-handoff.ts";
+import { BackgroundTasks } from "../src/tools/background.ts";
+import { Subagents } from "../src/subagents/subagents.ts";
+import { testRuntime } from "./support/runtime.ts";
 
 const sdkCall = <A>(call: () => A | PromiseLike<A>) =>
   Effect.tryPromise(() => Promise.resolve(call()));
+const testAdmission = Context.get(
+  Effect.runSync(Effect.scoped(Layer.build(ExecutionAdmission.layer()))),
+  ExecutionAdmission,
+);
 function maliciousWorker(source: string) {
-  const clientUrl = new URL("../src/agent/full-loop-rpc-client.ts", import.meta.url).href;
+  const effectUrl = import.meta.resolve("effect");
+  const rpcUrl = import.meta.resolve("effect/rpc");
+  const platformNodeUrl = import.meta.resolve("@effect/platform-node");
+  const nativeEffectUrl = new URL("../src/runtime/native-effect.ts", import.meta.url).href;
   const codecUrl = new URL("../src/agent/full-loop-codec.ts", import.meta.url).href;
+  const rpcDefinitionsUrl = new URL("../src/agent/full-loop-effect-rpc.ts", import.meta.url).href;
+  const messagePortUrl = new URL("../src/agent/effect-rpc-message-port.ts", import.meta.url).href;
   return new URL(
     `data:text/javascript;base64,${Buffer.from(`
-    import { workerData, parentPort } from 'node:worker_threads';
-    import { makeOwnerRpcPortClient } from ${JSON.stringify(clientUrl)};
+    import { NodeWorkerRunner } from ${JSON.stringify(platformNodeUrl)};
+    import { Effect, Layer, Stream } from ${JSON.stringify(effectUrl)};
+    import { RpcClient, RpcServer } from ${JSON.stringify(rpcUrl)};
+    import { runNativeEffect } from ${JSON.stringify(nativeEffectUrl)};
     import { encodeFullLoopValue, decodeFullLoopValue } from ${JSON.stringify(codecUrl)};
-    const client = makeOwnerRpcPortClient(workerData.port);
-    let id = 0;
-    const rpc = async (operation, input) => client.request({
-      type: 'owner-rpc-request', capability: workerData.capability,
-      operationId: ++id, operation, input: encodeFullLoopValue(input),
-    });
-    ${source}
-    client.close(); parentPort.close();
+    import {
+      FullLoopCapabilityMiddleware,
+      FullLoopOwnerRpcGroup,
+      FullLoopRpcError,
+      FullLoopRpcGroup,
+    } from ${JSON.stringify(rpcDefinitionsUrl)};
+    import { layerMessagePortRpcClient } from ${JSON.stringify(messagePortUrl)};
+
+    const runFullLoop = (payload) => Stream.unwrap(Effect.gen(function* () {
+      const ownerProtocolContext = yield* Layer.build(layerMessagePortRpcClient(payload.ownerPort));
+      const owner = yield* RpcClient.make(FullLoopOwnerRpcGroup).pipe(
+        Effect.provide(ownerProtocolContext),
+      );
+      let id = payload.lastOperationId;
+      const rpc = (operation, input) => runNativeEffect(owner.OwnerCall({
+        type: 'owner-rpc-request', capability: payload.capability,
+        operationId: ++id, operation, input: encodeFullLoopValue(input),
+      }));
+      const result = yield* Effect.tryPromise({
+        try: async () => {
+          ${source}
+        },
+        catch: () => FullLoopRpcError.make({ reason: 'worker_failed' }),
+      });
+      return Stream.make(result);
+    }));
+
+    const handlers = FullLoopRpcGroup.toLayer({ RunFullLoop: runFullLoop });
+    const authorization = Layer.succeed(FullLoopCapabilityMiddleware, (effect) => effect);
+    const protocol = RpcServer.layerProtocolWorkerRunner.pipe(Layer.provide(NodeWorkerRunner.layer));
+    const server = RpcServer.layer(FullLoopRpcGroup, {
+      concurrency: 1,
+      disableFatalDefects: true,
+    }).pipe(Layer.provide(handlers), Layer.provide(authorization), Layer.provide(protocol));
+    await runNativeEffect(Layer.launch(server));
   `).toString("base64")}`,
   );
 }
@@ -111,7 +154,7 @@ it.live(
               "revoke failed",
             );
             expect(worker?.threadId).toBe(-1);
-            expect(lifecycle).toEqual(["start", "exit", "stop"]);
+            expect(lifecycle).toEqual(["start", "stop", "exit"]);
           } finally {
           }
         }),
@@ -122,77 +165,45 @@ it.live(
 );
 
 it.live(
-  "consumer cancellation awaits actual termination and rejected termination retains lease",
+  "consumer cancellation awaits actual worker exit before releasing its lease",
   () => {
-    const callerControllers0 = Array.from({ length: 2 }, () => new AbortController());
-    let controllerCursor0 = 0;
+    const callerController0 = new AbortController();
     return Effect.scoped(
       withTestPlatform(
         Effect.gen(function* () {
-          for (const rejectTermination of [false, true]) {
-            const f = yield* fixture();
-            const controller = callerControllers0[controllerCursor0++]!;
-            let worker: import("node:worker_threads").Worker | undefined;
-            let stopped = 0;
-            let restore: (() => void) | undefined;
-            yield* Effect.addFinalizer(() =>
-              Effect.sync(() => restore?.()).pipe(
-                Effect.andThen(sdkCall(() => worker?.terminate())),
-                Effect.orDie,
-              ),
-            );
-            const stream = createFullLoopExecution<ScriptedTextAdapter>({
-              ...f.owner,
-              onWorker: (value) => {
-                worker = value;
-                if (rejectTermination) {
-                  const spy = vi
-                    .spyOn(value, "terminate")
-                    .mockRejectedValue(new Error("termination failed"));
-                  restore = () => spy.mockRestore();
-                }
-              },
-              onWorkerStopped: () => {
-                stopped++;
-              },
-            }).execute(
-              { messages: [], runId: "r", threadId: "s" },
-              {
-                model: { adapter: new ScriptedTextAdapter([{ text: "answer" }]) },
-                tools: [],
-                middleware: [],
-                stream: { abortController: controller },
-              },
-            );
-            try {
-              expect((yield* sdkCall(() => stream.next())).done).toBe(false);
-              if (rejectTermination) {
-                expect(
-                  (yield* Effect.flip(sdkCall(() => stream.return(undefined)))).cause,
-                ).toMatchObject({
-                  _tag: "WorkerLifecycleError",
-                  operation: "terminate",
-                  cause: expect.objectContaining({ message: "termination failed" }),
-                });
-                expect(stopped).toBe(0);
-                expect(worker?.threadId).not.toBe(-1);
-                expect(worker?.listenerCount("message")).toBe(0);
-                expect(worker?.listenerCount("error")).toBe(0);
-                expect(worker?.listenerCount("exit")).toBe(0);
-              } else {
-                yield* sdkCall(() => stream.return(undefined));
-                expect(worker?.threadId).toBe(-1);
-                expect(stopped).toBe(1);
-                expect(worker?.listenerCount("message")).toBe(0);
-                expect(worker?.listenerCount("error")).toBe(0);
-                expect(worker?.listenerCount("exit")).toBe(0);
-              }
-              expect(controller.signal.aborted).toBe(true);
-            } finally {
-              restore?.();
-              yield* sdkCall(() => worker?.terminate());
-            }
-          }
+          const f = yield* fixture();
+          const lifecycle: string[] = [];
+          let worker: import("node:worker_threads").Worker | undefined;
+          const stream = createFullLoopExecution<ScriptedTextAdapter>({
+            ...f.owner,
+            onWorker: (value) => {
+              worker = value;
+              value.once("exit", () => {
+                lifecycle.push("exit");
+              });
+            },
+            onWorkerStopped: () => {
+              lifecycle.push("stop");
+            },
+          }).execute(
+            { messages: [], runId: "r", threadId: "s" },
+            {
+              model: { adapter: new ScriptedTextAdapter([{ text: "answer" }]) },
+              tools: [],
+              middleware: [],
+              stream: { abortController: callerController0 },
+            },
+          );
+
+          expect((yield* sdkCall(() => stream.next())).done).toBe(false);
+          yield* sdkCall(() => stream.return(undefined));
+
+          expect(worker?.threadId).toBe(-1);
+          expect(lifecycle).toEqual(["stop", "exit"]);
+          expect(worker?.listenerCount("message")).toBe(0);
+          expect(worker?.listenerCount("error")).toBe(0);
+          expect(worker?.listenerCount("exit")).toBe(0);
+          expect(callerController0.signal.aborted).toBe(true);
         }),
       ),
     );
@@ -445,6 +456,7 @@ const fixture = Effect.fn("fullLoopOwnerFixture")(function* () {
       if (sqlite.isOpen) sqlite.close();
     },
     owner: {
+      admission: testAdmission,
       ledger,
       capability,
       lastOperationId: 0,
@@ -546,10 +558,8 @@ it.live(
         context: { runId: 'forged', threadId: 's', provider: 'scripted', model: 'scripted-1',
           source: 'server', context: {} } })).type);
       const legitimate = await rpc('tool', call);
-      parentPort.postMessage({ type: 'chunk', chunk: { type: 'CUSTOM', name: 'results',
-        value: { rejected, authorization: authorization.type, legitimate: legitimate.type, transcript: transcript.type } } });
-      await new Promise(resolve => parentPort.once('message', resolve));
-      parentPort.postMessage({ type: 'done' });
+      return { type: 'CUSTOM', name: 'results',
+        value: { rejected, authorization: authorization.type, legitimate: legitimate.type, transcript: transcript.type } };
     `);
             const adapter = new ScriptedTextAdapter([
               { toolCalls: [{ id: "c", name: "owner_tool", arguments: '{"value":"safe"}' }] },
@@ -844,6 +854,233 @@ it.live(
   20000,
 );
 
+it.live.each(["get_background_result", "cancel_background_task"])(
+  "missing background task through the real worker preserves read/write failure semantics (%s)",
+  (name) => {
+    const callerController = new AbortController();
+    return Effect.scoped(
+      withTestPlatform(
+        Effect.gen(function* () {
+          const f = yield* fixture();
+          const { runtime, session } = yield* sdkCall(() => testRuntime());
+          const tasks = yield* Effect.provideContext(BackgroundTasks, yield* runtime.contextEffect);
+          const tool = tasks.forSession(session.id).find((tool) => tool.name === name)!;
+          const adapter = new ScriptedTextAdapter([
+            { toolCalls: [{ id: "missing", name, arguments: '{"taskId":"missing-task"}' }] },
+            { text: "handled missing result" },
+          ]);
+          const result = yield* Effect.result(
+            Stream.runCollect(
+              Stream.fromAsyncIterable(
+                createFullLoopExecution<ScriptedTextAdapter>(f.owner).execute(
+                  { messages: [], runId: "r", threadId: "s" },
+                  {
+                    model: { adapter, agentLoopStrategy: maxIterations(3) },
+                    tools: [tool],
+                    middleware: [],
+                    stream: { abortController: callerController },
+                  },
+                ),
+                (cause) => new Cause.UnknownError(cause),
+              ),
+            ),
+          );
+          const rows = f.sqlite
+            .prepare(
+              'SELECT status FROM owner_rpc_operations WHERE fingerprint LIKE \'%"operation":"tool"%\'',
+            )
+            .all();
+          switch (name) {
+            case "get_background_result":
+              expect(Result.isSuccess(result)).toBe(true);
+              if (Result.isSuccess(result))
+                expect(result.success).toContainEqual(
+                  expect.objectContaining({
+                    type: "TEXT_MESSAGE_CONTENT",
+                    delta: "handled missing result",
+                  }),
+                );
+              expect(adapter.invocations[1]?.messages).toContainEqual(
+                expect.objectContaining({
+                  role: "tool",
+                  toolCallId: "missing",
+                  content: expect.stringContaining("Background task not found in this session"),
+                }),
+              );
+              expect(rows).toEqual([{ status: "succeeded" }]);
+              break;
+            case "cancel_background_task":
+              // The SDK can finish after an RPC rejection, but durable Goal execution
+              // must still see the unresolved write and refuse completion.
+              expect(rows).toEqual([{ status: "uncertain" }]);
+              break;
+          }
+        }),
+      ),
+    );
+  },
+  20000,
+);
+
+it.live(
+  "a retrieval audit write followed by failure remains uncertain through the real worker",
+  () => {
+    const controller = new AbortController();
+    return Effect.scoped(
+      withTestPlatform(
+        Effect.gen(function* () {
+          const f = yield* fixture();
+          f.sqlite.exec("CREATE TABLE retrieval_audit(id INTEGER PRIMARY KEY)");
+          const adapter = new ScriptedTextAdapter([
+            { toolCalls: [{ id: "audited-read", name: "find_memory", arguments: "{}" }] },
+            { text: "must not convert a partial write into a settled read error" },
+          ]);
+          const tool = toolDefinition({
+            name: "find_memory",
+            description: "audited retrieval",
+          }).server(() => {
+            f.sqlite.exec("INSERT INTO retrieval_audit VALUES(1)");
+            throw new Error("Failure after writing retrieval audit");
+          });
+          yield* Effect.result(
+            Stream.runDrain(
+              Stream.fromAsyncIterable(
+                createFullLoopExecution<ScriptedTextAdapter>(f.owner).execute(
+                  { messages: [], runId: "r", threadId: "s" },
+                  {
+                    model: { adapter, agentLoopStrategy: maxIterations(3) },
+                    tools: [tool],
+                    middleware: [],
+                    stream: { abortController: controller },
+                  },
+                ),
+                (cause) => new Cause.UnknownError(cause),
+              ),
+            ),
+          );
+          expect(f.sqlite.prepare("SELECT id FROM retrieval_audit").all()).toEqual([{ id: 1 }]);
+          expect(
+            f.sqlite
+              .prepare(
+                'SELECT status FROM owner_rpc_operations WHERE fingerprint LIKE \'%"operation":"tool"%\'',
+              )
+              .all(),
+          ).toEqual([{ status: "uncertain" }]);
+        }),
+      ),
+    );
+  },
+  20000,
+);
+
+it.live.each(["get_subagent_report", "get_subagent_reports", "wait_subagents"])(
+  "missing subagent reports through the real worker return a settled read failure (%s)",
+  (name) => {
+    const controller = new AbortController();
+    return Effect.scoped(
+      withTestPlatform(
+        Effect.gen(function* () {
+          const f = yield* fixture();
+          const { runtime, project, session } = yield* sdkCall(() => testRuntime());
+          const subagents = yield* Effect.provideContext(Subagents, yield* runtime.contextEffect);
+          const run = subagents.forRun({
+            project,
+            sessionId: session.id,
+            runId: "r",
+            selection: { provider: "openai", model: "scripted-1", reasoningEffort: "none" },
+            abortSignal: controller.signal,
+            tools: [],
+            systemPrompts: [],
+            deliveredParentNotificationIds: HashSet.empty(),
+            gated: HashSet.empty(),
+          });
+          const tool = run.tools.find((candidate) => candidate.name === name)!;
+          const attempts = [
+            {
+              taskId: "5254f3ea-8610-405d-9d75-83644aa455fc",
+              attemptId: "19c53746-50de-43d9-a8b3-9a9ff13c8a4a",
+            },
+            {
+              taskId: "21419ef4-480f-4a5b-8bed-3993bc595887",
+              attemptId: "91083f5c-96fd-447e-b00e-4a2656669762",
+            },
+            {
+              taskId: "c7853ba4-887d-4f6f-8a68-d31867c428b0",
+              attemptId: "61f3d383-537b-4d5e-ab11-82fb7a468282",
+            },
+          ];
+          const input =
+            name === "get_subagent_report"
+              ? attempts[0]
+              : name === "wait_subagents"
+                ? { attempts, mode: "all", timeoutMs: 0 }
+                : { attempts };
+          const rejection = yield* Effect.flip(Effect.asVoid(sdkCall(() => tool.execute!(input))));
+          expect(rejection.cause).toBeInstanceOf(Error);
+          if (rejection.cause instanceof Error) {
+            expect(rejection.cause.message).toBe("Subagent attempt not found in this session");
+            expect(rejection.cause.stack).toContain(
+              name === "wait_subagents" ? "store.ts" : "subagents.ts",
+            );
+          }
+          const adapter = new ScriptedTextAdapter([
+            {
+              toolCalls: [
+                {
+                  id: "missing-report",
+                  name,
+                  arguments: yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
+                    input,
+                  ),
+                },
+              ],
+            },
+            { text: "handled missing report" },
+          ]);
+          const observed: boolean[] = [];
+          yield* Stream.runDrain(
+            Stream.fromAsyncIterable(
+              createFullLoopExecution<ScriptedTextAdapter>(f.owner).execute(
+                { messages: [], runId: "r", threadId: "s" },
+                {
+                  model: { adapter, agentLoopStrategy: maxIterations(3) },
+                  tools: [tool],
+                  middleware: [
+                    {
+                      name: "read-outcome",
+                      onAfterToolCall: (_ctx, info) => {
+                        observed.push(info.ok);
+                      },
+                    },
+                  ],
+                  stream: { abortController: controller },
+                },
+              ),
+              (cause) => new Cause.UnknownError(cause),
+            ),
+          );
+          expect(adapter.invocations[1]?.messages).toContainEqual(
+            expect.objectContaining({
+              role: "tool",
+              toolCallId: "missing-report",
+              content: expect.stringContaining("Subagent attempt not found in this session"),
+            }),
+          );
+          expect(observed).toEqual([false]);
+          expect(
+            f.sqlite
+              .prepare(
+                'SELECT status FROM owner_rpc_operations WHERE fingerprint LIKE \'%"operation":"tool"%\'',
+              )
+              .all(),
+          ).toEqual([{ status: "succeeded" }]);
+        }),
+      ),
+    );
+  },
+  20000,
+);
+
 it.live(
   "real SDK worker pins owner callables per execution without freezing their receivers",
   () => {
@@ -1003,14 +1240,16 @@ it.live(
             expect(
               String(
                 (yield* Effect.flip(
-                  sdkCall(() =>
-                    guardedTool!.execute!(
-                      {},
-                      {
-                        toolCallId: "c1",
-                        abortSignal: capabilities.stream.abortController.signal,
-                        emitCustomEvent: () => undefined,
-                      },
+                  Effect.asVoid(
+                    sdkCall(() =>
+                      guardedTool!.execute!(
+                        {},
+                        {
+                          toolCallId: "c1",
+                          abortSignal: capabilities.stream.abortController.signal,
+                          emitCustomEvent: () => undefined,
+                        },
+                      ),
                     ),
                   ),
                 )).cause,
@@ -1317,17 +1556,19 @@ it.live(
                               expect(
                                 String(
                                   (yield* Effect.flip(
-                                    sdkCall(() =>
-                                      execute(
-                                        {},
-                                        {
-                                          toolCallId: "one",
-                                          abortSignal: controller.signal,
-                                          emitCustomEvent: () => undefined,
-                                        },
+                                    Effect.asVoid(
+                                      sdkCall(() =>
+                                        execute(
+                                          {},
+                                          {
+                                            toolCallId: "one",
+                                            abortSignal: controller.signal,
+                                            emitCustomEvent: () => undefined,
+                                          },
+                                        ),
                                       ),
                                     ),
-                                  )).cause,
+                                  ).pipe(Effect.orDie)).cause,
                                 ),
                               ).toContain("owner tool implementation grant");
                               expect(started).toEqual([]);
@@ -1375,7 +1616,7 @@ it.live(
 );
 
 it.live(
-  "worker death during owner effect rejects stream and never replays tool",
+  "worker death during owner effect rejects stream, retains uncertainty and never replays tool",
   () => {
     const callerController0 = new AbortController();
     return Effect.scoped(
@@ -1453,19 +1694,14 @@ it.live(
               expect(String(failure.failure.cause)).toContain("no replay");
             expect(calls).toBe(1);
             yield* Deferred.succeed(gate, undefined);
-            yield* sdkCall(() =>
-              expect
-                .poll(
-                  () =>
-                    f.sqlite
-                      .prepare(
-                        `SELECT status FROM owner_rpc_operations WHERE side_effect = 1 AND fingerprint LIKE '%"operation":"tool"%'`,
-                      )
-                      .all(),
-                  { timeout: 1_000, interval: 20 },
+            yield* Effect.yieldNow;
+            expect(
+              f.sqlite
+                .prepare(
+                  `SELECT status FROM owner_rpc_operations WHERE side_effect = 1 AND fingerprint LIKE '%"operation":"tool"%'`,
                 )
-                .toMatchObject([{ status: "succeeded" }]),
-            );
+                .all(),
+            ).toMatchObject([{ status: "pending" }]);
             expect(calls).toBe(1);
           } finally {
             yield* Deferred.succeed(gate, undefined);

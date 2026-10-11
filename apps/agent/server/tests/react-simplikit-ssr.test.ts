@@ -1,16 +1,26 @@
 // Separate native Node processes verify import/require without sharing poisoned browser globals.
-import { spawnSync } from "node:child_process";
+import { NodeServices } from "@effect/platform-node";
+import { Effect, Layer } from "effect";
+import { it } from "@effect/vitest";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { fileURLToPath } from "node:url";
-import { expect, test } from "vite-plus/test";
+import { expect } from "vite-plus/test";
 
 // Node exposes storage getters even without a browser. SSR must not probe them.
-test.each(["import", "require"])("%s does not read browser storage during SSR", (mode) => {
-  const result = spawnSync(
-    process.execPath,
-    [
-      "--input-type=module",
-      "-e",
-      `
+for (const mode of ["import", "require"])
+  it.live(`${mode} does not read browser storage during SSR`, () =>
+    Effect.gen(function* () {
+      const context = yield* Layer.build(NodeServices.layer);
+      const result = yield* Effect.provideContext(
+        Effect.gen(function* () {
+          const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+          return yield* spawner.exitCode(
+            ChildProcess.make(
+              process.execPath,
+              [
+                "--input-type=module",
+                "-e",
+                `
         import { createRequire } from "node:module";
         let reads = 0;
         for (const key of ["localStorage", "sessionStorage"])
@@ -22,8 +32,13 @@ test.each(["import", "require"])("%s does not read browser storage during SSR", 
         if (typeof hooks.useLoading !== "function" || reads !== 0)
           throw new Error("SSR storage reads: " + reads);
       `,
-    ],
-    { cwd: fileURLToPath(new URL("../..", import.meta.url)), encoding: "utf8" },
+              ],
+              { cwd: fileURLToPath(new URL("../..", import.meta.url)), stderr: "inherit" },
+            ),
+          );
+        }),
+        context,
+      );
+      expect(result).toBe(0);
+    }),
   );
-  expect(result.status, result.stderr).toBe(0);
-});

@@ -1,6 +1,7 @@
+import { browserCrypto } from "./shared/browser-crypto";
 import { runUiEffect, uiPromise } from "./shared/ui-effect";
 import { isTruthy } from "../truthy.ts";
-import { Effect } from "effect";
+import { Effect, Function as EffectFunction } from "effect";
 import { ProviderId } from "memory-agent/provider-contracts";
 import type {
   Attachment,
@@ -270,12 +271,16 @@ export function makeSessionLifecycleClient(appFetch: typeof fetch) {
   function changeSessionLifecycle(sessionId: string, holder: string, change: JsonBody) {
     return runUiEffect(
       Effect.gen(function* () {
+        const idempotencyKey = yield* browserCrypto.randomUUIDv4();
         const response = yield* uiPromise(() =>
           appFetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
             method: "POST",
             headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
             // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
-            body: JSON.stringify({ ...change, idempotencyKey: crypto.randomUUID() }),
+            body: JSON.stringify({
+              ...change,
+              idempotencyKey: idempotencyKey,
+            }),
           }),
         );
         const body: unknown = yield* uiPromise(() => response.json());
@@ -347,8 +352,16 @@ function apiError(
 /** Preserve the server's typed error code through the chat transport. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export const chatFetch: typeof fetch = (...arguments_) =>
-  runUiEffect(
+export const chatFetch: {
+  (init?: RequestInit): (input: RequestInfo | URL) => Promise<Response>;
+} & typeof fetch = EffectFunction.dual(
+  (args) =>
+    args[0] instanceof URL || args[0] instanceof Request || Schema.is(Schema.String)(args[0]),
+  chatFetchBody,
+);
+function chatFetchBody(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const arguments_: Parameters<typeof fetch> = [input, init];
+  return runUiEffect(
     Effect.gen(function* () {
       const response = yield* uiPromise(() => appFetch(...arguments_));
       if (!response.ok) {
@@ -363,6 +376,7 @@ export const chatFetch: typeof fetch = (...arguments_) =>
       return response;
     }),
   );
+}
 
 type JsonValue =
   | string
@@ -616,7 +630,7 @@ export const api = {
       Effect.gen(function* () {
         // Native Request/Response adapter preserves host and SDK stream semantics.
         const response = yield* uiPromise(() =>
-          fetch(
+          appFetch(
             `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
             {
               method: "POST",
@@ -643,15 +657,19 @@ export const api = {
   ): Promise<ArchiveTaskResult> =>
     runUiEffect(
       Effect.gen(function* () {
+        const idempotencyKey = yield* browserCrypto.randomUUIDv4();
         // Native Request/Response adapter preserves host and SDK stream semantics.
         const response = yield* uiPromise(() =>
-          fetch(
+          appFetch(
             `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
             {
               method: "POST",
               headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
               // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
-              body: JSON.stringify({ intent: "archive", idempotencyKey: crypto.randomUUID() }),
+              body: JSON.stringify({
+                intent: "archive",
+                idempotencyKey: idempotencyKey,
+              }),
             },
           ),
         );
@@ -677,15 +695,19 @@ export const api = {
   ): Promise<ArchiveTaskResult> =>
     runUiEffect(
       Effect.gen(function* () {
+        const idempotencyKey = yield* browserCrypto.randomUUIDv4();
         // Native Request/Response adapter preserves host and SDK stream semantics.
         const response = yield* uiPromise(() =>
-          fetch(
+          appFetch(
             `/api/sessions/${encodeURIComponent(sessionId)}/trace/tasks/${encodeURIComponent(taskId)}`,
             {
               method: "POST",
               headers: { [sessionHolderHeader]: holder, "Content-Type": "application/json" },
               // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
-              body: JSON.stringify({ intent: "delete", idempotencyKey: crypto.randomUUID() }),
+              body: JSON.stringify({
+                intent: "delete",
+                idempotencyKey: idempotencyKey,
+              }),
             },
           ),
         );
@@ -729,7 +751,7 @@ export const api = {
       Effect.gen(function* () {
         // Native Request/Response adapter preserves host and SDK stream semantics.
         const response = yield* uiPromise(() =>
-          fetch("/api/attachments", {
+          appFetch("/api/attachments", {
             method: "POST",
             headers: { "Content-Type": file.type || "application/octet-stream" },
             body: file,
@@ -798,29 +820,25 @@ export function archiveErrorMessage(error: Error) {
 
 /** Which queued messages a run just took in at a tool call. */
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export const decodeDeliveredEvent = Schema.decodeUnknownOption(
-  Schema.Struct({ ids: Schema.Array(Schema.String) }),
-);
+const DeliveredEvent = Schema.Struct({ ids: Schema.Array(Schema.String) });
 
 /** A context update a run sends while it answers. */
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export const decodeContextEvent = Schema.decodeUnknownOption(
-  Schema.Struct({
-    usedTokens: Schema.NullOr(Schema.Finite),
-    cachedTokens: Schema.NullOr(Schema.Finite).pipe(
-      Schema.withDecodingDefaultTypeKey(Effect.succeed(null)),
-    ),
-    cacheRatio: Schema.NullOr(Schema.Finite).pipe(
-      Schema.withDecodingDefaultTypeKey(Effect.succeed(null)),
-    ),
-    compactionStage: Schema.NullOr(
-      Schema.Literals(["none", "clear-answered", "summarize", "leave-out"]),
-    ).pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed(null))),
-    windowTokens: Schema.Finite,
-    windowKnown: Schema.Boolean.pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed(false))),
-    compactAtTokens: Schema.Finite,
-  }),
-);
+const ContextEvent = Schema.Struct({
+  usedTokens: Schema.NullOr(Schema.Finite),
+  cachedTokens: Schema.NullOr(Schema.Finite).pipe(
+    Schema.withDecodingDefaultTypeKey(Effect.succeed(null)),
+  ),
+  cacheRatio: Schema.NullOr(Schema.Finite).pipe(
+    Schema.withDecodingDefaultTypeKey(Effect.succeed(null)),
+  ),
+  compactionStage: Schema.NullOr(
+    Schema.Literals(["none", "clear-answered", "summarize", "leave-out"]),
+  ).pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed(null))),
+  windowTokens: Schema.Finite,
+  windowKnown: Schema.Boolean.pipe(Schema.withDecodingDefaultTypeKey(Effect.succeed(false))),
+  compactAtTokens: Schema.Finite,
+});
 
 const CompactRejection = Schema.Literals([
   "run_in_progress",
@@ -838,3 +856,8 @@ export function compactErrorMessage(error: Error) {
     ? compactRejections[error.code]
     : "도구 출력을 비우지 못했어요.";
 }
+
+export const eventDecoders = {
+  delivered: Schema.decodeUnknownOption(DeliveredEvent),
+  context: Schema.decodeUnknownOption(ContextEvent),
+};

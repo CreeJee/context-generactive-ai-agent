@@ -23,14 +23,14 @@ export function action({ request }: Route.ActionArgs) {
       const { projectId, sourceSessionId } = decoded.success;
       if (projectId.length > 256 || sourceSessionId.length > 256)
         return Response.json({ error: "invalid_report_source" }, { status: 400 });
-      return yield* Effect.gen(function* () {
+      {
         const { sqlite } = yield* Database;
         const result = yield* openReportSession(sqlite, projectId, sourceSessionId);
         if (!(result !== null))
           return Response.json({ error: "report_source_not_found" }, { status: 404 });
         (yield* AppEvents).publishProject(projectId, "sessions");
         return Response.json(result, { headers: { "Cache-Control": "no-store" } });
-      });
+      }
     }),
   );
 }

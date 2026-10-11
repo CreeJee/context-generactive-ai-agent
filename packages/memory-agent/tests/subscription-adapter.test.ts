@@ -245,10 +245,12 @@ describe("subscription model adapters", () => {
     );
     for (const provider of ["openai", "anthropic"] as const) {
       const selection = { provider, model: "model-1", reasoningEffort: "medium" };
-      expect(subscriptionRequest(provider, selection, forward)).toBe(
-        subscriptionRequest(provider, selection, reversed),
+      expect(
+        subscriptionRequest({ provider: provider, selection: selection, options: forward }),
+      ).toBe(subscriptionRequest({ provider: provider, selection: selection, options: reversed }));
+      const request = JSON.parse(
+        subscriptionRequest({ provider: provider, selection: selection, options: forward }),
       );
-      const request = JSON.parse(subscriptionRequest(provider, selection, forward));
       expect(request.tools.map((tool: { name: string }) => tool.name)).toEqual(["alpha", "lookup"]);
       const schema =
         provider === "openai" ? request.tools[0].parameters : request.tools[0].input_schema;
@@ -525,11 +527,11 @@ describe("subscription model adapters", () => {
 
   test("maps transcript and tool results to OpenAI Responses wire shape", () => {
     const request = JSON.parse(
-      subscriptionRequest(
-        "openai",
-        { provider: "openai", model: "model-1", reasoningEffort: "high" },
-        options,
-      ),
+      subscriptionRequest({
+        provider: "openai",
+        selection: { provider: "openai", model: "model-1", reasoningEffort: "high" },
+        options: options,
+      }),
     );
     expect(request).toMatchObject({
       model: "model-1",
@@ -561,15 +563,15 @@ describe("subscription model adapters", () => {
       arguments: '{"query":"x"}',
     });
     const assistantRequest = JSON.parse(
-      subscriptionRequest(
-        "openai",
-        { provider: "openai", model: "model-1", reasoningEffort: "high" },
-        {
+      subscriptionRequest({
+        provider: "openai",
+        selection: { provider: "openai", model: "model-1", reasoningEffort: "high" },
+        options: {
           systemPrompts: [],
           messages: [{ role: "assistant", content: "answer" }],
           tools: [],
         },
-      ),
+      }),
     );
     expect(assistantRequest.input).toContainEqual({
       type: "message",
@@ -638,10 +640,10 @@ describe("subscription model adapters", () => {
 
   test("normalizes OpenAI history into valid alternating Anthropic turns", () => {
     const request = JSON.parse(
-      subscriptionRequest(
-        "anthropic",
-        { provider: "anthropic", model: "claude-opus-5", reasoningEffort: "medium" },
-        {
+      subscriptionRequest({
+        provider: "anthropic",
+        selection: { provider: "anthropic", model: "claude-opus-5", reasoningEffort: "medium" },
+        options: {
           messages: [
             { role: "user", content: "first" },
             { role: "user", content: "second" },
@@ -679,8 +681,8 @@ describe("subscription model adapters", () => {
           systemPrompts: [],
           tools: [],
         },
-        { promptCache: "disabled" },
-      ),
+        requestOptions: { promptCache: "disabled" },
+      }),
     );
 
     expect(request.messages).toEqual([
@@ -813,7 +815,7 @@ describe("subscription model adapters", () => {
                         new Cause.UnknownError(new DOMException("aborted", "AbortError")),
                       ),
                     );
-                  if (signal?.aborted) {
+                  if (signal?.aborted === true) {
                     onAbort();
                     return;
                   }
@@ -974,11 +976,11 @@ describe("subscription model adapters", () => {
 
   test("maps transcript and tool results to Anthropic Messages wire shape", () => {
     const request = JSON.parse(
-      subscriptionRequest(
-        "anthropic",
-        { provider: "anthropic", model: "model-1", reasoningEffort: "medium" },
-        options,
-      ),
+      subscriptionRequest({
+        provider: "anthropic",
+        selection: { provider: "anthropic", model: "model-1", reasoningEffort: "medium" },
+        options: options,
+      }),
     );
     expect(request).toMatchObject({
       model: "model-1",

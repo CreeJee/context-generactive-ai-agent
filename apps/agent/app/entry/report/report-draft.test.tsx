@@ -39,10 +39,10 @@ describe("independent report entry", () => {
   });
 
   test("keeps a usable statement when evidence is unavailable", () => {
-    const text = reportText(
-      { symptom: "승인이 반복돼요", expected: "채팅 계속", actual: "승인 대기" },
-      "2026-09-26",
-    );
+    const text = reportText({
+      fields: { symptom: "승인이 반복돼요", expected: "채팅 계속", actual: "승인 대기" },
+      createdAt: "2026-09-26",
+    });
     expect(text).toContain("승인이 반복돼요");
     expect(text).toContain("첨부된 증거 없음");
   });

@@ -1,3 +1,4 @@
+import { withTestPlatform } from "./support/platform.ts";
 import { expect, it } from "@effect/vitest";
 import { assertTrue } from "@effect/vitest/utils";
 import { Cause, Effect, Exit, Fiber } from "effect";
@@ -31,7 +32,7 @@ it.effect("Windows rename retries stop after twenty attempts", () =>
       },
     });
     expect(calls).toBe(20);
-  }),
+  }).pipe(withTestPlatform),
 );
 
 it.effect("interruption stops retries and unexpected callback defects remain defects", () =>
@@ -66,5 +67,5 @@ it.effect("interruption stops retries and unexpected callback defects remain def
     );
     assertTrue(Exit.hasDies(exit));
     expect(Cause.squash(exit.cause)).toBe(defect);
-  }),
+  }).pipe(withTestPlatform),
 );

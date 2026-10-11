@@ -11,9 +11,16 @@ import {
   DateTime,
   Result,
   Schema,
+  Scope,
   Stream,
 } from "effect";
-import { createServer, type IncomingMessage } from "node:http";
+import {
+  testHttpServer,
+  testHttpClient,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "./support/http.ts";
+import { HttpClientRequest, FetchHttpClient } from "effect/http";
 import { describe, expect, test } from "vite-plus/test";
 import {
   createSubscriptionOAuthClient,
@@ -168,7 +175,7 @@ it.live.each(["cancel", "timeout"] as const)(
         callback.searchParams.set("code", "accepted-code");
         callback.searchParams.set("state", authorize.searchParams.get("state")!);
         const response = yield* Effect.forkChild(
-          sdkCall(() => fetch(callback)),
+          (yield* testHttpClient()).get(callback.toString()),
           { startImmediately: true },
         );
         try {
@@ -178,7 +185,7 @@ it.live.each(["cancel", "timeout"] as const)(
           yield* Deferred.succeed(gate, undefined);
           const rejected = yield* Fiber.join(response);
           expect(rejected.status).toBe(410);
-          yield* sdkCall(() => rejected.text());
+          yield* rejected.text;
           expect(yield* sdkCall(() => completed)).toMatchObject({
             code: mode === "cancel" ? "cancelled" : "callback_timeout",
           });
@@ -188,7 +195,7 @@ it.live.each(["cancel", "timeout"] as const)(
           yield* Deferred.succeed(gate, undefined);
           login.cancel();
           yield* Fiber.join(response).pipe(
-            Effect.flatMap((result) => sdkCall(() => result.text())),
+            Effect.flatMap((result) => result.text),
             Effect.orElseSucceed(() => ""),
           );
           yield* sdkCall(() => completed);
@@ -199,19 +206,23 @@ it.live.each(["cancel", "timeout"] as const)(
 
 const sdkCall = <A>(call: () => A | PromiseLike<A>) =>
   Effect.tryPromise(() => Promise.resolve(call()));
+const nativeHttpResponse = Effect.fn("oauthFixture.nativeHttpResponse")(function* (
+  request: HttpClientRequest.HttpClientRequest,
+) {
+  const client = yield* testHttpClient();
+  const response = yield* client
+    .execute(request)
+    .pipe(Effect.provideService(FetchHttpClient.RequestInit, { redirect: "follow" }));
+  return new Response(yield* Stream.toReadableStreamEffect(response.stream), {
+    status: response.status,
+    headers: response.headers,
+  });
+});
 const jsonStringify = EffectFunction.flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
   Result.getOrThrow,
 );
-const body = Effect.fn("readOAuthFixtureBody")(function* (request: IncomingMessage) {
-  const chunks = yield* Stream.runCollect(
-    Stream.fromAsyncIterable(request, (cause) => new Cause.UnknownError(cause)),
-  );
-  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
-});
-
 const fakeProvider = Effect.fn("fakeOAuthProvider")(function* (provider: OAuthProvider) {
-  const runNative = Effect.runPromiseWith(yield* Effect.context());
   let tokenRequests = 0;
   let refreshRequests = 0;
   let modelRequests = 0;
@@ -224,128 +235,93 @@ const fakeProvider = Effect.fn("fakeOAuthProvider")(function* (provider: OAuthPr
   const modelHeaders: Array<Record<string, string | string[] | undefined>> = [];
   const catalogHeaders: Array<Record<string, string | string[] | undefined>> = [];
   const catalogUrls: string[] = [];
-  const server = createServer((request, response) => {
-    void runNative(
-      Effect.gen(function* () {
-        const url = new URL(request.url ?? "/", "http://127.0.0.1");
-        if (url.pathname === "/authorize") {
-          authorizations.push(url.search);
-          const redirect = new URL(url.searchParams.get("redirect_uri") ?? "");
-          redirect.searchParams.set("code", "authorization-code-secret");
-          redirect.searchParams.set("state", url.searchParams.get("state") ?? "");
-          response.writeHead(302, { Location: redirect.toString() }).end();
-          return;
-        }
-        if (url.pathname === "/token") {
-          tokenRequests += 1;
-          const raw = yield* body(request);
-          tokenBodies.push(raw);
-          const isRefresh =
-            request.headers["content-type"] === "application/json"
-              ? raw.includes('"grant_type":"refresh_token"')
-              : new URLSearchParams(raw).get("grant_type") === "refresh_token";
-          if (isRefresh) refreshRequests += 1;
-          if (isRefresh && rejectRefresh) {
-            response.writeHead(401).end();
-            return;
-          }
-          const suffix = isRefresh ? "2" : "1";
-          const claims = Buffer.from(
-            jsonStringify({
-              "https://api.openai.com/auth": { chatgpt_account_id: "account-internal-1" },
-            }),
-          ).toString("base64url");
-          response.writeHead(200, { "Content-Type": "application/json" }).end(
-            jsonStringify({
-              access_token: `access-secret-${suffix}`,
-              refresh_token: `refresh-secret-${suffix}`,
-              id_token: `header.${claims}.signature`,
-              expires_in: 3_600,
-            }),
-          );
-          return;
-        }
-        if (url.pathname === "/catalog") {
-          catalogRequests += 1;
-          catalogHeaders.push(request.headers);
-          catalogUrls.push(url.toString());
-          if (forceUnauthorized && request.headers.authorization === "Bearer access-secret-1") {
-            response.writeHead(provider === "openai" ? 401 : 403).end();
-            return;
-          }
-          response.writeHead(200, { "Content-Type": "application/json" });
-          if (provider === "openai")
-            response.end(jsonStringify({ models: [{ slug: "gpt-test" }] }));
-          else if (url.searchParams.get("after_id") === "page-1")
-            response.end(jsonStringify({ data: [{ id: "claude-page-2" }], has_more: false }));
-          else
-            response.end(
-              jsonStringify({
-                data: [{ id: "claude-page-1" }],
-                has_more: true,
-                last_id: "page-1",
-              }),
-            );
-          return;
-        }
-        if (url.pathname === "/model") {
-          modelRequests += 1;
-          modelHeaders.push(request.headers);
-          modelBodies.push(yield* body(request));
-          if (forceUnauthorized && request.headers.authorization === "Bearer access-secret-1") {
-            response.writeHead(401).end();
-            return;
-          }
-          response.writeHead(200, { "Content-Type": "text/event-stream" });
-          if (provider === "openai") {
-            response.write('data: {"type":"response.output_text.delta","delta":"hello"}\n\n');
-            response.write(
-              'data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call-1","name":"lookup","arguments":"{\\\"q\\\":\\\"x\\\"}"}}\n\n',
-            );
-          } else {
-            response.write(
-              'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}\n\n',
-            );
-            response.write(
-              'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call-1","name":"lookup","input":{}}}\n\n',
-            );
-            response.write(
-              `data: ${jsonStringify({
-                type: "content_block_delta",
-                index: 1,
-                delta: { type: "input_json_delta", partial_json: '{"q":"x"}' },
-              })}\n\n`,
-            );
-            response.write('data: {"type":"content_block_stop","index":1}\n\n');
-          }
-          response.end("data: [DONE]\n\n");
-          return;
-        }
-        response.writeHead(404).end();
-      }).pipe(
-        Effect.catchCause(() =>
-          Effect.sync(() => {
-            response.writeHead(500).end();
+  const { url: base } = yield* testHttpServer(
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const url = new URL(request.url, "http://127.0.0.1");
+      if (url.pathname === "/authorize") {
+        authorizations.push(url.search);
+        const redirect = new URL(url.searchParams.get("redirect_uri") ?? "");
+        redirect.searchParams.set("code", "authorization-code-secret");
+        redirect.searchParams.set("state", url.searchParams.get("state") ?? "");
+        return HttpServerResponse.empty({
+          status: 302,
+          headers: { location: redirect.toString() },
+        });
+      }
+      if (url.pathname === "/token") {
+        tokenRequests += 1;
+        const raw = yield* request.text;
+        tokenBodies.push(raw);
+        const isRefresh =
+          request.headers["content-type"] === "application/json"
+            ? raw.includes('"grant_type":"refresh_token"')
+            : new URLSearchParams(raw).get("grant_type") === "refresh_token";
+        if (isRefresh) refreshRequests += 1;
+        if (isRefresh && rejectRefresh) return HttpServerResponse.empty({ status: 401 });
+        const suffix = isRefresh ? "2" : "1";
+        const claims = Buffer.from(
+          jsonStringify({
+            "https://api.openai.com/auth": { chatgpt_account_id: "account-internal-1" },
           }),
-        ),
-      ),
-    ).catch(() => {
-      response.destroy();
-    });
-  });
-  yield* Effect.addFinalizer(() =>
-    Effect.callback<void>((resume) => {
-      server.closeAllConnections();
-      server.close(() => resume(Effect.void));
+        ).toString("base64url");
+        return yield* HttpServerResponse.json({
+          access_token: `access-secret-${suffix}`,
+          refresh_token: `refresh-secret-${suffix}`,
+          id_token: `header.${claims}.signature`,
+          expires_in: 3600,
+        });
+      }
+      if (url.pathname === "/catalog") {
+        catalogRequests += 1;
+        catalogHeaders.push(request.headers);
+        catalogUrls.push(url.toString());
+        if (forceUnauthorized && request.headers.authorization === "Bearer access-secret-1")
+          return HttpServerResponse.empty({ status: provider === "openai" ? 401 : 403 });
+        return yield* HttpServerResponse.json(
+          provider === "openai"
+            ? { models: [{ slug: "gpt-test" }] }
+            : url.searchParams.get("after_id") === "page-1"
+              ? { data: [{ id: "claude-page-2" }], has_more: false }
+              : { data: [{ id: "claude-page-1" }], has_more: true, last_id: "page-1" },
+        );
+      }
+      if (url.pathname === "/model") {
+        modelRequests += 1;
+        modelHeaders.push(request.headers);
+        modelBodies.push(yield* request.text);
+        if (forceUnauthorized && request.headers.authorization === "Bearer access-secret-1")
+          return HttpServerResponse.empty({ status: 401 });
+        const events: string[] = [];
+        if (provider === "openai") {
+          events.push('data: {"type":"response.output_text.delta","delta":"hello"}\n\n');
+          events.push(
+            'data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call-1","name":"lookup","arguments":"{\\\"q\\\":\\\"x\\\"}"}}\n\n',
+          );
+        } else {
+          events.push(
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}\n\n',
+          );
+          events.push(
+            'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call-1","name":"lookup","input":{}}}\n\n',
+          );
+          events.push(
+            `data: ${jsonStringify({
+              type: "content_block_delta",
+              index: 1,
+              delta: { type: "input_json_delta", partial_json: '{"q":"x"}' },
+            })}\n\n`,
+          );
+          events.push('data: {"type":"content_block_stop","index":1}\n\n');
+        }
+        events.push("data: [DONE]\n\n");
+        return HttpServerResponse.stream(Stream.fromIterable(events).pipe(Stream.encodeText), {
+          contentType: "text/event-stream",
+        });
+      }
+      return HttpServerResponse.empty({ status: 404 });
     }),
   );
-  yield* Effect.callback<void>((resume) => {
-    server.listen(0, "127.0.0.1", () => resume(Effect.void));
-  });
-  const { port } = yield* Schema.decodeUnknownEffect(Schema.Struct({ port: Schema.Int }))(
-    server.address(),
-  );
-  const base = `http://127.0.0.1:${port}`;
   const original = providerProtocols[provider];
   const protocol: ProviderProtocol = {
     ...original,
@@ -377,7 +353,7 @@ const fakeProvider = Effect.fn("fakeOAuthProvider")(function* (provider: OAuthPr
 
 const login = Effect.fn("loginOAuthFixture")(function* (harness: OAuthValidationHarness) {
   const attempt = yield* sdkCall(() => harness.startLogin({ timeoutMs: 1_000 }));
-  const browser = yield* sdkCall(() => fetch(attempt.authorizationUrl));
+  const browser = yield* (yield* testHttpClient()).get(String(attempt.authorizationUrl));
   expect(browser.status).toBe(200);
   return yield* sdkCall(() => attempt.completed);
 });
@@ -418,7 +394,7 @@ it.live("reports a browser denial without exposing OAuth callback parameters", (
       callback.searchParams.set("state", authorize.searchParams.get("state")!);
       callback.searchParams.set("error", "access_denied");
       callback.searchParams.set("error_description", "secret-from-browser");
-      expect((yield* sdkCall(() => fetch(callback))).status).toBe(400);
+      expect((yield* (yield* testHttpClient()).get(String(callback))).status).toBe(400);
       yield* sdkCall(() => completion);
     }),
   ),
@@ -464,9 +440,9 @@ it.live("reports credential write failure without blaming the provider or exposi
         operation: "credential_store",
         credentialStage: "write",
       });
-      const browser = yield* sdkCall(() => fetch(attempt.authorizationUrl));
+      const browser = yield* (yield* testHttpClient()).get(String(attempt.authorizationUrl));
       expect(browser.status).toBe(502);
-      const text = yield* sdkCall(() => browser.text());
+      const text = yield* browser.text;
       expect(text).toContain("credential store is unavailable");
       expect(text).not.toContain("private-native-error");
       expect(text).not.toContain("access-secret");
@@ -507,7 +483,9 @@ it.live("classifies token exchange transport failures without exposing native er
       });
       const attempt = yield* sdkCall(() => harness.startLogin({ timeoutMs: 1_000 }));
       const completion = attempt.completed.catch((error: OAuthHarnessError) => error);
-      expect((yield* sdkCall(() => fetch(attempt.authorizationUrl))).status).toBe(502);
+      expect((yield* (yield* testHttpClient()).get(String(attempt.authorizationUrl))).status).toBe(
+        502,
+      );
       const failure = yield* sdkCall(() => completion);
       expect(failure).toMatchObject({
         code: "transport_unavailable",
@@ -559,13 +537,12 @@ it.live("retries an OpenAI pre-connect timeout once on a scoped proxy route", ()
               expect(url).toBe(fake.protocol.tokenUrl);
               return {
                 route: "attempted" as const,
-                response: yield* sdkCall(() =>
-                  fetch(url, {
-                    method: "POST",
-                    body,
-                    headers: { "Content-Type": contentType },
-                  }),
-                ),
+                response: yield* Scope.provide(
+                  nativeHttpResponse(
+                    HttpClientRequest.post(url).pipe(HttpClientRequest.bodyText(body, contentType)),
+                  ),
+                  scope,
+                ).pipe(Effect.mapError((cause) => new Cause.UnknownError(cause))),
               };
             }),
           ),
@@ -626,7 +603,9 @@ for (const route of ["direct", "unavailable", "attempted"] as const) {
         });
         const attempt = yield* sdkCall(() => harness.startLogin({ timeoutMs: 1_000 }));
         const completion = attempt.completed.catch((error: OAuthHarnessError) => error);
-        expect((yield* sdkCall(() => fetch(attempt.authorizationUrl))).status).toBe(502);
+        expect(
+          (yield* (yield* testHttpClient()).get(String(attempt.authorizationUrl))).status,
+        ).toBe(502);
         const failure = yield* sdkCall(() => completion);
         expect(failure).toMatchObject({
           code: "transport_unavailable",
@@ -676,7 +655,9 @@ it.live("does not replay an authorization code after a non-connect failure", () 
         code: "transport_unavailable",
         transportCode: "timeout",
       });
-      expect((yield* sdkCall(() => fetch(attempt.authorizationUrl))).status).toBe(502);
+      expect((yield* (yield* testHttpClient()).get(String(attempt.authorizationUrl))).status).toBe(
+        502,
+      );
       yield* sdkCall(() => completion);
       expect(proxyCalls).toBe(0);
     }),
@@ -704,17 +685,21 @@ it.live("exposes only a validated provider error code from a failed token exchan
         store: new MemoryCredentialStore(),
         fetch: (input, init) =>
           runSdk(
-            sdkCall(() =>
-              input === fake.protocol.tokenUrl
-                ? new Response(
+            (input === fake.protocol.tokenUrl
+              ? Effect.succeed(
+                  new Response(
                     jsonStringify({
                       error: { code: "access_denied", message: "private-user-data" },
                       access_token: "secret-token",
                     }),
                     { status: 403 },
-                  )
-                : fetch(input, init),
-            ),
+                  ),
+                )
+              : Scope.provide(
+                  nativeHttpResponse(HttpClientRequest.fromWeb(new Request(input, init))),
+                  scope,
+                )
+            ).pipe(Effect.mapError((cause) => new Cause.UnknownError(cause))),
           ),
       });
       const attempt = yield* sdkCall(() => harness.startLogin({ timeoutMs: 1_000 }));
@@ -724,7 +709,9 @@ it.live("exposes only a validated provider error code from a failed token exchan
         status: 403,
         providerCode: "access_denied",
       });
-      expect((yield* sdkCall(() => fetch(attempt.authorizationUrl))).status).toBe(502);
+      expect((yield* (yield* testHttpClient()).get(String(attempt.authorizationUrl))).status).toBe(
+        502,
+      );
       yield* sdkCall(() => completion);
     }),
   ),
@@ -1061,7 +1048,7 @@ describe("OAuth callback safety", () => {
         const callback = new URL(authorization.searchParams.get("redirect_uri") ?? "");
         callback.searchParams.set("code", "authorization-code-secret");
         callback.searchParams.set("state", "attacker-state-secret");
-        yield* sdkCall(() => fetch(callback));
+        yield* (yield* testHttpClient()).get(String(callback));
 
         const thrown = yield* sdkCall(() => completion);
         expect(thrown).toBeInstanceOf(OAuthHarnessError);
@@ -1141,14 +1128,17 @@ describe("OAuth callback safety", () => {
           };
           const harness = OAuthValidationHarness({ protocol: fake.protocol, store: deferred });
           const attempt = yield* sdkCall(() => harness.startLogin({ timeoutMs: 5_000 }));
-          const browser = fetch(attempt.authorizationUrl);
+          const browser = yield* Effect.forkChild(
+            (yield* testHttpClient()).get(attempt.authorizationUrl),
+            { startImmediately: true },
+          );
           yield* Deferred.await(writing);
           attempt.cancel();
           yield* Deferred.succeed(held, undefined);
           expect((yield* Effect.flip(sdkCall(() => attempt.completed))).cause).toMatchObject({
             code: "cancelled",
           });
-          yield* sdkCall(() => browser);
+          yield* Fiber.join(browser);
           expect(Option.getOrUndefined(MutableHashMap.get(store.values, "anthropic"))).toEqual(
             prior,
           );

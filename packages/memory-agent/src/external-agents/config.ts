@@ -1,11 +1,10 @@
 import { Function as EffectFunction } from "effect";
-import { Effect } from "effect";
+import { Effect, FileSystem } from "effect";
+import { sha256 as hashSha256 } from "../runtime/synchronous-crypto.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { createHash } from "node:crypto";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { existsSync, readFileSync } from "node:fs";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { join } from "node:path";
+import { path as platformPath } from "../runtime/synchronous-path.ts";
+const { join } = platformPath;
 import { Result, Schema } from "effect";
 import { McpServerName } from "../mcp/config.ts";
 
@@ -47,28 +46,25 @@ export interface AgentsFileRead {
 }
 
 export const agentFingerprint = (command: AgentCommand) =>
-  createHash("sha256")
-    .update(
-      JSON.stringify([
-        command.command,
-        command.args,
-        Object.entries(command.env).sort(([a], [b]) => a.localeCompare(b)),
-      ]),
-    )
-    .digest("hex");
+  hashSha256(
+    JSON.stringify([
+      command.command,
+      command.args,
+      Object.entries(command.env).sort(([a], [b]) => a.localeCompare(b)),
+    ]),
+  );
 
-export const readAgentsFile: {
-  (scope: AgentScope): (path: string) => ReturnType<typeof readAgentsFileBody>;
-} & typeof readAgentsFileBody = EffectFunction.dual(2, readAgentsFileBody);
-function readAgentsFileBody(path: string, scope: AgentScope): AgentsFileRead {
-  if (!existsSync(path)) return { path, agents: [], error: null };
-  let text: string;
-  try {
-    text = readFileSync(path, "utf8");
-  } catch {
-    return { path, agents: [], error: "unreadable" };
-  }
-  return Result.match(decodeAgentsFile(text), {
+const readAgentsFileBody = Effect.fn("agents.readConfig")(function* (
+  path: string,
+  scope: AgentScope,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  if (!(yield* fs.exists(path).pipe(Effect.orElseSucceed(() => false))))
+    return { path, agents: [], error: null } satisfies AgentsFileRead;
+  const text = yield* fs.readFileString(path).pipe(Effect.result);
+  if (Result.isFailure(text))
+    return { path, agents: [], error: "unreadable" } satisfies AgentsFileRead;
+  return Result.match(decodeAgentsFile(text.success), {
     onFailure: (error) => ({
       path,
       agents: [],
@@ -94,4 +90,8 @@ function readAgentsFileBody(path: string, scope: AgentScope): AgentsFileRead {
       };
     },
   });
-}
+});
+
+export const readAgentsFile: {
+  (scope: AgentScope): (path: string) => ReturnType<typeof readAgentsFileBody>;
+} & typeof readAgentsFileBody = EffectFunction.dual(2, readAgentsFileBody);

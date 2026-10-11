@@ -1,12 +1,10 @@
-import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
+import { nativeFailure, nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { spawn } from "node:child_process";
-import { createInterface } from "node:readline";
-import { Effect, Array as EffectArray, Option, Schema } from "effect";
+import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
+import { runOAuthNodeEffect } from "../oauth/node-runtime.ts";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { Cause, Effect, Array as EffectArray, Fiber, Option, Queue, Schema, Stream } from "effect";
 import type { ModelGateway } from "./model-gateway.ts";
 import type { HarnessProfile, Measurement } from "./contracts.ts";
 import { EvaluationFailed, WorkerFailureReason } from "./failure.ts";
@@ -41,7 +39,26 @@ interface EvaluationState {
 }
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function evaluateSandbox(
+export function evaluateSandbox(options: {
+  readonly client: ModelGateway;
+  readonly profile: HarnessProfile;
+  readonly split: "evolve" | "validation" | "sealed" | "smoke";
+  readonly signal: AbortSignal;
+  readonly consume: (raw: string) => void;
+  readonly image?: string | undefined;
+  readonly onProgress?: ((completed: number, total: number) => void) | undefined;
+}) {
+  return evaluateSandboxBody(
+    options.client,
+    options.profile,
+    options.split,
+    options.signal,
+    options.consume,
+    options.image,
+    options.onProgress,
+  );
+}
+function evaluateSandboxBody(
   client: ModelGateway,
   profile: HarnessProfile,
   split: "evolve" | "validation" | "sealed" | "smoke",
@@ -50,37 +67,47 @@ export function evaluateSandbox(
   image = "context-agent-rrsi:local",
   onProgress?: (completed: number, total: number) => void,
 ): Promise<Measurement> {
-  return runNativeEffect(
+  return runOAuthNodeEffect(
     Effect.gen(function* () {
-      const name = `rrsi-${randomUUID()}`;
-      const child = spawn(
-        "docker",
-        [
-          "run",
-          "--rm",
-          "-i",
-          "--name",
-          name,
-          "--network",
-          "none",
-          "--read-only",
-          "--cap-drop",
-          "ALL",
-          "--security-opt",
-          "no-new-privileges",
-          "--pids-limit",
-          "128",
-          "--memory",
-          "2g",
-          "--cpus",
-          "2",
-          "--tmpfs",
-          "/tmp:rw,noexec,nosuid,size=512m,mode=1777",
-          "-e",
-          "CONTEXT_AGENT_RRSI_WORKER=1",
-          image,
-        ],
-        { stdio: ["pipe", "pipe", "pipe"] },
+      const name = `rrsi-${yield* oauthProtocolCrypto.randomUUIDv4().pipe(Effect.orDie)}`;
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const input = yield* Queue.make<Uint8Array, Cause.Done>();
+      const encoder = new TextEncoder();
+      const child = yield* spawner.spawn(
+        ChildProcess.make(
+          "docker",
+          [
+            "run",
+            "--rm",
+            "-i",
+            "--name",
+            name,
+            "--network",
+            "none",
+            "--read-only",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--pids-limit",
+            "128",
+            "--memory",
+            "2g",
+            "--cpus",
+            "2",
+            "--tmpfs",
+            "/tmp:rw,noexec,nosuid,size=512m,mode=1777",
+            "-e",
+            "CONTEXT_AGENT_RRSI_WORKER=1",
+            image,
+          ],
+          {
+            stdin: Stream.fromQueue(input),
+            detached: false,
+            windowsHide: true,
+            forceKillAfter: "5 seconds",
+          },
+        ),
       );
       let totalTokens: number | null = 0;
       let modelCalls = 0;
@@ -90,131 +117,139 @@ export function evaluateSandbox(
         result: null,
         failure: null,
       };
-      const reads = createInterface({ input: child.stdout });
+      const abortEffect = Effect.gen(function* () {
+        yield* spawner
+          .exitCode(
+            ChildProcess.make("docker", ["kill", name], {
+              stdin: "ignore",
+              stdout: "ignore",
+              stderr: "ignore",
+              detached: false,
+              windowsHide: true,
+              forceKillAfter: "1 second",
+            }),
+          )
+          .pipe(Effect.timeout(5000), Effect.ignore);
+        yield* child.kill({ forceKillAfter: "1 second" }).pipe(Effect.ignore);
+      });
       const abort = () => {
-        spawn("docker", ["kill", name], { stdio: "ignore" });
-        child.kill("SIGTERM");
+        void runNativeEffect(abortEffect);
       };
       yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
           signal.removeEventListener("abort", abort);
-          reads.close();
-          if (child.exitCode === null) abort();
+          yield* Queue.shutdown(input);
+          if (yield* child.isRunning.pipe(Effect.orElseSucceed(() => false))) yield* abortEffect;
         }),
       );
       signal.addEventListener("abort", abort, { once: true });
       if (signal.aborted) abort();
-      child.stdin.write(
-        `${stringifyJson({ kind: "initialize", profile, split, model: client.configuration.model, provider: client.configuration.provider, reasoningEffort: client.configuration.reasoningEffort })}\n`,
+      yield* Queue.offer(
+        input,
+        encoder.encode(
+          `${stringifyJson({ kind: "initialize", profile, split, model: client.configuration.model, provider: client.configuration.provider, reasoningEffort: client.configuration.reasoningEffort })}\n`,
+        ),
       );
-      // Serialize requests at the host boundary. Candidate code has no network or credentials.
-      let requests = Promise.resolve();
-      reads.on("line", (line) => {
-        if (!line.startsWith("RRSI:")) return;
-        requests = requests
-          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          .then(() =>
-            runNativeEffect(
-              Effect.gen(function* () {
-                const frame = yield* Schema.decodeEffect(Schema.fromJsonString(Frame))(
-                  line.slice(5),
+      // Each host request completes before the next frame; the candidate has no network or credentials.
+      const requests = yield* child.stdout.pipe(
+        Stream.decodeText(),
+        Stream.splitLines,
+        Stream.filter((line) => line.startsWith("RRSI:")),
+        Stream.runForEach(
+          Effect.fnUntraced(function* (line) {
+            const frame = yield* Schema.decodeEffect(Schema.fromJsonString(Frame))(
+              line.slice(5),
+            ).pipe(Effect.mapError(() => EvaluationFailed.make({ reason: "protocol_invalid" })));
+            switch (frame.kind) {
+              case "request":
+              case "subscription-request": {
+                if (frame.kind === "subscription-request" && client.protocol !== "subscription")
+                  return yield* EvaluationFailed.make({ reason: "gateway_protocol_mismatch" });
+                const raw = yield* nativePromise(() =>
+                  frame.kind === "subscription-request" && client.protocol === "subscription"
+                    ? client.subscription(frame.body, signal)
+                    : client.complete(frame.body, signal),
                 ).pipe(
-                  Effect.mapError(() => EvaluationFailed.make({ reason: "protocol_invalid" })),
+                  Effect.mapError((error) =>
+                    EvaluationFailed.make({
+                      reason:
+                        error.cause instanceof CompatibleCompletionRejected &&
+                        error.cause.reason === "memory_capacity_exceeded"
+                          ? "gateway_memory_limit"
+                          : "gateway_request_failed",
+                    }),
+                  ),
                 );
-                switch (frame.kind) {
-                  case "request":
-                  case "subscription-request": {
-                    if (frame.kind === "subscription-request" && client.protocol !== "subscription")
-                      return yield* EvaluationFailed.make({ reason: "gateway_protocol_mismatch" });
-                    const raw = yield* nativePromise(() =>
-                      frame.kind === "subscription-request" && client.protocol === "subscription"
-                        ? client.subscription(frame.body, signal)
-                        : client.complete(frame.body, signal),
-                    ).pipe(
-                      Effect.mapError((error) =>
-                        EvaluationFailed.make({
-                          reason:
-                            error.cause instanceof CompatibleCompletionRejected &&
-                            error.cause.reason === "memory_capacity_exceeded"
-                              ? "gateway_memory_limit"
-                              : "gateway_request_failed",
-                        }),
-                      ),
-                    );
-                    modelCalls++;
-                    consume(raw);
-                    const usage = reportedTokens(raw);
-                    totalTokens =
-                      totalTokens === null || usage === null ? null : totalTokens + usage;
-                    child.stdin.write(
-                      `${stringifyJson({ kind: "response", id: frame.id, ok: true, body: raw })}\n`,
-                    );
-                    break;
-                  }
-                  case "progress":
-                    if (
-                      frame.total !== expected ||
-                      frame.completed > expected ||
-                      frame.completed < completedTasks
-                    )
-                      return yield* EvaluationFailed.make({ reason: "protocol_invalid" });
-                    completedTasks = frame.completed;
-                    onProgress?.(frame.completed, expected);
-                    break;
-                  case "result": {
-                    if (
-                      frame.results.length !== expected ||
-                      EffectArray.dedupe(frame.results.map((item) => item.id)).length !== expected
-                    )
-                      return yield* EvaluationFailed.make({ reason: "evaluation_incomplete" });
-                    const score = (domain: "coding" | "memory") => {
-                      const items = frame.results.filter((item) => item.domain === domain);
-                      if (items.length !== expected / 2)
-                        throw EvaluationFailed.make({ reason: "evaluation_incomplete" });
-                      return items.reduce((sum, item) => sum + item.score, 0) / items.length;
-                    };
-                    const coding = score("coding");
-                    const memory = score("memory");
-                    state.result = {
-                      score: (coding + memory) / 2,
-                      coding,
-                      memory,
-                      tokens: totalTokens,
-                    };
-                    child.stdin.end();
-                    break;
-                  }
-                  case "failure":
-                    // Accept only evaluator categories; arbitrary candidate text never becomes a reason.
-                    return yield* EvaluationFailed.make({
-                      reason: Option.getOrElse(
-                        Schema.decodeUnknownOption(WorkerFailureReason)(frame.reason),
-                        () => "worker_failed" as const,
-                      ),
-                    });
-                }
-              }),
-            ),
-          )
-          .catch((error: Error) => {
+                modelCalls++;
+                consume(raw);
+                const usage = reportedTokens(raw);
+                totalTokens = totalTokens === null || usage === null ? null : totalTokens + usage;
+                yield* Queue.offer(
+                  input,
+                  encoder.encode(
+                    `${stringifyJson({ kind: "response", id: frame.id, ok: true, body: raw })}\n`,
+                  ),
+                );
+                break;
+              }
+              case "progress":
+                if (
+                  frame.total !== expected ||
+                  frame.completed > expected ||
+                  frame.completed < completedTasks
+                )
+                  return yield* EvaluationFailed.make({ reason: "protocol_invalid" });
+                completedTasks = frame.completed;
+                onProgress?.(frame.completed, expected);
+                break;
+              case "result": {
+                if (
+                  frame.results.length !== expected ||
+                  EffectArray.dedupe(frame.results.map((item) => item.id)).length !== expected
+                )
+                  return yield* EvaluationFailed.make({ reason: "evaluation_incomplete" });
+                const score = (domain: "coding" | "memory") => {
+                  const items = frame.results.filter((item) => item.domain === domain);
+                  if (items.length !== expected / 2)
+                    throw EvaluationFailed.make({ reason: "evaluation_incomplete" });
+                  return items.reduce((sum, item) => sum + item.score, 0) / items.length;
+                };
+                const coding = score("coding");
+                const memory = score("memory");
+                state.result = {
+                  score: (coding + memory) / 2,
+                  coding,
+                  memory,
+                  tokens: totalTokens,
+                };
+                yield* Queue.end(input);
+                break;
+              }
+              case "failure":
+                // Accept only evaluator categories; arbitrary candidate text never becomes a reason.
+                return yield* EvaluationFailed.make({
+                  reason: Option.getOrElse(
+                    Schema.decodeUnknownOption(WorkerFailureReason)(frame.reason),
+                    () => "worker_failed" as const,
+                  ),
+                });
+            }
+          }),
+        ),
+        Effect.catchCause((cause) =>
+          Effect.gen(function* () {
+            const error = nativeFailure(cause).cause;
             state.failure ??= Schema.is(EvaluationFailed)(error)
               ? error
-              : EvaluationFailed.make({
-                  reason: "protocol_invalid",
-                });
-            abort();
-          });
-      });
-      // Do not echo candidate stderr, which may contain arbitrary workspace or request text.
-      child.stderr.resume();
-      const code = yield* nativePromise(
-        () =>
-          new Promise<number | null>((resolve, reject) => {
-            child.once("error", reject);
-            child.once("close", resolve);
+              : EvaluationFailed.make({ reason: "protocol_invalid" });
+            yield* abortEffect;
           }),
+        ),
+        Effect.forkChild,
       );
-      yield* nativePromise(() => requests);
+      yield* child.stderr.pipe(Stream.runDrain, Effect.ignore, Effect.forkChild);
+      const code = yield* child.exitCode;
+      yield* Fiber.join(requests);
       if (state.failure !== null) return yield* state.failure;
       if (code !== 0)
         return yield* EvaluationFailed.make({ reason: "evaluation_container_failed" });

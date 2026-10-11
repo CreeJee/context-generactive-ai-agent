@@ -1,0 +1,59 @@
+{
+  "date": "2026-10-08",
+  "sha256": {
+    "worker": "18337389f4bd57e838612aae1c12650d460ff622689e8b7a0ad8350075bccf48",
+    "client": "2ffb4544365abb9b095671b91f55f072df0eaa4d82494e9898f9efad7f6719bb",
+    "harness": "f6968231b9bc1c943c85efcbc4d89e197342c51e0f4a3be79f014e306c1c7b7a",
+    "loadedAddon": "db0fd75e0b3c9e2b514a87e26f1318aabd51f3b36d48ec99e1b9090e02e933ed"
+  },
+  "observation": {
+    "count": 50000,
+    "dimensions": 384,
+    "bits": 4,
+    "k": 48,
+    "nativeWorkerThreadId": 1,
+    "observations": [
+      {
+        "nativeBoundaryMs": 5.853917,
+        "mainHeartbeatInsideNativeCall": 5
+      },
+      {
+        "nativeBoundaryMs": 5.590667,
+        "mainHeartbeatInsideNativeCall": 4
+      },
+      {
+        "nativeBoundaryMs": 5.394792,
+        "mainHeartbeatInsideNativeCall": 4
+      },
+      {
+        "nativeBoundaryMs": 5.617334,
+        "mainHeartbeatInsideNativeCall": 4
+      },
+      {
+        "nativeBoundaryMs": 5.593541,
+        "mainHeartbeatInsideNativeCall": 4
+      },
+      {
+        "nativeBoundaryMs": 5.509,
+        "mainHeartbeatInsideNativeCall": 4
+      },
+      {
+        "nativeBoundaryMs": 5.567333,
+        "mainHeartbeatInsideNativeCall": 4
+      },
+      {
+        "nativeBoundaryMs": 5.504583,
+        "mainHeartbeatInsideNativeCall": 4
+      },
+      {
+        "nativeBoundaryMs": 5.563958,
+        "mainHeartbeatInsideNativeCall": 5
+      },
+      {
+        "nativeBoundaryMs": 5.571958,
+        "mainHeartbeatInsideNativeCall": 4
+      }
+    ],
+    "note": "Main hrtime heartbeat timestamps strictly inside actual worker native-call windows. Includes N-API conversion, not pure inner CPU. Fixture preparation, allowlist marshaling and SQL/graph work are not this measurement. This does not prove active native cancellation or budget."
+  }
+}

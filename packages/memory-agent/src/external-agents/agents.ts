@@ -1,10 +1,6 @@
 import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import type { ChildProcess } from "node:child_process";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import type {
   RequestPermissionRequest,
@@ -13,7 +9,8 @@ import type {
   StopReason,
 } from "@agentclientprotocol/sdk";
 import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
-import spawn from "cross-spawn";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { SdkStreams } from "../acp/web-streams.ts";
 import {
   Cause,
   HashSet,
@@ -23,6 +20,11 @@ import {
   Context,
   Data,
   Effect,
+  FiberMap,
+  FileSystem,
+  Path,
+  Scope,
+  Exit,
   Layer,
   Option,
   Schema,
@@ -31,7 +33,6 @@ import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
 import { expandVariables } from "../mcp/config.ts";
 import type { Project } from "../projects/projects.ts";
-import { endChild } from "../runtime/host.ts";
 import {
   AgentScope,
   globalAgentsFile,
@@ -122,7 +123,7 @@ interface SessionHandlers {
 }
 
 interface Live {
-  readonly child: ChildProcess;
+  readonly dispose: () => void;
   readonly connection: acp.ClientConnection;
   readonly agentName: string | null;
   readonly loadSession: boolean;
@@ -178,12 +179,90 @@ function permissionAnswer(
     : { outcome: { outcome: "cancelled" } };
 }
 
+/** Resolve Windows launchers using the same cmd metacharacter and npm shim escaping contract as cross-spawn. */
+export const agentCommandInvocation = Effect.fn("ExternalAgent.commandInvocation")(
+  function* (options: {
+    readonly command: string;
+    readonly args: readonly string[];
+    readonly cwd: string;
+    readonly env: NodeJS.ProcessEnv;
+    readonly platform?: NodeJS.Platform;
+  }) {
+    let command = options.command;
+    let args = [...options.args];
+    let shell: string | undefined;
+    if ((options.platform ?? process.platform) !== "win32") return { command, args, shell };
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const { cwd, env } = options;
+    const resolve = Effect.fnUntraced(function* (name: string) {
+      const extensions = ["", ...(env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";")];
+      const directories = /[\\/]/.test(name)
+        ? [cwd]
+        : [cwd, ...(env.Path ?? env.PATH ?? "").split(";")];
+      for (const directory of directories) {
+        for (const extension of extensions) {
+          const candidate = path.resolve(cwd, directory, `${name}${extension}`);
+          const info = yield* fs.stat(candidate).pipe(Effect.option);
+          if (Option.isSome(info) && info.value.type === "File") return candidate;
+        }
+      }
+      return undefined;
+    });
+    let executable = yield* resolve(command);
+    if (executable !== undefined && !/\.(com|exe)$/i.test(executable)) {
+      const firstLine = yield* fs.readFileString(executable).pipe(
+        Effect.map((text) => text.split(/\r?\n/, 1)[0] ?? ""),
+        Effect.orElseSucceed(() => ""),
+      );
+      if (firstLine.startsWith("#!")) {
+        const [interpreterPath, ...flags] = firstLine.slice(2).trim().split(/\s+/);
+        let interpreter = interpreterPath?.split("/").at(-1);
+        if (interpreter === "env") {
+          if (flags[0] === "-S") flags.shift();
+          interpreter = flags.shift();
+        }
+        if (interpreter !== undefined && interpreter.length > 0) {
+          command = interpreter;
+          args = [...flags, executable, ...args];
+          executable = yield* resolve(command);
+        }
+      }
+    }
+    if (executable === undefined || !/\.(com|exe)$/i.test(executable)) {
+      const meta = /([()\][%!^"`<>&|;, *?])/g;
+      const doubleEscape =
+        executable !== undefined && /node_modules[\\/]\.bin[\\/][^\\/]+\.cmd$/i.test(executable);
+      const quote = (arg: string) => {
+        let value =
+          `"${arg.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"').replace(/(?=(\\+?)?)\1$/, "$1$1")}"`.replace(
+            meta,
+            "^$1",
+          );
+        if (doubleEscape) value = value.replace(meta, "^$1");
+        return value;
+      };
+      command = [path.normalize(command).replace(meta, "^$1"), ...args.map(quote)].join(" ");
+      args = [];
+      shell = env.ComSpec ?? env.COMSPEC ?? "cmd.exe";
+    }
+    return { command, args, shell };
+  },
+);
+
 const make = Effect.gen(function* () {
   const effectClock = yield* Clock.Clock;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const serviceScope = yield* Scope.Scope;
 
   const storage = yield* StorageRoot;
   const { sqlite } = yield* Database;
   const links = MutableHashMap.empty<string, Link>();
+  const retries = yield* FiberMap.make<string, void, never>();
+  const context = yield* Effect.context<never>();
+  const runCallback = Effect.runForkWith(context);
 
   const selectTrust = sqlite.prepare(
     "SELECT scope, name, fingerprint FROM agent_trust WHERE project_id = '' OR project_id = ?",
@@ -199,9 +278,13 @@ const make = Effect.gen(function* () {
   const linkKey = (project: Project, agent: ConfiguredAgent) =>
     `${project.id}/${agent.scope}/${agent.name}`;
 
-  const configured = (project: Project) => {
-    const global = readAgentsFile(globalAgentsFile(storage.path), "global");
-    const local = readAgentsFile(projectAgentsFile(project.root), "project");
+  const configured = Effect.fn("ExternalAgents.configured")(function* (project: Project) {
+    const global = yield* readAgentsFile(globalAgentsFile(storage.path), "global").pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
+    );
+    const local = yield* readAgentsFile(projectAgentsFile(project.root), "project").pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
+    );
     const trust = decodeTrustRows(selectTrust.all(project.id));
     const localNames = HashSet.fromIterable(local.agents.map((agent) => agent.name));
     const agents = [...global.agents, ...local.agents].map((agent) => ({
@@ -231,14 +314,14 @@ const make = Effect.gen(function* () {
       })),
       agents,
     };
-  };
+  });
 
   const shutdown = (link: Link) => {
     const live = link.live;
     link.live = null;
     if (!(live !== null)) return;
     live.connection.close();
-    endChild(live.child);
+    live.dispose();
   };
 
   const retire = (link: Link) => {
@@ -260,18 +343,44 @@ const make = Effect.gen(function* () {
             ]),
           ),
         };
-        // cross-spawn runs `npx` and other `.cmd` launchers on Windows, with arguments quoted for cmd.exe.
-        const child = spawn(
-          expandVariables(agent.command.command, process.env),
-          agent.command.args.map((arg) => expandVariables(arg, process.env)),
-          { cwd: project.root, env, stdio: ["pipe", "pipe", "ignore"], windowsHide: true },
+        const owner = yield* Scope.fork(serviceScope, "parallel");
+        const { command, args, shell } = yield* agentCommandInvocation({
+          command: expandVariables(agent.command.command, process.env),
+          args: agent.command.args.map((arg) => expandVariables(arg, process.env)),
+          cwd: project.root,
+          env,
+        }).pipe(
+          Effect.provideService(FileSystem.FileSystem, fs),
+          Effect.provideService(Path.Path, path),
         );
-        // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-        const spawned = new Promise<void>((resolve, reject) => {
-          child.once("spawn", resolve);
-          child.once("error", reject);
-        });
-        yield* nativePromise(() => spawned);
+        const child = yield* spawner
+          .spawn(
+            ChildProcess.make(command, args, {
+              cwd: project.root,
+              env,
+              extendEnv: false,
+              stderr: "ignore",
+              windowsHide: true,
+              stdin: { stream: "pipe", endOnDone: false },
+              shell,
+              forceKillAfter: "3 seconds",
+            }),
+          )
+          .pipe(
+            Effect.provideService(Scope.Scope, owner),
+            Effect.onError(() => Scope.close(owner, Exit.void)),
+          );
+        const dispose = () => {
+          runCallback(Scope.close(owner, Exit.void));
+        };
+        const streamContext = yield* Layer.build(
+          SdkStreams.layer({
+            input: child.stdout,
+            output: child.stdin,
+            closeOutput: Scope.close(owner, Exit.void),
+          }),
+        ).pipe(Effect.provideService(Scope.Scope, owner));
+        const streams = Context.get(streamContext, SdkStreams);
 
         const handlers = MutableHashMap.empty<string, SessionHandlers>();
         const connection = acp
@@ -290,13 +399,7 @@ const make = Effect.gen(function* () {
               ? handler.askPermission(ctx.params)
               : Promise.resolve({ outcome: { outcome: "cancelled" } as const });
           })
-          .connect(
-            acp.ndJsonStream(
-              Writable.toWeb(child.stdin!),
-              // SAFETY: a spawned child's stdout is a byte stream; Node types its web form loosely.
-              Readable.toWeb(child.stdout!) as ReadableStream<Uint8Array>,
-            ),
-          );
+          .connect(acp.ndJsonStream(streams.writable, streams.readable));
 
         return yield* Effect.gen(function* () {
           const initialized = yield* nativePromise(() =>
@@ -315,21 +418,25 @@ const make = Effect.gen(function* () {
             }),
           );
           const live: Live = {
-            child,
+            dispose,
             connection,
             agentName: initialized.agentInfo?.name ?? null,
             loadSession: initialized.agentCapabilities?.loadSession === true,
             sessions: MutableHashMap.empty(),
             handlers,
           };
-          child.once("exit", () => onLost(project, agent, link, live));
+          yield* child.exitCode.pipe(
+            Effect.onExit(() => Effect.sync(() => onLost(project, agent, link, live))),
+            Effect.ignore,
+            Effect.forkIn(owner),
+          );
           void connection.closed.finally(() => onLost(project, agent, link, live));
           return live;
         }).pipe(
           Effect.onError(() =>
             Effect.sync(() => {
               connection.close();
-              endChild(child);
+              dispose();
             }),
           ),
         );
@@ -345,7 +452,7 @@ const make = Effect.gen(function* () {
         link.attempt = null;
         if (link.retired) {
           live.connection.close();
-          endChild(live.child);
+          live.dispose();
           return live;
         }
         link.live = live;
@@ -375,16 +482,16 @@ const make = Effect.gen(function* () {
   const onLost = (project: Project, agent: ConfiguredAgent, link: Link, live: Live) => {
     if (link.retired || link.live !== live) return;
     link.live = null;
-    endChild(live.child);
-    const retry = (): void => {
-      if (link.retired || link.live !== null || link.failures >= maxConsecutiveFailures) return;
-      void attempt(project, agent, link).catch(() => {
-        // Native callback heartbeat/debounce timing remains at the protocol boundary.
-        if (link.failures < maxConsecutiveFailures) setTimeout(retry, retryDelayMs).unref();
-      });
-    };
-    // Native callback heartbeat/debounce timing remains at the protocol boundary.
-    setTimeout(retry, retryDelayMs).unref();
+    live.dispose();
+    const retry = Effect.gen(function* () {
+      while (!link.retired && link.live === null && link.failures < maxConsecutiveFailures) {
+        yield* Effect.sleep(retryDelayMs);
+        if (link.retired || link.live !== null || link.failures >= maxConsecutiveFailures) return;
+        const outcome = yield* Effect.result(nativePromise(() => attempt(project, agent, link)));
+        if (Result.isSuccess(outcome)) return;
+      }
+    });
+    runCallback(FiberMap.run(retries, linkKey(project, agent), retry, { onlyIfMissing: true }));
   };
 
   const linkFor = (project: Project, agent: ConfiguredAgent) => {
@@ -405,14 +512,19 @@ const make = Effect.gen(function* () {
   };
 
   /** The trusted, unchanged configuration of a named agent usable in this project. */
-  const usable = (project: Project, name: string) =>
-    configured(project).agents.find(
-      (entry) =>
-        entry.agent.name === name && !entry.shadowed && entry.trusted === entry.agent.fingerprint,
-    )?.agent ?? null;
+  const usable = Effect.fn("ExternalAgents.usable")(function* (project: Project, name: string) {
+    return (
+      (yield* configured(project)).agents.find(
+        (entry) =>
+          entry.agent.name === name && !entry.shadowed && entry.trusted === entry.agent.fingerprint,
+      )?.agent ?? null
+    );
+  });
 
-  const overview = (project: Project): ExternalAgentsOverview => {
-    const { files, agents } = configured(project);
+  const overview = Effect.fn("ExternalAgents.overview")(function* (
+    project: Project,
+  ): Effect.fn.Return<ExternalAgentsOverview> {
+    const { files, agents } = yield* configured(project);
     return {
       files,
       agents: agents.map((entry) => ({
@@ -434,7 +546,7 @@ const make = Effect.gen(function* () {
                 },
       })),
     };
-  };
+  });
 
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
@@ -443,19 +555,21 @@ const make = Effect.gen(function* () {
   );
 
   return {
-    overview: (project: Project) => Effect.sync(() => overview(project)),
+    overview,
 
     /** Names of agents a conversation in this project may use. */
     available: (project: Project) =>
-      configured(project)
-        .agents.filter((entry) => !entry.shadowed && entry.trusted === entry.agent.fingerprint)
-        .map((entry) => entry.agent.name),
+      Effect.map(configured(project), (config) =>
+        config.agents
+          .filter((entry) => !entry.shadowed && entry.trusted === entry.agent.fingerprint)
+          .map((entry) => entry.agent.name),
+      ),
 
     /** Trusting records the exact configuration; nothing starts until it is used. */
     setTrusted: (project: Project, scope: AgentScope, name: string, trusted: boolean) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         const projectId = scope === "global" ? "" : project.id;
-        const entry = configured(project).agents.find(
+        const entry = (yield* configured(project)).agents.find(
           (candidate) => candidate.agent.scope === scope && candidate.agent.name === name,
         );
         if (trusted && isTruthy(entry))
@@ -474,14 +588,14 @@ const make = Effect.gen(function* () {
               MutableHashMap.remove(links, key);
             }
         }
-        return overview(project);
+        return yield* overview(project);
       }),
 
     /** Manual reconnect: clears the failure count and tries once more. */
     reconnect: (project: Project, name: string) =>
       Effect.gen(function* () {
-        const agent = usable(project, name);
-        if (!isTruthy(agent)) return overview(project);
+        const agent = yield* usable(project, name);
+        if (!isTruthy(agent)) return yield* overview(project);
         const link = linkFor(project, agent);
         shutdown(link);
         link.failures = 0;
@@ -489,7 +603,7 @@ const make = Effect.gen(function* () {
           try: () => attempt(project, agent, link),
           catch: (cause) => new ExternalAgentOperationFailed({ operation: "reconnect", cause }),
         }).pipe(Effect.catchTag("ExternalAgentOperationFailed", () => Effect.void));
-        return overview(project);
+        return yield* overview(project);
       }),
 
     /**
@@ -506,7 +620,7 @@ const make = Effect.gen(function* () {
     ): Promise<ExternalPromptOutcome> =>
       runNativeEffect(
         Effect.gen(function* () {
-          const agent = usable(project, name);
+          const agent = yield* usable(project, name);
           if (!isTruthy(agent)) return { status: "unavailable" as const, reason: "not_trusted" };
           const link = linkFor(project, agent);
           if (

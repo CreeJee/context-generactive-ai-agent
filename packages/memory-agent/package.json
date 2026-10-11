@@ -25,6 +25,12 @@
     ".": "./src/index.ts",
     "./testing": "./src/testing/index.ts",
     "./native-effect": "./src/runtime/native-effect.ts",
+    "./runtime-resources": {
+      "types": "./src/runtime/resources.ts",
+      "development": "./src/runtime/resources.ts",
+      "import": "./src/runtime/resources.ts",
+      "default": "./src/runtime/resources.ts"
+    },
     "./definitions": "./src/tools/definitions.ts",
     "./provider-contracts": "./src/providers/contracts.ts",
     "./compatible-config": "./src/providers/openai-compatible-config.ts",
@@ -34,7 +40,7 @@
     "./embed-worker": "./src/memory/embedding/embed-worker.ts",
     "./import-worker": "./src/imports/worker.ts",
     "./redact-worker": "./src/secrets/redact-worker.ts",
-    "./full-loop-worker": "./src/agent/full-loop-worker.ts"
+    "./native-search-worker": "./src/memory/native-search/worker.ts"
   },
   "publishConfig": {
     "access": "public"

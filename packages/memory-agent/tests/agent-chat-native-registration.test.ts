@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { Cause, ConfigProvider, Context, Effect, Layer, Schema } from "effect";
+import { Cause, Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { Database } from "../src/db/database.ts";
@@ -11,15 +11,6 @@ it.live(
   "real AgentChat workers link two Goal runs to separate native registrations and cold revalidate",
   () =>
     Effect.gen(function* () {
-      const flags = yield* Layer.build(
-        ConfigProvider.layerAdd(
-          ConfigProvider.fromUnknown({
-            CONTEXT_AGENT_NATIVE_ARTIFACT: "1",
-            CONTEXT_AGENT_GOAL_WORKER: "1",
-          }),
-          { asPrimary: true },
-        ),
-      );
       const context = yield* sdkCall(() =>
         testRuntime({
           testProvider: { responder: () => ({ text: "native registered answer" }) },
@@ -53,7 +44,7 @@ it.live(
         session: string,
         run: string,
       ) {
-        const services = Context.merge(yield* runtime.contextEffect, flags);
+        const services = yield* runtime.contextEffect;
         const request = new Request("http://localhost/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -69,7 +60,10 @@ it.live(
           Effect.flatMap(AgentChat, (chat) => chat.handle(request, session)),
           services,
         );
-        expect(response.status).toBe(200);
+        expect(
+          response.status,
+          response.status === 200 ? "" : yield* sdkCall(() => response.text()),
+        ).toBe(200);
         const text = yield* sdkCall(() => response.text());
         expect(text).not.toContain("RUN_ERROR");
         expect(text).toContain("native registered answer");

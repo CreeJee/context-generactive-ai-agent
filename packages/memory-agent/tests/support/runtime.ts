@@ -9,10 +9,17 @@ import { testProvider as makeTestProvider, type TestProviderOptions } from "./pr
 
 // The native test runner owns this Scope across every runtime reopen in one test.
 let fixtureScope = Scope.makeUnsafe();
+let fixtureRuntimeScope = Scope.makeUnsafe();
 afterEach(() => {
   const scope = fixtureScope;
+  const runtimes = fixtureRuntimeScope;
   fixtureScope = Scope.makeUnsafe();
-  return Effect.runPromise(Scope.close(scope, Exit.void));
+  fixtureRuntimeScope = Scope.makeUnsafe();
+  // Runtime reopens register later than the storage acquisition. Keep every database owner
+  // alive until it is disposed, and only then remove SQLite's mapped WAL/SHM files.
+  return Effect.runPromise(
+    Scope.close(runtimes, Exit.void).pipe(Effect.andThen(Scope.close(scope, Exit.void))),
+  );
 });
 
 const open = Effect.fnUntraced(function* (
@@ -38,6 +45,7 @@ export interface TestRuntimeOptions extends MemoryAgentLayerOptions {
  */
 export function testRuntime(overrides: TestRuntimeOptions = {}) {
   const owner = fixtureScope;
+  const runtimeOwner = fixtureRuntimeScope;
   const create = Effect.gen(function* () {
     const scope = yield* Scope.fork(owner);
     const setup = Effect.gen(function* () {
@@ -75,7 +83,7 @@ export function testRuntime(overrides: TestRuntimeOptions = {}) {
       const storage = path.join(base, "storage");
       const projectRoot = path.join(base, "project");
       yield* fs.makeDirectory(projectRoot);
-      const runtime = yield* open(storage, options, scope);
+      const runtime = yield* open(storage, options, runtimeOwner);
       const { project, session } = yield* Effect.provideContext(
         Effect.gen(function* () {
           const project = yield* (yield* Projects).add(projectRoot);
@@ -93,7 +101,7 @@ export function testRuntime(overrides: TestRuntimeOptions = {}) {
         storage,
         provider,
         /** Close the current runtime while the fixture Scope retains storage for its replacement. */
-        reopen: () => runtime.dispose().then(() => run(open(storage, options, scope))),
+        reopen: () => runtime.dispose().then(() => run(open(storage, options, runtimeOwner))),
       };
     }).pipe(Effect.provideService(Scope.Scope, scope));
     // Stop unfinished setup before closing its resource Scope when the test ends.

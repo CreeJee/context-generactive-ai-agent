@@ -1,14 +1,31 @@
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { Hex } from "effect/encoding";
+import { readFileBytesEffect } from "../files/text.ts";
+import {
+  Context as PlatformContext,
+  Effect as PlatformEffect,
+  Layer as PlatformLayer,
+  Path,
+} from "effect";
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { createHash } from "node:crypto";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
+// FileSystem.stat follows symbolic links; skill discovery must inspect entries without following them.
+import { lstat } from "node:fs/promises";
 import { homedir } from "node:os";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { dirname, join } from "node:path";
-import { MutableHashMap, Option, Context, Effect, Layer, Schema } from "effect";
+import * as NodePath from "@effect/platform-node/NodePath";
+import { MutableHashMap, Option, Context, Effect, FileSystem, Crypto, Layer, Schema } from "effect";
 import type { Project } from "../projects/projects.ts";
 import { runtimeRequire, runtimeRoot } from "../runtime/resources.ts";
+
+// Path operations remain synchronous at these public host boundaries.
+const { dirname, join } = PlatformEffect.runSync(
+  PlatformEffect.scoped(
+    PlatformEffect.gen(function* () {
+      const services = yield* PlatformLayer.build(NodePath.layer);
+      return PlatformContext.get(services, Path.Path);
+    }),
+  ),
+);
 
 /**
  * Where a skill comes from. `builtin` ships with this app; the user's own (`global`) and the
@@ -109,87 +126,10 @@ export function parseFrontMatter(text: string): FrontMatter {
 
 const skillFileOf = (directory: string) => join(directory, "SKILL.md");
 
-/** Real directories only: a link could point a skill anywhere. */
-const isPlainDirectory = (path: string) => {
-  try {
-    return lstatSync(path).isDirectory();
-  } catch {
-    return false;
-  }
-};
-
 type SkillRead =
   | { readonly _tag: "none" }
   | { readonly _tag: "skill"; readonly skill: Skill; readonly body: string }
   | { readonly _tag: "problem"; readonly problem: SkillProblem };
-
-function readSkill(scope: SkillScope, directory: string, folder: string): SkillRead {
-  const file = skillFileOf(directory);
-  const problem = (kind: SkillProblem["problem"]): SkillRead => ({
-    _tag: "problem",
-    problem: { scope, directory, problem: kind },
-  });
-  try {
-    if (!existsSync(file)) return { _tag: "none" };
-    const stats = lstatSync(file);
-    if (!stats.isFile()) return { _tag: "none" };
-    if (stats.size > maxSkillBytes) return problem("too_large");
-    const text = readFileSync(file, "utf8");
-    const { fields, body } = parseFrontMatter(text);
-    const description = Option.getOrUndefined(MutableHashMap.get(fields, "description")) ?? "";
-    if (description.length === 0) return problem("no_description");
-    const skill: Skill = {
-      scope,
-      name: Option.getOrUndefined(MutableHashMap.get(fields, "name")) || folder,
-      description: description.slice(0, maxDescriptionCharacters),
-      directory,
-      contentHash: createHash("sha256").update(text).digest("hex"),
-    };
-    return { _tag: "skill", skill, body };
-  } catch {
-    return problem("unreadable");
-  }
-}
-
-function scan(scope: SkillScope, root: string) {
-  const skills: Array<{ skill: Skill; body: string }> = [];
-  const problems: SkillProblem[] = [];
-  if (!existsSync(root) || !statSync(root).isDirectory()) return { skills, problems };
-  for (const folder of readdirSync(root).sort()) {
-    const directory = join(root, folder);
-    if (folder.startsWith(".") || !isPlainDirectory(directory)) continue;
-    const read = readSkill(scope, directory, folder);
-    switch (read._tag) {
-      case "none":
-        break;
-      case "skill":
-        skills.push(read);
-        break;
-      case "problem":
-        problems.push(read.problem);
-        break;
-    }
-  }
-  return { skills, problems };
-}
-
-/**
- * Other files a skill may point the model at. A built-in skill has none by rule: the executable
- * unpacks it under the storage root, which the file tools refuse to read, so anything it needs has
- * to be in SKILL.md itself.
- */
-function filesOf(skill: Skill): string[] {
-  switch (skill.scope) {
-    case "builtin":
-      return [];
-    case "global":
-    case "project":
-      return readdirSync(skill.directory)
-        .filter((file) => file !== "SKILL.md" && !file.startsWith("."))
-        .sort()
-        .slice(0, 100);
-  }
-}
 
 export interface SkillsOptions {
   /** Where global skills live; tests use a temporary home. */
@@ -199,16 +139,102 @@ export interface SkillsOptions {
 }
 
 const make = (options: SkillsOptions) =>
-  Effect.sync(() => {
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const crypto = yield* Crypto.Crypto;
     const home = options.home ?? homedir();
     const builtinRoot = options.builtin ?? builtinSkillsDirectory();
 
-    const load = (project: Project) => {
+    const readSkill = Effect.fn("Skills.readSkill")(function* (
+      scope: SkillScope,
+      directory: string,
+      folder: string,
+    ): Effect.fn.Return<SkillRead> {
+      const file = skillFileOf(directory);
+      const problem = (kind: SkillProblem["problem"]): SkillRead => ({
+        _tag: "problem",
+        problem: { scope, directory, problem: kind },
+      });
+      return yield* Effect.gen(function* (): Effect.fn.Return<
+        SkillRead,
+        | import("../files/text.ts").TextFileIoFailed
+        | import("../files/text.ts").TextFileRejected
+        | import("../files/paths.ts").PathRejected
+        | import("effect/PlatformError").PlatformError
+        | import("effect/Cause").UnknownError
+      > {
+        if (!(yield* fs.exists(file))) return { _tag: "none" };
+        const stats = yield* Effect.tryPromise(() => lstat(file));
+        if (!stats.isFile()) return { _tag: "none" };
+        if (stats.size > maxSkillBytes) return problem("too_large");
+        // Open the same leaf without following a link swapped in after discovery.
+        const { bytes } = yield* readFileBytesEffect({ absolute: file, path: file });
+        if (bytes.length > maxSkillBytes) return problem("too_large");
+        const text = new TextDecoder().decode(bytes);
+        const { fields, body } = parseFrontMatter(text);
+        const description = Option.getOrUndefined(MutableHashMap.get(fields, "description")) ?? "";
+        if (description.length === 0) return problem("no_description");
+        return {
+          _tag: "skill",
+          body,
+          skill: {
+            scope,
+            name: Option.getOrUndefined(MutableHashMap.get(fields, "name")) || folder,
+            description: description.slice(0, maxDescriptionCharacters),
+            directory,
+            contentHash: Hex.encode(
+              yield* crypto.digest("SHA-256", new TextEncoder().encode(text)),
+            ),
+          },
+        };
+      }).pipe(Effect.orElseSucceed(() => problem("unreadable")));
+    });
+
+    const scan = Effect.fn("Skills.scan")(function* (scope: SkillScope, root: string) {
+      const skills: Array<{ skill: Skill; body: string }> = [];
+      const problems: SkillProblem[] = [];
+      if (!(yield* fs.exists(root))) return { skills, problems };
+      if ((yield* fs.stat(root)).type !== "Directory") return { skills, problems };
+      for (const folder of (yield* fs.readDirectory(root)).sort()) {
+        if (folder.startsWith(".")) continue;
+        const directory = join(root, folder);
+        const plain = yield* Effect.tryPromise(() => lstat(directory)).pipe(
+          Effect.map((entry) => entry.isDirectory()),
+          Effect.orElseSucceed(() => false),
+        );
+        if (!plain) continue;
+        const read = yield* readSkill(scope, directory, folder);
+        switch (read._tag) {
+          case "none":
+            break;
+          case "skill":
+            skills.push(read);
+            break;
+          case "problem":
+            problems.push(read.problem);
+            break;
+        }
+      }
+      return { skills, problems };
+    });
+    const filesOf = Effect.fn("Skills.filesOf")(function* (skill: Skill) {
+      switch (skill.scope) {
+        case "builtin":
+          return [];
+        case "global":
+        case "project":
+          return (yield* fs.readDirectory(skill.directory))
+            .filter((file) => file !== "SKILL.md" && !file.startsWith("."))
+            .sort()
+            .slice(0, 100);
+      }
+    });
+    const load = Effect.fn("Skills.load")(function* (project: Project) {
       // Later scopes win on a shared name: the app's defaults, then the user's, then the project's.
       const layers = [
-        scan("builtin", builtinRoot),
-        scan("global", globalSkillsDirectory(home)),
-        scan("project", projectSkillsDirectory(project.root)),
+        yield* scan("builtin", builtinRoot),
+        yield* scan("global", globalSkillsDirectory(home)),
+        yield* scan("project", projectSkillsDirectory(project.root)),
       ];
       const byName = MutableHashMap.empty<string, { skill: Skill; body: string }>();
       for (const layer of layers)
@@ -217,14 +243,14 @@ const make = (options: SkillsOptions) =>
         entries: [...MutableHashMap.values(byName)],
         problems: layers.flatMap((layer) => layer.problems),
       };
-    };
+    });
 
     return {
-      /** Where the user's own skills, shared by every project, live. */
       globalDirectory: globalSkillsDirectory(home),
-
-      catalog: (project: Project): SkillCatalog => {
-        const { entries, problems } = load(project);
+      catalog: Effect.fn("Skills.catalog")(function* (
+        project: Project,
+      ): Effect.fn.Return<SkillCatalog, import("effect/PlatformError").PlatformError> {
+        const { entries, problems } = yield* load(project);
         return {
           directories: [
             { scope: "global", path: globalSkillsDirectory(home) },
@@ -233,13 +259,17 @@ const make = (options: SkillsOptions) =>
           skills: entries.map((entry) => entry.skill),
           problems,
         };
-      },
-
-      read: (project: Project, name: string): SkillDocument | null => {
-        const entry = load(project).entries.find((candidate) => candidate.skill.name === name);
-        if (!isTruthy(entry)) return null;
-        return { ...entry.skill, body: entry.body, files: filesOf(entry.skill) };
-      },
+      }),
+      read: Effect.fn("Skills.read")(function* (
+        project: Project,
+        name: string,
+      ): Effect.fn.Return<SkillDocument | null, import("effect/PlatformError").PlatformError> {
+        const entry = (yield* load(project)).entries.find(
+          (candidate) => candidate.skill.name === name,
+        );
+        if (entry === undefined) return null;
+        return { ...entry.skill, body: entry.body, files: yield* filesOf(entry.skill) };
+      }),
     };
   });
 
@@ -247,5 +277,8 @@ const make = (options: SkillsOptions) =>
 export class Skills extends Context.Service<Skills, Effect.Success<ReturnType<typeof make>>>()(
   "memory-agent/skills/skills",
 ) {
-  static readonly layer = (options: SkillsOptions = {}) => Layer.effect(Skills, make(options));
+  static readonly layer = (options: SkillsOptions = {}) =>
+    Layer.effect(Skills, make(options)).pipe(
+      Layer.provide(Layer.merge(NodeFileSystem.layer, NodeCrypto.layer)),
+    );
 }

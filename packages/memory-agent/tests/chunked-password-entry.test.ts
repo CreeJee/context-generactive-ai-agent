@@ -1,3 +1,4 @@
+import { testHttpClient } from "./support/http.ts";
 import { Cause, Effect, MutableHashMap, Option, Result, Schema } from "effect";
 import { it } from "@effect/vitest";
 import { expect } from "vite-plus/test";
@@ -231,9 +232,7 @@ it.live(
         const callback = new URL(authorization.searchParams.get("redirect_uri")!);
         callback.searchParams.set("state", authorization.searchParams.get("state")!);
         callback.searchParams.set("code", "synthetic-code");
-        // The OAuth SDK owns this native loopback callback protocol. Keep its transport at
-        // the Promise boundary while the test Fiber owns awaiting and cancellation.
-        expect((yield* call(() => fetch(callback))).status).toBe(200);
+        expect((yield* (yield* testHttpClient()).get(callback.toString())).status).toBe(200);
         expect((yield* call(() => completion)).connected).toBe(true);
         expect((yield* call(() => client.refreshForValidation())).connected).toBe(true);
         expect((yield* call(() => store.read("openai")))?.accessToken).toContain("access-2-");

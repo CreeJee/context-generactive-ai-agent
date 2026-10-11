@@ -1,5 +1,5 @@
 // Release signatures require Ed25519 PEM keys; Effect 4 Crypto does not expose key generation.
-import { generateKeyPairSync } from "node:crypto";
+import { generateKeyPairSync, sign, verify } from "node:crypto";
 import { describe, expect, test } from "vite-plus/test";
 import {
   acceptRelease,
@@ -7,6 +7,7 @@ import {
   compareVersions,
   releaseAssetName,
   signReleaseManifest,
+  verifyManifestSignature,
   type ReleaseManifest,
 } from "./release-contract";
 
@@ -58,6 +59,50 @@ describe("release contract", () => {
 
   test("accepts a signed newer release for the selected target", () => {
     expect(acceptRelease(signed(manifest()), trusted, options).size).toBe(123);
+  });
+
+  test("preserves Ed25519 PEM interoperability, canonical UTF-8 and padded base64", () => {
+    const value = { ...manifest(), publishedAt: "한글 😀" };
+    const payload = Buffer.from(canonicalJson(value), "utf8");
+    const signature = signReleaseManifest(value, "release-2026", keys.privateKey);
+    const nativeSignature = sign(null, payload, keys.privateKey);
+    expect(signature.signature).toBe(nativeSignature.toString("base64"));
+    expect(verify(null, payload, keys.publicKey, Buffer.from(signature.signature, "base64"))).toBe(
+      true,
+    );
+    expect(() =>
+      verifyManifestSignature(
+        value,
+        { ...signature, signature: nativeSignature.toString("base64") },
+        trusted,
+      ),
+    ).not.toThrow();
+  });
+
+  test("preserves accepted signature encodings and rejects corrupt signatures", () => {
+    const value = manifest();
+    const signature = signReleaseManifest(value, "release-2026", keys.privateKey);
+    for (const encoded of [
+      signature.signature.replace(/=+$/, ""),
+      Buffer.from(signature.signature, "base64").toString("base64url"),
+      ` \n${signature.signature}\n `,
+    ]) {
+      expect(() =>
+        verifyManifestSignature(value, { ...signature, signature: encoded }, trusted),
+      ).not.toThrow();
+    }
+    for (const encoded of ["", "%%%", Buffer.alloc(64).toString("base64")]) {
+      expect(() =>
+        verifyManifestSignature(value, { ...signature, signature: encoded }, trusted),
+      ).toThrow("signature is invalid");
+    }
+  });
+
+  test("rejects malformed PEM keys without accepting a release", () => {
+    expect(() => signReleaseManifest(manifest(), "release-2026", "invalid PEM")).toThrow();
+    expect(() =>
+      acceptRelease(signed(manifest()), { "release-2026": "invalid PEM" }, options),
+    ).toThrow();
   });
 
   test("rejects manifest tampering and unknown signing keys", () => {

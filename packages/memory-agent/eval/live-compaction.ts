@@ -2,12 +2,13 @@ import { nativePromise, runNativeEffect } from "../src/runtime/native-effect.ts"
 import { Config, Console, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../src/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
+import { randomUUID } from "../src/runtime/synchronous-crypto.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { NodeServices } from "@effect/platform-node";
+import { Context, FileSystem } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { join } from "node:path";
+import { path } from "../src/runtime/synchronous-path.ts";
+const { join } = path;
 import { maxIterations } from "@tanstack/ai";
 import { DateTime, Effect, Layer, Schema } from "effect";
 import { AgentChat } from "../src/agent/chat.ts";
@@ -68,7 +69,11 @@ const guardedRegistry = Layer.effect(
                   // BPE count is only a preflight guard; billed/cached usage comes from provider.
                   if (selection.provider === "openai-compatible")
                     throw new Error("subscription_pilot_only");
-                  const serialized = subscriptionRequest(selection.provider, selection, options);
+                  const serialized = subscriptionRequest({
+                    provider: selection.provider,
+                    selection: selection,
+                    options: options,
+                  });
                   const estimated = estimateRequestTokens(serialized, selection.model);
                   if (
                     calls >= maxCalls ||
@@ -122,15 +127,14 @@ function answerFromSse(sse: string) {
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const runArm = Effect.fn("eval.runArm")(function* (variant: "auto" | "auto-plus-manual") {
-  const base = mkdtempSync(join(tmpdir(), "memory-agent-paid-ab-"));
+  const platform = yield* Layer.build(NodeServices.layer);
+  const fs = Context.get(platform, FileSystem.FileSystem);
+  const base = yield* fs.makeTempDirectoryScoped({ prefix: "memory-agent-paid-ab-" });
   const projectRoot = join(base, "project");
   const home = join(base, "home");
-  mkdirSync(join(projectRoot, "src"), { recursive: true });
-  mkdirSync(home);
-  writeFileSync(join(projectRoot, "src/checksum.ts"), fixture);
-  yield* Effect.addFinalizer(() =>
-    Effect.sync(() => rmSync(base, { recursive: true, force: true })),
-  );
+  yield* fs.makeDirectory(join(projectRoot, "src"), { recursive: true });
+  yield* fs.makeDirectory(home);
+  yield* fs.writeFileString(join(projectRoot, "src/checksum.ts"), fixture);
   const servicesContext = yield* Layer.build(
     memoryAgentLayer(join(base, "storage"), {
       providerRegistry: guardedRegistry,

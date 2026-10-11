@@ -2,7 +2,6 @@ import { withTestPlatform } from "./support/platform.ts";
 import { Schema } from "effect";
 import { it as effectTest } from "@effect/vitest";
 // Real MessagePorts exercise the native worker transport; Scope owns ports, handlers and storage.
-import { makeOwnerRpcPortClient as makeFrozenOwnerRpcPortClient } from "../src/agent/full-loop-rpc-client.ts";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
 import { describe, expect } from "vite-plus/test";
 import { Cause, Deferred, Effect, Fiber, FileSystem, Path, Scope, Context, Exit } from "effect";
@@ -461,17 +460,17 @@ describe("owner MessagePort RPC", () => {
 });
 
 effectTest.live.each(["1", "__proto__"])(
-  "frozen worker rejects non-numeric reply ID %s",
+  "owner transport rejects non-numeric reply ID %s",
   (requestId) =>
     Effect.gen(function* () {
       const { port1, port2 } = yield* channels();
-      const client = makeFrozenOwnerRpcPortClient(port1);
+      const client = makeOwnerRpcPortClient<Operations>(port1);
       try {
         const received = yield* Effect.forkChild(portEvent(port2, "message"), {
           startImmediately: true,
         });
         const pending = client.request(request());
-        const rejected = expect(pending).rejects.toThrow("Owner port closed; no replay");
+        const rejected = expect(pending).rejects.toMatchObject({ reason: "protocol" });
         yield* Fiber.join(received);
         port2.postMessage({
           type: "reply",

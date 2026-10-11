@@ -1,3 +1,4 @@
+import { Cause } from "effect";
 import {
   type AdapterYieldChunk,
   EventType,
@@ -6,7 +7,8 @@ import {
   toolDefinition,
 } from "@tanstack/ai";
 import { it } from "@effect/vitest";
-import { Effect, Schema, Stream } from "effect";
+import { Context, Effect, Layer, Schema, Stream } from "effect";
+import { ExecutionAdmission } from "../src/runtime/execution-admission.ts";
 import { sdkCancellation } from "./support/sdk-cancellation.ts";
 import { expect, test } from "vite-plus/test";
 import {
@@ -16,6 +18,12 @@ import {
 import { encodeFullLoopValue, decodeFullLoopValue } from "../src/agent/full-loop-codec.ts";
 import { makeInMemoryOwnerRpcLedger } from "../src/agent/owner-rpc.ts";
 import { ScriptedTextAdapter } from "../src/testing/scripted-adapter.ts";
+
+const testAdmission = Context.get(
+  Effect.runSync(Effect.scoped(Layer.build(ExecutionAdmission.layer()))),
+  ExecutionAdmission,
+);
+const workerUrl = new URL("../src/agent/full-loop-worker.ts", import.meta.url);
 
 const capability = {
   runId: "r",
@@ -59,7 +67,10 @@ it.live("owner finalization retains worker reasoning separately from the answer"
         return Stream.toAsyncIterable(
           Stream.concat(
             Stream.fromIterable(prefix, { chunkSize: 1 }),
-            Stream.fromAsyncIterable(super.chatStream(options), (cause) => cause),
+            Stream.fromAsyncIterable(
+              super.chatStream(options),
+              (cause) => new Cause.UnknownError(cause),
+            ),
           ),
         );
       }
@@ -68,6 +79,8 @@ it.live("owner finalization retains worker reasoning separately from the answer"
     yield* Stream.runDrain(
       Stream.fromAsyncIterable(
         createFullLoopExecution<ReasoningAdapter>({
+          admission: testAdmission,
+          workerUrl,
           capability,
           ledger: makeInMemoryOwnerRpcLedger(),
           permits: () => true,
@@ -97,7 +110,7 @@ it.live("owner finalization retains worker reasoning separately from the answer"
             ],
           },
         ),
-        (cause) => cause,
+        (cause) => new Cause.UnknownError(cause),
       ),
     );
     expect(finalized).toBe(true);
@@ -165,6 +178,8 @@ it.live(
       const chunks = yield* Stream.runCollect(
         Stream.fromAsyncIterable(
           createFullLoopExecution<ScriptedTextAdapter>({
+            admission: testAdmission,
+            workerUrl,
             capability,
             ledger: makeInMemoryOwnerRpcLedger(),
             permits: () => true,
@@ -172,7 +187,7 @@ it.live(
             finalizationMiddleware: ["provider", "consumer", "owner-gate"],
             lastOperationId: 0,
           }).execute({ messages: [], runId: "r", threadId: "s" }, capabilities),
-          (cause) => cause,
+          (cause) => new Cause.UnknownError(cause),
         ),
       );
       expect(finished).toBe(1);
@@ -206,6 +221,8 @@ it.live(
       const chunks = yield* Stream.runCollect(
         Stream.fromAsyncIterable(
           createFullLoopExecution<ScriptedTextAdapter>({
+            admission: testAdmission,
+            workerUrl,
             capability,
             ledger: makeInMemoryOwnerRpcLedger(),
             permits: () => true,
@@ -237,7 +254,7 @@ it.live(
               stream: { abortController: (yield* sdkCancellation).controller },
             },
           ),
-          (cause) => cause,
+          (cause) => new Cause.UnknownError(cause),
         ),
       );
       expect(calls).toBe(0);
@@ -261,6 +278,8 @@ it.live(
       const chunks = yield* Stream.runCollect(
         Stream.fromAsyncIterable(
           createFullLoopExecution<ScriptedTextAdapter>({
+            admission: testAdmission,
+            workerUrl,
             capability,
             ledger: makeInMemoryOwnerRpcLedger(),
             permits: () => issued && active,
@@ -299,7 +318,7 @@ it.live(
               ],
             },
           ),
-          (cause) => cause,
+          (cause) => new Cause.UnknownError(cause),
         ),
       );
       expect(recorded).toBe(1);

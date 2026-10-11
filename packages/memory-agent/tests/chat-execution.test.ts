@@ -1,3 +1,4 @@
+import { Cause } from "effect";
 import { it } from "@effect/vitest";
 import { maxIterations, toolDefinition, type StreamChunk } from "@tanstack/ai";
 import { expect, test } from "vite-plus/test";
@@ -52,7 +53,7 @@ test("owner capabilities override untyped turn fields without rebuilding owner i
 });
 
 const collect = (stream: AsyncIterable<StreamChunk>) =>
-  Stream.runCollect(Stream.fromAsyncIterable(stream, (cause) => cause));
+  Stream.runCollect(Stream.fromAsyncIterable(stream, (cause) => new Cause.UnknownError(cause)));
 
 it.live("execution runs the complete tool/model loop with owner middleware and run identity", () =>
   Effect.gen(function* () {

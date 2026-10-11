@@ -6,8 +6,8 @@
     "#server-build": "./build/server/index.js"
   },
   "scripts": {
-    "dev": "node --experimental-strip-types scripts/dev.ts",
-    "dev:agent": "node --experimental-strip-types scripts/dev.ts agent",
+    "dev": "vp run memory-agent#build && node --experimental-strip-types scripts/dev.ts",
+    "dev:agent": "vp run memory-agent#build && node --experimental-strip-types scripts/dev.ts agent",
     "dev:web": "node --experimental-strip-types scripts/dev.ts web",
     "start": "node dist/context-agent.mjs"
   },
@@ -46,17 +46,14 @@
     "tw-animate-css": "catalog:"
   },
   "devDependencies": {
-    "@babel/core": "^7.29.7",
     "@effect/vitest": "catalog:",
     "@react-router/dev": "^8",
-    "@rolldown/plugin-babel": "^0.2.3",
     "@tailwindcss/vite": "^4.2.2",
-    "@types/babel__core": "^7.20.5",
     "@types/node": "catalog:",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
-    "babel-plugin-react-compiler": "^1.0.0",
+    "oxc-transform-react": "catalog:",
     "tailwindcss": "^4.2.2",
     "typescript": "catalog:",
     "vite": "catalog:",

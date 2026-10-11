@@ -1,12 +1,23 @@
 import { runNativeEffect } from "../runtime/native-effect.ts";
 import type { ChatMiddleware } from "@tanstack/ai";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { glob } from "node:fs/promises";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { sep } from "node:path";
-import { Cause, Effect, Result, Schema, Stream } from "effect";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
+import * as NodePath from "@effect/platform-node/NodePath";
+import {
+  Effect,
+  FileSystem,
+  Layer,
+  ManagedRuntime,
+  Path,
+  PlatformError,
+  Result,
+  Schema,
+} from "effect";
 import { isCredentialPath, resolveProjectPath } from "../files/paths.ts";
 import { readTextFileEffect } from "../files/text.ts";
+
+const platformRuntime = ManagedRuntime.make(Layer.merge(NodeFileSystem.layer, NodePath.layer));
+const fs = platformRuntime.runSync(FileSystem.FileSystem);
+const path = platformRuntime.runSync(Path.Path);
 
 const prefix = "[Project AGENTS.md instructions]";
 
@@ -28,24 +39,32 @@ export function projectInstructions(root: string): ChatMiddleware {
                 ? (yield* readTextFileEffect({ absolute: resolved.absolute, path: "AGENTS.md" }))
                     .text
                 : "";
-            const paths = yield* Stream.runCollect(
-              Stream.fromAsyncIterable(
-                glob("**/AGENTS.md", {
-                  cwd: root,
-                  exclude: (path) =>
-                    isCredentialPath(path) ||
-                    path.split(/[\\/]/).some((part) => part === "node_modules" || part === ".git"),
-                }),
-                (cause) => new Cause.UnknownError(cause),
-              ).pipe(
-                Stream.map((entry) => entry.split(sep).join("/")),
-                Stream.filter(
-                  (path) =>
-                    path !== "AGENTS.md" &&
-                    Result.isSuccess(resolveProjectPath(root, path, "file")),
-                ),
-              ),
-            );
+            const paths: string[] = [];
+            const visit = (directory: string): Effect.Effect<void, PlatformError.PlatformError> =>
+              Effect.gen(function* () {
+                for (const name of yield* fs.readDirectory(path.join(root, directory))) {
+                  const relative = path.join(directory, name);
+                  if (isCredentialPath(relative) || name === "node_modules" || name === ".git")
+                    continue;
+                  const absolute = path.join(root, relative);
+                  // Match glob's default: never descend through symbolic links.
+                  if (
+                    yield* fs
+                      .readLink(absolute)
+                      .pipe(Effect.match({ onSuccess: () => true, onFailure: () => false }))
+                  )
+                    continue;
+                  const info = yield* fs.stat(absolute);
+                  if (info.type === "Directory") yield* visit(relative);
+                  else if (
+                    name === "AGENTS.md" &&
+                    relative !== "AGENTS.md" &&
+                    Result.isSuccess(resolveProjectPath(root, relative, "file"))
+                  )
+                    paths.push(relative.split(path.sep).join("/"));
+                }
+              });
+            yield* visit("");
             instructions = `${prefix}\nRoot guidance (AGENTS.md):\n${rootText}\n\nScoped instruction files:\n${paths
               .sort()
               .map((path) => `- ${JSON.stringify(path)}`)

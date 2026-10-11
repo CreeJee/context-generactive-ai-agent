@@ -121,8 +121,12 @@ describe("ProviderToolPolicy", () => {
         },
         providerToolDescriptors.map((descriptor) => descriptor.id),
       );
-      const registry = yield* makeProviderToolCapabilityRegistry();
-      const policy = makeProviderToolPolicy(registry, {}, flags);
+      const registry = yield* makeProviderToolCapabilityRegistry({});
+      const policy = makeProviderToolPolicy({
+        registry: registry,
+        config: {},
+        featureFlags: flags,
+      });
       expect((yield* policy.expose(basePolicy())).tools.map((tool) => tool.id)).toEqual([
         "openai:web_search",
       ]);
@@ -706,7 +710,7 @@ describe("ProviderToolRuntime", () => {
         expect(result.raw).toBe(raw);
         expect(result.usage?.raw).toBe(usage);
         expect(result.cost).toBeUndefined();
-        expect(normalizeProviderToolUsage(usage)?.raw).toBe(usage);
+        expect(normalizeProviderToolUsage({ raw: usage })?.raw).toBe(usage);
       }).pipe(withTestPlatform),
   );
 

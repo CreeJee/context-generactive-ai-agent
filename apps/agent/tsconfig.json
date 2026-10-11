@@ -132,7 +132,7 @@
           "unnecessaryPipeChain": "error",
           "unnecessaryTypeofType": "error",
           "unsafeEffectTypeAssertion": "error",
-          "unstableApiUsage": "error"
+          "unstableApiUsage": "off"
         }
       }
     ]

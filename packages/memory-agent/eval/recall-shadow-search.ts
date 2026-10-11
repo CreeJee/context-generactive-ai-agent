@@ -1,8 +1,10 @@
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { NodeServices } from "@effect/platform-node";
+import { Context, FileSystem } from "effect";
+import { homedir } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { join } from "node:path";
+import { path } from "../src/runtime/synchronous-path.ts";
+const { join } = path;
 import {
   Console,
   Array as EffectArray,
@@ -47,8 +49,6 @@ export class ShadowSearchError extends Schema.TaggedError<ShadowSearchError>()(
     stage: Schema.Literals(["fixture", "temporary-storage", "cleanup", "model-load"]),
   },
 ) {}
-const io = <A>(stage: ShadowSearchError["stage"], run: () => A) =>
-  Effect.try({ try: run, catch: () => ShadowSearchError.make({ stage }) });
 const disabledEmbedding = Layer.succeed(Embedder, {
   identity: "none",
   dimensions: 384,
@@ -135,24 +135,32 @@ const offlineEmbedding = (cacheDir: string) =>
 export const evaluateRecallShadowSearch = Effect.fnUntraced(function* (
   options: { textOnly?: boolean } = {},
 ) {
-  const fixture = yield* io("fixture", () =>
-    JSON.parse(readFileSync(new URL("./recall-turns.fixture.json", import.meta.url), "utf8")),
-  ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Fixture)));
-  const base = yield* Effect.acquireRelease(
-    io("temporary-storage", () => realpathSync(mkdtempSync(join(tmpdir(), "recall-shadow-")))),
-    (path) =>
-      io("cleanup", () => rmSync(path, { recursive: true, force: true })).pipe(Effect.orDie),
+  const platform = yield* Layer.build(NodeServices.layer);
+  const fs = Context.get(platform, FileSystem.FileSystem);
+  const fixturePath = yield* path.fromFileUrl(
+    new URL("./recall-turns.fixture.json", import.meta.url),
+  );
+  const fixture = yield* fs.readFileString(fixturePath).pipe(
+    Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(Fixture))),
+    Effect.mapError(() => ShadowSearchError.make({ stage: "fixture" })),
+  );
+  const base = yield* fs.makeTempDirectoryScoped({ prefix: "recall-shadow-" }).pipe(
+    Effect.flatMap(fs.realPath),
+    Effect.mapError(() => ShadowSearchError.make({ stage: "temporary-storage" })),
   );
   const cacheRoot = join(homedir(), ".context-generactive-agent");
   const cached =
     !(options.textOnly === true) &&
-    [
-      join(cacheRoot, "models", localModel.id, modelFile("quint8")),
-      join(cacheRoot, "models", localModel.id, "tokenizer.json"),
-      join(cacheRoot, "models", localModel.id, "tokenizer_config.json"),
-      join(cacheRoot, "models", localModel.id, "config.json"),
-      join(cacheRoot, "models", `kiwi-${kiwiModel.version}`, kiwiModel.directory, "cong.mdl"),
-    ].every(existsSync);
+    (yield* Effect.forEach(
+      [
+        join(cacheRoot, "models", localModel.id, modelFile("quint8")),
+        join(cacheRoot, "models", localModel.id, "tokenizer.json"),
+        join(cacheRoot, "models", localModel.id, "tokenizer_config.json"),
+        join(cacheRoot, "models", localModel.id, "config.json"),
+        join(cacheRoot, "models", `kiwi-${kiwiModel.version}`, kiwiModel.directory, "cong.mdl"),
+      ],
+      (file) => fs.exists(file),
+    )).every(Boolean);
   const layer = memoryAgentLayer(join(base, "storage"), {
     embedder: cached ? offlineEmbedding(join(cacheRoot, "models")) : disabledEmbedding,
     morphAnalyzer: cached
@@ -180,7 +188,9 @@ export const evaluateRecallShadowSearch = Effect.fnUntraced(function* (
       ]),
     )) {
       const root = join(base, label);
-      yield* io("temporary-storage", () => mkdirSync(root));
+      yield* fs
+        .makeDirectory(root)
+        .pipe(Effect.mapError(() => ShadowSearchError.make({ stage: "temporary-storage" })));
       MutableHashMap.set(projectIds, label, (yield* projects.add(root)).id);
     }
     for (const item of fixture.cases) {

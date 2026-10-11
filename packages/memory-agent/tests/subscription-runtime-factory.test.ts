@@ -1,3 +1,4 @@
+import { Cause } from "effect";
 import { it } from "@effect/vitest";
 import { MutableHashMap, DateTime, Effect, Stream } from "effect";
 import { EventType, type TextOptions } from "@tanstack/ai";
@@ -125,7 +126,10 @@ it.effect("retained native implementation binds fresh central clients and pins e
         threadId: `thread-${index}`,
       };
       const chunks = yield* Stream.runCollect(
-        Stream.fromAsyncIterable(adapter.chatStream(options), (cause) => cause),
+        Stream.fromAsyncIterable(
+          adapter.chatStream(options),
+          (cause) => new Cause.UnknownError(cause),
+        ),
       );
       expect(
         chunks.some(

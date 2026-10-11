@@ -6,6 +6,7 @@ import {
   MutableHashSet,
   Context,
   Effect,
+  Function as EffectFunction,
   Layer,
   Schema,
 } from "effect";
@@ -105,12 +106,20 @@ export interface MemoryToolRunBinding extends Omit<RunBinding, "userNodeId"> {
 }
 
 /** The implementation is fixed here; only live services and fresh run state are supplied. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export const createMemoryTools = (
+export const createMemoryTools: {
+  (
+    projectId: string,
+    binding?: MemoryToolRunBinding,
+  ): (env: MemoryToolEnvironment) => ReturnType<typeof createMemoryToolsBody>;
+} & typeof createMemoryToolsBody = EffectFunction.dual(
+  (args) => !Schema.is(Schema.String)(args[0]),
+  createMemoryToolsBody,
+);
+function createMemoryToolsBody(
   env: MemoryToolEnvironment,
   projectId: string,
   binding?: MemoryToolRunBinding,
-) => {
+) {
   const runtime = Context.make(MemorySearch, env.search).pipe(
     Context.add(Nodes, env.nodes),
     Context.add(Graph, env.graph),
@@ -317,7 +326,7 @@ export const createMemoryTools = (
     },
   };
   return { tools: [...base, readToolResult, promote, useMemory] as const, middleware };
-};
+}
 
 const make = Effect.gen(function* () {
   const env: MemoryToolEnvironment = {

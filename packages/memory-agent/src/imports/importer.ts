@@ -21,7 +21,7 @@ import { Database } from "../db/database.ts";
 import { AppEvents } from "../events/app-events.ts";
 import { Indexer } from "../memory/embedding/indexer.ts";
 import { Projects } from "../projects/projects.ts";
-import { runtimeWorker } from "../runtime/resources.ts";
+import { runtimeWorker, runtimeWorkerOptions } from "../runtime/resources.ts";
 import { ImportSourceName } from "./items.ts";
 import type { PassProgress, TranscriptCounts } from "./pass.ts";
 import { importSources } from "./sources.ts";
@@ -178,7 +178,7 @@ const make = (watching: boolean, home: string) =>
     };
 
     const start = () => {
-      const created = new Worker(runtimeWorker("import-worker"), { workerData: setup });
+      const created = new Worker(runtimeWorker("import-worker"), runtimeWorkerOptions(setup));
       const lost = () => {
         if (worker === created) void stop("the import worker stopped");
       };

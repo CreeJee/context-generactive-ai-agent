@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Fiber } from "effect";
 import { runUiEffect, uiPromise, uiFailure } from "../shared/ui-effect";
 import { isTruthy } from "../../truthy.ts";
 import { fetchServerSentEvents, useChat } from "@tanstack/ai-react";
@@ -27,8 +27,7 @@ import {
   isApiError,
   chatFetch,
   compactErrorMessage,
-  decodeContextEvent,
-  decodeDeliveredEvent,
+  eventDecoders,
   type CompactResult,
   type ContextView,
   type QueuedMessage,
@@ -179,10 +178,12 @@ export function SessionView({
   sessionId,
   imagesSupported,
   slash,
+  sendingEnabled,
 }: {
   sessionId: string;
   imagesSupported: boolean;
   slash: SlashSupport;
+  sendingEnabled: boolean;
 }) {
   const { holder, lease, revision, refused, continueHere } = useSessionLease(sessionId);
   const [syncRevision, setSyncRevision] = useState(0);
@@ -198,6 +199,7 @@ export function SessionView({
       onResync={() => setSyncRevision((current) => current + 1)}
       imagesSupported={imagesSupported}
       slash={slash}
+      sendingEnabled={sendingEnabled}
     />
   );
 }
@@ -215,6 +217,7 @@ function ChatPanel({
   onResync,
   imagesSupported,
   slash,
+  sendingEnabled,
 }: {
   sessionId: string;
   holder: string;
@@ -224,6 +227,7 @@ function ChatPanel({
   onResync: () => void;
   imagesSupported: boolean;
   slash: SlashSupport;
+  sendingEnabled: boolean;
 }) {
   const queryClient = useQueryClient();
   const { projectId } = useSessionEventScope();
@@ -234,7 +238,7 @@ function ChatPanel({
   const compactMutation = useCompactSessionMutation(projectId, sessionId, holder);
   const readOnly = lease.state !== "mine";
   const backendRestartRequired = useBackendRestartRequired();
-  const mutationBlocked = readOnly || backendRestartRequired;
+  const mutationBlocked = readOnly || backendRestartRequired || !sendingEnabled;
   const workTrace = useWorkTrace(sessionId);
   const [composer, setComposer] = useState<Composer>({ kind: "compose" });
   const [sessionDrafts, setSessionDrafts] = useAtom(sessionDraftsAtom);
@@ -304,14 +308,14 @@ function ChatPanel({
     onCustomEvent: (eventType, data) => {
       switch (eventType) {
         case contextUsageEvent: {
-          const view = Option.getOrNull(decodeContextEvent(data));
+          const view = Option.getOrNull(eventDecoders.context(data));
           if (isTruthy(view)) setLiveContext(view);
           return;
         }
         case queueDeliveredEvent: {
           // Taken in at a tool call: after the message that made it, before the answer that follows.
           const last = messages.at(-1);
-          const delivered = Option.getOrNull(decodeDeliveredEvent(data));
+          const delivered = Option.getOrNull(eventDecoders.delivered(data));
           if (isTruthy(last) && delivered !== null)
             place(delivered.ids, { side: "after", messageId: last.id });
           void queue.refresh();
@@ -403,7 +407,7 @@ function ChatPanel({
           contentOf(
             retryingFailedVerification
               ? "저장된 검증 실패 evidence를 바탕으로 구현 결함을 수정하고 다시 검증해 줘."
-              : "승인한 Plan을 첫 번째 미완료 단계부터 실행하고 결과를 검증해 줘.",
+              : "승인한 Plan을 첫 번째 미완료 단계부터 실행하고 결과를 검증하며, 검증된 결과를 확인 하고 단계가 완료될때까지 반복하여 플랜을 완결성있게 마무리해줘",
             [],
           ),
         );
@@ -642,9 +646,14 @@ function ChatPanel({
   );
   useEffect(() => {
     if (!(editing !== null)) return;
-    // Native callback heartbeat/debounce timing remains at the protocol boundary.
-    const timer = setTimeout(() => void saveEditDraft(editing.id, draft), editDraftSaveMs);
-    return () => clearTimeout(timer);
+    const task = Effect.runFork(
+      Effect.sleep(editDraftSaveMs).pipe(
+        Effect.andThen(Effect.sync(() => void saveEditDraft(editing.id, draft))),
+      ),
+    );
+    return () => {
+      void Effect.runFork(Fiber.interrupt(task));
+    };
   }, [draft, editing?.id]);
 
   const startEdit = (message: QueuedMessage) => {

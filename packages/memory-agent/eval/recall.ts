@@ -7,10 +7,13 @@ import { isTruthy } from "../src/truthy.ts";
 //   vp run eval:recall "trigram + kiwi"   one configuration
 //   vp run eval:recall --terms            Kiwi terms of the decision corpus and queries
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { NodeServices } from "@effect/platform-node";
+import { Context, FileSystem } from "effect";
+import { runOAuthNodeEffect } from "../src/oauth/node-runtime.ts";
+import { homedir } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { join } from "node:path";
+import { path } from "../src/runtime/synchronous-path.ts";
+const { join } = path;
 import { Console, Effect, Layer, MutableHashMap, Option } from "effect";
 import { SecretStore } from "../src/config/secrets.ts";
 import { StorageRoot } from "../src/config/storage-root.ts";
@@ -39,7 +42,8 @@ const home = join(homedir(), ".context-generactive-agent");
 const embeddingModel = join(home, "models", localModel.id, modelFile("quint8"));
 const kiwiFile = join(home, "models", `kiwi-${kiwiModel.version}`, kiwiModel.directory, "cong.mdl");
 for (const file of [embeddingModel, kiwiFile])
-  if (!existsSync(file)) throw new Error(`model missing: ${file}`);
+  if (!(await runOAuthNodeEffect(Effect.flatMap(FileSystem.FileSystem, (fs) => fs.exists(file)))))
+    throw new Error(`model missing: ${file}`);
 
 const sharedModels = StorageRoot.layer(home);
 const embedder = Embedder.localVariant("fp32").pipe(Layer.provide(sharedModels));
@@ -94,12 +98,13 @@ const evaluate = Effect.fn("eval.evaluate")(function* (
   configuration: Configuration,
   set: RecallSet,
 ) {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), "memory-agent-recall-")));
-  const projectRoot = join(base, "project");
-  mkdirSync(projectRoot);
-  yield* Effect.addFinalizer(() =>
-    Effect.sync(() => rmSync(base, { recursive: true, force: true })),
+  const platform = yield* Layer.build(NodeServices.layer);
+  const fs = Context.get(platform, FileSystem.FileSystem);
+  const base = yield* fs.realPath(
+    yield* fs.makeTempDirectoryScoped({ prefix: "memory-agent-recall-" }),
   );
+  const projectRoot = join(base, "project");
+  yield* fs.makeDirectory(projectRoot);
   const servicesContext = yield* Layer.build(
     memoryAgentLayer(join(base, "storage"), {
       embedder: configuration.embedder,

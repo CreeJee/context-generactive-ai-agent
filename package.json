@@ -17,7 +17,9 @@
   },
   "devDependencies": {
     "@effect/platform-node": "catalog:",
+    "@effect/platform-node-shared": "catalog:",
     "@effect/tsgo": "catalog:",
+    "@effect/vitest": "catalog:",
     "@shadcn/lint": "catalog:",
     "@vitest/browser-playwright": "catalog:",
     "effect": "catalog:",

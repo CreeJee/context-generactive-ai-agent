@@ -1,0 +1,407 @@
+{
+  "date": "2026-10-08",
+  "scope": "step04 boundary-only current repaired native build",
+  "fingerprints": {
+    "tools/native-search-read-paired.ts": "6a3ccbfa732feb0747ce38297ace728f37f646fca0d6dd7fece1a5f307ba5897",
+    "packages/memory-agent/src/memory/native-search/client.ts": "9737a3cdd9ff1ab6495dce19d2b401915cc5fae1c0e6776b2e8d3c772a809ab3",
+    "packages/memory-agent/src/memory/native-search/worker.ts": "aa285f407a68def772b763afebfbddbd81ec364a35af395bebd37cb11624cdd0",
+    "packages/memory-agent/src/memory/native-search/read-protocol.ts": "1989a78f51ab853ee14452ebf4764a5ecf8a858ecc0d82bac85d39ece5a4094a",
+    "packages/turbovec/src/read_session.rs": "71a5bdb3b823436d841cd40e044ba54cd2a7de8db13ada3e79670bec874267d2",
+    "packages/turbovec/memory-turbovec.node": "2d33a85c15623338fbac078810667d2cf41d09b595b1bc78ce09ffdc60a5cfb5"
+  },
+  "verification": {
+    "nativeTests": 4,
+    "tsTests": 7,
+    "checkedTsFiles": 7,
+    "taskId": "b676d94b-ac1c-445e-998e-7774344804a9"
+  },
+  "data": {
+    "dimensions": 384,
+    "bits": 4,
+    "candidateCount": 10002,
+    "vectorK": 48,
+    "rounds": 13,
+    "workerThreadId": 1,
+    "samples": [
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": true,
+        "wallMs": 36.891583999999966,
+        "mainCpuMs": 31.913,
+        "workerBoundaryCpuMs": 1.294,
+        "vectorWallMs": 1.270125,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": true,
+        "wallMs": 30.892749999999978,
+        "mainCpuMs": 6.729,
+        "workerBoundaryCpuMs": 27.59,
+        "vectorWallMs": 0.172792,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": false,
+        "wallMs": 25.981249999999932,
+        "mainCpuMs": 0.745,
+        "workerBoundaryCpuMs": 24.92,
+        "vectorWallMs": 0.298583,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      },
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": false,
+        "wallMs": 35.02125000000001,
+        "mainCpuMs": 31.188,
+        "workerBoundaryCpuMs": 1.196,
+        "vectorWallMs": 1.178083,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": false,
+        "wallMs": 33.87416699999994,
+        "mainCpuMs": 30.1,
+        "workerBoundaryCpuMs": 1.234,
+        "vectorWallMs": 1.22025,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": false,
+        "wallMs": 25.94150000000002,
+        "mainCpuMs": 0.721,
+        "workerBoundaryCpuMs": 24.946,
+        "vectorWallMs": 0.17533300000000002,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": false,
+        "wallMs": 26.371291999999926,
+        "mainCpuMs": 0.549,
+        "workerBoundaryCpuMs": 25.532,
+        "vectorWallMs": 0.172667,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      },
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": false,
+        "wallMs": 34.57908400000008,
+        "mainCpuMs": 30.969,
+        "workerBoundaryCpuMs": 1.278,
+        "vectorWallMs": 1.262042,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": false,
+        "wallMs": 33.95074999999997,
+        "mainCpuMs": 30.551,
+        "workerBoundaryCpuMs": 1.19,
+        "vectorWallMs": 1.19275,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": false,
+        "wallMs": 26.420208000000002,
+        "mainCpuMs": 0.696,
+        "workerBoundaryCpuMs": 25.458,
+        "vectorWallMs": 0.168291,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": false,
+        "wallMs": 26.31762500000002,
+        "mainCpuMs": 0.494,
+        "workerBoundaryCpuMs": 25.608,
+        "vectorWallMs": 0.17358400000000002,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      },
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": false,
+        "wallMs": 34.28762500000005,
+        "mainCpuMs": 30.958,
+        "workerBoundaryCpuMs": 1.183,
+        "vectorWallMs": 1.172,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": false,
+        "wallMs": 33.67308300000002,
+        "mainCpuMs": 30.8,
+        "workerBoundaryCpuMs": 1.18,
+        "vectorWallMs": 1.167916,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": false,
+        "wallMs": 25.250083000000018,
+        "mainCpuMs": 0.443,
+        "workerBoundaryCpuMs": 24.538,
+        "vectorWallMs": 0.1605,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": false,
+        "wallMs": 25.544458000000077,
+        "mainCpuMs": 0.396,
+        "workerBoundaryCpuMs": 24.954,
+        "vectorWallMs": 0.139958,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      },
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": false,
+        "wallMs": 33.62787500000013,
+        "mainCpuMs": 29.984,
+        "workerBoundaryCpuMs": 1.098,
+        "vectorWallMs": 1.091333,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": false,
+        "wallMs": 33.80479100000002,
+        "mainCpuMs": 30.386,
+        "workerBoundaryCpuMs": 1.161,
+        "vectorWallMs": 1.152959,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": false,
+        "wallMs": 26.20658400000002,
+        "mainCpuMs": 0.533,
+        "workerBoundaryCpuMs": 25.414,
+        "vectorWallMs": 0.165875,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": false,
+        "wallMs": 24.90333399999986,
+        "mainCpuMs": 0.301,
+        "workerBoundaryCpuMs": 24.445,
+        "vectorWallMs": 0.15270799999999998,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      },
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": false,
+        "wallMs": 33.37420899999984,
+        "mainCpuMs": 29.863,
+        "workerBoundaryCpuMs": 1.317,
+        "vectorWallMs": 1.306708,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": false,
+        "wallMs": 32.746458000000075,
+        "mainCpuMs": 29.484,
+        "workerBoundaryCpuMs": 1.116,
+        "vectorWallMs": 1.1055,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": false,
+        "wallMs": 26.69637499999999,
+        "mainCpuMs": 0.618,
+        "workerBoundaryCpuMs": 25.583,
+        "vectorWallMs": 0.17825,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": false,
+        "wallMs": 25.77466699999991,
+        "mainCpuMs": 0.483,
+        "workerBoundaryCpuMs": 24.788,
+        "vectorWallMs": 0.167083,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      },
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": false,
+        "wallMs": 33.56029199999989,
+        "mainCpuMs": 31.3,
+        "workerBoundaryCpuMs": 1.153,
+        "vectorWallMs": 1.139917,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": false,
+        "wallMs": 32.20770799999991,
+        "mainCpuMs": 29.126,
+        "workerBoundaryCpuMs": 1.098,
+        "vectorWallMs": 1.091208,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": false,
+        "wallMs": 25.65924999999993,
+        "mainCpuMs": 0.528,
+        "workerBoundaryCpuMs": 24.87,
+        "vectorWallMs": 0.151709,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      }
+    ],
+    "note": "Same one worker/index and fixed temporary WAL data. Legacy arm moves candidate enumeration/strings and per-hit mapping through JS; native arm retains candidates and batches mapping. Boundary thread CPU includes N-API/SQLite, not pure engine CPU. Logical bytes differ in DTO accounting and are not serialized wire bytes. No concurrent API/RSS/default activation or full application p95 claim; first pair shares OS/index caches and is not true cold.",
+    "summary": [
+      {
+        "arm": "legacy-boundary",
+        "samples": 12,
+        "wallMs": {
+          "median": 33.80479100000002,
+          "p95": 35.02125000000001
+        },
+        "mainCpuMs": {
+          "median": 30.551,
+          "p95": 31.3
+        },
+        "workerBoundaryCpuMs": {
+          "median": 1.183,
+          "p95": 1.317
+        },
+        "vectorWallMs": {
+          "median": 1.172,
+          "p95": 1.306708
+        },
+        "sqlCalls": {
+          "median": 55,
+          "p95": 55
+        },
+        "inputLogicalBytes": {
+          "median": 40802,
+          "p95": 40802
+        },
+        "outputLogicalBytes": {
+          "median": 902,
+          "p95": 902
+        }
+      },
+      {
+        "arm": "native-read",
+        "samples": 12,
+        "wallMs": {
+          "median": 25.981249999999932,
+          "p95": 26.69637499999999
+        },
+        "mainCpuMs": {
+          "median": 0.533,
+          "p95": 0.745
+        },
+        "workerBoundaryCpuMs": {
+          "median": 24.954,
+          "p95": 25.608
+        },
+        "vectorWallMs": {
+          "median": 0.168291,
+          "p95": 0.298583
+        },
+        "sqlCalls": {
+          "median": 10,
+          "p95": 10
+        },
+        "inputLogicalBytes": {
+          "median": 1620,
+          "p95": 1620
+        },
+        "outputLogicalBytes": {
+          "median": 1291,
+          "p95": 1291
+        }
+      }
+    ]
+  }
+}

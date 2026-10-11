@@ -7,7 +7,7 @@ export class ReportRequestFailed extends Data.TaggedError("ReportRequestFailed")
   readonly phase: "transport" | "status" | "response";
 }> {}
 
-export function makeReportClient(fetcher: typeof appFetch) {
+export function makeReportClient(fetcher: typeof fetch) {
   const request = <S extends Schema.Constraint>(input: {
     readonly schema: S;
     readonly operation: ReportRequestFailed["operation"];

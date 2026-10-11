@@ -1,8 +1,7 @@
 import { Console, Effect } from "effect";
 import { OAuthCheckFailed } from "./oauth-check-failure.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { runProcess } from "../src/rrsi/command.ts";
 import {
   createSubscriptionOAuthClient,
   OAuthHarnessError,
@@ -31,7 +30,7 @@ const store: CredentialStore = {
 };
 
 const client = createSubscriptionOAuthClient({ protocol: providerProtocols.openai, store });
-const openBrowser = promisify(execFile);
+const openBrowser = (command: string, args: string[]) => runProcess({ command, args });
 let attempt: Awaited<ReturnType<typeof client.startLogin>> | null = null;
 const cancel = () => attempt?.cancel();
 process.once("SIGINT", cancel);

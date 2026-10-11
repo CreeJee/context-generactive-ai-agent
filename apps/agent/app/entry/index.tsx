@@ -276,7 +276,7 @@ export function App() {
     );
 
   const openSettings = () =>
-    openSettingsOverlay(projects.find((item) => item.id === projectId) ?? null);
+    openSettingsOverlay({ project: projects.find((item) => item.id === projectId) ?? null });
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const selectModel = (model: string, effort?: string) =>
@@ -330,6 +330,24 @@ export function App() {
   };
 
   const main = match({ selection, signedIn, selectedSignedIn, projectId, sessionId })
+    // Local history does not depend on the provider's remote model catalogue.
+    // Keep model/auth readiness on mutations, not on mounting the session reader.
+    .with({ projectId: P.string, sessionId: P.string }, ({ sessionId: id }) => (
+      <SessionView
+        key={id}
+        sessionId={id}
+        slash={slash}
+        sendingEnabled={selectedSignedIn}
+        imagesSupported={
+          selection !== null &&
+          sessions.find((session) => session.id === id)?.agent == null &&
+          ((modelQueries[selection.provider].data?.models ?? [])
+            .find((model) => model.id === selection.model)
+            ?.capabilities.inputModalities.includes("image") ??
+            false)
+        }
+      />
+    ))
     .with({ selection: null, signedIn: false }, () => (
       <Placeholder
         icon={<LogInIcon />}
@@ -369,23 +387,6 @@ export function App() {
         description="왼쪽의 새 대화 버튼을 누르세요."
       />
     ))
-    .with(
-      { selection: P.nonNullable, sessionId: P.string },
-      ({ selection: selected, sessionId: id }) => (
-        <SessionView
-          key={id}
-          sessionId={id}
-          slash={slash}
-          imagesSupported={
-            sessions.find((session) => session.id === id)?.agent == null &&
-            ((modelQueries[selected.provider].data?.models ?? [])
-              .find((model) => model.id === selected.model)
-              ?.capabilities.inputModalities.includes("image") ??
-              false)
-          }
-        />
-      ),
-    )
     .exhaustive();
 
   return (

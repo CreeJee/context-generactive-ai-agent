@@ -7,7 +7,7 @@ export function nativeStream<A, E>(stream: Stream.Stream<A, E>): AsyncGenerator<
   let pending = Promise.resolve();
   const done = (): IteratorReturnResult<void> => ({ done: true, value: undefined });
   const result = (item: IteratorResult<A>): IteratorResult<A, void> =>
-    item.done ? done() : { done: false, value: item.value };
+    item.done === true ? done() : { done: false, value: item.value };
   const reject = <E>(error: E): Promise<never> =>
     Promise.reject(error instanceof Cause.UnknownError ? error.cause : error);
   const generator: AsyncGenerator<A, void, unknown> = {

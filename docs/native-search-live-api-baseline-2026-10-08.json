@@ -1,0 +1,10 @@
+{
+  "date": "2026-10-08",
+  "endpoint": "/api/projects",
+  "concurrency": 4,
+  "rounds": 5,
+  "requests": 20,
+  "statusCounts": { "200": 20 },
+  "ms": { "median": 2.99660449672956, "p95": 62.76887499552686, "max": 63.3302089991048 },
+  "note": "Fresh read-only live API observation during uncontrolled owner activity; not the synthetic fixture control and not attribution or an old/new comparison. Served build fingerprint was not verified in this observation."
+}

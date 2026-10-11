@@ -2,6 +2,8 @@ import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
 import { Effect, Function as EffectFunction } from "effect";
 import { HashSet, MutableHashMap, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
+import { readOnlyToolNames } from "./effects.ts";
+export { readOnlyToolNames } from "./effects.ts";
 import {
   isStandardSchema,
   parseWithStandardSchema,
@@ -9,24 +11,6 @@ import {
   type ChatMiddleware,
   type ToolExecutionContext,
 } from "@tanstack/ai";
-
-/** Tools that only read: running several of them at once cannot change what another sees. */
-export const readOnlyToolNames = HashSet.fromIterable([
-  "find_memory",
-  "read_evidence",
-  "trace_evidence",
-  "list_files",
-  "search_files",
-  "read_file",
-  "list_outside_files",
-  "read_outside_file",
-  "search_outside_file",
-  "read_skill",
-  "read_tool_result",
-  "read_subagent_tool_result",
-  "kagi_search",
-  "kagi_extract",
-]);
 
 export interface ParallelReads {
   /** The same tools; read-only ones pick up a result that was started early. */

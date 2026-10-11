@@ -1,5 +1,6 @@
 import { NodeCrypto } from "@effect/platform-node";
-import { createServer, type RequestListener, type Server } from "node:http";
+import { testHttpServer, HttpServerRequest, HttpServerResponse } from "./support/http.ts";
+import { Scope, Exit } from "effect";
 import { it } from "@effect/vitest";
 import { Cause, Crypto, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { withTestPlatform } from "./support/platform.ts";
@@ -27,48 +28,19 @@ const tempDir = Effect.fn("runtimeTest.tempDir")(function* () {
   const fs = yield* FileSystem.FileSystem;
   return yield* fs.realPath(yield* fs.makeTempDirectoryScoped({ prefix: "memory-agent-runtime-" }));
 });
-const closeServer = Effect.fn("runtimeTest.closeServer")(function* (server: Server) {
-  if (!server.listening) return;
-  yield* Effect.callback<void, Cause.UnknownError>((resume) => {
-    server.close((error) =>
-      resume(error === undefined ? Effect.void : Effect.fail(new Cause.UnknownError(error))),
-    );
-    server.closeAllConnections();
-  });
-});
-// Listen on a real native TCP endpoint, but wait for its closure before fixture storage is removed.
-const listeningServer = Effect.fn("runtimeTest.listeningServer")(function* (
-  handler?: RequestListener,
-) {
-  const server = yield* Effect.acquireRelease(
-    Effect.sync(() => createServer(handler)),
-    (server) => closeServer(server).pipe(Effect.orDie),
-  );
-  yield* Effect.callback<void, Cause.UnknownError>((resume) => {
-    const fail = (cause: Error) => resume(Effect.fail(new Cause.UnknownError(cause)));
-    server.once("error", fail);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", fail);
-      resume(Effect.void);
-    });
-    return Effect.sync(() => {
-      server.off("error", fail);
-    });
-  });
-  const address = yield* Schema.decodeUnknownEffect(Schema.Struct({ port: Schema.Int }))(
-    server.address(),
-  );
-  return { server, port: address.port };
-});
 const archiveServer = Effect.fn("runtimeTest.archiveServer")(function* (
   files: Record<string, Buffer>,
 ) {
-  const { port } = yield* listeningServer((request, response) => {
-    const body = files[request.url ?? ""];
-    if (body === undefined) return void response.writeHead(404).end();
-    response.writeHead(200, { "content-type": "application/gzip" }).end(body);
-  });
-  return (path: string) => "http://127.0.0.1:" + port + path;
+  const { url } = yield* testHttpServer(
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const body = files[request.url];
+      return body === undefined
+        ? HttpServerResponse.empty({ status: 404 })
+        : HttpServerResponse.uint8Array(body, { contentType: "application/gzip" });
+    }),
+  );
+  return (path: string) => url + path;
 });
 const pinned = Effect.fn("runtimeTest.pinned")(function* (url: string, bytes: Uint8Array) {
   const crypto = yield* Crypto.Crypto;
@@ -129,12 +101,8 @@ describe("installArchive", () => {
         const target = path.join(dir, "tool");
         yield* fs.makeDirectory(target);
         yield* fs.writeFileString(path.join(target, "old"), "old");
-        expect(
-          yield* Effect.gen(function* () {
-            const pin = yield* pinned(url("/tool.tgz"), bytes);
-            return yield* sdkCall(() => installArchive(pin, target));
-          }),
-        ).toBeNull();
+        const pin = yield* pinned(url("/tool.tgz"), bytes);
+        expect(yield* sdkCall(() => installArchive(pin, target))).toBeNull();
         expect(yield* fs.readFileString(path.join(target, "package/bin/tool"))).toContain(
           "echo hi",
         );
@@ -158,33 +126,25 @@ describe("installArchive", () => {
         expect(yield* sdkCall(() => installArchive(wrongPin, target))).toMatchObject({
           reason: "checksum_mismatch",
         });
-        expect(
-          yield* Effect.gen(function* () {
-            const pin = yield* pinned(url("/missing.tgz"), good);
-            return yield* sdkCall(() => installArchive(pin, target));
-          }),
-        ).toEqual({
+        const missingPin = yield* pinned(url("/missing.tgz"), good);
+        expect(yield* sdkCall(() => installArchive(missingPin, target))).toEqual({
           reason: "download_failed",
           detail: "HTTP 404",
         });
-        expect(
-          yield* Effect.gen(function* () {
-            const pin = yield* pinned(url("/escaping.tgz"), escaping);
-            return yield* sdkCall(() => installArchive(pin, target));
-          }),
-        ).toEqual({
+        const escapingPin = yield* pinned(url("/escaping.tgz"), escaping);
+        expect(yield* sdkCall(() => installArchive(escapingPin, target))).toEqual({
           reason: "unsafe_archive",
           detail: "../outside",
         });
         // The log says why a download failed, not only that fetch did.
-        const { server: closed, port } = yield* listeningServer();
-        yield* closeServer(closed);
-        expect(
-          yield* Effect.gen(function* () {
-            const pin = yield* pinned(`http://127.0.0.1:${port}/x.tgz`, good);
-            return yield* sdkCall(() => installArchive(pin, target));
-          }),
-        ).toMatchObject({
+        const listenerScope = yield* Scope.make();
+        const { port } = yield* Scope.provide(
+          testHttpServer(Effect.succeed(HttpServerResponse.empty())),
+          listenerScope,
+        );
+        yield* Scope.close(listenerScope, Exit.void);
+        const closedPin = yield* pinned(`http://127.0.0.1:${port}/x.tgz`, good);
+        expect(yield* sdkCall(() => installArchive(closedPin, target))).toMatchObject({
           reason: "download_failed",
           detail: expect.stringContaining("ECONNREFUSED"),
         });

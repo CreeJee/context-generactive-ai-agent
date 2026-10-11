@@ -68,21 +68,23 @@ export default function ReportPage() {
   const included = evidenceItems(evidence ?? emptyEvidence).filter((item) =>
     Object.hasOwn(selected, item.id),
   );
-  const generatedText = reportText(
+  const generatedText = reportText({
     fields,
     createdAt,
-    included.map((item) => ({
+    evidence: included.map((item) => ({
       label: item.label,
       source: item.source,
       text: selected[item.id] ?? "",
     })),
-    evidence !== null
-      ? evidenceGaps(evidence)
-      : ["원본 증거: 조회하지 않았거나 조회 실패 (확인되지 않음)"],
-    evidence !== null
-      ? { projectId: evidence.session.projectId, sessionId: evidence.session.id }
-      : undefined,
-  );
+    unavailable:
+      evidence !== null
+        ? evidenceGaps(evidence)
+        : ["원본 증거: 조회하지 않았거나 조회 실패 (확인되지 않음)"],
+    origin:
+      evidence !== null
+        ? { projectId: evidence.session.projectId, sessionId: evidence.session.id }
+        : undefined,
+  });
   const text = editedText ?? generatedText;
 
   const evidenceTask = useRef<Fiber.Fiber<void> | null>(null);

@@ -1,16 +1,12 @@
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { HashMap, MutableHashMap, Option, DateTime, Clock, Semaphore, Fiber, Scope } from "effect";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { createHash, randomUUID } from "node:crypto";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { mkdirSync } from "node:fs";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
+import * as NodePath from "@effect/platform-node/NodePath";
 import type { SQLOutputValue } from "node:sqlite";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { join } from "node:path";
-import { Context, Data, Effect, Layer, Schema } from "effect";
+import { Context, Crypto, Data, Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { Hex } from "effect/encoding";
 import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
 import { requireRuntime } from "../runtime/resources.ts";
@@ -113,8 +109,13 @@ const make = Effect.gen(function* () {
   const run = Effect.runPromiseWith(yield* Effect.context());
   const { sqlite } = yield* Database;
   const storage = yield* StorageRoot;
-  const directory = join(storage.path, "attachments");
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const crypto = yield* Crypto.Crypto;
+  const directory = path.join(storage.path, "attachments");
+  yield* fs
+    .makeDirectory(directory, { recursive: true, mode: 0o700 })
+    .pipe(Effect.mapError((cause) => new AttachmentStorageFailed({ operation: "save", cause })));
 
   const selectAttachment = sqlite.prepare("SELECT * FROM attachments WHERE id = ?");
   const insertAttachment = sqlite.prepare(
@@ -128,7 +129,7 @@ const make = Effect.gen(function* () {
   );
 
   const fileOf = (attachment: Attachment) =>
-    join(
+    path.join(
       directory,
       `${attachment.id}.${Option.getOrUndefined(HashMap.get(extensions, attachment.mimeType))}`,
     );
@@ -152,38 +153,42 @@ const make = Effect.gen(function* () {
       catch: (cause) => new AttachmentStorageFailed({ operation, cause }),
     });
 
-  const publish = (
+  const fileIo = <A>(
     operation: AttachmentStorageFailed["operation"],
-    path: string,
+    effect: Effect.Effect<A, import("effect/PlatformError").PlatformError>,
+  ) => effect.pipe(Effect.mapError((cause) => new AttachmentStorageFailed({ operation, cause })));
+
+  const publish = Effect.fn("Attachments.publish")(function* (
+    operation: AttachmentStorageFailed["operation"],
+    destination: string,
     bytes: Uint8Array,
-  ) =>
-    Effect.suspend(() => {
-      const temporary = `${path}.${randomUUID()}.tmp`;
-      return Effect.acquireUseRelease(
-        Effect.succeed(temporary),
-        (temp) =>
-          io(operation, () => writeFile(temp, bytes, { mode: 0o600, flag: "wx" })).pipe(
-            Effect.andThen(io(operation, () => rename(temp, path))),
-          ),
-        (temp) => io(operation, () => rm(temp, { force: true })),
-      ).pipe(Effect.uninterruptible);
-    });
+  ) {
+    const temporary = `${destination}.${yield* fileIo(operation, crypto.randomUUIDv4())}.tmp`;
+    return yield* Effect.acquireUseRelease(
+      Effect.succeed(temporary),
+      (temp) =>
+        fileIo(operation, fs.writeFile(temp, bytes, { mode: 0o600, flag: "wx" })).pipe(
+          Effect.andThen(fileIo(operation, fs.rename(temp, destination))),
+        ),
+      (temp) => fileIo(operation, fs.remove(temp, { force: true })),
+    ).pipe(Effect.uninterruptible);
+  });
 
   const encodeForModel = Effect.fn("Attachments.encodeForModel")(function* (
     attachment: Attachment,
   ): Effect.fn.Return<ModelImage> {
     const upload: ModelImage = { path: fileOf(attachment), mimeType: attachment.mimeType };
     if (attachment.mimeType === "image/gif") return upload;
-    const copy = join(directory, `${attachment.id}.model.webp`);
-    const noCopy = join(directory, `${attachment.id}.model-original`);
+    const copy = path.join(directory, `${attachment.id}.model.webp`);
+    const noCopy = path.join(directory, `${attachment.id}.model-original`);
     return yield* Effect.gen(function* () {
-      const existingCopy = yield* io("convert", () => stat(copy)).pipe(
+      const existingCopy = yield* fileIo("convert", fs.stat(copy)).pipe(
         Effect.orElseSucceed(() => undefined),
       );
-      if (existingCopy !== undefined && existingCopy.size <= maxModelImageBytes)
+      if (existingCopy !== undefined && Number(existingCopy.size) <= maxModelImageBytes)
         return { path: copy, mimeType: "image/webp" as const };
-      if (existingCopy !== undefined) yield* io("convert", () => rm(copy, { force: true }));
-      const original = yield* io("convert", () => stat(noCopy)).pipe(
+      if (existingCopy !== undefined) yield* fileIo("convert", fs.remove(copy, { force: true }));
+      const original = yield* fileIo("convert", fs.stat(noCopy)).pipe(
         Effect.orElseSucceed(() => undefined),
       );
       if (original !== undefined) return upload;
@@ -214,7 +219,7 @@ const make = Effect.gen(function* () {
         return candidate;
       }).pipe(conversionPermits.withPermits(1));
       if (encoded.length >= attachment.bytes) {
-        yield* io("convert", () => writeFile(noCopy, "", { mode: 0o600 }));
+        yield* fileIo("convert", fs.writeFileString(noCopy, "", { mode: 0o600 }));
         return upload;
       }
       yield* publish("convert", copy, encoded);
@@ -244,8 +249,10 @@ const make = Effect.gen(function* () {
     Effect.flatMap(conversionFor(attachment), Fiber.join);
   const forModel = (attachment: Attachment): Promise<ModelImage> => run(forModelEffect(attachment));
   const dataUrlEffect = (image: ModelImage) =>
-    io("convert", () => readFile(image.path)).pipe(
-      Effect.map((bytes) => `data:${image.mimeType};base64,${bytes.toString("base64")}`),
+    fileIo("convert", fs.readFile(image.path)).pipe(
+      Effect.map(
+        (bytes) => `data:${image.mimeType};base64,${Buffer.from(bytes).toString("base64")}`,
+      ),
     );
 
   /**
@@ -261,16 +268,17 @@ const make = Effect.gen(function* () {
       if (!isTruthy(mimeType)) return yield* new AttachmentRejected({ reason: "unsupported_type" });
 
       const attachment: Attachment = {
-        id: createHash("sha256").update(bytes).digest("hex"),
+        id: Hex.encode(yield* fileIo("save", crypto.digest("SHA-256", bytes))),
         mimeType,
         bytes: bytes.length,
         createdAt: DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
       };
       const path = fileOf(attachment);
-      const existing = yield* io("save", () => stat(path)).pipe(
+      const existing = yield* fileIo("save", fs.stat(path)).pipe(
         Effect.orElseSucceed(() => undefined),
       );
-      if (existing?.size !== bytes.length) yield* publish("save", path, bytes);
+      if (existing === undefined || Number(existing.size) !== bytes.length)
+        yield* publish("save", path, bytes);
       insertAttachment.run(
         attachment.id,
         attachment.mimeType,
@@ -322,7 +330,8 @@ const make = Effect.gen(function* () {
     /** Absolute path of a stored image as uploaded. */
     pathOf: fileOf,
 
-    read: (attachment: Attachment) => readFile(fileOf(attachment)),
+    read: (attachment: Attachment) =>
+      run(fs.readFile(fileOf(attachment)).pipe(Effect.map((bytes) => Buffer.from(bytes)))),
 
     /** Model derivative, eagerly made on upload with a lazy fallback for pre-existing files. */
     forModel,
@@ -353,10 +362,10 @@ const make = Effect.gen(function* () {
         yield* Effect.forEach(
           [
             fileOf(attachment),
-            join(directory, `${attachment.id}.model.webp`),
-            join(directory, `${attachment.id}.model-original`),
+            path.join(directory, `${attachment.id}.model.webp`),
+            path.join(directory, `${attachment.id}.model-original`),
           ],
-          (path) => io("purge", () => rm(path, { force: true })),
+          (path) => fileIo("purge", fs.remove(path, { force: true })),
           { concurrency: 3, discard: true },
         );
       }
@@ -371,5 +380,7 @@ export type AttachmentsApi = Effect.Success<typeof make>;
 export class Attachments extends Context.Service<Attachments, AttachmentsApi>()(
   "memory-agent/attachments/attachments",
 ) {
-  static readonly layer = Layer.effect(Attachments, make);
+  static readonly layer = Layer.effect(Attachments, make).pipe(
+    Layer.provide(Layer.mergeAll(NodeCrypto.layer, NodeFileSystem.layer, NodePath.layer)),
+  );
 }

@@ -2,7 +2,17 @@ import { nativePromise } from "../runtime/native-effect.ts";
 import { Cause, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { ANTHROPIC_MODELS } from "@tanstack/ai-anthropic";
-import { MutableHashSet, Effect, Exit, Option, Ref, Schema, Semaphore } from "effect";
+import {
+  Clock,
+  Deferred,
+  MutableHashSet,
+  Effect,
+  Exit,
+  Option,
+  Ref,
+  Schema,
+  Semaphore,
+} from "effect";
 import type { Settings } from "../config/global-config.ts";
 import { optionalProperty } from "../optional-property.ts";
 import {
@@ -333,7 +343,10 @@ export function createSubscriptionProvider(
   type CatalogEntry = {
     readonly key: string;
     readonly token: object;
-    readonly load: Effect.Effect<ReadonlyArray<ProviderModel>, ProviderOperationFailed>;
+    readonly completion: Deferred.Deferred<ReadonlyArray<ProviderModel>, ProviderOperationFailed>;
+    readonly state:
+      | { readonly _tag: "Loading" }
+      | { readonly _tag: "Cached"; readonly expiresAt: number };
   };
   const catalogEntry = Ref.makeUnsafe<CatalogEntry | null>(null);
   const catalogLock = Semaphore.makeUnsafe(1);
@@ -359,39 +372,86 @@ export function createSubscriptionProvider(
 
   // The first caller owns the load in its existing fiber/scope. Cancelling a
   // waiting caller only stops that wait; cancelling the owner interrupts all
-  // current waiters, and TTL 0 permits retry. The owner signal reaches the
+  // current waiters, and failed/interrupted entries permit retry. The owner signal reaches the
   // native catalog fetch; a cancelled waiter cannot abort the owner's transport.
-  const list = Effect.gen(function* () {
-    const entry = yield* catalogLock.withPermits(1)(
-      Effect.gen(function* () {
-        const key = options.catalogKey?.() ?? "__default__";
-        const current = yield* Ref.get(catalogEntry);
-        if (current?.key === key) return current;
-        const token = {};
-        const load = yield* Effect.cachedWithTTL(
-          Effect.gen(function* () {
-            const pages =
-              provider === "anthropic"
-                ? anthropicInstalledCatalog
-                : yield* fromPromise(provider, "catalog", (signal) => client.modelCatalog(signal));
-            const models = parseSubscriptionCatalog(provider, pages);
-            if (models.length === 0) return yield* operationFailure(provider, "catalog");
-            if (
-              Ref.getUnsafe(catalogEntry)?.token === token &&
-              (options.catalogKey?.() ?? "__default__") === key
-            )
-              catalogCache = { key, models };
-            return models;
-          }),
-          (exit) => (Exit.isSuccess(exit) ? "30 seconds" : 0),
-        );
-        const next = { key, token, load };
-        yield* Ref.set(catalogEntry, next);
-        return next;
-      }),
-    );
-    return yield* entry.load;
-  });
+  // Publish the owner only after installing its interruption cleanup. Network and waiter
+  // effects restore caller interruptibility; the short admission section stays atomic.
+  const list = Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      const admission = yield* catalogLock.withPermits(1)(
+        Effect.gen(function* () {
+          const key = options.catalogKey?.() ?? "__default__";
+          const current = yield* Ref.get(catalogEntry);
+          if (current?.key === key) {
+            switch (current.state._tag) {
+              case "Loading":
+                return { _tag: "Waiter", entry: current } as const;
+              case "Cached":
+                if ((yield* Clock.currentTimeMillis) < current.state.expiresAt)
+                  return { _tag: "Waiter", entry: current } as const;
+            }
+          }
+          const next: CatalogEntry = {
+            key,
+            token: {},
+            completion: yield* Deferred.make<
+              ReadonlyArray<ProviderModel>,
+              ProviderOperationFailed
+            >(),
+            state: { _tag: "Loading" },
+          };
+          yield* Ref.set(catalogEntry, next);
+          return { _tag: "Owner", entry: next } as const;
+        }),
+      );
+      const { entry } = admission;
+      switch (admission._tag) {
+        case "Waiter":
+          return yield* restore(Deferred.await(entry.completion));
+        case "Owner":
+          return yield* restore(
+            Effect.gen(function* () {
+              const pages =
+                provider === "anthropic"
+                  ? anthropicInstalledCatalog
+                  : yield* fromPromise(provider, "catalog", (signal) =>
+                      client.modelCatalog(signal),
+                    );
+              const models = parseSubscriptionCatalog(provider, pages);
+              if (models.length === 0) return yield* operationFailure(provider, "catalog");
+              if (
+                Ref.getUnsafe(catalogEntry)?.token === entry.token &&
+                (options.catalogKey?.() ?? "__default__") === entry.key
+              )
+                catalogCache = { key: entry.key, models };
+              return models;
+            }).pipe(
+              Effect.onExit((exit) =>
+                catalogLock.withPermits(1)(
+                  Effect.gen(function* () {
+                    if (Ref.getUnsafe(catalogEntry)?.token === entry.token) {
+                      yield* Ref.set(
+                        catalogEntry,
+                        Exit.isSuccess(exit)
+                          ? {
+                              ...entry,
+                              state: {
+                                _tag: "Cached",
+                                expiresAt: (yield* Clock.currentTimeMillis) + 30_000,
+                              },
+                            }
+                          : null,
+                      );
+                    }
+                    yield* Deferred.done(entry.completion, exit);
+                  }),
+                ),
+              ),
+            ),
+          );
+      }
+    }),
+  );
   const selected = Effect.map(options.config.read, (settings): ModelSelection | null =>
     settings.provider === provider && isTruthy(settings.model) && isTruthy(settings.reasoningEffort)
       ? {

@@ -33,7 +33,7 @@ export class CompatibleRequestFailed extends Schema.TaggedError<CompatibleReques
   },
 ) {}
 
-export function makeCompatibleClient(fetcher: typeof appFetch) {
+export function makeCompatibleClient(fetcher: typeof fetch) {
   const requestEffect = <A, I>(schema: Schema.Codec<A, I>, body?: CompatibleCommand) =>
     Effect.gen(function* () {
       const operation = body?.action ?? "status";

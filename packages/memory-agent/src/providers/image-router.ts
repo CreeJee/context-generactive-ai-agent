@@ -305,7 +305,14 @@ export interface ImageRouterApi {
 }
 
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function makeImageRouter(
+export function makeImageRouter(options: {
+  readonly catalog: RouteCatalogApi;
+  readonly factsService: ImageRouteFactsApi;
+  readonly crossProviderConsent?: CrossProviderMediaConsentApi | undefined;
+}) {
+  return makeImageRouterBody(options.catalog, options.factsService, options.crossProviderConsent);
+}
+function makeImageRouterBody(
   catalog: RouteCatalogApi,
   factsService: ImageRouteFactsApi,
   crossProviderConsent?: CrossProviderMediaConsentApi,
@@ -469,17 +476,20 @@ export class ImageRouter extends Context.Service<ImageRouter, ImageRouterApi>()(
   static readonly layer = Layer.effect(
     ImageRouter,
     Effect.gen(function* () {
-      return makeImageRouter(yield* RouteCatalog, yield* ImageRouteFacts);
+      return makeImageRouter({
+        catalog: yield* RouteCatalog,
+        factsService: yield* ImageRouteFacts,
+      });
     }),
   );
   static readonly consentLayer = Layer.effect(
     ImageRouter,
     Effect.gen(function* () {
-      return makeImageRouter(
-        yield* RouteCatalog,
-        yield* ImageRouteFacts,
-        yield* CrossProviderMediaConsent,
-      );
+      return makeImageRouter({
+        catalog: yield* RouteCatalog,
+        factsService: yield* ImageRouteFacts,
+        crossProviderConsent: yield* CrossProviderMediaConsent,
+      });
     }),
   );
   static readonly layerFrom = (api: ImageRouterApi) => Layer.succeed(ImageRouter, api);

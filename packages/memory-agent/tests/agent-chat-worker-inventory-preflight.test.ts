@@ -15,7 +15,6 @@ it.live.each(["duplicate", "client-only", "provider-native"] as const)(
   "real worker admission rejects %s inventory before any execution evidence",
   (inventory) =>
     Effect.gen(function* () {
-      vi.stubEnv("CONTEXT_AGENT_GOAL_WORKER", "1");
       try {
         const context = yield* Effect.promise(() => testRuntime({ testProvider: {} }));
         yield* Effect.provideContext(selectTestModel(), yield* context.runtime.contextEffect);
@@ -89,7 +88,6 @@ it.live.each(["duplicate", "client-only", "provider-native"] as const)(
         expect(context.provider!.adapter.invocations).toHaveLength(0);
       } finally {
         vi.restoreAllMocks();
-        vi.unstubAllEnvs();
       }
     }),
 );

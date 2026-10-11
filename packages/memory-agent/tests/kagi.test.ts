@@ -1,10 +1,9 @@
 import { it } from "@effect/vitest";
 import type { JsonValue } from "../src/json.ts";
 import { selectTestModel } from "./support/provider.ts";
-import { isTruthy } from "../src/truthy.ts";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { testHttpServer, HttpServerRequest, HttpServerResponse } from "./support/http.ts";
 import type { AnyServerTool } from "@tanstack/ai";
-import { Cause, Effect, Fiber, Random, Result, Schema, Scope, Stream } from "effect";
+import { Cause, Effect, Random, Result, Schema } from "effect";
 import { describe, expect } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { Kagi } from "../src/kagi/kagi.ts";
@@ -40,73 +39,22 @@ const rejects = Effect.fn("kagiTest.rejects")(function* <A>(
       }).toThrow(message),
   });
 });
-const readBody = Effect.fn("kagiTest.readBody")(function* (request: IncomingMessage) {
-  const chunks = yield* Stream.runCollect(
-    Stream.fromAsyncIterable(request, (cause) => new Cause.UnknownError(cause)),
-  );
-  return yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(
-    Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8"),
-  );
-});
-// The SDK fixture speaks real HTTP; its listener and request Fibers belong to the test Scope.
 const fakeKagi = Effect.fn("kagiTest.fakeKagi")(function* (reply: (path: string) => Reply) {
   const received: Received[] = [];
-  const context = yield* Effect.context<never>();
-  const scope = yield* Scope.Scope;
-  const handle = Effect.fn("kagiTest.handle")(function* (
-    request: IncomingMessage,
-    response: ServerResponse,
-  ) {
-    const path = request.url ?? "";
-    received.push({
-      path,
-      authorization: request.headers.authorization,
-      body: yield* readBody(request),
-    });
-    const { status, body } = reply(path);
-    const json = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(body);
-    response.writeHead(status, { "Content-Type": "application/json" });
-    response.end(json);
-  });
-  const server = yield* Effect.acquireRelease(
-    Effect.sync(() =>
-      createServer((request, response) => {
-        void Effect.runPromiseWith(context)(
-          handle(request, response).pipe(Effect.forkIn(scope), Effect.flatMap(Fiber.join)),
-        ).catch((cause) =>
-          response.destroy(
-            cause instanceof Error ? cause : new Error("Fixture request failed", { cause }),
-          ),
-        );
-      }),
-    ),
-    (server) =>
-      server.listening
-        ? Effect.callback<void, Cause.UnknownError>((resume) => {
-            server.close((error) =>
-              resume(
-                error === undefined ? Effect.void : Effect.fail(new Cause.UnknownError(error)),
-              ),
-            );
-            server.closeAllConnections();
-          }).pipe(Effect.orDie)
-        : Effect.void,
+  const { url } = yield* testHttpServer(
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const path = request.url;
+      received.push({
+        path,
+        authorization: request.headers.authorization,
+        body: yield* HttpServerRequest.schemaBodyJson(Schema.Json),
+      });
+      const { status, body } = reply(path);
+      return yield* HttpServerResponse.json(body, { status });
+    }),
   );
-  yield* Effect.callback<void, Cause.UnknownError>((resume) => {
-    const fail = (error: Error) => resume(Effect.fail(new Cause.UnknownError(error)));
-    server.once("error", fail);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", fail);
-      resume(Effect.void);
-    });
-    return Effect.sync(() => {
-      server.off("error", fail);
-    });
-  });
-  const address = yield* Schema.decodeUnknownEffect(Schema.Struct({ port: Schema.Int }))(
-    server.address(),
-  );
-  return { baseUrl: "http://127.0.0.1:" + address.port + "/api/v1", received };
+  return { baseUrl: url + "/api/v1", received };
 });
 
 const searchReply: Reply = {
@@ -148,7 +96,7 @@ const kagiSetup = Effect.fn("kagiTest.setup")(function* (
 
 function toolNamed(tools: readonly AnyServerTool[], name: string) {
   const execute = tools.find((candidate) => candidate.name === name)?.execute;
-  if (!isTruthy(execute)) throw new Error(`no ${name}`);
+  if (execute === undefined) throw new Error(`no ${name}`);
   return execute;
 }
 

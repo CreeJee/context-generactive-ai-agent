@@ -469,6 +469,14 @@ function installedModelMetadata(): readonly ProviderToolModelMetadata[] {
 }
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
 export function makeProviderToolCapabilityRegistry(
+  options: {
+    readonly descriptors?: readonly AnyProviderToolDescriptor[] | undefined;
+    readonly models?: readonly ProviderToolModelMetadata[] | undefined;
+  } = {},
+) {
+  return makeProviderToolCapabilityRegistryBody(options.descriptors, options.models);
+}
+function makeProviderToolCapabilityRegistryBody(
   descriptors: readonly AnyProviderToolDescriptor[] = providerToolDescriptors,
   models: readonly ProviderToolModelMetadata[] = installedModelMetadata(),
 ): Effect.Effect<ProviderToolCapabilityRegistryApi, ProviderToolMetadataFailure> {
@@ -533,7 +541,7 @@ export class ProviderToolCapabilityRegistry extends Context.Service<
 >()("memory-agent/providers/tool-capabilities/ProviderToolCapabilityRegistry") {
   static readonly layer = Layer.effect(
     ProviderToolCapabilityRegistry,
-    makeProviderToolCapabilityRegistry(),
+    makeProviderToolCapabilityRegistry({}),
   );
   static readonly layerFrom = (
     descriptors: readonly AnyProviderToolDescriptor[],
@@ -541,7 +549,7 @@ export class ProviderToolCapabilityRegistry extends Context.Service<
   ) =>
     Layer.effect(
       ProviderToolCapabilityRegistry,
-      makeProviderToolCapabilityRegistry(descriptors, models),
+      makeProviderToolCapabilityRegistry({ descriptors: descriptors, models: models }),
     );
 }
 export type InstalledProviderToolModel = OpenAIChatModel | AnthropicChatModel;

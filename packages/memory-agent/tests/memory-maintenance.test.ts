@@ -372,8 +372,8 @@ describe("automatic memory graph maintenance", () => {
       const entered = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       const embedder = Layer.succeed(Embedder, {
-        identity: "gated-test-64",
-        dimensions: 64,
+        identity: "gated-test-384",
+        dimensions: 384,
         runtime: () => ({ kind: "other" }),
         embed: (texts) =>
           Effect.gen(function* () {

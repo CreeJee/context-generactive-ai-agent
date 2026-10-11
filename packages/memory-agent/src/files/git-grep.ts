@@ -1,16 +1,23 @@
 import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { execFile } from "node:child_process";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { dirname } from "node:path";
-import { Deferred, Effect, HashSet, Schema } from "effect";
+import * as NodeChildProcessSpawner from "@effect/platform-node/NodeChildProcessSpawner";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
+import * as NodePath from "@effect/platform-node/NodePath";
+import { Context, Effect, HashSet, Layer, Path, Stream, Cause } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { findExecutable, helperEnvironment } from "../runtime/host.ts";
 
 /** Git runs with its own folder and the system folders on its search path, and nothing else. */
-export const gitEnvironment = (git: string) => helperEnvironment([dirname(git)], { user: false });
-
-const noFileMatched = Schema.is(Schema.Struct({ code: Schema.Literal(1) }));
+const hostPath = Effect.runSync(
+  Effect.scoped(
+    Effect.gen(function* () {
+      const services = yield* Layer.build(NodePath.layer);
+      return Context.get(services, Path.Path);
+    }),
+  ),
+);
+export const gitEnvironment = (git: string) =>
+  helperEnvironment([hostPath.dirname(git)], { user: false });
 
 /** Only ASCII case folding is the same in `git grep -i` and JavaScript. */
 const isAscii = (text: string) => /^[\x20-\x7e]*$/.test(text);
@@ -42,12 +49,16 @@ export const gitGrepFilesEffect = (options: {
   readonly directory: string;
   readonly query: string;
   readonly caseSensitive: boolean;
-}): Effect.Effect<HashSet.HashSet<string> | null> =>
-  Effect.suspend(() => {
+}) =>
+  Effect.gen(function* () {
     const { root, directory, query, caseSensitive } = options;
-    if (query.includes("\n") || (!caseSensitive && !isAscii(query))) return Effect.succeed(null);
-    const git = findExecutable("git");
-    if (!isTruthy(git)) return Effect.succeed(null);
+    if (query.includes("\n") || (!caseSensitive && !isAscii(query))) return null;
+    const git = yield* Effect.scoped(
+      Layer.build(NodeFileSystem.layer).pipe(
+        Effect.flatMap((services) => Effect.provideContext(findExecutable("git"), services)),
+      ),
+    );
+    if (!isTruthy(git)) return null;
     const args = [
       "grep",
       "--untracked",
@@ -61,27 +72,46 @@ export const gitGrepFilesEffect = (options: {
       "--",
       directory,
     ];
-    return Effect.callback<HashSet.HashSet<string> | null>((resume) => {
-      const closed = Deferred.makeUnsafe<void>();
-      const child = execFile(
-        git,
-        args,
-        {
-          cwd: root,
-          maxBuffer: 64 * 1024 * 1024,
-          windowsHide: true,
-          env: { ...gitEnvironment(git), LANG: "C", GIT_PAGER: "cat" },
-        },
-        (error, stdout) => {
-          if (error === null)
-            resume(Effect.succeed(HashSet.fromIterable(stdout.split("\0").filter(Boolean))));
-          else resume(Effect.succeed(noFileMatched(error) ? HashSet.empty<string>() : null));
-        },
-      );
-      child.once("close", () => Deferred.doneUnsafe(closed, Effect.void));
-      return Effect.gen(function* () {
-        child.kill();
-        yield* Deferred.await(closed);
-      });
-    });
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        const services = yield* Layer.build(
+          NodeChildProcessSpawner.layer.pipe(
+            Layer.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)),
+          ),
+        );
+        const spawner = Context.get(services, ChildProcessSpawner.ChildProcessSpawner);
+        const child = yield* spawner.spawn(
+          ChildProcess.make(git, args, {
+            cwd: root,
+            windowsHide: true,
+            env: { ...gitEnvironment(git), LANG: "C", GIT_PAGER: "cat" },
+            extendEnv: false,
+            stderr: "ignore",
+          }),
+        );
+        let size = 0;
+        const stdout = yield* child.stdout.pipe(
+          Stream.mapEffect((chunk) => {
+            size += chunk.byteLength;
+            return size <= 64 * 1024 * 1024
+              ? Effect.succeed(chunk)
+              : Effect.fail(new Cause.UnknownError("git grep output exceeds 64 MiB"));
+          }),
+          Stream.decodeText(),
+          Stream.runFold(
+            () => "",
+            (text, chunk) => text + chunk,
+          ),
+        );
+        const code = yield* child.exitCode;
+        switch (Number(code)) {
+          case 0:
+            return HashSet.fromIterable(stdout.split("\0").filter(Boolean));
+          case 1:
+            return HashSet.empty<string>();
+          default:
+            return null;
+        }
+      }),
+    ).pipe(Effect.orElseSucceed(() => null));
   });

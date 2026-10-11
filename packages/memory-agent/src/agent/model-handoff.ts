@@ -1,7 +1,7 @@
 import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { createHash } from "node:crypto";
+import { sha256 } from "../runtime/synchronous-crypto.ts";
 import type { MetadataStore, ModelMessage } from "@tanstack/ai";
 import { Effect, HashSet, Option, Predicate, Schema } from "effect";
 import { messageText, replayableToolHistory } from "./compaction.ts";
@@ -98,25 +98,21 @@ const decodeState = Schema.decodeUnknownOption(HandoffState);
 const StoredModel = Schema.Struct({ tanstack: Schema.Struct({ model: Schema.String }) });
 const decodeModel = Schema.decodeUnknownOption(StoredModel);
 const legacyFingerprint = (message: ModelMessage | undefined) =>
-  createHash("sha256")
-    .update(JSON.stringify(message) ?? "missing")
-    .digest("hex");
+  sha256(JSON.stringify(message) ?? "missing");
 
 // UI hydration can reorder object fields and fan out tool messages. Hash JSON values
 // canonically and locate identified boundaries independently of their array position.
 const fingerprint = (message: ModelMessage | undefined) =>
   "v2:" +
-  createHash("sha256")
-    .update(
-      JSON.stringify(message, (_key, value) =>
-        Predicate.isObject(value) && !Array.isArray(value)
-          ? Object.fromEntries(
-              Object.entries(value).sort(([left], [right]) => left.localeCompare(right)),
-            )
-          : value,
-      ) ?? "missing",
-    )
-    .digest("hex");
+  sha256(
+    JSON.stringify(message, (_key, value) =>
+      Predicate.isObject(value) && !Array.isArray(value)
+        ? Object.fromEntries(
+            Object.entries(value).sort(([left], [right]) => left.localeCompare(right)),
+          )
+        : value,
+    ) ?? "missing",
+  );
 
 /** A new model reads evidence context, never the old model's reasoning/tool protocol. */
 export const handoffHistory: {

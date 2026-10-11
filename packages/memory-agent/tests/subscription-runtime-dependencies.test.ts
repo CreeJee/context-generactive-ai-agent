@@ -1,3 +1,4 @@
+import { Cause } from "effect";
 import { SubscriptionAccountProvider } from "../src/providers/contracts.ts";
 import { DatabaseSync } from "node:sqlite";
 import { Clock, Effect, FileSystem, Layer, Result, Schema, Stream } from "effect";
@@ -70,10 +71,10 @@ it.live(
             .run(id, id, index === 0 ? 1 : 0, index);
         const requests: string[] = [];
         const created: string[] = [];
-        const clients = createAccountBoundSubscriptionClients(
-          sqlite,
-          "openai",
-          (id) => {
+        const clients = createAccountBoundSubscriptionClients({
+          sqlite: sqlite,
+          provider: "openai",
+          createClient: (id) => {
             created.push(id!);
             return createSubscriptionOAuthClient({
               protocol: providerProtocols.openai,
@@ -102,12 +103,12 @@ it.live(
               },
             });
           },
-          {
+          accounts: {
             read: () => Promise.resolve(null),
             write: () => Promise.reject(new Error("unexpected profile write")),
             remove: () => Promise.reject(new Error("unexpected profile removal")),
           },
-        );
+        });
         const program = Effect.gen(function* () {
           const config = yield* GlobalConfig;
           const provider = createSubscriptionProvider({
@@ -162,7 +163,7 @@ it.live(
                     runId: `run-${index}`,
                     threadId: "thread",
                   }),
-                  (cause) => cause,
+                  (cause) => new Cause.UnknownError(cause),
                 ),
               );
               expect(chunks.some((chunk) => chunk.type === EventType.RUN_FINISHED)).toBe(true);

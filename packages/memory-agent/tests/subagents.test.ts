@@ -383,8 +383,8 @@ describe("subagents", () => {
         askedBy: "every_call",
         requester: { kind: "subagent", name: null },
       });
-      expect(relayed.answer("another-session", request!.id, true)).toBe(false);
-      expect(relayed.answer(session.id, request!.id, true)).toBe(true);
+      expect(yield* relayed.answer("another-session", request!.id, true)).toBe(false);
+      expect(yield* relayed.answer(session.id, request!.id, true)).toBe(true);
       const approvedAnswer = yield* Fiber.join(approved);
       expect(approvedAnswer).toContain("child-approved");
       expect(approvedAnswer).toContain("exitCode");
@@ -395,7 +395,7 @@ describe("subagents", () => {
         Effect.sync(() => state().approvals.length === 1),
         "the second approval",
       );
-      relayed.answer(session.id, state().approvals[0]!.id, false);
+      yield* relayed.answer(session.id, state().approvals[0]!.id, false);
       const deniedAnswer = yield* Fiber.join(denied);
       expect(deniedAnswer).toContain("User denied this action");
       expect(deniedAnswer).not.toContain("exitCode");

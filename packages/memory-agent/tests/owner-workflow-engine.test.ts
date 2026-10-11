@@ -1,0 +1,191 @@
+import { NodeFileSystem, NodePath } from "@effect/platform-node";
+import { it } from "@effect/vitest";
+import { Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { Activity, Workflow, WorkflowEngine } from "effect/workflow";
+import { describe, expect } from "vite-plus/test";
+import { Database } from "../src/db/database.ts";
+import { ownerWorkflowEngineLayer } from "../src/workflow/owner-workflow-engine.ts";
+import {
+  OwnerWorkflowAdmission,
+  OwnerWorkflowStorageError,
+} from "../src/workflow/owner-workflow-storage.ts";
+
+const ContractWorkflow = Workflow.make("OwnerWorkflowEngineContract", {
+  payload: { value: Schema.String },
+  success: Schema.String,
+  idempotencyKey: ({ value }) => value,
+});
+
+const withDatabase = <A, E, R>(use: (database: Database["Service"]) => Effect.Effect<A, E, R>) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "owner-workflow-engine-" });
+      const context = yield* Layer.build(Database.layer(path.join(directory, "owner.db")));
+      return yield* Effect.provideContext(Effect.flatMap(Database, use), context);
+    }),
+  ).pipe(Effect.provide([NodeFileSystem.layer, NodePath.layer]));
+
+const withEngine = <A, E, R>(
+  database: Database["Service"],
+  use: Effect.Effect<A, E, R | WorkflowEngine.WorkflowEngine | OwnerWorkflowAdmission>,
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const context = yield* Layer.build(
+        ownerWorkflowEngineLayer.pipe(Layer.provide(Layer.succeed(Database, database))),
+      );
+      return yield* Effect.provideContext(use, context);
+    }),
+  );
+
+describe("owner workflow engine", () => {
+  it.live("persists a transformed Activity result once and decodes the typed workflow result", () =>
+    withDatabase((database) => {
+      const workflow = Workflow.make("OwnerWorkflowTransformedActivity", {
+        payload: { value: Schema.String },
+        success: Schema.Finite,
+        idempotencyKey: ({ value }) => value,
+      });
+      const run = withEngine(
+        database,
+        Effect.gen(function* () {
+          const engine = yield* WorkflowEngine.WorkflowEngine;
+          yield* engine.register(workflow, () =>
+            Activity.make({
+              name: "transformed-number",
+              success: Schema.FiniteFromString,
+              execute: Effect.succeed(42),
+            }),
+          );
+          return yield* engine.execute(workflow, {
+            executionId: "transformed-activity-execution",
+            payload: { value: "same" },
+          });
+        }),
+      );
+      return Effect.gen(function* () {
+        expect(yield* run).toBe(42);
+        expect(yield* run).toBe(42);
+      });
+    }),
+  );
+
+  it.live("replays a completed Activity after the scoped engine restarts", () =>
+    withDatabase((database) => {
+      let executions = 0;
+      const run = withEngine(
+        database,
+        Effect.gen(function* () {
+          const engine = yield* WorkflowEngine.WorkflowEngine;
+          yield* engine.register(ContractWorkflow, ({ value }) =>
+            Activity.make({
+              name: "OwnerWorkflowEngineContract.activity",
+              success: Schema.String,
+              execute: Effect.sync(() => {
+                executions += 1;
+                return `done:${value}`;
+              }),
+            }),
+          );
+          return yield* engine.execute(ContractWorkflow, {
+            executionId: "session/run/goal/revision",
+            payload: { value: "same" },
+          });
+        }),
+      );
+      return Effect.gen(function* () {
+        const first = yield* run;
+        const replayed = yield* run;
+        expect({ first, replayed, executions }).toEqual({
+          first: "done:same",
+          replayed: "done:same",
+          executions: 1,
+        });
+      });
+    }),
+  );
+
+  it.live("commits owner binding and the first request in one Database.atomic transaction", () =>
+    withDatabase((database) =>
+      withEngine(
+        database,
+        Effect.gen(function* () {
+          database.sqlite.exec("CREATE TABLE owner_workflow_binding_probe (id TEXT PRIMARY KEY)");
+          const admission = yield* OwnerWorkflowAdmission;
+          const request = {
+            workflowName: ContractWorkflow._tag,
+            executionId: "atomic-execution",
+            payload: { value: "bound" },
+          };
+
+          const failed = yield* admission
+            .admit(request, () => {
+              database.sqlite
+                .prepare("INSERT INTO owner_workflow_binding_probe VALUES (?)")
+                .run("rolled-back");
+              throw new Error("reject binding");
+            })
+            .pipe(Effect.flip);
+          expect(failed).toBeInstanceOf(OwnerWorkflowStorageError);
+          expect(
+            database.sqlite.prepare("SELECT id FROM owner_workflow_binding_probe").all(),
+          ).toEqual([]);
+          expect(
+            database.sqlite.prepare("SELECT execution_id FROM owner_workflow_executions").all(),
+          ).toEqual([]);
+
+          yield* admission.admit(request, () =>
+            database.sqlite
+              .prepare("INSERT INTO owner_workflow_binding_probe VALUES (?)")
+              .run("committed"),
+          );
+          expect(
+            database.sqlite.prepare("SELECT id FROM owner_workflow_binding_probe").all(),
+          ).toEqual([{ id: "committed" }]);
+          expect(
+            database.sqlite
+              .prepare("SELECT execution_id, workflow_name FROM owner_workflow_executions")
+              .all(),
+          ).toEqual([
+            {
+              execution_id: "atomic-execution",
+              workflow_name: ContractWorkflow._tag,
+            },
+          ]);
+
+          let rebound = false;
+          const duplicate = yield* admission.admit(request, () => {
+            rebound = true;
+          });
+          expect(duplicate.type).toBe("existing");
+          expect(rebound).toBe(false);
+        }),
+      ),
+    ),
+  );
+
+  it.live("interrupts live workflow fibers when the engine scope closes", () =>
+    withDatabase((database) =>
+      Effect.gen(function* () {
+        let finalized = 0;
+        yield* withEngine(
+          database,
+          Effect.gen(function* () {
+            const engine = yield* WorkflowEngine.WorkflowEngine;
+            yield* engine.register(ContractWorkflow, () =>
+              Effect.never.pipe(Effect.ensuring(Effect.sync(() => finalized++))),
+            );
+            yield* engine.execute(ContractWorkflow, {
+              executionId: "scope-owned-execution",
+              payload: { value: "pending" },
+              discard: true,
+            });
+          }),
+        );
+        expect(finalized).toBe(1);
+      }),
+    ),
+  );
+});

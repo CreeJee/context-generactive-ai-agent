@@ -1,6 +1,5 @@
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
+import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
 import {
   MutableHashMap,

@@ -1,7 +1,7 @@
 import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { createHash } from "node:crypto";
+import { sha256 } from "../runtime/synchronous-crypto.ts";
 import type { ToolPhaseCompleteInfo } from "@tanstack/ai";
 import { HashSet, Option, Schema } from "effect";
 import { JsonValue } from "../json.ts";
@@ -93,5 +93,5 @@ function toolProgressFingerprintBody(
   }
   const encoded = JSON.stringify(stable(value));
   if (encoded === "[]") return null;
-  return createHash("sha256").update(`${name}\n${encoded}`).digest("hex");
+  return sha256(`${name}\n${encoded}`);
 }

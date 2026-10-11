@@ -16,6 +16,7 @@ import {
 import { useAtom } from "jotai";
 import { atomWithStorage } from "jotai/utils";
 import { useState } from "react";
+import { Link } from "react-router";
 import { Alert, AlertDescription } from "~/components/ui/alert";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -115,7 +116,7 @@ export function AccountSection({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => openSettingsOverlay(null, "compatible")}
+              onClick={() => openSettingsOverlay({ project: null, initialPage: "compatible" })}
             >
               호환 공급자 설정
             </Button>
@@ -551,8 +552,9 @@ export function SessionSection({
                 session.id === sessionId && "bg-muted font-medium",
               )}
             >
-              <a
-                href={`/?project=${encodeURIComponent(projectId)}&session=${encodeURIComponent(session.id)}`}
+              <Link
+                to={`/?project=${encodeURIComponent(projectId)}&session=${encodeURIComponent(session.id)}`}
+                preventScrollReset
                 aria-current={session.id === sessionId ? "page" : undefined}
                 className="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1.5 text-left text-xs"
               >
@@ -562,7 +564,7 @@ export function SessionSection({
                     <BotIcon /> {session.agent}
                   </Badge>
                 )}
-              </a>
+              </Link>
               {/* The row shows its action on hover, or while the action has keyboard focus. */}
               <div className="mr-1 flex opacity-0 group-hover:opacity-100 has-focus-visible:opacity-100">
                 <Button

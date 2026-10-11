@@ -3,11 +3,12 @@ import { Cause, Effect } from "effect";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ok } from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, expect, test, vi } from "vite-plus/test";
+import { beforeEach, afterEach, expect, test, vi } from "vite-plus/test";
 import { AppliedSettings, ExperimentSummary } from "./rrsi-summary";
 import type { ExperimentRecord, HarnessVersion } from "memory-agent";
 import { RrsiSettings } from "./rrsi";
 
+beforeEach(() => vi.stubGlobal("location", new URL("http://localhost/settings")));
 afterEach(() => vi.unstubAllGlobals());
 const sdkCall = Effect.fn("rrsiSettingsTest.sdkCall")(function* <A>(
   operation: () => A | PromiseLike<A>,

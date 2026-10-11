@@ -21,7 +21,7 @@ const request = Effect.fn("NativeFactoryTest.request")(function* () {
     headers: { "Content-Type": "application/json" },
     body: yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
       threadId: "thread-ui",
-      runId: yield* (yield* Crypto.Crypto).randomUUIDv4,
+      runId: yield* (yield* Crypto.Crypto).randomUUIDv4(),
       messages: [{ id: "m1", role: "user", content: "hello" }],
       tools: [],
       context: [],

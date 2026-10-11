@@ -1,9 +1,10 @@
+import { NodePath } from "@effect/platform-node";
 import { Array as EffectArray, Function as EffectFunction } from "effect";
 import { totalmem } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import {
+  Path,
   DateTime,
   Clock,
   Context,
@@ -18,7 +19,7 @@ import {
 } from "effect";
 import { GlobalConfig, type GpuCheck, type Settings } from "../../config/global-config.ts";
 import { StorageRoot } from "../../config/storage-root.ts";
-import { runtimeWorker } from "../../runtime/resources.ts";
+import { runtimeWorker, runtimeWorkerOptions } from "../../runtime/resources.ts";
 
 export class EmbeddingError extends Data.TaggedError("EmbeddingError")<{
   readonly cause: unknown;
@@ -231,7 +232,7 @@ function modelWorker(cacheDir: string, setup: ModelSetup) {
   };
 
   const start = () => {
-    const created = new Worker(runtimeWorker("embed-worker"), { workerData });
+    const created = new Worker(runtimeWorker("embed-worker"), runtimeWorkerOptions(workerData));
     const lost = () => {
       if (worker === created) void stop("embedding worker stopped");
     };
@@ -347,7 +348,8 @@ type LocalPurpose =
 const makeLocal = (setup: ModelSetup, purpose: LocalPurpose) =>
   Effect.gen(function* () {
     const storage = yield* StorageRoot;
-    const model = modelWorker(join(storage.path, "models"), setup);
+    const paths = yield* Path.Path;
+    const model = modelWorker(paths.join(storage.path, "models"), setup);
     yield* Effect.addFinalizer(() =>
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
       Effect.promise(() => Promise.resolve(model.stop("embedder stopped"))).pipe(Effect.asVoid),
@@ -375,10 +377,11 @@ export const checkGpu = (storageRoot: string) =>
   Effect.scoped(
     Effect.gen(function* () {
       const effectClock = yield* Clock.Clock;
+      const paths = yield* Path.Path;
 
       const model = yield* Effect.acquireRelease(
         Effect.sync(() =>
-          modelWorker(join(storageRoot, "models"), {
+          modelWorker(paths.join(storageRoot, "models"), {
             variant: "fp32",
             devices: ["webgpu"],
           }),
@@ -430,8 +433,10 @@ export class Embedder extends Context.Service<Embedder, EmbedderApi>()(
       const mode = embeddingModeFor(yield* (yield* GlobalConfig).read);
       return yield* makeLocal(modes[mode], { kind: "app", mode });
     }),
-  );
+  ).pipe(Layer.provide(NodePath.layer));
   /** Another published file on the CPU, to compare quality and memory. */
   static readonly localVariant = (variant: ModelVariant) =>
-    Layer.effect(Embedder, makeLocal({ variant, devices: ["cpu"] }, { kind: "evaluation" }));
+    Layer.effect(Embedder, makeLocal({ variant, devices: ["cpu"] }, { kind: "evaluation" })).pipe(
+      Layer.provide(NodePath.layer),
+    );
 }

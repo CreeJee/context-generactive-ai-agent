@@ -1,6 +1,8 @@
 import { Function as EffectFunction, Schema } from "effect";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { join } from "node:path";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { path } from "./runtime/synchronous-path.ts";
+const { join } = path;
 import { optionalProperty } from "./optional-property.ts";
 import { Effect, Layer } from "effect";
 import type { ProviderId } from "./providers/contracts.ts";
@@ -72,12 +74,19 @@ import { OutsideTools } from "./tools/outside.ts";
 import { WorkTraceStore } from "./work-trace/store.ts";
 import { Workflows } from "./workflow/workflow.ts";
 import { WorkflowExecution } from "./workflow/execution.ts";
+import { goalExecutionLayer } from "./workflow/goal-execution.ts";
+import { OwnerReadRecovery } from "./agent/owner-read-recovery.ts";
 import { WorkflowTools } from "./workflow/tools.ts";
 import { WorkflowRules } from "./workflow/rules.ts";
 import { OpenAICompatibleSettings } from "./providers/openai-compatible.ts";
+import {
+  ExecutionAdmission,
+  type ExecutionAdmissionLimits,
+} from "./runtime/execution-admission.ts";
 
 export interface MemoryAgentLayerOptions {
   readonly goalWorker?: GoalWorkerOptions;
+  readonly executionAdmission?: ExecutionAdmissionLimits;
   readonly openDatabase?: Parameters<typeof Database.layer>[1];
   /** Isolated evaluation transport; production uses its endpoint-bound keyring. */
   readonly compatibleSettings?: Layer.Layer<OpenAICompatibleSettings, never, GlobalConfig>;
@@ -149,11 +158,13 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
   // The settings are read by services in every tier above, the embedder among them.
   const foundation = GlobalConfig.layer.pipe(
     Layer.provideMerge(
-      Layer.merge(
+      Layer.mergeAll(
         StorageRoot.layer(storageRoot),
         Database.layer(join(storageRoot, "agent.db"), options.openDatabase),
+        ExecutionAdmission.layer(options.executionAdmission),
       ),
     ),
+    Layer.provideMerge(Layer.merge(NodeServices.layer, NodeCrypto.layer)),
   );
   const harness = HarnessStore.layer.pipe(Layer.provide(foundation));
   const compatibleSettings = (options.compatibleSettings ?? OpenAICompatibleSettings.layer).pipe(
@@ -216,6 +227,8 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     SecretRedactor.layer,
     Workflows.layer,
     WorkflowExecution.layer,
+    goalExecutionLayer,
+    OwnerReadRecovery.layer,
     WorkTraceStore.layer,
     providerToolRegistry,
     modelFeatureFlags,

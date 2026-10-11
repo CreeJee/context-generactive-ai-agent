@@ -2,12 +2,14 @@ import { nativePromise, runNativeEffect } from "../src/runtime/native-effect.ts"
 import { Console, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../src/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
+import { randomUUID } from "../src/runtime/synchronous-crypto.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { NodeServices } from "@effect/platform-node";
+import { Context, FileSystem } from "effect";
+import { runOAuthNodeEffect } from "../src/oauth/node-runtime.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { join } from "node:path";
+import { path } from "../src/runtime/synchronous-path.ts";
+const { join } = path;
 import { DatabaseSync } from "node:sqlite";
 import { DateTime, Clock, Effect, Layer, Schema } from "effect";
 import { maxIterations, normalizeSystemPrompts, type ModelMessage } from "@tanstack/ai";
@@ -53,11 +55,18 @@ const Selection = Schema.Struct({
 const selection = EffectFunction.flow(
   Schema.decodeResult(Schema.fromJsonString(Selection)),
   Result.getOrThrow,
-)(readFileSync(join(defaultStorageRoot, "config.json"), "utf8"));
+)(
+  await runOAuthNodeEffect(
+    Effect.flatMap(FileSystem.FileSystem, (fs) =>
+      fs.readFileString(join(defaultStorageRoot, "config.json")),
+    ),
+  ),
+);
 const accountDatabase = new DatabaseSync(join(defaultStorageRoot, "agent.db"), { readOnly: true });
-const selectedProfile = listOAuthProfiles(accountDatabase, selection.provider).find(
-  (profile) => profile.selected,
-)?.id;
+const selectedProfile = listOAuthProfiles({
+  sqlite: accountDatabase,
+  provider: selection.provider,
+}).find((profile) => profile.selected)?.id;
 accountDatabase.close();
 const client = createSubscriptionOAuthClient({
   protocol: providerProtocols.openai,
@@ -79,16 +88,18 @@ let estimatedInputTokens = 0;
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "optimized-guidance") {
-  const base = mkdtempSync(join(tmpdir(), "delegation-live-eval-"));
+  const platform = yield* Layer.build(NodeServices.layer);
+  const fs = Context.get(platform, FileSystem.FileSystem);
+  const base = yield* fs.makeTempDirectoryScoped({ prefix: "delegation-live-eval-" });
   const projectRoot = join(base, "project");
   const home = join(base, "home");
-  mkdirSync(projectRoot);
-  mkdirSync(home);
-  writeFileSync(
+  yield* fs.makeDirectory(projectRoot);
+  yield* fs.makeDirectory(home);
+  yield* fs.writeFileString(
     join(projectRoot, "main.ts"),
     "export const mainTotal = [2, 3, 5].reduce((sum, x) => sum + x, 0);\n",
   );
-  writeFileSync(
+  yield* fs.writeFileString(
     join(projectRoot, "child.ts"),
     "export const childTotal = [7, 11].reduce((sum, x) => sum + x, 0);\n",
   );
@@ -131,7 +142,11 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
                     return (options: Parameters<typeof adapter.chatStream>[0]) => {
                       if (selected.provider !== "openai") throw new Error("openai_pilot_only");
                       const estimate = estimateRequestTokens(
-                        subscriptionRequest(selected.provider, selected, options),
+                        subscriptionRequest({
+                          provider: selected.provider,
+                          selection: selected,
+                          options: options,
+                        }),
                         selected.model,
                       );
                       if (
@@ -173,9 +188,6 @@ const arm = Effect.fn("eval.arm")(function* (variant: "baseline-guidance" | "opt
       };
     }),
   ).pipe(Layer.provide(SubscriptionProviderRegistry));
-  yield* Effect.addFinalizer(() =>
-    Effect.sync(() => rmSync(base, { recursive: true, force: true })),
-  );
   const servicesContext = yield* Layer.build(
     memoryAgentLayer(join(base, "storage"), {
       providerRegistry: registry,

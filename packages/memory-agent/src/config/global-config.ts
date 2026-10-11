@@ -1,9 +1,7 @@
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { join } from "node:path";
-import { Context, Effect, Layer, Schema, Semaphore } from "effect";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
+import * as NodePath from "@effect/platform-node/NodePath";
+import { Context, Effect, FileSystem, Layer, Path, Schema, Semaphore } from "effect";
 import { ProviderId } from "../providers/contracts.ts";
 import { OpenAICompatibleConfiguration } from "../providers/openai-compatible-config.ts";
 import { StorageRoot } from "./storage-root.ts";
@@ -91,10 +89,11 @@ export class GlobalConfigFailed extends Schema.TaggedError<GlobalConfigFailed>()
 
 const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
-  const file = join(storage.path, "config.json");
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const file = path.join(storage.path, "config.json");
 
   const updates = Semaphore.makeUnsafe(1);
-  const isMissingFile = Schema.is(Schema.Struct({ code: Schema.Literal("ENOENT") }));
   const jsonSettings = Schema.fromJsonString(Settings, { space: 2 });
   const write = (settings: Settings) =>
     Effect.gen(function* () {
@@ -107,28 +106,34 @@ const make = Effect.gen(function* () {
           }),
         ),
       );
-      yield* Effect.try({
-        try: () => {
-          mkdirSync(storage.path, { recursive: true, mode: 0o700 });
-          const temporary = `${file}.${process.pid}.tmp`;
-          writeFileSync(temporary, `${json}\n`, { mode: 0o600 });
-          renameSync(temporary, file);
-        },
-        catch: (cause) =>
+      const temporary = `${file}.${process.pid}.tmp`;
+      yield* Effect.acquireUseRelease(
+        fs.makeDirectory(storage.path, { recursive: true, mode: 0o700 }),
+        () =>
+          fs
+            .writeFileString(temporary, `${json}\n`, { mode: 0o600 })
+            .pipe(Effect.andThen(fs.rename(temporary, file))),
+        () => fs.remove(temporary, { force: true }),
+      ).pipe(
+        Effect.uninterruptible,
+        Effect.mapError((cause) =>
           GlobalConfigFailed.make({ operation: "write", reason: { _tag: "WriteFailed" }, cause }),
-      });
+        ),
+      );
       return settings;
     });
   const read = Effect.gen(function* () {
-    const json = yield* Effect.try({
-      try: () => readFileSync(file, "utf8"),
-      catch: (cause) =>
+    const json = yield* fs.readFileString(file).pipe(
+      Effect.mapError((cause) =>
         GlobalConfigFailed.make({
           operation: "read",
-          reason: isMissingFile(cause) ? { _tag: "MissingFile" } : { _tag: "ReadFailed" },
+          reason:
+            cause.reason._tag === "NotFound" ? { _tag: "MissingFile" } : { _tag: "ReadFailed" },
           cause,
         }),
-    }).pipe(Effect.catchReason("GlobalConfigFailed", "MissingFile", () => Effect.succeed(null)));
+      ),
+      Effect.catchReason("GlobalConfigFailed", "MissingFile", () => Effect.succeed(null)),
+    );
     if (json === null) return {};
     const settings = yield* Schema.decodeEffect(jsonSettings)(json).pipe(
       Effect.mapError((cause) =>
@@ -162,5 +167,7 @@ export type GlobalConfigApi = Effect.Success<typeof make>;
 export class GlobalConfig extends Context.Service<GlobalConfig, GlobalConfigApi>()(
   "memory-agent/config/global-config/GlobalConfig",
 ) {
-  static readonly layer = Layer.effect(GlobalConfig, make);
+  static readonly layer = Layer.effect(GlobalConfig, make).pipe(
+    Layer.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)),
+  );
 }

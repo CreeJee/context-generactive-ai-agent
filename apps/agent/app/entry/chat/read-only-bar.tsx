@@ -1,4 +1,5 @@
 import { EyeIcon } from "lucide-react";
+import { useState } from "react";
 import { Button } from "~/components/ui/button";
 import {
   Item,
@@ -22,8 +23,17 @@ export function ReadOnlyBar({
 }: {
   lease: PageLease;
   refused: boolean;
-  onContinue: () => void;
+  onContinue: () => void | Promise<void>;
 }) {
+  const [connectionFailed, setConnectionFailed] = useState(false);
+  const continueHere = async () => {
+    setConnectionFailed(false);
+    try {
+      await onContinue();
+    } catch {
+      setConnectionFailed(true);
+    }
+  };
   switch (lease.state) {
     case "checking":
     case "mine":
@@ -42,16 +52,18 @@ export function ReadOnlyBar({
                 : "다른 창이 이 대화를 더 이상 쓰지 않아요"}
             </ItemTitle>
             <ItemDescription>
-              {refused && lease.state === "other"
-                ? "아직 쓰고 있어서 이어갈 수 없어요. 그 창을 닫거나 다른 대화로 옮기면 이어갈 수 있어요."
-                : "여기서는 읽기만 할 수 있어요."}
+              {connectionFailed
+                ? "연결하지 못했어요. 다시 시도해 주세요."
+                : refused && lease.state === "other"
+                  ? "아직 쓰고 있어서 이어갈 수 없어요. 그 창을 닫거나 다른 대화로 옮기면 이어갈 수 있어요."
+                  : "여기서는 읽기만 할 수 있어요."}
             </ItemDescription>
           </ItemContent>
           <ItemActions>
             <Button
               size="sm"
               variant={lease.state === "free" ? "default" : "outline"}
-              onClick={onContinue}
+              onClick={continueHere}
             >
               이어서 작업
             </Button>

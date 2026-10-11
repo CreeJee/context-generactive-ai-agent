@@ -1,12 +1,11 @@
 import { Config, Console, Effect } from "effect";
 import { OAuthCheckFailed } from "./oauth-check-failure.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { runProcess } from "../src/rrsi/command.ts";
 import { OAuthHarnessError, OAuthValidationHarness } from "../src/oauth/validation-harness.ts";
 import { providerProtocols } from "../src/oauth/protocol.ts";
 
-const openBrowser = promisify(execFile);
+const openBrowser = (command: string, args: string[]) => runProcess({ command, args });
 // Native host/SDK configuration boundary reads or forwards the host environment.
 const model = Effect.runSync(
   Config.String("CONTEXT_AGENT_ANTHROPIC_VALIDATION_MODEL").pipe(

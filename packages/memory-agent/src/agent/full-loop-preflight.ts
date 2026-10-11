@@ -36,8 +36,11 @@ function preflightFullLoopExecutionBody<TAdapter extends AnyTextAdapter>(
   turn: ChatExecutionTurn<TAdapter>,
   capabilities: ChatExecutionCapabilities<TAdapter>,
 ): void {
-  if (isTruthy(turn.resume?.length))
-    throw new Error("Worker interrupt continuation is not yet supported");
+  if (
+    isTruthy(turn.resume?.length) &&
+    !capabilities.middleware.some((middleware) => middleware.name === "chat-persistence")
+  )
+    throw new Error("Worker continuation requires owner persistence");
   const declared = HashSet.fromIterable(
     capabilities.middleware.flatMap((mw) => [...(mw.provides ?? [])]),
   );

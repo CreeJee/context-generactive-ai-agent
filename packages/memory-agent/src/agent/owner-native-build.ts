@@ -1,23 +1,16 @@
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { dirname, join } from "node:path";
 import { Context, Layer } from "effect";
-import { runtimeRequire } from "../runtime/resources.ts";
+import { runtimeArtifact } from "../runtime/resources.ts";
 
-/** Private dependency for owner-controlled builds, not a public artifact adoption API.
- * Production always uses the fixed package entry. Tests may supply controlled source through
- * Layer composition; HTTP, environment variables and executable descriptors cannot set this.
- * Registration must still build, hash, verify, persist and load the resulting artifact.
+/** Build-time artifact manifest selected by the package/application bundle.
+ * Production never accepts a source entry and never invokes Vite at startup or on first request.
  */
 export class OwnerNativeBuild extends Context.Service<
   OwnerNativeBuild,
-  { readonly entry: string }
+  { readonly manifest: string }
 >()("memory-agent/agent/owner-native-build/OwnerNativeBuild") {
   static readonly production = {
-    get entry() {
-      return join(
-        dirname(runtimeRequire().resolve("memory-agent/package.json")),
-        "src/agent/native-artifact-entry.ts",
-      );
+    get manifest() {
+      return runtimeArtifact("artifact-manifest.json");
     },
   };
   static readonly layer = Layer.succeed(OwnerNativeBuild, OwnerNativeBuild.production);

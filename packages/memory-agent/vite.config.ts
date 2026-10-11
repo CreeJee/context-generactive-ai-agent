@@ -26,7 +26,10 @@ export default defineConfig({
   run: {
     tasks: {
       // turbovec's addon is built first: the vector index and its tests load it.
-      build: { command: "vp pack", dependsOn: [{ task: "build", from: "dependencies" }] },
+      build: {
+        command: "vp pack && node scripts/build-runtime-artifacts.ts",
+        dependsOn: [{ task: "build", from: "dependencies" }],
+      },
       test: {
         command: "vp test --maxWorkers=4",
         dependsOn: [{ task: "build", from: "dependencies" }],

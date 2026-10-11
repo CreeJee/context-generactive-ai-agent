@@ -24,13 +24,13 @@ export function loader({ request }: Route.LoaderArgs) {
       if (itemId !== null) {
         if (!(itemId.length > 0) || itemId.length > 256)
           return Response.json({ error: "project_session_item_required" }, { status: 400 });
-        return yield* Effect.gen(function* () {
+        {
           const { sqlite } = yield* Database;
           return reportEvidenceItemResponse(sqlite, request);
-        });
+        }
       }
 
-      return yield* Effect.gen(function* () {
+      {
         const { sqlite } = yield* Database;
         const trace = yield* WorkTraceStore;
         return reportEvidenceResponse(sqlite, request, (id) =>
@@ -46,7 +46,7 @@ export function loader({ request }: Route.LoaderArgs) {
               updatedAt: task.updatedAt,
             })),
         );
-      });
+      }
     }),
   );
 }

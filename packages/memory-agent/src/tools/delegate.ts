@@ -1,5 +1,4 @@
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
+import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import { isTruthy } from "../truthy.ts";
 import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
 import { Context, Effect, Layer, Schema } from "effect";
@@ -68,13 +67,13 @@ const make = Effect.gen(function* () {
 
   return {
     /** delegate_to_agent for a run, or nothing when no external agent is trusted in the project. */
-    forRun(
+    forRun: Effect.fn("DelegateTools.forRun")(function* (
       project: Project,
       sessionId: string,
       signal: AbortSignal,
       runId: string = randomUUID(),
-    ): DelegateToolset {
-      const available = agents.available(project);
+    ): Effect.fn.Return<DelegateToolset> {
+      const available = yield* agents.available(project);
       if (available.length === 0) return { tools: [], instructions: null };
       const delegate = toolDefinition({
         name: delegateToolName,
@@ -95,6 +94,7 @@ const make = Effect.gen(function* () {
                   askPermission: (request) =>
                     relayed.ask(
                       sessionId,
+                      runId,
                       {
                         requester: { kind: "external_agent", agent },
                         toolName: request.toolCall.title ?? "external tool",
@@ -126,7 +126,7 @@ const make = Effect.gen(function* () {
         ),
       );
       return { tools: [delegate], instructions: delegateInstructions(available) };
-    },
+    }),
   };
 });
 

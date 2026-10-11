@@ -1,7 +1,6 @@
 import { HashSet } from "effect";
 import { Function as EffectFunction } from "effect";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { isAbsolute, resolve } from "node:path";
+import { oauthProtocolPath } from "../oauth/node-runtime.ts";
 import { optionalProperty } from "../optional-property.ts";
 import {
   HashMap,
@@ -406,7 +405,7 @@ function validateSandbox(
       return Result.fail(
         new ProviderToolSandboxViolation({ toolId: tool.id, reason: "trusted_profile_required" }),
       );
-    if (isAbsolute(request.path))
+    if (oauthProtocolPath.isAbsolute(request.path))
       return Result.fail(
         new ProviderToolPathViolation({
           toolId: tool.id,
@@ -451,12 +450,19 @@ const trustedSandbox = (
   if (sandbox === undefined) return undefined;
   return Object.freeze({
     ...sandbox,
-    workspaceRoot: canonicalPath(resolve(sandbox.workspaceRoot)),
+    workspaceRoot: canonicalPath(oauthProtocolPath.resolve(sandbox.workspaceRoot)),
     allowedEnvironmentNames: Object.freeze([...sandbox.allowedEnvironmentNames]),
     limits: Object.freeze({ ...sandbox.limits }),
   });
 };
-export function makeProviderToolPolicy(
+export function makeProviderToolPolicy(options: {
+  readonly registry: ProviderToolCapabilityRegistry["Service"];
+  readonly config?: ProviderToolPolicyConfig | undefined;
+  readonly featureFlags?: ModelFeatureFlagsApi | undefined;
+}) {
+  return makeProviderToolPolicyBody(options.registry, options.config, options.featureFlags);
+}
+function makeProviderToolPolicyBody(
   registry: ProviderToolCapabilityRegistry["Service"],
   config: ProviderToolPolicyConfig = {},
   featureFlags?: ModelFeatureFlagsApi,
@@ -587,28 +593,30 @@ export class ProviderToolPolicy extends Context.Service<
   /** Production default: provider-hosted tools only; no local authority is granted. */
   static readonly layer = Layer.effect(
     ProviderToolPolicy,
-    Effect.map(ProviderToolCapabilityRegistry, (registry) => makeProviderToolPolicy(registry)),
+    Effect.map(ProviderToolCapabilityRegistry, (registry) =>
+      makeProviderToolPolicy({ registry: registry }),
+    ),
   );
   /** Production flag-aware policy. Both model exposure and execution revalidation read fresh flags. */
   static readonly featureFlagLayer = Layer.effect(
     ProviderToolPolicy,
     Effect.gen(function* () {
-      return makeProviderToolPolicy(
-        yield* ProviderToolCapabilityRegistry,
-        {},
-        yield* ModelFeatureFlags,
-      );
+      return makeProviderToolPolicy({
+        registry: yield* ProviderToolCapabilityRegistry,
+        config: {},
+        featureFlags: yield* ModelFeatureFlags,
+      });
     }),
   );
   static readonly featureFlagLayerWithConfig = (config: ProviderToolPolicyConfig) =>
     Layer.effect(
       ProviderToolPolicy,
       Effect.gen(function* () {
-        return makeProviderToolPolicy(
-          yield* ProviderToolCapabilityRegistry,
-          config,
-          yield* ModelFeatureFlags,
-        );
+        return makeProviderToolPolicy({
+          registry: yield* ProviderToolCapabilityRegistry,
+          config: config,
+          featureFlags: yield* ModelFeatureFlags,
+        });
       }),
     );
   /** Construct a policy Layer from trusted server configuration. */
@@ -616,7 +624,7 @@ export class ProviderToolPolicy extends Context.Service<
     Layer.effect(
       ProviderToolPolicy,
       Effect.map(ProviderToolCapabilityRegistry, (registry) =>
-        makeProviderToolPolicy(registry, config),
+        makeProviderToolPolicy({ registry: registry, config: config }),
       ),
     );
   static readonly layerFrom = (service: ProviderToolPolicyApi) =>
@@ -799,7 +807,13 @@ const numberRecord = (value: unknown): Readonly<Record<string, number>> | undefi
   return entries.length === 0 ? undefined : Object.freeze(Object.fromEntries(entries));
 };
 /** Normalize reported values only; never estimate absent tokens or cost. */
-export function normalizeProviderToolUsage(
+export function normalizeProviderToolUsage(options: {
+  readonly raw: unknown;
+  readonly attribution?: ProviderToolUsageAttribution | undefined;
+}) {
+  return normalizeProviderToolUsageBody(options.raw, options.attribution);
+}
+function normalizeProviderToolUsageBody(
   raw: unknown,
   attribution?: ProviderToolUsageAttribution,
 ): ProviderToolUsage | undefined {
@@ -904,12 +918,15 @@ const runtimeEnvelope = <Raw>(
     unknownKind: result.kind !== undefined && !HashMap.has(providerStatus, result.kind),
     ...optionalProperty(
       "usage",
-      normalizeProviderToolUsage(result.usage, {
-        provider: descriptor.provider,
-        model: request.policy.model,
-        accountId: request.accountId,
-        toolId: descriptor.id,
-        runId: request.runId,
+      normalizeProviderToolUsage({
+        raw: result.usage,
+        attribution: {
+          provider: descriptor.provider,
+          model: request.policy.model,
+          accountId: request.accountId,
+          toolId: descriptor.id,
+          runId: request.runId,
+        },
       }),
     ),
     ...optionalProperty("cost", normalizeProviderToolCost(result.cost)),

@@ -1,8 +1,8 @@
 import { Array as EffectArray, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
-import { Clock, Context, Data, Effect, Layer, Schema } from "effect";
+import { NodeCrypto } from "@effect/platform-node";
+import { Clock, Context, Crypto, Data, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import { Nodes } from "./nodes.ts";
 
@@ -144,6 +144,8 @@ export class MemoryPromotionRejected extends Data.TaggedError("MemoryPromotionRe
 
 const make = Effect.gen(function* () {
   const effectClock = yield* Clock.Clock;
+  const crypto = yield* Crypto.Crypto;
+  const runSync = Effect.runSyncWith(yield* Effect.context<never>());
 
   const { sqlite, atomic } = yield* Database;
   const nodes = yield* Nodes;
@@ -249,8 +251,8 @@ const make = Effect.gen(function* () {
           status,
         );
         if (isTruthy(found)) return candidateByDecision(decodeExisting(found).id);
-        const decisionId = randomUUID();
-        const candidateId = randomUUID();
+        const decisionId = runSync(crypto.randomUUIDv4());
+        const candidateId = runSync(crypto.randomUUIDv4());
         const createdAt = effectClock.currentTimeMillisUnsafe();
         const memoryNode =
           status === "saved" || status === "edited_saved"
@@ -323,7 +325,7 @@ const make = Effect.gen(function* () {
       VALUES (?, ?, ?, ?, ?, ?, NULL, 'retrieved', ?)`);
       for (const candidate of candidates)
         insert.run(
-          randomUUID(),
+          runSync(crypto.randomUUIDv4()),
           input.projectId,
           candidate.id,
           candidate.memory_node_id,
@@ -357,7 +359,7 @@ const make = Effect.gen(function* () {
       VALUES (?, ?, ?, ?, ?, ?, ?, 'used', ?)`);
       for (const candidate of candidates)
         insert.run(
-          randomUUID(),
+          runSync(crypto.randomUUIDv4()),
           input.projectId,
           candidate.id,
           candidate.memory_node_id,
@@ -397,5 +399,7 @@ export class KnowledgePromotions extends Context.Service<
   KnowledgePromotions,
   Effect.Success<typeof make>
 >()("memory-agent/memory/knowledge/KnowledgePromotions") {
-  static readonly layer = Layer.effect(KnowledgePromotions, make);
+  static readonly layer = Layer.effect(KnowledgePromotions, make).pipe(
+    Layer.provide(NodeCrypto.layer),
+  );
 }

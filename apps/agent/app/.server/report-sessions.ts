@@ -19,7 +19,7 @@ export const openReportSession = Effect.fn("openReportSession")(function* (
   projectId: string,
   sourceSessionId: string,
 ) {
-  const id = yield* (yield* Crypto.Crypto).randomUUIDv4;
+  const id = yield* (yield* Crypto.Crypto).randomUUIDv4();
   const createdAt = DateTime.formatIso(yield* DateTime.now);
   return yield* Effect.try({
     try: (): ReportSessionBinding | null => {

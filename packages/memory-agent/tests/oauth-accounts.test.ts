@@ -113,8 +113,8 @@ describe("OAuth per-profile secret storage and non-destructive migration", () =>
           }
         }
         expect(MutableHashMap.size(profileSecrets)).toBe(4);
-        expect(yield* serialize(listOAuthProfiles(sqlite))).not.toContain("access-");
-        expect(yield* serialize(listOAuthProfiles(sqlite))).not.toContain("refresh-");
+        expect(yield* serialize(listOAuthProfiles({ sqlite: sqlite }))).not.toContain("access-");
+        expect(yield* serialize(listOAuthProfiles({ sqlite: sqlite }))).not.toContain("refresh-");
       } finally {
         sqlite.close();
       }
@@ -129,7 +129,12 @@ describe("OAuth per-profile secret storage and non-destructive migration", () =>
         try {
           yield* call(() => legacy.write(provider, token(provider)));
           const imported = yield* call(() =>
-            importLegacyOAuthProfile(sqlite, provider, accounts, legacy),
+            importLegacyOAuthProfile({
+              sqlite: sqlite,
+              provider: provider,
+              accounts: accounts,
+              legacy: legacy,
+            }),
           );
           expect(imported).toMatchObject({ id: `legacy-${provider}`, provider, selected: true });
           expect(yield* call(() => accounts.read(provider, `legacy-${provider}`))).toEqual(
@@ -137,9 +142,16 @@ describe("OAuth per-profile secret storage and non-destructive migration", () =>
           );
           expect(yield* call(() => legacy.read(provider))).toEqual(token(provider));
           expect(
-            yield* call(() => importLegacyOAuthProfile(sqlite, provider, accounts, legacy)),
+            yield* call(() =>
+              importLegacyOAuthProfile({
+                sqlite: sqlite,
+                provider: provider,
+                accounts: accounts,
+                legacy: legacy,
+              }),
+            ),
           ).toEqual(imported);
-          expect(listOAuthProfiles(sqlite, provider)).toHaveLength(1);
+          expect(listOAuthProfiles({ sqlite: sqlite, provider: provider })).toHaveLength(1);
           expect(MutableHashMap.size(legacySecrets)).toBe(1);
         } finally {
           sqlite.close();
@@ -160,10 +172,16 @@ describe("OAuth per-profile secret storage and non-destructive migration", () =>
             remove: () => Promise.reject(new Error("must not delete")),
           }));
           yield* rejects(
-            () => importLegacyOAuthProfile(sqlite, "openai", failed, legacy),
+            () =>
+              importLegacyOAuthProfile({
+                sqlite: sqlite,
+                provider: "openai",
+                accounts: failed,
+                legacy: legacy,
+              }),
             "disk unavailable",
           );
-          expect(listOAuthProfiles(sqlite)).toEqual([]);
+          expect(listOAuthProfiles({ sqlite: sqlite })).toEqual([]);
           expect(yield* call(() => legacy.read("openai"))).toEqual(token("original"));
           const noReadback = createProfileCredentialStore(() => ({
             read: () => Promise.resolve(null),
@@ -171,12 +189,25 @@ describe("OAuth per-profile secret storage and non-destructive migration", () =>
             remove: () => Promise.reject(new Error("must not delete")),
           }));
           yield* rejects(
-            () => importLegacyOAuthProfile(sqlite, "openai", noReadback, legacy),
+            () =>
+              importLegacyOAuthProfile({
+                sqlite: sqlite,
+                provider: "openai",
+                accounts: noReadback,
+                legacy: legacy,
+              }),
             "oauth_profile_copy_unverified",
           );
-          expect(listOAuthProfiles(sqlite)).toEqual([]);
+          expect(listOAuthProfiles({ sqlite: sqlite })).toEqual([]);
           expect(
-            yield* call(() => importLegacyOAuthProfile(sqlite, "openai", accounts, legacy)),
+            yield* call(() =>
+              importLegacyOAuthProfile({
+                sqlite: sqlite,
+                provider: "openai",
+                accounts: accounts,
+                legacy: legacy,
+              }),
+            ),
           ).toMatchObject({
             selected: true,
           });
@@ -201,29 +232,49 @@ describe("OAuth per-profile secret storage and non-destructive migration", () =>
           sqlite.exec(oauthSchema);
           for (const provider of providers) {
             yield* call(() => legacy.write(provider, token(`original-${provider}`)));
-            yield* call(() => importLegacyOAuthProfile(sqlite, provider, accounts, legacy));
+            yield* call(() =>
+              importLegacyOAuthProfile({
+                sqlite: sqlite,
+                provider: provider,
+                accounts: accounts,
+                legacy: legacy,
+              }),
+            );
             for (const suffix of [1, 2]) {
               const id = `00000000-0000-4000-8000-${String((provider === "openai" ? 0 : 2) + suffix).padStart(12, "0")}`;
               yield* call(() => accounts.write(provider, id, token(`${provider}-${suffix}`)));
               expect(
                 yield* call(() =>
-                  publishOAuthProfile(sqlite, provider, id, `계정 ${suffix}`, accounts),
+                  publishOAuthProfile({
+                    sqlite: sqlite,
+                    provider: provider,
+                    id: id,
+                    label: `계정 ${suffix}`,
+                    accounts: accounts,
+                  }),
                 ),
               ).toMatchObject({ selected: false });
             }
           }
-          expect(listOAuthProfiles(sqlite, "openai").find((p) => p.selected)?.id).toBe(
-            "legacy-openai",
-          );
-          const chosen = "00000000-0000-4000-8000-000000000002";
-          yield* call(() => selectOAuthProfile(sqlite, "openai", chosen, accounts));
           expect(
-            listOAuthProfiles(sqlite, "openai")
+            listOAuthProfiles({ sqlite: sqlite, provider: "openai" }).find((p) => p.selected)?.id,
+          ).toBe("legacy-openai");
+          const chosen = "00000000-0000-4000-8000-000000000002";
+          yield* call(() =>
+            selectOAuthProfile({
+              sqlite: sqlite,
+              provider: "openai",
+              id: chosen,
+              accounts: accounts,
+            }),
+          );
+          expect(
+            listOAuthProfiles({ sqlite: sqlite, provider: "openai" })
               .filter((p) => p.selected)
               .map((p) => p.id),
           ).toEqual([chosen]);
           expect(
-            listOAuthProfiles(sqlite, "anthropic")
+            listOAuthProfiles({ sqlite: sqlite, provider: "anthropic" })
               .filter((p) => p.selected)
               .map((p) => p.id),
           ).toEqual(["legacy-anthropic"]);
@@ -232,11 +283,13 @@ describe("OAuth per-profile secret storage and non-destructive migration", () =>
           const reopened = yield* scopedSqlite(path);
           try {
             expect(
-              listOAuthProfiles(reopened, "openai")
+              listOAuthProfiles({ sqlite: reopened, provider: "openai" })
                 .filter((p) => p.selected)
                 .map((p) => p.id),
             ).toEqual([chosen]);
-            expect(yield* serialize(listOAuthProfiles(reopened))).not.toContain("access-");
+            expect(yield* serialize(listOAuthProfiles({ sqlite: reopened }))).not.toContain(
+              "access-",
+            );
           } finally {
             reopened.close();
           }
@@ -254,31 +307,76 @@ describe("OAuth per-profile secret storage and non-destructive migration", () =>
         const id = "00000000-0000-4000-8000-000000000001";
         try {
           yield* call(() => legacy.write("openai", token("original")));
-          yield* call(() => importLegacyOAuthProfile(sqlite, "openai", accounts, legacy));
+          yield* call(() =>
+            importLegacyOAuthProfile({
+              sqlite: sqlite,
+              provider: "openai",
+              accounts: accounts,
+              legacy: legacy,
+            }),
+          );
           yield* rejects(
-            () => publishOAuthProfile(sqlite, "openai", id, "unverified", accounts),
+            () =>
+              publishOAuthProfile({
+                sqlite: sqlite,
+                provider: "openai",
+                id: id,
+                label: "unverified",
+                accounts: accounts,
+              }),
             "missing_credential",
           );
           yield* call(() => accounts.write("openai", id, token("new")));
           yield* rejects(
-            () => publishOAuthProfile(sqlite, "openai", id, " ", accounts),
+            () =>
+              publishOAuthProfile({
+                sqlite: sqlite,
+                provider: "openai",
+                id: id,
+                label: " ",
+                accounts: accounts,
+              }),
             "invalid_oauth_profile",
           );
-          yield* call(() => publishOAuthProfile(sqlite, "openai", id, "새 계정", accounts));
+          yield* call(() =>
+            publishOAuthProfile({
+              sqlite: sqlite,
+              provider: "openai",
+              id: id,
+              label: "새 계정",
+              accounts: accounts,
+            }),
+          );
           expect(renameOAuthProfile(sqlite, "openai", id, "  두 번째  ").label).toBe("두 번째");
           expect(() => renameOAuthProfile(sqlite, "anthropic", id, "가짜")).toThrow("not_found");
-          expect(listOAuthProfiles(sqlite, "openai").find((p) => p.id === id)?.label).toBe(
-            "두 번째",
+          expect(
+            listOAuthProfiles({ sqlite: sqlite, provider: "openai" }).find((p) => p.id === id)
+              ?.label,
+          ).toBe("두 번째");
+          yield* rejects(
+            () =>
+              selectOAuthProfile({
+                sqlite: sqlite,
+                provider: "anthropic",
+                id: id,
+                accounts: accounts,
+              }),
+            "not_found",
           );
-          yield* rejects(() => selectOAuthProfile(sqlite, "anthropic", id, accounts), "not_found");
           yield* call(() => accounts.remove("openai", id));
           yield* rejects(
-            () => selectOAuthProfile(sqlite, "openai", id, accounts),
+            () =>
+              selectOAuthProfile({
+                sqlite: sqlite,
+                provider: "openai",
+                id: id,
+                accounts: accounts,
+              }),
             "missing_credential",
           );
-          expect(listOAuthProfiles(sqlite, "openai").find((p) => p.selected)?.id).toBe(
-            "legacy-openai",
-          );
+          expect(
+            listOAuthProfiles({ sqlite: sqlite, provider: "openai" }).find((p) => p.selected)?.id,
+          ).toBe("legacy-openai");
         } finally {
           sqlite.close();
         }
@@ -293,30 +391,74 @@ describe("OAuth per-profile secret storage and non-destructive migration", () =>
         try {
           for (const provider of providers) {
             yield* call(() => legacy.write(provider, token(`original-${provider}`)));
-            yield* call(() => importLegacyOAuthProfile(sqlite, provider, accounts, legacy));
+            yield* call(() =>
+              importLegacyOAuthProfile({
+                sqlite: sqlite,
+                provider: provider,
+                accounts: accounts,
+                legacy: legacy,
+              }),
+            );
           }
           const first = "00000000-0000-4000-8000-000000000001";
           const second = "00000000-0000-4000-8000-000000000002";
           yield* call(() => accounts.write("openai", first, token("first")));
           yield* call(() => accounts.write("openai", second, token("second")));
-          yield* call(() => publishOAuthProfile(sqlite, "openai", first, "first", accounts));
-          yield* call(() => publishOAuthProfile(sqlite, "openai", second, "second", accounts));
-          yield* call(() => selectOAuthProfile(sqlite, "openai", second, accounts));
+          yield* call(() =>
+            publishOAuthProfile({
+              sqlite: sqlite,
+              provider: "openai",
+              id: first,
+              label: "first",
+              accounts: accounts,
+            }),
+          );
+          yield* call(() =>
+            publishOAuthProfile({
+              sqlite: sqlite,
+              provider: "openai",
+              id: second,
+              label: "second",
+              accounts: accounts,
+            }),
+          );
+          yield* call(() =>
+            selectOAuthProfile({
+              sqlite: sqlite,
+              provider: "openai",
+              id: second,
+              accounts: accounts,
+            }),
+          );
           yield* rejects(
-            () => removeOAuthProfile(sqlite, "anthropic", second, accounts, legacy),
+            () =>
+              removeOAuthProfile({
+                sqlite: sqlite,
+                provider: "anthropic",
+                id: second,
+                accounts: accounts,
+                legacy: legacy,
+              }),
             "not_found",
           );
           const remaining = yield* call(() =>
-            removeOAuthProfile(sqlite, "openai", second, accounts, legacy),
+            removeOAuthProfile({
+              sqlite: sqlite,
+              provider: "openai",
+              id: second,
+              accounts: accounts,
+              legacy: legacy,
+            }),
           );
           expect(remaining.some((profile) => profile.id === second)).toBe(false);
           expect(remaining.filter((profile) => profile.selected)).toHaveLength(1);
           expect(yield* call(() => accounts.read("openai", first))).toEqual(token("first"));
           expect(yield* call(() => accounts.read("openai", second))).toBeNull();
           expect(yield* call(() => legacy.read("openai"))).toEqual(token("original-openai"));
-          expect(listOAuthProfiles(sqlite, "anthropic").find((p) => p.selected)?.id).toBe(
-            "legacy-anthropic",
-          );
+          expect(
+            listOAuthProfiles({ sqlite: sqlite, provider: "anthropic" }).find((p) => p.selected)
+              ?.id,
+          ).toBe("legacy-anthropic");
         } finally {
           sqlite.close();
         }
@@ -330,30 +472,64 @@ describe("OAuth per-profile secret storage and non-destructive migration", () =>
         const { sqlite, legacy, accounts } = yield* fixture();
         try {
           yield* call(() => legacy.write("openai", token("original")));
-          yield* call(() => importLegacyOAuthProfile(sqlite, "openai", accounts, legacy));
+          yield* call(() =>
+            importLegacyOAuthProfile({
+              sqlite: sqlite,
+              provider: "openai",
+              accounts: accounts,
+              legacy: legacy,
+            }),
+          );
           const failed: CredentialStore = {
             read: (provider) => legacy.read(provider),
             write: (provider, value) => legacy.write(provider, value),
             remove: () => Promise.reject(new Error("vault unavailable")),
           };
           yield* rejects(
-            () => removeOAuthProfile(sqlite, "openai", "legacy-openai", accounts, failed),
+            () =>
+              removeOAuthProfile({
+                sqlite: sqlite,
+                provider: "openai",
+                id: "legacy-openai",
+                accounts: accounts,
+                legacy: failed,
+              }),
             "vault unavailable",
           );
           expect(
-            yield* call(() => importLegacyOAuthProfile(sqlite, "openai", accounts, legacy)),
+            yield* call(() =>
+              importLegacyOAuthProfile({
+                sqlite: sqlite,
+                provider: "openai",
+                accounts: accounts,
+                legacy: legacy,
+              }),
+            ),
           ).toBeNull();
           expect(yield* call(() => legacy.read("openai"))).toEqual(token("original"));
-          expect(listOAuthProfiles(sqlite, "openai")).toHaveLength(1);
+          expect(listOAuthProfiles({ sqlite: sqlite, provider: "openai" })).toHaveLength(1);
           expect(
             yield* call(() =>
-              removeOAuthProfile(sqlite, "openai", "legacy-openai", accounts, legacy),
+              removeOAuthProfile({
+                sqlite: sqlite,
+                provider: "openai",
+                id: "legacy-openai",
+                accounts: accounts,
+                legacy: legacy,
+              }),
             ),
           ).toEqual([]);
           expect(yield* call(() => legacy.read("openai"))).toBeNull();
           expect(yield* call(() => accounts.read("openai", "legacy-openai"))).toBeNull();
           expect(
-            yield* call(() => importLegacyOAuthProfile(sqlite, "openai", accounts, legacy)),
+            yield* call(() =>
+              importLegacyOAuthProfile({
+                sqlite: sqlite,
+                provider: "openai",
+                accounts: accounts,
+                legacy: legacy,
+              }),
+            ),
           ).toBeNull();
         } finally {
           sqlite.close();
@@ -368,10 +544,22 @@ describe("OAuth per-profile secret storage and non-destructive migration", () =>
         const { sqlite, legacy, accounts } = yield* fixture();
         try {
           yield* call(() => legacy.write("openai", token("original")));
-          yield* call(() => importLegacyOAuthProfile(sqlite, "openai", accounts, legacy));
+          yield* call(() =>
+            importLegacyOAuthProfile({
+              sqlite: sqlite,
+              provider: "openai",
+              accounts: accounts,
+              legacy: legacy,
+            }),
+          );
           yield* call(() => accounts.remove("openai", "legacy-openai"));
           const restored = yield* call(() =>
-            importLegacyOAuthProfile(sqlite, "openai", accounts, legacy),
+            importLegacyOAuthProfile({
+              sqlite: sqlite,
+              provider: "openai",
+              accounts: accounts,
+              legacy: legacy,
+            }),
           );
           expect(restored).toMatchObject({ id: "legacy-openai", selected: true });
           expect(yield* call(() => accounts.read("openai", "legacy-openai"))).toEqual(
@@ -391,14 +579,20 @@ describe("OAuth per-profile secret storage and non-destructive migration", () =>
         yield* call(() => legacy.write("anthropic", token("legacy")));
         yield* call(() => accounts.write("anthropic", "legacy-anthropic", token("different")));
         yield* rejects(
-          () => importLegacyOAuthProfile(sqlite, "anthropic", accounts, legacy),
+          () =>
+            importLegacyOAuthProfile({
+              sqlite: sqlite,
+              provider: "anthropic",
+              accounts: accounts,
+              legacy: legacy,
+            }),
           "oauth_profile_conflicting_credential",
         );
         expect(yield* call(() => accounts.read("anthropic", "legacy-anthropic"))).toEqual(
           token("different"),
         );
         expect(yield* call(() => legacy.read("anthropic"))).toEqual(token("legacy"));
-        expect(listOAuthProfiles(sqlite)).toEqual([]);
+        expect(listOAuthProfiles({ sqlite: sqlite })).toEqual([]);
       } finally {
         sqlite.close();
       }

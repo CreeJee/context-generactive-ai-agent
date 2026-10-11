@@ -14,7 +14,9 @@ import {
 // prompt it receives to $FAKE_ACP_LOG.slow. While
 // $FAKE_ACP_REFUSE names an existing file, it exits at once, so connection attempts fail.
 import { NodeFileSystem } from "@effect/platform-node";
-import { Readable, Writable } from "node:stream";
+import { NodeStream, NodeSink } from "@effect/platform-node";
+import { SdkStreams } from "../../src/acp/web-streams.ts";
+import { Cause as StreamCause, Context, Stream } from "effect";
 import * as acp from "@agentclientprotocol/sdk";
 
 const services = await Effect.runPromise(Effect.scoped(Layer.build(NodeFileSystem.layer)));
@@ -52,6 +54,34 @@ const say = (client: acp.AgentContext, sessionId: string, text: string) =>
     update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
   });
 
+const { readable, writable } = await Effect.runPromise(
+  Effect.scoped(
+    Effect.map(
+      Layer.build(
+        SdkStreams.layer({
+          input: NodeStream.fromReadable({
+            evaluate: () => process.stdin,
+            onError: (cause) => new StreamCause.UnknownError(cause),
+          }),
+          output: NodeSink.fromWritable({
+            evaluate: () => process.stdout,
+            onError: (cause) => new StreamCause.UnknownError(cause),
+            endOnDone: false,
+          }),
+          closeOutput: Stream.run(
+            Stream.empty,
+            NodeSink.fromWritable({
+              evaluate: () => process.stdout,
+              onError: (cause) => new StreamCause.UnknownError(cause),
+              endOnDone: true,
+            }),
+          ),
+        }),
+      ),
+      (context) => Context.get(context, SdkStreams),
+    ),
+  ),
+);
 acp
   .agent({ name: "fake-external" })
   .onRequest(acp.methods.agent.initialize, () => ({
@@ -146,7 +176,7 @@ acp
   .onNotification(acp.methods.agent.session.cancel, (ctx) => {
     MutableHashSet.add(cancelled, ctx.params.sessionId);
   })
-  .connect(acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin)));
+  .connect(acp.ndJsonStream(writable, readable));
 
 const sdkCall = Effect.fn("FakeAcp.sdkCall")(<A>(call: () => A | PromiseLike<A>) =>
   Effect.tryPromise({

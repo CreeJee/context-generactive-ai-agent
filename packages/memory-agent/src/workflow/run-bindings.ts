@@ -2,6 +2,7 @@ import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { DateTime, Schema } from "effect";
 import type { DatabaseSync } from "node:sqlite";
+import { recoveredReadRunSql } from "../agent/owner-read-recovery.ts";
 
 type OwnerDatabase = {
   readonly sqlite: DatabaseSync;
@@ -41,14 +42,19 @@ export function workflowRunBindings({ sqlite, atomic }: OwnerDatabase) {
   const previous = sqlite.prepare(`
     SELECT b.run_id FROM workflow_run_bindings b
     LEFT JOIN chat_runs r ON r.run_id = b.run_id
-    WHERE b.session_id = ? AND (r.status IS NULL OR r.status <> 'completed') LIMIT 1
+    WHERE b.session_id = ? AND (r.status IS NULL OR (r.status <> 'completed' AND NOT (
+      ${recoveredReadRunSql("r")} OR r.status = 'interrupted' AND EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id)
+      AND (r.run_id = ? OR NOT EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id AND i.status = 'pending'))
+    ))) LIMIT 1
   `);
   const unresolved = sqlite.prepare(`
     SELECT operations.operation_id FROM owner_rpc_operations AS operations
     JOIN workflow_run_bindings AS binding ON binding.run_id = operations.run_id
+    LEFT JOIN chat_runs r ON r.run_id = binding.run_id
     WHERE binding.session_id = ? AND binding.goal_instance_id = ?
       AND (operations.status = 'pending'
-        OR (operations.side_effect = 1 AND operations.status <> 'succeeded')) LIMIT 1
+        OR (operations.side_effect = 1 AND operations.status <> 'succeeded'))
+      AND NOT ${recoveredReadRunSql("r")} LIMIT 1
   `);
   const claimed = sqlite.prepare("SELECT run_id FROM workflow_run_bindings WHERE run_id = ?");
   const insert = sqlite.prepare(`
@@ -56,7 +62,13 @@ export function workflowRunBindings({ sqlite, atomic }: OwnerDatabase) {
       (run_id, session_id, goal_instance_id, goal_version, plan_version, workflow_revision_id, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
-  const bind = (sessionId: string, runId: string, expectedRevisionId: number): Admission =>
+  const bind = (
+    sessionId: string,
+    runId: string,
+    expectedRevisionId: number,
+    resumeRunId?: string,
+    mode: "commit" | "preview" = "commit",
+  ): Admission =>
     atomic(() => {
       // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
       const goal = EffectFunction.flow(
@@ -95,19 +107,25 @@ export function workflowRunBindings({ sqlite, atomic }: OwnerDatabase) {
       // bindings for this Goal, including older Goal/Plan versions, before admission.
       // Pending reads may still settle; uncertain reads alone cannot replay an effect.
       if (
-        isTruthy(previous.get(sessionId)) ||
+        isTruthy(previous.get(sessionId, resumeRunId ?? "")) ||
         isTruthy(unresolved.get(sessionId, goal.goal_instance_id))
       )
         return { status: "refused", reason: "run_outcome_uncertain" };
-      insert.run(
-        runId,
-        sessionId,
-        goal.goal_instance_id,
-        state.goal_version,
-        state.plan_version,
-        state.id,
-        DateTime.formatIso(DateTime.nowUnsafe()),
-      );
+      switch (mode) {
+        case "commit":
+          insert.run(
+            runId,
+            sessionId,
+            goal.goal_instance_id,
+            state.goal_version,
+            state.plan_version,
+            state.id,
+            DateTime.formatIso(DateTime.nowUnsafe()),
+          );
+          break;
+        case "preview":
+          break;
+      }
       return {
         status: "bound",
         binding: {
@@ -120,5 +138,9 @@ export function workflowRunBindings({ sqlite, atomic }: OwnerDatabase) {
         },
       };
     });
-  return { bind };
+  return {
+    bind,
+    preview: (sessionId: string, runId: string, revisionId: number) =>
+      bind(sessionId, runId, revisionId, undefined, "preview"),
+  };
 }

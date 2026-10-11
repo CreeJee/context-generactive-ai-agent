@@ -1,3 +1,139 @@
+## SQLite lock regression coverage (2026-10-10 UTC)
+
+- Keep the original subagent parent-cancellation and restart-recovery integration test. It exercises the production memory-agent Layer with a real temporary SQLite database and fake providers; it is not a Rust implementation-only test.
+- Evaluate the Node SQLite API-table bridge with an offline, locked Cargo build in a temporary target directory. Test-only module resolution selects the temporary addon without replacing the checkout addon or restarting a user's server. The final Mac SEA package passed startup/core APIs/reopen/exit-0 checks outside the checkout without Node/compiler on PATH; unpacked artifact search/Goal regressions also passed. Windows packaging remains a CI verification item, and no installation or deployment is implied.
+- Preserve SQLite locking and WAL visibility. Diagnostic stress coverage supplements actual MemorySearch and runtime reopen coverage rather than replacing that contract with bundled-Rust unit tests.
+
+## Configurable dev and Goal settlement boundaries (2026-10-10 UTC)
+
+- Dev accepts CLI backend/web ports, storage and manifest paths, with CLI values taking precedence over environment defaults. Readiness requires the matching build ID and `status: ready`; frontend HMR remains enabled and backend changes require an explicit rebuild/restart. Isolated verification uses temporary storage and alternate ports, leaving existing servers and user sessions alone.
+- Goal source generation identifies both the Goal and worker build bytes. The separate worker hash verifies bytes; identical worker builds in different Goals must not collide with the database's globally unique generation constraint. Previously saved content-hash pins remain verifiable and are not rewritten.
+- New-Goal intent admission excludes only the calling run's pending RPC; uncertain effects remain refused. Applying the intent after termination rechecks all owner receipts without that exclusion.
+- Criterion mappings from a running recorder are proposals, not completion snapshots. Only after successful SDK and durable Goal settlement does the owner revalidate versions, node ownership/success, dispatch identity and all operation receipts to publish completion evidence. Failed or uncertain runs cannot complete the Goal.
+- Worker approval continuation requires owner persistence. The SDK validates the stored complete interrupt batch and original response schemas; only its owner-validated approval Map authorizes pending calls. A resolved pause is distinct from a crash and does not replay completed tools or fabricate success for the interrupted run.
+- A definite read-tool error crosses the RPC as a tagged failed result and retains `ok: false`; it does not become an uncertain side effect. Write/provider failures still use the conservative uncertainty gate.
+- Native SQLite read sessions close explicitly before worker teardown. The owner awaits a close acknowledgement before termination, with a bounded fallback for a failed worker. This makes SQLite and N-API resource lifetime explicit across runtime reopen. Scope-owned test runtimes close before temporary storage is removed. Parallel and serial stress runs still produced a SQLite WAL/SHM SIGBUS on macOS; this lifetime change alone is not evidence that the crash is resolved. The same-process Node SQLite/bundled rusqlite boundary requires further review; do not bypass locking or WAL visibility to force a green test.
+- Existing Effect diagnostic severity remains unchanged. Approved unstable API use is inventoried separately from ordinary TypeScript errors; it is not reported as a passing configured type check.
+
+## Effect execution admission and safe observability (2026-10-10 Asia/Seoul)
+
+- One process-scoped `ExecutionAdmission` service owns separate workflow, worker, model and tool gates. Each gate uses an active `Semaphore` plus a total-admitted `Semaphore`, so active work and queued waiters are both bounded. Configuration is validated from `CONTEXT_AGENT_{WORKFLOW,WORKER,MODEL,TOOL}_{CONCURRENCY,QUEUE_CAPACITY}`; invalid values fail Layer construction.
+- A full queue fails immediately with typed `ExecutionSaturated`. Workflow admission maps this to HTTP 503 before issuing a worker capability; full-loop workers hold a worker permit for their Scope, model `next()` calls hold model permits, and owner tool implementations hold tool permits. Interruption and Scope finalization release both permits exactly once.
+- Admission metrics expose only kind-tagged active, queued and saturation counts. Spans/logs contain kind, configured limits, queue depth and outcome; they do not include prompts, records, SQL, endpoints, capability tokens or credentials. Durable workflow execution IDs remain canonical derived hashes rather than raw session/run values.
+- The owner workflow engine continues to own live executions in scoped `FiberMap`s, keyed by derived execution ID, which is deterministically bound to session/run/Goal/revision. `onlyIfMissing` rejects duplicate run/timer fibers, and Scope shutdown interrupts and joins them structurally.
+- This migration adds no `Schedule` retry around workflow, model, tool, file, remote, or Goal-loop effects. Retrying an uncertain side effect remains forbidden. A future retry may be introduced only at an enumerated idempotent infrastructure boundary (database read/connect or pre-dispatch worker acquisition), with its stable key and exhaustion outcome documented first.
+
+## Build-time native and Goal-worker artifacts (2026-10-10 Asia/Seoul)
+
+- `memory-agent#build` produces `dist/runtime/native.mjs`, a self-contained `full-loop-worker.mjs`, and a canonical manifest with full SHA-256 hashes. Application packaging schema-decodes that manifest, verifies both files, and copies those exact bytes; startup and first Goal requests do not invoke Vite or transpile TypeScript.
+- The native artifact keeps the explicitly shared Effect/TanStack runtime imports and is evaluated from a scoped staging directory adjacent to the checkout/package runtime so those imports resolve to the owner's module identities. Its immutable bytes are copied once into owner storage under the artifact hash before an atomic Goal registration. Existing Goals load only their registered durable bytes, so a new application build cannot silently replace historical execution code.
+- The full-loop worker is bundled except for `node:` imports. A new Goal copies the verified build artifact into its durable Goal pin and records a Goal-specific manifest. `sourceGeneration` hashes the Goal ID and worker hash; the worker SHA-256 separately verifies file integrity. Cold adoption validates saved bytes and manifest without reading current build inputs, including earlier content-hash generation pins. Worker leases still prevent registry disposal while an OS worker is active.
+- Missing, malformed, corrupt, or mismatched manifests/artifacts are explicit startup or admission failures. There is no source-tree/SDK-tree capture, `.ts` worker fallback, runtime compiler, or legacy artifact fallback on these paths.
+
+## Durable approval, timer, and queue boundary (2026-10-10 Asia/Seoul)
+
+- Relayed subagent/external-agent permission waits are `RelayedApprovalExecution` Effect Workflows keyed by session, run, and random approval ID. The decision is a schema-typed `DurableDeferred`; answers are admitted only after the session/approval payload match, same-value duplicate completion is idempotent, and a conflicting duplicate is rejected.
+- Approval timeout is a durable `DurableClock` branch in a persisted `DurableDeferred.raceAll`. The owner engine now resumes pending executions when their workflow registers after restart. Once either approval or timeout completes the workflow, still-scheduled loser clocks are removed and their scoped timer fibers are interrupted.
+- Owner cancellation interrupts the bound workflow, removes it from the pending page view, and cancels its timer; it never turns cancellation into a durable denial. A process/layer restart without owner cancellation preserves and resumes the pending approval. No model, tool, file, remote API, or entire Goal loop is replayed to consume an answer automatically.
+- No production `DurableQueue` is enabled in this migration step. The installed queue is at-least-once, typed handler failures complete rather than retry, crash after a side effect can redeliver, and dead letters require an explicit requeue operator path. Current candidate work either includes model/remote effects, already has a different owner/recovery contract, or lacks a proven stable idempotency key plus dead-letter procedure. A future post-commit derived task may adopt it only with those proofs, bounded attempts, observation, and manual requeue documented first.
+
+## Goal full-loop transport: Effect Worker/RPC protocol boundary (2026-10-10 Asia/Seoul)
+
+- The production full-loop uses `@effect/platform-node` `NodeWorker`, `effect/workers` `Worker`/`SerializedWorker`, and `effect/rpc` `Rpc`/`RpcGroup`/`RpcMiddleware`. The old handwritten worker frame parser, pending-Promise resolver, and chunk-ack listener are no longer on this production path.
+- `RunFullLoop` is a schema-decoded streaming RPC. Its capability middleware compares the complete session/run/Goal/revision/generation/token tuple before the SDK loop runs. Transferable `MessagePort` schema carries a dedicated reverse owner-RPC channel; the reverse server still executes the existing owner ledger/admission checks, so RPC transport does not become a second authority or source of truth.
+- The MessagePort protocol adapter is project-owned and scoped: bounded inbound queue, typed close/message/overflow failures, structured-clone codec, transfer-list support, native RPC acknowledgements, and listener/port cleanup. `streamBufferSize: 0` keeps producer progress tied to consumer acknowledgement rather than adding an unbounded application buffer.
+- Worker and reverse-port protocol Layers live for the execution Scope, SDK interruption aborts its `AbortController`, and Scope finalization awaits actual worker termination before releasing owner asset hooks. A dispatched owner operation is never retried by the transport; the existing durable operation ledger reuses only succeeded receipts and stops pending/uncertain effects.
+- Goal worker pins copy the build-produced self-contained `.mjs`; its SHA-256 verifies bytes and a Goal/build hash identifies the source generation. They no longer capture protocol source files or SDK dependency trees on first request.
+
+## Async native memory search: Rust-owned request control safety repair (2026-10-08 Asia/Seoul)
+
+- The old SAB-brand validator could be bypassed by mutable JS intrinsics. Ordinary-path/GC/paired results below are historical, not proof of that unsafe boundary. Remove raw backing-store atomics, pointer-as-usize callbacks and all search-time run_script/JS clock dependency before public integration.
+- Register a Rust-owned request Arc with AtomicBool cancellation and Instant deadline before large host input validation/copy/queueing. Only bounded identity/budget conversion precedes registration. Native search and SQLite's progress callback consult the same Arc after transport/N-API conversion. Cancellation is a direct main-thread native atomic store; no second index/lease/writer and no same-worker cancel-message substitution.
+- A private host UUID seed plus a never-recycled native serial issues each capability. Bound owner/epoch/request and claim once. Reject duplicate active seeds, and a reissued seed cannot revive an old token. Cap registry at 4,096 live controls without an unbounded tombstone set. Effect acquireUseRelease and owner failure cleanup close every admitted control; callback-held Arc remains alive after host close. Keep active transport slots until actual completion.
+- Reject snapshot ID duplicates/noncanonical IDs. Duplicate [1,1] must not stand in for the omitted ID in index [1,2]; membership plus input length alone is insufficient. This verifies ID composition, not vector/text generation identity.
+- Explicitly clear SQLite progress hooks, rollback and confirm autocommit before a successful return. Cleanup failure permanently poisons that read connection and terminates the owner with read-failed; Drop only performs best-effort fallback. Original records/schema/persistent vector format remain unchanged.
+- Preserve nonpreemptible CPP admission and default-off. Native eight tests/release build and current ABI/worker/read/lifecycle tests pass. Actual cross-worker Rust-owned control: five cancel calls timestamped inside N-API windows all returned cancelled, 15 after-call writes returned success, with main GC in all 20 calls. This includes FFI conversion, not a scoring-midpoint/preemption proof.
+- Same WAL fixture and 13 alternating pairs matched channels/IDs/scores/coverage; warm medians: wall 34.424→25.704ms, main CPU 30.577→0.744ms, boundary worker CPU 1.163→24.658ms, SQL 55→10, input logical bytes 40,802→1,620. Raw evidence/source/addon fingerprints: native-search-rust-control-2026-10-08.json. Isolated boundary comparison, not production concurrent API/RSS/default qualification.
+- Read-only review found a source-derived host queue ABA: an old request's delayed finalizer could remove a newer job with the same request ID. Final cleanup now removes only the exact job reference, preserving caller ID reuse. Measurement samples precede only that host finalizer repair; native binary is unchanged and post-review host regression/fingerprint is separate. No experimental reproduction of that interleaving is claimed.
+
+## Historical pre-safety-repair boundary evidence (2026-10-08 Asia/Seoul)
+
+- A read-only review identified zero-content term arrays bypassing logical-byte admission and dispatch-to-native time missing from the read budget. Charge eight bytes per entry before host Schema decoding/copying; compute the absolute same-process hrtime deadline from invocation, overwrite caller deadline at dispatch, and sample Node hrtime inside the trusted N-API realm after argument conversion. Retain duration-only compatibility for direct ABI calls without that optional deadline. No wall-clock/Instant epoch comparison or CPP hard-preemption claim.
+- Failure envelopes are a separately fixed, empty-channel response; tiny requested output budgets bound successful payloads, not that error envelope or exact serialization bytes. Do not return partial success on budget failure.
+- Current repaired build passed seven-file TS format/lint/type, four TS files/seven tests, four native tests and release build. A deterministic SQLite interrupt exercised the actual ReadGuard, hook removal/rollback, writer update and a fresh subsequent snapshot. It does not replace a future in-flight SAB/whole search integration test.
+- One worker/index and a fixed temporary WAL fixture (10,002 candidates, 384dim/4bit/k48) produced exact IDs/scores/text/morph/coverage equality across 13 alternating pairs. Twelve warm pairs: wall median 33.805→25.981ms; main-thread CPU 30.551→0.533ms; SQL executions 55→10; reported logical request contents 40,802→1,620 bytes. Worker boundary CPU rises 1.183→24.954ms because SQL moves there; this is offload plus boundary elimination, not a pure engine speed claim.
+- Raw current-build evidence/fingerprints: `native-search-read-paired-2026-10-08.json`. This comparison deliberately keeps vector scoring in the same worker in both arms, so it isolates the candidate/SQL boundary and is not the old production main-thread/full-service baseline. First calls share caches; no OS-cold, concurrent API, RSS or default-activation conclusion. Native output logical bytes 1,291 remain bounded but use a different accounting than old JSON result bytes (902); do not compare them as exact wire-size gains. Broad FTS match work remains unbounded by top-k.
+- Step 04 boundary implementation/verification is ready; generation/publication and public MemorySearch policy integration remain step 05, full regression/activation remain steps 06–07. Existing default runtime, production storage and server are unchanged.
+
+## Async native memory search: read-only high-level primitive (2026-10-08 Asia/Seoul)
+
+- Added `MemoryReadSession` to the existing native extension, borrowing the same worker-owned index. Pin rusqlite 0.37.0 bundled/hooks; connection is read-only/query-only, one snapshot per call, no schema/persistent-format change and no independent writer.
+- Enumerate filtered candidate u64 IDs and call the original engine inside native; map bounded hits with one batch SQL query. Execute trigram/short-term/morph rankings and asymmetrically scoped coverage in the same read snapshot. Preserve exact meaningful/suppression predicates and project filtering before k.
+- Expose one memory-search/result DTO via existing bounded owner transport, not all candidates or arbitrary SQL/paths. Trusted database path is setup-only. Keep root/cancellation/progress hook lifetime and conservative vector admission, never silently clip scope/candidates.
+- Actual parent old/new fixture matched IDs/scores/order/coverage; growing candidates 2→52 held input logical bytes and SQL execution count constant with output <512 bytes. Empty scope/cancel/output-budget outcomes and existing owner/lease tests passed. Native three tests plus release build and final TS seven-file check/four-file seven tests passed.
+- This is an additive private boundary, not production default/public MemorySearch integration. Wall-stage timings are not pure CPU; no paired CPU/performance improvement, fully bounded FTS match work or publication/generation correctness is claimed. These remain subsequent integration/qualification work.
+
+## Async native memory search: concurrent control visibility (2026-10-08 Asia/Seoul)
+
+- Timestamp shared flag writes against actual synchronous N-API call windows; do not infer in-flight behavior from a delay or from pre-aborted cells alone. A finite direct-ABI observation (ephemeral 50k/384/4bit worker, fresh flags, temporary typed-array views) ran 40 calls across early/varied offsets with main-isolate GC.
+- Every observed in-window write returned cancelled: 20 in the early run and six in the varied run. Fourteen writes after completion returned success, as expected. Early Rust-body times were near zero and mainly exercised FFI/pre-engine cancellation; two varied-offset cases had longer bodies but no midpoint hook. None of these observations proves mid-scan preemption, hard deadlines, forced worker-isolate GC or adversarial-realm safety.
+- Retain bounded admission/pre-post checks and default-off policy. Safe raw observations and source/addon fingerprints are in `native-search-control-visibility-2026-10-08.json`; the approved high-level SQLite integration must preserve these explicit limits rather than convert them into a hard-cancel claim.
+
+## Async native memory search: additive controlled primitive (2026-10-08 Asia/Seoul)
+
+- Pinned turbovec's allowlist search builds a full index-sized mask and calls synchronous cache preparation/scoring without a cancellation hook. Do not change engine revision, split candidates/merge rankings, or claim a Promise timeout interrupts that engine.
+- Added a native searchControlled primitive and typed worker command/result. A callback-local strong N-API reference roots one fixed four-byte SharedArrayBuffer Int32 cell; raw aligned pointer atomic loads avoid concurrent non-atomic Rust slices. Trust the owning worker's standard realm intrinsics for SAB brand/fixed-storage validation and explicitly retain this ABI limitation.
+- Current measured admission envelope is ≤50k index, 384 dimensions, 4-bit, k≤48, ≤50k allowlist, remaining ≥12ms. Other work returns budget-exceeded without clipping. Checks before/after the exact engine call discard cancelled/late results; cold preparation/scoring remains non-preemptible. This is not a hard deadline guarantee, and does not justify enabling the new default.
+- Host decrements queue/worker-validation time, raises the shared flag on interruption, and masks admission/cleanup registration to prevent a cancellation race leaking a queued job. Existing low-level API/format/writer and the application's default path remain unchanged.
+- Actual worker round trip matched legacy IDs/scores, accepted shared cancellation, rejected a 1ms budget without scoring, and remained usable afterward. Final TS check and three-file six-test regression passed; Rust controlled-envelope unit test/release addon build passed. Concurrent in-flight shared visibility/GC stress, arbitrary-size budget and high-level SQLite are still remaining work, not proven by pre-aborted tests.
+
+## Async native memory search: observed worker responsiveness (2026-10-08 Asia/Seoul)
+
+- Add safe monotonic native-call windows to vector-hit responses and expose the host owner as a Context service with a scoped Layer. Runtime consumers yield that service; test constructors are not a production composition pattern.
+- The actual production client/worker, with 50,000 synthetic 384-dimensional vectors, ran ten k=48 searches. Each synchronous N-API span lasted 5.39–5.85 ms and contained 4–5 independent main-thread heartbeats. This confirms main-thread progress during actual native execution for that fixture, not just before or after an asynchronous wrapper.
+- Preserve the limitations: these windows include N-API conversion, not pure turbovec CPU; they exclude allowlist marshaling/fixture preparation and do not prove SQLite/graph offload, cancellation, worst-case deadlines, or production API improvement. Do not enable the default path based on this observation alone. Raw source/addon fingerprints and intervals: `native-search-worker-responsiveness-2026-10-08.json`.
+
+## Async native memory search: worker transport foundation (2026-10-08 Asia/Seoul)
+
+- Added an actual Node worker owning one low-level turbovec index and CacheLease, with Schema-decoded commands, safe protocol failures, existing `.tmp` save/rename, and Scope-based port/lease cleanup. A mismatched saved layout fails closed; rebuilding requires explicit host recovery.
+- Host transport uses Deferred for responses, Ref for admission and removable queued jobs, and a capacity-one Queue as a dispatcher wake signal. Only one job is posted at a time. Queued interruption frees admission immediately; interrupted active callers do not release the native resource slot before its actual completion. Worker exit fails all outstanding Deferreds and preserves the first failure reason.
+- Source Worker export/checkout resolver and packaged `.mjs` entry were registered. The deployment-style bundle built in temporary storage and its native bootstrap/close succeeded; the first CLI smoke used an incompatible inherited `--input-type` flag and was invalid, then was rerun with file-compatible worker arguments. No app server or operational cache was restarted/modified.
+- Minimal real-worker tests cover native add/search/save, competing lease rejection, explicit close/snapshot reopen, and host Scope shutdown/reacquisition. A gated transport test covers 32-request saturation, queued Fiber interruption freeing capacity, and worker exit settling all remaining waiters; the gate uses Deferred rather than sleeps.
+- This remains a transport foundation, not completed high-level memory search. Rust read-only SQLite, active native cancellation/progress hooks, publication integration, packaged-current-build performance comparison and default activation are still later work. The app's existing search path is unchanged.
+
+## Async native memory search: API and ownership contract (2026-10-08 Asia/Seoul)
+
+- Keep host services/policies in TypeScript and add a separate read-session module to the existing turbovec Rust crate; retain the low-level API and persisted index format. The owning Node worker alone holds the existing index and CacheLease. Its SQLite search connection is read-only and uses one transaction per ranked seed request.
+- A host publication gate must cover index mutation, existing atomic snapshot save, and existing SQLite mapping/journal commit as one unpublished interval. Only then publish an ephemeral epoch/generation. Failed publication poisons reads until existing reconciliation succeeds; it does not create a new Rust writer or silently fall back to synchronous main-thread search.
+- Preserve TypeScript rank fusion/graph/correction/provenance policies and project checks. Native returns bounded channel rankings/IDs/coverage, not a raw-score replacement for the public memory contract. All allowed-project filtering occurs before channel top-k. DTO byte budgets are 1 MiB each, with explicit budget errors rather than silent project/rank truncation.
+- Effect adaptation is lazy and scoped over real worker messages. Individual Fiber interruption cancels only its request. An atomic shared cancellation flag and SQLite progress hook are necessary because a worker cancel message cannot interrupt an executing synchronous native call. The current turbovec primitive has no verified cooperative mid-scan hook; measure its residual span and do not enable the new default if cancellation/deadline bounds fail.
+- No additional SQLite migration/user_version change, original/model-context alteration, second lease, or index-format change. Operator startup switch chooses exactly one owner and rollback drains it before legacy acquisition. Same-build legacy rollback is distinct from original 0.0.13 binary downgrade: existing newer migrations already prevent opening the current migrated DB with that binary. Verify 0.0.13 fixtures/backups on copies; no in-place schema downgrade promise or new downgrade tooling.
+- Contract review found rank/publication edge cases and they were corrected: text results may exceed per-query k because each two-character term appends its own top-k before dedupe; keep that order and host UTF-16 term classification. Gate covers maintenance's initial durable suppression/intent commit and late embedding/purge revalidation, not just native RPCs. Recheck generation when the owner actually executes a job. Global cancel/stale/budget/worker errors cannot be swallowed as vector-only degradation.
+- Distinguish host cancel acceptance, native observation and completed termination. Validate shared atomic storage/lifetime, progress-hook coverage and deadline-bounded busy wait; queued/caller Promise settlement alone does not prove resource release. Detailed DTO/outcome/publication/lifetime invariants: `native-search-contract.md`.
+
+## Async native memory search: ownership and baseline (2026-10-08 Asia/Seoul)
+
+- Trace actual service ownership before adding a worker. Current source executes SQLite ranking and synchronous turbovec through the central owner runtime; Goal/full-loop worker tools proxy back to that owner. The Rust owning-worker comment is not evidence of an implemented search worker.
+- Preserve one VectorIndex handle/CacheLease and its add→save→mapping publication/removal recovery ordering. Existing import workers already have separate SQLite connections; the proposed search connection is read-only and must not introduce another vector-cache writer.
+- A finite synthetic SQLite/N-API boundary benchmark passed targeted format/lint/type and three independent runs. For 50,000 candidates, warm search p95 is 80.51–83.20 ms; a twenty-search saturation burst delays an independent loopback control by 1.53–1.60 seconds. These are not production MemorySearch/API measurements or proof about the earlier residual API delay.
+- Prioritize both off-main-thread SQL execution and removal of full allowlist/per-hit mapping bridges. In this fixture FTS work is larger than vector-call CPU; moving only string conversion cannot solve event-loop blocking. Keep graph/authorization/provenance policies in TypeScript.
+- Raw synthetic results and source/addon fingerprints are in `native-search-baseline-2026-10-08.json`; methodology is in `performance-native-search.md`. The initial boundary-only measurements were insufficient to complete step 01. Subsequent real-service temporary file/WAL measurements add 185/186 actual SQL executions per search, new-process startup, and four-client HTTP during a fixed twenty-search burst. Preserve the older in-memory results as historical, not a paired baseline.
+- Freeze old/new comparisons against the three file/WAL runs in `native-search-service-file-baseline-2026-10-08.json`: 15%/5 ms warm-search allowance, ≥50% event-loop/control-HTTP improvement with control p95 ≤20 ms, ≤64 MiB additional observed RSS, ≤500 ms additional scoped startup. Runtime design bounds are 32 admitted searches, one active index-owner search, 2-second work budget and finite cancellation acknowledgement. Keep all quality/authorization/provenance criteria independent of these speed targets. Native-boundary CPU still includes N-API conversion; production cold startup and controlled live API attribution are not inferred.
+
+## Local API: limited final verification (2026-10-08 Asia/Seoul)
+
+- After the user's rebuild/restart, served/current backend fingerprints match `b69717d9c665d257f255185d`. Twenty subsequent observations per endpoint reproduce no ≥10-second delay; all 84 requests, including first observations and static/health controls, return 200. This is bounded observation, not proof of a permanent cure or causal attribution to the FTS edit across parallel refactoring.
+- Residual API/health wall-time maxima are 3.7–3.8 seconds while static remains below 30 ms. Retain this as unresolved; do not claim the local API p95 target was met. The first observed catalog request (291 ms) is not proven cold startup.
+- Follow Goal v6/Plan v13: do not expand deep API/SQL investigation when the later ten-second episode is not reproduced. Targeted final current-source regressions pass 59/59 across 11 existing files, with search format/lint/type passing. Reuse earlier storage/bytes/UI/0.0.13 browser and rollback evidence explicitly as historical; parallel frontend changes are not re-benchmarked by these tests.
+- No operating DB mutation, model/tool replay, schema change or assistant-initiated service restart in this verification. See `performance-api-streaming.md` for measurements and limits.
+
+## Local API: minimum FTS sort repair (2026-10-07)
+
+- During a bounded direct-health/native sample, backend main-thread FTS/BM25 work coincided with 2.15/4.22-second health delays. This is a supported lead, not proof of the earlier fifteen-second episode's sole cause.
+- Use FTS5's default BM25 hidden `rank` ordering for the two existing MemorySearch FTS queries, retaining meaning/project filters and result limits. A 30-row isolated plan comparison preserves ordered results and removes the external temporary ORDER BY B-tree. Do not claim it bounds all internal FTS matching work or proves a live latency improvement.
+- No schema change, original/model-context truncation, custom rank configuration, blanket proxy timeout or SQL integration-suite expansion. Code rollback restores the two prior ORDER BY expressions. Keep owner/run/approval/session contracts and parallel refactoring unchanged.
+- Changed-source static checks and existing search/maintenance 22/22 plus subscription/error/restoration 21/21 pass. The no-HMR backend still serves the prior fingerprint after this edit; rebuild/restart must be coordinated with its owner before live recurrence verification and final completion.
+
 ## RRSI local experiments (2026-10-05)
 
 - Develop in the independent `context-generactive-agent-rrsi` clone on `feat/rrsi-local`; web 5174, backend 5181 and `.rrsi-local/runtime` are isolated from the original checkout.
@@ -7,6 +143,87 @@
 - Default automatic budget: 10 min idle, one run/day, 2 rounds with 2 candidates each, 30 minutes with no total token cap. Token usage remains an efficiency metric. Missing usage or incomplete evaluation prevents adoption.
 
 # 결정 기록
+
+## 반복 API 지연의 제한된 계측과 no-HMR backend 검증 (2026-10-07)
+
+- SQL 추가 검증은 과도한 전체 조회 여부에 한정한다. 약10초 지연이 기동 이후 반복될 때만 해당 지연을 조사한다.
+- API GET 계측은 개발 모드 또는 기존 `--dev-backend`에서만 숫자형 단계시간을 제공한다. 모델·계정·토큰·오류본문은 노출하지 않고 응답 JSON·인가·POST 계약을 유지한다.
+- stable dev backend는 빌드된 no-HMR 런타임이므로, 현재 소스 검증과 live API 증거를 build fingerprint로 구분한다. 프론트엔드 cwd가 같다는 사실만으로 backend가 현재 소스를 실행한다고 간주하지 않는다.
+- active run·승인 및 병행 리팩토링을 보존하기 위해 현재 서버를 임의 종료하지 않는다. live 단계 계측은 coordinated backend 재빌드·재기동 후 확인하며 적용되지 않은 코드를 성능 개선 완료로 보고하지 않는다.
+
+## Catalog 공유와 공개 reasoning 스트림 안전 계약 (2026-10-07)
+
+- 동일 identity의 catalog 조회는 공유하며 성공 캐시와 실패 재시도·owner/waiter 취소를 구분한다. 합성 upstream 비교를 실제 HTTP endpoint나 UI blocking 개선으로 보고하지 않는다.
+- 공개 summary의 text/part/ID 상태에 명시적인 상한을 적용하고 초과·중복·충돌·불완전 종료는 typed failure로 처리한다. 원본 transcript를 성공한 것처럼 자르거나 암호화 추론을 공개 내용으로 복호화하지 않는다.
+- 미완료 native tool/reasoning block에서 정상 RUN_FINISHED를 만들지 않으며 취소는 실패 본문이나 정상 완료로 바꾸지 않는다. 공급자 오류 본문 대신 안전한 코드·reason을 유지한다.
+- 실제 SDK chat→withPersistence→reconstructChat 통합 fixture로 공개 thinking/text 복원과 opaque reasoning 비노출을 검증한다. fixture는 메모리 저장소이며 운영 SQLite·실제 provider 증상 재현과 구분한다.
+- 병행 소스 리팩토링을 보존하고 현재 회귀 결과와 역사적 결과를 나눈다. 측정 범위와 잔여 조건은 `docs/performance-api-streaming.md`에 기록한다.
+
+## 응답량과 독립적인 tool 상세 렌더 지연 (2026-10-07)
+
+- 접힌 tool card에서는 detail subtree와 JSON pretty 계산을 만들지 않고 실제 펼침에서만 생성한다. 원본 인자·결과·API/pageSize는 바꾸지 않으며 상태/승인 badge와 SVG preview는 유지한다.
+- 같은 20 tools·동일 대형 인자/결과를 실제 브라우저에 전달한 전후 비교를 사용한다. historical eager 동작은 browser module의 guard 한곳만 재현하며 working source/DB를 되돌리지 않는다. 양측 동일 React Profiler를 사용하고 production build/p95로 보고하지 않는다.
+- SSR shell/bootstrap, history 응답 이후 client/SDK/React 처리, DOM/layout counter를 구분한다. Profiler commit timestamp를 DOM commit duration으로, renderer TaskDuration을 최장 blocking으로 계산하지 않는다. 측정 및 회귀 범위는 `docs/performance-ui-history.md`에 기록한다.
+
+## 모델 목록 대기와 로컬 기록 표시 분리 (2026-10-07)
+
+- 기존 프로젝트/세션 URL의 `SessionView`는 공급자 인증·모델 카탈로그 선택 placeholder보다 먼저 mount한다. 로컬 기록 조회와 shell은 카탈로그 완료나 오류 때문에 숨기지 않는다. API의 실제 세션/인가 검증은 유지한다.
+- 모델/인증 준비 여부는 `sendingEnabled`로 변경 동작에 적용한다. 자동 queued turn도 이 gate를 건너뛰지 않으며, 준비 상태가 돌아오면 이전 snapshot을 재사용하지 않고 현재 서버 run/queue를 재조회한 뒤 기존 완료-run 조건을 확인한다.
+- 브라우저 검증은 remote catalog를 보류한 채 shell/기록과 A→B→A 표시를 확인하고 503·늦은 B 기록 반환 후 A 격리를 확인한다. lease 응답은 브라우저 fixture이며 실제 서버 변경/모델 실행은 하지 않는다. 이는 독립 hydration/render 비용 측정과는 별개의 검증이다.
+
+## History pagination의 실제 SDK 저장소 연결 (2026-10-07)
+
+- 앱의 `ChatState`는 기존 `Database` 소유자를 받는 `ownedSqliteChatPersistence`로 연결한다. 페이지 요청은 파생 group snapshot을 읽는 `MessagePage`를 반환하고 모델 컨텍스트와 명시적 전체 기록 조회는 원본을 유지한다.
+- 원본 upsert와 파생 group 교체는 기존 `Database.atomic`으로 함께 저장한다. UI ID 충돌 때문에 정상 원본 저장을 거부하지 않고 파생 뷰를 not-ready로 유지한다. 다른 SQL 실패는 원본과 파생 뷰를 함께 rollback한다.
+- 별도 runtime/SQLite 연결을 만들지 않는다. SDK·동기 SQLite 경계에서만 native 호출을 사용한다. 시작 시 미준비 기록과 실제로 새로 materialize된 import만 명시적으로 backfill하며 일반 초기/과거 페이지의 stale 처리는 전체 JSON fallback으로 바꾸지 않는다.
+- SDK의 `pageSize + 1` overscan 및 retained UI ID cursor 교체를 유지한다. legacy 파생 ID는 기존 hydration의 `stored:thread:ordinal`과 맞추고 원본 ID·본문·metadata는 바꾸지 않는다.
+- 첫 전달과 과거 페이지는 50개 대신 20개 UI 메시지로 요청한다. 전체 원본과 과거 페이지 접근은 유지한다. 이 응답량 감소를 동일 데이터 조건의 독립 hydration·render 비용 개선으로 계산하지 않는다.
+- 실제 SDK 통합 회귀 통과와 전체 목표 완료를 구분한다. 응답 bytes·cold/backfill·writer blocking·릴리즈 전체 migration/opener·UI 비용의 독립 측정은 별도 완료 기준이다.
+
+## History 파생 저장의 증분 갱신과 측정 한계 (2026-10-07)
+
+- 실측에서 발견한 저장 비용 증가를 읽기 개선에 묻어 두지 않는다. SDK가 이미 보유한 typed model snapshot은 원본 직렬화에 쓴 동일 배열을 파생 저장에도 전달해 재파싱을 피한다. startup/import의 외부 JSON 검증·디코딩은 유지한다.
+- 파생 group은 ordinal/UI-ID metadata로 이동·tail을 정리한 뒤 동일 JSON은 SQL INSERT 전에 제외하고 변경된 행만 갱신한다. 원본/파생/발행은 기존 transaction 안에 유지한다. full snapshot 직렬화·group 순회 자체는 여전히 수행하므로 O(changed-groups) 알고리즘으로 보고하지 않는다.
+- non-STRICT SQLite의 손상된 fractional ordinal이 정상 원본 저장을 막지 않도록 disposable 행을 metadata decode 전에 제거하고 원본에서 복원한다. 조회 중 전체 transcript fallback이나 원본 수정으로 복구하지 않는다.
+- 0.0.13의 실제 opener·전체 30 migration으로 만든 임시 DB에서 파생 backfill, 원본과 글로벌 version 보존, projection rollback, 원본 opener 재개방 및 3값 writer를 검증한다. 공유된 현재 Effect 설치본에서의 릴리즈 소스 검증과 출시 binary 실행을 구분한다.
+
+## History pagination의 호환 기준과 UI 경계 (2026-10-07)
+
+- 이번 개선의 릴리즈 하위호환 기준은 사용자가 지정한 `0.0.13`이다. 실험용이며 빌드 실패한 `0.0.14-canary1`은 제외한다. 실제 0.0.13 원본에서 확인한 3컬럼 `chat_threads` 및 writer 계약을 유지하고, 원본 transcript와 모델 컨텍스트를 파생 데이터로 대체하거나 자르지 않는다.
+- 저장소 page 단위는 SDK의 UI 변환 경계를 따른다. linked tool result와 assistant segment가 현재 assistant에 병합되므로 raw message 개수만 제한하는 방식은 pagination 완료로 인정하지 않는다. 경계용 `history-groups.ts`를 추가하고 실제 SDK 전체 변환과 각 page split 결과를 대조한다.
+- id 없는 legacy 메시지에는 projection에서만 결정적인 thread/index ID를 부여한다. 원본에 ID를 써넣지 않는다. 파생 저장소 연결·동시 쓰기·cursor 및 release backfill/rollback 전체 검증은 helper 테스트와 별개로 수행해야 한다.
+
+## History 파생 저장소 전환 계약 (2026-10-07)
+
+- 원본 `chat_threads`의 컬럼과 글로벌 `user_version`을 바꾸지 않는 disposable projection으로 구현한다. format 버전은 별도 metadata에 둔다. 다른 기능의 migration이나 downgrade를 이 rollback으로 우회하지 않는다.
+- projection은 UI group ordinal 및 UI-ID unique index로 조회한다. 최신/과거 page는 해당 group JSON만 읽고, 이전 page 존재 여부는 payload 없는 EXISTS 쿼리로 확인한다.
+- reader는 readiness·cursor 유효성·page payload·이전 page 여부를 한 SQLite statement의 동일 snapshot에서 읽는다. 별도 check/read 사이의 쓰기로 상태가 엇갈리지 않도록 한다. 준비되지 않음·알 수 없는 cursor·정상 empty/end page는 payload 없는 state row로 구분하고, adapter 경계에서 검증·처리한다. materialize와 정렬은 요청한 page 범위에만 한정한다.
+- reader의 의존성은 Effect Context/Layer로 연결하고 기존 Database 연결을 빌린다. 별도 DB 연결·runtime·백그라운드 작업을 reader에 만들지 않는다. 요청과 DB 행은 Schema로 검증하고 준비 안 됨·알 수 없는 cursor·정상 page를 태그로 구분한다. 저장소 오류나 손상된 행을 빈 기록으로 바꾸지 않으며 오류에는 안전한 단계/reason만 담는다. 선택된 model JSON의 디코딩과 인가는 SDK/HTTP 경계에서 유지한다.
+- 이전 릴리즈 writer를 포함해 transcript insert/update가 projection readiness를 무효화하고 delete가 파생 데이터를 정리한다. 준비되지 않은 기록을 page read 중 전체 파싱해 숨겨서 복구하지 않는다. 별도 backfill/준비 경로에서 원본 snapshot과 파생 데이터를 원자적으로 발행하며 오류·충돌을 명시적으로 처리한다.
+- backfill은 준비에 사용한 원본 JSON과 현재 원본이 일치할 때만 조건부 발행한다. timestamp만 비교하지 않는다. staging에서 readiness 해제·group 교체·조건부 발행을 한 savepoint에 묶고, 원본 변경/삭제로 발행이 거부되면 staging 전체를 rollback해 더 최신의 ready projection을 보존한다. 원본과 group을 함께 저장하는 modern writer의 무조건 발행 SQL을 backfill에서 재사용하지 않는다.
+- 준비된 projection 발행은 기존 Database.atomic을 소유자로 사용한다. 파생 스키마 설치와 발행에 새 transaction manager/DB/runtime를 만들지 않는다. 원본 비교가 거부되면 native 동기 callback 경계에서 typed SourceChanged로 owner rollback을 일으킨 뒤 해당 reason만 명시적인 결과로 회복한다. 다른 SQL 실패는 typed failure로 전파한다. publisher의 JSON-array 검증은 SDK model codec이나 원본/group 동등성 검증을 대체하지 않으므로 검증된 grouping producer에서만 사용한다.
+- owner atomic의 COMMIT 실패도 원본 실패와 transaction 상태를 보존해야 한다. outer/nested 구분을 실행 전에 고정하고 depth는 finally에서 한 번만 줄인다. 중첩 callback 실패는 해당 savepoint로 rollback한 뒤 release하여 outer 작업을 보존한다. 지연 FK COMMIT 실패·후속 transaction·중첩 작업 보존을 실제 SQLite로 회귀 검증한다.
+- rollback은 projection trigger/table만 제거한다. 운영 adapter 적용 전에 preparation 정책, snapshot consistency, 실제 릴리즈 upgrade/rollback 및 별도 응답량·조회량 검증을 완료해야 한다. 메모리 SQL 테스트만으로 운영 pagination 완료를 주장하지 않는다.
+
+## 실행 중 명시적 Goal 변경 동기화 (2026-10-06)
+
+- Execute와 Verify에서도 `update_goal`을 제공한다. 사용자가 명시적으로 변경한 구현 범위·제약·제외 항목은 에이전트가 canonical Goal에 반영하며, 수정 가능한 artifact를 외부 의존성으로 보고하거나 확인되지 않은 Goal 편집 UI를 요구하지 않는다. 단순 재개 요청은 제약 해제 승인이 아니다.
+- Execute/Verify에서 Goal을 수정하면 즉시 Plan으로 돌아간다. 기존 Plan과 근거는 보존하되 새 Goal 버전에 맞춰 Plan을 동기화하고 실행 확인을 받기 전에는 이전 실행 턴의 progress를 허용하지 않는다. Goal 변경은 권한·완료 증거·실행 세대 고정을 우회하지 않는다.
+
+## 로컬 multilingual recall sensor S4 판정 (2026-10-06)
+
+- 승인한 활성화 게이트를 적용한 현재 FP32/cold-process 평가에서는 S5 자동 검색을 진행하지 않는다. 측정 결과와 한계는 [docs/laya-recall-s4.md](laya-recall-s4.md)에 기록한다.
+- validation 선택 threshold의 전체 필요한 근거 회수는 4/5, 작은 holdout에서는 0/1이다. 검색을 실행하면 기존 project-only 검색은 gold를 회수하지만 센서가 정정 질문의 검색을 생략한다. 작은 합성 표본과 사후 작성 heuristic으로 일반적인 모델 우열을 확정하지 않는다.
+- cold 전체 p95 약 4.92초, 단독 warm 긴 입력 p95 약 1.12초로 예산을 초과한다. 단독 warm 짧은 입력만 약 174ms이며 이것으로 production turn 비용 충족을 주장하지 않는다. 답변 출처 정확도·전력·완전한 자원 모니터링은 미확인이다.
+- 모델은 앱 외부 실험 경로에 두고 eval adapter는 기본 비활성으로 유지한다. Clef로 후보를 변경하거나 기준을 완화하지 않는다. 새 활성화 시도는 별도 설계·평가 Plan 확인이 필요하다.
+
+## 로컬 multilingual recall sensor 평가 (2026-10-06)
+
+- 우선 실험 후보는 Node/TypeScript `@receptron/laya`의 `subfolder: "multilingual"` 경로다. README의 옵션 지원과 사용자 머신에서의 실제 번들 로딩 성공은 구분한다.
+- Python–ONNX 출력 일치는 필수 활성화 게이트에서 제외한다. 이상 출력이 관찰될 때만 비교를 진단 수단으로 검토한다.
+- 한국어 과거 결정·정정·지시어 및 검색 불필요 턴에서 필요한 원본 evidence 회수, 과잉 검색·출처 오류, cold/warm·p95 지연, 메모리·embedding 경합·전력 비용과 fallback을 평가한다.
+- 자동 검색은 shadow 평가 통과 전 비활성으로 유지한다. 모델 점수는 사용자 승인이나 evidence 정정 관계가 아니며 기존 검색·compaction·수동 evidence 도구를 변경하지 않는다.
+- 외부 모델 다운로드는 별도 동의 또는 명시적 설정으로만 수행하며, 로컬 입력의 원격 전송과 cloud fallback은 허용하지 않는다.
 
 ## 백그라운드 실행의 Effect 수명과 종료 처리 (2026-10-04)
 
@@ -1003,6 +1220,18 @@
 
 - 정상 평가의 영역별 0점은 개선 대상이므로 후보 생성 전에 중단하지 않는다. 기존 채택 기준과 코딩·기억 회귀 방어는 유지한다. 실제 실행 오류는 typed failure로 중단시켜 정상적인 낮은 성능과 구분한다.
 
+## 2026-10-06: OpenAI 호환 응답 진단
+
+- OpenAI 호환 채팅의 HTTP 응답 본문을 SDK가 읽는 순서대로 `diagnostics/openai-compatible`에 기록한다. `.raw`는 파싱 전 응답 바이트, `.jsonl`은 세션·실행 ID, adapter별 요청 순번, 헤더 수신 시간, 청크별 바이트 수와 완료·취소·실패 단계다. 헤더 이전 실패와 본문 스트림 실패를 구분한다.
+- 사용자 요청에 따라 원본 응답을 로컬에 저장하며 요청 본문과 인증 헤더는 저장하지 않는다. 응답 헤더는 content type·길이와 요청 추적 ID 등 허용 목록만 기록한다. 파일 권한은 0600, 폴더 권한은 0700이다. 원본은 요청당 32 MiB까지 저장하고 초과 여부와 전체 수신 크기를 기록한다.
+- 응답을 복제하거나 백그라운드에서 읽지 않는다. 소비자 취소를 원본 스트림으로 전달하고, 진단 파일 쓰기 실패는 로그로 알리되 원래 HTTP 결과와 오류를 유지한다. 이전 실패의 원본 응답은 소급 복원하지 못한다.
+
+## 2026-10-06: 대화 Link 전환과 검증 범위
+
+- 일반 대화 목록 이동은 React Router `Link`를 사용한다. URL 인코딩과 브라우저 뒤로/앞으로·modifier 새 탭 동작을 유지하며 root QueryClient·shell·전역 SSE를 문서 이동으로 다시 만들지 않는다. `preventScrollReset`으로 공통 shell의 스크롤 초기화를 막는다.
+- 같은 페이지에서 같은 세션의 lease claim/release는 요청 완료 순서대로 직렬화한다. 빠른 A→B→A 재진입에서 이전 cleanup release가 새 claim 뒤에 적용되지 않게 하며, 다른 세션 요청은 병렬로 진행한다. 실패한 요청의 결과는 호출자에게 전달하고 다음 요청의 진행을 막지 않는다. pagehide beacon 정책은 유지한다.
+- 브라우저 전환 회귀 검증은 로그인·모델·history·lease를 브라우저에서만 대체하고 서버 변경과 메시지 전송을 차단한다. fixture UI 격리 검증과 실제 서버·모델 실행 검증을 구분하며 document reload 제거만으로 history 저장소 처리·hydration·API 지연 개선을 완료했다고 보고하지 않는다.
+
 ## Map·Set 응답 대기와 상태 소유권 정리 (2026-10-06)
 
 - 화면의 서버 메시지·큐 배열은 배열에서 직접 대조한다. 구독자 목록과 현재 창의 요청 직렬화는 서버 응답을 복제하는 인덱스와 구분한다.
@@ -1039,6 +1268,17 @@
 - 기억 과제의 최종 응답은 `decision`과 `evidenceIds` 두 필드만 가진 JSON으로 받는다. 현재 결정의 정확한 일치와 원본 정정 노드 하나의 인용을 함께 요구한다.
 - 정정 턴 직후 실제 사용자 노드 ID를 별도로 고정한다. 채점 시 원본의 존재, 종류, 프로젝트, 세션, 정정 텍스트를 확인한다. 원본을 고정할 수 없는 실행은 `evaluation_incomplete`이며, 잘못된 답변은 실패 점수다.
 - 기존 문구·UUID 패턴 채점의 점수와 새 점수는 직접 비교하지 않는다. 평가 이미지를 다시 빌드해 같은 채점기로 기준과 후보를 평가하며, 이미 소비한 sealed corpus 영수증은 초기화하지 않는다.
+- Effect 4.0의 `Schema.decodeEffect`, `Effect.fn`, `Nodes` 서비스 의존성으로 채점 흐름을 합성한다. 답변의 `SchemaError`만 실패 점수로 복구하며 원본 조회 실패는 `EvaluationFailed`로 전파한다. 턴별 상태는 순차 `Effect.reduce`가 누적한다.
+
+## OpenAI 공개 reasoning summary 스트림 (2026-10-07)
+
+- OpenAI의 공개 reasoning summary 시작·증분·종료 이벤트는 summary part별 SDK reasoning 메시지로 전달한다. 종료 이벤트의 전체 텍스트는 이미 전달한 증분을 중복 출력하지 않는다.
+- 공개 summary와 암호화 reasoning의 식별자를 분리하고, 암호화 reasoning을 다음 공급자 요청에 전달하는 기존 계약은 유지한다. summary 이벤트를 Anthropic content block 종료로 해석하지 않는다.
+
+## 개발 서버 시작 실패의 프로세스 정리 (2026-10-07)
+
+- 개발 backend manifest를 쓰기 전에 상위 build 디렉터리를 생성한다. 서버 준비 확인·manifest 기록·frontend 시작 중 어느 단계에서 실패해도 해당 실행이 만든 backend와 frontend를 종료한다.
+- manifest 삭제는 기존 build ID 소유권 확인을 유지하며 다른 실행이 만든 manifest를 지우지 않는다.
 
 ## archive 설치의 Effect 서비스와 호스트 경계 (2026-10-07)
 
@@ -1054,20 +1294,6 @@
 - 파일 삭제 재시도는 기존 errno 목록·횟수·지연을 Schedule로 유지한다. 취소할 수 없는 단일 Node 파일 작업은 완료를 기다린 뒤 staging을 해제하되 재시도 사이의 대기는 중단할 수 있다.
 - native factory의 명시적 호스트 패키지 목록에 기존 의존성인 `@effect/platform-node`를 추가한다. 외부 패키지 전부를 허용하지 않으며, 빌드와 소스 제거 후 새 프로세스 실행으로 호스트 해석을 검증한다.
 - `O_NOFOLLOW`와 동기 transaction fence처럼 설치된 플랫폼 API로 동일하게 표현할 수 없는 보호 계약은 그대로 유지한다. 프로세스·HTTP의 unstable API 정책과 진단 설정은 이 변경에서 낮추지 않는다.
-
-## 2026-10-07: 보조 모델 호출의 취소와 시간 제한
-
-- 권한 분류와 턴 요약의 모델 호출은 Effect가 시간 제한과 취소를 소유한다. AbortController를 요구하는 SDK에는 호출 Fiber의 신호를 연결하고, SDK rejection과 동기 예외를 typed error로 변환한다.
-- 권한 분류의 60초 제한은 provider 준비를 포함한다. timeout과 요청 실패, 예상하지 못한 결함은 사용자 확인으로 돌아가며, Fiber interruption은 전파한다. 턴 요약의 백그라운드 작업은 서비스 Scope 종료 시 취소한다.
-- 보조 호출의 UUID는 Crypto 서비스를 사용하고 기본 Node Layer는 NodeCrypto로 제공한다. RouteCatalog의 기본 시각은 런타임 Clock을 사용하고 snapshot 갱신은 Ref의 원자적 변경으로 기록한다.
-
-## 2026-10-08: History projection의 반복 assistant ID
-
-- 같은 assistant 그룹에서 반복되는 원본 ID는 projection 뷰에서만 `${assistantId}-segment-history-${modelOrdinal}`로 변환한다. SDK의 segment 합치기를 이용하여 도구 호출·결과·후속 텍스트의 순서와 하나의 UI cursor를 유지한다.
-- chat_threads 원본, 모델 컨텍스트와 실시간 스트림 ID는 변경하지 않는다. 명시적 원본 ID가 서로 다른 assistant 그룹이나 사용자 메시지에서 충돌하거나 생성한 segment ID와 명시적 ID가 충돌하면 기존 id-collision 오류를 유지한다.
-- ID가 없는 메시지는 기본 `stored:${threadId}:${modelOrdinal}`을 유지하되 명시적 ID와 충돌하면 예약되지 않은 첫 `:fallback:${n}` 접미사를 선택한다. 이미 projection에 발행된 fallback cursor는 재사용하며, 새 명시적 ID가 그 cursor와 충돌하면 cursor를 바꾸거나 서로 다른 답변을 합치지 않고 오류를 유지한다. ID 조회 컬렉션의 키는 문자열 ID와 숫자 ordinal이다.
-- 기존 미준비 projection은 수정된 초기화 경로에서 준비한다. 페이지 읽기에 전체 원본 파싱이나 자동 backfill을 추가하지 않는다.
-- `stored:` 형식만으로 합성 cursor의 소유자를 판단하지 않는다. assistant에 연결되는 tool 결과는 독립 UI cursor를 갖지 않으므로, 해당 tool의 원본 ordinal을 가리키는 다른 명시적 cursor를 합성 cursor로 재사용하거나 충돌로 거부하지 않는다. 연결된 tool의 fallback은 명시적 ID를 피해서 생성하고 assistant cursor와 toolCallId 연결을 보존한다.
 
 ## Effect 4 컬렉션의 키 동등성과 AST 방문 추적 (2026-10-07)
 
@@ -1085,6 +1311,12 @@
 - 공통 `testRuntime` fixture는 테스트 Scope가 임시 디렉터리와 모든 재시작 런타임을 소유한다. 파일 I/O는 `FileSystem`·`Path` 서비스로 수행하고 초기화 Fiber도 해당 Scope에 연결한다. 런타임 재시작은 저장소 Scope를 닫지 않으며, 테스트 종료 시 초기화 중단·런타임 해제·디렉터리 제거 순서를 유지한다. SDK 클라이언트 상태를 기다리는 테스트는 Effect의 반복과 시간 제한을 사용하고 클라이언트를 Scope에서 해제한다.
 - scripted responder와 테스트 배리어는 요구 서비스가 없는 Effect도 받을 수 있다. 공통 `turnGate`는 Deferred로 만들고 스트림의 실행 Fiber에서 직접 기다린다. 기존 Promise 응답·대기 계약은 유지하며, 의도적으로 취소를 무시하는 네이티브 SDK·서브프로세스 실험은 해당 경계에서만 Promise로 실행한다. Effect 대기는 취소 시 정리를 마친 뒤 SDK 스트림을 종료한다.
 - 원인 수정의 검증은 `vp run typecheck`로 앱·memory-agent·utils와 서버 테스트용 프로젝트를 모두 검사한다. Vite Task는 병렬 실행 중에도 다른 패키지의 진단 실패로 앱 작업을 중단할 수 있으므로 각 검사 결과를 모은 뒤 최종 실패를 반환한다. 앱의 `tsc`가 경고로 중단되어도 서버 테스트용 프로젝트를 검사한다.
+
+## 2026-10-07: 보조 모델 호출의 취소와 시간 제한
+
+- 권한 분류와 턴 요약의 모델 호출은 Effect가 시간 제한과 취소를 소유한다. AbortController를 요구하는 SDK에는 호출 Fiber의 신호를 연결하고, SDK rejection과 동기 예외를 typed error로 변환한다.
+- 권한 분류의 60초 제한은 provider 준비를 포함한다. timeout과 요청 실패, 예상하지 못한 결함은 사용자 확인으로 돌아가며, Fiber interruption은 전파한다. 턴 요약의 백그라운드 작업은 서비스 Scope 종료 시 취소한다.
+- 보조 호출의 UUID는 Crypto 서비스를 사용하고 기본 Node Layer는 NodeCrypto로 제공한다. RouteCatalog의 기본 시각은 런타임 Clock을 사용하고 snapshot 갱신은 Ref의 원자적 변경으로 기록한다.
 
 ## 2026-10-07: SDK 실행 Fiber와 응답 연결의 수명
 
@@ -1120,6 +1352,20 @@
 - 실행 종료 후 큐와 새 Goal 요청을 정리하는 작업도 실행의 해제 Effect가 기다린다. `ended` 신호는 이 정리가 끝난 뒤 완료하여, SQLite와 이벤트 서비스를 닫은 뒤 미처리 Promise가 남지 않게 한다.
 - 서비스 Scope 종료는 SDK에 `service_shutdown` 사유를 먼저 전달한 뒤 생산 Fiber를 중단한다. 완료한 실행은 중단하지 않으며, 종료 당시 진행 중인 실행은 `failed/server_restarted`로 남긴다. 사용자의 명시적 취소는 기존 `aborted` 의미를 유지한다.
 
+## 2026-10-08: History projection의 반복 assistant ID
+
+- 같은 assistant 그룹에서 반복되는 원본 ID는 projection 뷰에서만 `${assistantId}-segment-history-${modelOrdinal}`로 변환한다. SDK의 segment 합치기를 이용하여 도구 호출·결과·후속 텍스트의 순서와 하나의 UI cursor를 유지한다.
+- chat_threads 원본, 모델 컨텍스트와 실시간 스트림 ID는 변경하지 않는다. 명시적 원본 ID가 서로 다른 assistant 그룹이나 사용자 메시지에서 충돌하거나 생성한 segment ID와 명시적 ID가 충돌하면 기존 id-collision 오류를 유지한다.
+- ID가 없는 메시지는 기본 `stored:${threadId}:${modelOrdinal}`을 유지하되 명시적 ID와 충돌하면 예약되지 않은 첫 `:fallback:${n}` 접미사를 선택한다. 이미 projection에 발행된 fallback cursor는 재사용하며, 새 명시적 ID가 그 cursor와 충돌하면 cursor를 바꾸거나 서로 다른 답변을 합치지 않고 오류를 유지한다. ID 조회 컬렉션의 키는 문자열 ID와 숫자 ordinal이다.
+- 기존 미준비 projection은 수정된 초기화 경로에서 준비한다. 페이지 읽기에 전체 원본 파싱이나 자동 backfill을 추가하지 않는다.
+- `stored:` 형식만으로 합성 cursor의 소유자를 판단하지 않는다. assistant에 연결되는 tool 결과는 독립 UI cursor를 갖지 않으므로, 해당 tool의 원본 ordinal을 가리키는 다른 명시적 cursor를 합성 cursor로 재사용하거나 충돌로 거부하지 않는다. 연결된 tool의 fallback은 명시적 ID를 피해서 생성하고 assistant cursor와 toolCallId 연결을 보존한다.
+
+## 2026-10-08: Laya eval 프로세스 경계
+
+- Laya eval은 Effect의 experimental process API 대신 `LayaWorkerProcess`로 stdout·exit·kill 계약만 주입한다. Node spawn 구현은 Scope가 소유하며, stdin에 한 번의 제한된 요청을 보내고 환경변수 상속과 stderr 수집을 하지 않는다.
+- timeout·취소·sensor close는 SIGKILL 요청 뒤 실제 close 이벤트까지 기다린다. bounded output 검사, 단일 turn memo, network deny sandbox 명령과 production 비활성화는 유지한다.
+- 경계 테스트는 kill과 exit를 독립적으로 제어하여 종료 대기를 검증하고, native transport 테스트는 실제 자식 프로세스의 stdin 전달과 Scope 종료 후 reaping을 검증한다. experimental API 진단을 억제하는 주석은 사용하지 않는다.
+
 ## 2026-10-08: Effect 4 strict async와 SDK 경계 (Asia/Seoul)
 
 - 앱과 memory-agent의 `asyncFunction` 진단은 error로 유지한다. 도메인의 반복·대기·병렬 처리·해제는 Effect와 Stream에서 계산하며, Promise 및 AsyncGenerator는 실제 SDK·React·Node 호출 계약에 연결하는 경계에서만 제공한다. `@effect-diagnostics` 억제 주석으로 예외를 만들지 않는다.
@@ -1136,3 +1382,101 @@
 - `read_file`과 `read_outside_file`은 전체 해시·UTF-8 검증을 최초에 순차 스캔하고, 이후 페이지는 실제 바이트 범위만 읽는다. 캐시에는 파일 stat과 해시·줄 바이트 오프셋만 남긴다. 2 MiB 제한, CRLF, 긴 줄의 명시적 축약, 기존 줄 번호·sha256 계약을 유지한다.
 - 일반 파일 검색은 범위 페이지를 순차 처리한다. 여러 줄 쿼리와 긴 줄은 정확성을 위해 제한된 전체 파일 경로를 유지하고, 선행 읽기는 4개로 제한한다. 목록은 정렬된 고정 스냅샷이므로 전체 경로 목록은 유지하되 디렉터리 엔트리를 스트리밍하고 자식 탐색 전에 핸들을 닫는다.
 - SDK 취소 신호를 Effect 실행에 전달한다. 파일의 취소 불가능한 단일 native read가 끝난 뒤 Scope가 close하며, Git 프로세스의 종료도 기다린다. interruption은 I/O 오류로 변환하지 않는다. 설계·측정·검증의 제한은 [I/O 범위 읽기 측정](io-range-performance.md)에 기록한다.
+
+## 2026-10-11: Background 결과 조회의 확정된 읽기 실패
+
+- `get_background_result`는 저장된 task와 결과만 조회하므로 읽기 도구 목록에 포함한다. 없는 task나 결과 조회 오류는 owner가 확정된 실패 결과로 SDK에 전달하며, RPC 성공과 도구 성공을 구분한다. 실패 결과를 성공한 도구나 완료 근거로 기록하지 않는다.
+- `cancel_background_task`는 같은 목록에 넣지 않는다. 쓰기 도구의 예외·worker 종료에 대한 uncertain 기록과 재실행 차단을 유지한다. 이번 변경은 기존 uncertain 기록을 수정하거나 자동 복구하지 않는다.
+
+## 2026-10-11: 검증된 background 읽기 실패의 명시적 복구
+
+- 현재 Goal의 terminal 실패 run에서 마지막 `get_background_result` 하나만 uncertain인 경우, 직전 승인·binding·durable Failure와 다른 미완료 작업의 부재를 검증한 operator API가 별도 불변 receipt를 남긴다. schema 49는 원본 failed/uncertain/Failure를 보존하며 성공·완료 근거를 위조하지 않는다.
+- 새 run의 입장 검사와 owner effect fence는 receipt를 원본과 대조하여 해당 과거 run만 제외한다. 원래 run ID 재입장과 그 run의 새 read/write RPC 예약은 계속 거부한다. 다른 pending/uncertain, stale preview, 변경된 원본과 새로운 Goal의 별도 보호는 유지한다.
+- API는 fresh assessment digest·no-replay 확인·운영자가 복원 검증한 일관된 백업 식별자·세션 lease/cross-site 검사를 요구한다. 백업 확인은 operator assertion이며 API의 파일 검증이 아니다. 모델 도구로 제공하거나 메시지/agent 실행을 자동 요청하지 않는다. 실제 적용은 충분한 백업 공간과 복원 검증, 공유 서버 재시작/receipt 적용 승인을 확보한 뒤 진행한다.
+
+## 2026-10-11: 최소 읽기 복구와 DB 단일 기준
+
+- 한 건의 append-only 읽기 복구에는 원본 관련 레코드의 일관된 snapshot을 격리 DB에서 복원 검증하고 불변 revoke event로 차단을 되돌릴 수 있으면 `operator_verified_original_records`를 허용한다. 전체 DB backup만을 요구하는 앞선 판단을 수정한다. 실제 backup 검증은 operator 책임이며 전체 DB 복원 가능성을 보장하지 않는다.
+- 이미 실제 저장소에 적용된 schema 49를 유지하며 추가 version을 만들지 않는다. 실패 run·uncertain RPC·durable Failure는 수정하지 않고 새 run만 허용한다. 같은 binding 검사 함수의 preview로 admission을 확인하며 메시지·모델 호출·재생은 하지 않는다.
+- DB의 `user_version`과 실제 column 계약이 실행 경계의 기준이다. app만 단일 `BEGIN IMMEDIATE`에서 lock 뒤 버전을 다시 읽고 pending migrations 전체를 atomic commit한다. worker/native reader는 실제 DB를 먼저 검증하고 mismatch 때 초기화·실행 전에 거부한다. 기존 generation/content hash 검증은 유지한다.
+- 기존 failed/blocked task에 active attempt가 없으면 실행 중 작업으로 보지 않는다. active attempt 또는 queued/running/waiting/resuming 작업, 다른 불확실한 쓰기는 복구를 계속 차단한다.
+- 사용자가 미출시 상태를 확인했으므로 구 release/downgrade 설치를 완료 조건으로 요구하지 않는다. 데이터 보존·중간 실패 rollback·동시 시작 검증은 유지한다. Windows packaging은 CI에서 검증한다.
+
+## 2026-10-11: Subagent 보고서 조회의 확정된 읽기 실패
+
+- `get_subagent_report`와 `get_subagent_reports`는 보고서 조회와 run-local 결과 캐시만 수행하므로 읽기 도구로 분류한다. 영구 returned/reviewed·adoption은 별도 middleware/도구의 쓰기 경계에 남긴다. 없는 task/attempt의 확정된 오류는 failed SDK tool outcome으로 전달하고 RPC를 정상 settle하며 도구 성공·완료 근거로 만들지 않는다.
+- 명시적 background retrieval 복구는 이 두 보고서 조회의 UUID task/attempt와 인접한 승인 이름·모든 args를 재검증한다. 기존 schema 49와 policy 식별자를 유지한다. 다른 도구나 middleware의 uncertain을 포괄적으로 해제하지 않는다. 새 실패의 실제 적용은 사용자 요청으로 서버가 종료되어 대기 중이며 source의 readonly eligibility와 구분한다.
+
+## 2026-10-11: 명시적 기본 도구 effect 분류
+
+- 기본 도구의 read/effectful 계약을 단일 분류표로 관리하고 source 등록 완전성 검증을 추가한다. 새 literal 등록 이름과 검토되지 않은 등록 문법은 검증에서 실패한다. Unknown/custom/MCP는 effectful 기본값을 유지하며 read/get 접두사로 추론하지 않는다.
+- find_memory의 promoted-memory 조회 이력 INSERT와 Kagi의 외부 과금 호출은 순수 read에서 제외한다. wait_subagents 및 bound report evidence 조회는 ack/consumption·영구 쓰기가 없어 read로 분류한다. cancelled/interrupted 처리와 RPC side-effect reservation, 실패한 쓰기의 uncertain 보호는 유지한다.
+
+## 2026-10-11: dev 중복 실행과 시작 실패의 명시적 종료
+
+- dev 감독 프로세스는 자신이 시작할 backend/UI 포트의 사용 가능 여부를 backend build 전에 확인한다. 포트 충돌은 종료 코드 1로 보고하고 기존 서버는 유지한다. 의존성 빌드는 기존 Vite+ task 순서를 유지한다.
+- backend 준비 대기는 해당 자식 프로세스의 종료와 함께 감시한다. 이미 종료된 자식의 exit를 뒤늦게 기다리며 멈추지 않는다. UI 주소는 실제 Vite loopback 기본값인 `localhost`로 안내한다.
+- 동일 기본 명령의 재현·정상 시작·중복 실행, 격리 dev 회귀 17개, 실제 5173 UI 및 5180 health와 DB schema/기존 복구 기록 보존을 확인했다. 자세한 결과는 [dev 시작 검증](dev-startup-failure-2026-10-11.md)에 기록한다.
+
+## 2026-10-11: Effect 패치 정렬과 API 안정성 진단
+
+- 사용자 확인에 따라 공식 Effect RPC·Workflow·SQL 구현을 유지하며 app와 memory-agent의 `unstableApiUsage`만 off로 설정한다. 일반 타입 오류, 오류·취소·Scope 계약 검사를 유지하며 안정성 경고 때문에 실행 프로토콜을 자체 재구현하지 않는다.
+- 공개 registry의 Effect latest는 4.0.2였다. platform-node/vitest latest 4.0.3은 아직 게시되지 않은 effect 4.0.3을 peer로 요구하여 적용하지 않고, 실제 설치 가능한 effect/platform-node/vitest 4.0.2 조합을 정확한 버전으로 고정한다. 다른 사용자 의존성 변경은 유지한다.
+- 카탈로그의 최초 호출자 소유권을 유지한다. 대기자의 취소는 소유자 요청을 중단하지 않고, 소유자의 취소는 해당 요청의 AbortSignal과 현재 대기자에게 전달한다. Effect 4.0.2의 공유 cache 조회 수명에 의존하는 대신 Deferred·Ref·Semaphore와 짧은 uninterruptible admission/cleanup으로 이 계약을 표현한다. 실패·중단은 즉시 재시도 가능하고 성공 TTL은 30초로 유지한다.
+
+## 2026-10-11: 공식 Effect 서비스와 DB Migrator의 적용
+
+- unstable 진단만 끄고 일반 경고는 실제 API·타입·자원 소유권을 고친다. 경고를 종료 코드에서 제외하는 옵션이나 일반 진단 억제는 추가하지 않는다. 공식 RPC·Workflow·SQL을 자체 구현으로 교체하지 않는다.
+- DB Migrator는 기존 DatabaseSync 연결과 user_version을 유지한다. BEGIN IMMEDIATE 뒤 cursor를 읽고, legacy 이력 최초 채택·pending SQL·metadata·user_version·FK/행 보존 검증을 atomic commit/rollback한다. 기존 metadata 불일치는 초기화로 덮어쓰지 않고 거부한다.
+- 일반 HTTP/프로세스/파일 작업과 타이머는 공식 서비스·Scope/Fiber로 소유한다. 동기 SQLite fence와 SDK/native adapter에 남은 경계는 보존 계약과 전환 조건을 개별 기록하며, API가 없다는 포괄적 판단으로 억제하지 않는다.
+- full-loop worker는 Effect 포함 self-contained JS bundle이며 native.mjs는 owner의 Effect/TanStack/Node platform 서비스를 공유한다. 배포 runtime의 dependency 수집에 external Node platform을 포함한다. Windows 패키징은 CI에서 검증한다.
+- 구현·잔여 항목·검증은 [Effect 경고 전환 기록](effect-warning-remediation-2026-10-11.md)에 기록한다.
+
+## 2026-10-11: 동기 경계의 실제 비동기 서비스 이행
+
+- MCP·외부 ACP 설정 읽기와 신뢰/도구 조회, Skills catalog/read, CLI 폴더 검사 및 host 실행 파일 검사는 공식 FileSystem Effect를 반환하며 호출부도 함께 실행한다. 공개 채팅 handle에는 생성 시 캡처한 플랫폼 Context를 제공해 requirement 증가를 막는다.
+- 외부 ACP 프로세스와 SDK stream은 Scope·ChildProcessSpawner·NodeStream·NodeSink가 관리한다. Windows 명령의 literal 인자·npm shim escaping·shebang flags를 보존한다.
+- dev owner lock은 공식 FileSystem과 Scope로 획득/해제하며 정상 종료는 runtime dispose → lock release → process exit 순서다. stale PID lock 회수와 강제 종료 후 복구는 유지한다.
+- Goal asset 일반 생성·publication·adopt·dispose는 FileSystem Effect와 Semaphore로 관리한다. async 검증이 끝난 뒤 owner가 여전히 살아 있는지 DB pin 기록 직전 다시 확인한다. Worker 생성 직전의 동기 파일 fence와 lease release는 유지한다.
+- 공식 API에 없는 파일 보안·서명·프로세스 종료 정보 및 공식 Workflow type-erased 경계는 변경하지 않았고 추가 진단 억제도 적용하지 않았다. 해당 범위의 추가 결정은 [후속 기록](effect-warning-remediation-2026-10-11.md)에 있다.
+
+### 2026-10-11 — Activity의 encoded 결과 저장
+
+공식 Activity.executeEncoded가 이미 적용한 success/error codec을 owner Workflow 저장 경계에서 다시 적용하지 않는다. encoded Exit 모양만 저장·복구하고 공식 WorkflowEngine.makeUnsafe가 concrete schema를 한 번 디코딩한다. FiniteFromString 회귀로 중복 인코딩 오류를 재현하고 수정했다. 기존 identity codec의 저장 형식과 schema 49는 유지한다. PR #8900의 noFollow/positional read는 4.0.3 GitHub 릴리스에 포함됐지만 effect 4.0.3의 npm 배포가 확인되지 않아 버전 혼합이나 타입 패치를 하지 않았다. 진단 예외는 승인되지 않았으므로 보류한다.
+
+### 2026-10-11 — 공식 Effect preview 및 제한된 파일 API 전환
+
+사용자의 preview 설치 요청에 따라 effect, platform-node, platform-node-shared, vitest를 공식 main CI가 배포한 동일 커밋 `844a77b18c03b4faa386cf04bf94908d3d37abc7`의 pkg.pr.new URL로 고정한다. 네 패키지 모두 4.0.3이며 overrides로 간접 의존성도 동일 커밋을 사용한다. 공급망 정책의 영구 예외는 추가하지 않는다.
+
+일반 bounded 파일 읽기는 공식 scoped FileSystem.open의 noFollow와 positional read를 사용한다. checkLeaf는 열린 handle의 regular-file 및 단일 hard-link 조건을 검사하며 metadata가 없으면 거부한다. Windows 등 noFollow 미지원 플랫폼은 공식 BadArgument로 안전하게 실패한다. 편집 충돌 검사에는 nanosecond fstat 및 동일 FD가 필요하고 공식 File.Info는 이를 노출하지 않으므로 해당 native 경계는 유지한다. UUID 호출부는 preview의 함수 API로 맞춘다. Workflow unknown/any 경고 및 기존 native 경계 진단을 추가로 억제하지 않는다.
+
+### 2026-10-11 — Windows 정상 파일 읽기 회귀 수정
+
+앞선 모든 OS에 noFollow를 적용한 결정은 Windows의 정상 파일 읽기까지 거부하는 회귀를 만들었으므로 수정한다. macOS/Linux는 공식 FileSystem noFollow 및 positional read를 유지한다. Windows는 명시적 플랫폼 분기로 기존 native FileHandle의 positional read, fstat, close 오류 계약을 유지한다. 열린 handle의 checkLeaf regular-file/hard-link 검사와 caller의 디렉터리/leaf 검증도 유지하며, Windows helper 자체에서도 open 전에 lstat로 관찰된 symlink를 거부한다. 이 검사는 링크 교체 경쟁을 원자적으로 차단하지 않으며 기존 Windows에도 POSIX O_NOFOLLOW 보장은 없었다. Skills에서 허용하던 일반 hard-linked 파일은 checkLeaf=false일 때 계속 허용한다. 테스트는 Context.Reference로 Windows 분기를 주입하여 host OS 전역 변경 없이 검증한다. 실제 Windows 권한 및 파일 시스템 검증은 별도 CI가 필요하다.
+
+## Owner RPC fingerprint의 bounded evidence와 해시 비교 (2026-10-11)
+
+- 반복 context snapshot을 fingerprint에 저장하지 않고, 기존 canonical request 전체의 SHA-256과 명시적 버전 envelope로 비교한다. 진단·읽기 복구 입력은 16,384자까지, 큰 middleware는 index/hook만 보관한다. 권한·high-water·cached reply·uncertain fence는 유지한다.
+- 구형 fingerprint도 동일 digest로 비교하며 명시적 offline 변환만 지원한다. 불변 읽기 복구 receipt에 연결된 원래 fingerprint를 변경하지 않는다. 실제 변환과 공간 회수는 검증된 복구 백업과 전후 비-fingerprint 데이터 일치 확인을 전제로 한다.
+- 마이그레이션 백업은 검증·재기동·수용 이후 정리 가능한 일시 복구 자료다. 전체 원본의 영구 보관을 제품 요구사항으로 추가하지 않는다. 현재 완료 snapshot과 모델 context 압축은 참조 대상 원본을 대체하는 완전한 보관본이 아니므로 snapshot 완료만으로 ledger/실패/증거를 자동 삭제하지 않는다. 장기 정리는 독립 복원 검증과 run retirement/tombstone 및 최소 idempotency 증명 정책을 별도로 설계한다.
+- 상세 근거: [owner-rpc-fingerprint-remediation-2026-10-11.md](owner-rpc-fingerprint-remediation-2026-10-11.md).
+
+## 2026-10-11 — 백엔드 런타임의 명시적 설정과 소유권
+
+- 개발 backend는 고정 번들로 실행하며 UI만 HMR을 사용한다. `contextGeneractiveAgent`와 `contextGeneractiveBackendCleanup` 전역 변수 대신 서버 build의 entry가 동일한 agent runtime의 설정과 dispose를 제공한다. CLI는 첫 서비스 획득 전에 storage/runtime 경로를 설정한다.
+- backend Scope는 agent dispose 뒤 storage lock을 해제한다. signal과 beforeExit listener도 해당 Scope에서 제거하며 startup 실패에도 같은 정리 경로를 사용한다.
+- runtime 경로는 workerData의 별도 metadata로 전달한다. 기존 worker payload와 SDK 환경은 유지하며 process.env를 변경하지 않는다. checkout의 명시적 null 경로와 미설정 시 기존 환경 변수 fallback을 구분한다.
+- `memory-agent/runtime-resources`는 workspace 내부 TypeScript 진입점이다. types/development/import/default 조건은 같은 source를 가리키며 기존 exports:false 패키지 빌드 정책을 유지한다. 앱 서버·실행 파일 빌드는 이를 번들에 포함한다.
+- 새 React Router entry는 Web Stream으로 HEAD, shell/all-ready, 렌더 오류, 요청 취소와 렌더 deadline을 유지한다. 격리 Vite 개발조건에서 실제 세션 페이지 SSR을 검증하며 운영 DB와 모델을 사용하지 않는다.
+
+## 2026-10-11 — native search worker의 시작 의존성 제한
+
+- Native search worker는 필요한 공식 `@effect/platform-node/NodeFileSystem`과 `NodePath` 하위 모듈을 직접 가져온다. 전체 platform-node 진입점은 사용하지 않는 NodeRedis와 Redis SDK까지 ESM 평가하므로, 이 worker의 2초 시작 계약에는 불필요한 비용이다.
+- worker 생성·모듈 로딩·첫 SQLite 검사·native extension 초기화·ready를 /tmp의 격리 preload로 계측했다. 같은 공식 Effect preview와 원래 실패한 두 파일의 두 worker 실행에서 로딩 모듈은 1,113→310개로 감소했다. 스키마 검사, cache lease, 인덱스 초기화, IPC 계약과 2초 시작 제한은 변경하지 않는다.
+- 이 프로젝트는 릴리스 전 로컬 개발 환경이다. 요청된 수정은 실제 사용하는 dev 경로에 반영하며 별도 운영 배포 승인을 요구하지 않는다. 로컬 데이터 보존과 활성 모델 작업 보호는 유지한다. 재시작 전 DB의 running 기록 0개와 대상 세션 비실행 상태를 확인했다. 완료된 해시 마이그레이션을 다시 실행하지 않았다.
+
+## 2026-10-11 — release 서명과 Crypto 진단의 작업별 판정
+
+- release manifest의 canonical UTF-8, Ed25519 PKCS#8/SPKI PEM 키, 원문 직접 서명과 Base64 wire 계약을 보존한다. 서명을 SHA digest로 대체하지 않는다. 설치된 공식 Effect Crypto 및 NodeCrypto는 난수·UUID·SHA digest를 제공하지만 서명·검증·키 import/generation을 제공하지 않는다.
+- canonical UTF-8는 TextEncoder, 서명 Base64 출력은 공식 Effect Base64.encode를 사용한다. 입력의 기존 unpadded/base64url/whitespace 허용 계약은 엄격한 Base64.decode와 다르므로 기존 디코더를 유지한다.
+- TS377057은 모듈 단위 안내다. 개별 연산과 드라이버를 확인하여 판정하며 Crypto 경고 5곳 전체를 미지원으로 묶지 않는다. UUID는 지원되고, 서명·키 생성·상수시간 비교·증분 digest는 현재 서비스에 없다. 진단 억제나 다른 import 경로로 경고를 숨기지 않는다.

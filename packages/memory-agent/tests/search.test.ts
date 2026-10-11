@@ -27,12 +27,27 @@ import {
 } from "../src/memory/search.ts";
 import { Projects } from "../src/projects/projects.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
+import { fakeVector } from "../src/testing/fake-embedder.ts";
 import { ScriptedTextAdapter } from "../src/testing/scripted-adapter.ts";
 import { MemoryTools } from "../src/tools/memory.ts";
 import { testRuntime } from "./support/runtime.ts";
 import { withTestPlatform } from "./support/platform.ts";
 
 type Runtime = Awaited<ReturnType<typeof testRuntime>>["runtime"];
+
+const nativeTestEmbedderLayer = Layer.succeed(Embedder, {
+  identity: "fake-trigram-384",
+  dimensions: 384,
+  embed: (texts: readonly string[]) =>
+    Effect.succeed(
+      texts.map((text) => {
+        const vector = new Float32Array(384);
+        vector.set(fakeVector(text));
+        return vector;
+      }),
+    ),
+  runtime: () => ({ kind: "other" as const }),
+});
 
 /** An earlier session: a decision, then the assistant reads a file about it. */
 const earlierSession = Effect.fn("search.earlierSession")(function* (
@@ -212,6 +227,37 @@ describe("MemorySearch.find", () => {
       expect(result.degraded).toEqual([]);
       expect(result.matches[0]).toMatchObject({ id: target.id, foundBy: "vector" });
       expect(result.matches.map((match) => match.id)).not.toContain(distractors[0]?.id);
+    }).pipe(withTestPlatform),
+  );
+
+  it.live("uses the native seed path without changing project or graph result semantics", () =>
+    Effect.gen(function* () {
+      const { runtime, project, session, base } = yield* Effect.promise(() =>
+        testRuntime({ embedder: nativeTestEmbedderLayer }),
+      );
+      const earlier = yield* earlierSession(runtime, project.id, session.id);
+      const excluded = yield* otherProject(runtime, base, "SQLite로 결정한 다른 프로젝트 기록");
+      yield* Effect.provideContext(indexAll, yield* runtime.contextEffect);
+      const result = yield* Effect.provideContext(
+        Effect.flatMap(MemorySearch, (search) =>
+          search.find({
+            query: "SQLite로 결정했던 이유",
+            projectId: project.id,
+            crossProject: false,
+          }),
+        ),
+        yield* runtime.contextEffect,
+      );
+      expect(result.degraded).toEqual([]);
+      expect(result.unindexed).toBe(0);
+      expect(result.matches.map((match) => match.id)).not.toContain(excluded.node.id);
+      expect(result.matches.find((match) => match.id === earlier.decision.id)?.foundBy).toMatch(
+        /vector|text/,
+      );
+      expect(result.matches.find((match) => match.id === earlier.result.id)).toMatchObject({
+        foundBy: "graph",
+        fromOtherProject: false,
+      });
     }).pipe(withTestPlatform),
   );
 

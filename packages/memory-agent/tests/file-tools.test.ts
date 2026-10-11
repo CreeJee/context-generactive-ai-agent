@@ -1,12 +1,38 @@
 import { it } from "@effect/vitest";
 import { withTestPlatform } from "./support/platform.ts";
-// Git fixture commands use the native process boundary; filesystem resources belong to the test Scope.
-import { execFileSync } from "node:child_process";
-import { Cause, FileSystem, Layer, MutableHashMap, Effect, Path, Schema } from "effect";
+import { NodeServices } from "@effect/platform-node";
+import {
+  Cause,
+  Context,
+  FileSystem,
+  Layer,
+  MutableHashMap,
+  Effect,
+  Path,
+  Schema,
+  Stream,
+} from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { describe, expect } from "vite-plus/test";
 import { FileTools } from "../src/tools/files.ts";
 
 const isText = Schema.is(Schema.String);
+const gitFixture = Effect.fn("fileToolsTest.gitFixture")(function* (root: string, args: string[]) {
+  const platform = yield* Layer.build(NodeServices.layer);
+  const spawner = Context.get(platform, ChildProcessSpawner.ChildProcessSpawner);
+  const child = yield* spawner.spawn(
+    ChildProcess.make("git", args, { cwd: root, stdin: "ignore" }),
+  );
+  const [, , exitCode] = yield* Effect.all(
+    [
+      Stream.runDrain(child.stdout),
+      child.stderr.pipe(Stream.decodeText(), Stream.mkString),
+      child.exitCode,
+    ],
+    { concurrency: "unbounded" },
+  );
+  expect(exitCode).toBe(0);
+});
 const project = Effect.fn("fileToolsTest.project")(function* (
   files: MutableHashMap.MutableHashMap<string, string | Buffer>,
 ) {
@@ -86,7 +112,7 @@ describe("list_files", () => {
       );
       yield* fs.writeFileString(path.join(base, "outside.txt"), "x");
       yield* fs.symlink(path.join(base, "outside.txt"), path.join(root, "link.txt"));
-      execFileSync("git", ["init", "-q"], { cwd: root });
+      yield* gitFixture(root, ["init", "-q"]);
       const { listFiles } = yield* fileTools(root);
       expect(yield* run(listFiles, {})).toMatchObject({
         source: "git",
@@ -191,8 +217,8 @@ describe("search_files in a Git work tree", () => {
             ["src/한글.md", "첫 줄\n바늘 needle 둘째 줄\n"],
           ]),
         );
-        execFileSync("git", ["init", "-q"], { cwd: root });
-        execFileSync("git", ["add", "src/tracked.ts", ".gitignore"], { cwd: root });
+        yield* gitFixture(root, ["init", "-q"]);
+        yield* gitFixture(root, ["add", "src/tracked.ts", ".gitignore"]);
         const { searchFiles } = yield* fileTools(root);
         expect(yield* run(searchFiles, { query: "needle" })).toMatchObject({
           matches: [

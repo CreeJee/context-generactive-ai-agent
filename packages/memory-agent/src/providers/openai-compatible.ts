@@ -5,8 +5,9 @@ import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { isDeepStrictEqual } from "node:util";
 import { openaiCompatibleText } from "@tanstack/ai-openai/compatible";
-// Native host/SDK boundary uses cryptographic configuration fingerprints.
-import { createHash } from "node:crypto";
+import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { oauthProtocolPath } from "../oauth/node-runtime.ts";
 import {
   Cause,
   Config,
@@ -20,6 +21,11 @@ import {
   Stream,
 } from "effect";
 import { GlobalConfig, type GlobalConfigApi } from "../config/global-config.ts";
+import { StorageRoot } from "../config/storage-root.ts";
+import {
+  traceCompatibleResponse,
+  type CompatibleTraceIdentity,
+} from "./compatible-response-trace.ts";
 import { requireRuntime } from "../runtime/resources.ts";
 import { ModelUnavailable, type ProviderServices, type ProviderModel } from "./contracts.ts";
 import {
@@ -143,10 +149,24 @@ export function validateCompatibleConfiguration(
   return { ...value, baseUrl: url.href.replace(/\/+$/, ""), model: value.model.trim() };
 }
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function makeOpenAICompatibleSettings(
+export function makeOpenAICompatibleSettings(options: {
+  readonly config: GlobalConfigApi;
+  readonly keys?: CompatibleKeyStore | undefined;
+  readonly fetcher?: typeof fetch | undefined;
+  readonly traceDirectory?: string | undefined;
+}) {
+  return makeOpenAICompatibleSettingsBody(
+    options.config,
+    options.keys,
+    options.fetcher,
+    options.traceDirectory,
+  );
+}
+function makeOpenAICompatibleSettingsBody(
   config: GlobalConfigApi,
   keys: CompatibleKeyStore = keychain,
   fetcher: typeof fetch = fetch,
+  traceDirectory?: string,
 ) {
   const updates = Semaphore.makeUnsafe(1);
   // Keyring calls cannot be cancelled once started. Never retry an uncertain write automatically.
@@ -472,6 +492,9 @@ export function makeOpenAICompatibleSettings(
           () => ({ value: null, failed: true }),
         );
         let promptDiagnostic = "Compatible request message roles unavailable";
+        const traceContext = new AsyncLocalStorage<CompatibleTraceIdentity>();
+        const adapterId = Effect.runSync(oauthProtocolCrypto.randomUUIDv4());
+        let sequence = 0;
         const adapter = openaiCompatibleText(selection.model, {
           baseURL: settings.baseUrl,
           apiKey: "unused",
@@ -550,7 +573,20 @@ export function makeOpenAICompatibleSettings(
                       redirect: "error",
                       signal,
                     });
-                  return yield* nativePromise(send);
+                  return isTruthy(traceDirectory)
+                    ? yield* nativePromise(() =>
+                        traceCompatibleResponse({
+                          directory: traceDirectory,
+                          identity: {
+                            ...traceContext.getStore(),
+                            adapterId,
+                            sequence: ++sequence,
+                          },
+                          request: send,
+                          signal: signal,
+                        }),
+                      )
+                    : yield* nativePromise(send);
                 }).pipe(
                   Effect.catchCause((failure) =>
                     Effect.gen(function* () {
@@ -577,7 +613,7 @@ export function makeOpenAICompatibleSettings(
                         cause,
                       });
                       // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-                      console.error(error.message);
+                      yield* Effect.logError(error.message);
                       return yield* new Cause.UnknownError(error);
                     }),
                   ),
@@ -604,8 +640,12 @@ export function makeOpenAICompatibleSettings(
                 );
                 return {
                   pull: Effect.gen(function* () {
-                    const next = yield* nativePromise(() => source.next());
-                    if (next.done) return yield* Cause.done();
+                    const next = yield* nativePromise(() =>
+                      traceContext.run({ threadId: options.threadId, runId: options.runId }, () =>
+                        source.next(),
+                      ),
+                    );
+                    if (next.done === true) return yield* Cause.done();
                     const chunk = next.value;
                     if (!settings.toolCalling && String(chunk.type).startsWith("TOOL_CALL"))
                       return yield* new Cause.UnknownError(
@@ -639,7 +679,11 @@ export function makeOpenAICompatibleSettings(
           );
         return Object.assign(adapter, {
           releaseRun: () => runAbort.abort(),
-          historyKey: createHash("sha256").update(settings.baseUrl).digest("hex"),
+          historyKey: Buffer.from(
+            Effect.runSync(
+              oauthProtocolCrypto.digest("SHA-256", new TextEncoder().encode(settings.baseUrl)),
+            ),
+          ).toString("hex"),
         });
       },
       contextWindow: () => {
@@ -663,20 +707,33 @@ export class OpenAICompatibleSettings extends Context.Service<
   static readonly layerWith = (
     keys: Layer.Layer<CompatibleKeyring>,
     fetcher: Layer.Layer<CompatibleFetch>,
+    traceDirectory?: string,
   ) =>
     Layer.effect(
       OpenAICompatibleSettings,
       Effect.gen(function* () {
         const config = yield* GlobalConfig;
-        return makeOpenAICompatibleSettings(
-          config,
-          yield* CompatibleKeyring,
-          yield* CompatibleFetch,
-        );
+        return makeOpenAICompatibleSettings({
+          config: config,
+          keys: yield* CompatibleKeyring,
+          fetcher: yield* CompatibleFetch,
+          traceDirectory: traceDirectory,
+        });
       }),
     ).pipe(Layer.provide(Layer.merge(keys, fetcher)));
-  static readonly layer = OpenAICompatibleSettings.layerWith(
-    CompatibleKeyring.layer,
-    CompatibleFetch.layer,
+  static readonly layer = Layer.effect(
+    OpenAICompatibleSettings,
+    Effect.gen(function* () {
+      return makeOpenAICompatibleSettings({
+        config: yield* GlobalConfig,
+        keys: keychain,
+        fetcher: fetch,
+        traceDirectory: oauthProtocolPath.join(
+          (yield* StorageRoot).path,
+          "diagnostics",
+          "openai-compatible",
+        ),
+      });
+    }),
   );
 }

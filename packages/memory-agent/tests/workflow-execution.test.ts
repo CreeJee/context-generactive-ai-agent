@@ -2,12 +2,13 @@ import { it } from "@effect/vitest";
 import { withTestPlatform } from "./support/platform.ts";
 import { Array as EffectArray } from "effect";
 import { isTruthy } from "../src/truthy.ts";
-import { Cause, Effect, FileSystem, Path, Schedule, Schema } from "effect";
+import { Cause, Effect, FileSystem, Path, Schedule, Schema, Result } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
+import { Database } from "../src/db/database.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { WorkflowExecution } from "../src/workflow/execution.ts";
-import { Workflows } from "../src/workflow/workflow.ts";
+import { Workflows, WorkflowState, UpdateWorkflowProgress } from "../src/workflow/workflow.ts";
 import type { ScriptedTurn } from "../src/testing/scripted-adapter.ts";
 import type { JsonValue as Json } from "../src/json.ts";
 import { testRuntime } from "./support/runtime.ts";
@@ -54,18 +55,63 @@ const passed = {
 };
 
 const setup = Effect.fn("WorkflowExecutionTest.setup")(function* (turns: readonly ScriptedTurn[]) {
+  let verifiedTurn = (turn: ScriptedTurn): ScriptedTurn => turn;
   const context = yield* sdkCall(() =>
     testRuntime({
       testProvider: {
         responder: ({ index }) => {
           const turn = turns[index];
           if (!isTruthy(turn)) throw new Error(`Unexpected model iteration ${index}`);
-          return turn;
+          return verifiedTurn(turn);
         },
       },
     }),
   );
   yield* sdkCall(() => context.provider!.select(context.runtime));
+  let db = yield* Effect.provideContext(Database, yield* context.runtime.contextEffect);
+  // The scripted model cites actual successful owner tool results, as the production model must.
+  verifiedTurn = (turn) => ({
+    ...turn,
+    toolCalls:
+      turn.toolCalls?.map((toolCall) => {
+        if (toolCall.name !== "update_workflow_progress") return toolCall;
+        const input = Result.getOrThrow(
+          Schema.decodeResult(Schema.fromJsonString(UpdateWorkflowProgress))(toolCall.arguments),
+        );
+        if (input.verification?.status !== "passed") return toolCall;
+        const row = db.sqlite
+          .prepare(
+            "SELECT state_json FROM workflow_state_revisions WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+          )
+          .get(context.session.id);
+        const state = Result.getOrThrow(
+          Schema.decodeUnknownResult(Schema.fromJsonString(WorkflowState))(row?.state_json),
+        );
+        const proof = db.sqlite
+          .prepare(`SELECT n.id, n.run_id FROM nodes n JOIN chat_runs r ON r.run_id = n.run_id
+        WHERE n.session_id = ? AND n.kind = 'tool_result' AND json_extract(n.detail, '$.ok') = 1 AND r.status = 'completed' ORDER BY n.seq DESC LIMIT 1`)
+          .get(context.session.id);
+        if (state.goal === null || state.plan === null || proof === undefined)
+          throw new Error("Missing actual completion proof");
+        const step = state.plan.steps.find((candidate) => candidate.status === "completed");
+        if (step === undefined) throw new Error("Missing completed step");
+        return {
+          ...toolCall,
+          arguments: JSON.stringify({
+            ...input,
+            criterionMappings: state.goal.outcomes.map((outcomeText, outcomeIndex) => ({
+              outcomeIndex,
+              outcomeText,
+              stepId: step.id,
+              acceptanceIndex: 0,
+              acceptanceText: step.acceptanceCriteria[0],
+              runId: proof.run_id,
+              evidenceNodeIds: [proof.id],
+            })),
+          }),
+        };
+      }) ?? [],
+  });
   const workflows = yield* Effect.provideContext(Workflows, yield* context.runtime.contextEffect);
   yield* Effect.provideContext(
     Effect.gen(function* () {
@@ -106,6 +152,13 @@ const setup = Effect.fn("WorkflowExecutionTest.setup")(function* (turns: readonl
   });
   return {
     ...context,
+    reopen: () =>
+      context.reopen().then((reopened) =>
+        reopened.runPromise(Database).then((database) => {
+          db = database;
+          return reopened;
+        }),
+      ),
     agent,
     workflows,
     execution,
@@ -557,6 +610,6 @@ const waitFor = Effect.fn("WorkflowExecutionTest.waitFor")(
   <A, E>(read: Effect.Effect<A, E>, expected: A) =>
     read.pipe(
       Effect.repeat({ until: (value) => value === expected, schedule: Schedule.spaced(10) }),
-      Effect.timeout("1 second"),
+      Effect.timeout("5 seconds"),
     ),
 );

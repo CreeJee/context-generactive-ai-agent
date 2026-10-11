@@ -2,7 +2,7 @@ import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { MutableHashMap, HashSet, Array as EffectArray, DateTime, Clock, Semaphore } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
+import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import type { SQLOutputValue } from "node:sqlite";
 import { chat } from "@tanstack/ai";
 import { Context, Data, Effect, Layer, Option, Schema } from "effect";

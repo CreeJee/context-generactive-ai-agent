@@ -4,7 +4,8 @@ import { Result, Function as EffectFunction } from "effect";
 // In a checkout Node runs this file as TypeScript; the executable ships it bundled
 // (`scripts/package.ts`).
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { join } from "node:path";
+import { path as platformPath } from "../runtime/synchronous-path.ts";
+const { join } = platformPath;
 import { parentPort, workerData } from "node:worker_threads";
 import { DateTime, Cause, Effect, Exit, Layer, ManagedRuntime, Schema } from "effect";
 import { GlobalConfig } from "../config/global-config.ts";

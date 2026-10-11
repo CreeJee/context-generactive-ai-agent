@@ -64,10 +64,27 @@ export const publishOAuthProfileEffect = Effect.fn("publishOAuthProfile")(functi
     .prepare(`INSERT INTO oauth_profiles(id, provider, label, selected, created_at)
     VALUES (?, ?, ?, 0, ?)`)
     .run(id, provider, label.trim(), DateTime.toEpochMillis(DateTime.nowUnsafe()));
-  return listOAuthProfiles(sqlite, provider).find((profile) => profile.id === id)!;
+  return listOAuthProfiles({ sqlite: sqlite, provider: provider }).find(
+    (profile) => profile.id === id,
+  )!;
 });
 
-export function publishOAuthProfile(
+export function publishOAuthProfile(options: {
+  readonly sqlite: DatabaseSync;
+  readonly provider: OAuthProvider;
+  readonly id: string;
+  readonly label: string;
+  readonly accounts?: ProfileCredentialStore | undefined;
+}) {
+  return publishOAuthProfileBody(
+    options.sqlite,
+    options.provider,
+    options.id,
+    options.label,
+    options.accounts,
+  );
+}
+function publishOAuthProfileBody(
   sqlite: DatabaseSync,
   provider: OAuthProvider,
   id: string,
@@ -85,7 +102,9 @@ export const selectOAuthProfileEffect = Effect.fn("selectOAuthProfile")(function
   id: string,
   accounts: ProfileCredentialStore = createProfileCredentialStore(),
 ) {
-  const target = listOAuthProfiles(sqlite, provider).find((profile) => profile.id === id);
+  const target = listOAuthProfiles({ sqlite: sqlite, provider: provider }).find(
+    (profile) => profile.id === id,
+  );
   if (!isTruthy(target)) return yield* new Cause.UnknownError(new Error("oauth_profile_not_found"));
   if (oauthProfileRemoving(sqlite, provider, id))
     return yield* new Cause.UnknownError(new Error("oauth_profile_removing"));
@@ -118,7 +137,15 @@ export const selectOAuthProfileEffect = Effect.fn("selectOAuthProfile")(function
   return { ...target, selected: true };
 });
 
-export function selectOAuthProfile(
+export function selectOAuthProfile(options: {
+  readonly sqlite: DatabaseSync;
+  readonly provider: OAuthProvider;
+  readonly id: string;
+  readonly accounts?: ProfileCredentialStore | undefined;
+}) {
+  return selectOAuthProfileBody(options.sqlite, options.provider, options.id, options.accounts);
+}
+function selectOAuthProfileBody(
   sqlite: DatabaseSync,
   provider: OAuthProvider,
   id: string,
@@ -145,7 +172,7 @@ function renameOAuthProfileBody(
     .prepare("UPDATE oauth_profiles SET label = ? WHERE id = ? AND provider = ?")
     .run(label.trim(), id, provider);
   if (updated.changes !== 1) throw new Error("oauth_profile_not_found");
-  return listOAuthProfiles(sqlite, provider).find((item) => item.id === id)!;
+  return listOAuthProfiles({ sqlite: sqlite, provider: provider }).find((item) => item.id === id)!;
 }
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
@@ -156,14 +183,16 @@ export const removeOAuthProfileEffect = Effect.fn("removeOAuthProfile")(function
   accounts: ProfileCredentialStore = createProfileCredentialStore(),
   legacy: CredentialStore = createKeychainCredentialStore(),
 ) {
-  const profile = listOAuthProfiles(sqlite, provider).find((item) => item.id === id);
+  const profile = listOAuthProfiles({ sqlite: sqlite, provider: provider }).find(
+    (item) => item.id === id,
+  );
   if (!isTruthy(profile))
     return yield* new Cause.UnknownError(new Error("oauth_profile_not_found"));
   const finishRemoval = beginOAuthProfileRemoval(sqlite, provider, id);
   return yield* Effect.gen(function* () {
     let fallback: OAuthProfile | undefined;
     if (profile.selected) {
-      for (const candidate of listOAuthProfiles(sqlite, provider).filter(
+      for (const candidate of listOAuthProfiles({ sqlite: sqlite, provider: provider }).filter(
         (item) => item.id !== id,
       )) {
         if (isTruthy(yield* nativePromise(() => accounts.read(provider, candidate.id)))) {
@@ -197,11 +226,26 @@ export const removeOAuthProfileEffect = Effect.fn("removeOAuthProfile")(function
         throw error;
       }
     });
-    return listOAuthProfiles(sqlite, provider);
+    return listOAuthProfiles({ sqlite: sqlite, provider: provider });
   }).pipe(Effect.ensuring(Effect.sync(finishRemoval)));
 });
 
-export function removeOAuthProfile(
+export function removeOAuthProfile(options: {
+  readonly sqlite: DatabaseSync;
+  readonly provider: OAuthProvider;
+  readonly id: string;
+  readonly accounts?: ProfileCredentialStore | undefined;
+  readonly legacy?: CredentialStore | undefined;
+}) {
+  return removeOAuthProfileBody(
+    options.sqlite,
+    options.provider,
+    options.id,
+    options.accounts,
+    options.legacy,
+  );
+}
+function removeOAuthProfileBody(
   sqlite: DatabaseSync,
   provider: OAuthProvider,
   id: string,
@@ -211,7 +255,13 @@ export function removeOAuthProfile(
   return runNativeEffect(removeOAuthProfileEffect(sqlite, provider, id, accounts, legacy));
 }
 
-export function listOAuthProfiles(sqlite: DatabaseSync, provider?: OAuthProvider): OAuthProfile[] {
+export function listOAuthProfiles(options: {
+  readonly sqlite: DatabaseSync;
+  readonly provider?: OAuthProvider | undefined;
+}) {
+  return listOAuthProfilesBody(options.sqlite, options.provider);
+}
+function listOAuthProfilesBody(sqlite: DatabaseSync, provider?: OAuthProvider): OAuthProfile[] {
   const rows = isTruthy(provider)
     ? sqlite
         .prepare(
@@ -262,7 +312,9 @@ export const importLegacyOAuthProfileEffect = Effect.fn("importLegacyOAuthProfil
     )
   )
     return null;
-  const existing = listOAuthProfiles(sqlite, provider).find((item) => item.id === id);
+  const existing = listOAuthProfiles({ sqlite: sqlite, provider: provider }).find(
+    (item) => item.id === id,
+  );
   const stored = yield* nativePromise(() => accounts.read(provider, id));
   if (isTruthy(existing) && isTruthy(stored)) return existing;
   const credential = yield* nativePromise(() => legacy.read(provider));
@@ -296,7 +348,9 @@ export const importLegacyOAuthProfileEffect = Effect.fn("importLegacyOAuthProfil
           id,
           provider,
           `${provider === "openai" ? "ChatGPT" : "Claude"} (이전 계정)`,
-          listOAuthProfiles(sqlite, provider).some((item) => item.selected) ? 0 : 1,
+          listOAuthProfiles({ sqlite: sqlite, provider: provider }).some((item) => item.selected)
+            ? 0
+            : 1,
           DateTime.toEpochMillis(DateTime.nowUnsafe()),
         );
       sqlite.exec("COMMIT");
@@ -305,10 +359,25 @@ export const importLegacyOAuthProfileEffect = Effect.fn("importLegacyOAuthProfil
       throw error;
     }
   });
-  return listOAuthProfiles(sqlite, provider).find((item) => item.id === id) ?? null;
+  return (
+    listOAuthProfiles({ sqlite: sqlite, provider: provider }).find((item) => item.id === id) ?? null
+  );
 });
 
-export function importLegacyOAuthProfile(
+export function importLegacyOAuthProfile(options: {
+  readonly sqlite: DatabaseSync;
+  readonly provider: OAuthProvider;
+  readonly accounts?: ProfileCredentialStore | undefined;
+  readonly legacy?: CredentialStore | undefined;
+}) {
+  return importLegacyOAuthProfileBody(
+    options.sqlite,
+    options.provider,
+    options.accounts,
+    options.legacy,
+  );
+}
+function importLegacyOAuthProfileBody(
   sqlite: DatabaseSync,
   provider: OAuthProvider,
   accounts: ProfileCredentialStore = createProfileCredentialStore(),

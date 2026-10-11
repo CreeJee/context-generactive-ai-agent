@@ -1,8 +1,7 @@
 import { nativePromise, nativeFailure, runNativeEffect } from "../runtime/native-effect.ts";
 import { Cause, Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { createHash } from "node:crypto";
+import { sha256 } from "../runtime/synchronous-crypto.ts";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { AnyServerTool } from "@tanstack/ai";
@@ -16,6 +15,7 @@ import {
   Context,
   Data,
   Effect,
+  FileSystem,
   Layer,
   Schema,
 } from "effect";
@@ -78,7 +78,7 @@ export const mcpToolName: {
 function mcpToolNameBody(server: string, tool: string) {
   const plain = `${mcpToolPrefix}${server}__${tool.replace(/[^A-Za-z0-9_-]/g, "_")}`;
   if (plain.length <= 64) return plain;
-  const hash = createHash("sha256").update(tool).digest("hex").slice(0, 8);
+  const hash = sha256(tool).slice(0, 8);
   return `${plain.slice(0, 55)}_${hash}`;
 }
 
@@ -149,6 +149,7 @@ const truncated = (text: string) =>
 const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
   const { sqlite } = yield* Database;
+  const fs = yield* FileSystem.FileSystem;
   const connections = MutableHashMap.empty<string, Connection>();
 
   const selectTrust = sqlite.prepare(
@@ -165,9 +166,13 @@ const make = Effect.gen(function* () {
   const connectionKey = (project: Project, server: ConfiguredServer) =>
     `${project.id}/${server.scope}/${server.name}`;
 
-  const configured = (project: Project) => {
-    const global = readMcpFile(globalMcpFile(storage.path), "global");
-    const local = readMcpFile(projectMcpFile(project.root), "project");
+  const configured = Effect.fn("mcp.configured")(function* (project: Project) {
+    const global = yield* readMcpFile(globalMcpFile(storage.path), "global").pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
+    );
+    const local = yield* readMcpFile(projectMcpFile(project.root), "project").pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
+    );
     const trust = decodeTrustRows(selectTrust.all(project.id));
     const trustedFingerprint = (server: ConfiguredServer) =>
       trust.find((row) => row.scope === server.scope && row.name === server.name)?.fingerprint ??
@@ -199,7 +204,7 @@ const make = Effect.gen(function* () {
       })),
       servers,
     };
-  };
+  });
 
   const close = (key: string) => {
     const connection = Option.getOrUndefined(MutableHashMap.get(connections, key));
@@ -338,7 +343,7 @@ const make = Effect.gen(function* () {
 
   const stateOf = (
     project: Project,
-    entry: ReturnType<typeof configured>["servers"][number],
+    entry: Effect.Success<ReturnType<typeof configured>>["servers"][number],
   ): McpServerState => {
     if (entry.trusted === null) return { status: "untrusted" };
     if (entry.trusted !== entry.server.fingerprint) return { status: "changed" };
@@ -350,8 +355,8 @@ const make = Effect.gen(function* () {
       : { status: "trusted" };
   };
 
-  const overview = (project: Project): McpOverview => {
-    const { files, servers } = configured(project);
+  const overview = Effect.fn("mcp.overview")(function* (project: Project) {
+    const { files, servers } = yield* configured(project);
     return {
       files,
       servers: servers.map((entry) => ({
@@ -368,8 +373,8 @@ const make = Effect.gen(function* () {
         shadowed: entry.shadowed,
         state: stateOf(project, entry),
       })),
-    };
-  };
+    } satisfies McpOverview;
+  });
 
   yield* Effect.addFinalizer(() =>
     Effect.forEach(
@@ -384,7 +389,7 @@ const make = Effect.gen(function* () {
   );
 
   return {
-    overview: (project: Project) => Effect.sync(() => overview(project)),
+    overview,
 
     /**
      * Trusting starts the exact configuration now and reports what it offers; it approves no tool
@@ -392,7 +397,7 @@ const make = Effect.gen(function* () {
      */
     setTrusted: (project: Project, scope: McpScope, name: string, trusted: boolean) =>
       Effect.gen(function* () {
-        const entry = configured(project).servers.find(
+        const entry = (yield* configured(project)).servers.find(
           (candidate) => candidate.server.scope === scope && candidate.server.name === name,
         );
         const projectId = scope === "global" ? "" : project.id;
@@ -401,9 +406,9 @@ const make = Effect.gen(function* () {
           // A global server may be running for any project.
           for (const key of MutableHashMap.keys(connections))
             if (key.endsWith(`/${scope}/${name}`)) close(key);
-          return overview(project);
+          return yield* overview(project);
         }
-        if (!isTruthy(entry)) return overview(project);
+        if (!isTruthy(entry)) return yield* overview(project);
         upsertTrust.run(
           scope,
           projectId,
@@ -416,7 +421,7 @@ const make = Effect.gen(function* () {
             try: () => discover(project, entry.server),
             catch: (cause) => new McpOperationFailed({ operation: "trust", cause }),
           });
-        return overview(project);
+        return yield* overview(project);
       }),
 
     /**
@@ -425,7 +430,7 @@ const make = Effect.gen(function* () {
      */
     tools: (project: Project) =>
       Effect.gen(function* () {
-        const usable = configured(project).servers.filter(
+        const usable = (yield* configured(project)).servers.filter(
           (entry) => !entry.shadowed && entry.trusted === entry.server.fingerprint,
         );
         const lists = yield* Effect.forEach(

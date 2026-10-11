@@ -1,3 +1,5 @@
+import { testHttpClient } from "./support/http.ts";
+import type { HttpClientResponse } from "effect/http";
 import { it } from "@effect/vitest";
 import { waitUntil } from "./support/wait-until.ts";
 import { Cause, Clock, Deferred, Effect, Fiber, MutableHashMap, Option } from "effect";
@@ -115,7 +117,7 @@ const fixture = Effect.fn("oauthLoginTest.fixture")(function* () {
     legacy,
     legacyStore,
     attempts,
-    manager: createOAuthAccountLoginManager(db, accounts, start),
+    manager: createOAuthAccountLoginManager({ sqlite: db, accounts: accounts, startLogin: start }),
   };
 });
 
@@ -144,37 +146,48 @@ describe("multi-account OAuth login manager", () => {
           ),
         );
         let login!: LoginAttempt;
-        const manager = createOAuthAccountLoginManager(db, accounts, (p, id) =>
-          createSubscriptionOAuthClient({
-            protocol: {
-              ...providerProtocols[p],
-              callbackPort: null,
-              callbackRedirectHost: "127.0.0.1",
-            },
-            fetch: tokenFetch,
-            store: {
-              read: () => accounts.read(p, id),
-              write: (_, value) => {
-                writes += 1;
-                return accounts.write(p, id, value);
+        const manager = createOAuthAccountLoginManager({
+          sqlite: db,
+          accounts: accounts,
+          startLogin: (p, id) =>
+            createSubscriptionOAuthClient({
+              protocol: {
+                ...providerProtocols[p],
+                callbackPort: null,
+                callbackRedirectHost: "127.0.0.1",
               },
-              remove: () => accounts.remove(p, id),
-            },
-          })
-            .startLogin()
-            .then((attempt) => {
-              login = attempt;
-              return attempt;
-            }),
-        );
-        let first: Promise<Response> | undefined;
+              fetch: tokenFetch,
+              store: {
+                read: () => accounts.read(p, id),
+                write: (_, value) => {
+                  writes += 1;
+                  return accounts.write(p, id, value);
+                },
+                remove: () => accounts.remove(p, id),
+              },
+            })
+              .startLogin()
+              .then((attempt) => {
+                login = attempt;
+                return attempt;
+              }),
+        });
+        let first:
+          | Fiber.Fiber<
+              HttpClientResponse.HttpClientResponse,
+              import("effect/http/HttpClientError").HttpClientError
+            >
+          | undefined;
         try {
           const pending = yield* sdkCall(() => manager.start(provider, "concurrent profile"));
           const authorize = new URL(pending.login.authorizationUrl!);
           const callback = new URL(authorize.searchParams.get("redirect_uri")!);
           callback.searchParams.set("code", "first-code");
           callback.searchParams.set("state", authorize.searchParams.get("state")!);
-          const initiated = fetch(callback);
+          const initiated = yield* Effect.forkChild(
+            (yield* testHttpClient()).get(callback.toString()),
+            { startImmediately: true },
+          );
           first = initiated;
           yield* Deferred.await(exchanging);
           for (const [code, state] of [
@@ -185,17 +198,17 @@ describe("multi-account OAuth login manager", () => {
             const duplicate = new URL(callback);
             duplicate.searchParams.set("code", code!);
             duplicate.searchParams.set("state", state!);
-            const rejected = yield* sdkCall(() => fetch(duplicate));
+            const rejected = yield* (yield* testHttpClient()).get(duplicate.toString());
             expect(rejected.status).toBe(410);
-            yield* sdkCall(() => rejected.text());
+            yield* rejected.text;
           }
           expect(tokenFetch).toHaveBeenCalledTimes(1);
           expect(writes).toBe(0);
           expect(manager.profiles(provider).profiles).toEqual([]);
           release();
-          const response = yield* sdkCall(() => initiated);
+          const response = yield* Fiber.join(initiated);
           expect(response.status).toBe(200);
-          yield* sdkCall(() => response.text());
+          yield* response.text;
           yield* sdkCall(() => login.completed);
           yield* waitUntil(
             () => manager.profiles(provider).login.status === "completed",
@@ -210,7 +223,11 @@ describe("multi-account OAuth login manager", () => {
           expect(tokenFetch).toHaveBeenCalledTimes(1);
         } finally {
           release();
-          yield* sdkCall(() => first?.then((response) => response.text()).catch(() => {}));
+          if (first !== undefined)
+            yield* Fiber.join(first).pipe(
+              Effect.flatMap((response) => response.text),
+              Effect.ignore,
+            );
           yield* sdkCall(() => manager.cancel(provider));
           db.close();
         }
@@ -223,7 +240,14 @@ describe("multi-account OAuth login manager", () => {
         const { db, accounts, slots, legacy, legacyStore, attempts, manager } = yield* fixture();
         try {
           yield* sdkCall(() => legacyStore.write(provider, credential("original")));
-          yield* sdkCall(() => importLegacyOAuthProfile(db, provider, accounts, legacyStore));
+          yield* sdkCall(() =>
+            importLegacyOAuthProfile({
+              sqlite: db,
+              provider: provider,
+              accounts: accounts,
+              legacy: legacyStore,
+            }),
+          );
           for (const suffix of [1, 2]) {
             const pending = yield* sdkCall(() => manager.start(provider, `계정 ${suffix}`));
             expect(pending.login).toMatchObject({ status: "pending" });
@@ -271,7 +295,14 @@ describe("multi-account OAuth login manager", () => {
       const { db, accounts, legacyStore, attempts, manager } = yield* fixture();
       try {
         yield* sdkCall(() => legacyStore.write("openai", credential("original")));
-        yield* sdkCall(() => importLegacyOAuthProfile(db, "openai", accounts, legacyStore));
+        yield* sdkCall(() =>
+          importLegacyOAuthProfile({
+            sqlite: db,
+            provider: "openai",
+            accounts: accounts,
+            legacy: legacyStore,
+          }),
+        );
         yield* sdkCall(() => manager.start("openai", "new account"));
         const attempt = Option.getOrUndefined(MutableHashMap.get(attempts, "openai"))!;
         yield* sdkCall(() => accounts.write("openai", attempt.id, credential("new")));

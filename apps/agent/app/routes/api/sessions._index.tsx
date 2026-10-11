@@ -50,7 +50,7 @@ export function action({ request }: Route.ActionArgs) {
       const response = Effect.gen(function* () {
         if (isTruthy(external)) {
           const project = yield* (yield* Projects).get(projectId);
-          if (!(yield* ExternalAgents).available(project).includes(external))
+          if (!(yield* (yield* ExternalAgents).available(project)).includes(external))
             return Response.json({ error: "external_agent_unavailable" }, { status: 409 });
         }
         const session = yield* (yield* Sessions).create(projectId, title ?? null, external ?? null);

@@ -85,7 +85,7 @@ const fixture = Effect.fnUntraced(function* (options: {
             { signal },
           ),
       }),
-    evaluate: (_client, profile, split, signal, consume, _image, progress) => {
+    evaluate: ({ profile, split, signal, consume, onProgress: progress }) => {
       if (options.hold !== undefined) return options.hold(signal);
       return runEffect(
         Effect.sync(() => {

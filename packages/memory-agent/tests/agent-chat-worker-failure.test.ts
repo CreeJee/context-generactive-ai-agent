@@ -6,7 +6,7 @@ const sdkCall = Effect.fn("workerFailure.sdkCall")(function* <A>(
     catch: (cause) => new Cause.UnknownError(cause),
   });
 });
-import { Cause, ConfigProvider, Deferred, Effect, Fiber, Layer, Schema } from "effect";
+import { Cause, Context, Deferred, Effect, Fiber, Schema } from "effect";
 import { it } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
@@ -45,11 +45,7 @@ for (const toolFirst of [false, true]) {
     `real worker midstream failure preserves durable output and denies replay${toolFirst ? " after a tool" : ""}`,
     () =>
       Effect.gen(function* () {
-        const flagServices = yield* Layer.build(
-          ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ CONTEXT_AGENT_GOAL_WORKER: "1" }), {
-            asPrimary: true,
-          }),
-        );
+        const testServices = Context.empty();
         const gate = turnGate();
         const modelStarted = yield* Deferred.make<void>();
         const lookupArguments = yield* Schema.encodeEffect(
@@ -88,16 +84,16 @@ for (const toolFirst of [false, true]) {
           const { db, workflows, chat } = yield* Effect.provideContext(
             Effect.all({ db: Database, workflows: Workflows, chat: AgentChat }),
             yield* context.runtime.contextEffect,
-          ).pipe(Effect.provideContext(flagServices));
+          ).pipe(Effect.provideContext(testServices));
           yield* Effect.provideContext(
             workflows.updateGoal(context.session.id, goal),
             yield* context.runtime.contextEffect,
-          ).pipe(Effect.provideContext(flagServices));
+          ).pipe(Effect.provideContext(testServices));
           const runId = toolFirst ? "failed-worker-with-tool" : "failed-worker";
           const response = yield* Effect.provideContext(
             chat.handle(yield* request(context.session.id, runId), context.session.id),
             yield* context.runtime.contextEffect,
-          ).pipe(Effect.provideContext(flagServices));
+          ).pipe(Effect.provideContext(testServices));
           expect(response.status).toBe(200);
           const deliveredFiber = yield* Effect.forkChild(sdkCall(() => response.text()));
           yield* Deferred.await(modelStarted);
@@ -110,7 +106,7 @@ for (const toolFirst of [false, true]) {
             const duplicate = yield* Effect.provideContext(
               chat.handle(yield* request(context.session.id, duplicateId), context.session.id),
               yield* context.runtime.contextEffect,
-            ).pipe(Effect.provideContext(flagServices));
+            ).pipe(Effect.provideContext(testServices));
             expect(duplicate.status).toBe(409);
             expect(userCount()).toEqual({ n: 1 });
           }
@@ -140,7 +136,7 @@ for (const toolFirst of [false, true]) {
           const owner = yield* Effect.provideContext(
             Effect.all({ db: Database, chat: AgentChat }),
             yield* reopened.contextEffect,
-          ).pipe(Effect.provideContext(flagServices));
+          ).pipe(Effect.provideContext(testServices));
           expect(
             owner.db.sqlite.prepare("SELECT status FROM chat_runs WHERE run_id = ?").get(runId),
           ).toEqual({ status: "failed" });
@@ -152,7 +148,7 @@ for (const toolFirst of [false, true]) {
               context.session.id,
             ),
             yield* reopened.contextEffect,
-          ).pipe(Effect.provideContext(flagServices));
+          ).pipe(Effect.provideContext(testServices));
           expect(replay.status).toBe(200);
           expect
             .soft(yield* sdkCall(() => replay.text()))
@@ -161,7 +157,7 @@ for (const toolFirst of [false, true]) {
             const retry = yield* Effect.provideContext(
               owner.chat.handle(yield* request(context.session.id, retryId), context.session.id),
               yield* reopened.contextEffect,
-            ).pipe(Effect.provideContext(flagServices));
+            ).pipe(Effect.provideContext(testServices));
             expect(retry.status).toBe(409);
           }
           expect(context.provider!.adapter.invocations.length).toBe(callsBeforeRestart);

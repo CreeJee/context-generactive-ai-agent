@@ -1,4 +1,5 @@
-import { DateTime, Effect, Layer } from "effect";
+import { NodeCrypto } from "@effect/platform-node";
+import { Crypto, DateTime, Effect, Layer } from "effect";
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import { Database } from "../src/db/database.ts";
@@ -14,9 +15,13 @@ const testLayer = () => {
   return Layer.mergeAll(database, nodes, trace, knowledge);
 };
 const run = Effect.fnUntraced(function* <A, E>(
-  program: Effect.Effect<A, E, Database | Nodes | WorkTraceStore | KnowledgePromotions>,
+  program: Effect.Effect<
+    A,
+    E,
+    Database | Nodes | WorkTraceStore | KnowledgePromotions | Crypto.Crypto
+  >,
 ) {
-  const services = yield* Layer.build(testLayer());
+  const services = yield* Layer.build(Layer.merge(testLayer(), NodeCrypto.layer));
   return yield* Effect.provideContext(program, services);
 }, Effect.scoped);
 

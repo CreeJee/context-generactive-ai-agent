@@ -1,8 +1,6 @@
 import { nativeStream } from "../src/runtime/native-stream.ts";
 import { Stream } from "effect";
-// The worker gateway consumes a real Node stdin stream; this fixture keeps that transport boundary.
-import { PassThrough } from "node:stream";
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope, Queue } from "effect";
 import { it } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import { WorkerGateway, type GatewayRequest } from "../src/rrsi/worker-gateway.ts";
@@ -13,14 +11,14 @@ import type { NormalizedStreamEvent } from "../src/oauth/protocol.ts";
 const request = (body: string) =>
   Effect.flatMap(WorkerGateway, (gateway) => gateway.request("request", body));
 const inputFixture = Effect.acquireRelease(
-  Effect.sync(() => new PassThrough()),
-  (input) =>
-    Effect.sync(() => {
-      input.destroy();
-    }),
+  Effect.gen(function* () {
+    const queue = yield* Queue.make<Uint8Array, Cause.Done>();
+    return { queue, stream: Stream.fromQueue(queue) };
+  }),
+  (input) => Queue.end(input.queue),
 );
 const reply = Effect.fn("workerGateway.reply")(function* (
-  input: PassThrough,
+  input: Effect.Success<typeof inputFixture>,
   id: string,
   body: string,
 ) {
@@ -34,7 +32,7 @@ const reply = Effect.fn("workerGateway.reply")(function* (
       }),
     ),
   )({ kind: "response", id, ok: true, body });
-  input.write(json + "\n");
+  yield* Queue.offer(input.queue, new TextEncoder().encode(json + "\n"));
 });
 
 it.live(
@@ -45,7 +43,7 @@ it.live(
       const sent: GatewayRequest[] = [];
       const ready = yield* Deferred.make<void>();
       const services = yield* Layer.build(
-        WorkerGateway.layer(input, (frame) => {
+        WorkerGateway.layer(input.stream, (frame) => {
           sent.push(frame);
           if (sent.length === 2) Deferred.doneUnsafe(ready, Effect.void);
         }),
@@ -68,13 +66,13 @@ it.live("stdin close fails pending and future requests instead of leaving waiter
     const input = yield* inputFixture;
     const ready = yield* Deferred.make<void>();
     const services = yield* Layer.build(
-      WorkerGateway.layer(input, () => Deferred.doneUnsafe(ready, Effect.void)),
+      WorkerGateway.layer(input.stream, () => Deferred.doneUnsafe(ready, Effect.void)),
     );
     const completed = yield* Effect.forkChild(
       Effect.provideContext(request("waiting").pipe(Effect.result), services),
     );
     yield* Deferred.await(ready);
-    input.end();
+    yield* Queue.end(input.queue);
     expect((yield* Fiber.join(completed))._tag).toBe("Failure");
     expect(
       (yield* Effect.provideContext(request("after-close").pipe(Effect.result), services))._tag,
@@ -89,7 +87,7 @@ it.live("cancelled request cannot settle the following request through a late re
     const first = yield* Deferred.make<void>();
     const second = yield* Deferred.make<void>();
     const services = yield* Layer.build(
-      WorkerGateway.layer(input, (frame) => {
+      WorkerGateway.layer(input.stream, (frame) => {
         sent.push(frame);
         Deferred.doneUnsafe(sent.length === 1 ? first : second, Effect.void);
       }),

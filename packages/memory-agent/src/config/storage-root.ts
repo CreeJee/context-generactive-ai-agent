@@ -1,10 +1,16 @@
 import { homedir } from "node:os";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { join } from "node:path";
-import { Context, Layer } from "effect";
+import * as NodePath from "@effect/platform-node/NodePath";
+import { Context, Effect, Layer, Path } from "effect";
 
 /** `~/.context-generactive-agent`: database, vector indexes, models and config. */
-export const defaultStorageRoot = join(homedir(), ".context-generactive-agent");
+export const defaultStorageRoot = Effect.runSync(
+  Effect.scoped(
+    Effect.gen(function* () {
+      const services = yield* Layer.build(NodePath.layer);
+      return Context.get(services, Path.Path).join(homedir(), ".context-generactive-agent");
+    }),
+  ),
+);
 
 /** Directory holding the database, vector indexes and global config. Never inside a project. */
 export class StorageRoot extends Context.Service<StorageRoot, { readonly path: string }>()(

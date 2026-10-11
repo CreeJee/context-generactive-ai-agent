@@ -1,12 +1,13 @@
 import { nativeStream } from "../runtime/native-stream.ts";
 import { it } from "@effect/vitest";
-import { Cause, Effect, FileSystem, Path, Schema, Stream } from "effect";
+import { Cause, Effect, FileSystem, Layer, Path, Stream } from "effect";
+import { NodeHttpServer } from "@effect/platform-node";
+import { HttpClient, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { withTestPlatform } from "../../tests/support/platform.ts";
 // SQLite and the TanStack SDK retain their native synchronous transaction and HTTP contracts.
 import { isTruthy } from "../truthy.ts";
 import { describe, expect } from "vite-plus/test";
 import { DatabaseSync } from "node:sqlite";
-import { createServer } from "node:http";
 import {
   resumeServerSentEventsResponse,
   toServerSentEventsResponse,
@@ -123,82 +124,53 @@ describe("central SQLite SDK durability", () => {
               if (db.sqlite.isOpen) db.sqlite.close();
             }),
           );
-          const runNative = Effect.runPromiseWith(yield* Effect.context<never>());
           let producerCalls = 0;
-          const server = createServer((request, response) => {
-            void runNative(
-              Effect.gen(function* () {
-                const offset = request.headers["last-event-id"];
-                const adapter = sqliteStreamDurability({
-                  ...db,
-                  resumeOffset: Array.isArray(offset) ? (offset[0] ?? null) : (offset ?? null),
-                });
-                const produce = () =>
-                  nativeStream(
-                    Stream.suspend(() => {
-                      producerCalls++;
-                      return Stream.fromIterable([chunk("RUN_STARTED"), chunk("RUN_FINISHED")]);
-                    }),
-                  );
-                const result =
-                  request.url === "/resume"
-                    ? resumeServerSentEventsResponse({ adapter })
-                    : toServerSentEventsResponse(produce(), { durability: { adapter } });
-                response.writeHead(result.status, Object.fromEntries(result.headers));
-                yield* Stream.runForEach(
-                  Stream.fromAsyncIterable(result.body!, (cause) => new Cause.UnknownError(cause)),
-                  (bytes) =>
-                    Effect.sync(() => {
-                      response.write(bytes);
-                    }),
-                );
-                response.end();
-              }).pipe(
-                Effect.catchCause(() =>
-                  Effect.sync(() => {
-                    response.writeHead(400);
-                    response.end();
+          const httpServices = yield* Layer.build(NodeHttpServer.layerTest);
+          const server = yield* Effect.provideContext(HttpServer.HttpServer, httpServices);
+          const http = yield* Effect.provideContext(HttpClient.HttpClient, httpServices);
+          yield* server.serve(
+            Effect.gen(function* () {
+              const request = yield* HttpServerRequest.HttpServerRequest;
+              const adapter = sqliteStreamDurability({
+                ...db,
+                resumeOffset: request.headers["last-event-id"] ?? null,
+              });
+              const produce = () =>
+                nativeStream(
+                  Stream.suspend(() => {
+                    producerCalls++;
+                    return Stream.fromIterable([chunk("RUN_STARTED"), chunk("RUN_FINISHED")]);
                   }),
-                ),
-              ),
-            );
-          });
-          yield* Effect.acquireRelease(
-            Effect.callback<void, Cause.UnknownError>((resume) => {
-              const failed = (cause: Error) => resume(Effect.fail(new Cause.UnknownError(cause)));
-              server.once("error", failed);
-              server.listen(0, "127.0.0.1", () => resume(Effect.void));
-              return Effect.sync(() => server.off("error", failed));
-            }),
-            () =>
-              Effect.callback<void>((resume) => {
-                server.closeAllConnections();
-                server.close(() => resume(Effect.void));
-              }),
+                );
+              const result =
+                request.url === "/resume"
+                  ? resumeServerSentEventsResponse({ adapter })
+                  : toServerSentEventsResponse(produce(), { durability: { adapter } });
+              return HttpServerResponse.stream(
+                Stream.fromAsyncIterable(result.body!, (cause) => new Cause.UnknownError(cause)),
+                { status: result.status, headers: Object.fromEntries(result.headers) },
+              );
+            }).pipe(
+              Effect.catchCause(() => Effect.succeed(HttpServerResponse.empty({ status: 400 }))),
+            ),
           );
-          const address = yield* Schema.decodeUnknownEffect(Schema.Struct({ port: Schema.Int }))(
-            server.address(),
-          );
-          const url = `http://127.0.0.1:${address.port}`;
-          const liveResponse = yield* sdkCall(() => fetch(url));
-          const live = yield* sdkCall(() => liveResponse.text());
+          const liveResponse = yield* http.get("/");
+          const live = yield* liveResponse.text;
           const ids = [...live.matchAll(/^id: (.+)$/gm)].map((match) => match[1]!);
           expect(ids).toHaveLength(3); // SDK inserts a persisted RUN_ACCEPTED CUSTOM event.
           expect(ids.every((id) => id.startsWith("sdk-stream:v1:run:"))).toBe(true);
           db.sqlite.close();
           db = owner(path);
-          const replayResponse = yield* sdkCall(() =>
-            fetch(`${url}/resume`, { headers: { "Last-Event-ID": ids[1]! } }),
-          );
-          const replay = yield* sdkCall(() => replayResponse.text());
+          const replayResponse = yield* http.get("/resume", {
+            headers: { "Last-Event-ID": ids[1]! },
+          });
+          const replay = yield* replayResponse.text;
           expect(replay).not.toContain("RUN_STARTED");
           expect(replay).toContain("RUN_FINISHED");
           expect(replay).toContain(`id: ${ids[2]}`);
           expect(producerCalls).toBe(1);
           expect(
-            (yield* sdkCall(() =>
-              fetch(`${url}/resume`, { headers: { "Last-Event-ID": "forged" } }),
-            )).status,
+            (yield* http.get("/resume", { headers: { "Last-Event-ID": "forged" } })).status,
           ).toBe(400);
         }),
       ),

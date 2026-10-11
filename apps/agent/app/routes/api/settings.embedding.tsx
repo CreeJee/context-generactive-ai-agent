@@ -37,7 +37,7 @@ export function action({ request }: Route.ActionArgs) {
       if (Result.isFailure(body))
         return Response.json({ error: "invalid_embedding_action" }, { status: 400 });
 
-      return yield* Effect.gen(function* () {
+      {
         const setup = yield* EmbeddingSetup;
         const command = body.success;
         switch (command.action) {
@@ -46,7 +46,7 @@ export function action({ request }: Route.ActionArgs) {
           case "check":
             return Response.json(yield* setup.recheck);
         }
-      });
+      }
     }),
   );
 }

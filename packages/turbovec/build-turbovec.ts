@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync } from "node:fs";
+import { copyFileSync, renameSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
@@ -18,5 +18,9 @@ const libraries: Partial<Record<NodeJS.Platform, string>> = {
 };
 const library = libraries[process.platform];
 if (!library) throw new Error("Unsupported build host");
-copyFileSync(join(root, "target/release", library), join(root, "memory-turbovec.node"));
+// Do not truncate a library already mmap'ed by a running user server.
+const destination = join(root, "memory-turbovec.node");
+const staged = `${destination}.${process.pid}.tmp`;
+copyFileSync(join(root, "target/release", library), staged);
+renameSync(staged, destination);
 console.log("Built local turbovec addon; no cross-platform binary distribution is implied.");

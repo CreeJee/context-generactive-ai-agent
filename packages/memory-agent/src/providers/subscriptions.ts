@@ -27,19 +27,19 @@ const make = Effect.gen(function* () {
     client: anthropicClient,
   });
 
-  return providerRegistryFrom(
-    [openai, anthropic],
-    [
+  return providerRegistryFrom({
+    configurations: [openai, anthropic],
+    runtimes: [
       createSubscriptionRuntime("openai", openaiClient, openai.contextWindow),
       createSubscriptionRuntime("anthropic", anthropicClient, anthropic.contextWindow),
     ],
-    (provider) =>
+    subscriptionDependencies: (provider) =>
       Effect.succeed(
         provider === "openai"
           ? { client: openaiClient, catalogWindow: openai.contextWindow }
           : { client: anthropicClient, catalogWindow: anthropic.contextWindow },
       ),
-  );
+  });
 });
 
 /** Product subscription auth, catalogs, and native model runtimes for both providers. */
@@ -49,8 +49,14 @@ export const SubscriptionProviderRegistry = Layer.effect(ProviderRegistry, make)
 const makeForAccounts = Effect.gen(function* () {
   const config = yield* GlobalConfig;
   const { sqlite } = yield* Database;
-  const openaiClient = createAccountBoundSubscriptionClients(sqlite, "openai");
-  const anthropicClient = createAccountBoundSubscriptionClients(sqlite, "anthropic");
+  const openaiClient = createAccountBoundSubscriptionClients({
+    sqlite: sqlite,
+    provider: "openai",
+  });
+  const anthropicClient = createAccountBoundSubscriptionClients({
+    sqlite: sqlite,
+    provider: "anthropic",
+  });
   const openai = createSubscriptionProvider({
     protocol: providerProtocols.openai,
     config,
@@ -63,19 +69,19 @@ const makeForAccounts = Effect.gen(function* () {
     client: anthropicClient.client,
     catalogKey: anthropicClient.catalogKey,
   });
-  return providerRegistryFrom(
-    [openai, anthropic],
-    [
+  return providerRegistryFrom({
+    configurations: [openai, anthropic],
+    runtimes: [
       createSubscriptionRuntime("openai", openaiClient.forRun, openai.contextWindow),
       createSubscriptionRuntime("anthropic", anthropicClient.forRun, anthropic.contextWindow),
     ],
-    (provider) =>
+    subscriptionDependencies: (provider) =>
       Effect.succeed(
         provider === "openai"
           ? { client: openaiClient.forRun, catalogWindow: openai.contextWindow }
           : { client: anthropicClient.forRun, catalogWindow: anthropic.contextWindow },
       ),
-  );
+  });
 });
 
 export const AccountSubscriptionProviderRegistry = Layer.effect(ProviderRegistry, makeForAccounts);

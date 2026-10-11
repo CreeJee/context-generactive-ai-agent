@@ -8,11 +8,14 @@ import {
   Path,
   Schedule,
   Schema,
+  Stream,
 } from "effect";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
-import { execFile } from "node:child_process";
+import { NodeChildProcessSpawner, NodeServices } from "@effect/platform-node";
+import { FetchHttpClient, HttpClient } from "effect/http";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import {
   ArchiveHost,
   ArchiveInstaller,
@@ -72,42 +75,61 @@ const hostFailure =
   (cause: unknown) =>
     ArchiveInstallFailed.make({ reason: { _tag: "HostOperationFailed", operation, cause } });
 
-/** Wait for close before releasing staging, including when interruption kills tar. */
-const archiveCommand = (options: {
-  readonly operation: "list" | "extract";
-  readonly args: ReadonlyArray<string>;
-  readonly maxBuffer: number;
-}) =>
-  Effect.callback<string, ArchiveInstallFailed>((resume) => {
-    let closed = false;
-    let outcome: Effect.Effect<string, ArchiveInstallFailed> | undefined;
-    const child = execFile(
-      tarExecutable(),
-      [...options.args],
-      { maxBuffer: options.maxBuffer },
-      (error, stdout) => {
-        outcome =
-          error === null
-            ? Effect.succeed(stdout)
-            : Effect.fail(hostFailure(options.operation)(error));
-      },
+interface ArchiveCommandOutput {
+  readonly chunks: Uint8Array[];
+  readonly size: number;
+}
+
+/** Each command scope drains output and settles the process before releasing staging. */
+const archiveCommand = Effect.fn("ArchiveHost.command")(function* (
+  options: {
+    readonly operation: "list" | "extract";
+    readonly args: ReadonlyArray<string>;
+    readonly maxBuffer: number;
+  },
+  spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
+) {
+  const collect = (output: ChildProcessSpawner.ChildProcessHandle["stdout"]) =>
+    output.pipe(
+      Stream.runFoldEffect(
+        (): ArchiveCommandOutput => ({ chunks: [], size: 0 }),
+        (state, chunk) => {
+          const size = state.size + chunk.byteLength;
+          if (size > options.maxBuffer)
+            return Effect.fail(hostFailure(options.operation)("tar output exceeds buffer limit"));
+          state.chunks.push(chunk);
+          return Effect.succeed({ chunks: state.chunks, size });
+        },
+      ),
+      Effect.map(({ chunks, size }) => {
+        const bytes = new Uint8Array(size);
+        let offset = 0;
+        for (const chunk of chunks) {
+          bytes.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        return new TextDecoder().decode(bytes);
+      }),
     );
-    child.once("close", () => {
-      closed = true;
-      resume(
-        outcome ??
-          Effect.fail(hostFailure(options.operation)("tar closed without a completion callback")),
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      const child = yield* spawner.spawn(
+        ChildProcess.make(tarExecutable(), [...options.args], { stdin: "ignore" }),
       );
-    });
-    return Effect.callback<void>((complete) => {
-      if (closed) {
-        complete(Effect.void);
-        return;
-      }
-      child.once("close", () => complete(Effect.void));
-      child.kill();
-    });
-  });
+      const [stdout, , exitCode] = yield* Effect.all(
+        [collect(child.stdout), collect(child.stderr), child.exitCode],
+        { concurrency: "unbounded" },
+      );
+      if (exitCode !== 0)
+        return yield* hostFailure(options.operation)(`tar exited with code ${exitCode}`);
+      return stdout;
+    }).pipe(
+      Effect.mapError((cause) =>
+        Schema.is(ArchiveInstallFailed)(cause) ? cause : hostFailure(options.operation)(cause),
+      ),
+    ),
+  );
+});
 
 const removalCode = Schema.is(
   Schema.Struct({
@@ -128,6 +150,8 @@ export const archiveHostLayer = Layer.effect(
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const crypto = yield* Crypto.Crypto;
+    const client = yield* HttpClient.HttpClient;
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     // Node filesystem calls cannot abort; settle each call before staging is released.
     const remove = (file: string) =>
       fs.remove(file, { recursive: true, force: true }).pipe(
@@ -139,22 +163,23 @@ export const archiveHostLayer = Layer.effect(
       );
     return ArchiveHost.of({
       download: Effect.fn("ArchiveHost.download")(function* (url: string) {
-        // One fiber signal owns both the request and consumption of its response body.
-        return yield* Effect.tryPromise({
-          try: (signal) =>
-            fetch(url, { redirect: "follow", signal }).then((response) => {
-              if (!response.ok) {
-                throw ArchiveInstallFailed.make({
-                  reason: { _tag: "HttpStatus", status: response.status },
-                });
-              }
-              return response.arrayBuffer().then((bytes) => new Uint8Array(bytes));
-            }),
-          catch: (cause) =>
-            Schema.is(ArchiveInstallFailed)(cause)
-              ? cause
-              : ArchiveInstallFailed.make({ reason: { _tag: "DownloadFailed", cause } }),
-        });
+        const response = yield* client
+          .get(url)
+          .pipe(
+            Effect.mapError((cause) =>
+              ArchiveInstallFailed.make({ reason: { _tag: "DownloadFailed", cause } }),
+            ),
+          );
+        if (response.status < 200 || response.status >= 300)
+          return yield* ArchiveInstallFailed.make({
+            reason: { _tag: "HttpStatus", status: response.status },
+          });
+        return yield* response.arrayBuffer.pipe(
+          Effect.map((bytes) => new Uint8Array(bytes)),
+          Effect.mapError((cause) =>
+            ArchiveInstallFailed.make({ reason: { _tag: "DownloadFailed", cause } }),
+          ),
+        );
       }),
       checksum: (options) =>
         crypto.digest(options.algorithm === "sha256" ? "SHA-256" : "SHA-512", options.bytes).pipe(
@@ -175,17 +200,23 @@ export const archiveHostLayer = Layer.effect(
           .writeFile(options.staging.file, options.bytes, { mode: 0o600 })
           .pipe(Effect.uninterruptible, Effect.mapError(hostFailure("write"))),
       list: (staging) =>
-        archiveCommand({
-          operation: "list",
-          args: ["-tzf", staging.file],
-          maxBuffer: 64 * 1024 * 1024,
-        }),
+        archiveCommand(
+          {
+            operation: "list",
+            args: ["-tzf", staging.file],
+            maxBuffer: 64 * 1024 * 1024,
+          },
+          spawner,
+        ),
       extract: (staging) =>
-        archiveCommand({
-          operation: "extract",
-          args: ["-xzf", staging.file, "-C", staging.directory],
-          maxBuffer: 1024 * 1024,
-        }).pipe(Effect.asVoid),
+        archiveCommand(
+          {
+            operation: "extract",
+            args: ["-xzf", staging.file, "-C", staging.directory],
+            maxBuffer: 1024 * 1024,
+          },
+          spawner,
+        ).pipe(Effect.asVoid),
       publish: Effect.fn("ArchiveHost.publish")(
         function* (options: { readonly staging: ArchiveStaging; readonly target: string }) {
           yield* remove(options.staging.file);
@@ -204,6 +235,13 @@ export const archiveHostLayer = Layer.effect(
       cleanup: (staging) => remove(staging.directory).pipe(Effect.mapError(hostFailure("cleanup"))),
     });
   }),
+).pipe(
+  Layer.provide(
+    Layer.merge(
+      FetchHttpClient.layer,
+      NodeChildProcessSpawner.layer.pipe(Layer.provide(NodeServices.layer)),
+    ),
+  ),
 );
 
 const installerLayer = ArchiveInstaller.layer.pipe(

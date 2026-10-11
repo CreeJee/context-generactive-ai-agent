@@ -1,9 +1,8 @@
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { createHash, randomUUID } from "node:crypto";
+import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
 import type { DatabaseSync } from "node:sqlite";
-import { DateTime, Context, Effect, Layer, Schema } from "effect";
+import { Config, ConfigProvider, DateTime, Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import {
   baselineProfile,
@@ -28,7 +27,11 @@ const decodeExperiment = EffectFunction.flow(
   Result.getOrThrow,
 );
 export const profileHash = (profile: HarnessProfile) =>
-  createHash("sha256").update(JSON.stringify(profile)).digest("hex");
+  Buffer.from(
+    Effect.runSync(
+      oauthProtocolCrypto.digest("SHA-256", new TextEncoder().encode(JSON.stringify(profile))),
+    ),
+  ).toString("hex");
 export function makeHarnessStore(db: { sqlite: DatabaseSync; atomic: <A>(work: () => A) => A }) {
   const { sqlite, atomic } = db;
   const insert = sqlite.prepare("INSERT INTO rrsi_versions VALUES (?, ?)");
@@ -134,7 +137,14 @@ export function makeHarnessStore(db: { sqlite: DatabaseSync; atomic: <A>(work: (
       atomic(() => {
         if (!isTruthy(goalId))
           // Native host/SDK configuration boundary reads or forwards the host environment.
-          return process.env.CONTEXT_AGENT_RRSI_WORKER === "1" ? current() : get("baseline");
+          return Effect.runSync(
+            Config.String("CONTEXT_AGENT_RRSI_WORKER")
+              .pipe(Config.withDefault(""))
+              .parse(ConfigProvider.fromEnv())
+              .pipe(Effect.orDie),
+          ) === "1"
+            ? current()
+            : get("baseline");
         // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
         const saved = EffectFunction.flow(
           Schema.decodeUnknownResult(
@@ -152,7 +162,7 @@ export function makeHarnessStore(db: { sqlite: DatabaseSync; atomic: <A>(work: (
       atomic(() => {
         if (current().id !== expected) throw new Error("harness_frontier_changed");
         const version: HarnessVersion = {
-          id: randomUUID(),
+          id: Effect.runSync(oauthProtocolCrypto.randomUUIDv4()),
           parentId: expected,
           profile,
           kind: "profile",

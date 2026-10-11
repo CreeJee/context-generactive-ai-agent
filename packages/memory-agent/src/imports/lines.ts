@@ -1,6 +1,4 @@
-import { Function as EffectFunction } from "effect";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { closeSync, openSync, readSync } from "node:fs";
+import { Effect, FileSystem, Function as EffectFunction } from "effect";
 
 /** 1 MiB at a time: big enough that a 20 MB transcript is a few dozen reads, small enough to hold. */
 const chunkBytes = 1024 * 1024;
@@ -20,44 +18,54 @@ export interface LinesRead {
  * is what a cursor can be compared against the file's size. Cutting only at a newline is safe for
  * UTF-8: that byte never appears inside a multi-byte character.
  */
+const readLinesFromBody = Effect.fn("readLinesFrom")(function* (
+  path: string,
+  offset: number,
+  onLine: (line: string) => void,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      const handle = yield* fs.open(path, { flag: "r" });
+      yield* handle.seek(BigInt(offset), "start");
+      const chunk = new Uint8Array(chunkBytes);
+      const decoder = new TextDecoder();
+      let pending = new Uint8Array(0);
+      let lines = 0;
+      while (true) {
+        const read = yield* handle.read(chunk);
+        if (read === 0) break;
+        const combined = new Uint8Array(pending.length + read);
+        combined.set(pending);
+        combined.set(chunk.subarray(0, read), pending.length);
+        pending = combined;
+        let start = 0;
+        while (true) {
+          const end = pending.indexOf(newline, start);
+          if (end === -1) break;
+          const line = decoder.decode(pending.subarray(start, end)).trim();
+          if (line.length > 0) {
+            onLine(line);
+            lines += 1;
+          }
+          start = end + 1;
+        }
+        offset += start;
+        pending = pending.subarray(start);
+      }
+      return { offset, lines } satisfies LinesRead;
+    }),
+  );
+});
+
 export const readLinesFrom: {
+  (
+    path: string,
+    offset: number,
+    onLine: (line: string) => void,
+  ): ReturnType<typeof readLinesFromBody>;
   (
     offset: number,
     onLine: (line: string) => void,
   ): (path: string) => ReturnType<typeof readLinesFromBody>;
-} & typeof readLinesFromBody = EffectFunction.dual(3, readLinesFromBody);
-function readLinesFromBody(
-  path: string,
-  offset: number,
-  onLine: (line: string) => void,
-): LinesRead {
-  const handle = openSync(path, "r");
-  try {
-    const chunk = Buffer.allocUnsafe(chunkBytes);
-    let position = offset;
-    let pending = Buffer.alloc(0);
-    let lines = 0;
-    for (;;) {
-      const read = readSync(handle, chunk, 0, chunkBytes, position);
-      if (read === 0) break;
-      position += read;
-      pending = Buffer.concat([pending, chunk.subarray(0, read)]);
-      let start = 0;
-      for (;;) {
-        const end = pending.indexOf(newline, start);
-        if (end === -1) break;
-        const line = pending.subarray(start, end).toString("utf8").trim();
-        if (line.length > 0) {
-          onLine(line);
-          lines += 1;
-        }
-        start = end + 1;
-      }
-      offset += start;
-      pending = pending.subarray(start);
-    }
-    return { offset, lines };
-  } finally {
-    closeSync(handle);
-  }
-}
+} = EffectFunction.dual(3, readLinesFromBody);

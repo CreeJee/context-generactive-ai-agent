@@ -1,0 +1,1225 @@
+{
+  "date": "2026-10-08",
+  "fixture": "native-search-baseline-v1",
+  "sha256": {
+    "harness": "375c96f23642a26b9bd8300b9510e5ce0684ac4c167dfbeadc068a53347bcb59",
+    "search": "5bf9857fbf26e66568da3e95abc35cda0ef6a54ffe7583f5b1a315a7bfbc9d76",
+    "vectorIndex": "debda55723d5e83bc4be28f0db664291853b29cb51ada7e7b632dc64dbeb83c5",
+    "rustBinding": "f1d204a21084bfb9433adba7d23693d29cd330b61de4180c0a3deb964511efc6",
+    "loadedAddon": "db0fd75e0b3c9e2b514a87e26f1318aabd51f3b36d48ec99e1b9090e02e933ed"
+  },
+  "runs": [
+    {
+      "version": 1,
+      "node": "v26.8.2",
+      "idleHttpMs": {
+        "median": 0.9019169999999974,
+        "p95": 1.6693750000000023,
+        "max": 1.7249579999999867
+      },
+      "note": "Synthetic in-memory boundary fixture; first observation is not process-cold. UTF8 ID bytes exclude V8/NAPI overhead. Native wall includes NAPI input/output conversion; process CPU is not native-only CPU. HTTP is a loopback control, not application API. No graph/embedding/analyzer/provenance work measured.",
+      "cases": [
+        {
+          "count": 10000,
+          "projects": 1,
+          "dimensions": 384,
+          "bits": 4,
+          "k": 48,
+          "rounds": 20,
+          "isMainThread": true,
+          "threadId": 0,
+          "candidateCount": 2500,
+          "candidateIdUtf8Bytes": 9726,
+          "queryFloat32Bytes": 1536,
+          "responseJsonBytes": 1419,
+          "sqlCallsPerSearch": 51,
+          "firstObservationMs": {
+            "candidates": 1.50241699999998,
+            "conversion": 0.05254200000001674,
+            "native": 0.7775829999999928,
+            "mapping": 0.12000000000000455,
+            "fts": 6.2097499999999854,
+            "morph": 4.6520419999999945,
+            "total": 13.314333999999974,
+            "nativeBoundaryThreadCpu": 0.651
+          },
+          "warmStageMs": {
+            "candidates": {
+              "median": 1.351333000000011,
+              "p95": 1.5844579999999837,
+              "max": 1.683334000000002
+            },
+            "conversion": {
+              "median": 0.04695800000001782,
+              "p95": 0.06095799999997098,
+              "max": 0.06208300000002964
+            },
+            "native": {
+              "median": 0.45087499999999636,
+              "p95": 0.5076250000000755,
+              "max": 0.5428329999999733
+            },
+            "mapping": {
+              "median": 0.05962499999998272,
+              "p95": 0.08945800000003601,
+              "max": 0.1073749999999336
+            },
+            "fts": {
+              "median": 5.884833000000015,
+              "p95": 6.167208999999957,
+              "max": 6.6407500000000255
+            },
+            "morph": {
+              "median": 4.520667000000003,
+              "p95": 4.67308399999996,
+              "max": 4.677625000000035
+            },
+            "total": {
+              "median": 12.292083000000048,
+              "p95": 12.783166999999992,
+              "max": 13.568209000000024
+            },
+            "nativeBoundaryThreadCpu": {
+              "median": 0.434,
+              "p95": 0.486,
+              "max": 0.499
+            }
+          },
+          "httpControlMs": {
+            "median": 0.6943750000000364,
+            "p95": 248.92091699999997,
+            "max": 249.01979200000005
+          },
+          "httpRequests": 20,
+          "eventLoopMs": {
+            "p95": 249.561087,
+            "max": 249.561087
+          },
+          "processCpuMs": {
+            "user": 253.925,
+            "system": 4.447
+          },
+          "memoryBytes": {
+            "before": {
+              "rss": 193101824,
+              "heapTotal": 17563648,
+              "heapUsed": 13219288,
+              "external": 23519500,
+              "arrayBuffers": 15508241
+            },
+            "after": {
+              "rss": 202424320,
+              "heapTotal": 25427968,
+              "heapUsed": 17145976,
+              "external": 23519516,
+              "arrayBuffers": 15508257
+            },
+            "candidateHeapDeltaUpperObserved": 738440
+          }
+        },
+        {
+          "count": 10000,
+          "projects": 4,
+          "dimensions": 384,
+          "bits": 4,
+          "k": 48,
+          "rounds": 20,
+          "isMainThread": true,
+          "threadId": 0,
+          "candidateCount": 10000,
+          "candidateIdUtf8Bytes": 38894,
+          "queryFloat32Bytes": 1536,
+          "responseJsonBytes": 1398,
+          "sqlCallsPerSearch": 51,
+          "firstObservationMs": {
+            "candidates": 3.066500000000019,
+            "conversion": 0.14004099999999653,
+            "native": 1.1229999999999336,
+            "mapping": 0.04624999999998636,
+            "fts": 6.48695900000007,
+            "morph": 4.891124999999988,
+            "total": 15.753874999999994,
+            "nativeBoundaryThreadCpu": 1.115
+          },
+          "warmStageMs": {
+            "candidates": {
+              "median": 3.2554999999999836,
+              "p95": 3.8362919999999576,
+              "max": 3.8762919999999212
+            },
+            "conversion": {
+              "median": 0.1367089999999962,
+              "p95": 0.16399999999998727,
+              "max": 0.1750000000000682
+            },
+            "native": {
+              "median": 1.140416000000073,
+              "p95": 1.2279999999999518,
+              "max": 1.2581669999999576
+            },
+            "mapping": {
+              "median": 0.05600000000004002,
+              "p95": 0.07891700000004676,
+              "max": 0.08008300000005875
+            },
+            "fts": {
+              "median": 6.26141599999994,
+              "p95": 6.4321670000000495,
+              "max": 6.4489580000000615
+            },
+            "morph": {
+              "median": 4.862041999999974,
+              "p95": 4.990374999999972,
+              "max": 5.015333000000055
+            },
+            "total": {
+              "median": 15.835708000000068,
+              "p95": 16.519416999999976,
+              "max": 16.573167000000012
+            },
+            "nativeBoundaryThreadCpu": {
+              "median": 1.127,
+              "p95": 1.213,
+              "max": 1.224
+            }
+          },
+          "httpControlMs": {
+            "median": 0.7322090000000117,
+            "p95": 318.0316670000001,
+            "max": 318.153375
+          },
+          "httpRequests": 20,
+          "eventLoopMs": {
+            "p95": 317.456383,
+            "max": 317.456383
+          },
+          "processCpuMs": {
+            "user": 324.677,
+            "system": 6.939
+          },
+          "memoryBytes": {
+            "before": {
+              "rss": 203374592,
+              "heapTotal": 25952256,
+              "heapUsed": 20185104,
+              "external": 23519516,
+              "arrayBuffers": 15508257
+            },
+            "after": {
+              "rss": 228802560,
+              "heapTotal": 49020928,
+              "heapUsed": 38642128,
+              "external": 23519516,
+              "arrayBuffers": 15508257
+            },
+            "candidateHeapDeltaUpperObserved": 2960064
+          }
+        },
+        {
+          "count": 50000,
+          "projects": 1,
+          "dimensions": 384,
+          "bits": 4,
+          "k": 48,
+          "rounds": 20,
+          "isMainThread": true,
+          "threadId": 0,
+          "candidateCount": 12500,
+          "candidateIdUtf8Bytes": 59726,
+          "queryFloat32Bytes": 1536,
+          "responseJsonBytes": 1464,
+          "sqlCallsPerSearch": 51,
+          "firstObservationMs": {
+            "candidates": 6.63087500000006,
+            "conversion": 0.2394170000000031,
+            "native": 1.7354170000000977,
+            "mapping": 0.10779099999990649,
+            "fts": 31.849500000000035,
+            "morph": 23.836250000000064,
+            "total": 64.39925000000017,
+            "nativeBoundaryThreadCpu": 1.497
+          },
+          "warmStageMs": {
+            "candidates": {
+              "median": 6.630374999999731,
+              "p95": 7.385333000000173,
+              "max": 8.272583999999824
+            },
+            "conversion": {
+              "median": 0.22341699999969933,
+              "p95": 0.2503750000000764,
+              "max": 0.251540999999861
+            },
+            "native": {
+              "median": 1.7946249999999964,
+              "p95": 2.9090410000001157,
+              "max": 6.173625000000129
+            },
+            "mapping": {
+              "median": 0.0963329999999587,
+              "p95": 0.12395800000012969,
+              "max": 0.15499999999997272
+            },
+            "fts": {
+              "median": 31.41858400000001,
+              "p95": 32.29899999999998,
+              "max": 32.67987499999981
+            },
+            "morph": {
+              "median": 23.76883299999986,
+              "p95": 24.4348329999998,
+              "max": 25.351666000000023
+            },
+            "total": {
+              "median": 64.10858400000006,
+              "p95": 66.6586249999998,
+              "max": 67.11845799999992
+            },
+            "nativeBoundaryThreadCpu": {
+              "median": 1.499,
+              "p95": 1.55,
+              "max": 1.578
+            }
+          },
+          "httpControlMs": {
+            "median": 0.8232080000002497,
+            "p95": 1288.484375,
+            "max": 1288.5727499999998
+          },
+          "httpRequests": 20,
+          "eventLoopMs": {
+            "p95": 1289.748479,
+            "max": 1289.748479
+          },
+          "processCpuMs": {
+            "user": 1288.733,
+            "system": 34.528
+          },
+          "memoryBytes": {
+            "before": {
+              "rss": 398524416,
+              "heapTotal": 47595520,
+              "heapUsed": 23746000,
+              "external": 84961052,
+              "arrayBuffers": 76949793
+            },
+            "after": {
+              "rss": 400556032,
+              "heapTotal": 66994176,
+              "heapUsed": 42253240,
+              "external": 84961052,
+              "arrayBuffers": 76949793
+            },
+            "candidateHeapDeltaUpperObserved": 3919288
+          }
+        },
+        {
+          "count": 50000,
+          "projects": 4,
+          "dimensions": 384,
+          "bits": 4,
+          "k": 48,
+          "rounds": 20,
+          "isMainThread": true,
+          "threadId": 0,
+          "candidateCount": 50000,
+          "candidateIdUtf8Bytes": 238894,
+          "queryFloat32Bytes": 1536,
+          "responseJsonBytes": 1442,
+          "sqlCallsPerSearch": 51,
+          "firstObservationMs": {
+            "candidates": 18.581833000000188,
+            "conversion": 1.0060419999999795,
+            "native": 5.651083000000199,
+            "mapping": 0.11733299999968949,
+            "fts": 33.396000000000186,
+            "morph": 25.535417000000052,
+            "total": 84.2877080000003,
+            "nativeBoundaryThreadCpu": 5.374
+          },
+          "warmStageMs": {
+            "candidates": {
+              "median": 16.232540999999856,
+              "p95": 20.42558400000007,
+              "max": 21.711333000000195
+            },
+            "conversion": {
+              "median": 0.8927500000004329,
+              "p95": 1.0522909999999683,
+              "max": 1.1318750000000364
+            },
+            "native": {
+              "median": 5.5538329999999405,
+              "p95": 5.7845830000001115,
+              "max": 6.211084000000028
+            },
+            "mapping": {
+              "median": 0.11991600000010294,
+              "p95": 0.1655839999998534,
+              "max": 0.1680420000002414
+            },
+            "fts": {
+              "median": 30.243749999999636,
+              "p95": 31.758499999999913,
+              "max": 32.24812500000007
+            },
+            "morph": {
+              "median": 22.905749999999898,
+              "p95": 24.18862500000023,
+              "max": 24.806332999999995
+            },
+            "total": {
+              "median": 76.4715000000001,
+              "p95": 80.50820900000008,
+              "max": 83.49241600000005
+            },
+            "nativeBoundaryThreadCpu": {
+              "median": 5.168,
+              "p95": 5.35,
+              "max": 5.393
+            }
+          },
+          "httpControlMs": {
+            "median": 0.6494169999996302,
+            "p95": 1534.1230829999995,
+            "max": 1534.1809170000006
+          },
+          "httpRequests": 20,
+          "eventLoopMs": {
+            "p95": 1535.115263,
+            "max": 1535.115263
+          },
+          "processCpuMs": {
+            "user": 1550.498,
+            "system": 45.468
+          },
+          "memoryBytes": {
+            "before": {
+              "rss": 408682496,
+              "heapTotal": 54001664,
+              "heapUsed": 12234976,
+              "external": 84961052,
+              "arrayBuffers": 148257
+            },
+            "after": {
+              "rss": 300515328,
+              "heapTotal": 113131520,
+              "heapUsed": 47540384,
+              "external": 8159516,
+              "arrayBuffers": 148257
+            },
+            "candidateHeapDeltaUpperObserved": 15202992
+          }
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "node": "v26.8.2",
+      "idleHttpMs": {
+        "median": 0.7610829999999851,
+        "p95": 1.2295000000000016,
+        "max": 1.444625000000002
+      },
+      "note": "Synthetic in-memory boundary fixture; first observation is not process-cold. UTF8 ID bytes exclude V8/NAPI overhead. Native wall includes NAPI input/output conversion; process CPU is not native-only CPU. HTTP is a loopback control, not application API. No graph/embedding/analyzer/provenance work measured.",
+      "cases": [
+        {
+          "count": 10000,
+          "projects": 1,
+          "dimensions": 384,
+          "bits": 4,
+          "k": 48,
+          "rounds": 20,
+          "isMainThread": true,
+          "threadId": 0,
+          "candidateCount": 2500,
+          "candidateIdUtf8Bytes": 9726,
+          "queryFloat32Bytes": 1536,
+          "responseJsonBytes": 1419,
+          "sqlCallsPerSearch": 51,
+          "firstObservationMs": {
+            "candidates": 1.5700410000000034,
+            "conversion": 0.06279200000000174,
+            "native": 0.9129169999999931,
+            "mapping": 0.10179099999999153,
+            "fts": 6.263666999999998,
+            "morph": 4.676042000000052,
+            "total": 13.58725000000004,
+            "nativeBoundaryThreadCpu": 0.683
+          },
+          "warmStageMs": {
+            "candidates": {
+              "median": 1.4639589999999316,
+              "p95": 1.6918749999999818,
+              "max": 1.7352500000000077
+            },
+            "conversion": {
+              "median": 0.05083300000001145,
+              "p95": 0.06616599999995287,
+              "max": 0.07662499999997863
+            },
+            "native": {
+              "median": 0.480624999999975,
+              "p95": 0.5171250000000214,
+              "max": 0.5327919999999722
+            },
+            "mapping": {
+              "median": 0.061666999999999916,
+              "p95": 0.08624999999994998,
+              "max": 0.0987920000000031
+            },
+            "fts": {
+              "median": 6.172416999999996,
+              "p95": 6.386541000000079,
+              "max": 6.543125000000032
+            },
+            "morph": {
+              "median": 4.687665999999979,
+              "p95": 4.891042000000027,
+              "max": 4.89874999999995
+            },
+            "total": {
+              "median": 12.91866699999997,
+              "p95": 13.46999999999997,
+              "max": 13.494583000000034
+            },
+            "nativeBoundaryThreadCpu": {
+              "median": 0.455,
+              "p95": 0.493,
+              "max": 0.517
+            }
+          },
+          "httpControlMs": {
+            "median": 0.8106670000000804,
+            "p95": 259.179166,
+            "max": 259.411042
+          },
+          "httpRequests": 20,
+          "eventLoopMs": {
+            "p95": 259.653631,
+            "max": 259.653631
+          },
+          "processCpuMs": {
+            "user": 263.066,
+            "system": 7.15
+          },
+          "memoryBytes": {
+            "before": {
+              "rss": 191823872,
+              "heapTotal": 17563648,
+              "heapUsed": 13269840,
+              "external": 23519500,
+              "arrayBuffers": 15508241
+            },
+            "after": {
+              "rss": 201064448,
+              "heapTotal": 25427968,
+              "heapUsed": 17139760,
+              "external": 23519516,
+              "arrayBuffers": 15508257
+            },
+            "candidateHeapDeltaUpperObserved": 735720
+          }
+        },
+        {
+          "count": 10000,
+          "projects": 4,
+          "dimensions": 384,
+          "bits": 4,
+          "k": 48,
+          "rounds": 20,
+          "isMainThread": true,
+          "threadId": 0,
+          "candidateCount": 10000,
+          "candidateIdUtf8Bytes": 38894,
+          "queryFloat32Bytes": 1536,
+          "responseJsonBytes": 1398,
+          "sqlCallsPerSearch": 51,
+          "firstObservationMs": {
+            "candidates": 3.463292000000024,
+            "conversion": 0.16137500000002092,
+            "native": 1.3469579999999723,
+            "mapping": 0.07216700000003584,
+            "fts": 6.64020800000003,
+            "morph": 5.149042000000009,
+            "total": 16.83304200000009,
+            "nativeBoundaryThreadCpu": 1.289
+          },
+          "warmStageMs": {
+            "candidates": {
+              "median": 3.3981670000000577,
+              "p95": 3.9282080000000406,
+              "max": 4.100708000000054
+            },
+            "conversion": {
+              "median": 0.1434590000000071,
+              "p95": 0.16999999999995907,
+              "max": 0.17020800000000236
+            },
+            "native": {
+              "median": 1.1669160000000147,
+              "p95": 1.233459000000039,
+              "max": 1.2821660000000747
+            },
+            "mapping": {
+              "median": 0.0569590000000062,
+              "p95": 0.06791600000008202,
+              "max": 0.06845799999996416
+            },
+            "fts": {
+              "median": 6.221916999999962,
+              "p95": 6.4993750000001,
+              "max": 6.597749999999905
+            },
+            "morph": {
+              "median": 4.7468750000000455,
+              "p95": 5.024209000000042,
+              "max": 5.074833000000012
+            },
+            "total": {
+              "median": 15.93345899999997,
+              "p95": 16.607624999999985,
+              "max": 16.658457999999996
+            },
+            "nativeBoundaryThreadCpu": {
+              "median": 1.155,
+              "p95": 1.22,
+              "max": 1.266
+            }
+          },
+          "httpControlMs": {
+            "median": 0.9624999999998636,
+            "p95": 322.30370800000003,
+            "max": 322.41775000000007
+          },
+          "httpRequests": 20,
+          "eventLoopMs": {
+            "p95": 320.339967,
+            "max": 320.339967
+          },
+          "processCpuMs": {
+            "user": 334.582,
+            "system": 9.216
+          },
+          "memoryBytes": {
+            "before": {
+              "rss": 202063872,
+              "heapTotal": 26214400,
+              "heapUsed": 20177880,
+              "external": 23519516,
+              "arrayBuffers": 15508257
+            },
+            "after": {
+              "rss": 226344960,
+              "heapTotal": 35913728,
+              "heapUsed": 12567672,
+              "external": 23519516,
+              "arrayBuffers": 15508257
+            },
+            "candidateHeapDeltaUpperObserved": 2960064
+          }
+        },
+        {
+          "count": 50000,
+          "projects": 1,
+          "dimensions": 384,
+          "bits": 4,
+          "k": 48,
+          "rounds": 20,
+          "isMainThread": true,
+          "threadId": 0,
+          "candidateCount": 12500,
+          "candidateIdUtf8Bytes": 59726,
+          "queryFloat32Bytes": 1536,
+          "responseJsonBytes": 1464,
+          "sqlCallsPerSearch": 51,
+          "firstObservationMs": {
+            "candidates": 6.395042000000103,
+            "conversion": 0.20716599999991558,
+            "native": 2.0542089999999007,
+            "mapping": 0.09620800000016061,
+            "fts": 30.470957999999882,
+            "morph": 23.28737500000011,
+            "total": 62.51095800000007,
+            "nativeBoundaryThreadCpu": 1.461
+          },
+          "warmStageMs": {
+            "candidates": {
+              "median": 6.674958999999944,
+              "p95": 7.747125000000324,
+              "max": 7.807791000000179
+            },
+            "conversion": {
+              "median": 0.21662500000002183,
+              "p95": 0.25995899999998073,
+              "max": 0.2744159999999738
+            },
+            "native": {
+              "median": 1.7833749999999782,
+              "p95": 2.1691250000003492,
+              "max": 2.461124999999811
+            },
+            "mapping": {
+              "median": 0.09345900000016627,
+              "p95": 0.1307499999998072,
+              "max": 0.13983300000018062
+            },
+            "fts": {
+              "median": 30.021583999999848,
+              "p95": 32.94900000000007,
+              "max": 33.817541999999776
+            },
+            "morph": {
+              "median": 22.844750000000204,
+              "p95": 24.36145800000031,
+              "max": 25.247083000000202
+            },
+            "total": {
+              "median": 61.46900000000005,
+              "p95": 66.87520799999993,
+              "max": 68.4490410000003
+            },
+            "nativeBoundaryThreadCpu": {
+              "median": 1.425,
+              "p95": 1.595,
+              "max": 1.62
+            }
+          },
+          "httpControlMs": {
+            "median": 0.6340829999999187,
+            "p95": 1251.156333,
+            "max": 1251.3127909999998
+          },
+          "httpRequests": 20,
+          "eventLoopMs": {
+            "p95": 1251.999743,
+            "max": 1251.999743
+          },
+          "processCpuMs": {
+            "user": 1266.417,
+            "system": 35.987
+          },
+          "memoryBytes": {
+            "before": {
+              "rss": 403931136,
+              "heapTotal": 39993344,
+              "heapUsed": 19961352,
+              "external": 84961052,
+              "arrayBuffers": 76949793
+            },
+            "after": {
+              "rss": 392806400,
+              "heapTotal": 49545216,
+              "heapUsed": 12197496,
+              "external": 84961052,
+              "arrayBuffers": 148257
+            },
+            "candidateHeapDeltaUpperObserved": 3919288
+          }
+        },
+        {
+          "count": 50000,
+          "projects": 4,
+          "dimensions": 384,
+          "bits": 4,
+          "k": 48,
+          "rounds": 20,
+          "isMainThread": true,
+          "threadId": 0,
+          "candidateCount": 50000,
+          "candidateIdUtf8Bytes": 238894,
+          "queryFloat32Bytes": 1536,
+          "responseJsonBytes": 1442,
+          "sqlCallsPerSearch": 51,
+          "firstObservationMs": {
+            "candidates": 16.081416999999874,
+            "conversion": 0.9312079999999696,
+            "native": 5.467041999999765,
+            "mapping": 0.10116700000025958,
+            "fts": 31.73087499999974,
+            "morph": 24.50858300000027,
+            "total": 78.82029199999988,
+            "nativeBoundaryThreadCpu": 5.053
+          },
+          "warmStageMs": {
+            "candidates": {
+              "median": 16.5226660000003,
+              "p95": 19.388292000000092,
+              "max": 20.36133400000017
+            },
+            "conversion": {
+              "median": 0.9212079999997513,
+              "p95": 1.0874579999999696,
+              "max": 2.921415999999681
+            },
+            "native": {
+              "median": 5.624458999999661,
+              "p95": 5.897666999999728,
+              "max": 6.459374999999909
+            },
+            "mapping": {
+              "median": 0.11300000000028376,
+              "p95": 0.13374999999996362,
+              "max": 0.1487499999998363
+            },
+            "fts": {
+              "median": 31.856667000000016,
+              "p95": 33.25187499999993,
+              "max": 33.60462499999994
+            },
+            "morph": {
+              "median": 24.303207999999813,
+              "p95": 26.09387500000048,
+              "max": 26.160208999999668
+            },
+            "total": {
+              "median": 79.72204099999999,
+              "p95": 83.20054200000004,
+              "max": 84.79262500000004
+            },
+            "nativeBoundaryThreadCpu": {
+              "median": 5.306,
+              "p95": 5.437,
+              "max": 6.08
+            }
+          },
+          "httpControlMs": {
+            "median": 1.2174999999997453,
+            "p95": 1602.4110420000002,
+            "max": 1602.488667
+          },
+          "httpRequests": 20,
+          "eventLoopMs": {
+            "p95": 1603.272703,
+            "max": 1603.272703
+          },
+          "processCpuMs": {
+            "user": 1629.351,
+            "system": 59.787
+          },
+          "memoryBytes": {
+            "before": {
+              "rss": 396410880,
+              "heapTotal": 51036160,
+              "heapUsed": 27535384,
+              "external": 84961052,
+              "arrayBuffers": 148257
+            },
+            "after": {
+              "rss": 398278656,
+              "heapTotal": 81412096,
+              "heapUsed": 6981632,
+              "external": 8159516,
+              "arrayBuffers": 148257
+            },
+            "candidateHeapDeltaUpperObserved": 15203192
+          }
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "node": "v26.8.2",
+      "idleHttpMs": {
+        "median": 0.7804589999999791,
+        "p95": 1.2960410000000024,
+        "max": 1.353082999999998
+      },
+      "note": "Synthetic in-memory boundary fixture; first observation is not process-cold. UTF8 ID bytes exclude V8/NAPI overhead. Native wall includes NAPI input/output conversion; process CPU is not native-only CPU. HTTP is a loopback control, not application API. No graph/embedding/analyzer/provenance work measured.",
+      "cases": [
+        {
+          "count": 10000,
+          "projects": 1,
+          "dimensions": 384,
+          "bits": 4,
+          "k": 48,
+          "rounds": 20,
+          "isMainThread": true,
+          "threadId": 0,
+          "candidateCount": 2500,
+          "candidateIdUtf8Bytes": 9726,
+          "queryFloat32Bytes": 1536,
+          "responseJsonBytes": 1419,
+          "sqlCallsPerSearch": 51,
+          "firstObservationMs": {
+            "candidates": 1.4639589999999885,
+            "conversion": 0.05170799999996234,
+            "native": 0.4674580000000219,
+            "mapping": 0.06779199999999719,
+            "fts": 6.186458000000016,
+            "morph": 4.635959000000014,
+            "total": 12.873334,
+            "nativeBoundaryThreadCpu": 0.453
+          },
+          "warmStageMs": {
+            "candidates": {
+              "median": 1.386792000000014,
+              "p95": 1.6405829999999924,
+              "max": 1.864541000000031
+            },
+            "conversion": {
+              "median": 0.04320799999999281,
+              "p95": 0.061666999999999916,
+              "max": 0.07162499999998317
+            },
+            "native": {
+              "median": 0.45716600000002927,
+              "p95": 0.5000830000000178,
+              "max": 0.5538339999999948
+            },
+            "mapping": {
+              "median": 0.05220899999994799,
+              "p95": 0.08779099999998152,
+              "max": 0.09199999999998454
+            },
+            "fts": {
+              "median": 6.140625,
+              "p95": 6.26320800000002,
+              "max": 6.404333000000008
+            },
+            "morph": {
+              "median": 4.690708000000029,
+              "p95": 4.7992080000000215,
+              "max": 4.858874999999955
+            },
+            "total": {
+              "median": 12.78958399999999,
+              "p95": 13.165332999999976,
+              "max": 13.177707999999996
+            },
+            "nativeBoundaryThreadCpu": {
+              "median": 0.447,
+              "p95": 0.495,
+              "max": 0.508
+            }
+          },
+          "httpControlMs": {
+            "median": 0.6812080000000833,
+            "p95": 255.51125000000002,
+            "max": 255.58079200000003
+          },
+          "httpRequests": 20,
+          "eventLoopMs": {
+            "p95": 255.983615,
+            "max": 255.983615
+          },
+          "processCpuMs": {
+            "user": 259.857,
+            "system": 5.806
+          },
+          "memoryBytes": {
+            "before": {
+              "rss": 190545920,
+              "heapTotal": 17825792,
+              "heapUsed": 13225160,
+              "external": 23519500,
+              "arrayBuffers": 15508241
+            },
+            "after": {
+              "rss": 199950336,
+              "heapTotal": 25427968,
+              "heapUsed": 17153512,
+              "external": 23519516,
+              "arrayBuffers": 15508257
+            },
+            "candidateHeapDeltaUpperObserved": 735720
+          }
+        },
+        {
+          "count": 10000,
+          "projects": 4,
+          "dimensions": 384,
+          "bits": 4,
+          "k": 48,
+          "rounds": 20,
+          "isMainThread": true,
+          "threadId": 0,
+          "candidateCount": 10000,
+          "candidateIdUtf8Bytes": 38894,
+          "queryFloat32Bytes": 1536,
+          "responseJsonBytes": 1398,
+          "sqlCallsPerSearch": 51,
+          "firstObservationMs": {
+            "candidates": 3.1701249999999845,
+            "conversion": 0.15141600000004019,
+            "native": 1.1927919999999403,
+            "mapping": 0.05266700000004221,
+            "fts": 6.378583000000049,
+            "morph": 4.737582999999972,
+            "total": 15.683166000000028,
+            "nativeBoundaryThreadCpu": 1.181
+          },
+          "warmStageMs": {
+            "candidates": {
+              "median": 3.250499999999988,
+              "p95": 3.840624999999932,
+              "max": 5.146791000000007
+            },
+            "conversion": {
+              "median": 0.1349999999999909,
+              "p95": 0.17037499999992178,
+              "max": 0.17129099999999653
+            },
+            "native": {
+              "median": 1.140333000000055,
+              "p95": 1.2374999999999545,
+              "max": 1.2724580000000287
+            },
+            "mapping": {
+              "median": 0.05875000000003183,
+              "p95": 0.07095800000001873,
+              "max": 0.08675000000005184
+            },
+            "fts": {
+              "median": 6.180166999999983,
+              "p95": 6.416833999999994,
+              "max": 6.418749999999932
+            },
+            "morph": {
+              "median": 4.734208000000081,
+              "p95": 4.913124999999923,
+              "max": 4.916166999999973
+            },
+            "total": {
+              "median": 15.642583000000059,
+              "p95": 16.494666999999936,
+              "max": 16.95379099999991
+            },
+            "nativeBoundaryThreadCpu": {
+              "median": 1.126,
+              "p95": 1.218,
+              "max": 1.259
+            }
+          },
+          "httpControlMs": {
+            "median": 0.8400419999999258,
+            "p95": 315.4196659999999,
+            "max": 315.53754100000003
+          },
+          "httpRequests": 20,
+          "eventLoopMs": {
+            "p95": 317.194239,
+            "max": 317.194239
+          },
+          "processCpuMs": {
+            "user": 339.901,
+            "system": 7.218
+          },
+          "memoryBytes": {
+            "before": {
+              "rss": 200900608,
+              "heapTotal": 25952256,
+              "heapUsed": 20180432,
+              "external": 23519516,
+              "arrayBuffers": 15508257
+            },
+            "after": {
+              "rss": 221609984,
+              "heapTotal": 32505856,
+              "heapUsed": 12760184,
+              "external": 23519516,
+              "arrayBuffers": 15508257
+            },
+            "candidateHeapDeltaUpperObserved": 2960064
+          }
+        },
+        {
+          "count": 50000,
+          "projects": 1,
+          "dimensions": 384,
+          "bits": 4,
+          "k": 48,
+          "rounds": 20,
+          "isMainThread": true,
+          "threadId": 0,
+          "candidateCount": 12500,
+          "candidateIdUtf8Bytes": 59726,
+          "queryFloat32Bytes": 1536,
+          "responseJsonBytes": 1464,
+          "sqlCallsPerSearch": 51,
+          "firstObservationMs": {
+            "candidates": 6.786833999999999,
+            "conversion": 0.21520800000007512,
+            "native": 1.7535419999999249,
+            "mapping": 0.08725000000004002,
+            "fts": 30.781208000000106,
+            "morph": 24.29233299999987,
+            "total": 63.916375000000016,
+            "nativeBoundaryThreadCpu": 1.456
+          },
+          "warmStageMs": {
+            "candidates": {
+              "median": 6.514833000000181,
+              "p95": 7.695791999999983,
+              "max": 8.523333000000093
+            },
+            "conversion": {
+              "median": 0.22612500000013824,
+              "p95": 0.27404200000000856,
+              "max": 0.28304199999979573
+            },
+            "native": {
+              "median": 1.830667000000176,
+              "p95": 2.047458000000006,
+              "max": 2.4498749999997926
+            },
+            "mapping": {
+              "median": 0.1042090000000826,
+              "p95": 0.13358299999981682,
+              "max": 0.16437500000029104
+            },
+            "fts": {
+              "median": 30.634874999999965,
+              "p95": 32.63333399999965,
+              "max": 32.75004100000001
+            },
+            "morph": {
+              "median": 23.337125000000015,
+              "p95": 24.187917000000198,
+              "max": 24.316417
+            },
+            "total": {
+              "median": 63.27912500000002,
+              "p95": 64.87658399999987,
+              "max": 65.01741700000002
+            },
+            "nativeBoundaryThreadCpu": {
+              "median": 1.48,
+              "p95": 1.575,
+              "max": 1.617
+            }
+          },
+          "httpControlMs": {
+            "median": 0.8041670000002341,
+            "p95": 1268.891167,
+            "max": 1269.100167
+          },
+          "httpRequests": 20,
+          "eventLoopMs": {
+            "p95": 1268.776959,
+            "max": 1268.776959
+          },
+          "processCpuMs": {
+            "user": 1282.42,
+            "system": 44.781
+          },
+          "memoryBytes": {
+            "before": {
+              "rss": 392380416,
+              "heapTotal": 39993344,
+              "heapUsed": 19874864,
+              "external": 84961052,
+              "arrayBuffers": 76949793
+            },
+            "after": {
+              "rss": 418136064,
+              "heapTotal": 57671680,
+              "heapUsed": 12371064,
+              "external": 84961052,
+              "arrayBuffers": 148257
+            },
+            "candidateHeapDeltaUpperObserved": 3919288
+          }
+        },
+        {
+          "count": 50000,
+          "projects": 4,
+          "dimensions": 384,
+          "bits": 4,
+          "k": 48,
+          "rounds": 20,
+          "isMainThread": true,
+          "threadId": 0,
+          "candidateCount": 50000,
+          "candidateIdUtf8Bytes": 238894,
+          "queryFloat32Bytes": 1536,
+          "responseJsonBytes": 1442,
+          "sqlCallsPerSearch": 51,
+          "firstObservationMs": {
+            "candidates": 15.31333399999994,
+            "conversion": 0.8817909999997937,
+            "native": 5.641791999999896,
+            "mapping": 0.11366700000007768,
+            "fts": 32.31129099999998,
+            "morph": 24.942000000000007,
+            "total": 79.2038749999997,
+            "nativeBoundaryThreadCpu": 5.208
+          },
+          "warmStageMs": {
+            "candidates": {
+              "median": 15.87295800000038,
+              "p95": 17.392166999999972,
+              "max": 23.069416999999703
+            },
+            "conversion": {
+              "median": 0.8525409999997464,
+              "p95": 1.0934579999998277,
+              "max": 3.4211670000004233
+            },
+            "native": {
+              "median": 5.435124999999971,
+              "p95": 5.613250000000335,
+              "max": 5.667709000000286
+            },
+            "mapping": {
+              "median": 0.11220800000000963,
+              "p95": 0.14466600000014296,
+              "max": 0.15079199999991033
+            },
+            "fts": {
+              "median": 30.18054200000006,
+              "p95": 32.24816699999974,
+              "max": 32.312250000000404
+            },
+            "morph": {
+              "median": 24.0129579999998,
+              "p95": 24.927166999999827,
+              "max": 25.77637500000037
+            },
+            "total": {
+              "median": 76.40337499999987,
+              "p95": 80.87937499999998,
+              "max": 86.03154199999972
+            },
+            "nativeBoundaryThreadCpu": {
+              "median": 5.081,
+              "p95": 5.179,
+              "max": 5.204
+            }
+          },
+          "httpControlMs": {
+            "median": 1.1917080000002898,
+            "p95": 1548.899583,
+            "max": 1548.9611670000004
+          },
+          "httpRequests": 20,
+          "eventLoopMs": {
+            "p95": 1549.795327,
+            "max": 1549.795327
+          },
+          "processCpuMs": {
+            "user": 1575.445,
+            "system": 51.684
+          },
+          "memoryBytes": {
+            "before": {
+              "rss": 421675008,
+              "heapTotal": 58900480,
+              "heapUsed": 27713968,
+              "external": 84961052,
+              "arrayBuffers": 148257
+            },
+            "after": {
+              "rss": 317440000,
+              "heapTotal": 144080896,
+              "heapUsed": 96511080,
+              "external": 8159516,
+              "arrayBuffers": 148257
+            },
+            "candidateHeapDeltaUpperObserved": 15203120
+          }
+        }
+      ]
+    }
+  ]
+}

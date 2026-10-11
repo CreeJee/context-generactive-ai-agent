@@ -58,8 +58,14 @@ function toolFailureBody(error: Error, path: string): Error {
 /** Runs one tool operation, rethrowing any failure as a model-facing message. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 export const guarded: {
-  <A, E = never>(operation: () => Promise<A> | Effect.Effect<A, E>): (path: string) => Promise<A>;
-} & typeof guardedBody = EffectFunction.dual((args) => args.length >= 2, guardedBody);
+  <A, E = never>(
+    operation: () => Promise<A> | Effect.Effect<A, E>,
+    signal?: AbortSignal,
+  ): (path: string) => Promise<A>;
+} & typeof guardedBody = EffectFunction.dual(
+  (args) => Schema.is(Schema.String)(args[0]),
+  guardedBody,
+);
 function guardedBody<A, E = never>(
   path: string,
   operation: () => Promise<A> | Effect.Effect<A, E>,
@@ -78,8 +84,13 @@ function guardedBody<A, E = never>(
 }
 
 /** Keep model-facing path/error redaction at the SDK edge, including native callback exceptions. */
-export const guardedEffect = <A, E, R>(path: string, program: Effect.Effect<A, E, R>) =>
-  program.pipe(
+export const guardedEffect: {
+  <A, E, R>(
+    program: Effect.Effect<A, E, R>,
+  ): (path: string) => ReturnType<typeof guardedEffectBody<A, E, R>>;
+} & typeof guardedEffectBody = EffectFunction.dual(2, guardedEffectBody);
+function guardedEffectBody<A, E, R>(path: string, program: Effect.Effect<A, E, R>) {
+  return program.pipe(
     Effect.catchCause((cause): Effect.Effect<never, E | Cause.UnknownError> => {
       if (Cause.hasInterrupts(cause)) return Effect.failCause(cause);
       const failure = Cause.squash(cause);
@@ -91,6 +102,7 @@ export const guardedEffect = <A, E, R>(path: string, program: Effect.Effect<A, E
       );
     }),
   );
+}
 
 /** Unwraps a path resolution inside {@link guarded}, throwing the rejection. */
 export const orThrow = <A>(result: Result.Result<A, PathRejected>) =>

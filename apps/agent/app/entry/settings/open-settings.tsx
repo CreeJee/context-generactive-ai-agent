@@ -3,11 +3,13 @@ import type { Project } from "../api";
 import { SettingsOverlay } from "./settings-dialog";
 
 /** Open a settings view with the currently selected project. */
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function openSettingsOverlay(
-  project: Project | null,
-  initialPage: "web" | "compatible" = "web",
-) {
+export function openSettingsOverlay({
+  project,
+  initialPage = "web",
+}: {
+  readonly project: Project | null;
+  readonly initialPage?: "web" | "compatible";
+}) {
   overlay.open(({ isOpen, close, unmount }) => (
     <SettingsOverlay
       project={project}

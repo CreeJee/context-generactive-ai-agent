@@ -17,7 +17,7 @@ it.live(
         let server: ViteDevServer;
         const moduleFile = join(root, "entry.ts");
         const hookEvents: string[] = [];
-        const ownerKey = `__context_agent_hmr_test_${yield* (yield* Crypto.Crypto).randomUUIDv4}`;
+        const ownerKey = `__context_agent_hmr_test_${yield* (yield* Crypto.Crypto).randomUUIDv4()}`;
         const encodedOwnerKey = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.String))(
           ownerKey,
         );

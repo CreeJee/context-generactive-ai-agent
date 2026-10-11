@@ -1,11 +1,12 @@
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
+import { NodeCrypto } from "@effect/platform-node";
 import type { SQLOutputValue } from "node:sqlite";
 import {
   DateTime,
   Clock,
+  Crypto,
   Context,
   Effect,
   Layer,
@@ -153,6 +154,8 @@ const interpretedKinds = HashSet.fromIterable<NodeKind>(["user", "assistant"]);
 
 const make = Effect.gen(function* () {
   const effectClock = yield* Clock.Clock;
+  const crypto = yield* Crypto.Crypto;
+  const runSync = Effect.runSyncWith(yield* Effect.context<never>());
 
   const { sqlite, atomic } = yield* Database;
   const resultPages = createResultPageReader(sqlite);
@@ -200,7 +203,7 @@ const make = Effect.gen(function* () {
       );
       const previous = isTruthy(input.sessionId) ? idOf(lastInSession.get(input.sessionId)) : null;
       const row = insertNode.get(
-        randomUUID(),
+        runSync(crypto.randomUUIDv4()),
         input.projectId,
         input.sessionId,
         input.runId ?? null,
@@ -324,5 +327,5 @@ const make = Effect.gen(function* () {
 export class Nodes extends Context.Service<Nodes, Effect.Success<typeof make>>()(
   "memory-agent/memory/nodes",
 ) {
-  static readonly layer = Layer.effect(Nodes, make);
+  static readonly layer = Layer.effect(Nodes, make).pipe(Layer.provide(NodeCrypto.layer));
 }

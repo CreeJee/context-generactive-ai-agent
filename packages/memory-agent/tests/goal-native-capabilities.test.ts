@@ -230,7 +230,7 @@ it.live("actual Goal-bound native AgentChat turns bypass bound recording and mem
                   headers: { "Content-Type": "application/json" },
                   body: yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
                     threadId: session.id,
-                    runId: yield* (yield* Crypto.Crypto).randomUUIDv4,
+                    runId: yield* (yield* Crypto.Crypto).randomUUIDv4(),
                     messages: [{ id: `user-${index}`, role: "user", content: `hello-${index}` }],
                     tools: [],
                     context: [],

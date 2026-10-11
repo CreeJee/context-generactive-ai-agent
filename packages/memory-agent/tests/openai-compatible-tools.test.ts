@@ -12,15 +12,15 @@ it.effect(
       let saved: Settings = {};
       const wire =
         'data: {"id":"tool","object":"chat.completion.chunk","created":1,"model":"manual","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":null}]}\n\ndata: {"id":"tool","object":"chat.completion.chunk","created":1,"model":"manual","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n\n';
-      const api = makeOpenAICompatibleSettings(
-        {
+      const api = makeOpenAICompatibleSettings({
+        config: {
           read: Effect.sync(() => saved),
           update: (patch) => Effect.sync(() => (saved = { ...saved, ...patch })),
         },
-        { get: () => Promise.resolve(null), set: () => Promise.resolve() },
-        () =>
+        keys: { get: () => Promise.resolve(null), set: () => Promise.resolve() },
+        fetcher: () =>
           Promise.resolve(new Response(wire, { headers: { "Content-Type": "text/event-stream" } })),
-      );
+      });
       const configuration = {
         baseUrl: "http://localhost:8000/v1",
         model: "manual",

@@ -1,9 +1,5 @@
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
-import { createInterface } from "node:readline";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import type { Readable } from "node:stream";
+import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
 import { HashMap, Ref, Option, Context, Deferred, Effect, Layer, Schema, Stream } from "effect";
 import { HarnessProfile } from "./contracts.ts";
 import { ProviderId } from "../providers/contracts.ts";
@@ -27,7 +23,7 @@ export class GatewayClosed extends Schema.TaggedError<GatewayClosed>()("GatewayC
 export type GatewayRequest = { kind: "request" | "subscription-request"; id: string; body: string };
 
 export const makeWorkerGateway = Effect.fn("Rrsi.makeWorkerGateway")(function* (
-  input: Readable,
+  input: Stream.Stream<Uint8Array, GatewayClosed>,
   send: (request: GatewayRequest) => void,
 ) {
   const initialized = yield* Deferred.make<typeof WorkerInput.Type, GatewayClosed>();
@@ -35,10 +31,6 @@ export const makeWorkerGateway = Effect.fn("Rrsi.makeWorkerGateway")(function* (
     HashMap.empty<string, Deferred.Deferred<string, GatewayClosed>>(),
   );
   let closed = false;
-  const lines = yield* Effect.acquireRelease(
-    Effect.sync(() => createInterface({ input })),
-    (reader) => Effect.sync(() => reader.close()),
-  );
   const close = Effect.gen(function* () {
     closed = true;
     yield* Deferred.fail(initialized, GatewayClosed.make());
@@ -47,7 +39,9 @@ export const makeWorkerGateway = Effect.fn("Rrsi.makeWorkerGateway")(function* (
       Deferred.fail(reply, GatewayClosed.make()),
     );
   });
-  yield* Stream.fromAsyncIterable(lines, () => GatewayClosed.make()).pipe(
+  yield* input.pipe(
+    Stream.decodeText(),
+    Stream.splitLines,
     Stream.runForEach(
       Effect.fnUntraced(function* (line) {
         const frame = yield* Schema.decodeEffect(Schema.fromJsonString(Incoming))(line);
@@ -74,7 +68,7 @@ export const makeWorkerGateway = Effect.fn("Rrsi.makeWorkerGateway")(function* (
     kind: GatewayRequest["kind"],
     body: string,
   ) {
-    const id = randomUUID();
+    const id = yield* oauthProtocolCrypto.randomUUIDv4().pipe(Effect.orDie);
     const reply = yield* Deferred.make<string, GatewayClosed>();
     return yield* Effect.gen(function* () {
       yield* Ref.update(pending, (requests) => HashMap.set(requests, id, reply));
@@ -97,7 +91,10 @@ export class WorkerGateway extends Context.Service<
   WorkerGateway,
   Effect.Success<ReturnType<typeof makeWorkerGateway>>
 >()("memory-agent/rrsi/worker-gateway/WorkerGateway") {
-  static layer(input: Readable, send: (request: GatewayRequest) => void) {
+  static layer(
+    input: Stream.Stream<Uint8Array, GatewayClosed>,
+    send: (request: GatewayRequest) => void,
+  ) {
     return Layer.effect(WorkerGateway, makeWorkerGateway(input, send));
   }
 }

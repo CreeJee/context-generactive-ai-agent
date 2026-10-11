@@ -1,4 +1,4 @@
-import { Effect, Result, Schema } from "effect";
+import { Crypto, Effect, Result, Schema } from "effect";
 import { AgentChat, sessionHolderHeader } from "memory-agent";
 import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
@@ -35,24 +35,23 @@ export function action({ request, params }: Route.ActionArgs) {
       if (Result.isFailure(body))
         return Response.json({ error: "invalid_trace_task_action" }, { status: 400 });
       const holder = request.headers.get(sessionHolderHeader);
-      return yield* Effect.flatMap(AgentChat, (chat) =>
-        body.success.intent === "resume"
-          ? chat.requestTraceResume(
-              params.session,
-              holder,
-              params.task,
-              body.success.expectedAttemptId,
-              body.success.confirmUncertain,
-            )
-          : chat.lifecycleTraceTask(
-              params.session,
-              holder,
-              params.task,
-              body.success.intent,
-              // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
-              body.success.idempotencyKey ?? crypto.randomUUID(),
-            ),
-      );
+      const chat = yield* AgentChat;
+      return yield* body.success.intent === "resume"
+        ? chat.requestTraceResume(
+            params.session,
+            holder,
+            params.task,
+            body.success.expectedAttemptId,
+            body.success.confirmUncertain,
+          )
+        : chat.lifecycleTraceTask(
+            params.session,
+            holder,
+            params.task,
+            body.success.intent,
+            // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
+            body.success.idempotencyKey ?? (yield* (yield* Crypto.Crypto).randomUUIDv4()),
+          );
     }),
   );
 }

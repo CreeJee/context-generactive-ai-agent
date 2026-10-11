@@ -164,7 +164,7 @@ const firstSent = Effect.fn("compaction.firstSent")(function* (
 ) {
   const services = yield* Layer.build(NodeCrypto.layer);
   const crypto = yield* Effect.provideContext(Crypto.Crypto, services);
-  const id = threadId ?? (yield* crypto.randomUUIDv4);
+  const id = threadId ?? (yield* crypto.randomUUIDv4());
   const adapter = new ScriptedTextAdapter([{ text: "네" }]);
   yield* drain(chat({ adapter, threadId: id, messages: [...messages], middleware: [middleware] }));
   return adapter.invocations[0]?.messages ?? [];

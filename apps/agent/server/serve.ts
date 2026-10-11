@@ -1,20 +1,25 @@
+import { NodePath, NodeServices, NodeSink } from "@effect/platform-node";
+import { ManagedRuntime, Path } from "effect";
+import { runNativeEffect } from "memory-agent/native-effect";
 import { isTruthy } from "../app/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { spawn } from "node:child_process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { createReadStream, statSync } from "node:fs";
+
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { extname, resolve, sep } from "node:path";
+
 import { createRequestListener } from "@react-router/node";
-import { Schema } from "effect";
+import { Cause, Console, Effect, FileSystem, Fiber, Option, Schema, Stream } from "effect";
 import type { ServerBuild } from "react-router";
 import {
   developmentBuildHeader,
   developmentRequestDecision,
   createDevelopmentBoundary,
 } from "./dev-safety.ts";
+
+const { extname, resolve, sep } = ManagedRuntime.make(NodePath.layer).runSync(Path.Path);
 
 export interface ServeOptions {
   readonly build: ServerBuild;
@@ -69,22 +74,26 @@ function isLoopbackHost(host: string | undefined) {
 }
 
 /** A file of the client build for this path, or null to let React Router answer. */
-function clientFile(clientDirectory: string, pathname: string) {
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(pathname);
-  } catch {
-    return null;
-  }
+const clientFile = Effect.fn("serve.clientFile")(function* (
+  clientDirectory: string,
+  pathname: string,
+) {
+  const parsed = yield* Effect.try({
+    try: () => decodeURIComponent(pathname),
+    catch: (cause) => new Cause.UnknownError(cause),
+  }).pipe(Effect.option);
+  if (Option.isNone(parsed)) return null;
+  const decoded = parsed.value;
   if (decoded.includes("\0")) return null;
   const file = resolve(clientDirectory, `.${decoded}`);
   if (!file.startsWith(clientDirectory + sep)) return null;
-  try {
-    return statSync(file).isFile() ? file : null;
-  } catch {
-    return null;
-  }
-}
+  const fs = yield* FileSystem.FileSystem;
+  const stat = yield* fs.stat(file).pipe(Effect.option);
+  return Option.isSome(stat) && stat.value.type === "File" ? file : null;
+});
+
+const browserLauncher = ManagedRuntime.make(NodeServices.layer);
+const assetRuntime = ManagedRuntime.make(NodeServices.layer);
 
 export function openInBrowser(url: string) {
   const [command, args] =
@@ -93,9 +102,21 @@ export function openInBrowser(url: string) {
       : process.platform === "win32"
         ? ["cmd", ["/c", "start", "", url]]
         : ["xdg-open", [url]];
-  const child = spawn(command, args, { stdio: "ignore", detached: true });
-  child.on("error", () => undefined);
-  child.unref();
+  void browserLauncher.runPromise(
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const child = yield* spawner.spawn(
+        ChildProcess.make(command, args, {
+          stdin: "ignore",
+          stdout: "ignore",
+          stderr: "ignore",
+          detached: true,
+        }),
+      );
+      yield* child.unref.pipe(Effect.asVoid);
+      yield* child.exitCode;
+    }).pipe(Effect.scoped, Effect.ignore),
+  );
 }
 
 /** Serves the app on 127.0.0.1: client files directly, everything else through React Router. */
@@ -103,7 +124,10 @@ export function serve(options: ServeOptions) {
   const clientDirectory = resolve(options.clientDirectory);
   const handle = createRequestListener({ build: options.build, mode: "production" });
   const development = isTruthy(options.developmentBuildId)
-    ? createDevelopmentBoundary(options.developmentBuildId, options.runtimeInstanceId)
+    ? createDevelopmentBoundary({
+        buildId: options.developmentBuildId,
+        instanceId: options.runtimeInstanceId,
+      })
     : null;
 
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
@@ -125,9 +149,11 @@ export function serve(options: ServeOptions) {
       if (decision.kind !== "allow") {
         if (decision.kind === "reject")
           // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-          console.warn(
-            `[dev-backend] blocked ${request.method ?? "UNKNOWN"} ${pathname}: ${decision.error} ` +
-              `(backend=${decision.backendBuildId}, browser=${decision.presentedBuildId ?? "missing"})`,
+          Effect.runSync(
+            Console.warn(
+              `[dev-backend] blocked ${request.method ?? "UNKNOWN"} ${pathname}: ${decision.error} ` +
+                `(backend=${decision.backendBuildId}, browser=${decision.presentedBuildId ?? "missing"})`,
+            ),
           );
         response
           .writeHead(decision.status, {
@@ -138,21 +164,48 @@ export function serve(options: ServeOptions) {
         return;
       }
     }
-    const file =
-      request.method === "GET" || request.method === "HEAD"
-        ? clientFile(clientDirectory, pathname)
-        : null;
-    if (!isTruthy(file)) return handle(request, response);
-    response.writeHead(200, {
-      "content-type": contentType(file),
-      // Hashed build assets never change under the same name.
-      "cache-control": pathname.startsWith("/assets/")
-        ? "public, max-age=31536000, immutable"
-        : "no-cache",
-      "x-content-type-options": "nosniff",
+    const task = assetRuntime.runFork(
+      Effect.gen(function* () {
+        const file =
+          request.method === "GET" || request.method === "HEAD"
+            ? yield* clientFile(clientDirectory, pathname)
+            : null;
+        if (file === null)
+          return yield* Effect.tryPromise({
+            try: () => Promise.resolve(handle(request, response)),
+            catch: (cause) => new Cause.UnknownError(cause),
+          });
+        response.writeHead(200, {
+          "content-type": contentType(file),
+          "cache-control": pathname.startsWith("/assets/")
+            ? "public, max-age=31536000, immutable"
+            : "no-cache",
+          "x-content-type-options": "nosniff",
+        });
+        if (request.method === "HEAD") {
+          response.end();
+          return;
+        }
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.stream(file).pipe(
+          Stream.run(
+            NodeSink.fromWritable({
+              evaluate: () => response,
+              onError: (cause) => new Cause.UnknownError(cause),
+            }),
+          ),
+        );
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.sync(() => {
+            response.destroy(new Error(Cause.pretty(cause)));
+          }),
+        ),
+      ),
+    );
+    response.once("close", () => {
+      void Effect.runFork(Fiber.interrupt(task));
     });
-    if (request.method === "HEAD") return void response.end();
-    createReadStream(file).pipe(response);
   });
 
   if (development !== null) {
@@ -163,9 +216,13 @@ export function serve(options: ServeOptions) {
       });
   }
 
-  // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-  return new Promise<void>((resolveListening, reject) => {
-    server.once("error", reject);
-    server.listen(options.port, "127.0.0.1", () => resolveListening());
-  });
+  // Node owns the listening server; the startup callback subscription ends with the handshake.
+  return runNativeEffect(
+    Effect.callback<void, Cause.UnknownError>((resume) => {
+      const onError = (cause: Error) => resume(Effect.fail(new Cause.UnknownError(cause)));
+      server.once("error", onError);
+      server.listen(options.port, "127.0.0.1", () => resume(Effect.void));
+      return Effect.sync(() => server.off("error", onError));
+    }),
+  );
 }

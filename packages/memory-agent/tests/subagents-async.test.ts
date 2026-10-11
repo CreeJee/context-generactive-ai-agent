@@ -57,6 +57,7 @@ const until = Effect.fn("untilSubagentState")(function* (
 const setup = Effect.fn("setupAsyncSubagents")(function* () {
   const crypto = yield* Crypto.Crypto;
   const delayed: Array<{ user: string; gate: Deferred.Deferred<void> }> = [];
+  const slowParentStarted = yield* Deferred.make<void>();
   yield* Effect.addFinalizer(() =>
     Effect.forEach(delayed, ({ gate }) => Deferred.succeed(gate, undefined)).pipe(Effect.asVoid),
   );
@@ -221,6 +222,8 @@ const setup = Effect.fn("setupAsyncSubagents")(function* () {
           const { delayMs: _delayMs, ...ready } = turn;
           const gate = yield* Deferred.make<void>();
           delayed.push({ user, gate });
+          if (!internal && user === "slow parent work")
+            yield* Deferred.succeed(slowParentStarted, undefined);
           return { ...ready, waitFor: Deferred.await(gate) };
         }),
       },
@@ -245,23 +248,20 @@ const setup = Effect.fn("setupAsyncSubagents")(function* () {
     target: typeof context.runtime = context.runtime,
   ) {
     const services = yield* target.contextEffect;
-    const agentEffect: Effect.Effect<typeof agent, unknown> = Effect.provideContext(
-      AgentChat,
-      services,
-    );
+    const agentEffect = Effect.provideContext(AgentChat, services);
     const targetAgent = yield* agentEffect;
     const request = new Request("http://local/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
         threadId: context.session.id,
-        runId: yield* crypto.randomUUIDv4,
-        messages: [{ id: yield* crypto.randomUUIDv4, role: "user", content: text }],
+        runId: yield* crypto.randomUUIDv4(),
+        messages: [{ id: yield* crypto.randomUUIDv4(), role: "user", content: text }],
         tools: [],
         context: [],
       }).pipe(Effect.orDie),
     });
-    const responseEffect: Effect.Effect<Response, unknown> = Effect.provideContext(
+    const responseEffect = Effect.provideContext(
       targetAgent.handle(request, context.session.id),
       services,
     );
@@ -292,7 +292,18 @@ const setup = Effect.fn("setupAsyncSubagents")(function* () {
       yield* Deferred.succeed(entry.gate, undefined);
     }
   });
-  return { ...context, agent, children, trace, db, count, idle, send, releaseDelayed };
+  return {
+    ...context,
+    agent,
+    children,
+    trace,
+    db,
+    count,
+    idle,
+    send,
+    releaseDelayed,
+    waitForSlowParent: Deferred.await(slowParentStarted).pipe(Effect.timeout("6 seconds")),
+  };
 });
 
 describe("asynchronous subagents", () => {
@@ -423,8 +434,17 @@ describe("asynchronous subagents", () => {
     Effect.scoped(
       withCrypto(
         Effect.gen(function* () {
-          const { send, children, session, provider, count, idle, db, releaseDelayed } =
-            yield* setup();
+          const {
+            send,
+            children,
+            session,
+            provider,
+            count,
+            idle,
+            db,
+            releaseDelayed,
+            waitForSlowParent,
+          } = yield* setup();
           const answer = yield* send("delegate twice dispatch only");
           expect(answer.match(/"status":"running"/g)).toHaveLength(2);
           expect(children.list(session.id).map((child) => child.status)).toEqual([
@@ -434,6 +454,8 @@ describe("asynchronous subagents", () => {
           const parent = yield* Effect.forkChild(send("slow parent work"), {
             startImmediately: true,
           });
+          // A fork schedules the turn; the SDK gate proves the parent is actually waiting.
+          yield* waitForSlowParent;
           yield* releaseDelayed("nap", 2);
           yield* until(
             () => children.list(session.id).every((child) => child.status === "completed"),

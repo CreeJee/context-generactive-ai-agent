@@ -35,7 +35,9 @@ export function loader({ request }: Route.LoaderArgs) {
       return yield* Effect.gen(function* () {
         const { sqlite } = yield* Database;
         // Preserve existing auth even if OS keychain import fails. Subsequent requests retry.
-        yield* Effect.promise(() => importLegacyOAuthProfile(sqlite, provider).catch(() => null));
+        yield* Effect.promise(() =>
+          importLegacyOAuthProfile({ sqlite: sqlite, provider: provider }).catch(() => null),
+        );
         return reply(accountLoginManager(sqlite).profiles(provider));
       }).pipe(
         Effect.catchCause(() => Effect.succeed(reply({ error: "account_list_unavailable" }, 503))),
@@ -71,9 +73,14 @@ export function action({ request }: Route.ActionArgs) {
         if (intent === "cancel")
           return reply(yield* Effect.tryPromise(() => manager.cancel(provider)));
         if (intent === "remove")
-          yield* Effect.tryPromise(() => removeOAuthProfile(sqlite, provider, accountId!));
+          yield* Effect.tryPromise(() =>
+            removeOAuthProfile({ sqlite: sqlite, provider: provider, id: accountId! }),
+          );
         else if (intent === "rename") renameOAuthProfile(sqlite, provider, accountId!, label!);
-        else yield* Effect.tryPromise(() => selectOAuthProfile(sqlite, provider, accountId!));
+        else
+          yield* Effect.tryPromise(() =>
+            selectOAuthProfile({ sqlite: sqlite, provider: provider, id: accountId! }),
+          );
         return reply(manager.profiles(provider));
       }).pipe(
         // Never expose keychain/native OAuth errors or tokens to the browser.

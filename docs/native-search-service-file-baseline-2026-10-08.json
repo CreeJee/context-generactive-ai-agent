@@ -1,0 +1,414 @@
+{
+  "date": "2026-10-08",
+  "fixture": "production-services-file-wal-v3",
+  "sha256": {
+    "harness": "53589ade207bbb25dfa376bf3f1b81aa94621e6dcfba414d415a2759536de7ba",
+    "probe": "c69088bd04d8f312f27167b4e5b79238d5e763a8ba66a9263752b4f88c78a660",
+    "search": "5bf9857fbf26e66568da3e95abc35cda0ef6a54ffe7583f5b1a315a7bfbc9d76",
+    "loadedAddon": "db0fd75e0b3c9e2b514a87e26f1318aabd51f3b36d48ec99e1b9090e02e933ed"
+  },
+  "runs": [
+    [
+      {
+        "kind": "fresh-process-layer-startup",
+        "scopedLayerStartupMs": 46.121083999999996,
+        "processElapsedMs": 568.8065,
+        "emptyFixtureStorage": true,
+        "osCacheCold": false,
+        "productionBackendStartup": false
+      },
+      {
+        "kind": "first-call",
+        "allowedProjects": 1,
+        "elapsedMs": 35.86216699999977,
+        "processCold": false,
+        "threadId": 0,
+        "rssBytes": 284426240
+      },
+      {
+        "kind": "warm",
+        "allowedProjects": 1,
+        "rows": 10000,
+        "limit": 12,
+        "rounds": 20,
+        "medianMs": 32.19016699999975,
+        "p95Ms": 33.41924999999992,
+        "maxMs": 33.554333999999926,
+        "postCallTurn": {
+          "medianMs": 0.07416599999987739,
+          "p95Ms": 0.4290000000000873,
+          "maxMs": 1.3771670000000995
+        },
+        "eventLoopDelayP95Ms": 33.456127,
+        "eventLoopDelayMaxMs": 33.685503,
+        "threadId": 0,
+        "rssBytes": 285474816,
+        "sqlExecutions": {
+          "median": 185,
+          "p95": 185,
+          "max": 185
+        },
+        "sqlPreparations": {
+          "median": 6,
+          "p95": 6,
+          "max": 6
+        },
+        "sqlCounterOverheadIncluded": true
+      },
+      {
+        "kind": "concurrent-service-control",
+        "allowedProjects": 1,
+        "burstSearches": 20,
+        "burstElapsedMs": 622.1222090000001,
+        "httpRequests": 20,
+        "httpConcurrency": 4,
+        "idleHttp": {
+          "medianMs": 1.3918749999998,
+          "p95Ms": 14.163417000000209,
+          "maxMs": 31.15429200000017
+        },
+        "concurrentHttp": {
+          "medianMs": 0.8204169999999067,
+          "p95Ms": 623.5662090000001,
+          "maxMs": 623.7126250000001
+        },
+        "appEndpoint": false,
+        "threadId": 0
+      },
+      {
+        "kind": "first-call",
+        "allowedProjects": 2,
+        "elapsedMs": 39.588416999999936,
+        "processCold": false,
+        "threadId": 0,
+        "rssBytes": 298237952
+      },
+      {
+        "kind": "warm",
+        "allowedProjects": 2,
+        "rows": 10000,
+        "limit": 12,
+        "rounds": 20,
+        "medianMs": 38.428707999999915,
+        "p95Ms": 41.503999999999905,
+        "maxMs": 42.88000000000011,
+        "postCallTurn": {
+          "medianMs": 0.06837499999983265,
+          "p95Ms": 1.6228750000000218,
+          "maxMs": 1.6446670000000267
+        },
+        "eventLoopDelayP95Ms": 41.549823,
+        "eventLoopDelayMaxMs": 43.253759,
+        "threadId": 0,
+        "rssBytes": 299302912,
+        "sqlExecutions": {
+          "median": 186,
+          "p95": 186,
+          "max": 186
+        },
+        "sqlPreparations": {
+          "median": 7,
+          "p95": 7,
+          "max": 7
+        },
+        "sqlCounterOverheadIncluded": true
+      },
+      {
+        "kind": "concurrent-service-control",
+        "allowedProjects": 2,
+        "burstSearches": 20,
+        "burstElapsedMs": 771.9441660000002,
+        "httpRequests": 20,
+        "httpConcurrency": 4,
+        "idleHttp": {
+          "medianMs": 0.6779169999999795,
+          "p95Ms": 1.2651249999998981,
+          "maxMs": 1.4686249999995198
+        },
+        "concurrentHttp": {
+          "medianMs": 1.796291999999994,
+          "p95Ms": 774.7455840000002,
+          "maxMs": 775.2917500000003
+        },
+        "appEndpoint": false,
+        "threadId": 0
+      },
+      {
+        "kind": "loopback-http-control-only",
+        "concurrentWithSearch": false,
+        "appEndpoint": false,
+        "medianMs": 0.49879199999941193,
+        "p95Ms": 1.377917000000707,
+        "maxMs": 9.144124999999804
+      }
+    ],
+    [
+      {
+        "kind": "fresh-process-layer-startup",
+        "scopedLayerStartupMs": 44.508624999999995,
+        "processElapsedMs": 456.902042,
+        "emptyFixtureStorage": true,
+        "osCacheCold": false,
+        "productionBackendStartup": false
+      },
+      {
+        "kind": "first-call",
+        "allowedProjects": 1,
+        "elapsedMs": 34.74083400000018,
+        "processCold": false,
+        "threadId": 0,
+        "rssBytes": 287948800
+      },
+      {
+        "kind": "warm",
+        "allowedProjects": 1,
+        "rows": 10000,
+        "limit": 12,
+        "rounds": 20,
+        "medianMs": 30.97637500000019,
+        "p95Ms": 32.67670799999996,
+        "maxMs": 32.86412500000006,
+        "postCallTurn": {
+          "medianMs": 0.07949999999982538,
+          "p95Ms": 0.3777500000001055,
+          "maxMs": 1.2947909999998046
+        },
+        "eventLoopDelayP95Ms": 32.817151,
+        "eventLoopDelayMaxMs": 33.062911,
+        "threadId": 0,
+        "rssBytes": 288817152,
+        "sqlExecutions": {
+          "median": 185,
+          "p95": 185,
+          "max": 185
+        },
+        "sqlPreparations": {
+          "median": 6,
+          "p95": 6,
+          "max": 6
+        },
+        "sqlCounterOverheadIncluded": true
+      },
+      {
+        "kind": "concurrent-service-control",
+        "allowedProjects": 1,
+        "burstSearches": 20,
+        "burstElapsedMs": 607.428375,
+        "httpRequests": 20,
+        "httpConcurrency": 4,
+        "idleHttp": {
+          "medianMs": 1.3073330000001988,
+          "p95Ms": 10.768791999999848,
+          "maxMs": 26.66362500000014
+        },
+        "concurrentHttp": {
+          "medianMs": 0.8096250000003238,
+          "p95Ms": 608.8348329999999,
+          "maxMs": 608.9799160000002
+        },
+        "appEndpoint": false,
+        "threadId": 0
+      },
+      {
+        "kind": "first-call",
+        "allowedProjects": 2,
+        "elapsedMs": 39.60841699999992,
+        "processCold": false,
+        "threadId": 0,
+        "rssBytes": 304021504
+      },
+      {
+        "kind": "warm",
+        "allowedProjects": 2,
+        "rows": 10000,
+        "limit": 12,
+        "rounds": 20,
+        "medianMs": 38.2392090000003,
+        "p95Ms": 39.62733300000036,
+        "maxMs": 40.76579200000015,
+        "postCallTurn": {
+          "medianMs": 0.06016700000054698,
+          "p95Ms": 0.47420800000008967,
+          "maxMs": 1.5029170000002523
+        },
+        "eventLoopDelayP95Ms": 39.747583,
+        "eventLoopDelayMaxMs": 41.058303,
+        "threadId": 0,
+        "rssBytes": 307642368,
+        "sqlExecutions": {
+          "median": 186,
+          "p95": 186,
+          "max": 186
+        },
+        "sqlPreparations": {
+          "median": 7,
+          "p95": 7,
+          "max": 7
+        },
+        "sqlCounterOverheadIncluded": true
+      },
+      {
+        "kind": "concurrent-service-control",
+        "allowedProjects": 2,
+        "burstSearches": 20,
+        "burstElapsedMs": 775.7901250000004,
+        "httpRequests": 20,
+        "httpConcurrency": 4,
+        "idleHttp": {
+          "medianMs": 1.9672090000003664,
+          "p95Ms": 2.8281669999996666,
+          "maxMs": 3.066624999999476
+        },
+        "concurrentHttp": {
+          "medianMs": 0.7282500000001164,
+          "p95Ms": 777.2079170000006,
+          "maxMs": 777.3316659999991
+        },
+        "appEndpoint": false,
+        "threadId": 0
+      },
+      {
+        "kind": "loopback-http-control-only",
+        "concurrentWithSearch": false,
+        "appEndpoint": false,
+        "medianMs": 0.4485420000000886,
+        "p95Ms": 1.4742919999998776,
+        "maxMs": 7.832042000000001
+      }
+    ],
+    [
+      {
+        "kind": "fresh-process-layer-startup",
+        "scopedLayerStartupMs": 42.38575000000003,
+        "processElapsedMs": 448.716916,
+        "emptyFixtureStorage": true,
+        "osCacheCold": false,
+        "productionBackendStartup": false
+      },
+      {
+        "kind": "first-call",
+        "allowedProjects": 1,
+        "elapsedMs": 35.261375000000044,
+        "processCold": false,
+        "threadId": 0,
+        "rssBytes": 284508160
+      },
+      {
+        "kind": "warm",
+        "allowedProjects": 1,
+        "rows": 10000,
+        "limit": 12,
+        "rounds": 20,
+        "medianMs": 30.775540999999976,
+        "p95Ms": 31.800792,
+        "maxMs": 32.08275000000003,
+        "postCallTurn": {
+          "medianMs": 0.07249999999976353,
+          "p95Ms": 0.7087910000000193,
+          "maxMs": 1.6084999999998217
+        },
+        "eventLoopDelayP95Ms": 31.899647,
+        "eventLoopDelayMaxMs": 32.260095,
+        "threadId": 0,
+        "rssBytes": 285212672,
+        "sqlExecutions": {
+          "median": 185,
+          "p95": 185,
+          "max": 185
+        },
+        "sqlPreparations": {
+          "median": 6,
+          "p95": 6,
+          "max": 6
+        },
+        "sqlCounterOverheadIncluded": true
+      },
+      {
+        "kind": "concurrent-service-control",
+        "allowedProjects": 1,
+        "burstSearches": 20,
+        "burstElapsedMs": 606.7190840000003,
+        "httpRequests": 20,
+        "httpConcurrency": 4,
+        "idleHttp": {
+          "medianMs": 1.7719590000001517,
+          "p95Ms": 10.329291999999896,
+          "maxMs": 27.265499999999975
+        },
+        "concurrentHttp": {
+          "medianMs": 0.9296250000002146,
+          "p95Ms": 608.1263750000003,
+          "maxMs": 608.234125
+        },
+        "appEndpoint": false,
+        "threadId": 0
+      },
+      {
+        "kind": "first-call",
+        "allowedProjects": 2,
+        "elapsedMs": 39.330417000000125,
+        "processCold": false,
+        "threadId": 0,
+        "rssBytes": 299450368
+      },
+      {
+        "kind": "warm",
+        "allowedProjects": 2,
+        "rows": 10000,
+        "limit": 12,
+        "rounds": 20,
+        "medianMs": 37.887416999999914,
+        "p95Ms": 39.84154200000012,
+        "maxMs": 40.36679200000026,
+        "postCallTurn": {
+          "medianMs": 0.06375000000025466,
+          "p95Ms": 0.47920799999974406,
+          "maxMs": 1.4221669999997175
+        },
+        "eventLoopDelayP95Ms": 39.944191,
+        "eventLoopDelayMaxMs": 40.665087,
+        "threadId": 0,
+        "rssBytes": 305922048,
+        "sqlExecutions": {
+          "median": 186,
+          "p95": 186,
+          "max": 186
+        },
+        "sqlPreparations": {
+          "median": 7,
+          "p95": 7,
+          "max": 7
+        },
+        "sqlCounterOverheadIncluded": true
+      },
+      {
+        "kind": "concurrent-service-control",
+        "allowedProjects": 2,
+        "burstSearches": 20,
+        "burstElapsedMs": 764.0935829999999,
+        "httpRequests": 20,
+        "httpConcurrency": 4,
+        "idleHttp": {
+          "medianMs": 0.6682089999994787,
+          "p95Ms": 1.2588339999992968,
+          "maxMs": 1.3595000000004802
+        },
+        "concurrentHttp": {
+          "medianMs": 1.586250000000291,
+          "p95Ms": 765.4983329999995,
+          "maxMs": 765.6198329999997
+        },
+        "appEndpoint": false,
+        "threadId": 0
+      },
+      {
+        "kind": "loopback-http-control-only",
+        "concurrentWithSearch": false,
+        "appEndpoint": false,
+        "medianMs": 0.4394579999998314,
+        "p95Ms": 1.3780829999996058,
+        "maxMs": 7.568457999999737
+      }
+    ]
+  ]
+}

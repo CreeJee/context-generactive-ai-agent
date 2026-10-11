@@ -1,6 +1,6 @@
 import { isTruthy } from "../truthy.ts";
 import { toolDefinition, type AnyServerTool } from "@tanstack/ai";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Function as EffectFunction, Layer, Schema } from "effect";
 import { AppEvents } from "../events/app-events.ts";
 import {
   StartNewGoal,
@@ -10,7 +10,7 @@ import {
   WorkflowProgressRefused,
   Workflows,
   type WorkflowPhase,
-  type WorkflowState,
+  WorkflowState,
 } from "./workflow.ts";
 import { toToolSchema } from "../tools/schema.ts";
 import type { ResolvedRules } from "./rules.ts";
@@ -194,19 +194,22 @@ const ruleSource = (rule: ResolvedRules["rules"][number]) => {
   }
 };
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function workflowInstructions(
-  state: WorkflowState,
-  resolved: ResolvedRules,
-  goalInstanceId: string | null = null,
-) {
-  const applicableRules = resolved.rules
-    .map(
-      (rule) =>
-        `- ${rule.id}@${rule.version} (${rule.priority}; ${ruleSource(rule)}): ${rule.instruction}\n  Evidence: ${rule.requiredEvidence.join("; ") || "(none)"}`,
-    )
-    .join("\n");
-  const common = `Workflow phase: ${state.phase}.
+export const workflowInstructions: {
+  (
+    resolved: ResolvedRules,
+    goalInstanceId?: string | null,
+  ): (state: WorkflowState) => string | null;
+  (state: WorkflowState, resolved: ResolvedRules, goalInstanceId?: string | null): string | null;
+} = EffectFunction.dual(
+  (args) => Schema.is(WorkflowState)(args[0]),
+  (state: WorkflowState, resolved: ResolvedRules, goalInstanceId: string | null = null) => {
+    const applicableRules = resolved.rules
+      .map(
+        (rule) =>
+          `- ${rule.id}@${rule.version} (${rule.priority}; ${ruleSource(rule)}): ${rule.instruction}\n  Evidence: ${rule.requiredEvidence.join("; ") || "(none)"}`,
+      )
+      .join("\n");
+    const common = `Workflow phase: ${state.phase}.
 Current Goal instance ID: ${goalInstanceId ?? "(none; legacy/unbound)"}. For start_new_goal, use this exact ID as previousGoalInstanceId (null only if none). This is a snapshot; the owner checks the current ID again at request time.
 Goal and Plan are durable artifacts, not substitutes for a conversational answer.
 Use only the workflow artifact tools available in this phase, and update an artifact when the user's decisions materially change it.
@@ -215,8 +218,8 @@ When an explicit user decision changes saved Goal constraints or non-goals, pers
 Applicable workflow rules (reference these ids from Plan steps; do not copy their text into the artifact):
 ${applicableRules || "(none)"}${resolved.degraded.includes("embedding") ? "\nOptional semantic rule retrieval was unavailable; required metadata rules still apply." : ""}${resolved.degraded.includes("source") ? "\nOne or more optional structured rule sources were invalid or unreadable and were skipped." : ""}`;
 
-  const goal = isTruthy(state.goal)
-    ? `Goal v${state.goal.version} (${state.goal.status}): ${state.goal.statement}
+    const goal = isTruthy(state.goal)
+      ? `Goal v${state.goal.version} (${state.goal.status}): ${state.goal.statement}
 Outcomes:
 ${compactList(state.goal.outcomes)}
 Constraints (apply across every continuation; a new turn does not reset limits):
@@ -225,31 +228,31 @@ Non-goals:
 ${compactList(state.goal.nonGoals, state.goal.nonGoals.length)}
 Blocking questions:
 ${compactList(state.goal.openQuestions.filter((question) => question.blocking).map((question) => question.question))}`
-    : "Goal: not recorded yet.";
+      : "Goal: not recorded yet.";
 
-  switch (state.phase) {
-    case "chat":
-      return null;
-    case "completed":
-      return `${common}\nThe Goal and Plan are complete. Do not resume verification or change their completed evidence. Answer follow-up questions conversationally. Start a new Goal only when the user explicitly requests new work.\n\n${goal}`;
-    case "goal":
-      return `${common}
+    switch (state.phase) {
+      case "chat":
+        return null;
+      case "completed":
+        return `${common}\nThe Goal and Plan are complete. Do not resume verification or change their completed evidence. Answer follow-up questions conversationally. Start a new Goal only when the user explicitly requests new work.\n\n${goal}`;
+      case "goal":
+        return `${common}
 The user delegated an outcome, not merely a request to describe a goal. Save a concise active Goal artifact before material changes, then autonomously investigate, implement and verify the outcome in this run. Replan internally as needed without requiring a Plan artifact. Use update_workflow_progress to record pauses, failures, evidence and verification. Do not mark the Goal completed without passed verification evidence. Ask only genuinely blocking questions. Tool permissions still apply.
 
 ${goal}`;
-    case "plan": {
-      const plan = isTruthy(state.plan)
-        ? `Plan v${state.plan.version} (${state.plan.status}, based on Goal v${state.plan.goalVersion}): ${state.plan.summary}`
-        : "Plan: not recorded yet.";
-      return `${common}
+      case "plan": {
+        const plan = isTruthy(state.plan)
+          ? `Plan v${state.plan.version} (${state.plan.status}, based on Goal v${state.plan.goalVersion}): ${state.plan.summary}`
+          : "Plan: not recorded yet.";
+        return `${common}
 You are planning, not executing. Project tools are restricted to read-only investigation. If no Goal is recorded, infer the smallest useful Goal from the user's request and save it before the Plan; the user does not need to enter Goal mode first. Produce ordered steps with stable ids, dependencies, acceptance criteria, risks and applicable rule ids. When a contradiction or unanswered question arises, record what is uncertain and which decisions depend on it; continue all independent read-only investigation and planning before asking. Narrow questions with evidence and ask only when no useful independent planning remains and the decision truly blocks progress. A non-blocking open question does not by itself require a draft Plan: save a ready Plan when its steps can proceed, and leave the unresolved decision for the step it actually affects. Never assume an answer to a blocking question or mark a Plan ready if the unresolved decision prevents safe execution of its next step. Do not modify files, run commands, delegate work or present investigation as implementation.
 
 ${goal}
 
 ${plan}`;
-    }
-    case "execute":
-      return `${common}
+      }
+      case "execute":
+        return `${common}
 Execute only the current Plan. On a request to resume the approved work, continue an existing in_progress step from its recorded evidence rather than merely listing remaining tasks or restarting completed work. A request to continue an answer, explain status or discuss the Plan is not by itself execution intent or new approval; answer that request without claiming work was performed. When the wording is ambiguous, use the surrounding conversation and ask if execution intent remains unclear. Resume requests never waive Goal constraints, failed-approach limits, pending permissions or a confirmed blocker. Before each step, record it as in_progress. Record completed steps with actual evidence using update_workflow_progress; never mark work complete from intention alone. If the user materially changes the scope, design or acceptance criteria, revise the Plan with update_plan; this returns the workflow to Plan so the revised version can be confirmed before execution resumes. The workflow advances to Verify only when every step is completed with evidence.
 Continue the approved work through implementation, preparation, review and verification that you can perform. Do not end a turn merely promising to investigate or review next. After partial progress, persist new evidence with update_workflow_progress and continue. If progress genuinely requires a user decision, permission, an external dependency or recovery from a repeated failed approach, finish all independent work and record_workflow_blocker with the concrete reason and evidence before answering. Unverified work is remaining work to perform, not itself a reason to stop. The server continues unfinished approved execution automatically while executable; ending your answer does not pause the Plan. Successful file modifications and new substantive successful tool results also count as progress before a step completes. Identical repeated reads, no-op writes, failed calls and permission refusals do not reset the two-consecutive-turn no-progress limit. Automatic continuation never grants new permission or bypasses a pending approval, confirmed blocker, user stop or failed run.
 When repairing failed verification, use the recorded failure evidence, perform the repair, and persist the repair evidence plus verification status not_run before returning to Verify.
@@ -263,11 +266,12 @@ Current steps:
 ${state.plan.steps.map((step) => `- ${step.id} [${step.status}]: ${step.title}${step.status === "completed" ? "" : `\n  Description: ${step.description}\n  Depends on: ${step.dependsOn.join(", ") || "(none)"}\n  Acceptance criteria:\n${compactList(step.acceptanceCriteria, step.acceptanceCriteria.length)}\n  Rule refs: ${step.ruleRefs.join(", ") || "(none)"}\n  Recent evidence (historical evidence is not fresh verification):\n${compactList(step.evidence.slice(-6))}`}`).join("\n")}`
     : "Approved Plan: missing."
 }`;
-    case "verify":
-      return `${common}
+      case "verify":
+        return `${common}
 Verify the implementation against the Goal, Plan acceptance criteria and applicable rules. You have read/search tools and run_shell for builds, tests, linters and other non-mutating checks; actually run applicable checks instead of claiming this phase lacks tools. Do not edit files or install packages in Verify. First check whether the hypothesis and each criterion can actually distinguish the claimed cause. Record passed only with supporting evidence. Record failed only when valid criteria show an implementation defect; after you persist that failure the workflow automatically returns to Execute for repair. Use invalid_hypothesis when the premise is wrong (set recoveryPhase to goal or plan), invalid_criterion when the check itself is unsound, inconclusive when evidence cannot decide, and blocked only for a confirmed external dependency. Persist the result and evidence with update_workflow_progress. Do not invent settings, silently repair, waive a criterion, or ask the user to change workflow phases.
 Perform applicable review and checks now instead of ending with a promise to do them later. If a confirmed dependency prevents all independent verification, record_workflow_blocker with its reason and evidence.
 
 ${goal}`;
-  }
-}
+    }
+  },
+);

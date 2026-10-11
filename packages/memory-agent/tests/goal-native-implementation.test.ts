@@ -128,7 +128,7 @@ it.live(
                     headers: { "Content-Type": "application/json" },
                     body: yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
                       threadId: target.id,
-                      runId: yield* (yield* Crypto.Crypto).randomUUIDv4,
+                      runId: yield* (yield* Crypto.Crypto).randomUUIDv4(),
                       messages: [
                         { id: `user-${index + 1}`, role: "user", content: `hello-${index + 1}` },
                       ],

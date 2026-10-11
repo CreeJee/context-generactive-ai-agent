@@ -6,7 +6,7 @@ import { describe, expect } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { GlobalConfig } from "../src/config/global-config.ts";
 import { Database } from "../src/db/database.ts";
-import { embeddedKindFilter, Indexer } from "../src/memory/embedding/indexer.ts";
+import { Indexer } from "../src/memory/embedding/indexer.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
@@ -28,8 +28,6 @@ const chatRequest = Effect.fn("agentChat.chatRequest")(function* (text: string) 
     body,
   });
 });
-
-const Count = Schema.Struct({ count: Schema.Finite });
 
 describe("AgentChat.handle", () => {
   it.live("rejects empty user text before creating evidence or a run", () =>
@@ -199,16 +197,8 @@ describe("AgentChat.handle", () => {
       expect(toolResult.text).toContain(earlier.node.id);
 
       // Indexing runs in the background after the run; wait for it to catch up.
-      const db = yield* Effect.provideContext(Database, yield* runtime.contextEffect);
-      const unindexed = () =>
-        Schema.decodeUnknownEffect(Count)(
-          db.sqlite
-            .prepare(
-              `SELECT count(*) AS count FROM nodes n LEFT JOIN node_vectors v ON v.node_seq = n.seq WHERE v.node_seq IS NULL AND length(n.text) > 0 AND ${embeddedKindFilter}`,
-            )
-            .get(),
-        ).pipe(Effect.map((row) => row.count));
-      const indexed = yield* unindexed().pipe(
+      const indexer = yield* Effect.provideContext(Indexer, yield* runtime.contextEffect);
+      const indexed = yield* indexer.pending.pipe(
         Effect.repeat({ until: (remaining) => remaining === 0, schedule: Schedule.spaced(20) }),
         Effect.timeoutOption(1_000),
       );

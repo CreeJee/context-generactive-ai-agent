@@ -18,6 +18,8 @@ const RunProvenance = Schema.Struct({
   runId: Schema.String,
   workflowRevisionId: Schema.Int,
   dispatchGeneration: Schema.NullOr(Schema.String),
+  // Additive for 0.0.13 snapshots; source-bound runs always populate it.
+  durableExecutionId: Schema.optionalKey(Schema.String),
 });
 export const CompletionSnapshot = Schema.Struct({
   sessionId: Schema.String,
@@ -41,6 +43,14 @@ export const CompletionSnapshot = Schema.Struct({
 });
 export type CompletionSnapshot = typeof CompletionSnapshot.Type;
 export type CriterionMapping = typeof CriterionMapping.Type;
+
+/** A proposal is never completion evidence; the owner validates it after durable settlement. */
+export const CompletionRequest = Schema.Struct({
+  recorderRunId: Schema.String,
+  goalVersion: Schema.Int,
+  planVersion: Schema.Int,
+  mappings: Schema.Array(CriterionMapping),
+});
 
 const Binding = Schema.Struct({
   session_id: Schema.String,
@@ -92,6 +102,7 @@ export function completionEvidence(sqlite: DatabaseSync) {
     state: WorkflowState,
     mappings: readonly CriterionMapping[],
     recorderRunId: string,
+    pendingRecorder = false,
   ):
     | { readonly status: "accepted"; readonly snapshot: CompletionSnapshot }
     | { readonly status: "refused" } => {
@@ -110,6 +121,11 @@ export function completionEvidence(sqlite: DatabaseSync) {
       mappings.length === 0
     )
       return { status: "refused" };
+    const source = sqlite
+      .prepare(`SELECT source_generation, manifest_hash
+      FROM workflow_goal_worker_generations WHERE goal_instance_id = ?`)
+      .get(goalId);
+    const sourceGeneration = optionalString(source?.source_generation);
     const binding = (runId: string) =>
       optionalBinding(
         sqlite.prepare("SELECT * FROM workflow_run_bindings WHERE run_id = ?").get(runId),
@@ -139,17 +155,71 @@ export function completionEvidence(sqlite: DatabaseSync) {
         ? bound
         : null;
     };
+    const provenance = (runId: string, bound: typeof Binding.Type) => {
+      if (pendingRecorder && runId === recorderRunId) {
+        const dispatch = optionalString(
+          sqlite
+            .prepare("SELECT generation FROM workflow_worker_dispatches WHERE run_id = ?")
+            .get(runId)?.generation,
+        );
+        if (sourceGeneration !== undefined && dispatch === undefined) return null;
+        return {
+          runId,
+          workflowRevisionId: bound.workflow_revision_id,
+          dispatchGeneration: dispatch ?? null,
+        };
+      }
+      const unresolved = sqlite
+        .prepare(
+          `SELECT 1 FROM owner_rpc_operations WHERE run_id = ?
+           AND (status = 'pending' OR (side_effect = 1 AND status <> 'succeeded')) LIMIT 1`,
+        )
+        .get(runId);
+      if (isTruthy(unresolved)) return null;
+      const dispatchGeneration = optionalString(
+        sqlite
+          .prepare("SELECT generation FROM workflow_worker_dispatches WHERE run_id = ?")
+          .get(runId)?.generation,
+      );
+      if (sourceGeneration !== undefined && dispatchGeneration === undefined) return null;
+      if (sourceGeneration === undefined)
+        return {
+          runId,
+          workflowRevisionId: bound.workflow_revision_id,
+          dispatchGeneration: dispatchGeneration ?? null,
+        };
+      const durableExecutionId = optionalString(
+        sqlite
+          .prepare(
+            `SELECT execution_id FROM owner_workflow_executions
+             WHERE workflow_name = 'GoalExecution' AND status = 'completed'
+               AND json_extract(payload_json, '$.identity.sessionId') = ?
+               AND json_extract(payload_json, '$.identity.runId') = ?
+               AND json_extract(payload_json, '$.identity.goalInstanceId') = ?
+               AND json_extract(payload_json, '$.identity.workflowRevisionId') = ?
+               AND json_extract(result_json, '$._tag') = 'Complete'
+               AND json_extract(result_json, '$.exit._tag') = 'Success'
+               AND json_extract(result_json, '$.exit.value._tag') = 'GoalExecutionSuccess'
+               AND json_extract(result_json, '$.exit.value.runId') = ?
+               AND json_extract(result_json, '$.exit.value.executionId') = execution_id`,
+          )
+          .get(sessionId, runId, goalId, bound.workflow_revision_id, runId)?.execution_id,
+      );
+      return durableExecutionId === undefined
+        ? null
+        : {
+            runId,
+            workflowRevisionId: bound.workflow_revision_id,
+            dispatchGeneration: dispatchGeneration ?? null,
+            durableExecutionId,
+          };
+    };
     const recorder = valid(recorderRunId);
     if (!(recorder !== null)) return { status: "refused" };
+    const recorderProvenance = provenance(recorderRunId, recorder);
+    if (recorderProvenance === null) return { status: "refused" };
     const runs = MutableHashMap.empty<string, typeof RunProvenance.Type>();
-    const recorderDispatch = sqlite
-      .prepare("SELECT generation FROM workflow_worker_dispatches WHERE run_id = ?")
-      .get(recorderRunId)?.generation;
-    MutableHashMap.set(runs, recorderRunId, {
-      runId: recorderRunId,
-      workflowRevisionId: recorder.workflow_revision_id,
-      dispatchGeneration: optionalString(recorderDispatch) ?? null,
-    });
+    MutableHashMap.set(runs, recorderRunId, recorderProvenance);
     const coverage = MutableHashSet.empty<number>();
     for (const mapping of mappings) {
       const step = plan.steps.find((candidate) => candidate.id === mapping.stepId);
@@ -175,20 +245,11 @@ export function completionEvidence(sqlite: DatabaseSync) {
         if (!isTruthy(node)) return { status: "refused" };
       }
       MutableHashSet.add(coverage, mapping.outcomeIndex);
-      const dispatch = sqlite
-        .prepare("SELECT generation FROM workflow_worker_dispatches WHERE run_id = ?")
-        .get(mapping.runId)?.generation;
-      MutableHashMap.set(runs, mapping.runId, {
-        runId: mapping.runId,
-        workflowRevisionId: bound.workflow_revision_id,
-        dispatchGeneration: optionalString(dispatch) ?? null,
-      });
+      const runProvenance = provenance(mapping.runId, bound);
+      if (runProvenance === null) return { status: "refused" };
+      MutableHashMap.set(runs, mapping.runId, runProvenance);
     }
     if (MutableHashSet.size(coverage) !== goal.outcomes.length) return { status: "refused" };
-    const source = sqlite
-      .prepare(`SELECT source_generation, manifest_hash
-      FROM workflow_goal_worker_generations WHERE goal_instance_id = ?`)
-      .get(goalId);
     // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
     const registration = EffectFunction.flow(
       Schema.decodeUnknownResult(Schema.UndefinedOr(Registration)),
@@ -210,7 +271,7 @@ export function completionEvidence(sqlite: DatabaseSync) {
         planVersion: plan.version,
         recorderRunId,
         recorderRevisionId: recorder.workflow_revision_id,
-        sourceGeneration: optionalString(source?.source_generation) ?? null,
+        sourceGeneration: sourceGeneration ?? null,
         manifestHash: optionalString(source?.manifest_hash) ?? null,
         nativeRegistration: registration ?? null,
         mappings,
@@ -218,5 +279,8 @@ export function completionEvidence(sqlite: DatabaseSync) {
       },
     };
   };
-  return { required, derive };
+  const running = (runId: string) =>
+    sqlite.prepare("SELECT status FROM chat_runs WHERE run_id = ?").get(runId)?.status ===
+    "running";
+  return { required, derive, running };
 }

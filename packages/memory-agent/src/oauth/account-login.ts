@@ -1,8 +1,8 @@
-import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
+import { nativePromise } from "../runtime/native-effect.ts";
+import { runOAuthNodeEffect } from "./node-runtime.ts";
 import { Cause, Effect, MutableHashMap, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
+import { Crypto } from "effect";
 import type { DatabaseSync } from "node:sqlite";
 import {
   createProfileCredentialStore,
@@ -33,7 +33,14 @@ export type AccountLoginState =
 
 /** Each login gets a fresh keychain slot; the legacy provider client is never used to add accounts. */
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function createOAuthAccountLoginManager(
+export function createOAuthAccountLoginManager(options: {
+  readonly sqlite: DatabaseSync;
+  readonly accounts?: ProfileCredentialStore | undefined;
+  readonly startLogin?: LoginStarter | undefined;
+}) {
+  return createOAuthAccountLoginManagerBody(options.sqlite, options.accounts, options.startLogin);
+}
+function createOAuthAccountLoginManagerBody(
   sqlite: DatabaseSync,
   accounts: ProfileCredentialStore = createProfileCredentialStore(),
   startLogin: LoginStarter = (provider, id) =>
@@ -80,18 +87,22 @@ export function createOAuthAccountLoginManager(
     }
   };
   const profiles = (provider: OAuthProvider) => ({
-    profiles: listOAuthProfiles(sqlite, provider),
+    profiles: listOAuthProfiles({ sqlite: sqlite, provider: provider }),
     login: state(provider),
   });
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const start = (provider: OAuthProvider, label: string) =>
-    runNativeEffect(
+    runOAuthNodeEffect(
       Effect.gen(function* () {
-        if (!label.trim() || label.length > 80)
+        if (label.trim().length === 0 || label.length > 80)
           return yield* new Cause.UnknownError(new Error("invalid_oauth_profile"));
         if (activeAttempt(provider) !== undefined)
           return yield* new Cause.UnknownError(new Error("oauth_login_in_progress"));
-        const attempt: Attempt = { id: randomUUID(), label: label.trim(), cancelled: false };
+        const attempt: Attempt = {
+          id: yield* (yield* Crypto.Crypto).randomUUIDv4(),
+          label: label.trim(),
+          cancelled: false,
+        };
         MutableHashMap.set(entries, provider, {
           status: "running",
           attempt,
@@ -102,7 +113,7 @@ export function createOAuthAccountLoginManager(
           attempt.login = login;
           if (attempt.cancelled) login.cancel();
           // Completion is owned by the login SDK and its explicit cancel callback, across HTTP requests.
-          attempt.completed = runNativeEffect(
+          attempt.completed = runOAuthNodeEffect(
             nativePromise(() => login.completed).pipe(
               Effect.flatMap((connection) =>
                 Effect.gen(function* () {
@@ -115,7 +126,11 @@ export function createOAuthAccountLoginManager(
                     attempt.label,
                     accounts,
                   );
-                  if (!listOAuthProfiles(sqlite, provider).some((profile) => profile.selected))
+                  if (
+                    !listOAuthProfiles({ sqlite: sqlite, provider: provider }).some(
+                      (profile) => profile.selected,
+                    )
+                  )
                     yield* selectOAuthProfileEffect(sqlite, provider, attempt.id, accounts);
                   recordResult(provider, { status: "completed" });
                 }),
@@ -123,7 +138,7 @@ export function createOAuthAccountLoginManager(
               Effect.catchCause(() =>
                 Effect.gen(function* () {
                   if (
-                    !listOAuthProfiles(sqlite, provider).some(
+                    !listOAuthProfiles({ sqlite: sqlite, provider: provider }).some(
                       (profile) => profile.id === attempt.id,
                     )
                   ) {
@@ -161,7 +176,7 @@ export function createOAuthAccountLoginManager(
       }),
     );
   const cancel = (provider: OAuthProvider) =>
-    runNativeEffect(
+    runOAuthNodeEffect(
       Effect.gen(function* () {
         const attempt = activeAttempt(provider);
         if (attempt !== undefined) {

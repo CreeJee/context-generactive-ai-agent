@@ -1,11 +1,10 @@
 import { nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
 import { HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { readFile } from "node:fs/promises";
 import type { AnyServerTool } from "@tanstack/ai";
-import { Context, Data, Effect, Result, Layer, Option, Schema } from "effect";
+import { Context, Effect, Result, Layer, Option, Schema } from "effect";
 import { resolveProjectPath } from "../files/paths.ts";
+import { readFileBytesEffect } from "../files/text.ts";
 import type { Project } from "../projects/projects.ts";
 import { Attachments } from "./attachments.ts";
 
@@ -27,11 +26,6 @@ export interface DrawingPreview {
   readonly mimeType: string;
 }
 
-export class DrawingPreviewReadFailed extends Data.TaggedError("DrawingPreviewReadFailed")<{
-  readonly path: string;
-  readonly cause: unknown;
-}> {}
-
 const isDrawing = (path: string) => path.toLowerCase().endsWith(".svg");
 
 const make = Effect.gen(function* () {
@@ -50,10 +44,7 @@ const make = Effect.gen(function* () {
         onSuccess: (resolved) => resolved.absolute,
       });
       if (absolute === null) return Option.none<DrawingPreview>();
-      const svg = yield* Effect.tryPromise({
-        try: () => readFile(absolute),
-        catch: (cause) => new DrawingPreviewReadFailed({ path, cause }),
-      });
+      const { bytes: svg } = yield* readFileBytesEffect({ absolute, path, checkLeaf: true });
       const picture = yield* attachments.saveDrawing(svg);
       return Option.some<DrawingPreview>({
         attachmentId: picture.id,

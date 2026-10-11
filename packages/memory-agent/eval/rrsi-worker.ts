@@ -3,15 +3,6 @@ import { nativeStream } from "../src/runtime/native-stream.ts";
 import { Stream } from "effect";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../src/truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { join } from "node:path";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { execFileSync } from "node:child_process";
 import { Predicate, Cause, Effect, Layer, ManagedRuntime, Option, Schema } from "effect";
 import { memoryAgentLayer } from "../src/layers.ts";
 import { HarnessStore } from "../src/rrsi/store.ts";
@@ -19,9 +10,17 @@ import { AgentChat } from "../src/agent/chat.ts";
 import { Projects } from "../src/projects/projects.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
 import { TurnSummaries } from "../src/agent/turn-summaries.ts";
+import {
+  captureMemoryEvidence,
+  evaluateMemoryAnswer,
+  type MemoryEvidence,
+} from "../src/rrsi/memory-score.ts";
 import { ProviderRegistry } from "../src/providers/registry.ts";
 import { createSubscriptionRuntime } from "../src/providers/subscription-runtime.ts";
-import { WorkerGateway } from "../src/rrsi/worker-gateway.ts";
+import { WorkerGateway, GatewayClosed } from "../src/rrsi/worker-gateway.ts";
+import { NodeStream, NodeServices } from "@effect/platform-node";
+import { Crypto, FileSystem, Path } from "effect";
+import { runProcess } from "../src/rrsi/command.ts";
 import { SubscriptionResult } from "../src/rrsi/model-gateway.ts";
 import {
   OpenAICompatibleSettings,
@@ -33,6 +32,11 @@ import { fakeMorphLayer } from "../src/testing/fake-morph.ts";
 import { readTrialAnswer } from "../src/rrsi/trial-response.ts";
 import { EvaluationFailed } from "../src/rrsi/failure.ts";
 import { corpus } from "./rrsi-corpus.ts";
+
+interface TrialAnswers {
+  readonly lastAnswer: string;
+  readonly correctionEvidence: Option.Option<MemoryEvidence>;
+}
 
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
 const stringifyJson = EffectFunction.flow(
@@ -54,7 +58,18 @@ const emit = (
     | { kind: "failure"; reason: string }
     | { kind: "progress"; completed: number; total: number },
 ) => process.stdout.write(`RRSI:${stringifyJson(value)}\n`);
-const gateway = ManagedRuntime.make(WorkerGateway.layer(process.stdin, emit));
+const gateway = ManagedRuntime.make(
+  Layer.merge(
+    NodeServices.layer,
+    WorkerGateway.layer(
+      NodeStream.fromReadable({
+        evaluate: () => process.stdin,
+        onError: () => GatewayClosed.make(),
+      }),
+      emit,
+    ),
+  ),
+);
 const gatewayRequest = (
   kind: "request" | "subscription-request",
   body: string,
@@ -136,6 +151,9 @@ const filesystem = <A>(operation: () => A) =>
   });
 const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
   const input = yield* (yield* WorkerGateway).input;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const crypto = yield* Crypto.Crypto;
   const selection = {
     provider: input.provider ?? "openai-compatible",
     model: input.model,
@@ -144,32 +162,31 @@ const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
   const results: { id: string; domain: string; score: number }[] = [];
   const tasks = input.split === "smoke" ? corpus("validation").slice(0, 2) : corpus(input.split);
   for (const task of tasks) {
-    const root = yield* filesystem(() => mkdtempSync(join(tmpdir(), "rrsi-trial-")));
-    const projectRoot = join(root, "project");
-    const storage = join(root, "storage");
-    const home = join(root, "home");
-    yield* filesystem(() => {
-      mkdirSync(join(projectRoot, "src"), { recursive: true });
-      mkdirSync(storage);
-      mkdirSync(home);
-      if (isTruthy(task.fixture)) writeFileSync(join(projectRoot, "src/solve.mjs"), task.fixture);
-      writeFileSync(join(projectRoot, "notes.txt"), "Planning notes.\n".repeat(800));
-      writeFileSync(
-        join(storage, "config.json"),
-        stringifyJson({
-          openaiCompatible: {
-            baseUrl: "http://127.0.0.1/v1",
-            model: input.model,
-            contextWindow: 32000,
-            outputBudget: 2048,
-            toolCalling: true,
-          },
-          provider: selection.provider,
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "rrsi-trial-" });
+    const projectRoot = path.join(root, "project");
+    const storage = path.join(root, "storage");
+    const home = path.join(root, "home");
+    yield* fs.makeDirectory(path.join(projectRoot, "src"), { recursive: true });
+    yield* fs.makeDirectory(storage);
+    yield* fs.makeDirectory(home);
+    if (isTruthy(task.fixture))
+      yield* fs.writeFileString(path.join(projectRoot, "src/solve.mjs"), task.fixture);
+    yield* fs.writeFileString(path.join(projectRoot, "notes.txt"), "Planning notes.\n".repeat(800));
+    yield* fs.writeFileString(
+      path.join(storage, "config.json"),
+      stringifyJson({
+        openaiCompatible: {
+          baseUrl: "http://127.0.0.1/v1",
           model: input.model,
-          reasoningEffort: selection.reasoningEffort,
-        }),
-      );
-    });
+          contextWindow: 32000,
+          outputBudget: 2048,
+          toolCalling: true,
+        },
+        provider: selection.provider,
+        model: input.model,
+        reasoningEffort: selection.reasoningEffort,
+      }),
+    );
     const compatibleLayer = OpenAICompatibleSettings.layerWith(
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
       Layer.succeed(CompatibleKeyring, {
@@ -231,7 +248,7 @@ const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
       importsWatching: false,
       importsHome: home,
       skillsHome: home,
-      skillsBuiltin: join(home, "skills"),
+      skillsBuiltin: path.join(home, "skills"),
       sweepSecrets: false,
     });
     const correct = yield* Effect.gen(function* () {
@@ -243,64 +260,84 @@ const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
       const session = yield* (yield* Sessions).create(project.id);
       const agent = yield* AgentChat;
       const summaries = yield* TurnSummaries;
-      let lastAnswer = "";
-      for (const text of task.turns) {
-        const response = yield* agent.handle(
-          new Request(inProcessChatUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: stringifyJson({
-              threadId: session.id,
-              tools: [],
-              context: [],
-              runId: randomUUID(),
-              messages: [{ id: randomUUID(), role: "user", content: text }],
+      const answers = yield* Effect.reduce(
+        task.turns,
+        (): TrialAnswers => ({ lastAnswer: "", correctionEvidence: Option.none() }),
+        Effect.fnUntraced(function* (previous: TrialAnswers, text: string, turnIndex: number) {
+          const response = yield* agent.handle(
+            new Request(inProcessChatUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: stringifyJson({
+                threadId: session.id,
+                tools: [],
+                context: [],
+                runId: yield* crypto.randomUUIDv4(),
+                messages: [{ id: yield* crypto.randomUUIDv4(), role: "user", content: text }],
+              }),
             }),
-          }),
-          session.id,
-        );
-        if (!response.ok) return yield* EvaluationFailed.make({ reason: "trial_execution_failed" });
-        const responseText = yield* Effect.tryPromise({
-          try: () => response.text(),
-          catch: () => EvaluationFailed.make({ reason: "trial_execution_failed" }),
-        });
-        lastAnswer = yield* readTrialAnswer(responseText);
-        const summary = yield* summaries.catchUp(session.id, true);
-        if (summary === "failed")
-          return yield* EvaluationFailed.make({ reason: "trial_execution_failed" });
-      }
-      let correct = false;
-      if (task.domain === "coding") {
-        correct = yield* Effect.try({
-          try: () => {
-            const result = execFileSync(
-              process.execPath,
-              [
-                "--input-type=module",
-                "-e",
-                `import {solve} from './src/solve.mjs'; console.log(${task.verification});`,
-              ],
-              {
+            session.id,
+          );
+          if (!response.ok)
+            return yield* EvaluationFailed.make({ reason: "trial_execution_failed" });
+          const responseText = yield* Effect.tryPromise({
+            try: () => response.text(),
+            catch: () => EvaluationFailed.make({ reason: "trial_execution_failed" }),
+          });
+          const lastAnswer = yield* readTrialAnswer(responseText);
+          let correctionEvidence = previous.correctionEvidence;
+          switch (task.domain) {
+            case "memory": {
+              if (turnIndex === task.correctionTurnIndex) {
+                correctionEvidence = Option.some(
+                  yield* captureMemoryEvidence({
+                    projectId: project.id,
+                    sessionId: session.id,
+                    text,
+                    decision: task.expected,
+                  }),
+                );
+              }
+              break;
+            }
+            case "coding":
+              break;
+          }
+          const summary = yield* summaries.catchUp(session.id, true);
+          if (summary === "failed")
+            return yield* EvaluationFailed.make({ reason: "trial_execution_failed" });
+          return { lastAnswer, correctionEvidence };
+        }),
+      );
+      switch (task.domain) {
+        case "coding": {
+          return yield* Effect.gen(function* () {
+            const execution = yield* nativePromise(() =>
+              runProcess({
+                command: process.execPath,
+                args: [
+                  "--input-type=module",
+                  "-e",
+                  `import {solve} from './src/solve.mjs'; console.log(${task.verification});`,
+                ],
                 cwd: projectRoot,
                 timeout: 5000,
-                encoding: "utf8",
-                stdio: ["ignore", "pipe", "ignore"],
-              },
-            ).trim();
-            return (
-              result === task.expected &&
-              readFileSync(join(projectRoot, "src/solve.mjs"), "utf8") !== task.fixture
+              }),
             );
-          },
-          catch: () => CodingVerificationFailed.make(),
-        }).pipe(Effect.catchTag("CodingVerificationFailed", () => Effect.succeed(false)));
-      } else {
-        correct =
-          lastAnswer.includes(task.expected) &&
-          !lastAnswer.includes("obsolete-") &&
-          /[a-f0-9]{8}-[a-f0-9-]{27,}/i.test(lastAnswer);
+            const source = yield* fs.readFileString(path.join(projectRoot, "src/solve.mjs"));
+            return execution.stdout.trim() === task.expected && source !== task.fixture;
+          }).pipe(
+            Effect.mapError(() => CodingVerificationFailed.make()),
+            Effect.catchTag("CodingVerificationFailed", () => Effect.succeed(false)),
+          );
+        }
+        case "memory": {
+          if (Option.isNone(answers.correctionEvidence)) {
+            return yield* EvaluationFailed.make({ reason: "evaluation_incomplete" });
+          }
+          return yield* evaluateMemoryAnswer(answers.lastAnswer, answers.correctionEvidence.value);
+        }
       }
-      return correct;
       // Evaluation entry point owns this Layer and its resource scope.
     }).pipe(
       Effect.fnUntraced(function* <A, E, R>(program: Effect.Effect<A, E, R>) {
@@ -317,7 +354,7 @@ const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
 // The Node entry point and SDK transport are the only ManagedRuntime bridges.
 try {
   await gateway.runPromise(
-    evaluateWorker().pipe(
+    Effect.scoped(evaluateWorker()).pipe(
       Effect.matchCause({
         onSuccess: (results) => emit({ kind: "result", results }),
         onFailure: (cause) => {

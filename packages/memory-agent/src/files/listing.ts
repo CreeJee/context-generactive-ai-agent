@@ -1,15 +1,21 @@
+import * as NodePath from "@effect/platform-node/NodePath";
+import * as NodeChildProcessSpawner from "@effect/platform-node/NodeChildProcessSpawner";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { execFile } from "node:child_process";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
+// Directory walking keeps one opendir handle; lstat rejects linked Git entries without following them.
 import { lstat, opendir } from "node:fs/promises";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { join, posix } from "node:path";
+// Effect Path has no glob matcher; retain Node's existing POSIX glob semantics.
+import { posix } from "node:path";
+import { path as hostPath } from "../runtime/synchronous-path.ts";
 import {
-  Deferred,
+  Context,
+  Crypto,
+  Layer,
+  Cause,
+  Stream,
   MutableHashMap,
   Option,
   Effect,
@@ -20,6 +26,8 @@ import {
 import { findExecutable } from "../runtime/host.ts";
 import { gitEnvironment } from "./git-grep.ts";
 import { isCredentialPath } from "./paths.ts";
+
+const { join } = hostPath;
 
 export class FileListingIoFailed extends Schema.TaggedError<FileListingIoFailed>()(
   "FileListingIoFailed",
@@ -51,23 +59,51 @@ export interface FileListing {
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const gitFiles = Effect.fn("FileListing.gitFiles")(function* (root: string, directory: string) {
-  const git = findExecutable("git");
+  const git = yield* Effect.scoped(
+    Layer.build(NodeFileSystem.layer).pipe(
+      Effect.flatMap((services) => Effect.provideContext(findExecutable("git"), services)),
+    ),
+  );
   if (!isTruthy(git)) return null;
-  return yield* Effect.callback<string[] | null>((resume) => {
-    const closed = Deferred.makeUnsafe<void>();
-    const child = execFile(
-      git,
-      ["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", directory],
-      { cwd: root, maxBuffer: 256 * 1024 * 1024, windowsHide: true, env: gitEnvironment(git) },
-      (error, stdout) =>
-        resume(Effect.succeed(error === null ? stdout.split("\0").filter(Boolean) : null)),
-    );
-    child.once("close", () => Deferred.doneUnsafe(closed, Effect.void));
-    return Effect.gen(function* () {
-      child.kill();
-      yield* Deferred.await(closed);
-    });
-  });
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      const services = yield* Layer.build(
+        NodeChildProcessSpawner.layer.pipe(
+          Layer.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)),
+        ),
+      );
+      const spawner = Context.get(services, ChildProcessSpawner.ChildProcessSpawner);
+      const child = yield* spawner.spawn(
+        ChildProcess.make(
+          git,
+          ["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", directory],
+          {
+            cwd: root,
+            windowsHide: true,
+            env: gitEnvironment(git),
+            extendEnv: false,
+            stderr: "ignore",
+          },
+        ),
+      );
+      let size = 0;
+      const stdout = yield* child.stdout.pipe(
+        Stream.mapEffect((chunk) => {
+          size += chunk.byteLength;
+          return size <= 256 * 1024 * 1024
+            ? Effect.succeed(chunk)
+            : Effect.fail(new Cause.UnknownError("git listing output exceeds 256 MiB"));
+        }),
+        Stream.decodeText(),
+        Stream.runFold(
+          () => "",
+          (text, chunk) => text + chunk,
+        ),
+      );
+      const code = yield* child.exitCode;
+      return Number(code) === 0 ? stdout.split("\0").filter(Boolean) : null;
+    }),
+  ).pipe(Effect.orElseSucceed(() => null));
 });
 
 /**
@@ -234,11 +270,20 @@ export interface Snapshot extends FileListing {
  * instead of a tree that shifts between pages. Old snapshots are dropped first.
  */
 export const createSnapshots = (capacity = 32) =>
-  Effect.sync(() => {
+  Effect.gen(function* () {
+    const services = yield* Effect.scoped(Layer.build(NodeCrypto.layer));
+    const crypto = Context.get(services, Crypto.Crypto);
+    const runSync = Effect.runSyncWith(services);
     const entries = MutableHashMap.empty<string, Snapshot>();
     return {
       add(root: string, directory: string, glob: string | undefined, listing: FileListing) {
-        const snapshot: Snapshot = { id: randomUUID(), root, directory, glob, ...listing };
+        const snapshot: Snapshot = {
+          id: runSync(crypto.randomUUIDv4()),
+          root,
+          directory,
+          glob,
+          ...listing,
+        };
         MutableHashMap.set(entries, snapshot.id, snapshot);
         for (const id of MutableHashMap.keys(entries)) {
           if (MutableHashMap.size(entries) <= capacity) break;

@@ -1,0 +1,32 @@
+{
+  "date": "2026-10-08",
+  "sha256": {
+    "packages/turbovec/src/lib.rs": "56e4ea019ad389c41989c5f01130dd168862fceccccd988c9dad48d71585b993",
+    "packages/turbovec/src/search_control.rs": "1d5a0e2dbaa2d14bf40ca64dc1994cf0a3697205767b9169dc3855f02c0f7870",
+    "packages/turbovec/index.d.ts": "13bd56a55f699c50769f8d694c2f5cee953db27a46b4debb619b4bbe2c05b8bc",
+    "packages/turbovec/memory-turbovec.node": "a9a5e5aff79ca49542a4d0a895f69fbfcbd5ed3bbbdcf916a9b3172306545eca",
+    "packages/memory-agent/src/memory/native-search/worker.ts": "211be31186766f5174f8b947ec242b6eb9c02ad0372a0fb8d320ba07b784d8dd",
+    "packages/memory-agent/src/memory/native-search/client.ts": "ae2daa94c3f41db93ec31e08f6b7f752d5a452e749b979b330cd16c4831e2723",
+    "packages/memory-agent/src/memory/native-search/worker-protocol.ts": "4356bc51c0b5e3eabd9123f6a7cd89fe0b2856f309f90b4ff7c543a44af7ce2f"
+  },
+  "verified": {
+    "rustEnvelopeUnitTests": 1,
+    "tsWorkerRegressionTests": 6,
+    "tsCheckedFiles": 6,
+    "legacyResultMatch": true,
+    "preAbortedSharedCellReturnsCancelled": true,
+    "oneMsBudgetRejected": true,
+    "defaultPathChanged": false
+  },
+  "limits": {
+    "maximumIndex": 50000,
+    "dimensions": 384,
+    "bits": 4,
+    "maximumK": 48,
+    "minimumRemainingMs": 12,
+    "midScanPreemption": false,
+    "hardDeadline": false,
+    "realmIntrinsicsTrusted": true,
+    "inFlightGcVisibilityStressVerified": false
+  }
+}

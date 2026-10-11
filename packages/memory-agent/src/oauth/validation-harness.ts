@@ -3,13 +3,16 @@ import { nativeStream } from "../runtime/native-stream.ts";
 import { Result } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer } from "node:http";
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { optionalProperty } from "../optional-property.ts";
-import type { AddressInfo } from "node:net";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import {
   Cause,
+  Deferred,
+  Fiber,
   Effect,
   Semaphore,
   Stream,
@@ -19,6 +22,9 @@ import {
   Data,
   Option,
   Schema,
+  Layer,
+  Scope,
+  Exit,
 } from "effect";
 import { requireRuntime } from "../runtime/resources.ts";
 import { prepareAnthropicValidationBody } from "./anthropic-validation-adapter.ts";
@@ -347,12 +353,6 @@ const safeEqual = (left: string, right: string) => {
   return a.length === b.length && timingSafeEqual(a, b);
 };
 
-const close = (server: Server) =>
-  // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-  new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
-
 const TokenResponse = Schema.Struct({
   access_token: Schema.String,
   refresh_token: Schema.optional(Schema.String),
@@ -533,30 +533,39 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
     let verifier: string | null = pkce.verifier;
     const state = protocol.provider === "anthropic" ? pkce.verifier : createOAuthState();
     const timeoutMs = options.timeoutMs ?? 120_000;
-    const server = createServer();
-    yield* Effect.tryPromise({
-      try: () =>
-        new Promise<void>((resolve, reject) => {
-          server.once("error", reject);
-          server.listen(protocol.callbackPort ?? 0, protocol.callbackRedirectHost, () => resolve());
-        }),
-      catch: () => new OAuthHarnessError("transport_unavailable"),
-    }).pipe(
+    const listenerScope = yield* Scope.make();
+    const closeListener = Scope.close(listenerScope, Exit.void);
+    const serverServices = yield* Layer.buildWithScope(
+      NodeHttpServer.layer(createServer, {
+        port: protocol.callbackPort ?? 0,
+        host: protocol.callbackRedirectHost,
+      }),
+      listenerScope,
+    ).pipe(
+      Effect.catchCause(() =>
+        closeListener.pipe(
+          Effect.andThen(() => Effect.fail(new OAuthHarnessError("transport_unavailable"))),
+        ),
+      ),
       Effect.tapError(() =>
         Effect.sync(() => {
           loginActive = false;
         }),
       ),
     );
-    const listeningAddress = server.address();
-    if (listeningAddress === null) {
-      yield* Effect.promise(() => close(server));
-      loginActive = false;
-      return yield* new OAuthHarnessError("transport_unavailable");
+    const server = yield* Effect.provideContext(HttpServer.HttpServer, serverServices);
+    let port: number;
+    switch (server.address._tag) {
+      case "InetAddressV4":
+      case "InetAddressV6":
+        port = server.address.port;
+        break;
+      case "UnixPathAddress":
+        yield* closeListener;
+        loginActive = false;
+        return yield* new OAuthHarnessError("transport_unavailable");
     }
-    // SAFETY: this server was bound to a TCP host/port, never to an IPC pipe.
-    const address = listeningAddress as AddressInfo;
-    const redirectAuthority = `${protocol.callbackRedirectHost}:${address.port}`;
+    const redirectAuthority = `${protocol.callbackRedirectHost}:${port}`;
     const redirectUri = `http://${redirectAuthority}${protocol.callbackPath}`;
     const authorize = new URL(protocol.authorizeUrl);
     for (const [key, value] of Object.entries({
@@ -571,66 +580,66 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
     }))
       authorize.searchParams.set(key, value);
 
-    let settle!: (value: OAuthConnectionStatus) => void;
-    let reject!: (reason: OAuthHarnessError) => void;
-    // LoginAttempt's native completion/cancel contract outlives the initiating HTTP request.
-    const completed = new Promise<OAuthConnectionStatus>((resolve, fail) => {
-      settle = resolve;
-      reject = fail;
-    });
+    // Login completion has its own lifetime and explicit cancellation, independent of the HTTP request.
+    const completion = yield* Deferred.make<OAuthConnectionStatus, OAuthHarnessError>();
+    const completed = runNativeEffect(Deferred.await(completion));
     let finished = false;
     let callbackClaimed = false;
+    let timer: Fiber.Fiber<void> | undefined;
     const finish = Effect.fn("OAuth.finishLogin")(function* (
       result: Result.Result<OAuthConnectionStatus, OAuthHarnessError>,
-    ) {
+      fromTimeout: boolean = false,
+    ): Effect.fn.Return<void> {
       if (finished) return;
       finished = true;
-      clearTimeout(timer);
+      if (!fromTimeout && timer !== undefined) yield* Fiber.interrupt(timer);
       options.signal?.removeEventListener("abort", abort);
       verifier = null;
       loginActive = false;
-      yield* Effect.promise(() => close(server));
-      Result.match(result, { onSuccess: settle, onFailure: reject });
+      yield* closeListener;
+      yield* Result.match(result, {
+        onSuccess: (status) => Deferred.succeed(completion, status),
+        onFailure: (error) => Deferred.fail(completion, error),
+      });
     });
     const abort = () => {
-      void runNativeEffect(finish(Result.fail(new OAuthHarnessError("cancelled"))));
+      void runNativeEffect(Result.fail(new OAuthHarnessError("cancelled")).pipe(finish));
     };
-    const timer = setTimeout(() => {
-      void runNativeEffect(finish(Result.fail(new OAuthHarnessError("callback_timeout"))));
-    }, timeoutMs);
-    options.signal?.addEventListener("abort", abort, { once: true });
-    if (options.signal?.aborted === true) abort();
-
-    const onCallback = Effect.fn("OAuth.loginCallback")(function* (
-      request: IncomingMessage,
-      response: ServerResponse,
-    ) {
-      response.setHeader("Connection", "close");
+    // HttpEffect closes each request Scope only after writing its response. Finish from a
+    // detached finalizer Fiber so closing the listener never interrupts its own callback.
+    const settleAfterResponse = (result: Result.Result<OAuthConnectionStatus, OAuthHarnessError>) =>
+      Effect.sync(() => {
+        callbackClaimed = true;
+      }).pipe(
+        Effect.andThen(
+          Effect.addFinalizer(() => Effect.forkDetach(finish(result)).pipe(Effect.asVoid)),
+        ),
+      );
+    const callbackResponse = (text: string, status: number) =>
+      HttpServerResponse.text(text, { status, headers: { connection: "close" } });
+    const onCallback = Effect.fn("OAuth.loginCallback")(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
       // Admission happens before any suspension; replay cannot exchange or settle twice.
       if (callbackClaimed || finished) {
-        response.writeHead(410).end("OAuth callback already consumed.");
-        return;
+        return callbackResponse("OAuth callback already consumed.", 410);
       }
-      const callback = new URL(request.url ?? "/", redirectUri);
+      const callback = new URL(request.url, redirectUri);
       if (
         request.method !== "GET" ||
         callback.pathname !== protocol.callbackPath ||
         request.headers.host !== redirectAuthority
       ) {
-        response.writeHead(400).end("Invalid OAuth callback.");
-        return;
+        return callbackResponse("Invalid OAuth callback.", 400);
       }
       const returnedState = callback.searchParams.get("state");
       const code = callback.searchParams.get("code");
       if (returnedState === null || !safeEqual(returnedState, state)) {
-        response.writeHead(400).end("OAuth state mismatch.");
-        yield* finish(Result.fail(new OAuthHarnessError("callback_state_mismatch")));
-        return;
+        yield* settleAfterResponse(Result.fail(new OAuthHarnessError("callback_state_mismatch")));
+        return callbackResponse("OAuth state mismatch.", 400);
       }
       if (code === null || code.length === 0 || verifier === null) {
         const callbackCode = callback.searchParams.get("error");
-        response.writeHead(400).end("Invalid OAuth callback.");
-        yield* finish(
+        yield* settleAfterResponse(
           Result.fail(
             callbackCode !== null && HashSet.has(safeOAuthCodes, callbackCode)
               ? new OAuthHarnessError("provider_rejected", null, {
@@ -641,13 +650,13 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
               : new OAuthHarnessError("callback_invalid"),
           ),
         );
-        return;
+        return callbackResponse("Invalid OAuth callback.", 400);
       }
       callbackClaimed = true;
       const codeVerifier = verifier;
       let previous: StoredCredential | null = null;
       let written = false;
-      yield* Effect.gen(function* () {
+      return yield* Effect.gen(function* () {
         if (finished) return yield* new OAuthHarnessError("cancelled");
         const commonGrant = {
           grant_type: "authorization_code",
@@ -667,9 +676,8 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
         if (finished) return yield* new OAuthHarnessError("cancelled");
         const connection = yield* statusEffect();
         if (finished) return yield* new OAuthHarnessError("cancelled");
-        response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-        response.end("Connected. You may close this window.");
-        yield* finish(Result.succeed(connection));
+        yield* settleAfterResponse(Result.succeed(connection));
+        return callbackResponse("Connected. You may close this window.", 200);
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
@@ -682,16 +690,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
                   : store.write(protocol.provider, credential),
               ).pipe(Effect.ignore);
             }
-            response
-              .writeHead(
-                error instanceof OAuthHarnessError && error.code === "cancelled" ? 410 : 502,
-              )
-              .end(
-                error instanceof OAuthHarnessError && error.code === "credential_store_unavailable"
-                  ? "Login succeeded, but the system credential store is unavailable. Return to the app for diagnostic details."
-                  : "Login could not be completed. Return to the app for diagnostic details.",
-              );
-            yield* finish(
+            yield* settleAfterResponse(
               Result.fail(
                 error instanceof OAuthHarnessError
                   ? error
@@ -701,13 +700,26 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
                     }),
               ),
             );
+            return callbackResponse(
+              error instanceof OAuthHarnessError && error.code === "credential_store_unavailable"
+                ? "Login succeeded, but the system credential store is unavailable. Return to the app for diagnostic details."
+                : "Login could not be completed. Return to the app for diagnostic details.",
+              error instanceof OAuthHarnessError && error.code === "cancelled" ? 410 : 502,
+            );
           }),
         ),
       );
     });
-    server.on("request", (request, response) => {
-      void runNativeEffect(onCallback(request, response));
-    });
+    yield* Effect.provideContext(
+      Scope.provide(HttpServer.serveEffect(onCallback()), listenerScope),
+      serverServices,
+    );
+    timer = yield* Effect.sleep(timeoutMs).pipe(
+      Effect.andThen(() => finish(Result.fail(new OAuthHarnessError("callback_timeout")), true)),
+      Effect.forkDetach,
+    );
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted === true) abort();
     return {
       provider: protocol.provider,
       authorizationUrl: authorize.toString(),

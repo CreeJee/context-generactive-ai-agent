@@ -1,7 +1,7 @@
-import { Cause, Effect, Function, Result, Schema, Stream } from "effect";
-import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
-import { nativeStream } from "../runtime/native-stream.ts";
-import { parentPort, workerData } from "node:worker_threads";
+import { NodeWorkerRunner } from "@effect/platform-node";
+import { Cause, Effect, Function, Layer, Result, Schema, Scope, Stream } from "effect";
+import { RpcClient, RpcServer } from "effect/rpc";
+import { workerData } from "node:worker_threads";
 import {
   chat,
   defineInterrupt,
@@ -9,24 +9,21 @@ import {
   type ChatMiddleware,
   type ChatMiddlewareContext,
 } from "@tanstack/ai";
-import { encodeFullLoopValue, decodeFullLoopValue } from "./full-loop-codec.ts";
-// Pure MessagePort client, not an Effect service constructor.
-// oxlint-disable-next-line anti-slop-effect/no-service-constructor-imports
-import { makeOwnerRpcPortClient } from "./full-loop-rpc-client.ts";
+import { runNativeEffect } from "../runtime/native-effect.ts";
+import { nativeStream } from "../runtime/native-stream.ts";
+import { decodeFullLoopValue, encodeFullLoopValue } from "./full-loop-codec.ts";
+import {
+  FullLoopCapabilityMiddleware,
+  FullLoopOwnerRpcGroup,
+  FullLoopRpcError,
+  FullLoopRpcGroup,
+  type FullLoopRunPayload,
+} from "./full-loop-effect-rpc.ts";
+import { layerMessagePortRpcClient } from "./effect-rpc-message-port.ts";
 
-// This process owns only SDK transient state. Every external capability uses the
-// owner endpoint and its durable admission ledger. There is no retry path.
-const {
-  port,
-  capability,
-  turn,
-  tools,
-  middleware,
-  adapter: identity,
-  lastOperationId,
-} = workerData;
-if (!(parentPort !== null)) throw new Error("Full-loop entry requires a worker parent port");
-const parent = parentPort;
+// TanStack's native SDK requires an AbortController, not an AbortSignal.
+const sdkAbortController = () => new AbortController();
+
 function portableSchema(schema: any) {
   if (schema === undefined) return undefined;
   return {
@@ -37,229 +34,249 @@ function portableSchema(schema: any) {
     },
   };
 }
-const definitions = (turn.interrupts ?? []).map((definition: any) => {
-  // The SDK overloads differ for payload/response schemas; the owner supplied
-  // the definition and its portable schema inventory before worker admission.
-  const options: any = { id: definition.id };
-  if (definition.payloadSchema !== undefined)
-    options.payloadSchema = portableSchema(definition.payloadSchema);
-  if (definition.responseSchema !== undefined)
-    options.responseSchema = portableSchema(definition.responseSchema);
-  return defineInterrupt(options);
-});
-function restoreInterruptRequests(value: any): any {
-  if (value === null || value === undefined) return value;
-  if (Array.isArray(value)) return value.map(restoreInterruptRequests);
-  if (Object.getPrototypeOf(value) !== Object.prototype) return value;
-  if ((value.definition?.id?.length ?? 0) > 0 && (value.key?.length ?? 0) > 0) {
-    const definition = definitions.find(
-      (definition: ReturnType<typeof defineInterrupt>) => definition.id === value.definition.id,
-    );
-    if (definition === undefined) throw new Error("Unregistered owner interrupt definition");
-    const { definition: _definition, ...input } = value;
-    return definition.interrupt(input);
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, restoreInterruptRequests(entry)]),
+
+function sameCapability(left: any, right: any): boolean {
+  return (
+    left?.sessionId === right?.sessionId &&
+    left?.runId === right?.runId &&
+    left?.goalInstanceId === right?.goalInstanceId &&
+    left?.goalVersion === right?.goalVersion &&
+    left?.planVersion === right?.planVersion &&
+    left?.workflowRevisionId === right?.workflowRevisionId &&
+    left?.generation === right?.generation &&
+    left?.token === right?.token
   );
 }
-const client = makeOwnerRpcPortClient(port);
-const controller = new AbortController();
-let operationId = lastOperationId;
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-const rpcEffect = Effect.fn("FullLoopWorker.rpc")(function* (operation: string, input: any) {
-  const reply = yield* nativePromise(() =>
-    client.request({
-      type: "owner-rpc-request",
-      capability,
-      operationId: ++operationId,
-      operation,
-      input: encodeFullLoopValue(input),
-    }),
-  );
-  if (reply.type !== "succeeded")
-    return yield* new Cause.UnknownError(new Error(`Owner capability ${reply.type}`));
-  // Operation-specific SDK payloads are validated by the owner before admission.
-  const output: any = decodeFullLoopValue(reply.output);
-  return output;
-});
-const rpc = (operation: string, input: any): Promise<any> =>
-  runNativeEffect(rpcEffect(operation, input));
-const parseArguments = Function.flow(
-  Schema.decodeResult(Schema.fromJsonString(Schema.Unknown)),
-  Result.getOrThrow,
-);
-function toolProxy(tool: any) {
-  const proxy = { ...tool };
-  if (tool.server === true)
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    proxy.execute = (args: any, context: ChatMiddlewareContext & { toolCallId?: string }) =>
-      runNativeEffect(
-        Effect.gen(function* () {
-          const result = yield* rpcEffect("tool", {
-            name: tool.name,
-            args: args ?? null,
-            toolCallId: context?.toolCallId ?? null,
-          });
-          for (const event of result.events)
-            context?.emitCustomEvent(event.name, event.value, event.options);
-          return result.value;
-        }),
-      );
-  return proxy;
-}
-function contextSnapshot(ctx: ChatMiddlewareContext) {
-  const {
-    signal: _signal,
-    abort: _abort,
-    emitCustomEvent: _emitCustomEvent,
-    defer: _defer,
-    createId: _createId,
-    capabilities: _capabilities,
-    get: _get,
-    getOptional: _getOptional,
-    provide: _provide,
-    ...snapshot
-  } = ctx;
-  return snapshot;
-}
-const hooks = middleware.map(
-  (
-    {
-      name,
-      hooks,
-      routedPersistence,
-    }: { name: string; hooks: string[]; routedPersistence: string[] },
-    index: number,
-  ) => {
-    // SDK hooks have heterogeneous signatures; only inventoried hooks are installed.
-    const proxy: any = { name };
-    if (routedPersistence.length > 0)
-      proxy.routedSubagentPersistence = Object.fromEntries(
-        routedPersistence.map((method) => [
-          method,
-          (value: any) => rpc("routedPersistence", { index, method, value }),
-        ]),
-      );
-    for (const hook of hooks) {
-      // Owner authorization runs the complete permission chain once, not worker-
-      // selected individual hooks. Keep the middleware's other SDK hooks intact.
-      if (hook === "onBeforeToolCall") continue;
-      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      proxy[hook] = (ctx: ChatMiddlewareContext, info: any) =>
-        runNativeEffect(
-          Effect.gen(function* () {
-            let payload = info ?? null;
-            if (hook === "onConfig") payload = { ...info, tools: tools };
-            const response = yield* rpcEffect("middleware", {
-              index,
-              hook,
-              context: contextSnapshot(ctx),
-              info: payload,
-            });
-            for (const event of response.events)
-              ctx.emitCustomEvent(event.name, event.value, event.options);
-            if (response.abort !== null) ctx.abort(response.abort);
-            let result = restoreInterruptRequests(response.result);
-            if (hook === "onConfig" && result?.tools !== undefined)
-              result = { ...result, tools: result.tools.map(toolProxy) };
-            return result === null && response.void === true ? undefined : result;
-          }),
+
+const trustedCapability = structuredClone(workerData.capability);
+
+function runFullLoop(
+  payload: FullLoopRunPayload,
+): Stream.Stream<unknown, FullLoopRpcError, Scope.Scope> {
+  return Stream.unwrap(
+    Effect.gen(function* () {
+      // SAFETY: the RPC schema decoded the envelope; nested SDK values intentionally
+      // remain opaque because their contracts are owned by TanStack AI.
+      const {
+        capability,
+        turn,
+        tools,
+        middleware,
+        adapter: identity,
+        lastOperationId,
+        ownerPort,
+      } = payload as any;
+      const definitions = (turn.interrupts ?? []).map((definition: any) => {
+        const options: any = { id: definition.id };
+        if (definition.payloadSchema !== undefined)
+          options.payloadSchema = portableSchema(definition.payloadSchema);
+        if (definition.responseSchema !== undefined)
+          options.responseSchema = portableSchema(definition.responseSchema);
+        return defineInterrupt(options);
+      });
+      function restoreInterruptRequests(value: any): any {
+        if (value === null || value === undefined) return value;
+        if (Array.isArray(value)) return value.map(restoreInterruptRequests);
+        if (Object.getPrototypeOf(value) !== Object.prototype) return value;
+        if ((value.definition?.id?.length ?? 0) > 0 && (value.key?.length ?? 0) > 0) {
+          const definition = definitions.find(
+            (entry: ReturnType<typeof defineInterrupt>) => entry.id === value.definition.id,
+          );
+          if (definition === undefined) throw new Error("Unregistered owner interrupt definition");
+          const { definition: _definition, ...input } = value;
+          return definition.interrupt(input);
+        }
+        return Object.fromEntries(
+          Object.entries(value).map(([key, entry]) => [key, restoreInterruptRequests(entry)]),
         );
-    }
-    return proxy;
-  },
-);
-const adapter: AnyTextAdapter = {
-  ...identity,
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  chatStream(options) {
-    return nativeStream(
-      Stream.fromPull(
-        Effect.gen(function* () {
-          const {
-            request: _request,
-            logger: _logger,
-            capabilities: _capabilities,
-            ...input
-          } = options;
-          const opened = yield* rpcEffect("modelOpen", {
-            ...input,
-            approvals: [...(input.approvals?.entries() ?? [])],
-          });
-          return {
-            pull: Effect.gen(function* () {
-              if (controller.signal.aborted) return yield* Cause.done();
-              const next = yield* rpcEffect("modelNext", { id: opened.id });
-              if (next.done === true) return yield* Cause.done();
-              return [next.value] as const;
-            }),
-          };
-        }).pipe(Effect.map(({ pull }) => pull)),
-      ),
-    );
-  },
-};
-parentPort.on("message", (message) => {
-  if (message.type === "abort") controller.abort();
-});
-await runNativeEffect(
-  Effect.gen(function* () {
-    // Strategy is synchronous in the SDK; continuation is mediated through its
-    // asynchronous middleware hook so the owner's strategy stays owner-resident.
-    const strategy: ChatMiddleware = {
-      name: "owner-strategy",
-      onShouldContinue: (_ctx, state) => rpc("strategy", state),
-    };
-    const stream = chat({
-      ...turn,
-      interrupts: definitions,
-      context: turn.context ?? {},
-      adapter,
-      tools: tools.map(toolProxy),
-      middleware: [
-        ...hooks,
-        {
-          name: "owner-tool-grant",
-          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          onBeforeToolCall: (ctx, info) =>
+      }
+
+      const ownerProtocolContext = yield* Layer.build(layerMessagePortRpcClient(ownerPort)).pipe(
+        Effect.mapError(() => FullLoopRpcError.make({ reason: "owner_transport" })),
+      );
+      const owner = yield* RpcClient.make(FullLoopOwnerRpcGroup).pipe(
+        Effect.provide(ownerProtocolContext),
+      );
+      const controller = sdkAbortController();
+      yield* Effect.addFinalizer(() => Effect.sync(() => controller.abort("worker interrupted")));
+      let operationId = lastOperationId;
+      const rpcEffect = Effect.fn("FullLoopWorker.rpc")(function* (operation: string, input: any) {
+        const reply = yield* owner.OwnerCall({
+          type: "owner-rpc-request",
+          capability,
+          operationId: ++operationId,
+          operation,
+          input: encodeFullLoopValue(input),
+        });
+        if (reply.type !== "succeeded")
+          return yield* FullLoopRpcError.make({ reason: "owner_rejected" });
+        // SAFETY: operation-specific owner handlers validated the encoded SDK payload.
+        return decodeFullLoopValue(reply.output) as any;
+      });
+      const rpc = (operation: string, input: any): Promise<any> =>
+        runNativeEffect(rpcEffect(operation, input));
+      const parseArguments = Function.flow(
+        Schema.decodeResult(Schema.fromJsonString(Schema.Unknown)),
+        Result.getOrThrow,
+      );
+      function toolProxy(tool: any) {
+        const proxy = { ...tool };
+        if (tool.server === true)
+          proxy.execute = (args: any, context: ChatMiddlewareContext & { toolCallId?: string }) =>
             runNativeEffect(
               Effect.gen(function* () {
-                const response = yield* rpcEffect("toolAuthorize", {
-                  name: info.toolName,
-                  toolCallId: info.toolCallId,
-                  args: parseArguments(info.toolCall.function.arguments || "{}"),
+                const result = yield* rpcEffect("tool", {
+                  name: tool.name,
+                  args: args ?? null,
+                  toolCallId: context?.toolCallId ?? null,
                 });
-                for (const event of response.events ?? [])
-                  ctx.emitCustomEvent(event.name, event.value, event.options);
-                return response.decision;
+                for (const event of result.events)
+                  context?.emitCustomEvent(event.name, event.value, event.options);
+                switch (result.outcome.type) {
+                  case "succeeded":
+                    return result.outcome.value;
+                  case "failed":
+                    throw new Error(result.outcome.message);
+                  default:
+                    throw new Error("Invalid owner tool outcome");
+                }
               }),
-            ),
+            );
+        return proxy;
+      }
+      function contextSnapshot(ctx: ChatMiddlewareContext) {
+        const {
+          signal: _signal,
+          abort: _abort,
+          emitCustomEvent: _emitCustomEvent,
+          defer: _defer,
+          createId: _createId,
+          capabilities: _capabilities,
+          get: _get,
+          getOptional: _getOptional,
+          provide: _provide,
+          ...snapshot
+        } = ctx;
+        return snapshot;
+      }
+      const hooks = middleware.map(
+        (entry: { name: string; hooks: string[]; routedPersistence: string[] }, index: number) => {
+          const proxy: any = { name: entry.name };
+          if (entry.routedPersistence.length > 0)
+            proxy.routedSubagentPersistence = Object.fromEntries(
+              entry.routedPersistence.map((method) => [
+                method,
+                (value: any) => rpc("routedPersistence", { index, method, value }),
+              ]),
+            );
+          for (const hook of entry.hooks) {
+            if (hook === "onBeforeToolCall") continue;
+            proxy[hook] = (ctx: ChatMiddlewareContext, info: any) =>
+              runNativeEffect(
+                Effect.gen(function* () {
+                  let hookPayload = info ?? null;
+                  if (hook === "onConfig") hookPayload = { ...info, tools };
+                  const response = yield* rpcEffect("middleware", {
+                    index,
+                    hook,
+                    context: contextSnapshot(ctx),
+                    info: hookPayload,
+                  });
+                  for (const event of response.events)
+                    ctx.emitCustomEvent(event.name, event.value, event.options);
+                  if (response.abort !== null) ctx.abort(response.abort);
+                  let result = restoreInterruptRequests(response.result);
+                  if (hook === "onConfig" && result?.tools !== undefined)
+                    result = { ...result, tools: result.tools.map(toolProxy) };
+                  return result === null && response.void === true ? undefined : result;
+                }),
+              );
+          }
+          return proxy;
         },
-        strategy,
-      ],
-      agentLoopStrategy: () => true,
-      outputSchema: undefined,
-      abortController: controller,
-      stream: true,
-    });
-    yield* Stream.fromAsyncIterable(stream, (cause) => new Cause.UnknownError(cause)).pipe(
-      Stream.runForEach((chunk) =>
-        Effect.gen(function* () {
-          // The owner consumer must acknowledge each event before the next SDK pull.
-          parent.postMessage({ type: "chunk", chunk });
-          yield* nativePromise(() => new Promise((resolve) => parent.once("message", resolve)));
-        }),
-      ),
-    );
-    parent.postMessage({ type: "done" });
-  }).pipe(
-    Effect.catchCause(() => Effect.sync(() => parent.postMessage({ type: "failed" }))),
-    Effect.ensuring(
-      Effect.sync(() => {
-        client.close();
-        parent.close();
-      }),
-    ),
-  ),
+      );
+      const adapter: AnyTextAdapter = {
+        ...identity,
+        chatStream(options) {
+          return nativeStream(
+            Stream.fromPull(
+              Effect.gen(function* () {
+                const {
+                  request: _request,
+                  logger: _logger,
+                  capabilities: _capabilities,
+                  ...input
+                } = options;
+                const opened = yield* rpcEffect("modelOpen", {
+                  ...input,
+                  approvals: [...(input.approvals?.entries() ?? [])],
+                });
+                return {
+                  pull: Effect.gen(function* () {
+                    if (controller.signal.aborted) return yield* Cause.done();
+                    const next = yield* rpcEffect("modelNext", { id: opened.id });
+                    if (next.done === true) return yield* Cause.done();
+                    return [next.value] as const;
+                  }),
+                };
+              }).pipe(Effect.map(({ pull }) => pull)),
+            ),
+          );
+        },
+      };
+      const strategy: ChatMiddleware = {
+        name: "owner-strategy",
+        onShouldContinue: (_ctx, state) => rpc("strategy", state),
+      };
+      const sdkStream = chat({
+        ...turn,
+        interrupts: definitions,
+        context: turn.context ?? {},
+        adapter,
+        tools: tools.map(toolProxy),
+        middleware: [
+          ...hooks,
+          {
+            name: "owner-tool-grant",
+            onBeforeToolCall: (ctx, info) =>
+              runNativeEffect(
+                Effect.gen(function* () {
+                  const response = yield* rpcEffect("toolAuthorize", {
+                    name: info.toolName,
+                    toolCallId: info.toolCallId,
+                    args: parseArguments(info.toolCall.function.arguments || "{}"),
+                  });
+                  for (const event of response.events ?? [])
+                    ctx.emitCustomEvent(event.name, event.value, event.options);
+                  return response.decision;
+                }),
+              ),
+          },
+          strategy,
+        ],
+        agentLoopStrategy: () => true,
+        outputSchema: undefined,
+        abortController: controller,
+        stream: true,
+      });
+      return Stream.fromAsyncIterable(sdkStream, () =>
+        FullLoopRpcError.make({ reason: "worker_failed" }),
+      );
+    }),
+  );
+}
+
+const handlers = FullLoopRpcGroup.toLayer({ RunFullLoop: runFullLoop });
+const authorization = Layer.succeed(FullLoopCapabilityMiddleware, (effect, options) =>
+  // SAFETY: middleware runs after the RunFullLoop payload schema decoder.
+  sameCapability((options.payload as any).capability, trustedCapability)
+    ? effect
+    : Effect.fail(FullLoopRpcError.make({ reason: "unauthorized" })),
 );
+const protocol = RpcServer.layerProtocolWorkerRunner.pipe(Layer.provide(NodeWorkerRunner.layer));
+const server = RpcServer.layer(FullLoopRpcGroup, {
+  concurrency: 1,
+  disableFatalDefects: true,
+}).pipe(Layer.provide(handlers), Layer.provide(authorization), Layer.provide(protocol));
+
+await runNativeEffect(Layer.launch(server));

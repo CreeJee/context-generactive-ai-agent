@@ -1,3 +1,4 @@
+import { Cause } from "effect";
 import { Result, Schema } from "effect";
 import { nativePromise, runNativeEffect } from "../src/runtime/native-effect.ts";
 import { Effect, Stream } from "effect";
@@ -66,7 +67,7 @@ const collect = (events: readonly NormalizedStreamEvent[]) => {
           messages: [],
           logger,
         }),
-        (cause) => cause,
+        (cause) => new Cause.UnknownError(cause),
       ),
     ),
   );
@@ -205,7 +206,7 @@ test("owner abort during an unfinished public summary ends silently without fals
             logger,
             abortController: controller,
           }),
-          (cause) => cause,
+          (cause) => new Cause.UnknownError(cause),
         ),
       );
       expect(chunks.some((chunk) => chunk.type === EventType.RUN_FINISHED)).toBe(false);

@@ -1,15 +1,49 @@
-import { Result, Function as EffectFunction } from "effect";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { createHash } from "node:crypto";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { existsSync, mkdirSync, renameSync } from "node:fs";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { join } from "node:path";
+import { NodeCrypto, NodePath } from "@effect/platform-node";
 import { Context, Data, Effect, Layer, Option, Schema } from "effect";
-import { StorageRoot } from "../../config/storage-root.ts";
-import { Database } from "../../db/database.ts";
-import { requireRuntime } from "../../runtime/resources.ts";
-import { Embedder } from "./embedder.ts";
+// Composition root: the sole backend acquires resources in this Layer's Scope.
+// eslint-disable-next-line anti-slop-effect/no-service-constructor-imports
+import { makeNativeVectorIndex } from "./native-vector-index.ts";
+import type { NativeReadInput, NativeReadOutput } from "../native-search/read-protocol.ts";
+
+export interface VectorBackend {
+  readonly kind: "native";
+  readonly read: (input: NativeReadInput) => Effect.Effect<
+    {
+      readonly publication: { readonly epoch: string; readonly generation: number };
+      readonly result: NativeReadOutput;
+    },
+    VectorIndexError
+  >;
+}
+
+export interface VectorIndexApi {
+  readonly backend: VectorBackend;
+  readonly size: () => number;
+  readonly flushRemovals: Effect.Effect<void, VectorIndexError>;
+  readonly add: (
+    seqs: readonly number[],
+    vectors: readonly Float32Array[],
+  ) => Effect.Effect<void, VectorIndexError>;
+  readonly remove: (seqs: readonly number[]) => Effect.Effect<void, VectorIndexError>;
+  readonly search: (
+    query: Float32Array,
+    k: number,
+    allowedSeqs?: readonly number[],
+  ) => Effect.Effect<VectorHit[], VectorIndexError>;
+  readonly save: Effect.Effect<void, VectorIndexError>;
+  /** Prepare/revalidate and publish one short mutation; embedding/network work stays outside. */
+  readonly publish: <A, E, R, E2, R2>(
+    prepare: Effect.Effect<
+      {
+        readonly seqs: readonly number[];
+        readonly vectors: readonly Float32Array[];
+        readonly commit: Effect.Effect<A, E, R>;
+      },
+      E2,
+      R2
+    >,
+  ) => Effect.Effect<A, E | E2 | VectorIndexError, R | R2>;
+}
 
 export class VectorIndexError extends Data.TaggedError("VectorIndexError")<{
   readonly operation: "open" | "add" | "remove" | "search" | "save";
@@ -17,8 +51,6 @@ export class VectorIndexError extends Data.TaggedError("VectorIndexError")<{
 }> {
   override get message() {
     const cause = Schema.decodeUnknownOption(Schema.Struct({ message: Schema.String }))(this.cause);
-    // turbovec's writer lease: only one process may hold an index, so a second app server on the
-    // same storage root cannot start.
     if (
       this.operation === "open" &&
       Option.exists(cause, ({ message }) => message.includes("locked"))
@@ -38,156 +70,16 @@ export interface VectorHit {
   readonly score: number;
 }
 
-/** 4-bit quantization: turbovec's best recall setting at a quarter of float32 size. */
-const quantizationBits = 4;
-
-const Count = Schema.Struct({ count: Schema.Finite });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeSeq = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Struct({ seq: Schema.Finite })),
-  Result.getOrThrow,
-);
-
-/** Writes a new file then swaps it in, so a crash never leaves a half-written index. */
-function write(index: { save(path: string): void }, file: string) {
-  const temporary = `${file}.tmp`;
-  index.save(temporary);
-  renameSync(temporary, file);
-}
-
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeVectorCount = EffectFunction.flow(Schema.decodeUnknownResult(Count), Result.getOrThrow);
-const make = Effect.gen(function* () {
-  const storage = yield* StorageRoot;
-  const { sqlite, atomic } = yield* Database;
-  const embedder = yield* Embedder;
-
-  const directory = join(
-    storage.path,
-    "vectors",
-    createHash("sha256").update(embedder.identity).digest("hex").slice(0, 16),
-  );
-  const file = join(directory, "index.tvim");
-
-  const pendingRemovals = sqlite.prepare(
-    "SELECT node_seq AS seq FROM memory_graph_vector_removals WHERE embedder = ? ORDER BY node_seq",
-  );
-  const flush = (current: { remove(id: string): void; save(path: string): void }) => {
-    const pending = pendingRemovals.all(embedder.identity).map((row) => decodeSeq(row));
-    if (pending.length === 0) return;
-    for (const row of pending) current.remove(String(row.seq));
-    write(current, file);
-    atomic(() => {
-      const forget = sqlite.prepare("DELETE FROM node_vectors WHERE node_seq = ? AND embedder = ?");
-      const done = sqlite.prepare(
-        "DELETE FROM memory_graph_vector_removals WHERE node_seq = ? AND embedder = ?",
-      );
-      for (const row of pending) {
-        forget.run(row.seq, embedder.identity);
-        done.run(row.seq, embedder.identity);
-      }
-    });
-  };
-
-  const { index } = yield* Effect.acquireRelease(
-    Effect.try({
-      try: () => {
-        mkdirSync(directory, { recursive: true, mode: 0o700 });
-        const { CacheLease, VectorIndex } = requireRuntime("turbovec").loadTurbovec();
-        const lease = new CacheLease(join(directory, "writer.lock"));
-        try {
-          const saved = existsSync(file) ? VectorIndex.load(file) : null;
-          if (saved !== null && saved.dimensions() === embedder.dimensions) flush(saved);
-          const indexed = decodeVectorCount(
-            sqlite
-              .prepare("SELECT count(*) AS count FROM node_vectors WHERE embedder = ?")
-              .get(embedder.identity),
-          ).count;
-          if (saved !== null && saved.dimensions() === embedder.dimensions) {
-            // Ahead of the database: vectors whose record never landed (a crash between save and
-            // commit) or was dropped on purpose (tool nodes, since only statements are embedded).
-            // Dropping those is cheaper than embedding everything again.
-            if (saved.size() > indexed) {
-              const unrecorded = sqlite
-                .prepare(`
-                  SELECT n.seq FROM nodes n
-                  LEFT JOIN node_vectors v ON v.node_seq = n.seq AND v.embedder = ?
-                  WHERE v.node_seq IS NULL`)
-                .all(embedder.identity);
-              for (const row of unrecorded) saved.remove(String(decodeSeq(row).seq));
-              if (saved.size() === indexed) write(saved, file);
-            }
-            if (saved.size() === indexed) return { index: saved, lease };
-          }
-          // Missing, behind the database or otherwise out of step with it: rebuild.
-          sqlite.prepare("DELETE FROM node_vectors WHERE embedder = ?").run(embedder.identity);
-          sqlite
-            .prepare("DELETE FROM memory_graph_vector_removals WHERE embedder = ?")
-            .run(embedder.identity);
-          return { index: new VectorIndex(embedder.dimensions, quantizationBits), lease };
-        } catch (error) {
-          lease.close();
-          throw error;
-        }
-      },
-      catch: (cause) => new VectorIndexError({ operation: "open", cause }),
-    }),
-    ({ lease }) => Effect.sync(() => lease.close()),
-  );
-
-  return {
-    size: () => index.size(),
-
-    /** Resume targeted removals after a failed save or a crash, before comparing index sizes. */
-    flushRemovals: Effect.try({
-      try: () => flush(index),
-      catch: (cause) => new VectorIndexError({ operation: "remove", cause }),
-    }),
-
-    add: (seqs: readonly number[], vectors: readonly Float32Array[]) =>
-      Effect.try({
-        try: () => {
-          const batch = new Float32Array(vectors.length * embedder.dimensions);
-          vectors.forEach((vector, row) => batch.set(vector, row * embedder.dimensions));
-          index.add(batch, seqs.map(String));
-        },
-        catch: (cause) => new VectorIndexError({ operation: "add", cause }),
-      }),
-
-    /**
-     * Drops the vectors of nodes whose text changed, so the indexer embeds the new text. Callers
-     * delete the matching `node_vectors` rows in the same step, keeping the count the open check
-     * compares.
-     */
-    remove: (seqs: readonly number[]) =>
-      Effect.try({
-        try: () => {
-          for (const seq of seqs) index.remove(String(seq));
-        },
-        catch: (cause) => new VectorIndexError({ operation: "remove", cause }),
-      }),
-
-    /** Restrict candidates before ranking when callers supply indexed node sequences. */
-    search: (query: Float32Array, k: number, allowedSeqs?: readonly number[]) =>
-      Effect.try({
-        try: (): VectorHit[] => {
-          if (index.size() === 0) return [];
-          const result = index.search(query, Math.min(k, index.size()), allowedSeqs?.map(String));
-          return result.ids.map((id, rank) => ({ seq: Number(id), score: result.scores[rank]! }));
-        },
-        catch: (cause) => new VectorIndexError({ operation: "search", cause }),
-      }),
-
-    save: Effect.try({
-      try: () => write(index, file),
-      catch: (cause) => new VectorIndexError({ operation: "save", cause }),
-    }),
-  };
-});
-
-/** turbovec index of node embeddings for the active embedder. One writer process at a time. */
-export class VectorIndex extends Context.Service<VectorIndex, Effect.Success<typeof make>>()(
-  "memory-agent/memory/embedding/vector-index/VectorIndex",
-) {
-  static readonly layer = Layer.effect(VectorIndex, make);
+/**
+ * turbovec index and read worker for the active embedder. The native owner is the only
+ * production backend; `layer` remains the public composition API.
+ */
+export class VectorIndex extends Context.Service<
+  VectorIndex,
+  Effect.Success<typeof makeNativeVectorIndex>
+>()("memory-agent/memory/embedding/vector-index/VectorIndex") {
+  static readonly layer = Layer.effect(
+    VectorIndex,
+    Effect.suspend(() => makeNativeVectorIndex),
+  ).pipe(Layer.provide(Layer.merge(NodeCrypto.layer, NodePath.layer)));
 }

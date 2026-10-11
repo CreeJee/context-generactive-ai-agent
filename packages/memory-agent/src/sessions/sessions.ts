@@ -1,7 +1,6 @@
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
+import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import type { SQLOutputValue } from "node:sqlite";
 import { DateTime, Clock, Context, Data, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";

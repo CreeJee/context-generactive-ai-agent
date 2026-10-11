@@ -12,11 +12,9 @@ import {
 } from "effect";
 import { Database } from "../db/database.ts";
 import { Embedder } from "./embedding/embedder.ts";
-import { embeddedKindFilter } from "./embedding/indexer.ts";
 import { VectorIndex } from "./embedding/vector-index.ts";
 import { MorphAnalysisFailed, MorphAnalyzer } from "./morph/analyzer.ts";
 import { Graph, type Hop } from "./graph.ts";
-import { meaningfulNodeFilter } from "./quality.ts";
 import type { NodeKind } from "./nodes.ts";
 
 export interface FindInput {
@@ -69,6 +67,13 @@ export interface FindResult {
   readonly uninterpreted: number;
 }
 
+export class NativeMemorySearchFailed extends Schema.TaggedError<NativeMemorySearchFailed>()(
+  "NativeMemorySearchFailed",
+  {
+    reason: Schema.Literals(["budget-exceeded", "invalid-input", "read-failed", "index-failed"]),
+  },
+) {}
+
 const snippetLength = 300;
 const defaultLimit = 12;
 /** Standard Reciprocal Rank Fusion constant; damps the gap between neighbouring ranks. */
@@ -118,20 +123,9 @@ export function namesSomethingExactly(query: string) {
     );
 }
 
-const IdProject = Schema.Struct({ id: Schema.String, project_id: Schema.String });
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeIdProject = EffectFunction.flow(
-  Schema.decodeUnknownResult(IdProject),
-  Result.getOrThrow,
-);
 const Id = Schema.Struct({ id: Schema.String });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
 const decodeId = EffectFunction.flow(Schema.decodeUnknownResult(Id), Result.getOrThrow);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const decodeSeq = EffectFunction.flow(
-  Schema.decodeUnknownResult(Schema.Struct({ seq: Schema.Finite })),
-  Result.getOrThrow,
-);
 const Count = Schema.Struct({ count: Schema.Finite });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
 const decodeCount = EffectFunction.flow(Schema.decodeUnknownResult(Count), Result.getOrThrow);
@@ -207,81 +201,69 @@ const make = (tuning: SearchTuning) =>
           ]
         : [projectId];
 
-    /** Node ids ranked by cosine similarity within the allowed projects, best first. */
-    const vectorRanking = (query: string, allowed: readonly string[], k: number) =>
-      Effect.gen(function* () {
-        const [queryVector] = yield* embedder.embed([query]);
-        if (!isTruthy(queryVector)) return [];
-        const projects = allowed.map(() => "?").join(", ");
-        const allowedSeqs = sqlite
-          .prepare(`
-            SELECT n.seq FROM node_vectors v JOIN nodes n ON n.seq = v.node_seq
-            WHERE ${meaningfulNodeFilter} AND v.embedder = ? AND n.project_id IN (${projects})`)
-          .all(embedder.identity, ...allowed)
-          .map((row) => decodeSeq(row).seq);
-        if (allowedSeqs.length === 0) return [];
-        const hits = yield* vectors.search(queryVector, k, allowedSeqs);
-        const bySeq = sqlite.prepare("SELECT id FROM nodes WHERE seq = ?");
-        return hits.flatMap((hit) => {
-          const row = bySeq.get(hit.seq);
-          return isTruthy(row) ? [decodeId(row).id] : [];
-        });
-      });
-
-    /**
-     * Node ids ranked by morpheme terms (BM25): "로그 형식을 정했었지" meets "로그 포맷은 … 하기로 했다"
-     * through 로그, and particles or endings no longer decide the match.
-     */
-    const morphRanking = (query: string, allowed: readonly string[], k: number) =>
-      Effect.gen(function* () {
+    const collectSeeds = Effect.fnUntraced(function* (
+      input: FindInput,
+      allowed: readonly string[],
+      limit: number,
+      degraded: ("vector" | "morph")[],
+    ) {
+      // Model/network stays in the host, outside the publication admission permit.
+      const query = yield* embedder.embed([input.query]).pipe(
+        Effect.map((values) => values[0]),
+        Effect.catch(() => {
+          degraded.push("vector");
+          return Effect.void;
+        }),
+      );
+      const terms = yield* Effect.gen(function* () {
         if (!analyzer.ready()) {
           analyzer.warm();
           return yield* new MorphAnalysisFailed({ reason: "not_ready" });
         }
-        const [terms = []] = yield* analyzer.terms([query]);
-        const unique = EffectArray.dedupe(terms).filter((term) => term.length > 0);
-        if (unique.length === 0) return [];
-        const match = unique.map((term) => `"${term.replaceAll('"', '""')}"`).join(" OR ");
-        const projects = allowed.map(() => "?").join(", ");
-        return sqlite
-          .prepare(`
-          SELECT n.id, n.project_id FROM nodes_morph f JOIN nodes n ON n.seq = f.rowid
-          WHERE ${meaningfulNodeFilter} AND nodes_morph MATCH ? AND n.project_id IN (${projects})
-          ORDER BY bm25(nodes_morph) LIMIT ?`)
-          .all(match, ...allowed, k)
-          .map((row) => decodeIdProject(row).id);
+        const [tokens = []] = yield* analyzer.terms([input.query]);
+        return EffectArray.dedupe(tokens).filter((term) => term.length > 0);
+      }).pipe(
+        Effect.catch(() => {
+          if (analyzer.identity !== "none") degraded.push("morph");
+          return Effect.succeed([]);
+        }),
+      );
+      const grouped = searchTerms(input.query);
+      const { result } = yield* vectors.backend.read({
+        allowedProjects: allowed,
+        embedder: embedder.identity,
+        query: limit > 0 && query !== undefined ? new Float32Array(query) : undefined,
+        trigramTerms: grouped.trigram,
+        shortTerms: grouped.short,
+        morphTerms: terms,
+        vectorK: limit * 4,
+        textK: limit * 2,
+        morphK: limit * 2,
+        textEnabled: tuning.text && limit > 0,
+        morphEnabled: limit > 0 && terms.length > 0,
+        remainingMs: 2000,
+        inputBudgetBytes: 1048576,
+        outputBudgetBytes: 1048576,
       });
-
-    /** Node ids ranked by text match: trigram BM25 first, then 2-character substring hits. */
-    function textRanking(query: string, allowed: readonly string[], k: number) {
-      if (!tuning.text) return [];
-      const { trigram, short } = searchTerms(query);
-      const projects = allowed.map(() => "?").join(", ");
-      const ranked: string[] = [];
-      if (trigram.length > 0) {
-        const match = trigram.map((term) => `"${term.replaceAll('"', '""')}"`).join(" OR ");
-        const rows = sqlite
-          .prepare(`
-          SELECT n.id, n.project_id FROM nodes_fts f JOIN nodes n ON n.seq = f.rowid
-          WHERE ${meaningfulNodeFilter} AND nodes_fts MATCH ? AND n.project_id IN (${projects})
-          ORDER BY bm25(nodes_fts) LIMIT ?`)
-          .all(match, ...allowed, k);
-        for (const row of rows) ranked.push(decodeIdProject(row).id);
-      }
-      for (const term of short) {
-        const rows = sqlite
-          .prepare(`
-          SELECT n.id, n.project_id FROM nodes n
-          WHERE ${meaningfulNodeFilter} AND instr(n.text, ?) > 0 AND project_id IN (${projects})
-          ORDER BY seq DESC LIMIT ?`)
-          .all(term, ...allowed, k);
-        for (const row of rows) {
-          const id = decodeIdProject(row).id;
-          if (!ranked.includes(id)) ranked.push(id);
+      switch (result.kind) {
+        case "cancelled":
+          return yield* Effect.interrupt;
+        case "success": {
+          if (result.vectorUnavailable && !degraded.includes("vector")) degraded.unshift("vector");
+          return {
+            byVector: result.vectorIds,
+            byText: result.textIds,
+            byMorph: result.morphIds,
+            coverage: {
+              unindexed: result.unindexed,
+              uninterpreted: result.uninterpreted,
+            },
+          };
         }
+        default:
+          return yield* NativeMemorySearchFailed.make({ reason: result.kind });
       }
-      return ranked;
-    }
+    });
 
     const find = (input: FindInput) =>
       Effect.gen(function* () {
@@ -289,18 +271,11 @@ const make = (tuning: SearchTuning) =>
         const allowed = allowedProjects(input.projectId, input.crossProject ?? true);
         const degraded: ("vector" | "morph")[] = [];
 
-        const byVector = yield* vectorRanking(input.query, allowed, limit * 4).pipe(
-          Effect.catch(() => {
-            degraded.push("vector");
-            return Effect.succeed([]);
-          }),
-        );
-        const byText = textRanking(input.query, allowed, limit * 2);
-        const byMorph = yield* morphRanking(input.query, allowed, limit * 2).pipe(
-          Effect.catch(() => {
-            if (analyzer.identity !== "none") degraded.push("morph");
-            return Effect.succeed([]);
-          }),
+        const { byVector, byText, byMorph, coverage } = yield* collectSeeds(
+          input,
+          allowed,
+          limit,
+          degraded,
         );
         // The vector list is always full, related or not. For a query that names something
         // exactly it would outvote the text match, so the text ranking goes first and counts more.
@@ -320,22 +295,7 @@ const make = (tuning: SearchTuning) =>
           projectIds: allowed,
           includeEmpty: false,
         });
-        const unindexed = (yield* Schema.decodeUnknownEffect(Count)(
-          sqlite
-            .prepare(`
-            SELECT count(*) AS count FROM nodes n
-            LEFT JOIN node_vectors v ON v.node_seq = n.seq AND v.embedder = ?
-            WHERE v.node_seq IS NULL AND ${meaningfulNodeFilter} AND ${embeddedKindFilter}`)
-            .get(embedder.identity),
-        )).count;
-
-        const uninterpreted = (yield* Schema.decodeUnknownEffect(Count)(
-          sqlite
-            .prepare(`
-            SELECT count(*) AS count FROM interpret_jobs j JOIN nodes n ON n.id = j.node_id
-            WHERE j.status != 'done' AND ${meaningfulNodeFilter} AND n.project_id IN (${allowed.map(() => "?").join(", ")})`)
-            .get(...allowed),
-        )).count;
+        const { unindexed, uninterpreted } = coverage;
 
         const matches: Match[] = [];
         for (const visit of walk.visits) {

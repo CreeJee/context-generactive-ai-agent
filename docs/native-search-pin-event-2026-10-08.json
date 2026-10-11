@@ -1,0 +1,27 @@
+{
+  "date": "2026-10-08",
+  "scope": "native-search-05 actual pin event only",
+  "verification": {
+    "nativeTests": 8,
+    "tsTests": 4,
+    "addonRebuilt": true,
+    "pinObservedInsideNative": true,
+    "fixtureTextRows": 50000,
+    "buildTask": "aef31d69-5257-46e4-af32-b83a9a73c0f7",
+    "visibilityTask": "ad639ca6-b616-4ab7-b4a7-38a1620b6043"
+  },
+  "limits": [
+    "Historical pin event, not live transaction lease",
+    "Host admission/Scope/Deferred/publication and public MemorySearch not wired",
+    "Finite fixture spin is not a production waiter",
+    "No generation-consistency or production performance claim"
+  ],
+  "sha256": {
+    "packages/turbovec/src/search_control.rs": "caba56a989b8ad5ce2f85fad923452853a960eebfcf4f4b8e03b5818218f1bf7",
+    "packages/turbovec/src/read_session.rs": "bc2772df4ecbedb78870a47104406d88010610bbc4e174a868447ccd718bc5bf",
+    "packages/turbovec/index.d.ts": "261ddf83f9e631528e4328f2dfdc678c5772b93e2ea10293e8b39ed861e5cd39",
+    "packages/turbovec/memory-turbovec.node": "005d005a6301d2f5118f529c654e02ff5ecaf841feccc0a469b7fdff06b0179e",
+    "packages/memory-agent/src/memory/native-search/pin.test.ts": "27292d6321a5cedece2d775b7aa9bc29d7c4049ef1cfd5e7c5e9c7b068750550",
+    "tools/native-search-pin-visibility.ts": "15504b22fbc2ef2205b57a47bc033007e7f2603324985b8ae6f59560e5b00fe5"
+  }
+}

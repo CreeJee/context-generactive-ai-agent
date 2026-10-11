@@ -57,7 +57,7 @@ describe("workflow rule sources", () => {
         const file = path.join(current.root, projectWorkflowRulesPath);
         yield* fs.makeDirectory(path.join(current.root, ".agents"));
         yield* fs.writeFileString(file, ruleFile("Check supported versions"));
-        const first = projectWorkflowRules(current);
+        const first = yield* projectWorkflowRules(current);
         expect(first.problems).toEqual([]);
         expect(first.rules[0]).toMatchObject({
           id: "project.release-check",
@@ -65,7 +65,7 @@ describe("workflow rule sources", () => {
           source: { kind: "project", path: projectWorkflowRulesPath },
         });
         yield* fs.writeFileString(file, ruleFile("Check supported versions and rollback"));
-        const second = projectWorkflowRules(current);
+        const second = yield* projectWorkflowRules(current);
         expect(second.rules[0]?.source).not.toEqual(first.rules[0]?.source);
       }),
     ),
@@ -82,7 +82,7 @@ describe("workflow rule sources", () => {
           path.join(current.root, projectWorkflowRulesPath),
           '{"rules":[{"id":1}]}',
         );
-        expect(projectWorkflowRules(current)).toMatchObject({
+        expect(yield* projectWorkflowRules(current)).toMatchObject({
           rules: [],
           problems: [{ problem: "invalid" }],
         });

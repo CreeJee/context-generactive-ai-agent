@@ -57,10 +57,10 @@ describe("background task lifecycle", () => {
       const tasks = yield* Effect.provideContext(BackgroundTasks, yield* runtime.contextEffect);
       const binding = {
         sessionId: session.id,
-        runId: yield* crypto.randomUUIDv4,
+        runId: yield* crypto.randomUUIDv4(),
         abortSignal: abortSignal,
       };
-      const callId = yield* crypto.randomUUIDv4;
+      const callId = yield* crypto.randomUUIDv4();
       let executions = 0;
       const operation = Effect.sync(() => {
         executions++;
@@ -95,10 +95,10 @@ describe("background task lifecycle", () => {
         tasks.start(
           {
             sessionId: session.id,
-            runId: yield* crypto.randomUUIDv4,
+            runId: yield* crypto.randomUUIDv4(),
             abortSignal: abortSignal,
           },
-          yield* crypto.randomUUIDv4,
+          yield* crypto.randomUUIDv4(),
           "shell",
           "task",
           Effect.succeed("done"),
@@ -136,10 +136,10 @@ describe("background task lifecycle", () => {
         tasks.start(
           {
             sessionId: session.id,
-            runId: yield* crypto.randomUUIDv4,
+            runId: yield* crypto.randomUUIDv4(),
             abortSignal: abortSignal,
           },
-          yield* crypto.randomUUIDv4,
+          yield* crypto.randomUUIDv4(),
           "shell",
           "failing task",
           Effect.fail(new BackgroundOperationFailed({ cause: new Error("execution failed") })),
@@ -188,10 +188,10 @@ describe("background task lifecycle", () => {
             tasks.start(
               {
                 sessionId: session.id,
-                runId: yield* crypto.randomUUIDv4,
+                runId: yield* crypto.randomUUIDv4(),
                 abortSignal: abortSignal,
               },
-              yield* crypto.randomUUIDv4,
+              yield* crypto.randomUUIDv4(),
               "shell",
               "task",
               Effect.succeed("operation completed"),
@@ -239,10 +239,10 @@ describe("background task lifecycle", () => {
           tasks.start(
             {
               sessionId: session.id,
-              runId: yield* crypto.randomUUIDv4,
+              runId: yield* crypto.randomUUIDv4(),
               abortSignal: controller.signal,
             },
-            yield* crypto.randomUUIDv4,
+            yield* crypto.randomUUIDv4(),
             "external_agent",
             "task",
             Effect.sync(() => {
@@ -286,10 +286,10 @@ describe("background task lifecycle", () => {
       const tasks = yield* Effect.provideContext(BackgroundTasks, yield* runtime.contextEffect);
       const binding = {
         sessionId: session.id,
-        runId: yield* crypto.randomUUIDv4,
+        runId: yield* crypto.randomUUIDv4(),
         abortSignal: abortSignal,
       };
-      const callId = yield* crypto.randomUUIDv4;
+      const callId = yield* crypto.randomUUIDv4();
       let executions = 0;
       const operation = Effect.sync(() => {
         executions++;
@@ -330,11 +330,11 @@ describe("background task lifecycle", () => {
         const abortSignal = yield* Effect.abortSignal;
         const [shell] = approved.forProject(project, "gate", {
           sessionId: session.id,
-          runId: yield* crypto.randomUUIDv4,
+          runId: yield* crypto.randomUUIDv4(),
           abortSignal: abortSignal,
         });
         const command = `node -e 'const fs=require("fs");const t=setInterval(()=>{if(fs.existsSync("release")){clearInterval(t);console.log("finished")}},20)'`;
-        const shellCallId = yield* crypto.randomUUIDv4;
+        const shellCallId = yield* crypto.randomUUIDv4();
         const receipt = yield* Schema.decodeUnknownEffect(Receipt)(
           yield* call(() =>
             shell.execute!(
@@ -401,10 +401,10 @@ describe("background task lifecycle", () => {
         tasks.start(
           {
             sessionId: session.id,
-            runId: yield* crypto.randomUUIDv4,
+            runId: yield* crypto.randomUUIDv4(),
             abortSignal: abortSignal,
           },
-          yield* crypto.randomUUIDv4,
+          yield* crypto.randomUUIDv4(),
           "external_agent",
           "synthetic task",
           Effect.sync(() => {
@@ -446,6 +446,45 @@ describe("background task lifecycle", () => {
       ).toMatchObject({ status: "interrupted" });
     }).pipe(withTestPlatform),
   );
+  it.live("result retrieval neither acknowledges nor consumes a stored result", () =>
+    Effect.gen(function* () {
+      const abortSignal = yield* Effect.abortSignal;
+      const { runtime, session } = yield* call(() => testRuntime());
+      const context = yield* runtime.contextEffect;
+      const tasks = yield* Effect.provideContext(BackgroundTasks, context);
+      const db = yield* Effect.provideContext(Database, context);
+      const trace = yield* Effect.provideContext(WorkTraceStore, context);
+      const receipt = yield* Effect.provideContext(
+        tasks.start(
+          { sessionId: session.id, runId: "readonly-run", abortSignal },
+          "readonly-call",
+          "shell",
+          "synthetic read-only contract",
+          Effect.succeed("saved result"),
+        ),
+        context,
+      );
+      yield* waitUntil(
+        () => trace.taskDetail(session.id, receipt.taskId)?.task.status === "completed",
+        "background result to finalize",
+        2000,
+      );
+      const changes = db.sqlite.prepare("SELECT total_changes() AS n").get();
+      const get = tasks
+        .forSession(session.id)
+        .find((tool) => tool.name === "get_background_result")!;
+      db.sqlite.exec("PRAGMA query_only = ON");
+      try {
+        const first = yield* call(() => get.execute!({ taskId: receipt.taskId }));
+        expect(first).toMatchObject({ status: "completed", result: "saved result" });
+        expect(yield* call(() => get.execute!({ taskId: receipt.taskId }))).toEqual(first);
+        yield* rejects(() => get.execute!({ taskId: "missing-task" }), "not found");
+        expect(db.sqlite.prepare("SELECT total_changes() AS n").get()).toEqual(changes);
+      } finally {
+        db.sqlite.exec("PRAGMA query_only = OFF");
+      }
+    }).pipe(withTestPlatform),
+  );
   it.live("paged results stay bounded and task deletion clears their stored payload", () =>
     Effect.gen(function* () {
       const abortSignal = yield* Effect.abortSignal;
@@ -457,10 +496,10 @@ describe("background task lifecycle", () => {
         tasks.start(
           {
             sessionId: session.id,
-            runId: yield* crypto.randomUUIDv4,
+            runId: yield* crypto.randomUUIDv4(),
             abortSignal: abortSignal,
           },
-          yield* crypto.randomUUIDv4,
+          yield* crypto.randomUUIDv4(),
           "external_agent",
           "task",
           Effect.succeed("x".repeat(6000)),
@@ -487,7 +526,7 @@ describe("background task lifecycle", () => {
         sessionId: session.id,
         taskId: receipt.taskId,
         intent: "delete",
-        idempotencyKey: yield* crypto.randomUUIDv4,
+        idempotencyKey: yield* crypto.randomUUIDv4(),
       });
       expect(requested.status).toBe("requested");
       if (requested.status !== "requested") throw new Error("delete not requested");

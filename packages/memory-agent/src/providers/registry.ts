@@ -23,7 +23,18 @@ export interface ProviderRegistryApi {
 }
 
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export const providerRegistryFrom = (
+export function providerRegistryFrom(options: {
+  readonly configurations: ReadonlyArray<ProviderConfiguration>;
+  readonly runtimes?: ReadonlyArray<AgentModelRuntime> | undefined;
+  readonly subscriptionDependencies?: SubscriptionDependencyResolver | undefined;
+}) {
+  return providerRegistryFromBody(
+    options.configurations,
+    options.runtimes,
+    options.subscriptionDependencies,
+  );
+}
+const providerRegistryFromBody = (
   configurations: ReadonlyArray<ProviderConfiguration>,
   runtimes: ReadonlyArray<AgentModelRuntime> = [],
   subscriptionDependencies?: SubscriptionDependencyResolver,
@@ -65,7 +76,11 @@ export class ProviderRegistry extends Context.Service<ProviderRegistry, Provider
   ) {
     return Layer.succeed(
       ProviderRegistry,
-      providerRegistryFrom(configurations, runtimes, subscriptionDependencies),
+      providerRegistryFrom({
+        configurations: configurations,
+        runtimes: runtimes,
+        subscriptionDependencies: subscriptionDependencies,
+      }),
     );
   }
 }

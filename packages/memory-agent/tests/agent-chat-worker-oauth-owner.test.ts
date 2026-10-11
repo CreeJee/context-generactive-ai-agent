@@ -1,10 +1,14 @@
 // Actual worker threads and loopback HTTP exercise centrally owned OAuth credentials.
 import { NodeCrypto } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { createServer } from "node:http";
+import {
+  testHttpServer,
+  testHttpClient,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "./support/http.ts";
 import { threadId, type Worker } from "node:worker_threads";
 import {
-  Cause,
   Crypto,
   Deferred,
   Effect,
@@ -14,9 +18,8 @@ import {
   Option,
   Result,
   Schema,
-  Stream,
 } from "effect";
-import { expect, vi } from "vite-plus/test";
+import { expect } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { Database } from "../src/db/database.ts";
 import { createOAuthAccountLoginManager } from "../src/oauth/account-login.ts";
@@ -41,17 +44,14 @@ const withCrypto = Effect.fn("OAuthOwnerTest.crypto")(function* <A, E, R>(
 
 it.live(
   "central account callback and PKCE survive actual SDK worker termination without restarting login",
-  () => {
-    vi.stubEnv("CONTEXT_AGENT_GOAL_WORKER", "1");
-    return Effect.scoped(
+  () =>
+    Effect.scoped(
       withCrypto(
         Effect.gen(function* () {
-          yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllEnvs()));
           const workers: Worker[] = [];
           const entered = yield* Deferred.make<void>();
           const gate = yield* Deferred.make<void>();
           yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
-          const runNative = Effect.runPromiseWith(yield* Effect.context());
           let tokenRequests = 0;
           let loginStarts = 0;
           const grants: URLSearchParams[] = [];
@@ -70,47 +70,18 @@ it.live(
               return Promise.resolve();
             },
           });
-          const server = createServer((request, response) => {
-            void runNative(
-              Effect.gen(function* () {
-                if (request.url !== "/token") {
-                  response.writeHead(404).end();
-                  return;
-                }
-                tokenRequests++;
-                const chunks = yield* Stream.runCollect(
-                  Stream.fromAsyncIterable(request, (cause) => new Cause.UnknownError(cause)),
-                );
-                grants.push(
-                  new URLSearchParams(
-                    Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8"),
-                  ),
-                );
-                const body = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
-                  access_token: "fake-access",
-                  refresh_token: "fake-refresh",
-                  expires_in: 3600,
-                });
-                response.writeHead(200, { "Content-Type": "application/json" }).end(body);
-              }).pipe(
-                Effect.catchCause(() =>
-                  Effect.sync(() => {
-                    response.writeHead(500).end();
-                  }),
-                ),
-              ),
-            );
-          });
-          yield* Effect.addFinalizer(() =>
-            Effect.callback<void>((resume) => {
-              server.close(() => resume(Effect.void));
+          const { port } = yield* testHttpServer(
+            Effect.gen(function* () {
+              const request = yield* HttpServerRequest.HttpServerRequest;
+              if (request.url !== "/token") return HttpServerResponse.empty({ status: 404 });
+              tokenRequests++;
+              grants.push(new URLSearchParams(yield* request.text));
+              return yield* HttpServerResponse.json({
+                access_token: "fake-access",
+                refresh_token: "fake-refresh",
+                expires_in: 3600,
+              });
             }),
-          );
-          yield* Effect.callback<void>((resume) => {
-            server.listen(0, "127.0.0.1", () => resume(Effect.void));
-          });
-          const { port } = yield* Schema.decodeUnknownEffect(Schema.Struct({ port: Schema.Int }))(
-            server.address(),
           );
           const protocol = {
             ...providerProtocols.openai,
@@ -173,16 +144,16 @@ it.live(
           yield* Deferred.await(entered);
           expect(workers).toHaveLength(1);
           expect(workers[0]!.threadId).not.toBe(threadId);
-          const manager = createOAuthAccountLoginManager(
-            db.sqlite,
-            createProfileCredentialStore(store),
-            (_provider, id) => {
+          const manager = createOAuthAccountLoginManager({
+            sqlite: db.sqlite,
+            accounts: createProfileCredentialStore(store),
+            startLogin: (_provider, id) => {
               loginStarts++;
               return OAuthValidationHarness({ protocol, store: store(id) }).startLogin({
                 timeoutMs: 5000,
               });
             },
-          );
+          });
           yield* Effect.addFinalizer(() =>
             sdkCall(() => manager.cancel("openai")).pipe(Effect.orDie),
           );
@@ -207,7 +178,7 @@ it.live(
             1000,
           );
           expect(manager.profiles("openai").login.status).toBe("pending");
-          expect((yield* sdkCall(() => fetch(callback))).status).toBe(200);
+          expect((yield* (yield* testHttpClient()).get(callback.toString())).status).toBe(200);
           yield* waitUntil(
             () => manager.profiles("openai").login.status === "completed",
             "owner login completes",
@@ -226,10 +197,12 @@ it.live(
           expect(Buffer.from(digest).toString("base64url")).toBe(
             auth.searchParams.get("code_challenge"),
           );
-          const closedCallback = yield* Effect.result(sdkCall(() => fetch(callback)));
+          const closedCallback = yield* Effect.result(
+            (yield* testHttpClient()).get(callback.toString()),
+          );
           expect(Result.isFailure(closedCallback)).toBe(true);
           if (Result.isFailure(closedCallback))
-            expect(closedCallback.failure.cause).toBeInstanceOf(Error);
+            expect(closedCallback.failure.reason.cause).toBeInstanceOf(Error);
           expect(tokenRequests).toBe(1);
           expect(loginStarts).toBe(1);
           expect(workers).toHaveLength(1);
@@ -238,7 +211,7 @@ it.live(
           const wrongCallback = new URL(wrongAuth.searchParams.get("redirect_uri")!);
           wrongCallback.searchParams.set("code", "fake-code");
           wrongCallback.searchParams.set("state", "wrong-state");
-          expect((yield* sdkCall(() => fetch(wrongCallback))).status).toBe(400);
+          expect((yield* (yield* testHttpClient()).get(wrongCallback.toString())).status).toBe(400);
           yield* waitUntil(
             () =>
               Schema.is(
@@ -254,7 +227,6 @@ it.live(
           expect(manager.profiles("openai").profiles).toHaveLength(1);
         }),
       ),
-    );
-  },
+    ),
   20000,
 );

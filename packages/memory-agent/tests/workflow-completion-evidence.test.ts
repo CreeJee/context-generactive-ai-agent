@@ -6,6 +6,8 @@ import { Database } from "../src/db/database.ts";
 import { WorkflowTools } from "../src/workflow/tools.ts";
 import { Workflows, WorkflowState, type UpdateWorkflowProgress } from "../src/workflow/workflow.ts";
 import { workflowRunBindings } from "../src/workflow/run-bindings.ts";
+import { GoalExecution, GoalExecutions } from "../src/workflow/goal-execution.ts";
+import type { GoalExecutionPayload } from "../src/workflow/goal-execution-contracts.ts";
 import { testRuntime } from "./support/runtime.ts";
 import { Projects } from "../src/projects/projects.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
@@ -86,6 +88,7 @@ const fixture = Effect.fn("workflowCompletionTest.fixture")(function* (native: b
     workflows.goalInstanceId(ctx.session.id),
     yield* ctx.runtime.contextEffect,
   );
+  if (id === null) return yield* Effect.die("Expected Goal identity");
   if (native)
     db.sqlite
       .prepare("INSERT INTO workflow_goal_native_artifacts VALUES (?, ?, ?, ?, ?, ?)")
@@ -104,9 +107,32 @@ const fixture = Effect.fn("workflowCompletionTest.fixture")(function* (native: b
   const revision = db.sqlite
     .prepare("SELECT max(id) AS id FROM workflow_state_revisions WHERE session_id = ?")
     .get(ctx.session.id)!.id;
-  expect(workflowRunBindings(db).bind(ctx.session.id, "run", Number(revision)).status).toBe(
-    "bound",
-  );
+  if (native) {
+    const goals = yield* Effect.provideContext(GoalExecutions, yield* ctx.runtime.contextEffect);
+    const payload: GoalExecutionPayload = {
+      _tag: "GoalExecutionPayload",
+      identity: {
+        owner: { ownerId: ctx.project.id, generation: "test-owner-generation" },
+        sessionId: ctx.session.id,
+        runId: "run",
+        goalInstanceId: id,
+        workflowRevisionId: Number(revision),
+      },
+    };
+    const admitted = yield* Effect.provideContext(
+      goals.admitAndStart(payload, () =>
+        workflowRunBindings(db).bind(ctx.session.id, "run", Number(revision)),
+      ),
+      yield* ctx.runtime.contextEffect,
+    );
+    expect(admitted.type).toBe("admitted");
+    yield* Effect.provideContext(goals.succeed(payload), yield* ctx.runtime.contextEffect);
+    yield* Effect.provideContext(GoalExecution.execute(payload), yield* ctx.runtime.contextEffect);
+  } else {
+    expect(workflowRunBindings(db).bind(ctx.session.id, "run", Number(revision)).status).toBe(
+      "bound",
+    );
+  }
   db.sqlite
     .prepare(
       "INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES (?, ?, 'completed', 1)",
@@ -145,6 +171,41 @@ const refusal = Effect.fn("workflowCompletionTest.refusal")(function* (
 });
 
 describe("criterion-linked Goal completion", () => {
+  it.live("stages a running recorder and requires settled receipts before completing", () =>
+    Effect.gen(function* () {
+      const ctx = yield* fixture();
+      ctx.db.sqlite.prepare("UPDATE chat_runs SET status = 'running' WHERE run_id = 'run'").run();
+      ctx.db.sqlite
+        .prepare(`INSERT INTO owner_rpc_operations
+        (run_id, run_key, operation_id, fingerprint, side_effect, reply_json, status)
+        VALUES ('run', '{}', 1, '{}', 1, '{"type":"pending","operationId":1}', 'pending')`)
+        .run();
+      const services = yield* ctx.runtime.contextEffect;
+      const staged = yield* Effect.provideContext(
+        ctx.workflows.updateProgress(ctx.session.id, complete, "run"),
+        services,
+      );
+      expect(staged.goal?.status).toBe("active");
+      expect(staged.goal?.completion).toBeUndefined();
+      expect(staged.goal?.completionRequest?.recorderRunId).toBe("run");
+      yield* Effect.provideContext(ctx.workflows.finishRun(ctx.session.id, "execute"), services);
+      const pending = yield* Effect.provideContext(
+        ctx.workflows.finishRun(ctx.session.id, "verify"),
+        services,
+      );
+      expect(pending.goal?.completion).toBeUndefined();
+      ctx.db.sqlite.prepare("UPDATE chat_runs SET status = 'completed' WHERE run_id = 'run'").run();
+      ctx.db.sqlite
+        .prepare("UPDATE owner_rpc_operations SET status = 'succeeded' WHERE run_id = 'run'")
+        .run();
+      const settled = yield* Effect.provideContext(
+        ctx.workflows.finishRun(ctx.session.id, "verify"),
+        services,
+      );
+      expect(settled.goal?.status).toBe("completed");
+      expect(settled.goal?.completion?.runs[0]?.durableExecutionId).toEqual(expect.any(String));
+    }),
+  );
   it.live("WorkflowTools binds the recorder separately from untrusted input", () =>
     Effect.gen(function* () {
       const ctx = yield* fixture();
@@ -214,7 +275,13 @@ describe("criterion-linked Goal completion", () => {
           recorderRunId: "run",
           sourceGeneration: "source",
           nativeRegistration: { artifactHash: "a".repeat(64) },
-          runs: [{ runId: "run", dispatchGeneration: "dispatch" }],
+          runs: [
+            {
+              runId: "run",
+              dispatchGeneration: "dispatch",
+              durableExecutionId: expect.any(String),
+            },
+          ],
         });
         const retry = yield* Effect.provideContext(
           ctx.workflows.updateProgress(ctx.session.id, complete, "run"),
@@ -313,6 +380,62 @@ describe("criterion-linked Goal completion", () => {
           break;
       }
       yield* refusal(ctx, input, recorder);
+    }),
+  );
+
+  it.live.each([
+    "missing execution",
+    "suspended execution",
+    "failed execution",
+    "missing dispatch",
+    "pending operation",
+    "uncertain effect",
+  ])("rejects source-bound completion with %s", (failure) =>
+    Effect.gen(function* () {
+      const ctx = yield* fixture();
+      switch (failure) {
+        case "missing execution":
+          ctx.db.sqlite.prepare("DELETE FROM owner_workflow_executions").run();
+          break;
+        case "suspended execution":
+          ctx.db.sqlite
+            .prepare(
+              "UPDATE owner_workflow_executions SET status = 'suspended', result_json = '{\"_tag\":\"Suspended\"}'",
+            )
+            .run();
+          break;
+        case "failed execution":
+          ctx.db.sqlite
+            .prepare(
+              'UPDATE owner_workflow_executions SET status = \'completed\', result_json = \'{"_tag":"Complete","exit":{"_tag":"Failure"}}\'',
+            )
+            .run();
+          break;
+        case "missing dispatch":
+          ctx.db.sqlite
+            .prepare("DELETE FROM workflow_worker_dispatches WHERE run_id = 'run'")
+            .run();
+          break;
+        case "pending operation":
+        case "uncertain effect": {
+          const uncertain = failure === "uncertain effect";
+          ctx.db.sqlite
+            .prepare(
+              `INSERT INTO owner_rpc_operations
+               (run_id, run_key, operation_id, fingerprint, side_effect, reply_json, status)
+               VALUES ('run', '{}', 1, '{}', ?, ?, ?)`,
+            )
+            .run(
+              uncertain ? 1 : 0,
+              uncertain
+                ? '{"type":"uncertain","operationId":1}'
+                : '{"type":"pending","operationId":1}',
+              uncertain ? "uncertain" : "pending",
+            );
+          break;
+        }
+      }
+      yield* refusal(ctx, complete);
     }),
   );
 

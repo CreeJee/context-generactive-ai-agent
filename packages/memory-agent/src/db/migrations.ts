@@ -1370,6 +1370,78 @@ export const migrations: readonly string[] = [
   CREATE TRIGGER rrsi_versions_retained BEFORE DELETE ON rrsi_versions BEGIN SELECT RAISE(ABORT, 'harness history retained'); END;
   CREATE TRIGGER rrsi_pins_immutable BEFORE UPDATE ON rrsi_goal_pins BEGIN SELECT RAISE(ABORT, 'immutable Goal harness pin'); END;
   `,
+  `
+  -- Project-owned Effect WorkflowEngine state. These tables share the one owner Database
+  -- connection so owner admission and the first durable request can commit atomically.
+  CREATE TABLE owner_workflow_executions (
+    execution_id TEXT PRIMARY KEY,
+    workflow_name TEXT NOT NULL,
+    payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+    parent_execution_id TEXT REFERENCES owner_workflow_executions(execution_id),
+    status TEXT NOT NULL CHECK (status IN ('running', 'suspended', 'completed', 'interrupted')),
+    result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json))
+  );
+  CREATE INDEX owner_workflow_executions_parent
+    ON owner_workflow_executions(parent_execution_id);
+
+  CREATE TABLE owner_workflow_activities (
+    execution_id TEXT NOT NULL REFERENCES owner_workflow_executions(execution_id) ON DELETE CASCADE,
+    activity_name TEXT NOT NULL,
+    attempt INTEGER NOT NULL CHECK (attempt >= 0),
+    result_json TEXT NOT NULL CHECK (json_valid(result_json)),
+    PRIMARY KEY (execution_id, activity_name, attempt)
+  );
+
+  CREATE TABLE owner_workflow_deferreds (
+    execution_id TEXT NOT NULL REFERENCES owner_workflow_executions(execution_id) ON DELETE CASCADE,
+    deferred_name TEXT NOT NULL,
+    workflow_name TEXT NOT NULL,
+    exit_json TEXT NOT NULL CHECK (json_valid(exit_json)),
+    PRIMARY KEY (execution_id, deferred_name)
+  );
+
+  CREATE TABLE owner_workflow_clocks (
+    execution_id TEXT NOT NULL REFERENCES owner_workflow_executions(execution_id) ON DELETE CASCADE,
+    clock_name TEXT NOT NULL,
+    workflow_name TEXT NOT NULL,
+    deferred_name TEXT NOT NULL,
+    due_at INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('scheduled', 'fired')),
+    PRIMARY KEY (execution_id, clock_name)
+  );
+  CREATE INDEX owner_workflow_clocks_pending
+    ON owner_workflow_clocks(status, due_at);
+  `,
+  `
+  -- Explicit owner/operator recovery of one verified read failure. Original run/RPC/Goal
+  -- failure receipts stay unchanged; this only permits a new, user-requested run.
+  CREATE TABLE owner_read_recoveries (
+    receipt_id TEXT NOT NULL UNIQUE,
+    run_id TEXT PRIMARY KEY REFERENCES workflow_run_bindings(run_id),
+    session_id TEXT NOT NULL,
+    goal_instance_id TEXT NOT NULL,
+    workflow_revision_id INTEGER NOT NULL,
+    operation_id INTEGER NOT NULL,
+    operation_fingerprint TEXT NOT NULL,
+    authorization_fingerprint TEXT NOT NULL,
+    run_key TEXT NOT NULL,
+    finished_at INTEGER NOT NULL,
+    execution_id TEXT NOT NULL REFERENCES owner_workflow_executions(execution_id),
+    execution_result_json TEXT NOT NULL CHECK(json_valid(execution_result_json)),
+    execution_payload_json TEXT NOT NULL CHECK(json_valid(execution_payload_json)),
+    assessment_id TEXT NOT NULL CHECK(length(assessment_id)=64),
+    policy TEXT NOT NULL CHECK(policy='background-result-read-v1'),
+    confirmation TEXT NOT NULL CHECK(confirmation='confirm_read_only_and_continue_without_replay'),
+    backup_reference TEXT NOT NULL CHECK(length(backup_reference) BETWEEN 1 AND 256),
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY(run_id, operation_id) REFERENCES owner_rpc_operations(run_id, operation_id)
+  );
+  CREATE TRIGGER owner_read_recoveries_no_update BEFORE UPDATE ON owner_read_recoveries
+    BEGIN SELECT RAISE(ABORT, 'read recovery receipt is immutable'); END;
+  CREATE TRIGGER owner_read_recoveries_no_delete BEFORE DELETE ON owner_read_recoveries
+    BEGIN SELECT RAISE(ABORT, 'read recovery receipt is retained'); END;
+  CREATE INDEX owner_read_recoveries_session ON owner_read_recoveries(session_id, run_id);
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

@@ -5,7 +5,7 @@ import {
   Predicate,
   Function as EffectFunction,
 } from "effect";
-import { createHash } from "node:crypto";
+import { sha256 } from "../runtime/synchronous-crypto.ts";
 import type { ModelMessage } from "@tanstack/ai";
 
 export interface HistoryGroup {
@@ -113,7 +113,7 @@ function groupHistoryMessagesBody(
       message.id !== undefined && message.id.length > 0 ? [message.id] : [],
     ),
   );
-  const namespace = createHash("sha256").update(threadId).digest("hex");
+  const namespace = sha256(threadId);
   const groups: HistoryGroup[] = [];
   let assistant: HistoryGroup | undefined;
 

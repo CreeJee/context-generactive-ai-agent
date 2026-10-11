@@ -1,11 +1,10 @@
 import { Function as EffectFunction } from "effect";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
+import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import { isTruthy } from "../truthy.ts";
 import type { ToolExecutionContext } from "@tanstack/ai";
 import { tmpdir } from "node:os";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { isAbsolute, relative, sep } from "node:path";
+import { path } from "../runtime/synchronous-path.ts";
+const { isAbsolute, relative, sep } = path;
 import { Context, Effect, Result, Layer, Schema } from "effect";
 import { BackgroundTasks, backgroundOperation, type BackgroundBinding } from "./background.ts";
 import { StorageRoot } from "../config/storage-root.ts";
@@ -116,30 +115,28 @@ const make = Effect.gen(function* () {
                 env: process.env,
               });
             if (binding !== undefined) {
-              return yield* Effect.gen(function* () {
-                const receipt = yield* background.start(
-                  binding,
-                  context?.toolCallId ?? randomUUID(),
-                  "shell",
-                  command,
-                  backgroundOperation(execute).pipe(
-                    Effect.map((result) =>
-                      JSON.stringify({ workdir: directory.relative, ...result }),
-                    ),
+              const receipt = yield* background.start(
+                binding,
+                context?.toolCallId ?? randomUUID(),
+                "shell",
+                command,
+                backgroundOperation(execute).pipe(
+                  Effect.map((result) =>
+                    JSON.stringify({ workdir: directory.relative, ...result }),
                   ),
+                ),
+              );
+              const result = yield* background.waitResult(
+                binding.sessionId,
+                receipt.taskId,
+                yieldMs ?? 1000,
+              );
+              if (result?.status === "completed")
+                return yield* Schema.decodeEffect(Schema.fromJsonString(ShellResult))(
+                  result.result,
                 );
-                const result = yield* background.waitResult(
-                  binding.sessionId,
-                  receipt.taskId,
-                  yieldMs ?? 1000,
-                );
-                if (result?.status === "completed")
-                  return yield* Schema.decodeEffect(Schema.fromJsonString(ShellResult))(
-                    result.result,
-                  );
-                if (isTruthy(result)) return { taskId: receipt.taskId, ...result };
-                return receipt;
-              });
+              if (isTruthy(result)) return { taskId: receipt.taskId, ...result };
+              return receipt;
             }
             const result = yield* Effect.tryPromise(() => execute(context?.abortSignal));
             return { workdir: directory.relative, ...result };

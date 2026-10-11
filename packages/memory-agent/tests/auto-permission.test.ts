@@ -68,7 +68,7 @@ describe("workspace instructions", () => {
       const path = yield* Path.Path;
       const { project, storage, home } = yield* call(() => testRuntime({ testProvider: {} }));
       const places = { storageRoot: storage, globalSkills: path.join(home, ".agents", "skills") };
-      const auto = workspaceInstructions(
+      const auto = yield* workspaceInstructions(
         { ...project, permissionMode: "auto" },
         places,
         DateTime.toDateUtc(DateTime.makeUnsafe("2026-09-15T12:00:00Z")),
@@ -76,12 +76,12 @@ describe("workspace instructions", () => {
       expect(auto).toContain("reviewed before each call: routine requested work runs");
       expect(auto).toMatch(/Today is 2026-09-1[56] \(.+\)\. run_shell runs commands with \S+ on /);
       expect(auto).not.toContain("read-only");
-      expect(workspaceInstructions({ ...project, permissionMode: "ask" }, places)).toContain(
+      expect(yield* workspaceInstructions({ ...project, permissionMode: "ask" }, places)).toContain(
         "wait for the user's approval of each call",
       );
-      expect(workspaceInstructions({ ...project, permissionMode: "full" }, places)).toContain(
-        "run without per-call approval",
-      );
+      expect(
+        yield* workspaceInstructions({ ...project, permissionMode: "full" }, places),
+      ).toContain("run without per-call approval");
       // Where the app keeps its own settings, and that its storage is not for the file tools.
       expect(auto).toContain(
         `MCP servers: ${path.join(storage, "mcp.json")}, ${path.join(project.root, ".mcp.json")}`,

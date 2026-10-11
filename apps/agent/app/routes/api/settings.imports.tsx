@@ -41,7 +41,7 @@ export function action({ request }: Route.ActionArgs) {
       if (Result.isFailure(body))
         return Response.json({ error: "invalid_import_action" }, { status: 400 });
 
-      return yield* Effect.gen(function* () {
+      {
         const importer = yield* Importer;
         const command = body.success;
         switch (command.action) {
@@ -57,7 +57,7 @@ export function action({ request }: Route.ActionArgs) {
             yield* importer.setInterpret(command.interpret);
         }
         return Response.json(yield* importer.overview);
-      });
+      }
     }),
   );
 }

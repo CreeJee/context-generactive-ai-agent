@@ -13,6 +13,7 @@ import { Workflows } from "../src/workflow/workflow.ts";
 import { testRuntime } from "./support/runtime.ts";
 import { selectTestModel } from "./support/provider.ts";
 import { withTestPlatform } from "./support/platform.ts";
+import { FileReadPlatform } from "../src/files/text.ts";
 
 const writeSkill = Effect.fn("writeSkill")(function* (
   root: string,
@@ -51,6 +52,34 @@ describe("parseFrontMatter", () => {
 });
 
 describe("Skills", () => {
+  const platforms =
+    process.platform === "win32" ? (["windows"] as const) : (["posix", "windows"] as const);
+  for (const platform of platforms) {
+    it.live(
+      `${platform}: rejects linked skill files while preserving ordinary hard-linked files`,
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const { runtime, project, home, base } = yield* call(() => testRuntime());
+          const root = path.join(home, ".agents", "skills");
+          const outside = yield* writeSkill(base, "outside", "description: Shared rules.");
+          const source = path.join(outside, "SKILL.md");
+          for (const name of ["symbolic", "hard"]) {
+            yield* fs.makeDirectory(path.join(root, name), { recursive: true });
+          }
+          yield* fs.symlink(source, path.join(root, "symbolic", "SKILL.md"));
+          yield* fs.link(source, path.join(root, "hard", "SKILL.md"));
+          const skills = yield* Effect.provideContext(Skills, yield* runtime.contextEffect);
+          expect((yield* skills.catalog(project)).skills.map((skill) => skill.name)).toEqual([
+            "hard",
+          ]);
+          expect(yield* skills.read(project, "symbolic")).toBeNull();
+          expect(yield* skills.read(project, "hard")).toMatchObject({ body: "Do it well." });
+        }).pipe(Effect.provideService(FileReadPlatform, platform), withTestPlatform),
+    );
+  }
+
   it.live(
     "lists global and project skills; a project skill replaces a global one of the same name",
     () =>
@@ -78,7 +107,7 @@ describe("Skills", () => {
         );
         yield* fs.symlink(outside, path.join(global, "linked"));
         const skills = yield* Effect.provideContext(Skills, yield* runtime.contextEffect);
-        const catalog = skills.catalog(project);
+        const catalog = yield* skills.catalog(project);
         expect(catalog.skills.map((skill) => [skill.name, skill.scope, skill.description])).toEqual(
           [
             ["deploy", "global", "Deploy the app."],
@@ -89,7 +118,7 @@ describe("Skills", () => {
           { scope: "global", directory: path.join(global, "broken"), problem: "no_description" },
         ]);
         const tools = yield* Effect.provideContext(
-          Effect.map(SkillTools, (t) => t.forProject(project)),
+          Effect.flatMap(SkillTools, (t) => t.forProject(project)),
           yield* runtime.contextEffect,
         );
         expect(tools.instructions).toContain("- review (project): Project review.");
@@ -127,14 +156,18 @@ describe("Skills", () => {
       );
       const skills = yield* Effect.provideContext(Skills, yield* runtime.contextEffect);
       expect(
-        skills.catalog(project).skills.map((skill) => [skill.name, skill.scope, skill.description]),
+        (yield* skills.catalog(project)).skills.map((skill) => [
+          skill.name,
+          skill.scope,
+          skill.description,
+        ]),
       ).toEqual([
         ["draw", "global", "My drawing."],
         ["tidy", "builtin", "App tidying."],
       ]);
       // The executable unpacks built-in skills under the storage root, which the file tools refuse,
       // so a built-in skill never points the model at files beside it.
-      expect(skills.read(project, "tidy")).toMatchObject({
+      expect(yield* skills.read(project, "tidy")).toMatchObject({
         scope: "builtin",
         files: [],
         body: "Tidy rules.",
@@ -147,9 +180,10 @@ describe("Skills", () => {
       const { runtime, project } = yield* call(() =>
         testRuntime({ skillsBuiltin: builtinSkillsDirectory() }),
       );
-      const catalog = (yield* Effect.provideContext(Skills, yield* runtime.contextEffect)).catalog(
-        project,
-      );
+      const catalog = yield* (yield* Effect.provideContext(
+        Skills,
+        yield* runtime.contextEffect,
+      )).catalog(project);
       expect(catalog.problems).toEqual([]);
       const shipped = catalog.skills.filter((skill) => skill.scope === "builtin");
       expect(shipped.map((skill) => skill.name)).toContain("draw");

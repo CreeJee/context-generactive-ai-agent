@@ -1,16 +1,16 @@
 import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
+import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
 import { DatabaseSync } from "node:sqlite";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { join } from "node:path";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { oauthProtocolFileSystem as fs } from "../oauth/node-runtime.ts";
+import { oauthProtocolPath } from "../oauth/node-runtime.ts";
+import { runProcess } from "./command.ts";
+const run = (
+  command: string,
+  args: readonly string[],
+  options: Omit<Parameters<typeof runProcess>[0], "command" | "args"> = {},
+) => runProcess({ command, args, ...options });
 import {
   Clock,
   ConfigProvider,
@@ -83,7 +83,6 @@ type MutableCandidate = { -readonly [K in keyof CandidateRecord]: CandidateRecor
 type MutableExperiment = {
   -readonly [K in keyof Omit<ExperimentRecord, "candidates">]: ExperimentRecord[K];
 } & { candidates: MutableCandidate[] };
-const run = promisify(execFile);
 const stringifyJson = <A>(value: A, _replacer?: null, space?: number) =>
   Result.getOrThrow(
     Schema.encodeResult(Schema.fromJsonString(Schema.Unknown, { space: space ?? 0 }))(value),
@@ -139,9 +138,11 @@ const make = Effect.gen(function* () {
     .pipe(Config.withDefault(""))
     .parse(ConfigProvider.fromEnv())
     .pipe(Effect.orDie);
-  const originalFile = isTruthy(originalStorage) ? join(originalStorage, "agent.db") : null;
+  const originalFile = isTruthy(originalStorage)
+    ? oauthProtocolPath.join(originalStorage, "agent.db")
+    : null;
   const original =
-    isTruthy(originalFile) && existsSync(originalFile)
+    originalFile !== null && (yield* fs.exists(originalFile).pipe(Effect.orDie))
       ? new DatabaseSync(originalFile, { readOnly: true })
       : null;
   const repo = Option.getOrNull(
@@ -171,12 +172,22 @@ const make = Effect.gen(function* () {
   ) {
     if (!isTruthy(repo)) return { branch: null, commit: null };
     const branch = `rrsi/${experimentId}/${round}/${index}`;
-    const directory = join(repo, ".rrsi-local/candidates", experimentId, `${round}-${index}`);
-    mkdirSync(join(repo, ".rrsi-local/candidates", experimentId), { recursive: true });
+    const directory = oauthProtocolPath.join(
+      repo,
+      ".rrsi-local/candidates",
+      experimentId,
+      `${round}-${index}`,
+    );
+    yield* fs.makeDirectory(oauthProtocolPath.join(repo, ".rrsi-local/candidates", experimentId), {
+      recursive: true,
+    });
     yield* nativePromise(() =>
       run("git", ["worktree", "add", "-b", branch, directory, "HEAD"], { cwd: repo }),
     );
-    writeFileSync(join(directory, "rrsi-profile.json"), stringifyJson(profile, null, 2) + "\n");
+    yield* fs.writeFileString(
+      oauthProtocolPath.join(directory, "rrsi-profile.json"),
+      stringifyJson(profile, null, 2) + "\n",
+    );
     yield* nativePromise(() => run("git", ["add", "--", "rrsi-profile.json"], { cwd: directory }));
     yield* nativePromise(() =>
       run(
@@ -256,24 +267,26 @@ const make = Effect.gen(function* () {
       for (let trial = 0; trial < trials; trial++) {
         measurements.push(
           yield* nativePromise(() =>
-            native.evaluate(
-              bounded,
+            native.evaluate({
+              client: bounded,
               profile,
-              split,
-              abort.signal,
+              split: split,
+              signal: abort.signal,
               consume,
-              record.baselineImage,
-              (completed) =>
+              image: record.baselineImage,
+              onProgress: (completed) =>
                 progress(phase, completedOffset + trial * tasksPerTrial + completed, total),
-            ),
+            }),
           ),
         );
         progress(phase, completedOffset + (trial + 1) * tasksPerTrial, total);
       }
       return mean(measurements);
     });
-    // Native callback heartbeat/debounce timing remains at the protocol boundary.
-    const timer = setTimeout(() => abort.abort("time_limit"), settings.maxMinutes * 60000);
+    const timer = yield* Effect.sleep(settings.maxMinutes * 60000).pipe(
+      Effect.andThen(Effect.sync(() => abort.abort("time_limit"))),
+      Effect.forkChild,
+    );
     yield* Effect.gen(function* () {
       const base = store.get(record.baseVersion);
       let profile = base.profile;
@@ -334,7 +347,7 @@ const make = Effect.gen(function* () {
           const candidate: MutableCandidate = {
             kind: "profile",
             imageId: null,
-            id: randomUUID(),
+            id: yield* oauthProtocolCrypto.randomUUIDv4().pipe(Effect.orDie),
             round,
             profile: proposal.profile,
             edits: proposal.edits,
@@ -456,7 +469,7 @@ const make = Effect.gen(function* () {
             yield* request(
               [
                 "Propose one reusable code improvement. Return JSON {edits:[{component,hypothesis}],files:[{path,before,after}]}. Use exact unique replacement anchors; touch at most three allowed files. Do not modify permissions, authentication, evaluator, tests, runtime version management or user instructions.",
-                `Source: ${stringifyJson(codeContext(repo))}`,
+                `Source: ${stringifyJson(yield* codeContext(repo))}`,
                 `Measured profile history: ${stringifyJson(record.candidates)}`,
               ].join("\n"),
             ),
@@ -465,7 +478,7 @@ const make = Effect.gen(function* () {
           const candidate: MutableCandidate = {
             kind: "code",
             imageId: null,
-            id: randomUUID(),
+            id: yield* oauthProtocolCrypto.randomUUIDv4().pipe(Effect.orDie),
             round: 2,
             profile,
             edits: proposal.edits,
@@ -504,26 +517,26 @@ const make = Effect.gen(function* () {
           candidate.imageId = code.image;
           candidate.measurement = mean([
             yield* nativePromise(() =>
-              native.evaluate(
-                bounded,
+              native.evaluate({
+                client: bounded,
                 profile,
-                "validation",
-                abort.signal,
+                split: "validation",
+                signal: abort.signal,
                 consume,
-                code.image,
-                (completed) => progress("code_validation", completed, 12),
-              ),
+                image: code.image,
+                onProgress: (completed) => progress("code_validation", completed, 12),
+              }),
             ),
             yield* nativePromise(() =>
-              native.evaluate(
-                bounded,
+              native.evaluate({
+                client: bounded,
                 profile,
-                "validation",
-                abort.signal,
+                split: "validation",
+                signal: abort.signal,
                 consume,
-                code.image,
-                (completed) => progress("code_validation", 6 + completed, 12),
-              ),
+                image: code.image,
+                onProgress: (completed) => progress("code_validation", 6 + completed, 12),
+              }),
             ),
           ]);
           progress("code_validation", 12, 12);
@@ -545,7 +558,7 @@ const make = Effect.gen(function* () {
           Effect.ensuring(Effect.sync(() => store.saveExperiment(record))),
         );
       }
-    }).pipe(Effect.ensuring(Effect.sync(() => clearTimeout(timer))));
+    }).pipe(Effect.ensuring(Fiber.interrupt(timer)));
   });
   const execute = (record: MutableExperiment, client: ModelGateway, abort: AbortController) =>
     runNativeEffect(executeEffect(record, client, abort));
@@ -568,7 +581,7 @@ const make = Effect.gen(function* () {
     const cancellation = yield* cancellations.allocate("app_shutdown");
     const abort = cancellation.controller;
     const record: MutableExperiment = {
-      id: randomUUID(),
+      id: yield* oauthProtocolCrypto.randomUUIDv4().pipe(Effect.orDie),
       status: "running",
       startedAt: yield* Clock.currentTimeMillis,
       finishedAt: null,

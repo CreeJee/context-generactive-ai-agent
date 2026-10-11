@@ -1,3 +1,5 @@
+import { Effect } from "effect";
+import { browserCrypto } from "../shared/browser-crypto";
 import { Function as EffectFunction } from "effect";
 import { useEffect, useRef, useState } from "react";
 import { api, attachmentErrorMessage, type Attachment } from "../api";
@@ -56,7 +58,7 @@ export function useDraftImages() {
     for (const file of files) {
       const base: DraftImageBase = {
         // Browser/native SDK boundary requires a cryptographic correlation or idempotency token.
-        key: crypto.randomUUID(),
+        key: Effect.runSync(browserCrypto.randomUUIDv4()),
         number: nextNumber.current++,
         previewUrl: URL.createObjectURL(file),
         name: file.name,

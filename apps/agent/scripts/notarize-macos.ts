@@ -13,94 +13,127 @@
 // A bare Mach-O executable cannot hold a stapled ticket — only a container can — which is why the
 // deliverable is a .dmg. Notarizing a .zip of the executable also works and needs no container, but
 // then every first launch has to reach Apple's server, and an offline Mac shows the warning anyway.
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { spawnSync } from "node:child_process";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { createHash } from "node:crypto";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { basename, join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { Config, Crypto, Effect, FileSystem, Layer, Path, Stream, Schema } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { Hex } from "effect/encoding";
 
-const app = fileURLToPath(new URL("..", import.meta.url));
-const target = `darwin-${process.arch}`;
-const directory = join(app, "dist", `context-agent-${target}`);
-const executable = join(directory, "context-agent");
-const image = join(app, "dist", `context-agent-${target}.dmg`);
-// Native host/SDK configuration boundary reads or forwards the host environment.
-const profile = process.env.CONTEXT_AGENT_NOTARY_PROFILE ?? "context-agent";
+class CommandFailed extends Schema.TaggedError<CommandFailed>()("CommandFailed", {
+  command: Schema.String,
+  args: Schema.String,
+}) {}
 
-function run(command: string, args: readonly string[]) {
-  const result = spawnSync(command, args, { cwd: app, stdio: "inherit" });
-  if (result.status !== 0) throw new Error(`${command} ${args.join(" ")} failed`);
-}
+class PackagePreflightFailed extends Schema.TaggedError<PackagePreflightFailed>()(
+  "PackagePreflightFailed",
+  { message: Schema.String },
+) {}
 
-function capture(command: string, args: readonly string[]) {
-  const result = spawnSync(command, args, { cwd: app, encoding: "utf8" });
-  return { status: result.status, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
-}
-
-if (process.platform !== "darwin") throw new Error("notarization only runs on macOS");
-if (!existsSync(executable))
-  throw new Error(`${relative(app, executable)} is missing; run \`vp run package\` first`);
-
-// An ad-hoc signature has no team behind it and notarization rejects it, with a message that does
-// not say why. Better to stop here and name the missing piece.
-const signature = capture("codesign", ["--display", "--verbose=4", executable]);
-if (signature.status !== 0) throw new Error("the executable is not signed");
-if (/^Signature=adhoc$/mu.test(signature.out))
-  throw new Error(
-    "the executable is signed ad-hoc. Rebuild with a Developer ID:\n" +
-      '  CONTEXT_AGENT_SIGN_IDENTITY="Developer ID Application: <name> (<team id>)" vp run package\n' +
-      "  (`security find-identity -v -p codesigning` lists the identities this machine has)",
-  );
-if (!/TeamIdentifier=[A-Z0-9]{10}/u.test(signature.out))
-  throw new Error("the signature carries no Team ID, so it cannot be notarized");
-
-const stored = capture("xcrun", ["notarytool", "history", "--keychain-profile", profile]);
-if (stored.status !== 0)
-  throw new Error(
-    `no notarytool keychain profile "${profile}". Create it once with:\n` +
-      `  xcrun notarytool store-credentials ${profile} --apple-id <Apple ID> --team-id <Team ID> --password <app-specific password>`,
+const program = Effect.gen(function* () {
+  const services = yield* Layer.build(NodeServices.layer);
+  const fs = yield* Effect.provideContext(FileSystem.FileSystem, services);
+  const path = yield* Effect.provideContext(Path.Path, services);
+  const crypto = yield* Effect.provideContext(Crypto.Crypto, services);
+  const spawner = yield* Effect.provideContext(ChildProcessSpawner.ChildProcessSpawner, services);
+  const { basename, join, relative } = path;
+  const app = yield* path.fromFileUrl(new URL("..", import.meta.url));
+  const target = `darwin-${process.arch}`;
+  const directory = join(app, "dist", `context-agent-${target}`);
+  const executable = join(directory, "context-agent");
+  const image = join(app, "dist", `context-agent-${target}.dmg`);
+  const profile = yield* Config.String("CONTEXT_AGENT_NOTARY_PROFILE").pipe(
+    Config.withDefault("context-agent"),
   );
 
-rmSync(image, { force: true });
-// A read-only image holds the executable with its permission bits, and can be stapled.
-run("hdiutil", [
-  "create",
-  "-volname",
-  "Context Agent",
-  "-srcfolder",
-  directory,
-  "-ov",
-  "-format",
-  "UDZO",
-  image,
-]);
-run("codesign", [
-  "--sign",
-  // Native host/SDK configuration boundary reads or forwards the host environment.
-  process.env.CONTEXT_AGENT_SIGN_IDENTITY ?? "-",
-  "--force",
-  "--timestamp",
-  image,
-]);
+  const run = Effect.fn("notarize.run")(function* (command: string, args: readonly string[]) {
+    const child = yield* spawner.spawn(
+      ChildProcess.make(command, args, { cwd: app, stdout: "inherit", stderr: "inherit" }),
+    );
+    const status = yield* child.exitCode;
+    if (Number(status) !== 0) return yield* CommandFailed.make({ command, args: args.join(" ") });
+  });
+  const capture = Effect.fn("notarize.capture")(function* (
+    command: string,
+    args: readonly string[],
+  ) {
+    const child = yield* spawner.spawn(ChildProcess.make(command, args, { cwd: app }));
+    const out = yield* child.all.pipe(
+      Stream.decodeText(),
+      Stream.runFold(
+        () => "",
+        (out, part) => out + part,
+      ),
+    );
+    return { status: Number(yield* child.exitCode), out };
+  });
 
-run("xcrun", ["notarytool", "submit", image, "--keychain-profile", profile, "--wait"]);
-run("xcrun", ["stapler", "staple", image]);
-// What Gatekeeper itself will say on the other machine.
-run("spctl", [
-  "--assess",
-  "--type",
-  "open",
-  "--context",
-  "context:primary-signature",
-  "-vv",
-  image,
-]);
+  if (process.platform !== "darwin")
+    return yield* PackagePreflightFailed.make({ message: "notarization only runs on macOS" });
+  if (!(yield* fs.exists(executable)))
+    return yield* PackagePreflightFailed.make({
+      message: `${relative(app, executable)} is missing; run \`vp run package\` first`,
+    });
 
-const digest = createHash("sha256").update(readFileSync(image)).digest("hex");
-writeFileSync(`${image}.sha256`, `${digest}  ${basename(image)}\n`);
-// Native stdout/stderr or SDK logging boundary preserves the existing output format.
-console.log(`${relative(app, image)}: notarized and stapled`);
+  // An ad-hoc signature has no team behind it and notarization rejects it, with a message that does
+  // not say why. Better to stop here and name the missing piece.
+  const signature = yield* capture("codesign", ["--display", "--verbose=4", executable]);
+  if (signature.status !== 0)
+    return yield* PackagePreflightFailed.make({ message: "the executable is not signed" });
+  if (/^Signature=adhoc$/mu.test(signature.out))
+    return yield* PackagePreflightFailed.make({
+      message:
+        "the executable is signed ad-hoc. Rebuild with a Developer ID:\n" +
+        '  CONTEXT_AGENT_SIGN_IDENTITY="Developer ID Application: <name> (<team id>)" vp run package\n' +
+        "  (`security find-identity -v -p codesigning` lists the identities this machine has)",
+    });
+  if (!/TeamIdentifier=[A-Z0-9]{10}/u.test(signature.out))
+    return yield* PackagePreflightFailed.make({
+      message: "the signature carries no Team ID, so it cannot be notarized",
+    });
+
+  const stored = yield* capture("xcrun", ["notarytool", "history", "--keychain-profile", profile]);
+  if (stored.status !== 0)
+    return yield* PackagePreflightFailed.make({
+      message:
+        `no notarytool keychain profile "${profile}". Create it once with:\n` +
+        `  xcrun notarytool store-credentials ${profile} --apple-id <Apple ID> --team-id <Team ID> --password <app-specific password>`,
+    });
+
+  yield* fs.remove(image, { force: true });
+  // A read-only image holds the executable with its permission bits, and can be stapled.
+  yield* run("hdiutil", [
+    "create",
+    "-volname",
+    "Context Agent",
+    "-srcfolder",
+    directory,
+    "-ov",
+    "-format",
+    "UDZO",
+    image,
+  ]);
+  yield* run("codesign", [
+    "--sign",
+    yield* Config.String("CONTEXT_AGENT_SIGN_IDENTITY").pipe(Config.withDefault("-")),
+    "--force",
+    "--timestamp",
+    image,
+  ]);
+
+  yield* run("xcrun", ["notarytool", "submit", image, "--keychain-profile", profile, "--wait"]);
+  yield* run("xcrun", ["stapler", "staple", image]);
+  // What Gatekeeper itself will say on the other machine.
+  yield* run("spctl", [
+    "--assess",
+    "--type",
+    "open",
+    "--context",
+    "context:primary-signature",
+    "-vv",
+    image,
+  ]);
+
+  const digest = Hex.encode(yield* crypto.digest("SHA-256", yield* fs.readFile(image)));
+  yield* fs.writeFileString(`${image}.sha256`, `${digest}  ${basename(image)}\n`);
+  yield* Effect.logInfo(`${relative(app, image)}: notarized and stapled`);
+});
+await Effect.runPromise(Effect.scoped(program));

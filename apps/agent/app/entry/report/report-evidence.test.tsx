@@ -56,20 +56,23 @@ describe("report review and manual sharing", () => {
     expect(html).toContain("도구 호출/결과 상세 확인 (최대 8,000자)");
     expect(evidenceGaps(snapshot)).toContain("대화: 조회 실패");
     expect(evidenceGaps(snapshot)).toContain("도구 호출: 최근 항목 일부만 수집됨");
-    const minimal = reportText({ symptom: "승인 반복", expected: "", actual: "" }, "오늘");
+    const minimal = reportText({
+      fields: { symptom: "승인 반복", expected: "", actual: "" },
+      createdAt: "오늘",
+    });
     expect(minimal).not.toContain("sensitive");
   });
 
   test("only explicitly included, edited evidence enters the shareable text", () => {
     const item = evidenceItems(snapshot).find((entry) => entry.id === "call:c1");
     if (!isTruthy(item)) throw new Error("missing fixture call");
-    const text = reportText(
-      { symptom: "승인 반복", expected: "", actual: "" },
-      "오늘",
-      [{ label: item.label, source: item.source, text: "redacted by user" }],
-      evidenceGaps(snapshot),
-      { projectId: snapshot.session.projectId, sessionId: snapshot.session.id },
-    );
+    const text = reportText({
+      fields: { symptom: "승인 반복", expected: "", actual: "" },
+      createdAt: "오늘",
+      evidence: [{ label: item.label, source: item.source, text: "redacted by user" }],
+      unavailable: evidenceGaps(snapshot),
+      origin: { projectId: snapshot.session.projectId, sessionId: snapshot.session.id },
+    });
     expect(text).toContain("증거 출처: 프로젝트 p1 / 원본 세션 s1");
     expect(text).toContain("nodes/c1");
     expect(text).toContain("redacted by user");

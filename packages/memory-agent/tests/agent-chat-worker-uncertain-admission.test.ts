@@ -1,19 +1,24 @@
 import { selectTestModel } from "./support/provider.ts";
 import { it } from "@effect/vitest";
 import { DateTime, Effect, Schema } from "effect";
-import { expect, vi } from "vite-plus/test";
+import { expect } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
+import { makeOwnerNativeArtifacts } from "../src/agent/owner-native-artifacts.ts";
 import { makeSqliteOwnerRpcLedger } from "../src/agent/owner-rpc-ledger.ts";
 import { Database } from "../src/db/database.ts";
 import { workflowRunBindings } from "../src/workflow/run-bindings.ts";
 import { Workflows } from "../src/workflow/workflow.ts";
 import { testRuntime } from "./support/runtime.ts";
 
-it.live.each(["pending", "uncertain", "succeeded"] as const)(
-  "completed SDK run with %s side effect respects actual AgentChat admission",
-  (status) =>
+it.live.each([
+  { status: "pending", runStatus: "completed" },
+  { status: "uncertain", runStatus: "completed" },
+  { status: "succeeded", runStatus: "completed" },
+  { status: "succeeded", runStatus: "failed" },
+] as const)(
+  "SDK run $runStatus with $status side effect respects actual AgentChat admission",
+  ({ status, runStatus }) =>
     Effect.gen(function* () {
-      vi.stubEnv("CONTEXT_AGENT_GOAL_WORKER", "1");
       try {
         const context = yield* Effect.promise(() => testRuntime({ testProvider: {} }));
         yield* Effect.provideContext(selectTestModel(), yield* context.runtime.contextEffect);
@@ -33,18 +38,34 @@ it.live.each(["pending", "uncertain", "succeeded"] as const)(
           }),
           yield* context.runtime.contextEffect,
         );
-        const revision = (yield* Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.Finite }))(
+        const revision = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ id: Schema.Finite, goal_instance_id: Schema.String }),
+        )(
           db.sqlite
-            .prepare("SELECT max(id) AS id FROM workflow_state_revisions WHERE session_id = ?")
+            .prepare(
+              "SELECT id, goal_instance_id FROM workflow_state_revisions WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+            )
             .get(context.session.id),
-        )).id;
-        const admission = workflowRunBindings(db).bind(context.session.id, "oldrun", revision);
+        );
+        // Establish genuine prebuilt provenance before creating the historical receipt fixture.
+        yield* Effect.scoped(
+          makeOwnerNativeArtifacts({
+            ...db,
+            directory: `${context.storage}/native-artifacts`,
+          }).acquire(revision.goal_instance_id),
+        );
+        const admission = workflowRunBindings(db).bind(context.session.id, "oldrun", revision.id);
         if (admission.status !== "bound") throw new Error("expected old binding");
         db.sqlite
           .prepare(
-            "INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES (?, ?, 'completed', ?)",
+            "INSERT INTO chat_runs (run_id, thread_id, status, started_at) VALUES (?, ?, ?, ?)",
           )
-          .run("oldrun", context.session.id, DateTime.toEpochMillis(DateTime.nowUnsafe()));
+          .run(
+            "oldrun",
+            context.session.id,
+            runStatus,
+            DateTime.toEpochMillis(DateTime.nowUnsafe()),
+          );
         const ledger = makeSqliteOwnerRpcLedger(db);
         const key = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
           admission.binding,
@@ -88,8 +109,8 @@ it.live.each(["pending", "uncertain", "succeeded"] as const)(
         );
         // Consume even a failing baseline's stream so model invocation is observable.
         const body = yield* Effect.promise(() => response.text());
-        if (status === "succeeded") {
-          expect(response.status).toBe(200);
+        if (status === "succeeded" && runStatus === "completed") {
+          expect(response.status, body).toBe(200);
           expect(context.provider!.adapter.invocations.length).toBeGreaterThan(0);
           expect(
             db.sqlite.prepare("SELECT count(*) AS n FROM workflow_run_bindings").get(),
@@ -114,7 +135,6 @@ it.live.each(["pending", "uncertain", "succeeded"] as const)(
           before,
         );
       } finally {
-        vi.unstubAllEnvs();
       }
     }),
 );

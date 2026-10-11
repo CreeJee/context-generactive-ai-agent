@@ -2,18 +2,17 @@ import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
 import { Cause, Effect, Function as EffectFunction } from "effect";
 import { MutableHashMap, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { createHash } from "node:crypto";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { readFileSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { join } from "node:path";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
+import { oauthProtocolFileSystem as fs } from "../oauth/node-runtime.ts";
+import { oauthProtocolPath } from "../oauth/node-runtime.ts";
+import { runProcess } from "./command.ts";
+const run = (
+  command: string,
+  args: readonly string[],
+  options: Omit<Parameters<typeof runProcess>[0], "command" | "args"> = {},
+) => runProcess({ command, args, ...options });
 import type { CodeProposal } from "./contracts.ts";
 
-const run = promisify(execFile);
 export const editableCode = [
   "packages/memory-agent/src/agent/prompt-layout.ts",
   "packages/memory-agent/src/agent/compaction.ts",
@@ -21,39 +20,46 @@ export const editableCode = [
   "packages/memory-agent/src/tools/memory.ts",
   "packages/memory-agent/src/memory/search.ts",
 ] as const;
-export function codeContext(repository: string) {
-  return editableCode.map((path) => ({
-    path,
-    source: readFileSync(join(repository, path), "utf8").slice(0, 15000),
-  }));
-}
+export const codeContext = Effect.fnUntraced(function* (repository: string) {
+  return yield* Effect.forEach(editableCode, (path) =>
+    fs
+      .readFileString(oauthProtocolPath.join(repository, path))
+      .pipe(Effect.map((source) => ({ path, source: source.slice(0, 15000) }))),
+  );
+});
+
 export const applyCodeProposal: {
   (proposal: CodeProposal): (directory: string) => ReturnType<typeof applyCodeProposalBody>;
 } & typeof applyCodeProposalBody = EffectFunction.dual(2, applyCodeProposalBody);
 function applyCodeProposalBody(directory: string, proposal: CodeProposal) {
-  if (
-    proposal.files.length < 1 ||
-    proposal.files.length > 3 ||
-    proposal.edits.length < 1 ||
-    proposal.edits.length > 3
-  )
-    throw new Error("code_edit_budget");
-  const root = realpathSync(directory);
-  const replacements = MutableHashMap.empty<string, string>();
-  for (const edit of proposal.files) {
-    if (!editableCode.some((path) => path === edit.path)) throw new Error("protected_code_path");
-    const file = join(root, edit.path);
-    if (realpathSync(file) !== file) throw new Error("code_symlink_rejected");
-    const source =
-      Option.getOrUndefined(MutableHashMap.get(replacements, file)) ?? readFileSync(file, "utf8");
+  return Effect.gen(function* () {
     if (
-      source.indexOf(edit.before) < 0 ||
-      source.indexOf(edit.before) !== source.lastIndexOf(edit.before)
+      proposal.files.length < 1 ||
+      proposal.files.length > 3 ||
+      proposal.edits.length < 1 ||
+      proposal.edits.length > 3
     )
-      throw new Error("code_anchor_ambiguous");
-    MutableHashMap.set(replacements, file, source.replace(edit.before, edit.after));
-  }
-  for (const [file, source] of replacements) writeFileSync(file, source);
+      return yield* new Cause.UnknownError(new Error("code_edit_budget"));
+    const root = yield* fs.realPath(directory);
+    const replacements = MutableHashMap.empty<string, string>();
+    for (const edit of proposal.files) {
+      if (!editableCode.some((path) => path === edit.path))
+        return yield* new Cause.UnknownError(new Error("protected_code_path"));
+      const file = oauthProtocolPath.join(root, edit.path);
+      if ((yield* fs.realPath(file)) !== file)
+        return yield* new Cause.UnknownError(new Error("code_symlink_rejected"));
+      const source =
+        Option.getOrUndefined(MutableHashMap.get(replacements, file)) ??
+        (yield* fs.readFileString(file));
+      if (
+        source.indexOf(edit.before) < 0 ||
+        source.indexOf(edit.before) !== source.lastIndexOf(edit.before)
+      )
+        return yield* new Cause.UnknownError(new Error("code_anchor_ambiguous"));
+      MutableHashMap.set(replacements, file, source.replace(edit.before, edit.after));
+    }
+    for (const [file, source] of replacements) yield* fs.writeFileString(file, source);
+  });
 }
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 export const prepareCodeCandidate: {
@@ -72,15 +78,25 @@ function prepareCodeCandidateBody(
   return runNativeEffect(
     Effect.gen(function* () {
       const branch = `rrsi/${experimentId}/code`;
-      const directory = join(repository, ".rrsi-local/candidates", experimentId, "code");
-      mkdirSync(join(repository, ".rrsi-local/candidates", experimentId), { recursive: true });
+      const directory = oauthProtocolPath.join(
+        repository,
+        ".rrsi-local/candidates",
+        experimentId,
+        "code",
+      );
+      yield* fs.makeDirectory(
+        oauthProtocolPath.join(repository, ".rrsi-local/candidates", experimentId),
+        {
+          recursive: true,
+        },
+      );
       yield* nativePromise(() =>
         run("git", ["worktree", "add", "-b", branch, directory, "HEAD"], {
           cwd: repository,
           signal,
         }),
       );
-      applyCodeProposal(directory, proposal);
+      yield* applyCodeProposal(directory, proposal);
       const { stdout: diff } = yield* nativePromise(() =>
         run("git", ["diff", "--", ...editableCode], {
           cwd: directory,
@@ -107,7 +123,13 @@ function prepareCodeCandidateBody(
       const { stdout: commit } = yield* nativePromise(() =>
         run("git", ["rev-parse", "HEAD"], { cwd: directory, signal }),
       );
-      const tag = `context-agent-rrsi:code-${createHash("sha256").update(commit).digest("hex").slice(0, 16)}`;
+      const tag = `context-agent-rrsi:code-${Buffer.from(
+        yield* oauthProtocolCrypto
+          .digest("SHA-256", new TextEncoder().encode(commit))
+          .pipe(Effect.orDie),
+      )
+        .toString("hex")
+        .slice(0, 16)}`;
       // Dockerfile/dependencies/evaluator are protected; no candidate command executes on the host.
       yield* nativePromise(() =>
         run("docker", ["build", "-f", "tools/rrsi/Dockerfile", "-t", tag, "."], {

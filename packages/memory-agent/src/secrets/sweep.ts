@@ -7,7 +7,7 @@ import { Nodes } from "../memory/nodes.ts";
 import { Database } from "../db/database.ts";
 import { Indexer } from "../memory/embedding/indexer.ts";
 import { VectorIndex } from "../memory/embedding/vector-index.ts";
-import { runtimeWorker } from "../runtime/resources.ts";
+import { runtimeWorker, runtimeWorkerOptions } from "../runtime/resources.ts";
 import { RedactReply, type RedactRequest } from "./redact-protocol.ts";
 import type { Redaction } from "./redactor.ts";
 
@@ -134,7 +134,7 @@ type Redact = (
  */
 const redactionWorker = Effect.map(
   Effect.acquireRelease(
-    Effect.sync(() => new Worker(runtimeWorker("redact-worker"))),
+    Effect.sync(() => new Worker(runtimeWorker("redact-worker"), runtimeWorkerOptions({}))),
     (worker) => Effect.promise(() => worker.terminate()),
   ),
   (worker): Redact => {

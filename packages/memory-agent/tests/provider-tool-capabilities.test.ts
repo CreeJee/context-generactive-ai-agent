@@ -167,7 +167,9 @@ describe("ProviderToolCapabilityRegistry", () => {
   effectTest.effect("reports descriptor collisions as typed metadata failures", () =>
     Effect.gen(function* () {
       const first = providerToolDescriptors[0];
-      const error = yield* Effect.flip(makeProviderToolCapabilityRegistry([first, first], []));
+      const error = yield* Effect.flip(
+        makeProviderToolCapabilityRegistry({ descriptors: [first, first], models: [] }),
+      );
       expect(error).toMatchObject({
         _tag: "ProviderToolMetadataFailure",
         reason: `duplicate provider tool id: ${first.id}`,

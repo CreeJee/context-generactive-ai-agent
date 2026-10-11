@@ -18,7 +18,9 @@ describe("chat transport errors", () => {
           ),
         ),
       );
-      expect((yield* Effect.flip(call(() => chatFetch("/api/chat")))).cause).toMatchObject({
+      expect(
+        (yield* Effect.flip(call(() => chatFetch("http://localhost/api/chat")))).cause,
+      ).toMatchObject({
         status: 503,
         code: "provider_auth_unavailable",
       } satisfies Partial<ApiError>);

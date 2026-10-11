@@ -33,10 +33,10 @@ describe("host differences", () => {
       const base = yield* fs.realPath(directory);
       yield* fs.makeDirectory(path.join(base, "bin"));
       yield* fs.writeFileString(path.join(base, "bin", "git"), "");
-      expect(findExecutable("git", { PATH: `relative:${path.join(base, "bin")}` }, "linux")).toBe(
-        path.join(base, "bin", "git"),
-      );
-      expect(findExecutable("git", { PATH: "relative" }, "linux")).toBeNull();
+      expect(
+        yield* findExecutable("git", { PATH: `relative:${path.join(base, "bin")}` }, "linux"),
+      ).toBe(path.join(base, "bin", "git"));
+      expect(yield* findExecutable("git", { PATH: "relative" }, "linux")).toBeNull();
 
       const existing = HashSet.fromIterable([
         "C:\\Program Files\\Git\\cmd\\git.exe",
@@ -44,8 +44,8 @@ describe("host differences", () => {
       ]);
       const onWindows = (name: string) =>
         findExecutable(name, windowsEnv, "win32", (path) => HashSet.has(existing, path));
-      expect(onWindows("git")).toBe("C:\\Program Files\\Git\\cmd\\git.exe");
-      expect(onWindows("npx")).toBe("C:\\Users\\me\\AppData\\Roaming\\npm\\npx.cmd");
+      expect(yield* onWindows("git")).toBe("C:\\Program Files\\Git\\cmd\\git.exe");
+      expect(yield* onWindows("npx")).toBe("C:\\Users\\me\\AppData\\Roaming\\npm\\npx.cmd");
     }).pipe(withTestPlatform),
   );
 
@@ -74,22 +74,26 @@ describe("host differences", () => {
     );
   });
 
-  test("commands run through sh -c, or cmd.exe /d /s /c on Windows", () => {
-    expect(shellInvocation("ls", { SHELL: "/bin/zsh" }, "darwin", () => true)).toEqual({
-      file: "/bin/zsh",
-      args: ["-c", "ls"],
-      verbatim: false,
-    });
-    expect(shellInvocation("ls", { SHELL: "zsh" }, "linux", () => true).file).toBe("/bin/sh");
-    expect(shellInvocation("dir /b", windowsEnv, "win32", () => true)).toEqual({
-      file: "C:\\Windows\\System32\\cmd.exe",
-      args: ["/d", "/s", "/c", '"dir /b"'],
-      verbatim: true,
-    });
-    expect(shellInvocation("dir", { SystemRoot: "D:\\Win" }, "win32", () => false).file).toBe(
-      "D:\\Win\\System32\\cmd.exe",
-    );
-  });
+  it.effect("commands run through sh -c, or cmd.exe /d /s /c on Windows", () =>
+    Effect.gen(function* () {
+      expect(yield* shellInvocation("ls", { SHELL: "/bin/zsh" }, "darwin", () => true)).toEqual({
+        file: "/bin/zsh",
+        args: ["-c", "ls"],
+        verbatim: false,
+      });
+      expect((yield* shellInvocation("ls", { SHELL: "zsh" }, "linux", () => true)).file).toBe(
+        "/bin/sh",
+      );
+      expect(yield* shellInvocation("dir /b", windowsEnv, "win32", () => true)).toEqual({
+        file: "C:\\Windows\\System32\\cmd.exe",
+        args: ["/d", "/s", "/c", '"dir /b"'],
+        verbatim: true,
+      });
+      expect(
+        (yield* shellInvocation("dir", { SystemRoot: "D:\\Win" }, "win32", () => false)).file,
+      ).toBe("D:\\Win\\System32\\cmd.exe");
+    }).pipe(withTestPlatform),
+  );
 
   test("archives extract with System32 tar on Windows, whatever tar comes first on PATH", () => {
     expect(tarExecutable({ PATH: "/usr/bin" }, "darwin")).toBe("tar");

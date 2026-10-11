@@ -181,7 +181,7 @@ describe("runCommand", () => {
             (yield* Effect.forEach([process.execPath, holdStdio, pidFile], (part) =>
               Schema.encodeEffect(Schema.fromJsonString(Schema.String))(part),
             )).join(" "),
-            { ...options(cwd), timeoutSeconds: 0.5 },
+            { ...options(cwd), timeoutSeconds: 1.5 },
           );
           pid = Number(yield* fs.readFileString(pidFile));
           expect(result.status).toBe("timed_out");

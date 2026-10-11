@@ -41,12 +41,49 @@ release. Add a tool name to select part of the graph. For example, run
 - 변형은 리터럴 태그를 가진 서로소 유니온으로 표현하고 `switch`로 분기하시오. `"key" in obj` 식 판별은 쓰지 마시오.
 - 확정한 제품과 설계 결정은 [docs/decisions.md](docs/decisions.md)에 날짜와 함께 남기시오.
 
-- Set/Map을 Effect 컬렉션으로 전환할 때 키의 동등성 계약을 먼저 확인하시오. Effect 4의 `HashSet`/`HashMap` 및 mutable 버전은 객체를 구조적으로 해싱·비교하므로, AST·scope·변경 가능한 SDK 객체를 그대로 키로 넣지 마시오. 도메인의 안정적인 문자열/숫자 ID를 우선 사용하고, 참조 동일성이 필요하면 그 계약을 명시한 경계 구현을 사용하시오. `Equal.byReference`는 호출마다 새 프록시를 만들므로 매 조회마다 감싸면 같은 키가 되지 않으며, `byReferenceUnsafe`로 외부 객체의 전역 비교 의미를 바꾸지 마시오. 객체가 값으로 저장되는 경우와 키로 사용되는 경우를 구분하시오.
-
 ## CodeGraph로 코드 탐색하기
 
 - 저장소 루트에 `.codegraph/`가 있으면 코드의 위치·구조·호출 관계를 찾거나 수정할 코드를 읽을 때 `grep`, `rg`, `find`, 파일 직접 읽기보다 CodeGraph를 먼저 사용하시오. 셸을 사용할 수 있어도 이 순서를 지키시오.
 - MCP 도구가 있으면 `codegraph_explore`를 호출하시오. `query`에는 질문, 심볼 이름 또는 파일 경로를 넣으시오. 예: `codegraph_explore({ query: "workspaceInstructions" })`, `codegraph_explore({ query: "packages/memory-agent/src/agent/project-instructions.ts" })`. 다른 저장소를 탐색할 때는 `projectPath`에 그 저장소의 절대 경로를 지정하시오.
 - 결과의 줄 번호가 있는 소스와 호출 관계를 탐색 근거로 사용하시오. 필요한 코드가 빠졌으면 더 구체적인 심볼이나 파일 경로로 다시 질의하시오. 이미 반환된 코드를 확인하기 위해 같은 파일을 다시 읽거나 grep하지 마시오.
-- CodeGraph가 다루지 않는 문서·설정·일반 텍스트, 결과에서 빠진 특정 내용, 재색인 대기 경고가 표시된 파일은 직접 읽거나 검색할 수 있다. `.codegraph/`가 없거나 CodeGraph 호출이 실패하면 일반 파일 도구와 `rg`를 사용하고 그 이유를 밝히시오. 인덱스를 임의로 생성하지 마시오.
-- 동기화가 안되어있으면 `codegraph init` 를 실행해줘
+- CodeGraph가 다루지 않는 문서·설정·일반 텍스트, 결과에서 빠진 특정 내용, 재색인 대기 경고가 표시된 파일은 직접 읽거나 검색할 수 있다.
+- 동기화가 안되어있으면 `codegraph init` 를 실행해함
+- 타입으로 확인되지않는 테스트만 만들어야하며, 타입으로 확인이 되는경우 과감히 지워야함
+
+## Effect 지침
+
+이 패키지의 에이전트 백엔드 구현·수리·리팩터링에 Effect다운 설계와 코드 스타일을 적용한다. 아래 의존성 문서 읽기 지침은 이 패키지에서 Effect 코드를 작성하거나 변경할 때 적용한다.
+
+- 서비스와 의존성은 `Context`와 `Layer`로 구성하고 내부 실행 흐름은 Effect로 합성한다.
+- 예상 가능한 실패는 타입이 명시된 오류로 모델링하고 외부 입력은 경계에서 `Schema`로 검증한다. `left`/`right`를 직접 확인하는 대신 Effect의 합성·오류 처리 API를 사용한다.
+- 자원 획득·해제는 `Scope`와 `acquireRelease`로 관리하고 동시 실행·취소·중단은 Fiber와 interruption으로 처리한다.
+- 새 코드와 변경 코드의 검토·검증에서 적용 범위와 남은 위반을 확인한다. 기존 보호 장치나 실행 중인 작업을 제거하는 구실로 삼지 않는다.
+- Effect 코드를 작성하기 전에 저장소 루트 기준 `node_modules/effect/AGENTS.md`를 전체 읽고 관련 링크를 따른다. 그 문서에 없는 API는 같은 설치본의 `node_modules/effect/src`에서 확인한다.
+
+Effect 가이드문서: 설치된 `node_modules/effect/AGENTS.md`와 그 문서에서 연결하는 예시·소스. 다른 버전의 외부 가이드를 현재 설치본의 API 근거로 사용하지 않는다.
+
+가능한 모든 로직을 Effect 답게 작성하며 항상 퍼스트파티에서 연동된 모듈이 있는지 확인하시오
+
+## Typed error와 취소 계약
+
+- 예상 가능한 도메인·저장소·공급자·프로토콜·프로세스 실패는 `Schema.TaggedError`와 리터럴 태그를 가진 reason 모델로 정의한다. 공개 Effect의 오류 채널에 실제 실패 타입을 포함하고, `Error.message` 문자열을 오류 식별이나 분기 계약으로 사용하지 않는다.
+- 일반 `throw new Error(...)`로 예상 실패를 표현하지 않는다. Effect 내부 로직은 `Effect.fail` 또는 generator의 `return yield* new TypedError(...)`로 실패를 오류 채널에 전달한다. Effect를 받을 수 없는 SDK·callback 등 좁은 상호운용 경계에서는 정의된 typed error를 사용할 수 있다. 외부 라이브러리의 예외·Promise rejection은 입출력 경계의 `Effect.try`·`tryPromise`·`callback`에서 변환한다.
+- 외부 Promise·callback·파일·DB·HTTP 경계에서 실패를 타입이 있는 오류로 변환한다. `Effect.promise`나 `Effect.sync`로 예상 가능한 실패를 defect에 숨기지 않는다. 결함과 예상 실패를 구분하고, 실패를 `void`나 임의 기본값으로 삼켜 실행 성공으로 보이게 하지 않는다.
+- 오류 처리는 `Effect.catchTag`·`catchReason` 등 설치본의 합성 API로 작성한다. 실제 원인과 실패 단계를 유지하며, 취소 후 발생한 프로세스 종료·연결 오류가 먼저 발생한 원인을 덮어쓰지 않게 한다.
+- typed error를 일반 오류·기본값으로 바꾸거나 태그·reason·오류 채널을 지우는 포괄적 `try/catch` 흐름은 제거한다. 처리할 수 있는 실패만 태그·reason으로 분기하고 나머지는 전파한다. 자원 정리는 finalizer로 분리하며, 외부 예외를 typed error로 변환하는 좁은 입출력 경계와 내부 오류를 삼키는 비즈니스 catch를 구분한다.
+- 취소와 timeout은 Fiber interruption과 소유자의 Scope 수명으로 처리한다. 사용자 중단·시간 제한 등 제품에 필요한 취소 사유는 명시적으로 기록하되, interruption을 일반 도메인 실패로 바꾸거나 종료 후 작업이 계속되게 하지 않는다.
+- 사용자·로그·영속 기록에는 검증된 오류 코드와 필요한 안전한 메타데이터만 전달한다. 공급자 오류 본문·프롬프트·모델 ID·endpoint·자격증명을 그대로 노출하지 않는다. 불확실한 오류를 메시지 키워드만으로 특정 도메인 원인이라고 추측하지 않는다.
+
+## 리뷰 가능한 구조와 비동기 수명
+
+- 프로토콜 입출력·디코딩, 도메인 판단, 작업 실행·취소를 책임별로 분리한다. 각 함수와 서비스에서 상태의 소유자, 실패 경로, 자원 종료 경로를 읽을 수 있게 작성한다. 분리는 실제 책임 경계를 기준으로 하고 단순 전달용 계층은 추가하지 않는다.
+- 비동기 대기나 작업 관리가 필요하면 현재 설치된 Effect의 기본 도구를 먼저 검토한다. Promise resolver 목록, 실행 중인 작업 Map, 타이머와 AbortController를 조합해 별도 작업 관리기를 만들기 전에 표준 도구로 표현할 수 있는지 확인한다.
+- 한 번 도착하는 값이나 요청별 응답을 기다릴 때는 `Deferred`를 사용한다. 요청 ID와 대기자를 연결하는 Map은 필요할 수 있지만, 응답 대기의 성공·실패·취소는 `Deferred`와 Effect의 수명 관리로 표현한다. 대기가 취소되거나 연결이 종료되면 등록을 정리하고, 연결 종료 시 남은 대기자가 무한히 기다리지 않게 한다.
+- 키별로 실행 중인 fiber를 시작·교체·중단해야 할 때는 `FiberMap`을 사용한다. 응답 매칭과 실행 작업 관리를 구분하고, 단일 작업이나 단순 조회용 Map에 `FiberMap`을 적용하지 않는다.
+- 생산자/소비자 전달과 처리량 제한에는 `Queue`와 bounded concurrency를, 반복 실행에는 `Schedule`을 검토한다. 비동기 경계를 넘는 공유 상태는 `Ref` 등으로 소유권과 갱신 규칙을 명시한다. 도구의 이름만 바꾸는 치환보다 필요한 동작에 맞는 최소 구성을 선택한다.
+- 로직은 입력과 결과가 명시된 독립적인 Effect로 구성해 병렬 실행할 수 있게 한다. 서로 의존하지 않는 조회·평가에는 `Effect.all` 또는 `Effect.forEach`와 명시적인 concurrency 제한을 사용한다. 자원·모델·DB의 처리량을 고려하고 무제한 병렬화를 기본값으로 두지 않는다.
+- 작업별 상태와 자원을 분리해 전역 mutable state, `process.env` 변경, 완료 순서에 의존하지 않게 한다. 실행 순서가 아니라 요청·작업 ID로 결과를 연결한다. 병렬 작업의 실패가 전체 실행을 취소하는지, 개별 실패 결과로 수집되는지 명시한다.
+- 순차 처리는 실제 데이터 의존성이나 공유 상태의 일관성이 필요한 경계에 둔다. 토큰 예산 예약·차감, 버전 채택, sealed corpus 소비 같은 상태 전이는 해당 소유자에서 원자적으로 처리한다. 긴 모델 호출·평가 전체를 lock 안에 넣어 독립 작업까지 직렬화하지 않는다.
+- 백그라운드 작업은 소유자의 `Scope`에 묶고, 파일·스트림·리스너·프로세스는 `Effect.acquireRelease` 등으로 정리한다. 정상 완료, 실패, interruption, timeout, 연결 종료에서 무엇이 종료되고 해제되는지 명시한다.
+- 외부 Promise/callback API와 Effect의 변환은 입출력 경계에 모은다. callback API에는 `Effect.callback`의 interruption cleanup을, 취소 가능한 Promise API에는 전달받은 `AbortSignal`을 연결한다. 내부 도메인 흐름은 Effect로 유지하고, 기존 컨텍스트나 Scope를 잃는 임의의 `runPromise` 호출을 추가하지 않는다.
+- 동시성 테스트는 응답 순서가 바뀌는 경우, 취소·연결 종료 후 대기와 자원이 남지 않는 경우 등 실제 계약을 검증한다. 경쟁 조건은 gate/`Deferred`로 재현하고 임의의 sleep에 의존하지 않는다.

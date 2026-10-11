@@ -1,22 +1,26 @@
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { createHash } from "node:crypto";
+import { sha256 as hashSha256 } from "../runtime/synchronous-crypto.ts";
 import {
   constants,
   closeSync,
   fstatSync,
-  mkdtempSync,
   openSync,
   readFileSync,
   realpathSync,
-  rmSync,
-  writeFileSync,
   // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { join } from "node:path";
+import { path as platformPath } from "../runtime/synchronous-path.ts";
+const { join } = platformPath;
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { Effect, Predicate, Schema } from "effect";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
+import { Effect, FileSystem, ManagedRuntime, Predicate, Schema } from "effect";
 import type * as NativeArtifact from "./native-artifact-entry.ts";
+
+// Stateless official host service; acquisitions below attach cleanup to caller Scope.
+const filesystemRuntime = ManagedRuntime.make(NodeFileSystem.layer);
+const fs = filesystemRuntime.runSync(FileSystem.FileSystem);
+const stagingError = (cause: import("effect/PlatformError").PlatformError) =>
+  NativeArtifactLoadError.make({ reason: "staging", cause });
 
 /** Loader ABI, not a version claim about the entry module or its transitive dependencies. */
 export const nativeFactoryLoaderContract = "native-factories/v1";
@@ -93,25 +97,28 @@ export const loadTrustedNativeArtifact = Effect.fn("loadTrustedNativeArtifact")(
       closeSync(fd);
     }
   });
-  if (createHash("sha256").update(bytes).digest("hex") !== descriptor.sha256)
+  if (hashSha256(bytes) !== descriptor.sha256)
     return yield* NativeArtifactLoadError.make({ reason: "integrity", cause: "SHA256 mismatch" });
+  const parent = yield* fs
+    .realPath(options.ownerControlledDirectory)
+    .pipe(Effect.mapError(stagingError));
+  if (parent !== options.ownerControlledDirectory)
+    return yield* NativeArtifactLoadError.make({
+      reason: "staging",
+      cause: "Noncanonical staging parent",
+    });
   const directory = yield* Effect.acquireRelease(
-    boundary("staging", () => {
-      const parent = realpathSync(options.ownerControlledDirectory);
-      if (parent !== options.ownerControlledDirectory)
-        throw new Error("Noncanonical staging parent");
-      return mkdtempSync(join(parent, ".verified-native-"));
-    }),
+    fs
+      .makeTempDirectory({ directory: parent, prefix: ".verified-native-" })
+      .pipe(Effect.mapError(stagingError)),
     (directory) =>
-      boundary("staging", () => rmSync(directory, { recursive: true, force: true })).pipe(
-        Effect.orDie,
-      ),
+      fs
+        .remove(directory, { recursive: true, force: true })
+        .pipe(Effect.mapError(stagingError), Effect.orDie),
   );
-  const stagedUrl = yield* boundary("staging", () => {
-    const file = join(directory, "artifact.mjs");
-    writeFileSync(file, bytes, { flag: "wx", mode: 0o400 });
-    return pathToFileURL(file).href;
-  });
+  const file = join(directory, "artifact.mjs");
+  yield* fs.writeFile(file, bytes, { flag: "wx", mode: 0o400 }).pipe(Effect.mapError(stagingError));
+  const stagedUrl = pathToFileURL(file).href;
   // Native import cannot be cancelled. Wait for evaluation to settle before scope removes bytes.
   const module: unknown = yield* Effect.tryPromise({
     try: () => import(/* @vite-ignore */ stagedUrl),

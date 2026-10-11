@@ -43,8 +43,16 @@ describe("paid pilot OpenAI token preflight", () => {
       model: "gpt-5.6-sol",
       reasoningEffort: "low" as const,
     };
-    const withTools = subscriptionRequest("openai", selection, options);
-    const withoutTools = subscriptionRequest("openai", selection, { ...options, tools: [] });
+    const withTools = subscriptionRequest({
+      provider: "openai",
+      selection: selection,
+      options: options,
+    });
+    const withoutTools = subscriptionRequest({
+      provider: "openai",
+      selection: selection,
+      options: { ...options, tools: [] },
+    });
     expect(withTools).toContain('"parameters":');
     const large = estimateRequestTokens(withTools, selection.model);
     const small = estimateRequestTokens(withoutTools, selection.model);

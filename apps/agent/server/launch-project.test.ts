@@ -2,6 +2,8 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { it } from "@effect/vitest";
 import { Cause, Effect, FileSystem, Layer, Path, Schema } from "effect";
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { describe, expect } from "vite-plus/test";
@@ -35,32 +37,42 @@ describe("launch folder", () => {
           yield* fs.makeDirectory(join(storage, "runtime"), { recursive: true });
           yield* fs.writeFileString(join(project, "README.md"), "");
 
-          expect(launchFolder(undefined, project, storage, null)).toEqual({
+          expect(yield* sdkCall(() => launchFolder(undefined, project, storage, null))).toEqual({
             kind: "folder",
             root: project,
           });
-          expect(launchFolder("src", project, storage, null)).toEqual({
+          expect(yield* sdkCall(() => launchFolder("src", project, storage, null))).toEqual({
             kind: "folder",
             root: join(project, "src"),
           });
           // A double-click starts in "/", a plain terminal in the home folder: neither is a project.
-          expect(launchFolder(undefined, "/", storage, null)).toEqual({ kind: "none" });
-          expect(launchFolder(undefined, homedir(), storage, null)).toEqual({ kind: "none" });
-          expect(launchFolder(undefined, join(storage, "runtime"), storage, null)).toEqual({
+          expect(yield* sdkCall(() => launchFolder(undefined, "/", storage, null))).toEqual({
+            kind: "none",
+          });
+          expect(yield* sdkCall(() => launchFolder(undefined, homedir(), storage, null))).toEqual({
+            kind: "none",
+          });
+          expect(
+            yield* sdkCall(() => launchFolder(undefined, join(storage, "runtime"), storage, null)),
+          ).toEqual({
             kind: "none",
           });
           // A Windows double-click starts in the executable's folder; naming that folder still opens it.
-          expect(launchFolder(undefined, project, storage, project)).toEqual({ kind: "none" });
-          expect(launchFolder(".", project, storage, project)).toEqual({
+          expect(yield* sdkCall(() => launchFolder(undefined, project, storage, project))).toEqual({
+            kind: "none",
+          });
+          expect(yield* sdkCall(() => launchFolder(".", project, storage, project))).toEqual({
             kind: "folder",
             root: project,
           });
           // A folder named on the command line must exist and be a folder.
-          expect(launchFolder("missing", project, storage, null)).toEqual({
+          expect(yield* sdkCall(() => launchFolder("missing", project, storage, null))).toEqual({
             kind: "invalid",
             path: join(project, "missing"),
           });
-          expect(launchFolder("README.md", project, storage, null).kind).toBe("invalid");
+          expect(
+            (yield* sdkCall(() => launchFolder("README.md", project, storage, null))).kind,
+          ).toBe("invalid");
         }),
       ),
   );
@@ -69,50 +81,38 @@ describe("launch folder", () => {
 describe("opening the folder on the app", () => {
   it.live("adds it, or finds it when it is registered already, and reports refusals", () =>
     Effect.gen(function* () {
-      const runNative = Effect.runPromiseWith(yield* Effect.context<never>());
       const projects = [{ id: "p-1", root: "/work/known" }];
-      const server = createServer((request, response) => {
-        const reply = (status: number, json: string) =>
-          response.writeHead(status, { "content-type": "application/json" }).end(json);
-        const rejected = (reason: string) =>
-          reply(422, JSON.stringify({ error: "project_rejected", reason }));
-        if (request.method === "GET") return reply(200, JSON.stringify(projects));
-        let text = "";
-        request.on("data", (chunk: Buffer) => (text += chunk.toString()));
-        request.on("end", () => {
-          void runNative(
-            Effect.gen(function* () {
-              const { root } = yield* Schema.decodeEffect(
-                Schema.fromJsonString(Schema.Struct({ root: Schema.String })),
-              )(text);
-              if (root === "/work/known") return rejected("already_registered");
-              if (root.startsWith("/storage")) return rejected("overlaps_storage");
-              reply(
-                201,
-                yield* Schema.encodeEffect(
-                  Schema.fromJsonString(Schema.Struct({ id: Schema.String, root: Schema.String })),
-                )({ id: "p-2", root }),
-              );
-            }).pipe(Effect.catch(() => Effect.sync(() => reply(400, "{}")))),
-          );
-        });
-      });
-      yield* Effect.acquireRelease(
-        Effect.callback<void, Cause.UnknownError>((resume) => {
-          const failed = (cause: Error) => resume(Effect.fail(new Cause.UnknownError(cause)));
-          server.once("error", failed);
-          server.listen(0, "127.0.0.1", () => resume(Effect.void));
-          return Effect.sync(() => server.off("error", failed));
-        }),
-        () =>
-          Effect.callback<void>((resume) => {
-            server.close(() => resume(Effect.void));
-          }),
+      const serverServices = yield* Layer.build(
+        Layer.fresh(NodeHttpServer.layer(createServer, { port: 0, host: "127.0.0.1" })),
       );
-      const { port } = yield* Schema.decodeUnknownEffect(Schema.Struct({ port: Schema.Int }))(
-        server.address(),
+      const server = yield* Effect.provideContext(HttpServer.HttpServer, serverServices);
+      yield* Effect.provideContext(
+        HttpServer.serveEffect(
+          Effect.gen(function* () {
+            const request = yield* HttpServerRequest.HttpServerRequest;
+            const json = (
+              value:
+                | typeof projects
+                | { error: string; reason: string }
+                | { id: string; root: string },
+              status: number,
+            ) => HttpServerResponse.json(value, { status });
+            const rejected = (reason: string) => json({ error: "project_rejected", reason }, 422);
+            if (request.method === "GET") return yield* json(projects, 200);
+            const { root } = yield* Schema.decodeEffect(
+              Schema.fromJsonString(Schema.Struct({ root: Schema.String })),
+            )(yield* request.text);
+            if (root === "/work/known") return yield* rejected("already_registered");
+            if (root.startsWith("/storage")) return yield* rejected("overlaps_storage");
+            return yield* json({ id: "p-2", root }, 201);
+          }).pipe(Effect.catch(() => HttpServerResponse.json({}, { status: 400 }))),
+        ),
+        serverServices,
       );
-      const baseUrl = `http://127.0.0.1:${port}`;
+      const address = server.address;
+      if (address._tag === "UnixPathAddress")
+        return yield* Effect.die(new Error("HTTP fixture requires TCP"));
+      const baseUrl = `http://127.0.0.1:${address.port}`;
 
       expect(yield* sdkCall(() => isThisApp(baseUrl))).toBe(true);
       expect(yield* sdkCall(() => isThisApp("http://127.0.0.1:1"))).toBe(false);

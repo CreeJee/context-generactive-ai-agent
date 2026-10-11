@@ -1,8 +1,8 @@
-import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
+import { nativePromise } from "../runtime/native-effect.ts";
+import { runOAuthNodeEffect } from "./node-runtime.ts";
 import { Effect, MutableHashMap, Option } from "effect";
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
+import { Crypto } from "effect";
 import type { DatabaseSync } from "node:sqlite";
 import {
   createProfileCredentialStore,
@@ -24,7 +24,22 @@ import {
 
 /** Synchronous selection at request/run creation; each profile owns its client and refresh lock. */
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function createAccountBoundSubscriptionClients(
+export function createAccountBoundSubscriptionClients(options: {
+  readonly sqlite: DatabaseSync;
+  readonly provider: OAuthProvider;
+  readonly createClient?: ((id: string | null) => SubscriptionOAuthClient) | undefined;
+  readonly accounts?: ProfileCredentialStore | undefined;
+  readonly legacy?: CredentialStore | undefined;
+}) {
+  return createAccountBoundSubscriptionClientsBody(
+    options.sqlite,
+    options.provider,
+    options.createClient,
+    options.accounts,
+    options.legacy,
+  );
+}
+function createAccountBoundSubscriptionClientsBody(
   sqlite: DatabaseSync,
   provider: OAuthProvider,
   createClient: (id: string | null) => SubscriptionOAuthClient = (id) => {
@@ -40,10 +55,11 @@ export function createAccountBoundSubscriptionClients(
 ) {
   const cache = MutableHashMap.empty<string, SubscriptionOAuthClient>();
   const selectedId = () =>
-    listOAuthProfiles(sqlite, provider).find((profile) => profile.selected)?.id ?? null;
+    listOAuthProfiles({ sqlite: sqlite, provider: provider }).find((profile) => profile.selected)
+      ?.id ?? null;
   const clientFor = (id: string | null) => {
     const key = id ?? "__legacy__";
-    const configured = listOAuthProfiles(sqlite, provider);
+    const configured = listOAuthProfiles({ sqlite: sqlite, provider: provider });
     for (const cachedId of MutableHashMap.keys(cache)) {
       if (
         cachedId !== key &&
@@ -61,7 +77,7 @@ export function createAccountBoundSubscriptionClients(
     return client;
   };
   const legacyAllowed = () =>
-    listOAuthProfiles(sqlite, provider).length === 0 &&
+    listOAuthProfiles({ sqlite: sqlite, provider: provider }).length === 0 &&
     !isTruthy(
       sqlite.prepare("SELECT provider FROM oauth_legacy_removed WHERE provider = ?").get(provider),
     );
@@ -94,9 +110,9 @@ export function createAccountBoundSubscriptionClients(
       // Explicit login always creates a fresh slot, including after legacy account removal.
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
       startLogin: () =>
-        runNativeEffect(
+        runOAuthNodeEffect(
           Effect.gen(function* () {
-            const id = randomUUID();
+            const id = yield* (yield* Crypto.Crypto).randomUUIDv4();
             const attempt = yield* nativePromise(() => clientFor(id).startLogin()).pipe(
               Effect.catchCause((cause) =>
                 Effect.sync(() => MutableHashMap.remove(cache, id)).pipe(
@@ -106,7 +122,7 @@ export function createAccountBoundSubscriptionClients(
             );
             let cancelled = false;
             // The login SDK owns this completion and its explicit cancel callback across requests.
-            const completed = runNativeEffect(
+            const completed = runOAuthNodeEffect(
               nativePromise(() => attempt.completed).pipe(
                 Effect.flatMap((connection) =>
                   Effect.gen(function* () {
@@ -127,7 +143,11 @@ export function createAccountBoundSubscriptionClients(
                 Effect.catchCause((cause) =>
                   Effect.gen(function* () {
                     // A published account survives a selection failure or late cancellation.
-                    if (!listOAuthProfiles(sqlite, provider).some((profile) => profile.id === id)) {
+                    if (
+                      !listOAuthProfiles({ sqlite: sqlite, provider: provider }).some(
+                        (profile) => profile.id === id,
+                      )
+                    ) {
                       yield* nativePromise(() => accounts.remove(provider, id));
                       MutableHashMap.remove(cache, id);
                     }
@@ -147,7 +167,7 @@ export function createAccountBoundSubscriptionClients(
           }),
         ),
       disconnect: () =>
-        runNativeEffect(
+        runOAuthNodeEffect(
           Effect.gen(function* () {
             const id = selectedId();
             if (id !== null) {

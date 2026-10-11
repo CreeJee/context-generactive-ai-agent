@@ -1,11 +1,9 @@
 import { Cause, DateTime, Effect, Stream } from "effect";
-import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
+import { runNativeEffect } from "../runtime/native-effect.ts";
 import { nativeStream } from "../runtime/native-stream.ts";
 import { isTruthy } from "../truthy.ts";
 import type { StreamChunk, StreamDurability } from "@tanstack/ai";
 import type { DatabaseSync } from "node:sqlite";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { setTimeout } from "node:timers/promises";
 
 const namespace = "sdk-stream:v1:";
 const closedKey = `${namespace}closed`;
@@ -166,7 +164,7 @@ export function sqliteStreamDurability(input: {
               let pending: ReturnType<typeof entries> = [];
               let closed = false;
               return Effect.gen(function* () {
-                while (!signal?.aborted) {
+                while (signal?.aborted !== true) {
                   const entry = pending.shift();
                   if (entry !== undefined) {
                     cursor = yield* Effect.try({
@@ -190,14 +188,18 @@ export function sqliteStreamDurability(input: {
                   pending = page.entries;
                   closed = page.closed;
                   if (pending.length > 0 || closed) continue;
-                  yield* nativePromise(() => setTimeout(20, undefined, { signal })).pipe(
-                    Effect.catch((error) =>
-                      Effect.gen(function* () {
-                        if (signal?.aborted) return yield* Cause.done();
-                        return yield* error;
+                  const pause = Effect.sleep("20 millis");
+                  if (signal === undefined) yield* pause;
+                  else
+                    yield* Effect.raceFirst(
+                      pause,
+                      Effect.callback<never, Cause.Done>((resume) => {
+                        const abort = () => resume(Cause.done());
+                        signal.addEventListener("abort", abort, { once: true });
+                        if (signal.aborted) abort();
+                        return Effect.sync(() => signal.removeEventListener("abort", abort));
                       }),
-                    ),
-                  );
+                    );
                 }
                 return yield* Cause.done();
               });

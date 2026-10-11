@@ -1,13 +1,25 @@
+import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { isTruthy } from "../../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { existsSync, mkdirSync } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { dirname, join } from "node:path";
+
 import { Worker } from "node:worker_threads";
-import { Context, Data, Deferred, HashMap, Ref, Effect, Layer, Option, Schema } from "effect";
+import {
+  Context,
+  Data,
+  Deferred,
+  FileSystem,
+  HashMap,
+  Path,
+  Ref,
+  Effect,
+  Layer,
+  Option,
+  Schema,
+} from "effect";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { installArchive } from "../../runtime/archive.ts";
-import { runtimeWorker } from "../../runtime/resources.ts";
+import { runtimeWorker, runtimeWorkerOptions } from "../../runtime/resources.ts";
 
 export class MorphAnalysisFailed extends Data.TaggedError("MorphAnalysisFailed")<{
   readonly reason: string;
@@ -52,20 +64,29 @@ const decodeReply = Schema.decodeUnknownOption(Reply);
 
 /** Downloads and extracts the model once, into `<storage>/models/kiwi-<version>`. */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-const ensureModel = Effect.fn("MorphAnalyzer.ensureModel")(function* (storageRoot: string) {
-  const root = join(storageRoot, "models", `kiwi-${kiwiModel.version}`);
-  const modelDirectory = join(root, kiwiModel.directory);
-  if (existsSync(join(modelDirectory, "cong.mdl"))) return modelDirectory;
-  mkdirSync(dirname(root), { recursive: true, mode: 0o700 });
-  const failure = yield* Effect.tryPromise(() =>
-    installArchive({ url: kiwiModel.url, algorithm: "sha256", digest: kiwiModel.sha256 }, root),
-  );
-  if (failure !== null)
-    return yield* new MorphAnalysisFailed({
-      reason: `Kiwi model install failed (${failure.reason}): ${failure.detail}`,
-    });
-  return modelDirectory;
-});
+const ensureModel = Effect.fn("MorphAnalyzer.ensureModel")(
+  function* (storageRoot: string) {
+    const fs = yield* FileSystem.FileSystem;
+    const paths = yield* Path.Path;
+    const root = paths.join(storageRoot, "models", `kiwi-${kiwiModel.version}`);
+    const modelDirectory = paths.join(root, kiwiModel.directory);
+    if (yield* fs.exists(paths.join(modelDirectory, "cong.mdl"))) return modelDirectory;
+    yield* fs.makeDirectory(paths.dirname(root), { recursive: true, mode: 0o700 });
+    const failure = yield* Effect.tryPromise(() =>
+      installArchive({ url: kiwiModel.url, algorithm: "sha256", digest: kiwiModel.sha256 }, root),
+    );
+    if (failure !== null)
+      return yield* new MorphAnalysisFailed({
+        reason: `Kiwi model install failed (${failure.reason}): ${failure.detail}`,
+      });
+    return modelDirectory;
+  },
+  Effect.mapError((cause) =>
+    cause instanceof MorphAnalysisFailed
+      ? cause
+      : new MorphAnalysisFailed({ reason: String(cause) }),
+  ),
+);
 
 /**
  * Kiwi in a worker, started on first use and kept. Building the model peaks at ~900 MB and settles
@@ -74,7 +95,7 @@ const ensureModel = Effect.fn("MorphAnalyzer.ensureModel")(function* (storageRoo
  */
 const makeKiwi = Effect.gen(function* () {
   const storage = yield* StorageRoot;
-  const context = yield* Effect.context<never>();
+  const context = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
   const runSync = Effect.runSyncWith(context);
   const runPromise = Effect.runPromiseWith(context);
   let worker: Worker | null = null;
@@ -99,7 +120,7 @@ const makeKiwi = Effect.gen(function* () {
       ensureModel(storage.path).pipe(
         Effect.map((modelDirectory) => {
           const created = new Worker(runtimeWorker("kiwi-worker"), {
-            workerData: { modelDirectory },
+            ...runtimeWorkerOptions({ modelDirectory }),
           });
           created.on("message", (message) => {
             const decoded = decodeReply(message);
@@ -215,7 +236,9 @@ export class MorphAnalyzer extends Context.Service<MorphAnalyzer, MorphAnalyzerA
   "memory-agent/memory/morph/analyzer/MorphAnalyzer",
 ) {
   /** Kiwi in a worker thread, with its model downloaded to `<storage>/models` on first use. */
-  static readonly kiwi = Layer.effect(MorphAnalyzer, makeKiwi);
+  static readonly kiwi = Layer.effect(MorphAnalyzer, makeKiwi).pipe(
+    Layer.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)),
+  );
 
   /** No analyzer: search runs without morpheme terms. */
   static readonly disabled = Layer.succeed(MorphAnalyzer, {

@@ -5,14 +5,19 @@ export interface ReportFields {
   actual: string;
 }
 
-// Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function reportText(
-  fields: ReportFields,
-  createdAt: string,
-  evidence: readonly { label: string; source: string; text: string }[] = [],
-  unavailable: readonly string[] = [],
-  origin?: { projectId: string; sessionId: string },
-): string {
+export function reportText({
+  fields,
+  createdAt,
+  evidence = [],
+  unavailable = [],
+  origin,
+}: {
+  readonly fields: ReportFields;
+  readonly createdAt: string;
+  readonly evidence?: readonly { label: string; source: string; text: string }[];
+  readonly unavailable?: readonly string[];
+  readonly origin?: { projectId: string; sessionId: string };
+}): string {
   return [
     "# Context Agent 문제 제보",
     `작성 시각: ${createdAt}`,

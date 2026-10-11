@@ -1,13 +1,15 @@
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { renameSync, statSync } from "node:fs";
+import { NodeFileSystem } from "@effect/platform-node";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { posix, win32 } from "node:path";
+import { posix, win32 } from "./synchronous-path.ts";
 import {
   Array as EffectArray,
   Effect,
+  FileSystem,
+  ManagedRuntime,
   Function as EffectFunction,
   HashSet,
   Option,
@@ -60,28 +62,33 @@ function findExecutableBody(
   name: string,
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
-  isFile: (path: string) => boolean = fileExists,
-): string | null {
-  const path = pathModule(platform);
-  const extensions =
-    platform === "win32" ? ["", ...(env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";")] : [""];
-  for (const directory of searchPath(env, platform).split(path.delimiter)) {
-    if (!path.isAbsolute(directory)) continue;
-    for (const extension of extensions) {
-      const candidate = path.join(directory, `${name}${extension.toLowerCase()}`);
-      if (isFile(candidate)) return candidate;
+  isFile?: (path: string) => boolean,
+) {
+  return Effect.gen(function* () {
+    const path = pathModule(platform);
+    const extensions =
+      platform === "win32" ? ["", ...(env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";")] : [""];
+    for (const directory of searchPath(env, platform).split(platform === "win32" ? ";" : ":")) {
+      if (!path.isAbsolute(directory)) continue;
+      for (const extension of extensions) {
+        const candidate = path.join(directory, `${name}${extension.toLowerCase()}`);
+        if (
+          yield* isFile === undefined ? fileExists(candidate) : Effect.sync(() => isFile(candidate))
+        )
+          return candidate;
+      }
     }
-  }
-  return null;
+    return null;
+  });
 }
 
-function fileExists(path: string) {
-  try {
-    return statSync(path).isFile();
-  } catch {
-    return false;
-  }
-}
+const fileExists = Effect.fn("Host.fileExists")(function* (path: string) {
+  const fs = yield* FileSystem.FileSystem;
+  return yield* fs.stat(path).pipe(
+    Effect.map((info) => info.type === "File"),
+    Effect.orElseSucceed(() => false),
+  );
+});
 
 /**
  * The system `tar`. On Windows that is bsdtar in System32 (Windows 10 1803 and later), named by
@@ -130,30 +137,36 @@ interface RenameOptions {
   readonly rename?: (from: string, to: string) => void;
 }
 
+const renameRuntime = ManagedRuntime.make(NodeFileSystem.layer);
+
 /** Native archive installer entry point; Effect callers retain the caller clock and interruption. */
 export function renameWhenReleased(
   options: RenameOptions & { readonly from: string },
 ): Promise<void> {
-  return Effect.runPromise(renameWhenReleasedEffect(options));
+  return renameRuntime.runPromise(renameWhenReleasedEffect(options));
 }
 
 export const renameWhenReleasedEffect = Effect.fn("renameWhenReleased")(function* (
   options: RenameOptions & { readonly from: string },
 ) {
-  const { from, to, platform = process.platform, rename = renameSync } = options;
-  return yield* Effect.try({
-    try: () => rename(from, to),
-    catch: (cause) => {
-      const decoded = Schema.decodeUnknownOption(ErrorCode)(cause);
-      if (Option.isNone(decoded)) throw cause;
-      return DirectoryRenameFailed.make({
-        from,
-        to,
-        reason: { _tag: "RenameFailed", code: decoded.value.code },
-        cause,
-      });
-    },
-  }).pipe(
+  const { from, to, platform = process.platform, rename } = options;
+  const mapFailure = (cause: unknown) => {
+    const decoded = Schema.decodeUnknownOption(ErrorCode)(cause);
+    if (Option.isNone(decoded)) throw cause;
+    return DirectoryRenameFailed.make({
+      from,
+      to,
+      reason: { _tag: "RenameFailed", code: decoded.value.code },
+      cause,
+    });
+  };
+  const operation =
+    rename === undefined
+      ? Effect.flatMap(FileSystem.FileSystem, (fs) =>
+          fs.rename(from, to).pipe(Effect.mapError((error) => mapFailure(error.cause))),
+        )
+      : Effect.try({ try: () => rename(from, to), catch: mapFailure });
+  return yield* operation.pipe(
     Effect.retry({
       times: 19,
       schedule: Schedule.spaced("500 millis"),
@@ -231,7 +244,7 @@ function helperEnvironmentBody(
 ) {
   const unique = (directories: readonly string[]) => EffectArray.dedupe(directories);
   if (platform !== "win32")
-    return { PATH: unique([...searchDirectories, "/usr/bin", "/bin"]).join(posix.delimiter) };
+    return { PATH: unique([...searchDirectories, "/usr/bin", "/bin"]).join(":") };
   const systemRoot = env.SystemRoot ?? env.SYSTEMROOT ?? "C:\\Windows";
   return {
     ...pick(
@@ -239,9 +252,7 @@ function helperEnvironmentBody(
       options.user ? [...windowsSystemVariables, ...windowsUserVariables] : windowsSystemVariables,
     ),
     SystemRoot: systemRoot,
-    Path: unique([...searchDirectories, win32.join(systemRoot, "System32"), systemRoot]).join(
-      win32.delimiter,
-    ),
+    Path: unique([...searchDirectories, win32.join(systemRoot, "System32"), systemRoot]).join(";"),
   };
 }
 
@@ -281,38 +292,25 @@ function shellInvocationBody(
   command: string,
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform = process.platform,
-  exists: (path: string) => boolean = fileExists,
-): ShellInvocation {
-  if (platform === "win32") {
-    const comSpec = env.ComSpec ?? env.COMSPEC;
+  exists?: (path: string) => boolean,
+) {
+  return Effect.gen(function* (): Effect.fn.Return<ShellInvocation, never, FileSystem.FileSystem> {
+    const check = (file: string) =>
+      exists === undefined ? fileExists(file) : Effect.sync(() => exists(file));
+    if (platform === "win32") {
+      const comSpec = env.ComSpec ?? env.COMSPEC;
+      const file =
+        isTruthy(comSpec) && win32.isAbsolute(comSpec) && (yield* check(comSpec))
+          ? comSpec
+          : win32.join(env.SystemRoot ?? env.SYSTEMROOT ?? "C:\\Windows", "System32", "cmd.exe");
+      // The same form Node uses for `shell: true`: cmd.exe strips the outer quotes and runs the rest.
+      return { file, args: ["/d", "/s", "/c", `"${command}"`], verbatim: true };
+    }
+    const shell = env.SHELL;
     const file =
-      isTruthy(comSpec) && win32.isAbsolute(comSpec) && exists(comSpec)
-        ? comSpec
-        : win32.join(env.SystemRoot ?? env.SYSTEMROOT ?? "C:\\Windows", "System32", "cmd.exe");
-    // The same form Node uses for `shell: true`: cmd.exe strips the outer quotes and runs the rest.
-    return { file, args: ["/d", "/s", "/c", `"${command}"`], verbatim: true };
-  }
-  const shell = env.SHELL;
-  const file = isTruthy(shell) && posix.isAbsolute(shell) && exists(shell) ? shell : "/bin/sh";
-  return { file, args: ["-c", command], verbatim: false };
-}
-
-/**
- * Ends a child the app started. On Windows a launcher (`npx.cmd` through cmd.exe) would leave the
- * real program running if only the launcher were killed, so the whole tree goes.
- */
-export const endChild: {
-  (): (child: ChildProcess) => ReturnType<typeof endChildBody>;
-  (platform: NodeJS.Platform | undefined): (child: ChildProcess) => ReturnType<typeof endChildBody>;
-  (child: ChildProcess): ReturnType<typeof endChildBody>;
-  (child: ChildProcess, platform: NodeJS.Platform | undefined): ReturnType<typeof endChildBody>;
-} = EffectFunction.dual(
-  (args) => args.length > 0 && !Schema.is(Schema.UndefinedOr(Schema.String))(args[0]),
-  endChildBody,
-);
-function endChildBody(child: ChildProcess, platform: NodeJS.Platform = process.platform) {
-  if (platform === "win32" && child.pid !== undefined) stopProcessTree(child.pid, true, platform);
-  else child.kill();
+      isTruthy(shell) && posix.isAbsolute(shell) && (yield* check(shell)) ? shell : "/bin/sh";
+    return { file, args: ["-c", command], verbatim: false };
+  });
 }
 
 /**

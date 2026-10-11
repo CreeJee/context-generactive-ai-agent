@@ -51,7 +51,10 @@ export function loader({ request }: Route.LoaderArgs) {
         switch (connection.type) {
           case "subscription":
             yield* Effect.promise(() =>
-              importLegacyOAuthProfile(sqlite, connection.accountProvider).catch(() => null),
+              importLegacyOAuthProfile({
+                sqlite: sqlite,
+                provider: connection.accountProvider,
+              }).catch(() => null),
             );
             break;
           case "compatible-endpoint":

@@ -1,15 +1,20 @@
-import { Effect, Result } from "effect";
-import { nativePromise, runNativeEffect } from "memory-agent/native-effect";
+import { FetchHttpClient, HttpBody, HttpClient } from "effect/http";
+import { NodeServices } from "@effect/platform-node";
+import { ManagedRuntime, Path, FileSystem, Option } from "effect";
+import { Effect } from "effect";
+import { runNativeEffect } from "memory-agent/native-effect";
 import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../app/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+
 import { Schema } from "effect";
 
 /** The folder the app opens as a project, or why it opens none. */
+const launchRuntime = ManagedRuntime.make(NodeServices.layer);
+const { dirname, isAbsolute, relative, resolve } = launchRuntime.runSync(Path.Path);
+
 export type LaunchFolder =
   | { readonly kind: "folder"; readonly root: string }
   | { readonly kind: "none" }
@@ -20,13 +25,10 @@ const isInside = (child: string, parent: string) => {
   return path === "" || (!path.startsWith("..") && !isAbsolute(path));
 };
 
-const canonical = (path: string) => {
-  try {
-    return realpathSync(path);
-  } catch {
-    return resolve(path);
-  }
-};
+const canonical = Effect.fn("launch.canonical")(function* (path: string) {
+  const fs = yield* FileSystem.FileSystem;
+  return yield* fs.realPath(path).pipe(Effect.orElseSucceed(() => resolve(path)));
+});
 
 /**
  * `context-agent <folder>` opens that folder; without one, the folder it was started from. A start
@@ -46,25 +48,34 @@ function launchFolderBody(
   cwd: string,
   storageRoot: string,
   executableFolder: string | null,
-): LaunchFolder {
+): Promise<LaunchFolder> {
+  return launchRuntime.runPromise(launchFolderEffect(argument, cwd, storageRoot, executableFolder));
+}
+const launchFolderEffect = Effect.fn("launch.folder")(function* (
+  argument: string | undefined,
+  cwd: string,
+  storageRoot: string,
+  executableFolder: string | null,
+): Effect.fn.Return<LaunchFolder, never, FileSystem.FileSystem> {
+  const fs = yield* FileSystem.FileSystem;
   const candidate = resolve(cwd, argument ?? ".");
-  let root: string;
-  try {
-    root = realpathSync(candidate);
-    if (!statSync(root).isDirectory()) throw new Error("not a directory");
-  } catch {
+  const resolved = yield* fs.realPath(candidate).pipe(Effect.option);
+  if (Option.isNone(resolved))
     return argument === undefined ? { kind: "none" } : { kind: "invalid", path: candidate };
-  }
+  const root = resolved.value;
+  const info = yield* fs.stat(root).pipe(Effect.option);
+  if (Option.isNone(info) || info.value.type !== "Directory")
+    return argument === undefined ? { kind: "none" } : { kind: "invalid", path: candidate };
   if (argument !== undefined) return { kind: "folder", root };
-  if (
-    root === dirname(root) ||
-    root === canonical(homedir()) ||
-    isInside(root, canonical(storageRoot)) ||
-    (executableFolder !== null && root === canonical(executableFolder))
-  )
+  const home = yield* canonical(homedir());
+  const storage = yield* canonical(storageRoot);
+  const executable = executableFolder === null ? null : yield* canonical(executableFolder);
+  if (root === dirname(root) || root === home || isInside(root, storage) || root === executable)
     return { kind: "none" };
   return { kind: "folder", root };
-}
+});
+
+const launchHttpClient = ManagedRuntime.make(FetchHttpClient.layer).runSync(HttpClient.HttpClient);
 
 const Project = Schema.Struct({ id: Schema.String, root: Schema.String });
 const Rejected = Schema.Struct({
@@ -79,11 +90,13 @@ export type OpenedProject =
 /** Whether something answering on this address is this app (it lists projects). */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const isThisAppEffect = Effect.fn("launch.isThisApp")(function* (baseUrl: string) {
-  const response = yield* nativePromise(() =>
-    fetch(`${baseUrl}/api/projects`, { signal: AbortSignal.timeout(3_000) }),
-  );
+  const response = yield* launchHttpClient
+    .get(`${baseUrl}/api/projects`)
+    .pipe(Effect.timeout(3_000));
   return (
-    response.ok && Schema.is(Schema.Array(Project))(yield* nativePromise(() => response.json()))
+    response.status >= 200 &&
+    response.status < 300 &&
+    Schema.is(Schema.Array(Project))(yield* response.json)
   );
 });
 export const isThisApp = (baseUrl: string) =>
@@ -104,18 +117,13 @@ export const openProjectEffect = Effect.fn("launch.openProject")(function* (
   baseUrl: string,
   root: string,
 ) {
-  const response = yield* nativePromise(() =>
-    fetch(`${baseUrl}/api/projects`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: Result.getOrThrow(
-        Schema.encodeResult(Schema.fromJsonString(Schema.Struct({ root: Schema.String })))({
-          root,
-        }),
-      ),
-    }),
-  );
-  const body: unknown = yield* nativePromise(() => response.json());
+  const payload = yield* Schema.encodeEffect(
+    Schema.fromJsonString(Schema.Struct({ root: Schema.String })),
+  )({ root });
+  const response = yield* launchHttpClient.post(`${baseUrl}/api/projects`, {
+    body: HttpBody.text(payload, "application/json"),
+  });
+  const body: unknown = yield* response.json;
   if (response.status === 201 && Schema.is(Project)(body))
     return { kind: "opened", projectId: body.id, added: true } as const satisfies OpenedProject;
   if (!Schema.is(Rejected)(body))
@@ -125,8 +133,8 @@ export const openProjectEffect = Effect.fn("launch.openProject")(function* (
     } as const satisfies OpenedProject;
   if (body.reason !== "already_registered")
     return { kind: "rejected", reason: body.reason } as const satisfies OpenedProject;
-  const listing = yield* nativePromise(() => fetch(`${baseUrl}/api/projects`));
-  const projects: unknown = yield* nativePromise(() => listing.json());
+  const listing = yield* launchHttpClient.get(`${baseUrl}/api/projects`);
+  const projects: unknown = yield* listing.json;
   const existing = Schema.is(Schema.Array(Project))(projects)
     ? projects.find((project) => project.root === root)
     : undefined;

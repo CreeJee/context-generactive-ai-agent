@@ -3,11 +3,24 @@ import { withTestPlatform } from "./support/platform.ts";
 // Native ACP processes prove actual OS environment isolation, reconnect and cancellation.
 import { fileURLToPath } from "node:url";
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
-import { Cause, Random, Effect, Fiber, FileSystem, Path, Schedule, Schema } from "effect";
+import {
+  Cause,
+  Random,
+  Effect,
+  Fiber,
+  FileSystem,
+  Path,
+  Schedule,
+  Schema,
+  MutableHashMap,
+  Option,
+  Layer,
+} from "effect";
 import { describe, expect, vi } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { RelayedApprovals } from "../src/approvals/relayed.ts";
-import { ExternalAgents } from "../src/external-agents/agents.ts";
+import { ExternalAgents, agentCommandInvocation } from "../src/external-agents/agents.ts";
+import * as NodePath from "@effect/platform-node/NodePath";
 import { Indexer } from "../src/memory/embedding/indexer.ts";
 import { Nodes } from "../src/memory/nodes.ts";
 import { Sessions } from "../src/sessions/sessions.ts";
@@ -95,10 +108,11 @@ describe("external ACP agents", () => {
         const { runtime, agents, run, project, session, log, fs } = yield* agentSetup();
         const signal = yield* Effect.abortSignal;
         yield* run(agents.setTrusted(project, "project", "fake", true));
-        const delegate = (yield* Effect.provideContext(
+        const delegateService = yield* Effect.provideContext(
           DelegateTools,
           yield* runtime.contextEffect,
-        )).forRun(project, session.id, signal).tools[0]!;
+        );
+        const delegate = (yield* delegateService.forRun(project, session.id, signal)).tools[0]!;
         const receipt = yield* sdkCall(() =>
           delegate.execute!({ agent: "fake", task: "slow task", yieldMs: 0 }),
         );
@@ -336,13 +350,15 @@ describe("external ACP agents", () => {
             toolName: "Edit README.md",
             askedBy: "agent",
           });
-          relayed.answer(session.id, request!.id, true);
+          yield* relayed.answer(session.id, request!.id, true);
           yield* until(
             Effect.sync(() => answer().includes("permission: once")),
             "the delegation result",
           );
         }),
       ),
+    // Three bounded approval/process waits can exceed Vitest's default five seconds under load.
+    20_000,
   );
 
   it.live(
@@ -415,4 +431,88 @@ const sdkCall = Effect.fn("ExternalAgentTest.sdkCall")(
       try: (signal) => Promise.resolve(call(signal)),
       catch: (cause) => new Cause.UnknownError(cause),
     }),
+);
+
+const windowsInvocation = Effect.fn("ExternalAgentTest.windowsInvocation")(function* (
+  command: string,
+  args: readonly string[],
+  files: readonly (readonly [string, string])[],
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const directory = yield* fs.makeTempDirectoryScoped();
+  const metadataPath = path.join(directory, "metadata");
+  yield* fs.writeFileString(metadataPath, "");
+  const fileInfo = yield* fs.stat(metadataPath);
+  const knownFiles = MutableHashMap.fromIterable(
+    files.map(([name, text]) => [name.toLowerCase(), text] as const),
+  );
+  const missing = FileSystem.makeNoop({});
+  const fixtureFs = FileSystem.makeNoop({
+    stat: (name) =>
+      MutableHashMap.has(knownFiles, name.toLowerCase())
+        ? Effect.succeed(fileInfo)
+        : missing.stat(name),
+    readFileString: (name) =>
+      Option.match(MutableHashMap.get(knownFiles, name.toLowerCase()), {
+        onNone: () => missing.readFileString(name),
+        onSome: Effect.succeed,
+      }),
+  });
+  const paths = yield* Layer.build(NodePath.layerWin32);
+  return yield* agentCommandInvocation({
+    command,
+    args,
+    cwd: "C:\\work",
+    env: {
+      Path: "C:\\tools;C:\\work\\node_modules\\.bin",
+      PATHEXT: ".EXE;.CMD",
+      ComSpec: "C:\\Windows\\System32\\cmd.exe",
+    },
+    platform: "win32",
+  }).pipe(Effect.provideContext(paths), Effect.provideService(FileSystem.FileSystem, fixtureFs));
+});
+
+it.effect("Windows exe launch preserves literal arguments without a shell", () =>
+  Effect.gen(function* () {
+    expect(
+      yield* windowsInvocation("tool", ["a&b", "%PATH%"], [["C:\\tools\\tool.exe", ""]]),
+    ).toEqual({ command: "tool", args: ["a&b", "%PATH%"], shell: undefined });
+  }).pipe(withTestPlatform),
+);
+it.effect("Windows npm command shim escapes metacharacters for both cmd passes", () =>
+  Effect.gen(function* () {
+    expect(
+      yield* windowsInvocation(
+        "npx",
+        ["a&b", "%PATH%"],
+        [["C:\\work\\node_modules\\.bin\\npx.cmd", "@echo off"]],
+      ),
+    ).toEqual({
+      command: 'npx ^^^"a^^^&b^^^" ^^^"^^^%PATH^^^%^^^"',
+      args: [],
+      shell: "C:\\Windows\\System32\\cmd.exe",
+    });
+  }).pipe(withTestPlatform),
+);
+it.effect.each([
+  "#!/usr/bin/env node --trace-warnings --no-warnings",
+  "#!/usr/bin/node --trace-warnings --no-warnings",
+])("Windows shebang preserves interpreter flags: %s", (shebang) =>
+  Effect.gen(function* () {
+    expect(
+      yield* windowsInvocation(
+        "script",
+        ["payload"],
+        [
+          ["C:\\work\\script", shebang],
+          ["C:\\tools\\node.exe", ""],
+        ],
+      ),
+    ).toEqual({
+      command: "node",
+      args: ["--trace-warnings", "--no-warnings", "C:\\work\\script", "payload"],
+      shell: undefined,
+    });
+  }).pipe(withTestPlatform),
 );

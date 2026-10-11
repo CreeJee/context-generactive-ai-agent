@@ -146,10 +146,10 @@ describe("account-bound subscription provider", () => {
         const created: string[] = [];
         let finish!: () => void;
         try {
-          const bound = createAccountBoundSubscriptionClients(
-            db,
-            provider,
-            (id) => ({
+          const bound = createAccountBoundSubscriptionClients({
+            sqlite: db,
+            provider: provider,
+            createClient: (id) => ({
               status: () =>
                 Promise.resolve().then(() => ({
                   provider,
@@ -183,9 +183,9 @@ describe("account-bound subscription provider", () => {
                   };
                 }),
             }),
-            accounts,
-            legacy,
-          );
+            accounts: accounts,
+            legacy: legacy,
+          });
           const configured = createSubscriptionProvider({
             protocol: providerProtocols[provider],
             config: { read: Effect.succeed({}), update: (patch) => Effect.succeed(patch) },
@@ -194,10 +194,10 @@ describe("account-bound subscription provider", () => {
           });
           for (let round = 0; round < 2; round++) {
             expect((yield* configured.auth.disconnect).status).toBe("signed-out");
-            expect(listOAuthProfiles(db, provider)).toEqual([]);
+            expect(listOAuthProfiles({ sqlite: db, provider: provider })).toEqual([]);
             expect(() => bound.forRun()).toThrow("not_connected");
             expect((yield* configured.auth.connect).status).toBe("pending");
-            expect(listOAuthProfiles(db, provider)).toEqual([]);
+            expect(listOAuthProfiles({ sqlite: db, provider: provider })).toEqual([]);
             finish();
             expect(
               (yield* configured.auth.status.pipe(
@@ -208,7 +208,7 @@ describe("account-bound subscription provider", () => {
                 Effect.timeout("1000 millis"),
               )).status,
             ).toBe("signed-in");
-            expect(listOAuthProfiles(db, provider)).toMatchObject([
+            expect(listOAuthProfiles({ sqlite: db, provider: provider })).toMatchObject([
               { id: created[round], provider, selected: true },
             ]);
             bound.forRun().releaseRun();
@@ -245,10 +245,10 @@ describe("account-bound subscription provider", () => {
         };
         let finish!: () => void;
         try {
-          const bound = createAccountBoundSubscriptionClients(
-            db,
-            "openai",
-            () => ({
+          const bound = createAccountBoundSubscriptionClients({
+            sqlite: db,
+            provider: "openai",
+            createClient: () => ({
               status: () =>
                 Promise.resolve().then(() => ({
                   provider: "openai",
@@ -294,8 +294,8 @@ describe("account-bound subscription provider", () => {
                   cancel: () => {},
                 })),
             }),
-            accounts,
-          );
+            accounts: accounts,
+          });
           const attempt = yield* sdkCall(() => bound.client.startLogin());
           if (intent === "cancel") attempt.cancel();
           finish();
@@ -304,7 +304,7 @@ describe("account-bound subscription provider", () => {
             intent === "cancel" ? "cancelled" : "provider_rejected",
           );
           expect(removed).toHaveLength(1);
-          expect(listOAuthProfiles(db, "openai")).toEqual([]);
+          expect(listOAuthProfiles({ sqlite: db, provider: "openai" })).toEqual([]);
           expect((yield* sdkCall(() => bound.client.status())).connected).toBe(false);
           expect(() => bound.forRun()).toThrow("not_connected");
         } finally {
@@ -320,37 +320,41 @@ describe("account-bound subscription provider", () => {
         const db = yield* dbFixture(provider);
         const calls: string[] = [];
         try {
-          const bound = createAccountBoundSubscriptionClients(db, provider, (id) => ({
-            status: () =>
-              Promise.resolve().then(() => ({ provider, connected: true, expiresAt: null })),
-            modelCatalog: () =>
-              Promise.resolve().then(() => {
-                calls.push(`catalog:${id}`);
-                return [];
-              }),
-            stream: () =>
-              nativeStream(
-                Stream.suspend(() =>
-                  Stream.fromIterable(
-                    (function* (): Generator<NormalizedStreamEvent> {
-                      calls.push(`stream:${id}`);
-                      yield* [];
-                    })(),
+          const bound = createAccountBoundSubscriptionClients({
+            sqlite: db,
+            provider: provider,
+            createClient: (id) => ({
+              status: () =>
+                Promise.resolve().then(() => ({ provider, connected: true, expiresAt: null })),
+              modelCatalog: () =>
+                Promise.resolve().then(() => {
+                  calls.push(`catalog:${id}`);
+                  return [];
+                }),
+              stream: () =>
+                nativeStream(
+                  Stream.suspend(() =>
+                    Stream.fromIterable(
+                      (function* (): Generator<NormalizedStreamEvent> {
+                        calls.push(`stream:${id}`);
+                        yield* [];
+                      })(),
+                    ),
                   ),
                 ),
-              ),
-            refreshForValidation: () =>
-              Promise.resolve().then(() => {
-                calls.push(`refresh:${id}`);
-                return { provider, connected: true, expiresAt: null };
-              }),
-            disconnect: () =>
-              Promise.resolve().then(() => ({ provider, connected: false, expiresAt: null })),
-            startLogin: () =>
-              Promise.resolve().then(() => {
-                throw new Error("unexpected login");
-              }),
-          }));
+              refreshForValidation: () =>
+                Promise.resolve().then(() => {
+                  calls.push(`refresh:${id}`);
+                  return { provider, connected: true, expiresAt: null };
+                }),
+              disconnect: () =>
+                Promise.resolve().then(() => ({ provider, connected: false, expiresAt: null })),
+              startLogin: () =>
+                Promise.resolve().then(() => {
+                  throw new Error("unexpected login");
+                }),
+            }),
+          });
           const a = bound.forRun();
           select(db, ids[1], provider);
           const b = bound.forRun();
@@ -386,46 +390,50 @@ describe("account-bound subscription provider", () => {
         const calls: string[] = [];
         const created: string[] = [];
         try {
-          const bound = createAccountBoundSubscriptionClients(db, "openai", (id) => {
-            created.push(id ?? "legacy");
-            return {
-              status: () =>
-                Promise.resolve().then(() => {
-                  calls.push(`status:${id}`);
-                  return { provider: "openai", connected: true, expiresAt: null };
-                }),
-              modelCatalog: () =>
-                Promise.resolve().then(() => {
-                  calls.push(`catalog:${id}`);
-                  return [{ models: [{ slug: `model-${id}` }] }];
-                }),
-              stream: () =>
-                nativeStream(
-                  Stream.suspend(() =>
-                    Stream.fromIterable(
-                      (function* (): Generator<NormalizedStreamEvent> {
-                        calls.push(`stream:${id}`);
-                        yield* [];
-                      })(),
+          const bound = createAccountBoundSubscriptionClients({
+            sqlite: db,
+            provider: "openai",
+            createClient: (id) => {
+              created.push(id ?? "legacy");
+              return {
+                status: () =>
+                  Promise.resolve().then(() => {
+                    calls.push(`status:${id}`);
+                    return { provider: "openai", connected: true, expiresAt: null };
+                  }),
+                modelCatalog: () =>
+                  Promise.resolve().then(() => {
+                    calls.push(`catalog:${id}`);
+                    return [{ models: [{ slug: `model-${id}` }] }];
+                  }),
+                stream: () =>
+                  nativeStream(
+                    Stream.suspend(() =>
+                      Stream.fromIterable(
+                        (function* (): Generator<NormalizedStreamEvent> {
+                          calls.push(`stream:${id}`);
+                          yield* [];
+                        })(),
+                      ),
                     ),
                   ),
-                ),
-              refreshForValidation: () =>
-                Promise.resolve().then(() => {
-                  calls.push(`refresh:${id}`);
-                  return { provider: "openai", connected: true, expiresAt: null };
-                }),
-              disconnect: () =>
-                Promise.resolve().then(() => ({
-                  provider: "openai",
-                  connected: false,
-                  expiresAt: null,
-                })),
-              startLogin: () =>
-                Promise.resolve().then(() => {
-                  throw new Error("unexpected login");
-                }),
-            } satisfies SubscriptionOAuthClient;
+                refreshForValidation: () =>
+                  Promise.resolve().then(() => {
+                    calls.push(`refresh:${id}`);
+                    return { provider: "openai", connected: true, expiresAt: null };
+                  }),
+                disconnect: () =>
+                  Promise.resolve().then(() => ({
+                    provider: "openai",
+                    connected: false,
+                    expiresAt: null,
+                  })),
+                startLogin: () =>
+                  Promise.resolve().then(() => {
+                    throw new Error("unexpected login");
+                  }),
+              } satisfies SubscriptionOAuthClient;
+            },
           });
           const runtime = createSubscriptionRuntime("openai", bound.forRun);
           const selection = {
@@ -481,45 +489,49 @@ describe("account-bound subscription provider", () => {
           }),
         );
 
-        const bound = createAccountBoundSubscriptionClients(db, "openai", (id) => ({
-          status: () =>
-            Promise.resolve().then(() => ({
-              provider: "openai",
-              connected: true,
-              expiresAt: null,
-            })),
-          modelCatalog: () =>
-            Promise.resolve().then(() => {
-              requests.push(id!);
-              return [
-                {
-                  models: [
-                    {
-                      slug: id === ids[0] ? "model-a" : "model-b",
-                      context_window: id === ids[0] ? 100_000 : 200_000,
-                    },
-                  ],
-                },
-              ];
-            }),
-          stream: () => nativeStream(Stream.empty),
-          refreshForValidation: () =>
-            Promise.resolve().then(() => ({
-              provider: "openai",
-              connected: true,
-              expiresAt: null,
-            })),
-          disconnect: () =>
-            Promise.resolve().then(() => ({
-              provider: "openai",
-              connected: false,
-              expiresAt: null,
-            })),
-          startLogin: () =>
-            Promise.resolve().then(() => {
-              throw new Error("unexpected login");
-            }),
-        }));
+        const bound = createAccountBoundSubscriptionClients({
+          sqlite: db,
+          provider: "openai",
+          createClient: (id) => ({
+            status: () =>
+              Promise.resolve().then(() => ({
+                provider: "openai",
+                connected: true,
+                expiresAt: null,
+              })),
+            modelCatalog: () =>
+              Promise.resolve().then(() => {
+                requests.push(id!);
+                return [
+                  {
+                    models: [
+                      {
+                        slug: id === ids[0] ? "model-a" : "model-b",
+                        context_window: id === ids[0] ? 100_000 : 200_000,
+                      },
+                    ],
+                  },
+                ];
+              }),
+            stream: () => nativeStream(Stream.empty),
+            refreshForValidation: () =>
+              Promise.resolve().then(() => ({
+                provider: "openai",
+                connected: true,
+                expiresAt: null,
+              })),
+            disconnect: () =>
+              Promise.resolve().then(() => ({
+                provider: "openai",
+                connected: false,
+                expiresAt: null,
+              })),
+            startLogin: () =>
+              Promise.resolve().then(() => {
+                throw new Error("unexpected login");
+              }),
+          }),
+        });
         const provider = createSubscriptionProvider({
           protocol: providerProtocols.openai,
           config: { read: Effect.succeed({}), update: (patch) => Effect.succeed(patch) },
@@ -569,50 +581,76 @@ describe("account-bound subscription provider", () => {
           remove: () => Promise.resolve().then(() => {}),
         };
         try {
-          const bound = createAccountBoundSubscriptionClients(db, "openai", () => ({
-            status: () =>
-              Promise.resolve().then(() => ({
-                provider: "openai",
-                connected: true,
-                expiresAt: null,
-              })),
-            modelCatalog: () => Promise.resolve().then(() => []),
-            stream: () => nativeStream(Stream.empty),
-            refreshForValidation: () =>
-              Promise.resolve().then(() => ({
-                provider: "openai",
-                connected: true,
-                expiresAt: null,
-              })),
-            disconnect: () =>
-              Promise.resolve().then(() => ({
-                provider: "openai",
-                connected: false,
-                expiresAt: null,
-              })),
-            startLogin: () =>
-              Promise.resolve().then(() => {
-                throw new Error("unexpected login");
-              }),
-          }));
+          const bound = createAccountBoundSubscriptionClients({
+            sqlite: db,
+            provider: "openai",
+            createClient: () => ({
+              status: () =>
+                Promise.resolve().then(() => ({
+                  provider: "openai",
+                  connected: true,
+                  expiresAt: null,
+                })),
+              modelCatalog: () => Promise.resolve().then(() => []),
+              stream: () => nativeStream(Stream.empty),
+              refreshForValidation: () =>
+                Promise.resolve().then(() => ({
+                  provider: "openai",
+                  connected: true,
+                  expiresAt: null,
+                })),
+              disconnect: () =>
+                Promise.resolve().then(() => ({
+                  provider: "openai",
+                  connected: false,
+                  expiresAt: null,
+                })),
+              startLogin: () =>
+                Promise.resolve().then(() => {
+                  throw new Error("unexpected login");
+                }),
+            }),
+          });
           const pinnedA = bound.forRun();
           select(db, ids[1]);
           const pinnedB = bound.forRun();
           yield* rejects(
-            () => removeOAuthProfile(db, "openai", ids[0], accounts, legacy),
+            () =>
+              removeOAuthProfile({
+                sqlite: db,
+                provider: "openai",
+                id: ids[0],
+                accounts: accounts,
+                legacy: legacy,
+              }),
             "oauth_profile_in_use",
           );
           expect(MutableHashMap.has(vault, ids[0])).toBe(true);
           pinnedA.releaseRun();
           pinnedA.releaseRun(); // release is idempotent
-          yield* sdkCall(() => removeOAuthProfile(db, "openai", ids[0], accounts, legacy));
+          yield* sdkCall(() =>
+            removeOAuthProfile({
+              sqlite: db,
+              provider: "openai",
+              id: ids[0],
+              accounts: accounts,
+              legacy: legacy,
+            }),
+          );
           expect(MutableHashMap.has(vault, ids[0])).toBe(false);
           expect(MutableHashMap.has(vault, ids[1])).toBe(true);
           expect(db.prepare("SELECT id FROM oauth_profiles WHERE selected = 1").get()).toEqual({
             id: ids[1],
           });
           yield* rejects(
-            () => removeOAuthProfile(db, "openai", ids[1], accounts, legacy),
+            () =>
+              removeOAuthProfile({
+                sqlite: db,
+                provider: "openai",
+                id: ids[1],
+                accounts: accounts,
+                legacy: legacy,
+              }),
             "oauth_profile_in_use",
           );
           pinnedB.releaseRun();
@@ -654,41 +692,57 @@ describe("account-bound subscription provider", () => {
           remove: () => Promise.resolve().then(() => {}),
         };
         try {
-          const bound = createAccountBoundSubscriptionClients(db, "openai", () => ({
-            status: () =>
-              Promise.resolve().then(() => ({
-                provider: "openai",
-                connected: true,
-                expiresAt: null,
-              })),
-            modelCatalog: () => Promise.resolve().then(() => []),
-            stream: () => nativeStream(Stream.empty),
-            refreshForValidation: () =>
-              Promise.resolve().then(() => ({
-                provider: "openai",
-                connected: true,
-                expiresAt: null,
-              })),
-            disconnect: () =>
-              Promise.resolve().then(() => ({
-                provider: "openai",
-                connected: false,
-                expiresAt: null,
-              })),
-            startLogin: () =>
-              Promise.resolve().then(() => {
-                throw new Error("unexpected login");
-              }),
-          }));
+          const bound = createAccountBoundSubscriptionClients({
+            sqlite: db,
+            provider: "openai",
+            createClient: () => ({
+              status: () =>
+                Promise.resolve().then(() => ({
+                  provider: "openai",
+                  connected: true,
+                  expiresAt: null,
+                })),
+              modelCatalog: () => Promise.resolve().then(() => []),
+              stream: () => nativeStream(Stream.empty),
+              refreshForValidation: () =>
+                Promise.resolve().then(() => ({
+                  provider: "openai",
+                  connected: true,
+                  expiresAt: null,
+                })),
+              disconnect: () =>
+                Promise.resolve().then(() => ({
+                  provider: "openai",
+                  connected: false,
+                  expiresAt: null,
+                })),
+              startLogin: () =>
+                Promise.resolve().then(() => {
+                  throw new Error("unexpected login");
+                }),
+            }),
+          });
           const removal = yield* Effect.forkChild(
-            sdkCall(() => removeOAuthProfile(db, "openai", ids[0], accounts, legacy)).pipe(
-              Effect.uninterruptible,
-            ),
+            sdkCall(() =>
+              removeOAuthProfile({
+                sqlite: db,
+                provider: "openai",
+                id: ids[0],
+                accounts: accounts,
+                legacy: legacy,
+              }),
+            ).pipe(Effect.uninterruptible),
           );
           yield* Deferred.await(reading);
           expect(() => bound.forRun()).toThrow("oauth_profile_removing");
           yield* rejects(
-            () => selectOAuthProfile(db, "openai", ids[0], accounts),
+            () =>
+              selectOAuthProfile({
+                sqlite: db,
+                provider: "openai",
+                id: ids[0],
+                accounts: accounts,
+              }),
             "oauth_profile_removing",
           );
           yield* Deferred.succeed(held, undefined);

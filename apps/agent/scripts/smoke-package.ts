@@ -1,289 +1,322 @@
-import { Cause, Clock, Effect } from "effect";
-import { nativePromise, runNativeEffect } from "memory-agent/native-effect";
-import { Result, Function as EffectFunction } from "effect";
-import { isTruthy } from "../app/truthy.ts";
-// Runs the built executable from a folder outside the repository (so nothing resolves from the
-// repo's node_modules) against a throwaway storage root, and checks what a user's first start
-// needs. Run with `vp run smoke-package` after `vp run package`.
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { request as httpRequest } from "node:http";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
+import {
+  Cause,
+  Clock,
+  Context,
+  DateTime,
+  Effect,
+  FileSystem,
+  Layer,
+  Path,
+  Schema,
+  Schedule,
+  Stream,
+  Option,
+} from "effect";
+import { HttpClient, HttpClientRequest } from "effect/http";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { createServer, type AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { join } from "node:path";
+// This smoke fixture seeds and inspects only its temporary database with the same synchronous driver as the executable.
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
-import { Schema } from "effect";
+import { isTruthy } from "../app/truthy.ts";
 
-const app = fileURLToPath(new URL("..", import.meta.url));
-const windows = process.platform === "win32";
-const executableName = windows ? "context-agent.exe" : "context-agent";
-const built = join(
-  app,
-  "dist",
-  `context-agent-${process.platform}-${process.arch}`,
-  executableName,
-);
-if (!existsSync(built)) throw new Error("no executable; run `vp run package` first");
-
-const base = realpathSync(mkdtempSync(join(tmpdir(), "context-agent-smoke-")));
-const executable = join(base, "bin", executableName);
-const storage = join(base, "storage");
-const project = join(base, "project");
-mkdirSync(join(base, "bin"));
-mkdirSync(project);
-cpSync(built, executable);
-
-const failures: string[] = [];
-function check(name: string, ok: boolean, detail = "") {
-  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  console.log(`${ok ? "✓" : "✗"} ${name}${detail.length > 0 ? ` — ${detail}` : ""}`);
-  if (!ok) failures.push(name);
-}
-
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-const freePort = Effect.fn("smoke.freePort")(function* () {
-  const server = createServer();
-  // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-  yield* nativePromise(
-    () => new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve)),
+const program = Effect.gen(function* () {
+  const services = yield* Layer.build(
+    Layer.merge(NodeServices.layer, NodeHttpClient.layerNodeHttp),
   );
-  // SAFETY: a server listening on a TCP port reports an AddressInfo, never a pipe name.
-  const { port } = server.address() as AddressInfo;
-  // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-  yield* nativePromise(() => new Promise<void>((resolve) => server.close(() => resolve())));
-  return port;
-});
+  const fs = Context.get(services, FileSystem.FileSystem);
+  const path = Context.get(services, Path.Path);
+  const spawner = Context.get(services, ChildProcessSpawner.ChildProcessSpawner);
+  const client = Context.get(services, HttpClient.HttpClient);
+  const { join } = path;
+  const app = yield* path.fromFileUrl(new URL("..", import.meta.url));
+  const windows = process.platform === "win32";
+  const executableName = windows ? "context-agent.exe" : "context-agent";
+  const built = join(
+    app,
+    "dist",
+    `context-agent-${process.platform}-${process.arch}`,
+    executableName,
+  );
+  if (!(yield* fs.exists(built))) throw new Error("no executable; run `vp run package` first");
 
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-const until = Effect.fn("smoke.until")(function* <T>(
-  what: string,
-  probe: () => Promise<T | null>,
-  timeoutMs: number,
-) {
-  const deadline = (yield* Clock.currentTimeMillis) + timeoutMs;
-  while ((yield* Clock.currentTimeMillis) < deadline) {
-    const value = yield* nativePromise(probe).pipe(Effect.orElseSucceed(() => null));
-    if (value !== null) return value;
-    yield* Effect.sleep(250);
-  }
-  return yield* new Cause.UnknownError(new Error(`timed out waiting for ${what}`));
-});
+  const temporary = yield* Effect.acquireRelease(
+    fs.makeTempDirectory({ prefix: "context-agent-smoke-" }),
+    (directory) =>
+      fs
+        .remove(directory, { recursive: true, force: true })
+        .pipe(Effect.retry({ times: 5, schedule: Schedule.spaced(100) }), Effect.orDie),
+  );
+  const base = yield* fs.realPath(temporary);
+  const executable = join(base, "bin", executableName);
+  const storage = join(base, "storage");
+  const project = join(base, "project");
+  yield* fs.makeDirectory(join(base, "bin"));
+  yield* fs.makeDirectory(project);
+  yield* fs.copyFile(built, executable);
 
-function start(port: number) {
-  const env = { ...process.env };
-  delete env.CONTEXT_AGENT_BUILD_ID;
-  delete env.CONTEXT_AGENT_DEV_BACKEND;
-  const child = spawn(executable, ["--port", String(port), "--no-open", "--storage", storage], {
-    cwd: base,
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
+  const failures: string[] = [];
+  const check = Effect.fnUntraced(function* (name: string, ok: boolean, detail = "") {
+    yield* Effect.logInfo(`${ok ? "✓" : "✗"} ${name}${detail.length > 0 ? ` — ${detail}` : ""}`);
+    if (!ok) failures.push(name);
   });
-  child.stdout.resume();
-  child.stderr.resume();
-  return child;
-}
 
-// Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-const stop = Effect.fn("smoke.stop")(function* (child: ChildProcess) {
-  // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-  const exited = new Promise<number | null>((resolve) =>
-    child.once("exit", (code) => resolve(code)),
-  );
-  // Windows cannot deliver SIGTERM to another console process; end the whole tree there.
-  if (windows && child.pid !== undefined)
-    spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
-  else child.kill("SIGTERM");
-  return yield* nativePromise(() => exited);
-});
+  // Reserve and release a loopback port using the low-level Node TCP callback boundary.
+  const freePort = Effect.fn("smoke.freePort")(function* () {
+    return yield* Effect.acquireUseRelease(
+      Effect.sync(() => createServer()),
+      Effect.fnUntraced(function* (listener) {
+        yield* Effect.callback<void, Cause.UnknownError>((resume) => {
+          listener.once("error", (cause) => resume(Effect.fail(new Cause.UnknownError(cause))));
+          listener.listen(0, "127.0.0.1", () => resume(Effect.void));
+        });
+        // SAFETY: listen(0, "127.0.0.1") completed; a TCP listener reports AddressInfo.
+        return (listener.address() as AddressInfo).port;
+      }),
+      (listener) =>
+        Effect.callback<void>((resume) => {
+          listener.close(() => resume(Effect.void));
+        }),
+    );
+  });
+  const until = Effect.fn("smoke.until")(function* <T, E, R>(
+    what: string,
+    probe: Effect.Effect<T | null, E, R>,
+    timeoutMs: number,
+  ) {
+    const deadline = (yield* Clock.currentTimeMillis) + timeoutMs;
+    while ((yield* Clock.currentTimeMillis) < deadline) {
+      const value = yield* probe.pipe(Effect.orElseSucceed(() => null));
+      if (value !== null) return value;
+      yield* Effect.sleep(250);
+    }
+    return yield* new Cause.UnknownError(new Error(`timed out waiting for ${what}`));
+  });
+  const start = (port: number) =>
+    spawner.spawn(
+      ChildProcess.make(executable, ["--port", String(port), "--no-open", "--storage", storage], {
+        cwd: base,
+        env: { CONTEXT_AGENT_BUILD_ID: undefined, CONTEXT_AGENT_DEV_BACKEND: undefined },
+        extendEnv: true,
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+      }),
+    );
+  const stop = Effect.fn("smoke.stop")(function* (child: ChildProcessSpawner.ChildProcessHandle) {
+    if (yield* child.isRunning) {
+      if (windows) {
+        const killer = yield* spawner.spawn(
+          ChildProcess.make("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+            stdout: "ignore",
+            stderr: "ignore",
+          }),
+        );
+        yield* killer.exitCode;
+      } else yield* child.kill();
+    }
+    return Number(yield* child.exitCode);
+  });
 
-const ErrorResponse = Schema.Struct({ error: Schema.String });
-const Created = Schema.Struct({ id: Schema.String });
-const Text = Schema.Struct({ text: Schema.String });
-/** Assembled at run time so no key-shaped text sits in the repository. */
-const smokeToken = `${"gh"}p_${"S1m2O3k4E5t6O7k8E9n0A1b2C3d4E5f6G7h8"}`;
-const Catalog = Schema.Struct({
-  skills: Schema.Array(Schema.Struct({ name: Schema.String, scope: Schema.String })),
-});
-const json = <A, I>(schema: Schema.Codec<A, I>, response: Response) =>
-  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  response
-    .json()
-    .then((body) =>
-      EffectFunction.flow(Schema.decodeUnknownResult(schema), Result.getOrThrow)(body),
+  const ErrorResponse = Schema.Struct({ error: Schema.String });
+  const Created = Schema.Struct({ id: Schema.String });
+  const Text = Schema.Struct({ text: Schema.String });
+  /** Assembled at run time so no key-shaped text sits in the repository. */
+  const smokeToken = `${"gh"}p_${"S1m2O3k4E5t6O7k8E9n0A1b2C3d4E5f6G7h8"}`;
+  const Catalog = Schema.Struct({
+    skills: Schema.Array(Schema.Struct({ name: Schema.String, scope: Schema.String })),
+  });
+  const json = <A, I>(
+    schema: Schema.Codec<A, I>,
+    response: import("effect/http/HttpClientResponse").HttpClientResponse,
+  ) => response.json.pipe(Effect.flatMap(Schema.decodeUnknownEffect(schema)));
+
+  const port = yield* freePort();
+  const url = `http://127.0.0.1:${port}`;
+  const post = (
+    route: string,
+    body: Record<string, string>,
+    headers: Record<string, string> = {},
+  ) =>
+    client.execute(
+      HttpClientRequest.post(`${url}${route}`).pipe(
+        HttpClientRequest.setHeaders(headers),
+        HttpClientRequest.bodyJsonUnsafe(body),
+      ),
     );
 
-/** A request with a Host header fetch() does not allow setting. */
-const statusWithHost = (url: string, host: string) =>
-  // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-  new Promise<number>((resolve, reject) => {
-    const request = httpRequest(url, { headers: { host } }, (response) => {
-      response.resume();
-      resolve(response.statusCode ?? 0);
-    });
-    request.on("error", reject);
-    request.end();
-  });
-
-let server: ChildProcess | null = null;
-try {
-  const port = await runNativeEffect(freePort());
-  const url = `http://127.0.0.1:${port}`;
-  const post = (path: string, body: Record<string, string>, headers: Record<string, string> = {}) =>
-    // Native Request/Response adapter preserves host and SDK stream semantics.
-    fetch(`${url}${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...headers },
-      body: JSON.stringify(body),
-    });
-
-  // React/native timestamps use the host Date contract outside Effect execution.
-  let started = Date.now();
-  server = start(port);
-  await runNativeEffect(
-    until(
-      "the server",
-      // Native Request/Response adapter preserves host and SDK stream semantics.
-      () => fetch(url).then((response) => (response.ok ? response : null)),
-      60_000,
-    ),
+  let started = yield* Clock.currentTimeMillis;
+  const server = yield* start(port);
+  yield* until(
+    "the server",
+    client
+      .get(url)
+      .pipe(
+        Effect.map((response) =>
+          response.status >= 200 && response.status < 300 ? response : null,
+        ),
+      ),
+    60_000,
   );
-  // React/native timestamps use the host Date contract outside Effect execution.
-  check("first start serves the app", true, `${Date.now() - started} ms`);
+  yield* check(
+    "first start serves the app",
+    true,
+    `${(yield* Clock.currentTimeMillis) - started} ms`,
+  );
 
-  // Native Request/Response adapter preserves host and SDK stream semantics.
-  const page = await fetch(url).then((response) => response.text());
+  const page = yield* Effect.flatMap(client.get(url), (response) => response.text);
   const asset = /\/assets\/[^"]+\.js/.exec(page)?.[0];
-  // Native Request/Response adapter preserves host and SDK stream semantics.
-  const assetResponse = isTruthy(asset) ? await fetch(`${url}${asset}`) : null;
-  check(
+  const assetResponse = isTruthy(asset) ? yield* client.get(`${url}${asset}`) : null;
+  yield* check(
     "client assets with immutable caching",
     assetResponse?.status === 200 &&
-      (assetResponse.headers.get("cache-control") ?? "").includes("immutable"),
+      (assetResponse.headers["cache-control"] ?? "").includes("immutable"),
   );
 
-  const badHost = await statusWithHost(`${url}/api/auth?provider=openai`, "evil.example");
-  check("non-loopback Host refused", badHost === 403, String(badHost));
-  const crossSite = await post(
+  const badHost = yield* client
+    .get(`${url}/api/auth?provider=openai`, { headers: { host: "evil.example" } })
+    .pipe(Effect.map((response) => response.status));
+  yield* check("non-loopback Host refused", badHost === 403, String(badHost));
+  const crossSite = yield* post(
     "/api/auth",
     { intent: "logout", provider: "openai" },
     { Origin: "https://evil.example", "Sec-Fetch-Site": "cross-site" },
   );
-  check("cross-site POST refused", crossSite.status === 403, String(crossSite.status));
+  yield* check("cross-site POST refused", crossSite.status === 403, String(crossSite.status));
 
-  // Native Request/Response adapter preserves host and SDK stream semantics.
-  const authResponse = await fetch(`${url}/api/auth?provider=invalid`);
-  const authError = await json(ErrorResponse, authResponse);
-  check(
+  const authResponse = yield* client.get(`${url}/api/auth?provider=invalid`);
+  const authError = yield* json(ErrorResponse, authResponse);
+  yield* check(
     "provider auth route validates the provider",
     authResponse.status === 400 && authError.error === "invalid_provider",
     `${authResponse.status} ${authError.error}`,
   );
 
-  const created = await post("/api/projects", { root: project });
-  check("project added (SQLite, vector index)", created.status === 201, String(created.status));
-  const projectId = created.status === 201 ? (await json(Created, created)).id : "";
-  const session = await post("/api/sessions", { projectId });
-  check("session created", session.status === 201, String(session.status));
-  // Native Request/Response adapter preserves host and SDK stream semantics.
-  const kagi = await fetch(`${url}/api/settings/kagi`);
-  check("keychain addon loads (Kagi status)", kagi.status === 200, String(kagi.status));
+  const created = yield* post("/api/projects", { root: project });
+  yield* check(
+    "project added (SQLite, vector index)",
+    created.status === 201,
+    String(created.status),
+  );
+  const projectId = created.status === 201 ? (yield* json(Created, created)).id : "";
+  const session = yield* post("/api/sessions", { projectId });
+  yield* check("session created", session.status === 201, String(session.status));
+  const kagi = yield* client.get(`${url}/api/settings/kagi`);
+  yield* check("keychain addon loads (Kagi status)", kagi.status === 200, String(kagi.status));
   // Built-in skills are found next to the unpacked runtime, a path only the executable takes.
-  // Native Request/Response adapter preserves host and SDK stream semantics.
-  const catalog = await json(Catalog, await fetch(`${url}/api/projects/${projectId}/skills`));
+  const catalog = yield* json(
+    Catalog,
+    yield* client.get(`${url}/api/projects/${projectId}/skills`),
+  );
   const builtin = catalog.skills.filter((skill) => skill.scope === "builtin");
-  check(
+  yield* check(
     "built-in skills unpacked and listed",
     builtin.some((skill) => skill.name === "draw"),
     builtin.map((skill) => skill.name).join(", ") || "none",
   );
 
-  const acp = spawnSync(executable, ["acp", "--port", String(port)], {
-    input: `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 1, clientCapabilities: {} } })}\n`,
-    encoding: "utf8",
-    timeout: 30_000,
+  const initialize = yield* Schema.encodeEffect(
+    Schema.fromJsonString(
+      Schema.Struct({
+        jsonrpc: Schema.Literal("2.0"),
+        id: Schema.Literal(1),
+        method: Schema.Literal("initialize"),
+        params: Schema.Struct({
+          protocolVersion: Schema.Literal(1),
+          clientCapabilities: Schema.Struct({}),
+        }),
+      }),
+    ),
+  )({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { protocolVersion: 1, clientCapabilities: {} },
   });
-  check(
-    "acp answers initialize on stdout",
-    acp.stdout.includes('"agentInfo"'),
-    acp.stdout.slice(0, 80),
-  );
+  const acp = yield* Effect.scoped(
+    Effect.gen(function* () {
+      const child = yield* spawner.spawn(
+        ChildProcess.make(executable, ["acp", "--port", String(port)], {
+          stdin: Stream.make(new TextEncoder().encode(`${initialize}\n`)),
+          stderr: "ignore",
+        }),
+      );
+      return yield* child.stdout.pipe(
+        Stream.decodeText(),
+        Stream.runFold(
+          () => "",
+          (text, part) => text + part,
+        ),
+      );
+    }),
+  ).pipe(Effect.timeout(30_000));
+  yield* check("acp answers initialize on stdout", acp.includes('"agentInfo"'), acp.slice(0, 80));
 
-  const code = await runNativeEffect(stop(server));
-  check("server shuts down cleanly", windows || code === 0, `exit ${code}`);
+  const code = yield* stop(server);
+  yield* check("server shuts down cleanly", windows || code === 0, `exit ${code}`);
 
   // A node stored the way it was before secrets were hidden on the way in; the start below sweeps
   // it. This check exercises the packaged secret detector.
-  const sessionId = session.status === 201 ? (await json(Created, session)).id : "";
-  const seeded = (() => {
+  const sessionId = session.status === 201 ? (yield* json(Created, session)).id : "";
+  const seededAt = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
+  const seeded = yield* Effect.sync(() => {
     const database = new DatabaseSync(join(storage, "agent.db"));
     try {
       database
         .prepare(
           "INSERT INTO nodes (id, project_id, session_id, kind, text, created_at) VALUES ('smoke-secret', ?, ?, 'tool_result', ?, ?)",
         )
-        // React/native timestamps use the host Date contract outside Effect execution.
-        .run(projectId, sessionId, `GITHUB_TOKEN=${smokeToken}`, new Date().toISOString());
+        .run(projectId, sessionId, `GITHUB_TOKEN=${smokeToken}`, seededAt);
       return true;
     } finally {
       database.close();
     }
-  })();
+  });
 
-  server = start(port);
-  await runNativeEffect(
-    until(
-      "the second start",
-      // Native Request/Response adapter preserves host and SDK stream semantics.
-      () => fetch(url).then((response) => (response.ok ? response : null)),
-      60_000,
-    ),
+  const secondServer = yield* start(port);
+  yield* until(
+    "the second start",
+    client
+      .get(url)
+      .pipe(
+        Effect.map((response) =>
+          response.status >= 200 && response.status < 300 ? response : null,
+        ),
+      ),
+    60_000,
   );
   // The agent (and the sweep it starts) is made on the first API request, as the page makes one.
-  // Native Request/Response adapter preserves host and SDK stream semantics.
-  await fetch(`${url}/api/auth`);
-  const swept = await runNativeEffect(
-    until(
-      "the secret sweep",
-      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      () =>
-        runNativeEffect(
-          Effect.sync(() => {
-            const database = new DatabaseSync(join(storage, "agent.db"), { readOnly: true });
-            try {
-              const row = database
-                .prepare("SELECT text FROM nodes WHERE id = 'smoke-secret'")
-                .get();
-              // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-              const text = isTruthy(row)
-                ? EffectFunction.flow(Schema.decodeUnknownResult(Text), Result.getOrThrow)(row).text
-                : "";
-              return text.includes(smokeToken) ? null : text;
-            } finally {
-              database.close();
-            }
-          }),
-        ),
-      30_000,
-    ),
+  yield* client.get(`${url}/api/auth`);
+  const swept = yield* until(
+    "the secret sweep",
+    Effect.sync(() => {
+      const database = new DatabaseSync(join(storage, "agent.db"), { readOnly: true });
+      try {
+        const row = database.prepare("SELECT text FROM nodes WHERE id = 'smoke-secret'").get();
+        const text = isTruthy(row)
+          ? Schema.decodeUnknownOption(Text)(row).pipe(
+              Option.map((value) => value.text),
+              Option.getOrElse(() => ""),
+            )
+          : "";
+        return text.includes(smokeToken) ? null : text;
+      } finally {
+        database.close();
+      }
+    }),
+    30_000,
   );
-  check(
+  yield* check(
     "stored secrets swept on start (bundled detector)",
     seeded && swept === "GITHUB_TOKEN=[redacted:github]",
     swept,
   );
-  await runNativeEffect(stop(server));
-} finally {
-  if (server !== null && server.exitCode === null) await runNativeEffect(stop(server));
-  rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-}
+  yield* stop(secondServer);
 
-if (failures.length > 0) {
-  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  console.error(`${failures.length} check(s) failed`);
-  process.exit(1);
-}
+  if (failures.length > 0) {
+    yield* Effect.logError(`${failures.length} check(s) failed`);
+    return yield* new Cause.UnknownError(new Error(`${failures.length} smoke checks failed`));
+  }
+});
+await Effect.runPromise(Effect.scoped(program));

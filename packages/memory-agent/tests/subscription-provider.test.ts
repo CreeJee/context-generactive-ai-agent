@@ -1,6 +1,8 @@
+import { runNativeEffectWith } from "../src/runtime/native-effect.ts";
 import { nativeStream } from "../src/runtime/native-stream.ts";
 import { it as effectTest } from "@effect/vitest";
 import { Stream, DateTime, Deferred, Effect, Exit, Fiber, Schema } from "effect";
+import * as TestClock from "effect/testing/TestClock";
 import { describe, expect, test } from "vite-plus/test";
 import type { Settings } from "../src/config/global-config.ts";
 import {
@@ -18,7 +20,7 @@ import { createSubscriptionRuntime } from "../src/providers/subscription-runtime
 // Native SDK callbacks receive a stable Promise backed by a Deferred owned by this test Scope.
 const sdkGateFactory = Effect.fn("subscriptionProviderTest.sdkGateFactory")(function* () {
   const scope = yield* Effect.scope;
-  const run = Effect.runPromiseWith(yield* Effect.context());
+  const run = runNativeEffectWith(yield* Effect.context());
   return <A, E = never>() => {
     const deferred = Deferred.makeUnsafe<A, E>();
     let promise: Promise<A> | undefined;
@@ -149,6 +151,23 @@ const gatedCatalog = Effect.fn("subscriptionProviderTest.gatedCatalog")(function
 });
 
 describe("subscription catalog concurrency", () => {
+  effectTest.effect("retains success until the 30-second TTL expires", () =>
+    Effect.gen(function* () {
+      const { provider, gates } = yield* gatedCatalog();
+      const first = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
+      gates[0]!.release(catalogPages("first"));
+      yield* Fiber.join(first);
+      yield* TestClock.adjust("29 seconds");
+      expect((yield* provider.models.list)[0]?.id).toBe("first");
+      expect(gates).toHaveLength(1);
+      yield* TestClock.adjust("1 second");
+      const fresh = yield* Effect.forkChild(provider.models.list, { startImmediately: true });
+      expect(gates).toHaveLength(2);
+      gates[1]!.release(catalogPages("fresh"));
+      expect((yield* Fiber.join(fresh))[0]?.id).toBe("fresh");
+    }),
+  );
+
   effectTest.live(
     "coalesces eight concurrent cold calls into one invocation and retains success",
     () =>
@@ -445,10 +464,8 @@ describe("subscription provider product services", () => {
 
   effectTest.live("shows a safe credential-store stage even when status reads also fail", () =>
     Effect.gen(function* () {
-      let rejectLogin!: (error: OAuthHarnessError) => void;
-      const completed = new Promise<OAuthConnectionStatus>((_resolve, reject) => {
-        rejectLogin = reject;
-      });
+      const login = (yield* sdkGateFactory())<OAuthConnectionStatus, OAuthHarnessError>();
+      const completed = login.promise;
       const provider = createSubscriptionProvider({
         protocol: providerProtocols.openai,
         config: settingsStore(),
@@ -478,7 +495,7 @@ describe("subscription provider product services", () => {
         credentialStage: "read",
       });
       expect((yield* provider.auth.connect).status).toBe("pending");
-      rejectLogin(
+      login.reject(
         new OAuthHarnessError("credential_store_unavailable", null, {
           provider: "openai",
           operation: "credential_store",

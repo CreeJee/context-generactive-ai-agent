@@ -1,41 +1,71 @@
-import { NodeCrypto } from "@effect/platform-node";
-import { Config, Effect, Layer, ManagedRuntime } from "effect";
-import { defaultStorageRoot, memoryAgentLayer, stopAllCommands } from "memory-agent";
+import { NodeServices } from "@effect/platform-node";
+import { Config, Effect, Layer, ManagedRuntime, Function as EffectFunction } from "effect";
+import {
+  defaultStorageRoot,
+  memoryAgentLayer,
+  stopAllCommands,
+  type ModelSelection,
+} from "memory-agent";
+import { configureRuntimeRoot } from "memory-agent/runtime-resources";
+import {
+  withServerToolComparison,
+  type ComparisonProviderLayer,
+  type ComparisonRequestGuard,
+} from "./tool-comparison.ts";
 
 // Config is evaluated when the runtime first builds its services, after CLI options are applied.
 type MemoryAgentLayer = ReturnType<typeof memoryAgentLayer>;
+let configuredStorageRoot: string | undefined;
+
+/** Called by the bundled server entry before the first request builds any agent service. */
+export function configureAgentBackend(options: {
+  readonly storageRoot: string;
+  readonly runtimeRoot: string | null;
+}): void {
+  configuredStorageRoot = options.storageRoot;
+  configureRuntimeRoot(options.runtimeRoot);
+}
 const agentLayer: Layer.Layer<
   Layer.Success<MemoryAgentLayer>,
-  Layer.Error<MemoryAgentLayer> | Config.ConfigError
+  Layer.Error<MemoryAgentLayer> | Config.ConfigError,
+  Layer.Services<MemoryAgentLayer>
 > = Layer.unwrap(
-  Config.String("CONTEXT_AGENT_HOME").pipe(
-    Config.withDefault(defaultStorageRoot),
-    Effect.map(memoryAgentLayer),
-  ),
+  Effect.suspend(() =>
+    configuredStorageRoot === undefined
+      ? Config.String("CONTEXT_AGENT_HOME").pipe(Config.withDefault(defaultStorageRoot))
+      : Effect.succeed(configuredStorageRoot),
+  ).pipe(Effect.map(memoryAgentLayer)),
 );
 type AgentRuntime = ManagedRuntime.ManagedRuntime<
-  Layer.Success<typeof agentLayer> | import("effect").Crypto.Crypto,
+  Layer.Success<typeof agentLayer> | Layer.Success<typeof NodeServices.layer>,
   Layer.Error<typeof agentLayer>
 >;
 
 function createAgentRuntime(): AgentRuntime {
-  // The storage root is read when the first request builds the layer, so the executable can set
-  // CONTEXT_AGENT_HOME (its --storage option) after this module is loaded.
-  const runtime = ManagedRuntime.make(Layer.merge(agentLayer, NodeCrypto.layer));
-  // Stop child commands and release the vector index lock with the server. SIGHUP is a closed
-  // terminal, and on Windows a closed console window (it has no SIGTERM).
-  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const)
-    process.once(signal, () => {
-      stopAllCommands();
-      void runtime.dispose().finally(() => process.exit(0));
-    });
-  return runtime;
-}
-
-declare global {
-  // Survives dev-server module reloads so the runtime and index lock are not started twice.
-  var contextGeneractiveAgent: ReturnType<typeof createAgentRuntime> | undefined;
+  // The server entry configures storage before the first request builds this layer.
+  return ManagedRuntime.make(agentLayer.pipe(Layer.provideMerge(NodeServices.layer)));
 }
 
 /** The single memory-agent runtime of this server process. Server-only. */
-export const agent = (globalThis.contextGeneractiveAgent ??= createAgentRuntime());
+export const agent = createAgentRuntime();
+
+/** The backend owner's Scope disposes this exact runtime from the server build. */
+export function disposeAgent(): Promise<void> {
+  stopAllCommands();
+  return agent.dispose();
+}
+
+/** Internal evaluation capability; borrowing providers never exposes a DB or credentials to HTTP. */
+export const runToolComparison: {
+  <A, E>(
+    guard: ComparisonRequestGuard,
+    use: (providers: ComparisonProviderLayer) => Effect.Effect<A, E>,
+  ): (selection: ModelSelection) => Promise<A>;
+} & typeof runToolComparisonBody = EffectFunction.dual(3, runToolComparisonBody);
+function runToolComparisonBody<A, E>(
+  selection: ModelSelection,
+  guard: ComparisonRequestGuard,
+  use: (providers: ComparisonProviderLayer) => Effect.Effect<A, E>,
+) {
+  return agent.runPromise(withServerToolComparison(selection, guard, use));
+}

@@ -1,5 +1,5 @@
+import { withTestPlatform } from "./support/platform.ts";
 import { it, layer } from "@effect/vitest";
-import { assertExitFailure } from "@effect/vitest/utils";
 import { NodeServices } from "@effect/platform-node";
 import { Cause, Effect, Exit, Fiber, FileSystem, Path, Schedule, Schema } from "effect";
 import { expect } from "vite-plus/test";
@@ -46,7 +46,7 @@ it.live("native process startup failures use the typed error channel", () =>
     );
     expect(failure._tag).toBe("CommandStartFailed");
     expect(failure.reason._tag).toBe("SpawnFailed");
-  }),
+  }).pipe(withTestPlatform),
 );
 
 it.effect("defects in command preparation stay defects", () =>
@@ -66,6 +66,7 @@ it.effect("defects in command preparation stay defects", () =>
         env: broken,
       }),
     );
-    assertExitFailure(exit, Cause.die(defect));
-  }),
+    expect(Exit.hasDies(exit)).toBe(true);
+    if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBe(defect);
+  }).pipe(withTestPlatform),
 );

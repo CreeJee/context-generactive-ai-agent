@@ -7,7 +7,7 @@ const sdkCall = Effect.fn("workerCancellationTest.sdkCall")(function* <A>(
     catch: (cause) => new Cause.UnknownError(cause),
   });
 });
-import { Cause, ConfigProvider, Deferred, Effect, Fiber, Layer, Schema } from "effect";
+import { Cause, Context, Deferred, Effect, Fiber, Schema } from "effect";
 import { expect, vi } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { Database } from "../src/db/database.ts";
@@ -19,11 +19,7 @@ it.live(
   "cancelled pending worker pull cannot leave a stopped SDK run marked running or completed",
   () =>
     Effect.gen(function* () {
-      const flagServices = yield* Layer.build(
-        ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ CONTEXT_AGENT_GOAL_WORKER: "1" }), {
-          asPrimary: true,
-        }),
-      );
+      const testServices = Context.empty();
       const runNative = Effect.runPromiseWith(yield* Effect.context());
 
       const gate = turnGate();
@@ -70,14 +66,14 @@ it.live(
         yield* Effect.addFinalizer(() => Effect.sync(() => streaming.mockRestore()));
         yield* Effect.provideContext(
           Effect.provideContext(selectTestModel(), yield* context.runtime.contextEffect),
-          flagServices,
+          testServices,
         );
         const { db, workflows, chat } = yield* Effect.provideContext(
           Effect.provideContext(
             Effect.all({ db: Database, workflows: Workflows, chat: AgentChat }),
             yield* context.runtime.contextEffect,
           ),
-          flagServices,
+          testServices,
         );
         yield* Effect.provideContext(
           Effect.provideContext(
@@ -92,7 +88,7 @@ it.live(
             }),
             yield* context.runtime.contextEffect,
           ),
-          flagServices,
+          testServices,
         );
         const runId = "cancelled-pending-worker";
         const request = Effect.fn("workerCancellationTest.request")(function* (id: string) {
@@ -113,20 +109,20 @@ it.live(
             chat.handle(yield* request(runId), context.session.id),
             yield* context.runtime.contextEffect,
           ),
-          flagServices,
+          testServices,
         );
         expect(response.status).toBe(200);
         const delivered = yield* Effect.forkChild(sdkCall(() => response.text()));
         yield* Effect.provideContext(
           Effect.provideContext(Deferred.await(started), yield* context.runtime.contextEffect),
-          flagServices,
+          testServices,
         );
         const cancel = yield* Effect.provideContext(
           Effect.provideContext(
             chat.cancel(context.session.id, null),
             yield* context.runtime.contextEffect,
           ),
-          flagServices,
+          testServices,
         );
         expect(cancel.status).toBe(200);
         const result = yield* sdkCall(() => cancel.json());
@@ -158,7 +154,7 @@ it.live(
             Effect.all({ db: Database, chat: AgentChat }),
             yield* reopened.contextEffect,
           ),
-          flagServices,
+          testServices,
         );
         expect(
           owner.db.sqlite.prepare("SELECT status FROM chat_runs WHERE run_id = ?").get(runId),
@@ -173,7 +169,7 @@ it.live(
             ),
             yield* reopened.contextEffect,
           ),
-          flagServices,
+          testServices,
         );
         expect(replay.status).toBe(200);
         expect(yield* sdkCall(() => replay.text())).toBe(output.slice(output.indexOf("\n\n") + 2));
@@ -190,7 +186,7 @@ it.live(
               owner.chat.handle(yield* request(id), context.session.id),
               yield* reopened.contextEffect,
             ),
-            flagServices,
+            testServices,
           );
           expect(retry.status).toBe(409);
         }

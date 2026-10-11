@@ -1,20 +1,15 @@
+import { NodeCrypto, NodePath, NodeServices } from "@effect/platform-node";
+import { Crypto, Effect, FileSystem, ManagedRuntime, Path } from "effect";
 import { Function as EffectFunction } from "effect";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { createHash, randomUUID } from "node:crypto";
-import {
-  closeSync,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  readdirSync,
-  unlinkSync,
-  writeFileSync,
-  // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-} from "node:fs";
+import { Hex } from "effect/encoding";
+
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { join, relative, resolve } from "node:path";
-import { Option, Schema } from "effect";
+
+import { nativeFailure } from "memory-agent/native-effect";
+import { DateTime, Option, Schema, Scope, Exit, Cause } from "effect";
+
+const { join, resolve } = ManagedRuntime.make(NodePath.layer).runSync(Path.Path);
 
 export const developmentBuildHeader = "x-context-agent-build-id";
 
@@ -28,40 +23,63 @@ export const developmentBackendWatchPaths = (appRoot: string) => [
   resolve(appRoot, "../../packages/memory-agent/package.json"),
 ];
 
-const fingerprintFiles = (path: string): string[] => {
-  if (!existsSync(path)) return [];
-  const entries = readdirSync(path, { withFileTypes: true });
-  return entries.flatMap((entry) => {
-    const child = join(path, entry.name);
-    if (entry.isDirectory()) return fingerprintFiles(child);
-    if (!entry.isFile() || entry.name.includes(".test.")) return [];
-    return [child];
-  });
-};
+const fingerprintRuntime = ManagedRuntime.make(NodeServices.layer);
+const fingerprintFiles = Effect.fn("dev.fingerprintFiles")(function* (
+  path: string,
+): Effect.fn.Return<string[], never, FileSystem.FileSystem | Path.Path> {
+  const fs = yield* FileSystem.FileSystem;
+  const { basename, join } = yield* Path.Path;
+  const info = yield* fs.stat(path).pipe(Effect.option);
+  if (Option.isNone(info)) return [];
+  switch (info.value.type) {
+    case "File":
+      return basename(path).includes(".test.") ? [] : [path];
+    case "Directory": {
+      const entries = yield* fs.readDirectory(path).pipe(Effect.orDie);
+      const results: string[] = [];
+      for (const entry of entries) {
+        const child = join(path, entry);
+        if (Option.isSome(yield* fs.readLink(child).pipe(Effect.option))) continue;
+        results.push(...(yield* fingerprintFiles(child)));
+      }
+      return results;
+    }
+    default:
+      return [];
+  }
+});
+
+const fingerprint = Effect.fn("dev.fingerprint")(function* (appRoot: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const crypto = yield* Crypto.Crypto;
+  const files: string[] = [];
+  for (const watched of developmentBackendWatchPaths(appRoot))
+    files.push(...(yield* fingerprintFiles(watched)));
+  files.sort();
+  const encoder = new TextEncoder();
+  const delimiter = encoder.encode("\\0");
+  const chunks: Uint8Array[] = [];
+  for (const file of files) {
+    chunks.push(
+      encoder.encode(path.relative(appRoot, file)),
+      delimiter,
+      yield* fs.readFile(file),
+      delimiter,
+    );
+  }
+  const input = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.byteLength, 0));
+  let offset = 0;
+  for (const chunk of chunks) {
+    input.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return Hex.encode(yield* crypto.digest("SHA-256", input)).slice(0, 24);
+});
 
 /** Stable fingerprint of every source file owned by the no-HMR backend boundary. */
-export function developmentBuildId(appRoot: string) {
-  const hash = createHash("sha256");
-  const files = developmentBackendWatchPaths(appRoot)
-    .flatMap((path) => (existsSync(path) && !readdirSafe(path) ? [path] : fingerprintFiles(path)))
-    .sort();
-  for (const file of files) {
-    hash.update(relative(appRoot, file));
-    hash.update("\\0");
-    hash.update(readFileSync(file));
-    hash.update("\\0");
-  }
-  return hash.digest("hex").slice(0, 24);
-}
-
-const readdirSafe = (path: string) => {
-  try {
-    readdirSync(path);
-    return true;
-  } catch {
-    return false;
-  }
-};
+export const developmentBuildId = (appRoot: string) =>
+  fingerprintRuntime.runPromise(fingerprint(appRoot));
 
 export const affectsDevelopmentBackend = (file: string) => {
   const path = file.replaceAll("\\\\", "/");
@@ -89,16 +107,20 @@ export interface DevelopmentBoundary {
   readonly beginDrain: () => void;
 }
 
-export function createDevelopmentBoundary(
-  buildId: string,
-  instanceId: string = randomUUID(),
-): DevelopmentBoundary {
+export function createDevelopmentBoundary({
+  buildId,
+  instanceId = ManagedRuntime.make(NodeCrypto.layer).runSync(
+    Effect.flatMap(Crypto.Crypto, (crypto) => crypto.randomUUIDv4()),
+  ),
+}: {
+  readonly buildId: string;
+  readonly instanceId?: string;
+}): DevelopmentBoundary {
   let isDraining = false;
   return {
     buildId,
     instanceId,
-    // React/native timestamps use the host Date contract outside Effect execution.
-    startedAt: new Date().toISOString(),
+    startedAt: DateTime.formatIso(DateTime.nowUnsafe()),
     draining: () => isDraining,
     beginDrain: () => {
       isDraining = true;
@@ -189,41 +211,47 @@ export const acquireStorageLock: {
   ): (storageRoot: string) => ReturnType<typeof acquireStorageLockBody>;
 } & typeof acquireStorageLockBody = EffectFunction.dual(3, acquireStorageLockBody);
 function acquireStorageLockBody(storageRoot: string, port: number, instanceId: string) {
-  mkdirSync(storageRoot, { recursive: true, mode: 0o700 });
-  const file = join(storageRoot, "backend.lock");
-  const record = { pid: process.pid, instanceId, port };
-
-  const create = () => {
-    const descriptor = openSync(file, "wx", 0o600);
-    try {
-      writeFileSync(descriptor, JSON.stringify(record));
-    } finally {
-      closeSync(descriptor);
-    }
-  };
-
-  try {
-    create();
-  } catch (error) {
-    const FsError = Schema.Struct({ code: Schema.String });
-    if (!Schema.is(FsError)(error) || error.code !== "EEXIST") throw error;
-    const existing = Option.getOrNull(decodeLock(readFileSync(file, "utf8")));
-    if (existing !== null && processIsAlive(existing.pid)) {
-      throw new Error(`backend already owns this storage root on port ${existing.port}`);
-    }
-    unlinkSync(file);
-    create();
-  }
-
-  let released = false;
-  return () => {
-    if (released) return;
-    released = true;
-    try {
-      const existing = Option.getOrNull(decodeLock(readFileSync(file, "utf8")));
-      if (existing?.instanceId === instanceId) unlinkSync(file);
-    } catch {
-      // The lock is already absent or no longer ours.
-    }
-  };
+  return fingerprintRuntime
+    .runPromiseExit(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const file = join(storageRoot, "backend.lock");
+        const record = { pid: process.pid, instanceId, port };
+        yield* fs.makeDirectory(storageRoot, { recursive: true, mode: 0o700 });
+        const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(LockRecord))(record);
+        const create = fs.writeFileString(file, encoded, {
+          flag: "wx",
+          mode: 0o600,
+        });
+        yield* create.pipe(
+          Effect.catch((error) =>
+            Effect.gen(function* () {
+              if (error.reason._tag !== "AlreadyExists") return yield* error;
+              const existing = Option.getOrNull(decodeLock(yield* fs.readFileString(file)));
+              if (existing !== null && processIsAlive(existing.pid))
+                return yield* new Cause.UnknownError(
+                  new Error(`backend already owns this storage root on port ${existing.port}`),
+                );
+              yield* fs.remove(file);
+              yield* create;
+            }),
+          ),
+        );
+        const scope = yield* Scope.make();
+        yield* Scope.addFinalizer(
+          scope,
+          Effect.gen(function* () {
+            const existing = Option.getOrNull(decodeLock(yield* fs.readFileString(file)));
+            if (existing?.instanceId === instanceId) yield* fs.remove(file);
+          }).pipe(Effect.ignore),
+        );
+        return () => fingerprintRuntime.runPromise(Scope.close(scope, Exit.void));
+      }),
+    )
+    .then(
+      Exit.match({
+        onSuccess: (release) => release,
+        onFailure: (cause) => Promise.reject(nativeFailure(cause).cause),
+      }),
+    );
 }

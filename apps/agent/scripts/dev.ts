@@ -1,31 +1,43 @@
-import { Cause, Clock, Effect } from "effect";
+import { FetchHttpClient, HttpClient } from "effect/http";
+import { NodePath, NodeServices } from "@effect/platform-node";
+import { ManagedRuntime, Path } from "effect";
+import { Cause, Clock, Config, Console, Effect, FileSystem, Layer } from "effect";
 import { nativePromise, runNativeEffect } from "memory-agent/native-effect";
-import { Result, Function as EffectFunction } from "effect";
-import { isTruthy } from "../app/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { spawn, type ChildProcess } from "node:child_process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { join } from "node:path";
+
 import { fileURLToPath } from "node:url";
 import { Option, Schema } from "effect";
 import { developmentBuildId } from "../server/dev-safety.ts";
+import { devHelp, readDevConfiguration } from "./dev-configuration.ts";
+import { assertPortAvailable } from "./dev-process.ts";
 
+const { dirname } = ManagedRuntime.make(NodePath.layer).runSync(Path.Path);
+
+const developmentRuntime = ManagedRuntime.make(
+  Layer.merge(NodeServices.layer, FetchHttpClient.layer),
+);
 const app = fileURLToPath(new URL("..", import.meta.url));
-// Native host/SDK configuration boundary reads or forwards the host environment.
-const backendPort = Number(process.env.CONTEXT_AGENT_DEV_BACKEND_PORT ?? "5180");
-// Native host/SDK configuration boundary reads or forwards the host environment.
-const webPort = Number(process.env.CONTEXT_AGENT_DEV_WEB_PORT ?? "5173");
+// Validate CLI/environment settings before any build, process or storage mutation.
+const configuration = await runNativeEffect(
+  readDevConfiguration(process.argv.slice(2), process.env, app).pipe(
+    Effect.catchTag("DevConfigurationError", (failure) =>
+      Effect.sync(() => {
+        Effect.runSync(Console.error(failure.message));
+        process.exit(1);
+      }),
+    ),
+  ),
+);
+if (configuration.help) {
+  Effect.runSync(Console.log(devHelp));
+  process.exit(0);
+}
+const { backendPort, webPort, manifestFile, mode } = configuration;
 const backendUrl = `http://127.0.0.1:${backendPort}`;
-const manifestFile = join(app, "build", "dev-backend.json");
-
-const Mode = Schema.Literals(["all", "agent", "web"]);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-const mode = EffectFunction.flow(
-  Schema.decodeUnknownResult(Mode),
-  Result.getOrThrow,
-)(process.argv[2] ?? "all");
 
 const Manifest = Schema.Struct({
   backendUrl: Schema.String,
@@ -33,41 +45,39 @@ const Manifest = Schema.Struct({
 });
 const decodeManifest = Schema.decodeUnknownOption(Schema.fromJsonString(Manifest));
 
-function packageCommand(args: readonly string[], env: NodeJS.ProcessEnv = {}) {
-  // Native host/SDK configuration boundary reads or forwards the host environment.
-  const npmExecPath = process.env.npm_execpath;
-  return isTruthy(npmExecPath)
-    ? spawn(process.execPath, [npmExecPath, ...args], {
-        cwd: app,
-        env: { ...process.env, ...env },
-        stdio: "inherit",
-      })
-    : spawn("pnpm", args, {
-        cwd: app,
-        env: { ...process.env, ...env },
-        stdio: "inherit",
-        shell: process.platform === "win32",
-      });
-}
-
-function completion(child: ChildProcess, label: string) {
-  // Callback-to-Promise handshake for the native caller; cleanup stays at this protocol boundary.
-  return new Promise<number>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("exit", (code, signal) => {
-      if (isTruthy(signal)) reject(new Error(`${label} stopped by ${signal}`));
-      else resolve(code ?? 1);
-    });
-  });
-}
+const packageCommand = Effect.fnUntraced(function* (
+  args: readonly string[],
+  env: Record<string, string> = {},
+) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const options = {
+    cwd: app,
+    env,
+    extendEnv: true,
+    stdin: "inherit",
+    stdout: "inherit",
+    stderr: "inherit",
+    forceKillAfter: 5_000,
+  } as const;
+  if (args[0] === "exec" && args[1] === "vp")
+    return yield* spawner.spawn(
+      ChildProcess.make("vp", args.slice(2), { ...options, shell: process.platform === "win32" }),
+    );
+  const npmExecPath = Option.getOrUndefined(yield* Config.option(Config.String("npm_execpath")));
+  return yield* spawner.spawn(
+    npmExecPath !== undefined && npmExecPath.length > 0
+      ? ChildProcess.make(process.execPath, [npmExecPath, ...args], options)
+      : ChildProcess.make("pnpm", args, { ...options, shell: process.platform === "win32" }),
+  );
+});
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const run = Effect.fn("dev.run")(function* (
   args: readonly string[],
-  env: NodeJS.ProcessEnv,
+  env: Record<string, string>,
   label: string,
 ) {
-  const code = yield* nativePromise(() => completion(packageCommand(args, env), label));
+  const code = yield* (yield* packageCommand(args, env)).exitCode;
   if (code !== 0)
     return yield* new Cause.UnknownError(new Error(`${label} failed with exit code ${code}`));
 });
@@ -82,16 +92,19 @@ const waitForBackend = Effect.fn("dev.waitForBackend")(function* (
     status: Schema.Literals(["ready", "draining"]),
   });
   while ((yield* Clock.currentTimeMillis) < deadline) {
-    const response = yield* nativePromise(() =>
-      fetch(`${url}/api/health`, { signal: AbortSignal.timeout(1_000) }),
-    ).pipe(Effect.option);
+    const response = yield* HttpClient.get(`${url}/api/health`).pipe(
+      Effect.timeoutOption(1_000),
+      Effect.orElseSucceed(() => Option.none()),
+    );
     if (Option.isSome(response)) {
-      const body = yield* nativePromise(() => response.value.json()).pipe(Effect.option);
+      const body = yield* response.value.json.pipe(Effect.option);
       if (
-        response.value.ok &&
+        response.value.status >= 200 &&
+        response.value.status < 300 &&
         Option.isSome(body) &&
         Schema.is(Health)(body.value) &&
-        body.value.buildId === expectedBuildId
+        body.value.buildId === expectedBuildId &&
+        body.value.status === "ready"
       )
         return;
     }
@@ -100,30 +113,35 @@ const waitForBackend = Effect.fn("dev.waitForBackend")(function* (
   return yield* new Cause.UnknownError(new Error(`stable backend did not become ready at ${url}`));
 });
 
-function writeManifest(manifest: typeof Manifest.Type) {
-  mkdirSync(join(app, "build"), { recursive: true });
+const writeManifest = Effect.fn("dev.writeManifest")(function* (manifest: typeof Manifest.Type) {
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs.makeDirectory(dirname(manifestFile), { recursive: true });
   const temporary = `${manifestFile}.${process.pid}.tmp`;
-  writeFileSync(temporary, JSON.stringify(manifest), { mode: 0o600 });
-  renameSync(temporary, manifestFile);
-}
+  const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Manifest))(manifest);
+  yield* fs.writeFileString(temporary, encoded, { mode: 0o600 });
+  yield* fs.rename(temporary, manifestFile);
+});
 
-function readManifest() {
-  const manifest = Option.getOrNull(decodeManifest(readFileSync(manifestFile, "utf8")));
+const readManifest = Effect.fn("dev.readManifest")(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const manifest = Option.getOrNull(decodeManifest(yield* fs.readFileString(manifestFile)));
   if (manifest === null)
-    throw new Error("dev backend manifest is invalid; run pnpm dev:agent first");
+    return yield* new Cause.UnknownError(
+      new Error(
+        "dev backend manifest is invalid; run vp run dev:agent with the same backend-port/manifest first",
+      ),
+    );
   return manifest;
-}
+});
 
-function removeManifest(buildId: string) {
-  try {
-    const current = Option.getOrNull(decodeManifest(readFileSync(manifestFile, "utf8")));
-    if (current?.buildId === buildId) rmSync(manifestFile, { force: true });
-  } catch {
-    // A newer backend owns the manifest, or it is already absent.
-  }
-}
+const removeManifest = Effect.fn("dev.removeManifest")(function* (buildId: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const current = Option.getOrNull(decodeManifest(yield* fs.readFileString(manifestFile)));
+  if (current?.buildId === buildId) yield* fs.remove(manifestFile, { force: true });
+}, Effect.ignore());
 
-function stableBackend(buildId: string) {
+const stableBackend = Effect.fnUntraced(function* (buildId: string) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const args = [
     "dist/context-agent.mjs",
     "--port",
@@ -131,16 +149,19 @@ function stableBackend(buildId: string) {
     "--no-open",
     "--dev-backend",
   ];
-  // Native host/SDK configuration boundary reads or forwards the host environment.
-  if (isTruthy(process.env.CONTEXT_AGENT_HOME))
-    // Native host/SDK configuration boundary reads or forwards the host environment.
-    args.push("--storage", process.env.CONTEXT_AGENT_HOME);
-  return spawn(process.execPath, args, {
-    cwd: app,
-    env: { ...process.env, CONTEXT_AGENT_BUILD_ID: buildId },
-    stdio: "inherit",
-  });
-}
+  if (configuration.storage !== undefined) args.push("--storage", configuration.storage);
+  return yield* spawner.spawn(
+    ChildProcess.make(process.execPath, args, {
+      cwd: app,
+      env: { CONTEXT_AGENT_BUILD_ID: buildId },
+      extendEnv: true,
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+      forceKillAfter: 5_000,
+    }),
+  );
+});
 
 function webFrontend(manifest: typeof Manifest.Type) {
   return packageCommand(
@@ -155,52 +176,49 @@ function webFrontend(manifest: typeof Manifest.Type) {
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const buildBackend = Effect.fn("dev.buildBackend")(function* (buildId: string) {
   const env = { CONTEXT_AGENT_BUILD_ID: buildId };
-  console.log("Building the stable agent backend (HMR disabled)...");
-  yield* run(["exec", "vp", "run", "turbovec#build"], env, "turbovec native build");
+  yield* Console.log("Building the stable agent backend (HMR disabled)...");
   yield* run(["exec", "react-router", "build"], env, "react-router build");
   yield* run(["exec", "vp", "pack"], env, "vp pack");
 });
 
-const stop = Effect.fn("dev.stop")(function* (child: ChildProcess | null, signal: NodeJS.Signals) {
-  if (child === null || child.exitCode !== null || child.signalCode !== null) return;
-  child.kill(signal);
-  yield* nativePromise(() => completion(child, "child process")).pipe(
-    Effect.ignore,
-    Effect.timeoutOption(5_000),
-    Effect.tap((result) =>
-      Effect.sync(() => {
-        if (Option.isNone(result) && child.exitCode === null && child.signalCode === null)
-          child.kill("SIGKILL");
-      }),
-    ),
-  );
-});
+const stop = Effect.fn("dev.stop")(function* (
+  child: ChildProcessSpawner.ChildProcessHandle | null,
+  signal: ChildProcess.Signal,
+) {
+  if (child === null || !(yield* child.isRunning)) return;
+  yield* child.kill({ killSignal: signal, forceKillAfter: 5_000 });
+}, Effect.ignore());
 
 const runWebOnly = Effect.fn("dev.runWebOnly")(function* () {
-  const manifest = readManifest();
+  yield* nativePromise(() => assertPortAvailable(webPort, "localhost", "Frontend"));
+  const manifest = yield* readManifest();
   yield* waitForBackend(manifest.backendUrl, manifest.buildId);
-  console.log(`Stable agent backend: ${manifest.backendUrl}`);
-  const web = webFrontend(manifest);
-  process.exitCode = yield* nativePromise(() => completion(web, "HMR frontend"));
+  yield* Console.log(`Stable agent backend: ${manifest.backendUrl}`);
+  const web = yield* webFrontend(manifest);
+  process.exitCode = yield* web.exitCode;
 });
 
 const runWithBackend = Effect.fn("dev.runWithBackend")(function* (includeWeb: boolean) {
-  const buildId = developmentBuildId(app);
+  yield* nativePromise(() => assertPortAvailable(backendPort, "127.0.0.1", "Backend"));
+  if (includeWeb) yield* nativePromise(() => assertPortAvailable(webPort, "localhost", "Frontend"));
+  const buildId = yield* nativePromise(() => developmentBuildId(app));
   yield* buildBackend(buildId);
-  const backend = stableBackend(buildId);
-  let web: ChildProcess | null = null;
+  const backend = yield* stableBackend(buildId);
+  let web: ChildProcessSpawner.ChildProcessHandle | null = null;
   let stopping = false;
-  const shutdown = Effect.fn("dev.shutdown")(function* (signal: NodeJS.Signals) {
+  const shutdown = Effect.fn("dev.shutdown")(function* (signal: ChildProcess.Signal) {
     if (stopping) return;
     stopping = true;
     yield* Effect.forEach([web, backend], (child) => stop(child, signal), {
       concurrency: "unbounded",
       discard: true,
     });
-    removeManifest(buildId);
+    yield* removeManifest(buildId);
   });
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
-  const handlers = signals.map((signal) => () => void runNativeEffect(shutdown(signal)));
+  const handlers = signals.map(
+    (signal) => () => void developmentRuntime.runPromise(shutdown(signal)),
+  );
   signals.forEach((signal, index) => process.once(signal, handlers[index]!));
   yield* Effect.addFinalizer(() =>
     shutdown("SIGTERM").pipe(
@@ -211,29 +229,43 @@ const runWithBackend = Effect.fn("dev.runWithBackend")(function* (includeWeb: bo
       ),
     ),
   );
-  yield* waitForBackend(backendUrl, buildId);
-  writeManifest({ backendUrl, buildId });
-  console.log(`Stable agent backend: ${backendUrl}`);
+  yield* Effect.raceFirst(
+    waitForBackend(backendUrl, buildId),
+    backend.exitCode.pipe(
+      Effect.flatMap((code) =>
+        Effect.fail(
+          new Cause.UnknownError(
+            new Error(`stable backend exited before startup with code ${code}`),
+          ),
+        ),
+      ),
+    ),
+  );
+  yield* writeManifest({ backendUrl, buildId });
+  yield* Console.log(`Stable agent backend: ${backendUrl}`);
   if (!includeWeb) {
-    process.exitCode = yield* nativePromise(() => completion(backend, "stable backend"));
+    process.exitCode = yield* backend.exitCode.pipe(
+      Effect.catchCause((cause) => (stopping ? Effect.succeed(0) : Effect.failCause(cause))),
+    );
     return;
   }
-  web = webFrontend({ backendUrl, buildId });
-  console.log(`HMR frontend: http://127.0.0.1:${webPort}`);
-  const first = yield* nativePromise(() =>
-    Promise.race([
-      completion(backend, "stable backend").then((code) => ({ child: "backend", code })),
-      completion(web!, "HMR frontend").then((code) => ({ child: "web", code })),
-    ]),
+  web = yield* webFrontend({ backendUrl, buildId });
+  yield* Console.log(`HMR frontend: http://localhost:${webPort}`);
+  const first = yield* Effect.raceFirst(
+    backend.exitCode.pipe(Effect.map((code) => ({ child: "backend", code }))),
+    web.exitCode.pipe(Effect.map((code) => ({ child: "web", code }))),
+  ).pipe(
+    Effect.catchCause((cause) =>
+      stopping ? Effect.succeed({ child: "backend", code: 0 }) : Effect.failCause(cause),
+    ),
   );
   process.exitCode = first.code;
 }, Effect.scoped);
 
-try {
-  if (mode === "web") await runNativeEffect(runWebOnly());
-  else await runNativeEffect(runWithBackend(mode === "all"));
-} catch (error) {
-  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-  console.error(error instanceof Error ? error.message : "development server failed");
+const developmentExit = await developmentRuntime.runPromiseExit(
+  mode === "web" ? Effect.scoped(runWebOnly()) : runWithBackend(mode === "all"),
+);
+if (developmentExit._tag === "Failure") {
+  Effect.runSync(Console.error(Cause.pretty(developmentExit.cause)));
   process.exitCode = 1;
 }

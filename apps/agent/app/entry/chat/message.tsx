@@ -438,8 +438,13 @@ function ToolCallCard({
   result: ToolResult | undefined;
   awaitingApproval: boolean;
 }) {
+  const [open, setOpen] = useState(false);
   return (
-    <Collapsible className="rounded-md border bg-muted/30 text-xs">
+    <Collapsible
+      open={open}
+      onOpenChange={setOpen}
+      className="rounded-md border bg-muted/30 text-xs"
+    >
       <CollapsibleTrigger className="group flex w-full items-center gap-2 px-2.5 py-1.5 text-left">
         <ChevronRightIcon className="size-3.5 text-muted-foreground transition-transform group-data-[panel-open]:rotate-90" />
         <WrenchIcon className="size-3.5 text-muted-foreground" />

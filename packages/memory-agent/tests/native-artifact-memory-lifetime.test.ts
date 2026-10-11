@@ -118,8 +118,8 @@ it.live(
             embedder: Layer.sync(Embedder, () => {
               embedderOwners++;
               return {
-                identity: "fake-trigram-64",
-                dimensions: 64,
+                identity: "fake-trigram-384",
+                dimensions: 384,
                 embed: (texts) => Effect.succeed(texts.map(fakeVector)),
                 runtime: () => ({ kind: "other" }),
               };

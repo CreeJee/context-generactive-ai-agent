@@ -1,6 +1,5 @@
 import { Result, Function as EffectFunction } from "effect";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
+import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
 import { isTruthy } from "../truthy.ts";
 import {
   Config,
@@ -13,6 +12,7 @@ import {
   Layer,
   Schema,
 } from "effect";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { optionalProperty } from "../optional-property.ts";
 import { Attachments, type Attachment, type AttachmentsApi } from "../attachments/attachments.ts";
 import {
@@ -73,54 +73,76 @@ export class DirectImageExecutor extends Context.Service<
   static readonly unavailableLayer = DirectImageExecutor.layerFrom({
     generate: () => Effect.fail(new DirectImageExecutionFailed({ reason: "not_configured" })),
   });
-  static readonly openAIEnvironmentLayer = DirectImageExecutor.layerFrom({
-    generate: ({ decision, prompt, signal }) =>
-      Effect.gen(function* () {
-        const key = Option.getOrUndefined(
-          yield* Config.option(Config.String("OPENAI_API_KEY"))
-            .parse(ConfigProvider.fromEnv())
-            .pipe(Effect.orDie),
-        );
-        if (key === undefined)
-          return yield* new DirectImageExecutionFailed({ reason: "not_configured" });
-        if (decision.executorMediaModel.type !== "explicit")
-          return yield* new DirectImageExecutionFailed({ reason: "invalid_output" });
-        const model = decision.executorMediaModel.model;
-        const fiberSignal = yield* Effect.abortSignal;
-        const response = yield* Effect.tryPromise({
-          try: () =>
-            // Native fetch I/O boundary preserves RequestInit semantics; scoped AbortSignal owns interruption.
-            fetch("https://api.openai.com/v1/images/generations", {
-              method: "POST",
-              headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
-              body: stringifyJson({ model, prompt, output_format: "png" }),
-              signal: signal === undefined ? fiberSignal : AbortSignal.any([signal, fiberSignal]),
-            }),
-          catch: (cause) => new DirectImageExecutionFailed({ reason: "network", cause }),
-        });
-        if (!response.ok)
-          return yield* new DirectImageExecutionFailed({
-            reason: "provider_rejected",
-            cause: { status: response.status },
-          });
-        const raw: unknown = yield* Effect.tryPromise({
-          try: () => response.json(),
-          catch: (cause) => new DirectImageExecutionFailed({ reason: "network", cause }),
-        });
-        const value = yield* Schema.decodeUnknownEffect(OpenAIImageResponse)(raw).pipe(
-          Effect.mapError((cause) => new DirectImageExecutionFailed({ reason: "network", cause })),
-        );
-        const encoded = value.data[0]?.b64_json;
-        if (encoded === undefined)
-          return yield* new DirectImageExecutionFailed({ reason: "invalid_output" });
-        const result: DirectImageExecutionResult = {
-          bytes: Uint8Array.from(Buffer.from(encoded, "base64")),
-          contentType: "image/png",
-        };
-        const requestId = response.headers.get("x-request-id");
-        return requestId === null ? result : { ...result, providerRequestId: requestId };
-      }).pipe(Effect.scoped),
-  });
+  static readonly openAIEnvironmentLayer = Layer.effect(
+    DirectImageExecutor,
+    Effect.gen(function* () {
+      const client = yield* HttpClient.HttpClient;
+      return DirectImageExecutor.of({
+        generate: ({ decision, prompt, signal }) =>
+          Effect.gen(function* () {
+            const key = Option.getOrUndefined(
+              yield* Config.option(Config.String("OPENAI_API_KEY"))
+                .parse(ConfigProvider.fromEnv())
+                .pipe(Effect.orDie),
+            );
+            if (key === undefined)
+              return yield* new DirectImageExecutionFailed({ reason: "not_configured" });
+            if (decision.executorMediaModel.type !== "explicit")
+              return yield* new DirectImageExecutionFailed({ reason: "invalid_output" });
+            const model = decision.executorMediaModel.model;
+            const fetch = yield* FetchHttpClient.Fetch;
+            const response = yield* client
+              .execute(
+                HttpClientRequest.post("https://api.openai.com/v1/images/generations").pipe(
+                  HttpClientRequest.setHeaders({ authorization: `Bearer ${key}` }),
+                  HttpClientRequest.bodyText(
+                    stringifyJson({ model, prompt, output_format: "png" }),
+                    "application/json",
+                  ),
+                ),
+              )
+              .pipe(
+                Effect.provideService(FetchHttpClient.Fetch, (url, init) => {
+                  if (signal === undefined) return fetch(url, init);
+                  return fetch(url, {
+                    ...init,
+                    signal: AbortSignal.any(
+                      init?.signal == null ? [signal] : [signal, init.signal],
+                    ),
+                  });
+                }),
+                Effect.mapError(
+                  (cause) => new DirectImageExecutionFailed({ reason: "network", cause }),
+                ),
+              );
+            if (response.status < 200 || response.status >= 300)
+              return yield* new DirectImageExecutionFailed({
+                reason: "provider_rejected",
+                cause: { status: response.status },
+              });
+            const raw = yield* response.json.pipe(
+              Effect.mapError(
+                (cause) => new DirectImageExecutionFailed({ reason: "network", cause }),
+              ),
+            );
+            const value = yield* Schema.decodeUnknownEffect(OpenAIImageResponse)(raw).pipe(
+              Effect.mapError(
+                (cause) => new DirectImageExecutionFailed({ reason: "network", cause }),
+              ),
+            );
+            const encoded = value.data[0]?.b64_json;
+            if (encoded === undefined)
+              return yield* new DirectImageExecutionFailed({ reason: "invalid_output" });
+            const result: DirectImageExecutionResult = {
+              bytes: Uint8Array.from(Buffer.from(encoded, "base64")),
+              contentType: "image/png",
+            };
+            const requestId = response.headers["x-request-id"];
+            return requestId === undefined ? result : { ...result, providerRequestId: requestId };
+          }).pipe(Effect.scoped),
+      });
+    }),
+  ).pipe(Layer.provide(FetchHttpClient.layer));
 }
 
 export interface CrossProviderMediaRunApproval {
@@ -175,7 +197,24 @@ export interface ImageMediaWorkflowApi {
 }
 
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function makeImageMediaWorkflow(
+export function makeImageMediaWorkflow(options: {
+  readonly feature: ImageFeatureApi;
+  readonly router: ImageRouterApi;
+  readonly executor: DirectImageExecutorApi;
+  readonly attachments: Pick<AttachmentsApi, "save">;
+  readonly catalog?: Pick<RouteCatalogApi, "refresh"> | undefined;
+  readonly crossProviderConsent?: CrossProviderMediaConsentApi | undefined;
+}) {
+  return makeImageMediaWorkflowBody(
+    options.feature,
+    options.router,
+    options.executor,
+    options.attachments,
+    options.catalog,
+    options.crossProviderConsent,
+  );
+}
+function makeImageMediaWorkflowBody(
   feature: ImageFeatureApi,
   router: ImageRouterApi,
   executor: DirectImageExecutorApi,
@@ -251,7 +290,8 @@ export function makeImageMediaWorkflow(
           if (consent.mode === "disabled")
             return yield* new ImageMediaUnavailable({ reason: "cross-provider consent disabled" });
           if (consent.mode === "always") return;
-          const runId = request.runId ?? randomUUID();
+          const runId =
+            request.runId ?? (yield* oauthProtocolCrypto.randomUUIDv4().pipe(Effect.orDie));
           const expected: CrossProviderMediaRunApproval = {
             runId,
             initiatorChatRouteId: decision.initiatorChatRouteId,
@@ -340,14 +380,14 @@ export class ImageMediaWorkflow extends Context.Service<
   static readonly layer = Layer.effect(
     ImageMediaWorkflow,
     Effect.gen(function* () {
-      return makeImageMediaWorkflow(
-        yield* ImageFeature,
-        yield* ImageRouter,
-        yield* DirectImageExecutor,
-        yield* Attachments,
-        yield* RouteCatalog,
-        yield* CrossProviderMediaConsent,
-      );
+      return makeImageMediaWorkflow({
+        feature: yield* ImageFeature,
+        router: yield* ImageRouter,
+        executor: yield* DirectImageExecutor,
+        attachments: yield* Attachments,
+        catalog: yield* RouteCatalog,
+        crossProviderConsent: yield* CrossProviderMediaConsent,
+      });
     }),
   );
   static readonly layerFrom = (api: ImageMediaWorkflowApi) =>

@@ -14,8 +14,7 @@ import {
   type StructuredOutputOptions,
   type StructuredOutputResult,
 } from "@tanstack/ai/adapters";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { createHash, randomUUID } from "node:crypto";
+import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
 import { Cause, Effect, Stream, MutableHashMap, DateTime, Option, Schema } from "effect";
 import {
   ProviderFeatureRejectedError,
@@ -243,7 +242,10 @@ const anthropicMessages = (messages: ReadonlyArray<ModelMessage>) => {
   return output;
 };
 
-const sha256 = (serialized: string) => createHash("sha256").update(serialized).digest("hex");
+const sha256 = (serialized: string) =>
+  Buffer.from(
+    Effect.runSync(oauthProtocolCrypto.digest("SHA-256", new TextEncoder().encode(serialized))),
+  ).toString("hex");
 const systemText = (options: Pick<TextOptions<Record<string, never>>, "systemPrompts">) =>
   normalizeSystemPrompts(options.systemPrompts ?? [])
     .map((prompt) => prompt.content)
@@ -272,7 +274,23 @@ export function requestFingerprints(
 }
 
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
-export function subscriptionRequest(
+export function subscriptionRequest(options: {
+  readonly provider: OAuthProvider;
+  readonly selection: ModelSelection;
+  readonly options: Pick<
+    TextOptions<Record<string, never>>,
+    "messages" | "systemPrompts" | "tools"
+  >;
+  readonly requestOptions?: { readonly promptCache?: "provider-default" | "disabled" } | undefined;
+}) {
+  return subscriptionRequestBody(
+    options.provider,
+    options.selection,
+    options.options,
+    options.requestOptions,
+  );
+}
+function subscriptionRequestBody(
   provider: OAuthProvider,
   selection: ModelSelection,
   options: Pick<TextOptions<Record<string, never>>, "messages" | "systemPrompts" | "tools">,
@@ -395,9 +413,9 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
       Stream.suspend(() => {
         const providerName = this.name;
         const signal = options.abortController?.signal ?? options.request?.signal ?? undefined;
-        const runId = options.runId ?? randomUUID();
-        const threadId = options.threadId ?? randomUUID();
-        const messageId = randomUUID();
+        const runId = options.runId ?? Effect.runSync(oauthProtocolCrypto.randomUUIDv4());
+        const threadId = options.threadId ?? Effect.runSync(oauthProtocolCrypto.randomUUIDv4());
+        const messageId = Effect.runSync(oauthProtocolCrypto.randomUUIDv4());
         const stamp = () => ({
           model: this.model,
           timestamp: DateTime.toEpochMillis(DateTime.nowUnsafe()),
@@ -722,9 +740,18 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
         };
 
         const events = Stream.suspend(() => {
-          const body = subscriptionRequest(this.name, this.#selection, options);
-          const baselineBody = subscriptionRequest(this.name, this.#selection, options, {
-            promptCache: "disabled",
+          const body = subscriptionRequest({
+            provider: this.name,
+            selection: this.#selection,
+            options: options,
+          });
+          const baselineBody = subscriptionRequest({
+            provider: this.name,
+            selection: this.#selection,
+            options: options,
+            requestOptions: {
+              promptCache: "disabled",
+            },
           });
           const fingerprints = requestFingerprints(options);
           options.logger.request("subscription model request", {

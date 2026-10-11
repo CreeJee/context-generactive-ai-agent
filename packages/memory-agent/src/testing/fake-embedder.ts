@@ -2,7 +2,8 @@ import { NodeCrypto } from "@effect/platform-node";
 import { Crypto, Effect, Layer } from "effect";
 import { Embedder, EmbeddingError, normalize } from "../memory/embedding/embedder.ts";
 
-const dimensions = 64;
+// Match the measured native search admission envelope used by the application.
+const dimensions = 384;
 // NodeCrypto's Layer is a resource-free value and its SHA digest is synchronous.
 // Keep that host contract at the synchronous fixture boundary consumed by SQLite helpers.
 const cryptoContext = Effect.runSync(Effect.scoped(Layer.build(NodeCrypto.layer)));
@@ -34,7 +35,7 @@ export function fakeVector(text: string): Float32Array {
 }
 
 export const fakeEmbedderLayer = Layer.succeed(Embedder, {
-  identity: "fake-trigram-64",
+  identity: "fake-trigram-384",
   dimensions,
   embed: (texts) =>
     Effect.forEach(texts, vectorEffect).pipe(

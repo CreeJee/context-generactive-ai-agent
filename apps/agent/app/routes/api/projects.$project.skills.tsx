@@ -12,7 +12,7 @@ export function loader({ params }: Route.LoaderArgs) {
   return agent.runPromise(
     Effect.gen(function* () {
       const project = yield* (yield* Projects).get(params.project);
-      return Response.json((yield* Skills).catalog(project));
+      return Response.json(yield* (yield* Skills).catalog(project));
     }).pipe(
       Effect.catchTag("ProjectNotFound", () =>
         Effect.succeed(Response.json({ error: "project_not_found" }, { status: 404 })),

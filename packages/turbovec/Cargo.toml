@@ -7,9 +7,16 @@ publish = false
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+default = ["node-sqlite"]
+node-sqlite = ["rusqlite/loadable_extension"]
+# Only the Rust unit-test executable supplies its own SQLite implementation.
+test-sqlite = ["rusqlite/bundled"]
+
 [dependencies]
 napi = { version = "3", default-features = false, features = ["napi8"] }
 napi-derive = "3"
+rusqlite = { version = "=0.37.0", features = ["hooks"] }
 turbovec = { git = "https://github.com/RyanCodrai/turbovec.git", rev = "ccab9f325e6ce2a270a87daf01ae4e443bcf2d49" }
 
 [build-dependencies]

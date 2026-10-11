@@ -68,17 +68,17 @@ describe("ImageMediaWorkflow", () => {
   effectTest.effect("requires explicit approval before paid execution", () =>
     Effect.gen(function* () {
       let executions = 0;
-      const workflow = makeImageMediaWorkflow(
-        feature,
-        router,
-        {
+      const workflow = makeImageMediaWorkflow({
+        feature: feature,
+        router: router,
+        executor: {
           generate: () => {
             executions += 1;
             return Effect.die("must not execute");
           },
         },
-        attachmentStore([]),
-      );
+        attachments: attachmentStore([]),
+      });
       const result = yield* Effect.result(workflow.generate({ ...request, approved: false }));
       expect(Result.isFailure(result) && result.failure._tag).toBe("ImageMediaApprovalRequired");
       expect(executions).toBe(0);
@@ -91,10 +91,10 @@ describe("ImageMediaWorkflow", () => {
       Effect.gen(function* () {
         const bytes = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
         const saved: Uint8Array[] = [];
-        const workflow = makeImageMediaWorkflow(
-          feature,
-          router,
-          {
+        const workflow = makeImageMediaWorkflow({
+          feature: feature,
+          router: router,
+          executor: {
             generate: () =>
               Effect.succeed({
                 bytes,
@@ -103,8 +103,8 @@ describe("ImageMediaWorkflow", () => {
                 usage: { outputTokens: 42 },
               }),
           },
-          attachmentStore(saved),
-        );
+          attachments: attachmentStore(saved),
+        });
         const asset = yield* workflow.generate(request);
         expect(saved).toEqual([bytes]);
         expect(asset).toMatchObject({
@@ -135,18 +135,18 @@ describe("ImageMediaWorkflow", () => {
         };
         let mode: "disabled" | "ask" | "always" = "ask";
         let executions = 0;
-        const workflow = makeImageMediaWorkflow(
-          feature,
-          { ...router, select: () => Effect.succeed(crossDecision) },
-          {
+        const workflow = makeImageMediaWorkflow({
+          feature: feature,
+          router: { ...router, select: () => Effect.succeed(crossDecision) },
+          executor: {
             generate: () => {
               executions += 1;
               return Effect.succeed({ bytes: Uint8Array.of(1), contentType: "image/png" });
             },
           },
-          attachmentStore([]),
-          undefined,
-          {
+          attachments: attachmentStore([]),
+          catalog: undefined,
+          crossProviderConsent: {
             read: Effect.succeed({ version: 1, pairs: {} }),
             decide: (pair) =>
               Effect.succeed({
@@ -160,7 +160,7 @@ describe("ImageMediaWorkflow", () => {
               }),
             set: () => Effect.die("unused"),
           },
-        );
+        });
         const first = yield* Effect.result(workflow.generate(request));
         expect(Result.isFailure(first) && first.failure).toMatchObject({
           _tag: "ImageMediaApprovalRequired",
@@ -196,15 +196,15 @@ describe("ImageMediaWorkflow", () => {
 
   effectTest.effect("returns confirmation-required reroute evidence after execution failure", () =>
     Effect.gen(function* () {
-      const workflow = makeImageMediaWorkflow(
-        feature,
-        router,
-        {
+      const workflow = makeImageMediaWorkflow({
+        feature: feature,
+        router: router,
+        executor: {
           generate: () =>
             Effect.fail(new DirectImageExecutionFailed({ reason: "provider_rejected" })),
         },
-        attachmentStore([]),
-      );
+        attachments: attachmentStore([]),
+      });
       const result = yield* Effect.result(workflow.generate(request));
       expect(Result.isFailure(result) && result.failure).toMatchObject({
         _tag: "ImageMediaExecutionFailed",

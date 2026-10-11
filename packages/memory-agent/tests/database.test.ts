@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { it } from "@effect/vitest";
 import { DateTime, Effect, Exit, FileSystem, Layer, Path } from "effect";
 import { describe, expect } from "vite-plus/test";
-import { Database } from "../src/db/database.ts";
+import { Database, migrateDatabase, assertDatabaseSchema } from "../src/db/database.ts";
 import { migrations } from "../src/db/migrations.ts";
 import { withTestPlatform } from "./support/platform.ts";
 
@@ -63,6 +63,74 @@ function seed(db: Database["Service"]) {
 }
 
 describe("Database", () => {
+  it("rolls back the entire pending migration path and restores FK enforcement when a later step fails", () => {
+    const sqlite = new DatabaseSync(":memory:");
+    try {
+      sqlite.exec("PRAGMA foreign_keys=ON");
+      for (const step of migrations.slice(0, 47)) sqlite.exec(step);
+      sqlite.exec("PRAGMA user_version=47; CREATE TABLE owner_read_recoveries(existing_data TEXT)");
+      seed({ sqlite, atomic: (work) => work() });
+      const before = sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all();
+      expect(() => migrateDatabase(sqlite)).toThrow(/already exists/);
+      expect(sqlite.prepare("PRAGMA user_version").get()).toEqual({ user_version: 47 });
+      expect(
+        sqlite
+          .prepare("SELECT name FROM sqlite_schema WHERE name='owner_workflow_executions'")
+          .get(),
+      ).toBeUndefined();
+      expect(sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all()).toEqual(before);
+      expect(sqlite.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("readers require the actual current DB contract and reject stale, newer or damaged schemas before execution", () => {
+    const sqlite = new DatabaseSync(":memory:");
+    try {
+      expect(() => assertDatabaseSchema(sqlite)).toThrow(/owning app/);
+      migrateDatabase(sqlite);
+      expect(assertDatabaseSchema(sqlite)).toBe(migrations.length);
+      sqlite.exec(`PRAGMA user_version=${migrations.length + 1}`);
+      expect(() => assertDatabaseSchema(sqlite)).toThrow(/update the app/);
+      sqlite.exec(
+        `PRAGMA user_version=${migrations.length}; ALTER TABLE owner_read_recoveries RENAME TO missing_receipts`,
+      );
+      expect(() => assertDatabaseSchema(sqlite)).toThrow(/owner_read_recoveries/);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("adds recovery receipts to schema 48 without changing evidence and leaves 48 intact on a failed upgrade", () => {
+    const sqlite = new DatabaseSync(":memory:");
+    try {
+      sqlite.exec("PRAGMA foreign_keys=ON");
+      for (const step of migrations.slice(0, 48)) sqlite.exec(step);
+      sqlite.exec("PRAGMA user_version=48");
+      seed({ sqlite, atomic: (work) => work() });
+      const before = sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all();
+      sqlite.exec("PRAGMA query_only=ON");
+      expect(() => migrateDatabase(sqlite)).toThrow(/readonly|read-only/i);
+      expect(sqlite.prepare("PRAGMA user_version").get()).toEqual({ user_version: 48 });
+      expect(
+        sqlite.prepare("SELECT name FROM sqlite_schema WHERE name='owner_read_recoveries'").get(),
+      ).toBeUndefined();
+      expect(sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all()).toEqual(before);
+      sqlite.exec("PRAGMA query_only=OFF");
+      migrateDatabase(sqlite);
+      expect(sqlite.prepare("PRAGMA user_version").get()).toEqual({ user_version: 49 });
+      expect(sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all()).toEqual(before);
+      expect(sqlite.prepare("SELECT count(*) AS n FROM owner_read_recoveries").get()).toEqual({
+        n: 0,
+      });
+      expect(sqlite.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(sqlite.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it.live("creates the directory, applies every migration once and reopens", () =>
     Effect.gen(function* () {
       const file = yield* databaseFile();

@@ -1,5 +1,20 @@
 # RRSI local experiments (2026-10-05)
 
+## Memory scoring contract (2026-10-07)
+
+Memory trials now require a JSON answer containing only `decision` and `evidenceIds`.
+The decision must exactly match the current correction, and the evidence array must
+contain only the original user correction node ID. The worker captures that ID
+immediately after the correction turn, independently of the final answer. Scoring
+checks that the node still exists and matches its user kind, project, session and
+original text. A missing correction during capture fails the evaluation as incomplete;
+malformed answers, invented IDs and unrelated or superseded citations score zero.
+
+Rebuild the evaluator image before using this scorer. Old substring/UUID scores
+are not comparable to these scores; compare baselines and candidates within the
+same pinned evaluator image. Existing sealed-corpus receipts remain consumed.
+These synthetic trials do not establish production retrieval quality.
+
 This is a review preview of [RRSI](https://arxiv.org/abs/2609.24972), adapted to
 Context Agent. All registered providers (OpenAI, Anthropic and OpenAI-compatible)
 are eligible; the experiment pins the selected model/account and does not fall back

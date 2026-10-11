@@ -1,14 +1,26 @@
 // Actual child processes and HTTP fetch preserve the owner transport boundary.
-import { fork, type ChildProcess } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import * as NodeChildProcessSpawner from "@effect/platform-node/NodeChildProcessSpawner";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { HttpClientRequest, type HttpClientResponse } from "effect/http";
+import { testHttpClient } from "./support/http.ts";
 import { it } from "@effect/vitest";
 import { expect } from "vite-plus/test";
-import { Cause, Effect, Fiber, FileSystem, Option, Path, Schedule, Schema } from "effect";
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Fiber,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Schedule,
+  Schema,
+  Stream,
+} from "effect";
 import { withTestPlatform } from "./support/platform.ts";
-const childFile = fileURLToPath(new URL("./fixtures/goal-owner-process.mts", import.meta.url));
-const childLoader = fileURLToPath(new URL("./fixtures/native-test-loader.ts", import.meta.url));
-const sdkCall = <A>(call: () => A | PromiseLike<A>) =>
-  Effect.tryPromise(() => Promise.resolve(call()));
+const childFile = new URL("./fixtures/goal-owner-process.mts", import.meta.url);
+const childLoader = new URL("./fixtures/native-test-loader.ts", import.meta.url);
 const inspection = Schema.Struct({
   bindings: Schema.Array(Schema.Unknown),
   operations: Schema.Array(Schema.Unknown),
@@ -16,76 +28,82 @@ const inspection = Schema.Struct({
   dispatches: Schema.Array(Schema.Unknown),
   runs: Schema.Array(Schema.Struct({ status: Schema.String })),
 });
-type Owner = { child: ChildProcess; url: string; sessionId: string };
+type Owner = { child: ChildProcessSpawner.ChildProcessHandle; url: string; sessionId: string };
 const inspect = Effect.fn("inspectOwner")(function* (owner: Owner) {
-  const response = yield* sdkCall(() =>
-    fetch(`${owner.url}/inspect`, { signal: AbortSignal.timeout(10_000) }),
-  );
-  return yield* Schema.decodeUnknownEffect(inspection)(yield* sdkCall(() => response.json()));
+  const response = yield* (yield* testHttpClient())
+    .get(`${owner.url}/inspect`)
+    .pipe(Effect.timeout("10 seconds"));
+  return yield* Schema.decodeUnknownEffect(inspection)(yield* response.json);
 });
-const stop = Effect.fn("stopOwner")(function* (child: ChildProcess, signal: NodeJS.Signals) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  const exited = yield* Effect.forkChild(
-    Effect.callback<void>((resume) => {
-      const onExit = () => resume(Effect.void);
-      child.once("exit", onExit);
-      return Effect.sync(() => {
-        child.off("exit", onExit);
-      });
-    }),
-    { startImmediately: true },
-  );
-  child.kill(signal);
-  const settled = yield* Fiber.join(exited).pipe(Effect.timeoutOption("5 seconds"));
-  if (Option.isNone(settled)) {
-    child.kill("SIGKILL");
-    yield* Fiber.join(exited);
-  }
+const stop = Effect.fn("stopOwner")(function* (
+  child: ChildProcessSpawner.ChildProcessHandle,
+  signal: ChildProcess.Signal,
+) {
+  if (!(yield* child.isRunning)) return;
+  yield* child.kill({ killSignal: signal, forceKillAfter: "5 seconds" });
+  // The official spawner reports signal termination as a PlatformError rather than an exit code.
+  if (signal === "SIGKILL") yield* Effect.result(child.exitCode);
+  else yield* child.exitCode;
+  expect(yield* child.isRunning).toBe(false);
 });
 const Ready = Schema.Struct({ port: Schema.Int, sessionId: Schema.String });
-type Ready = typeof Ready.Type;
 const start = Effect.fn("startOwner")(function* (base: string, mode: string) {
-  const child = yield* Effect.acquireRelease(
-    Effect.sync(() =>
-      fork(childFile, [base, mode], {
-        execArgv: ["--experimental-strip-types", "--import", childLoader],
-        stdio: ["ignore", "pipe", "pipe", "ipc"],
-      }),
+  const path = yield* Path.Path;
+  const services = yield* Layer.build(NodeChildProcessSpawner.layer);
+  const spawner = yield* Effect.provideContext(ChildProcessSpawner.ChildProcessSpawner, services);
+  const child = yield* spawner.spawn(
+    ChildProcess.make(
+      process.execPath,
+      [
+        "--experimental-strip-types",
+        "--import",
+        yield* path.fromFileUrl(childLoader),
+        yield* path.fromFileUrl(childFile),
+        base,
+        mode,
+      ],
+      { stdin: "ignore", killSignal: "SIGKILL" },
     ),
-    (child) => stop(child, "SIGKILL").pipe(Effect.orDie),
   );
   let diagnostic = "";
-  child.stderr?.on("data", (chunk) => {
-    diagnostic += String(chunk);
-  });
-  child.stdout?.resume();
-  return yield* Effect.callback<Owner, Cause.UnknownError>((resume) => {
-    const onExit = (code: number | null) =>
-      resume(Effect.fail(new Cause.UnknownError(new Error(`Owner exited ${code}: ${diagnostic}`))));
-    const onReady = (input: Ready) =>
-      resume(
-        Schema.decodeEffect(Ready)(input).pipe(
-          Effect.map((message) => ({
-            child,
-            url: `http://127.0.0.1:${message.port}`,
-            sessionId: message.sessionId,
-          })),
-          Effect.mapError((cause) => new Cause.UnknownError(cause)),
-        ),
-      );
-    child.once("exit", onExit);
-    child.once("message", onReady);
-    return Effect.sync(() => {
-      child.off("exit", onExit);
-      child.off("message", onReady);
-    });
-  }).pipe(
-    Effect.timeout("15 seconds"),
-    Effect.mapError(
-      (cause) =>
-        new Cause.UnknownError(new Error(`Owner startup failed: ${diagnostic}`, { cause })),
+  yield* Effect.forkChild(
+    child.stderr.pipe(
+      Stream.decodeText(),
+      Stream.runForEach((text) =>
+        Effect.sync(() => {
+          diagnostic += text;
+        }),
+      ),
     ),
+    { startImmediately: true },
   );
+  const ready = yield* Deferred.make<typeof Ready.Type>();
+  yield* Effect.forkChild(
+    child.stdout.pipe(
+      Stream.decodeText(),
+      Stream.splitLines,
+      Stream.runForEach((line) =>
+        line.startsWith("OWNER_READY ")
+          ? Schema.decodeEffect(Schema.fromJsonString(Ready))(
+              line.slice("OWNER_READY ".length),
+            ).pipe(
+              Effect.flatMap((message) => Deferred.succeed(ready, message)),
+              Effect.asVoid,
+            )
+          : Effect.void,
+      ),
+    ),
+    { startImmediately: true },
+  );
+  const message = yield* Effect.raceFirst(
+    Deferred.await(ready),
+    child.exitCode.pipe(
+      Effect.flatMap((code) =>
+        Effect.fail(new Cause.UnknownError(new Error(`Owner exited ${code}: ${diagnostic}`))),
+      ),
+    ),
+  ).pipe(Effect.timeout("15 seconds"));
+  return { child, url: `http://127.0.0.1:${message.port}`, sessionId: message.sessionId };
 });
 const post = Effect.fn("postOwner")(function* (owner: Owner, runId: string) {
   const body = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
@@ -95,14 +113,13 @@ const post = Effect.fn("postOwner")(function* (owner: Owner, runId: string) {
     tools: [],
     context: [],
   });
-  return yield* sdkCall(() =>
-    fetch(`${owner.url}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-      signal: AbortSignal.timeout(10_000),
-    }),
-  );
+  return yield* (yield* testHttpClient())
+    .execute(
+      HttpClientRequest.post(`${owner.url}/api/chat`).pipe(
+        HttpClientRequest.bodyText(body, "application/json"),
+      ),
+    )
+    .pipe(Effect.timeout("10 seconds"));
 });
 const waitForModel = Effect.fn("waitForOwnerModel")(function* (base: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -111,27 +128,27 @@ const waitForModel = Effect.fn("waitForOwnerModel")(function* (base: string) {
     schedule: Schedule.spaced("20 millis"),
   }).pipe(Effect.timeout("10 seconds"));
 });
-const textPrefix = Effect.fn("ownerTextPrefix")(function* (response: Response) {
+const textPrefix = Effect.fn("ownerTextPrefix")(function* (
+  response: HttpClientResponse.HttpClientResponse,
+) {
   expect(response.status).toBe(200);
-  const reader = yield* Effect.acquireRelease(
-    Effect.sync(() => response.body!.getReader()),
-    (reader) => sdkCall(() => reader.cancel()).pipe(Effect.orDie),
+  const chunks = yield* response.stream.pipe(
+    Stream.decodeText(),
+    Stream.scan(
+      () => "",
+      (prefix, text) => prefix + text,
+    ),
+    Stream.takeUntil(
+      (prefix) => prefix.includes("completed owner turn") && prefix.endsWith("\n\n"),
+    ),
+    Stream.runLast,
+    Effect.timeout("10 seconds"),
   );
-  const decoder = new TextDecoder();
-  let prefix = "";
-  try {
-    while (!prefix.includes("completed owner turn") || !prefix.endsWith("\n\n")) {
-      const chunk = yield* sdkCall(() => reader.read());
-      if (chunk.done) throw new Error("Stream ended before durable text");
-      prefix += decoder.decode(chunk.value, { stream: true });
-    }
-    expect(prefix).toContain("TEXT_MESSAGE_CONTENT");
-    expect(prefix).not.toContain("RUN_FINISHED");
-    expect(prefix).not.toContain("RUN_ERROR");
-    return prefix;
-  } finally {
-    yield* sdkCall(() => reader.cancel());
-  }
+  const prefix = Option.getOrThrow(chunks);
+  expect(prefix).toContain("TEXT_MESSAGE_CONTENT");
+  expect(prefix).not.toContain("RUN_FINISHED");
+  expect(prefix).not.toContain("RUN_ERROR");
+  return prefix;
 }, Effect.scoped);
 
 it.live(
@@ -149,13 +166,11 @@ it.live(
 
             const runId = "partial-killed-run";
             const delivered = yield* textPrefix(yield* post(first, runId));
-            const replay = Effect.fn("replayOwner")((owner: Owner) =>
-              sdkCall(() =>
-                fetch(`${owner.url}/api/chat?runId=${runId}&offset=-1`, {
-                  signal: AbortSignal.timeout(10_000),
-                }),
-              ),
-            );
+            const replay = Effect.fn("replayOwner")(function* (owner: Owner) {
+              return yield* (yield* testHttpClient())
+                .get(`${owner.url}/api/chat?runId=${runId}&offset=-1`)
+                .pipe(Effect.timeout("10 seconds"));
+            });
             // A second HTTP reader proves the text is journaled before OS termination.
             expect(yield* textPrefix(yield* replay(first))).toBe(delivered);
             const old = yield* inspect(first);
@@ -204,7 +219,7 @@ for (const interrupted of [false, true]) {
               const response = yield* post(first, runId);
               expect(response.status).toBe(200);
               const delivered = yield* Effect.forkChild(
-                sdkCall(() => response.text()).pipe(Effect.orElseSucceed(() => "")),
+                response.text.pipe(Effect.orElseSucceed(() => "")),
                 { startImmediately: true },
               );
               yield* waitForModel(base);
@@ -222,43 +237,40 @@ for (const interrupted of [false, true]) {
               const state = yield* inspect(second);
               expect(state.bindings).toEqual(old.bindings);
               expect(state.runs[0].status).toBe(interrupted ? "failed" : "completed");
-              const replayResponse = yield* sdkCall(() =>
-                fetch(`${second.url}/api/chat?runId=${runId}&offset=-1`, {
-                  signal: AbortSignal.timeout(10_000),
-                }),
-              );
+              const replayResponse = yield* (yield* testHttpClient())
+                .get(`${second.url}/api/chat?runId=${runId}&offset=-1`)
+                .pipe(Effect.timeout("10 seconds"));
               expect(replayResponse.status).toBe(200);
               // A killed SDK log has no terminal chunk: reconnect can deliver its durable
               // prefix but must not be mistaken for a completed stream or awaited to EOF.
               let replay: string;
               if (interrupted) {
-                const reader = replayResponse.body!.getReader();
-                const decoder = new TextDecoder();
-                replay = "";
-                while (!replay.includes("\n\n")) {
-                  const chunk = yield* sdkCall(() => reader.read());
-                  if (chunk.done) throw new Error("Interrupted log lost its durable prefix");
-                  replay += decoder.decode(chunk.value, { stream: true });
-                }
-                yield* sdkCall(() => reader.cancel());
+                replay = Option.getOrThrow(
+                  yield* replayResponse.stream.pipe(
+                    Stream.decodeText(),
+                    Stream.scan(
+                      () => "",
+                      (prefix, text) => prefix + text,
+                    ),
+                    Stream.takeUntil((prefix) => prefix.includes("\n\n")),
+                    Stream.runLast,
+                  ),
+                );
                 expect(replay).toContain("run.accepted");
                 expect(replay).not.toContain("never completed");
               } else {
-                replay = yield* sdkCall(() => replayResponse.text());
+                replay = yield* replayResponse.text;
                 expect(replay).toBe(completed);
               }
               const firstOffset = /^id: (.+)$/m.exec(replay)?.[1];
               expect(firstOffset).toBeDefined();
               if (!interrupted) {
-                const suffix = yield* sdkCall(() =>
-                  fetch(`${second.url}/api/chat?runId=${runId}`, {
+                const suffix = yield* (yield* testHttpClient())
+                  .get(`${second.url}/api/chat?runId=${runId}`, {
                     headers: { "Last-Event-ID": firstOffset! },
-                    signal: AbortSignal.timeout(10_000),
-                  }),
-                );
-                expect(yield* sdkCall(() => suffix.text())).toBe(
-                  replay.slice(replay.indexOf("\n\n") + 2),
-                );
+                  })
+                  .pipe(Effect.timeout("10 seconds"));
+                expect(yield* suffix.text).toBe(replay.slice(replay.indexOf("\n\n") + 2));
               }
               if (interrupted) {
                 for (const retry of [runId, "new-run-bypass"])

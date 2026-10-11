@@ -2,8 +2,7 @@ import { nativeFailure, nativePromise, runNativeEffectWith } from "../runtime/na
 import { HashSet } from "effect";
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
+import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import { projectInstructions } from "../agent/project-instructions.ts";
 import {
   EventType,
@@ -464,6 +463,7 @@ const make = Effect.gen(function* () {
           );
           const decision = relayed.ask(
             binding.sessionId,
+            binding.runId,
             {
               requester: { kind: "subagent", subagentId: row.id, name: row.name },
               toolName: hook.toolName,

@@ -19,6 +19,10 @@ export const embeddedKinds = ["user", "assistant", "topic"] as const satisfies r
 /** `n.kind` limited to {@link embeddedKinds}, for queries over nodes aliased `n`. */
 export const embeddedKindFilter = `n.kind IN (${embeddedKinds.map((kind) => `'${kind}'`).join(", ")})`;
 
+export class IndexingError extends Schema.TaggedError<IndexingError>()("IndexingError", {
+  reason: Schema.Literals(["revalidation-failed", "mapping-commit-failed"]),
+}) {}
+
 const Pending = Schema.Struct({ seq: Schema.Finite, text: Schema.String });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
 const decodePending = EffectFunction.flow(Schema.decodeUnknownResult(Pending), Result.getOrThrow);
@@ -68,16 +72,47 @@ const make = Effect.gen(function* () {
       const pending = selectPending.all(embedder.identity, limit).map((row) => decodePending(row));
       if (pending.length === 0) return 0;
       const embedded = yield* embedder.embed(pending.map((node) => node.text));
-      const seqs = pending.map((node) => node.seq);
-      yield* vectors.add(seqs, embedded);
-      // Save before recording: a crash in between leaves the index ahead, which reopen detects.
-      yield* vectors.save;
-      atomic(() => {
-        for (const seq of seqs) markIndexed.run(seq, embedder.identity);
-      });
-      events.publishGlobal("embedding");
-      events.publishGlobal("imports");
-      return pending.length;
+      // Embedding is an asynchronous external boundary. Revalidation enters the short publication
+      // permit with add/save/commit, so a concurrent invalidation cannot create an obsolete mapping.
+      const published = yield* vectors.publish(
+        Effect.gen(function* () {
+          const fresh = yield* Effect.try({
+            try: () =>
+              sqlite
+                .prepare(`
+            SELECT n.seq, n.text FROM nodes n
+            LEFT JOIN node_vectors v ON v.node_seq = n.seq AND v.embedder = ?
+            WHERE v.node_seq IS NULL AND ${meaningfulNodeFilter} AND ${embeddedKindFilter}
+              AND n.seq IN (${pending.map(() => "?").join(",")})`)
+                .all(embedder.identity, ...pending.map((node) => node.seq))
+                .map((row) => decodePending(row)),
+            catch: () => IndexingError.make({ reason: "revalidation-failed" }),
+          });
+          const accepted = pending.flatMap((node, row) =>
+            fresh.some((current) => current.seq === node.seq && current.text === node.text)
+              ? [{ seq: node.seq, vector: embedded[row]! }]
+              : [],
+          );
+          const seqs = accepted.map((node) => node.seq);
+          return {
+            seqs,
+            vectors: accepted.map((node) => node.vector),
+            commit: Effect.try({
+              try: () =>
+                atomic(() => {
+                  for (const seq of seqs) markIndexed.run(seq, embedder.identity);
+                  return accepted.length;
+                }),
+              catch: () => IndexingError.make({ reason: "mapping-commit-failed" }),
+            }),
+          };
+        }),
+      );
+      if (published > 0) {
+        events.publishGlobal("embedding");
+        events.publishGlobal("imports");
+      }
+      return published;
     }).pipe(oneBatchAtATime.withPermits(1));
 
   /** Stores morpheme terms for one batch of nodes the current analyzer has not seen. */

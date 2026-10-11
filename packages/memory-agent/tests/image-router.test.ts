@@ -111,18 +111,18 @@ const intent = { operation: "generate" as const, sourceImageCount: 0, requiresMa
 
 const router = Effect.fnUntraced(function* (
   factValues: readonly ImageRouteFact[] = facts,
-  crossProviderConsent?: Parameters<typeof makeImageRouter>[2],
+  crossProviderConsent?: Parameters<typeof makeImageRouter>[0]["crossProviderConsent"],
 ) {
   const source: RouteCatalogSource = {
     load: Effect.succeed({ chat: [chat], media: routes, execution: [] }),
   };
   const catalog = yield* makeRouteCatalog(source, () => 1);
   yield* catalog.refresh;
-  return makeImageRouter(
-    catalog,
-    { forRoutes: () => Effect.succeed(factValues) },
-    crossProviderConsent,
-  );
+  return makeImageRouter({
+    catalog: catalog,
+    factsService: { forRoutes: () => Effect.succeed(factValues) },
+    crossProviderConsent: crossProviderConsent,
+  });
 });
 
 describe("image router", () => {
@@ -131,20 +131,21 @@ describe("image router", () => {
     () =>
       Effect.gen(function* () {
         let mode: "disabled" | "ask" | "always" = "disabled";
-        const consent: NonNullable<Parameters<typeof makeImageRouter>[2]> = {
-          read: Effect.succeed({ version: 1, pairs: {} }),
-          decide: (pair) =>
-            Effect.succeed({
-              ...pair,
-              crossProvider: true,
-              mode,
-              allowedWithoutPrompt: mode === "always",
-              requiresApproval: mode === "ask",
-              reasons: [],
-              settingsVersion: 1,
-            }),
-          set: () => Effect.die("unused"),
-        };
+        const consent: NonNullable<Parameters<typeof makeImageRouter>[0]["crossProviderConsent"]> =
+          {
+            read: Effect.succeed({ version: 1, pairs: {} }),
+            decide: (pair) =>
+              Effect.succeed({
+                ...pair,
+                crossProvider: true,
+                mode,
+                allowedWithoutPrompt: mode === "always",
+                requiresApproval: mode === "ask",
+                reasons: [],
+                settingsVersion: 1,
+              }),
+            set: () => Effect.die("unused"),
+          };
         const service = yield* router(facts, consent);
         const request = {
           initiatorChatRouteId: chat.id,

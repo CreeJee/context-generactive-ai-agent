@@ -1,10 +1,8 @@
-import { Result, Function as EffectFunction } from "effect";
+import { Cause, Effect, FileSystem, ManagedRuntime, Option, Path, Schema } from "effect";
+import { NodeServices } from "@effect/platform-node";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { dirname, join } from "node:path";
 import { getAsset, getRawAsset, isSea } from "node:sea";
-import { Schema } from "effect";
 
 /** Asset names inside the executable: the manifest, and one asset per runtime file under this prefix. */
 export const runtimeManifestAsset = "runtime/manifest.json";
@@ -25,38 +23,46 @@ const completeMarker = ".complete";
  * `<storage>/runtime/<hash>`, once per build, and removes folders of other builds.
  * Returns that folder, or null when not running as the executable.
  */
-export function unpackRuntime(storageRoot: string): string | null {
+const runtimeAssets = ManagedRuntime.make(NodeServices.layer);
+const unpack = Effect.fn("runtime.unpack")(function* (storageRoot: string) {
   if (!isSea()) return null;
-  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-  const manifest = EffectFunction.flow(
-    Schema.decodeResult(Schema.fromJsonString(RuntimeManifest)),
-    Result.getOrThrow,
-  )(getAsset(runtimeManifestAsset, "utf8"));
+  const fs = yield* FileSystem.FileSystem;
+  const { dirname, join } = yield* Path.Path;
+  const manifest = yield* Schema.decodeEffect(Schema.fromJsonString(RuntimeManifest))(
+    getAsset(runtimeManifestAsset, "utf8"),
+  );
   const runtimeFolder = join(storageRoot, "runtime");
   const root = join(runtimeFolder, manifest.hash);
-
-  if (!existsSync(join(root, completeMarker))) {
-    const staging = `${root}.staging-${process.pid}`;
-    rmSync(staging, { recursive: true, force: true });
+  if (!(yield* fs.exists(join(root, completeMarker)))) {
+    const stagingPath = `${root}.staging-${process.pid}`;
+    const staging = yield* Effect.acquireRelease(
+      fs
+        .remove(stagingPath, { recursive: true, force: true })
+        .pipe(
+          Effect.andThen(fs.makeDirectory(stagingPath, { recursive: true, mode: 0o700 })),
+          Effect.as(stagingPath),
+        ),
+      (path) => fs.remove(path, { recursive: true, force: true }).pipe(Effect.ignore),
+    );
     for (const file of manifest.files) {
       const target = join(staging, file);
-      mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-      writeFileSync(target, new Uint8Array(getRawAsset(`${runtimeFilePrefix}${file}`)));
+      yield* fs.makeDirectory(dirname(target), { recursive: true, mode: 0o700 });
+      yield* fs.writeFile(target, new Uint8Array(getRawAsset(`${runtimeFilePrefix}${file}`)));
     }
-    writeFileSync(join(staging, completeMarker), "");
-    rmSync(root, { recursive: true, force: true });
-    try {
-      renameSync(staging, root);
-    } catch {
-      // Another start of the same build finished first; its copy is identical.
-      rmSync(staging, { recursive: true, force: true });
-      if (!existsSync(join(root, completeMarker))) throw new Error("runtime unpack failed");
+    yield* fs.writeFileString(join(staging, completeMarker), "");
+    yield* fs.remove(root, { recursive: true, force: true });
+    const promoted = yield* fs.rename(staging, root).pipe(Effect.option);
+    if (Option.isNone(promoted)) {
+      yield* fs.remove(staging, { recursive: true, force: true });
+      if (!(yield* fs.exists(join(root, completeMarker))))
+        return yield* new Cause.UnknownError(new Error("runtime unpack failed"));
     }
   }
-
-  // Remove unpacked folders from older builds.
-  for (const entry of readdirSync(runtimeFolder))
+  for (const entry of yield* fs.readDirectory(runtimeFolder))
     if (hashFolder.test(entry) && entry !== manifest.hash)
-      rmSync(join(runtimeFolder, entry), { recursive: true, force: true });
+      yield* fs.remove(join(runtimeFolder, entry), { recursive: true, force: true });
   return root;
-}
+});
+
+export const unpackRuntime = (storageRoot: string) =>
+  runtimeAssets.runPromise(Effect.scoped(unpack(storageRoot)));

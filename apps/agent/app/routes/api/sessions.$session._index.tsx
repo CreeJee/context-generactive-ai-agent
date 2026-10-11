@@ -1,4 +1,4 @@
-import { Effect, Result, Schema } from "effect";
+import { Crypto, Effect, Result, Schema } from "effect";
 import {
   AgentChat,
   AppEvents,
@@ -55,7 +55,7 @@ export function action({ request, params }: Route.ActionArgs) {
       if (Result.isFailure(body))
         return Response.json({ error: "invalid_session_change" }, { status: 400 });
       const holder = request.headers.get(sessionHolderHeader);
-      return yield* Effect.gen(function* () {
+      {
         const chat = yield* AgentChat;
         const events = yield* AppEvents;
         const sessions = yield* Sessions;
@@ -67,7 +67,7 @@ export function action({ request, params }: Route.ActionArgs) {
               params.session,
               holder,
               change.archived,
-              change.idempotencyKey ?? crypto.randomUUID(),
+              change.idempotencyKey ?? (yield* (yield* Crypto.Crypto).randomUUIDv4()),
             );
             events.publishProject(session.projectId, "sessions");
             return result;
@@ -92,7 +92,7 @@ export function action({ request, params }: Route.ActionArgs) {
             return workflow;
           }
         }
-      });
+      }
     }),
   );
 }

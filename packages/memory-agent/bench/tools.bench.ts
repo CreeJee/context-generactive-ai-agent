@@ -2,13 +2,14 @@
 import { isTruthy } from "../src/truthy.ts";
 // Tool latency at the tool-execution seam (no model, HTTP or UI): `vp test bench`.
 // A synthetic repository is generated once per process in the OS temp directory.
-import { execFileSync } from "node:child_process";
+import { NodeServices } from "@effect/platform-node";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { optionalProperty } from "../src/optional-property.ts";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+
+import { path } from "../src/runtime/synchronous-path.ts";
+const { join } = path;
 import type { AnyServerTool } from "@tanstack/ai";
-import { Cause, Effect, ManagedRuntime } from "effect";
+import { Cause, Effect, FileSystem, Stream, ManagedRuntime } from "effect";
 import { test, describe, afterAll } from "vite-plus/test";
 import { SecretStore } from "../src/config/secrets.ts";
 import { memoryAgentLayer } from "../src/layers.ts";
@@ -22,11 +23,16 @@ const directories = 40;
 const filesPerDirectory = 75;
 const needleFiles = 60;
 
-function makeRepository(root: string, git: boolean) {
-  mkdirSync(root, { recursive: true });
+const platformRuntime = ManagedRuntime.make(NodeServices.layer);
+const fs = await platformRuntime.runPromise(FileSystem.FileSystem);
+const makeRepository = Effect.fn("ToolBench.makeRepository")(function* (
+  root: string,
+  git: boolean,
+) {
+  yield* fs.makeDirectory(root, { recursive: true });
   for (let d = 0; d < directories; d++) {
     const directory = join(root, "src", `module-${d}`);
-    mkdirSync(directory, { recursive: true });
+    yield* fs.makeDirectory(directory, { recursive: true });
     for (let f = 0; f < filesPerDirectory; f++) {
       const index = d * filesPerDirectory + f;
       const lines = Array.from({ length: 120 }, (_, line) =>
@@ -34,26 +40,37 @@ function makeRepository(root: string, git: boolean) {
           ? `  const needle${line} = compute(${index}, ${line}); // 한글 주석 needle`
           : `  export function helper${index}_${line}(value: number) { return value * ${line}; }`,
       );
-      writeFileSync(join(directory, `file-${f}.ts`), `${lines.join("\n")}\n`);
+      yield* fs.writeFileString(join(directory, `file-${f}.ts`), `${lines.join("\n")}\n`);
     }
   }
   const big = Array.from({ length: 6000 }, (_, line) => `line ${line}: ${"x".repeat(60)} 😀\r`);
-  writeFileSync(join(root, "big.txt"), big.join("\n"));
+  yield* fs.writeFileString(join(root, "big.txt"), big.join("\n"));
   if (git) {
-    const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
-    execFileSync("git", ["init", "-q"], { cwd: root, env });
-    execFileSync("git", ["add", "-A"], { cwd: root, env });
-    execFileSync(
-      "git",
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const env = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
+    for (const args of [
+      ["init", "-q"],
+      ["add", "-A"],
       ["-c", "user.email=b@e", "-c", "user.name=bench", "commit", "-qm", "fixture"],
-      { cwd: root, env },
-    );
+    ]) {
+      const child = yield* spawner.spawn(
+        ChildProcess.make("git", args, { cwd: root, env, extendEnv: true, stdin: "ignore" }),
+      );
+      const [, , code] = yield* Effect.all(
+        [Stream.runDrain(child.stdout), Stream.runDrain(child.stderr), child.exitCode],
+        { concurrency: "unbounded" },
+      );
+      if (code !== 0)
+        return yield* new Cause.UnknownError(new Error(`Git fixture failed: ${code}`));
+    }
   }
-}
+});
 
-const base = realpathSync(mkdtempSync(join(tmpdir(), "memory-agent-bench-")));
-makeRepository(join(base, "plain"), false);
-makeRepository(join(base, "git"), true);
+const base = await platformRuntime.runPromise(
+  fs.makeTempDirectory({ prefix: "memory-agent-bench-" }).pipe(Effect.flatMap(fs.realPath)),
+);
+await platformRuntime.runPromise(Effect.scoped(makeRepository(join(base, "plain"), false)));
+await platformRuntime.runPromise(Effect.scoped(makeRepository(join(base, "git"), true)));
 
 const runtime = ManagedRuntime.make(
   memoryAgentLayer(join(base, "storage"), {
@@ -65,7 +82,16 @@ const runtime = ManagedRuntime.make(
   }),
 );
 
-afterAll(() => runtime.dispose().finally(() => rmSync(base, { recursive: true, force: true })));
+afterAll(() =>
+  runtime
+    .dispose()
+    .finally(() =>
+      platformRuntime
+        .runPromise(fs.remove(base, { recursive: true, force: true }))
+        .finally(() => platformRuntime.dispose()),
+    ),
+);
+
 const runtimeServices = await runtime.context();
 const runNative = Effect.runPromiseWith(runtimeServices);
 const tools = await runNative(

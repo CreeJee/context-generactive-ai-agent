@@ -1,4 +1,5 @@
-import { Effect } from "effect";
+import { browserCrypto } from "../shared/browser-crypto";
+import { Effect, Fiber, Schedule } from "effect";
 import { runUiEffect, uiPromise } from "../shared/ui-effect";
 import { isTruthy } from "../../truthy.ts";
 import { useEffect, useState } from "react";
@@ -26,11 +27,11 @@ export function pageHolder() {
     const existing = sessionStorage.getItem(holderKey);
     if (isTruthy(existing)) return existing;
     // Browser boundary: session ownership requires a cryptographic token.
-    const created = crypto.randomUUID();
+    const created = Effect.runSync(browserCrypto.randomUUIDv4());
     sessionStorage.setItem(holderKey, created);
     return created;
   } catch {
-    return crypto.randomUUID();
+    return Effect.runSync(browserCrypto.randomUUIDv4());
   }
 }
 
@@ -87,11 +88,17 @@ export function useSessionLease(sessionId: string) {
     let current = true;
     const tick = () =>
       leaseAction(sessionId, holder, "claim").then((view) => current && setLease(view));
-    // Native callback heartbeat/debounce timing remains at the protocol boundary.
-    const timer = setInterval(() => void tick().catch(() => {}), renewMs);
+    const task = Effect.runFork(
+      uiPromise(tick).pipe(
+        Effect.ignore,
+        Effect.forkChild,
+        Effect.repeat(Schedule.spaced(renewMs)),
+        Effect.delay(renewMs),
+      ),
+    );
     return () => {
       current = false;
-      clearInterval(timer);
+      void Effect.runFork(Fiber.interrupt(task));
     };
   }, [sessionId, holder, owning]);
 

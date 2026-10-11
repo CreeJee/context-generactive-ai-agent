@@ -146,20 +146,24 @@ it.live("code proposals reject protected paths and ambiguous anchors without par
     });
     yield* fs.writeFileString(file, "const first = 1;\nconst second = 2;\n");
     const edits = [{ component: "prompt" as const, hypothesis: "Shorten redundant instructions." }];
-    expect(() =>
-      applyCodeProposal(directory, {
+    const apply = (proposal: Parameters<typeof applyCodeProposal>[1]) =>
+      applyCodeProposal(directory, proposal).pipe(Effect.provideContext(context));
+    const protectedPath = yield* Effect.flip(
+      apply({
         edits,
         files: [
           { path, before: "const first = 1;", after: "const first = 3;" },
           { path: "packages/memory-agent/eval/rrsi-worker.ts", before: "check", after: "skip" },
         ],
       }),
-    ).toThrow("protected_code_path");
+    );
+    expect(protectedPath).toMatchObject({ cause: { message: "protected_code_path" } });
     expect(yield* fs.readFileString(file)).toContain("const first = 1;");
-    expect(() =>
-      applyCodeProposal(directory, { edits, files: [{ path, before: "const", after: "let" }] }),
-    ).toThrow("code_anchor_ambiguous");
-    applyCodeProposal(directory, {
+    const ambiguous = yield* Effect.flip(
+      apply({ edits, files: [{ path, before: "const", after: "let" }] }),
+    );
+    expect(ambiguous).toMatchObject({ cause: { message: "code_anchor_ambiguous" } });
+    yield* apply({
       edits,
       files: [{ path, before: "const first = 1;", after: "const first = 3;" }],
     });

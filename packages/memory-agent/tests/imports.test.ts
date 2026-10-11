@@ -484,7 +484,11 @@ describe("migrating other agents' transcripts", () => {
             ["codex", 1, 0],
           ]);
           expect(overview.failures).toEqual([
-            { source: "claude-code", path: unreadable, reason: expect.stringContaining("EACCES") },
+            {
+              source: "claude-code",
+              path: unreadable,
+              reason: expect.stringContaining("PermissionDenied"),
+            },
           ]);
         }
         yield* Scope.close(permissionScope, Exit.void);

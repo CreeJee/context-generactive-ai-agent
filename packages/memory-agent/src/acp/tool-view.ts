@@ -1,7 +1,6 @@
 import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { resolve } from "node:path";
+import { oauthProtocolPath } from "../oauth/node-runtime.ts";
 import type { ToolKind } from "@agentclientprotocol/sdk";
 import { HashMap, Option, Schema } from "effect";
 
@@ -70,8 +69,9 @@ export const toolLocations: {
 function toolLocationsBody(argumentsJson: string, projectRoot: string) {
   return Option.match(decodePathArguments(argumentsJson), {
     onNone: () => [],
-    // resolve() keeps an absolute path (`/x`, `C:\x`) and joins a relative one to the project,
+    // oauthProtocolPath.resolve() keeps an absolute path (`/x`, `C:\x`) and joins a relative one to the project,
     // normalizing separators and `..` for this platform.
-    onSome: (args) => (args.path === undefined ? [] : [{ path: resolve(projectRoot, args.path) }]),
+    onSome: (args) =>
+      args.path === undefined ? [] : [{ path: oauthProtocolPath.resolve(projectRoot, args.path) }],
   });
 }

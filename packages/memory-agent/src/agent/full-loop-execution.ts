@@ -1,15 +1,13 @@
+import { NodeWorker } from "@effect/platform-node";
 import { referenceIds } from "../runtime/reference-ids.ts";
 import { nativePromise, runNativeEffect } from "../runtime/native-effect.ts";
+import { runtimeWorkerOptions } from "../runtime/resources.ts";
 import { nativeStream } from "../runtime/native-stream.ts";
 import { Cause, Stream, Result, Function as EffectFunction } from "effect";
+import { RpcClient, RpcServer } from "effect/rpc";
 import { isTruthy } from "../truthy.ts";
-import type { Worker } from "node:worker_threads";
-import {
-  acquireFullLoopChannel,
-  acquireFullLoopEndpoint,
-  acquireFullLoopWorker,
-  WorkerLifecycleError,
-} from "./full-loop-resources.ts";
+import { Worker } from "node:worker_threads";
+import { acquireFullLoopChannel, WorkerLifecycleError } from "./full-loop-resources.ts";
 import { isDeepStrictEqual } from "node:util";
 import { parallelReads, readOnlyToolNames } from "../tools/parallel-reads.ts";
 // Run-local observation ledger, not an Effect contextual service constructor.
@@ -22,14 +20,21 @@ import {
   Option,
   Effect,
   Exit,
-  Queue,
+  Layer,
   Schema,
   Scope,
 } from "effect";
-import { acquireFullLoopWorkerEvents } from "./full-loop-worker-events.ts";
+// Pure owner domain constructor used behind the contextual RPC server Layer below.
+// oxlint-disable-next-line anti-slop-effect/no-service-constructor-imports
+import { makeOwnerRpcEffect } from "./owner-rpc.ts";
+import {
+  FullLoopOwnerRpcGroup,
+  FullLoopRpcError,
+  FullLoopRpcGroup,
+} from "./full-loop-effect-rpc.ts";
+import { layerMessagePortRpcServer } from "./effect-rpc-message-port.ts";
 
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID } from "node:crypto";
+import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import {
   convertSchemaToJsonSchema,
   convertMessagesToModelMessages,
@@ -40,6 +45,7 @@ import {
   type StreamChunk,
 } from "@tanstack/ai";
 import type { ChatExecutionCapabilities, ChatExecutionTurn } from "./chat-execution.ts";
+import type { ExecutionAdmission } from "../runtime/execution-admission.ts";
 import {
   assertFullLoopPortable,
   FullLoopAdmissionRejected,
@@ -133,6 +139,7 @@ function preflightFullLoopExecutionBody<TAdapter extends AnyTextAdapter>(
 
 /** Admission and high-water allocation belong to the central owner, never the worker. */
 export interface FullLoopOwner {
+  readonly admission: ExecutionAdmission["Service"];
   readonly capability: OwnerRpcCapability;
   readonly ledger: OwnerRpcLedger;
   readonly permits: (capability: OwnerRpcCapability) => boolean;
@@ -141,7 +148,7 @@ export interface FullLoopOwner {
   readonly finalizationMiddleware?: readonly string[];
   readonly revoke?: () => void;
   readonly lastOperationId: number;
-  readonly workerUrl?: URL;
+  readonly workerUrl: URL;
   readonly onWorker?: (worker: Worker) => void;
   /** Owner-only asset lease hooks; stop releases only after the actual Worker terminates. */
   readonly onWorkerStarting?: () => void;
@@ -176,6 +183,8 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
           Effect.gen(function* () {
             const adapter = capabilities.model.adapter;
             const controller = capabilities.stream.abortController;
+            const releaseWorkerAdmission = yield* owner.admission.acquire("worker");
+            yield* Effect.addFinalizer(() => releaseWorkerAdmission);
             if (!owner.permits(owner.capability)) throw new Error("Inactive owner capability");
             if (controller.signal.aborted) return { pull: Cause.done() };
             // Pin callable references and inventory before the first await. Bind to the
@@ -307,6 +316,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
               messages: convertMessagesToModelMessages(structuredClone(turn.messages ?? [])),
               parentRunId: turn.parentRunId,
               modelOptions: turn.modelOptions,
+              resume: turn.resume,
               messageCount: turn.messages?.length ?? 0,
               hasTools: capabilities.tools.length > 0,
               iteration: 0,
@@ -325,10 +335,8 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
             ownerContext.get = (handle: any) => handle[0](ownerContext);
             ownerContext.getOptional = (handle: any) => handle[0](ownerContext, { optional: true });
             ownerContext.provide = (handle: any, value: any) => handle[1](ownerContext, value);
-            // Generic continuation requires preserving schema validation and Map-backed
-            // resume state; do not downgrade it to JSON validation or silently replay.
-            if (isTruthy(turn.resume?.length))
-              throw new Error("Worker interrupt continuation is not yet supported");
+            // Owner persistence validates resumed responses with its original schemas.
+            // The tagged codec preserves the resulting SDK Map/Set state in the worker.
             const definitions = (turn.interrupts ?? []).map((definition) => ({
               id: definition.id,
               payloadSchema: definition.payloadSchema?.["~standard"].jsonSchema.input({
@@ -345,11 +353,26 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
             const workerScope = Scope.makeUnsafe();
             const models = MutableHashMap.empty<string, AsyncIterator<any>>();
             let closed = false;
+            let terminalObserved = false;
+            let runningWorker: Worker | undefined;
             yield* Effect.addFinalizer(() =>
               Effect.suspend(() => {
                 closed = true;
                 return Effect.sync(() => owner.revoke?.()).pipe(
                   Effect.ensuring(Effect.sync(() => controller.abort())),
+                  // A stopped native SDK pull cannot acknowledge graceful worker shutdown.
+                  // Revoke first, then await actual termination before releasing the Scope/lease.
+                  Effect.ensuring(
+                    Effect.suspend(() =>
+                      !terminalObserved && runningWorker !== undefined
+                        ? Effect.tryPromise({
+                            try: () => runningWorker!.terminate(),
+                            catch: (cause) =>
+                              WorkerLifecycleError.make({ operation: "terminate", cause }),
+                          }).pipe(Effect.asVoid, Effect.orDie)
+                        : Effect.void,
+                    ),
+                  ),
                   Effect.ensuring(Scope.close(workerScope, Exit.void)),
                   Effect.ensuring(
                     Effect.sync(() => {
@@ -373,9 +396,15 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
               systemPrompts: ownerContext.systemPrompts,
               tools: capabilities.tools,
               modelOptions: turn.modelOptions,
+              resume: turn.resume,
+              parentRunId: turn.parentRunId,
             };
             const decisions = MutableHashMap.empty<string, any>();
             const completedTools = MutableHashMap.empty<string, any>();
+            const resumedApproval = (toolCallId: string) => {
+              const approval = ownerConfig.resumeToolState?.approvals?.get(toolCallId);
+              return approval === true || approval?.approved === true;
+            };
             const phaseCall = (call: any) => {
               const observed = grants.toolCalls().find((entry) => isDeepStrictEqual(entry, call));
               if (isTruthy(observed)) return observed;
@@ -396,7 +425,6 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
             ownerContext.createId = (prefix: string) => `${prefix}-${randomUUID()}`;
             ownerContext.defer = (promise: Promise<unknown>) => deferred.push(promise);
             let finalizing = false;
-            let terminalObserved = false;
             // Guard the actual owner implementation, not only worker RPC delivery.
             // Rebuild parallelReads around these guards: the incoming middleware closes
             // over its original unguarded tools and must never be invoked here.
@@ -415,8 +443,9 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                     )
                       throw new Error("Inactive owner tool implementation capability");
                     grants.start({ name: tool.name, toolCallId: context?.toolCallId, args });
-                    return yield* nativePromise(() =>
-                      Promise.resolve(tool.execute!(args, context)),
+                    return yield* owner.admission.run(
+                      "tool",
+                      nativePromise(() => Promise.resolve(tool.execute!(args, context))),
                     );
                   }),
                 ),
@@ -471,7 +500,11 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                   const tool = ownerTools.find((tool) => tool.name === invocation.name);
                   // The inventory retains SDK needsApproval. Without owner-issued
                   // approval continuation support, it cannot authorize execution.
-                  if (!isTruthy(tool?.execute) || isTruthy(tool.needsApproval)) return false;
+                  if (
+                    !isTruthy(tool?.execute) ||
+                    (isTruthy(tool.needsApproval) && !resumedApproval(invocation.toolCallId))
+                  )
+                    return false;
                   if (isTruthy(tool.inputSchema) && isStandardSchema(tool.inputSchema))
                     parseWithStandardSchema(tool.inputSchema, invocation.args);
                   return true;
@@ -517,9 +550,10 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
               }
               return true;
             };
-            yield* acquireFullLoopEndpoint(port1, {
-              permits: (capability) => !closed && !finalizing && owner.permits(capability),
-              permitsFinalization: (capability) =>
+            const ownerEndpointOptions = {
+              permits: (capability: OwnerRpcCapability) =>
+                !closed && !finalizing && owner.permits(capability),
+              permitsFinalization: (capability: OwnerRpcCapability) =>
                 !closed && finalizing && owner.permitsFinalization?.(capability) === true,
               ledger: owner.ledger,
               handlers: {
@@ -572,7 +606,10 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                           MutableHashMap.get(models, input.id),
                         );
                         if (!isTruthy(iterator)) throw new Error("Unknown owner model stream");
-                        const next = yield* nativePromise(() => Promise.resolve(iterator.next()));
+                        const next = yield* owner.admission.run(
+                          "model",
+                          nativePromise(() => Promise.resolve(iterator.next())),
+                        );
                         if (isTruthy(next.done)) {
                           MutableHashMap.remove(models, input.id);
                           ownerContext.phase = "afterModel";
@@ -629,14 +666,17 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                 },
                 toolAuthorize: {
                   sideEffect: true,
-                  authorize: (wire) => authorizeRequest("toolAuthorize", wire),
+                  authorize: (wire: any) => authorizeRequest("toolAuthorize", wire),
                   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
                   execute: (wire: any) =>
                     runNativeEffect(
                       Effect.gen(function* () {
                         const invocation = grants.observed(decodeFullLoopValue(wire));
                         const tool = ownerTools.find((tool) => tool.name === invocation.name);
-                        if (!isTruthy(tool?.execute) || isTruthy(tool.needsApproval))
+                        if (
+                          !isTruthy(tool?.execute) ||
+                          (isTruthy(tool.needsApproval) && !resumedApproval(invocation.toolCallId))
+                        )
                           throw new Error("Unsupported owner approval tool");
                         const events: any[] = [];
                         ownerContext.emitCustomEvent = (name: string, value: any, options: any) =>
@@ -663,7 +703,10 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                           const definition = ownerTools.find(
                             (tool) => tool.name === call.function.name,
                           );
-                          if (!isTruthy(definition?.execute) || isTruthy(definition.needsApproval))
+                          if (
+                            !isTruthy(definition?.execute) ||
+                            (isTruthy(definition.needsApproval) && !resumedApproval(call.id))
+                          )
                             throw new Error("Unsupported owner approval tool");
                           const raw = parseToolJson(call.function.arguments);
                           let args = raw;
@@ -775,7 +818,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                 },
                 tool: {
                   sideEffect: true,
-                  authorize: (wire) => authorizeRequest("tool", wire),
+                  authorize: (wire: any) => authorizeRequest("tool", wire),
                   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
                   execute: (input: any) =>
                     runNativeEffect(
@@ -785,7 +828,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                         if (!isTruthy(tool?.execute)) throw new Error("Unknown owner tool");
                         const args = input.args;
                         const events: any[] = [];
-                        const value = yield* nativePromise(() =>
+                        const outcome = yield* nativePromise(() =>
                           Promise.resolve(
                             tool.execute(args, {
                               context: turn.context,
@@ -796,13 +839,31 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                               },
                             }),
                           ),
+                        ).pipe(
+                          Effect.matchEffect({
+                            onSuccess: (value) =>
+                              Effect.succeed({ type: "succeeded" as const, value }),
+                            onFailure: (error) =>
+                              HashSet.has(readOnlyToolNames, input.name)
+                                ? Effect.succeed({
+                                    type: "failed" as const,
+                                    message:
+                                      error.cause instanceof Error
+                                        ? error.cause.message
+                                        : "Read tool failed",
+                                  })
+                                : Effect.fail(error),
+                          }),
                         );
+                        const value =
+                          outcome.type === "succeeded" ? outcome.value : { error: outcome.message };
                         MutableHashMap.set(completedTools, input.toolCallId, {
                           toolCallId: input.toolCallId,
                           toolName: input.name,
                           toolCall: grants.toolCalls().find((call) => call.id === input.toolCallId),
                           tool,
-                          ok: true,
+                          ok: outcome.type === "succeeded",
+                          error: outcome.type === "failed" ? outcome.message : undefined,
                           duration: 0,
                           result: value,
                         });
@@ -811,7 +872,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                           toolCallId: input.toolCallId,
                           content: Schema.is(Schema.String)(value) ? value : stringify(value),
                         });
-                        return json({ value, events });
+                        return json({ outcome, events });
                       }),
                     ),
                 },
@@ -857,7 +918,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                 },
                 middleware: {
                   sideEffect: true,
-                  authorize: (wire) => authorizeRequest("middleware", wire),
+                  authorize: (wire: any) => authorizeRequest("middleware", wire),
                   finalization: finalizationInput,
                   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
                   execute: (input: any) =>
@@ -1011,6 +1072,27 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                         if (input.hook === "onConfig" && isTruthy(result)) {
                           Object.assign(ownerConfig, result);
                           if (isTruthy(result.messages)) ownerContext.messages = result.messages;
+                          if (isTruthy(result.resumeToolState)) {
+                            const resumed = result.resumeToolState.approvals;
+                            for (const call of ownerContext.messages.flatMap(
+                              (message: any) => message.toolCalls ?? [],
+                            )) {
+                              if (resumed?.has(call.id) !== true) continue;
+                              if (grants.toolCalls().some((observed) => observed.id === call.id))
+                                continue;
+                              grants.observe({
+                                type: "TOOL_CALL_START",
+                                toolCallId: call.id,
+                                toolCallName: call.function.name,
+                              });
+                              grants.observe({
+                                type: "TOOL_CALL_ARGS",
+                                toolCallId: call.id,
+                                delta: call.function.arguments,
+                              });
+                              grants.observe({ type: "TOOL_CALL_END", toolCallId: call.id });
+                            }
+                          }
                           if (isTruthy(result.systemPrompts))
                             ownerContext.systemPrompts = result.systemPrompts;
                         }
@@ -1024,74 +1106,141 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                     ),
                 },
               },
-            }).pipe(Effect.provideService(Scope.Scope, workerScope));
-            const worker = yield* acquireFullLoopWorker(
-              owner.workerUrl ?? new URL("./full-loop-worker.ts", import.meta.url),
-              {
-                workerData: {
-                  port: port2,
+            };
+            // SAFETY: each operation keeps its input/output pairing while only the
+            // Promise boundary is lifted into the native Effect runtime.
+            const effectHandlers = Object.fromEntries(
+              Object.entries(ownerEndpointOptions.handlers).map(([operation, handler]: any) => [
+                operation,
+                {
+                  ...handler,
+                  execute: (input: any, capability: OwnerRpcCapability) =>
+                    nativePromise(() => handler.execute(input, capability)),
+                },
+              ]),
+            ) as any;
+            const executeOwnerRpc = makeOwnerRpcEffect({
+              ...ownerEndpointOptions,
+              handlers: effectHandlers,
+            });
+            const callbackHandlers = FullLoopOwnerRpcGroup.toLayer({
+              OwnerCall: (request) =>
+                executeOwnerRpc(request).pipe(
+                  Effect.mapError(() => FullLoopRpcError.make({ reason: "owner_transport" })),
+                ),
+            });
+            const callbackServer = RpcServer.layer(FullLoopOwnerRpcGroup, {
+              concurrency: 1,
+              disableFatalDefects: true,
+            }).pipe(
+              Layer.provide(callbackHandlers),
+              Layer.provide(layerMessagePortRpcServer(port1)),
+            );
+            yield* Effect.forkIn(Layer.launch(callbackServer), workerScope);
+
+            let workerStopped = false;
+            let orphanTermination: Promise<number> | undefined;
+            yield* Scope.addFinalizer(
+              workerScope,
+              Effect.suspend(() => {
+                const termination = orphanTermination;
+                return termination === undefined
+                  ? Effect.void
+                  : nativePromise(() => termination).pipe(Effect.orDie);
+              }),
+            );
+            const workerLayer = NodeWorker.layer(() => {
+              owner.onWorkerStarting?.();
+              let worker: Worker;
+              try {
+                worker = new Worker(
+                  owner.workerUrl,
+                  runtimeWorkerOptions({ capability: owner.capability }),
+                );
+              } catch (cause) {
+                owner.onWorkerStopped?.();
+                throw cause;
+              }
+              worker.once("exit", () => {
+                if (workerStopped) return;
+                workerStopped = true;
+                owner.onWorkerStopped?.();
+              });
+              runningWorker = worker;
+              try {
+                owner.onWorker?.(worker);
+              } catch (cause) {
+                orphanTermination = worker.terminate();
+                throw cause;
+              }
+              return worker;
+            });
+            const workerProtocol = RpcClient.layerProtocolWorker({ size: 1, concurrency: 1 }).pipe(
+              Layer.provide(workerLayer),
+            );
+            const workerProtocolContext = yield* Layer.buildWithScope(workerProtocol, workerScope);
+            const client = yield* RpcClient.make(FullLoopRpcGroup).pipe(
+              Effect.provide(workerProtocolContext),
+              Effect.provideService(Scope.Scope, workerScope),
+            );
+            const chunks = client
+              .RunFullLoop(
+                {
                   capability: owner.capability,
                   lastOperationId: owner.lastOperationId,
                   turn: wireTurn,
                   tools: toolDescriptions,
                   middleware,
                   adapter: { name: adapterName, model: adapterModel },
+                  ownerPort: port2,
                 },
-                transferList: [port2],
-              },
-              owner,
-            ).pipe(Effect.provideService(Scope.Scope, workerScope));
-            owner.onWorker?.(worker);
-            const queue = yield* acquireFullLoopWorkerEvents(worker, controller.signal).pipe(
-              Effect.provideService(Scope.Scope, workerScope),
-            );
-            let acknowledge = false;
-            return {
-              pull: Effect.gen(function* (): Effect.fn.Return<
-                readonly [StreamChunk, ...StreamChunk[]],
-                Cause.Done<void> | Cause.UnknownError | WorkerLifecycleError
-              > {
-                // Native async generators acknowledge only when the consumer asks for the next chunk.
-                if (acknowledge) {
-                  worker.postMessage({ type: "ack" });
-                  acknowledge = false;
-                }
-                while (true) {
-                  const frame = yield* Queue.take(queue);
-                  switch (frame.type) {
-                    case "chunk": {
-                      // SAFETY: The decoded chunk envelope comes from the owner-selected SDK worker;
-                      // its SDK iterator owns the StreamChunk payload contract (not this transport schema).
-                      const chunk = frame.chunk as StreamChunk;
-                      if (finalizing || !owner.permits(owner.capability))
-                        throw new Error("Inactive owner chunk capability");
-                      if (chunk.type === "RUN_FINISHED" || chunk.type === "RUN_ERROR")
-                        terminalObserved = true;
-                      acknowledge = true;
-                      return [chunk];
-                    }
-                    case "aborted":
-                      // The owner ended the pull without SDK terminal acknowledgement.
-                      // Surface uncertainty so AgentChat records failure instead of leaving
-                      // a stopped run marked running or silently treating it as successful.
-                      return yield* WorkerLifecycleError.make({
-                        operation: "cancel",
-                        cause: new Error("Worker cancellation outcome unacknowledged; no replay"),
-                      });
-                    case "done":
-                      yield* Effect.forEach(deferred, (promise) => nativePromise(() => promise), {
-                        concurrency: "unbounded",
-                        discard: true,
-                      });
-                      return yield* Cause.done();
-                    case "failed":
-                      throw new Error(
-                        "SDK loop worker failed; owner effects may be uncertain; no replay performed",
-                      );
-                  }
-                }
-              }),
-            };
+                { streamBufferSize: 0 },
+              )
+              .pipe(
+                Stream.mapEffect((value) =>
+                  Effect.sync(() => {
+                    // SAFETY: RunFullLoop is the worker-side SDK iterator and its RPC
+                    // envelope has already passed schema decoding.
+                    const chunk = value as StreamChunk;
+                    if (finalizing || !owner.permits(owner.capability))
+                      throw new Error("Inactive owner chunk capability");
+                    if (chunk.type === "RUN_FINISHED" || chunk.type === "RUN_ERROR")
+                      terminalObserved = true;
+                    return chunk;
+                  }),
+                ),
+                Stream.mapError((error) =>
+                  Schema.is(FullLoopRpcError)(error)
+                    ? error
+                    : FullLoopRpcError.make({ reason: "worker_failed" }),
+                ),
+                Stream.ensuring(
+                  Effect.forEach(deferred, (promise) => nativePromise(() => promise), {
+                    concurrency: "unbounded",
+                    discard: true,
+                  }).pipe(Effect.orDie),
+                ),
+              );
+            const pull = yield* Stream.toPull(chunks);
+            const cancelled = Effect.callback<never, WorkerLifecycleError>((resume) => {
+              let settled = false;
+              const cancel = () => {
+                if (settled) return;
+                settled = true;
+                resume(
+                  Effect.fail(
+                    WorkerLifecycleError.make({
+                      operation: "cancel",
+                      cause: controller.signal.reason,
+                    }),
+                  ),
+                );
+              };
+              controller.signal.addEventListener("abort", cancel, { once: true });
+              if (controller.signal.aborted) cancel();
+              return Effect.sync(() => controller.signal.removeEventListener("abort", cancel));
+            });
+            return { pull: Effect.raceFirst(pull, cancelled) };
           }).pipe(Effect.map(({ pull }) => pull)),
         ).pipe(
           Stream.scoped,

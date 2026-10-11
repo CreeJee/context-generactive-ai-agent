@@ -210,11 +210,13 @@ const make = Effect.gen(function* () {
           return yield* new ProjectRootRejected({ root, reason: "overlaps_storage" });
 
         const project: Project = {
-          id: yield* crypto.randomUUIDv4.pipe(
-            Effect.mapError((cause) =>
-              ProjectHostFailed.make({ root, reason: { _tag: "IdentityFailed", cause } }),
+          id: yield* crypto
+            .randomUUIDv4()
+            .pipe(
+              Effect.mapError((cause) =>
+                ProjectHostFailed.make({ root, reason: { _tag: "IdentityFailed", cause } }),
+              ),
             ),
-          ),
           root,
           name: path.basename(root) || root,
           crossRecallExcluded: false,

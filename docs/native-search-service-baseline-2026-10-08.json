@@ -1,0 +1,75 @@
+{
+  "date": "2026-10-08",
+  "fixture": "production-services-synthetic-v1",
+  "sha256": {
+    "harness": "fcc8c294972f1d077d21e6932bdb37990456e1f83efdac9f0a21c1f43b4fa3b6",
+    "search": "5bf9857fbf26e66568da3e95abc35cda0ef6a54ffe7583f5b1a315a7bfbc9d76",
+    "loadedAddon": "db0fd75e0b3c9e2b514a87e26f1318aabd51f3b36d48ec99e1b9090e02e933ed"
+  },
+  "samples": [
+    {
+      "kind": "first-call",
+      "allowedProjects": 1,
+      "elapsedMs": 38.35520899999983,
+      "processCold": false,
+      "threadId": 0,
+      "rssBytes": 257376256
+    },
+    {
+      "kind": "warm",
+      "allowedProjects": 1,
+      "rows": 10000,
+      "limit": 12,
+      "rounds": 20,
+      "medianMs": 30.950209000000086,
+      "p95Ms": 32.22579200000018,
+      "maxMs": 32.46550000000002,
+      "postCallTurn": {
+        "medianMs": 0.07183299999996962,
+        "p95Ms": 0.4375,
+        "maxMs": 0.4469160000001011
+      },
+      "eventLoopDelayP95Ms": 32.374783,
+      "eventLoopDelayMaxMs": 32.604159,
+      "threadId": 0,
+      "rssBytes": 258195456,
+      "sqlCalls": "not-instrumented"
+    },
+    {
+      "kind": "first-call",
+      "allowedProjects": 2,
+      "elapsedMs": 40.10441700000001,
+      "processCold": false,
+      "threadId": 0,
+      "rssBytes": 258228224
+    },
+    {
+      "kind": "warm",
+      "allowedProjects": 2,
+      "rows": 10000,
+      "limit": 12,
+      "rounds": 20,
+      "medianMs": 38.66816700000027,
+      "p95Ms": 40.381875000000036,
+      "maxMs": 41.33595800000012,
+      "postCallTurn": {
+        "medianMs": 0.05500000000029104,
+        "p95Ms": 0.40145799999982046,
+        "maxMs": 1.556416000000354
+      },
+      "eventLoopDelayP95Ms": 40.468479,
+      "eventLoopDelayMaxMs": 41.648127,
+      "threadId": 0,
+      "rssBytes": 259899392,
+      "sqlCalls": "not-instrumented"
+    },
+    {
+      "kind": "loopback-http-control-only",
+      "concurrentWithSearch": false,
+      "appEndpoint": false,
+      "medianMs": 0.41325000000006185,
+      "p95Ms": 1.5364169999998012,
+      "maxMs": 16.268125000000055
+    }
+  ]
+}

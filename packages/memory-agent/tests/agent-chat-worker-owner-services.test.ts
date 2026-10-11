@@ -3,7 +3,7 @@ import { it } from "@effect/vitest";
 import { DatabaseSync } from "node:sqlite";
 import { threadId } from "node:worker_threads";
 import { Array, Effect, Layer, Schema } from "effect";
-import { expect, vi } from "vite-plus/test";
+import { expect } from "vite-plus/test";
 import { AgentChat } from "../src/agent/chat.ts";
 import { Database } from "../src/db/database.ts";
 import { Embedder } from "../src/memory/embedding/embedder.ts";
@@ -38,7 +38,6 @@ it.live(
         }
       }
 
-      vi.stubEnv("CONTEXT_AGENT_GOAL_WORKER", "1");
       let backendInitializations = 0;
       let activeBackends = 0;
       let maxActiveBackends = 0;
@@ -52,8 +51,8 @@ it.live(
             activeBackends++;
             maxActiveBackends = Math.max(maxActiveBackends, activeBackends);
             return {
-              identity: "fake-trigram-64",
-              dimensions: 64,
+              identity: "fake-trigram-384",
+              dimensions: 384,
               embed: (texts: readonly string[]) =>
                 Effect.sync(() => {
                   embeddingCalls.push({ threadId, texts: [...texts] });
@@ -176,7 +175,6 @@ it.live(
         expect(maxActiveBackends).toBe(1);
         expect(ownership.sdkWorkerIds).toHaveLength(1);
       } finally {
-        vi.unstubAllEnvs();
       }
     }),
   20000,

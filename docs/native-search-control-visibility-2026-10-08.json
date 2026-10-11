@@ -1,0 +1,319 @@
+{
+  "date": "2026-10-08",
+  "sha256": {
+    "harness": "331b306fa50fd96475c45fedacaa49e9dc95fe9aed048db3738fc9085030c79c",
+    "control": "1d5a0e2dbaa2d14bf40ca64dc1994cf0a3697205767b9169dc3855f02c0f7870",
+    "loadedAddon": "a9a5e5aff79ca49542a4d0a895f69fbfcbd5ed3bbbdcf916a9b3172306545eca"
+  },
+  "runs": [
+    {
+      "kind": "early-two-ms",
+      "harnessSha256": "b70f9baa637eb86943bf8023a07d094b495ae452382a7fa7dc7cc10dd8342f9e",
+      "result": {
+        "rounds": 20,
+        "inFlightWrites": 20,
+        "mainGcRuns": 20,
+        "observations": [
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 0.090125,
+            "gcPerformed": true
+          },
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 0.008749999999999999,
+            "gcPerformed": true
+          },
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 0.008875000000000001,
+            "gcPerformed": true
+          },
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 0.007042,
+            "gcPerformed": true
+          },
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 0.010499999999999999,
+            "gcPerformed": true
+          },
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 0.0051660000000000005,
+            "gcPerformed": true
+          },
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 0.008624999999999999,
+            "gcPerformed": true
+          },
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 0.006375,
+            "gcPerformed": true
+          },
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 0.007542,
+            "gcPerformed": true
+          },
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 0.004791,
+            "gcPerformed": true
+          },
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 0.008624999999999999,
+            "gcPerformed": true
+          },
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 0.006417,
+            "gcPerformed": true
+          },
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 0.0053750000000000004,
+            "gcPerformed": true
+          },
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 0.005542,
+            "gcPerformed": true
+          },
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 0.004083,
+            "gcPerformed": true
+          },
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 0.005084,
+            "gcPerformed": true
+          },
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 0.014584,
+            "gcPerformed": true
+          },
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 0.007292,
+            "gcPerformed": true
+          },
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 0.00625,
+            "gcPerformed": true
+          },
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 0.006333,
+            "gcPerformed": true
+          }
+        ],
+        "note": "Actual shared writes timestamped inside synchronous N-API call windows with main-isolate GC and temporary worker typed-array views. Not a scoring midpoint hook, worker-isolate forced GC, hard deadline or mid-scan preemption proof. No persistent cache/writer/application DB used."
+      }
+    },
+    {
+      "kind": "vary-offsets",
+      "result": {
+        "rounds": 20,
+        "inFlightWrites": 6,
+        "mainGcRuns": 20,
+        "observations": [
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 0.049416999999999996,
+            "gcPerformed": true,
+            "observationOffsetMs": 2,
+            "wholeNapiCallMs": 3.646917
+          },
+          {
+            "writtenInsideNativeCall": false,
+            "kind": "success",
+            "nativeMs": 2.5442080000000002,
+            "gcPerformed": true,
+            "observationOffsetMs": 5,
+            "wholeNapiCallMs": 6.042166
+          },
+          {
+            "writtenInsideNativeCall": false,
+            "kind": "success",
+            "nativeMs": 2.471208,
+            "gcPerformed": true,
+            "observationOffsetMs": 8,
+            "wholeNapiCallMs": 5.620917
+          },
+          {
+            "writtenInsideNativeCall": false,
+            "kind": "success",
+            "nativeMs": 2.3181249999999998,
+            "gcPerformed": true,
+            "observationOffsetMs": 12,
+            "wholeNapiCallMs": 5.516583
+          },
+          {
+            "writtenInsideNativeCall": false,
+            "kind": "success",
+            "nativeMs": 2.3631659999999997,
+            "gcPerformed": true,
+            "observationOffsetMs": 20,
+            "wholeNapiCallMs": 5.501625
+          },
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 0.026625,
+            "gcPerformed": true,
+            "observationOffsetMs": 2,
+            "wholeNapiCallMs": 3.661375
+          },
+          {
+            "writtenInsideNativeCall": false,
+            "kind": "success",
+            "nativeMs": 2.371541,
+            "gcPerformed": true,
+            "observationOffsetMs": 5,
+            "wholeNapiCallMs": 6.093125
+          },
+          {
+            "writtenInsideNativeCall": false,
+            "kind": "success",
+            "nativeMs": 2.5345,
+            "gcPerformed": true,
+            "observationOffsetMs": 8,
+            "wholeNapiCallMs": 6.497667
+          },
+          {
+            "writtenInsideNativeCall": false,
+            "kind": "success",
+            "nativeMs": 2.804542,
+            "gcPerformed": true,
+            "observationOffsetMs": 12,
+            "wholeNapiCallMs": 6.070917
+          },
+          {
+            "writtenInsideNativeCall": false,
+            "kind": "success",
+            "nativeMs": 2.417375,
+            "gcPerformed": true,
+            "observationOffsetMs": 20,
+            "wholeNapiCallMs": 5.6145
+          },
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 0.023084,
+            "gcPerformed": true,
+            "observationOffsetMs": 2,
+            "wholeNapiCallMs": 3.70025
+          },
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 2.5142089999999997,
+            "gcPerformed": true,
+            "observationOffsetMs": 5,
+            "wholeNapiCallMs": 6.478667
+          },
+          {
+            "writtenInsideNativeCall": false,
+            "kind": "success",
+            "nativeMs": 2.5121670000000003,
+            "gcPerformed": true,
+            "observationOffsetMs": 8,
+            "wholeNapiCallMs": 5.7425
+          },
+          {
+            "writtenInsideNativeCall": false,
+            "kind": "success",
+            "nativeMs": 2.493,
+            "gcPerformed": true,
+            "observationOffsetMs": 12,
+            "wholeNapiCallMs": 5.7345
+          },
+          {
+            "writtenInsideNativeCall": false,
+            "kind": "success",
+            "nativeMs": 3.089083,
+            "gcPerformed": true,
+            "observationOffsetMs": 20,
+            "wholeNapiCallMs": 12.031334
+          },
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 0.023167,
+            "gcPerformed": true,
+            "observationOffsetMs": 2,
+            "wholeNapiCallMs": 4.969375
+          },
+          {
+            "writtenInsideNativeCall": true,
+            "kind": "cancelled",
+            "nativeMs": 4.357792,
+            "gcPerformed": true,
+            "observationOffsetMs": 5,
+            "wholeNapiCallMs": 7.605625
+          },
+          {
+            "writtenInsideNativeCall": false,
+            "kind": "success",
+            "nativeMs": 3.886333,
+            "gcPerformed": true,
+            "observationOffsetMs": 8,
+            "wholeNapiCallMs": 8.919666
+          },
+          {
+            "writtenInsideNativeCall": false,
+            "kind": "success",
+            "nativeMs": 3.098167,
+            "gcPerformed": true,
+            "observationOffsetMs": 12,
+            "wholeNapiCallMs": 7.525875
+          },
+          {
+            "writtenInsideNativeCall": false,
+            "kind": "success",
+            "nativeMs": 3.0529580000000003,
+            "gcPerformed": true,
+            "observationOffsetMs": 20,
+            "wholeNapiCallMs": 6.958666
+          }
+        ],
+        "note": "Actual shared writes timestamped inside synchronous N-API call windows with main-isolate GC and temporary worker typed-array views. Not a scoring midpoint hook, worker-isolate forced GC, hard deadline or mid-scan preemption proof. No persistent cache/writer/application DB used."
+      }
+    }
+  ],
+  "limitations": {
+    "workerIsolateGcForced": false,
+    "scoringMidpointHook": false,
+    "midScanPreemption": false,
+    "hardDeadline": false
+  }
+}

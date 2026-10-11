@@ -1,3 +1,4 @@
+import { Cause } from "effect";
 import { it } from "@effect/vitest";
 import { chat, toolDefinition } from "@tanstack/ai";
 import { Effect, Schema, Stream } from "effect";
@@ -23,7 +24,7 @@ const runTests = toolDefinition({
 });
 
 const drain = (stream: AsyncIterable<unknown>) =>
-  Stream.runCollect(Stream.fromAsyncIterable(stream, (cause) => cause));
+  Stream.runCollect(Stream.fromAsyncIterable(stream, (cause) => new Cause.UnknownError(cause)));
 
 describe("Recorder", () => {
   it.live("stores every message of a tool-using run with structural edges", () =>

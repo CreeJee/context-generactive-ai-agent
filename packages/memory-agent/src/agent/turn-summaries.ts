@@ -90,7 +90,7 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
       .map(nodeLine)
       .join("\n\n")
       .slice(0, inputCharacters);
-    const threadId = yield* crypto.randomUUIDv4;
+    const threadId = yield* crypto.randomUUIDv4();
     const answer = yield* sdkPromise((abortController) =>
       chat({
         adapter: services.runtime.adapter(cheap),

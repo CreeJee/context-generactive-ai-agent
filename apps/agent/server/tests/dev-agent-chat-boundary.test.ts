@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest";
 import { selectTestModel } from "../../../../packages/memory-agent/tests/support/provider.ts";
 import { isTruthy } from "../../app/truthy.ts";
-import { Cause, ConfigProvider, Context, Effect, Layer, Schema } from "effect";
+import { Cause, Effect, Schema } from "effect";
 import { RouterContextProvider } from "react-router";
 import { Database, SessionLeases, Sessions, Workflows } from "memory-agent";
 import { expect } from "vite-plus/test";
@@ -56,16 +56,9 @@ it.live(
   "chat route handlers map a leased local session to its bound Goal/run without cross-site writes",
   () =>
     Effect.gen(function* () {
-      const flags = yield* Layer.build(
-        ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ CONTEXT_AGENT_GOAL_WORKER: "1" }), {
-          asPrimary: true,
-        }),
-      );
       const context = yield* sdkCall(() => testRuntime({ testProvider: {} }));
       const { action, loader } = makeChatHandlers({
-        runPromise: Effect.runPromiseWith(
-          Context.merge(yield* context.runtime.contextEffect, flags),
-        ),
+        runPromise: Effect.runPromiseWith(yield* context.runtime.contextEffect),
       });
       yield* Effect.provideContext(selectTestModel(), yield* context.runtime.contextEffect);
       const { leases, workflows, db } = yield* Effect.provideContext(
@@ -156,16 +149,9 @@ it.live(
   "cross-site metadata cannot borrow a valid holder or create durable Goal effects",
   () =>
     Effect.gen(function* () {
-      const flags = yield* Layer.build(
-        ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ CONTEXT_AGENT_GOAL_WORKER: "1" }), {
-          asPrimary: true,
-        }),
-      );
       const context = yield* sdkCall(() => testRuntime({ testProvider: {} }));
       const { action } = makeChatHandlers({
-        runPromise: Effect.runPromiseWith(
-          Context.merge(yield* context.runtime.contextEffect, flags),
-        ),
+        runPromise: Effect.runPromiseWith(yield* context.runtime.contextEffect),
       });
       yield* Effect.provideContext(selectTestModel(), yield* context.runtime.contextEffect);
       const { leases, workflows, db } = yield* Effect.provideContext(
@@ -228,16 +214,9 @@ it.live(
   "headerless local requests preserve lease and cross-session run authority",
   () =>
     Effect.gen(function* () {
-      const flags = yield* Layer.build(
-        ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ CONTEXT_AGENT_GOAL_WORKER: "1" }), {
-          asPrimary: true,
-        }),
-      );
       const context = yield* sdkCall(() => testRuntime({ testProvider: {} }));
       const { action } = makeChatHandlers({
-        runPromise: Effect.runPromiseWith(
-          Context.merge(yield* context.runtime.contextEffect, flags),
-        ),
+        runPromise: Effect.runPromiseWith(yield* context.runtime.contextEffect),
       });
       yield* Effect.provideContext(selectTestModel(), yield* context.runtime.contextEffect);
       const { leases, workflows, sessions, db } = yield* Effect.provideContext(
@@ -310,7 +289,10 @@ it.live(
       ).toEqual(before);
       leases.release(second.id, "page-b");
       const allowed = yield* callRoute(action, yield* native(second.id, "session-b-run", null));
-      expect(allowed.status).toBe(200);
+      expect(
+        allowed.status,
+        allowed.status === 200 ? "" : yield* sdkCall(() => allowed.text()),
+      ).toBe(200);
       yield* sdkCall(() => allowed.text());
       expect(
         db.sqlite

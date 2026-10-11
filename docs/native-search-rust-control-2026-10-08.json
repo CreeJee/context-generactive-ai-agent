@@ -1,0 +1,536 @@
+{
+  "recordedAt": "2026-10-08T06:49:13.930Z",
+  "postReview": {
+    "change": "Host queue finalizer removes only exact job identity, not a future request-ID reuse. Source-derived ABA review finding; no experimental race reproduction claimed.",
+    "clientSha256": "2a93870d80bda3f69b0b846601e66746a26d377a0807685c675194e70288768d",
+    "measurementScope": "Paired/visibility samples precede only this host finalizer repair. Native source/addon and workload remain unchanged; final current-host regression is recorded separately."
+  },
+  "paired": {
+    "dimensions": 384,
+    "bits": 4,
+    "candidateCount": 10002,
+    "vectorK": 48,
+    "rounds": 13,
+    "workerThreadId": 1,
+    "samples": [
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": true,
+        "wallMs": 37.05529200000001,
+        "mainCpuMs": 36.777,
+        "workerBoundaryCpuMs": 1.332,
+        "vectorWallMs": 1.30875,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": true,
+        "wallMs": 32.03250000000003,
+        "mainCpuMs": 2.348,
+        "workerBoundaryCpuMs": 26.393,
+        "vectorWallMs": 0.166375,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": false,
+        "wallMs": 26.068959000000063,
+        "mainCpuMs": 0.797,
+        "workerBoundaryCpuMs": 24.909,
+        "vectorWallMs": 0.178791,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      },
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": false,
+        "wallMs": 33.911500000000046,
+        "mainCpuMs": 30.378,
+        "workerBoundaryCpuMs": 1.135,
+        "vectorWallMs": 1.122708,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": false,
+        "wallMs": 34.016917000000035,
+        "mainCpuMs": 30.517,
+        "workerBoundaryCpuMs": 1.173,
+        "vectorWallMs": 1.155833,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": false,
+        "wallMs": 25.733375000000024,
+        "mainCpuMs": 0.848,
+        "workerBoundaryCpuMs": 24.469,
+        "vectorWallMs": 0.164292,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": false,
+        "wallMs": 26.034582999999998,
+        "mainCpuMs": 0.868,
+        "workerBoundaryCpuMs": 24.863,
+        "vectorWallMs": 0.168625,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      },
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": false,
+        "wallMs": 33.495874999999955,
+        "mainCpuMs": 30.046,
+        "workerBoundaryCpuMs": 1.116,
+        "vectorWallMs": 1.103166,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": false,
+        "wallMs": 33.53295800000001,
+        "mainCpuMs": 30.104,
+        "workerBoundaryCpuMs": 1.194,
+        "vectorWallMs": 1.205208,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": false,
+        "wallMs": 25.869709000000057,
+        "mainCpuMs": 0.83,
+        "workerBoundaryCpuMs": 24.673,
+        "vectorWallMs": 0.16449999999999998,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": false,
+        "wallMs": 25.611999999999966,
+        "mainCpuMs": 0.69,
+        "workerBoundaryCpuMs": 24.643,
+        "vectorWallMs": 0.171042,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      },
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": false,
+        "wallMs": 50.00091699999996,
+        "mainCpuMs": 31.721,
+        "workerBoundaryCpuMs": 1.281,
+        "vectorWallMs": 1.312792,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": false,
+        "wallMs": 34.77645800000005,
+        "mainCpuMs": 31.737,
+        "workerBoundaryCpuMs": 1.13,
+        "vectorWallMs": 1.115875,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": false,
+        "wallMs": 25.939374999999927,
+        "mainCpuMs": 0.699,
+        "workerBoundaryCpuMs": 24.821,
+        "vectorWallMs": 0.16674999999999998,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": false,
+        "wallMs": 25.5603329999999,
+        "mainCpuMs": 0.708,
+        "workerBoundaryCpuMs": 24.506,
+        "vectorWallMs": 0.17533300000000002,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      },
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": false,
+        "wallMs": 34.293499999999995,
+        "mainCpuMs": 30.443,
+        "workerBoundaryCpuMs": 1.153,
+        "vectorWallMs": 1.141125,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": false,
+        "wallMs": 34.55537500000014,
+        "mainCpuMs": 30.774,
+        "workerBoundaryCpuMs": 1.2,
+        "vectorWallMs": 1.187792,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": false,
+        "wallMs": 26.54095799999982,
+        "mainCpuMs": 0.837,
+        "workerBoundaryCpuMs": 25.322,
+        "vectorWallMs": 0.183333,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": false,
+        "wallMs": 25.674833000000035,
+        "mainCpuMs": 0.78,
+        "workerBoundaryCpuMs": 24.691,
+        "vectorWallMs": 0.17033299999999998,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      },
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": false,
+        "wallMs": 35.72662500000001,
+        "mainCpuMs": 31.245,
+        "workerBoundaryCpuMs": 1.247,
+        "vectorWallMs": 1.249125,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": false,
+        "wallMs": 34.63820799999985,
+        "mainCpuMs": 30.636,
+        "workerBoundaryCpuMs": 1.261,
+        "vectorWallMs": 1.427709,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": false,
+        "wallMs": 25.44879200000014,
+        "mainCpuMs": 0.691,
+        "workerBoundaryCpuMs": 24.579,
+        "vectorWallMs": 0.168834,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": false,
+        "wallMs": 25.362540999999965,
+        "mainCpuMs": 0.593,
+        "workerBoundaryCpuMs": 24.514,
+        "vectorWallMs": 0.14566700000000002,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      },
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": false,
+        "wallMs": 34.78729199999998,
+        "mainCpuMs": 31.493,
+        "workerBoundaryCpuMs": 1.128,
+        "vectorWallMs": 1.119791,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "legacy-boundary",
+        "coldFirstCall": false,
+        "wallMs": 32.90425000000005,
+        "mainCpuMs": 29.601,
+        "workerBoundaryCpuMs": 1.126,
+        "vectorWallMs": 1.119791,
+        "sqlCalls": 55,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 40802,
+        "outputLogicalBytes": 902
+      },
+      {
+        "arm": "native-read",
+        "coldFirstCall": false,
+        "wallMs": 25.32054200000016,
+        "mainCpuMs": 0.517,
+        "workerBoundaryCpuMs": 24.528,
+        "vectorWallMs": 0.156667,
+        "sqlCalls": 10,
+        "candidateCount": 10002,
+        "inputLogicalBytes": 1620,
+        "outputLogicalBytes": 1291
+      }
+    ],
+    "note": "Same one worker/index and fixed temporary WAL data. Legacy arm moves candidate enumeration/strings and per-hit mapping through JS; native arm retains candidates and batches mapping. Boundary thread CPU includes N-API/SQLite, not pure engine CPU. Logical bytes differ in DTO accounting and are not serialized wire bytes. No concurrent API/RSS/default activation or full application p95 claim; first pair shares OS/index caches and is not true cold."
+  },
+  "visibility": {
+    "rounds": 20,
+    "inFlightWrites": 5,
+    "mainGcRuns": 20,
+    "observations": [
+      {
+        "writtenInsideNativeCall": true,
+        "kind": "cancelled",
+        "nativeMs": 0.001167,
+        "gcPerformed": true,
+        "observationOffsetMs": 2,
+        "wholeNapiCallMs": 3.7045
+      },
+      {
+        "writtenInsideNativeCall": false,
+        "kind": "success",
+        "nativeMs": 2.548375,
+        "gcPerformed": true,
+        "observationOffsetMs": 5,
+        "wholeNapiCallMs": 5.851417
+      },
+      {
+        "writtenInsideNativeCall": false,
+        "kind": "success",
+        "nativeMs": 2.4317919999999997,
+        "gcPerformed": true,
+        "observationOffsetMs": 8,
+        "wholeNapiCallMs": 5.683291
+      },
+      {
+        "writtenInsideNativeCall": false,
+        "kind": "success",
+        "nativeMs": 2.534542,
+        "gcPerformed": true,
+        "observationOffsetMs": 12,
+        "wholeNapiCallMs": 6.063125
+      },
+      {
+        "writtenInsideNativeCall": false,
+        "kind": "success",
+        "nativeMs": 2.251125,
+        "gcPerformed": true,
+        "observationOffsetMs": 20,
+        "wholeNapiCallMs": 5.413041
+      },
+      {
+        "writtenInsideNativeCall": true,
+        "kind": "cancelled",
+        "nativeMs": 0.0012920000000000002,
+        "gcPerformed": true,
+        "observationOffsetMs": 2,
+        "wholeNapiCallMs": 3.795959
+      },
+      {
+        "writtenInsideNativeCall": false,
+        "kind": "success",
+        "nativeMs": 2.356375,
+        "gcPerformed": true,
+        "observationOffsetMs": 5,
+        "wholeNapiCallMs": 5.449292
+      },
+      {
+        "writtenInsideNativeCall": false,
+        "kind": "success",
+        "nativeMs": 2.517291,
+        "gcPerformed": true,
+        "observationOffsetMs": 8,
+        "wholeNapiCallMs": 5.745459
+      },
+      {
+        "writtenInsideNativeCall": false,
+        "kind": "success",
+        "nativeMs": 2.3708750000000003,
+        "gcPerformed": true,
+        "observationOffsetMs": 12,
+        "wholeNapiCallMs": 5.513792
+      },
+      {
+        "writtenInsideNativeCall": false,
+        "kind": "success",
+        "nativeMs": 2.581083,
+        "gcPerformed": true,
+        "observationOffsetMs": 20,
+        "wholeNapiCallMs": 5.675042
+      },
+      {
+        "writtenInsideNativeCall": true,
+        "kind": "cancelled",
+        "nativeMs": 0.001042,
+        "gcPerformed": true,
+        "observationOffsetMs": 2,
+        "wholeNapiCallMs": 3.567708
+      },
+      {
+        "writtenInsideNativeCall": false,
+        "kind": "success",
+        "nativeMs": 2.225167,
+        "gcPerformed": true,
+        "observationOffsetMs": 5,
+        "wholeNapiCallMs": 5.336542
+      },
+      {
+        "writtenInsideNativeCall": false,
+        "kind": "success",
+        "nativeMs": 2.369542,
+        "gcPerformed": true,
+        "observationOffsetMs": 8,
+        "wholeNapiCallMs": 5.42675
+      },
+      {
+        "writtenInsideNativeCall": false,
+        "kind": "success",
+        "nativeMs": 2.410625,
+        "gcPerformed": true,
+        "observationOffsetMs": 12,
+        "wholeNapiCallMs": 5.55375
+      },
+      {
+        "writtenInsideNativeCall": false,
+        "kind": "success",
+        "nativeMs": 2.5262919999999998,
+        "gcPerformed": true,
+        "observationOffsetMs": 20,
+        "wholeNapiCallMs": 5.571
+      },
+      {
+        "writtenInsideNativeCall": true,
+        "kind": "cancelled",
+        "nativeMs": 0.0011250000000000001,
+        "gcPerformed": true,
+        "observationOffsetMs": 2,
+        "wholeNapiCallMs": 3.643125
+      },
+      {
+        "writtenInsideNativeCall": false,
+        "kind": "success",
+        "nativeMs": 2.424125,
+        "gcPerformed": true,
+        "observationOffsetMs": 5,
+        "wholeNapiCallMs": 5.56575
+      },
+      {
+        "writtenInsideNativeCall": false,
+        "kind": "success",
+        "nativeMs": 2.422416,
+        "gcPerformed": true,
+        "observationOffsetMs": 8,
+        "wholeNapiCallMs": 5.514042
+      },
+      {
+        "writtenInsideNativeCall": true,
+        "kind": "cancelled",
+        "nativeMs": 5.519292,
+        "gcPerformed": true,
+        "observationOffsetMs": 12,
+        "wholeNapiCallMs": 15.687
+      },
+      {
+        "writtenInsideNativeCall": false,
+        "kind": "success",
+        "nativeMs": 2.4767919999999997,
+        "gcPerformed": true,
+        "observationOffsetMs": 20,
+        "wholeNapiCallMs": 6.881333
+      }
+    ],
+    "note": "Main-thread Rust-owned AtomicBool cancellation timestamped inside synchronous N-API call windows with main-isolate GC. SAB only provides a measurement gate, never native control memory. Not a scoring midpoint hook, worker-isolate forced GC, hard deadline or mid-scan preemption proof. No persistent cache/writer/application DB used."
+  },
+  "summary": {
+    "legacy-boundary": {
+      "wallMs": 34.42443750000007,
+      "mainCpuMs": 30.5765,
+      "workerBoundaryCpuMs": 1.163,
+      "vectorWallMs": 1.148479,
+      "sqlCalls": 55,
+      "candidateCount": 10002,
+      "inputLogicalBytes": 40802,
+      "outputLogicalBytes": 902
+    },
+    "native-read": {
+      "wallMs": 25.70410400000003,
+      "mainCpuMs": 0.744,
+      "workerBoundaryCpuMs": 24.658,
+      "vectorWallMs": 0.1687295,
+      "sqlCalls": 10,
+      "candidateCount": 10002,
+      "inputLogicalBytes": 1620,
+      "outputLogicalBytes": 1291
+    }
+  },
+  "fingerprints": {
+    "packages/turbovec/src/lib.rs": "dc94c6d5580202772a42666d01f956c64bfb84bde52d6c49e2178439f20fabdd",
+    "packages/turbovec/src/search_control.rs": "e9f513d088259930c0b227c0920adf2aab82ed4b738801e44ed780cf9dc8d329",
+    "packages/turbovec/src/read_session.rs": "d155071bc903fe4f6f7b83661ea20f92c94c383290872aaf56d7e6a9cc5eca51",
+    "packages/turbovec/index.d.ts": "9854cc72079e2da2cce0e9fdc84185374033cb05f3c313bd496b7aede23f689b",
+    "packages/turbovec/Cargo.toml": "64a7b219d54af521095db37d4efdc43a796b38c1614cff645dafc464f0176038",
+    "packages/turbovec/Cargo.lock": "e688a3a54de8e6b221ae92dbeceee60bb04ad0e7077f018afbd16a697ca86e77",
+    "packages/turbovec/memory-turbovec.node": "34bb1fba7d32f0b9e35510303524aed42cc26030b5ee29081c79dcc5a63393f9",
+    "packages/memory-agent/src/memory/native-search/client.ts": "a8363b2e7548135783fcd6f52ff66d017a4c75e38fba2cfb7ffadf7b7aac1cf4",
+    "packages/memory-agent/src/memory/native-search/worker.ts": "395ac5936a338e59675ff44038bc0c70cc0ebad26eb6b526f8ab9b367d934c34",
+    "packages/memory-agent/src/memory/native-search/worker-protocol.ts": "d62da84f3fc67c77e1cfef7d460ed98a8653162d70d553bbe34954263407f70f",
+    "packages/memory-agent/src/memory/native-search/read-protocol.ts": "f42b9c38b11930365675f63891053debf301470e9fd0fe97dbf12ef034d35428",
+    "tools/native-search-control-visibility.ts": "dd69729921c18547d2bdb11d76cfb895caadf2b6bc2a64ad373a286bf9081555",
+    "tools/native-search-read-paired.ts": "cb5b5ca06ba342314e858c0f45531b7da161cde57a6df0a6e56bd1201251fa5f"
+  }
+}

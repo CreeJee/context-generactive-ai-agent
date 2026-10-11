@@ -1,23 +1,16 @@
 import { nativeFailure, nativePromise, runNativeEffect } from "../../runtime/native-effect.ts";
-import { Effect, HashSet } from "effect";
+import { Effect, FileSystem, HashSet, Layer, Path } from "effect";
+import { NodeFileSystem, NodePath } from "@effect/platform-node";
 // Kiwi (Korean morphological analyzer) in a worker thread: the WASM model needs ~850 MB, so it
 // lives here and the main thread can end the worker when it has been idle.
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { dirname, join } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import { KiwiBuilder, type Kiwi } from "kiwi-nlp";
 
 if (!(parentPort !== null)) throw new Error("Kiwi entry requires a worker parent port");
 const parent = parentPort;
-
-// Resolved here, next to this file's own dependency, so it works when the caller is bundled.
-const wasmPath = join(
-  dirname(createRequire(import.meta.url).resolve("kiwi-nlp")),
-  "kiwi-wasm.wasm",
-);
 
 /** Parts of speech worth searching by: nouns, numerals, verb/adjective stems, roots, Hanja. */
 const kept = HashSet.fromIterable(["NNG", "NNP", "NR", "VV", "VA", "XR", "SH"]);
@@ -46,12 +39,24 @@ const latinOrNumber = /[\p{Script=Latin}\p{Nd}]+/gu;
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 const load = Effect.fn("KiwiWorker.load")(function* () {
-  const builder = yield* nativePromise(() => KiwiBuilder.create(wasmPath));
-  const modelFiles = Object.fromEntries(
-    readdirSync(workerData.modelDirectory, { withFileTypes: true })
-      .filter((entry) => entry.isFile())
-      .map((entry) => [entry.name, readFileSync(join(workerData.modelDirectory, entry.name))]),
+  const services = yield* Layer.build(Layer.merge(NodeFileSystem.layer, NodePath.layer));
+  const fs = yield* Effect.provideContext(FileSystem.FileSystem, services);
+  const paths = yield* Effect.provideContext(Path.Path, services);
+  // Resolve beside this worker's own dependency so bundled callers retain the correct WASM path.
+  const wasmPath = paths.join(
+    paths.dirname(createRequire(import.meta.url).resolve("kiwi-nlp")),
+    "kiwi-wasm.wasm",
   );
+  const builder = yield* nativePromise(() => KiwiBuilder.create(wasmPath));
+  const modelFiles: Record<string, Uint8Array> = {};
+  for (const name of yield* fs.readDirectory(workerData.modelDirectory)) {
+    const path = paths.join(workerData.modelDirectory, name);
+    // readdir's previous isFile contract excluded symbolic links, including dangling links.
+    const link = yield* fs.readLink(path).pipe(Effect.result);
+    if (link._tag === "Success") continue;
+    const info = yield* fs.stat(path);
+    if (info.type === "File") modelFiles[name] = yield* fs.readFile(path);
+  }
   return yield* nativePromise(() => builder.build({ modelFiles, modelType: "cong" }));
 });
 
@@ -82,7 +87,7 @@ function termsOf(kiwi: Kiwi, input: string) {
   return terms.map((term) => term.toLowerCase());
 }
 
-const ready = runNativeEffect(load()).then(
+const ready = runNativeEffect(Effect.scoped(load())).then(
   (kiwi) => ({ kind: "ready" as const, kiwi }),
   (error) => ({ kind: "failed" as const, error: String(error) }),
 );

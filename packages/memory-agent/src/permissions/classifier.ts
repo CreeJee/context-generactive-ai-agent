@@ -129,7 +129,7 @@ const make = Effect.gen(function* () {
       if (isTruthy(routine)) return routine;
       const { services } = yield* active.resolve(request.selection);
       const cheap = yield* services.models.cheapestEffort(request.selection);
-      const threadId = yield* crypto.randomUUIDv4;
+      const threadId = yield* crypto.randomUUIDv4();
       const answer = yield* sdkPromise((abortController) =>
         chat({
           adapter: services.runtime.adapter(cheap),

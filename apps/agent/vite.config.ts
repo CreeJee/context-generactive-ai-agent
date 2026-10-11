@@ -1,11 +1,15 @@
-import { Result, Function as EffectFunction } from "effect";
+import {
+  Config,
+  Effect,
+  FileSystem,
+  ManagedRuntime,
+  Option,
+  Function as EffectFunction,
+} from "effect";
 import { isTruthy } from "./app/truthy.ts";
 import { reactRouter } from "@react-router/dev/vite";
-import { reactCompilerPreset } from "@vitejs/plugin-react";
-import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { readFileSync } from "node:fs";
+import { NodeFileSystem } from "@effect/platform-node";
 import { Schema } from "effect";
 import { lazyPlugins, defineConfig } from "vite-plus";
 
@@ -26,131 +30,154 @@ export const developmentApiProxy: {
   (backendBuildId: string): (target: string) => ReturnType<typeof developmentApiProxyBody>;
 } & typeof developmentApiProxyBody = EffectFunction.dual(2, developmentApiProxyBody);
 
-export default defineConfig(({ command }) => {
-  // Native host/SDK configuration boundary reads or forwards the host environment.
-  const developmentBackend = process.env.CONTEXT_AGENT_DEV_BACKEND;
-  // Native host/SDK configuration boundary reads or forwards the host environment.
-  const backendBuildId = process.env.CONTEXT_AGENT_BUILD_ID ?? "missing";
+const configurationRuntime = ManagedRuntime.make(NodeFileSystem.layer);
 
-  return {
-    define: {
-      "import.meta.env.VITE_CONTEXT_AGENT_BUILD_ID": JSON.stringify(
-        // Native host/SDK configuration boundary reads or forwards the host environment.
-        process.env.CONTEXT_AGENT_BUILD_ID ?? "",
-      ),
-    },
-    test: {
-      clearMocks: true,
-    },
-    server: isTruthy(developmentBackend)
-      ? {
-          proxy: {
-            "/api": developmentApiProxy(developmentBackend, backendBuildId),
-          },
-        }
-      : undefined,
-    lint: {
-      plugins: ["react", "typescript", "oxc"],
-      rules: {
-        "react/rules-of-hooks": "error",
-        "react/only-export-components": [
-          "error",
-          {
-            allowConstantExport: true,
-          },
-        ],
-        "vite-plus/prefer-vite-plus-imports": "error",
-      },
-      options: {
-        typeAware: true,
-        typeCheck: true,
-      },
-      jsPlugins: [
-        {
-          name: "vite-plus",
-          specifier: "vite-plus/oxlint-plugin",
-        },
-      ],
-    },
-    plugins: lazyPlugins(() => [
-      tailwindcss(),
-      reactRouter(),
-      babel({ presets: [reactCompilerPreset()] }),
-    ]),
-    resolve: {
-      tsconfigPaths: true,
-    },
-    ssr: {
-      // memory-agent ships TypeScript source; the dev server compiles only it. The production server
-      // build carries every JS dependency, so `server/main.ts` and the executable need no node_modules.
-      // Native and embedding packages are not imported statically: memory-agent `require`s them from
-      // its runtime folder.
-      noExternal: command === "build" ? true : ["memory-agent"],
-    },
-    // `vp pack` after `react-router build`: the production server (`server/main.ts`) with the server
-    // build and every JS dependency in one file, `dist/context-agent.mjs`. `vp pack --exe` wraps the
-    // same bundle into the executable.
-    pack: {
-      entry: { "context-agent": "server/main.ts" },
-      format: "esm",
-      platform: "node",
-      outDir: "dist",
-      dts: false,
-      deps: {
-        // tsdown <0.23 compatibility: resolve external dependency subpaths.
-        // Remove to preserve subpath imports as written (the new default).
-        // https://tsdown.dev/options/dependencies#deps-resolvedepsubpath
-        resolveDepSubpath: true,
-        alwaysBundle: [/.*/],
-        onlyBundle: false,
-        onlyImport: [],
-      },
-      // A Node SEA holds one script, so dynamic imports are inlined too.
-      outputOptions: { codeSplitting: false },
-      // `vp run package` (scripts/package.ts) sets these to also build the executable with the
-      // runtime files it has collected as SEA assets.
-      // Native host/SDK configuration boundary reads or forwards the host environment.
-      exe: isTruthy(process.env.CONTEXT_AGENT_EXE_ASSETS)
-        ? {
-            fileName: "context-agent",
-            // Native host/SDK configuration boundary reads or forwards the host environment.
-            outDir: process.env.CONTEXT_AGENT_EXE_DIR,
-            seaConfig: {
-              // The shipped app ignores NODE_OPTIONS, so a developer's or tool's Node flags (preloads,
-              // --conditions) cannot change or break it.
-              execArgvExtension: "none",
-              // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-              assets: EffectFunction.flow(
-                Schema.decodeResult(
-                  Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)),
+export default defineConfig(({ command }) =>
+  configurationRuntime.runPromise(
+    Effect.gen(function* () {
+      const developmentBackend = Option.getOrUndefined(
+        yield* Config.option(Config.String("CONTEXT_AGENT_DEV_BACKEND")),
+      );
+      const configuredBuildId = Option.getOrUndefined(
+        yield* Config.option(Config.String("CONTEXT_AGENT_BUILD_ID")),
+      );
+      const executableAssets = Option.getOrUndefined(
+        yield* Config.option(Config.String("CONTEXT_AGENT_EXE_ASSETS")),
+      );
+      const executableDirectory = Option.getOrUndefined(
+        yield* Config.option(Config.String("CONTEXT_AGENT_EXE_DIR")),
+      );
+      const assets =
+        executableAssets !== undefined && executableAssets.length > 0
+          ? yield* (yield* FileSystem.FileSystem)
+              .readFileString(executableAssets)
+              .pipe(
+                Effect.flatMap(
+                  Schema.decodeUnknownEffect(
+                    Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)),
+                  ),
                 ),
-                Result.getOrThrow,
-              )(readFileSync(process.env.CONTEXT_AGENT_EXE_ASSETS, "utf8")),
+              )
+          : undefined;
+      const backendBuildId = configuredBuildId ?? "missing";
+
+      return {
+        define: {
+          "import.meta.env.VITE_CONTEXT_AGENT_BUILD_ID": yield* Schema.encodeEffect(
+            Schema.fromJsonString(Schema.String),
+          )(configuredBuildId ?? ""),
+        },
+        test: {
+          clearMocks: true,
+        },
+        server: isTruthy(developmentBackend)
+          ? {
+              proxy: {
+                "/api": developmentApiProxy(developmentBackend, backendBuildId),
+              },
+            }
+          : undefined,
+        lint: {
+          plugins: ["react", "typescript", "oxc"],
+          rules: {
+            "react/rules-of-hooks": "error",
+            "react/only-export-components": [
+              "error",
+              {
+                allowConstantExport: true,
+              },
+            ],
+            "vite-plus/prefer-vite-plus-imports": "error",
+          },
+          options: {
+            typeAware: true,
+            typeCheck: true,
+          },
+          jsPlugins: [
+            {
+              name: "vite-plus",
+              specifier: "vite-plus/oxlint-plugin",
             },
-          }
-        : false,
-    },
-    run: {
-      tasks: {
-        // Workspace dependencies build first, down to turbovec's native addon.
-        build: {
-          command: "react-router build",
-          dependsOn: [{ task: "build", from: "dependencies" }],
+          ],
         },
-        bundle: { command: "vp pack", dependsOn: ["build"] },
-        // Never cached: Vite Task does not see the files TypeScript 7's native tsc reads, so a cached
-        // pass would hide new errors.
-        typecheck: {
-          command: "react-router typegen && tsc && tsc -p server/tests/tsconfig.json",
-          cache: false,
+        plugins: lazyPlugins(() => [
+          tailwindcss(),
+          reactRouter(),
+          // react({
+          //   compiler: true
+          // })
+        ]),
+        resolve: {
+          tsconfigPaths: true,
         },
-        // Never cached: each run builds or starts a fresh executable, and Vite Task's file tracking
-        // around the started executable keeps it from serving.
-        package: { command: "node scripts/package.ts", dependsOn: ["build"], cache: false },
-        "smoke-package": { command: "node scripts/smoke-package.ts", cache: false },
-        // macOS only, and only on the machine holding the Developer ID identity.
-        notarize: { command: "node scripts/notarize-macos.ts", cache: false },
-      },
-    },
-  };
-});
+        ssr: {
+          // memory-agent ships TypeScript source; the dev server compiles only it. The production server
+          // build carries every JS dependency, so `server/main.ts` and the executable need no node_modules.
+          // Native and embedding packages are not imported statically: memory-agent `require`s them from
+          // its runtime folder.
+          noExternal: command === "build" ? true : ["memory-agent"],
+        },
+        // `vp pack` after `react-router build`: the production server (`server/main.ts`) with the server
+        // build and every JS dependency in one file, `dist/context-agent.mjs`. `vp pack --exe` wraps the
+        // same bundle into the executable.
+        pack: {
+          entry: { "context-agent": "server/main.ts" },
+          format: "esm",
+          platform: "node",
+          outDir: "dist",
+          dts: false,
+          deps: {
+            // tsdown <0.23 compatibility: resolve external dependency subpaths.
+            // Remove to preserve subpath imports as written (the new default).
+            // https://tsdown.dev/options/dependencies#deps-resolvedepsubpath
+            resolveDepSubpath: true,
+            alwaysBundle: [/.*/],
+            onlyBundle: false,
+            onlyImport: [],
+          },
+          // A Node SEA holds one script, so dynamic imports are inlined too.
+          outputOptions: { codeSplitting: false },
+          // `vp run package` (scripts/package.ts) sets these to also build the executable with the
+          // runtime files it has collected as SEA assets.
+          // Native host/SDK configuration boundary reads or forwards the host environment.
+          exe:
+            assets !== undefined
+              ? {
+                  fileName: "context-agent",
+                  // Native host/SDK configuration boundary reads or forwards the host environment.
+                  outDir: executableDirectory,
+                  seaConfig: {
+                    // The shipped app ignores NODE_OPTIONS, so a developer's or tool's Node flags (preloads,
+                    // --conditions) cannot change or break it.
+                    execArgvExtension: "none",
+                    assets,
+                  },
+                }
+              : false,
+        },
+        run: {
+          tasks: {
+            // Workspace dependencies build first, down to turbovec's native addon.
+            build: {
+              command: "react-router build",
+              dependsOn: [{ task: "build", from: "dependencies" }],
+            },
+            bundle: { command: "vp pack", dependsOn: ["build"] },
+            // Never cached: Vite Task does not see the files TypeScript 7's native tsc reads, so a cached
+            // pass would hide new errors.
+            typecheck: {
+              command: "react-router typegen && tsc && tsc -p server/tests/tsconfig.json",
+              cache: false,
+            },
+            // Never cached: each run builds or starts a fresh executable, and Vite Task's file tracking
+            // around the started executable keeps it from serving.
+            package: { command: "node scripts/package.ts", dependsOn: ["build"], cache: false },
+            "smoke-package": { command: "node scripts/smoke-package.ts", cache: false },
+            // macOS only, and only on the machine holding the Developer ID identity.
+            notarize: { command: "node scripts/notarize-macos.ts", cache: false },
+          },
+        },
+      };
+    }),
+  ),
+);
