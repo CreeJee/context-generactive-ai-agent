@@ -1,0 +1,376 @@
+import { Context, Crypto, Deferred, Effect, Fiber, FileSystem, Layer, Path, Scope } from "effect";
+import { layer } from "@effect/vitest";
+import { expect } from "vite-plus/test";
+import { GlobalConfig } from "../../src/config/global-config.ts";
+import { Database } from "../../src/db/database.ts";
+import { Embedder } from "../../src/memory/embedding/embedder.ts";
+import { Indexer } from "../../src/memory/embedding/indexer.ts";
+import { EmbeddingSetup } from "../../src/memory/embedding/setup.ts";
+import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
+import { Graph } from "../../src/memory/graph.ts";
+import { MemoryGraphMaintenance } from "../../src/memory/maintenance.ts";
+import { Nodes, type Node } from "../../src/memory/nodes.ts";
+import { MemorySearch } from "../../src/memory/search.ts";
+import { Sessions } from "../../src/sessions/sessions.ts";
+import { fakeVector } from "../../src/testing/fake-embedder.ts";
+import {
+  type AgentServices,
+  TestEnv,
+  type TestEnvOptions,
+  testAgent,
+} from "../support/test-env.ts";
+
+/**
+ * A store written by an older version: a reversed `returns` edge, an empty answer linked to topics
+ * by the model, and a pending interpretation of that empty answer.
+ */
+const legacy = Effect.gen(function* () {
+  const { project, session } = yield* TestEnv;
+  const nodes = yield* Nodes;
+  const { sqlite } = yield* Database;
+  const at = { projectId: project.id, sessionId: session.id };
+  const user = nodes.append({ ...at, kind: "user", text: "원문 SQLite 결정" });
+  const empty = nodes.append({
+    ...at,
+    kind: "assistant",
+    text: " \n\t",
+    links: [{ kind: "reply", nodeId: user.id }],
+  });
+  const call = nodes.append({
+    ...at,
+    kind: "tool_call",
+    text: "read_file",
+    links: [{ kind: "calls", nodeId: empty.id }],
+  });
+  const result = nodes.append({
+    ...at,
+    kind: "tool_result",
+    text: "CREATE TABLE",
+    links: [{ kind: "returns", nodeId: call.id }],
+  });
+  sqlite
+    .prepare("DELETE FROM edges WHERE from_id = ? AND to_id = ? AND kind = 'returns'")
+    .run(call.id, result.id);
+  sqlite
+    .prepare("INSERT INTO edges VALUES (?, ?, 'returns', 'structure', 0.95, ?)")
+    .run(result.id, call.id, result.createdAt);
+  const topic = { projectId: project.id, sessionId: null, kind: "topic" } as const;
+  const emptyTopic = nodes.append({ ...topic, text: "내용 없는 응답" });
+  const shared = nodes.append({ ...topic, text: "SQLite 저장소" });
+  const protectedTopic = nodes.append({
+    ...topic,
+    text: "사용자가 저장한 기억",
+    detail: { authorizedByUserNodeId: user.id },
+  });
+  nodes.append({ ...topic, text: "다른 독립 주제" });
+  const link = (source: Node, target: Node, kind = "about") => {
+    sqlite
+      .prepare("INSERT INTO edges VALUES (?, ?, ?, 'llm', 0.8, ?)")
+      .run(source.id, target.id, kind, source.createdAt);
+    sqlite
+      .prepare(
+        "INSERT INTO interpretations (node_id, kind, target_id, status, reason, model, created_at) VALUES (?, ?, ?, 'applied', 'legacy', 'old', ?)",
+      )
+      .run(source.id, kind, target.id, source.createdAt);
+  };
+  link(empty, emptyTopic);
+  link(empty, shared);
+  link(user, shared);
+  link(empty, protectedTopic);
+  sqlite
+    .prepare("INSERT INTO interpret_jobs (node_id, status, updated_at) VALUES (?, 'pending', ?)")
+    .run(empty.id, empty.createdAt);
+  return { nodes, sqlite, user, empty, call, result, topic: emptyTopic, link };
+});
+
+/** Choosing an execution device is the consent that lets repairs run. */
+const consent = Effect.flatMap(GlobalConfig, (config) => config.update({ embeddingDevice: "cpu" }));
+const run = Effect.flatMap(MemoryGraphMaintenance, (maintenance) => maintenance.run);
+const overview = Effect.flatMap(MemoryGraphMaintenance, (maintenance) => maintenance.overview);
+const indexAll = Effect.flatMap(Indexer, (indexer) => indexer.indexAll());
+const vectorCount = Effect.map(VectorIndex, (vectors) => vectors.size());
+const chainLength = (id: string) => Effect.map(Graph, (graph) => graph.trace(id)?.chain.length);
+
+/** Repairs scan and rewrite the whole store, so each test owns its agent. */
+const alone = <E>(
+  name: string,
+  test: () => Effect.Effect<void, E, AgentServices | TestEnv | Scope.Scope>,
+  options?: TestEnvOptions,
+) => testAgent(options)("automatic memory graph maintenance", (it) => it.effect(name, test));
+
+alone("other fibers can run between repair batches", () =>
+  Effect.gen(function* () {
+    const c = yield* legacy;
+    const { project, session } = yield* TestEnv;
+    for (let i = 0; i < 256; i++) {
+      c.nodes.append({
+        projectId: project.id,
+        sessionId: session.id,
+        kind: "user",
+        text: `유효한 문장 ${i}`,
+      });
+    }
+    yield* consent;
+    const observed: number[] = [];
+    const observer = Effect.gen(function* () {
+      for (;;) {
+        const snapshot = yield* overview;
+        observed.push(snapshot.scanned);
+        if (snapshot.status === "completed") return;
+        yield* Effect.yieldNow;
+      }
+    });
+    yield* Effect.all([run, observer], { concurrency: 2 });
+    const final = yield* overview;
+    expect(observed.some((scanned) => scanned > 0 && scanned < final.scanned)).toBe(true);
+  }),
+);
+
+alone("a crash after saving removals resumes the queue before index size reconciliation", () =>
+  Effect.gen(function* () {
+    const env = yield* TestEnv;
+    const c = yield* legacy;
+    yield* indexAll;
+    const before = yield* vectorCount;
+    const embedder = yield* Embedder;
+    const vectors = yield* VectorIndex;
+    c.sqlite
+      .prepare("INSERT INTO memory_graph_suppressed_nodes VALUES (?, 1, 'empty_statement_topic')")
+      .run(c.topic.seq);
+    c.sqlite
+      .prepare("INSERT INTO memory_graph_vector_removals VALUES (?, ?)")
+      .run(c.topic.seq, embedder.identity);
+    yield* vectors.remove([c.topic.seq]);
+    yield* vectors.save;
+    // The process stopped here: SQLite still records the vector and the removal intent.
+    yield* env.reopen;
+    expect(yield* env.use(vectorCount)).toBe(before - 1);
+    expect(yield* env.use(indexAll)).toBe(0);
+    const { sqlite } = yield* env.use(Database);
+    expect(sqlite.prepare("SELECT * FROM memory_graph_vector_removals").all()).toEqual([]);
+    expect(
+      sqlite.prepare("SELECT * FROM node_vectors WHERE node_seq = ?").all(c.topic.seq),
+    ).toEqual([]);
+  }),
+);
+
+alone("an absent execution choice never authorizes repairs", () =>
+  Effect.gen(function* () {
+    const c = yield* legacy;
+    yield* run;
+    expect(c.sqlite.prepare("SELECT * FROM memory_graph_maintenance").all()).toEqual([]);
+    expect(yield* chainLength(c.result.id)).toBe(1);
+    expect(yield* overview).toMatchObject({ enabled: false, status: "pending" });
+  }),
+);
+
+alone("repairs already embedded nodes while preserving originals and useful vectors", () =>
+  Effect.gen(function* () {
+    const env = yield* TestEnv;
+    const c = yield* legacy;
+    yield* indexAll;
+    const original = c.sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all();
+    const before = yield* vectorCount;
+    c.sqlite.prepare("INSERT INTO node_vectors VALUES (?, 'inactive-model')").run(c.topic.seq);
+    yield* consent;
+    yield* run;
+    expect((yield* Graph).trace(c.result.id)?.chain.map((node) => node.id)).toEqual([
+      c.result.id,
+      c.call.id,
+      c.empty.id,
+      c.user.id,
+    ]);
+    expect(c.sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all()).toEqual(original);
+    expect(c.sqlite.prepare("SELECT node_seq FROM memory_graph_suppressed_nodes").all()).toEqual([
+      { node_seq: c.topic.seq },
+    ]);
+    expect(yield* vectorCount).toBe(before - 1);
+    expect(c.sqlite.prepare("SELECT * FROM memory_graph_vector_removals").all()).toEqual([
+      { node_seq: c.topic.seq, embedder: "inactive-model" },
+    ]);
+    expect(yield* indexAll).toBe(0);
+    expect(
+      c.sqlite.prepare("SELECT * FROM interpret_jobs WHERE node_id = ?").get(c.empty.id),
+    ).toBeUndefined();
+    expect(c.sqlite.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    expect(c.sqlite.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+    const state = yield* overview;
+    expect(state).toMatchObject({
+      status: "completed",
+      repairedEdges: 1,
+      suppressedEdges: 3,
+      retiredTopics: 1,
+    });
+    const found = yield* (yield* MemorySearch).find({
+      query: c.topic.text,
+      projectId: env.project.id,
+    });
+    expect(found.matches.some((match) => match.id === c.topic.id || match.id === c.empty.id)).toBe(
+      false,
+    );
+    // A second pass over a repaired store changes nothing, before or after reopening.
+    yield* run;
+    expect(yield* overview).toEqual(state);
+    yield* env.reopen;
+    expect(yield* env.use(indexAll)).toBe(0);
+    expect(yield* env.use(vectorCount)).toBe(before - 1);
+  }),
+);
+
+alone("selecting an execution mode starts repairs without a manual migration command", () =>
+  Effect.gen(function* () {
+    yield* legacy;
+    const setup = yield* EmbeddingSetup;
+    yield* setup.choose("auto");
+    // Wait on the same pass permit, rather than guessing how long a background job takes.
+    yield* run;
+    expect(yield* setup.overview).toMatchObject({
+      maintenance: { enabled: true, status: "completed", repairedEdges: 1 },
+    });
+  }),
+);
+
+alone("existing execution choices trigger maintenance on restart", () =>
+  Effect.gen(function* () {
+    const env = yield* TestEnv;
+    yield* legacy;
+    yield* (yield* GlobalConfig).update({ embeddingDevice: "gpu" });
+    yield* env.reopen;
+    yield* env.use(run);
+    expect(yield* env.use(overview)).toMatchObject({
+      enabled: true,
+      status: "completed",
+      repairedEdges: 1,
+    });
+  }),
+);
+
+alone("a failed index save resumes targeted removals without rebuilding valid vectors", () =>
+  Effect.gen(function* () {
+    const env = yield* TestEnv;
+    const fs = yield* FileSystem.FileSystem;
+    const c = yield* legacy;
+    yield* indexAll;
+    const before = yield* vectorCount;
+    const embedder = yield* Embedder;
+    const digest = yield* (yield* Crypto.Crypto).digest(
+      "SHA-256",
+      new TextEncoder().encode(embedder.identity),
+    );
+    const directory = Buffer.from(digest).toString("hex").slice(0, 16);
+    const blocker = (yield* Path.Path).join(env.storage, "vectors", directory, "index.tvim.tmp");
+    yield* fs.makeDirectory(blocker);
+    yield* consent;
+    yield* run;
+    expect(yield* overview).toMatchObject({ status: "failed" });
+    expect(c.sqlite.prepare("SELECT node_seq FROM memory_graph_vector_removals").all()).toEqual([
+      { node_seq: c.topic.seq },
+    ]);
+    yield* fs.remove(blocker, { recursive: true });
+    yield* env.reopen;
+    yield* env.use(run);
+    expect(yield* env.use(vectorCount)).toBe(before - 1);
+    expect(yield* env.use(indexAll)).toBe(0);
+    expect(yield* env.use(overview)).toMatchObject({ status: "completed" });
+  }),
+);
+
+// The agent embeds through this gate, so indexing is held while repairs are requested twice.
+const entered = Deferred.makeUnsafe<void>();
+const release = Deferred.makeUnsafe<void>();
+const gatedEmbedder = Layer.succeed(Embedder, {
+  identity: "gated-test-384",
+  dimensions: 384,
+  runtime: () => ({ kind: "other" }),
+  embed: (texts) =>
+    Deferred.succeed(entered, undefined).pipe(
+      Effect.andThen(Deferred.await(release)),
+      Effect.as(texts.map(fakeVector)),
+    ),
+});
+
+alone(
+  "concurrent indexing and duplicate repair requests share only batch permits",
+  () =>
+    Effect.gen(function* () {
+      const c = yield* legacy;
+      const indexing = yield* Effect.forkChild(indexAll);
+      yield* Deferred.await(entered);
+      yield* consent;
+      const first = yield* Effect.forkChild(run);
+      const second = yield* Effect.forkChild(run);
+      yield* Deferred.succeed(release, undefined);
+      yield* Effect.all([Fiber.join(indexing), Fiber.join(first), Fiber.join(second)]);
+      expect(yield* overview).toMatchObject({
+        status: "completed",
+        repairedEdges: 1,
+        retiredTopics: 1,
+      });
+      expect(yield* vectorCount).toBe(4);
+      expect(yield* (yield* Indexer).pending).toBe(0);
+      expect(
+        c.sqlite
+          .prepare("SELECT count(*) AS n FROM memory_graph_edge_repairs WHERE action = 'reverse'")
+          .get(),
+      ).toEqual({ n: 1 });
+    }),
+  { embedder: gatedEmbedder },
+);
+
+alone(
+  "legacy cross-session corrections become unconfirmed, same-session decisions stay applied",
+  () =>
+    Effect.gen(function* () {
+      const { project, session } = yield* TestEnv;
+      const c = yield* legacy;
+      const another = yield* (yield* Sessions).create(project.id);
+      const cross = c.nodes.append({
+        projectId: project.id,
+        sessionId: another.id,
+        kind: "user",
+        text: "도구 없이 1부터 60까지 써줘",
+      });
+      const same = c.nodes.append({
+        projectId: project.id,
+        sessionId: session.id,
+        kind: "user",
+        text: "아니 SQLite 대신 Postgres로 바꾸자",
+      });
+      c.link(cross, c.user, "corrects");
+      c.link(same, c.user, "corrects");
+      yield* consent;
+      yield* run;
+      const status = (node: Node) =>
+        c.sqlite
+          .prepare("SELECT status FROM interpretations WHERE node_id = ? AND kind = 'corrects'")
+          .get(node.id);
+      expect(status(cross)).toEqual({ status: "unconfirmed" });
+      expect(status(same)).toEqual({ status: "applied" });
+    }),
+);
+
+/** A second agent over its own storage, beside the block's own. */
+class OtherStore extends Context.Service<OtherStore, TestEnv["Service"]>()(
+  "memory-agent/tests/memory/maintenance.test/OtherStore",
+) {}
+
+layer(
+  Layer.merge(
+    TestEnv.layer(),
+    Layer.effect(OtherStore, TestEnv).pipe(Layer.provide(TestEnv.layer())),
+  ),
+  { excludeTestServices: true },
+)("automatic memory graph maintenance across stores", (it) => {
+  it.effect("different users' stores retain independent consent and progress", () =>
+    Effect.gen(function* () {
+      const other = yield* OtherStore;
+      const first = yield* legacy;
+      const second = yield* other.use(legacy.pipe(Effect.provideService(TestEnv, other)));
+      yield* consent;
+      yield* Effect.all([run, other.use(run)], { concurrency: "unbounded" });
+      expect(yield* chainLength(first.result.id)).toBe(4);
+      expect(yield* other.use(chainLength(second.result.id))).toBe(1);
+      expect(second.sqlite.prepare("SELECT * FROM memory_graph_maintenance").all()).toEqual([]);
+    }),
+  );
+});
