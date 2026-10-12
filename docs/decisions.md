@@ -680,6 +680,13 @@
 - 대기 간격은 2초에서 시작해 2배씩 늘리고 한 번의 대기는 최대 30분으로 제한한다. jitter를 포함해 계산한 `retryAt`은 한 번만 계산해 영속화하고, replay에서 다시 계산하지 않는다. 대기는 `DurableClock`으로 수행하며 앱 재시작 후에도 복원되도록 `inMemoryThreshold: 0`을 사용한다.
 - 소진 결과: 재시도 한도(총 경과 시간 또는 횟수)는 구현 시 이 항목에 수치로 기록한 뒤 활성화한다. 한도를 넘으면 실행 실패로 끝내지 않고 기존 blocker 경로(2026-10-02)로 정지해 이유와 근거를 표시한다. 사용자 취소·일시 중지는 대기 중인 재시도를 중단하며 자동 재개하지 않는다.
 - 이 결정은 `DurableQueue` 보류(2026-10-10)를 바꾸지 않는다.
+- 구현(2026-10-13): 재시도는 Goal 실행(full-loop worker)의 provider 호출에만 적용한다. 일반 채팅 경로 제외 여부는 사용자 확인 중이며, 지금은 적용하지 않는다.
+- 구현: 재시도 범위는 owner의 모델 스트림 pull이다. `RequestNotSent`이고 어댑터의 `RUN_STARTED` 외 chunk가 worker에 하나도 가지 않았을 때만 같은 요청을 새 스트림으로 다시 보내고, 새 스트림의 `RUN_STARTED`는 건너뛴다. 그 외 실패, 소진, 취소는 원래 provider 실패로 끝난다. 각 pull은 model 게이트를 거치고, 대기하는 동안에는 model permit을 잡지 않는다. 대기 workflow는 Goal 실행처럼 workflow 게이트를 거쳐 admission한다.
+- 구현: Goal run 하나가 attempt 하나다. 상위 Goal run은 `agent_run_attempts`를 만들지 않으므로 키는 bound run ID와 그 run의 대기 순번이다. 순번은 프로세스 카운터가 아니라 그 run에 저장된 대기 workflow 수에서 정한다. 백오프와 한도는 한 provider 요청의 연속 재시도 횟수와 첫 실패 시각으로 센다. `retryAt`은 admission 전에 owner가 한 번 계산해 workflow payload(SQLite)에 저장한다. workflow 본문은 저장된 값으로 `DurableClock`만 다시 건다.
+- 구현: 소진되면 `external_dependency` blocker를 기록한다. run이 실패로 끝나도 blocker가 남는다. 취소·일시 중지·중단·phase 변경은 대기 workflow를 interrupt하고 timer를 지운다. 대기 중인 시각은 workflow 패널에 표시한다.
+- 소진 한도 수치는 확인 중이다. 확정 전까지 `providerRetryLimits`의 제안값(재시도 20회, 첫 실패부터 24시간)을 쓴다.
+- 예외(2026-10-13): 서버 종료로 끊긴 Goal run 중 도구를 실행하지 않은 run(`endedWithoutEffectsSql`)은 재시작 후 자동으로 이어간다. 그 run에 대기 중이던 재시도가 있으면 저장된 `retryAt`에, 없으면 바로 이어간다. 이는 "요청 후 실패는 재시도하지 않는다"에 대한 명시적 예외다. 근거: owner 도구 호출은 실행 전에 장부에 예약되므로 도구 기록이 없는 run은 바깥에 남긴 변경이 없다. 그래서 다시 진행해도 외부 효과가 중복되지 않는다. 끊긴 run은 재생하지 않는다. 새 continuation run이 Plan과 transcript를 기준으로 남은 단계를 이어간다(Work Trace 2026-09-20). 자동 진행 상태는 `retrying`으로 저장하고, 대기 workflow가 다시 재시작돼도 복원된다. 사용자 취소·일시 중지는 이 이어가기도 멈춘다.
+- 예외의 범위 밖: 도구를 실행한 run은 그 도구가 성공했어도 fence를 유지한다. 자동으로 이어가지 않고 `server_restarted` blocker로 이유를 표시한다. 이 blocker는 서버만 기록한다.
 
 ### 구독 provider 스트림 실패의 전송 단계 분류 (2026-10-13)
 
