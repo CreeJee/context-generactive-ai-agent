@@ -119,7 +119,9 @@ describe("Database", () => {
       expect(sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all()).toEqual(before);
       sqlite.exec("PRAGMA query_only=OFF");
       migrateDatabase(sqlite);
-      expect(sqlite.prepare("PRAGMA user_version").get()).toEqual({ user_version: 49 });
+      expect(sqlite.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: migrations.length,
+      });
       expect(sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all()).toEqual(before);
       expect(sqlite.prepare("SELECT count(*) AS n FROM owner_read_recoveries").get()).toEqual({
         n: 0,

@@ -105,6 +105,9 @@ export interface MemoryToolRunBinding extends Omit<RunBinding, "userNodeId"> {
   readonly userNodeId: () => string;
 }
 
+/** Which projects' memory the tools read: those cross recall allows, or only the bound one. */
+export type MemoryToolScope = "allowed-projects" | "project";
+
 /** The implementation is fixed here; only live services and fresh run state are supplied. */
 export const createMemoryTools: {
   (
@@ -119,7 +122,9 @@ function createMemoryToolsBody(
   env: MemoryToolEnvironment,
   projectId: string,
   binding?: MemoryToolRunBinding,
+  scope: MemoryToolScope = "allowed-projects",
 ) {
+  const crossProject = scope === "allowed-projects";
   const runtime = Context.make(MemorySearch, env.search).pipe(
     Context.add(Nodes, env.nodes),
     Context.add(Graph, env.graph),
@@ -131,7 +136,7 @@ function createMemoryToolsBody(
   let usedDraft: string[] = [];
   const visible = () =>
     Effect.map(MemorySearch, (search) =>
-      HashSet.fromIterable(search.allowedProjects(projectId, true)),
+      HashSet.fromIterable(search.allowedProjects(projectId, crossProject)),
     );
 
   const findMemory = toolDefinition({
@@ -144,7 +149,7 @@ function createMemoryToolsBody(
     run(
       Effect.gen(function* () {
         const result = yield* Effect.flatMap(MemorySearch, (search) =>
-          search.find({ query, projectId }),
+          search.find({ query, projectId, crossProject }),
         );
         if (binding !== undefined) {
           const ids = yield* Effect.map(KnowledgePromotions, (knowledge) =>

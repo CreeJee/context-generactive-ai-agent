@@ -354,7 +354,8 @@ const make = Effect.gen(function* () {
     purgeOrphans: Effect.gen(function* () {
       const orphaned = sqlite
         .prepare(`SELECT a.* FROM attachments a
-        WHERE NOT EXISTS (SELECT 1 FROM node_attachments n WHERE n.attachment_id = a.id)`)
+        WHERE NOT EXISTS (SELECT 1 FROM node_attachments n WHERE n.attachment_id = a.id)
+          AND NOT EXISTS (SELECT 1 FROM btw_attachments b WHERE b.attachment_id = a.id)`)
         .all()
         .map(toAttachment);
       for (const attachment of orphaned) {

@@ -7,6 +7,7 @@ import { optionalProperty } from "./optional-property.ts";
 import { Effect, Layer } from "effect";
 import type { ProviderId } from "./providers/contracts.ts";
 import { AgentChat, GoalWorkerConfiguration, type GoalWorkerOptions } from "./agent/chat.ts";
+import { BtwChat } from "./btw/chat.ts";
 import { HarnessStore } from "./rrsi/store.ts";
 import { Rrsi } from "./rrsi/service.ts";
 import { ApiUsage } from "./agent/api-usage.ts";
@@ -308,6 +309,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     Layer.provideMerge(
       Layer.mergeAll(
         MemoryTools.layer,
+        BtwChat.layer,
         FileTools.layer,
         OutsideTools.layer,
         ApprovedTools.layer,

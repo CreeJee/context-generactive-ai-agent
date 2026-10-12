@@ -190,7 +190,8 @@ function toInterrupt(row: Record<string, SQLOutputValue>): InterruptRecord {
 /** Synchronous SQLite/transaction boundary required by TanStack's Promise stores.
  * Work still runs before this call returns; failures reject with the original SQLite/codec error.
  */
-const storePromise = <A>(operation: () => A): Promise<A> =>
+/** A synchronous SQLite store call at the SDK's Promise interface; a thrown failure rejects. */
+export const storePromise = <A>(operation: () => A): Promise<A> =>
   Result.match(Effect.runSync(Effect.result(Effect.try(operation))), {
     onSuccess: (value) => Promise.resolve(value),
     onFailure: (failure) => Promise.reject(failure.cause),
