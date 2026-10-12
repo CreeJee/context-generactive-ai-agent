@@ -6,6 +6,7 @@ import { secretLintProfiler } from "@secretlint/profiler";
 import { creator as recommendedRules } from "@secretlint/secretlint-rule-preset-recommend";
 import { Cause, Context, Data, Effect, Layer, Option, Schema } from "effect";
 import { JsonValue, type JsonValue as Json } from "../json.ts";
+import { placeholderOf, type HiddenSpan, type RedactedView } from "./restore.ts";
 
 /**
  * Hides secrets in text before a model reads it or memory keeps it.
@@ -136,14 +137,23 @@ export function mergeFindings(findings: readonly Finding[]): Finding[] {
   return merged;
 }
 
-function replaceFindings(text: string, findings: readonly Finding[]): string {
+function replaceFindings(text: string, findings: readonly Finding[]): RedactedView {
   let out = "";
   let at = 0;
+  const hidden: HiddenSpan[] = [];
   for (const finding of findings) {
-    out += `${text.slice(at, finding.start)}[redacted:${finding.kind}]`;
+    out += text.slice(at, finding.start);
+    const shown = placeholderOf(finding.kind);
+    hidden.push({
+      start: out.length,
+      end: out.length + shown.length,
+      kind: finding.kind,
+      value: text.slice(finding.start, finding.end),
+    });
+    out += shown;
     at = finding.end;
   }
-  return out + text.slice(at);
+  return { text: out + text.slice(at), hidden };
 }
 
 const isString = Schema.is(Schema.String);
@@ -158,16 +168,21 @@ const make = Effect.sync(() => {
   // that is a leak, and Node warns (MaxPerformanceEntryBufferExceededWarning). Nothing reads them.
   secretLintProfiler.setEnabled(false);
 
-  const redactText = (text: string) =>
-    Effect.gen(function* () {
-      if (text.length === 0) return { text, hidden: 0 };
+  /** The text as the model reads it, with the values its placeholders stand for. */
+  const redactView = (text: string) =>
+    Effect.gen(function* (): Effect.fn.Return<RedactedView, SecretRedactionFailed> {
+      if (text.length === 0) return { text, hidden: [] };
       const detected = yield* formatFindings(text).pipe(
         Effect.mapError((failure) => new SecretRedactionFailed({ cause: failure.cause })),
       );
-      const findings = mergeFindings([...detected, ...assignmentFindings(text)]);
-      if (findings.length === 0) return { text, hidden: 0 };
-      return { text: replaceFindings(text, findings), hidden: findings.length };
+      return replaceFindings(text, mergeFindings([...detected, ...assignmentFindings(text)]));
     });
+
+  const redactText = (text: string) =>
+    Effect.map(redactView(text), (view): Redaction => ({
+      text: view.text,
+      hidden: view.hidden.length,
+    }));
 
   const redactJson = (value: Json): Effect.Effect<Json, SecretRedactionFailed> => {
     if (isString(value)) return Effect.map(redactText(value), (redaction) => redaction.text);
@@ -193,6 +208,7 @@ const make = Effect.sync(() => {
 
   return {
     redactText,
+    redactView,
     redactJson,
     redactResult,
 

@@ -356,6 +356,49 @@ describe("read, write, edit and delete", () => {
     }).pipe(withTestPlatform),
   );
 
+  it.live("edits and rewrites around a hidden value without writing its placeholder", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const original = 'const url = "a";\nconst API_KEY = "kq83jd92kslw01";\n';
+      const { root } = yield* project(MutableHashMap.fromIterable([["config.ts", original]]));
+      const target = path.join(root, "config.ts");
+      const { readFile, editFile, writeFile } = yield* fileTools(root);
+      // The model reads `const API_KEY = "[redacted:credential]";` and edits that line.
+      expect(
+        yield* run(editFile, {
+          path: "config.ts",
+          oldText: 'const url = "a";\nconst API_KEY = "[redacted:credential]";',
+          newText: 'const url = "b";\nexport const API_KEY = "[redacted:credential]";',
+        }),
+      ).toMatchObject({ replacements: 1 });
+      expect(yield* fs.readFileString(target)).toBe(
+        'const url = "b";\nexport const API_KEY = "kq83jd92kslw01";\n',
+      );
+      expect(
+        yield* failure(
+          run(editFile, {
+            path: "config.ts",
+            oldText: 'API_KEY = "[redacted:cred',
+            newText: "x",
+          }),
+        ),
+      ).toBe("hidden_value_split");
+
+      const { sha256 } = Schema.decodeUnknownSync(WithSha)(
+        yield* run(readFile, { path: "config.ts" }),
+      );
+      yield* run(writeFile, {
+        path: "config.ts",
+        expectedSha256: sha256,
+        content: '// rewritten\nexport const API_KEY = "[redacted:credential]";\n',
+      });
+      expect(yield* fs.readFileString(target)).toBe(
+        '// rewritten\nexport const API_KEY = "kq83jd92kslw01";\n',
+      );
+    }).pipe(withTestPlatform),
+  );
+
   it.live("refuses credentials, .git internals, links and escapes", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

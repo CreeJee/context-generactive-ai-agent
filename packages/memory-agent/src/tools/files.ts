@@ -19,6 +19,8 @@ import {
   TextFileRejected,
 } from "../files/text.ts";
 import type { Project } from "../projects/projects.ts";
+import { SecretRedactor } from "../secrets/redactor.ts";
+import { mentionsHidden, replaceKeepingHidden } from "../secrets/restore.ts";
 import { guarded } from "./failure.ts";
 import { toToolSchema } from "./schema.ts";
 
@@ -108,7 +110,50 @@ export const listPageSize = 500;
 /** Search candidates kept per snapshot and query, so later pages do not ask Git again. */
 const candidateCacheSize = 32;
 const make = Effect.gen(function* () {
+  const redactor = yield* SecretRedactor;
   const snapshots = yield* createSnapshots();
+
+  /**
+   * The file's new text when the model's change mentions a hidden value. The model reads files
+   * with secrets replaced by placeholders, so it writes against that view; the values the
+   * placeholders stand for are put back here and never pass through the model.
+   */
+  const keepingHidden = Effect.fnUntraced(function* (options: {
+    readonly path: string;
+    readonly current: string;
+    readonly find: string | null;
+    readonly replacement: string;
+    readonly replaceAll: boolean;
+  }) {
+    const view = yield* redactor.redactView(options.current);
+    const replaced = replaceKeepingHidden({
+      view,
+      // Replacing the whole file replaces every placeholder the model read.
+      find: options.find ?? view.text,
+      replacement: options.replacement,
+      replaceAll: options.replaceAll,
+    });
+    if (Result.isSuccess(replaced)) return replaced.success;
+    const failure = replaced.failure;
+    switch (failure._tag) {
+      case "no_match":
+        return yield* new Cause.UnknownError(
+          new Error(`no_match: ${options.path}. oldText does not occur; read the file again.`),
+        );
+      case "ambiguous":
+        return yield* new Cause.UnknownError(
+          new Error(
+            `ambiguous_match: ${options.path}. oldText occurs ${failure.occurrences} times; add surrounding lines or pass replaceAll.`,
+          ),
+        );
+      case "cuts_hidden":
+        return yield* new Cause.UnknownError(
+          new Error(
+            `hidden_value_split: ${options.path}. oldText starts or ends inside a [redacted:…] placeholder; include the whole placeholder.`,
+          ),
+        );
+    }
+  });
   const candidateCache = MutableHashMap.empty<string, HashSet.HashSet<string> | null>();
   const readPage = createTextPageReader();
 
@@ -359,11 +404,24 @@ const make = Effect.gen(function* () {
             }
             if (!(resolved.stats !== undefined))
               return yield* new PathRejected({ path, reason: "not_found" });
+            let text = content;
+            if (mentionsHidden(content)) {
+              const file = yield* readTextFileEffect({ absolute: resolved.absolute, path: path });
+              if (file.sha256 !== expectedSha256)
+                return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
+              text = (yield* keepingHidden({
+                path,
+                current: file.text,
+                find: null,
+                replacement: content,
+                replaceAll: false,
+              })).text;
+            }
             const replaced = yield* replaceTextFileEffect({
               absolute: resolved.absolute,
               path: path,
               expectedSha256: expectedSha256,
-              text: content,
+              text,
             });
             return { path, created: false, ...replaced };
           }),
@@ -386,6 +444,22 @@ const make = Effect.gen(function* () {
             const crlf = file.text.includes("\r\n") && !oldText.includes("\r\n");
             const find = crlf ? oldText.replaceAll("\n", "\r\n") : oldText;
             const replacement = crlf ? newText.replaceAll("\n", "\r\n") : newText;
+            if (mentionsHidden(oldText)) {
+              const edited = yield* keepingHidden({
+                path,
+                current: file.text,
+                find,
+                replacement,
+                replaceAll,
+              });
+              const written = yield* replaceTextFileEffect({
+                absolute: resolved.absolute,
+                path: path,
+                expectedSha256: file.sha256,
+                text: edited.text,
+              });
+              return { path, replacements: edited.replacements, ...written };
+            }
             const occurrences = file.text.split(find).length - 1;
             if (occurrences === 0)
               return yield* new Cause.UnknownError(
@@ -438,5 +512,5 @@ const make = Effect.gen(function* () {
 export class FileTools extends Context.Service<FileTools, Effect.Success<typeof make>>()(
   "memory-agent/tools/files/FileTools",
 ) {
-  static readonly layer = Layer.effect(FileTools, make);
+  static readonly layer = Layer.effect(FileTools, make).pipe(Layer.provide(SecretRedactor.layer));
 }
