@@ -11,7 +11,6 @@ import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { Array as EffectArray } from "effect";
 // Native server integration test uses host environment, SDK Promise callbacks and I/O fixtures.
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import { createServer as createHttpServer } from "node:http";
 import { Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { AgentChat, Database, Sessions, Workflows } from "memory-agent";
 import { createServer } from "vite-plus";
@@ -86,15 +85,7 @@ testAgent({ testProvider: {} })("dev HMR API recovery", (it) => {
             });
             yield* Effect.scoped(
               Effect.gen(function* () {
-                const backendServices = yield* Layer.build(
-                  Layer.fresh(
-                    NodeHttpServer.layer(createHttpServer, {
-                      port: 0,
-                      host: "127.0.0.1",
-                      gracefulShutdownTimeout: "100 millis",
-                    }),
-                  ),
-                );
+                const backendServices = yield* Layer.build(Layer.fresh(NodeHttpServer.layerTest));
                 const backend = yield* Effect.provideContext(
                   HttpServer.HttpServer,
                   backendServices,

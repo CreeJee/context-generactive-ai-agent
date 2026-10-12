@@ -1,5 +1,4 @@
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import { createServer } from "node:http";
 import { Effect, Layer } from "effect";
 import {
   FetchHttpClient,
@@ -13,15 +12,7 @@ import {
 export const testHttpServer = Effect.fn("testHttpServer")(function* <E, R>(
   handler: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>,
 ) {
-  const services = yield* Layer.build(
-    Layer.fresh(
-      NodeHttpServer.layer(createServer, {
-        port: 0,
-        host: "127.0.0.1",
-        gracefulShutdownTimeout: "100 millis",
-      }),
-    ),
-  );
+  const services = yield* Layer.build(Layer.fresh(NodeHttpServer.layerTest));
   const server = yield* Effect.provideContext(HttpServer.HttpServer, services);
   yield* Effect.provideContext(HttpServer.serveEffect(handler), services);
   switch (server.address._tag) {
