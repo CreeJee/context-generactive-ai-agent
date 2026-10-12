@@ -394,7 +394,10 @@ testAgent({ testProvider: {} })("native chat factory", (it) => {
           Effect.gen(function* () {
             const chat = yield* makeAgentChatImplementation();
             for (const turn of [1, 2]) {
-              const response = yield* chat.handle(chatRequest(id, `${id}-${owner}-${turn}`), id);
+              const response = yield* chat.handle(
+                yield* chatRequest(id, `${id}-${owner}-${turn}`),
+                id,
+              );
               expect(response.status).toBe(409);
               expect(yield* responseJson(response)).toMatchObject({
                 error: "model_unavailable_for_account",
@@ -432,7 +435,7 @@ testAgent({ testProvider: {} })("native chat factory", (it) => {
           Effect.gen(function* () {
             const chat = yield* makeAgentChatImplementation();
             expect(log.acquired).toHaveLength(owner - 1);
-            const response = yield* chat.handle(chatRequest(id, `${id}-${owner}`), id);
+            const response = yield* chat.handle(yield* chatRequest(id, `${id}-${owner}`), id);
             expect(response.status).toBe(200);
             expect(response.headers.get("Content-Type")).toContain("text/event-stream");
             const text = yield* responseText(response);
@@ -467,7 +470,7 @@ testAgent({ testProvider: {} })("native chat factory", (it) => {
         Effect.gen(function* () {
           expect(Option.isNone(yield* Effect.serviceOption(ProviderRegistry))).toBe(true);
           const chat = yield* makeAgentChatImplementation();
-          const response = yield* chat.handle(chatRequest(id, `${id}-custom`), id);
+          const response = yield* chat.handle(yield* chatRequest(id, `${id}-custom`), id);
           expect(response.status).toBe(200);
           yield* responseText(response);
         }),
@@ -484,10 +487,9 @@ testAgent({ testProvider: {} })("native chat factory", (it) => {
     Effect.gen(function* () {
       const id = yield* freshSession();
       const registry = yield* ProviderRegistry;
+      const request = yield* chatRequest(id, `${id}-unavailable`);
       const response = yield* Effect.scoped(
-        Effect.flatMap(makeAgentChatImplementation(), (chat) =>
-          chat.handle(chatRequest(id, `${id}-unavailable`), id),
-        ),
+        Effect.flatMap(makeAgentChatImplementation(), (chat) => chat.handle(request, id)),
       ).pipe(
         Effect.provideService(ProviderRegistry, {
           ...registry,

@@ -658,7 +658,9 @@ layer(ownerLayer, { excludeTestServices: true })("full-loop owner authority", (i
 });
 
 /** The permission gate's review log lives in the owner database of the run it gates. */
-class Owner extends Context.Service<Owner, OwnerFixture>()("tests/full-loop/Owner") {}
+class Owner extends Context.Service<Owner, OwnerFixture>()(
+  "memory-agent/tests/full-loop/owner-authority.test/Owner",
+) {}
 const ownerWithReviews = PermissionReviews.layer.pipe(
   Layer.provideMerge(
     Layer.effect(

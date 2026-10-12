@@ -1,5 +1,5 @@
 import { chat, type ChatMiddleware, type ModelMessage } from "@tanstack/ai";
-import { Cause, Effect, Stream } from "effect";
+import { Cause, Effect, Function as EffectFunction, Stream } from "effect";
 import type { CompactionSources } from "../../src/agent/compaction.ts";
 import type { Node, Nodes } from "../../src/memory/nodes.ts";
 import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
@@ -15,11 +15,13 @@ export const drain = <A>(stream: AsyncIterable<A>) =>
 
 export const noLimit = 1_000_000;
 
-export const sourcesOf = (nodes: Nodes["Service"], sessionId: string) =>
-  ({
-    toolResultId: (toolCallId) => nodes.toolResultId(sessionId, toolCallId),
-    nodeText: (id) => nodes.get(id)?.text ?? null,
-  }) satisfies CompactionSources;
+export const sourcesOf: {
+  (sessionId: string): (nodes: Nodes["Service"]) => CompactionSources;
+  (nodes: Nodes["Service"], sessionId: string): CompactionSources;
+} = EffectFunction.dual(2, (nodes: Nodes["Service"], sessionId: string): CompactionSources => ({
+  toolResultId: (toolCallId) => nodes.toolResultId(sessionId, toolCallId),
+  nodeText: (id) => nodes.get(id)?.text ?? null,
+}));
 
 /** What the model is sent on the first call of a run over `messages`. */
 export const firstSent = Effect.fnUntraced(function* (
@@ -36,11 +38,19 @@ export const firstSent = Effect.fnUntraced(function* (
  * A conversation of `answers.length + 1` user turns, recorded in memory the way runs record it.
  * The first answer used a tool.
  */
-export function conversation(
-  nodes: Nodes["Service"],
-  at: { readonly projectId: string; readonly sessionId: string },
-  answers: readonly string[],
-) {
+interface ConversationAt {
+  readonly projectId: string;
+  readonly sessionId: string;
+}
+
+export const conversation: {
+  (
+    at: ConversationAt,
+    answers: readonly string[],
+  ): (nodes: Nodes["Service"]) => ReturnType<typeof conversationBody>;
+} & typeof conversationBody = EffectFunction.dual(3, conversationBody);
+
+function conversationBody(nodes: Nodes["Service"], at: ConversationAt, answers: readonly string[]) {
   const userNodes: Node[] = [];
   const messages: ModelMessage[] = [];
   const toolOutput = "테스트 결과 ".repeat(200);

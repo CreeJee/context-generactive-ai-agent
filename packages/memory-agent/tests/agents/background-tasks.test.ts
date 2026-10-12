@@ -41,10 +41,11 @@ const readResult = Effect.fnUntraced(function* (
   return yield* sdk(() => tasks.forSession(sessionId)[0]!.execute!(input));
 });
 
-/** The rejection of a tool call that must fail. */
+/** The rejection of a tool call that must fail; a call that succeeds fails the test as a defect. */
 const rejection = <A, R>(operation: Effect.Effect<A, Cause.UnknownError, R>) =>
   operation.pipe(
     Effect.flip,
+    Effect.orDie,
     Effect.map((error) => error.cause),
   );
 

@@ -31,7 +31,7 @@ const drain = (stream: AsyncIterable<unknown>) =>
 
 /** A second agent over its own storage, to check what is bound to which owner. */
 class OtherAgent extends Context.Service<OtherAgent, TestEnv["Service"]>()(
-  "memory-agent/tests/memory/record/OtherAgent",
+  "memory-agent/tests/memory/record.test/OtherAgent",
 ) {}
 
 // Layers memoize by reference, so the second agent gets its own memo map; otherwise it would share

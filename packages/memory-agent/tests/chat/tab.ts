@@ -19,7 +19,9 @@ export const sdk = <A>(operation: () => A | PromiseLike<A>) =>
 
 export const json = (response: Response) => sdk(() => response.json());
 
-export const until = (condition: () => boolean, what: string) => waitUntil(condition, what, 6_000);
+export const until = Effect.fnUntraced(function* (condition: () => boolean, what: string) {
+  return yield* waitUntil(condition, what, 6_000);
+});
 
 /** Run against the agent that is open now, so helpers keep working across `env.reopen`. */
 export const current = <A, E, R>(effect: Effect.Effect<A, E, R>) =>

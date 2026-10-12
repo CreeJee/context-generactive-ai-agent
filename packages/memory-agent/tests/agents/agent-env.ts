@@ -16,9 +16,14 @@ export const sdk = <A>(operation: () => A | PromiseLike<A>) =>
     catch: (cause) => new Cause.UnknownError(cause),
   });
 
-export const until = (condition: () => boolean, what: string) => waitUntil(condition, what, 6_000);
+export const until = Effect.fnUntraced(function* (condition: () => boolean, what: string) {
+  return yield* waitUntil(condition, what, 6_000);
+});
 
-export const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+
+/** JSON text of any test value, as the SDK and HTTP bodies carry it. */
+export const encodeJson = <A>(value: A) => Schema.encodeEffect(JsonText)(value);
 
 /** Run against the agent that is open now, so helpers keep working across `env.reopen`. */
 export const current = <A, E, R>(effect: Effect.Effect<A, E, R>) =>

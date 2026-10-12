@@ -1,4 +1,4 @@
-import { Cause, Effect, Fiber, Schema } from "effect";
+import { Cause, Effect, Fiber, Result, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { ChatState } from "../../src/chat-state/chat-state.ts";
@@ -147,8 +147,10 @@ const callTool = Effect.fnUntraced(function* (sessionId: string, name: string, a
   return yield* send(sessionId, `call ${name} ${yield* encodeJson(args)}`);
 });
 
+// Polled from synchronous `until` conditions; a malformed row fails the polling test at once.
 const count = (db: Database["Service"], query: string, ...params: string[]) =>
-  Schema.decodeUnknownSync(Count)(db.sqlite.prepare(query).get(...params)).count;
+  Result.getOrThrow(Schema.decodeUnknownResult(Count)(db.sqlite.prepare(query).get(...params)))
+    .count;
 
 const runningRuns = (db: Database["Service"], sessionId: string) =>
   count(

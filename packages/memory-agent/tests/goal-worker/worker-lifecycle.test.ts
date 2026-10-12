@@ -265,11 +265,9 @@ testAgent({ testProvider: { responder } })("Goal worker failure and cancellation
         const started = yield* Deferred.make<void>();
         // A native SDK callback that ignores cancellation: the model and its iterator stay held
         // until the test ends.
-        let release = () => {};
-        const held = new Promise<void>((resolve) => {
-          release = resolve;
-        });
-        yield* Effect.addFinalizer(() => Effect.sync(() => release()));
+        const release = yield* Deferred.make<void>();
+        const held = Effect.runPromiseWith(yield* Effect.context())(Deferred.await(release));
+        yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
         const adapter = env.provider!.adapter;
         const nativeStream = adapter.chatStream.bind(adapter);
         const streaming = vi.spyOn(adapter, "chatStream").mockImplementation((options) => {
@@ -291,7 +289,10 @@ testAgent({ testProvider: { responder } })("Goal worker failure and cancellation
           "Keep cancellation outcome and uncertain effects without replay",
           () =>
             Deferred.succeed(started, undefined).pipe(
-              Effect.as({ waitFor: held, text: "must not publish after cancellation" }),
+              Effect.as({
+                waitFor: Deferred.await(release),
+                text: "must not publish after cancellation",
+              }),
             ),
         );
         const runId = `${id}-cancelled`;

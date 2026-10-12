@@ -2,7 +2,18 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import type { AnyTextAdapter } from "@tanstack/ai";
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
-import { Cause, Effect, FileSystem, Fiber, Layer, Path, Result, Stream } from "effect";
+import {
+  Cause,
+  Effect,
+  FileSystem,
+  Fiber,
+  Function as EffectFunction,
+  Layer,
+  Path,
+  Result,
+  Schema,
+  Stream,
+} from "effect";
 import type { ChatExecutionCapabilities } from "../../src/agent/chat-execution.ts";
 import {
   createFullLoopExecution,
@@ -121,29 +132,47 @@ export type OwnerFixture = Effect.Success<ReturnType<typeof ownerFixture>>;
 export const callerController = () => new AbortController();
 
 /** SDK capabilities with no tools or middleware unless given, and their own abort controller. */
-export const capabilities = <TAdapter extends AnyTextAdapter>(
-  model: ChatExecutionCapabilities<TAdapter>["model"],
-  rest: Partial<Omit<ChatExecutionCapabilities<TAdapter>, "model">> = {},
-): ChatExecutionCapabilities<TAdapter> => ({
-  model,
-  tools: [],
-  middleware: [],
-  stream: { abortController: callerController() },
-  ...rest,
-});
+type CapabilityOptions<TAdapter extends AnyTextAdapter> = Partial<
+  Omit<ChatExecutionCapabilities<TAdapter>, "model">
+>;
+
+const isModel = Schema.is(Schema.Struct({ adapter: Schema.ObjectKeyword }));
+
+export const capabilities: {
+  <TAdapter extends AnyTextAdapter>(
+    model: ChatExecutionCapabilities<TAdapter>["model"],
+    rest?: CapabilityOptions<TAdapter>,
+  ): ChatExecutionCapabilities<TAdapter>;
+  <TAdapter extends AnyTextAdapter>(
+    rest?: CapabilityOptions<TAdapter>,
+  ): (model: ChatExecutionCapabilities<TAdapter>["model"]) => ChatExecutionCapabilities<TAdapter>;
+} = EffectFunction.dual(
+  (args) => isModel(args[0]),
+  <TAdapter extends AnyTextAdapter>(
+    model: ChatExecutionCapabilities<TAdapter>["model"],
+    rest: CapabilityOptions<TAdapter> = {},
+  ): ChatExecutionCapabilities<TAdapter> => ({
+    model,
+    tools: [],
+    middleware: [],
+    stream: { abortController: callerController() },
+    ...rest,
+  }),
+);
 
 /** Every chunk of one full-loop run through the real worker. */
-export const collect = <TAdapter extends AnyTextAdapter>(
+export const collect = Effect.fnUntraced(function* <TAdapter extends AnyTextAdapter>(
   owner: FullLoopOwner,
   run: ChatExecutionCapabilities<TAdapter>,
   turn: Parameters<ReturnType<typeof createFullLoopExecution<TAdapter>>["execute"]>[0] = ownerTurn,
-) =>
-  Stream.runCollect(
+) {
+  return yield* Stream.runCollect(
     Stream.fromAsyncIterable(
       createFullLoopExecution<TAdapter>(owner).execute(turn, run),
       (cause) => new Cause.UnknownError(cause),
     ),
   );
+});
 
 /**
  * Runs owner-side Effects from native SDK callbacks (tool executes, middleware hooks) in the

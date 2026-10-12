@@ -195,7 +195,7 @@ testAgent()("an index an older build filled with tool nodes", (it) => {
 
 /** What a second app server reports when it opens the first one's storage. */
 class SecondServer extends Context.Service<SecondServer, { readonly opened: string }>()(
-  "memory-agent/tests/memory/embedding/SecondServer",
+  "memory-agent/tests/memory/embedding.test/SecondServer",
 ) {}
 
 // Layers memoize by reference, so the second server gets its own memo map; otherwise it would reuse
@@ -446,7 +446,7 @@ describe.skipIf(!cachedModels.cpu)("the local model (downloaded, quint8 on the C
 
 /** The full-precision model on the CPU, to compare the gpu mode against. */
 class Reference extends Context.Service<Reference, Embedder["Service"]>()(
-  "memory-agent/tests/memory/embedding/Reference",
+  "memory-agent/tests/memory/embedding.test/Reference",
 ) {}
 
 // The user's own settings stay out of it: this block chooses the GPU itself.

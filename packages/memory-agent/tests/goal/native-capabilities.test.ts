@@ -119,19 +119,18 @@ const ownerRun = Effect.fnUntraced(function* (
   expect(() => useMemory.execute!({ memoryNodeIds: [user.id] })).toThrow(
     "Only promoted memories retrieved in this run can be used",
   );
-  const refused = yield* Effect.flip(
-    sdkCall(() =>
-      promoteMemory({
-        claimId: "unadopted",
-        taskId: "task",
-        attemptId: "attempt",
-        evidenceRefIds: [],
-        proposedText: "memory",
-        resolvedText: "memory",
-        disposition: "save",
-      }),
-    ),
-  );
+  // A promotion that unexpectedly succeeds fails the test as a defect.
+  const refused = yield* sdkCall(() =>
+    promoteMemory({
+      claimId: "unadopted",
+      taskId: "task",
+      attemptId: "attempt",
+      evidenceRefIds: [],
+      proposedText: "memory",
+      resolvedText: "memory",
+      disposition: "save",
+    }),
+  ).pipe(Effect.flip, Effect.orDie);
   expect(refused.cause).toMatchObject({ reason: "claim_not_adopted" });
   const tool = toolDefinition({ name: "probe", description: "native goal probe" }).server(() => {
     executed.push(index);
