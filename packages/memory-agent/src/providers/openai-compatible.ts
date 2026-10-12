@@ -6,8 +6,6 @@ import { isTruthy } from "../truthy.ts";
 import { isDeepStrictEqual } from "node:util";
 import { openaiCompatibleText } from "@tanstack/ai-openai/compatible";
 import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
-import { AsyncLocalStorage } from "node:async_hooks";
-import { oauthProtocolPath } from "../oauth/node-runtime.ts";
 import {
   Cause,
   Config,
@@ -21,11 +19,6 @@ import {
   Stream,
 } from "effect";
 import { GlobalConfig, type GlobalConfigApi } from "../config/global-config.ts";
-import { StorageRoot } from "../config/storage-root.ts";
-import {
-  traceCompatibleResponse,
-  type CompatibleTraceIdentity,
-} from "./compatible-response-trace.ts";
 import { requireRuntime } from "../runtime/resources.ts";
 import { ModelUnavailable, type ProviderServices, type ProviderModel } from "./contracts.ts";
 import {
@@ -153,20 +146,13 @@ export function makeOpenAICompatibleSettings(options: {
   readonly config: GlobalConfigApi;
   readonly keys?: CompatibleKeyStore | undefined;
   readonly fetcher?: typeof fetch | undefined;
-  readonly traceDirectory?: string | undefined;
 }) {
-  return makeOpenAICompatibleSettingsBody(
-    options.config,
-    options.keys,
-    options.fetcher,
-    options.traceDirectory,
-  );
+  return makeOpenAICompatibleSettingsBody(options.config, options.keys, options.fetcher);
 }
 function makeOpenAICompatibleSettingsBody(
   config: GlobalConfigApi,
   keys: CompatibleKeyStore = keychain,
   fetcher: typeof fetch = fetch,
-  traceDirectory?: string,
 ) {
   const updates = Semaphore.makeUnsafe(1);
   // Keyring calls cannot be cancelled once started. Never retry an uncertain write automatically.
@@ -492,9 +478,6 @@ function makeOpenAICompatibleSettingsBody(
           () => ({ value: null, failed: true }),
         );
         let promptDiagnostic = "Compatible request message roles unavailable";
-        const traceContext = new AsyncLocalStorage<CompatibleTraceIdentity>();
-        const adapterId = Effect.runSync(oauthProtocolCrypto.randomUUIDv4());
-        let sequence = 0;
         const adapter = openaiCompatibleText(selection.model, {
           baseURL: settings.baseUrl,
           apiKey: "unused",
@@ -565,28 +548,15 @@ function makeOpenAICompatibleSettingsBody(
                   const signal = isTruthy(init?.signal)
                     ? AbortSignal.any([init.signal, runAbort.signal])
                     : runAbort.signal;
-                  const send = () =>
+                  return yield* nativePromise(() =>
                     fetcher(url, {
                       ...init,
                       body,
                       headers,
                       redirect: "error",
                       signal,
-                    });
-                  return isTruthy(traceDirectory)
-                    ? yield* nativePromise(() =>
-                        traceCompatibleResponse({
-                          directory: traceDirectory,
-                          identity: {
-                            ...traceContext.getStore(),
-                            adapterId,
-                            sequence: ++sequence,
-                          },
-                          request: send,
-                          signal: signal,
-                        }),
-                      )
-                    : yield* nativePromise(send);
+                    }),
+                  );
                 }).pipe(
                   Effect.catchCause((failure) =>
                     Effect.gen(function* () {
@@ -640,11 +610,7 @@ function makeOpenAICompatibleSettingsBody(
                 );
                 return {
                   pull: Effect.gen(function* () {
-                    const next = yield* nativePromise(() =>
-                      traceContext.run({ threadId: options.threadId, runId: options.runId }, () =>
-                        source.next(),
-                      ),
-                    );
+                    const next = yield* nativePromise(() => source.next());
                     if (next.done === true) return yield* Cause.done();
                     const chunk = next.value;
                     if (!settings.toolCalling && String(chunk.type).startsWith("TOOL_CALL"))
@@ -707,7 +673,6 @@ export class OpenAICompatibleSettings extends Context.Service<
   static readonly layerWith = (
     keys: Layer.Layer<CompatibleKeyring>,
     fetcher: Layer.Layer<CompatibleFetch>,
-    traceDirectory?: string,
   ) =>
     Layer.effect(
       OpenAICompatibleSettings,
@@ -717,7 +682,6 @@ export class OpenAICompatibleSettings extends Context.Service<
           config: config,
           keys: yield* CompatibleKeyring,
           fetcher: yield* CompatibleFetch,
-          traceDirectory: traceDirectory,
         });
       }),
     ).pipe(Layer.provide(Layer.merge(keys, fetcher)));
@@ -728,11 +692,6 @@ export class OpenAICompatibleSettings extends Context.Service<
         config: yield* GlobalConfig,
         keys: keychain,
         fetcher: fetch,
-        traceDirectory: oauthProtocolPath.join(
-          (yield* StorageRoot).path,
-          "diagnostics",
-          "openai-compatible",
-        ),
       });
     }),
   );
