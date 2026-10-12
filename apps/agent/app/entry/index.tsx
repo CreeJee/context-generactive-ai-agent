@@ -47,6 +47,7 @@ import { openSettingsOverlay } from "./settings/open-settings";
 import { AccountSection, ModelSection, ProjectSection, SessionSection } from "./navigation/sidebar";
 import { AccountModelPanel } from "./navigation/account-model-panel";
 import { WorkTracePanel } from "./chat/work-trace-panel";
+import { BtwPanel } from "./chat/btw-panel";
 import { ReportLink, reportHref } from "./report/report-link";
 import { providerLabels } from "./navigation/providers";
 
@@ -474,6 +475,9 @@ export function App() {
             )}
           </aside>
           <main className="min-w-0 flex-1">{main}</main>
+          {projectId && sessionId && selection && (
+            <BtwPanel key={sessionId} projectId={projectId} sessionId={sessionId} />
+          )}
           {projectId && <WorkTracePanel projectId={projectId} sessionId={sessionId} />}
         </div>
       </SessionEventsProvider>

@@ -36,5 +36,7 @@ export const appQueryKeys = {
       [...appQueryKeys.session.root(projectId, sessionId), "relayed-approvals"] as const,
     trace: (projectId: string, sessionId: string) =>
       [...appQueryKeys.session.root(projectId, sessionId), "trace"] as const,
+    btw: (projectId: string, sessionId: string) =>
+      [...appQueryKeys.session.root(projectId, sessionId), "btw"] as const,
   },
 };
