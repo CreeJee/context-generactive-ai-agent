@@ -4,16 +4,16 @@ import { agent } from "~/.server/agent";
 import { readJson, rejectCrossSite } from "~/.server/http";
 import type { Route } from "./+types/reports.delivery";
 
-const DeliveryAction = Schema.Union([
-  Schema.Struct({ action: Schema.Literal("send"), text: Schema.String, resend: Schema.Boolean }),
-  Schema.Struct({ action: Schema.Literal("configure"), url: Schema.String }),
-  Schema.Struct({ action: Schema.Literal("remove") }),
-]);
+const DeliveryAction = Schema.Struct({
+  action: Schema.Literal("send"),
+  text: Schema.String,
+  resend: Schema.Boolean,
+});
 
 /** One status code per reason, so the browser never needs to read a rejected body. */
 const failureStatus = {
   not_configured: 409,
-  invalid_webhook_url: 400,
+  invalid_webhook_url: 503,
   too_large: 413,
   in_progress: 423,
   rate_limited: 429,
@@ -26,7 +26,10 @@ const failureStatus = {
 const reply = <A,>(value: A, status = 200) =>
   Response.json(value, { status, headers: { "Cache-Control": "no-store" } });
 
-/** GET: whether a developer webhook is configured. The URL and its token are never returned. */
+/**
+ * GET: whether the server has a developer webhook (`DISCORD_WEBHOOK_URL`). The URL and its token
+ * are never returned.
+ */
 // Promise boundary for React Router; delivery runs in the agent runtime.
 export function loader() {
   return agent.runPromise(
@@ -36,7 +39,7 @@ export function loader() {
 
 /**
  * POST, same-origin only. `send` posts the reviewed report once; `resend` confirms sending a text
- * that was already sent or may have been. `configure`/`remove` manage the keychain-held webhook.
+ * that was already sent or may have been. The webhook comes only from server configuration.
  */
 export function action({ request }: Route.ActionArgs) {
   return agent.runPromise(
@@ -47,14 +50,7 @@ export function action({ request }: Route.ActionArgs) {
       if (Result.isFailure(decoded)) return reply({ error: "invalid_report_delivery" }, 400);
       const delivery = yield* ReportDelivery;
       const command = decoded.success;
-      switch (command.action) {
-        case "send":
-          return reply(yield* delivery.send(command.text, command.resend));
-        case "configure":
-          return reply(yield* delivery.configure(command.url));
-        case "remove":
-          return reply(yield* delivery.remove);
-      }
+      return reply(yield* delivery.send(command.text, command.resend));
     }).pipe(
       Effect.catchTags({
         ReportDeliveryError: (error) =>

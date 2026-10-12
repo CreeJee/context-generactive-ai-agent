@@ -1,5 +1,6 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
+  Config,
   Context,
   Crypto,
   DateTime,
@@ -8,12 +9,12 @@ import {
   Function as EffectFunction,
   Layer,
   Option,
+  Redacted,
   Ref,
   Schema,
 } from "effect";
 import { Hex } from "effect/encoding";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
-import { SecretStore } from "../config/secrets.ts";
 import { ReportDeliveryFailure, type ReportDeliveryResult } from "./delivery-contract.ts";
 
 /**
@@ -57,8 +58,17 @@ const MessageBody = Schema.Struct({ id: Schema.String });
 
 interface WebhookUrl {
   readonly id: string;
-  readonly url: string;
+  readonly url: Redacted.Redacted<string>;
 }
+
+/** Server configuration key holding the developer's execute-webhook URL. */
+export const webhookConfigKey = "DISCORD_WEBHOOK_URL";
+
+/** The webhook the server was started with; read once, never sent to the browser. */
+type WebhookConfig =
+  | { readonly status: "missing" }
+  | { readonly status: "invalid" }
+  | { readonly status: "ready"; readonly webhook: WebhookUrl };
 
 /** Accepts only an execute-webhook URL on Discord; loopback is allowed only for tests. */
 export const parseWebhookUrl: {
@@ -74,7 +84,10 @@ function parseWebhookUrlBody(input: string, allowLoopback: boolean): WebhookUrl 
   if (!loopback && (url.protocol !== "https:" || !discordHosts.has(url.hostname))) return null;
   const match = webhookPath.exec(url.pathname);
   if (match === null || match[1] === undefined) return null;
-  return { id: match[1], url: `${url.origin}${url.pathname.replace(/\/$/, "")}` };
+  return {
+    id: match[1],
+    url: Redacted.make(`${url.origin}${url.pathname.replace(/\/$/, "")}`, { label: "webhook" }),
+  };
 }
 
 /** Discord renders the first part inline; the full reviewed text always travels as the file. */
@@ -108,7 +121,6 @@ export interface ReportDeliveryOptions {
 const make = (options: ReportDeliveryOptions) =>
   Effect.gen(function* () {
     const client = yield* HttpClient.HttpClient;
-    const secrets = yield* SecretStore;
     const crypto = yield* Crypto.Crypto;
     // Node's SHA-256 cannot fail for an in-memory buffer; a failure would be a defect.
     const reportHash = (text: string) =>
@@ -127,28 +139,46 @@ const make = (options: ReportDeliveryOptions) =>
         return next;
       });
 
-    const webhook = Effect.gen(function* () {
-      const stored = yield* secrets
-        .get("report-discord-webhook")
-        .pipe(Effect.mapError(() => ReportDeliveryError.make({ reason: "not_configured" })));
-      const parsed = stored === null ? null : parseWebhookUrl(stored, allowLoopback);
-      if (parsed === null) return yield* ReportDeliveryError.make({ reason: "not_configured" });
-      return parsed;
+    // A config read error (not a missing key) means the value is unusable, like a malformed URL.
+    const config: WebhookConfig = yield* Config.option(Config.Redacted(webhookConfigKey)).pipe(
+      Effect.map(
+        Option.match({
+          onNone: (): WebhookConfig => ({ status: "missing" }),
+          onSome: (value): WebhookConfig => {
+            const webhook = parseWebhookUrl(Redacted.value(value), allowLoopback);
+            return webhook === null ? { status: "invalid" } : { status: "ready", webhook };
+          },
+        }),
+      ),
+      Effect.catchTag("ConfigError", () => Effect.succeed<WebhookConfig>({ status: "invalid" })),
+    );
+
+    const webhook = Effect.suspend((): Effect.Effect<WebhookUrl, ReportDeliveryError> => {
+      switch (config.status) {
+        case "missing":
+          return Effect.fail(ReportDeliveryError.make({ reason: "not_configured" }));
+        case "invalid":
+          return Effect.fail(ReportDeliveryError.make({ reason: "invalid_webhook_url" }));
+        case "ready":
+          return Effect.succeed(config.webhook);
+      }
     });
 
-    const status = Effect.gen(function* () {
-      const parsed = yield* Effect.option(webhook);
-      return Option.match(parsed, {
-        onNone: () => ({ configured: false, webhookIdSuffix: null }),
-        onSome: ({ id }) => ({ configured: true, webhookIdSuffix: id.slice(-4) }),
-      });
+    const status = Effect.sync(() => {
+      switch (config.status) {
+        case "missing":
+        case "invalid":
+          return { configured: false, webhookIdSuffix: null };
+        case "ready":
+          return { configured: true, webhookIdSuffix: config.webhook.id.slice(-4) };
+      }
     });
 
     const post = (target: WebhookUrl, text: string) =>
       Effect.gen(function* () {
         const response = yield* client
           .execute(
-            HttpClientRequest.post(target.url).pipe(
+            HttpClientRequest.post(Redacted.value(target.url)).pipe(
               HttpClientRequest.setUrlParam("wait", "true"),
               HttpClientRequest.bodyFormData(messageBody(text)),
             ),
@@ -253,27 +283,13 @@ const make = (options: ReportDeliveryOptions) =>
       return { status: "delivered", messageId, deliveredAt };
     });
 
-    const configure = Effect.fn("ReportDelivery.configure")(function* (url: string) {
-      const parsed = parseWebhookUrl(url, allowLoopback);
-      if (parsed === null)
-        return yield* ReportDeliveryError.make({ reason: "invalid_webhook_url" });
-      yield* secrets
-        .set("report-discord-webhook", parsed.url)
-        .pipe(Effect.mapError(() => ReportDeliveryError.make({ reason: "not_configured" })));
-      return yield* status;
-    });
-
-    const remove = secrets.remove("report-discord-webhook").pipe(
-      Effect.mapError(() => ReportDeliveryError.make({ reason: "not_configured" })),
-      Effect.andThen(status),
-    );
-
-    return { status, send, configure, remove };
+    return { status, send };
   });
 
 /**
- * Sends a reviewed report to the developer's Discord channel through an incoming webhook the user
- * configured. The webhook URL lives only in the OS keychain and never reaches logs or reports.
+ * Sends a reviewed report to the developer's Discord channel through the incoming webhook in the
+ * server configuration (`DISCORD_WEBHOOK_URL`). The URL stays redacted on the server: it never
+ * reaches the browser, logs, errors or reports.
  */
 export class ReportDelivery extends Context.Service<
   ReportDelivery,

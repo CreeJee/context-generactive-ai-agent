@@ -95,15 +95,11 @@ export function makeReportClient(fetcher: typeof fetch) {
   });
 
   const DeliveryCommand = Schema.fromJsonString(
-    Schema.Union([
-      Schema.Struct({
-        action: Schema.Literal("send"),
-        text: Schema.String,
-        resend: Schema.Boolean,
-      }),
-      Schema.Struct({ action: Schema.Literal("configure"), url: Schema.String }),
-      Schema.Struct({ action: Schema.Literal("remove") }),
-    ]),
+    Schema.Struct({
+      action: Schema.Literal("send"),
+      text: Schema.String,
+      resend: Schema.Boolean,
+    }),
   );
   const deliver = <S extends Schema.Constraint>(schema: S, command: typeof DeliveryCommand.Type) =>
     Effect.flatMap(Schema.encodeEffect(DeliveryCommand)(command), (body) =>
@@ -125,9 +121,6 @@ export function makeReportClient(fetcher: typeof fetch) {
   const sendReport: {
     (resend: boolean): (text: string) => ReturnType<typeof sendReportBody>;
   } & typeof sendReportBody = EffectFunction.dual(2, sendReportBody);
-  const configureWebhook = (url: string) =>
-    deliver(ReportDeliveryStatus, { action: "configure", url });
-  const removeWebhook = deliver(ReportDeliveryStatus, { action: "remove" });
 
   return {
     openReportSession,
@@ -136,8 +129,6 @@ export function makeReportClient(fetcher: typeof fetch) {
     requestDiagnosis,
     readDeliveryStatus,
     sendReport,
-    configureWebhook,
-    removeWebhook,
   };
 }
 export const {
@@ -147,6 +138,4 @@ export const {
   requestDiagnosis,
   readDeliveryStatus,
   sendReport,
-  configureWebhook,
-  removeWebhook,
 } = makeReportClient(appFetch);

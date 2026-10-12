@@ -5,7 +5,7 @@ import { requireRuntime } from "../runtime/resources.ts";
 export const keychainService = "context-generactive-agent";
 
 /** Names of the secrets the app keeps. Each one is a separate keychain entry. */
-export type SecretName = "kagi-api-key" | "report-discord-webhook";
+export type SecretName = "kagi-api-key";
 
 /** The OS keychain refused or failed. Never answered by storing the secret somewhere else (R14). */
 export class SecretStoreFailed extends Data.TaggedError("SecretStoreFailed")<{

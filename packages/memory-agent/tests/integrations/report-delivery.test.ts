@@ -1,7 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Layer, Ref } from "effect";
-import { SecretStore } from "../../src/config/secrets.ts";
-import { ReportDelivery, parseWebhookUrl } from "../../src/report/discord-webhook.ts";
+import { ConfigProvider, Deferred, Effect, Fiber, Layer, Ref } from "effect";
+import {
+  ReportDelivery,
+  parseWebhookUrl,
+  webhookConfigKey,
+} from "../../src/report/discord-webhook.ts";
 import { HttpServerRequest, HttpServerResponse, testHttpServer } from "../support/http.ts";
 
 interface Reply {
@@ -11,6 +14,14 @@ interface Reply {
 
 const token = "tok_abcdefghijklmnopqrstuvwxyz0123";
 const message = (id: string): Reply => ({ status: 200, body: `{"id":"${id}"}` });
+
+/** Builds the service with `DISCORD_WEBHOOK_URL` set (or not) in server configuration. */
+const deliveryWith = (config: Record<string, string>) =>
+  Layer.build(
+    ReportDelivery.layer({ allowLoopback: true }).pipe(
+      Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(config))),
+    ),
+  ).pipe(Effect.flatMap((services) => Effect.provideContext(ReportDelivery, services)));
 
 /** A local stand-in for Discord's execute-webhook route; nothing leaves the machine. */
 const fakeDiscord = Effect.fnUntraced(function* (replies: readonly Reply[]) {
@@ -33,11 +44,9 @@ const fakeDiscord = Effect.fnUntraced(function* (replies: readonly Reply[]) {
       });
     }),
   );
-  const services = yield* Layer.build(
-    ReportDelivery.layer({ allowLoopback: true }).pipe(Layer.provide(SecretStore.memory)),
-  );
-  const delivery = yield* Effect.provideContext(ReportDelivery, services);
-  yield* delivery.configure(`${url}/api/webhooks/123456789012345678/${token}`);
+  const delivery = yield* deliveryWith({
+    [webhookConfigKey]: `${url}/api/webhooks/123456789012345678/${token}`,
+  });
   return { delivery, received, arrived, release };
 });
 
@@ -51,6 +60,24 @@ describe("report delivery to a Discord webhook", () => {
       parseWebhookUrl(`http://127.0.0.1:1/api/webhooks/123456789012345678/${token}`, false),
     ).toBeNull();
   });
+
+  it.effect("reads the webhook only from server configuration and never exposes it", () =>
+    Effect.gen(function* () {
+      const missing = yield* deliveryWith({});
+      expect(yield* missing.status).toEqual({ configured: false, webhookIdSuffix: null });
+      expect(yield* Effect.flip(missing.send("a", false))).toMatchObject({
+        reason: "not_configured",
+      });
+      const invalid = yield* deliveryWith({ [webhookConfigKey]: "https://example.com/hook" });
+      expect(yield* Effect.flip(invalid.send("a", false))).toMatchObject({
+        reason: "invalid_webhook_url",
+      });
+      const configured = yield* deliveryWith({
+        [webhookConfigKey]: `https://discord.com/api/webhooks/123456789012345678/${token}`,
+      });
+      expect(yield* configured.status).toEqual({ configured: true, webhookIdSuffix: "5678" });
+    }).pipe(Effect.scoped),
+  );
 
   it.live("posts the reviewed text without mentions, then recognises the same text", () =>
     Effect.gen(function* () {

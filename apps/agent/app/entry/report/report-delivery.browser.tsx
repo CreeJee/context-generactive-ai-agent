@@ -7,10 +7,9 @@ import { ReportDelivery } from "./report-delivery";
 import { ReportDiagnosisReview, type DiagnosisState } from "./report-diagnosis";
 
 describe("report review and delivery", () => {
-  it.live("configures a webhook, sends the reviewed text and falls back on failure", () =>
+  it.live("sends the reviewed text to the server's webhook and falls back on failure", () =>
     Effect.gen(function* () {
       const replies = [
-        Response.json({ configured: false, webhookIdSuffix: null }),
         Response.json({ configured: true, webhookIdSuffix: "5678" }),
         new Response(null, { status: 504 }),
         Response.json({ status: "uncertain_duplicate", attemptedAt: "2026-10-12T00:00:00.000Z" }),
@@ -24,14 +23,7 @@ describe("report review and delivery", () => {
       yield* Effect.addFinalizer(() => Effect.sync(() => fetch.mockRestore()));
       const screen = yield* sdkCall(() => render(<ReportDelivery text="# 제보 문안" />));
 
-      yield* sdkCall(() =>
-        screen
-          .getByLabelText("개발자 Discord 웹훅 주소")
-          .fill("https://discord.com/api/webhooks/1/x"),
-      );
-      yield* sdkCall(() => screen.getByRole("button", { name: "저장" }).click());
-      yield* sdkCall(() => expect.element(screen.getByText(/웹훅 …5678 설정됨/)).toBeVisible());
-      expect(screen.container.textContent).not.toContain("discord.com/api/webhooks");
+      yield* sdkCall(() => expect.element(screen.getByText(/개발자 웹훅 …5678/)).toBeVisible());
 
       yield* sdkCall(() => screen.getByRole("button", { name: "Discord로 보내기" }).click());
       yield* sdkCall(() =>
