@@ -48,6 +48,16 @@ export {
   type ProfileCredentialStore,
 } from "./oauth/accounts.ts";
 export { createOAuthAccountLoginManager, type AccountLoginState } from "./oauth/account-login.ts";
+export {
+  SubscriptionQuota,
+  SubscriptionQuotaError,
+  SubscriptionQuotaReport,
+  SubscriptionQuotaStatus,
+  subscriptionQuotaRoutes,
+  type SubscriptionAccountQuota,
+  type SubscriptionQuotaUnavailableReason,
+  type SubscriptionQuotaWindow,
+} from "./oauth/subscription-quota.ts";
 
 export { StorageRoot, defaultStorageRoot } from "./config/storage-root.ts";
 export {

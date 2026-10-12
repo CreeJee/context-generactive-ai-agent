@@ -17,6 +17,7 @@ import { Attachments } from "./attachments/attachments.ts";
 import { DrawingPreviews } from "./attachments/previews.ts";
 import { GlobalConfig } from "./config/global-config.ts";
 import { SecretStore } from "./config/secrets.ts";
+import { SubscriptionQuota } from "./oauth/subscription-quota.ts";
 import { StorageRoot } from "./config/storage-root.ts";
 import { Database } from "./db/database.ts";
 import { AppEvents } from "./events/app-events.ts";
@@ -230,6 +231,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     goalExecutionLayer,
     OwnerReadRecovery.layer,
     WorkTraceStore.layer,
+    SubscriptionQuota.layer,
     providerToolRegistry,
     modelFeatureFlags,
     crossProviderMediaConsent,

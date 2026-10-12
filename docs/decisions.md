@@ -412,6 +412,10 @@
 - 2026-10-06에 넣은 `diagnostics/openai-compatible` 응답 원본(`.raw`)·청크 기록(`.jsonl`)을 없앤다. 항상 켜져 있어 호환 모델을 쓸수록 디스크가 늘고 비밀 가리기를 거치지 않은 모델 출력이 대화 DB 밖에 남았지만, 조사 이후 쓰이지 않았다.
 - 템플릿 오류(`No user query found in messages`)에 요청 구성을 덧붙이는 진단(2026-10-04)은 본문을 저장하지 않으므로 유지한다. 이미 만들어진 진단 파일은 앱이 지우지 않는다.
 
+### 계정별 구독 쿼터 상태 (2026-10-12)
+
+- 계정별 구독 쿼터는 `GET /api/accounts/quota?provider=`가 `observed`·`stale`·`unavailable` 상태의 서로소 유니온으로 돌려준다. 공급자별 경로는 `subscriptionQuotaRoutes` 정적 표가 정한다. 허용·검증된 경로가 없으므로 OpenAI는 `no_permitted_route`, Anthropic은 `provider_policy_restricted`로 조회 불가를 명시하고 내부 사용량 엔드포인트(`/wham/usage`, `/api/oauth/usage`)는 호출하지 않는다. 로컬 토큰·응답 수로 대신하지 않는다. V1 실계정 검증과 비공식 경로 채택은 사용자 결정 전까지 하지 않는다.
+
 ## 대화·실행·기록
 
 ### 대화 상태 (2026-09-14)
