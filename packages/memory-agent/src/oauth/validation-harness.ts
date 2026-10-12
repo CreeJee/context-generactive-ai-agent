@@ -7,8 +7,6 @@ import { createServer } from "node:http";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { optionalProperty } from "../optional-property.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { timingSafeEqual } from "node:crypto";
 import {
   Cause,
   Deferred,
@@ -349,10 +347,15 @@ export interface SubscriptionOAuthClientOptions {
   readonly now?: () => number;
 }
 
+const utf8 = new TextEncoder();
+// Equal-length inputs are compared in constant time: every byte is folded in, with no early exit.
 const safeEqual = (left: string, right: string) => {
-  const a = Buffer.from(left);
-  const b = Buffer.from(right);
-  return a.length === b.length && timingSafeEqual(a, b);
+  const a = utf8.encode(left);
+  const b = utf8.encode(right);
+  if (a.length !== b.length) return false;
+  let difference = 0;
+  for (let index = 0; index < a.length; index++) difference |= a[index]! ^ b[index]!;
+  return difference === 0;
 };
 
 const TokenResponse = Schema.Struct({
