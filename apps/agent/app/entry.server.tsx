@@ -1,10 +1,29 @@
 import { Cause, Console, Effect, Function as EffectFunction } from "effect";
-import { ServerRouter, type EntryContext, type RouterContextProvider } from "react-router";
+import {
+  ServerRouter,
+  type EntryContext,
+  type HandleErrorFunction,
+  type RouterContextProvider,
+} from "react-router";
 import { renderToReadableStream } from "react-dom/server";
 import { isbot } from "isbot";
 
 export { configureAgentBackend, disposeAgent } from "./.server/agent.ts";
 export const streamTimeout = 5_000;
+
+/**
+ * A loader or action that throws. Node prints an Effect error as its fields without a stack, so
+ * the log carries the request and the pretty cause, whose stack shows where it failed.
+ */
+export const handleError: HandleErrorFunction = (error, { request }) => {
+  if (request.signal.aborted) return;
+  // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+  Effect.runSync(
+    Console.error(
+      `[server] ${request.method} ${new URL(request.url).pathname} failed\n${Cause.pretty(Cause.die(error))}`,
+    ),
+  );
+};
 
 // React's Web Stream entry preserves shell/all-ready behavior without a Node pipe adapter.
 const renderDocument = Effect.fn("server.renderDocument")(function* (
