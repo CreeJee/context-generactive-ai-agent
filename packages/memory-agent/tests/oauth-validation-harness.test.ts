@@ -32,6 +32,7 @@ import {
 } from "../src/oauth/validation-harness.ts";
 import {
   ProviderFeatureRejectedError,
+  ProviderStreamFailed,
   providerProtocols,
   type OAuthProvider,
   type ProviderProtocol,
@@ -1109,10 +1110,74 @@ describe("provider wire contracts", () => {
         expect((yield* Effect.flip(drain(cacheRejected))).cause).toBeInstanceOf(
           ProviderFeatureRejectedError,
         );
-        expect((yield* Effect.flip(drain(unrelated))).cause).toMatchObject({
-          message:
-            "oauth_provider_rejected [provider=Anthropic, operation=model_stream, status=400]: The provider rejected the request. invalid model",
+        const unrelatedFailure = (yield* Effect.flip(drain(unrelated))).cause;
+        expect(unrelatedFailure).toMatchObject({
+          _tag: "ProviderStreamFailed",
+          reason: { _tag: "ProviderStatusRejected", statusClass: "client_error" },
         });
+        expect(JSON.stringify(unrelatedFailure)).not.toContain("invalid model");
+      }),
+    ),
+  );
+
+  it.live("classifies model request transport failures at the fetch boundary", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const store = new MemoryCredentialStore();
+        MutableHashMap.set(store.values, "openai", {
+          accessToken: "access-secret",
+          refreshToken: "refresh-secret",
+          expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 60_000,
+        });
+        const failureOf = Effect.fn("modelStreamFailure")(function* (fetcher: typeof fetch) {
+          const harness = OAuthValidationHarness({
+            protocol: providerProtocols.openai,
+            store,
+            fetch: fetcher,
+          });
+          const failure = yield* Effect.flip(
+            Stream.runDrain(
+              Stream.fromAsyncIterable(
+                harness.stream('{"model":"test","stream":true}'),
+                (cause) => new Cause.UnknownError(cause),
+              ),
+            ),
+          );
+          return yield* Schema.decodeUnknownEffect(ProviderStreamFailed)(failure.cause).pipe(
+            Effect.map((error) => error.reason),
+          );
+        });
+        // undici rejects fetch with a TypeError whose cause carries the socket error code.
+        const rejectsWith = (code: string) => () =>
+          Promise.reject(
+            new TypeError("fetch failed", { cause: Object.assign(new Error(code), { code }) }),
+          );
+
+        expect(yield* failureOf(rejectsWith("ECONNREFUSED"))).toEqual({
+          _tag: "RequestNotSent",
+          stage: "connect",
+        });
+        expect(yield* failureOf(rejectsWith("ENOTFOUND"))).toEqual({
+          _tag: "RequestNotSent",
+          stage: "dns",
+        });
+        expect(yield* failureOf(rejectsWith("ECONNRESET"))).toEqual({
+          _tag: "RequestOutcomeUnknown",
+        });
+        expect(
+          yield* failureOf(() =>
+            Promise.resolve(
+              new Response(
+                new ReadableStream({
+                  start(controller) {
+                    controller.enqueue(new TextEncoder().encode('data: {"type":"response.'));
+                    controller.error(new Error("terminated"));
+                  },
+                }),
+              ),
+            ),
+          ),
+        ).toEqual({ _tag: "ResponseInterrupted" });
       }),
     ),
   );

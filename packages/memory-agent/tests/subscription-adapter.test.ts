@@ -8,11 +8,13 @@ import { Cause, Deferred, Effect, Schema, Stream } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import {
   ProviderFeatureRejectedError,
+  ProviderStreamFailed,
   decodeProviderEvent,
   providerProtocols,
 } from "../src/oauth/protocol.ts";
 import { toToolSchema } from "../src/tools/schema.ts";
 import {
+  SubscriptionStreamFailed,
   SubscriptionTextAdapter,
   requestFingerprints,
   subscriptionRequest,
@@ -753,6 +755,62 @@ describe("subscription model adapters", () => {
         }),
       );
       expect(attempts).toBe(1);
+    }),
+  );
+
+  it.live("classifies transport failures by delivery and stream position", () =>
+    Effect.gen(function* () {
+      const failingAfter = (
+        events: ReadonlyArray<{ readonly type: "text"; readonly text: string }>,
+        failure: Error,
+      ) => ({
+        stream() {
+          return nativeStream(
+            Stream.fromIterable(
+              (function* () {
+                yield* events;
+                throw failure;
+              })(),
+              { chunkSize: 1 },
+            ),
+          );
+        },
+      });
+      const reasonOf = Effect.fn("subscriptionAdapterTest.reasonOf")(function* (
+        client: ReturnType<typeof failingAfter>,
+      ) {
+        const adapter = new SubscriptionTextAdapter(client, {
+          provider: "openai",
+          model: "model-1",
+          reasoningEffort: "medium",
+        });
+        const failure = yield* Effect.flip(
+          Stream.runDrain(
+            Stream.fromAsyncIterable(
+              adapter.chatStream({ ...options, model: "model-1", logger }),
+              (cause) => new Cause.UnknownError(cause),
+            ),
+          ),
+        );
+        return yield* Schema.decodeUnknownEffect(SubscriptionStreamFailed)(failure.cause).pipe(
+          Effect.map((error) => error.reason),
+        );
+      });
+      const connectionRefused = ProviderStreamFailed.make({
+        provider: "openai",
+        reason: { _tag: "RequestNotSent", stage: "connect" },
+      });
+
+      expect(yield* reasonOf(failingAfter([], connectionRefused))).toEqual({
+        _tag: "RequestNotSent",
+        stage: "connect",
+      });
+      expect(
+        yield* reasonOf(failingAfter([{ type: "text", text: "partial" }], new Error())),
+      ).toEqual({ _tag: "ResponseInterrupted" });
+      expect(yield* reasonOf(failingAfter([], new Error("socket hang up")))).toEqual({
+        _tag: "RequestOutcomeUnknown",
+      });
     }),
   );
 
