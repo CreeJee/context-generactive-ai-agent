@@ -95,6 +95,55 @@ export function useAccountActionMutation(provider: SubscriptionAccountProvider) 
   });
 }
 
+/** An account the sidebar switcher can move to; the compatible provider has a single configuration. */
+export type AccountTarget =
+  | { readonly provider: SubscriptionAccountProvider; readonly accountId: string }
+  | { readonly provider: "openai-compatible" };
+
+/**
+ * Makes `target` the account in use. Moving to another provider also selects that provider's
+ * default model, since a single model selection decides which account a chat runs on.
+ */
+export function useSwitchAccountMutation() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ target, selectModel }: { target: AccountTarget; selectModel: boolean }) =>
+      runUiEffect(
+        Effect.gen(function* () {
+          switch (target.provider) {
+            case "openai":
+            case "anthropic": {
+              const { provider, accountId } = target;
+              const view = yield* uiPromise(() =>
+                api.accountAction(provider, { intent: "select", accountId }),
+              );
+              client.setQueryData(globalQueries.accounts(provider).queryKey, view);
+              yield* Effect.forEach(
+                [
+                  globalQueries.accountQuota(provider).queryKey,
+                  globalQueries.auth(provider).queryKey,
+                ],
+                (queryKey) => uiPromise(() => client.invalidateQueries({ queryKey })),
+                { concurrency: "unbounded", discard: true },
+              );
+              break;
+            }
+            case "openai-compatible":
+              break;
+          }
+          if (!selectModel) return null;
+          const { models } = yield* uiPromise(() =>
+            client.fetchQuery({ ...globalQueries.models(target.provider), staleTime: 0 }),
+          );
+          const model = models.find((item) => item.isDefault) ?? models[0];
+          if (model === undefined) return null;
+          return yield* uiPromise(() => api.selectModel(model.id, undefined, target.provider));
+        }),
+      ),
+    onSettled: () => client.invalidateQueries({ queryKey: appQueryKeys.global.modelsRoot }),
+  });
+}
+
 export function useAddProjectMutation() {
   const client = useQueryClient();
   return useMutation({

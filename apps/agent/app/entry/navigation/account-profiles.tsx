@@ -29,7 +29,7 @@ type QuotaStatus = SubscriptionQuotaReport["accounts"][number]["quota"];
 type QuotaWindow = Extract<QuotaStatus, { status: "observed" }>["windows"][number];
 
 /** Labels for provider window names; an unknown name is shown as the provider sent it. */
-const windowLabel = (name: string) => {
+export const windowLabel = (name: string) => {
   switch (name) {
     case "five_hour":
       return "5시간";
@@ -54,7 +54,7 @@ export function quotaUnavailableText(
   }
 }
 
-const gaugeTone = (usedPercent: number) =>
+export const gaugeTone = (usedPercent: number) =>
   usedPercent >= 90 ? "bg-destructive" : usedPercent >= 70 ? "bg-warning" : "bg-primary";
 
 /** One provider-reported window as a gauge; a stale value is dimmed rather than hidden. */

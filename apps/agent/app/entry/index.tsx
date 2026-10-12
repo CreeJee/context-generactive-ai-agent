@@ -6,6 +6,8 @@ import {
   useAddProjectMutation,
   useAuthActionMutation,
   useSelectModelMutation,
+  useSwitchAccountMutation,
+  type AccountTarget,
 } from "./queries/mutations/global";
 import {
   useCreateSessionMutation,
@@ -34,6 +36,13 @@ import {
 import { Separator } from "~/components/ui/separator";
 import { Button } from "~/components/ui/button";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "~/components/ui/dialog";
+import {
   archiveErrorMessage,
   projectErrorMessage,
   type ModelSelection,
@@ -47,6 +56,7 @@ import { openSettingsOverlay } from "./settings/open-settings";
 import { AccountSection, ModelSection, ProjectSection, SessionSection } from "./navigation/sidebar";
 import { AccountModelPanel } from "./navigation/account-model-panel";
 import { SubscriptionAccounts } from "./navigation/account-profiles";
+import { AccountSwitcher } from "./navigation/account-switcher";
 import { WorkTracePanel } from "./chat/work-trace-panel";
 import { BtwPanel } from "./chat/btw-panel";
 import { ReportLink, reportHref } from "./report/report-link";
@@ -106,6 +116,9 @@ export function App() {
   const authMutation = useAuthActionMutation(provider);
   const addProjectMutation = useAddProjectMutation();
   const modelMutation = useSelectModelMutation(provider);
+  const switchMutation = useSwitchAccountMutation();
+  const [accountsOpen, setAccountsOpen] = useState(false);
+  const [switchError, setSwitchError] = useState<string | null>(null);
   const permissionMutation = usePermissionModeMutation(projectId ?? "");
   const crossRecallMutation = useCrossRecallMutation(projectId ?? "");
   const hideProjectMutation = useHideProjectMutation();
@@ -290,6 +303,28 @@ export function App() {
     );
 
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  const switchAccount = (target: AccountTarget) =>
+    runUiEffect(
+      Effect.gen(function* () {
+        setSwitchError(null);
+        const selected = yield* uiPromise(() =>
+          switchMutation.mutateAsync({
+            target,
+            selectModel: selection?.provider !== target.provider,
+          }),
+        );
+        setProvider(target.provider);
+        if (selected !== null) setSelection(selected);
+      }).pipe(
+        Effect.catchCause(() =>
+          Effect.sync(() =>
+            setSwitchError("계정을 바꾸지 못했어요. 이 계정의 실행이 끝난 뒤 다시 시도하세요."),
+          ),
+        ),
+      ),
+    );
+
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const createSession = (agent?: string) =>
     runUiEffect(
       Effect.gen(function* () {
@@ -424,23 +459,19 @@ export function App() {
                     : undefined
                 }
               >
-                <AccountSection
-                  auth={auth[provider]}
-                  provider={provider}
-                  onProviderChange={setProvider}
-                  onAction={(intent) => void authAction(intent)}
-                  profiles={
-                    provider === "openai-compatible" ? undefined : (
-                      <SubscriptionAccounts key={provider} provider={provider} />
-                    )
-                  }
-                />
-                {signedIn && (
+                {signedIn ? (
                   <ModelSection
                     models={models}
                     selection={selection?.provider === provider ? selection : null}
                     onSelect={(model, effort) => void selectModel(model, effort)}
                   />
+                ) : (
+                  <div className="flex flex-col gap-2 p-3 text-xs text-muted-foreground">
+                    {providerLabels[provider]} 계정을 연결하면 모델을 고를 수 있어요.
+                    <Button variant="outline" size="sm" onClick={() => setAccountsOpen(true)}>
+                      계정 연결
+                    </Button>
+                  </div>
                 )}
               </AccountModelPanel>
               <ProjectSection
@@ -479,6 +510,40 @@ export function App() {
                 agents={slashAgents}
               />
             )}
+            <div className="mt-auto">
+              <AccountSwitcher
+                activeProvider={selection?.provider ?? provider}
+                compatibleAuth={auth["openai-compatible"]}
+                busy={switchMutation.isPending}
+                error={switchError}
+                onSwitch={(target) => void switchAccount(target)}
+                onConfigureCompatible={() =>
+                  openSettingsOverlay({ project: null, initialPage: "compatible" })
+                }
+                onManage={() => setAccountsOpen(true)}
+              />
+            </div>
+            <Dialog open={accountsOpen} onOpenChange={setAccountsOpen}>
+              <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle>계정 추가·관리</DialogTitle>
+                  <DialogDescription>
+                    공급자별로 로그인한 계정을 추가하고 이름을 바꾸거나 해제해요.
+                  </DialogDescription>
+                </DialogHeader>
+                <AccountSection
+                  auth={auth[provider]}
+                  provider={provider}
+                  onProviderChange={setProvider}
+                  onAction={(intent) => void authAction(intent)}
+                  profiles={
+                    provider === "openai-compatible" ? undefined : (
+                      <SubscriptionAccounts key={provider} provider={provider} />
+                    )
+                  }
+                />
+              </DialogContent>
+            </Dialog>
           </aside>
           <main className="min-w-0 flex-1">{main}</main>
           {projectId && sessionId && selection && (

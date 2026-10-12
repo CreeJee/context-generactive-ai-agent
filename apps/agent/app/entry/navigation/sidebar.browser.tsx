@@ -6,6 +6,7 @@ import { describe, expect } from "vite-plus/test";
 import "../../app.css";
 import { AccountModelPanel } from "./account-model-panel";
 import { AccountProfiles } from "./account-profiles";
+import { AccountSwitcherMenu } from "./account-switcher";
 import { AccountSection, ModelSection, ProjectSection } from "./sidebar";
 
 const alignedTerms = (root: HTMLElement, expected: string[]) => {
@@ -198,6 +199,84 @@ describe("sidebar disclosures", () => {
       yield* sdkCall(() => work.getByRole("button", { name: "전환" }).click());
       expect(actions).toEqual([{ intent: "select", accountId: "b" }]);
     }),
+  );
+
+  it.live(
+    "the account switcher lists every provider's accounts and switches across providers",
+    () =>
+      Effect.gen(function* () {
+        const switched: unknown[] = [];
+        const screen = yield* sdkCall(() =>
+          render(
+            <div className="w-72">
+              <AccountSwitcherMenu
+                entries={[
+                  {
+                    kind: "profile",
+                    provider: "openai",
+                    profile: {
+                      id: "a",
+                      provider: "openai",
+                      label: "개인",
+                      selected: true,
+                      createdAt: 1,
+                    },
+                    quota: { status: "unavailable", reason: "no_permitted_route" },
+                    current: true,
+                  },
+                  {
+                    kind: "profile",
+                    provider: "anthropic",
+                    profile: {
+                      id: "c",
+                      provider: "anthropic",
+                      label: "회사",
+                      selected: true,
+                      createdAt: 2,
+                    },
+                    quota: {
+                      status: "observed",
+                      windows: [
+                        {
+                          name: "five_hour",
+                          usedPercent: 37,
+                          windowSeconds: 18_000,
+                          resetsAt: null,
+                        },
+                      ],
+                      observedAt: "2026-10-12T00:00:00.000Z",
+                    },
+                    current: false,
+                  },
+                  { kind: "compatible", configured: false, current: false },
+                ]}
+                busy={false}
+                error={null}
+                onSwitch={(target) => switched.push(target)}
+                onConfigureCompatible={() => {}}
+                onManage={() => {}}
+              />
+            </div>,
+          ),
+        );
+
+        yield* sdkCall(() =>
+          screen.getByRole("button", { name: "계정 전환: 개인 (ChatGPT)" }).click(),
+        );
+        const work = screen.getByRole("menuitem", { name: "회사 (Claude)" });
+        yield* sdkCall(() =>
+          expect
+            .element(work.getByRole("meter", { name: "5시간" }))
+            .toHaveAttribute("aria-valuenow", "37"),
+        );
+        yield* sdkCall(() =>
+          expect
+            .element(screen.getByRole("menuitem", { name: "OpenAI 호환 (OpenAI 호환)" }))
+            .toBeVisible(),
+        );
+        yield* sdkCall(() => work.click());
+        expect(switched).toEqual([{ provider: "anthropic", accountId: "c" }]);
+      }),
   );
 });
 
