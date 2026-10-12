@@ -665,11 +665,23 @@
 
 - 2026-10-10 "Effect execution admission and safe observability"의 재시도 허용 경계에 **provider 요청이 전송되기 전이 확정된 transport 실패**를 추가한다. 연결 수립·DNS·TLS 등 요청 본문이 provider에 도달하지 않았음을 어댑터가 확정할 수 있는 실패만 해당한다.
 - 요청 전송 이후의 실패, 일부 출력이나 tool call을 받은 뒤의 스트림 중단, 원인이 불명확한 실패는 이 경계에 포함하지 않는다. 이 경우는 기존 Work Trace 계약(2026-09-20)대로 재생하지 않고, 필요하면 새 attempt에서 논리적으로 이어간다. model·tool·Goal-loop 전체를 재실행하는 retry는 계속 금지한다.
-- 전제: 현재 `SubscriptionStreamFailed`는 알려지지 않은 오류를 모두 `TransportUnavailable`로 변환하므로 요청 전 실패를 구분할 수 없다. reason을 요청 전 실패와 그 외로 나누기 전에는 재시도를 활성화하지 않는다.
+- 전제: 현재 `SubscriptionStreamFailed`는 알려지지 않은 오류를 모두 `TransportUnavailable`로 변환하므로 요청 전 실패를 구분할 수 없다. reason을 요청 전 실패와 그 외로 나누기 전에는 재시도를 활성화하지 않는다. (갱신: 아래 "구독 provider 스트림 실패의 전송 단계 분류 (2026-10-13)"에서 나눴다. 재시도 대상은 `RequestNotSent`뿐이다.)
 - 안정 키는 run attempt ID와 해당 attempt 안의 재시도 순번으로 구성한다. 현재 시각·랜덤 값·프로세스 로컬 카운터는 키에 쓰지 않는다.
 - 대기 간격은 2초에서 시작해 2배씩 늘리고 한 번의 대기는 최대 30분으로 제한한다. jitter를 포함해 계산한 `retryAt`은 한 번만 계산해 영속화하고, replay에서 다시 계산하지 않는다. 대기는 `DurableClock`으로 수행하며 앱 재시작 후에도 복원되도록 `inMemoryThreshold: 0`을 사용한다.
 - 소진 결과: 재시도 한도(총 경과 시간 또는 횟수)는 구현 시 이 항목에 수치로 기록한 뒤 활성화한다. 한도를 넘으면 실행 실패로 끝내지 않고 기존 blocker 경로(2026-10-02)로 정지해 이유와 근거를 표시한다. 사용자 취소·일시 중지는 대기 중인 재시도를 중단하며 자동 재개하지 않는다.
 - 이 결정은 `DurableQueue` 보류(2026-10-10)를 바꾸지 않는다.
+
+### 구독 provider 스트림 실패의 전송 단계 분류 (2026-10-13)
+
+- `SubscriptionStreamFailed.reason`의 `TransportUnavailable`을 다음 넷으로 나눈다. 다른 reason(`ProviderRejected`, `InvalidToolCall` 등)과 로그의 `code: failure._tag`는 그대로다. 이 reason은 영속화하지 않는다.
+  - `RequestNotSent { stage: "dns" | "connect" | "tls" }`: 요청 본문이 provider에 도달하지 않았음이 확정된 실패. fetch가 거절한 오류의 `cause.code`가 `ENOTFOUND`·`EAI_AGAIN`(dns), `ECONNREFUSED`·`ENETUNREACH`·`EHOSTUNREACH`·`UND_ERR_CONNECT_TIMEOUT`(connect), 인증서 검증 오류(tls)일 때만 해당한다.
+  - `ProviderStatusRejected { statusClass: "client_error" | "server_error" }`: provider가 HTTP 오류 상태로 거절. 상태 범주만 남기고 응답 본문·메시지는 경계 밖으로 내보내지 않는다. Anthropic prompt-cache 거절은 기존대로 `ProviderFeatureRejectedError`로 baseline 요청을 한 번 다시 보낸다.
+  - `ResponseInterrupted`: 응답 헤더를 받은 뒤 본문 스트림이 끊기거나, 이벤트를 하나라도 받은 뒤 실패.
+  - `RequestOutcomeUnknown`: 그 외 모든 실패. `ETIMEDOUT`·`ECONNRESET`·`UND_ERR_SOCKET`·헤더 timeout·redirect 거절·코드 없는 오류는 요청이 전송됐을 수 있으므로 여기에 둔다. 요청이 전송된 것으로 취급한다.
+- 분류는 입출력 경계에서 구조화된 값으로만 한다. OAuth 클라이언트가 fetch 단계(오류 code)·HTTP status·본문 스트림 단계를 `oauth/protocol.ts`의 `ProviderStreamFailed`로 표현하고, 어댑터는 첫 이벤트 수신 여부만 더해 `SubscriptionStreamFailed`로 옮긴다. `Error.message` 키워드로 분류하지 않는다.
+- 자격 증명 읽기·토큰 갱신 실패처럼 OAuth 클라이언트가 `ProviderStreamFailed`로 표현하지 않는 오류는 `RequestOutcomeUnknown`으로 보수적으로 둔다.
+- 모델 스트림의 HTTP 거절은 더 이상 `OAuthHarnessError`에 provider 오류 문구를 담지 않는다. live 검증 스크립트도 상태 범주만 본다.
+- 이 단계는 재시도를 추가하지 않는다.
 
 ### Goal full-loop transport: Effect Worker/RPC protocol boundary (2026-10-10)
 
