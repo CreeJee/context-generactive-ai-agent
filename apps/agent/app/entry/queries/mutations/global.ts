@@ -1,7 +1,12 @@
 import { runUiEffect, uiPromise } from "../../shared/ui-effect";
 import { Effect } from "effect";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, type ProviderId } from "../../api";
+import {
+  api,
+  type AccountAction,
+  type ProviderId,
+  type SubscriptionAccountProvider,
+} from "../../api";
 import { globalQueries } from "../global";
 import { appQueryKeys } from "../keys";
 
@@ -65,6 +70,28 @@ export function useAuthActionMutation(provider: ProviderId) {
           { concurrency: "unbounded" },
         ).pipe(Effect.asVoid),
       ),
+  });
+}
+
+/** A switched or removed account changes the provider's auth, models and quota rows. */
+export function useAccountActionMutation(provider: SubscriptionAccountProvider) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (action: AccountAction) => api.accountAction(provider, action),
+    onSuccess: (view) => {
+      client.setQueryData(globalQueries.accounts(provider).queryKey, view);
+      return runUiEffect(
+        Effect.forEach(
+          [
+            globalQueries.accountQuota(provider).queryKey,
+            globalQueries.auth(provider).queryKey,
+            appQueryKeys.global.models(provider),
+          ],
+          (queryKey) => uiPromise(() => client.invalidateQueries({ queryKey })),
+          { concurrency: "unbounded", discard: true },
+        ),
+      );
+    },
   });
 }
 

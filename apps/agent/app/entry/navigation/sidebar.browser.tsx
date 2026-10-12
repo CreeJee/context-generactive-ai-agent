@@ -5,6 +5,7 @@ import { render } from "vitest-browser-react";
 import { describe, expect } from "vite-plus/test";
 import "../../app.css";
 import { AccountModelPanel } from "./account-model-panel";
+import { AccountProfiles } from "./account-profiles";
 import { AccountSection, ModelSection, ProjectSection } from "./sidebar";
 
 const alignedTerms = (root: HTMLElement, expected: string[]) => {
@@ -126,8 +127,59 @@ describe("sidebar disclosures", () => {
         ),
       );
 
-      yield* sdkCall(() => screen.getByRole("button", { name: /프로젝트 · Project 1/ }).click());
+      const trigger = screen.getByRole("button", { name: "프로젝트 Project 1" });
+      expect(trigger.element().textContent).toBe("Project 1");
+      yield* sdkCall(() => trigger.click());
       alignedTerms(screen.container, ["프로젝트", "권한", "기억", "목록"]);
+    }),
+  );
+
+  it.live("expanded accounts show each account's quota status and switch accounts", () =>
+    Effect.gen(function* () {
+      const actions: unknown[] = [];
+      const unavailable = { status: "unavailable", reason: "no_permitted_route" } as const;
+      const screen = yield* sdkCall(() =>
+        render(
+          <div className="w-72">
+            <AccountProfiles
+              view={{
+                profiles: [
+                  { id: "a", provider: "openai", label: "개인", selected: true, createdAt: 1 },
+                  { id: "b", provider: "openai", label: "회사", selected: false, createdAt: 2 },
+                ],
+                login: { status: "idle" },
+              }}
+              quota={{
+                provider: "openai",
+                checkedAt: "2026-10-12T00:00:00.000Z",
+                accounts: [
+                  { accountId: "a", label: "개인", selected: true, quota: unavailable },
+                  { accountId: "b", label: "회사", selected: false, quota: unavailable },
+                ],
+              }}
+              quotaFailed={false}
+              error={null}
+              busy={false}
+              onAction={(action) => actions.push(action)}
+            />
+          </div>,
+        ),
+      );
+
+      const personal = screen.getByRole("listitem", { name: "개인" });
+      yield* sdkCall(() => expect.element(personal.getByText("사용 중")).toBeVisible());
+      yield* sdkCall(() =>
+        expect
+          .element(personal.getByText("구독 한도 조회 불가: 허용된 조회 경로가 확인되지 않았어요"))
+          .toBeVisible(),
+      );
+      yield* sdkCall(() =>
+        screen
+          .getByRole("listitem", { name: "회사" })
+          .getByRole("button", { name: "전환" })
+          .click(),
+      );
+      expect(actions).toEqual([{ intent: "select", accountId: "b" }]);
     }),
   );
 });

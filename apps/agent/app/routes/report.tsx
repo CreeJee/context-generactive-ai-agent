@@ -4,7 +4,18 @@ import { useEffect, useRef, useState } from "react";
 import type { ReportEvidence } from "../.server/report-evidence";
 import { ReportDraft, reportText, type ReportFields } from "../entry/report/report-draft";
 import { copyReportText } from "../entry/report/report-copy";
-import { openReportSession, readReportEvidence } from "../entry/report/report-client";
+import { ReportDelivery } from "../entry/report/report-delivery";
+import {
+  openReportSession,
+  readReportEvidence,
+  requestDiagnosis,
+} from "../entry/report/report-client";
+import {
+  ReportDiagnosisReview,
+  diagnosisFailure,
+  diagnosisText,
+  type DiagnosisState,
+} from "../entry/report/report-diagnosis";
 import {
   ReportEvidenceReview,
   evidenceGaps,
@@ -42,6 +53,7 @@ export default function ReportPage() {
     projectId: string;
     reportSessionId: string;
   } | null>(null);
+  const [diagnosis, setDiagnosis] = useState<DiagnosisState>({ status: "idle" });
   const [sessionRetry, setSessionRetry] = useState(0);
   const [sessionFailed, setSessionFailed] = useState(false);
   useEffect(() => {
@@ -84,16 +96,43 @@ export default function ReportPage() {
       evidence !== null
         ? { projectId: evidence.session.projectId, sessionId: evidence.session.id }
         : undefined,
+    diagnosis: diagnosisText(diagnosis),
   });
   const text = editedText ?? generatedText;
 
   const evidenceTask = useRef<Fiber.Fiber<void> | null>(null);
+  const diagnosisTask = useRef<Fiber.Fiber<void> | null>(null);
   useEffect(
     () => () => {
       if (evidenceTask.current !== null) Effect.runFork(Fiber.interrupt(evidenceTask.current));
+      if (diagnosisTask.current !== null) Effect.runFork(Fiber.interrupt(diagnosisTask.current));
     },
     [],
   );
+  const runDiagnosis = () => {
+    if (diagnosisTask.current !== null) Effect.runFork(Fiber.interrupt(diagnosisTask.current));
+    setDiagnosis({ status: "running" });
+    diagnosisTask.current = Effect.runFork(
+      requestDiagnosis({
+        sourceSessionId: new URLSearchParams(window.location.search).get("session"),
+        symptom: fields.symptom.slice(0, 4_000),
+        expected: fields.expected.slice(0, 2_000),
+        actual: fields.actual.slice(0, 2_000),
+        evidence: included.slice(0, 20).map((item) => ({
+          id: item.id.slice(0, 256),
+          label: item.label.slice(0, 200),
+          source: item.source.slice(0, 500),
+          text: (selected[item.id] ?? "").slice(0, 6_000),
+        })),
+      }).pipe(
+        Effect.match({
+          onSuccess: (result) =>
+            setDiagnosis({ status: "ready", diagnosis: result, included: true }),
+          onFailure: (error) => setDiagnosis({ status: "failed", reason: diagnosisFailure(error) }),
+        }),
+      ),
+    );
+  };
   const loadEvidence = () => {
     const params = new URLSearchParams(window.location.search);
     const project = params.get("project");
@@ -148,7 +187,7 @@ export default function ReportPage() {
         <h1 className="text-2xl font-semibold">문제 제보</h1>
         <p className="text-sm text-muted-foreground">
           채팅이나 실행이 멈춰도 여기서 증상을 기록할 수 있습니다. 이 화면은 제보를 자동으로
-          전송하지 않습니다.
+          전송하지 않으며, 직접 누를 때만 개발자 Discord 웹훅으로 보냅니다.
         </p>
       </header>
       {analysisSession && (
@@ -203,9 +242,14 @@ export default function ReportPage() {
           <ReportEvidenceReview data={evidence} selected={selected} onChange={setSelected} />
         )}
       </section>
-      <section className="space-y-2" aria-label="Discord 수동 게시">
+      <section className="space-y-2" aria-label="AI 진단">
+        <h2 className="text-sm font-medium">AI 진단 (선택)</h2>
+        <ReportDiagnosisReview state={diagnosis} onRequest={runDiagnosis} onChange={setDiagnosis} />
+      </section>
+      <section className="space-y-2" aria-label="복사·저장">
         <p className="text-sm">
-          문안을 확인한 후 복사하여 개발자의 Discord에 직접 게시하세요. 자동 전송은 하지 않습니다.
+          문안을 확인한 후 복사하거나 텍스트 파일로 저장해 개발자의 Discord에 직접 게시할 수
+          있습니다. 웹훅 전송이 실패해도 이 방법은 항상 쓸 수 있습니다.
         </p>
         <div className="flex gap-2">
           <button
@@ -219,6 +263,10 @@ export default function ReportPage() {
             텍스트 파일 저장
           </button>
         </div>
+      </section>
+      <section className="space-y-2" aria-label="Discord 웹훅 전송">
+        <h2 className="text-sm font-medium">개발자 Discord로 보내기 (선택)</h2>
+        <ReportDelivery text={text} />
       </section>
     </main>
   );

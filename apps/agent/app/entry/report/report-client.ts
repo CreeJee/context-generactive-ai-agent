@@ -1,10 +1,18 @@
 import { Data, Effect, Schema } from "effect";
+import {
+  ReportDeliveryResult,
+  ReportDeliveryStatus,
+  ReportDiagnosis,
+  ReportDiagnosisInput,
+} from "memory-agent/definitions";
 import { appFetch } from "../shared/backend-restart";
 import { ReportEvidence } from "./report-contracts";
 
 export class ReportRequestFailed extends Data.TaggedError("ReportRequestFailed")<{
-  readonly operation: "session" | "evidence" | "detail";
+  readonly operation: "session" | "evidence" | "detail" | "diagnosis" | "delivery";
   readonly phase: "transport" | "status" | "response";
+  /** Only the status code is kept from a rejected response; its body is never read. */
+  readonly httpStatus?: number;
 }> {}
 
 export function makeReportClient(fetcher: typeof fetch) {
@@ -21,7 +29,11 @@ export function makeReportClient(fetcher: typeof fetch) {
         catch: () => new ReportRequestFailed({ operation: input.operation, phase: "transport" }),
       });
       if (!response.ok)
-        return yield* new ReportRequestFailed({ operation: input.operation, phase: "status" });
+        return yield* new ReportRequestFailed({
+          operation: input.operation,
+          phase: "status",
+          httpStatus: response.status,
+        });
       const body: unknown = yield* Effect.tryPromise({
         try: () => response.json(),
         catch: () => new ReportRequestFailed({ operation: input.operation, phase: "response" }),
@@ -69,7 +81,69 @@ export function makeReportClient(fetcher: typeof fetch) {
       init: { cache: "no-store" },
     });
 
-  return { openReportSession, readReportEvidence, readReportDetail };
+  const diagnosisInput = Schema.fromJsonString(ReportDiagnosisInput);
+  const requestDiagnosis = Effect.fn("Report.requestDiagnosis")(function* (
+    input: ReportDiagnosisInput,
+  ) {
+    const body = yield* Schema.encodeEffect(diagnosisInput)(input);
+    return yield* request({
+      schema: ReportDiagnosis,
+      operation: "diagnosis",
+      url: "/api/reports/diagnosis",
+      init: { method: "POST", headers: { "Content-Type": "application/json" }, body },
+    });
+  });
+
+  const DeliveryCommand = Schema.fromJsonString(
+    Schema.Union([
+      Schema.Struct({
+        action: Schema.Literal("send"),
+        text: Schema.String,
+        resend: Schema.Boolean,
+      }),
+      Schema.Struct({ action: Schema.Literal("configure"), url: Schema.String }),
+      Schema.Struct({ action: Schema.Literal("remove") }),
+    ]),
+  );
+  const deliver = <S extends Schema.Constraint>(schema: S, command: typeof DeliveryCommand.Type) =>
+    Effect.flatMap(Schema.encodeEffect(DeliveryCommand)(command), (body) =>
+      request({
+        schema,
+        operation: "delivery",
+        url: "/api/reports/delivery",
+        init: { method: "POST", headers: { "Content-Type": "application/json" }, body },
+      }),
+    );
+  const readDeliveryStatus = request({
+    schema: ReportDeliveryStatus,
+    operation: "delivery",
+    url: "/api/reports/delivery",
+    init: { cache: "no-store" },
+  });
+  const sendReport = (text: string, resend: boolean) =>
+    deliver(ReportDeliveryResult, { action: "send", text, resend });
+  const configureWebhook = (url: string) =>
+    deliver(ReportDeliveryStatus, { action: "configure", url });
+  const removeWebhook = deliver(ReportDeliveryStatus, { action: "remove" });
+
+  return {
+    openReportSession,
+    readReportEvidence,
+    readReportDetail,
+    requestDiagnosis,
+    readDeliveryStatus,
+    sendReport,
+    configureWebhook,
+    removeWebhook,
+  };
 }
-export const { openReportSession, readReportEvidence, readReportDetail } =
-  makeReportClient(appFetch);
+export const {
+  openReportSession,
+  readReportEvidence,
+  readReportDetail,
+  requestDiagnosis,
+  readDeliveryStatus,
+  sendReport,
+  configureWebhook,
+  removeWebhook,
+} = makeReportClient(appFetch);

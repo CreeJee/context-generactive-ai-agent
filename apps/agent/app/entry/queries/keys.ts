@@ -5,6 +5,8 @@ export const appQueryKeys = {
   global: {
     root: ["app", "global"] as const,
     auth: ["app", "global", "auth"] as const,
+    accounts: (provider: string) => ["app", "global", "accounts", provider] as const,
+    accountQuota: (provider: string) => ["app", "global", "account-quota", provider] as const,
     imports: ["app", "global", "imports"] as const,
     embedding: ["app", "global", "embedding"] as const,
     imageSettings: ["app", "global", "image-settings"] as const,

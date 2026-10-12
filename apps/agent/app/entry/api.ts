@@ -32,6 +32,10 @@ import type {
   WorkflowAction,
   WorkflowPhase,
   WorkflowState,
+  AccountLoginState,
+  OAuthProfile,
+  SubscriptionAccountProvider,
+  SubscriptionQuotaReport,
 } from "memory-agent";
 import type { ModelMessage } from "@tanstack/ai";
 import type { UIMessage } from "@tanstack/ai-react";
@@ -82,7 +86,22 @@ export type ProviderAuthState =
       readonly proxyRoute?: "direct" | "unavailable" | "attempted";
     };
 
+/** Local OAuth profiles of one provider and its pending account login, without secrets. */
+export type AccountsView = {
+  readonly profiles: readonly OAuthProfile[];
+  readonly login: AccountLoginState;
+};
+export type AccountAction =
+  | { readonly intent: "add"; readonly label: string }
+  | { readonly intent: "cancel" }
+  | { readonly intent: "select"; readonly accountId: string }
+  | { readonly intent: "remove"; readonly accountId: string }
+  | { readonly intent: "rename"; readonly accountId: string; readonly label: string };
+
 export type {
+  OAuthProfile,
+  SubscriptionAccountProvider,
+  SubscriptionQuotaReport,
   Attachment,
   CancelResult,
   ProviderModel,
@@ -125,6 +144,8 @@ export type {
 
 /** Every error code the browser API currently understands, including local fallbacks. */
 export const ApiErrorCode = Schema.Literals([
+  "account_action_failed",
+  "account_list_unavailable",
   "approval_not_pending",
   "attachment_not_found",
   "attachment_rejected",
@@ -144,6 +165,9 @@ export const ApiErrorCode = Schema.Literals([
   "image_execution_failed",
   "image_feature_unavailable",
   "image_route_unavailable",
+  "invalid_account_action",
+  "invalid_account_id",
+  "invalid_account_label",
   "invalid_agent_change",
   "invalid_answer",
   "invalid_chat_request",
@@ -186,6 +210,7 @@ export const ApiErrorCode = Schema.Literals([
   "queue_not_found",
   "queue_not_held",
   "queued_message_not_next",
+  "quota_status_unavailable",
   "request_failed",
   "run_in_progress",
   "run_not_found",
@@ -423,6 +448,16 @@ export const api = {
     call<ProviderAuthState>("GET", `/api/auth?provider=${encodeURIComponent(provider)}`),
   authAction: (intent: "login" | "cancel" | "logout", provider: ProviderId) =>
     call<ProviderAuthState>("POST", "/api/auth", { intent, provider }),
+
+  accounts: (provider: SubscriptionAccountProvider) =>
+    call<AccountsView>("GET", `/api/accounts?provider=${encodeURIComponent(provider)}`),
+  accountAction: (provider: SubscriptionAccountProvider, action: AccountAction) =>
+    call<AccountsView>("POST", "/api/accounts", { provider, ...action }),
+  accountQuota: (provider: SubscriptionAccountProvider) =>
+    call<SubscriptionQuotaReport>(
+      "GET",
+      `/api/accounts/quota?provider=${encodeURIComponent(provider)}`,
+    ),
 
   models: (provider: ProviderId) =>
     call<{ models: ProviderModel[]; selected: ModelSelection | null }>(

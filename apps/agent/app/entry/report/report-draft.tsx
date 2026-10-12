@@ -1,4 +1,5 @@
 import { isTruthy } from "../../truthy.ts";
+import { diagnosisFailureText, type DiagnosisText } from "./report-diagnosis";
 export interface ReportFields {
   symptom: string;
   expected: string;
@@ -11,12 +12,14 @@ export function reportText({
   evidence = [],
   unavailable = [],
   origin,
+  diagnosis = { status: "none" },
 }: {
   readonly fields: ReportFields;
   readonly createdAt: string;
   readonly evidence?: readonly { label: string; source: string; text: string }[];
   readonly unavailable?: readonly string[];
   readonly origin?: { projectId: string; sessionId: string };
+  readonly diagnosis?: DiagnosisText;
 }): string {
   return [
     "# Context Agent 문제 제보",
@@ -36,8 +39,32 @@ export function reportText({
       : "첨부된 증거 없음. 아래 설명만으로 제보할 수 있습니다.",
     ...(isTruthy(unavailable.length) ? ["", "## 수집하지 못한 정보", ...unavailable] : []),
     "",
-    "AI 진단: 수행하지 않음 (위 증거는 AI의 추정이 아닙니다.)",
+    ...diagnosisLines(diagnosis),
   ].join("\n");
+}
+
+/** Model output stays apart from the user's text and evidence, with guesses labelled as such. */
+function diagnosisLines(diagnosis: DiagnosisText): string[] {
+  switch (diagnosis.status) {
+    case "none":
+      return ["AI 진단: 수행하지 않음 (위 증거는 AI의 추정이 아닙니다.)"];
+    case "failed":
+      return [
+        `AI 진단: 실패 (${diagnosisFailureText[diagnosis.reason]}). 위 내용은 사용자 설명과 선택한 증거뿐입니다.`,
+      ];
+    case "included": {
+      const { observations, hypotheses } = diagnosis.diagnosis;
+      return [
+        "## AI 진단: 관측 (선택한 증거에서 확인, 사용자가 검토함)",
+        ...(observations.length > 0
+          ? observations.map((item) => `- ${item.text} (근거: ${item.evidenceIds.join(", ")})`)
+          : ["- 없음"]),
+        "",
+        "## AI 진단: 가설 (검증되지 않은 추정)",
+        ...(hypotheses.length > 0 ? hypotheses.map((item) => `- ${item.text}`) : ["- 없음"]),
+      ];
+    }
+  }
 }
 
 export function ReportDraft({

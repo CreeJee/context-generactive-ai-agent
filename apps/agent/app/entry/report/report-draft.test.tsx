@@ -46,4 +46,31 @@ describe("independent report entry", () => {
     expect(text).toContain("승인이 반복돼요");
     expect(text).toContain("첨부된 증거 없음");
   });
+
+  test("labels model observations and hypotheses apart, and survives a failed diagnosis", () => {
+    const fields = { symptom: "승인이 반복돼요", expected: "", actual: "" };
+    const included = reportText({
+      fields,
+      createdAt: "2026-10-12",
+      diagnosis: {
+        status: "included",
+        diagnosis: {
+          observations: [{ text: "승인 요청 3회", evidenceIds: ["approval:1"] }],
+          hypotheses: [{ text: "응답 저장 누락 가능성" }],
+        },
+      },
+    });
+    expect(included).toContain(
+      "관측 (선택한 증거에서 확인, 사용자가 검토함)\n- 승인 요청 3회 (근거: approval:1)",
+    );
+    expect(included).toContain("가설 (검증되지 않은 추정)\n- 응답 저장 누락 가능성");
+
+    const failed = reportText({
+      fields,
+      createdAt: "2026-10-12",
+      diagnosis: { status: "failed", reason: "model_unavailable" },
+    });
+    expect(failed).toContain("승인이 반복돼요");
+    expect(failed).toContain("AI 진단: 실패");
+  });
 });

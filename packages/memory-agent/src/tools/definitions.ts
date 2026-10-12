@@ -18,6 +18,16 @@ export {
   type ContextView,
   type SessionRunState,
 } from "../agent/run-state.ts";
+export {
+  ReportDiagnosis,
+  ReportDiagnosisFailure,
+  ReportDiagnosisInput,
+} from "../report/diagnosis-contract.ts";
+export {
+  ReportDeliveryFailure,
+  ReportDeliveryResult,
+  ReportDeliveryStatus,
+} from "../report/delivery-contract.ts";
 export { sessionHolderHeader, type LeaseView } from "../sessions/lease-state.ts";
 export type { SubagentStatus, SubagentView } from "../subagents/subagent-state.ts";
 export type { ApprovalRequester, RelayedApprovalView } from "../approvals/relayed-state.ts";

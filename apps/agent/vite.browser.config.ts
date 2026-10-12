@@ -9,6 +9,7 @@ export default defineConfig({
     include: [
       "apps/agent/app/entry/navigation/*.browser.tsx",
       "apps/agent/app/entry/chat/message.browser.tsx",
+      "apps/agent/app/entry/report/*.browser.tsx",
     ],
     browser: {
       enabled: true,

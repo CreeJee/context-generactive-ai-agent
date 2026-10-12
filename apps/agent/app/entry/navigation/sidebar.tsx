@@ -83,11 +83,14 @@ export function AccountSection({
   provider,
   onProviderChange,
   onAction,
+  profiles,
 }: {
   auth: ProviderAuthState | null;
   provider: ProviderId;
   onProviderChange: (provider: ProviderId) => void;
   onAction: (intent: "login" | "cancel" | "logout") => void;
+  /** The subscription provider's local accounts and quota, shown only when expanded. */
+  profiles?: React.ReactNode;
 }) {
   return (
     <Section title="구독 계정">
@@ -209,6 +212,7 @@ export function AccountSection({
               </div>
             </DataListItem>
           )}
+          {profiles && <DataListItem term="계정 목록">{profiles}</DataListItem>}
         </>
       )}
     </Section>
@@ -318,9 +322,13 @@ export function ProjectSection({
   return (
     <section>
       <Collapsible open={open} onOpenChange={setOpen}>
-        <SidebarDisclosureTrigger>
-          <span className="font-medium">프로젝트</span>
-          {current && <span className="text-muted-foreground"> · {current.name}</span>}
+        {/* Collapsed, a selected project shows only its name; the label keeps the context. */}
+        <SidebarDisclosureTrigger aria-label={current ? `프로젝트 ${current.name}` : "프로젝트"}>
+          {current ? (
+            <span className="font-medium">{current.name}</span>
+          ) : (
+            <span className="font-medium">프로젝트 선택</span>
+          )}
         </SidebarDisclosureTrigger>
         <CollapsibleContent className="px-3 pb-2">
           <DataList className="grid-cols-[3.5rem_minmax(0,1fr)]">
