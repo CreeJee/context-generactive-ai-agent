@@ -1,5 +1,10 @@
 # EFX11–12 이어쓰기 검증 (2026-10-10 UTC)
 
+**EFX12 최종 판정 (2026-10-12): 차단 일부.** `vp check`는 통과한다. `vp run typecheck`는 일반
+TypeScript 오류 0개, Effect 경고 25개 고유 위치(출력 26회)로 exit 1이다. 남은 25곳은 설치된 Effect
+4.0.3 preview에 대체 API가 없는 native 경계이며, 진단 억제·severity 하향·exit-code 제외·개별
+예외 없이 남긴다. 상세는 아래 [EFX12 gate 최종 정리](#efx12-gate-최종-정리-2026-10-12)를 따른다.
+
 최신 후속 결과(2026-10-11 04:20 UTC): 사용자 승인으로 실제 대상 세션을 복구하고 기존
 5173/5180 dev 서버를 재시작했다. schema 49는 이미 적용되어 있어 추가 upgrade는 없었다.
 원본 13개 row의 격리 복원 검증과 불변 receipt/revoke 경로를 사용했으며 기존 실패 기록을
@@ -309,17 +314,17 @@ SHA256 `77df01cb811d113a68318165ffce6601e0c58ed32ad150f323e56d9788e59563`은 재
 
 앱 plan/evidence 자체를 변경하지 않았다. 다음은 이 Codex 작업의 검증 판정이다.
 
-| 단계·기준                                                                 | 판정             | 근거 또는 제한                                                                                                                                                |
-| ------------------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| EFX11-1 기능당 단일 production 경로, legacy 선택 flag 제거                | 통과             | Goal Worker/RPC, prebuilt native artifact, native search 경로; source audit에서 과거 두 환경 flag와 nativeSearch 설정 없음                                    |
-| EFX11-2 대체 전용 타입/설정/fixture/dead code 정리, public API 보존       | 통과             | 제거 diff 및 API exports/DB 읽기 계약 유지; 실제 취소·복구 계약 테스트는 보존                                                                                 |
-| EFX11-3 missing/corrupt artifact 및 worker/native failure에 fallback 없음 | 통과             | 종합 회귀와 실제 unpacked Goal failure/search 회귀                                                                                                            |
-| EFX11-4 과거 binding/evidence 위조·backfill 없음                          | 통과             | 공개 릴리스 schema migration, historical revision 및 completion evidence 회귀                                                                                 |
-| EFX12-1 0.0.13 DB forward-open·migration 실패·old-open/복구 범위          | 통과 (DB 범위)   | 공개 태그 migration prefix 30과 동일, 30→48·evidence 보존; 첫 additive migration 쓰기 실패 후 schema/rows/version 30 유지 및 구 opener 재열기; 백업 복구 확인 |
-| EFX12-2 check/typecheck/tests/package gate                                | 차단 일부        | 종합 테스트·Mac build/smoke·lint/일반 타입 검사 통과; 설정된 typecheck의 기존 unstable 117개와 별도 JSON 포맷 1개는 실제 실패; GPU test/Windows는 미실행      |
-| EFX12-3 compiler/Vite 없는 prebuilt production 시작 및 workflow runner    | 통과             | SEA startup/core API/정상 종료, prebuilt hash 확인; packaged worker/native artifact의 fake-provider Goal 실행 경계 회귀                                       |
-| EFX12-4 unstable API adapter/service 경계·upgrade inventory               | 통과 (inventory) | 위 12개 경계 파일·117개 동일 진단 기록; 정책상 typecheck 성공과 구분                                                                                          |
-| EFX12-5 startup/RSS·saturation·crash/recovery 실측과 위험 보고            | 통과 (측정 범위) | startup/RSS 단일 값, 종합 admission/saturation/crash/recovery 회귀, 같은 DB control/패키지 재시작; 장기 사용자 workload 성능은 미실행                         |
+| 단계·기준                                                                 | 판정             | 근거 또는 제한                                                                                                                                                        |
+| ------------------------------------------------------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| EFX11-1 기능당 단일 production 경로, legacy 선택 flag 제거                | 통과             | Goal Worker/RPC, prebuilt native artifact, native search 경로; source audit에서 과거 두 환경 flag와 nativeSearch 설정 없음                                            |
+| EFX11-2 대체 전용 타입/설정/fixture/dead code 정리, public API 보존       | 통과             | 제거 diff 및 API exports/DB 읽기 계약 유지; 실제 취소·복구 계약 테스트는 보존                                                                                         |
+| EFX11-3 missing/corrupt artifact 및 worker/native failure에 fallback 없음 | 통과             | 종합 회귀와 실제 unpacked Goal failure/search 회귀                                                                                                                    |
+| EFX11-4 과거 binding/evidence 위조·backfill 없음                          | 통과             | 공개 릴리스 schema migration, historical revision 및 completion evidence 회귀                                                                                         |
+| EFX12-1 0.0.13 DB forward-open·migration 실패·old-open/복구 범위          | 통과 (DB 범위)   | 공개 태그 migration prefix 30과 동일, 30→48·evidence 보존; 첫 additive migration 쓰기 실패 후 schema/rows/version 30 유지 및 구 opener 재열기; 백업 복구 확인         |
+| EFX12-2 check/typecheck/tests/package gate                                | 차단 일부        | 2026-10-12 재판정: `vp check` 통과(JSON 포맷 해소, unstable 진단은 off). typecheck는 일반 오류 0, 대체 API 없는 native 경계 경고 25곳으로 exit 1. 아래 최종 정리 참조 |
+| EFX12-3 compiler/Vite 없는 prebuilt production 시작 및 workflow runner    | 통과             | SEA startup/core API/정상 종료, prebuilt hash 확인; packaged worker/native artifact의 fake-provider Goal 실행 경계 회귀                                               |
+| EFX12-4 unstable API adapter/service 경계·upgrade inventory               | 통과 (inventory) | 위 12개 경계 파일·117개 동일 진단 기록; 정책상 typecheck 성공과 구분                                                                                                  |
+| EFX12-5 startup/RSS·saturation·crash/recovery 실측과 위험 보고            | 통과 (측정 범위) | startup/RSS 단일 값, 종합 admission/saturation/crash/recovery 회귀, 같은 DB control/패키지 재시작; 장기 사용자 workload 성능은 미실행                                 |
 
 EFX11의 확인된 기준은 충족했다. EFX12는 실패한 check/typecheck와 외부 CI 항목을
 남긴 상태이며 모든 gate가 통과했다고 선언하지 않는다.
@@ -357,3 +362,75 @@ Windows는 로컬 미실행/CI 대기다. 기존 `.github/workflows/release.yml`
 검증 종료 뒤 `01a126a7-7f18-76b9-b5de-15c1f093301c`의 파일 I/O Effect 개선 병행 작업을
 통지받았다. 그 작업 파일을 수정·포맷·스테이징하지 않았다. 위 종합 결과는 실행한
 시점의 source에 대한 것이며 이후 병행 I/O 변경의 검증까지 포함하지 않는다.
+
+## EFX12 gate 최종 정리 (2026-10-12)
+
+기준은 로컬 main `a4c8740`(테스트 슬라이스 전환과 `tests/support/runtime.ts` 삭제 포함)이다. 사용자 DB,
+실서버, 유료 모델, OAuth는 사용하지 않았다. 앞 절의 unstable 117개는 2026-10-11 결정으로
+`unstableApiUsage`가 off라 더 이상 출력되지 않고, `docs/native-search-public-service-2026-10-09.json`
+포맷 실패도 이미 해소되어 있었다.
+
+### 시작 기준선
+
+| 명령               | 결과                                                                                                                                                                                       |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `vp check`         | exit 1: 822파일 포맷 통과, 오류 12개·경고 1개 (server tests의 TS2307/TS2322/TS18046, `backend-restart.test.ts`의 no-base-to-string)                                                        |
+| `vp run typecheck` | exit 1: 삭제된 `tests/support/runtime.ts` 참조 TS2307/TS2322/TS377004/TS18046, asyncFunction TS377081 2곳, 테스트 헬퍼 TS377101/TS377049/TS377130/TS377030/TS377080, 아래 native 경계 25곳 |
+
+### 수정한 진단
+
+- `apps/agent/server/tests` 세 파일: Promise `testRuntime`을 `TestEnv`/`testAgent`로 이전했다. 빈 테이블 단언을
+  유지하도록 테스트마다 별도 agent 블록을 둔다.
+- `read-only-bar.tsx`의 async 콜백은 기존 `runUiEffect`/`uiPromise` 패턴으로, `backend-restart.test.ts`의 async
+  then 콜백과 `String(input)`은 Promise 체인과 `new Request(input).url`로 바꿨다. 동기 throw 처리 동작은 같다.
+- memory-agent 테스트 헬퍼: 다인자 순수 함수는 `Function.dual`, Effect 반환 함수는 `Effect.fnUntraced`, 서비스 key는
+  파일 기준 결정적 이름, 실패해야 하는 SDK 호출은 `flip` 뒤 `orDie`, 수동 `new Promise`는 `Deferred`로 바꿨다.
+
+### native 경계로 남은 25곳
+
+억제·severity 하향·exit-code 제외·개별 예외는 추가하지 않았다(코디네이터 결정, `docs/decisions.md` 2026-10-12).
+각 위치의 필요 기능과 대체 API 부재 근거는 [Effect 경고 전환 기록](effect-warning-remediation-2026-10-11.md)의
+위치 표·재대조 표와 같으며, Effect·플랫폼 드라이버 업그레이드 때 재검토 대상이다.
+
+| 위치                                                                                                                                 | 필요한 native 기능                                                       | Effect 4.0.3 preview의 부재                                       |
+| ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| `apps/agent/scripts/package.ts:8,10`                                                                                                 | 증분 SHA-256 manifest, symlink 제외 lstat                                | Crypto.digest는 단발, FileSystem.stat은 링크를 따름               |
+| `apps/agent/server/release-contract.ts:5`, `release-contract.test.ts:2`                                                              | Ed25519 PEM sign/verify, 키 생성                                         | Crypto에 sign/verify/key API 없음                                 |
+| `apps/agent/server/serve.ts:10`                                                                                                      | React Router RequestListener http bridge                                 | 해당 bridge 없음                                                  |
+| `apps/agent/server/launch-project.test.ts:7`, `server/tests/dev-hmr-api-recovery.test.ts:13`, `memory-agent/tests/support/http.ts:2` | NodeHttpServer에 넘기는 loopback `createServer` factory                  | 공식 NodeHttpServer가 native factory를 요구, 검사기는 모듈명만 봄 |
+| `memory-agent/src/agent/goal-worker-assets.ts:6`, `owner-native-files.ts:3`                                                          | Worker 생성 직전·SQLite atomic 안의 동기 파일 fence                      | 동기 FileSystem 드라이버 없음                                     |
+| `memory-agent/src/agent/native-artifact-loader.ts:10`                                                                                | O_NOFOLLOW로 연 같은 FD의 fstat/read (동기)                              | 동기 nofollow open·같은 FD 정밀 stat 없음                         |
+| `memory-agent/src/files/text.ts:4,15,17`                                                                                             | 증분 SHA-256, 같은 FD의 nanosecond stat, Windows 분기                    | 증분 digest·ns stat 없음                                          |
+| `memory-agent/src/files/paths.ts:9`, `skills/skills.ts:13`                                                                           | lstat의 링크 자체 식별, device/inode 비교                                | lstat 없음                                                        |
+| `memory-agent/src/files/listing.ts:9,11`                                                                                             | bounded Dirent 순회, `posix.matchesGlob`                                 | Directory stream·glob capability 없음                             |
+| `memory-agent/src/oauth/validation-harness.ts:6,11`                                                                                  | loopback http factory, `timingSafeEqual`                                 | 상수시간 비교 없음                                                |
+| `memory-agent/src/runtime/host.ts:3` (standalone 검사에서 중복 출력), `shell/run.ts:5`                                               | 동기 process-tree 강제 종료, signal/leader 종료 계약                     | ChildProcess가 signalCode·process group 종료를 노출하지 않음      |
+| `memory-agent/src/workflow/owner-workflow-engine.ts:220,392`                                                                         | 공식 `Encoded.register`/`Activity.Any.executeEncoded`의 unknown/any 채널 | 공식 encoded 인터페이스 자체가 타입 소거됨                        |
+| `memory-agent/tests/io-range.test.ts:2`                                                                                              | await 없이 열린 FD의 순간 관찰                                           | 비동기 stat은 열린 순간을 놓침                                    |
+
+### EFX11 잔여 확인
+
+`CONTEXT_AGENT_GOAL_WORKER`, `CONTEXT_AGENT_NATIVE_ARTIFACT`, `nativeSearch` 분기는 docs 밖 소스에 0건이다.
+memory-agent `src`와 앱 server/app에서 런타임 compiler(esbuild/rolldown/vite/typescript/tsdown) import와
+인프로세스 Goal 실행 경로도 없다. 이 worktree에서 addon과 `dist/runtime`이 없을 때 테스트는 JS fallback 없이
+`NativeOwnerFailed(native-incompatible)`와 `artifact-manifest.json` `NotFound`로 실패했고, 빌드 뒤 통과했다.
+남은 "legacy" 표기는 0.0.13 읽기 계약의 데이터 migration(chat thread, OAuth legacy slot)이다.
+
+### 최종 명령 결과
+
+| 명령                                                                    | 결과                                                                                                                        |
+| ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `vp check`                                                              | **exit 0**: 822파일 포맷, 730파일 lint/type-aware 오류·경고 0                                                               |
+| `vp run typecheck`                                                      | **exit 1**: 일반 TS 오류 0, Effect 경고 25곳(출력 26회)                                                                     |
+| `vp run agent#typecheck` / `memory-agent#typecheck` / `utils#typecheck` | exit 1 (경고 6) / exit 1 (경고 18) / exit 0                                                                                 |
+| `tsc -p apps/agent/server/tests/tsconfig.json --noEmit`                 | exit 1: 경고 1 (`dev-hmr-api-recovery.test.ts` loopback factory)                                                            |
+| 수정 영역 테스트                                                        | server tests 3파일·5개, backend-restart 11개, memory-agent 수정 헬퍼 사용 38파일 중 37 통과·`external-agents` 1개 간헐 실패 |
+| 전체 `vp test --run --maxWorkers=2`                                     | **exit 1**: 239파일 중 236 통과, 1,422 통과·3 실패·10 skip, 390.28초                                                        |
+
+전체 실행 실패는 `chat/history.test.ts`(native search owner `startup-timeout`),
+`agent-chat-owner-process-recovery.test.ts`의 실제 OS SIGKILL/SIGTERM 2개, `native-search/control.test.ts`다.
+세 파일을 `--maxWorkers=1`로 다시 실행하면 첫 번째는 1개 실패, 두 번째는 3파일·12개 모두 통과했다.
+테스트 변경 전 커밋 `85652d3`의 별도 worktree에서도 두 번 중 한 번 OS recovery 2개가 실패했다.
+`external-agents.test.ts`도 같은 기준선에서 4회 중 2회 실패했다. 이 간헐 실패는 이번 변경 이전부터 있는
+부하 민감성이며 timeout이나 assertion을 완화하지 않았다. 전체 명령은 통과로 표시하지 않는다.
+Windows 패키징과 GPU 검증은 앞 절과 같이 CI·미실행 범위다.

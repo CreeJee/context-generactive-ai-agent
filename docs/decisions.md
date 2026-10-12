@@ -224,6 +224,11 @@
 - `memory-agent/runtime-resources`는 workspace 내부 TypeScript 진입점이다. types/development/import/default 조건은 같은 source를 가리키며 기존 exports:false 패키지 빌드 정책을 유지한다. 앱 서버·실행 파일 빌드는 이를 번들에 포함한다.
 - 새 React Router entry는 Web Stream으로 HEAD, shell/all-ready, 렌더 오류, 요청 취소와 렌더 deadline을 유지한다. 격리 Vite 개발조건에서 실제 세션 페이지 SSR을 검증하며 운영 DB와 모델을 사용하지 않는다.
 
+### EFX12 typecheck gate의 남은 native 경계 (2026-10-12)
+
+- 고칠 수 있는 진단은 실제 코드로 고친다. 다인자 테스트 헬퍼는 `Function.dual`로 pipeable 오버로드를 주고, Effect를 돌려주는 헬퍼는 `Effect.fnUntraced`로 쓴다. 서비스 key는 `deterministicKeys`가 요구하는 파일 기준 이름을 쓴다. 앱 서버 테스트는 삭제된 Promise `testRuntime` 대신 `TestEnv`/`testAgent`를 쓴다.
+- O_NOFOLLOW·같은 FD의 정밀 stat·동기 SQLite/Worker fence, Ed25519 서명, 상수시간 비교, 증분 SHA-256, 동기 process-tree 종료, NodeHttpServer loopback factory·React Router http bridge, POSIX glob, 공식 Workflow encoded 경계의 any/unknown 25곳은 설치된 Effect 4.0.3 preview에 대체 API가 없다. 진단 억제, severity 하향, exit-code 제외, 개별 예외를 추가하지 않고 보안·동기 fence 계약도 바꾸지 않는다. 따라서 `vp run typecheck`는 이 경고로 exit 1이며 EFX12-2는 '차단 일부'로 남긴다. 위치와 필요한 기능은 [EFX11–12 검증](efx11-12-verification.md)과 [Effect 경고 전환 기록](effect-warning-remediation-2026-10-11.md)에 두고, Effect·드라이버 업그레이드 때 다시 검토한다.
+
 ## 인증·모델·공급자
 
 ### 인증과 모델 (2026-09-15)
