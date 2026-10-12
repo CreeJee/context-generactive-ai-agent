@@ -38,9 +38,11 @@ import {
   createPkce,
   decodeProviderEvent,
   ProviderFeatureRejectedError,
+  ProviderStreamFailed,
   type NormalizedStreamEvent,
   type OAuthProvider,
   type ProviderProtocol,
+  type RequestNotSent,
 } from "./protocol.ts";
 
 export const StoredCredentialSchema = Schema.Struct({
@@ -240,15 +242,45 @@ const safeTransportCode = (error: Error): string => {
   return code !== undefined && HashSet.has(safeTransportCodes, code) ? code : "other";
 };
 
+// Codes raised before any request byte is written: name resolution, TCP connect or TLS handshake.
+// ETIMEDOUT, ECONNRESET and socket/header errors can follow a written request and stay uncertain.
+const RequestNotSentCode = Schema.Literals([
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "CERT_HAS_EXPIRED",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
+]);
+const isRequestNotSentCode = Schema.is(RequestNotSentCode);
+const requestNotSentStages = {
+  ENOTFOUND: "dns",
+  EAI_AGAIN: "dns",
+  ECONNREFUSED: "connect",
+  ENETUNREACH: "connect",
+  EHOSTUNREACH: "connect",
+  UND_ERR_CONNECT_TIMEOUT: "connect",
+  CERT_HAS_EXPIRED: "tls",
+  UNABLE_TO_VERIFY_LEAF_SIGNATURE: "tls",
+  SELF_SIGNED_CERT_IN_CHAIN: "tls",
+  DEPTH_ZERO_SELF_SIGNED_CERT: "tls",
+  ERR_TLS_CERT_ALTNAME_INVALID: "tls",
+} as const satisfies Record<typeof RequestNotSentCode.Type, typeof RequestNotSent.Type.stage>;
+
+const modelRequestFailed = (provider: OAuthProvider, transportCode: string) =>
+  ProviderStreamFailed.make({
+    provider,
+    reason: isRequestNotSentCode(transportCode)
+      ? { _tag: "RequestNotSent", stage: requestNotSentStages[transportCode] }
+      : { _tag: "RequestOutcomeUnknown" },
+  });
+
 const providerName = (provider: OAuthProvider) => (provider === "openai" ? "OpenAI" : "Anthropic");
-const maxProviderReasonCharacters = 1_000;
-const ProviderErrorBody = Schema.Struct({
-  error: Schema.optional(Schema.Struct({ message: Schema.String })),
-  message: Schema.optional(Schema.String),
-});
-const decodeProviderErrorBody = Schema.decodeUnknownOption(
-  Schema.fromJsonString(ProviderErrorBody),
-);
 
 const safeOAuthCodes = HashSet.fromIterable([
   "access_denied",
@@ -270,13 +302,6 @@ const providerCode = (body: string): string | undefined => {
   if (!isTruthy(parsed)) return undefined;
   const code = Schema.is(Schema.String)(parsed.error) ? parsed.error : parsed.error.code;
   return HashSet.has(safeOAuthCodes, code) ? code : undefined;
-};
-
-const providerReason = (body: string): string | undefined => {
-  const parsed = Option.getOrUndefined(decodeProviderErrorBody(body));
-  const reason = parsed?.error?.message ?? parsed?.message ?? body;
-  const bounded = reason.replace(/\s+/g, " ").trim().slice(0, maxProviderReasonCharacters);
-  return bounded.length > 0 ? bounded : undefined;
 };
 
 export class OAuthHarnessError extends Data.TaggedError("OAuthHarnessError")<{
@@ -441,46 +466,46 @@ const tokenBody = (protocol: ProviderProtocol, values: TokenGrant): EncodedToken
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 function sseEvents(provider: OAuthProvider, response: Response) {
-  return Stream.suspend<NormalizedStreamEvent, OAuthHarnessError | Cause.UnknownError, never>(
-    () => {
-      if (response.body === null)
-        return Stream.fail(new OAuthHarnessError("transport_unavailable"));
-      let buffer = "";
-      type Frame =
-        | { readonly _tag: "Event"; readonly event: NormalizedStreamEvent }
-        | { readonly _tag: "Done" };
-      const frames = function* (part: string): Generator<Frame, void, unknown> {
-        buffer += part.replaceAll("\r\n", "\n");
-        for (;;) {
-          const boundary = buffer.indexOf("\n\n");
-          if (boundary < 0) return;
-          const frame = buffer.slice(0, boundary);
-          buffer = buffer.slice(boundary + 2);
-          for (const line of frame.split("\n")) {
-            if (!line.startsWith("data:")) continue;
-            const data = line.slice(5).trim();
-            if (data === "[DONE]") {
-              yield { _tag: "Done" };
-              return;
-            }
-            const event = decodeProviderEvent(provider, data);
-            if (event !== null) yield { _tag: "Event", event };
+  // The provider accepted the request once headers arrived; any later loss is an interrupted response.
+  const interrupted = () =>
+    ProviderStreamFailed.make({ provider, reason: { _tag: "ResponseInterrupted" } });
+  return Stream.suspend<NormalizedStreamEvent, ProviderStreamFailed, never>(() => {
+    if (response.body === null) return Stream.fail(interrupted());
+    let buffer = "";
+    type Frame =
+      | { readonly _tag: "Event"; readonly event: NormalizedStreamEvent }
+      | { readonly _tag: "Done" };
+    const frames = function* (part: string): Generator<Frame, void, unknown> {
+      buffer += part.replaceAll("\r\n", "\n");
+      for (;;) {
+        const boundary = buffer.indexOf("\n\n");
+        if (boundary < 0) return;
+        const frame = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        for (const line of frame.split("\n")) {
+          if (!line.startsWith("data:")) continue;
+          const data = line.slice(5).trim();
+          if (data === "[DONE]") {
+            yield { _tag: "Done" };
+            return;
           }
+          const event = decodeProviderEvent(provider, data);
+          if (event !== null) yield { _tag: "Event", event };
         }
-      };
-      const body = response.body;
-      return Stream.fromReadableStream({
-        evaluate: () => body.pipeThrough(new TextDecoderStream()),
-        onError: (cause) => new Cause.UnknownError(cause),
-      }).pipe(
-        Stream.flatMap((part) => Stream.fromIterable(frames(part))),
-        Stream.takeWhile(
-          (frame): frame is Extract<Frame, { _tag: "Event" }> => frame._tag === "Event",
-        ),
-        Stream.map((frame) => frame.event),
-      );
-    },
-  );
+      }
+    };
+    const body = response.body;
+    return Stream.fromReadableStream({
+      evaluate: () => body.pipeThrough(new TextDecoderStream()),
+      onError: interrupted,
+    }).pipe(
+      Stream.flatMap((part) => Stream.fromIterable(frames(part))),
+      Stream.takeWhile(
+        (frame): frame is Extract<Frame, { _tag: "Event" }> => frame._tag === "Event",
+      ),
+      Stream.map((frame) => frame.event),
+    );
+  });
 }
 
 export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOptions) {
@@ -1034,7 +1059,11 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
             // A supplied signal belongs to the SDK run; preserve its reference contract.
             signal: signal ?? ownerSignal,
           }),
-        catch: () => new OAuthHarnessError("transport_unavailable", null, context),
+        catch: (error) =>
+          modelRequestFailed(
+            protocol.provider,
+            error instanceof Error ? safeTransportCode(error) : "other",
+          ),
       });
     });
 
@@ -1044,23 +1073,27 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
       response = yield* request(credential);
     }
     if (!response.ok) {
-      const responseText = yield* nativePromise(() => response.clone().text()).pipe(
-        Effect.orElseSucceed(() => ""),
-      );
       if (
         protocol.provider === "anthropic" &&
-        (response.status === 400 || response.status === 422) &&
-        /cache[_ -]?control|prompt[_ -]?cach/i.test(responseText)
-      )
-        return yield* new ProviderFeatureRejectedError(
-          "anthropic",
-          "prompt-cache",
-          response.status,
+        (response.status === 400 || response.status === 422)
+      ) {
+        const responseText = yield* nativePromise(() => response.clone().text()).pipe(
+          Effect.orElseSucceed(() => ""),
         );
-      const reason = providerReason(responseText);
-      return yield* new OAuthHarnessError("provider_rejected", response.status, {
-        ...context,
-        ...optionalProperty("reason", reason),
+        if (/cache[_ -]?control|prompt[_ -]?cach/i.test(responseText))
+          return yield* new ProviderFeatureRejectedError(
+            "anthropic",
+            "prompt-cache",
+            response.status,
+          );
+      }
+      // Only the status class leaves this boundary; the body may echo the prompt or account data.
+      return yield* ProviderStreamFailed.make({
+        provider: protocol.provider,
+        reason: {
+          _tag: "ProviderStatusRejected",
+          statusClass: response.status >= 500 ? "server_error" : "client_error",
+        },
       });
     }
     return response;

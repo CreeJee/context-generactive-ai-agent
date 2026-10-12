@@ -25,6 +25,36 @@ export class ProviderFeatureRejectedError extends Data.TaggedError("ProviderFeat
   }
 }
 
+/** Only this reason proves the request never reached the provider (connection, DNS or TLS setup). */
+export const RequestNotSent = Schema.TaggedStruct("RequestNotSent", {
+  stage: Schema.Literals(["dns", "connect", "tls"]),
+});
+/** The provider answered with an error status; only the status class is kept, never the body. */
+export const ProviderStatusRejected = Schema.TaggedStruct("ProviderStatusRejected", {
+  statusClass: Schema.Literals(["client_error", "server_error"]),
+});
+/** The response or its event stream had started when the connection broke. */
+export const ResponseInterrupted = Schema.TaggedStruct("ResponseInterrupted", {});
+/** The request may have reached the provider; treated as sent. */
+export const RequestOutcomeUnknown = Schema.TaggedStruct("RequestOutcomeUnknown", {});
+
+export class ProviderStreamFailed extends Schema.TaggedError<ProviderStreamFailed>()(
+  "ProviderStreamFailed",
+  {
+    provider: Schema.Literals(["openai", "anthropic"]),
+    reason: Schema.Union([
+      RequestNotSent,
+      ProviderStatusRejected,
+      ResponseInterrupted,
+      RequestOutcomeUnknown,
+    ]),
+  },
+) {
+  override get message() {
+    return "Provider model stream failed.";
+  }
+}
+
 export interface ProviderProtocol {
   readonly provider: OAuthProvider;
   readonly clientId: string;

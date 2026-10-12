@@ -18,7 +18,12 @@ import { oauthProtocolCrypto } from "../oauth/node-runtime.ts";
 import { Cause, Effect, Stream, MutableHashMap, DateTime, Option, Schema } from "effect";
 import {
   ProviderFeatureRejectedError,
+  ProviderStatusRejected,
+  ProviderStreamFailed,
   ReasoningSummaryProtocolFailed,
+  RequestNotSent,
+  RequestOutcomeUnknown,
+  ResponseInterrupted,
   ToolArguments,
   type NormalizedStreamEvent,
   type OAuthProvider,
@@ -63,7 +68,10 @@ export class SubscriptionStreamFailed extends Schema.TaggedError<SubscriptionStr
     provider: Schema.Literals(["openai", "anthropic"]),
     reason: Schema.Union([
       Schema.TaggedStruct("ProviderRejected", {}),
-      Schema.TaggedStruct("TransportUnavailable", {}),
+      RequestNotSent,
+      ProviderStatusRejected,
+      ResponseInterrupted,
+      RequestOutcomeUnknown,
       Schema.TaggedStruct("InvalidReasoning", {}),
       Schema.TaggedStruct("InvalidToolCall", {}),
       Schema.TaggedStruct("InvalidBlockEnd", {}),
@@ -347,6 +355,28 @@ const isPromptCacheRejection = (event: NormalizedStreamEvent) =>
     `${event.code} ${event.message}`,
   );
 
+// A thrown value from the native client is classified only by its type and stream position.
+const streamFailure = (
+  provider: OAuthProvider,
+  cause: unknown,
+  received: boolean,
+): SubscriptionStreamFailed | ProviderFeatureRejectedError | ReasoningSummaryProtocolFailed => {
+  if (
+    cause instanceof ProviderFeatureRejectedError ||
+    Schema.is(SubscriptionStreamFailed)(cause) ||
+    Schema.is(ReasoningSummaryProtocolFailed)(cause)
+  )
+    return cause;
+  if (received)
+    return SubscriptionStreamFailed.make({ provider, reason: { _tag: "ResponseInterrupted" } });
+  return SubscriptionStreamFailed.make({
+    provider,
+    reason: Schema.is(ProviderStreamFailed)(cause)
+      ? cause.reason
+      : { _tag: "RequestOutcomeUnknown" },
+  });
+};
+
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 function providerEventsWithPromptCacheFallback(
   client: StreamingOAuthClient,
@@ -359,10 +389,18 @@ function providerEventsWithPromptCacheFallback(
   return Stream.suspend(() => {
     let emitted = false;
     const source = (request: string) =>
-      Stream.fromAsyncIterable(
-        client.stream(request, signal),
-        (cause) => new Cause.UnknownError(cause),
-      );
+      Stream.suspend(() => {
+        let received = false;
+        return Stream.fromAsyncIterable(client.stream(request, signal), (cause) =>
+          streamFailure(provider, cause, received),
+        ).pipe(
+          Stream.tap(() =>
+            Effect.sync(() => {
+              received = true;
+            }),
+          ),
+        );
+      });
     return source(body).pipe(
       Stream.mapEffect((event) =>
         Effect.gen(function* () {
@@ -373,12 +411,11 @@ function providerEventsWithPromptCacheFallback(
         }),
       ),
       Stream.catch((failure) => {
-        const error = failure instanceof Cause.UnknownError ? failure.cause : failure;
         if (
           provider !== "anthropic" ||
           emitted ||
-          !(error instanceof ProviderFeatureRejectedError) ||
-          error.feature !== "prompt-cache"
+          !(failure instanceof ProviderFeatureRejectedError) ||
+          failure.feature !== "prompt-cache"
         )
           return Stream.fail(failure);
         return Stream.suspend(() => {
@@ -788,7 +825,7 @@ export class SubscriptionTextAdapter extends BaseTextAdapter<
                   ? error
                   : SubscriptionStreamFailed.make({
                       provider: this.name,
-                      reason: { _tag: "TransportUnavailable" },
+                      reason: { _tag: "RequestOutcomeUnknown" },
                     });
               options.logger.errors("subscription model request failed", {
                 provider: this.name,
