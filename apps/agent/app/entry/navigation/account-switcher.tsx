@@ -62,6 +62,16 @@ const entryLabel = (entry: AccountEntry) => {
   }
 };
 
+/** First letters collide (ChatGPT, Claude), so each provider has its own mark. */
+const providerMark = (provider: SubscriptionAccountProvider) => {
+  switch (provider) {
+    case "openai":
+      return "G";
+    case "anthropic":
+      return "A";
+  }
+};
+
 function ProviderMark({ provider }: { provider: ProviderId }) {
   return (
     <span
@@ -76,35 +86,35 @@ function ProviderMark({ provider }: { provider: ProviderId }) {
       {provider === "openai-compatible" ? (
         <PlugIcon className="size-3.5" />
       ) : (
-        providerLabels[provider][0]
+        providerMark(provider)
       )}
     </span>
   );
 }
 
-/** Small per-window bars; a stale value is dimmed and an unavailable one shows no number. */
+/** Per-window bars on their own line, so a narrow sidebar shrinks the bars instead of wrapping text. */
 function QuotaBars({ quota }: { quota: QuotaStatus | undefined }) {
   if (quota === undefined) return null;
   switch (quota.status) {
     case "unavailable":
-      return <span className="text-2xs text-muted-foreground">한도 조회 불가</span>;
+      return null;
     case "observed":
     case "stale":
       return (
-        <span className="flex items-center gap-2">
+        <span className="flex w-full min-w-0 items-center gap-3">
           {quota.windows.map((window) => {
             const used = Math.min(100, Math.max(0, window.usedPercent));
             return (
               <Meter.Root
                 key={window.name}
                 value={used}
-                className="flex items-center gap-1"
+                className="flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap"
                 getAriaValueText={() => `${Math.round(used)}% 사용`}
               >
-                <Meter.Label className="text-2xs text-muted-foreground">
+                <Meter.Label className="shrink-0 text-2xs text-muted-foreground">
                   {windowLabel(window.name)}
                 </Meter.Label>
-                <Meter.Track className="h-1 w-8 overflow-hidden rounded-full bg-muted">
+                <Meter.Track className="h-1 min-w-4 flex-1 overflow-hidden rounded-full bg-muted">
                   <Meter.Indicator
                     className={cn(
                       "h-full rounded-full",
@@ -113,7 +123,7 @@ function QuotaBars({ quota }: { quota: QuotaStatus | undefined }) {
                     )}
                   />
                 </Meter.Track>
-                <span className="text-2xs tabular-nums">{Math.round(used)}%</span>
+                <span className="shrink-0 text-2xs tabular-nums">{Math.round(used)}%</span>
               </Meter.Root>
             );
           })}
@@ -122,19 +132,34 @@ function QuotaBars({ quota }: { quota: QuotaStatus | undefined }) {
   }
 }
 
+/** The short status next to the provider name; numbers live in `QuotaBars`. */
+const entryNote = (entry: AccountEntry): string | null => {
+  switch (entry.kind) {
+    case "compatible":
+      return entry.configured ? "설정됨" : "설정 필요";
+    case "profile":
+      switch (entry.quota?.status) {
+        case undefined:
+        case "observed":
+          return null;
+        case "stale":
+          return "최근 조회 실패";
+        case "unavailable":
+          return "한도 조회 불가";
+      }
+  }
+};
+
 function EntrySummary({ entry }: { entry: AccountEntry }) {
-  const provider = entryProvider(entry);
+  const note = entryNote(entry);
   return (
     <span className="flex min-w-0 flex-1 flex-col gap-0.5 text-left">
       <span className="truncate text-xs font-medium">{entryLabel(entry)}</span>
-      <span className="flex min-w-0 items-center gap-1.5 text-2xs text-muted-foreground">
-        <span className="shrink-0">{providerLabels[provider]}</span>
-        {entry.kind === "profile" ? (
-          <QuotaBars quota={entry.quota} />
-        ) : (
-          <span>{entry.configured ? "설정됨" : "설정 필요"}</span>
-        )}
+      <span className="truncate text-2xs text-muted-foreground">
+        {providerLabels[entryProvider(entry)]}
+        {note !== null && ` · ${note}`}
       </span>
+      {entry.kind === "profile" && <QuotaBars quota={entry.quota} />}
     </span>
   );
 }
