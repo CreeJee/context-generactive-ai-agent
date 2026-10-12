@@ -32,8 +32,15 @@ URL 형식은 `https://{discord.com|discordapp.com|ptb.discord.com|canary.discor
 - `vp run test:browser` (헤드리스 Chromium, fake fetch): 3 files, 7 tests passed. 제보 페이지의 서버 웹훅 상태(ID 끝 4자리)→전송→응답 미확인(504) 폴백 문구와 복사·저장 안내→`그래도 다시 보내기`, 진단 관측·가설 구분과 항목 삭제, 사이드바의 접힌 프로젝트 이름만·계정 목록·한도 조회 불가 사유·계정 전환.
 - 서버 테스트(로컬 가짜 Discord HTTP 서버, 외부 네트워크 없음): `packages/memory-agent/tests/integrations/report-delivery.test.ts` 5 tests — 서버 설정 `DISCORD_WEBHOOK_URL` 없음(`not_configured`)·형식 오류(`invalid_webhook_url`)·설정 시 ID 끝 4자리만 노출, `wait=true`·`allowed_mentions.parse=[]`·첨부 파일명, 같은 문안 `duplicate`와 확인 후 재전송, 짧은 429 대기 후 성공, 404 `webhook_rejected`, 응답 미확인 후 `uncertain_duplicate`, 전송 중 같은 문안 `in_progress`, Discord 외 URL 거부. 그 밖에 `report-diagnosis.test.ts`(인용 없는 관측의 가설 이동, 형식 오류), `subscription-quota.test.ts`(계정 A/B별 조회 불가 사유), `entry/report/*.test.tsx`(관측·가설 문안, 진단 실패 시 최소 문안).
 - **수행하지 않음 (사용자 확인 필요)**
-  - 실제 Discord 수신: 실제 웹훅·네트워크로 보낸 적이 없다. 채널 수신·첨부 미리보기·2000자 경계·멘션 차단은 개발자 웹훅으로 직접 확인해야 한다.
+  - 실제 Discord 채널 화면 확인: 아래 실수신 1건은 Discord가 저장한 메시지 ID로 확인했지만, 채널에서 본문·첨부 미리보기·멘션 비활성 표시를 눈으로 보는 것과 2000자 경계 전송은 개발자가 직접 확인해야 한다.
   - live dev 서버 실행과 실제 브라우저 확인: `--storage /tmp/...`로 격리해도 첫 사이드바 로드의 `/api/auth`가 실제 OS 키체인의 기존 OAuth 로그인을 읽고 계정별 슬롯으로 복사할 수 있으며, 대화 가져오기가 실제 `~/.claude`·`~/.codex`를 따라간다. 키체인·가져오기를 끄는 격리 스위치가 없어 실행하지 않았다(후속 제안: dev 전용 메모리 자격 증명 저장소·가져오기 끄기 스위치).
   - 실제 모델 진단: 유료 호출 금지로 실제 모델을 부르지 않았다.
   - V1(기존 Claude 로그인으로 내부 사용량 경로 실계정 검증)과 비공식 쿼터 경로 채택: 사용자 결정 전까지 하지 않는다. 쿼터는 계정마다 조회 불가 사유로만 표시된다.
   - 승인창 반복/실행 장애 상태에서 사이드바 버튼·`/report` 직접 접속, 증거 조회 실패 시 문안 선택·복사, 긴 증거 TXT 다운로드.
+
+## 실수신 확인 (I5, 2026-10-12)
+
+- 경로: `apps/agent/scripts/report-webhook-receipt.ts --env-dir <개발자 env 폴더>`. React Router dev 서버와 같은 `loadEnv("development", envDir, "")`로 env 파일을 읽어 `ConfigProvider`로 넘기고, 앱의 실제 `ReportDelivery.layer()`(FetchHttpClient·NodeCrypto)로 `send(text, false)`를 한 번 호출한다. 작업자는 env 파일·웹훅 주소를 직접 열거나 출력하지 않았고, 스크립트도 결과만 출력한다.
+- 보낸 내용: `[테스트] context-agent 제보 웹훅 수신 확인`으로 시작하는 합성 문안 4줄(사용자·세션·증거 데이터 없음), `allowed_mentions.parse=[]`, 첨부 `context-agent-report.txt`.
+- 결과: 정확히 1건 전송, `delivered` — HTTP 2xx(`wait=true`), Discord 메시지 ID `1559038162376851578`. 재시도·중복 전송 없음.
+- 범위: 개발 env 파일이 있는 체크아웃을 `--env-dir`로 지정한 개발 환경 확인이다. 패키징된 실행 파일은 env 파일을 읽지 않으므로 배포본의 웹훅 주입은 [결정 기록](./decisions.md#개발자-웹훅은-서버-설정에서만-읽음-2026-10-12)대로 미정이다.
