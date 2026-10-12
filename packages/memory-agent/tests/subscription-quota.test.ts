@@ -34,7 +34,7 @@ const quotaService = Effect.fn(function* (failing: Ref.Ref<boolean>, calls: Ref.
   insert.run("legacy-anthropic", "anthropic", "C", 1, 3);
   insert.run(expiredId, "anthropic", "D", 0, 4);
   const usage = Layer.succeed(SubscriptionUsage, {
-    anthropic: (accountId) =>
+    read: (_provider, accountId) =>
       Effect.gen(function* () {
         if (accountId === expiredId) return yield* SubscriptionUsageCredentialExpired.make({});
         yield* Ref.update(calls, (count) => count + 1);
@@ -53,12 +53,12 @@ const quotaService = Effect.fn(function* (failing: Ref.Ref<boolean>, calls: Ref.
 });
 
 describe("subscription quota status", () => {
-  it.effect("OpenAI accounts say why their quota is unavailable, without numbers", () =>
+  it.effect("OpenAI accounts report the provider's observed windows", () =>
     Effect.gen(function* () {
       const quota = yield* quotaService(yield* Ref.make(false), yield* Ref.make(0));
       const openai = yield* quota.accounts("openai");
       expect(openai.accounts.map((account) => account.quota)).toEqual([
-        { status: "unavailable", reason: "no_permitted_route" },
+        { status: "observed", windows: [fiveHour], observedAt: "1970-01-01T00:00:00.000Z" },
       ]);
     }),
   );

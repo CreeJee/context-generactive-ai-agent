@@ -113,7 +113,7 @@ function QuotaBars({ quota }: { quota: QuotaStatus | undefined }) {
                 getAriaValueText={() => `${Math.round(used)}% 사용`}
               >
                 <Meter.Label className="shrink-0 text-2xs text-muted-foreground">
-                  {windowLabel(window.name)}
+                  {windowLabel(window)}
                 </Meter.Label>
                 <Meter.Track className="h-1 min-w-4 flex-1 overflow-hidden rounded-full bg-muted">
                   <Meter.Indicator

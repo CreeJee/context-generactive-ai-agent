@@ -138,7 +138,7 @@ describe("sidebar disclosures", () => {
   it.live("expanded accounts show each account's quota status and switch accounts", () =>
     Effect.gen(function* () {
       const actions: unknown[] = [];
-      const unavailable = { status: "unavailable", reason: "no_permitted_route" } as const;
+      const unavailable = { status: "unavailable", reason: "credential_expired" } as const;
       const screen = yield* sdkCall(() =>
         render(
           <div className="w-72">
@@ -187,7 +187,9 @@ describe("sidebar disclosures", () => {
       yield* sdkCall(() => expect.element(personal.getByText("사용 중")).toBeVisible());
       yield* sdkCall(() =>
         expect
-          .element(personal.getByText("구독 한도 조회 불가: 허용된 조회 경로가 확인되지 않았어요"))
+          .element(
+            personal.getByText("구독 한도 조회 불가: 저장된 로그인이 만료돼 조회하지 않았어요"),
+          )
           .toBeVisible(),
       );
       const work = screen.getByRole("listitem", { name: "회사" });
@@ -221,7 +223,7 @@ describe("sidebar disclosures", () => {
                       selected: true,
                       createdAt: 1,
                     },
-                    quota: { status: "unavailable", reason: "no_permitted_route" },
+                    quota: { status: "unavailable", reason: "lookup_failed" },
                     current: true,
                   },
                   {

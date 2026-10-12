@@ -28,15 +28,21 @@ import { koreanShortTime } from "../shared/local-time";
 type QuotaStatus = SubscriptionQuotaReport["accounts"][number]["quota"];
 type QuotaWindow = Extract<QuotaStatus, { status: "observed" }>["windows"][number];
 
-/** Labels for provider window names; an unknown name is shown as the provider sent it. */
-export const windowLabel = (name: string) => {
-  switch (name) {
+/**
+ * Anthropic names its windows; OpenAI reports `primary`/`secondary` with a length, which labels
+ * them. A window with neither is shown by the name the provider sent.
+ */
+export const windowLabel = (window: Pick<QuotaWindow, "name" | "windowSeconds">) => {
+  switch (window.name) {
     case "five_hour":
       return "5시간";
     case "seven_day":
       return "7일";
-    default:
-      return name;
+    default: {
+      if (window.windowSeconds === null) return window.name;
+      const hours = Math.round(window.windowSeconds / 3600);
+      return hours < 24 ? `${hours}시간` : `${Math.round(hours / 24)}일`;
+    }
   }
 };
 
@@ -45,8 +51,6 @@ export function quotaUnavailableText(
   reason: Extract<QuotaStatus, { status: "unavailable" }>["reason"],
 ): string {
   switch (reason) {
-    case "no_permitted_route":
-      return "구독 한도 조회 불가: 허용된 조회 경로가 확인되지 않았어요";
     case "credential_expired":
       return "구독 한도 조회 불가: 저장된 로그인이 만료돼 조회하지 않았어요";
     case "lookup_failed":
@@ -67,9 +71,7 @@ function QuotaGauge({ window, stale }: { window: QuotaWindow; stale: boolean }) 
       className="col-span-3 grid grid-cols-subgrid items-center gap-y-0.5"
       getAriaValueText={() => `${Math.round(used)}% 사용`}
     >
-      <Meter.Label className="text-2xs text-muted-foreground">
-        {windowLabel(window.name)}
-      </Meter.Label>
+      <Meter.Label className="text-2xs text-muted-foreground">{windowLabel(window)}</Meter.Label>
       <Meter.Track className="h-1.5 overflow-hidden rounded-full bg-muted">
         <Meter.Indicator
           className={cn(

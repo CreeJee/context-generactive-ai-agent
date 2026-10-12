@@ -1,7 +1,7 @@
-import { Effect, Option, Schema } from "effect";
+import { DateTime, Effect, Option, Schema } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { nativePromise } from "../runtime/native-effect.ts";
-import { providerProtocols } from "./protocol.ts";
+import { providerProtocols, type OAuthProvider } from "./protocol.ts";
 import {
   createSubscriptionOAuthClient,
   OAuthHarnessError,
@@ -9,8 +9,11 @@ import {
   type OAuthHarnessErrorContext,
 } from "./validation-harness.ts";
 
-/** The internal usage endpoint third-party clients call (docs/subscription-quota-research.md). */
+/** The internal usage endpoints third-party clients call (docs/subscription-quota-research.md). */
 export const anthropicUsageUrl = "https://api.anthropic.com/api/oauth/usage";
+/** The ChatGPT backend usage endpoint Codex's backend client reads for its rate-limit status. */
+export const openAiUsageUrl = "https://chatgpt.com/backend-api/wham/usage";
+const usageUrls = { anthropic: anthropicUsageUrl, openai: openAiUsageUrl } as const;
 
 const UsageObject = Schema.Record(Schema.String, Schema.Unknown);
 const decodeUsageWindow = Schema.decodeUnknownOption(
@@ -27,11 +30,11 @@ export interface SubscriptionUsageProbe {
   readonly windows: readonly { readonly name: string; readonly fieldNames: readonly string[] }[];
 }
 
-/** One provider-reported window; `usedPercent` is the provider's own `utilization` percentage. */
-export interface AnthropicUsageWindow {
+/** One provider-reported window; `usedPercent` is the provider's own percentage of that window. */
+export interface SubscriptionUsageWindow {
   readonly name: string;
   readonly usedPercent: number;
-  readonly windowSeconds: number;
+  readonly windowSeconds: number | null;
   readonly resetsAt: string | null;
 }
 
@@ -41,26 +44,24 @@ export class SubscriptionUsageCredentialExpired extends Schema.TaggedError<Subsc
   {},
 ) {}
 
-const context: OAuthHarnessErrorContext = {
-  provider: "anthropic",
-  operation: "subscription_usage",
-};
-
 /**
  * Sends exactly one usage request with the stored access token and never retries. An expired token
  * is refreshed first only when `refreshExpired` allows it; otherwise the lookup fails without a
  * request so it never races the model path's own refresh of a rotating refresh token.
  */
-const requestAnthropicUsage = Effect.fn("requestAnthropicUsage")(function* (options: {
+const requestUsage = Effect.fn("requestSubscriptionUsage")(function* (options: {
+  readonly provider: OAuthProvider;
   readonly store: CredentialStore;
   readonly refreshExpired: boolean;
   readonly fetch?: typeof fetch;
   readonly now?: () => number;
 }) {
-  const protocol = providerProtocols.anthropic;
+  const { provider } = options;
+  const context: OAuthHarnessErrorContext = { provider, operation: "subscription_usage" };
+  const protocol = providerProtocols[provider];
   const now = options.now ?? Date.now;
   const fetcher = options.fetch ?? fetch;
-  let credential = yield* nativePromise(() => options.store.read("anthropic"));
+  let credential = yield* nativePromise(() => options.store.read(provider));
   if (!isTruthy(credential)) return yield* new OAuthHarnessError("not_connected", null, context);
   // The app's own expiry margin: the same credential would be refreshed before a model request.
   const refreshed = credential.expiresAt <= now() + 30_000;
@@ -73,16 +74,18 @@ const requestAnthropicUsage = Effect.fn("requestAnthropicUsage")(function* (opti
       now,
     });
     yield* nativePromise(() => client.refreshForValidation());
-    credential = yield* nativePromise(() => options.store.read("anthropic"));
+    credential = yield* nativePromise(() => options.store.read(provider));
     if (!isTruthy(credential)) return yield* new OAuthHarnessError("not_connected", null, context);
   }
   const headers = new Headers(protocol.modelHeaders);
   headers.set("Accept", "application/json");
   headers.delete("Content-Type");
   headers.set("Authorization", `Bearer ${credential.accessToken}`);
+  if (provider === "openai" && credential.accountId !== undefined)
+    headers.set("chatgpt-account-id", credential.accountId);
   const response = yield* Effect.tryPromise({
     try: (signal) =>
-      fetcher(anthropicUsageUrl, {
+      fetcher(usageUrls[provider], {
         method: "GET",
         headers,
         redirect: "error",
@@ -108,8 +111,9 @@ export const anthropicSubscriptionUsageProbe = Effect.fn("anthropicSubscriptionU
     readonly fetch?: typeof fetch;
     readonly now?: () => number;
   }) {
-    const { refreshed, status, body } = yield* requestAnthropicUsage({
+    const { refreshed, status, body } = yield* requestUsage({
       ...options,
+      provider: "anthropic",
       refreshExpired: true,
     });
     const fields = Object.entries(body);
@@ -147,11 +151,15 @@ export const anthropicSubscriptionUsage = Effect.fn("anthropicSubscriptionUsage"
     readonly fetch?: typeof fetch;
     readonly now?: () => number;
   }) {
-    const { body } = yield* requestAnthropicUsage({ ...options, refreshExpired: false });
+    const { body } = yield* requestUsage({
+      ...options,
+      provider: "anthropic",
+      refreshExpired: false,
+    });
     return Object.entries(anthropicQuotaWindows).flatMap(([name, windowSeconds]) =>
       Option.match(decodeQuotaWindow(body[name]), {
         onNone: () => [],
-        onSome: (window): readonly AnthropicUsageWindow[] => [
+        onSome: (window): readonly SubscriptionUsageWindow[] => [
           {
             name,
             usedPercent: window.utilization,
@@ -163,3 +171,56 @@ export const anthropicSubscriptionUsage = Effect.fn("anthropicSubscriptionUsage"
     );
   },
 );
+
+/**
+ * Codex's rate-limit payload: a `primary` and an optional `secondary` window, each with the
+ * provider's used percent, window length and Unix reset time. Other fields are not read.
+ */
+const OpenAiRateLimitWindow = Schema.Struct({
+  used_percent: Schema.Finite,
+  limit_window_seconds: Schema.optional(Schema.NullOr(Schema.Finite)),
+  reset_at: Schema.optional(Schema.NullOr(Schema.Finite)),
+});
+const decodeOpenAiRateLimit = Schema.decodeUnknownOption(
+  Schema.Struct({
+    rate_limit: Schema.optional(
+      Schema.NullOr(
+        Schema.Struct({
+          primary_window: Schema.optional(Schema.NullOr(OpenAiRateLimitWindow)),
+          secondary_window: Schema.optional(Schema.NullOr(OpenAiRateLimitWindow)),
+        }),
+      ),
+    ),
+  }),
+);
+
+/**
+ * The adopted OpenAI quota route (decision 2026-10-12): Codex's `/wham/usage` windows for the
+ * stored ChatGPT account, read without refreshing its token. A missing window is omitted.
+ */
+export const openAiSubscriptionUsage = Effect.fn("openAiSubscriptionUsage")(function* (options: {
+  readonly store: CredentialStore;
+  readonly fetch?: typeof fetch;
+  readonly now?: () => number;
+}) {
+  const { body } = yield* requestUsage({ ...options, provider: "openai", refreshExpired: false });
+  const limits = Option.getOrUndefined(decodeOpenAiRateLimit(body))?.rate_limit;
+  return [
+    { name: "primary", window: limits?.primary_window },
+    { name: "secondary", window: limits?.secondary_window },
+  ].flatMap(({ name, window }): readonly SubscriptionUsageWindow[] =>
+    window === undefined || window === null
+      ? []
+      : [
+          {
+            name,
+            usedPercent: window.used_percent,
+            windowSeconds: window.limit_window_seconds ?? null,
+            resetsAt:
+              window.reset_at === undefined || window.reset_at === null
+                ? null
+                : DateTime.formatIso(DateTime.makeUnsafe(window.reset_at * 1000)),
+          },
+        ],
+  );
+});

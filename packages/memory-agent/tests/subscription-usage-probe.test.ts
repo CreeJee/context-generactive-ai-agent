@@ -5,6 +5,8 @@ import {
   anthropicSubscriptionUsage,
   anthropicSubscriptionUsageProbe,
   anthropicUsageUrl,
+  openAiSubscriptionUsage,
+  openAiUsageUrl,
 } from "../src/oauth/subscription-usage-probe.ts";
 import type { StoredCredential } from "../src/oauth/validation-harness.ts";
 
@@ -91,5 +93,51 @@ it.effect(
         failure: { _tag: "SubscriptionUsageCredentialExpired" },
       });
       expect(requests).toEqual([anthropicUsageUrl]);
+    }),
+);
+
+it.effect(
+  "OpenAI quota lookup reads Codex's primary and secondary windows for the stored account",
+  () =>
+    Effect.gen(function* () {
+      const requests: { url: Parameters<typeof fetch>[0]; accountId: string | null }[] = [];
+      const windows = yield* openAiSubscriptionUsage({
+        store: {
+          read: () =>
+            Promise.resolve({
+              accessToken: "fixture",
+              refreshToken: "fixture",
+              expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) + 3600_000,
+              accountId: "account-fixture",
+            }),
+          write: () => Promise.reject(new Error("unexpected write")),
+          remove: () => Promise.resolve(),
+        },
+        fetch: (url, init) => {
+          requests.push({ url, accountId: new Headers(init?.headers).get("chatgpt-account-id") });
+          return Promise.resolve(
+            Response.json({
+              plan_type: "plus",
+              rate_limit: {
+                primary_window: {
+                  used_percent: 25,
+                  limit_window_seconds: 18_000,
+                  reset_at: 1_791_800_000,
+                },
+                secondary_window: null,
+              },
+            }),
+          );
+        },
+      });
+      expect(windows).toEqual([
+        {
+          name: "primary",
+          usedPercent: 25,
+          windowSeconds: 18_000,
+          resetsAt: "2026-10-12T10:13:20.000Z",
+        },
+      ]);
+      expect(requests).toEqual([{ url: openAiUsageUrl, accountId: "account-fixture" }]);
     }),
 );

@@ -22,7 +22,7 @@ This is a source/permission review, **not** an authenticated test. No account to
 2. If a permitted route does not supply a field, return **조회 불가/미확인** with no fabricated number. If a stale response exists, label its observation time and error explicitly; do not substitute locally counted tokens or silently reset elapsed percentages to zero.
 3. Confirm how to handle current Anthropic OAuth in light of the official restriction (e.g. supported API-key path or an unmodified Claude Code integration, subject to actual terms). This is a blocking scope/design decision before M5 and UI claims about Claude subscription quota.
 
-**M5 status (2026-10-12, updated after V1):** the user adopted the Anthropic `/api/oauth/usage` route, accepting the policy risk in point 3. `GET /api/accounts/quota?provider=` now returns, per local Anthropic account, the provider's `five_hour`/`seven_day` `utilization` and `resets_at` as `observed` (see [M5 adoption](#m5-adoption-2026-10-12)). OpenAI stays `unavailable` / `no_permitted_route`; `/wham/usage` is not called. No local token count is shown as quota.
+**M5 status (2026-10-12, updated after V1):** the user adopted the Anthropic `/api/oauth/usage` route, accepting the policy risk in point 3. `GET /api/accounts/quota?provider=` now returns, per local Anthropic account, the provider's `five_hour`/`seven_day` `utilization` and `resets_at` as `observed` (see [M5 adoption](#m5-adoption-2026-10-12)). OpenAI was later adopted too, through Codex's `/wham/usage` (see [M5 OpenAI adoption](#m5-openai-adoption-2026-10-12)). No local token count is shown as quota.
 
 ## V1 — first attempt (2026-10-12): stopped before any call
 
@@ -70,3 +70,11 @@ The user decided to show Anthropic quota from this route despite the credential-
 - **Rate:** at most one request per account per minute (`Cache` with a 1-minute TTL); concurrent sidebar reads share it, and at most two accounts are looked up at once.
 - **Failure:** a failed lookup returns the last observation as `stale` (with `failedAt`), never zero. With no earlier observation it returns `unavailable` with `credential_expired` (token expired) or `lookup_failed` (any provider, transport or shape failure). Only the error tag is logged.
 - The previous `provider_policy_restricted` reason is removed; the route was never in a GitHub release.
+
+## M5 OpenAI adoption (2026-10-12)
+
+- Decision: the user adopted Codex's ChatGPT backend route for OpenAI accounts. Anthropic keeps `/api/oauth/usage` unchanged.
+- `openAiSubscriptionUsage` sends one `GET https://chatgpt.com/backend-api/wham/usage` per account with the stored access token and the `chatgpt-account-id` header, the same headers the model catalog uses. Like Anthropic, it never refreshes an expired token (`credential_expired`) and never retries.
+- Only `rate_limit.primary_window` and `rate_limit.secondary_window` are read: `used_percent`, `limit_window_seconds` and `reset_at` (Unix seconds, shown as ISO). They become the windows `primary` and `secondary`; the sidebar labels them by length (for example 5시간, 7일). `plan_type`, credits and other fields are ignored.
+- The field names come from the Codex backend client cited above. No live response was inspected in this change, so the first real lookup is the verification. If the shape differs, the account shows `lookup_failed` rather than a guessed number.
+- `no_permitted_route` was removed; it was never in a GitHub release.
