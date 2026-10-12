@@ -2,6 +2,7 @@ import { RefreshCwIcon } from "lucide-react";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
 import { Marker, MarkerContent } from "~/components/ui/marker";
+import { koreanLocalTime } from "../shared/local-time";
 import type { RunNotice } from "./run-notice";
 
 export function RunNoticeView({ notice }: { notice: RunNotice }) {
@@ -28,6 +29,16 @@ export function RunNoticeView({ notice }: { notice: RunNotice }) {
           <AlertDescription>
             답변 중에 서버가 다시 시작됐어요. 자동으로 다시 실행하지 않으니, 필요하면 다시 보내
             주세요.
+          </AlertDescription>
+        </Alert>
+      );
+    case "resuming":
+      return (
+        <Alert>
+          <AlertTitle>마지막 답변이 끝나지 않았어요</AlertTitle>
+          <AlertDescription>
+            답변 중에 서버가 다시 시작됐어요. 도구를 실행하기 전이라 같은 계획을{" "}
+            {koreanLocalTime(new Date(notice.at).toISOString())}에 새 실행으로 이어서 진행해요.
           </AlertDescription>
         </Alert>
       );

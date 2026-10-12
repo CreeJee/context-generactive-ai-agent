@@ -9,6 +9,9 @@ import {
   CollapsibleTrigger,
 } from "../../components/ui/collapsible";
 import type { WorkflowPhase, WorkflowState } from "../api";
+import { koreanLocalTime } from "../shared/local-time";
+
+const localTime = (epochMillis: number) => koreanLocalTime(new Date(epochMillis).toISOString());
 
 export const phaseLabels: Readonly<Record<WorkflowPhase, string>> = {
   chat: "Chat",
@@ -71,6 +74,7 @@ const verificationStatusLabels: Record<
 export function WorkflowArtifactPanel({
   state,
   execution,
+  providerRetry,
   actions,
   busy,
   disabled,
@@ -83,6 +87,7 @@ export function WorkflowArtifactPanel({
 }: {
   readonly state: WorkflowState | null;
   readonly execution?: SessionRunState["execution"] | null;
+  readonly providerRetry?: SessionRunState["providerRetry"];
   readonly actions: SessionRunState["actions"] | null;
   readonly busy: boolean;
   readonly disabled: boolean;
@@ -195,6 +200,19 @@ export function WorkflowArtifactPanel({
           <p className="mb-3 whitespace-pre-wrap" role="status">
             자동 진행 중단: {execution.detail}
           </p>
+        )}
+        {execution?.kind === "retrying" ? (
+          <p className="mb-3" role="status">
+            서버가 다시 시작돼 끊긴 실행을 {localTime(execution.retryAt)}에 남은 단계부터 이어서
+            진행해요.
+          </p>
+        ) : (
+          isTruthy(providerRetry) && (
+            <p className="mb-3" role="status">
+              공급자에 요청을 보내지 못해 {localTime(providerRetry.retryAt)}에 다시 보내요 (
+              {providerRetry.retry}번째 재시도).
+            </p>
+          )
         )}
         <Collapsible className="rounded-md border bg-background/50">
           <CollapsibleTrigger className="group flex w-full items-center gap-2 px-3 py-2 text-left">

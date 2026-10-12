@@ -6,6 +6,8 @@ export type RunNotice =
   | { readonly kind: "cancelled" }
   | { readonly kind: "cancel-pending" }
   | { readonly kind: "restarted" }
+  /** Cut off by a restart before it ran any tool; a new run continues the Plan at `at`. */
+  | { readonly kind: "resuming"; readonly at: number }
   | { readonly kind: "failed"; readonly message: string }
   /** The server is still answering, but this page is no longer receiving it. */
   | { readonly kind: "detached" }
@@ -31,7 +33,10 @@ function noticeOfBody(state: SessionRunState | null, page: PageView): RunNotice 
   const lastRun = state.lastRun;
   if (!(lastRun !== null)) return null;
   // A restart is recorded as an error; the status may have been rewritten since.
-  if (lastRun.error?.code === serverRestartedCode) return { kind: "restarted" };
+  if (lastRun.error?.code === serverRestartedCode)
+    return state.execution?.kind === "retrying"
+      ? { kind: "resuming", at: state.execution.retryAt }
+      : { kind: "restarted" };
   switch (lastRun.status) {
     case "aborted":
       return { kind: "cancelled" };
