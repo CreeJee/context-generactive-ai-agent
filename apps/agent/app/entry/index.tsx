@@ -528,7 +528,7 @@ export function App() {
                 <DialogHeader>
                   <DialogTitle>계정 추가·관리</DialogTitle>
                   <DialogDescription>
-                    공급자별로 로그인한 계정을 추가하고 이름을 바꾸거나 해제해요.
+                    공급자별로 계정을 추가하고, 계정마다 ⋯ 메뉴에서 이름을 바꾸거나 로그아웃해요.
                   </DialogDescription>
                 </DialogHeader>
                 <AccountSection

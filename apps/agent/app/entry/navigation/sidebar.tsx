@@ -9,7 +9,6 @@ import {
   ChevronRightIcon,
   EyeOffIcon,
   FolderPlusIcon,
-  LogOutIcon,
   PlusIcon,
   Trash2Icon,
 } from "lucide-react";
@@ -141,15 +140,6 @@ export function AccountSection({
                     {auth.planType}
                   </span>
                 )}
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  className="ml-auto shrink-0"
-                  onClick={() => onAction("logout")}
-                  aria-label="연결 해제"
-                >
-                  <LogOutIcon />
-                </Button>
               </div>
             </DataListItem>
           )}

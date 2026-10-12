@@ -1,6 +1,6 @@
 import { Meter } from "@base-ui/react/meter";
 import { cn } from "cn";
-import { CheckIcon, EllipsisIcon, PencilIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-react";
+import { CheckIcon, EllipsisIcon, PencilIcon, PlusIcon, LogOutIcon, XIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Alert, AlertDescription } from "~/components/ui/alert";
 import { Badge } from "~/components/ui/badge";
@@ -204,11 +204,15 @@ function ProfileRow({
                 variant="destructive"
                 disabled={busy}
                 onClick={() => {
-                  if (window.confirm(`${profile.label} 계정을 이 앱에서 해제할까요?`))
+                  if (
+                    window.confirm(
+                      `${profile.label} 계정에서 로그아웃하고 이 앱의 목록에서 지울까요?`,
+                    )
+                  )
                     onAction({ intent: "remove", accountId: profile.id });
                 }}
               >
-                <Trash2Icon /> 계정 해제
+                <LogOutIcon /> 로그아웃
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
