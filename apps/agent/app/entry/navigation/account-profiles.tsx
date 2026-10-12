@@ -1,8 +1,16 @@
-import { CheckIcon, PencilIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import { Meter } from "@base-ui/react/meter";
+import { cn } from "cn";
+import { CheckIcon, EllipsisIcon, PencilIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Alert, AlertDescription } from "~/components/ui/alert";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "~/components/ui/dropdown-menu";
 import { Input } from "~/components/ui/input";
 import { Spinner } from "~/components/ui/spinner";
 import {
@@ -15,7 +23,7 @@ import {
 } from "../api";
 import { useAccountQuotaQuery, useAccountsQuery } from "../queries/global";
 import { useAccountActionMutation } from "../queries/mutations/global";
-import { koreanLocalTime } from "../shared/local-time";
+import { koreanShortTime } from "../shared/local-time";
 
 type QuotaStatus = SubscriptionQuotaReport["accounts"][number]["quota"];
 type QuotaWindow = Extract<QuotaStatus, { status: "observed" }>["windows"][number];
@@ -32,29 +40,56 @@ const windowLabel = (name: string) => {
   }
 };
 
-const windowText = (window: QuotaWindow) =>
-  `${windowLabel(window.name)} ${Math.round(window.usedPercent)}% 사용${window.resetsAt !== null && window.resetsAt !== "" ? ` · ${koreanLocalTime(window.resetsAt)} 초기화` : ""}`;
-
-/** Provider-reported numbers only; an unavailable quota says why instead of estimating one. */
-export function quotaText(quota: QuotaStatus): string {
-  switch (quota.status) {
-    case "observed":
-      return `${quota.windows.map(windowText).join(", ")} (${koreanLocalTime(quota.observedAt)} 조회)`;
-    case "stale":
-      return `${quota.windows.map(windowText).join(", ")} (오래된 값: ${koreanLocalTime(quota.observedAt)} 기준, 최근 조회 실패)`;
-    case "unavailable":
-      switch (quota.reason) {
-        case "no_permitted_route":
-          return "구독 한도 조회 불가: 허용된 조회 경로가 확인되지 않았어요";
-        case "credential_expired":
-          return "구독 한도 조회 불가: 저장된 로그인이 만료돼 조회하지 않았어요";
-        case "lookup_failed":
-          return "구독 한도 조회 실패: 공급자에서 사용량을 받지 못했어요";
-      }
+/** Why a quota has no numbers; the app never estimates one. */
+export function quotaUnavailableText(
+  reason: Extract<QuotaStatus, { status: "unavailable" }>["reason"],
+): string {
+  switch (reason) {
+    case "no_permitted_route":
+      return "구독 한도 조회 불가: 허용된 조회 경로가 확인되지 않았어요";
+    case "credential_expired":
+      return "구독 한도 조회 불가: 저장된 로그인이 만료돼 조회하지 않았어요";
+    case "lookup_failed":
+      return "구독 한도 조회 실패: 공급자에서 사용량을 받지 못했어요";
   }
 }
 
-function QuotaLine({
+const gaugeTone = (usedPercent: number) =>
+  usedPercent >= 90 ? "bg-destructive" : usedPercent >= 70 ? "bg-warning" : "bg-primary";
+
+/** One provider-reported window as a gauge; a stale value is dimmed rather than hidden. */
+function QuotaGauge({ window, stale }: { window: QuotaWindow; stale: boolean }) {
+  const used = Math.min(100, Math.max(0, window.usedPercent));
+  const resetsAt = window.resetsAt !== null && window.resetsAt !== "" ? window.resetsAt : null;
+  return (
+    <Meter.Root
+      value={used}
+      className="col-span-3 grid grid-cols-subgrid items-center gap-y-0.5"
+      getAriaValueText={() => `${Math.round(used)}% 사용`}
+    >
+      <Meter.Label className="text-2xs text-muted-foreground">
+        {windowLabel(window.name)}
+      </Meter.Label>
+      <Meter.Track className="h-1.5 overflow-hidden rounded-full bg-muted">
+        <Meter.Indicator
+          className={cn(
+            "h-full rounded-full transition-all",
+            gaugeTone(used),
+            stale && "opacity-40",
+          )}
+        />
+      </Meter.Track>
+      <span className="text-right text-2xs tabular-nums">{Math.round(used)}%</span>
+      {resetsAt !== null && (
+        <span className="col-start-2 col-span-2 text-2xs text-muted-foreground">
+          {koreanShortTime(resetsAt)} 초기화
+        </span>
+      )}
+    </Meter.Root>
+  );
+}
+
+function QuotaGauges({
   quota,
   failed,
 }: {
@@ -65,7 +100,26 @@ function QuotaLine({
   if (failed)
     return <p className="text-2xs text-muted-foreground">한도 상태를 확인하지 못했어요</p>;
   if (quota === undefined) return <p className="text-2xs text-muted-foreground">한도 확인 중</p>;
-  return <p className="text-2xs text-muted-foreground">{quotaText(quota)}</p>;
+  switch (quota.status) {
+    case "unavailable":
+      return <p className="text-2xs text-muted-foreground">{quotaUnavailableText(quota.reason)}</p>;
+    case "observed":
+    case "stale":
+      return (
+        <div className="flex flex-col gap-1">
+          <div className="grid grid-cols-[auto_1fr_2.5rem] gap-x-2 gap-y-1">
+            {quota.windows.map((window) => (
+              <QuotaGauge key={window.name} window={window} stale={quota.status === "stale"} />
+            ))}
+          </div>
+          <p className="text-2xs text-muted-foreground">
+            {quota.status === "stale"
+              ? `최근 조회 실패 · ${koreanShortTime(quota.observedAt)} 기준 값`
+              : `${koreanShortTime(quota.observedAt)} 조회`}
+          </p>
+        </div>
+      );
+  }
 }
 
 function ProfileRow({
@@ -84,7 +138,13 @@ function ProfileRow({
   const [renaming, setRenaming] = useState(false);
   const [label, setLabel] = useState(profile.label);
   return (
-    <li className="flex flex-col gap-1 rounded-md border px-2 py-1.5" aria-label={profile.label}>
+    <li
+      className={cn(
+        "flex flex-col gap-1.5 rounded-md border px-2 py-1.5",
+        profile.selected && "border-primary/50 bg-primary/5",
+      )}
+      aria-label={profile.label}
+    >
       {renaming ? (
         <form
           className="flex items-center gap-1"
@@ -100,6 +160,11 @@ function ProfileRow({
             value={label}
             maxLength={80}
             onChange={(event) => setLabel(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Escape") return;
+              setLabel(profile.label);
+              setRenaming(false);
+            }}
             autoFocus
           />
           <Button type="submit" variant="ghost" size="icon-xs" aria-label="이름 저장">
@@ -121,31 +186,33 @@ function ProfileRow({
               전환
             </Button>
           )}
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label={`${profile.label} 이름 변경`}
-            title="이름 변경"
-            onClick={() => setRenaming(true)}
-          >
-            <PencilIcon />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            disabled={busy}
-            aria-label={`${profile.label} 계정 해제`}
-            title="계정 해제"
-            onClick={() => {
-              if (window.confirm(`${profile.label} 계정을 이 앱에서 해제할까요?`))
-                onAction({ intent: "remove", accountId: profile.id });
-            }}
-          >
-            <Trash2Icon />
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button variant="ghost" size="icon-xs" aria-label={`${profile.label} 계정 관리`} />
+              }
+            >
+              <EllipsisIcon />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => setRenaming(true)}>
+                <PencilIcon /> 이름 변경
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                variant="destructive"
+                disabled={busy}
+                onClick={() => {
+                  if (window.confirm(`${profile.label} 계정을 이 앱에서 해제할까요?`))
+                    onAction({ intent: "remove", accountId: profile.id });
+                }}
+              >
+                <Trash2Icon /> 계정 해제
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       )}
-      <QuotaLine quota={quota} failed={quotaFailed} />
+      <QuotaGauges quota={quota} failed={quotaFailed} />
     </li>
   );
 }
@@ -166,6 +233,7 @@ export function AccountProfiles({
   busy: boolean;
   onAction: (action: AccountAction) => void;
 }) {
+  const [adding, setAdding] = useState(false);
   const [label, setLabel] = useState("");
   if (view === undefined) return <Spinner />;
   const quotaOf = (id: string) => quota?.accounts.find((account) => account.accountId === id);
@@ -205,7 +273,7 @@ export function AccountProfiles({
             </Button>
           </div>
         </div>
-      ) : (
+      ) : adding ? (
         <form
           className="flex items-center gap-1"
           onSubmit={(event) => {
@@ -213,6 +281,7 @@ export function AccountProfiles({
             if (label.trim() === "") return;
             onAction({ intent: "add", label: label.trim() });
             setLabel("");
+            setAdding(false);
           }}
         >
           <Input
@@ -221,11 +290,34 @@ export function AccountProfiles({
             value={label}
             maxLength={80}
             onChange={(event) => setLabel(event.target.value)}
+            autoFocus
           />
           <Button type="submit" variant="outline" size="xs" disabled={busy || label.trim() === ""}>
-            <PlusIcon /> 추가
+            로그인
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label="계정 추가 취소"
+            onClick={() => {
+              setLabel("");
+              setAdding(false);
+            }}
+          >
+            <XIcon />
           </Button>
         </form>
+      ) : (
+        <Button
+          variant="ghost-muted"
+          size="xs"
+          className="self-start"
+          disabled={busy}
+          onClick={() => setAdding(true)}
+        >
+          <PlusIcon /> 계정 추가
+        </Button>
       )}
       {view.login.status === "error" && (
         <Alert variant="destructive">

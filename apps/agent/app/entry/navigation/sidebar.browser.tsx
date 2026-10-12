@@ -154,7 +154,23 @@ describe("sidebar disclosures", () => {
                 checkedAt: "2026-10-12T00:00:00.000Z",
                 accounts: [
                   { accountId: "a", label: "개인", selected: true, quota: unavailable },
-                  { accountId: "b", label: "회사", selected: false, quota: unavailable },
+                  {
+                    accountId: "b",
+                    label: "회사",
+                    selected: false,
+                    quota: {
+                      status: "observed",
+                      windows: [
+                        {
+                          name: "five_hour",
+                          usedPercent: 37,
+                          windowSeconds: 18_000,
+                          resetsAt: null,
+                        },
+                      ],
+                      observedAt: "2026-10-12T00:00:00.000Z",
+                    },
+                  },
                 ],
               }}
               quotaFailed={false}
@@ -173,12 +189,13 @@ describe("sidebar disclosures", () => {
           .element(personal.getByText("구독 한도 조회 불가: 허용된 조회 경로가 확인되지 않았어요"))
           .toBeVisible(),
       );
+      const work = screen.getByRole("listitem", { name: "회사" });
       yield* sdkCall(() =>
-        screen
-          .getByRole("listitem", { name: "회사" })
-          .getByRole("button", { name: "전환" })
-          .click(),
+        expect
+          .element(work.getByRole("meter", { name: "5시간" }))
+          .toHaveAttribute("aria-valuenow", "37"),
       );
+      yield* sdkCall(() => work.getByRole("button", { name: "전환" }).click());
       expect(actions).toEqual([{ intent: "select", accountId: "b" }]);
     }),
   );
