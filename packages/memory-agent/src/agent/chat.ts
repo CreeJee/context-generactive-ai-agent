@@ -144,7 +144,7 @@ import { goalWorkerAuthority, type GoalWorkerCapability } from "./goal-worker-au
 // oxlint-disable-next-line anti-slop-effect/no-service-constructor-imports
 import { makeSqliteOwnerRpcLedger } from "./owner-rpc-ledger.ts";
 import {
-  endedWithoutEffectsSql,
+  endedWithKnownEffectsSql,
   toolOperationSql,
   workflowRunBindings,
 } from "../workflow/run-bindings.ts";
@@ -1323,7 +1323,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             SELECT b.run_id FROM workflow_run_bindings b
             LEFT JOIN chat_runs r ON r.run_id = b.run_id
             WHERE b.session_id = ? AND (r.status IS NULL OR (r.status <> 'completed' AND NOT (
-              ${recoveredReadRunSql("r")} OR ${endedWithoutEffectsSql("r")}
+              ${recoveredReadRunSql("r")} OR ${endedWithKnownEffectsSql("r")}
               OR r.status = 'interrupted' AND EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id)
               AND (r.run_id = ? OR NOT EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id AND i.status = 'pending'))
             ))) LIMIT 1

@@ -3,6 +3,7 @@ import { isTruthy } from "../truthy.ts";
 import { DateTime, Schema } from "effect";
 import type { DatabaseSync } from "node:sqlite";
 import { recoveredReadRunSql } from "../agent/owner-read-recovery.ts";
+import { readOnlyToolNames } from "../tools/effects.ts";
 
 type OwnerDatabase = {
   readonly sqlite: DatabaseSync;
@@ -39,17 +40,35 @@ export const toolOperationSql = (operation: string) => `(${operation}.side_effec
     THEN json_extract(${operation}.fingerprint, '$.operation') END, '')
     NOT IN ('middleware', 'routedPersistence'))`;
 
+/** A string field of the owner-encoded tool invocation in a tool operation's fingerprint. */
+const invocationFieldSql = (operation: string, field: "name" | "toolCallId") =>
+  `(SELECT json_extract(f.value, '$[1][1]') FROM json_each(${operation}.fingerprint, '$.input[1]') f
+    WHERE json_extract(f.value, '$[0]') = '${field}')`;
+
+// Built-in names are fixed constants, never request input.
+const readOnlyToolsSql = [...readOnlyToolNames].map((name) => `'${name}'`).join(", ");
+
 /**
- * A bound run that ended without completing before it ran any tool: every owner tool call is
- * reserved before it runs, so the run changed nothing a later run could duplicate, and that run may
- * continue the Plan. Operations still pending belong to a run that is gone. A run that ran a tool
- * stays fenced even when the tool succeeded, since a later run may repeat it.
+ * A bound run that ended without completing, after which a later run cannot repeat anything it did
+ * without knowing it. Every tool it ran succeeded, and each one that may change something has its
+ * result in the session's recorded history, which the later run reads; a read-only tool cannot be
+ * repeated harmfully even when the run stopped before recording it. Authorizing a tool runs
+ * nothing. That run may continue the Plan as a new turn; nothing is replayed. A tool still pending
+ * or uncertain, a recorded-less effectful tool, or an operation that names no known tool step keeps
+ * the session fenced.
  */
-export const endedWithoutEffectsSql = (
+export const endedWithKnownEffectsSql = (
   run: string,
 ) => `(coalesce(${run}.status IN ('failed', 'aborted'), 0)
   AND NOT EXISTS (SELECT 1 FROM owner_rpc_operations eo
-    WHERE eo.run_id = ${run}.run_id AND ${toolOperationSql("eo")}))`;
+    WHERE eo.run_id = ${run}.run_id AND ${toolOperationSql("eo")} AND (eo.status <> 'succeeded'
+      OR NOT json_valid(eo.fingerprint)
+      OR coalesce(json_extract(eo.fingerprint, '$.operation'), '') NOT IN ('tool', 'toolAuthorize')
+      OR json_extract(eo.fingerprint, '$.operation') = 'tool'
+        AND coalesce(${invocationFieldSql("eo", "name")}, '') NOT IN (${readOnlyToolsSql})
+        AND NOT EXISTS (SELECT 1 FROM nodes n
+          WHERE n.session_id = ${run}.thread_id AND n.kind = 'tool_result'
+            AND json_extract(n.detail, '$.toolCallId') = ${invocationFieldSql("eo", "toolCallId")}))))`;
 
 /** A central-owner-only durable claim; it cannot authorize a worker or a tool on its own. */
 export function workflowRunBindings({ sqlite, atomic }: OwnerDatabase) {
@@ -65,7 +84,7 @@ export function workflowRunBindings({ sqlite, atomic }: OwnerDatabase) {
     SELECT b.run_id FROM workflow_run_bindings b
     LEFT JOIN chat_runs r ON r.run_id = b.run_id
     WHERE b.session_id = ? AND (r.status IS NULL OR (r.status <> 'completed' AND NOT (
-      ${recoveredReadRunSql("r")} OR ${endedWithoutEffectsSql("r")}
+      ${recoveredReadRunSql("r")} OR ${endedWithKnownEffectsSql("r")}
       OR r.status = 'interrupted' AND EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id)
       AND (r.run_id = ? OR NOT EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id AND i.status = 'pending'))
     ))) LIMIT 1
@@ -77,7 +96,7 @@ export function workflowRunBindings({ sqlite, atomic }: OwnerDatabase) {
     WHERE binding.session_id = ? AND binding.goal_instance_id = ?
       AND (operations.status = 'pending'
         OR (operations.side_effect = 1 AND operations.status <> 'succeeded'))
-      AND NOT ${recoveredReadRunSql("r")} AND NOT ${endedWithoutEffectsSql("r")} LIMIT 1
+      AND NOT ${recoveredReadRunSql("r")} AND NOT ${endedWithKnownEffectsSql("r")} LIMIT 1
   `);
   const claimed = sqlite.prepare("SELECT run_id FROM workflow_run_bindings WHERE run_id = ?");
   const insert = sqlite.prepare(`

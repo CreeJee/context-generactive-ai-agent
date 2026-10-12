@@ -1,7 +1,10 @@
 import { DateTime, Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
+import { encodeFullLoopValue } from "../../src/agent/full-loop-codec.ts";
+import { ownerRpcFingerprint } from "../../src/agent/owner-rpc-fingerprint.ts";
 import { makeSqliteOwnerRpcLedger } from "../../src/agent/owner-rpc-ledger.ts";
 import { Database } from "../../src/db/database.ts";
+import { Nodes } from "../../src/memory/nodes.ts";
 import { type Admission, workflowRunBindings } from "../../src/workflow/run-bindings.ts";
 import { workflowRunEvents } from "../../src/workflow/run-events.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
@@ -121,23 +124,47 @@ testAgent()("workflow run bindings", (it) => {
           status: "refused",
           reason: "run_id_conflict",
         });
-        // A failed run that only did owner bookkeeping changed nothing a later run could repeat.
         finishRun(db, session, shared, "failed");
         const operation = db.sqlite.prepare(
-          "INSERT INTO owner_rpc_operations VALUES (?, 'key', ?, ?, 1, '{}', 'succeeded')",
+          "INSERT INTO owner_rpc_operations VALUES (?, 'key', ?, ?, 1, '{}', ?)",
         );
-        operation.run(shared, 1, JSON.stringify({ operation: "middleware" }));
-        expect(
+        const step = (id: number, kind: "tool" | "toolAuthorize", name: string, status: string) =>
+          operation.run(
+            shared,
+            id,
+            ownerRpcFingerprint(
+              kind,
+              encodeFullLoopValue({ name, toolCallId: `${name}-call`, args: {} }),
+            ),
+            status,
+          );
+        const admits = () =>
           workflowRunBindings(db).bind(
             session,
             `${session}:different`,
             revision,
             undefined,
             "preview",
-          ),
-        ).toMatchObject({ status: "bound" });
-        // A tool it ran may be repeated, even when it succeeded.
-        operation.run(shared, 2, JSON.stringify({ operation: "toolAuthorize" }));
+          ).status;
+        // Owner bookkeeping, an authorization and a read the next run cannot know of repeat nothing.
+        operation.run(shared, 1, JSON.stringify({ operation: "middleware" }), "succeeded");
+        step(2, "toolAuthorize", "run_shell", "succeeded");
+        step(3, "tool", "read_file", "succeeded");
+        expect(admits()).toBe("bound");
+        // An effectful tool is known to the next run only through its recorded result.
+        step(4, "tool", "run_shell", "succeeded");
+        expect(admits()).toBe("refused");
+        (yield* Nodes).append({
+          projectId: (yield* TestEnv).project.id,
+          sessionId: session,
+          runId: shared,
+          kind: "tool_result",
+          text: "done",
+          detail: { toolName: "run_shell", toolCallId: "run_shell-call", ok: true },
+        });
+        expect(admits()).toBe("bound");
+        // A tool the run left uncertain may have changed something.
+        step(5, "tool", "read_file", "uncertain");
         expect(yield* bindLatest(session, `${session}:different`)).toEqual({
           status: "refused",
           reason: "run_outcome_uncertain",
