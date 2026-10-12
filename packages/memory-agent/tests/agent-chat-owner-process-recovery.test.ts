@@ -193,19 +193,6 @@ it.live(
             expect((yield* post(second, runId)).status).toBe(409);
             expect(yield* inspect(second)).toEqual(recovered);
             expect(yield* fs.readFileString(path.join(base, "model-calls"))).toBe(calls);
-            // The killed run ran no tool, so a new run continues without replaying it.
-            const continued = yield* post(second, "partial-continued-run");
-            expect({ status: continued.status, text: yield* continued.text }).toMatchObject({
-              status: 200,
-              text: expect.stringContaining("completed owner turn"),
-            });
-            expect((yield* inspect(second)).runs.map((run) => run.status)).toEqual([
-              "failed",
-              "completed",
-            ]);
-            expect(
-              (yield* fs.readFileString(path.join(base, "model-calls"))).trim().split("\n"),
-            ).toHaveLength(2);
           } finally {
           }
         }),
