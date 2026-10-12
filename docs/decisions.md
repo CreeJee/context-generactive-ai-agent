@@ -74,6 +74,12 @@
 - 도구 인수 해석·접근 범위 추적·지침 변경 비교·호출 차단과 재시도는 구현하지 않는다. 경로별 지침 읽기는 모델에 전달하는 작업 규칙이며 런타임의 실행 승인 조건이 아니다. 기존 도구 실행과 권한 승인 흐름을 유지한다. 목록과 루트 본문은 다음 실행에서 새로 수집한다.
 - Effect 의존성 문서 읽기 요구는 루트 지침에서 제거하고 `packages/memory-agent/AGENTS.md`에 둔다. 해당 패키지에서 Effect 코드를 작성하거나 변경할 때 저장소 루트의 설치본 문서를 읽는다.
 
+### 하위호환 기준 (2026-10-12)
+
+- 하위호환의 기준점은 GitHub의 마지막 정식(비 canary) 릴리스다. 2026-10-12 현재 `0.0.13`(2026-09-26)이다. `0.0.12-canary-*`, `0.0.14-canary1` 같은 canary 릴리스는 기준이 아니다.
+- 기준 릴리스에서 현재 빌드로의 업그레이드는 사용자 데이터(DB, 대화, 기억, 로그인)를 보존해야 한다. 현재 빌드에서 기준 릴리스로의 downgrade, canary 사이의 호환은 요구하지 않는다.
+- 앞의 결정에서 "0.0.13 기준"(2026-10-07)과 "미출시라 구 release를 요구하지 않음"(2026-10-11)은 이 규칙의 두 면이다. 새 정식 릴리스가 나오면 기준점도 그 릴리스로 옮긴다.
+
 ## Effect 런타임과 진단
 
 ### Effect v4 전환 (2026-09-24)
@@ -227,6 +233,8 @@
 ## 인증·모델·공급자
 
 ### 인증과 모델 (2026-09-15)
+
+> 대체됨: codex app-server 경로는 2026-09-19에 제거했다. 아래 "codex 런타임 제거" (2026-10-12 기록)를 본다. 이 절과 다른 절의 codex 관련 내용(`turn/steer`, `codexAgentLoop`, codex 샌드박스, 번들 skill 끄기, codex 받기)은 역사 기록이다.
 
 - ChatGPT OAuth와 모델 호출은 codex app-server(JSON-RPC over stdio)로 한다. 토큰은 codex가 관리하고 앱은 읽지 않으며, API 키로 재사용하지 않는다. codex 설정, 로그인은 앱 전용 `<저장 루트>/codex`(CODEX_HOME)에 두어 사용자의 `~/.codex`와 섞지 않는다.
 - codex는 사용자가 설치하지 않고, 사용자가 설치한 codex는 버전이 같아도 쓰지 않는다. 앱이 codex app-server의 실험 API(`dynamicTools`, `thread/inject_items`, `turn/steer`, code mode)에 기대고 사용자 codex는 스스로 업데이트되기 때문이다. 버전은 npm `@openai/codex` 0.154.0으로 고정한다.
@@ -385,6 +393,12 @@
 - 권한 분류의 60초 제한은 provider 준비를 포함한다. timeout과 요청 실패, 예상하지 못한 결함은 사용자 확인으로 돌아가며, Fiber interruption은 전파한다. 턴 요약의 백그라운드 작업은 서비스 Scope 종료 시 취소한다.
 - 보조 호출의 UUID는 Crypto 서비스를 사용하고 기본 Node Layer는 NodeCrypto로 제공한다. RouteCatalog의 기본 시각은 런타임 Clock을 사용하고 snapshot 갱신은 Ref의 원자적 변경으로 기록한다.
 
+### codex 런타임 제거 (2026-10-12 기록)
+
+- codex app-server(JSON-RPC over stdio)와 번들 codex 런타임은 2026-09-19 커밋 `ca4a525`에서 제거했고, 구독 OAuth로 공급자 API를 직접 부르는 subscription provider runtime(`f3a2120`)이 대신한다. 이 결정을 늦게 기록한다.
+- 앱은 codex를 받거나 실행하지 않는다. codex 다운로드·재시도, `CODEX_HOME`, `turn/steer`, `codexAgentLoop`, codex 샌드박스와 skill 설정에 관한 앞의 결정은 역사 기록이며 현재 동작의 근거로 쓰지 않는다.
+- 코드에 남은 `codex` 이름은 Codex CLI 대화 가져오기(`imports/codex.ts`), 자격 증명 거부 경로 `.codex`, ChatGPT 구독 API의 공식 경로·originator 값, 외부 ACP 에이전트(codex-acp) 같은 런타임과 무관한 용도다.
+
 ### OAuth refresh 거절의 로그아웃 범위 (2026-10-12)
 
 - 앞의 "OAuth 로그인 만료"(2026-09-21)에서 refresh가 400·401·403이거나 응답을 읽지 못하면 로그인을 지우던 규칙을 좁힌다. 저장된 로그인은 refresh가 401이거나, 400이면서 OAuth 오류 코드가 `invalid_grant`일 때만 지운다.
@@ -444,6 +458,8 @@
 
 ### 긴 대화 줄이기 (2026-09-17)
 
+> 일부 대체됨: 25% 기준은 "일반 compact 최소 진입 제한 정리"(2026-09-25)에서 없앴다. 도구 결과 포인터와 요약 블록의 현재 규칙은 "요청 구성, compact와 프롬프트 캐시"(2026-09-21)를 따른다.
+
 - 모델에 보내는 대화는 그 모델의 컨텍스트에 대한 비율로 줄인다. 기준은 대화(추정)가 25%를 넘을 때와 55%를 넘을 때 두 가지다.
   - 컨텍스트 크기는 codex가 모델 호출마다 알려 주는 `modelContextWindow`를 모델별로 기억해 쓴다. 이 프로세스에서 아직 호출이 없으면 258,400(272k의 95%, 계정 모델이 모두 같음)으로 본다. `model/list`에는 이 값이 없다.
   - 토큰은 ASCII 4자에 1, 한글과 그 밖의 글자는 1자에 1로 센다. 기본 추정(글자 수 / 4)으로는 한국어 대화가 한참 넘친 뒤에야 줄인다.
@@ -470,6 +486,8 @@
 - 실제 서버 캐시 적중은 provider TTL·라우팅·최소 prefix 길이에 좌우되므로 보장하지 않는다. deterministic 평가는 wire-prefix 안정성을, runtime 지표는 provider가 보고한 `cachedTokens`와 cache ratio를 각각 측정한다.
 
 ### 채팅 기록 표시 (2026-09-24)
+
+> 일부 대체됨: `@tanstack/react-virtual` 가상화는 도입 뒤 스트리밍 Markdown(streamdown)과 도구 카드의 높이가 계속 바뀌어 메시지 간격이 어긋나서 제거했다("UI" 절의 2026-09-25 항목). 페이지 크기는 "History pagination의 실제 SDK 저장소 연결"(2026-10-07)에서 20개로 바꿨다.
 
 - 채팅은 서버에 저장된 기록을 처음에 최근 50개만 복원하고, 목록 위쪽으로 스크롤하면 커서로 이전 페이지를 가져온다. 활성 run과 승인 상태는 기록 페이지와 별도로 기존 TanStack AI 복원 계약을 따른다.
 - 클라이언트는 `@tanstack/react-virtual`로 화면 근처의 메시지만 렌더링한다. 메시지 높이는 `measureElement`로 측정하고 `anchorTo: "end"`와 안정적인 메시지 ID로 이전 페이지를 앞에 붙여도 보고 있던 위치를 유지한다. `followOnAppend`는 사용자가 아래쪽에 있을 때만 새 응답을 따라 내려간다. 목록 높이와 행 위치는 CSS 변수로 전달한다.
@@ -1259,7 +1277,7 @@
 - 이미 실제 저장소에 적용된 schema 49를 유지하며 추가 version을 만들지 않는다. 실패 run·uncertain RPC·durable Failure는 수정하지 않고 새 run만 허용한다. 같은 binding 검사 함수의 preview로 admission을 확인하며 메시지·모델 호출·재생은 하지 않는다.
 - DB의 `user_version`과 실제 column 계약이 실행 경계의 기준이다. app만 단일 `BEGIN IMMEDIATE`에서 lock 뒤 버전을 다시 읽고 pending migrations 전체를 atomic commit한다. worker/native reader는 실제 DB를 먼저 검증하고 mismatch 때 초기화·실행 전에 거부한다. 기존 generation/content hash 검증은 유지한다.
 - 기존 failed/blocked task에 active attempt가 없으면 실행 중 작업으로 보지 않는다. active attempt 또는 queued/running/waiting/resuming 작업, 다른 불확실한 쓰기는 복구를 계속 차단한다.
-- 사용자가 미출시 상태를 확인했으므로 구 release/downgrade 설치를 완료 조건으로 요구하지 않는다. 데이터 보존·중간 실패 rollback·동시 시작 검증은 유지한다. Windows packaging은 CI에서 검증한다.
+- 이 변경은 아직 정식 릴리스에 포함되지 않았으므로 canary 사이의 호환과 구 release로의 downgrade 설치를 완료 조건으로 요구하지 않는다(기준은 "하위호환 기준" 2026-10-12). 데이터 보존·중간 실패 rollback·동시 시작 검증은 유지한다. Windows packaging은 CI에서 검증한다.
 
 ### Subagent 보고서 조회의 확정된 읽기 실패 (2026-10-11)
 
@@ -1275,7 +1293,7 @@
 
 ### UI (2026-09-14)
 
-- 대화 기록은 커서 페이지네이션(50개씩)을 유지하고, 위쪽 Intersection Observer로 이전 페이지를 읽는다(2026-09-25). 스트리밍 Markdown과 도구 카드의 높이가 계속 변하므로 메시지 가상화는 제거하고 일반 문서 흐름으로 배치한다. 이전 페이지를 붙일 때 읽던 위치를 보존하고, 맨 아래를 보고 있을 때만 새 출력에 따라 스크롤한다.
+- 대화 기록은 커서 페이지네이션(50개씩, 2026-10-07부터 20개씩)을 유지하고, 위쪽 Intersection Observer로 이전 페이지를 읽는다(2026-09-25). 스트리밍 Markdown과 도구 카드의 높이가 계속 변하므로 메시지 가상화는 제거하고 일반 문서 흐름으로 배치한다. 이전 페이지를 붙일 때 읽던 위치를 보존하고, 맨 아래를 보고 있을 때만 새 출력에 따라 스크롤한다.
 - 답변은 streamdown으로 스트리밍 마크다운 렌더링한다. 플러그인은 코드 하이라이트(`@streamdown/code`)와 한글 강조(`@streamdown/cjk`)만 쓴다. shadcn의 AI Elements `message`는 Vercel AI SDK 타입과 mermaid, 수식 의존이 따라와서 쓰지 않는다.
 - 답변 속 이미지는 streamdown 기본대로 표시한다. 원격 이미지는 렌더링 순간 요청이 나가므로, 도구 결과를 통한 URL 유출 위험이 있다는 점을 알고 선택했다. 링크는 이동 전에 확인한다.
 - 입력 영역은 카드 하나(shadcn `input-group`)로 묶는다(2026-09-14 변경). 위에서부터 대기 메시지 목록, 첨부 이미지, 입력창, 툴바(첨부, 상태, 단축키, 중지, 전송) 순서다. 대기 메시지는 상태 아이콘과 짧은 라벨로 표시하고, 편집, 지우기 버튼은 행에 마우스를 올리거나 포커스할 때만 보인다. 단축키 안내(`kbd`)는 Enter의 뜻이 바뀌는 답변 중, 편집 중에만 넓은 화면에서 보여준다. 읽기 전용 탭에서는 입력 카드 대신 안내 카드(`item`)를 둔다.
