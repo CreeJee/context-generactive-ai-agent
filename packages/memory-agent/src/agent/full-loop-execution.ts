@@ -47,6 +47,11 @@ import {
 import type { ChatExecutionCapabilities, ChatExecutionTurn } from "./chat-execution.ts";
 import type { ExecutionAdmission } from "../runtime/execution-admission.ts";
 import {
+  pullModelChunk,
+  type OwnerModelStream,
+  type ProviderRetryOwner,
+} from "./full-loop-provider-retry.ts";
+import {
   assertFullLoopPortable,
   FullLoopAdmissionRejected,
 } from "./full-loop-admission-preflight.ts";
@@ -153,6 +158,8 @@ export interface FullLoopOwner {
   /** Owner-only asset lease hooks; stop releases only after the actual Worker terminates. */
   readonly onWorkerStarting?: () => void;
   readonly onWorkerStopped?: () => void;
+  /** Durable waits before resending a provider request that was never sent. */
+  readonly providerRetry?: ProviderRetryOwner;
 }
 
 // SDK values cross a JSON capability boundary, not a database/object-identity boundary.
@@ -351,7 +358,7 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
             const wireTurn = structuredClone({ ...turn, interrupts: definitions });
             // The SDK iterator owns this Scope across yields, including setup failures.
             const workerScope = Scope.makeUnsafe();
-            const models = MutableHashMap.empty<string, AsyncIterator<any>>();
+            const models = MutableHashMap.empty<string, OwnerModelStream>();
             let closed = false;
             let terminalObserved = false;
             let runningWorker: Worker | undefined;
@@ -377,8 +384,8 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                   Effect.ensuring(
                     Effect.sync(() => {
                       // Native SDK next() may be uncancellable; awaiting return() can deadlock the worker lease.
-                      for (const iterator of MutableHashMap.values(models))
-                        void iterator.return?.().catch(() => {});
+                      for (const model of MutableHashMap.values(models))
+                        void model.iterator.return?.().catch(() => {});
                     }),
                   ),
                 );
@@ -569,28 +576,37 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                         ownerContext.accumulatedContent = "";
                         ownerContext.currentMessageId = null;
                         ownerContext.phase = "modelStream";
-                        MutableHashMap.set(
-                          models,
-                          id,
+                        const request = {
+                          ...input,
+                          // Model configuration comes from the owner lifecycle, not
+                          // a worker's claim about canonical messages or SDK services.
+                          messages: structuredClone(
+                            ownerConfig.providerMessages ?? ownerContext.messages,
+                          ),
+                          systemPrompts: structuredClone(ownerContext.systemPrompts),
+                          modelOptions: ownerConfig.modelOptions,
+                          logger: ownerLogger,
+                          capabilities: ownerContext,
+                          runId: owner.capability.runId,
+                          threadId: owner.capability.sessionId,
+                          parentRunId: turn.parentRunId,
+                          approvals: new Map(input.approvals ?? []),
+                          abortController: controller,
+                          request: { signal: controller.signal },
+                        };
+                        // A resent request carries exactly what the provider never received.
+                        const open = () =>
                           chatStream({
-                            ...input,
-                            // Model configuration comes from the owner lifecycle, not
-                            // a worker's claim about canonical messages or SDK services.
-                            messages: structuredClone(
-                              ownerConfig.providerMessages ?? ownerContext.messages,
-                            ),
-                            systemPrompts: structuredClone(ownerContext.systemPrompts),
-                            modelOptions: ownerConfig.modelOptions,
-                            logger: ownerLogger,
-                            capabilities: ownerContext,
-                            runId: owner.capability.runId,
-                            threadId: owner.capability.sessionId,
-                            parentRunId: turn.parentRunId,
-                            approvals: new Map(input.approvals ?? []),
-                            abortController: controller,
-                            request: { signal: controller.signal },
-                          })[Symbol.asyncIterator](),
-                        );
+                            ...request,
+                            messages: structuredClone(request.messages),
+                            systemPrompts: structuredClone(request.systemPrompts),
+                            approvals: new Map(request.approvals),
+                          })[Symbol.asyncIterator]();
+                        MutableHashMap.set(models, id, {
+                          iterator: open(),
+                          open,
+                          delivered: false,
+                        });
                         return json({ id });
                       }),
                     ),
@@ -602,13 +618,13 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                     runNativeEffect(
                       Effect.gen(function* () {
                         input = decodeFullLoopValue(input);
-                        const iterator = Option.getOrUndefined(
-                          MutableHashMap.get(models, input.id),
-                        );
-                        if (!isTruthy(iterator)) throw new Error("Unknown owner model stream");
-                        const next = yield* owner.admission.run(
-                          "model",
-                          nativePromise(() => Promise.resolve(iterator.next())),
+                        const model = Option.getOrUndefined(MutableHashMap.get(models, input.id));
+                        if (!isTruthy(model)) throw new Error("Unknown owner model stream");
+                        const next = yield* pullModelChunk(
+                          model,
+                          owner.providerRetry,
+                          controller.signal,
+                          (pull) => owner.admission.run("model", pull),
                         );
                         if (isTruthy(next.done)) {
                           MutableHashMap.remove(models, input.id);

@@ -1,8 +1,9 @@
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-import { Array as EffectArray, Context, Effect, Layer, Schema } from "effect";
+import { Array as EffectArray, Clock, Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import { planSchedule, stalledEvidence } from "./plan-schedule.ts";
+import { endedWithoutEffectsSql } from "./run-bindings.ts";
 import type { WorkflowState } from "./workflow.ts";
 
 const blockerFields = {
@@ -41,10 +42,19 @@ export const WorkflowExecutionState = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("idle") }),
   Schema.Struct({ kind: Schema.Literal("running"), ...executionFields }),
   Schema.Struct({ kind: Schema.Literal("ready"), ...executionFields }),
+  /**
+   * A run cut off by a server restart before it ran any tool. A new run continues the Plan at
+   * `retryAt`: the time of the provider retry it was waiting for, or the restart itself.
+   */
+  Schema.Struct({ kind: Schema.Literal("retrying"), ...executionFields, retryAt: Schema.Finite }),
   Schema.Struct({
     kind: Schema.Literal("blocked"),
     runId: Schema.String,
-    reason: Schema.Literals([...WorkflowBlocker.fields.reason.literals, "dependency_stalled"]),
+    reason: Schema.Literals([
+      ...WorkflowBlocker.fields.reason.literals,
+      "dependency_stalled",
+      "server_restarted",
+    ]),
     ...blockerFields,
   }),
   Schema.Struct({
@@ -105,6 +115,9 @@ const executable = (state: WorkflowState) =>
 const make = Effect.gen(function* () {
   const { sqlite } = yield* Database;
   const select = sqlite.prepare("SELECT value FROM chat_metadata WHERE namespace = ? AND key = ?");
+  const endedWithoutEffects = sqlite.prepare(
+    `SELECT 1 AS ended FROM chat_runs r WHERE r.run_id = ? AND ${endedWithoutEffectsSql("r")}`,
+  );
   const upsert = sqlite.prepare(`INSERT INTO chat_metadata (namespace, key, value) VALUES (?, ?, ?)
     ON CONFLICT(namespace, key) DO UPDATE SET value = excluded.value`);
   const read = (sessionId: string): WorkflowExecutionState => {
@@ -115,43 +128,107 @@ const make = Effect.gen(function* () {
     upsert.run(namespace, sessionId, encode(state));
     return state;
   };
+  const sessionsIn = (kind: WorkflowExecutionState["kind"]) =>
+    sqlite
+      .prepare(
+        "SELECT key FROM chat_metadata WHERE namespace = ? AND json_extract(value, '$.kind') = ?",
+      )
+      .all(namespace, kind)
+      // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+      .map(
+        (row) =>
+          EffectFunction.flow(
+            Schema.decodeUnknownResult(Schema.Struct({ key: Schema.String })),
+            Result.getOrThrow,
+          )(row).key,
+      );
+  const current = (
+    sessionId: string,
+    runId: string,
+    state: WorkflowState,
+    kind: "ready" | "retrying",
+  ) => {
+    const execution = read(sessionId);
+    return (
+      execution.kind === kind &&
+      execution.runId === runId &&
+      executable(state) &&
+      execution.goalVersion === state.goal?.version &&
+      execution.planVersion === state.plan?.version &&
+      planSchedule(state.plan.steps).kind !== "stalled"
+    );
+  };
 
   return {
     get: Effect.fn("WorkflowExecution.get")((sessionId: string) =>
       storage("read", () => read(sessionId)),
     ),
     readySessions: Effect.fn("WorkflowExecution.readySessions")(() =>
+      storage("read", () => sessionsIn("ready")),
+    ),
+
+    /** Sessions whose restarted run continues at its `retryAt`, with that run. */
+    retryingSessions: Effect.fn("WorkflowExecution.retryingSessions")(() =>
       storage("read", () =>
-        sqlite
-          .prepare(
-            "SELECT key FROM chat_metadata WHERE namespace = ? AND json_extract(value, '$.kind') = 'ready'",
-          )
-          .all(namespace)
-          // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-          .map(
-            (row) =>
-              EffectFunction.flow(
-                Schema.decodeUnknownResult(Schema.Struct({ key: Schema.String })),
-                Result.getOrThrow,
-              )(row).key,
-          ),
+        sessionsIn("retrying").flatMap((sessionId) => {
+          const execution = read(sessionId);
+          return execution.kind === "retrying" ? [{ sessionId, runId: execution.runId }] : [];
+        }),
       ),
     ),
 
     canContinue: Effect.fn("WorkflowExecution.canContinue")(
       (sessionId: string, runId: string, state: WorkflowState) =>
-        storage("read", () => {
-          const execution = read(sessionId);
-          return (
-            execution.kind === "ready" &&
-            execution.runId === runId &&
-            executable(state) &&
-            execution.goalVersion === state.goal?.version &&
-            execution.planVersion === state.plan?.version &&
-            planSchedule(state.plan.steps).kind !== "stalled"
-          );
-        }),
+        storage("read", () => current(sessionId, runId, state, "ready")),
     ),
+
+    /**
+     * Whether a new run continues the Plan after `runId` was cut off by a restart: it ran no tool
+     * and its `retryAt` has passed. The ended run is not replayed.
+     */
+    canResume: Effect.fn("WorkflowExecution.canResume")(function* (
+      sessionId: string,
+      runId: string,
+      state: WorkflowState,
+    ) {
+      const now = yield* Clock.currentTimeMillis;
+      return yield* storage("read", () => {
+        const execution = read(sessionId);
+        return (
+          execution.kind === "retrying" &&
+          execution.retryAt <= now &&
+          current(sessionId, runId, state, "retrying") &&
+          endedWithoutEffects.get(runId) !== undefined
+        );
+      });
+    }),
+
+    /**
+     * Continuation of a running Goal whose run the previous process left unfinished. A run that ran
+     * no tool continues at `resumeAt` (now when absent); otherwise the run may have changed
+     * something a new run could repeat, so the session waits behind a blocker.
+     */
+    afterRestart: Effect.fn("WorkflowExecution.afterRestart")(function* (
+      sessionId: string,
+      runId: string,
+      resumeAt: number | undefined,
+    ) {
+      const now = yield* Clock.currentTimeMillis;
+      return yield* storage("write", () => {
+        const previous = read(sessionId);
+        if (previous.kind !== "running" || previous.runId !== runId) return previous;
+        return endedWithoutEffects.get(runId) !== undefined
+          ? save(sessionId, { ...previous, kind: "retrying", retryAt: resumeAt ?? now })
+          : save(sessionId, {
+              kind: "blocked",
+              runId,
+              reason: "server_restarted",
+              detail:
+                "도구를 실행한 뒤 서버가 다시 시작돼 자동으로 이어가지 않았어요. 실행 결과를 확인한 뒤 다시 보내 주세요.",
+              evidence: [runId, "Owner tool operation recorded before the restart"],
+            });
+      });
+    }),
 
     start: Effect.fn("WorkflowExecution.start")(
       (sessionId: string, runId: string, state: WorkflowState, userTurn: boolean) =>
@@ -159,15 +236,16 @@ const make = Effect.gen(function* () {
           if (!executable(state) || state.goal === null || state.plan === null) return;
           const previous = read(sessionId);
           if (previous.kind === "running" && previous.runId === runId) return;
+          const continued = previous.kind === "ready" || previous.kind === "retrying";
           save(sessionId, {
             kind: "running",
             runId,
             goalVersion: state.goal.version,
             planVersion: state.plan.version,
-            noProgressRuns: !userTurn && previous.kind === "ready" ? previous.noProgressRuns : 0,
+            noProgressRuns: !userTurn && continued ? previous.noProgressRuns : 0,
             progress: progressOf(
               state,
-              !userTurn && previous.kind === "ready" ? previous.progress.toolResults : [],
+              !userTurn && continued ? previous.progress.toolResults : [],
             ),
           });
         }),
@@ -246,7 +324,8 @@ const make = Effect.gen(function* () {
       (sessionId: string, runId: string, blocker: WorkflowBlocker) =>
         storage("write", () => {
           const current = read(sessionId);
-          if (current.kind !== "ready" || current.runId !== runId) return;
+          if ((current.kind !== "ready" && current.kind !== "retrying") || current.runId !== runId)
+            return;
           save(sessionId, { kind: "blocked", runId, ...blocker });
         }),
     ),
