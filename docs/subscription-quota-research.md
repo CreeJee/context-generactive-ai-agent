@@ -22,9 +22,11 @@ This is a source/permission review, **not** an authenticated test. No account to
 2. If a permitted route does not supply a field, return **조회 불가/미확인** with no fabricated number. If a stale response exists, label its observation time and error explicitly; do not substitute locally counted tokens or silently reset elapsed percentages to zero.
 3. Confirm how to handle current Anthropic OAuth in light of the official restriction (e.g. supported API-key path or an unmodified Claude Code integration, subject to actual terms). This is a blocking scope/design decision before M5 and UI claims about Claude subscription quota.
 
-**M5 status (2026-10-12):** `GET /api/accounts/quota?provider=` returns, per local account, `unavailable` with reason `no_permitted_route` (OpenAI) or `provider_policy_restricted` (Anthropic). No internal usage endpoint is called and no local token count is shown as quota. The response type already distinguishes `observed` and `stale` values for a future allowed route; V1 and any adoption decision remain with the user.
+**M5 status (2026-10-12):** `GET /api/accounts/quota?provider=` returns, per local account, `unavailable` with reason `no_permitted_route` (OpenAI) or `provider_policy_restricted` (Anthropic). No internal usage endpoint is called and no local token count is shown as quota. The response type already distinguishes `observed` and `stale` values for a future allowed route; V1 has since been run once (below); adopting any route remains the user's decision.
 
-## V1 — existing Claude login, live usage check (2026-10-12): stopped before any call
+## V1 — first attempt (2026-10-12): stopped before any call
+
+Superseded by the [app-code V1 run](#v1--app-code-run-2026-10-12-one-request-http-200) below, after the user approved reading the app DB read-only and the refresh risk.
 
 Outcome: **aborted before reading any credential or calling any endpoint.** No token was read, no request was sent to `api.anthropic.com/api/oauth/usage` (or anywhere else), and no new login was started. There is no status, field list or time window to record from a live response.
 
@@ -38,3 +40,23 @@ What would unblock a future V1 (user decision, not done here):
 
 - Choose the account explicitly, either by letting app code read the profile list from the DB (secret-free: profile ID, label, selection) or by the user naming the profile ID. Then read only that profile's slot, with no refresh: if the access token has expired, stop rather than rotate.
 - Resolve the M4 policy finding first. A successful response would still be evidence only. M5 stays `unavailable` (`provider_policy_restricted` for Anthropic, `no_permitted_route` for OpenAI) unless the user decides to adopt a route.
+
+## V1 — app-code run (2026-10-12): one request, HTTP 200
+
+The user approved V1, including the risk that a token refresh could disturb the current login. Only app code touched the DB and credential: [`eval/anthropic-usage-probe.ts`](../packages/memory-agent/eval/anthropic-usage-probe.ts) calling [`anthropicSubscriptionUsageProbe`](../packages/memory-agent/src/oauth/subscription-usage-probe.ts). No secret, email, token or response value was printed or recorded.
+
+- **DB access:** `Database.layer` cannot open read-only (every open sets WAL and runs `migrateDatabase`, which starts `BEGIN IMMEDIATE` and `CREATE TABLE IF NOT EXISTS effect_sql_migrations`). The probe therefore uses the app's existing read-only path from `eval/live-delegation.ts`: `new DatabaseSync(~/.context-generactive-agent/agent.db, { readOnly: true })` + `listOAuthProfiles({ provider: "anthropic" })`. No migration and no DB write.
+- **Account attribution:** exactly one Anthropic profile, so the probe proceeded: profile ID `legacy-anthropic`, label "Claude (이전 계정)", `selected: true`. Its credential was read from that profile's keychain slot via `createKeychainProfileCredentialStore`.
+- **Token:** the stored access token was still valid (app margin: expires more than 30 s ahead), so **no refresh happened** and nothing was written to the keychain.
+- **Request:** exactly one `GET https://api.anthropic.com/api/oauth/usage` with the app's Anthropic OAuth headers and bearer, no retry. **Status 200.**
+- **Top-level fields (names only):** `five_hour`, `seven_day`, `seven_day_oauth_apps`, `seven_day_opus`, `seven_day_sonnet`, `seven_day_cowork`, `seven_day_omelette`, `tangelo`, `iguana_necktie`, `omelette_promotional`, `nimbus_quill`, `cinder_cove`, `copper_kite`, `brass_thimble`, `harbor_lantern`, `wattle_ember`, `amber_ladder`, `amber_cistern`, `juniper_tide`, `cedar_ember`, `amber_gauge`, `extra_usage`, `limits`, `spend`, `member_dashboard_available`, `seven_day_breakdown`, `weekly_scoped_shares`.
+- **Windows** (objects whose `utilization` was a number or null in this response):
+  - `five_hour`, `seven_day`, `iguana_necktie`: `utilization`, `resets_at`, `limit_dollars`, `used_dollars`, `remaining_dollars`, `locked_reason`.
+  - `extra_usage`: `utilization`, `is_enabled`, `monthly_limit`, `used_credits`, `currency`, `decimal_places`, `disabled_reason`, `user_disabled`, `spend_limit_reached`, `credits_ever_enabled`, `daily`, `weekly`.
+  - The other `seven_day_*` fields and the code-named fields were not window objects in this response (for example `null`), so their shape is unobserved.
+
+What this shows and does not show:
+
+- The endpoint answers this app's stored consumer-login token with provider-reported `five_hour`/`seven_day` utilization and reset times, matching the jcode parser. It is one observation of one account; the schema is undocumented and has many code-named fields that may change without notice.
+- It does **not** resolve the M4 policy finding: the call is exactly the third-party use of Claude.ai credentials that Anthropic's credential-use terms restrict.
+- **M5 is unchanged:** `SubscriptionQuota` still returns `unavailable` / `provider_policy_restricted` for Anthropic. Adopting this route (and which windows to show) is the user's decision.
