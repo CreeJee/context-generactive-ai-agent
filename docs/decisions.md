@@ -420,6 +420,7 @@
 ### 계정별 구독 쿼터 상태 (2026-10-12)
 
 - 계정별 구독 쿼터는 `GET /api/accounts/quota?provider=`가 `observed`·`stale`·`unavailable` 상태의 서로소 유니온으로 돌려준다. 공급자별 경로는 `subscriptionQuotaRoutes` 정적 표가 정한다. 허용·검증된 경로가 없으므로 OpenAI는 `no_permitted_route`, Anthropic은 `provider_policy_restricted`로 조회 불가를 명시하고 내부 사용량 엔드포인트(`/wham/usage`, `/api/oauth/usage`)는 호출하지 않는다. 로컬 토큰·응답 수로 대신하지 않는다. V1 실계정 검증과 비공식 경로 채택은 사용자 결정 전까지 하지 않는다.
+- V1(2026-10-12, 사용자 승인): 앱 코드(`anthropicSubscriptionUsageProbe`, `eval/anthropic-usage-probe.ts`)로 앱 DB를 읽기 전용으로 열어 유일한 Anthropic 프로필을 고르고 `/api/oauth/usage`에 1회 요청했다. `Database.layer`는 열 때 항상 migration 트랜잭션을 시작해 읽기 전용으로 열 수 없으므로, 기존 eval과 같은 `readOnly` `DatabaseSync` + `listOAuthProfiles` 경로를 쓴다. 응답은 200이었지만 증거일 뿐이며 `SubscriptionQuota`는 사용자가 채택을 결정하기 전까지 `unavailable`을 유지한다. 결과는 [subscription-quota-research.md](subscription-quota-research.md)에 있다.
 
 ## 대화·실행·기록
 
