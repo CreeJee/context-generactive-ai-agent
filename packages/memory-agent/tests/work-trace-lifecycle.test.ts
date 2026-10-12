@@ -274,6 +274,11 @@ describe("Work Trace task lifecycle", () => {
             .run(DateTime.formatIso(DateTime.makeUnsafe(0)));
           db.sqlite
             .prepare(
+              "INSERT INTO nodes_morph (rowid, terms) SELECT seq, 'private lifecycle' FROM nodes WHERE id = 'user-1'",
+            )
+            .run();
+          db.sqlite
+            .prepare(
               "INSERT INTO chat_threads (thread_id, messages, updated_at) VALUES ('s1', '[]', 1)",
             )
             .run();
@@ -336,6 +341,13 @@ describe("Work Trace task lifecycle", () => {
           expect(
             db.sqlite
               .prepare("SELECT count(*) AS count FROM nodes_fts WHERE nodes_fts MATCH 'lifecycle'")
+              .get(),
+          ).toEqual({ count: 0 });
+          expect(
+            db.sqlite
+              .prepare(
+                "SELECT count(*) AS count FROM nodes_morph WHERE nodes_morph MATCH 'lifecycle'",
+              )
               .get(),
           ).toEqual({ count: 0 });
         }),
