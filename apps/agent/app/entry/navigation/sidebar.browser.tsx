@@ -5,9 +5,9 @@ import { render } from "vitest-browser-react";
 import { describe, expect } from "vite-plus/test";
 import "../../app.css";
 import { AccountModelPanel } from "./account-model-panel";
-import { AccountProfiles } from "./account-profiles";
+import { AccountManagerList } from "./account-profiles";
 import { AccountSwitcherMenu } from "./account-switcher";
-import { AccountSection, ModelSection, ProjectSection } from "./sidebar";
+import { ModelSection, ProjectSection } from "./sidebar";
 
 const alignedTerms = (root: HTMLElement, expected: string[]) => {
   const rows = [...root.querySelectorAll("dl > div")];
@@ -58,7 +58,7 @@ describe("sidebar disclosures", () => {
       );
     }),
   );
-  it.live("account and model settings use the same data list columns", () =>
+  it.live("model settings use the same data list columns", () =>
     Effect.gen(function* () {
       const screen = yield* sdkCall(() =>
         render(
@@ -69,12 +69,6 @@ describe("sidebar disclosures", () => {
               selection={{ provider: "openai", model: "model-1", reasoningEffort: "medium" }}
               modelName="Model 1"
             >
-              <AccountSection
-                provider="openai"
-                auth={{ provider: "openai", status: "signed-in" }}
-                onProviderChange={() => {}}
-                onAction={() => {}}
-              />
               <ModelSection
                 models={[
                   {
@@ -96,7 +90,7 @@ describe("sidebar disclosures", () => {
       );
 
       yield* sdkCall(() => screen.getByRole("button", { name: /Model 1/ }).click());
-      alignedTerms(screen.container, ["계정", "연결", "모델", "추론"]);
+      alignedTerms(screen.container, ["모델", "추론"]);
     }),
   );
 
@@ -135,55 +129,78 @@ describe("sidebar disclosures", () => {
     }),
   );
 
-  it.live("expanded accounts show each account's quota status and switch accounts", () =>
+  it.live("the account manager lists every provider's accounts in one editable list", () =>
     Effect.gen(function* () {
       const actions: unknown[] = [];
-      const unavailable = { status: "unavailable", reason: "credential_expired" } as const;
+      const observed = {
+        status: "observed",
+        windows: [{ name: "five_hour", usedPercent: 37, windowSeconds: 18_000, resetsAt: null }],
+        observedAt: "2026-10-12T00:00:00.000Z",
+      } as const;
       const screen = yield* sdkCall(() =>
         render(
-          <div className="w-72">
-            <AccountProfiles
-              view={{
-                profiles: [
-                  { id: "a", provider: "openai", label: "개인", selected: true, createdAt: 1 },
-                  { id: "b", provider: "openai", label: "회사", selected: false, createdAt: 2 },
-                ],
-                login: { status: "idle" },
-              }}
-              quota={{
-                provider: "openai",
-                checkedAt: "2026-10-12T00:00:00.000Z",
-                accounts: [
-                  { accountId: "a", label: "개인", selected: true, quota: unavailable },
-                  {
-                    accountId: "b",
-                    label: "회사",
-                    selected: false,
-                    quota: {
-                      status: "observed",
-                      windows: [
-                        {
-                          name: "five_hour",
-                          usedPercent: 37,
-                          windowSeconds: 18_000,
-                          resetsAt: null,
-                        },
-                      ],
-                      observedAt: "2026-10-12T00:00:00.000Z",
-                    },
+          <div className="w-96">
+            <AccountManagerList
+              providers={[
+                {
+                  provider: "openai",
+                  auth: { provider: "openai", status: "signed-in" },
+                  view: {
+                    profiles: [
+                      { id: "a", provider: "openai", label: "개인", selected: true, createdAt: 1 },
+                    ],
+                    login: { status: "idle" },
                   },
-                ],
-              }}
-              quotaFailed={false}
+                  quota: {
+                    provider: "openai",
+                    checkedAt: "2026-10-12T00:00:00.000Z",
+                    accounts: [
+                      {
+                        accountId: "a",
+                        label: "개인",
+                        selected: true,
+                        quota: { status: "unavailable", reason: "credential_expired" },
+                      },
+                    ],
+                  },
+                  quotaFailed: false,
+                  busy: false,
+                },
+                {
+                  provider: "anthropic",
+                  auth: { provider: "anthropic", status: "signed-in" },
+                  view: {
+                    profiles: [
+                      {
+                        id: "c",
+                        provider: "anthropic",
+                        label: "회사",
+                        selected: true,
+                        createdAt: 2,
+                      },
+                    ],
+                    login: { status: "idle" },
+                  },
+                  quota: {
+                    provider: "anthropic",
+                    checkedAt: "2026-10-12T00:00:00.000Z",
+                    accounts: [{ accountId: "c", label: "회사", selected: true, quota: observed }],
+                  },
+                  quotaFailed: false,
+                  busy: false,
+                },
+              ]}
+              activeProvider="openai"
+              compatibleConfigured={false}
               error={null}
-              busy={false}
-              onAction={(action) => actions.push(action)}
+              onAction={(provider, action) => actions.push({ provider, action })}
+              onConfigureCompatible={() => {}}
             />
           </div>,
         ),
       );
 
-      const personal = screen.getByRole("listitem", { name: "개인" });
+      const personal = screen.getByRole("listitem", { name: "개인 (ChatGPT)" });
       yield* sdkCall(() => expect.element(personal.getByText("사용 중")).toBeVisible());
       yield* sdkCall(() =>
         expect
@@ -192,14 +209,25 @@ describe("sidebar disclosures", () => {
           )
           .toBeVisible(),
       );
-      const work = screen.getByRole("listitem", { name: "회사" });
+      // Only the provider in use has an account in use, though each provider keeps a selection.
+      const work = screen.getByRole("listitem", { name: "회사 (Claude)" });
+      yield* sdkCall(() => expect.element(work.getByText("사용 중")).not.toBeInTheDocument());
       yield* sdkCall(() =>
         expect
           .element(work.getByRole("meter", { name: "5시간" }))
           .toHaveAttribute("aria-valuenow", "37"),
       );
-      yield* sdkCall(() => work.getByRole("button", { name: "전환" }).click());
-      expect(actions).toEqual([{ intent: "select", accountId: "b" }]);
+      yield* sdkCall(() => work.getByRole("button", { name: "회사 이름 변경" }).click());
+      yield* sdkCall(() => work.getByRole("textbox", { name: "계정 이름" }).fill("팀"));
+      yield* sdkCall(() => work.getByRole("button", { name: "이름 저장" }).click());
+
+      yield* sdkCall(() => screen.getByRole("button", { name: "계정 추가" }).click());
+      yield* sdkCall(() => screen.getByRole("textbox", { name: "새 계정 이름" }).fill("부계정"));
+      yield* sdkCall(() => screen.getByRole("button", { name: "ChatGPT로 로그인" }).click());
+      expect(actions).toEqual([
+        { provider: "anthropic", action: { intent: "rename", accountId: "c", label: "팀" } },
+        { provider: "openai", action: { intent: "add", label: "부계정" } },
+      ]);
     }),
   );
 
@@ -208,6 +236,7 @@ describe("sidebar disclosures", () => {
     () =>
       Effect.gen(function* () {
         const switched: unknown[] = [];
+        let managed = 0;
         const screen = yield* sdkCall(() =>
           render(
             <div className="w-72">
@@ -256,7 +285,7 @@ describe("sidebar disclosures", () => {
                 error={null}
                 onSwitch={(target) => switched.push(target)}
                 onConfigureCompatible={() => {}}
-                onManage={() => {}}
+                onManage={() => void (managed += 1)}
               />
             </div>,
           ),
@@ -278,6 +307,8 @@ describe("sidebar disclosures", () => {
         );
         yield* sdkCall(() => work.click());
         expect(switched).toEqual([{ provider: "anthropic", accountId: "c" }]);
+        yield* sdkCall(() => screen.getByRole("button", { name: "계정 관리" }).click());
+        expect(managed).toBe(1);
       }),
   );
 });

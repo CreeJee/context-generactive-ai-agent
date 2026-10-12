@@ -54,158 +54,15 @@ import { Spinner } from "~/components/ui/spinner";
 import { Switch } from "~/components/ui/switch";
 import { dayAndTime } from "~/lib/dates";
 import { cn } from "~/lib/utils";
-import type {
-  ProviderModel,
-  ModelSelection,
-  PermissionMode,
-  ProviderAuthState,
-  ProviderId,
-  Project,
-  Session,
-} from "../api";
+import type { ProviderModel, ModelSelection, PermissionMode, Project, Session } from "../api";
 import { DataList, DataListItem } from "~/components/ui/data-list";
 import { SidebarDisclosureTrigger } from "./sidebar-disclosure-trigger";
-
-import { providerLabels, providerOptions, isProviderId } from "./providers";
-import { openSettingsOverlay } from "../settings/open-settings";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section aria-label={title} className="px-3 py-2 not-last:border-b">
       <DataList className="grid-cols-[3.5rem_minmax(0,1fr)]">{children}</DataList>
     </section>
-  );
-}
-
-export function AccountSection({
-  auth,
-  provider,
-  onProviderChange,
-  onAction,
-  profiles,
-}: {
-  auth: ProviderAuthState | null;
-  provider: ProviderId;
-  onProviderChange: (provider: ProviderId) => void;
-  onAction: (intent: "login" | "cancel" | "logout") => void;
-  /** The subscription provider's local accounts and quota, shown only when expanded. */
-  profiles?: React.ReactNode;
-}) {
-  return (
-    <Section title="구독 계정">
-      <DataListItem term="계정">
-        <Select
-          value={provider}
-          items={providerOptions}
-          onValueChange={(value) => value && isProviderId(value) && onProviderChange(value)}
-        >
-          <SelectTrigger className="w-full" size="sm" aria-label="구독 계정">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {providerOptions.map(({ value, label }) => (
-              <SelectItem key={value} value={value}>
-                {label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </DataListItem>
-      {provider === "openai-compatible" ? (
-        <DataListItem term="설정">
-          <div className="flex flex-col gap-2">
-            <span className="text-xs">{auth?.status === "signed-in" ? "설정됨" : "설정 필요"}</span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => openSettingsOverlay({ project: null, initialPage: "compatible" })}
-            >
-              호환 공급자 설정
-            </Button>
-          </div>
-        </DataListItem>
-      ) : (
-        <>
-          {!(auth !== null) && (
-            <DataListItem term="연결">
-              <Spinner />
-            </DataListItem>
-          )}
-          {auth?.status === "signed-in" && (
-            <DataListItem term="연결">
-              <div className="flex min-w-0 items-center gap-1.5">
-                <Badge variant="secondary">연결됨</Badge>
-                {auth.planType && (
-                  <span className="min-w-0 truncate text-xs text-muted-foreground">
-                    {auth.planType}
-                  </span>
-                )}
-              </div>
-            </DataListItem>
-          )}
-          {auth?.status === "pending" && (
-            <DataListItem term="연결">
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center gap-2 text-xs">
-                  <Spinner /> 브라우저에서 로그인을 완료하세요
-                </div>
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => window.open(auth.authUrl, "_blank", "noopener")}
-                  >
-                    로그인 창 다시 열기
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={() => onAction("cancel")}>
-                    취소
-                  </Button>
-                </div>
-              </div>
-            </DataListItem>
-          )}
-          {(auth?.status === "signed-out" || auth?.status === "error") && (
-            <DataListItem term="연결">
-              <div className="flex flex-col gap-2">
-                {auth.status === "error" && (
-                  <Alert variant="destructive" className="min-w-0">
-                    <AlertDescription className="min-w-0 wrap-break-word">
-                      {auth.message}
-                      {(auth.code || auth.httpStatus || auth.providerCode) && (
-                        <Collapsible className="mt-2 text-2xs">
-                          <CollapsibleTrigger className="group flex items-center gap-1 text-left">
-                            <ChevronRightIcon
-                              aria-hidden="true"
-                              className="size-3 transition-transform group-data-[panel-open]:rotate-90"
-                            />
-                            진단 정보
-                          </CollapsibleTrigger>
-                          <CollapsibleContent className="mt-1 space-y-0.5 break-all font-mono">
-                            {auth.code && <div>code: {auth.code}</div>}
-                            {auth.operation && <div>operation: {auth.operation}</div>}
-                            {auth.httpStatus && <div>HTTP: {auth.httpStatus}</div>}
-                            {auth.providerCode && <div>provider code: {auth.providerCode}</div>}
-                            {auth.credentialStage && (
-                              <div>credential stage: {auth.credentialStage}</div>
-                            )}
-                            {auth.transportCode && <div>transport code: {auth.transportCode}</div>}
-                            {auth.proxyRoute && <div>proxy route: {auth.proxyRoute}</div>}
-                          </CollapsibleContent>
-                        </Collapsible>
-                      )}
-                    </AlertDescription>
-                  </Alert>
-                )}
-                <Button onClick={() => onAction("login")}>
-                  {providerLabels[provider]}로 로그인
-                </Button>
-              </div>
-            </DataListItem>
-          )}
-          {profiles && <DataListItem term="계정 목록">{profiles}</DataListItem>}
-        </>
-      )}
-    </Section>
   );
 }
 

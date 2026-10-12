@@ -51,28 +51,6 @@ export function useEmbeddingMutation() {
   });
 }
 
-export function useAuthActionMutation(provider: ProviderId) {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: (intent: "login" | "cancel" | "logout") => api.authAction(intent, provider),
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    onSuccess: () =>
-      runUiEffect(
-        Effect.all(
-          [
-            uiPromise(() =>
-              client.invalidateQueries({ queryKey: globalQueries.auth(provider).queryKey }),
-            ),
-            uiPromise(() =>
-              client.invalidateQueries({ queryKey: appQueryKeys.global.models(provider) }),
-            ),
-          ],
-          { concurrency: "unbounded" },
-        ).pipe(Effect.asVoid),
-      ),
-  });
-}
-
 /** A switched or removed account changes the provider's auth, models and quota rows. */
 export function useAccountActionMutation(provider: SubscriptionAccountProvider) {
   const client = useQueryClient();

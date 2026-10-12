@@ -1,13 +1,12 @@
 import { Meter } from "@base-ui/react/meter";
 import { cn } from "cn";
-import { CheckIcon, ChevronsUpDownIcon, PlugIcon, UsersIcon } from "lucide-react";
+import { CheckIcon, ChevronsUpDownIcon, Settings2Icon } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu";
 import type {
@@ -17,10 +16,11 @@ import type {
   SubscriptionAccountProvider,
   SubscriptionQuotaReport,
 } from "../api";
+import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
 import { useAccountQuotaQuery, useAccountsQuery } from "../queries/global";
 import type { AccountTarget } from "../queries/mutations/global";
-import { gaugeTone, windowLabel } from "./account-profiles";
+import { AccountName, gaugeTone, ProviderMark, windowLabel } from "./account-profiles";
 import { providerLabels } from "./providers";
 
 type QuotaStatus = SubscriptionQuotaReport["accounts"][number]["quota"];
@@ -62,36 +62,6 @@ const entryLabel = (entry: AccountEntry) => {
       return "직접 설정한 엔드포인트";
   }
 };
-
-/** First letters collide (ChatGPT, Claude), so each provider has its own mark. */
-const providerMark = (provider: SubscriptionAccountProvider) => {
-  switch (provider) {
-    case "openai":
-      return "G";
-    case "anthropic":
-      return "A";
-  }
-};
-
-function ProviderMark({ provider }: { provider: ProviderId }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={cn(
-        "flex size-7 shrink-0 items-center justify-center rounded-md text-xs font-semibold",
-        provider === "openai" && "bg-foreground text-background",
-        provider === "anthropic" && "bg-warning/20 text-warning",
-        provider === "openai-compatible" && "bg-muted text-muted-foreground",
-      )}
-    >
-      {provider === "openai-compatible" ? (
-        <PlugIcon className="size-3.5" />
-      ) : (
-        providerMark(provider)
-      )}
-    </span>
-  );
-}
 
 /** Per-window bars on their own line, so a narrow sidebar shrinks the bars instead of wrapping text. */
 function QuotaBars({ quota }: { quota: QuotaStatus | undefined }) {
@@ -151,16 +121,22 @@ const entryNote = (entry: AccountEntry): string | null => {
   }
 };
 
+/** Provider and name on one line; the quota bars, or why there are none, below it. */
 function EntrySummary({ entry }: { entry: AccountEntry }) {
   const note = entryNote(entry);
+  const quota = entry.kind === "profile" ? entry.quota : undefined;
   return (
     <span className="flex min-w-0 flex-1 flex-col gap-0.5 text-left">
-      <span className="truncate text-xs font-medium">{entryLabel(entry)}</span>
-      <span className="truncate text-2xs text-muted-foreground">
-        {providerLabels[entryProvider(entry)]}
-        {note !== null && ` · ${note}`}
+      <span className="flex min-w-0">
+        <AccountName provider={entryProvider(entry)} label={entryLabel(entry)} />
       </span>
-      {entry.kind === "profile" && <QuotaBars quota={entry.quota} />}
+      {quota !== undefined && quota.status !== "unavailable" ? (
+        <span className="flex min-w-0" title={note ?? undefined}>
+          <QuotaBars quota={quota} />
+        </span>
+      ) : (
+        note !== null && <span className="truncate text-2xs text-muted-foreground">{note}</span>
+      )}
     </span>
   );
 }
@@ -185,77 +161,84 @@ export function AccountSwitcherMenu({
   return (
     <div className="flex flex-col gap-1 border-t p-2">
       {error && <p className="px-1 text-2xs text-destructive">{error}</p>}
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          aria-busy={busy}
-          aria-label={
-            current !== undefined
-              ? `계정 전환: ${entryLabel(current)} (${providerLabels[entryProvider(current)]})`
-              : "계정 전환"
-          }
-          render={
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 rounded-md px-1.5 py-1.5 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/30 data-popup-open:bg-accent"
-            />
-          }
+      <div className="flex items-center gap-1">
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            aria-busy={busy}
+            aria-label={
+              current !== undefined
+                ? `계정 전환: ${entryLabel(current)} (${providerLabels[entryProvider(current)]})`
+                : "계정 전환"
+            }
+            render={
+              <button
+                type="button"
+                className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/30 data-popup-open:bg-accent"
+              />
+            }
+          >
+            {current !== undefined ? (
+              <>
+                <ProviderMark provider={entryProvider(current)} />
+                <EntrySummary entry={current} />
+              </>
+            ) : (
+              <>
+                <ProviderMark provider="openai-compatible" />
+                <span className="flex-1 text-left text-xs text-muted-foreground">
+                  연결된 계정이 없어요
+                </span>
+              </>
+            )}
+            {busy ? (
+              <Spinner className="size-3.5 shrink-0" />
+            ) : (
+              <ChevronsUpDownIcon
+                aria-hidden="true"
+                className="size-3.5 shrink-0 text-muted-foreground"
+              />
+            )}
+          </DropdownMenuTrigger>
+          <DropdownMenuContent side="top" align="start" className="w-(--anchor-width) min-w-72">
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>계정 전환</DropdownMenuLabel>
+              {entries.map((entry) => (
+                <DropdownMenuItem
+                  key={entryKey(entry)}
+                  aria-label={`${entryLabel(entry)} (${providerLabels[entryProvider(entry)]})`}
+                  onClick={() => {
+                    if (entry.current) return;
+                    switch (entry.kind) {
+                      case "profile":
+                        return onSwitch({ provider: entry.provider, accountId: entry.profile.id });
+                      case "compatible":
+                        return entry.configured
+                          ? onSwitch({ provider: "openai-compatible" })
+                          : onConfigureCompatible();
+                    }
+                  }}
+                >
+                  <ProviderMark provider={entryProvider(entry)} />
+                  <EntrySummary entry={entry} />
+                  <CheckIcon
+                    aria-hidden="true"
+                    className={cn("shrink-0", !entry.current && "invisible")}
+                  />
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="계정 관리"
+          title="계정 추가·수정·로그아웃"
+          onClick={onManage}
         >
-          {current !== undefined ? (
-            <>
-              <ProviderMark provider={entryProvider(current)} />
-              <EntrySummary entry={current} />
-            </>
-          ) : (
-            <>
-              <ProviderMark provider="openai-compatible" />
-              <span className="flex-1 text-left text-xs text-muted-foreground">
-                연결된 계정이 없어요
-              </span>
-            </>
-          )}
-          {busy ? (
-            <Spinner className="size-3.5 shrink-0" />
-          ) : (
-            <ChevronsUpDownIcon
-              aria-hidden="true"
-              className="size-3.5 shrink-0 text-muted-foreground"
-            />
-          )}
-        </DropdownMenuTrigger>
-        <DropdownMenuContent side="top" align="start" className="w-(--anchor-width) min-w-64">
-          <DropdownMenuGroup>
-            <DropdownMenuLabel>계정 전환</DropdownMenuLabel>
-            {entries.map((entry) => (
-              <DropdownMenuItem
-                key={entryKey(entry)}
-                aria-label={`${entryLabel(entry)} (${providerLabels[entryProvider(entry)]})`}
-                onClick={() => {
-                  if (entry.current) return;
-                  switch (entry.kind) {
-                    case "profile":
-                      return onSwitch({ provider: entry.provider, accountId: entry.profile.id });
-                    case "compatible":
-                      return entry.configured
-                        ? onSwitch({ provider: "openai-compatible" })
-                        : onConfigureCompatible();
-                  }
-                }}
-              >
-                <ProviderMark provider={entryProvider(entry)} />
-                <EntrySummary entry={entry} />
-                <CheckIcon
-                  aria-hidden="true"
-                  className={cn("shrink-0", !entry.current && "invisible")}
-                />
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuGroup>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={onManage}>
-            <UsersIcon /> 계정 추가·관리
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+          <Settings2Icon />
+        </Button>
+      </div>
     </div>
   );
 }

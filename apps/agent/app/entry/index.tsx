@@ -4,7 +4,6 @@ import { isTruthy } from "../truthy.ts";
 import { useAuthQuery, useModelsQuery, useProjectsQuery } from "./queries/global";
 import {
   useAddProjectMutation,
-  useAuthActionMutation,
   useSelectModelMutation,
   useSwitchAccountMutation,
   type AccountTarget,
@@ -36,12 +35,12 @@ import {
 import { Separator } from "~/components/ui/separator";
 import { Button } from "~/components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "~/components/ui/dialog";
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "~/components/ui/sheet";
 import {
   archiveErrorMessage,
   projectErrorMessage,
@@ -53,9 +52,9 @@ import { AppEventsProvider, SessionEventsProvider } from "./events/providers";
 import { ThemeSelect } from "./shared/theme";
 import { pageHolder } from "./session/session-lease";
 import { openSettingsOverlay } from "./settings/open-settings";
-import { AccountSection, ModelSection, ProjectSection, SessionSection } from "./navigation/sidebar";
+import { ModelSection, ProjectSection, SessionSection } from "./navigation/sidebar";
 import { AccountModelPanel } from "./navigation/account-model-panel";
-import { SubscriptionAccounts } from "./navigation/account-profiles";
+import { AccountManager } from "./navigation/account-profiles";
 import { AccountSwitcher } from "./navigation/account-switcher";
 import { WorkTracePanel } from "./chat/work-trace-panel";
 import { BtwPanel } from "./chat/btw-panel";
@@ -113,7 +112,6 @@ export function App() {
   const projectsQuery = useProjectsQuery();
   const projects = projectsQuery.data ?? [];
   const [{ project: projectId, session: sessionId }, setLocation] = useQueryStates(locationParsers);
-  const authMutation = useAuthActionMutation(provider);
   const addProjectMutation = useAddProjectMutation();
   const modelMutation = useSelectModelMutation(provider);
   const switchMutation = useSwitchAccountMutation();
@@ -261,15 +259,6 @@ export function App() {
             }),
           ),
         );
-      }),
-    );
-
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const authAction = (intent: "login" | "cancel" | "logout") =>
-    runUiEffect(
-      Effect.gen(function* () {
-        const state = yield* uiPromise(() => authMutation.mutateAsync(intent));
-        if (state.status === "pending") window.open(state.authUrl, "_blank", "noopener");
       }),
     );
 
@@ -523,27 +512,27 @@ export function App() {
                 onManage={() => setAccountsOpen(true)}
               />
             </div>
-            <Dialog open={accountsOpen} onOpenChange={setAccountsOpen}>
-              <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-md">
-                <DialogHeader>
-                  <DialogTitle>계정 추가·관리</DialogTitle>
-                  <DialogDescription>
-                    공급자별로 계정을 추가하고, 계정마다 ⋯ 메뉴에서 이름을 바꾸거나 로그아웃해요.
-                  </DialogDescription>
-                </DialogHeader>
-                <AccountSection
-                  auth={auth[provider]}
-                  provider={provider}
-                  onProviderChange={setProvider}
-                  onAction={(intent) => void authAction(intent)}
-                  profiles={
-                    provider === "openai-compatible" ? undefined : (
-                      <SubscriptionAccounts key={provider} provider={provider} />
-                    )
-                  }
-                />
-              </DialogContent>
-            </Dialog>
+            <Sheet open={accountsOpen} onOpenChange={setAccountsOpen}>
+              <SheetContent side="left">
+                <SheetHeader>
+                  <SheetTitle>계정 관리</SheetTitle>
+                  <SheetDescription>
+                    계정을 추가하고, 계정마다 이름을 바꾸거나 로그아웃해요. 쓸 계정은 사이드바 아래
+                    계정 전환에서 골라요.
+                  </SheetDescription>
+                </SheetHeader>
+                <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+                  <AccountManager
+                    auth={{ openai: auth.openai, anthropic: auth.anthropic }}
+                    activeProvider={selection?.provider ?? provider}
+                    compatibleConfigured={auth["openai-compatible"]?.status === "signed-in"}
+                    onConfigureCompatible={() =>
+                      openSettingsOverlay({ project: null, initialPage: "compatible" })
+                    }
+                  />
+                </div>
+              </SheetContent>
+            </Sheet>
           </aside>
           <main className="min-w-0 flex-1">{main}</main>
           {projectId && sessionId && selection && (
