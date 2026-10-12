@@ -5,7 +5,7 @@ import { path } from "./runtime/synchronous-path.ts";
 const { join } = path;
 import { optionalProperty } from "./optional-property.ts";
 import { Effect, Layer } from "effect";
-import type { ProviderId } from "./providers/contracts.ts";
+import { ProviderUnavailable, type ProviderId } from "./providers/contracts.ts";
 import { AgentChat, GoalWorkerConfiguration, type GoalWorkerOptions } from "./agent/chat.ts";
 import { BtwChat } from "./btw/chat.ts";
 import { HarnessStore } from "./rrsi/store.ts";
@@ -180,7 +180,8 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
       ProviderRegistry,
       Effect.gen(function* () {
         const subscriptions = yield* ProviderRegistry;
-        const compatible = (yield* OpenAICompatibleSettings).services;
+        const settings = yield* OpenAICompatibleSettings;
+        const compatible = settings.services;
         return {
           ...subscriptions,
           providers: [...subscriptions.providers, compatible.provider],
@@ -190,7 +191,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
               : subscriptions.get(provider),
           runtime: (provider: ProviderId) =>
             provider === compatible.provider
-              ? Effect.succeed(compatible.runtime)
+              ? settings.runtime.pipe(Effect.mapError(() => new ProviderUnavailable({ provider })))
               : subscriptions.runtime(provider),
         };
       }),

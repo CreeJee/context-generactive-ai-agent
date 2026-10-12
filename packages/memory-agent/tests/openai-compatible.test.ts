@@ -80,7 +80,8 @@ function fixture(fetcher?: typeof fetch, initial: Settings = {}) {
   let saved: Settings = initial;
   let key: string | null = null;
   const config = {
-    read: Effect.sync(() => saved),
+    // Asynchronous like the real config file read.
+    read: Effect.promise(() => Promise.resolve(saved)),
     update: (patch: Partial<Settings>) => Effect.sync(() => (saved = { ...saved, ...patch })),
   };
   const keys = {
@@ -230,7 +231,7 @@ describe("OpenAI compatible settings", () => {
           ),
         );
         yield* f.api.update(configuration);
-        const adapter = f.api.services.runtime.adapter({
+        const adapter = (yield* f.api.runtime).adapter({
           provider: "openai-compatible",
           model: configuration.model,
           reasoningEffort: "default",
@@ -281,7 +282,7 @@ describe("OpenAI compatible settings", () => {
           openaiCompatible: configuration,
         });
         const layer = ActiveProvider.layer.pipe(
-          Layer.provide(ProviderRegistry.layer([f.api.services], [f.api.services.runtime])),
+          Layer.provide(ProviderRegistry.layer([f.api.services], [yield* f.api.runtime])),
           Layer.provide(Layer.succeed(GlobalConfig, f.config)),
         );
         const selection = yield* Effect.flatMap(ActiveProvider, (active) => active.selected).pipe(
@@ -296,7 +297,7 @@ describe("OpenAI compatible settings", () => {
           reasoningEffort: "default",
         });
         expect(f.saved().reasoningEffort).toBe("low");
-        const adapter = f.api.services.runtime.adapter(selection!);
+        const adapter = (yield* f.api.runtime).adapter(selection!);
         yield* Effect.addFinalizer(() => Effect.sync(() => adapter.releaseRun?.()));
         adapter.releaseRun?.();
       }),
@@ -571,7 +572,7 @@ describe("OpenAI compatible settings", () => {
           for (const effort of ["xhigh", "default"]) {
             const selection = yield* f.api.services.models.select(configuration.model, effort);
             expect(yield* f.restore().services.models.selected).toEqual(selection);
-            const adapter = f.api.services.runtime.adapter(selection);
+            const adapter = (yield* f.api.runtime).adapter(selection);
             yield* Effect.addFinalizer(() => Effect.sync(() => adapter.releaseRun?.()));
             try {
               yield* Stream.runForEach(
@@ -646,7 +647,7 @@ describe("OpenAI compatible settings", () => {
             ),
           );
           yield* f.api.update(configuration);
-          const adapter = f.api.services.runtime.adapter({
+          const adapter = (yield* f.api.runtime).adapter({
             provider: "openai-compatible",
             model: configuration.model,
             reasoningEffort: "default",
@@ -735,7 +736,7 @@ describe("OpenAI compatible settings", () => {
         expect(yield* Effect.flip(f.api.listModels)).toBeInstanceOf(Error);
         expect((yield* f.api.services.models.list)[0]?.id).toBe("manual-model");
         expect(yield* Effect.flip(f.api.services.models.select("missing"))).toBeInstanceOf(Error);
-        expect(f.api.services.runtime.contextWindow(configuration.model)).toBe(7680);
+        expect((yield* f.api.runtime).contextWindow(configuration.model)).toBe(7680);
       }),
     ),
   );
@@ -1018,7 +1019,7 @@ describe("OpenAI compatible settings", () => {
             Effect.fail(new Cause.UnknownError(new Error("must not reach network"))),
           ),
         });
-        const adapter = api.services.runtime.adapter({
+        const adapter = (yield* api.runtime).adapter({
           provider: "openai-compatible",
           model: configuration.model,
           reasoningEffort: "default",
@@ -1058,7 +1059,7 @@ describe("OpenAI compatible settings", () => {
           }),
         );
         yield* f.api.update(configuration);
-        const adapter = f.api.services.runtime.adapter({
+        const adapter = (yield* f.api.runtime).adapter({
           provider: "openai-compatible",
           model: configuration.model,
           reasoningEffort: "default",
@@ -1120,7 +1121,7 @@ describe("OpenAI compatible settings", () => {
             ),
           });
           yield* api.update({ ...configuration, apiKey: "first" });
-          const adapter = api.services.runtime.adapter({
+          const adapter = (yield* api.runtime).adapter({
             provider: "openai-compatible",
             model: configuration.model,
             reasoningEffort: "default",
@@ -1236,7 +1237,7 @@ describe("OpenAI compatible settings", () => {
               Effect.gen(function* () {
                 const chunks = yield* Stream.runCollect(
                   Stream.fromAsyncIterable(
-                    f.api.services.runtime.adapter(selection).chatStream({
+                    (yield* f.api.runtime).adapter(selection).chatStream({
                       logger: resolveDebugOption(false),
                       model: configuration.model,
                       messages: [{ role: "user", content: "hello" }],
@@ -1268,7 +1269,7 @@ describe("OpenAI compatible settings", () => {
             yield* f.api.update({ ...settings, toolCalling: false });
             yield* consume();
             expect(requests.at(-1)?.body.tools).toBeUndefined();
-            const adapter = f.api.services.runtime.adapter(selection);
+            const adapter = (yield* f.api.runtime).adapter(selection);
             yield* Effect.addFinalizer(() => Effect.sync(() => adapter.releaseRun?.()));
             const before = requests.length;
 

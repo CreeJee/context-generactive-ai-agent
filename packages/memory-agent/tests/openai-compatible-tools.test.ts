@@ -32,7 +32,7 @@ it.effect(
       const selection = yield* api.services.models.select("manual");
       const collect = Effect.fnUntraced(function* () {
         return yield* Stream.fromAsyncIterable(
-          api.services.runtime.adapter(selection).chatStream({
+          (yield* api.runtime).adapter(selection).chatStream({
             logger: resolveDebugOption(false),
             model: "manual",
             messages: [{ role: "user", content: "lookup" }],

@@ -20,7 +20,12 @@ import {
 } from "effect";
 import { GlobalConfig, type GlobalConfigApi } from "../config/global-config.ts";
 import { requireRuntime } from "../runtime/resources.ts";
-import { ModelUnavailable, type ProviderServices, type ProviderModel } from "./contracts.ts";
+import {
+  ModelUnavailable,
+  type AgentModelRuntime,
+  type ProviderConfiguration,
+  type ProviderModel,
+} from "./contracts.ts";
 import {
   OpenAICompatibleUpdate,
   type OpenAICompatibleConfiguration,
@@ -385,7 +390,7 @@ function makeOpenAICompatibleSettingsBody(
         Effect.runPromiseWith(context)(complete(body), { signal }),
     };
   });
-  const services: ProviderServices = {
+  const services: ProviderConfiguration = {
     provider,
     auth: {
       provider,
@@ -447,223 +452,219 @@ function makeOpenAICompatibleSettingsBody(
           }),
         ),
     },
-    runtime: {
-      provider,
-      adapter: (selection) => {
-        const settings = Effect.runSync(read);
-        if (
-          !isTruthy(settings) ||
-          selection.model !== settings.model ||
-          selection.provider !== provider ||
-          !model(settings).supportedReasoningEfforts.includes(selection.reasoningEffort)
-        )
-          throw new Error("Compatible model unavailable");
-        // One adapter is one run. Release from the central stream's finally aborts any
-        // outstanding SDK request; no separate long-lived compatible client is retained.
-        const runAbort = new AbortController();
-        const pinnedKey = Effect.runPromise(updates.withPermit(snapshot), {
-          signal: runAbort.signal,
-        }).then(
-          ({ configuration, key }) => ({
-            value: key,
-            failed:
-              !isTruthy(configuration) ||
-              configuration.baseUrl !== settings.baseUrl ||
-              configuration.model !== settings.model ||
-              configuration.contextWindow !== settings.contextWindow ||
-              configuration.outputBudget !== settings.outputBudget ||
-              configuration.toolCalling !== settings.toolCalling ||
-              JSON.stringify(configuration.reasoning) !== JSON.stringify(settings.reasoning),
-          }),
-          () => ({ value: null, failed: true }),
-        );
-        let promptDiagnostic = "Compatible request message roles unavailable";
-        const adapter = openaiCompatibleText(selection.model, {
-          baseURL: settings.baseUrl,
-          apiKey: "unused",
-          api: "chat-completions",
-          maxRetries: 0,
-          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          fetch: (url, init) =>
-            runNativeEffect(
-              Effect.gen(function* () {
-                const credential = yield* nativePromise(() => pinnedKey);
-                if (runAbort.signal.aborted)
-                  return yield* new Cause.UnknownError(new Error("Compatible run cancelled"));
-                if (credential.failed)
-                  return yield* new Cause.UnknownError(
-                    new Error("Compatible keychain unavailable"),
-                  );
-                const key = credential.value;
-                const headers = new Headers(init?.headers);
-                headers.delete("authorization");
-                if (isTruthy(key)) headers.set("authorization", `Bearer ${key}`);
-                // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-                const rawBody = EffectFunction.flow(
-                  Schema.decodeUnknownResult(Schema.String),
-                  Result.getOrThrow,
-                )(init?.body ?? "{}");
-                const payload = {
-                  // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-                  ...EffectFunction.flow(
-                    Schema.decodeResult(
-                      Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
-                    ),
-                    Result.getOrThrow,
-                  )(rawBody),
-                };
-                payload.max_tokens = settings.outputBudget;
-                if (selection.reasoningEffort === "default") delete payload.reasoning_effort;
-                else payload.reasoning_effort = selection.reasoningEffort;
-                if (!settings.toolCalling) {
-                  delete payload.tools;
-                  delete payload.tool_choice;
-                }
-                const body = stringifyJson(payload);
-                const messages = Option.getOrElse(requestRoles(payload.messages), () => []);
-                const userContent = messages
-                  .filter((message) => message.role === "user")
-                  .map((message) => {
-                    const content = message.content;
-                    if (Schema.is(Schema.String)(content)) {
-                      const text = content.trim();
-                      const wrapped =
-                        text.startsWith("<tool_response>") && text.endsWith("</tool_response>");
-                      return `text:${content.length}:${wrapped ? "tool-response" : "plain"}`;
-                    }
-                    if (Array.isArray(content)) return `parts:${content.length}`;
-                    return content === null || content === undefined ? "empty" : "other";
-                  });
-                promptDiagnostic = `Compatible request messages: total=${messages.length}, user=${messages.filter((message) => message.role === "user").length}, assistant=${messages.filter((message) => message.role === "assistant").length}, tool=${messages.filter((message) => message.role === "tool").length}, first=${messages[0]?.role ?? "none"}, last=${messages.at(-1)?.role ?? "none"}`;
-                promptDiagnostic += `, model=${selection.model}, toolDefinitions=${Array.isArray(payload.tools) ? payload.tools.length : 0}, userContent=[${userContent.join(",")}]`;
-                // Conservative local guard also covers auxiliary structured-output calls and tool schemas.
-                let estimatedInput = 0;
-                for (const character of body)
-                  estimatedInput += character.charCodeAt(0) < 128 ? 0.25 : 1;
-                if (Math.ceil(estimatedInput) + settings.outputBudget > settings.contextWindow)
-                  return yield* new Cause.UnknownError(
-                    new Error("Compatible context limit exceeded"),
-                  );
-                return yield* Effect.gen(function* () {
-                  const signal = isTruthy(init?.signal)
-                    ? AbortSignal.any([init.signal, runAbort.signal])
-                    : runAbort.signal;
-                  return yield* nativePromise(() =>
-                    fetcher(url, {
-                      ...init,
-                      body,
-                      headers,
-                      redirect: "error",
-                      signal,
-                    }),
-                  );
-                }).pipe(
-                  Effect.catchCause((failure) =>
-                    Effect.gen(function* () {
-                      const cause = nativeFailure(failure).cause;
-                      // Do not log URLs, headers or payloads. Surface transport codes even
-                      // when the provider SDK reduces this exception to "Connection error".
-                      const codes: string[] = [];
-                      let current: unknown = cause;
-                      const seen: unknown[] = [];
-                      while (
-                        current instanceof Error &&
-                        !seen.includes(current) &&
-                        seen.length < 8
-                      ) {
-                        seen.push(current);
-                        if ("code" in current && isTransportErrorCode(current.code))
-                          codes.push(current.code);
-                        current = current.cause;
-                      }
-                      const diagnostic = isTruthy(codes.length)
-                        ? codes.join(" <- ")
-                        : "transport failure";
-                      const error = new Error(`Compatible API request failed: ${diagnostic}`, {
-                        cause,
-                      });
-                      // Native stdout/stderr or SDK logging boundary preserves the existing output format.
-                      yield* Effect.logError(error.message);
-                      return yield* new Cause.UnknownError(error);
-                    }),
-                  ),
-                );
-              }),
-            ),
-        });
-        const original = adapter.chatStream.bind(adapter);
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        adapter.chatStream = (options) =>
-          nativeStream(
-            Stream.fromPull(
-              Effect.gen(function* () {
-                const request = {
-                  ...options,
-                  modelOptions: { ...options.modelOptions, max_tokens: settings.outputBudget },
-                };
-                if (!settings.toolCalling) request.tools = [];
-                const source = original(request)[Symbol.asyncIterator]();
-                yield* Effect.addFinalizer(() =>
-                  nativePromise(
-                    () => source.return?.().then(() => undefined) ?? Promise.resolve(),
-                  ).pipe(Effect.orDie),
-                );
-                return {
-                  pull: Effect.gen(function* () {
-                    const next = yield* nativePromise(() => source.next());
-                    if (next.done === true) return yield* Cause.done();
-                    const chunk = next.value;
-                    if (!settings.toolCalling && String(chunk.type).startsWith("TOOL_CALL"))
-                      return yield* new Cause.UnknownError(
-                        new Error("Compatible tool calling is disabled"),
-                      );
-                    const output: typeof chunk =
-                      chunk.type === "RUN_ERROR" &&
-                      chunk.message.includes("No user query found in messages")
-                        ? { ...chunk, message: `${chunk.message}\n${promptDiagnostic}` }
-                        : chunk;
-                    return [output] as const;
-                  }).pipe(
-                    Effect.catchIf(
-                      (error) => error instanceof Cause.UnknownError,
-                      (error) => {
-                        const cause = error.cause;
-                        return Effect.fail(
-                          cause instanceof Error &&
-                            cause.message.includes("No user query found in messages")
-                            ? new Cause.UnknownError(
-                                new Error(`${cause.message}\n${promptDiagnostic}`, { cause }),
-                              )
-                            : error,
-                        );
-                      },
-                    ),
-                  ),
-                };
-              }).pipe(Effect.map(({ pull }) => pull)),
-            ).pipe(Stream.scoped),
-          );
-        return Object.assign(adapter, {
-          releaseRun: () => runAbort.abort(),
-          historyKey: Buffer.from(
-            Effect.runSync(
-              oauthProtocolCrypto.digest("SHA-256", new TextEncoder().encode(settings.baseUrl)),
-            ),
-          ).toString("hex"),
-        });
-      },
-      contextWindow: () => {
-        const settings = Effect.runSync(read);
-        return isTruthy(settings) ? settings.contextWindow - settings.outputBudget : 0;
-      },
-      contextWindowKnown: () => true,
-      agentLoop: subscriptionAgentLoop,
-      runMiddleware: () => ({ name: "memory-agent/openai-compatible" }),
-      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      steer: () => Promise.resolve("no_turn"),
-    },
   };
-  return { pinRrsiClient, status, update, test, listModels, services };
+  /**
+   * The SDK runtime reads its window and builds adapters synchronously, so it is pinned to settings
+   * read beforehand; the config file read is asynchronous and cannot run inside those calls.
+   */
+  const runtimeFor = (settings: Effect.Success<typeof read>): AgentModelRuntime => ({
+    provider,
+    adapter: (selection) => {
+      if (
+        !isTruthy(settings) ||
+        selection.model !== settings.model ||
+        selection.provider !== provider ||
+        !model(settings).supportedReasoningEfforts.includes(selection.reasoningEffort)
+      )
+        throw new Error("Compatible model unavailable");
+      // One adapter is one run. Release from the central stream's finally aborts any
+      // outstanding SDK request; no separate long-lived compatible client is retained.
+      const runAbort = new AbortController();
+      const pinnedKey = Effect.runPromise(updates.withPermit(snapshot), {
+        signal: runAbort.signal,
+      }).then(
+        ({ configuration, key }) => ({
+          value: key,
+          failed:
+            !isTruthy(configuration) ||
+            configuration.baseUrl !== settings.baseUrl ||
+            configuration.model !== settings.model ||
+            configuration.contextWindow !== settings.contextWindow ||
+            configuration.outputBudget !== settings.outputBudget ||
+            configuration.toolCalling !== settings.toolCalling ||
+            JSON.stringify(configuration.reasoning) !== JSON.stringify(settings.reasoning),
+        }),
+        () => ({ value: null, failed: true }),
+      );
+      let promptDiagnostic = "Compatible request message roles unavailable";
+      const adapter = openaiCompatibleText(selection.model, {
+        baseURL: settings.baseUrl,
+        apiKey: "unused",
+        api: "chat-completions",
+        maxRetries: 0,
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        fetch: (url, init) =>
+          runNativeEffect(
+            Effect.gen(function* () {
+              const credential = yield* nativePromise(() => pinnedKey);
+              if (runAbort.signal.aborted)
+                return yield* new Cause.UnknownError(new Error("Compatible run cancelled"));
+              if (credential.failed)
+                return yield* new Cause.UnknownError(new Error("Compatible keychain unavailable"));
+              const key = credential.value;
+              const headers = new Headers(init?.headers);
+              headers.delete("authorization");
+              if (isTruthy(key)) headers.set("authorization", `Bearer ${key}`);
+              // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+              const rawBody = EffectFunction.flow(
+                Schema.decodeUnknownResult(Schema.String),
+                Result.getOrThrow,
+              )(init?.body ?? "{}");
+              const payload = {
+                // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+                ...EffectFunction.flow(
+                  Schema.decodeResult(
+                    Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+                  ),
+                  Result.getOrThrow,
+                )(rawBody),
+              };
+              payload.max_tokens = settings.outputBudget;
+              if (selection.reasoningEffort === "default") delete payload.reasoning_effort;
+              else payload.reasoning_effort = selection.reasoningEffort;
+              if (!settings.toolCalling) {
+                delete payload.tools;
+                delete payload.tool_choice;
+              }
+              const body = stringifyJson(payload);
+              const messages = Option.getOrElse(requestRoles(payload.messages), () => []);
+              const userContent = messages
+                .filter((message) => message.role === "user")
+                .map((message) => {
+                  const content = message.content;
+                  if (Schema.is(Schema.String)(content)) {
+                    const text = content.trim();
+                    const wrapped =
+                      text.startsWith("<tool_response>") && text.endsWith("</tool_response>");
+                    return `text:${content.length}:${wrapped ? "tool-response" : "plain"}`;
+                  }
+                  if (Array.isArray(content)) return `parts:${content.length}`;
+                  return content === null || content === undefined ? "empty" : "other";
+                });
+              promptDiagnostic = `Compatible request messages: total=${messages.length}, user=${messages.filter((message) => message.role === "user").length}, assistant=${messages.filter((message) => message.role === "assistant").length}, tool=${messages.filter((message) => message.role === "tool").length}, first=${messages[0]?.role ?? "none"}, last=${messages.at(-1)?.role ?? "none"}`;
+              promptDiagnostic += `, model=${selection.model}, toolDefinitions=${Array.isArray(payload.tools) ? payload.tools.length : 0}, userContent=[${userContent.join(",")}]`;
+              // Conservative local guard also covers auxiliary structured-output calls and tool schemas.
+              let estimatedInput = 0;
+              for (const character of body)
+                estimatedInput += character.charCodeAt(0) < 128 ? 0.25 : 1;
+              if (Math.ceil(estimatedInput) + settings.outputBudget > settings.contextWindow)
+                return yield* new Cause.UnknownError(
+                  new Error("Compatible context limit exceeded"),
+                );
+              return yield* Effect.gen(function* () {
+                const signal = isTruthy(init?.signal)
+                  ? AbortSignal.any([init.signal, runAbort.signal])
+                  : runAbort.signal;
+                return yield* nativePromise(() =>
+                  fetcher(url, {
+                    ...init,
+                    body,
+                    headers,
+                    redirect: "error",
+                    signal,
+                  }),
+                );
+              }).pipe(
+                Effect.catchCause((failure) =>
+                  Effect.gen(function* () {
+                    const cause = nativeFailure(failure).cause;
+                    // Do not log URLs, headers or payloads. Surface transport codes even
+                    // when the provider SDK reduces this exception to "Connection error".
+                    const codes: string[] = [];
+                    let current: unknown = cause;
+                    const seen: unknown[] = [];
+                    while (current instanceof Error && !seen.includes(current) && seen.length < 8) {
+                      seen.push(current);
+                      if ("code" in current && isTransportErrorCode(current.code))
+                        codes.push(current.code);
+                      current = current.cause;
+                    }
+                    const diagnostic = isTruthy(codes.length)
+                      ? codes.join(" <- ")
+                      : "transport failure";
+                    const error = new Error(`Compatible API request failed: ${diagnostic}`, {
+                      cause,
+                    });
+                    // Native stdout/stderr or SDK logging boundary preserves the existing output format.
+                    yield* Effect.logError(error.message);
+                    return yield* new Cause.UnknownError(error);
+                  }),
+                ),
+              );
+            }),
+          ),
+      });
+      const original = adapter.chatStream.bind(adapter);
+      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+      adapter.chatStream = (options) =>
+        nativeStream(
+          Stream.fromPull(
+            Effect.gen(function* () {
+              const request = {
+                ...options,
+                modelOptions: { ...options.modelOptions, max_tokens: settings.outputBudget },
+              };
+              if (!settings.toolCalling) request.tools = [];
+              const source = original(request)[Symbol.asyncIterator]();
+              yield* Effect.addFinalizer(() =>
+                nativePromise(
+                  () => source.return?.().then(() => undefined) ?? Promise.resolve(),
+                ).pipe(Effect.orDie),
+              );
+              return {
+                pull: Effect.gen(function* () {
+                  const next = yield* nativePromise(() => source.next());
+                  if (next.done === true) return yield* Cause.done();
+                  const chunk = next.value;
+                  if (!settings.toolCalling && String(chunk.type).startsWith("TOOL_CALL"))
+                    return yield* new Cause.UnknownError(
+                      new Error("Compatible tool calling is disabled"),
+                    );
+                  const output: typeof chunk =
+                    chunk.type === "RUN_ERROR" &&
+                    chunk.message.includes("No user query found in messages")
+                      ? { ...chunk, message: `${chunk.message}\n${promptDiagnostic}` }
+                      : chunk;
+                  return [output] as const;
+                }).pipe(
+                  Effect.catchIf(
+                    (error) => error instanceof Cause.UnknownError,
+                    (error) => {
+                      const cause = error.cause;
+                      return Effect.fail(
+                        cause instanceof Error &&
+                          cause.message.includes("No user query found in messages")
+                          ? new Cause.UnknownError(
+                              new Error(`${cause.message}\n${promptDiagnostic}`, { cause }),
+                            )
+                          : error,
+                      );
+                    },
+                  ),
+                ),
+              };
+            }).pipe(Effect.map(({ pull }) => pull)),
+          ).pipe(Stream.scoped),
+        );
+      return Object.assign(adapter, {
+        releaseRun: () => runAbort.abort(),
+        historyKey: Buffer.from(
+          Effect.runSync(
+            oauthProtocolCrypto.digest("SHA-256", new TextEncoder().encode(settings.baseUrl)),
+          ),
+        ).toString("hex"),
+      });
+    },
+    contextWindow: () => (isTruthy(settings) ? settings.contextWindow - settings.outputBudget : 0),
+    contextWindowKnown: () => true,
+    agentLoop: subscriptionAgentLoop,
+    runMiddleware: () => ({ name: "memory-agent/openai-compatible" }),
+    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+    steer: () => Promise.resolve("no_turn"),
+  });
+  /** A runtime pinned to the settings saved now; resolve again to see later changes. */
+  const runtime = Effect.map(read, runtimeFor);
+  return { pinRrsiClient, status, update, test, listModels, services, runtime };
 }
 export type OpenAICompatibleSettingsApi = ReturnType<typeof makeOpenAICompatibleSettings>;
 export class OpenAICompatibleSettings extends Context.Service<

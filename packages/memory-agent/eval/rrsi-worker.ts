@@ -202,7 +202,7 @@ const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
         const base = settings.services;
         const runtime =
           selection.provider === "openai-compatible"
-            ? base.runtime
+            ? yield* settings.runtime.pipe(Effect.orDie)
             : createSubscriptionRuntime(
                 selection.provider,
                 {
