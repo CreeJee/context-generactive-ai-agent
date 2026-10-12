@@ -174,6 +174,7 @@ export const ApiErrorCode = Schema.Literals([
   "invalid_agent_change",
   "invalid_answer",
   "invalid_chat_request",
+  "invalid_conversation_settings",
   "invalid_embedding_action",
   "invalid_import_action",
   "invalid_image_request",
@@ -220,6 +221,7 @@ export const ApiErrorCode = Schema.Literals([
   "session_in_use",
   "session_not_found",
   "session_required",
+  "settings_failed",
   "steer_failed",
   "steer_unavailable",
   "subagent_not_found",
@@ -228,6 +230,9 @@ export const ApiErrorCode = Schema.Literals([
   "user_turn_required",
 ]);
 export type ApiErrorCode = typeof ApiErrorCode.Type;
+
+/** When long conversations start being summarized, as a percent of the context window. */
+export type ConversationSettings = { readonly summaryStartPercent: number };
 
 const CrossProviderMediaRunApproval = Schema.Struct({
   runId: Schema.String,
@@ -612,6 +617,10 @@ export const api = {
   kagiAction: (
     command: { action: "register"; key: string } | { action: "remove" | "enable" | "disable" },
   ) => call<KagiStatus>("POST", "/api/settings/kagi", command),
+
+  conversationSettings: () => call<ConversationSettings>("GET", "/api/settings/conversation"),
+  setConversationSettings: (settings: ConversationSettings) =>
+    call<ConversationSettings>("POST", "/api/settings/conversation", settings),
 
   imports: () => call<ImportOverview>("GET", "/api/settings/imports"),
   importAction: (

@@ -9,6 +9,7 @@ import {
   turnSummariesNamespace,
   type Budget,
 } from "../../src/agent/compaction.ts";
+import { TurnSummaries } from "../../src/agent/turn-summaries.ts";
 import { ChatState } from "../../src/chat-state/chat-state.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
@@ -40,6 +41,9 @@ const decodeStatus = Schema.decodeUnknownEffect(
       compactAtTokens: Schema.Finite,
     }),
   }),
+);
+const decodeStoredSummaries = Schema.decodeUnknownEffect(
+  Schema.NullishOr(Schema.Struct({ blocks: Schema.Array(Schema.Unknown) })),
 );
 const StreamEvent = Schema.fromJsonString(
   Schema.Struct({
@@ -220,6 +224,28 @@ testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
         expect(result.body).toMatchObject({ cleared: 0, summarizedTurns: 0, summaryFailed: false });
         expect(yield* nextRequest(messages, at.sessionId, budgetFor(200_000))).toEqual(before);
       }),
+  );
+
+  it.effect("automatic summaries wait until the conversation fills the configured share", () =>
+    Effect.gen(function* () {
+      const at = yield* freshSession;
+      yield* savedConversation(at, ["네", "네", "네", "네", "네"]);
+      const summaries = yield* TurnSummaries;
+      const { metadata } = (yield* ChatState).persistence.stores;
+      const blocks = call(() => metadata.get(turnSummariesNamespace, at.sessionId)).pipe(
+        Effect.flatMap(decodeStoredSummaries),
+        Effect.map((stored) => stored?.blocks ?? []),
+      );
+
+      expect(yield* summaries.startPercent).toBe(25);
+      expect(yield* summaries.catchUp(at.sessionId, false)).toBe("done");
+      expect(yield* blocks).toEqual([]);
+
+      yield* summaries.setStartPercent(0);
+      yield* Effect.addFinalizer(() => Effect.orDie(summaries.setStartPercent(25)));
+      expect(yield* summaries.catchUp(at.sessionId, false)).toBe("done");
+      expect(yield* blocks).toHaveLength(1);
+    }),
   );
 });
 
