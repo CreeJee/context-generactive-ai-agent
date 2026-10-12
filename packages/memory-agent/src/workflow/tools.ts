@@ -9,12 +9,19 @@ import {
   UpdateWorkflowProgress,
   WorkflowProgressRefused,
   Workflows,
+  type PlanStep,
   type WorkflowPhase,
   WorkflowState,
 } from "./workflow.ts";
 import { toToolSchema } from "../tools/schema.ts";
 import type { ResolvedRules } from "./rules.ts";
 import { WorkflowBlocker, WorkflowExecution } from "./execution.ts";
+import {
+  planDependencyIssues,
+  planSchedule,
+  unmetDependencyText,
+  type PlanDependencyIssue,
+} from "./plan-schedule.ts";
 
 const exposeProgressRefusal = <A, R>(effect: Effect.Effect<A, WorkflowProgressRefused, R>) =>
   effect.pipe(
@@ -104,13 +111,19 @@ const make = Effect.gen(function* () {
       const updatePlan = toolDefinition({
         name: "update_plan",
         description:
-          "Save the session's canonical Plan artifact. Use after making or revising an actionable plan. Each step needs stable ids, dependencies, acceptance criteria and applicable workflow rule ids. This creates the next version. Revising a Plan during Execute returns the workflow to Plan and invalidates concurrent or later progress calls from that turn; do not call update_workflow_progress in parallel with update_plan.",
+          "Save the session's canonical Plan artifact. Use after making or revising an actionable plan. Each step needs stable unique ids, dependencies, acceptance criteria and applicable workflow rule ids. dependsOn may name only other step ids in the same Plan and must not form a cycle; otherwise nothing is saved and the refusal lists each issue to fix. This creates the next version. Revising a Plan during Execute returns the workflow to Plan and invalidates concurrent or later progress calls from that turn; do not call update_workflow_progress in parallel with update_plan.",
         inputSchema: toToolSchema(UpdatePlan),
       }).server((input) =>
         run(
           Effect.flatMap(Workflows, (workflows) => workflows.updatePlan(sessionId, input)).pipe(
             Effect.tap(() => Effect.sync(() => events.publishSession(sessionId, "run-state"))),
             Effect.map((state) => ({ phase: state.phase, plan: state.plan })),
+            Effect.catchTag("PlanDependenciesRejected", (failure) =>
+              Effect.succeed({
+                error: "plan_dependencies_rejected" as const,
+                issues: failure.issues.map(dependencyIssueText),
+              }),
+            ),
           ),
         ),
       );
@@ -180,6 +193,38 @@ const compactList = (items: readonly string[], limit = 6) =>
         .map((item) => `- ${item}`)
         .join("\n");
 
+const dependencyIssueText = (issue: PlanDependencyIssue) => {
+  switch (issue._tag) {
+    case "DuplicateStepId":
+      return `step id ${issue.stepId} is used more than once`;
+    case "UnknownDependency":
+      return `step ${issue.stepId} depends on ${issue.dependsOn}, which is not a step in this Plan`;
+    case "SelfDependency":
+      return `step ${issue.stepId} depends on itself`;
+    case "DependencyCycle":
+      return `dependency cycle ${issue.cycle.join(" -> ")}`;
+  }
+};
+
+const scheduleText = (steps: readonly PlanStep[]) => {
+  const issues = planDependencyIssues(steps).map(dependencyIssueText);
+  const saved =
+    issues.length === 0
+      ? ""
+      : `\nThis saved Plan has dependency issues; unknown and self dependencies are ignored, cycles never become ready. Fix them with update_plan:\n${compactList(issues, issues.length)}`;
+  const schedule = planSchedule(steps);
+  switch (schedule.kind) {
+    case "finished":
+      return saved;
+    case "runnable":
+      return `\nReady steps (pending with every dependency completed): ${schedule.ready.join(", ") || "(none)"}. Continue in_progress steps first, then start a ready step; do not start a step whose dependencies are not completed.${saved}`;
+    case "stalled":
+      return `\nNo remaining step can start: every one is blocked or waits on an unfinished dependency.
+${compactList([...schedule.blocked.map((id) => `${id} [blocked]`), ...schedule.waiting.map(unmetDependencyText)], steps.length)}
+Automatic continuation stops in this state. Resolve the blocked step, or revise wrong dependsOn with update_plan.${saved}`;
+  }
+};
+
 const ruleSource = (rule: ResolvedRules["rules"][number]) => {
   switch (rule.source.kind) {
     case "builtin":
@@ -245,7 +290,7 @@ ${goal}`;
           ? `Plan v${state.plan.version} (${state.plan.status}, based on Goal v${state.plan.goalVersion}): ${state.plan.summary}`
           : "Plan: not recorded yet.";
         return `${common}
-You are planning, not executing. Project tools are restricted to read-only investigation. If no Goal is recorded, infer the smallest useful Goal from the user's request and save it before the Plan; the user does not need to enter Goal mode first. Produce ordered steps with stable ids, dependencies, acceptance criteria, risks and applicable rule ids. When a contradiction or unanswered question arises, record what is uncertain and which decisions depend on it; continue all independent read-only investigation and planning before asking. Narrow questions with evidence and ask only when no useful independent planning remains and the decision truly blocks progress. A non-blocking open question does not by itself require a draft Plan: save a ready Plan when its steps can proceed, and leave the unresolved decision for the step it actually affects. Never assume an answer to a blocking question or mark a Plan ready if the unresolved decision prevents safe execution of its next step. Do not modify files, run commands, delegate work or present investigation as implementation.
+You are planning, not executing. Project tools are restricted to read-only investigation. If no Goal is recorded, infer the smallest useful Goal from the user's request and save it before the Plan; the user does not need to enter Goal mode first. Produce ordered steps with stable unique ids, dependencies (dependsOn names only other step ids in this Plan, without cycles), acceptance criteria, risks and applicable rule ids. When a contradiction or unanswered question arises, record what is uncertain and which decisions depend on it; continue all independent read-only investigation and planning before asking. Narrow questions with evidence and ask only when no useful independent planning remains and the decision truly blocks progress. A non-blocking open question does not by itself require a draft Plan: save a ready Plan when its steps can proceed, and leave the unresolved decision for the step it actually affects. Never assume an answer to a blocking question or mark a Plan ready if the unresolved decision prevents safe execution of its next step. Do not modify files, run commands, delegate work or present investigation as implementation.
 
 ${goal}
 
@@ -263,7 +308,7 @@ ${
   isTruthy(state.plan)
     ? `Approved Plan v${state.plan.version}: ${state.plan.summary}
 Current steps:
-${state.plan.steps.map((step) => `- ${step.id} [${step.status}]: ${step.title}${step.status === "completed" ? "" : `\n  Description: ${step.description}\n  Depends on: ${step.dependsOn.join(", ") || "(none)"}\n  Acceptance criteria:\n${compactList(step.acceptanceCriteria, step.acceptanceCriteria.length)}\n  Rule refs: ${step.ruleRefs.join(", ") || "(none)"}\n  Recent evidence (historical evidence is not fresh verification):\n${compactList(step.evidence.slice(-6))}`}`).join("\n")}`
+${state.plan.steps.map((step) => `- ${step.id} [${step.status}]: ${step.title}${step.status === "completed" ? "" : `\n  Description: ${step.description}\n  Depends on: ${step.dependsOn.map((id) => `${id} [${state.plan?.steps.find((candidate) => candidate.id === id)?.status ?? "unknown"}]`).join(", ") || "(none)"}\n  Acceptance criteria:\n${compactList(step.acceptanceCriteria, step.acceptanceCriteria.length)}\n  Rule refs: ${step.ruleRefs.join(", ") || "(none)"}\n  Recent evidence (historical evidence is not fresh verification):\n${compactList(step.evidence.slice(-6))}`}`).join("\n")}${scheduleText(state.plan.steps)}`
     : "Approved Plan: missing."
 }`;
       case "verify":

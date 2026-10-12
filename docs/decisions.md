@@ -628,6 +628,14 @@
 - Execute와 Verify에서도 `update_goal`을 제공한다. 사용자가 명시적으로 변경한 구현 범위·제약·제외 항목은 에이전트가 canonical Goal에 반영하며, 수정 가능한 artifact를 외부 의존성으로 보고하거나 확인되지 않은 Goal 편집 UI를 요구하지 않는다. 단순 재개 요청은 제약 해제 승인이 아니다.
 - Execute/Verify에서 Goal을 수정하면 즉시 Plan으로 돌아간다. 기존 Plan과 근거는 보존하되 새 Goal 버전에 맞춰 Plan을 동기화하고 실행 확인을 받기 전에는 이전 실행 턴의 progress를 허용하지 않는다. Goal 변경은 권한·완료 증거·실행 세대 고정을 우회하지 않는다.
 
+### Plan step 의존성 기반 스케줄링 (2026-10-13)
+
+- `PlanStep.dependsOn`을 실행 순서 판단에 쓴다. `update_plan`은 중복 step ID, 존재하지 않는 step 참조, 자기 참조, 순환을 `PlanDependenciesRejected`(문제별 리터럴 태그 목록)로 거부하고 아무것도 저장하지 않는다. 모델은 문제 목록을 받아 Plan을 고쳐 다시 저장한다.
+- Ready step은 `pending`이면서 모든 의존 step이 `completed`인 step이다. 검증 전에 저장된 Plan은 읽기 시 거부하지 않는다. 존재하지 않는 참조와 자기 참조는 순서 정보가 없으므로 무시하고, 저장된 순환은 Ready가 되지 않아 교착으로 드러난다. Execute 프롬프트는 각 의존 step의 상태, Ready 목록, 저장된 의존성 문제를 보여 준다.
+- blocked step이 있어도 Ready 또는 `in_progress` step이 남으면 서버 자동 진행을 계속한다. 이전에는 blocked step 하나로 이유 기록 없이 멈췄다. 미완료 step이 남았는데 Ready와 `in_progress`가 모두 없으면 run 종료 시 서버가 `dependency_stalled` blocker로 정지하고, 어떤 step이 어떤 blocked·미완료 step을 기다리는지 사슬을 근거로 저장한다. blocked step 자체의 상태와 근거는 그대로 화면에 표시된다.
+- `dependency_stalled`는 서버만 기록한다. `record_workflow_blocker` 입력에는 노출하지 않는다. 구조적 교착은 서버가 Plan 상태만으로 결정적으로 판정할 수 있고, 의존 관계가 잘못된 의미상 교착은 모델이 `update_plan`으로 dependsOn을 고쳐 해결해야 하므로 모델에 blocker 출구를 주지 않는다. 다음 턴 프롬프트에는 진행 불가 사슬을 보여 준다.
+- 서브에이전트 자동 배정, WIP 제한, 칸반 UI, DurableQueue는 이 단계의 범위가 아니다.
+
 ### Configurable dev and Goal settlement boundaries (2026-10-10)
 
 - Dev accepts CLI backend/web ports, storage and manifest paths, with CLI values taking precedence over environment defaults. Readiness requires the matching build ID and `status: ready`; frontend HMR remains enabled and backend changes require an explicit rebuild/restart. Isolated verification uses temporary storage and alternate ports, leaving existing servers and user sessions alone.

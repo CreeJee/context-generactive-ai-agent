@@ -21,7 +21,12 @@ import type {
   ScriptedTurn,
 } from "../../src/testing/scripted-adapter.ts";
 import { WorkflowExecution } from "../../src/workflow/execution.ts";
-import { UpdateWorkflowProgress, Workflows, WorkflowState } from "../../src/workflow/workflow.ts";
+import {
+  type UpdatePlan,
+  UpdateWorkflowProgress,
+  Workflows,
+  WorkflowState,
+} from "../../src/workflow/workflow.ts";
 import { selectTestModel } from "../support/provider.ts";
 import { TestEnv, testAgent } from "../support/test-env.ts";
 
@@ -160,7 +165,10 @@ const LastRunStatus = Schema.Struct({ lastRun: Schema.Struct({ status: Schema.St
  * A fresh session executing the approved Plan, answered by `turns`. Reads go through `env.use`, so
  * they follow the agent across `env.reopen`.
  */
-const executing = Effect.fnUntraced(function* (turns: readonly ScriptedTurn[]) {
+const executing = Effect.fnUntraced(function* (
+  turns: readonly ScriptedTurn[],
+  steps: UpdatePlan["steps"] = plan.steps,
+) {
   const env = yield* TestEnv;
   const id = (yield* env.use(
     Effect.flatMap(Sessions, (sessions) => sessions.create(env.project.id)),
@@ -178,7 +186,7 @@ const executing = Effect.fnUntraced(function* (turns: readonly ScriptedTurn[]) {
       yield* selectTestModel();
       const workflows = yield* Workflows;
       yield* workflows.updateGoal(id, goal);
-      yield* workflows.updatePlan(id, plan);
+      yield* workflows.updatePlan(id, { ...plan, steps });
       yield* workflows.setPhase(id, "execute");
     }),
   );
@@ -368,6 +376,38 @@ testAgent({ testProvider: { responder } })("automatic workflow execution", (it) 
         detail: "Choose the deployment target",
       });
       expect(session.invocations()).toHaveLength(2);
+    }),
+  );
+
+  it.effect("continues beside a blocked step and stops once no remaining step can start", () =>
+    Effect.gen(function* () {
+      const [p1] = plan.steps;
+      const session = yield* executing(
+        [
+          call("block-p1", "update_workflow_progress", {
+            steps: [{ id: "p1", status: "blocked", evidence: ["Upstream service is down"] }],
+            detail: "p1 blocked",
+          }),
+          { text: "p1 is blocked." },
+          call("finish-p3", "update_workflow_progress", {
+            steps: [{ id: "p3", status: "completed", evidence: ["Independent step done"] }],
+            detail: "p3 done",
+          }),
+          { text: "p3 is done." },
+        ],
+        [p1, { ...p1, id: "p2", dependsOn: ["p1"] }, { ...p1, id: "p3" }],
+      );
+      yield* session.run();
+      yield* waitFor(session.execution.pipe(Effect.map((state) => state.kind)), "blocked");
+      expect(yield* session.execution).toMatchObject({
+        reason: "dependency_stalled",
+        evidence: ["p1 [blocked]", "p2 waits on p1 [blocked]"],
+      });
+      const invocations = session.invocations();
+      expect(invocations).toHaveLength(4);
+      expect(invocations[2]?.systemPrompts.join("\n")).toContain(
+        "Ready steps (pending with every dependency completed): p3.",
+      );
     }),
   );
 
