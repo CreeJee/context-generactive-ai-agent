@@ -113,6 +113,7 @@ export const createMemoryTools: {
   (
     projectId: string,
     binding?: MemoryToolRunBinding,
+    scope?: MemoryToolScope,
   ): (env: MemoryToolEnvironment) => ReturnType<typeof createMemoryToolsBody>;
 } & typeof createMemoryToolsBody = EffectFunction.dual(
   (args) => !Schema.is(Schema.String)(args[0]),
@@ -122,9 +123,10 @@ function createMemoryToolsBody(
   env: MemoryToolEnvironment,
   projectId: string,
   binding?: MemoryToolRunBinding,
-  scope: MemoryToolScope = "allowed-projects",
+  scope?: MemoryToolScope,
 ) {
-  const crossProject = scope === "allowed-projects";
+  // Without a scope the tools read every project cross recall allows.
+  const crossProject = scope !== "project";
   const runtime = Context.make(MemorySearch, env.search).pipe(
     Context.add(Nodes, env.nodes),
     Context.add(Graph, env.graph),

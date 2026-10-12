@@ -83,7 +83,7 @@ export class SubscriptionQuota extends Context.Service<
       provider: SubscriptionAccountProvider,
     ) => Effect.Effect<SubscriptionQuotaReport, SubscriptionQuotaError>;
   }
->()("memory-agent/oauth/SubscriptionQuota") {
+>()("memory-agent/oauth/subscription-quota/SubscriptionQuota") {
   static readonly layer = Layer.effect(
     SubscriptionQuota,
     Effect.gen(function* () {
@@ -93,7 +93,7 @@ export class SubscriptionQuota extends Context.Service<
       ) {
         const profiles = yield* Effect.try({
           try: () => listOAuthProfiles({ sqlite, provider }),
-          catch: (cause) => new SubscriptionQuotaError({ reason: "profiles_unreadable", cause }),
+          catch: (cause) => SubscriptionQuotaError.make({ reason: "profiles_unreadable", cause }),
         });
         const checkedAt = DateTime.formatIso(yield* DateTime.now);
         return {

@@ -50,13 +50,13 @@ const make = Effect.gen(function* () {
    */
   const handle = Effect.fn("BtwChat.handle")(function* (request: Request, threadId: string) {
     const thread = yield* threads.get(threadId);
-    if (liveRuns.get(threadId)) return json(409, { error: "run_in_progress" });
+    if (liveRuns.get(threadId) !== null) return json(409, { error: "run_in_progress" });
     const selection = yield* active.selected;
     const auth = yield* active.authFor(selection?.provider ?? (yield* active.provider));
     if (auth.status === "error")
       return json(503, { error: "provider_auth_unavailable", provider: auth.provider });
     if (auth.status !== "signed-in") return json(401, { error: "login_required" });
-    if (!selection) return json(412, { error: "model_selection_required" });
+    if (selection === null) return json(412, { error: "model_selection_required" });
 
     const params = yield* Effect.tryPromise(() => request.json()).pipe(
       Effect.flatMap((body) => Effect.tryPromise(() => chatParamsFromRequestBody(body))),
@@ -66,12 +66,12 @@ const make = Effect.gen(function* () {
     const { messages, runId, parentRunId } = params.value;
     // A BTW turn is always a new question: there are no approvals or client tools to continue.
     const last = messages.at(-1);
-    const turn = last ? Option.getOrNull(incomingUserTurn(last)) : null;
-    if (!turn || !last) return json(400, { error: "user_turn_required" });
+    const turn = last !== undefined ? Option.getOrNull(incomingUserTurn(last)) : null;
+    if (turn === null || last === undefined) return json(400, { error: "user_turn_required" });
     if (isEmptyUserText(last)) return json(400, { error: "empty_message" });
     const images = turn.imageUrls.map((url) => {
       const id = attachmentIdOf(url);
-      return id ? attachments.get(id) : null;
+      return id !== null ? attachments.get(id) : null;
     });
     if (images.includes(null)) return json(400, { error: "unknown_attachment" });
     const attached = images.filter((image) => image !== null);
@@ -103,7 +103,7 @@ const make = Effect.gen(function* () {
       cancellation.release,
       cancellation.cancel,
     );
-    if (!claim) {
+    if (claim === null) {
       releaseSubscriptionRun(adapter);
       yield* cancellation.release;
       return json(409, { error: "run_in_progress" });
@@ -159,12 +159,12 @@ const make = Effect.gen(function* () {
     remove: Effect.fn("BtwChat.remove")(function* (threadId: string) {
       yield* threads.get(threadId);
       const live = liveRuns.get(threadId);
-      if (live) {
+      if (live !== null) {
         yield* live.cancel;
         yield* live.ended;
       }
-      if (liveRuns.get(threadId))
-        return yield* new BtwError({ reason: new BtwRunInProgress({ threadId }) });
+      if (liveRuns.get(threadId) !== null)
+        return yield* BtwError.make({ reason: BtwRunInProgress.make({ threadId }) });
       yield* threads.remove(threadId);
     }),
   };
@@ -172,7 +172,7 @@ const make = Effect.gen(function* () {
 
 /** BTW side questions: read the main conversation and project memory, write nothing back. */
 export class BtwChat extends Context.Service<BtwChat, Effect.Success<typeof make>>()(
-  "memory-agent/BtwChat",
+  "memory-agent/btw/chat/BtwChat",
 ) {
   static readonly layer = Layer.effect(BtwChat, make).pipe(
     Layer.provide(SdkCancellations.layer),

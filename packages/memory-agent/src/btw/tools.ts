@@ -1,5 +1,5 @@
 import type { AnyServerTool, ChatMiddleware } from "@tanstack/ai";
-import { Schema } from "effect";
+import { Function as EffectFunction, Schema } from "effect";
 import { createMemoryTools, type MemoryToolEnvironment } from "../tools/memory.ts";
 import { BtwToolName } from "./contracts.ts";
 
@@ -9,10 +9,12 @@ const allowed = Schema.is(BtwToolName);
  * Search, read and trace over the same project's memory, with no run binding: nothing records a
  * retrieval, a use or a promotion.
  */
-export const btwEvidenceTools = (
-  env: MemoryToolEnvironment,
-  projectId: string,
-): AnyServerTool[] => [...createMemoryTools(env, projectId, undefined, "project").tools];
+export const btwEvidenceTools: {
+  (projectId: string): (env: MemoryToolEnvironment) => AnyServerTool[];
+} & typeof btwEvidenceToolsBody = EffectFunction.dual(2, btwEvidenceToolsBody);
+function btwEvidenceToolsBody(env: MemoryToolEnvironment, projectId: string): AnyServerTool[] {
+  return [...createMemoryTools(env, projectId, undefined, "project").tools];
+}
 
 /**
  * Server-side allowlist. Drops any other tool from every model request and refuses a call to one

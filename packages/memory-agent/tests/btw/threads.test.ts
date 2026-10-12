@@ -1,5 +1,4 @@
-import { existsSync } from "node:fs";
-import { Cause, Effect, Schema } from "effect";
+import { Cause, Effect, FileSystem, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { Attachments } from "../../src/attachments/attachments.ts";
@@ -10,6 +9,7 @@ import { btwToolGuard } from "../../src/btw/tools.ts";
 import { Database } from "../../src/db/database.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
+import { randomUUID } from "../../src/runtime/synchronous-crypto.ts";
 import type { ScriptedResponder } from "../../src/testing/scripted-adapter.ts";
 import { tinyPng } from "../support/images.ts";
 import { selectTestModel } from "../support/provider.ts";
@@ -27,10 +27,10 @@ const btwRequest = (text: string, imageIds: readonly string[] = []) =>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       threadId: "page-thread",
-      runId: `run-${crypto.randomUUID()}`,
+      runId: `run-${randomUUID()}`,
       messages: [
         {
-          id: crypto.randomUUID(),
+          id: randomUUID(),
           role: "user",
           content: [
             { type: "text", content: text },
@@ -49,10 +49,9 @@ const btwRequest = (text: string, imageIds: readonly string[] = []) =>
 
 const Count = Schema.Struct({ count: Schema.Finite });
 const count = (sql: string, ...values: string[]) =>
-  Effect.map(
-    Database,
-    ({ sqlite }) => Schema.decodeUnknownSync(Count)(sqlite.prepare(sql).get(...values)).count,
-  );
+  Effect.flatMap(Database, ({ sqlite }) =>
+    Schema.decodeUnknownEffect(Count)(sqlite.prepare(sql).get(...values)),
+  ).pipe(Effect.map((row) => row.count));
 
 /** Calls the tool its question names (`promote` asks for a write), then answers. */
 const responder: ScriptedResponder = (invocation) => {
@@ -63,7 +62,7 @@ const responder: ScriptedResponder = (invocation) => {
     ? ["promote_memory_candidate", { claimId: "c", taskId: "t" }]
     : ["find_memory", { query: "SQLite" }];
   return {
-    toolCalls: [{ id: `call-${crypto.randomUUID()}`, name, arguments: JSON.stringify(args) }],
+    toolCalls: [{ id: `call-${randomUUID()}`, name, arguments: JSON.stringify(args) }],
   };
 };
 
@@ -151,7 +150,7 @@ testAgent({ testProvider: { responder } })("BTW threads", (it) => {
         ),
       ).toBe(0);
       expect(attachments.get(image.id)).toBeNull();
-      expect(existsSync(attachments.pathOf(image))).toBe(false);
+      expect(yield* (yield* FileSystem.FileSystem).exists(attachments.pathOf(image))).toBe(false);
       const missing = yield* btw.remove(thread.id).pipe(
         Effect.flip,
         Effect.map((error) => error.reason._tag),

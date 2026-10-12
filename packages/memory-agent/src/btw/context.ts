@@ -1,4 +1,7 @@
+import { Array as EffectArray, Function as EffectFunction } from "effect";
 import type { Node } from "../memory/nodes.ts";
+
+type ParentNode = Pick<Node, "id" | "kind" | "text" | "createdAt">;
 
 /** Characters of the main conversation a BTW request carries; older turns stay reachable by tools. */
 export const parentContextBudget = 24_000;
@@ -16,8 +19,13 @@ export const btwInstructions = `You are answering a BTW (by the way) side questi
  * The newest user and assistant messages of the main conversation that fit the budget, oldest
  * first. Each keeps its node id so the model can read the full original with read_evidence.
  */
-export function parentConversationPrompt(
-  nodes: readonly Pick<Node, "id" | "kind" | "text" | "createdAt">[],
+export const parentConversationPrompt: {
+  (budget: number): (nodes: readonly ParentNode[]) => string;
+  (nodes: readonly ParentNode[]): string;
+  (nodes: readonly ParentNode[], budget: number): string;
+} = EffectFunction.dual((args) => EffectArray.isArray(args[0]), parentConversationPromptBody);
+function parentConversationPromptBody(
+  nodes: readonly ParentNode[],
   budget: number = parentContextBudget,
 ): string {
   const picked: string[] = [];
