@@ -1,8 +1,6 @@
-import { Result, Function as EffectFunction } from "effect";
+import { Effect, Result, Function as EffectFunction } from "effect";
 import { Base64 } from "effect/encoding";
 import { isTruthy } from "../app/truthy.ts";
-// Effect Crypto and NodeCrypto provide digests/randomness, not Ed25519 sign/verify with PEM keys.
-import { sign, verify } from "node:crypto";
 import { Predicate, Schema } from "effect";
 
 export const releaseManifestSchemaVersion = 1;
@@ -79,19 +77,61 @@ export function canonicalJson(value: Json): string {
     .join(",")}}`;
 }
 
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-export const decodeReleaseManifest = EffectFunction.flow(
-  Schema.decodeResult(ReleaseManifest),
-  Result.getOrThrow,
-);
-// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
-export const decodeManifestSignature = EffectFunction.flow(
-  Schema.decodeResult(ManifestSignature),
-  Result.getOrThrow,
-);
-
 const encoder = new TextEncoder();
 const unsigned = (manifest: ReleaseManifest) => encoder.encode(canonicalJson(manifest));
+
+/** Why a release was not accepted: its signature, its trust anchor, or the update policy. */
+export class ReleaseRejected extends Schema.TaggedError<ReleaseRejected>()("ReleaseRejected", {
+  reason: Schema.Union([
+    Schema.TaggedStruct("UntrustedKey", { keyId: Schema.String }),
+    Schema.TaggedStruct("InvalidKey", { keyId: Schema.String, cause: Schema.Defect() }),
+    Schema.TaggedStruct("InvalidSignature", {}),
+    Schema.TaggedStruct("PrereleaseDisabled", {}),
+    Schema.TaggedStruct("NotNewer", {}),
+    Schema.TaggedStruct("UpdaterTooOld", { minimum: Schema.String }),
+    Schema.TaggedStruct("MissingAsset", { target: Schema.String }),
+    Schema.TaggedStruct("AssetNameMismatch", { target: Schema.String }),
+  ]),
+}) {}
+
+export class ReleaseSigningFailed extends Schema.TaggedError<ReleaseSigningFailed>()(
+  "ReleaseSigningFailed",
+  {
+    reason: Schema.Union([
+      Schema.TaggedStruct("InvalidKey", { cause: Schema.Defect() }),
+      Schema.TaggedStruct("SignFailed", { cause: Schema.Defect() }),
+    ]),
+  },
+) {}
+
+const ed25519 = { name: "Ed25519" } as const;
+
+class ReleaseKeyInvalid extends Schema.TaggedError<ReleaseKeyInvalid>()("ReleaseKeyInvalid", {
+  cause: Schema.Defect(),
+}) {}
+
+// Keys keep the PEM spellings `generateKeyPairSync("ed25519")` exports: SPKI for trust anchors and
+// PKCS#8 for the signing key. WebCrypto imports their DER bodies.
+const publicPem = { label: "PUBLIC KEY", format: "spki", usage: "verify" } as const;
+const privatePem = { label: "PRIVATE KEY", format: "pkcs8", usage: "sign" } as const;
+const importPemKey = Effect.fnUntraced(function* (
+  pem: string,
+  key: typeof publicPem | typeof privatePem,
+) {
+  const block = new RegExp(
+    `^-----BEGIN ${key.label}-----([A-Za-z0-9+/=\\s]*)-----END ${key.label}-----$`,
+  ).exec(pem.trim());
+  if (block === null)
+    return yield* ReleaseKeyInvalid.make({ cause: `not a ${key.label} PEM block` });
+  const der = yield* Effect.fromResult(Base64.decode((block[1] ?? "").replace(/\s+/g, ""))).pipe(
+    Effect.mapError((cause) => ReleaseKeyInvalid.make({ cause })),
+  );
+  return yield* Effect.tryPromise({
+    try: () =>
+      crypto.subtle.importKey(key.format, new Uint8Array(der), ed25519, false, [key.usage]),
+    catch: (cause) => ReleaseKeyInvalid.make({ cause }),
+  });
+});
 
 export const signReleaseManifest: {
   (
@@ -103,8 +143,19 @@ function signReleaseManifestBody(
   manifest: ReleaseManifest,
   keyId: string,
   privateKey: string,
-): ManifestSignature {
-  return { keyId, signature: Base64.encode(sign(null, unsigned(manifest), privateKey)) };
+): Effect.Effect<ManifestSignature, ReleaseSigningFailed> {
+  return Effect.gen(function* () {
+    const key = yield* importPemKey(privateKey, privatePem).pipe(
+      Effect.mapError(({ cause }) =>
+        ReleaseSigningFailed.make({ reason: { _tag: "InvalidKey", cause } }),
+      ),
+    );
+    const signature = yield* Effect.tryPromise({
+      try: () => crypto.subtle.sign(ed25519, key, unsigned(manifest)),
+      catch: (cause) => ReleaseSigningFailed.make({ reason: { _tag: "SignFailed", cause } }),
+    });
+    return { keyId, signature: Base64.encode(new Uint8Array(signature)) };
+  });
 }
 
 export const verifyManifestSignature: {
@@ -117,13 +168,25 @@ function verifyManifestSignatureBody(
   manifest: ReleaseManifest,
   signature: ManifestSignature,
   trustedKeys: Readonly<Record<string, string>>,
-) {
-  const publicKey = trustedKeys[signature.keyId];
-  if (!isTruthy(publicKey)) throw new Error(`untrusted release key: ${signature.keyId}`);
-  // Preserve Node's accepted unpadded/base64url/whitespace input; Base64.decode is stricter.
-  const bytes = Buffer.from(signature.signature, "base64");
-  if (!verify(null, unsigned(manifest), publicKey, bytes))
-    throw new Error("release manifest signature is invalid");
+): Effect.Effect<void, ReleaseRejected> {
+  return Effect.gen(function* () {
+    const { keyId } = signature;
+    const publicKey = trustedKeys[keyId];
+    if (!isTruthy(publicKey))
+      return yield* ReleaseRejected.make({ reason: { _tag: "UntrustedKey", keyId } });
+    const key = yield* importPemKey(publicKey, publicPem).pipe(
+      Effect.mapError(({ cause }) =>
+        ReleaseRejected.make({ reason: { _tag: "InvalidKey", keyId, cause } }),
+      ),
+    );
+    // Preserve Node's accepted unpadded/base64url/whitespace input; Base64.decode is stricter.
+    const bytes = Buffer.from(signature.signature, "base64");
+    const valid = yield* Effect.tryPromise({
+      try: () => crypto.subtle.verify(ed25519, key, bytes, unsigned(manifest)),
+      catch: () => ReleaseRejected.make({ reason: { _tag: "InvalidSignature" } }),
+    });
+    if (!valid) return yield* ReleaseRejected.make({ reason: { _tag: "InvalidSignature" } });
+  });
 }
 
 interface ParsedVersion {
@@ -203,22 +266,31 @@ function acceptReleaseBody(
   envelope: ReleaseEnvelope,
   trustedKeys: Readonly<Record<string, string>>,
   options: UpdateDecisionOptions,
-): ReleaseAsset {
-  const manifest = decodeReleaseManifest(envelope.manifest);
-  const signature = decodeManifestSignature(envelope.signature);
-  verifyManifestSignature(manifest, signature, trustedKeys);
-  if (manifest.channel === "prerelease" && !(options.allowPrerelease === true))
-    throw new Error("prerelease channel is not enabled");
-  if (
-    !(options.allowDowngrade === true) &&
-    compareVersions(manifest.version, options.currentVersion) <= 0
-  )
-    throw new Error("release is not newer than the installed version");
-  if (compareVersions(options.updaterVersion, manifest.minUpdaterVersion) < 0)
-    throw new Error(`updater ${manifest.minUpdaterVersion} or newer is required`);
-  const asset = manifest.assets[options.target];
-  if (!Predicate.isNotNullish(asset)) throw new Error(`release has no asset for ${options.target}`);
-  if (asset.name !== releaseAssetName(manifest.version, options.target))
-    throw new Error(`release asset name does not match ${options.target}`);
-  return asset;
+): Effect.Effect<ReleaseAsset, ReleaseRejected | Schema.SchemaError> {
+  return Effect.gen(function* () {
+    const manifest = yield* Schema.decodeEffect(ReleaseManifest)(envelope.manifest);
+    const signature = yield* Schema.decodeEffect(ManifestSignature)(envelope.signature);
+    yield* verifyManifestSignature(manifest, signature, trustedKeys);
+    if (manifest.channel === "prerelease" && !(options.allowPrerelease === true))
+      return yield* ReleaseRejected.make({ reason: { _tag: "PrereleaseDisabled" } });
+    const decodeVersion = Schema.decodeEffect(SemVer);
+    if (
+      !(options.allowDowngrade === true) &&
+      compareVersions(manifest.version, yield* decodeVersion(options.currentVersion)) <= 0
+    )
+      return yield* ReleaseRejected.make({ reason: { _tag: "NotNewer" } });
+    if (
+      compareVersions(yield* decodeVersion(options.updaterVersion), manifest.minUpdaterVersion) < 0
+    )
+      return yield* ReleaseRejected.make({
+        reason: { _tag: "UpdaterTooOld", minimum: manifest.minUpdaterVersion },
+      });
+    const { target } = options;
+    const asset = manifest.assets[target];
+    if (!Predicate.isNotNullish(asset))
+      return yield* ReleaseRejected.make({ reason: { _tag: "MissingAsset", target } });
+    if (asset.name !== releaseAssetName(manifest.version, target))
+      return yield* ReleaseRejected.make({ reason: { _tag: "AssetNameMismatch", target } });
+    return asset;
+  });
 }
