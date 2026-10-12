@@ -13,6 +13,7 @@ import {
   CompletionSnapshot,
   CriterionMapping,
 } from "./completion-evidence.ts";
+import { validatePlanDependencies } from "./plan-schedule.ts";
 
 export const WorkflowPhase = Schema.Literals([
   "chat",
@@ -986,44 +987,48 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
         }),
 
       updatePlan: (sessionId: string, input: UpdatePlan) =>
-        change(sessionId, (current) => {
-          const plan: PlanArtifact = {
-            ...input,
-            steps: input.steps.map((step) => ({
-              ...step,
-              status: "pending" as const,
-              evidence: [],
-            })),
-            evidence: [],
-            verification: verificationDefault(),
-            version: (current.plan?.version ?? 0) + 1,
-            goalVersion: current.goal?.version ?? 0,
-            updatedAt: DateTime.formatIso(
-              DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
-            ),
-          };
-          const kind = current.plan === null ? "plan_updated" : "plan_replanned";
-          const phase =
-            current.phase === "execute" || current.phase === "verify" ? "plan" : current.phase;
-          const planned = {
-            ...current,
-            phase,
-            plan,
-            ledger: [
-              ...current.ledger,
-              event(current, kind, `plan v${plan.version} (${plan.status})`),
-            ],
-          };
-          return phase === current.phase
-            ? planned
-            : {
-                ...planned,
+        validatePlanDependencies(input.steps).pipe(
+          Effect.andThen(() =>
+            change(sessionId, (current) => {
+              const plan: PlanArtifact = {
+                ...input,
+                steps: input.steps.map((step) => ({
+                  ...step,
+                  status: "pending" as const,
+                  evidence: [],
+                })),
+                evidence: [],
+                verification: verificationDefault(),
+                version: (current.plan?.version ?? 0) + 1,
+                goalVersion: current.goal?.version ?? 0,
+                updatedAt: DateTime.formatIso(
+                  DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
+                ),
+              };
+              const kind = current.plan === null ? "plan_updated" : "plan_replanned";
+              const phase =
+                current.phase === "execute" || current.phase === "verify" ? "plan" : current.phase;
+              const planned = {
+                ...current,
+                phase,
+                plan,
                 ledger: [
-                  ...planned.ledger,
-                  event(planned, "phase_changed", `${current.phase} -> plan (plan revised)`),
+                  ...current.ledger,
+                  event(current, kind, `plan v${plan.version} (${plan.status})`),
                 ],
               };
-        }),
+              return phase === current.phase
+                ? planned
+                : {
+                    ...planned,
+                    ledger: [
+                      ...planned.ledger,
+                      event(planned, "phase_changed", `${current.phase} -> plan (plan revised)`),
+                    ],
+                  };
+            }),
+          ),
+        ),
 
       updateProgress: (sessionId: string, input: UpdateWorkflowProgress, recorderRunId = "") =>
         serialize(

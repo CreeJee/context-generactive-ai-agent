@@ -97,6 +97,24 @@ testAgent()("Workflows", (it) => {
     }),
   );
 
+  it.effect("rejects a Plan with invalid dependencies without saving it", () =>
+    Effect.gen(function* () {
+      const id = yield* freshSession;
+      const workflows = yield* Workflows;
+      yield* workflows.updateGoal(id, goal);
+      const failure = yield* Effect.flip(
+        workflows.updatePlan(id, {
+          ...plan,
+          steps: plan.steps.map((step) => ({ ...step, dependsOn: ["missing"] })),
+        }),
+      );
+      expect(failure.issues).toEqual([
+        { _tag: "UnknownDependency", stepId: "store", dependsOn: "missing" },
+      ]);
+      expect((yield* workflows.get(id)).plan).toBeNull();
+    }),
+  );
+
   it.effect("refuses Execute until a Plan is ready", () =>
     Effect.gen(function* () {
       const id = yield* freshSession;

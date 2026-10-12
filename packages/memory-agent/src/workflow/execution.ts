@@ -2,8 +2,15 @@ import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Array as EffectArray, Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
+import { planSchedule, stalledEvidence } from "./plan-schedule.ts";
 import type { WorkflowState } from "./workflow.ts";
 
+const blockerFields = {
+  detail: Schema.NonEmptyString,
+  evidence: Schema.Array(Schema.NonEmptyString).pipe(Schema.check(Schema.isMinLength(1))),
+};
+
+/** Blockers the model may record; dependency stalls are decided only by the server. */
 export const WorkflowBlocker = Schema.Struct({
   reason: Schema.Literals([
     "user_decision",
@@ -11,8 +18,7 @@ export const WorkflowBlocker = Schema.Struct({
     "external_dependency",
     "repeated_failure",
   ]),
-  detail: Schema.NonEmptyString,
-  evidence: Schema.Array(Schema.NonEmptyString).pipe(Schema.check(Schema.isMinLength(1))),
+  ...blockerFields,
 });
 export type WorkflowBlocker = typeof WorkflowBlocker.Type;
 
@@ -38,7 +44,8 @@ export const WorkflowExecutionState = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("blocked"),
     runId: Schema.String,
-    ...WorkflowBlocker.fields,
+    reason: Schema.Literals([...WorkflowBlocker.fields.reason.literals, "dependency_stalled"]),
+    ...blockerFields,
   }),
   Schema.Struct({
     kind: Schema.Literal("stopped"),
@@ -141,7 +148,7 @@ const make = Effect.gen(function* () {
             executable(state) &&
             execution.goalVersion === state.goal?.version &&
             execution.planVersion === state.plan?.version &&
-            !state.plan.steps.some((step) => step.status === "blocked")
+            planSchedule(state.plan.steps).kind !== "stalled"
           );
         }),
     ),
@@ -196,21 +203,31 @@ const make = Effect.gen(function* () {
             progress.completedSteps.some((id) => !previous.progress.completedSteps.includes(id)) ||
             progress.evidence.some((item) => !previous.progress.evidence.includes(item));
           const noProgressRuns = advanced ? 0 : previous.noProgressRuns + 1;
+          const schedule = planSchedule(state.plan?.steps ?? []);
           save(
             sessionId,
-            noProgressRuns >= 2
+            schedule.kind === "stalled"
               ? {
                   kind: "blocked",
                   runId,
-                  reason: "repeated_failure",
+                  reason: "dependency_stalled",
                   detail:
-                    "두 턴 연속 완료된 단계, 새로운 진행 근거 또는 유의미한 도구 결과가 없어 자동 진행을 멈췄어요.",
-                  evidence: [
-                    previous.runId,
-                    "Two consecutive runs without new workflow evidence, completed steps or substantive successful tool results",
-                  ],
+                    "남은 단계가 모두 막혔거나 끝나지 않은 단계를 기다리고 있어 바로 시작할 단계가 없어요. 막힌 단계나 단계 의존 관계를 확인해 주세요.",
+                  evidence: stalledEvidence(schedule),
                 }
-              : { ...previous, kind: "ready", progress, noProgressRuns },
+              : noProgressRuns >= 2
+                ? {
+                    kind: "blocked",
+                    runId,
+                    reason: "repeated_failure",
+                    detail:
+                      "두 턴 연속 완료된 단계, 새로운 진행 근거 또는 유의미한 도구 결과가 없어 자동 진행을 멈췄어요.",
+                    evidence: [
+                      previous.runId,
+                      "Two consecutive runs without new workflow evidence, completed steps or substantive successful tool results",
+                    ],
+                  }
+                : { ...previous, kind: "ready", progress, noProgressRuns },
           );
         }),
     ),
