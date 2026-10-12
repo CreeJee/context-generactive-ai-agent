@@ -198,6 +198,7 @@ export type OAuthHarnessOperation =
   | "login_callback"
   | "model_catalog"
   | "model_stream"
+  | "subscription_usage"
   | "token_exchange"
   | "token_refresh";
 
