@@ -41,9 +41,7 @@ const program = Effect.gen(function* () {
   }));
   const [profile] = candidates;
   if (candidates.length !== 1 || profile === undefined)
-    return yield* Console.log(
-      JSON.stringify({ outcome: "not_called", reason: "candidate_count", candidates }, null, 2),
-    );
+    return yield* Console.log({ outcome: "not_called", reason: "candidate_count", candidates });
   const probe = yield* anthropicSubscriptionUsageProbe({
     store: createKeychainProfileCredentialStore(profile.id),
   }).pipe(
@@ -62,7 +60,7 @@ const program = Effect.gen(function* () {
         : Effect.fail(failure);
     }),
   );
-  yield* Console.log(JSON.stringify({ profile, ...probe }, null, 2));
+  yield* Console.log({ profile, ...probe });
 });
 
 await runOAuthNodeEffect(program);
