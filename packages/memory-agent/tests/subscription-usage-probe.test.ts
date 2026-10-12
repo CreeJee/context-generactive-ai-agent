@@ -2,6 +2,7 @@ import { it } from "@effect/vitest";
 import { DateTime, Effect } from "effect";
 import { expect } from "vite-plus/test";
 import {
+  anthropicSubscriptionUsage,
   anthropicSubscriptionUsageProbe,
   anthropicUsageUrl,
 } from "../src/oauth/subscription-usage-probe.ts";
@@ -53,4 +54,42 @@ it.effect.each([
         });
     }
   }),
+);
+
+it.effect(
+  "quota lookup reads only numbered named windows and never refreshes an expired token",
+  () =>
+    Effect.gen(function* () {
+      const now = DateTime.toEpochMillis(DateTime.nowUnsafe());
+      const requests: Parameters<typeof fetch>[0][] = [];
+      const lookup = (expiresAt: number) =>
+        anthropicSubscriptionUsage({
+          store: {
+            read: () =>
+              Promise.resolve({ accessToken: "fixture", refreshToken: "fixture", expiresAt }),
+            write: () => Promise.reject(new Error("unexpected write")),
+            remove: () => Promise.resolve(),
+          },
+          fetch: (url) => {
+            requests.push(url);
+            return Promise.resolve(
+              Response.json({
+                five_hour: { utilization: 12.5, resets_at: "fixture" },
+                seven_day: { utilization: null, resets_at: null },
+                iguana_necktie: { utilization: 3 },
+              }),
+            );
+          },
+        }).pipe(Effect.result);
+
+      expect(yield* lookup(now + 3600_000)).toMatchObject({
+        success: [
+          { name: "five_hour", usedPercent: 12.5, windowSeconds: 18_000, resetsAt: "fixture" },
+        ],
+      });
+      expect(yield* lookup(now)).toMatchObject({
+        failure: { _tag: "SubscriptionUsageCredentialExpired" },
+      });
+      expect(requests).toEqual([anthropicUsageUrl]);
+    }),
 );

@@ -22,7 +22,7 @@ This is a source/permission review, **not** an authenticated test. No account to
 2. If a permitted route does not supply a field, return **조회 불가/미확인** with no fabricated number. If a stale response exists, label its observation time and error explicitly; do not substitute locally counted tokens or silently reset elapsed percentages to zero.
 3. Confirm how to handle current Anthropic OAuth in light of the official restriction (e.g. supported API-key path or an unmodified Claude Code integration, subject to actual terms). This is a blocking scope/design decision before M5 and UI claims about Claude subscription quota.
 
-**M5 status (2026-10-12):** `GET /api/accounts/quota?provider=` returns, per local account, `unavailable` with reason `no_permitted_route` (OpenAI) or `provider_policy_restricted` (Anthropic). No internal usage endpoint is called and no local token count is shown as quota. The response type already distinguishes `observed` and `stale` values for a future allowed route; V1 has since been run once (below); adopting any route remains the user's decision.
+**M5 status (2026-10-12, updated after V1):** the user adopted the Anthropic `/api/oauth/usage` route, accepting the policy risk in point 3. `GET /api/accounts/quota?provider=` now returns, per local Anthropic account, the provider's `five_hour`/`seven_day` `utilization` and `resets_at` as `observed` (see [M5 adoption](#m5-adoption-2026-10-12)). OpenAI stays `unavailable` / `no_permitted_route`; `/wham/usage` is not called. No local token count is shown as quota.
 
 ## V1 — first attempt (2026-10-12): stopped before any call
 
@@ -59,4 +59,14 @@ What this shows and does not show:
 
 - The endpoint answers this app's stored consumer-login token with provider-reported `five_hour`/`seven_day` utilization and reset times, matching the jcode parser. It is one observation of one account; the schema is undocumented and has many code-named fields that may change without notice.
 - It does **not** resolve the M4 policy finding: the call is exactly the third-party use of Claude.ai credentials that Anthropic's credential-use terms restrict.
-- **M5 is unchanged:** `SubscriptionQuota` still returns `unavailable` / `provider_policy_restricted` for Anthropic. Adopting this route (and which windows to show) is the user's decision.
+- At the time of this run M5 was unchanged; the user then adopted the route (next section).
+
+## M5 adoption (2026-10-12)
+
+The user decided to show Anthropic quota from this route despite the credential-use terms finding above. [`SubscriptionQuota`](../packages/memory-agent/src/oauth/subscription-quota.ts) reads it through `anthropicSubscriptionUsage` in [subscription-usage-probe.ts](../packages/memory-agent/src/oauth/subscription-usage-probe.ts):
+
+- **Windows:** only `five_hour` (18 000 s) and `seven_day` (604 800 s), each only when `utilization` is a number. `usedPercent` is that `utilization`; `resetsAt` is `resets_at`. Code-named and dollar fields are ignored.
+- **No refresh:** the lookup reads each profile's stored access token and never refreshes it. An expired token fails the lookup without a request, so it never races the model path's refresh of a rotating refresh token.
+- **Rate:** at most one request per account per minute (`Cache` with a 1-minute TTL); concurrent sidebar reads share it, and at most two accounts are looked up at once.
+- **Failure:** a failed lookup returns the last observation as `stale` (with `failedAt`), never zero. With no earlier observation it returns `unavailable` with `credential_expired` (token expired) or `lookup_failed` (any provider, transport or shape failure). Only the error tag is logged.
+- The previous `provider_policy_restricted` reason is removed; the route was never in a GitHub release.

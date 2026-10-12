@@ -65,7 +65,7 @@ export {
   SubscriptionQuotaError,
   SubscriptionQuotaReport,
   SubscriptionQuotaStatus,
-  subscriptionQuotaRoutes,
+  SubscriptionUsage,
   type SubscriptionAccountQuota,
   type SubscriptionQuotaUnavailableReason,
   type SubscriptionQuotaWindow,

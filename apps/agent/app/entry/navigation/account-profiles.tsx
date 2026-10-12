@@ -20,8 +20,20 @@ import { koreanLocalTime } from "../shared/local-time";
 type QuotaStatus = SubscriptionQuotaReport["accounts"][number]["quota"];
 type QuotaWindow = Extract<QuotaStatus, { status: "observed" }>["windows"][number];
 
+/** Labels for provider window names; an unknown name is shown as the provider sent it. */
+const windowLabel = (name: string) => {
+  switch (name) {
+    case "five_hour":
+      return "5시간";
+    case "seven_day":
+      return "7일";
+    default:
+      return name;
+  }
+};
+
 const windowText = (window: QuotaWindow) =>
-  `${window.name} ${Math.round(window.usedPercent)}% 사용${window.resetsAt !== null && window.resetsAt !== "" ? ` · ${koreanLocalTime(window.resetsAt)} 초기화` : ""}`;
+  `${windowLabel(window.name)} ${Math.round(window.usedPercent)}% 사용${window.resetsAt !== null && window.resetsAt !== "" ? ` · ${koreanLocalTime(window.resetsAt)} 초기화` : ""}`;
 
 /** Provider-reported numbers only; an unavailable quota says why instead of estimating one. */
 export function quotaText(quota: QuotaStatus): string {
@@ -34,8 +46,10 @@ export function quotaText(quota: QuotaStatus): string {
       switch (quota.reason) {
         case "no_permitted_route":
           return "구독 한도 조회 불가: 허용된 조회 경로가 확인되지 않았어요";
-        case "provider_policy_restricted":
-          return "구독 한도 조회 불가: 공급자 정책상 이 앱에서 조회하지 않아요";
+        case "credential_expired":
+          return "구독 한도 조회 불가: 저장된 로그인이 만료돼 조회하지 않았어요";
+        case "lookup_failed":
+          return "구독 한도 조회 실패: 공급자에서 사용량을 받지 못했어요";
       }
   }
 }

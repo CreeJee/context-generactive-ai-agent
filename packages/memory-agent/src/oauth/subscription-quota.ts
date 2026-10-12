@@ -1,7 +1,26 @@
-import { Context, DateTime, Effect, Layer, Schema } from "effect";
+import {
+  Cache,
+  Cause,
+  Context,
+  DateTime,
+  Duration,
+  Effect,
+  Layer,
+  Ref,
+  Result,
+  Schema,
+} from "effect";
 import { Database } from "../db/database.ts";
 import { SubscriptionAccountProvider } from "../providers/contracts.ts";
 import { listOAuthProfiles } from "./accounts.ts";
+import {
+  anthropicSubscriptionUsage,
+  type SubscriptionUsageCredentialExpired,
+} from "./subscription-usage-probe.ts";
+import {
+  createKeychainProfileCredentialStore,
+  type OAuthHarnessError,
+} from "./validation-harness.ts";
 
 /**
  * A provider-reported window. `usedPercent` is the provider's own percentage of this named window,
@@ -17,12 +36,14 @@ export type SubscriptionQuotaWindow = typeof SubscriptionQuotaWindow.Type;
 
 /**
  * Why no quota can be shown. `no_permitted_route`: no supported, allowed route for this app's
- * credential is verified. `provider_policy_restricted`: the provider's terms restrict third-party
- * use of its consumer login, so an internal usage call is not made.
+ * credential is verified. `credential_expired`: the stored token has expired and a quota lookup
+ * does not refresh it; a model request with the account renews it. `lookup_failed`: the provider
+ * lookup failed and no earlier observation exists.
  */
 export const SubscriptionQuotaUnavailableReason = Schema.Literals([
   "no_permitted_route",
-  "provider_policy_restricted",
+  "credential_expired",
+  "lookup_failed",
 ]);
 export type SubscriptionQuotaUnavailableReason = typeof SubscriptionQuotaUnavailableReason.Type;
 
@@ -66,15 +87,31 @@ export class SubscriptionQuotaError extends Schema.TaggedError<SubscriptionQuota
   { reason: Schema.Literal("profiles_unreadable"), cause: Schema.Defect() },
 ) {}
 
-/**
- * The quota route each provider may use. No route is verified and allowed yet (see
- * docs/subscription-quota-research.md), so every account reports why it is unavailable instead of
- * calling an internal usage endpoint or estimating from local token counts.
- */
-export const subscriptionQuotaRoutes = {
-  openai: { status: "unavailable", reason: "no_permitted_route" },
-  anthropic: { status: "unavailable", reason: "provider_policy_restricted" },
-} as const satisfies Record<SubscriptionAccountProvider, SubscriptionQuotaStatus>;
+/** Reads the provider-reported windows of one stored Anthropic account. */
+export class SubscriptionUsage extends Context.Service<
+  SubscriptionUsage,
+  {
+    readonly anthropic: (
+      accountId: string,
+    ) => Effect.Effect<
+      readonly SubscriptionQuotaWindow[],
+      OAuthHarnessError | SubscriptionUsageCredentialExpired | Cause.UnknownError
+    >;
+  }
+>()("memory-agent/oauth/subscription-quota/SubscriptionUsage") {
+  static readonly layer = Layer.succeed(
+    SubscriptionUsage,
+    SubscriptionUsage.of({
+      anthropic: (accountId) =>
+        anthropicSubscriptionUsage({ store: createKeychainProfileCredentialStore(accountId) }),
+    }),
+  );
+}
+
+type ObservedQuota = Extract<SubscriptionQuotaStatus, { status: "observed" }>;
+
+/** At most one provider lookup per account per minute; concurrent reads share it. */
+const observationTimeToLive = Duration.minutes(1);
 
 export class SubscriptionQuota extends Context.Service<
   SubscriptionQuota,
@@ -84,10 +121,66 @@ export class SubscriptionQuota extends Context.Service<
     ) => Effect.Effect<SubscriptionQuotaReport, SubscriptionQuotaError>;
   }
 >()("memory-agent/oauth/subscription-quota/SubscriptionQuota") {
+  /**
+   * OpenAI has no permitted route. Anthropic reads `/api/oauth/usage` (adopted 2026-10-12, see
+   * docs/subscription-quota-research.md); a failed lookup keeps the last observation as `stale`.
+   */
   static readonly layer = Layer.effect(
     SubscriptionQuota,
     Effect.gen(function* () {
       const { sqlite } = yield* Database;
+      const usage = yield* SubscriptionUsage;
+      const lastObserved = yield* Ref.make<ReadonlyMap<string, ObservedQuota>>(new Map());
+      const anthropicQuota = yield* Cache.make({
+        capacity: 64,
+        timeToLive: observationTimeToLive,
+        lookup: Effect.fn("SubscriptionQuota.anthropic")(function* (accountId: string) {
+          const windows = yield* usage.anthropic(accountId).pipe(
+            Effect.map((windows) =>
+              windows.length > 0 ? Result.succeed(windows) : Result.fail("lookup_failed" as const),
+            ),
+            Effect.catchTag("SubscriptionUsageCredentialExpired", () =>
+              Effect.succeed(Result.fail("credential_expired" as const)),
+            ),
+            Effect.catch((error) =>
+              Effect.logWarning("subscription usage lookup failed").pipe(
+                Effect.annotateLogs({ error: error._tag }),
+                Effect.as(Result.fail("lookup_failed" as const)),
+              ),
+            ),
+          );
+          const at = DateTime.formatIso(yield* DateTime.now);
+          if (Result.isSuccess(windows)) {
+            const observed: ObservedQuota = {
+              status: "observed",
+              windows: windows.success,
+              observedAt: at,
+            };
+            yield* Ref.update(lastObserved, (map) => new Map(map).set(accountId, observed));
+            return observed;
+          }
+          const previous = (yield* Ref.get(lastObserved)).get(accountId);
+          return previous === undefined
+            ? ({ status: "unavailable", reason: windows.failure } satisfies SubscriptionQuotaStatus)
+            : ({
+                status: "stale",
+                windows: previous.windows,
+                observedAt: previous.observedAt,
+                failedAt: at,
+              } satisfies SubscriptionQuotaStatus);
+        }),
+      });
+      const quotaFor = (
+        provider: SubscriptionAccountProvider,
+        accountId: string,
+      ): Effect.Effect<SubscriptionQuotaStatus> => {
+        switch (provider) {
+          case "openai":
+            return Effect.succeed({ status: "unavailable", reason: "no_permitted_route" });
+          case "anthropic":
+            return Cache.get(anthropicQuota, accountId);
+        }
+      };
       const accounts = Effect.fn("SubscriptionQuota.accounts")(function* (
         provider: SubscriptionAccountProvider,
       ) {
@@ -96,16 +189,18 @@ export class SubscriptionQuota extends Context.Service<
           catch: (cause) => SubscriptionQuotaError.make({ reason: "profiles_unreadable", cause }),
         });
         const checkedAt = DateTime.formatIso(yield* DateTime.now);
-        return {
-          provider,
-          checkedAt,
-          accounts: profiles.map((profile) => ({
-            accountId: profile.id,
-            label: profile.label,
-            selected: profile.selected,
-            quota: subscriptionQuotaRoutes[provider],
-          })),
-        };
+        const quotas = yield* Effect.forEach(
+          profiles,
+          (profile) =>
+            Effect.map(quotaFor(provider, profile.id), (quota) => ({
+              accountId: profile.id,
+              label: profile.label,
+              selected: profile.selected,
+              quota,
+            })),
+          { concurrency: 2 },
+        );
+        return { provider, checkedAt, accounts: quotas };
       });
       return SubscriptionQuota.of({ accounts });
     }),
