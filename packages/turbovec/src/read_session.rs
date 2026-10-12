@@ -11,7 +11,9 @@ use std::{
     time::{Duration, Instant},
 };
 const MAX_BYTES: usize = 1_048_576;
-const MEANINGFUL: &str = "length(trim(n.text, char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279))) > 0 AND NOT EXISTS (SELECT 1 FROM memory_graph_suppressed_nodes s WHERE s.node_seq = n.seq)";
+// Same terms as the `nodes_embeddable` partial index; spelled differently, SQLite would not use it.
+const EMBEDDED_KINDS: &str = "n.kind IN ('user', 'assistant', 'topic')";
+const MEANINGFUL: &str ="length(trim(n.text, char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279))) > 0 AND NOT EXISTS (SELECT 1 FROM memory_graph_suppressed_nodes s WHERE s.node_seq = n.seq)";
 #[napi(object)]
 pub struct NativeReadInput {
     pub allowed_projects: Vec<String>,
@@ -294,7 +296,8 @@ impl MemoryReadSession {
             if input.query.is_some() && !input.allowed_projects.is_empty() {
                 let mut values = vec![Value::Text(input.embedder.clone())];
                 values.extend(project_values());
-                let sql = format!("SELECT n.seq FROM node_vectors v JOIN nodes n ON n.seq=v.node_seq WHERE {MEANINGFUL} AND v.embedder=? AND n.project_id IN ({projects})");
+                // The kind terms let SQLite answer from the `nodes_embeddable` index without reading text.
+                let sql = format!("SELECT n.seq FROM node_vectors v JOIN nodes n ON n.seq=v.node_seq WHERE {MEANINGFUL} AND {EMBEDDED_KINDS} AND v.embedder=? AND n.project_id IN ({projects})");
                 let mut statement = connection.prepare(&sql).map_err(|_| Outcome::ReadFailed)?;
                 let mut rows = statement
                     .query(params_from_iter(values))
@@ -446,9 +449,10 @@ impl MemoryReadSession {
                 rank(format!("SELECT n.id FROM nodes_morph f JOIN nodes n ON n.seq=f.rowid WHERE {MEANINGFUL} AND nodes_morph MATCH ? AND n.project_id IN ({projects}) ORDER BY f.rank LIMIT ?"), quoted(&input.morph_terms), input.morph_k, &mut out.morph_ids, false)?;
             }
             out.morph_ms = ms(stage);
-            out.unindexed = connection.query_row(&format!("SELECT count(*) FROM nodes n LEFT JOIN node_vectors v ON v.node_seq=n.seq AND v.embedder=? WHERE v.node_seq IS NULL AND {MEANINGFUL} AND n.kind IN ('user','assistant','topic')"), [&input.embedder], |r| r.get::<_,i64>(0)).map_err(|_| Outcome::ReadFailed)? as f64;
+            out.unindexed = connection.query_row(&format!("SELECT count(*) FROM nodes n LEFT JOIN node_vectors v ON v.node_seq=n.seq AND v.embedder=? WHERE v.node_seq IS NULL AND {MEANINGFUL} AND {EMBEDDED_KINDS}"), [&input.embedder], |r| r.get::<_,i64>(0)).map_err(|_| Outcome::ReadFailed)? as f64;
             out.sqlite_executions += 1;
-            out.uninterpreted = connection.query_row(&format!("SELECT count(*) FROM interpret_jobs j JOIN nodes n ON n.id=j.node_id WHERE j.status!='done' AND {MEANINGFUL} AND n.project_id IN ({projects})"), params_from_iter(project_values()), |r| r.get::<_,i64>(0)).map_err(|_| Outcome::ReadFailed)? as f64;
+            // CROSS JOIN keeps the few open jobs as the outer loop; otherwise SQLite walks every node of the project.
+            out.uninterpreted = connection.query_row(&format!("SELECT count(*) FROM interpret_jobs j CROSS JOIN nodes n ON n.id=j.node_id WHERE j.status!='done' AND {MEANINGFUL} AND n.project_id IN ({projects})"), params_from_iter(project_values()), |r| r.get::<_,i64>(0)).map_err(|_| Outcome::ReadFailed)? as f64;
             out.sqlite_executions += 1;
             check()?;
             if out.bytes() > input.output_budget_bytes as usize {

@@ -1467,6 +1467,14 @@ export const migrations: readonly string[] = [
   );
   CREATE INDEX btw_attachments_attachment ON btw_attachments(attachment_id);
   `,
+  `
+  -- Statements that can be embedded, so every search can list vector candidates and count the
+  -- unembedded ones without reading the text. The WHERE terms must stay identical to
+  -- embeddedKindFilter and nonBlankTextSql for SQLite to use the index.
+  CREATE INDEX nodes_embeddable ON nodes(project_id, seq)
+    WHERE kind IN ('user', 'assistant', 'topic')
+      AND length(trim(text, char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279))) > 0;
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

@@ -1,7 +1,10 @@
 /** Empty tool-phase assistant nodes remain evidence, but are not semantic statements. */
 export const hasStatementText = (text: string) => text.trim().length > 0;
 
-/** Only internal column names are passed here; user input must never become SQL. */
+/**
+ * Only internal column names are passed here; user input must never become SQL. The
+ * `nodes_embeddable` index repeats this expression; change both or searches scan every node.
+ */
 export const nonBlankTextSql = (column: string) =>
   `length(trim(${column}, char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279))) > 0`;
 
