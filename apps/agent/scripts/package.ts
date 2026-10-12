@@ -1,5 +1,6 @@
 import { HashSet } from "effect";
 import { isTruthy } from "../app/truthy.ts";
+import { BuildServerConfig, buildConfigAsset } from "../app/.server/build-config.ts";
 // Builds the executable for this machine's platform:
 //   dist/context-agent-<platform>-<arch>/context-agent (+ .sha256)
 // Run with `vp run package`, which builds the app and its workspace dependencies first. Other platforms are built on
@@ -21,6 +22,7 @@ import {
   Schema,
   MutableHashMap,
   Option,
+  Redacted,
 } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -455,6 +457,22 @@ const program = Effect.gen(function* () {
     )({ version: releaseVersion, channel: releaseChannel, target }),
   );
   assets["release/info.json"] = releaseInfoFile;
+  // The developer's report webhook from the build environment (a release secret in CI). It is never
+  // printed; the server resolves it through Config behind the runtime environment.
+  const developerWebhook = yield* Config.option(Config.Redacted("DISCORD_WEBHOOK_URL"));
+  const buildConfigJson = yield* Schema.encodeEffect(Schema.fromJsonString(BuildServerConfig))(
+    Option.match(developerWebhook, {
+      onNone: () => ({}),
+      onSome: (url) => ({ DISCORD_WEBHOOK_URL: Redacted.value(url) }),
+    }),
+  );
+  // The executable carries the webhook; no plaintext copy outlives packaging, even on failure.
+  assets[buildConfigAsset] = yield* Effect.acquireRelease(
+    fs
+      .writeFileString(join(work, "server-config.json"), buildConfigJson, { mode: 0o600 })
+      .pipe(Effect.as(join(work, "server-config.json"))),
+    (file) => fs.remove(file, { force: true }).pipe(Effect.ignore),
+  );
   yield* fs.writeFileString(
     assetsFile,
     yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)))(
@@ -462,7 +480,7 @@ const program = Effect.gen(function* () {
     ),
   );
   yield* Effect.logInfo(
-    `runtime: ${files.length} files, ${(bytes / 1e6).toFixed(1)} MB; release: ${releaseVersion} (${releaseChannel}, ${target})`,
+    `runtime: ${files.length} files, ${(bytes / 1e6).toFixed(1)} MB; release: ${releaseVersion} (${releaseChannel}, ${target}); developer webhook: ${Option.isSome(developerWebhook) ? "embedded" : "not set"}`,
   );
 
   yield* fs.remove(packedOutput, { recursive: true, force: true });

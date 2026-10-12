@@ -4,7 +4,7 @@
 - 증상만으로 문안 생성·복사 가능하다. 최근 증거는 사용자가 별도로 불러오고, 원문을 확인한 뒤 항목별로 포함·편집한다. 저장된 대화 노드·도구 노드 발췌와 Work Trace 작업 locator는 모델 제공자의 원시 HTTP 출력이 아니다.
 - 원본 대화와 분리된 전용 분석 세션을 열 수 있다. 서버가 원본 세션·프로젝트를 바인딩하며, 분석용 읽기 전용 근거 도구는 그 범위 안에서만 조회한다. 분석 세션을 열지 못해도 증상 제보문 작성·복사·저장은 계속 가능하다. 이 구현·검증이 원본 증거의 외부 전송 동의나 새로운 비용 정책을 승인한 것은 아니다.
 - **AI 진단(선택)**: 사용자가 누를 때만 `POST /api/reports/diagnosis`로 사용자가 선택한 모델에 한 번 요청한다. 작성한 설명과 포함·편집한 증거만 보낸다. 결과는 `관측`(포함한 증거 ID 인용)과 `가설`(검증되지 않은 추정)로 나뉘고, 인용이 없는 관측은 서버가 가설로 옮긴다. 각 항목은 편집·삭제할 수 있고 제보문 포함 여부를 고른다. 모델 사용 불가(503)·호출 실패(502)·형식 오류(422)여도 제보문에는 실패 사실만 적고 사용자 설명·증거는 그대로 남는다.
-- **Discord 웹훅 전송(선택)**: 서버 설정 `DISCORD_WEBHOOK_URL`에 개발자 웹훅이 있으면, 검토한 최종 문안을 **누를 때만** 그 웹훅으로 보낸다. 주소는 코드에 없고 서버가 시작할 때 Effect `Config.Redacted`로 한 번 읽는다(개발 실행은 `apps/agent`의 env 파일을 React Router Vite 플러그인이 `process.env`로 올린다). 브라우저·API 응답·제보문·오류에는 웹훅 ID 끝 4자리만 나온다. 설정이 없거나 형식이 틀리면 제보 페이지는 복사·저장만 안내한다. 실패하면 이유를 보여주고 복사·텍스트 파일 저장은 항상 남는다. 자동 오류 감지·로컬 이벤트 보존은 후속 작업이고, 웹서버 자체가 접근 불가능한 장애는 범위 밖이다.
+- **Discord 웹훅 전송(선택)**: 서버 설정 `DISCORD_WEBHOOK_URL`에 개발자 웹훅이 있으면, 검토한 최종 문안을 **누를 때만** 그 웹훅으로 보낸다. 주소는 코드에 없고 서버가 시작할 때 Effect `Config.Redacted`로 한 번 읽는다(개발 실행은 `apps/agent`의 env 파일을 React Router Vite 플러그인이 `process.env`로 올린다. 배포본은 아래 "배포본의 개발자 웹훅"대로 빌드 때 넣은 값을 쓴다). 브라우저·API 응답·제보문·오류에는 웹훅 ID 끝 4자리만 나온다. 설정이 없거나 형식이 틀리면 제보 페이지는 복사·저장만 안내한다. 실패하면 이유를 보여주고 복사·텍스트 파일 저장은 항상 남는다. 자동 오류 감지·로컬 이벤트 보존은 후속 작업이고, 웹서버 자체가 접근 불가능한 장애는 범위 밖이다.
 - 보안 경계: 현재 제품은 단일 사용자 로컬 loopback 서버이며 별도의 사용자별 계정 ACL이 없다. 보고 API는 세션과 프로젝트 ID의 실제 관계를 확인하고 건수/문자 수를 제한하며, 변경 요청은 same-origin만 받는다. 노드는 저장 시 비밀정보 탐지/마스킹을 거치지만, run 오류 문자열이나 사용자 텍스트에서 모든 민감 정보가 제거된다는 보장은 없다. 전송·복사 전에 최종 문안을 직접 확인해야 한다. 로컬 서버를 여러 사용자에게 노출하려면 먼저 인증과 세션별 권한을 추가해야 한다.
 
 ## Discord 웹훅 제약 (D1)
@@ -23,6 +23,15 @@
 | 멱등성    | Execute Webhook에는 중복 방지 키(`nonce`)가 없다.                                                                                                                                                                                                                                        | 문안의 SHA-256으로 서버 프로세스 메모리에서 원자적으로 시도를 점유한다. 보내는 중 같은 문안은 `in_progress`, 이미 보낸 문안은 `duplicate`, 응답을 확인하지 못한 문안(연결 끊김·30초 시간 초과·응답 형식 오류·중단)은 `uncertain_duplicate`로 돌려주고, 사용자가 채널을 확인한 뒤 **그래도 다시 보내기**로만 재전송한다. 이 기록은 서버 재시작 시 사라진다. |
 
 URL 형식은 `https://{discord.com|discordapp.com|ptb.discord.com|canary.discord.com}/api[/vN]/webhooks/{17~20자리 ID}/{토큰}`만 받는다. 사용자 이름·비밀번호가 붙은 URL, http, 다른 호스트는 거부한다(테스트 계층만 loopback http 허용).
+
+## 배포본의 개발자 웹훅 (2026-10-12)
+
+- 패키징된 실행 파일은 env 파일을 읽지 않는다. 그래서 `vp run package`가 빌드 환경의 `DISCORD_WEBHOOK_URL`을 읽어 실행 파일의 SEA asset(`release/server-config.json`)으로 넣는다. 서버는 시작할 때 이 asset을 읽고, agent runtime의 `ConfigProvider`에 실행 환경 **뒤의** 대체 출처로 붙인다(`ConfigProvider.layerAdd`). 그래서 기존 `Config.Redacted("DISCORD_WEBHOOK_URL")` 조회가 그대로 이 값을 찾고, 실행할 때 환경 변수 `DISCORD_WEBHOOK_URL`이 있으면 그 값이 이긴다.
+- 빌드 환경에 값이 없으면(비었거나 미설정) 아무것도 넣지 않고, 배포본은 기존처럼 `not_configured`로 복사·저장만 안내한다. 형식이 틀린 값은 `invalid_webhook_url`이다. 빌드 로그에는 `developer webhook: embedded` / `not set`만 나오고 값은 나오지 않는다. asset을 만들 때 쓴 임시 파일은 `vp pack`이 끝나면(실패해도) 지운다.
+- 값은 서버 번들(SEA asset)에만 있고, 클라이언트 번들·브라우저 응답에는 들어가지 않는다(브라우저에는 지금처럼 웹훅 ID 끝 4자리만).
+- 검증(2026-10-12, darwin-arm64, 실제 비밀 없음): `apps/agent/app/.server/build-config.test.ts`가 빌드 값이 `ReportDelivery`의 Config까지 닿는 것, 실행 환경 값이 이기는 것, 둘 다 없으면 미설정인 것을 확인한다. 가짜 placeholder 주소로 `vp run package`를 돌려 로그 `developer webhook: embedded`, 실행 파일에만 값이 있고 `build/client`·`build/server`·`dist/context-agent.mjs`에는 없으며 `build/package`에 평문 파일이 남지 않음을 확인했다. 값 없이 다시 빌드하면 `not set`이고 실행 파일에 값이 없다. GitHub Actions 실제 실행과 패키징된 앱을 띄운 전송 확인은 하지 않았다.
+- GitHub 릴리스: `.github/workflows/release.yml`의 **Build the executable** 단계에만 `secrets.DISCORD_WEBHOOK_URL`을 env로 넘긴다. 저장소 secret은 개발자가 직접 등록한다. secret이 없으면 웹훅 없는 배포본이 만들어진다.
+- **주의 — 추출 가능**: 실행 파일 안의 값은 암호화되지 않는다. 실행 파일을 가진 사람은 누구나 웹훅 URL을 꺼낼 수 있고, 그 URL로 개발자 채널에 글을 쓰거나(스팸) 웹훅 자체를 수정·삭제할 수 있다. 웹훅 전용 채널을 쓰고, 남용되면 위 "회전"대로 웹훅을 지우고 새로 만든 뒤 GitHub secret을 바꾸고 다시 릴리스한다. 이전 배포본의 전송은 그때부터 `webhook_rejected`가 된다.
 
 ## 검증 범위 (I5, 2026-10-12, 기준 main `c10dcc0`)
 
@@ -44,4 +53,4 @@ URL 형식은 `https://{discord.com|discordapp.com|ptb.discord.com|canary.discor
 - 보낸 내용: `[테스트] context-agent 제보 웹훅 수신 확인`으로 시작하는 합성 문안 4줄(사용자·세션·증거 데이터 없음), `allowed_mentions.parse=[]`, 첨부 `context-agent-report.txt`.
 - 결과: 정확히 1건 전송, `delivered` — HTTP 2xx(`wait=true`), Discord 메시지 ID `1559038162376851578`. 재시도·중복 전송 없음.
 - 사용자 확인(2026-10-12): 사용자가 개발자 채널에서 이 메시지(ID `1559038162376851578`)를 실제로 받은 것을 확인했다. 이로써 I5(개발자 웹훅 실수신)는 검증 완료다.
-- 범위: 개발 env 파일이 있는 체크아웃을 `--env-dir`로 지정한 개발 환경 확인이다. 패키징된 실행 파일은 env 파일을 읽지 않으므로 배포본의 웹훅 주입은 [결정 기록](./decisions.md#개발자-웹훅은-서버-설정에서만-읽음-2026-10-12)대로 미정이다.
+- 범위: 개발 env 파일이 있는 체크아웃을 `--env-dir`로 지정한 개발 환경 확인이다. 패키징된 실행 파일은 env 파일을 읽지 않으므로 배포본은 [빌드 시 주입](#배포본의-개발자-웹훅-2026-10-12)을 쓴다.

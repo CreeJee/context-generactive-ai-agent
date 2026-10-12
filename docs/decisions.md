@@ -1385,7 +1385,13 @@
 - 위 결정의 사용자 설정·키체인 저장을 대체한다. 목표의 "개발자 Discord 웹훅"은 개발자가 정하는 값이므로, 서버가 시작할 때 서버 설정 `DISCORD_WEBHOOK_URL`을 Effect `Config.Redacted`로 한 번 읽는 것이 유일한 출처다. 개발 실행에서는 React Router Vite 플러그인이 `apps/agent`의 env 파일을 `process.env`로 올리고, 기본 `ConfigProvider`가 그 값을 읽는다. 값을 바꾸려면 서버를 다시 시작한다.
 - 키체인 경로는 두 출처의 우선순위·화면 상태를 늘리므로 남기지 않았다. 제보 페이지의 주소 입력·제거와 `configure`/`remove` 요청, `report-discord-webhook` 비밀 이름을 지웠다. 이전 개발 빌드가 키체인에 남긴 항목은 더 이상 읽지 않는다. 이 기능은 아직 GitHub 릴리스에 포함되지 않았으므로 하위호환 대상이 아니다.
 - 비밀 취급: 값은 서버 안에서 `Redacted`로만 다니고 Discord 요청을 만들 때만 풀린다. 브라우저에는 설정 여부와 웹훅 ID 끝 4자리만 간다. 키가 없으면 `not_configured`(409), 값이 Discord 실행 웹훅 형식이 아니면 `invalid_webhook_url`(503, 서버 설정 문제)이며 오류·로그에 값은 담지 않는다.
-- 패키징된 실행 파일은 env 파일을 읽지 않는다. 배포본에 개발자 웹훅을 넣는 방법(빌드 시 주입 등)은 별도 결정이 필요하며, 그전까지 배포본은 `not_configured`로 복사·저장만 제공한다.
+- 패키징된 실행 파일은 env 파일을 읽지 않는다. 배포본에 개발자 웹훅을 넣는 방법(빌드 시 주입 등)은 별도 결정이 필요하며, 그전까지 배포본은 `not_configured`로 복사·저장만 제공한다. (아래 "배포본의 개발자 웹훅은 빌드 때 넣음"으로 결정됨)
+
+### 배포본의 개발자 웹훅은 빌드 때 넣음 (2026-10-12)
+
+- 사용자 결정: 패키징된 앱은 빌드 때 `DISCORD_WEBHOOK_URL`을 받는다. `vp run package`가 빌드 환경의 값을 `Config.Redacted`로 읽어 SEA asset(`release/server-config.json`)으로 넣고, 서버는 시작할 때 그 asset을 Schema로 읽어 agent runtime에 `ConfigProvider.layerAdd`(실행 환경 우선, 빌드 값은 대체)로 붙인다. 서버의 기존 `Config.Redacted` 조회와 typed reason(`not_configured`·`invalid_webhook_url`)은 바뀌지 않는다. 값은 클라이언트 번들에 넣지 않는다(Vite `define`·`VITE_` 변수를 쓰지 않는 이유).
+- GitHub Actions secret `DISCORD_WEBHOOK_URL`은 사용자가 직접 등록하고, 릴리스 워크플로는 실행 파일 빌드 단계의 env로만 넘긴다. 값은 로그·문서·asset 디코딩 오류(`BuildConfigInvalid`, 내용 없음)에 남기지 않는다.
+- 감수한 위험: 실행 파일을 가진 누구나 웹훅 URL을 꺼낼 수 있어 개발자 채널 스팸이나 웹훅 수정·삭제에 악용될 수 있다. 남용되면 웹훅을 지우고 새로 만든 뒤 secret을 바꿔 다시 릴리스한다(이전 배포본은 `webhook_rejected`). 자세한 내용은 [제보 문서](./reporting.md#배포본의-개발자-웹훅-2026-10-12).
 
 ## UI·클라이언트
 

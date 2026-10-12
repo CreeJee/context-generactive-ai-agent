@@ -99,6 +99,8 @@ vp run notarize          # dist/context-agent-darwin-arm64.dmg (+ .sha256)
 
 릴리스 없이 확인만 하려면 Actions 탭에서 "Release binaries"를 수동 실행합니다. 압축 파일은 워크플로 artifact로 남습니다.
 
+문제 제보의 개발자 Discord 웹훅은 저장소 secret `DISCORD_WEBHOOK_URL`에서 실행 파일 빌드 단계로만 넘어가 실행 파일에 들어갑니다. secret이 없으면 웹훅 없이 빌드됩니다. 로컬 빌드도 `DISCORD_WEBHOOK_URL`을 주고 `vp run package`를 실행하면 같습니다. 실행 파일을 가진 누구나 이 주소를 꺼낼 수 있으니 [제보 문서](./reporting.md#배포본의-개발자-웹훅-2026-10-12)의 주의를 보세요.
+
 워크플로가 만든 macOS 실행 파일은 ad-hoc 서명입니다. 서명과 공증한 `.dmg`는 위 "macOS 서명과 공증"대로 로컬에서 만들어 같은 릴리스에 올립니다.
 
 한 플랫폼이 실패해도 다른 플랫폼의 빌드는 계속 진행합니다(`fail-fast: false`). 실패한 플랫폼은 로그를 보고 고친 뒤 그 워크플로를 다시 실행하면 같은 릴리스에 덮어씁니다.

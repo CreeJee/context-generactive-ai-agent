@@ -12,17 +12,22 @@ import {
   type ComparisonProviderLayer,
   type ComparisonRequestGuard,
 } from "./tool-comparison.ts";
+import { buildConfigLayer, type BuildServerConfig } from "./build-config.ts";
 
 // Config is evaluated when the runtime first builds its services, after CLI options are applied.
 type MemoryAgentLayer = ReturnType<typeof memoryAgentLayer>;
 let configuredStorageRoot: string | undefined;
+let configuredBuildConfig: BuildServerConfig = {};
 
 /** Called by the bundled server entry before the first request builds any agent service. */
 export function configureAgentBackend(options: {
   readonly storageRoot: string;
   readonly runtimeRoot: string | null;
+  /** Settings embedded in the executable; the runtime environment overrides each of them. */
+  readonly buildConfig: BuildServerConfig;
 }): void {
   configuredStorageRoot = options.storageRoot;
+  configuredBuildConfig = options.buildConfig;
   configureRuntimeRoot(options.runtimeRoot);
 }
 const agentLayer: Layer.Layer<
@@ -43,7 +48,12 @@ type AgentRuntime = ManagedRuntime.ManagedRuntime<
 
 function createAgentRuntime(): AgentRuntime {
   // The server entry configures storage before the first request builds this layer.
-  return ManagedRuntime.make(agentLayer.pipe(Layer.provideMerge(NodeServices.layer)));
+  return ManagedRuntime.make(
+    agentLayer.pipe(
+      Layer.provide(Layer.suspend(() => buildConfigLayer(configuredBuildConfig))),
+      Layer.provideMerge(NodeServices.layer),
+    ),
+  );
 }
 
 /** The single memory-agent runtime of this server process. Server-only. */
