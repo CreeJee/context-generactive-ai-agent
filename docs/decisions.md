@@ -1641,3 +1641,15 @@
 - 호환성·롤백: 추가 마이그레이션 하나로 새 표 두 개만 만든다. 기존 세션·노드는 백필하지 않는다. 이 단계를 모르는 이전 릴리스로 롤백하면 BTW 표를 읽지 않으므로 BTW 대화가 세션 목록에 나타나거나 색인되지 않는다. `user_version`은 낮추지 않는다.
 - 패널 입력은 텍스트만 받는다. 서버 경로는 이미지 첨부의 연결·삭제 정리를 지원하지만 BTW 작성기에는 첨부 UI를 두지 않았다. 패널을 닫으면 열려 있던 BTW 선택을 지워 다른 대화에서 이전 BTW가 열리지 않게 하고, 목록에서 다시 연다.
 - 검증은 실제 API 라우트와 런타임 Layer를 임시 저장소·메모리 비밀 저장소·스크립트 모델로 실행하는 테스트와 Chromium 컴포넌트 테스트로 한다. 현재 dev 실행은 저장소를 옮겨도 OS 키체인 서비스를 전역으로 읽으므로 사용하지 않았다.
+
+## Node builtin을 설치본 Effect API로 교체하는 기준 (2026-10-12)
+
+- 설치본 `effect`·`@effect/platform-node`에 같은 동작의 API가 있으면 Node builtin 대신 쓴다. 판단은 설치된 `src`로
+  하고, 동작(정밀도, 동기성, 종료·신호 계약, 테스트 단언)이 하나라도 달라지면 바꾸지 않고 부족한 API를 기록한다.
+- 이번에 바꾼 곳: 테스트 HTTP 서버 3곳(`NodeHttpServer.layerTest`), OAuth 하네스 UUID(`Crypto.randomUUIDv4`),
+  io-range 테스트의 경로 stat·`/dev/fd` 목록(FileSystem).
+- 남긴 곳과 이유: `text.ts` no-follow 페이지 읽기(ns ctime/mtime stamp), 셸·프로세스 트리 종료(동기 kill, 신호 이름,
+  Windows verbatim 인자, pipe abandonment), io-range의 descriptor 번호 fstat, owner-workflow-engine의 encoded
+  채널(래핑 시 finalizer·compensation cause가 바뀌고, Activity R 축소는 거짓 타입). 나머지 sync fence, Ed25519,
+  `timingSafeEqual`, 운영 http factory, posix glob은 대응 API가 없다. 근거 표는 `docs/efx11-12-verification.md`.
+- 진단을 없애려고 억제·severity 변경·타입 단언을 쓰지 않는다. Effect 업그레이드 때 이 목록을 다시 대조한다.

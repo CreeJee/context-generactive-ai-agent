@@ -295,3 +295,21 @@ Crypto 진단 5곳의 판정을 정정한다:
 관련 런타임 테스트는 1파일/8개 모두 통과했다 (/tmp/release-crypto-tests.log). 기존 release 선택/변조/unknown key/버전 gate와 새 Ed25519 독립 상호운용·한글/이모지 UTF-8·Base64 출력 일치·기존 입력 인코딩·corrupt signature·malformed PEM 검증이다. 타입만 확인하는 테스트는 추가하지 않았다. vp check는 826파일 포맷 및 734파일 lint/type-aware 통과 (/tmp/release-crypto-check.log), agent#bundle도 통과 (/tmp/release-crypto-bundle.log). 변경 후 별도 typecheck는 실제 타입 오류 0, 기존 경고 25개 때문에 exit 1 (/tmp/release-crypto-after-types.log); 억제와 import 우회는 추가하지 않았다. 직전 전체 회귀 249파일/1,395통과 이후 이번 좁은 인코딩 변경은 관련 테스트로 검증했으며 전체 회귀를 다시 실행했다고 주장하지 않는다. dev 재시작, 실제 DB 수정, 모델 호출, commit/push는 하지 않았다.
 
 마지막 프로세스 확인에서 이전에 종료한 PID와 다른 supervisor 88937 및 backend89153/frontend89165가 5173/5180을 새로 점유하고 있었다. 이 작업에서는 dev 시작 명령을 실행하지 않았다. 새 실행의 활성 작업과 소유자가 확인되지 않아 임의 종료하지 않았으며, 현재 서버가 종료 상태라는 확인은 할 수 없다. 관련 검증 명령은 모두 완료했고 diff 검사 및 CodeGraph 두 소스 파일 동기화는 통과했다.
+
+### Node builtin 경계 재대조 (2026-10-12)
+
+위 표의 일부 판단을 설치본 소스로 다시 확인해 정정했다. 위치별 전체 표는
+[EFX11–12 검증](efx11-12-verification.md#node-builtin-경계의-설치본-api-재대조-2026-10-12)에 있다.
+
+- `launch-project.test.ts`, `tests/support/http.ts`, `dev-hmr-api-recovery.test.ts`: "공식 NodeHttpServer도 native
+  factory를 인자로 받는다"는 판단은 틀렸다. `NodeHttpServer.layerTest`가 factory 없이 ephemeral 리스너를 Scope로
+  제공하므로 전환했다.
+- `src/oauth/validation-harness.ts`: `randomUUID`는 `effect` `Crypto.randomUUIDv4`로 전환했다. `timingSafeEqual`과
+  운영 loopback factory는 그대로다.
+- `tests/io-range.test.ts`: async stat이 "열린 순간을 놓친다"는 근거는 맞지 않다(테스트는 handle이 보일 때까지
+  폴링한다). 대상 stat과 `/dev/fd` 목록은 FileSystem으로 바꿨고, 상속 descriptor 번호의 fstat만 대응 API가 없어 남는다.
+- `src/runtime/host.ts`, `src/shell/run.ts`: 공식 spawner도 process group 종료(`detached`, `killSignal`,
+  `forceKillAfter`)를 제공한다. 남는 이유는 `windowsVerbatimArguments` 부재, 신호 종료 이름의 값 부재, 동기 kill 부재,
+  inherited pipe abandonment 부재다.
+- `src/files/text.ts`: `open(..., { noFollow: true })`는 있으나 `File.Info`에 ctime·ns mtime이 없어 페이지 stamp
+  정밀도를 유지할 수 없다.
