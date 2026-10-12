@@ -129,7 +129,6 @@ import {
   type CompactionSources,
 } from "./compaction.ts";
 import { contextView, lastContextUsage, recordContextUsage } from "./context-usage.ts";
-import type { createRecallSensor } from "./recall-sensor.ts";
 import { ApiUsage, collectApiUsage } from "./api-usage.ts";
 import { TurnSummaries } from "./turn-summaries.ts";
 import { promptLayout } from "./prompt-layout.ts";
@@ -483,10 +482,7 @@ export const GoalWorkerConfiguration = Context.Reference<GoalWorkerOptions>(
 );
 
 /** Native implementation seam; central services are acquired anew for each construction. */
-/** Optional seam for isolated shadow tests; production passes no sensor and never calls Laya. */
-export const makeAgentChatImplementation = Effect.fnUntraced(function* (
-  recallSensor?: ReturnType<typeof createRecallSensor>,
-) {
+export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const context = yield* Effect.context();
   const ownerSignal = yield* Effect.abortSignal;
   const admission = yield* ExecutionAdmission;
@@ -2277,22 +2273,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* (
         if (isTruthy(queuedId)) {
           queue.markDelivered(queuedId, "next_turn", runId, true);
           events.publishSession(sessionId, "queue");
-        }
-        // Shadow-only: an explicitly supplied sensor sees one admitted, redacted user turn.
-        // Its score cannot change messages, tools, search, evidence or this run's response.
-        if (
-          turn !== null &&
-          keptTurn !== null &&
-          isTruthy(recallSensor) &&
-          !(reportSource !== null)
-        ) {
-          void recallSensor
-            .evaluate({
-              turnId: userNodeId(),
-              redactedText: keptTurn,
-              signal: abortController.signal,
-            })
-            .catch(() => undefined);
         }
         let workerLease: ReturnType<WorkerAssetsRegistry["use"]> | undefined;
         const releaseWorker = () => {
