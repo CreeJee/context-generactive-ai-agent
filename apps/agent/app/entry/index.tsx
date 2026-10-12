@@ -46,6 +46,7 @@ import { pageHolder } from "./session/session-lease";
 import { openSettingsOverlay } from "./settings/open-settings";
 import { AccountSection, ModelSection, ProjectSection, SessionSection } from "./navigation/sidebar";
 import { AccountModelPanel } from "./navigation/account-model-panel";
+import { SubscriptionAccounts } from "./navigation/account-profiles";
 import { WorkTracePanel } from "./chat/work-trace-panel";
 import { ReportLink, reportHref } from "./report/report-link";
 import { providerLabels } from "./navigation/providers";
@@ -427,6 +428,11 @@ export function App() {
                   provider={provider}
                   onProviderChange={setProvider}
                   onAction={(intent) => void authAction(intent)}
+                  profiles={
+                    provider === "openai-compatible" ? undefined : (
+                      <SubscriptionAccounts key={provider} provider={provider} />
+                    )
+                  }
                 />
                 {signedIn && (
                   <ModelSection

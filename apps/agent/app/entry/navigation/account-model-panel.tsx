@@ -33,7 +33,7 @@ function accountSummaryBody(
             : "로그인 필요";
   const model =
     selection !== null
-      ? `${providerLabel[selection.provider]} · ${modelName ?? selection.model}`
+      ? `${providerLabel[selection.provider]} / ${modelName ?? selection.model}`
       : "모델 미선택";
   return { status, model, hasError: auth?.status === "error" };
 }

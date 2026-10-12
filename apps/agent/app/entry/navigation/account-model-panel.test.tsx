@@ -20,7 +20,7 @@ describe("compact sidebar controls", () => {
     };
     expect(accountSummary("anthropic", error, selection, "Very Long Model")).toMatchObject({
       status: "연결 오류",
-      model: "ChatGPT · Very Long Model",
+      model: "ChatGPT / Very Long Model",
       hasError: true,
     });
     const html = renderToStaticMarkup(
@@ -52,9 +52,9 @@ describe("compact sidebar controls", () => {
       </AccountModelPanel>,
     );
     const summary = (html.split("</button>")[0] ?? "").replace(/title="[^"]*"/, "");
-    expect(summary).toContain("ChatGPT · GPT");
+    expect(summary).toContain("ChatGPT / GPT");
     expect(summary).not.toContain("ChatGPT · 연결됨");
-    expect(summary.match(/ChatGPT · GPT/g)).toHaveLength(1);
+    expect(summary.match(/ChatGPT \/ GPT/g)).toHaveLength(1);
   });
 
   test("report entry remains a labelled, focusable icon with the selected source", () => {
