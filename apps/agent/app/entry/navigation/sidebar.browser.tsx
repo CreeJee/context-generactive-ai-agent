@@ -271,7 +271,7 @@ describe("sidebar disclosures", () => {
         );
         yield* sdkCall(() =>
           expect
-            .element(screen.getByRole("menuitem", { name: "OpenAI 호환 (OpenAI 호환)" }))
+            .element(screen.getByRole("menuitem", { name: "직접 설정한 엔드포인트 (OpenAI 호환)" }))
             .toBeVisible(),
         );
         yield* sdkCall(() => work.click());

@@ -17,6 +17,7 @@ import type {
   SubscriptionAccountProvider,
   SubscriptionQuotaReport,
 } from "../api";
+import { Spinner } from "~/components/ui/spinner";
 import { useAccountQuotaQuery, useAccountsQuery } from "../queries/global";
 import type { AccountTarget } from "../queries/mutations/global";
 import { gaugeTone, windowLabel } from "./account-profiles";
@@ -58,7 +59,7 @@ const entryLabel = (entry: AccountEntry) => {
     case "profile":
       return entry.profile.label;
     case "compatible":
-      return providerLabels["openai-compatible"];
+      return "직접 설정한 엔드포인트";
   }
 };
 
@@ -186,7 +187,7 @@ export function AccountSwitcherMenu({
       {error && <p className="px-1 text-2xs text-destructive">{error}</p>}
       <DropdownMenu>
         <DropdownMenuTrigger
-          disabled={busy}
+          aria-busy={busy}
           aria-label={
             current !== undefined
               ? `계정 전환: ${entryLabel(current)} (${providerLabels[entryProvider(current)]})`
@@ -195,7 +196,7 @@ export function AccountSwitcherMenu({
           render={
             <button
               type="button"
-              className="flex w-full items-center gap-2 rounded-md px-1.5 py-1.5 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/30 disabled:opacity-50 data-popup-open:bg-accent"
+              className="flex w-full items-center gap-2 rounded-md px-1.5 py-1.5 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/30 data-popup-open:bg-accent"
             />
           }
         >
@@ -212,10 +213,14 @@ export function AccountSwitcherMenu({
               </span>
             </>
           )}
-          <ChevronsUpDownIcon
-            aria-hidden="true"
-            className="size-3.5 shrink-0 text-muted-foreground"
-          />
+          {busy ? (
+            <Spinner className="size-3.5 shrink-0" />
+          ) : (
+            <ChevronsUpDownIcon
+              aria-hidden="true"
+              className="size-3.5 shrink-0 text-muted-foreground"
+            />
+          )}
         </DropdownMenuTrigger>
         <DropdownMenuContent side="top" align="start" className="w-(--anchor-width) min-w-64">
           <DropdownMenuGroup>

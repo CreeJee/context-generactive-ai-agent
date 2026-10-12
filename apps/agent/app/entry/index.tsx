@@ -318,7 +318,7 @@ export function App() {
       }).pipe(
         Effect.catchCause(() =>
           Effect.sync(() =>
-            setSwitchError("계정을 바꾸지 못했어요. 이 계정의 실행이 끝난 뒤 다시 시도하세요."),
+            setSwitchError("계정을 바꾸지 못했어요. 연결 상태를 확인한 뒤 다시 시도하세요."),
           ),
         ),
       ),
