@@ -1676,3 +1676,21 @@
   채널(래핑 시 finalizer·compensation cause가 바뀌고, Activity R 축소는 거짓 타입). 나머지 sync fence, Ed25519,
   `timingSafeEqual`, 운영 http factory, posix glob은 대응 API가 없다. 근거 표는 `docs/efx11-12-verification.md`.
 - 진단을 없애려고 억제·severity 변경·타입 단언을 쓰지 않는다. Effect 업그레이드 때 이 목록을 다시 대조한다.
+
+## 남은 Node builtin 2차 전환 (2026-10-12)
+
+- 사용자 결정: lstat·SHA-256·Ed25519·`timingSafeEqual`을 동작·보안 계약을 유지하는 범위에서 없앤다. sync fence,
+  posix glob, 운영 http factory, child_process, owner-workflow-engine은 대상이 아니다.
+- release 서명은 런타임 표준 WebCrypto(`crypto.subtle` Ed25519)를 `Effect.tryPromise`와 typed error로 쓴다. 앞 절의
+  "Ed25519 대응 API 없음"은 effect Crypto만 본 판단이었다. 키는 계속 SPKI·PKCS#8 PEM이고 서명 바이트가 같으며 기존
+  node:crypto 서명이 검증된다. trust anchor 자리의 private key PEM·인증서는 더 이상 받지 않는다.
+- 상수시간 비교는 TypeScript로 쓴다(길이가 다르면 false, 같으면 전 바이트 XOR 누적). 입력이 메모리에 다 있거나 기존
+  상한(텍스트 2 MiB)이 있는 SHA-256은 `Crypto.digest`로, 상한 없는 패키지 manifest 해시는 증분 `createHash`로 둔다.
+- lstat은 `readLink`(성공=링크) + reason `Unknown`(EINVAL)일 때 `FileSystem.stat`으로 대체한다. `open(noFollow)`는
+  Windows 미지원·FIFO 블록·무권한 EACCES로 계약이 달라 쓰지 않는다. 두 호출 사이 교체 시 링크 대상으로 분류되는
+  race 차이는 받아들이되(코디네이터 결정) 이후 사용이 별도로 보호되거나 자체 출력인 skills·패키지 스크립트에만
+  적용한다. `paths.ts`는 동기 검사라 lstat을 유지한다.
+- 갱신(2026-10-12): `listing.ts`도 import 제거를 시도했으나 설치본 `readDirectory`는 전체 이름 배열만 주고 디렉터리
+  스트림이 없어, `walkLimit`에서 멈추는 `opendir` walk의 디렉터리당 메모리 상한(30만 항목 실측 +11 MB 대 +68 MB,
+  6.0초 대 0.86초)과 부분 읽기 계약이 깨진다. `opendir`·`lstat`을 유지한다.
+- 근거 표는 `docs/efx11-12-verification.md` "Node builtin 경계 2차 전환"에 있다.

@@ -313,3 +313,21 @@ Crypto 진단 5곳의 판정을 정정한다:
   inherited pipe abandonment 부재다.
 - `src/files/text.ts`: `open(..., { noFollow: true })`는 있으나 `File.Info`에 ctime·ns mtime이 없어 페이지 stamp
   정밀도를 유지할 수 없다.
+
+### Node builtin 경계 2차 전환 (2026-10-12)
+
+위 표와 재대조 절의 일부 판단을 다시 정정했다. 위치별 표와 실측은
+[EFX11–12 검증](efx11-12-verification.md#node-builtin-경계-2차-전환-2026-10-12)에 있다.
+
+- `server/release-contract.ts`, `.test.ts`: "설치된 Crypto는 서명 API를 제공하지 않는다"는 맞지만 런타임 표준
+  WebCrypto `crypto.subtle` Ed25519로 같은 PEM 키·서명 바이트를 유지할 수 있어 전환했다. 테스트는 RFC 8032 키로 만든
+  node:crypto 서명을 고정해 재현·검증한다.
+- `src/oauth/validation-harness.ts`: `timingSafeEqual`은 TypeScript 상수시간 비교로 바꿨다. 운영 loopback factory는
+  그대로다.
+- `src/files/text.ts`: 페이지 색인 해시는 2 MiB 상한 안이라 `Crypto.digest`로 바꿨다. 같은 FD의 ns stat과 Windows
+  lstat 분기는 그대로다.
+- `scripts/package.ts`: 자산 목록 lstat은 `readLink`+`stat`으로 바꿨다. 상한 없는 manifest 증분 해시는 그대로다.
+- `src/skills/skills.ts`: 두 lstat 모두 `readLink`+`stat`으로 바꿨다. 두 호출 사이 race 차이는 검증 문서에 적었다.
+- `src/files/listing.ts`: `opendir`·`lstat` 유지. `readDirectory`는 전체 이름 배열만 반환해 `walkLimit`에서 멈추는
+  bounded 순회의 디렉터리당 메모리 상한을 지킬 수 없다(실측은 검증 문서).
+- `src/files/paths.ts`: lstat 유지(동기 검사와 `realpathSync` fence).
