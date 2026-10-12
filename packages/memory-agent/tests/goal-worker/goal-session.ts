@@ -56,11 +56,17 @@ export const goalSession = Effect.fnUntraced(function* (
   return id;
 });
 
-export const chatRequest = (sessionId: string, runId: string, content = "hello") =>
-  new Request("http://localhost/api/chat", {
+const JsonText = Schema.fromJsonString(Schema.Unknown);
+
+export const chatRequest = Effect.fnUntraced(function* (
+  sessionId: string,
+  runId: string,
+  content = "hello",
+) {
+  return new Request("http://localhost/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+    body: yield* Schema.encodeEffect(JsonText)({
       threadId: sessionId,
       runId,
       messages: [{ id: `${runId}-user`, role: "user", content }],
@@ -68,6 +74,7 @@ export const chatRequest = (sessionId: string, runId: string, content = "hello")
       context: [],
     }),
   });
+});
 
 export const send = Effect.fnUntraced(function* (
   sessionId: string,
@@ -77,7 +84,9 @@ export const send = Effect.fnUntraced(function* (
   const env = yield* TestEnv;
   return yield* env.use(
     Effect.flatMap(AgentChat, (chat) =>
-      chat.handle(chatRequest(sessionId, runId, content), sessionId),
+      Effect.flatMap(chatRequest(sessionId, runId, content), (request) =>
+        chat.handle(request, sessionId),
+      ),
     ),
   );
 });

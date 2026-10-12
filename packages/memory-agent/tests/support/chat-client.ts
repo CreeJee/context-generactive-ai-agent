@@ -1,5 +1,5 @@
 import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
-import { Cause, Effect } from "effect";
+import { Cause, Effect, Function as EffectFunction } from "effect";
 import { AgentChat } from "../../src/agent/chat.ts";
 import { approvalToolDefinitions, permissionReviewInterrupt } from "../../src/tools/definitions.ts";
 import type { ScriptedResponder, ScriptedTurn } from "../../src/testing/scripted-adapter.ts";
@@ -12,7 +12,10 @@ import { waitUntil } from "./wait-until.ts";
  * are. The default responder's fixed IDs are scoped to the conversation so sessions sharing one
  * agent never collide; the responder itself still sees the IDs it chose.
  */
-export const scopedCallId = (id: string, sessionId: string) => `${id}@${sessionId}`;
+export const scopedCallId: {
+  (sessionId: string): (id: string) => string;
+  (id: string, sessionId: string): string;
+} = EffectFunction.dual(2, (id: string, sessionId: string) => `${id}@${sessionId}`);
 
 export const sessionScopedResponder: ScriptedResponder = (invocation) => {
   const sessionId = invocation.threadId ?? "";
