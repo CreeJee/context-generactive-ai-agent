@@ -30,6 +30,11 @@ export const sessionQueries = {
       queryKey: appQueryKeys.session.trace(projectId, sessionId),
       queryFn: () => api.workTrace(sessionId),
     }),
+  btw: (projectId: string, sessionId: string) =>
+    queryOptions({
+      queryKey: appQueryKeys.session.btw(projectId, sessionId),
+      queryFn: () => api.btwThreads(sessionId),
+    }),
   transcript: (projectId: string, sessionId: string) =>
     queryOptions({
       queryKey: [...appQueryKeys.session.root(projectId, sessionId), "transcript"] as const,

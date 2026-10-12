@@ -1442,6 +1442,31 @@ export const migrations: readonly string[] = [
     BEGIN SELECT RAISE(ABORT, 'read recovery receipt is retained'); END;
   CREATE INDEX owner_read_recoveries_session ON owner_read_recoveries(session_id, run_id);
   `,
+  `
+  -- BTW side threads. Their messages, tool calls and tool results live only here: never in
+  -- nodes, FTS, vectors, morph terms, interpretation jobs or promotions. Releases without this
+  -- step ignore both tables, so a rollback can neither list nor index BTW content.
+  CREATE TABLE btw_threads (
+    id TEXT PRIMARY KEY,
+    parent_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    messages TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(messages)),
+    created_at TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX btw_threads_parent ON btw_threads(parent_session_id, created_at);
+  CREATE TRIGGER btw_threads_binding_immutable
+    BEFORE UPDATE OF id, parent_session_id, created_at ON btw_threads
+    BEGIN SELECT RAISE(ABORT, 'BTW binding is immutable'); END;
+
+  -- Images a BTW message carried. No FK to attachments: an older release's orphan purge
+  -- must stay able to delete a blob only BTW still references.
+  CREATE TABLE btw_attachments (
+    thread_id TEXT NOT NULL REFERENCES btw_threads(id) ON DELETE CASCADE,
+    attachment_id TEXT NOT NULL,
+    PRIMARY KEY (thread_id, attachment_id)
+  );
+  CREATE INDEX btw_attachments_attachment ON btw_attachments(attachment_id);
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

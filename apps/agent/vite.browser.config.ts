@@ -10,6 +10,7 @@ export default defineConfig({
       "apps/agent/app/entry/navigation/*.browser.tsx",
       "apps/agent/app/entry/chat/message.browser.tsx",
       "apps/agent/app/entry/report/*.browser.tsx",
+      "apps/agent/app/entry/chat/btw-panel.browser.tsx",
     ],
     browser: {
       enabled: true,

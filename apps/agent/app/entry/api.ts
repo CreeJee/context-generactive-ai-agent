@@ -5,6 +5,7 @@ import { Effect, Function as EffectFunction } from "effect";
 import { ProviderId } from "memory-agent/provider-contracts";
 import type {
   Attachment,
+  BtwThread,
   ProviderModel,
   EmbeddingChoice,
   EmbeddingOverview,
@@ -103,6 +104,7 @@ export type {
   SubscriptionAccountProvider,
   SubscriptionQuotaReport,
   Attachment,
+  BtwThread,
   CancelResult,
   ProviderModel,
   CompactResult,
@@ -152,6 +154,7 @@ export const ApiErrorCode = Schema.Literals([
   "auth_failed",
   "backend_restart_required",
   "backend_restarting",
+  "btw_not_found",
   "cross_site_request",
   "empty_message",
   "external_agent_unavailable",
@@ -222,6 +225,7 @@ export const ApiErrorCode = Schema.Literals([
   "subagent_not_found",
   "unknown_attachment",
   "upload_failed",
+  "user_turn_required",
 ]);
 export type ApiErrorCode = typeof ApiErrorCode.Type;
 
@@ -414,7 +418,7 @@ type JsonBody = Readonly<{ [key: string]: JsonValue | undefined }>;
 
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
 function call<T>(
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "DELETE",
   path: string,
   body?: JsonBody,
   headers: Readonly<Record<string, string>> = {},
@@ -505,6 +509,17 @@ export const api = {
   /** `agent`: talk directly to that trusted external ACP agent instead of the app's model. */
   createSession: (projectId: string, agent?: string) =>
     call<Session>("POST", "/api/sessions", { projectId, agent }),
+  btwThreads: (sessionId: string) =>
+    call<BtwThread[]>("GET", `/api/sessions/${encodeURIComponent(sessionId)}/btw`),
+  /** A new BTW thread bound for good to this conversation. */
+  createBtw: (sessionId: string) =>
+    call<BtwThread>("POST", `/api/sessions/${encodeURIComponent(sessionId)}/btw`),
+  /** `filesPending`: the rows are gone, some unreferenced image files wait for the next cleanup. */
+  deleteBtw: (threadId: string) =>
+    call<{ deleted: true; filesPending: boolean }>(
+      "DELETE",
+      `/api/btw/${encodeURIComponent(threadId)}`,
+    ),
   sessionRunState: (sessionId: string, holder: string) =>
     call<SessionRunState>(
       "GET",

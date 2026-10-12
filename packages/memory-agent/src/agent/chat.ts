@@ -27,8 +27,8 @@ import {
   toServerSentEventsResponse,
   type AnyServerTool,
   type ChatMiddleware,
-  type ChatMiddlewareConfig,
   type ModelMessage,
+  type UIMessage,
 } from "@tanstack/ai";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { path } from "../runtime/synchronous-path.ts";
@@ -51,6 +51,7 @@ import {
 } from "effect";
 import { Attachments } from "../attachments/attachments.ts";
 import { attachmentIdOf } from "../attachments/urls.ts";
+import { modelBoundMessages, modelImages } from "../attachments/model-images.ts";
 import { ChatState } from "../chat-state/chat-state.ts";
 import { isEmptyUserText } from "../messages/empty-user.ts";
 import { keyedSerialLimit } from "../concurrency/keyed-limit.ts";
@@ -400,6 +401,10 @@ const IncomingUserTurn = Schema.Union([
 ]);
 const decodeUserTurn = Schema.decodeUnknownOption(IncomingUserTurn);
 
+/** The text and image URLs of a new user turn, when the message is one. */
+export const incomingUserTurn = (message: ModelMessage | UIMessage): Option.Option<UserTurn> =>
+  Option.map(decodeUserTurn(message), toTurn);
+
 const decodeQueuedNext = Schema.decodeUnknownOption(
   Schema.Struct({ queuedNext: Schema.Literal(true) }),
 );
@@ -467,10 +472,7 @@ type InternalFollowup =
 const isStreamJoin = (request: Request) =>
   request.headers.has("Last-Event-ID") || new URL(request.url).searchParams.has("offset");
 
-/** Image inlining must never replace the already-compacted provider view with transcript history. */
-export const modelBoundMessages = (
-  config: Pick<ChatMiddlewareConfig, "messages" | "providerMessages">,
-): readonly ModelMessage[] => config.providerMessages ?? config.messages;
+export { modelBoundMessages };
 
 export interface GoalWorkerOptions {
   readonly assets?: Parameters<typeof GoalWorkerAssets.makeGoalWorkerAssetsRegistry>[0];
@@ -759,68 +761,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         ),
     };
   };
-  /**
-   * Stored transcripts use browser-safe relative attachment URLs. Providers cannot fetch those, so
-   * only the model-bound copy gets the smaller stored image as provider-neutral inline data.
-   */
-  const modelImages = (): ChatMiddleware => ({
-    name: "memory-agent/model-images",
-    onConfig: (ctx, config) =>
-      runEffect(
-        Effect.gen(function* () {
-          if (ctx.phase === "init") return;
-          let changed = false;
-          const inlineImage = Effect.fn("AgentChat.inlineImage")(function* (
-            attachment: NonNullable<ReturnType<typeof attachments.get>>,
-          ) {
-            const image = yield* attachments.forModelEffect(attachment);
-            const prefix = `data:${image.mimeType};base64,`;
-            const dataUrl = yield* attachments.dataUrlEffect(image);
-            return {
-              type: "image" as const,
-              source: {
-                type: "data" as const,
-                value: dataUrl.slice(prefix.length),
-                mimeType: image.mimeType,
-              },
-            };
-          });
-          const inlineImages = MutableHashMap.empty<string, ReturnType<typeof inlineImage>>();
-          const providerMessages = yield* Effect.forEach(
-            modelBoundMessages(config),
-            (message) =>
-              Effect.gen(function* () {
-                if (!Array.isArray(message.content)) return message;
-                const content = yield* Effect.forEach(
-                  message.content,
-                  (part) =>
-                    Effect.gen(function* () {
-                      if (part.type !== "image" || part.source.type !== "url") return part;
-                      const id = attachmentIdOf(part.source.value);
-                      if (id === null) return part;
-                      changed = true;
-                      const attachment = attachments.get(id);
-                      if (attachment === null)
-                        return {
-                          type: "text" as const,
-                          content: "[Attached image is unavailable.]",
-                        };
-                      const known = Option.getOrUndefined(MutableHashMap.get(inlineImages, id));
-                      if (known !== undefined) return yield* known;
-                      const inline = yield* Effect.cachedWithTTL(inlineImage(attachment), 0);
-                      MutableHashMap.set(inlineImages, id, inline);
-                      return yield* inline;
-                    }),
-                  { concurrency: "unbounded" },
-                );
-                return { ...message, content };
-              }),
-            { concurrency: "unbounded" },
-          );
-          return changed ? { providerMessages } : undefined;
-        }),
-      ),
-  });
   /** Every handler that looks a session up answers this when it does not exist. */
   const sessionNotFound = () => Effect.succeed(json(404, { error: "session_not_found" }));
   const providerUnavailable = (failure: { readonly provider: string }) =>
@@ -2078,7 +2018,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             },
             restoreModelHistory,
           ),
-          modelImages(),
+          modelImages(attachments, runEffect),
           recordContextUsage({
             metadata,
             windowTokens: window,

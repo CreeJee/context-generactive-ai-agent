@@ -360,6 +360,8 @@ export {
   Projects,
 } from "./projects/projects.ts";
 export { Session, Sessions } from "./sessions/sessions.ts";
+export { BtwChat } from "./btw/chat.ts";
+export { BtwThread, btwToolNames } from "./btw/contracts.ts";
 export {
   evaluateWorkflowAction,
   workflowActions,
