@@ -49,6 +49,12 @@ export {
 } from "./oauth/accounts.ts";
 export { createOAuthAccountLoginManager, type AccountLoginState } from "./oauth/account-login.ts";
 export { ReportDiagnoser, ReportDiagnosisError } from "./report/diagnosis.ts";
+export { ReportDelivery, ReportDeliveryError, maxReportBytes } from "./report/discord-webhook.ts";
+export {
+  ReportDeliveryFailure,
+  ReportDeliveryResult,
+  ReportDeliveryStatus,
+} from "./report/delivery-contract.ts";
 export {
   ReportDiagnosis,
   ReportDiagnosisFailure,

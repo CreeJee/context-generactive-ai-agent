@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ReportEvidence } from "../.server/report-evidence";
 import { ReportDraft, reportText, type ReportFields } from "../entry/report/report-draft";
 import { copyReportText } from "../entry/report/report-copy";
+import { ReportDelivery } from "../entry/report/report-delivery";
 import {
   openReportSession,
   readReportEvidence,
@@ -186,7 +187,7 @@ export default function ReportPage() {
         <h1 className="text-2xl font-semibold">문제 제보</h1>
         <p className="text-sm text-muted-foreground">
           채팅이나 실행이 멈춰도 여기서 증상을 기록할 수 있습니다. 이 화면은 제보를 자동으로
-          전송하지 않습니다.
+          전송하지 않으며, 직접 누를 때만 개발자 Discord 웹훅으로 보냅니다.
         </p>
       </header>
       {analysisSession && (
@@ -245,9 +246,10 @@ export default function ReportPage() {
         <h2 className="text-sm font-medium">AI 진단 (선택)</h2>
         <ReportDiagnosisReview state={diagnosis} onRequest={runDiagnosis} onChange={setDiagnosis} />
       </section>
-      <section className="space-y-2" aria-label="Discord 수동 게시">
+      <section className="space-y-2" aria-label="복사·저장">
         <p className="text-sm">
-          문안을 확인한 후 복사하여 개발자의 Discord에 직접 게시하세요. 자동 전송은 하지 않습니다.
+          문안을 확인한 후 복사하거나 텍스트 파일로 저장해 개발자의 Discord에 직접 게시할 수
+          있습니다. 웹훅 전송이 실패해도 이 방법은 항상 쓸 수 있습니다.
         </p>
         <div className="flex gap-2">
           <button
@@ -261,6 +263,10 @@ export default function ReportPage() {
             텍스트 파일 저장
           </button>
         </div>
+      </section>
+      <section className="space-y-2" aria-label="Discord 웹훅 전송">
+        <h2 className="text-sm font-medium">개발자 Discord로 보내기 (선택)</h2>
+        <ReportDelivery text={text} />
       </section>
     </main>
   );

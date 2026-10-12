@@ -19,6 +19,7 @@ import { DrawingPreviews } from "./attachments/previews.ts";
 import { GlobalConfig } from "./config/global-config.ts";
 import { SecretStore } from "./config/secrets.ts";
 import { SubscriptionQuota } from "./oauth/subscription-quota.ts";
+import { ReportDelivery } from "./report/discord-webhook.ts";
 import { StorageRoot } from "./config/storage-root.ts";
 import { Database } from "./db/database.ts";
 import { AppEvents } from "./events/app-events.ts";
@@ -250,6 +251,8 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     Graph.layer,
     VectorIndex.layer,
     ChatState.layer,
+    // Above the stores: the webhook URL is read from the keychain right before each send.
+    ReportDelivery.layer(),
     Kagi.layer(options.kagiBaseUrl === undefined ? {} : { baseUrl: options.kagiBaseUrl }),
     McpServers.layer,
     ExternalAgents.layer,
