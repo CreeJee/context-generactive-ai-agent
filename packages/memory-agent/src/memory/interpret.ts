@@ -98,9 +98,11 @@ const make = Effect.gen(function* () {
   // A process that stopped mid-batch left jobs running; nothing is working on them now.
   sqlite.prepare("UPDATE interpret_jobs SET status = 'pending' WHERE status = 'running'").run();
   // Earlier builds queued assistant answers too; only the user's words are interpreted now.
+  // EXISTS looks up each pending job's node by id; `IN (SELECT ... WHERE kind = ...)` scanned every
+  // node on each startup and blocked the event loop past the native index's startup deadline.
   sqlite
     .prepare(
-      "DELETE FROM interpret_jobs WHERE status = 'pending' AND node_id IN (SELECT id FROM nodes WHERE kind = 'assistant')",
+      "DELETE FROM interpret_jobs WHERE status = 'pending' AND EXISTS (SELECT 1 FROM nodes n WHERE n.id = interpret_jobs.node_id AND n.kind = 'assistant')",
     )
     .run();
 
