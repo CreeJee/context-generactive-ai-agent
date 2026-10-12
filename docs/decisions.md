@@ -1305,6 +1305,10 @@
 - 기본 도구의 read/effectful 계약을 단일 분류표로 관리하고 source 등록 완전성 검증을 추가한다. 새 literal 등록 이름과 검토되지 않은 등록 문법은 검증에서 실패한다. Unknown/custom/MCP는 effectful 기본값을 유지하며 read/get 접두사로 추론하지 않는다.
 - find_memory의 promoted-memory 조회 이력 INSERT와 Kagi의 외부 과금 호출은 순수 read에서 제외한다. wait_subagents 및 bound report evidence 조회는 ack/consumption·영구 쓰기가 없어 read로 분류한다. cancelled/interrupted 처리와 RPC side-effect reservation, 실패한 쓰기의 uncertain 보호는 유지한다.
 
+### 문제 제보의 사용자 모델 진단 (2026-10-12)
+
+- 제보 진단은 사용자가 누를 때만 `POST /api/reports/diagnosis`로 사용자가 선택한 모델에 한 번 요청한다. 보내는 내용은 사용자가 작성한 설명과 포함·편집한 증거뿐이다. 응답은 `관측`(포함된 증거 ID를 인용)과 `가설`로 나누고, 인용이 없거나 없는 ID만 인용한 관측은 가설로 옮긴다. 사용자는 항목을 편집·삭제하고 포함 여부를 정한다. 모델 사용 불가(503)·호출 실패(502)·형식 오류(422)는 typed reason과 상태 코드로 구분하고, 브라우저는 거절 본문을 읽지 않는다. 제보문에는 실패 사실만 적어 최소 문안을 유지한다.
+
 ## UI·클라이언트
 
 ### UI (2026-09-14)

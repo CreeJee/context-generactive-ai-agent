@@ -48,6 +48,12 @@ export {
   type ProfileCredentialStore,
 } from "./oauth/accounts.ts";
 export { createOAuthAccountLoginManager, type AccountLoginState } from "./oauth/account-login.ts";
+export { ReportDiagnoser, ReportDiagnosisError } from "./report/diagnosis.ts";
+export {
+  ReportDiagnosis,
+  ReportDiagnosisFailure,
+  ReportDiagnosisInput,
+} from "./report/diagnosis-contract.ts";
 export {
   SubscriptionQuota,
   SubscriptionQuotaError,

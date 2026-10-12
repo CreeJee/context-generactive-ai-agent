@@ -11,6 +11,7 @@ import { HarnessStore } from "./rrsi/store.ts";
 import { Rrsi } from "./rrsi/service.ts";
 import { ApiUsage } from "./agent/api-usage.ts";
 import { TurnSummaries } from "./agent/turn-summaries.ts";
+import { ReportDiagnoser } from "./report/diagnosis.ts";
 import { ChatState } from "./chat-state/chat-state.ts";
 import { RelayedApprovals } from "./approvals/relayed.ts";
 import { Attachments } from "./attachments/attachments.ts";
@@ -304,6 +305,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     WorkflowRules.layer,
     QueueDelivery.layer,
     TurnSummaries.layer(options.summarizeAutomatically),
+    ReportDiagnoser.layer,
   ).pipe(Layer.provideMerge(providers));
   return AgentChat.layer.pipe(
     Layer.provide(Layer.succeed(GoalWorkerConfiguration, options.goalWorker ?? {})),
