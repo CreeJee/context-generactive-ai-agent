@@ -26,6 +26,7 @@ const inspection = Schema.Struct({
   operations: Schema.Array(Schema.Unknown),
   revisions: Schema.Array(Schema.Unknown),
   dispatches: Schema.Array(Schema.Unknown),
+  executions: Schema.Array(Schema.Struct({ runId: Schema.String, status: Schema.String })),
   runs: Schema.Array(Schema.Struct({ status: Schema.String })),
 });
 type Owner = { child: ChildProcessSpawner.ChildProcessHandle; url: string; sessionId: string };
@@ -189,10 +190,22 @@ it.live(
             expect(recovered.runs).toHaveLength(1);
             expect(recovered.runs[0].status).toBe("failed");
             expect(yield* textPrefix(yield* replay(second))).toBe(delivered);
-            for (const retry of [runId, "partial-new-run-bypass"])
-              expect((yield* post(second, retry)).status).toBe(409);
+            expect((yield* post(second, runId)).status).toBe(409);
             expect(yield* inspect(second)).toEqual(recovered);
             expect(yield* fs.readFileString(path.join(base, "model-calls"))).toBe(calls);
+            // The killed run ran no tool, so a new run continues without replaying it.
+            const continued = yield* post(second, "partial-continued-run");
+            expect({ status: continued.status, text: yield* continued.text }).toMatchObject({
+              status: 200,
+              text: expect.stringContaining("completed owner turn"),
+            });
+            expect((yield* inspect(second)).runs.map((run) => run.status)).toEqual([
+              "failed",
+              "completed",
+            ]);
+            expect(
+              (yield* fs.readFileString(path.join(base, "model-calls"))).trim().split("\n"),
+            ).toHaveLength(2);
           } finally {
           }
         }),
@@ -273,12 +286,25 @@ for (const interrupted of [false, true]) {
                 expect(yield* suffix.text).toBe(replay.slice(replay.indexOf("\n\n") + 2));
               }
               if (interrupted) {
-                for (const retry of [runId, "new-run-bypass"])
-                  expect((yield* post(second, retry)).status).toBe(409);
+                // The killed run never settled; the reopened owner closes its execution.
+                expect(old.executions).toEqual([{ runId, status: "suspended" }]);
+                expect(state.executions).toEqual([{ runId, status: "completed" }]);
+                expect((yield* post(second, runId)).status).toBe(409);
               }
               expect(
                 (yield* fs.readFileString(path.join(base, "model-calls"))).trim().split("\n"),
               ).toHaveLength(1);
+              if (interrupted) {
+                // The killed run ran no tool, so a new run continues without replaying it.
+                const continued = yield* post(second, "continued-run");
+                expect({ status: continued.status, text: yield* continued.text }).toMatchObject({
+                  status: 200,
+                  text: expect.stringContaining("completed owner turn"),
+                });
+                expect(
+                  (yield* fs.readFileString(path.join(base, "model-calls"))).trim().split("\n"),
+                ).toHaveLength(2);
+              }
             } finally {
             }
           }),

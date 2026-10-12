@@ -13,8 +13,9 @@ import {
 import { ownerWorkflowEngineLayer } from "./owner-workflow-engine.ts";
 import {
   OwnerWorkflowAdmission,
+  OwnerWorkflowStorage,
+  OwnerWorkflowStorageError,
   type OwnerWorkflowAdmissionResult,
-  type OwnerWorkflowStorageError,
 } from "./owner-workflow-storage.ts";
 
 export class GoalExecutionAdmissionRefused extends Schema.TaggedError<GoalExecutionAdmissionRefused>()(
@@ -53,6 +54,7 @@ const handler = (_payload: GoalExecutionPayloadType) =>
 const make = Effect.gen(function* () {
   const engine = yield* WorkflowEngine.WorkflowEngine;
   const admission = yield* OwnerWorkflowAdmission;
+  const storage = yield* OwnerWorkflowStorage;
   const executionAdmission = yield* ExecutionAdmission;
   const provideEngine = <A, E>(effect: Effect.Effect<A, E, WorkflowEngine.WorkflowEngine>) =>
     Effect.provideService(effect, WorkflowEngine.WorkflowEngine, engine);
@@ -64,6 +66,25 @@ const make = Effect.gen(function* () {
     });
 
   return {
+    /** Admitted executions still waiting for their run to settle them, as their stored payloads. */
+    unsettled: Effect.try({
+      try: () => storage.pendingExecutions(GoalExecution._tag),
+      catch: (cause) =>
+        Schema.is(OwnerWorkflowStorageError)(cause)
+          ? cause
+          : OwnerWorkflowStorageError.make({
+              operation: "execution.pending",
+              reason: "database",
+              cause,
+            }),
+    }).pipe(
+      Effect.flatMap((executions) =>
+        Effect.forEach(executions, (execution) =>
+          Schema.decodeUnknownEffect(GoalExecutionPayload)(execution.payload),
+        ),
+      ),
+    ),
+
     /**
      * Commits the existing owner run binding callback and first durable request together, then
      * dispatches the replay-safe workflow body. A committed request is always re-identifiable.

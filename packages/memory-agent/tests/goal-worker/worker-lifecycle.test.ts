@@ -200,7 +200,7 @@ testAgent({ testProvider: { responder } })("Goal worker failure and cancellation
               },
               failing,
             ]
-          : [{ ...failing, waitFor: Deferred.await(gate) }];
+          : [{ ...failing, waitFor: Deferred.await(gate) }, { text: "continued after failure" }];
         const turn = yield* Ref.make(0);
         const id = yield* goalSession("Keep failed worker output without replay", () =>
           Deferred.succeed(started, undefined).pipe(
@@ -245,14 +245,17 @@ testAgent({ testProvider: { responder } })("Goal worker failure and cancellation
         expect
           .soft(yield* responseText(replayed))
           .toBe(delivered.slice(delivered.indexOf("\n\n") + 2));
-        for (const retry of [runId, `${runId}-after-reopen`])
-          expect((yield* send(id, retry, "stream then fail")).status).toBe(409);
+        expect((yield* send(id, runId, "stream then fail")).status).toBe(409);
         expect(yield* invocations(id)).toHaveLength(calls);
         expect(yield* userNodes(id)).toEqual([{ n: 1 }]);
         expect(yield* toolEffects()).toEqual(effects);
         expect(
           yield* rows("SELECT count(*) AS n FROM workflow_run_bindings WHERE session_id = ?", id),
         ).toEqual([{ n: 1 }]);
+        // A run that ran a tool may repeat it; one that ran none continues in a new run.
+        const continued = yield* send(id, `${runId}-after-reopen`, "stream then fail");
+        expect(continued.status).toBe(toolFirst ? 409 : 200);
+        if (!toolFirst) expect(yield* responseText(continued)).toContain("continued after failure");
       }),
     20_000,
   );
@@ -285,14 +288,21 @@ testAgent({ testProvider: { responder } })("Goal worker failure and cancellation
           };
         });
         yield* Effect.addFinalizer(() => Effect.sync(() => streaming.mockRestore()));
+        const turns = yield* Ref.make(0);
         const id = yield* goalSession(
           "Keep cancellation outcome and uncertain effects without replay",
           () =>
-            Deferred.succeed(started, undefined).pipe(
-              Effect.as({
-                waitFor: Deferred.await(release),
-                text: "must not publish after cancellation",
-              }),
+            Effect.flatMap(
+              Ref.getAndUpdate(turns, (index) => index + 1),
+              (index) =>
+                index === 0
+                  ? Deferred.succeed(started, undefined).pipe(
+                      Effect.as({
+                        waitFor: Deferred.await(release),
+                        text: "must not publish after cancellation",
+                      }),
+                    )
+                  : Effect.succeed({ text: "continued after cancellation" }),
             ),
         );
         const runId = `${id}-cancelled`;
@@ -331,9 +341,12 @@ testAgent({ testProvider: { responder } })("Goal worker failure and cancellation
         expect(replayed.status).toBe(200);
         expect(yield* responseText(replayed)).toBe(output.slice(output.indexOf("\n\n") + 2));
         expect(yield* receipts()).toEqual(pending);
-        for (const retry of [runId, `${runId}-bypass`])
-          expect((yield* send(id, retry, "wait until cancelled")).status).toBe(409);
+        expect((yield* send(id, runId, "wait until cancelled")).status).toBe(409);
         expect(yield* invocations(id)).toHaveLength(calls);
+        // The cancelled run ran no tool, so a new run continues without replaying it.
+        const continued = yield* send(id, `${runId}-continued`, "wait until cancelled");
+        expect(continued.status).toBe(200);
+        expect(yield* responseText(continued)).toContain("continued after cancellation");
       }),
     20_000,
   );

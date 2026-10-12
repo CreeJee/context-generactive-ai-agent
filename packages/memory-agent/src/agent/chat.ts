@@ -143,7 +143,11 @@ import { goalWorkerAuthority, type GoalWorkerCapability } from "./goal-worker-au
 // supplies its existing SQLite connection and transaction boundary.
 // oxlint-disable-next-line anti-slop-effect/no-service-constructor-imports
 import { makeSqliteOwnerRpcLedger } from "./owner-rpc-ledger.ts";
-import { workflowRunBindings } from "../workflow/run-bindings.ts";
+import {
+  endedWithoutEffectsSql,
+  toolOperationSql,
+  workflowRunBindings,
+} from "../workflow/run-bindings.ts";
 import {
   OwnerReadRecovery,
   recoveredReadRunSql,
@@ -151,7 +155,13 @@ import {
   type ReadRecoveryRevocation,
 } from "./owner-read-recovery.ts";
 import { sqliteStreamDurability } from "../workflow/durable-stream.ts";
-import type { CancelResult, CompactResult, CompactionStage, SessionRunState } from "./run-state.ts";
+import {
+  serverRestartedCode,
+  type CancelResult,
+  type CompactResult,
+  type CompactionStage,
+  type SessionRunState,
+} from "./run-state.ts";
 import { sessionHolderHeader } from "../sessions/lease-state.ts";
 import { SessionLeases } from "../sessions/leases.ts";
 import { Workflows, type WorkflowAction, type WorkflowPhase } from "../workflow/workflow.ts";
@@ -1313,7 +1323,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             SELECT b.run_id FROM workflow_run_bindings b
             LEFT JOIN chat_runs r ON r.run_id = b.run_id
             WHERE b.session_id = ? AND (r.status IS NULL OR (r.status <> 'completed' AND NOT (
-              ${recoveredReadRunSql("r")} OR r.status = 'interrupted' AND EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id)
+              ${recoveredReadRunSql("r")} OR ${endedWithoutEffectsSql("r")}
+              OR r.status = 'interrupted' AND EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id)
               AND (r.run_id = ? OR NOT EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id AND i.status = 'pending'))
             ))) LIMIT 1
           `)
@@ -3001,6 +3012,47 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         yield* Effect.forkIn(serializeNotification(sessionId, followup(sessionId)), scope);
       }),
     ),
+  );
+  // A Goal run the previous process was still running never reached `settle`, and startup has
+  // marked it failed. Close its durable execution and continuation the same way, so only a side
+  // effect that may have happened keeps the session from continuing the Plan. The run is not
+  // replayed. An execution that cannot be closed stays fenced, as before.
+  const unsettledEffect = sqlite.prepare(
+    `SELECT operation_id, status FROM owner_rpc_operations o
+     WHERE run_id = ? AND ${toolOperationSql("o")} AND status <> 'succeeded'
+     ORDER BY operation_id LIMIT 1`,
+  );
+  const abandonedRun = sqlite.prepare(
+    "SELECT 1 AS failed FROM chat_runs WHERE run_id = ? AND thread_id = ? AND status = 'failed'",
+  );
+  yield* Effect.forEach(
+    yield* goalExecutions.unsettled.pipe(
+      Effect.catch((error) =>
+        Effect.as(Effect.logWarning("Unsettled Goal executions unavailable", error), []),
+      ),
+    ),
+    (payload) =>
+      Effect.gen(function* () {
+        const { sessionId, runId } = payload.identity;
+        if (abandonedRun.get(runId, sessionId) === undefined) return;
+        const effect = yield* Schema.decodeUnknownEffect(
+          Schema.UndefinedOr(Schema.Struct({ operation_id: Schema.Finite, status: Schema.String })),
+        )(unsettledEffect.get(runId));
+        yield* goalExecutions.fail(
+          payload,
+          effect === undefined
+            ? { _tag: "ExecutionFailed", phase: "sdk_loop", code: serverRestartedCode }
+            : {
+                _tag: "SideEffectUncertain",
+                operationId: String(effect.operation_id),
+                state: effect.status === "pending" ? "pending" : "uncertain",
+              },
+        );
+        yield* execution.stop(sessionId, "run_failed", runId);
+      }).pipe(
+        Effect.catch((error) => Effect.logWarning("Abandoned Goal execution stays fenced", error)),
+      ),
+    { discard: true },
   );
   // Only a persisted clean finish is eligible. Interrupted or failed runs are never replayed.
   for (const sessionId of yield* execution.readySessions()) wakeNotifications(sessionId);
