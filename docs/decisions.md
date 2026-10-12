@@ -645,7 +645,7 @@
 - A full queue fails immediately with typed `ExecutionSaturated`. Workflow admission maps this to HTTP 503 before issuing a worker capability; full-loop workers hold a worker permit for their Scope, model `next()` calls hold model permits, and owner tool implementations hold tool permits. Interruption and Scope finalization release both permits exactly once.
 - Admission metrics expose only kind-tagged active, queued and saturation counts. Spans/logs contain kind, configured limits, queue depth and outcome; they do not include prompts, records, SQL, endpoints, capability tokens or credentials. Durable workflow execution IDs remain canonical derived hashes rather than raw session/run values.
 - The owner workflow engine continues to own live executions in scoped `FiberMap`s, keyed by derived execution ID, which is deterministically bound to session/run/Goal/revision. `onlyIfMissing` rejects duplicate run/timer fibers, and Scope shutdown interrupts and joins them structurally.
-- This migration adds no `Schedule` retry around workflow, model, tool, file, remote, or Goal-loop effects. Retrying an uncertain side effect remains forbidden. A future retry may be introduced only at an enumerated idempotent infrastructure boundary (database read/connect or pre-dispatch worker acquisition), with its stable key and exhaustion outcome documented first.
+- This migration adds no `Schedule` retry around workflow, model, tool, file, remote, or Goal-loop effects. Retrying an uncertain side effect remains forbidden. A future retry may be introduced only at an enumerated idempotent infrastructure boundary (database read/connect or pre-dispatch worker acquisition), with its stable key and exhaustion outcome documented first. (갱신: provider 요청 전 transport 실패 경계를 아래 "Provider 요청 전 transport 실패의 durable 재시도 경계 (2026-10-13)"에 추가했다.)
 
 ### Build-time native and Goal-worker artifacts (2026-10-10)
 
@@ -660,6 +660,16 @@
 - Approval timeout is a durable `DurableClock` branch in a persisted `DurableDeferred.raceAll`. The owner engine now resumes pending executions when their workflow registers after restart. Once either approval or timeout completes the workflow, still-scheduled loser clocks are removed and their scoped timer fibers are interrupted.
 - Owner cancellation interrupts the bound workflow, removes it from the pending page view, and cancels its timer; it never turns cancellation into a durable denial. A process/layer restart without owner cancellation preserves and resumes the pending approval. No model, tool, file, remote API, or entire Goal loop is replayed to consume an answer automatically.
 - No production `DurableQueue` is enabled in this migration step. The installed queue is at-least-once, typed handler failures complete rather than retry, crash after a side effect can redeliver, and dead letters require an explicit requeue operator path. Current candidate work either includes model/remote effects, already has a different owner/recovery contract, or lacks a proven stable idempotency key plus dead-letter procedure. A future post-commit derived task may adopt it only with those proofs, bounded attempts, observation, and manual requeue documented first.
+
+### Provider 요청 전 transport 실패의 durable 재시도 경계 (2026-10-13)
+
+- 2026-10-10 "Effect execution admission and safe observability"의 재시도 허용 경계에 **provider 요청이 전송되기 전이 확정된 transport 실패**를 추가한다. 연결 수립·DNS·TLS 등 요청 본문이 provider에 도달하지 않았음을 어댑터가 확정할 수 있는 실패만 해당한다.
+- 요청 전송 이후의 실패, 일부 출력이나 tool call을 받은 뒤의 스트림 중단, 원인이 불명확한 실패는 이 경계에 포함하지 않는다. 이 경우는 기존 Work Trace 계약(2026-09-20)대로 재생하지 않고, 필요하면 새 attempt에서 논리적으로 이어간다. model·tool·Goal-loop 전체를 재실행하는 retry는 계속 금지한다.
+- 전제: 현재 `SubscriptionStreamFailed`는 알려지지 않은 오류를 모두 `TransportUnavailable`로 변환하므로 요청 전 실패를 구분할 수 없다. reason을 요청 전 실패와 그 외로 나누기 전에는 재시도를 활성화하지 않는다.
+- 안정 키는 run attempt ID와 해당 attempt 안의 재시도 순번으로 구성한다. 현재 시각·랜덤 값·프로세스 로컬 카운터는 키에 쓰지 않는다.
+- 대기 간격은 2초에서 시작해 2배씩 늘리고 한 번의 대기는 최대 30분으로 제한한다. jitter를 포함해 계산한 `retryAt`은 한 번만 계산해 영속화하고, replay에서 다시 계산하지 않는다. 대기는 `DurableClock`으로 수행하며 앱 재시작 후에도 복원되도록 `inMemoryThreshold: 0`을 사용한다.
+- 소진 결과: 재시도 한도(총 경과 시간 또는 횟수)는 구현 시 이 항목에 수치로 기록한 뒤 활성화한다. 한도를 넘으면 실행 실패로 끝내지 않고 기존 blocker 경로(2026-10-02)로 정지해 이유와 근거를 표시한다. 사용자 취소·일시 중지는 대기 중인 재시도를 중단하며 자동 재개하지 않는다.
+- 이 결정은 `DurableQueue` 보류(2026-10-10)를 바꾸지 않는다.
 
 ### Goal full-loop transport: Effect Worker/RPC protocol boundary (2026-10-10)
 
