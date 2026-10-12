@@ -22,6 +22,7 @@ import { SdkStreams } from "memory-agent/acp";
 import { Cause, Context, Exit, Layer, Scope, Stream } from "effect";
 import * as build from "#server-build";
 import { isThisApp, launchFolder, openProjectEffect, type LaunchFolder } from "./launch-project.ts";
+import { readBuildConfig } from "./build-config.ts";
 import { readReleaseInfo } from "./release-info.ts";
 import { unpackRuntime } from "./runtime-assets.ts";
 import { acquireStorageLock } from "./dev-safety.ts";
@@ -191,8 +192,13 @@ if (positionals[0] === "acp") {
       throw error;
     }),
   );
+  const buildConfig = await runNativeEffect(readBuildConfig).catch((error: Error) =>
+    closeBackend().then(() => {
+      throw error;
+    }),
+  );
   // Native host/SDK configuration boundary reads or forwards the host environment.
-  build.entry.module.configureAgentBackend({ storageRoot, runtimeRoot: runtime });
+  build.entry.module.configureAgentBackend({ storageRoot, runtimeRoot: runtime, buildConfig });
   await runNativeEffect(
     Scope.addFinalizer(backendScope, Effect.promise(build.entry.module.disposeAgent)),
   );

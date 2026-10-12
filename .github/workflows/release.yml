@@ -48,8 +48,12 @@ jobs:
           rustup toolchain install stable --profile minimal --no-self-update
           rustup default stable
 
+      # The developer's report webhook is embedded in the executable (docs/reporting.md). Only this
+      # step sees the secret; an unset secret builds an app without report delivery.
       - name: Build the executable
         working-directory: apps/agent
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: vp run package
 
       # Runs the executable outside the repository: first start, codex download, projects, acp, stop.
