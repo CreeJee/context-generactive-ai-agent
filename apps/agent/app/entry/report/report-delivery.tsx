@@ -5,6 +5,7 @@ import type {
   ReportDeliveryStatus,
 } from "memory-agent/definitions";
 import { useEffect, useRef, useState } from "react";
+import { koreanLocalTime } from "../shared/local-time";
 import {
   configureWebhook,
   readDeliveryStatus,
@@ -75,9 +76,9 @@ export function deliveryOutcomeText(outcome: DeliveryOutcome): string | null {
     case "delivered":
       return `개발자 Discord 채널로 보냈습니다 (메시지 ${outcome.messageId}).`;
     case "duplicate":
-      return `이 문안은 ${new Date(outcome.deliveredAt).toLocaleString("ko-KR")}에 이미 보냈습니다.`;
+      return `이 문안은 ${koreanLocalTime(outcome.deliveredAt)}에 이미 보냈습니다.`;
     case "uncertain_duplicate":
-      return `이 문안의 이전 전송(${new Date(outcome.attemptedAt).toLocaleString("ko-KR")})은 확인되지 않았습니다. 채널을 확인한 뒤 필요하면 다시 보내세요.`;
+      return `이 문안의 이전 전송(${koreanLocalTime(outcome.attemptedAt)})은 확인되지 않았습니다. 채널을 확인한 뒤 필요하면 다시 보내세요.`;
     case "failed":
       return `보내지 못했습니다: ${deliveryFailureText[outcome.reason]}. 위의 복사·텍스트 파일 저장으로 직접 게시할 수 있습니다.`;
   }

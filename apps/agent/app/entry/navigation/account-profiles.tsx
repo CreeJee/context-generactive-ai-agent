@@ -6,7 +6,7 @@ import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { Spinner } from "~/components/ui/spinner";
 import {
-  ApiError,
+  isApiError,
   type AccountAction,
   type AccountsView,
   type OAuthProfile,
@@ -15,20 +15,21 @@ import {
 } from "../api";
 import { useAccountQuotaQuery, useAccountsQuery } from "../queries/global";
 import { useAccountActionMutation } from "../queries/mutations/global";
+import { koreanLocalTime } from "../shared/local-time";
 
 type QuotaStatus = SubscriptionQuotaReport["accounts"][number]["quota"];
 type QuotaWindow = Extract<QuotaStatus, { status: "observed" }>["windows"][number];
 
 const windowText = (window: QuotaWindow) =>
-  `${window.name} ${Math.round(window.usedPercent)}% 사용${window.resetsAt ? ` · ${new Date(window.resetsAt).toLocaleString("ko-KR")} 초기화` : ""}`;
+  `${window.name} ${Math.round(window.usedPercent)}% 사용${window.resetsAt !== null && window.resetsAt !== "" ? ` · ${koreanLocalTime(window.resetsAt)} 초기화` : ""}`;
 
 /** Provider-reported numbers only; an unavailable quota says why instead of estimating one. */
 export function quotaText(quota: QuotaStatus): string {
   switch (quota.status) {
     case "observed":
-      return `${quota.windows.map(windowText).join(", ")} (${new Date(quota.observedAt).toLocaleString("ko-KR")} 조회)`;
+      return `${quota.windows.map(windowText).join(", ")} (${koreanLocalTime(quota.observedAt)} 조회)`;
     case "stale":
-      return `${quota.windows.map(windowText).join(", ")} (오래된 값: ${new Date(quota.observedAt).toLocaleString("ko-KR")} 기준, 최근 조회 실패)`;
+      return `${quota.windows.map(windowText).join(", ")} (오래된 값: ${koreanLocalTime(quota.observedAt)} 기준, 최근 조회 실패)`;
     case "unavailable":
       switch (quota.reason) {
         case "no_permitted_route":
@@ -49,7 +50,7 @@ function QuotaLine({
 }) {
   if (failed)
     return <p className="text-2xs text-muted-foreground">한도 상태를 확인하지 못했어요</p>;
-  if (!quota) return <p className="text-2xs text-muted-foreground">한도 확인 중</p>;
+  if (quota === undefined) return <p className="text-2xs text-muted-foreground">한도 확인 중</p>;
   return <p className="text-2xs text-muted-foreground">{quotaText(quota)}</p>;
 }
 
@@ -75,7 +76,7 @@ function ProfileRow({
           className="flex items-center gap-1"
           onSubmit={(event) => {
             event.preventDefault();
-            if (!label.trim()) return;
+            if (label.trim() === "") return;
             onAction({ intent: "rename", accountId: profile.id, label: label.trim() });
             setRenaming(false);
           }}
@@ -152,7 +153,7 @@ export function AccountProfiles({
   onAction: (action: AccountAction) => void;
 }) {
   const [label, setLabel] = useState("");
-  if (!view) return <Spinner />;
+  if (view === undefined) return <Spinner />;
   const quotaOf = (id: string) => quota?.accounts.find((account) => account.accountId === id);
   return (
     <div className="flex flex-col gap-2">
@@ -195,7 +196,7 @@ export function AccountProfiles({
           className="flex items-center gap-1"
           onSubmit={(event) => {
             event.preventDefault();
-            if (!label.trim()) return;
+            if (label.trim() === "") return;
             onAction({ intent: "add", label: label.trim() });
             setLabel("");
           }}
@@ -207,7 +208,7 @@ export function AccountProfiles({
             maxLength={80}
             onChange={(event) => setLabel(event.target.value)}
           />
-          <Button type="submit" variant="outline" size="xs" disabled={busy || !label.trim()}>
+          <Button type="submit" variant="outline" size="xs" disabled={busy || label.trim() === ""}>
             <PlusIcon /> 추가
           </Button>
         </form>
@@ -227,7 +228,7 @@ export function AccountProfiles({
 }
 
 const accountErrorMessage = (error: Error) => {
-  if (!(error instanceof ApiError)) return "계정 작업에 실패했어요.";
+  if (!isApiError(error)) return "계정 작업에 실패했어요.";
   switch (error.code) {
     case "invalid_account_label":
       return "계정 이름은 1~80자로 입력하세요.";

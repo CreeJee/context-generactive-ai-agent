@@ -1,6 +1,7 @@
 import { Cause, Effect } from "effect";
 import { Database, Nodes } from "memory-agent";
 import { expect } from "vite-plus/test";
+import { randomUUID } from "../../../../packages/memory-agent/src/runtime/synchronous-crypto.ts";
 import { selectTestModel } from "../../../../packages/memory-agent/tests/support/provider.ts";
 import {
   TestEnv,
@@ -22,8 +23,8 @@ const local = (url: string, init: RequestInit = {}) =>
 const question = (text: string) =>
   JSON.stringify({
     threadId: "page",
-    runId: `run-${crypto.randomUUID()}`,
-    messages: [{ id: crypto.randomUUID(), role: "user", content: text }],
+    runId: `run-${randomUUID()}`,
+    messages: [{ id: randomUUID(), role: "user", content: text }],
     tools: [],
     context: [],
   });

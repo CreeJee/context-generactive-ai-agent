@@ -1,4 +1,4 @@
-import { Data, Effect, Schema } from "effect";
+import { Data, Effect, Function as EffectFunction, Schema } from "effect";
 import {
   ReportDeliveryResult,
   ReportDeliveryStatus,
@@ -120,8 +120,11 @@ export function makeReportClient(fetcher: typeof fetch) {
     url: "/api/reports/delivery",
     init: { cache: "no-store" },
   });
-  const sendReport = (text: string, resend: boolean) =>
+  const sendReportBody = (text: string, resend: boolean) =>
     deliver(ReportDeliveryResult, { action: "send", text, resend });
+  const sendReport: {
+    (resend: boolean): (text: string) => ReturnType<typeof sendReportBody>;
+  } & typeof sendReportBody = EffectFunction.dual(2, sendReportBody);
   const configureWebhook = (url: string) =>
     deliver(ReportDeliveryStatus, { action: "configure", url });
   const removeWebhook = deliver(ReportDeliveryStatus, { action: "remove" });

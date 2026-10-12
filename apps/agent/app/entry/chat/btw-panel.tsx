@@ -32,7 +32,7 @@ import {
 import { Spinner } from "~/components/ui/spinner";
 import { Textarea } from "~/components/ui/textarea";
 import { dayAndTime } from "~/lib/dates";
-import { ApiError, api, chatFetch, type BtwThread } from "../api";
+import { api, chatFetch, isApiError, type BtwThread } from "../api";
 import { appQueryKeys } from "../queries/keys";
 import { sessionQueries } from "../queries/session";
 import { Markdown } from "./markdown";
@@ -60,7 +60,7 @@ const threadLabel = (thread: BtwThread) =>
   thread.title ?? `새 BTW · ${dayAndTime(thread.createdAt)}`;
 
 function btwErrorMessage(error: Error) {
-  if (!(error instanceof ApiError)) return error.message;
+  if (!isApiError(error)) return error.message;
   switch (error.code) {
     case "login_required":
       return "선택한 공급자에 로그인해야 해요.";
@@ -289,7 +289,7 @@ export function BtwPanel({ projectId, sessionId }: { projectId: string; sessionI
             <SheetTitle>
               <span className="flex items-center gap-2">
                 <MessageCircleQuestionIcon className="size-4" aria-hidden />
-                {selected ? threadLabel(selected) : "BTW 별도 질문"}
+                {selected !== null ? threadLabel(selected) : "BTW 별도 질문"}
               </span>
             </SheetTitle>
             <SheetDescription>{separateCopy}</SheetDescription>
@@ -323,7 +323,7 @@ export function BtwPanel({ projectId, sessionId }: { projectId: string; sessionI
               )}
             </div>
           </SheetHeader>
-          {selected ? (
+          {selected !== null ? (
             <BtwConversation key={selected.id} thread={selected} />
           ) : (
             <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-4 py-3">

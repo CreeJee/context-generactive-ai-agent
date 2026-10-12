@@ -323,8 +323,10 @@ export function ProjectSection({
     <section>
       <Collapsible open={open} onOpenChange={setOpen}>
         {/* Collapsed, a selected project shows only its name; the label keeps the context. */}
-        <SidebarDisclosureTrigger aria-label={current ? `프로젝트 ${current.name}` : "프로젝트"}>
-          {current ? (
+        <SidebarDisclosureTrigger
+          aria-label={current !== undefined ? `프로젝트 ${current.name}` : "프로젝트"}
+        >
+          {current !== undefined ? (
             <span className="font-medium">{current.name}</span>
           ) : (
             <span className="font-medium">프로젝트 선택</span>

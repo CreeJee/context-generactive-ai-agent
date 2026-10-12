@@ -37,10 +37,20 @@ export const globalQueries = {
 };
 
 export const useAuthQuery = (provider: ProviderId) => useQuery(globalQueries.auth(provider));
-export const useAccountsQuery = (provider: SubscriptionAccountProvider, enabled: boolean) =>
+const useAccountsQueryBody = (provider: SubscriptionAccountProvider, enabled: boolean) =>
   useQuery({ ...globalQueries.accounts(provider), enabled });
-export const useAccountQuotaQuery = (provider: SubscriptionAccountProvider, enabled: boolean) =>
+export const useAccountsQuery: {
+  (
+    enabled: boolean,
+  ): (provider: SubscriptionAccountProvider) => ReturnType<typeof useAccountsQueryBody>;
+} & typeof useAccountsQueryBody = EffectFunction.dual(2, useAccountsQueryBody);
+const useAccountQuotaQueryBody = (provider: SubscriptionAccountProvider, enabled: boolean) =>
   useQuery({ ...globalQueries.accountQuota(provider), enabled });
+export const useAccountQuotaQuery: {
+  (
+    enabled: boolean,
+  ): (provider: SubscriptionAccountProvider) => ReturnType<typeof useAccountQuotaQueryBody>;
+} & typeof useAccountQuotaQueryBody = EffectFunction.dual(2, useAccountQuotaQueryBody);
 export const useProjectsQuery = () => useQuery(globalQueries.projects());
 export const useImageSettingsQuery = () => useQuery(globalQueries.imageSettings());
 export const useSuspenseImageSettingsQuery = () => useSuspenseQuery(globalQueries.imageSettings());
