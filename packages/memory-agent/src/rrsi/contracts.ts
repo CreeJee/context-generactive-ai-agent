@@ -42,7 +42,8 @@ export const Settings = Schema.Struct({
   maxMinutes: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 120 })),
 });
 export type RrsiSettings = typeof Settings.Type;
-export const defaultSettings: RrsiSettings = { enabled: true, maxMinutes: 30 };
+// Off until the experiment results justify spending model time without a user request.
+export const defaultSettings: RrsiSettings = { enabled: false, maxMinutes: 30 };
 export const Version = Schema.Struct({
   id: Schema.String,
   parentId: Schema.NullOr(Schema.String),

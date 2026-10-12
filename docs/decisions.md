@@ -967,6 +967,11 @@
 - timeout·취소·sensor close는 SIGKILL 요청 뒤 실제 close 이벤트까지 기다린다. bounded output 검사, 단일 turn memo, network deny sandbox 명령과 production 비활성화는 유지한다.
 - 경계 테스트는 kill과 exit를 독립적으로 제어하여 종료 대기를 검증하고, native transport 테스트는 실제 자식 프로세스의 stdin 전달과 Scope 종료 후 reaping을 검증한다. experimental API 진단을 억제하는 주석은 사용하지 않는다.
 
+### 동작 개선 실험의 기본 비활성 (2026-10-12)
+
+- RRSI 유휴 자동 실행의 기본값을 끔으로 바꾼다. 사용자가 요청하지 않은 모델 시간과 구독 사용량을 쓰므로, 실험 결과로 유지·삭제를 정하기 전까지는 설정에서 켠 경우에만 돈다.
+- 설정 행이 이미 있는 저장소는 그 값을 유지한다. RRSI는 정식 릴리스(0.0.13) 이후에 들어와 기존 릴리스 사용자에게 저장된 값이 없다.
+
 ## 도구·권한·외부 연동
 
 ### 로컬 도구 (2026-09-14)
