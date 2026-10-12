@@ -8,7 +8,7 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { optionalProperty } from "../optional-property.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
 import {
   Cause,
   Deferred,
@@ -27,6 +27,7 @@ import {
   Exit,
 } from "effect";
 import { requireRuntime } from "../runtime/resources.ts";
+import { oauthProtocolCrypto } from "./node-runtime.ts";
 import { prepareAnthropicValidationBody } from "./anthropic-validation-adapter.ts";
 import { createChunkedPasswordEntry, type PasswordEntry } from "./chunked-password-entry.ts";
 import {
@@ -483,7 +484,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
   const store = options.store ?? createKeychainCredentialStore();
   const fetcher = options.fetch ?? fetch;
   const now = options.now ?? Date.now;
-  const anthropicSessionId = randomUUID();
+  const anthropicSessionId = Effect.runSync(oauthProtocolCrypto.randomUUIDv4().pipe(Effect.orDie));
   let loginActive = false;
   const refreshLock = Semaphore.makeUnsafe(1);
   type Refresh = {
@@ -904,7 +905,10 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
     if (protocol.provider === "openai" && credential.accountId !== undefined)
       headers.set("chatgpt-account-id", credential.accountId);
     if (protocol.provider === "anthropic") {
-      headers.set("x-client-request-id", randomUUID());
+      headers.set(
+        "x-client-request-id",
+        yield* oauthProtocolCrypto.randomUUIDv4().pipe(Effect.orDie),
+      );
       headers.set("X-Claude-Code-Session-Id", anthropicSessionId);
     }
     return yield* Effect.tryPromise({
@@ -993,13 +997,16 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
         ? prepareAnthropicValidationBody(serializedBody, anthropicSessionId)
         : serializedBody;
 
-    const request = (current: StoredCredential) => {
+    const request = Effect.fnUntraced(function* (current: StoredCredential) {
       const headers = new Headers(protocol.modelHeaders);
       headers.set("Authorization", `Bearer ${current.accessToken}`);
       if (protocol.provider === "openai" && current.accountId !== undefined)
         headers.set("chatgpt-account-id", current.accountId);
       if (protocol.provider === "anthropic") {
-        headers.set("x-client-request-id", randomUUID());
+        headers.set(
+          "x-client-request-id",
+          yield* oauthProtocolCrypto.randomUUIDv4().pipe(Effect.orDie),
+        );
         headers.set("X-Claude-Code-Session-Id", anthropicSessionId);
         headers.set("X-Stainless-Arch", process.arch === "x64" ? "x64" : process.arch);
         headers.set(
@@ -1013,7 +1020,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
                 : process.platform,
         );
       }
-      return Effect.tryPromise({
+      return yield* Effect.tryPromise({
         try: (ownerSignal) =>
           fetcher(protocol.modelUrl, {
             method: "POST",
@@ -1025,7 +1032,7 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
           }),
         catch: () => new OAuthHarnessError("transport_unavailable", null, context),
       });
-    };
+    });
 
     let response = yield* request(credential);
     if (protocol.refreshStatuses.includes(response.status)) {
