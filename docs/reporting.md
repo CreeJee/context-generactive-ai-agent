@@ -24,7 +24,7 @@
 
 URL 형식은 `https://{discord.com|discordapp.com|ptb.discord.com|canary.discord.com}/api[/vN]/webhooks/{17~20자리 ID}/{토큰}`만 받는다. 사용자 이름·비밀번호가 붙은 URL, http, 다른 호스트는 거부한다(테스트 계층만 loopback http 허용).
 
-## 검증 범위 (I5, 2026-10-12, 기준 main `d069e2e`)
+## 검증 범위 (I5, 2026-10-12, 기준 main `c10dcc0`)
 
 - `vp check`: 13 errors, 1 warning — 모두 이 브랜치가 건드리지 않은 기준 main의 파일이다(`apps/agent/server/tests/*`가 삭제된 `tests/support/runtime.ts`를 참조, `backend-restart.test.ts`). 이 브랜치 파일의 새 오류는 없다.
 - `vp run typecheck`: 오류는 같은 기준 파일(`apps/agent/server/tests/*`, `backend-restart.test.ts`)과 `read-only-bar.tsx`(async 함수 진단)뿐이다. 이 브랜치 파일의 새 오류는 없다.
