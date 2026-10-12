@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import { EyeIcon } from "lucide-react";
 import { useState } from "react";
 import { Button } from "~/components/ui/button";
@@ -10,6 +11,7 @@ import {
   ItemTitle,
 } from "~/components/ui/item";
 import type { PageLease } from "../session/session-lease";
+import { runUiEffect, uiPromise } from "../shared/ui-effect";
 
 /**
  * Takes the composer's place on a page that may only read the session: why, and a way to continue
@@ -26,13 +28,13 @@ export function ReadOnlyBar({
   onContinue: () => void | Promise<void>;
 }) {
   const [connectionFailed, setConnectionFailed] = useState(false);
-  const continueHere = async () => {
+  const continueHere = () => {
     setConnectionFailed(false);
-    try {
-      await onContinue();
-    } catch {
-      setConnectionFailed(true);
-    }
+    void runUiEffect(
+      uiPromise(() => Promise.resolve(onContinue())).pipe(
+        Effect.catch(() => Effect.sync(() => setConnectionFailed(true))),
+      ),
+    );
   };
   switch (lease.state) {
     case "checking":
