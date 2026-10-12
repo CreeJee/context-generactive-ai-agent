@@ -26,13 +26,11 @@ export function ReadOnlyBar({
   onContinue: () => void | Promise<void>;
 }) {
   const [connectionFailed, setConnectionFailed] = useState(false);
-  const continueHere = async () => {
+  const continueHere = () => {
     setConnectionFailed(false);
-    try {
-      await onContinue();
-    } catch {
-      setConnectionFailed(true);
-    }
+    return Promise.resolve()
+      .then(onContinue)
+      .catch(() => setConnectionFailed(true));
   };
   switch (lease.state) {
     case "checking":

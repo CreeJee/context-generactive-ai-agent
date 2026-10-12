@@ -385,7 +385,7 @@ describe("read, write, edit and delete", () => {
         ),
       ).toBe("hidden_value_split");
 
-      const { sha256 } = Schema.decodeUnknownSync(WithSha)(
+      const { sha256 } = yield* Schema.decodeUnknownEffect(WithSha)(
         yield* run(readFile, { path: "config.ts" }),
       );
       yield* run(writeFile, {

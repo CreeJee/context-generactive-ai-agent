@@ -98,16 +98,19 @@ describe("official HTTP client SDK transport", () => {
       const transport = vi.fn<typeof fetch>((_input, init) => {
         expect(init?.body).toBeInstanceOf(Uint8Array);
         const response = new Response(init?.body, { headers: init?.headers });
-        return response.formData().then(async (received) => {
-          expect(received.get("holder")).toBe("page");
-          const file = received.get("attachment");
-          expect(file).toBeInstanceOf(File);
-          if (file instanceof File)
-            expect(new Uint8Array(await file.arrayBuffer())).toEqual(
-              new Uint8Array([0, 255, 13, 10]),
-            );
-          return Response.json({ ok: true });
-        });
+        return response
+          .formData()
+          .then((received) => {
+            expect(received.get("holder")).toBe("page");
+            const file = received.get("attachment");
+            expect(file).toBeInstanceOf(File);
+            return file instanceof File ? file.arrayBuffer() : null;
+          })
+          .then((bytes) => {
+            if (bytes !== null)
+              expect(new Uint8Array(bytes)).toEqual(new Uint8Array([0, 255, 13, 10]));
+            return Response.json({ ok: true });
+          });
       });
       vi.stubGlobal("fetch", transport);
       yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllGlobals()));
