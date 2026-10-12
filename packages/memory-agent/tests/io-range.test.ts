@@ -1,9 +1,9 @@
 // Real native handles and SQLite rows exercise the host boundary without module mocks.
-import { fstatSync, readdirSync, statSync } from "node:fs";
+import { fstatSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { NodeServices } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
-import { Cause, Effect, Exit, Fiber, FileSystem, Layer, Path } from "effect";
+import { Cause, Effect, Exit, Fiber, FileSystem, Layer, Option, Path } from "effect";
 import { createResultPageReader } from "../src/memory/result-pages.ts";
 import { createTextPageReader, linePage, maxTextBytes, sha256 } from "../src/files/text.ts";
 import { searchTextFilesEffect } from "../src/files/search.ts";
@@ -22,18 +22,22 @@ const resultStore = Effect.acquireRelease(
 );
 
 // /dev/fd is available on both macOS and Linux. A unique fixture inode avoids other tests' handles.
-const handlesFor = (absolute: string) => {
-  const target = statSync(absolute);
-  return readdirSync("/dev/fd").filter((name) => {
+// FileSystem has no fstat for an inherited descriptor number, and stat("/dev/fd/N") reports the
+// devfs device on macOS, so only that per-descriptor probe stays native.
+const handlesFor = Effect.fn("handlesFor")(function* (absolute: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const target = yield* fs.stat(absolute);
+  const descriptors = yield* fs.readDirectory("/dev/fd");
+  return descriptors.filter((name) => {
     try {
       const stat = fstatSync(Number(name));
-      return stat.ino === target.ino && stat.dev === target.dev;
+      return Option.getOrUndefined(target.ino) === stat.ino && stat.dev === target.dev;
     } catch {
-      // The descriptor used by readdir has already closed.
+      // The descriptor used by readDirectory has already closed.
       return false;
     }
   }).length;
-};
+});
 
 layer(NodeServices.layer)((it) => {
   it.effect(
@@ -159,14 +163,14 @@ layer(NodeServices.layer)((it) => {
       const reading = yield* Effect.forkChild(
         createTextPageReader()({ absolute, path: absolute, startLine: 1, maxLines: 1 }),
       );
-      while (handlesFor(absolute) === 0) yield* Effect.yieldNow;
+      while ((yield* handlesFor(absolute)) === 0) yield* Effect.yieldNow;
       yield* Fiber.interrupt(reading);
-      expect(handlesFor(absolute)).toBe(0);
+      expect(yield* handlesFor(absolute)).toBe(0);
       for (let i = 0; i < 100; i++) yield* fs.writeFileString(path.join(directory, String(i)), "x");
       const listing = yield* Effect.forkChild(listOutsideFilesEffect(directory, undefined));
-      while (handlesFor(directory) === 0) yield* Effect.yieldNow;
+      while ((yield* handlesFor(directory)) === 0) yield* Effect.yieldNow;
       yield* Fiber.interrupt(listing);
-      expect(handlesFor(directory)).toBe(0);
+      expect(yield* handlesFor(directory)).toBe(0);
       const complete = yield* listOutsideFilesEffect(directory, undefined);
       expect(complete.paths).toHaveLength(101);
       expect(complete.paths).toEqual([...complete.paths].sort());
@@ -211,9 +215,9 @@ layer(NodeServices.layer)((it) => {
             return Effect.promise(() => settled).pipe(Effect.asVoid);
           }),
         );
-        while (handlesFor(absolute) === 0) yield* Effect.yieldNow;
+        while ((yield* handlesFor(absolute)) === 0) yield* Effect.yieldNow;
         yield* Fiber.interrupt(reading);
-        expect(handlesFor(absolute)).toBe(0);
+        expect(yield* handlesFor(absolute)).toBe(0);
         expect(String(rejection?.cause).toLowerCase()).toContain("interrupt");
         expect(String(rejection?.cause)).not.toContain("io_error");
       }),

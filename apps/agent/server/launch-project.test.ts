@@ -4,7 +4,6 @@ import { it } from "@effect/vitest";
 import { Cause, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http";
-import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { describe, expect } from "vite-plus/test";
 import { isThisApp, launchFolder, openProject } from "./launch-project";
@@ -82,9 +81,7 @@ describe("opening the folder on the app", () => {
   it.live("adds it, or finds it when it is registered already, and reports refusals", () =>
     Effect.gen(function* () {
       const projects = [{ id: "p-1", root: "/work/known" }];
-      const serverServices = yield* Layer.build(
-        Layer.fresh(NodeHttpServer.layer(createServer, { port: 0, host: "127.0.0.1" })),
-      );
+      const serverServices = yield* Layer.build(Layer.fresh(NodeHttpServer.layerTest));
       const server = yield* Effect.provideContext(HttpServer.HttpServer, serverServices);
       yield* Effect.provideContext(
         HttpServer.serveEffect(
