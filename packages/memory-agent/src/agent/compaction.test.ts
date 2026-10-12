@@ -46,6 +46,9 @@ const answeredShell: readonly ModelMessage[] = [
   },
   { role: "tool", toolCallId: "old-1", content: "large earlier output" },
   { role: "assistant", content: "done" },
+  // A later answered run: only then is old-1 cleared.
+  { role: "user", content: "follow-up" },
+  { role: "assistant", content: "answered" },
   { role: "user", content: "current question" },
 ];
 

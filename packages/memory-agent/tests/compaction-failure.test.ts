@@ -14,6 +14,8 @@ const messages: readonly ModelMessage[] = [
   },
   { role: "tool", toolCallId: "c1", content: "Recorded result" },
   { role: "assistant", content: "Result checked" },
+  { role: "user", content: "And then?" },
+  { role: "assistant", content: "Done" },
   { role: "user", content: "Continue" },
 ];
 

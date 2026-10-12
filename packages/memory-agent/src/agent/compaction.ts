@@ -98,24 +98,33 @@ const wholeToolOutputs = (messages: readonly ModelMessage[]) =>
   ).length;
 
 /**
- * The messages with the output of tool calls the model has already answered from cleared: every
- * tool result before the latest assistant message that called no tools. What follows it (the
- * calls of the run in progress) stays whole, since the model is still working with it. Each
- * cleared result names its memory node, so the model can read it
- * again. Null when there is nothing to clear.
+ * The messages with the output of tool calls the model has already answered from cleared. The
+ * answered part ends at the latest assistant message that called no tools; what follows it (the
+ * calls of the run in progress) stays whole, since the model is still working with it.
+ *
+ * `keepLatestAnswered` also keeps the turn that answer belongs to whole: the next request is
+ * usually about what that run just read, and re-reading it would cost a tool round trip. That
+ * turn is cleared once the following run has answered, so each tool result changes exactly once
+ * and the request prefix before it stays cacheable. An explicit `/compact` clears everything
+ * answered. Each cleared result names its memory node, so the model can read it again. Null when
+ * there is nothing to clear.
  */
 function clearAnswered(
   messages: readonly ModelMessage[],
   toolResultId: (toolCallId: string) => string | null,
+  keepLatestAnswered: boolean,
 ): ModelMessage[] | null {
   const answered = messages
     .map((message) => message.role === "assistant" && (message.toolCalls ?? []).length === 0)
     .lastIndexOf(true);
   if (answered < 0) return null;
+  const end = keepLatestAnswered
+    ? messages.slice(0, answered + 1).findLastIndex((message) => message.role === "user")
+    : answered + 1;
+  if (end <= 0) return null;
   let changed = false;
   const next = messages.map((message, index) => {
-    if (message.role !== "tool" || index > answered || !isTruthy(message.toolCallId))
-      return message;
+    if (message.role !== "tool" || index >= end || !isTruthy(message.toolCallId)) return message;
     const cleared = clearedOutput(toolResultId(message.toolCallId));
     if (message.content === cleared) return message;
     changed = true;
@@ -365,11 +374,13 @@ export const compactEffect = Effect.fnUntraced(function* (options: {
   const clearedByHand = clearAnswered(
     messages.slice(0, manual.clearedThrough),
     sources.toolResultId,
+    false,
   );
   if (clearedByHand !== null) sent = [...clearedByHand, ...messages.slice(manual.clearedThrough)];
-  // A completed run no longer needs its tool payload in the next request. This transition happens
-  // once; clearAnswered leaves pointers unchanged and never touches the run still in progress.
-  const cleared = clearAnswered(sent, sources.toolResultId);
+  // An answered run's tool payload is cleared once the run after it has answered too. This
+  // transition happens once; clearAnswered leaves pointers unchanged and never touches the run
+  // still in progress.
+  const cleared = clearAnswered(sent, sources.toolResultId, true);
   if (cleared !== null) sent = cleared;
   if (clearedByHand !== null || cleared !== null) stage = "clear-answered";
 

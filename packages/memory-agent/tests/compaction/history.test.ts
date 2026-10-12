@@ -154,7 +154,7 @@ testAgent()("compaction over recorded history", (it) => {
   );
 
   it.effect(
-    "clears tool output the model already answered from, and keeps the run's own whole",
+    "clears answered tool output once a later run has answered, and keeps the latest whole",
     () =>
       Effect.gen(function* () {
         const at = yield* freshSession;
@@ -162,6 +162,20 @@ testAgent()("compaction over recorded history", (it) => {
         const metadata = yield* metadataStore;
         const tools = (yield* MemoryTools).forProject(at.projectId);
         const output = "빌드 로그 ".repeat(1_000);
+        const lint = "린트 경고 ".repeat(200);
+        nodes.append({ ...at, kind: "user", text: "린트 돌려 줘" });
+        nodes.append({
+          ...at,
+          kind: "tool_call",
+          text: 'run_shell {"command":"pnpm lint"}',
+          detail: { toolName: "run_shell", toolCallId: "older-1" },
+        });
+        const lintResult = nodes.append({
+          ...at,
+          kind: "tool_result",
+          text: lint,
+          detail: { toolName: "run_shell", toolCallId: "older-1", ok: true },
+        });
         nodes.append({ ...at, kind: "user", text: "빌드 로그 봐 줘" });
         nodes.append({
           ...at,
@@ -176,6 +190,20 @@ testAgent()("compaction over recorded history", (it) => {
           detail: { toolName: "run_shell", toolCallId: "old-1", ok: true },
         });
         const messages: ModelMessage[] = [
+          { role: "user", content: "린트 돌려 줘" },
+          {
+            role: "assistant",
+            content: null,
+            toolCalls: [
+              {
+                id: "older-1",
+                type: "function",
+                function: { name: "run_shell", arguments: '{"command":"pnpm lint"}' },
+              },
+            ],
+          },
+          { role: "tool", toolCallId: "older-1", content: lint },
+          { role: "assistant", content: "경고가 있어요." },
           { role: "user", content: "빌드 로그 봐 줘" },
           {
             role: "assistant",
@@ -227,15 +255,18 @@ testAgent()("compaction over recorded history", (it) => {
         const [first, second] = adapter.invocations;
         const toolContent = (sent: readonly ModelMessage[] | undefined, id: string) =>
           sent?.find((message) => message.role === "tool" && message.toolCallId === id)?.content;
-        // The answered output is replaced by a pointer to its memory node.
-        expect(toolContent(first?.messages, "old-1")).toBe(clearedOutput(result.id));
+        // Output answered before the latest answer is replaced by a pointer to its memory node.
+        expect(toolContent(first?.messages, "older-1")).toBe(clearedOutput(lintResult.id));
+        // The latest answered run stays whole until a later run answers.
+        expect(toolContent(first?.messages, "old-1")).toBe(output);
         expect(first?.messages.at(-1)).toEqual({ role: "user", content: "그 로그 다시 읽어 줘" });
         // The output of the call in progress reaches the model whole.
-        expect(toolContent(second?.messages, "old-1")).toBe(clearedOutput(result.id));
+        expect(toolContent(second?.messages, "old-1")).toBe(output);
         expect(toolContent(second?.messages, "new-1")).toEqual(
           expect.stringContaining("빌드 로그 빌드 로그"),
         );
         // The conversation that is saved keeps every output.
+        expect(toolContent(saved, "older-1")).toBe(lint);
         expect(toolContent(saved, "old-1")).toBe(output);
       }),
   );
