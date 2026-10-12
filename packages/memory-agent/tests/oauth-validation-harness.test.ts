@@ -228,7 +228,7 @@ const fakeProvider = Effect.fn("fakeOAuthProvider")(function* (provider: OAuthPr
   let modelRequests = 0;
   let catalogRequests = 0;
   let forceUnauthorized = false;
-  let rejectRefresh = false;
+  let rejectRefresh: number | null = null;
   const authorizations: string[] = [];
   const tokenBodies: string[] = [];
   const modelBodies: string[] = [];
@@ -258,7 +258,8 @@ const fakeProvider = Effect.fn("fakeOAuthProvider")(function* (provider: OAuthPr
             ? raw.includes('"grant_type":"refresh_token"')
             : new URLSearchParams(raw).get("grant_type") === "refresh_token";
         if (isRefresh) refreshRequests += 1;
-        if (isRefresh && rejectRefresh) return HttpServerResponse.empty({ status: 401 });
+        if (isRefresh && rejectRefresh !== null)
+          return HttpServerResponse.empty({ status: rejectRefresh });
         const suffix = isRefresh ? "2" : "1";
         const claims = Buffer.from(
           jsonStringify({
@@ -345,8 +346,8 @@ const fakeProvider = Effect.fn("fakeOAuthProvider")(function* (provider: OAuthPr
     requireRefresh: () => {
       forceUnauthorized = true;
     },
-    rejectRefresh: () => {
-      rejectRefresh = true;
+    rejectRefresh: (status = 401) => {
+      rejectRefresh = status;
     },
   };
 });
@@ -946,6 +947,90 @@ for (const provider of ["openai", "anthropic"] as const) {
           );
           expect(fake.counts().refreshRequests).toBe(1);
           expect(MutableHashMap.has(store.values, provider)).toBe(false);
+        }),
+      ),
+    );
+
+    it.live("keeps the login when a refresh is refused with 403", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fake = yield* fakeProvider(provider);
+          const store = new MemoryCredentialStore();
+          const harness = OAuthValidationHarness({ protocol: fake.protocol, store });
+          yield* login(harness);
+          const credential = Option.getOrUndefined(MutableHashMap.get(store.values, provider))!;
+          const expired = {
+            ...credential,
+            expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) - 1,
+          };
+          MutableHashMap.set(store.values, provider, expired);
+          fake.rejectRefresh(403);
+
+          expect((yield* Effect.flip(sdkCall(() => harness.status()))).cause).toMatchObject({
+            code: "provider_rejected",
+            status: 403,
+          });
+          expect(Option.getOrUndefined(MutableHashMap.get(store.values, provider))).toEqual(
+            expired,
+          );
+        }),
+      ),
+    );
+
+    it.live("a caller holding a credential rotated meanwhile reuses the new one", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const scope = yield* Effect.scope;
+          const runNative = Effect.runPromiseWith(yield* Effect.context());
+          const fake = yield* fakeProvider(provider);
+          const store = new MemoryCredentialStore();
+          const reading = yield* Deferred.make<void>();
+          const held = yield* Deferred.make<void>();
+          yield* Effect.addFinalizer(() => Deferred.succeed(held, undefined));
+          let holdNextRead = false;
+          const gated: CredentialStore = {
+            read: (key) => {
+              if (!holdNextRead) return store.read(key);
+              holdNextRead = false;
+              // Snapshot before waiting, as a caller that read the keychain just before a refresh.
+              const snapshot = store.read(key);
+              return runNative(
+                Effect.forkIn(
+                  Effect.gen(function* () {
+                    yield* Deferred.succeed(reading, undefined);
+                    yield* Deferred.await(held);
+                  }),
+                  scope,
+                ).pipe(Effect.flatMap(Fiber.join)),
+              ).then(() => snapshot);
+            },
+            write: (key, value) => store.write(key, value),
+            remove: (key) => store.remove(key),
+          };
+          const harness = OAuthValidationHarness({ protocol: fake.protocol, store: gated });
+          yield* login(harness);
+          const credential = Option.getOrUndefined(MutableHashMap.get(store.values, provider))!;
+          MutableHashMap.set(store.values, provider, {
+            ...credential,
+            expiresAt: DateTime.toEpochMillis(DateTime.nowUnsafe()) - 1,
+          });
+
+          holdNextRead = true;
+          const stale = yield* Effect.forkChild(
+            sdkCall(() => harness.status()),
+            {
+              startImmediately: true,
+            },
+          );
+          yield* Deferred.await(reading);
+          yield* sdkCall(() => harness.status());
+          yield* Deferred.succeed(held, undefined);
+
+          expect(yield* Fiber.join(stale)).toMatchObject({ provider, connected: true });
+          expect(fake.counts().refreshRequests).toBe(1);
+          expect(
+            Option.getOrUndefined(MutableHashMap.get(store.values, provider))?.refreshToken,
+          ).toBe("refresh-secret-2");
         }),
       ),
     );

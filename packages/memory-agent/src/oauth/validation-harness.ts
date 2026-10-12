@@ -314,12 +314,13 @@ export class OAuthHarnessError extends Data.TaggedError("OAuthHarnessError")<{
   }
 }
 
+// Only a definite refresh-token rejection signs the account out. A 403 is also what an edge proxy,
+// region block or rate limiter returns, other 400s can be our own request's fault, and an
+// unreadable success body says nothing about the stored token: those keep the login.
 const invalidatesStoredCredential = (error: OAuthHarnessError) =>
   error.operation === "token_refresh" &&
-  (error.code === "invalid_token_response" ||
-    (error.code === "provider_rejected" &&
-      error.status !== null &&
-      [400, 401, 403].includes(error.status)));
+  error.code === "provider_rejected" &&
+  (error.status === 401 || (error.status === 400 && error.providerCode === "invalid_grant"));
 
 export interface OAuthConnectionStatus {
   readonly provider: OAuthProvider;
@@ -499,7 +500,10 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
         Effect.catchIf(
           (failure) => {
             const error = failure instanceof Cause.UnknownError ? failure.cause : failure;
-            return error instanceof OAuthHarnessError && invalidatesStoredCredential(error);
+            return (
+              error instanceof OAuthHarnessError &&
+              (invalidatesStoredCredential(error) || error.code === "not_connected")
+            );
           },
           () => Effect.succeed(null),
         ),
@@ -825,6 +829,16 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
     const entry = yield* refreshLock.withPermits(1)(
       Effect.gen(function* () {
         if (refreshing !== null) return refreshing;
+        // The caller's credential may predate a refresh that finished while it waited. Refresh
+        // tokens rotate, so spending the old one would be rejected and sign out the new login.
+        const stored = yield* nativePromise(() => store.read(protocol.provider));
+        if (stored === null)
+          return yield* new OAuthHarnessError("not_connected", null, {
+            provider: protocol.provider,
+            operation: "token_refresh",
+          });
+        if (stored.refreshToken !== credential.refreshToken)
+          return { token: {}, load: Effect.succeed(stored) };
         const token = {};
         const load = yield* Effect.cachedWithTTL(
           Effect.gen(function* () {
