@@ -6,11 +6,8 @@ import { isTruthy } from "../app/truthy.ts";
 // their own machines (turbovec and the optional platform packages exist only for the host).
 // The runtime manifest is hashed incrementally because staged native assets can be large.
 import { createHash } from "node:crypto";
-// FileSystem.stat follows symlinks; the asset manifest must exclude them exactly as Dirent listing did.
-import { lstat } from "node:fs/promises";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
-  Cause,
   Config,
   Context,
   Crypto,
@@ -316,13 +313,27 @@ const program = Effect.gen(function* () {
 
   const listFiles = Effect.fn("package.listFiles")(function* (
     directory: string,
-  ): Effect.fn.Return<string[], PlatformError | Cause.UnknownError> {
+  ): Effect.fn.Return<string[], PlatformError> {
     const files: string[] = [];
     for (const name of yield* fs.readDirectory(directory)) {
       const full = join(directory, name);
-      const entry = yield* Effect.tryPromise(() => lstat(full));
-      if (entry.isDirectory()) files.push(...(yield* listFiles(full)));
-      else if (entry.isFile()) files.push(full);
+      // The manifest excludes links as Dirent listing did, but FileSystem.stat follows them:
+      // readLink succeeds only for a link and fails with the unmapped `Unknown` reason (EINVAL) for
+      // anything else, which stat then classifies. The staged tree is this script's own output.
+      const type = yield* fs.readLink(full).pipe(
+        Effect.as("SymbolicLink" as const),
+        Effect.catchReason("PlatformError", "Unknown", () =>
+          Effect.map(fs.stat(full), (info) => info.type),
+        ),
+      );
+      switch (type) {
+        case "Directory":
+          files.push(...(yield* listFiles(full)));
+          break;
+        case "File":
+          files.push(full);
+          break;
+      }
     }
     return files;
   });

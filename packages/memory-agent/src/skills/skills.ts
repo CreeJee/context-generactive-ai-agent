@@ -9,8 +9,6 @@ import {
   Path,
 } from "effect";
 import { isTruthy } from "../truthy.ts";
-// FileSystem.stat follows symbolic links; skill discovery must inspect entries without following them.
-import { lstat } from "node:fs/promises";
 import { homedir } from "node:os";
 import * as NodePath from "@effect/platform-node/NodePath";
 import { MutableHashMap, Option, Context, Effect, FileSystem, Crypto, Layer, Schema } from "effect";
@@ -145,6 +143,17 @@ const make = (options: SkillsOptions) =>
     const home = options.home ?? homedir();
     const builtinRoot = options.builtin ?? builtinSkillsDirectory();
 
+    // The entry itself, not a link's target: none for a link (dangling ones too). readLink fails
+    // with an unmapped `Unknown` reason (EINVAL) for anything else; stat then classifies the entry and
+    // reports any other unmapped failure. Two calls, unlike lstat: a swap between them classifies
+    // the link's target, as a swap right after lstat would be followed (the SKILL.md read itself
+    // opens its leaf without following).
+    const unfollowedInfo = (path: string) =>
+      fs.readLink(path).pipe(
+        Effect.as(Option.none<FileSystem.File.Info>()),
+        Effect.catchReason("PlatformError", "Unknown", () => Effect.asSome(fs.stat(path))),
+      );
+
     const readSkill = Effect.fn("Skills.readSkill")(function* (
       scope: SkillScope,
       directory: string,
@@ -161,12 +170,11 @@ const make = (options: SkillsOptions) =>
         | import("../files/text.ts").TextFileRejected
         | import("../files/paths.ts").PathRejected
         | import("effect/PlatformError").PlatformError
-        | import("effect/Cause").UnknownError
       > {
         if (!(yield* fs.exists(file))) return { _tag: "none" };
-        const stats = yield* Effect.tryPromise(() => lstat(file));
-        if (!stats.isFile()) return { _tag: "none" };
-        if (stats.size > maxSkillBytes) return problem("too_large");
+        const entry = yield* unfollowedInfo(file);
+        if (Option.isNone(entry) || entry.value.type !== "File") return { _tag: "none" };
+        if (Number(entry.value.size) > maxSkillBytes) return problem("too_large");
         // Open the same leaf without following a link swapped in after discovery.
         const { bytes } = yield* readFileBytesEffect({ absolute: file, path: file });
         if (bytes.length > maxSkillBytes) return problem("too_large");
@@ -198,8 +206,8 @@ const make = (options: SkillsOptions) =>
       for (const folder of (yield* fs.readDirectory(root)).sort()) {
         if (folder.startsWith(".")) continue;
         const directory = join(root, folder);
-        const plain = yield* Effect.tryPromise(() => lstat(directory)).pipe(
-          Effect.map((entry) => entry.isDirectory()),
+        const plain = yield* unfollowedInfo(directory).pipe(
+          Effect.map((entry) => Option.isSome(entry) && entry.value.type === "Directory"),
           Effect.orElseSucceed(() => false),
         );
         if (!plain) continue;

@@ -1,7 +1,6 @@
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import { sha256 } from "../runtime/synchronous-crypto.ts";
-// Effect Crypto.digest accepts a complete buffer; incremental page indexing retains a bounded native hash state.
-import { createHash } from "node:crypto";
+import { Hex } from "effect/encoding";
 import {
   Context as PlatformContext,
   Effect as PlatformEffect,
@@ -528,27 +527,26 @@ export const createTextPageReader = () => {
         if (index?.stamp !== stamp) {
           const size = Number(stats.size);
           const offsets: number[] = size === 0 ? [] : [0];
-          const hash = createHash("sha256");
           const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
-          const buffer = Buffer.alloc(64 * 1024);
+          // At most maxTextBytes: the whole content stays in memory for one Crypto.digest.
+          const contents = Buffer.alloc(size);
           let position = 0;
           while (position < size) {
             // Positional reads cannot be aborted by Node: await each native read before Scope closes.
             const read = yield* Effect.uninterruptible(
               io(path, "read", () =>
-                handle.read(buffer, 0, Math.min(buffer.length, size - position), position),
+                handle.read(contents, position, Math.min(64 * 1024, size - position), position),
               ),
             );
             if (read.bytesRead === 0)
               return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
-            const bytes = buffer.subarray(0, read.bytesRead);
+            const bytes = contents.subarray(position, position + read.bytesRead);
             if (bytes.includes(0))
               return yield* TextFileRejected.make({ path, reason: { _tag: "binary" } });
             yield* Effect.try({
               try: () => utf8.decode(bytes, { stream: true }),
               catch: () => TextFileRejected.make({ path, reason: { _tag: "invalid_utf8" } }),
             });
-            hash.update(bytes);
             for (let i = 0; i < bytes.length; i++)
               if (bytes[i] === 10 && position + i + 1 < size) offsets.push(position + i + 1);
             position += read.bytesRead;
@@ -558,7 +556,9 @@ export const createTextPageReader = () => {
             try: () => utf8.decode(),
             catch: () => TextFileRejected.make({ path, reason: { _tag: "invalid_utf8" } }),
           });
-          index = { stamp, size, offsets: Uint32Array.from(offsets), sha256: hash.digest("hex") };
+          // NodeCrypto digest only fails as a defect, as createHash did.
+          const digest = yield* Effect.orDie(hostCrypto.digest("SHA-256", contents));
+          index = { stamp, size, offsets: Uint32Array.from(offsets), sha256: Hex.encode(digest) };
         }
         const totalLines = index.offsets.length;
         const first = Math.max(1, Math.min(startLine, totalLines + 1));

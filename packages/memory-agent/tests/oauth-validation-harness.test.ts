@@ -1145,6 +1145,34 @@ describe("OAuth callback safety", () => {
     ),
   );
 
+  it.live("rejects a same-length state that differs in its last byte", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = yield* fakeProvider("openai");
+        const harness = OAuthValidationHarness({
+          protocol: fake.protocol,
+          store: new MemoryCredentialStore(),
+        });
+        const attempt = yield* sdkCall(() => harness.startLogin({ timeoutMs: 1_000 }));
+        const completion = attempt.completed.catch((error: OAuthHarnessError) => error);
+        const authorization = new URL(attempt.authorizationUrl);
+        const state = authorization.searchParams.get("state") ?? "";
+        const callback = new URL(authorization.searchParams.get("redirect_uri") ?? "");
+        callback.searchParams.set("code", "authorization-code-secret");
+        callback.searchParams.set(
+          "state",
+          `${state.slice(0, -1)}${state.endsWith("A") ? "B" : "A"}`,
+        );
+        yield* (yield* testHttpClient()).get(String(callback));
+
+        const thrown = yield* sdkCall(() => completion);
+        expect(thrown instanceof OAuthHarnessError ? String(thrown) : "").toContain(
+          "state_mismatch",
+        );
+      }),
+    ),
+  );
+
   it.live("supports timeout and explicit cancellation with sanitized errors", () =>
     Effect.scoped(
       Effect.gen(function* () {
