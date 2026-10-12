@@ -23,3 +23,18 @@ This is a source/permission review, **not** an authenticated test. No account to
 3. Confirm how to handle current Anthropic OAuth in light of the official restriction (e.g. supported API-key path or an unmodified Claude Code integration, subject to actual terms). This is a blocking scope/design decision before M5 and UI claims about Claude subscription quota.
 
 **M5 status (2026-10-12):** `GET /api/accounts/quota?provider=` returns, per local account, `unavailable` with reason `no_permitted_route` (OpenAI) or `provider_policy_restricted` (Anthropic). No internal usage endpoint is called and no local token count is shown as quota. The response type already distinguishes `observed` and `stale` values for a future allowed route; V1 and any adoption decision remain with the user.
+
+## V1 — existing Claude login, live usage check (2026-10-12): stopped before any call
+
+Outcome: **aborted before reading any credential or calling any endpoint.** No token was read, no request was sent to `api.anthropic.com/api/oauth/usage` (or anywhere else), and no new login was started. There is no status, field list or time window to record from a live response.
+
+Why account attribution could not be established without crossing the agreed limits:
+
+1. **The account list lives only in the app DB.** Local Anthropic profiles (IDs, labels, which one is selected) are the `oauth_profiles` metadata read by `listOAuthProfiles({ sqlite, provider })` ([accounts.ts](../packages/memory-agent/src/oauth/accounts.ts)). Each profile's credential is in its own keychain slot `subscription-oauth-<profileId>` under service `com.context-agent.oauth.anthropic`, so the slot names themselves are only known from that DB. Reading the user's app DB was not allowed for this task, and the app has no other code path that lists stored profiles. Listing keychain items by hand was likewise out of bounds. So "exactly one stored Claude account" could not be confirmed, and more than one may exist (M2/M3 support several per provider).
+2. **The one slot readable without the DB is ambiguous and shared.** `createKeychainCredentialStore().read("anthropic")` reads the pre-multi-account slot `subscription-oauth`. `importLegacyOAuthProfile` copies that same credential into the `legacy-anthropic` profile slot and never deletes the original. Whether it is the currently selected account cannot be told without the DB. Also, both slots hold the same refresh token: if the access token had expired, the app's refresh would rotate the refresh token and could invalidate the copy the running app actually uses. A "minimal" check could therefore break the user's live login.
+3. **No app code for the request exists.** The app has no Anthropic usage client: `SubscriptionQuota` returns `unavailable` for every account by design, and `/api/oauth/usage` appears only in the third-party jcode source cited above. A V1 call would need new code that sends a consumer-login bearer token to an undocumented endpoint, which is exactly the use the [Anthropic credential-use terms](https://code.claude.com/docs/en/legal-and-compliance.md#authentication-and-credential-use) cited in the M4 review restrict.
+
+What would unblock a future V1 (user decision, not done here):
+
+- Choose the account explicitly, either by letting app code read the profile list from the DB (secret-free: profile ID, label, selection) or by the user naming the profile ID. Then read only that profile's slot, with no refresh: if the access token has expired, stop rather than rotate.
+- Resolve the M4 policy finding first. A successful response would still be evidence only. M5 stays `unavailable` (`provider_policy_restricted` for Anthropic, `no_permitted_route` for OpenAI) unless the user decides to adopt a route.
