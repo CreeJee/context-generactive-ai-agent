@@ -29,6 +29,28 @@ export type Admission =
         | "run_outcome_uncertain";
     };
 
+/**
+ * An owner operation that may have run a tool. Middleware hooks and routed persistence are owner
+ * bookkeeping and repeat nothing outside; a fingerprint that does not name its operation counts as
+ * a tool.
+ */
+export const toolOperationSql = (operation: string) => `(${operation}.side_effect = 1
+  AND coalesce(CASE WHEN json_valid(${operation}.fingerprint)
+    THEN json_extract(${operation}.fingerprint, '$.operation') END, '')
+    NOT IN ('middleware', 'routedPersistence'))`;
+
+/**
+ * A bound run that ended without completing before it ran any tool: every owner tool call is
+ * reserved before it runs, so the run changed nothing a later run could duplicate, and that run may
+ * continue the Plan. Operations still pending belong to a run that is gone. A run that ran a tool
+ * stays fenced even when the tool succeeded, since a later run may repeat it.
+ */
+export const endedWithoutEffectsSql = (
+  run: string,
+) => `(coalesce(${run}.status IN ('failed', 'aborted'), 0)
+  AND NOT EXISTS (SELECT 1 FROM owner_rpc_operations eo
+    WHERE eo.run_id = ${run}.run_id AND ${toolOperationSql("eo")}))`;
+
 /** A central-owner-only durable claim; it cannot authorize a worker or a tool on its own. */
 export function workflowRunBindings({ sqlite, atomic }: OwnerDatabase) {
   const identity = sqlite.prepare(
@@ -43,7 +65,8 @@ export function workflowRunBindings({ sqlite, atomic }: OwnerDatabase) {
     SELECT b.run_id FROM workflow_run_bindings b
     LEFT JOIN chat_runs r ON r.run_id = b.run_id
     WHERE b.session_id = ? AND (r.status IS NULL OR (r.status <> 'completed' AND NOT (
-      ${recoveredReadRunSql("r")} OR r.status = 'interrupted' AND EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id)
+      ${recoveredReadRunSql("r")} OR ${endedWithoutEffectsSql("r")}
+      OR r.status = 'interrupted' AND EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id)
       AND (r.run_id = ? OR NOT EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id AND i.status = 'pending'))
     ))) LIMIT 1
   `);
@@ -54,7 +77,7 @@ export function workflowRunBindings({ sqlite, atomic }: OwnerDatabase) {
     WHERE binding.session_id = ? AND binding.goal_instance_id = ?
       AND (operations.status = 'pending'
         OR (operations.side_effect = 1 AND operations.status <> 'succeeded'))
-      AND NOT ${recoveredReadRunSql("r")} LIMIT 1
+      AND NOT ${recoveredReadRunSql("r")} AND NOT ${endedWithoutEffectsSql("r")} LIMIT 1
   `);
   const claimed = sqlite.prepare("SELECT run_id FROM workflow_run_bindings WHERE run_id = ?");
   const insert = sqlite.prepare(`

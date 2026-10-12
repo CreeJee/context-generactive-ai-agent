@@ -128,6 +128,11 @@ await Effect.runPromise(
               operations: db.sqlite.prepare("SELECT * FROM owner_rpc_operations").all(),
               revisions: db.sqlite.prepare("SELECT * FROM workflow_state_revisions").all(),
               dispatches: db.sqlite.prepare("SELECT * FROM workflow_worker_dispatches").all(),
+              executions: db.sqlite
+                .prepare(
+                  "SELECT json_extract(payload_json, '$.identity.runId') AS runId, status FROM owner_workflow_executions WHERE workflow_name = 'GoalExecution'",
+                )
+                .all(),
             });
           const request = yield* HttpServerRequest.toWeb(incoming);
           const response = yield* Effect.provideContext(

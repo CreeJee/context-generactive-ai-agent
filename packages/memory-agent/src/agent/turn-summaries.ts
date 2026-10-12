@@ -8,10 +8,17 @@ import { ChatState } from "../chat-state/chat-state.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
 import type { ModelSelection } from "../providers/contracts.ts";
 import { Nodes, type Node, type NodeKind } from "../memory/nodes.ts";
-import { recentRawUserTurns, summaryBlockTurns } from "./compaction-policy.ts";
+import { GlobalConfig } from "../config/global-config.ts";
+import {
+  defaultSummaryStartPercent,
+  recentRawUserTurns,
+  summaryBlockTurns,
+} from "./compaction-policy.ts";
 import { ApiUsage, collectApiUsage } from "./api-usage.ts";
 import {
+  compactEffect,
   compactionState,
+  estimateConversation,
   linedUp,
   sameTurn,
   turnSummariesNamespace,
@@ -75,7 +82,12 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
   const active = yield* ActiveProvider;
   const usageLedger = yield* ApiUsage;
   const crypto = yield* Crypto.Crypto;
+  const config = yield* GlobalConfig;
   const oneAtATime = yield* Semaphore.make(1);
+  const startPercent = Effect.map(
+    config.read,
+    (settings) => settings.summaryStartPercent ?? defaultSummaryStartPercent,
+  );
   const { messages: messageStore, metadata } = chatState.persistence.stores;
 
   const summarize = Effect.fn("TurnSummaries.summarize")(function* (
@@ -122,6 +134,10 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
    * always sent as they are. In blocks of four turns as the conversation grows, or, for
    * `/compact` (`whole`), up to the latest few in one go. A saved conversation that does not
    * match what memory recorded (an imported one, say) is left alone.
+   *
+   * A conversation is summarized only once what it sends fills the configured share of the
+   * model's context window. Once it has summaries it keeps them, so the request prefix stays
+   * stable; `/compact` asks for them whatever the size.
    */
   const catchUp = (sessionId: string, whole: boolean): Effect.Effect<SummaryOutcome> =>
     Effect.gen(function* () {
@@ -136,6 +152,17 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
       const nodeText = (id: string) => nodes.get(id)?.text ?? null;
       const state = yield* summaryPromise("load-state", () => compactionState(metadata, sessionId));
       const blocks: SummaryBlock[] = linedUp(messages, state.blocks, nodeText);
+      if (!whole && blocks.length === 0) {
+        const runtime = yield* active.runtime(selection);
+        const threshold = (runtime.contextWindow(selection.model) * (yield* startPercent)) / 100;
+        const unsummarized = yield* compactEffect({
+          messages,
+          state: { manual: state.manual, blocks: [] },
+          sources: { toolResultId: (id) => nodes.toolResultId(sessionId, id), nodeText },
+          budget: { compactAt: 0, leaveOutAt: Number.POSITIVE_INFINITY },
+        });
+        if (estimateConversation(unsummarized.messages) <= threshold) return "done" as const;
+      }
       const turns = userTurns(messages);
       const sessionNodes = nodes.session(sessionId);
       const turnNodes = sessionNodes.filter((node) => node.kind === "user");
@@ -168,6 +195,11 @@ const make = Effect.fnUntraced(function* (automatic: boolean) {
 
   return {
     catchUp,
+
+    /** The share of the context window, in percent, at which summarizing starts. */
+    startPercent,
+    setStartPercent: (percent: number) =>
+      Effect.as(config.update({ summaryStartPercent: percent }), percent),
 
     /** Summarizes in the background once a run has finished, so compaction never waits for it. */
     afterRun: (sessionId: string): ChatMiddleware => ({

@@ -119,6 +119,32 @@ describe("compact", () => {
     }),
   );
 
+  it.effect("does not leave messages out for room taken only by unreplayable output", () =>
+    Effect.gen(function* () {
+      const messages: ModelMessage[] = [
+        { role: "user", content: "earlier question" },
+        { role: "assistant", content: "earlier answer" },
+        {
+          role: "assistant",
+          content: null,
+          toolCalls: [
+            { id: "partial", type: "function", function: { name: "run_shell", arguments: "{" } },
+          ],
+        },
+        { role: "tool", toolCallId: "partial", content: "output ".repeat(4_000) },
+        { role: "user", content: "continue" },
+      ];
+      const result = yield* compactEffect({
+        messages,
+        state: fresh,
+        sources: noSources,
+        budget: { compactAt: 0, leaveOutAt: 1_000 },
+      });
+      expect(result.stage).toBe("clear-answered");
+      expect(result.messages.slice(0, 2)).toEqual(messages.slice(0, 2));
+    }),
+  );
+
   it.effect.each([true, false])(
     "omits incomplete historical calls without rewriting the transcript (result: %s)",
     (hasResult) =>

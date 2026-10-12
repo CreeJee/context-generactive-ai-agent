@@ -5,6 +5,7 @@ import {
   GlobeIcon,
   HistoryIcon,
   ImageIcon,
+  MessagesSquareIcon,
   PlugIcon,
 } from "lucide-react";
 import {
@@ -20,6 +21,7 @@ import { QuerySection } from "../queries/boundary";
 import { ImageSettings } from "./pages/image";
 import { KagiSettings } from "./pages/web";
 import { ImportSettings } from "./pages/imports";
+import { ConversationSettings } from "./pages/conversation";
 import { EmbeddingSettings } from "./pages/embedding";
 import { McpSettings } from "./pages/mcp";
 import { AgentSettings } from "./pages/agents";
@@ -41,6 +43,7 @@ const settingsGroups = [
   {
     label: "기억",
     pages: [
+      { value: "conversation", label: "긴 대화", icon: MessagesSquareIcon },
       { value: "imports", label: "대화 가져오기", icon: HistoryIcon },
       { value: "embedding", label: "임베딩", icon: CpuIcon },
     ],
@@ -87,6 +90,12 @@ function SettingsPageBody({ page, project }: { page: SettingsPage; project: Proj
       return (
         <QuerySection>
           <AgentSettings project={project} />
+        </QuerySection>
+      );
+    case "conversation":
+      return (
+        <QuerySection>
+          <ConversationSettings />
         </QuerySection>
       );
     case "imports":

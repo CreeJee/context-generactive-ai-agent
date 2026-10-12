@@ -81,6 +81,7 @@ export {
   GpuCheck,
   ModelFeatureFlagSettings,
   Settings,
+  SummaryStartPercent,
   type GlobalConfigApi,
 } from "./config/global-config.ts";
 export {
@@ -412,6 +413,7 @@ export {
   type UnplacedFolder,
 } from "./imports/importer.ts";
 export { ImportSourceName } from "./imports/items.ts";
+export { TurnSummaries } from "./agent/turn-summaries.ts";
 export { SessionLeases, defaultLeaseTtlMs, makeLeases } from "./sessions/leases.ts";
 export { MessageQueue, QueueChangeRefused } from "./queue/queue.ts";
 export { QueueDelivery, queueDeliveredEvent, type DeliveryBinding } from "./queue/delivery.ts";

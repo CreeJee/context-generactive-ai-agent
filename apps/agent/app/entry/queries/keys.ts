@@ -11,6 +11,7 @@ export const appQueryKeys = {
     embedding: ["app", "global", "embedding"] as const,
     imageSettings: ["app", "global", "image-settings"] as const,
     kagi: ["app", "global", "kagi"] as const,
+    conversation: ["app", "global", "conversation"] as const,
     modelsRoot: ["app", "global", "models"] as const,
     models: (provider: string) => [...appQueryKeys.global.modelsRoot, provider] as const,
     projects: ["app", "global", "projects"] as const,

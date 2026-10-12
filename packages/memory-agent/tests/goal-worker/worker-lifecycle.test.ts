@@ -245,8 +245,7 @@ testAgent({ testProvider: { responder } })("Goal worker failure and cancellation
         expect
           .soft(yield* responseText(replayed))
           .toBe(delivered.slice(delivered.indexOf("\n\n") + 2));
-        for (const retry of [runId, `${runId}-after-reopen`])
-          expect((yield* send(id, retry, "stream then fail")).status).toBe(409);
+        expect((yield* send(id, runId, "stream then fail")).status).toBe(409);
         expect(yield* invocations(id)).toHaveLength(calls);
         expect(yield* userNodes(id)).toEqual([{ n: 1 }]);
         expect(yield* toolEffects()).toEqual(effects);
@@ -331,8 +330,7 @@ testAgent({ testProvider: { responder } })("Goal worker failure and cancellation
         expect(replayed.status).toBe(200);
         expect(yield* responseText(replayed)).toBe(output.slice(output.indexOf("\n\n") + 2));
         expect(yield* receipts()).toEqual(pending);
-        for (const retry of [runId, `${runId}-bypass`])
-          expect((yield* send(id, retry, "wait until cancelled")).status).toBe(409);
+        expect((yield* send(id, runId, "wait until cancelled")).status).toBe(409);
         expect(yield* invocations(id)).toHaveLength(calls);
       }),
     20_000,
