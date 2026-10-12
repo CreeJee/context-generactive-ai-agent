@@ -1,9 +1,12 @@
 import { cjk } from "@streamdown/cjk";
-import { code } from "@streamdown/code";
+import { createCodePlugin } from "@streamdown/code";
 import { Streamdown } from "streamdown";
 import "streamdown/styles.css";
 
 // cjk: bold/italic next to Korean text (`**값**입니다`) renders; plain CommonMark leaves the stars.
+const code = createCodePlugin({
+  themes: ["github-light", "github-dark"],
+});
 const plugins = { code, cjk };
 const linkSafety = { enabled: true };
 
