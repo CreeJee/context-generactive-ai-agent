@@ -1,28 +1,24 @@
 import { Meter } from "@base-ui/react/meter";
 import { cn } from "cn";
+import { DateTime } from "effect";
 import {
   CheckIcon,
   ChevronRightIcon,
+  CpuIcon,
   LogOutIcon,
   PencilIcon,
-  PlugIcon,
   PlusIcon,
   Settings2Icon,
   XIcon,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import claudeIcon from "~/assets/providers/claude.svg";
+import codexIcon from "~/assets/providers/codex.svg";
 import { Alert, AlertDescription } from "~/components/ui/alert";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "~/components/ui/collapsible";
 import { Input } from "~/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "~/components/ui/select";
 import { Spinner } from "~/components/ui/spinner";
 import {
   isApiError,
@@ -36,10 +32,10 @@ import {
 } from "../api";
 import { useAccountQuotaQuery, useAccountsQuery } from "../queries/global";
 import { useAccountActionMutation } from "../queries/mutations/global";
-import { koreanShortTime } from "../shared/local-time";
+import { koreanShortTime, timeUntil } from "../shared/local-time";
 import { providerLabels } from "./providers";
 
-type QuotaStatus = SubscriptionQuotaReport["accounts"][number]["quota"];
+export type QuotaStatus = SubscriptionQuotaReport["accounts"][number]["quota"];
 type QuotaWindow = Extract<QuotaStatus, { status: "observed" }>["windows"][number];
 
 /**
@@ -72,20 +68,54 @@ export function quotaUnavailableText(
   }
 }
 
-export const gaugeTone = (usedPercent: number) =>
-  usedPercent >= 90 ? "bg-destructive" : usedPercent >= 70 ? "bg-warning" : "bg-primary";
+export const usedPercent = (window: QuotaWindow) => Math.min(100, Math.max(0, window.usedPercent));
 
-/** One provider-reported window as a gauge; a stale value is dimmed rather than hidden. */
-function QuotaGauge({ window, stale }: { window: QuotaWindow; stale: boolean }) {
-  const used = Math.min(100, Math.max(0, window.usedPercent));
-  const resetsAt = window.resetsAt !== null && window.resetsAt !== "" ? window.resetsAt : null;
+export const gaugeTone = (used: number) =>
+  used >= 90 ? "bg-destructive" : used >= 70 ? "bg-warning" : "bg-primary";
+
+export const percentTone = (used: number) =>
+  used >= 90 ? "text-destructive" : used >= 70 ? "text-warning" : undefined;
+
+const providerIcons = { openai: codexIcon, anthropic: claudeIcon };
+
+/** A text-sized provider icon: Codex for ChatGPT, Claude for Claude, a chip for a local endpoint. */
+export function ProviderMark({ provider }: { provider: ProviderId }) {
+  switch (provider) {
+    case "openai":
+    case "anthropic":
+      return (
+        <img
+          src={providerIcons[provider]}
+          alt=""
+          aria-hidden="true"
+          className="size-4 shrink-0 rounded-sm"
+        />
+      );
+    case "openai-compatible":
+      return <CpuIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />;
+  }
+}
+
+/** One window as a labelled bar with its use and reset below; a stale value is dimmed. */
+function QuotaGauge({
+  window,
+  stale,
+  now,
+}: {
+  window: QuotaWindow;
+  stale: boolean;
+  now: DateTime.DateTime;
+}) {
+  const used = usedPercent(window);
+  const until =
+    window.resetsAt !== null && window.resetsAt !== "" ? timeUntil(window.resetsAt, now) : null;
   return (
     <Meter.Root
       value={used}
-      className="col-span-3 grid grid-cols-subgrid items-center gap-y-0.5"
+      className="flex flex-col gap-1"
       getAriaValueText={() => `${Math.round(used)}% 사용`}
     >
-      <Meter.Label className="text-2xs text-muted-foreground">{windowLabel(window)}</Meter.Label>
+      <Meter.Label className="text-xs">{windowLabel(window)}</Meter.Label>
       <Meter.Track className="h-1.5 overflow-hidden rounded-full bg-muted">
         <Meter.Indicator
           className={cn(
@@ -95,92 +125,31 @@ function QuotaGauge({ window, stale }: { window: QuotaWindow; stale: boolean }) 
           )}
         />
       </Meter.Track>
-      <span className="text-right text-2xs tabular-nums">{Math.round(used)}%</span>
-      {resetsAt !== null && (
-        <span className="col-start-2 col-span-2 text-2xs text-muted-foreground">
-          {koreanShortTime(resetsAt)} 초기화
-        </span>
-      )}
+      <span className="flex justify-between gap-2 text-2xs text-muted-foreground tabular-nums">
+        <span>{Math.round(used)}% 사용</span>
+        {until !== null && <span>{until} 후 초기화</span>}
+      </span>
     </Meter.Root>
   );
 }
 
-function QuotaGauges({
-  quota,
-  failed,
-}: {
-  quota: QuotaStatus | undefined;
-  /** The status request itself failed, which is not the same as an unavailable quota. */
-  failed: boolean;
-}) {
-  if (failed)
-    return <p className="text-2xs text-muted-foreground">한도 상태를 확인하지 못했어요</p>;
-  if (quota === undefined) return <p className="text-2xs text-muted-foreground">한도 확인 중</p>;
+/** The line under an account name: when its quota was read, or why it has none. */
+const quotaMeta = (quota: QuotaStatus | undefined, failed: boolean) => {
+  if (failed) return "한도 상태를 확인하지 못했어요";
+  if (quota === undefined) return "한도 확인 중";
   switch (quota.status) {
     case "unavailable":
-      return <p className="text-2xs text-muted-foreground">{quotaUnavailableText(quota.reason)}</p>;
+      return quotaUnavailableText(quota.reason);
     case "observed":
+      return `${koreanShortTime(quota.observedAt)} 조회`;
     case "stale":
-      return (
-        <div className="flex flex-col gap-1">
-          <div className="grid grid-cols-[auto_1fr_2.5rem] gap-x-2 gap-y-1">
-            {quota.windows.map((window) => (
-              <QuotaGauge key={window.name} window={window} stale={quota.status === "stale"} />
-            ))}
-          </div>
-          <p className="text-2xs text-muted-foreground">
-            {quota.status === "stale"
-              ? `최근 조회 실패 · ${koreanShortTime(quota.observedAt)} 기준 값`
-              : `${koreanShortTime(quota.observedAt)} 조회`}
-          </p>
-        </div>
-      );
-  }
-}
-
-/** First letters collide (ChatGPT, Claude), so each provider has its own mark. */
-const providerMark = (provider: SubscriptionAccountProvider) => {
-  switch (provider) {
-    case "openai":
-      return "G";
-    case "anthropic":
-      return "A";
+      return `최근 조회 실패 · ${koreanShortTime(quota.observedAt)} 기준 값`;
   }
 };
 
-export function ProviderMark({ provider }: { provider: ProviderId }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={cn(
-        "flex size-7 shrink-0 items-center justify-center rounded-md text-xs font-semibold",
-        provider === "openai" && "bg-foreground text-background",
-        provider === "anthropic" && "bg-warning/20 text-warning",
-        provider === "openai-compatible" && "bg-muted text-muted-foreground",
-      )}
-    >
-      {provider === "openai-compatible" ? (
-        <PlugIcon className="size-3.5" />
-      ) : (
-        providerMark(provider)
-      )}
-    </span>
-  );
-}
-
-/** Provider type and the user's name for the account, read together on one line. */
-export function AccountName({ provider, label }: { provider: ProviderId; label: string }) {
-  return (
-    <span className="min-w-0 flex-1 truncate text-xs">
-      <span className="text-muted-foreground">{providerLabels[provider]} · </span>
-      <span className="font-medium">{label}</span>
-    </span>
-  );
-}
-
 const rowLabel = (provider: ProviderId, label: string) => `${label} (${providerLabels[provider]})`;
 
-function ProfileRow({
+function ProfileCard({
   provider,
   profile,
   current,
@@ -204,81 +173,95 @@ function ProfileRow({
     setLabel(profile.label);
     setRenaming(false);
   };
+  const windows =
+    !quotaFailed && quota !== undefined && quota.status !== "unavailable" ? quota : null;
+  const now = DateTime.nowUnsafe();
   return (
     <li
       className={cn(
-        "flex flex-col gap-1.5 rounded-md border px-2 py-1.5",
-        current && "border-primary/50 bg-primary/5",
+        "flex flex-col gap-3 rounded-lg border px-3 py-2.5",
+        current && "border-primary/50",
       )}
       aria-label={rowLabel(provider, profile.label)}
     >
-      <div className="flex min-w-0 items-center gap-2">
-        <ProviderMark provider={provider} />
-        {renaming ? (
-          <form
-            className="flex min-w-0 flex-1 items-center gap-1"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (label.trim() === "") return;
-              onAction({ intent: "rename", accountId: profile.id, label: label.trim() });
-              setRenaming(false);
+      {renaming ? (
+        <form
+          className="flex items-center gap-1"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (label.trim() === "") return;
+            onAction({ intent: "rename", accountId: profile.id, label: label.trim() });
+            setRenaming(false);
+          }}
+        >
+          <Input
+            aria-label="계정 이름"
+            value={label}
+            maxLength={80}
+            onChange={(event) => setLabel(event.target.value)}
+            onKeyDown={(event) => event.key === "Escape" && cancelRename()}
+            autoFocus
+          />
+          <Button type="submit" variant="ghost" size="icon" aria-label="이름 저장">
+            <CheckIcon />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost-muted"
+            size="icon"
+            aria-label="이름 변경 취소"
+            onClick={cancelRename}
+          >
+            <XIcon />
+          </Button>
+        </form>
+      ) : (
+        <div className="flex min-w-0 items-start gap-2">
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate text-sm font-medium">{profile.label}</span>
+              {current && <Badge variant="outline">사용 중</Badge>}
+            </span>
+            <span className="truncate text-2xs text-muted-foreground">
+              {quotaMeta(quota, quotaFailed)}
+            </span>
+          </div>
+          <Button
+            variant="ghost-muted"
+            size="sm"
+            aria-label={`${profile.label} 이름 변경`}
+            onClick={() => setRenaming(true)}
+          >
+            <PencilIcon /> 이름 변경
+          </Button>
+          <Button
+            variant="ghost-muted"
+            size="sm"
+            aria-label={`${profile.label} 로그아웃`}
+            disabled={busy}
+            onClick={() => {
+              if (
+                window.confirm(`${profile.label} 계정에서 로그아웃하고 이 앱의 목록에서 지울까요?`)
+              )
+                onAction({ intent: "remove", accountId: profile.id });
             }}
           >
-            <Input
-              aria-label="계정 이름"
-              value={label}
-              maxLength={80}
-              onChange={(event) => setLabel(event.target.value)}
-              onKeyDown={(event) => event.key === "Escape" && cancelRename()}
-              autoFocus
+            <LogOutIcon /> 로그아웃
+          </Button>
+        </div>
+      )}
+      {windows !== null && (
+        <div className="flex flex-col gap-2.5">
+          {windows.windows.map((window) => (
+            <QuotaGauge
+              key={window.name}
+              window={window}
+              stale={windows.status === "stale"}
+              now={now}
             />
-            <Button type="submit" variant="ghost" size="icon-xs" aria-label="이름 저장">
-              <CheckIcon />
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label="이름 변경 취소"
-              onClick={cancelRename}
-            >
-              <XIcon />
-            </Button>
-          </form>
-        ) : (
-          <>
-            <AccountName provider={provider} label={profile.label} />
-            {current && <Badge variant="secondary">사용 중</Badge>}
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label={`${profile.label} 이름 변경`}
-              title="이름 변경"
-              onClick={() => setRenaming(true)}
-            >
-              <PencilIcon />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label={`${profile.label} 로그아웃`}
-              title="로그아웃"
-              disabled={busy}
-              onClick={() => {
-                if (
-                  window.confirm(
-                    `${profile.label} 계정에서 로그아웃하고 이 앱의 목록에서 지울까요?`,
-                  )
-                )
-                  onAction({ intent: "remove", accountId: profile.id });
-              }}
-            >
-              <LogOutIcon />
-            </Button>
-          </>
-        )}
-      </div>
-      <QuotaGauges quota={quota} failed={quotaFailed} />
+          ))}
+        </div>
+      )}
     </li>
   );
 }
@@ -288,7 +271,7 @@ function AuthErrorAlert({ auth }: { auth: Extract<ProviderAuthState, { status: "
   return (
     <Alert variant="destructive" className="min-w-0">
       <AlertDescription className="min-w-0 wrap-break-word">
-        {providerLabels[auth.provider]}: {auth.message}
+        {auth.message}
         {(auth.code || auth.httpStatus || auth.providerCode) && (
           <Collapsible className="mt-2 text-2xs">
             <CollapsibleTrigger className="group flex items-center gap-1 text-left">
@@ -314,7 +297,31 @@ function AuthErrorAlert({ auth }: { auth: Extract<ProviderAuthState, { status: "
   );
 }
 
-/** One subscription provider's accounts as the manager list needs them. */
+/** A provider heading with its one action on the right. */
+function ProviderHeader({
+  provider,
+  description,
+  children,
+}: {
+  provider: ProviderId;
+  description: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-start gap-2">
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <h3 className="flex items-center gap-2 text-sm font-medium">
+          <ProviderMark provider={provider} />
+          {providerLabels[provider]}
+        </h3>
+        <p className="text-2xs text-muted-foreground">{description}</p>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** One subscription provider's accounts as the manager needs them. */
 export type ProviderAccounts = {
   readonly provider: SubscriptionAccountProvider;
   readonly auth: ProviderAuthState | null;
@@ -324,78 +331,155 @@ export type ProviderAccounts = {
   readonly busy: boolean;
 };
 
-const subscriptionProviders = [
-  { value: "openai", label: providerLabels.openai },
-  { value: "anthropic", label: providerLabels.anthropic },
-] satisfies { value: SubscriptionAccountProvider; label: string }[];
+function LoginStatus({
+  group: { provider, view },
+  onCancel,
+}: {
+  group: ProviderAccounts;
+  onCancel: () => void;
+}) {
+  switch (view?.login.status) {
+    case "pending": {
+      const { authorizationUrl } = view.login;
+      return (
+        <div className="flex items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-xs">
+          <Spinner />
+          <span className="min-w-0 flex-1">
+            브라우저에서 {providerLabels[provider]} 로그인을 완료하세요
+          </span>
+          <Button
+            variant="ghost-muted"
+            size="sm"
+            onClick={() => window.open(authorizationUrl, "_blank", "noopener")}
+          >
+            다시 열기
+          </Button>
+          <Button variant="ghost-muted" size="sm" onClick={onCancel}>
+            취소
+          </Button>
+        </div>
+      );
+    }
+    case "error":
+      return (
+        <Alert variant="destructive">
+          <AlertDescription>새 계정 로그인을 완료하지 못했어요. 다시 시도하세요.</AlertDescription>
+        </Alert>
+      );
+    case "idle":
+    case "completed":
+    case undefined:
+      return null;
+  }
+}
 
 function AddAccountForm({
+  provider,
   busy,
   onAdd,
   onClose,
 }: {
+  provider: SubscriptionAccountProvider;
   busy: boolean;
-  onAdd: (provider: SubscriptionAccountProvider, label: string) => void;
+  onAdd: (label: string) => void;
   onClose: () => void;
 }) {
-  const [provider, setProvider] = useState<SubscriptionAccountProvider>("openai");
   const [label, setLabel] = useState("");
   return (
     <form
-      aria-label="새 계정"
-      className="flex flex-col gap-2 rounded-md border border-dashed p-2"
+      aria-label={`새 ${providerLabels[provider]} 계정`}
+      className="flex items-center gap-1 rounded-lg border border-dashed px-3 py-2"
       onSubmit={(event) => {
         event.preventDefault();
         if (label.trim() === "") return;
-        onAdd(provider, label.trim());
+        onAdd(label.trim());
         onClose();
       }}
     >
-      <div className="flex items-center gap-1">
-        <Select
-          value={provider}
-          items={subscriptionProviders}
-          onValueChange={(value) => {
-            const next = subscriptionProviders.find((option) => option.value === value);
-            if (next !== undefined) setProvider(next.value);
-          }}
-        >
-          <SelectTrigger size="sm" aria-label="새 계정 공급자">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {subscriptionProviders.map(({ value, label: name }) => (
-              <SelectItem key={value} value={value}>
-                {name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Input
-          aria-label="새 계정 이름"
-          placeholder="계정 이름 (예: 개인, 회사)"
-          value={label}
-          maxLength={80}
-          onChange={(event) => setLabel(event.target.value)}
-          onKeyDown={(event) => event.key === "Escape" && onClose()}
-          autoFocus
-        />
-      </div>
-      <div className="flex justify-end gap-1">
-        <Button type="button" variant="ghost" size="xs" onClick={onClose}>
-          취소
-        </Button>
-        <Button type="submit" variant="outline" size="xs" disabled={busy || label.trim() === ""}>
-          {providerLabels[provider]}로 로그인
-        </Button>
-      </div>
+      <Input
+        aria-label="새 계정 이름"
+        placeholder="계정 이름 (예: 개인, 회사)"
+        value={label}
+        maxLength={80}
+        onChange={(event) => setLabel(event.target.value)}
+        onKeyDown={(event) => event.key === "Escape" && onClose()}
+        autoFocus
+      />
+      <Button type="submit" variant="outline" disabled={busy || label.trim() === ""}>
+        로그인
+      </Button>
+      <Button type="button" variant="ghost-muted" onClick={onClose}>
+        취소
+      </Button>
     </form>
   );
 }
 
+function ProviderAccountsSection({
+  group,
+  activeProvider,
+  onAction,
+}: {
+  group: ProviderAccounts;
+  activeProvider: ProviderId;
+  onAction: (action: AccountAction) => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const label = providerLabels[group.provider];
+  const profiles = group.view?.profiles ?? [];
+  return (
+    <section aria-label={label} className="flex flex-col gap-3 py-5 first:pt-0">
+      <ProviderHeader
+        provider={group.provider}
+        description="계정마다 따로 로그인해요. 쓸 계정은 사이드바 아래에서 골라요."
+      >
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label={`${label} 계정 추가`}
+          disabled={adding || group.busy}
+          onClick={() => setAdding(true)}
+        >
+          <PlusIcon /> 계정 추가
+        </Button>
+      </ProviderHeader>
+      {group.auth?.status === "error" && <AuthErrorAlert auth={group.auth} />}
+      {group.view === undefined ? (
+        <Spinner />
+      ) : profiles.length > 0 ? (
+        <ul className="flex flex-col gap-2" aria-label={`${label} 계정 목록`}>
+          {profiles.map((profile) => (
+            <ProfileCard
+              key={profile.id}
+              provider={group.provider}
+              profile={profile}
+              current={activeProvider === group.provider && profile.selected}
+              quota={group.quota?.accounts.find((item) => item.accountId === profile.id)?.quota}
+              quotaFailed={group.quotaFailed}
+              busy={group.busy}
+              onAction={onAction}
+            />
+          ))}
+        </ul>
+      ) : (
+        !adding && <p className="text-xs text-muted-foreground">추가한 계정이 없어요.</p>
+      )}
+      {adding && (
+        <AddAccountForm
+          provider={group.provider}
+          busy={group.busy}
+          onAdd={(name) => onAction({ intent: "add", label: name })}
+          onClose={() => setAdding(false)}
+        />
+      )}
+      <LoginStatus group={group} onCancel={() => onAction({ intent: "cancel" })} />
+    </section>
+  );
+}
+
 /**
- * Every account in one list, whatever its provider: rename, log out and add here. Switching
- * belongs to the sidebar switcher, so this list only edits.
+ * Accounts grouped by provider, each group with its own add button: rename, log out and add here.
+ * Switching belongs to the sidebar switcher, so this view only edits.
  */
 export function AccountManagerList({
   providers,
@@ -412,117 +496,47 @@ export function AccountManagerList({
   onAction: (provider: SubscriptionAccountProvider, action: AccountAction) => void;
   onConfigureCompatible: () => void;
 }) {
-  const [adding, setAdding] = useState(false);
-  const loading = providers.some((group) => group.view === undefined);
-  const quotaOf = (group: ProviderAccounts, id: string) =>
-    group.quota?.accounts.find((account) => account.accountId === id)?.quota;
+  const compatibleCurrent = activeProvider === "openai-compatible";
   return (
-    <div className="flex flex-col gap-2">
-      {providers.map(
-        (group) =>
-          group.auth?.status === "error" && (
-            <AuthErrorAlert key={group.provider} auth={group.auth} />
-          ),
-      )}
-      <ul className="flex flex-col gap-1" aria-label="계정 목록">
-        {providers.flatMap((group) =>
-          (group.view?.profiles ?? []).map((profile) => (
-            <ProfileRow
-              key={profile.id}
-              provider={group.provider}
-              profile={profile}
-              current={activeProvider === group.provider && profile.selected}
-              quota={quotaOf(group, profile.id)}
-              quotaFailed={group.quotaFailed}
-              busy={group.busy}
-              onAction={(action) => onAction(group.provider, action)}
-            />
-          )),
-        )}
-        <li
-          className={cn(
-            "flex min-w-0 items-center gap-2 rounded-md border px-2 py-1.5",
-            activeProvider === "openai-compatible" && "border-primary/50 bg-primary/5",
-          )}
-          aria-label={rowLabel("openai-compatible", "직접 설정한 엔드포인트")}
-        >
-          <ProviderMark provider="openai-compatible" />
-          <AccountName provider="openai-compatible" label="직접 설정한 엔드포인트" />
-          {activeProvider === "openai-compatible" ? (
-            <Badge variant="secondary">사용 중</Badge>
-          ) : (
-            !compatibleConfigured && <Badge variant="outline">설정 필요</Badge>
-          )}
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="호환 공급자 설정"
-            title="호환 공급자 설정"
-            onClick={onConfigureCompatible}
-          >
-            <Settings2Icon />
-          </Button>
-        </li>
-      </ul>
-      {loading && <Spinner />}
-      {providers.map(({ provider, view }) => {
-        switch (view?.login.status) {
-          case "pending": {
-            const { authorizationUrl } = view.login;
-            return (
-              <div key={provider} className="flex flex-col gap-1.5 text-xs">
-                <span className="flex items-center gap-2">
-                  <Spinner /> 브라우저에서 {providerLabels[provider]} 로그인을 완료하세요
-                </span>
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => window.open(authorizationUrl, "_blank", "noopener")}
-                  >
-                    로그인 창 다시 열기
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => onAction(provider, { intent: "cancel" })}
-                  >
-                    취소
-                  </Button>
-                </div>
-              </div>
-            );
-          }
-          case "error":
-            return (
-              <Alert key={provider} variant="destructive">
-                <AlertDescription>
-                  {providerLabels[provider]} 새 계정 로그인을 완료하지 못했어요. 다시 시도하세요.
-                </AlertDescription>
-              </Alert>
-            );
-          case "idle":
-          case "completed":
-          case undefined:
-            return null;
-        }
-      })}
-      {adding ? (
-        <AddAccountForm
-          busy={providers.some((group) => group.busy)}
-          onAdd={(provider, label) => onAction(provider, { intent: "add", label })}
-          onClose={() => setAdding(false)}
-        />
-      ) : (
-        <Button variant="outline" size="sm" onClick={() => setAdding(true)}>
-          <PlusIcon /> 계정 추가
-        </Button>
-      )}
+    <div className="flex flex-col divide-y">
       {error && (
-        <Alert variant="destructive">
+        <Alert variant="destructive" className="mb-4">
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
+      {providers.map((group) => (
+        <ProviderAccountsSection
+          key={group.provider}
+          group={group}
+          activeProvider={activeProvider}
+          onAction={(action) => onAction(group.provider, action)}
+        />
+      ))}
+      <section
+        aria-label={providerLabels["openai-compatible"]}
+        className="flex flex-col gap-3 py-5"
+      >
+        <ProviderHeader
+          provider="openai-compatible"
+          description="직접 설정한 OpenAI 호환 엔드포인트 하나를 써요."
+        >
+          <Button variant="outline" size="sm" onClick={onConfigureCompatible}>
+            <Settings2Icon /> 설정
+          </Button>
+        </ProviderHeader>
+        <div
+          className={cn(
+            "flex min-w-0 items-center gap-1.5 rounded-lg border px-3 py-2.5",
+            compatibleCurrent && "border-primary/50",
+          )}
+        >
+          <span className="truncate text-sm font-medium">직접 설정한 엔드포인트</span>
+          {compatibleCurrent && <Badge variant="outline">사용 중</Badge>}
+          <span className="ml-auto shrink-0 text-2xs text-muted-foreground">
+            {compatibleConfigured ? "설정됨" : "설정 필요"}
+          </span>
+        </div>
+      </section>
     </div>
   );
 }

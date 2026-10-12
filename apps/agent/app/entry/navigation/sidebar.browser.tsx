@@ -221,9 +221,9 @@ describe("sidebar disclosures", () => {
       yield* sdkCall(() => work.getByRole("textbox", { name: "계정 이름" }).fill("팀"));
       yield* sdkCall(() => work.getByRole("button", { name: "이름 저장" }).click());
 
-      yield* sdkCall(() => screen.getByRole("button", { name: "계정 추가" }).click());
+      yield* sdkCall(() => screen.getByRole("button", { name: "ChatGPT 계정 추가" }).click());
       yield* sdkCall(() => screen.getByRole("textbox", { name: "새 계정 이름" }).fill("부계정"));
-      yield* sdkCall(() => screen.getByRole("button", { name: "ChatGPT로 로그인" }).click());
+      yield* sdkCall(() => screen.getByRole("button", { name: "로그인" }).click());
       expect(actions).toEqual([
         { provider: "anthropic", action: { intent: "rename", accountId: "c", label: "팀" } },
         { provider: "openai", action: { intent: "add", label: "부계정" } },
@@ -295,11 +295,7 @@ describe("sidebar disclosures", () => {
           screen.getByRole("button", { name: "계정 전환: 개인 (ChatGPT)" }).click(),
         );
         const work = screen.getByRole("menuitem", { name: "회사 (Claude)" });
-        yield* sdkCall(() =>
-          expect
-            .element(work.getByRole("meter", { name: "5시간" }))
-            .toHaveAttribute("aria-valuenow", "37"),
-        );
+        yield* sdkCall(() => expect.element(work.getByText("37%")).toBeVisible());
         yield* sdkCall(() =>
           expect
             .element(screen.getByRole("menuitem", { name: "직접 설정한 엔드포인트 (OpenAI 호환)" }))

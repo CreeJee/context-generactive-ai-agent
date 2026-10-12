@@ -1,5 +1,5 @@
-import { Meter } from "@base-ui/react/meter";
 import { cn } from "cn";
+import { DateTime } from "effect";
 import { CheckIcon, ChevronsUpDownIcon, Settings2Icon } from "lucide-react";
 import {
   DropdownMenu,
@@ -20,10 +20,15 @@ import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
 import { useAccountQuotaQuery, useAccountsQuery } from "../queries/global";
 import type { AccountTarget } from "../queries/mutations/global";
-import { AccountName, gaugeTone, ProviderMark, windowLabel } from "./account-profiles";
+import {
+  percentTone,
+  ProviderMark,
+  usedPercent,
+  windowLabel,
+  type QuotaStatus,
+} from "./account-profiles";
+import { timeUntil } from "../shared/local-time";
 import { providerLabels } from "./providers";
-
-type QuotaStatus = SubscriptionQuotaReport["accounts"][number]["quota"];
 
 /** One row of the switcher: a subscription login, or the single compatible configuration. */
 export type AccountEntry =
@@ -63,81 +68,75 @@ const entryLabel = (entry: AccountEntry) => {
   }
 };
 
-/** Per-window bars on their own line, so a narrow sidebar shrinks the bars instead of wrapping text. */
-function QuotaBars({ quota }: { quota: QuotaStatus | undefined }) {
-  if (quota === undefined) return null;
-  switch (quota.status) {
-    case "unavailable":
-      return null;
-    case "observed":
-    case "stale":
+/** Provider type and the user's name for the account, read together on one line. */
+function AccountName({ entry }: { entry: AccountEntry }) {
+  return (
+    <span className="min-w-0 flex-1 truncate text-left text-xs">
+      <span className="text-muted-foreground">{providerLabels[entryProvider(entry)]} · </span>
+      <span className="font-medium">{entryLabel(entry)}</span>
+    </span>
+  );
+}
+
+/**
+ * The tightest window only, as time to reset and percent used, like a status bar; every window
+ * stays in the tooltip and in the account manager.
+ */
+function QuotaHeadline({ entry }: { entry: AccountEntry }) {
+  switch (entry.kind) {
+    case "compatible":
       return (
-        <span className="flex w-full min-w-0 items-center gap-3">
-          {quota.windows.map((window) => {
-            const used = Math.min(100, Math.max(0, window.usedPercent));
-            return (
-              <Meter.Root
-                key={window.name}
-                value={used}
-                className="flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap"
-                getAriaValueText={() => `${Math.round(used)}% 사용`}
-              >
-                <Meter.Label className="shrink-0 text-2xs text-muted-foreground">
-                  {windowLabel(window)}
-                </Meter.Label>
-                <Meter.Track className="h-1 min-w-4 flex-1 overflow-hidden rounded-full bg-muted">
-                  <Meter.Indicator
-                    className={cn(
-                      "h-full rounded-full",
-                      gaugeTone(used),
-                      quota.status === "stale" && "opacity-40",
-                    )}
-                  />
-                </Meter.Track>
-                <span className="shrink-0 text-2xs tabular-nums">{Math.round(used)}%</span>
-              </Meter.Root>
-            );
-          })}
+        <span className="shrink-0 text-2xs text-muted-foreground">
+          {entry.configured ? "설정됨" : "설정 필요"}
         </span>
       );
+    case "profile": {
+      const { quota } = entry;
+      switch (quota?.status) {
+        case undefined:
+          return null;
+        case "unavailable":
+          return <span className="shrink-0 text-2xs text-muted-foreground">조회 불가</span>;
+        case "observed":
+        case "stale": {
+          const tightest = quota.windows.reduce<(typeof quota.windows)[number] | undefined>(
+            (worst, window) =>
+              worst === undefined || usedPercent(window) > usedPercent(worst) ? window : worst,
+            undefined,
+          );
+          if (tightest === undefined) return null;
+          const used = Math.round(usedPercent(tightest));
+          const until =
+            tightest.resetsAt !== null && tightest.resetsAt !== ""
+              ? timeUntil(tightest.resetsAt, DateTime.nowUnsafe())
+              : null;
+          return (
+            <span
+              className={cn(
+                "flex shrink-0 items-baseline gap-1.5 tabular-nums",
+                quota.status === "stale" && "opacity-50",
+              )}
+              title={quota.windows
+                .map((window) => `${windowLabel(window)} ${Math.round(usedPercent(window))}%`)
+                .join(" · ")}
+            >
+              {until !== null && <span className="text-2xs text-muted-foreground">{until}</span>}
+              <span className={cn("text-xs font-medium", percentTone(used))}>{used}%</span>
+            </span>
+          );
+        }
+      }
+    }
   }
 }
 
-/** The short status next to the provider name; numbers live in `QuotaBars`. */
-const entryNote = (entry: AccountEntry): string | null => {
-  switch (entry.kind) {
-    case "compatible":
-      return entry.configured ? "설정됨" : "설정 필요";
-    case "profile":
-      switch (entry.quota?.status) {
-        case undefined:
-        case "observed":
-          return null;
-        case "stale":
-          return "최근 조회 실패";
-        case "unavailable":
-          return "한도 조회 불가";
-      }
-  }
-};
-
-/** Provider and name on one line; the quota bars, or why there are none, below it. */
-function EntrySummary({ entry }: { entry: AccountEntry }) {
-  const note = entryNote(entry);
-  const quota = entry.kind === "profile" ? entry.quota : undefined;
+function EntryRow({ entry }: { entry: AccountEntry }) {
   return (
-    <span className="flex min-w-0 flex-1 flex-col gap-0.5 text-left">
-      <span className="flex min-w-0">
-        <AccountName provider={entryProvider(entry)} label={entryLabel(entry)} />
-      </span>
-      {quota !== undefined && quota.status !== "unavailable" ? (
-        <span className="flex min-w-0" title={note ?? undefined}>
-          <QuotaBars quota={quota} />
-        </span>
-      ) : (
-        note !== null && <span className="truncate text-2xs text-muted-foreground">{note}</span>
-      )}
-    </span>
+    <>
+      <ProviderMark provider={entryProvider(entry)} />
+      <AccountName entry={entry} />
+      <QuotaHeadline entry={entry} />
+    </>
   );
 }
 
@@ -173,15 +172,12 @@ export function AccountSwitcherMenu({
             render={
               <button
                 type="button"
-                className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/30 data-popup-open:bg-accent"
+                className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/30 data-popup-open:bg-accent"
               />
             }
           >
             {current !== undefined ? (
-              <>
-                <ProviderMark provider={entryProvider(current)} />
-                <EntrySummary entry={current} />
-              </>
+              <EntryRow entry={current} />
             ) : (
               <>
                 <ProviderMark provider="openai-compatible" />
@@ -218,8 +214,7 @@ export function AccountSwitcherMenu({
                     }
                   }}
                 >
-                  <ProviderMark provider={entryProvider(entry)} />
-                  <EntrySummary entry={entry} />
+                  <EntryRow entry={entry} />
                   <CheckIcon
                     aria-hidden="true"
                     className={cn("shrink-0", !entry.current && "invisible")}
@@ -230,8 +225,8 @@ export function AccountSwitcherMenu({
           </DropdownMenuContent>
         </DropdownMenu>
         <Button
-          variant="ghost"
-          size="icon-sm"
+          variant="ghost-muted"
+          size="icon-lg"
           aria-label="계정 관리"
           title="계정 추가·수정·로그아웃"
           onClick={onManage}
