@@ -24,10 +24,16 @@
 
 URL 형식은 `https://{discord.com|discordapp.com|ptb.discord.com|canary.discord.com}/api[/vN]/webhooks/{17~20자리 ID}/{토큰}`만 받는다. 사용자 이름·비밀번호가 붙은 URL, http, 다른 호스트는 거부한다(테스트 계층만 loopback http 허용).
 
-## 검증 범위
+## 검증 범위 (I5, 2026-10-12, 기준 main `d069e2e`)
 
-- 자동 검사(2026-10-12, 이 브랜치): `vp check`와 `vp run typecheck`는 이 브랜치가 바꾼 파일에서 새 오류가 없다. 남은 오류는 기준 main(`a4c8740`)에 이미 있던 `apps/agent/server/tests/*`의 삭제된 `testRuntime` 참조와 `backend-restart.test.ts`, `read-only-bar.tsx`뿐이다.
-- 집중 테스트: `packages/memory-agent/tests/integrations/report-delivery.test.ts`(로컬 가짜 HTTP 서버로 전송·`allowed_mentions`·첨부·`wait=true`, 같은 문안 중복 인식과 확인 후 재전송, 짧은 429 대기, 404 중단, 응답 미확인 후 `uncertain_duplicate`, 동시 전송 `in_progress`, URL 형식), `report-diagnosis.test.ts`(인용 없는 관측의 가설 이동, 형식 오류), `subscription-quota.test.ts`(계정별 조회 불가 사유), `apps/agent/app/entry/report/*.test.tsx`(관측·가설 구분 문안, 진단 실패 시 최소 문안), 사이드바 브라우저 테스트(접힌 프로젝트 이름만, 계정 목록·한도 상태·전환).
-- **실제 Discord 수신은 검증하지 않았다.** 실제 웹훅·네트워크로 보낸 적이 없고, 전송 검증은 로컬 가짜 서버에 한정된다. 실제 채널 수신·표시(첨부 미리보기, 2000자 경계, 멘션 차단)는 사용자가 개발자 웹훅을 받아 직접 확인해야 한다.
-- 모델 진단은 실제 모델을 호출하지 않았다(유료 호출 금지). 격리 실행에서는 로그인이 없어 `model_unavailable` 폴백 경로만 확인했다.
-- 수동 확인 필요: 실제 브라우저에서 승인창 반복/실행 장애를 유발한 상태에서 사이드바 버튼 및 `/report` 직접 접속, 증거 조회 실패 시 문안 선택·복사, 긴 증거 TXT 다운로드 및 Discord 붙여넣기.
+- `vp check`: 13 errors, 1 warning — 모두 이 브랜치가 건드리지 않은 기준 main의 파일이다(`apps/agent/server/tests/*`가 삭제된 `tests/support/runtime.ts`를 참조, `backend-restart.test.ts`). 이 브랜치 파일의 새 오류는 없다.
+- `vp run typecheck`: 오류는 같은 기준 파일(`apps/agent/server/tests/*`, `backend-restart.test.ts`)과 `read-only-bar.tsx`(async 함수 진단)뿐이다. 이 브랜치 파일의 새 오류는 없다.
+- `vp test` (관련 범위 35파일): 34 passed, 157 tests passed. `tests/integrations/kagi.test.ts`는 TestEnv가 네이티브 벡터 인덱스를 열지 못해(`native-incompatible`, 이 worktree에 네이티브 모듈 빌드 없음) Kagi·제보 코드에 닿기 전에 실패한다.
+- `vp run test:browser` (헤드리스 Chromium, fake fetch): 3 files, 7 tests passed. 제보 페이지의 웹훅 설정→전송→응답 미확인(504) 폴백 문구와 복사·저장 안내→`그래도 다시 보내기`, 화면에 웹훅 URL이 남지 않음, 진단 관측·가설 구분과 항목 삭제, 사이드바의 접힌 프로젝트 이름만·계정 목록·한도 조회 불가 사유·계정 전환.
+- 서버 테스트(로컬 가짜 Discord HTTP 서버, 외부 네트워크 없음): `packages/memory-agent/tests/integrations/report-delivery.test.ts` 4 tests — `wait=true`·`allowed_mentions.parse=[]`·첨부 파일명, 같은 문안 `duplicate`와 확인 후 재전송, 짧은 429 대기 후 성공, 404 `webhook_rejected`, 응답 미확인 후 `uncertain_duplicate`, 전송 중 같은 문안 `in_progress`, Discord 외 URL 거부. 그 밖에 `report-diagnosis.test.ts`(인용 없는 관측의 가설 이동, 형식 오류), `subscription-quota.test.ts`(계정 A/B별 조회 불가 사유), `entry/report/*.test.tsx`(관측·가설 문안, 진단 실패 시 최소 문안).
+- **수행하지 않음 (사용자 확인 필요)**
+  - 실제 Discord 수신: 실제 웹훅·네트워크로 보낸 적이 없다. 채널 수신·첨부 미리보기·2000자 경계·멘션 차단은 개발자 웹훅으로 직접 확인해야 한다.
+  - live dev 서버 실행과 실제 브라우저 확인: `--storage /tmp/...`로 격리해도 첫 사이드바 로드의 `/api/auth`가 실제 OS 키체인의 기존 OAuth 로그인을 읽고 계정별 슬롯으로 복사할 수 있으며, 대화 가져오기가 실제 `~/.claude`·`~/.codex`를 따라간다. 키체인·가져오기를 끄는 격리 스위치가 없어 실행하지 않았다(후속 제안: dev 전용 메모리 자격 증명 저장소·가져오기 끄기 스위치).
+  - 실제 모델 진단: 유료 호출 금지로 실제 모델을 부르지 않았다.
+  - V1(기존 Claude 로그인으로 내부 사용량 경로 실계정 검증)과 비공식 쿼터 경로 채택: 사용자 결정 전까지 하지 않는다. 쿼터는 계정마다 조회 불가 사유로만 표시된다.
+  - 승인창 반복/실행 장애 상태에서 사이드바 버튼·`/report` 직접 접속, 증거 조회 실패 시 문안 선택·복사, 긴 증거 TXT 다운로드.
