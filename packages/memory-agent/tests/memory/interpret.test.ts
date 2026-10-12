@@ -92,16 +92,18 @@ testAgent({ testProvider: {} })("llm-interpret", (it) => {
         context.say("assistant", "알겠습니다. SQLite로 진행할게요 #database");
         const change = context.say("user", "아니 Postgres로 바꾸자 [corrects:SQLite] #database");
 
-        expect(yield* interpret).toBe(3);
+        // Only the user's two statements are jobs; the first has nothing earlier to relate to.
+        expect(yield* interpret).toBe(2);
+        expect(yield* context.job(decision.id)).toEqual({ status: "done", attempts: 1 });
 
-        // One topic per label in the project, linked from every statement about it.
+        // One topic per label in the project, from the statement the model labelled.
         const topics = context.sqlite
           .prepare(
             "SELECT id FROM nodes WHERE kind = 'topic' AND text = 'database' AND project_id = ?",
           )
           .all(context.project.id);
         expect(topics).toHaveLength(1);
-        expect(yield* context.edges("about")).toHaveLength(3);
+        expect(yield* context.edges("about")).toHaveLength(1);
         expect(yield* context.edges("corrects")).toEqual([
           { from_id: change.id, to_id: decision.id, kind: "corrects" },
         ]);
@@ -154,7 +156,10 @@ testAgent({ testProvider: {} })("llm-interpret", (it) => {
         yield* interpret;
 
         expect(yield* context.edges("corrects")).toEqual([]);
-        expect((yield* context.job(claim.id)).status).toBe("done");
+        // An assistant answer is a candidate, never a job of its own.
+        expect(
+          context.sqlite.prepare("SELECT 1 FROM interpret_jobs WHERE node_id = ?").get(claim.id),
+        ).toBeUndefined();
         expect((yield* context.job(stray.id)).status).toBe("done");
       }),
   );
@@ -163,6 +168,8 @@ testAgent({ testProvider: {} })("llm-interpret", (it) => {
     Effect.gen(function* () {
       yield* selectTestModel();
       const context = yield* freshProject;
+      // Something earlier to relate to, so the statement is sent to the model at all.
+      context.say("user", "이상한 문장 이전의 이야기");
       const broken = context.say("user", "이상한 문장 [broken-interpret]");
       yield* Effect.repeat(interpret, { times: 2 });
 

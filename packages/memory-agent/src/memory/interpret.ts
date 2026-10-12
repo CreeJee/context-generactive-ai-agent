@@ -97,6 +97,12 @@ const make = Effect.gen(function* () {
 
   // A process that stopped mid-batch left jobs running; nothing is working on them now.
   sqlite.prepare("UPDATE interpret_jobs SET status = 'pending' WHERE status = 'running'").run();
+  // Earlier builds queued assistant answers too; only the user's words are interpreted now.
+  sqlite
+    .prepare(
+      "DELETE FROM interpret_jobs WHERE status = 'pending' AND node_id IN (SELECT id FROM nodes WHERE kind = 'assistant')",
+    )
+    .run();
 
   // The newest pending statement picks the session, so the conversation just held is interpreted
   // before an old backlog; inside that session statements still go oldest first. "Newest" is when
@@ -116,7 +122,7 @@ const make = Effect.gen(function* () {
   );
   const markFailed = sqlite.prepare(`
     UPDATE interpret_jobs SET status = CASE WHEN attempts >= ? THEN 'failed' ELSE 'pending' END,
-    error = ?, updated_at = ? WHERE node_id = ?`);
+    error = ?, updated_at = ? WHERE node_id = ? AND status = 'running'`);
   const earlierInSession = sqlite.prepare(`
     SELECT n.* FROM nodes n WHERE ${meaningfulNodeFilter} AND session_id = ? AND kind IN ('user', 'assistant') AND seq < ?
     ORDER BY seq DESC LIMIT ?`);
@@ -174,13 +180,27 @@ const make = Effect.gen(function* () {
     return nodes.append({ projectId, sessionId: null, kind: "topic", text: label }).id;
   };
 
-  const interpretBatch = (batch: readonly Node[], selection: ModelSelection) =>
+  const interpretBatch = (pending: readonly Node[], selection: ModelSelection) =>
     Effect.gen(function* () {
       const effectClock = yield* Clock.Clock;
 
       const candidates = MutableHashMap.empty<string, readonly Node[]>();
-      for (const statement of batch)
+      for (const statement of pending)
         MutableHashMap.set(candidates, statement.id, yield* candidatesFor(statement));
+      // A statement with no earlier candidate can relate to nothing, so it costs no model call.
+      const batch = pending.filter(
+        (statement) =>
+          (Option.getOrUndefined(MutableHashMap.get(candidates, statement.id)) ?? []).length > 0,
+      );
+      const alone = pending.filter((statement) => !batch.includes(statement));
+      if (alone.length > 0)
+        atomic(() => {
+          const now = DateTime.formatIso(
+            DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()),
+          );
+          for (const statement of alone) markDone.run(now, statement.id);
+        });
+      if (batch.length === 0) return pending.length;
       const projectId = batch[0]!.projectId;
       const input = {
         existingTopics: topicsOf.all(projectId).map((row) => decodeLabel(row).text),
@@ -313,7 +333,7 @@ const make = Effect.gen(function* () {
               statement.id,
             );
       });
-      return batch.length;
+      return pending.length;
     });
 
   return {

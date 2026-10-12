@@ -9,6 +9,9 @@ import { hasStatementText } from "../memory/quality.ts";
 import type { NodeDetail, NodeKind } from "../memory/nodes.ts";
 import type { ImportSourceName, TranscriptItem } from "./items.ts";
 
+/** Statements worth interpreting, the same rule live nodes follow (`interpretedKinds` in nodes.ts). */
+const interpretedKinds = HashSet.fromIterable<NodeKind>(["user"]);
+
 /** One conversation's worth of items, already tied to a project and a session. */
 export interface Migration {
   readonly source: ImportSourceName;
@@ -40,9 +43,6 @@ const decodeCall = EffectFunction.flow(
   ),
   Result.getOrThrow,
 );
-
-/** Statements worth interpreting, the same rule live nodes follow: tool output is not a claim. */
-const interpretedKinds = HashSet.fromIterable<NodeKind>(["user", "assistant"]);
 
 const make = Effect.gen(function* () {
   const { sqlite, atomic } = yield* Database;

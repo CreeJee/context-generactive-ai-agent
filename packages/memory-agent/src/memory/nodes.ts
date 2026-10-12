@@ -149,8 +149,11 @@ export function toEdge(row: Record<string, SQLOutputValue>): Edge {
 /** Characters of original text returned per read_evidence page. */
 export const evidencePageLength = 4000;
 
-/** Statements worth interpreting for topics and corrections; tool output is evidence, not a claim. */
-const interpretedKinds = HashSet.fromIterable<NodeKind>(["user", "assistant"]);
+/**
+ * Statements worth interpreting for topics and corrections. Only the user's words can correct or
+ * retract a decision, so assistant answers and tool output stay evidence and candidates, not jobs.
+ */
+const interpretedKinds = HashSet.fromIterable<NodeKind>(["user"]);
 
 const make = Effect.gen(function* () {
   const effectClock = yield* Clock.Clock;
