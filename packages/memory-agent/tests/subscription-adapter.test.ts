@@ -328,7 +328,7 @@ describe("subscription model adapters", () => {
   });
 
   it.live("continues every tool boundary and refuses cross-provider adapter selection", () =>
-    Effect.gen(function* () {
+    Effect.sync(() => {
       const client = {
         stream() {
           return nativeStream(Stream.fromIterable((function* () {})(), { chunkSize: 1 }));
