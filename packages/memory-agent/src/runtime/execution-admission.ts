@@ -181,31 +181,6 @@ const make = Effect.fnUntraced(function* (limits: ExecutionAdmissionLimits) {
     } satisfies ExecutionAdmissionSnapshot;
   });
 
-  /**
-   * Fails with `ExecutionSaturated` when both the active and the queued capacity are taken. Only a
-   * caller's first refusal is counted and logged, not every retry of the same wait.
-   */
-  const admit = (kind: ExecutionAdmissionKind, refused: Ref.Ref<boolean>) => {
-    const gate = gates[kind];
-    return Effect.gen(function* () {
-      const admitted = yield* gate.admittedPermits.takeIfAvailable(1);
-      if (!admitted) {
-        const state = yield* snapshot(kind);
-        if (yield* Ref.getAndSet(refused, true)) return yield* saturated(kind, state);
-        yield* Metric.update(tagged(saturatedCounter, kind), 1);
-        yield* Effect.logWarning("execution admission saturated").pipe(
-          Effect.annotateLogs({
-            admission_kind: kind,
-            active: state.active,
-            queued: state.queued,
-            capacity: gate.limits.active + gate.limits.queued,
-            outcome: "saturated",
-          }),
-        );
-        return yield* saturated(kind, state);
-      }
-    });
-  };
   const saturated = (kind: ExecutionAdmissionKind, state: ExecutionAdmissionSnapshot) =>
     ExecutionSaturated.make({
       kind,
@@ -213,6 +188,42 @@ const make = Effect.fnUntraced(function* (limits: ExecutionAdmissionLimits) {
       queued: state.queued,
       capacity: state.activeLimit + state.queueCapacity,
     });
+
+  /** Counts and logs a caller's first refusal, not every retry of the same wait. */
+  const reportOnce = (
+    kind: ExecutionAdmissionKind,
+    refused: Ref.Ref<boolean>,
+    state: ExecutionAdmissionSnapshot,
+  ) =>
+    Effect.when(
+      Metric.update(tagged(saturatedCounter, kind), 1).pipe(
+        Effect.andThen(
+          Effect.logWarning("execution admission saturated").pipe(
+            Effect.annotateLogs({
+              admission_kind: kind,
+              active: state.active,
+              queued: state.queued,
+              capacity: state.activeLimit + state.queueCapacity,
+              outcome: "saturated",
+            }),
+          ),
+        ),
+      ),
+      Effect.map(Ref.getAndSet(refused, true), (seen) => !seen),
+    );
+
+  /** Fails with `ExecutionSaturated` when both the active and the queued capacity are taken. */
+  const admit = (kind: ExecutionAdmissionKind, refused: Ref.Ref<boolean>) =>
+    gates[kind].admittedPermits.takeIfAvailable(1).pipe(
+      Effect.filterOrElse(
+        (admitted) => admitted,
+        () =>
+          snapshot(kind).pipe(
+            Effect.tap((state) => reportOnce(kind, refused, state)),
+            Effect.flatMap((state) => Effect.fail(saturated(kind, state))),
+          ),
+      ),
+    );
 
   /**
    * Takes a permit, waiting in the queue behind active work. When the queue is full too, the
@@ -231,19 +242,25 @@ const make = Effect.fnUntraced(function* (limits: ExecutionAdmissionLimits) {
     return Effect.gen(function* () {
       yield* admit(kind, yield* Ref.make(false)).pipe(Effect.retry(schedule));
 
-      const activeImmediately = yield* gate.activePermits.takeIfAvailable(1);
-      if (!activeImmediately) {
-        const queued = yield* Ref.updateAndGet(gate.queued, (value) => value + 1);
-        yield* updateGauge(queuedGauge, kind, queued);
-        yield* gate.activePermits.take(1).pipe(
-          Effect.ensuring(
-            Ref.updateAndGet(gate.queued, (value) => value - 1).pipe(
-              Effect.flatMap((value) => updateGauge(queuedGauge, kind, value)),
+      const waitInQueue = Ref.updateAndGet(gate.queued, (value) => value + 1).pipe(
+        Effect.flatMap((queued) => updateGauge(queuedGauge, kind, queued)),
+        Effect.andThen(
+          gate.activePermits.take(1).pipe(
+            Effect.ensuring(
+              Ref.updateAndGet(gate.queued, (value) => value - 1).pipe(
+                Effect.flatMap((value) => updateGauge(queuedGauge, kind, value)),
+              ),
             ),
+            Effect.onInterrupt(() => gate.admittedPermits.release(1)),
           ),
-          Effect.onInterrupt(() => gate.admittedPermits.release(1)),
-        );
-      }
+        ),
+      );
+      yield* gate.activePermits.takeIfAvailable(1).pipe(
+        Effect.filterOrElse(
+          (activeImmediately) => activeImmediately,
+          () => waitInQueue,
+        ),
+      );
       const active = yield* Ref.updateAndGet(gate.active, (value) => value + 1);
       yield* updateGauge(activeGauge, kind, active);
       const released = yield* Ref.make(false);
