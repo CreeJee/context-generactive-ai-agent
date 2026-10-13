@@ -4,6 +4,7 @@ import { ChatClient, fetchServerSentEvents } from "@tanstack/ai-client";
 import { Cause, Effect, Fiber, FiberSet, FileSystem, Path, Schedule, Schema } from "effect";
 import { expect, vi } from "vite-plus/test";
 import { AgentChat } from "../../src/agent/chat.ts";
+import { GlobalConfig } from "../../src/config/global-config.ts";
 import { RelayedApprovals } from "../../src/approvals/relayed.ts";
 import { ExternalAgents } from "../../src/external-agents/agents.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
@@ -335,6 +336,12 @@ testAgent({ testProvider: {} })("direct external agent conversations", (it) => {
         expect((yield* post(untrusted.id, "hello")).status).toBe(409);
 
         yield* trust;
+        // Memory leaves for the external process only once the user allows it.
+        const withheld = yield* post(untrusted.id, "로그 포맷 뭐였지?");
+        expect(yield* sdk(() => withheld.text())).not.toContain(
+          "Memory from context-generactive-agent",
+        );
+        yield* (yield* GlobalConfig).update({ externalAgentMemory: true });
         const response = yield* post(direct.id, "로그 포맷 뭐였지?");
         expect(response.status).toBe(200);
         const events = yield* sdk(() => response.text());

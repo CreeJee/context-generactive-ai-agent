@@ -32,6 +32,7 @@ export const globalQueries = {
       queryKey: appQueryKeys.global.conversation,
       queryFn: api.conversationSettings,
     }),
+  recall: () => queryOptions({ queryKey: appQueryKeys.global.recall, queryFn: api.recallSettings }),
   models: (provider: ProviderId) =>
     queryOptions({
       queryKey: appQueryKeys.global.models(provider),
@@ -61,6 +62,7 @@ export const useImportsQuery = () => useSuspenseQuery(globalQueries.imports());
 export const useEmbeddingQuery = () => useSuspenseQuery(globalQueries.embedding());
 export const useKagiQuery = () => useSuspenseQuery(globalQueries.kagi());
 export const useConversationSettingsQuery = () => useSuspenseQuery(globalQueries.conversation());
+export const useRecallSettingsQuery = () => useSuspenseQuery(globalQueries.recall());
 const useModelsQueryBody = (provider: ProviderId, enabled: boolean) =>
   useQuery({ ...globalQueries.models(provider), enabled });
 export const useModelsQuery: {

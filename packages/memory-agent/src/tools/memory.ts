@@ -343,7 +343,7 @@ const make = Effect.gen(function* () {
     interpretations: yield* Interpretations,
     knowledge: yield* KnowledgePromotions,
   };
-  const toolsFor = (projectId: string, binding?: RunBinding) =>
+  const toolsFor = (projectId: string, binding?: RunBinding, scope?: MemoryToolScope) =>
     createMemoryTools(
       env,
       projectId,
@@ -356,6 +356,7 @@ const make = Effect.gen(function* () {
             userNodeId: () => binding.userNodeId,
           }
         : undefined,
+      scope,
     );
   type ReadTools = Extract<ReturnType<typeof toolsFor>["tools"], { readonly length: 3 }>;
   return {
@@ -365,8 +366,8 @@ const make = Effect.gen(function* () {
       return toolsFor(projectId).tools as ReadTools;
     },
     /** Memory tools plus durable retrieval/use attribution for one chat run. */
-    forRun(binding: RunBinding) {
-      return toolsFor(binding.projectId, binding);
+    forRun(binding: RunBinding, scope?: MemoryToolScope) {
+      return toolsFor(binding.projectId, binding, scope);
     },
   };
 });

@@ -13,6 +13,7 @@ export const appQueryKeys = {
     imageSettings: ["app", "global", "image-settings"] as const,
     kagi: ["app", "global", "kagi"] as const,
     conversation: ["app", "global", "conversation"] as const,
+    recall: ["app", "global", "recall"] as const,
     modelsRoot: ["app", "global", "models"] as const,
     models: (provider: string) => [...appQueryKeys.global.modelsRoot, provider] as const,
     projects: ["app", "global", "projects"] as const,

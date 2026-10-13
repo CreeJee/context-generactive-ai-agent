@@ -175,6 +175,7 @@ export const ApiErrorCode = Schema.Literals([
   "invalid_answer",
   "invalid_chat_request",
   "invalid_conversation_settings",
+  "invalid_recall_settings",
   "invalid_embedding_action",
   "invalid_import_action",
   "invalid_image_request",
@@ -231,6 +232,11 @@ export type ApiErrorCode = typeof ApiErrorCode.Type;
 
 /** When long conversations start being summarized, as a percent of the context window. */
 export type ConversationSettings = { readonly summaryStartPercent: number };
+/** Which memory a run may reach beyond its own project; both start off. */
+export type RecallSettings = {
+  readonly crossProjectRecall: boolean;
+  readonly externalAgentMemory: boolean;
+};
 
 const CrossProviderMediaRunApproval = Schema.Struct({
   runId: Schema.String,
@@ -617,6 +623,9 @@ export const api = {
   ) => call<KagiStatus>("POST", "/api/settings/kagi", command),
 
   conversationSettings: () => call<ConversationSettings>("GET", "/api/settings/conversation"),
+  recallSettings: () => call<RecallSettings>("GET", "/api/settings/recall"),
+  setRecallSettings: (settings: Partial<RecallSettings>) =>
+    call<RecallSettings>("POST", "/api/settings/recall", settings),
   setConversationSettings: (settings: ConversationSettings) =>
     call<ConversationSettings>("POST", "/api/settings/conversation", settings),
 

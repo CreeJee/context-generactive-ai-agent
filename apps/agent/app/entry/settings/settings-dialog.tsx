@@ -7,6 +7,7 @@ import {
   ImageIcon,
   MessagesSquareIcon,
   PlugIcon,
+  WaypointsIcon,
 } from "lucide-react";
 import {
   Dialog,
@@ -22,6 +23,7 @@ import { ImageSettings } from "./pages/image";
 import { KagiSettings } from "./pages/web";
 import { ImportSettings } from "./pages/imports";
 import { ConversationSettings } from "./pages/conversation";
+import { RecallSettings } from "./pages/recall";
 import { EmbeddingSettings } from "./pages/embedding";
 import { McpSettings } from "./pages/mcp";
 import { AgentSettings } from "./pages/agents";
@@ -44,6 +46,7 @@ const settingsGroups = [
     label: "기억",
     pages: [
       { value: "conversation", label: "긴 대화", icon: MessagesSquareIcon },
+      { value: "recall", label: "기억 범위", icon: WaypointsIcon },
       { value: "imports", label: "대화 가져오기", icon: HistoryIcon },
       { value: "embedding", label: "임베딩", icon: CpuIcon },
     ],
@@ -96,6 +99,12 @@ function SettingsPageBody({ page, project }: { page: SettingsPage; project: Proj
       return (
         <QuerySection>
           <ConversationSettings />
+        </QuerySection>
+      );
+    case "recall":
+      return (
+        <QuerySection>
+          <RecallSettings />
         </QuerySection>
       );
     case "imports":

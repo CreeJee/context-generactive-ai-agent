@@ -79,6 +79,10 @@ export const Settings = Schema.Struct({
   gpuCheck: Schema.optional(GpuCheck),
   /** `defaultSummaryStartPercent` when unset. */
   summaryStartPercent: Schema.optional(SummaryStartPercent),
+  /** Also search other projects' memory (those not excluded). Off when unset. */
+  crossProjectRecall: Schema.optional(Schema.Boolean),
+  /** Send matching memory to an external agent in a direct conversation. Off when unset. */
+  externalAgentMemory: Schema.optional(Schema.Boolean),
 });
 export type Settings = typeof Settings.Type;
 

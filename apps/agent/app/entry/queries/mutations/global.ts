@@ -43,6 +43,14 @@ export function useConversationSettingsMutation() {
   });
 }
 
+export function useRecallSettingsMutation() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: api.setRecallSettings,
+    onSuccess: (settings) => client.setQueryData(globalQueries.recall().queryKey, settings),
+  });
+}
+
 export function useImportMutation() {
   const client = useQueryClient();
   return useMutation({
