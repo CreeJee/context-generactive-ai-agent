@@ -1,6 +1,7 @@
 import { isTruthy } from "../../truthy.ts";
 import { Effect, Result, Schema } from "effect";
 import {
+  AppEvents,
   Database,
   SubscriptionAccountProvider,
   importLegacyOAuthProfile,
@@ -68,8 +69,17 @@ export function action({ request }: Route.ActionArgs) {
       return yield* Effect.gen(function* () {
         const { sqlite } = yield* Database;
         const manager = accountLoginManager(sqlite);
-        if (intent === "add")
-          return reply(yield* Effect.tryPromise(() => manager.start(provider, label!)));
+        const events = yield* AppEvents;
+        if (intent === "add") {
+          const started = yield* Effect.tryPromise(() => manager.start(provider, label!));
+          // The login finishes in another tab; pages hear it instead of polling.
+          yield* Effect.forkDetach(
+            Effect.promise(() => manager.settled(provider)).pipe(
+              Effect.ensuring(Effect.sync(() => events.publishGlobal("auth"))),
+            ),
+          );
+          return reply(started);
+        }
         if (intent === "cancel")
           return reply(yield* Effect.tryPromise(() => manager.cancel(provider)));
         if (intent === "remove")

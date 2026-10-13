@@ -6,6 +6,8 @@ export { appQueryKeys, type AppQueryKey } from "../queries/keys";
 export function invalidationKeys(event: AppChangedEvent): readonly AppQueryKey[] {
   if (event.scope === "global") {
     if (event.topic === "all") return [appQueryKeys.global.root];
+    // Sign-in state decides which accounts exist and which one is used.
+    if (event.topic === "auth") return [appQueryKeys.global.auth, appQueryKeys.global.accountsRoot];
     return [appQueryKeys.global[event.topic]];
   }
   if (event.scope === "project") {

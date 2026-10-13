@@ -14,8 +14,6 @@ export const globalQueries = {
     queryOptions({
       queryKey: appQueryKeys.global.accounts(provider),
       queryFn: () => api.accounts(provider),
-      // A pending login completes in another tab; poll only while it waits.
-      refetchInterval: (query) => (query.state.data?.login.status === "pending" ? 1_000 : false),
     }),
   accountQuota: (provider: SubscriptionAccountProvider) =>
     queryOptions({

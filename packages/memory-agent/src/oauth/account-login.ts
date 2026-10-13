@@ -188,5 +188,9 @@ function createOAuthAccountLoginManagerBody(
         return profiles(provider);
       }),
     );
-  return { profiles, start, cancel };
+  /** Resolves once the provider's running login, if any, has finished either way. */
+  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+  const settled = (provider: OAuthProvider): Promise<void> =>
+    activeAttempt(provider)?.completed ?? Promise.resolve();
+  return { profiles, start, cancel, settled };
 }
