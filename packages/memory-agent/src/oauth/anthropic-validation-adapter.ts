@@ -1,8 +1,8 @@
 import { Function as EffectFunction } from "effect";
 import { Option, Schema } from "effect";
+import { claudeCodeVersion } from "./protocol.ts";
 
-const CLAUDE_CODE_BILLING =
-  "x-anthropic-billing-header: cc_version=2.1.257; cc_entrypoint=sdk-cli; cch=33f85;";
+const CLAUDE_CODE_BILLING = `x-anthropic-billing-header: cc_version=${claudeCodeVersion}; cc_entrypoint=sdk-cli; cch=33f85;`;
 const CLAUDE_CODE_IDENTITY = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
 
 const AnthropicValidationRequestSchema = Schema.Struct({
