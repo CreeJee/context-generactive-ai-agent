@@ -697,6 +697,13 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     runEffectSync(Queue.offer(notificationWakeups, sessionId));
   };
   subagents.onCompletion(wakeNotifications);
+  // An owner that vanished without releasing: like a release, nothing will send its waiting
+  // messages, and read-only pages hear the session is free so one can take over.
+  leases.onExpired((sessionId) => {
+    if (!isTruthy(liveRuns.get(sessionId))) queue.holdWaiting(sessionId, "pageLeft");
+    events.publishSession(sessionId, "queue");
+    events.publishSession(sessionId, "run-state");
+  });
   background.onCompletion(wakeNotifications);
   const { metadata } = chatState.persistence.stores;
   const inUse = () => json(423, { error: "session_in_use" });

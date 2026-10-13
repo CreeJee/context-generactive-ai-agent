@@ -28,7 +28,7 @@ interface Lease {
 /**
  * Which page may change each session (R03: a session another window is using opens read-only).
  * Leases live in memory: after a restart the page that still has the session open claims it again
- * with its next renewal, and a read-only page never takes over on its own.
+ * with its next renewal. When the owner leaves or stops renewing, a read-only page takes over.
  */
 export class SessionLeases extends Context.Service<SessionLeases, ReturnType<typeof makeLeases>>()(
   "memory-agent/sessions/leases/SessionLeases",
@@ -39,9 +39,10 @@ export class SessionLeases extends Context.Service<SessionLeases, ReturnType<typ
       Effect.gen(function* () {
         const clock = yield* Clock.Clock;
         const leases = makeLeases(ttlMs, () => clock.currentTimeMillisUnsafe());
+        // Swept often, so a read-only page hears soon that a vanished owner's session is free.
         yield* Effect.forkScoped(
           Effect.forever(
-            Effect.sleep(Math.max(1_000, ttlMs)).pipe(
+            Effect.sleep(Math.max(1_000, Math.min(ttlMs, 5_000))).pipe(
               Effect.andThen(Effect.sync(() => leases.sweepExpired())),
             ),
           ),
@@ -61,6 +62,7 @@ function makeLeasesBody(
   now: () => number = () => DateTime.toEpochMillis(DateTime.nowUnsafe()),
 ) {
   const leases = MutableHashMap.empty<string, Lease>();
+  const expiredListeners: Array<(sessionId: string) => void> = [];
   const live = (sessionId: string) => {
     const lease = Option.getOrUndefined(MutableHashMap.get(leases, sessionId));
     if (!isTruthy(lease)) return null;
@@ -70,16 +72,25 @@ function makeLeasesBody(
   };
 
   return {
-    /** Remove leases whose pages stopped renewing, including sessions nobody asks about again. */
+    /**
+     * Remove leases whose pages stopped renewing, including sessions nobody asks about again, and
+     * tell the listeners each session is free.
+     */
     sweepExpired() {
       const current = now();
-      let removed = 0;
+      const expired: string[] = [];
       for (const [sessionId, lease] of leases)
-        if (current - lease.renewedAt >= ttlMs) {
-          MutableHashMap.remove(leases, sessionId);
-          removed += 1;
-        }
-      return removed;
+        if (current - lease.renewedAt >= ttlMs) expired.push(sessionId);
+      for (const sessionId of expired) {
+        MutableHashMap.remove(leases, sessionId);
+        for (const listener of expiredListeners) listener(sessionId);
+      }
+      return expired;
+    },
+
+    /** Called with each session whose lease the sweep found expired. */
+    onExpired(listener: (sessionId: string) => void) {
+      expiredListeners.push(listener);
     },
 
     view(sessionId: string, holder: string | null): LeaseView {

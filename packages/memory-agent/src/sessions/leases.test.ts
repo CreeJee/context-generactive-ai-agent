@@ -13,7 +13,7 @@ test("one page holds a session until it lets go or stops renewing", () => {
   expect(leases.permits("s", "tab-b")).toBe(false);
   expect(leases.permits("s", null)).toBe(false);
 
-  // Renewing keeps it; a page that stops renewing loses it, but nobody takes it automatically.
+  // Renewing keeps it; a page that stops renewing loses it.
   clock += 20_000;
   leases.claim("s", "tab-a");
   clock += 20_000;
@@ -37,7 +37,10 @@ test("expired leases are reclaimed even when their sessions are not requested ag
   clock = 50;
   leases.claim("fresh", "tab-b");
   clock = 110;
-  expect(leases.sweepExpired()).toBe(1);
+  const freed: string[] = [];
+  leases.onExpired((sessionId) => freed.push(sessionId));
+  expect(leases.sweepExpired()).toEqual(["old"]);
+  expect(freed).toEqual(["old"]);
   expect(leases.view("old", "tab-a")).toEqual({ state: "free" });
   expect(leases.view("fresh", "tab-b")).toEqual({ state: "mine" });
 });
