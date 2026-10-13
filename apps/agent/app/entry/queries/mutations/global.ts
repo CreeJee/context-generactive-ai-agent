@@ -35,6 +35,14 @@ export function useKagiMutation() {
   });
 }
 
+export function useConversationSettingsMutation() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: api.setConversationSettings,
+    onSuccess: (settings) => client.setQueryData(globalQueries.conversation().queryKey, settings),
+  });
+}
+
 export function useImportMutation() {
   const client = useQueryClient();
   return useMutation({

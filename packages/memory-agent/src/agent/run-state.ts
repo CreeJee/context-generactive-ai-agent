@@ -3,6 +3,7 @@ import type { LeaseView } from "../sessions/lease-state.ts";
 import type { WorkflowActions } from "../workflow/actions.ts";
 import type { WorkflowState } from "../workflow/workflow.ts";
 import type { WorkflowExecutionState } from "../workflow/execution.ts";
+import type { ProviderRetryView } from "../workflow/provider-retry.ts";
 
 /** Browser-safe shapes of the session run endpoints. */
 
@@ -26,6 +27,8 @@ export interface SessionRunState {
   /** Durable Goal/Plan phase and artifacts for this conversation. */
   readonly workflow: WorkflowState;
   readonly execution?: WorkflowExecutionState;
+  /** The latest pending wait before resending a provider request that was never sent. */
+  readonly providerRetry?: ProviderRetryView | null;
   /** Server decisions for this snapshot and requesting page; mutations recheck latest state. */
   readonly actions: WorkflowActions;
 }

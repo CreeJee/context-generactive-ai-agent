@@ -79,6 +79,7 @@ import { WorkTraceStore } from "./work-trace/store.ts";
 import { Workflows } from "./workflow/workflow.ts";
 import { WorkflowExecution } from "./workflow/execution.ts";
 import { goalExecutionLayer } from "./workflow/goal-execution.ts";
+import { providerRetryLayer } from "./workflow/provider-retry.ts";
 import { OwnerReadRecovery } from "./agent/owner-read-recovery.ts";
 import { WorkflowTools } from "./workflow/tools.ts";
 import { WorkflowRules } from "./workflow/rules.ts";
@@ -233,6 +234,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
     Workflows.layer,
     WorkflowExecution.layer,
     goalExecutionLayer,
+    providerRetryLayer,
     OwnerReadRecovery.layer,
     WorkTraceStore.layer,
     SubscriptionQuota.layer.pipe(Layer.provide(SubscriptionUsage.layer)),

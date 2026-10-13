@@ -409,6 +409,16 @@ export const compactEffect = Effect.fnUntraced(function* (options: {
     }
   }
 
+  // Results that cannot be replayed are dropped anyway; measured with them, a request whose
+  // history holds large unreplayable output would leave out messages it has room for.
+  const pair = () => {
+    const paired = replayableToolHistory(sent);
+    if (paired.length !== sent.length || paired.some((message, index) => message !== sent[index])) {
+      sent = paired;
+      if (stage === "none") stage = "clear-answered";
+    }
+  };
+  pair();
   if (estimateConversation(sent) > budget.leaveOutAt) {
     const leftOut = yield* compactionPromise({
       operation: "prepare-before",
@@ -445,11 +455,8 @@ export const compactEffect = Effect.fnUntraced(function* (options: {
     }
   }
 
-  const paired = replayableToolHistory(sent);
-  if (paired.length !== sent.length || paired.some((message, index) => message !== sent[index])) {
-    sent = paired;
-    if (stage === "none") stage = "clear-answered";
-  }
+  // Leaving out the oldest messages can split a call from its result.
+  pair();
   return { messages: sent, stage, summarizedTurns };
 });
 

@@ -121,8 +121,23 @@ testAgent()("workflow run bindings", (it) => {
           status: "refused",
           reason: "run_id_conflict",
         });
-        // A failed run may have left an unresolved side effect behind.
+        // A failed run that only did owner bookkeeping changed nothing a later run could repeat.
         finishRun(db, session, shared, "failed");
+        const operation = db.sqlite.prepare(
+          "INSERT INTO owner_rpc_operations VALUES (?, 'key', ?, ?, 1, '{}', 'succeeded')",
+        );
+        operation.run(shared, 1, JSON.stringify({ operation: "middleware" }));
+        expect(
+          workflowRunBindings(db).bind(
+            session,
+            `${session}:different`,
+            revision,
+            undefined,
+            "preview",
+          ),
+        ).toMatchObject({ status: "bound" });
+        // A tool it ran may be repeated, even when it succeeded.
+        operation.run(shared, 2, JSON.stringify({ operation: "toolAuthorize" }));
         expect(yield* bindLatest(session, `${session}:different`)).toEqual({
           status: "refused",
           reason: "run_outcome_uncertain",

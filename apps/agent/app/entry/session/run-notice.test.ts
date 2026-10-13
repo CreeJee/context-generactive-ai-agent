@@ -53,4 +53,20 @@ describe("run notices", () => {
     expect(noticeOf(ended("failed", serverRestartedCode), page)).toEqual({ kind: "restarted" });
     expect(noticeOf(ended("completed", serverRestartedCode), page)).toEqual({ kind: "restarted" });
   });
+
+  test("a restart that the server continues by itself says when", () => {
+    const resuming: SessionRunState = {
+      ...ended("failed", serverRestartedCode),
+      execution: {
+        kind: "retrying",
+        runId: "run-1",
+        goalVersion: 1,
+        planVersion: 1,
+        noProgressRuns: 0,
+        progress: { completedSteps: [], evidence: [], toolResults: [] },
+        retryAt: 9_000,
+      },
+    };
+    expect(noticeOf(resuming, page)).toEqual({ kind: "resuming", at: 9_000 });
+  });
 });

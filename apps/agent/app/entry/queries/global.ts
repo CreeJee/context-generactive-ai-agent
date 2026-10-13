@@ -29,6 +29,11 @@ export const globalQueries = {
   imageSettings: () =>
     queryOptions({ queryKey: appQueryKeys.global.imageSettings, queryFn: api.imageSettings }),
   kagi: () => queryOptions({ queryKey: appQueryKeys.global.kagi, queryFn: api.kagi }),
+  conversation: () =>
+    queryOptions({
+      queryKey: appQueryKeys.global.conversation,
+      queryFn: api.conversationSettings,
+    }),
   models: (provider: ProviderId) =>
     queryOptions({
       queryKey: appQueryKeys.global.models(provider),
@@ -57,6 +62,7 @@ export const useSuspenseImageSettingsQuery = () => useSuspenseQuery(globalQuerie
 export const useImportsQuery = () => useSuspenseQuery(globalQueries.imports());
 export const useEmbeddingQuery = () => useSuspenseQuery(globalQueries.embedding());
 export const useKagiQuery = () => useSuspenseQuery(globalQueries.kagi());
+export const useConversationSettingsQuery = () => useSuspenseQuery(globalQueries.conversation());
 const useModelsQueryBody = (provider: ProviderId, enabled: boolean) =>
   useQuery({ ...globalQueries.models(provider), enabled });
 export const useModelsQuery: {
