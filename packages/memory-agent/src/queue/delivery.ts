@@ -1,7 +1,7 @@
 import { runNativeEffectWith } from "../runtime/native-effect.ts";
 import { isTruthy } from "../truthy.ts";
 import type { ChatMiddleware, ContentPart, ModelMessage } from "@tanstack/ai";
-import { Context, Effect, Layer } from "effect";
+import { Array as Arr, Context, Effect, Layer, Option } from "effect";
 import { Attachments } from "../attachments/attachments.ts";
 import { attachmentUrl } from "../attachments/urls.ts";
 import { Nodes } from "../memory/nodes.ts";
@@ -71,22 +71,36 @@ const make = Effect.gen(function* () {
       return {
         name: "memory-agent/queue-delivery",
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        onConfig: (ctx, config) =>
-          run(
-            Effect.gen(function* () {
-              if (ctx.phase !== "beforeModel" || config.messages.at(-1)?.role !== "tool") return;
-              const delivered = queue.deliverable(binding.sessionId);
-              if (delivered.length === 0) return;
-              for (const message of delivered) {
-                queue.markDelivered(message.id, "tool_boundary", binding.runId);
-                yield* record(binding, message);
-              }
-              ctx.emitCustomEvent(queueDeliveredEvent, {
-                ids: delivered.map((message) => message.id),
-              });
-              return { messages: [...config.messages, ...delivered.map(toUserMessage)] };
-            }),
-          ),
+        onConfig: (ctx, config) => {
+          const deliver = (delivered: Arr.NonEmptyReadonlyArray<QueuedMessage>) =>
+            Effect.forEach(
+              delivered,
+              (message) =>
+                Effect.sync(() =>
+                  queue.markDelivered(message.id, "tool_boundary", binding.runId),
+                ).pipe(Effect.andThen(record(binding, message))),
+              { discard: true },
+            ).pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  ctx.emitCustomEvent(queueDeliveredEvent, {
+                    ids: delivered.map((message) => message.id),
+                  });
+                  return { messages: [...config.messages, ...delivered.map(toUserMessage)] };
+                }),
+              ),
+            );
+          return run(
+            Effect.sync((): ReadonlyArray<QueuedMessage> =>
+              ctx.phase === "beforeModel" && config.messages.at(-1)?.role === "tool"
+                ? queue.deliverable(binding.sessionId)
+                : [],
+            ).pipe(
+              Effect.map(Option.liftPredicate(Arr.isReadonlyArrayNonEmpty)),
+              Effect.flatMap(Option.match({ onNone: () => Effect.void, onSome: deliver })),
+            ),
+          );
+        },
       };
     },
   };

@@ -2911,8 +2911,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const message = queue.add(sessionId, text, attachmentIds, mode === "steer");
         // Steering stops the answer where it is, unless it has begun a tool call; the run then
         // completes and the server sends the message as the next turn.
-        if (mode === "steer")
-          Option.getOrUndefined(MutableHashMap.get(steerCuts, sessionId))?.cut();
+        yield* Effect.when(
+          Effect.sync(() => Option.getOrUndefined(MutableHashMap.get(steerCuts, sessionId))?.cut()),
+          Effect.succeed(mode === "steer"),
+        );
         return json(201, message);
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
 
@@ -3010,52 +3012,64 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       if (!isTruthy(last)) return;
       // A steered message reaches the model whether or not a page is open: after a normal finish
       // the server sends it as the next turn. If that cannot start, the user confirms it instead.
-      if (last.status === "completed" && queue.snapshot(sessionId).nextDelivery.kind === "server") {
-        const unsent = Effect.sync(() => {
-          queue.holdWaiting(sessionId, "stopped");
-          events.publishSession(sessionId, "queue");
-        });
-        const response = yield* send({ kind: "steered" }).pipe(Effect.onError(() => unsent));
-        if (!response.ok) yield* unsent;
-        return yield* drain(response);
-      }
-      if (workTrace.parentNotificationsHeld(sessionId) || session.agent !== null) return;
-      // Never resume approval waits, cancelled runs, or failed parent turns automatically, except
-      // a run a restart cut off before it ran any tool.
-      const restarted = last.status !== "completed";
-      if (restarted && (yield* execution.get(sessionId)).kind !== "retrying") return;
-      const workflow = yield* workflows.reconcile(sessionId);
-      const continuing = restarted
-        ? yield* execution.canResume(sessionId, last.runId, workflow)
-        : yield* execution.canContinue(sessionId, last.runId, workflow);
-      if (
-        !continuing &&
-        (restarted || !workTrace.pendingParentNotificationSessions().includes(sessionId))
-      )
-        return;
-      // A user's queued request or pending approval takes precedence over automatic work.
-      if (
-        continuing &&
-        (queue.snapshot(sessionId).nextDelivery.kind !== "empty" ||
-          relayed.pending(sessionId).length > 0)
-      )
-        return;
-      const pendingApprovals = yield* agentPromise("list-approvals", () =>
-        chatState.persistence.stores.interrupts.listPending(sessionId),
+      const unsent = Effect.sync(() => {
+        queue.holdWaiting(sessionId, "stopped");
+        events.publishSession(sessionId, "queue");
+      });
+      const steered = send({ kind: "steered" }).pipe(
+        Effect.onError(() => unsent),
+        Effect.filterOrElse(
+          (response) => response.ok,
+          (response) => Effect.as(unsent, response),
+        ),
+        Effect.flatMap(drain),
       );
-      if (pendingApprovals.length > 0) return;
-      const response = yield* send(
-        continuing ? { kind: "workflow", afterRunId: last.runId } : { kind: "notification" },
-      );
-      if (!response.ok && continuing) {
-        yield* execution.blockPending(sessionId, last.runId, {
-          reason: "external_dependency",
-          detail: "자동 진행 요청을 시작하지 못했어요. 로그인 상태와 실행 조건을 확인해 주세요.",
-          evidence: [`HTTP ${response.status}`],
-        });
-        events.publishSession(sessionId, "run-state");
-      }
-      yield* drain(response);
+      const automatic = Effect.gen(function* () {
+        if (workTrace.parentNotificationsHeld(sessionId) || session.agent !== null) return;
+        // Never resume approval waits, cancelled runs, or failed parent turns automatically, except
+        // a run a restart cut off before it ran any tool.
+        const restarted = last.status !== "completed";
+        if (restarted && (yield* execution.get(sessionId)).kind !== "retrying") return;
+        const workflow = yield* workflows.reconcile(sessionId);
+        const continuing = restarted
+          ? yield* execution.canResume(sessionId, last.runId, workflow)
+          : yield* execution.canContinue(sessionId, last.runId, workflow);
+        if (
+          !continuing &&
+          (restarted || !workTrace.pendingParentNotificationSessions().includes(sessionId))
+        )
+          return;
+        // A user's queued request or pending approval takes precedence over automatic work.
+        if (
+          continuing &&
+          (queue.snapshot(sessionId).nextDelivery.kind !== "empty" ||
+            relayed.pending(sessionId).length > 0)
+        )
+          return;
+        const pendingApprovals = yield* agentPromise("list-approvals", () =>
+          chatState.persistence.stores.interrupts.listPending(sessionId),
+        );
+        if (pendingApprovals.length > 0) return;
+        const response = yield* send(
+          continuing ? { kind: "workflow", afterRunId: last.runId } : { kind: "notification" },
+        );
+        if (!response.ok && continuing) {
+          yield* execution.blockPending(sessionId, last.runId, {
+            reason: "external_dependency",
+            detail: "자동 진행 요청을 시작하지 못했어요. 로그인 상태와 실행 조건을 확인해 주세요.",
+            evidence: [`HTTP ${response.status}`],
+          });
+          events.publishSession(sessionId, "run-state");
+        }
+        yield* drain(response);
+      });
+      yield* Effect.when(
+        steered,
+        Effect.sync(
+          () =>
+            last.status === "completed" && queue.snapshot(sessionId).nextDelivery.kind === "server",
+        ),
+      ).pipe(Effect.flatMap(Option.match({ onSome: () => Effect.void, onNone: () => automatic })));
     }).pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("Subagent notification follow-up deferred", cause),
