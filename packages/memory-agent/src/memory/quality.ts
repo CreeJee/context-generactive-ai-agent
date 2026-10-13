@@ -1,3 +1,10 @@
+/**
+ * Version of the rules that repair the graph and leave nodes out of search. 2 stopped demoting
+ * cross-session `corrects`/`retracts` and restores those version 1 demoted. 3 leaves out read
+ * results a later read of the same file superseded.
+ */
+export const memoryGraphRepairVersion = 3;
+
 /** Empty tool-phase assistant nodes remain evidence, but are not semantic statements. */
 export const hasStatementText = (text: string) => text.trim().length > 0;
 

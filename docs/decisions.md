@@ -929,6 +929,15 @@
 - 새 해석이 세션 간 수정을 적용하는 기준(같은 프로젝트의 지속적인 결정을 명확히 바꾼 경우)은 그대로다.
 - 정리는 처음 실행할 때까지 저장된 기억만 한 번 순회한다. 그 뒤에 쓰는 기억은 현재 코드가 이런 결함 없이 쓴다.
 
+### 대체된 파일 읽기를 검색에서 빼기 (2026-10-14)
+
+- 노드 가지치기는 원문 삭제와 검색 제외를 나눈다. 원문은 근거라서 지우지 않고, 쓸모가 끝난 노드를 규칙으로 골라 검색에서만 뺀다. laya는 "이번 턴에 회상이 필요한가"를 판정하는 센서라서 노드별 가치 판정에 쓰지 않는다.
+- 첫 규칙: 같은 프로젝트에서 같은 파일을 나중에 다시 읽었는데 sha256이 다르면, 이전 `read_file`·`read_outside_file` 결과를 `memory_graph_suppressed_nodes`(reason `superseded_read`)에 넣는다. 이제 없는 파일 내용이 검색과 그래프 확장에 섞이지 않는다. 내용이 같은 재읽기는 빼지 않는다.
+  - 파일은 호출 인자의 ref로 맞추고, sha256은 결과 JSON에서 읽는다. 다른 에이전트에서 가져온 읽기는 sha256이 없어 대상이 아니다.
+  - 기록할 때 같은 트랜잭션에서 적용하고, 그 전에 쌓인 기억은 그래프 정리 버전 3이 한 번 순회하며 적용한다.
+  - 원문, `read_evidence`, 대화 기록은 그대로다. trigram·Kiwi 행은 물리적으로 지우지 않는다. 검색이 이미 `memory_graph_suppressed_nodes`로 거르고, 행을 지우면 세션 삭제의 FTS `delete`와 겹쳐 색인이 깨질 수 있다. 세션을 지울 때는 이 표의 행도 함께 지운다.
+- 다음 후보(아직 하지 않음): 한 번도 조회되지 않았고 의미 연결이 없으며 오래된 노드, 보관한 대화의 사용자 주도 완전 삭제.
+
 ### RRSI local experiments (2026-10-05)
 
 - Develop in the independent `context-generactive-agent-rrsi` clone on `feat/rrsi-local`; web 5174, backend 5181 and `.rrsi-local/runtime` are isolated from the original checkout.

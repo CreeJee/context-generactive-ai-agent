@@ -2283,6 +2283,9 @@ const make = Effect.gen(function* () {
           sqlite.prepare("DELETE FROM node_vectors WHERE node_seq = ?").run(node.seq);
           sqlite.prepare("DELETE FROM node_morphs WHERE node_seq = ?").run(node.seq);
           sqlite.prepare("DELETE FROM nodes_morph WHERE rowid = ?").run(node.seq);
+          sqlite
+            .prepare("DELETE FROM memory_graph_suppressed_nodes WHERE node_seq = ?")
+            .run(node.seq);
         }
         sqlite.prepare("DELETE FROM nodes WHERE session_id = ?").run(operation.target_id);
         sqlite

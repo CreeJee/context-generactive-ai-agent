@@ -16,6 +16,7 @@ import {
 } from "effect";
 import { createResultPageReader } from "./result-pages.ts";
 import { hasStatementText } from "./quality.ts";
+import { createSupersededReads } from "./superseded-reads.ts";
 import { firstMessageTitle } from "../sessions/title.ts";
 import { Database } from "../db/database.ts";
 import { EdgeKind, EdgeOrigin, edgeWeights, type Edge, type NodeLink } from "./edges.ts";
@@ -162,6 +163,7 @@ const make = Effect.gen(function* () {
 
   const { sqlite, atomic } = yield* Database;
   const resultPages = createResultPageReader(sqlite);
+  const supersedeEarlierReads = createSupersededReads(sqlite);
   const insertNode = sqlite.prepare(
     "INSERT INTO nodes (id, project_id, session_id, run_id, kind, text, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
   );
@@ -243,6 +245,7 @@ const make = Effect.gen(function* () {
         insertRef.run(node.id, ref);
         if (isTruthy(earlier)) link(node.id, earlier, "touches", createdAt);
       }
+      if (node.kind === "tool_result") supersedeEarlierReads(node.id);
       if (HashSet.has(interpretedKinds, node.kind) && hasStatementText(node.text))
         insertJob.run(node.id, createdAt);
       return node;

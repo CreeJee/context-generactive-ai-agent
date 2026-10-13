@@ -148,6 +148,43 @@ testAgent()("MemorySearch.find", (it) => {
     }),
   );
 
+  it.effect("leaves out a read that a later read of the changed file superseded", () =>
+    Effect.gen(function* () {
+      const { project, session } = yield* freshProject;
+      const nodes = yield* Nodes;
+      const at = { projectId: project.id, sessionId: session.id };
+      const read = (content: string, sha256: string) => {
+        const call = nodes.append({
+          ...at,
+          kind: "tool_call",
+          text: 'read_file {"path":"config.toml"}',
+          detail: { toolName: "read_file" },
+          refs: ["config.toml"],
+        });
+        return nodes.append({
+          ...at,
+          kind: "tool_result",
+          text: JSON.stringify({ path: "config.toml", sha256, content }),
+          detail: { toolName: "read_file", ok: true },
+          links: [{ kind: "returns", nodeId: call.id }],
+        });
+      };
+      const found = Effect.map(
+        find({ query: "retries", projectId: project.id, crossProject: false }),
+        (result) => result.matches.map((match) => match.id),
+      );
+      const first = read("retries = 2", "a".repeat(64));
+      const unchanged = read("retries = 2", "a".repeat(64));
+      expect(yield* found).toEqual(expect.arrayContaining([first.id, unchanged.id]));
+      const changed = read("retries = 5", "b".repeat(64));
+      const after = yield* found;
+      expect(after).toContain(changed.id);
+      expect(after).not.toContain(first.id);
+      expect(after).not.toContain(unchanged.id);
+      expect(nodes.get(first.id)?.text).toContain("retries = 2");
+    }),
+  );
+
   it.effect("stores each node's morpheme terms once and lets particles and endings differ", () =>
     Effect.gen(function* () {
       const { project, session } = yield* freshProject;

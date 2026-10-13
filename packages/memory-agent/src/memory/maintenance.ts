@@ -5,16 +5,13 @@ import { Database } from "../db/database.ts";
 import { AppEvents } from "../events/app-events.ts";
 import { Indexer } from "./embedding/indexer.ts";
 import { VectorIndex } from "./embedding/vector-index.ts";
-import { meaningfulNodeFilter, nonBlankTextSql } from "./quality.ts";
+import { meaningfulNodeFilter, memoryGraphRepairVersion, nonBlankTextSql } from "./quality.ts";
+import { createSupersededReads } from "./superseded-reads.ts";
 
 export class MemoryGraphRepairFailed extends Data.TaggedError("MemoryGraphRepairFailed")<{
   readonly cause: unknown;
 }> {}
 
-/**
- * 2 stopped demoting cross-session `corrects`/`retracts` and restores those version 1 demoted.
- */
-export const memoryGraphRepairVersion = 2;
 const batchSize = 64;
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
 const decodeProgress = EffectFunction.flow(
@@ -116,6 +113,8 @@ const make = Effect.gen(function* () {
     DELETE FROM edges WHERE from_id = ? AND EXISTS (
       SELECT 1 FROM memory_graph_edge_repairs r WHERE r.version = ?
       AND r.from_id = edges.from_id AND r.to_id = edges.to_id AND r.kind = edges.kind)`);
+  // Stores older than the rule recorded their reads without it.
+  const supersedeEarlierReads = createSupersededReads(sqlite);
   const discardEmptyJobs = sqlite.prepare(`
     DELETE FROM interpret_jobs WHERE node_id = ? AND EXISTS (
       SELECT 1 FROM nodes n WHERE n.id = interpret_jobs.node_id AND NOT (${meaningfulNodeFilter}))`);
@@ -183,7 +182,7 @@ const make = Effect.gen(function* () {
     UPDATE memory_graph_maintenance SET after_seq = ?, scanned = scanned + ?,
       repaired_edges = (SELECT count(*) FROM memory_graph_edge_repairs WHERE version = ? AND action = 'reverse'),
       suppressed_edges = (SELECT count(*) FROM memory_graph_edge_repairs WHERE version = ? AND action = 'suppress'),
-      retired_topics = (SELECT count(*) FROM memory_graph_suppressed_nodes WHERE version = ?)
+      retired_topics = (SELECT count(*) FROM memory_graph_suppressed_nodes WHERE version = ? AND reason = 'empty_statement_topic')
     WHERE version = ?`);
 
   const batch = Effect.fnUntraced(function* () {
@@ -205,6 +204,7 @@ const make = Effect.gen(function* () {
                 reverse.run(version, node.id);
                 removeEdges.run(node.id, version);
                 discardEmptyJobs.run(node.id);
+                supersedeEarlierReads(node.id);
               }
               for (const topic of candidates) {
                 retireTopic.run(version, topic.seq);
