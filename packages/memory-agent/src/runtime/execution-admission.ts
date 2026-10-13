@@ -181,13 +181,17 @@ const make = Effect.fnUntraced(function* (limits: ExecutionAdmissionLimits) {
     } satisfies ExecutionAdmissionSnapshot;
   });
 
-  /** Fails with `ExecutionSaturated` when both the active and the queued capacity are taken. */
-  const admit = (kind: ExecutionAdmissionKind) => {
+  /**
+   * Fails with `ExecutionSaturated` when both the active and the queued capacity are taken. Only a
+   * caller's first refusal is counted and logged, not every retry of the same wait.
+   */
+  const admit = (kind: ExecutionAdmissionKind, refused: Ref.Ref<boolean>) => {
     const gate = gates[kind];
     return Effect.gen(function* () {
       const admitted = yield* gate.admittedPermits.takeIfAvailable(1);
       if (!admitted) {
         const state = yield* snapshot(kind);
+        if (yield* Ref.getAndSet(refused, true)) return yield* saturated(kind, state);
         yield* Metric.update(tagged(saturatedCounter, kind), 1);
         yield* Effect.logWarning("execution admission saturated").pipe(
           Effect.annotateLogs({
@@ -198,15 +202,17 @@ const make = Effect.fnUntraced(function* (limits: ExecutionAdmissionLimits) {
             outcome: "saturated",
           }),
         );
-        return yield* ExecutionSaturated.make({
-          kind,
-          active: state.active,
-          queued: state.queued,
-          capacity: gate.limits.active + gate.limits.queued,
-        });
+        return yield* saturated(kind, state);
       }
     });
   };
+  const saturated = (kind: ExecutionAdmissionKind, state: ExecutionAdmissionSnapshot) =>
+    ExecutionSaturated.make({
+      kind,
+      active: state.active,
+      queued: state.queued,
+      capacity: state.activeLimit + state.queueCapacity,
+    });
 
   /**
    * Takes a permit, waiting in the queue behind active work. When the queue is full too, the
@@ -223,7 +229,7 @@ const make = Effect.fnUntraced(function* (limits: ExecutionAdmissionLimits) {
       }
     })();
     return Effect.gen(function* () {
-      yield* admit(kind).pipe(Effect.retry(schedule));
+      yield* admit(kind, yield* Ref.make(false)).pipe(Effect.retry(schedule));
 
       const activeImmediately = yield* gate.activePermits.takeIfAvailable(1);
       if (!activeImmediately) {
