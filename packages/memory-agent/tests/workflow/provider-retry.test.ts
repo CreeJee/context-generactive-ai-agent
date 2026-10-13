@@ -19,6 +19,8 @@ import {
   type OwnerModelStream,
   type ProviderRetryOwner,
 } from "../../src/agent/full-loop-provider-retry.ts";
+import { encodeFullLoopValue } from "../../src/agent/full-loop-codec.ts";
+import { ownerRpcFingerprint } from "../../src/agent/owner-rpc-fingerprint.ts";
 import { Database } from "../../src/db/database.ts";
 import { SubscriptionStreamFailed } from "../../src/providers/subscription-adapter.ts";
 import {
@@ -187,7 +189,7 @@ describe("durable provider retry", () => {
     ),
   );
 
-  it.effect("continues a restarted run without tools at its pending retry time", () =>
+  it.effect("continues a restarted run whose effects are known at its pending retry time", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { database, execution, scope } = yield* open(":memory:");
@@ -198,15 +200,35 @@ describe("durable provider retry", () => {
           retryAt: 9_000,
         });
         database.sqlite.exec("PRAGMA foreign_keys = OFF");
-        runningGoal(database, "tooled");
-        database.sqlite
-          .prepare(
-            "INSERT INTO owner_rpc_operations VALUES ('tooled', 'key', 1, ?, 1, '{}', 'succeeded')",
-          )
-          .run(JSON.stringify({ operation: "tool" }));
-        expect(yield* execution.afterRestart("s", "tooled", undefined)).toMatchObject({
+        const shellRun = (runId: string) => {
+          runningGoal(database, runId);
+          database.sqlite
+            .prepare(
+              "INSERT INTO owner_rpc_operations VALUES (?, 'key', 1, ?, 1, '{}', 'succeeded')",
+            )
+            .run(
+              runId,
+              ownerRpcFingerprint(
+                "tool",
+                encodeFullLoopValue({ name: "run_shell", toolCallId: `${runId}-call`, args: {} }),
+              ),
+            );
+        };
+        // A succeeded shell call the session history does not hold may be repeated unknowingly.
+        shellRun("unrecorded");
+        expect(yield* execution.afterRestart("s", "unrecorded", undefined)).toMatchObject({
           kind: "blocked",
           reason: "server_restarted",
+        });
+        shellRun("recorded");
+        database.sqlite
+          .prepare(
+            "INSERT INTO nodes (id, project_id, session_id, run_id, kind, text, detail, created_at) VALUES ('n', 'p', 's', 'recorded', 'tool_result', 'done', ?, '')",
+          )
+          .run(JSON.stringify({ toolName: "run_shell", toolCallId: "recorded-call", ok: true }));
+        expect(yield* execution.afterRestart("s", "recorded", undefined)).toMatchObject({
+          kind: "retrying",
+          runId: "recorded",
         });
         yield* Scope.close(scope, Exit.void);
       }),

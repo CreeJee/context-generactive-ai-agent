@@ -115,7 +115,7 @@ const executable = (state: WorkflowState) =>
 const make = Effect.gen(function* () {
   const { sqlite } = yield* Database;
   const select = sqlite.prepare("SELECT value FROM chat_metadata WHERE namespace = ? AND key = ?");
-  const endedWithoutEffects = sqlite.prepare(
+  const endedWithKnownEffects = sqlite.prepare(
     `SELECT 1 AS ended FROM chat_runs r WHERE r.run_id = ? AND ${endedWithKnownEffectsSql("r")}`,
   );
   const upsert = sqlite.prepare(`INSERT INTO chat_metadata (namespace, key, value) VALUES (?, ?, ?)
@@ -183,8 +183,8 @@ const make = Effect.gen(function* () {
     ),
 
     /**
-     * Whether a new run continues the Plan after `runId` was cut off by a restart: it ran no tool
-     * and its `retryAt` has passed. The ended run is not replayed.
+     * Whether a new run continues the Plan after `runId` was cut off by a restart: a later run
+     * knows everything it did and its `retryAt` has passed. The ended run is not replayed.
      */
     canResume: Effect.fn("WorkflowExecution.canResume")(function* (
       sessionId: string,
@@ -198,15 +198,16 @@ const make = Effect.gen(function* () {
           execution.kind === "retrying" &&
           execution.retryAt <= now &&
           current(sessionId, runId, state, "retrying") &&
-          endedWithoutEffects.get(runId) !== undefined
+          endedWithKnownEffects.get(runId) !== undefined
         );
       });
     }),
 
     /**
-     * Continuation of a running Goal whose run the previous process left unfinished. A run that ran
-     * no tool continues at `resumeAt` (now when absent); otherwise the run may have changed
-     * something a new run could repeat, so the session waits behind a blocker.
+     * Continuation of a running Goal whose run the previous process left unfinished. A run whose
+     * effects a later run knows, by the same rule that admits a later run, continues at `resumeAt`
+     * (now when absent); otherwise the run may have changed something a new run could repeat, so
+     * the session waits behind a blocker.
      */
     afterRestart: Effect.fn("WorkflowExecution.afterRestart")(function* (
       sessionId: string,
@@ -217,15 +218,18 @@ const make = Effect.gen(function* () {
       return yield* storage("write", () => {
         const previous = read(sessionId);
         if (previous.kind !== "running" || previous.runId !== runId) return previous;
-        return endedWithoutEffects.get(runId) !== undefined
+        return endedWithKnownEffects.get(runId) !== undefined
           ? save(sessionId, { ...previous, kind: "retrying", retryAt: resumeAt ?? now })
           : save(sessionId, {
               kind: "blocked",
               runId,
               reason: "server_restarted",
               detail:
-                "도구를 실행한 뒤 서버가 다시 시작돼 자동으로 이어가지 않았어요. 실행 결과를 확인한 뒤 다시 보내 주세요.",
-              evidence: [runId, "Owner tool operation recorded before the restart"],
+                "결과가 확인되지 않은 도구 실행 중 서버가 다시 시작돼 자동으로 이어가지 않았어요. 실행 결과를 확인한 뒤 다시 보내 주세요.",
+              evidence: [
+                runId,
+                "Owner tool operation without a recorded result before the restart",
+              ],
             });
       });
     }),
