@@ -274,6 +274,10 @@ export function requestFingerprints(
 }
 
 // Fixed-arity application/SDK contract; these arguments are not a data-last collection API.
+/** Models whose adaptive thinking cannot be turned off and is bound to the request prefix. */
+const anthropicThinkingAlwaysOn = (model: string) =>
+  /^claude-(?:opus-5-5|fable-5-1)(?:-\d{8})?(?:\[1m\])?$/.test(model);
+
 export function subscriptionRequest(options: {
   readonly provider: OAuthProvider;
   readonly selection: ModelSelection;
@@ -315,6 +319,16 @@ function subscriptionRequestBody(
           : tool,
       ),
       tool_choice: tools.length > 0 ? { type: "auto" } : undefined,
+      thinking: anthropicThinkingAlwaysOn(selection.model)
+        ? {
+            type: "adaptive",
+            // Without an explicit display these models return empty thinking blocks.
+            display: "summarized",
+            // Drop signed thinking whose prefix changed (compaction, model switch,
+            // system or tool changes) instead of rejecting the whole request.
+            block_binding: { prefix_mismatch_behavior: "drop_block" },
+          }
+        : undefined,
       output_config:
         selection.reasoningEffort === "none" ? undefined : { effort: selection.reasoningEffort },
     });

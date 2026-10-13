@@ -263,6 +263,7 @@
 - Claude 모델 목록은 앱이 이미 설치한 `@tanstack/ai-anthropic`의 `ANTHROPIC_MODELS` 메타데이터에서 만든다. 실제 계정 entitlement는 실행 요청의 provider 응답으로 검증하며, OpenAI 구독 모델은 기존 원격 카탈로그를 유지한다.
 - 이 결정은 개발 서버 시작과 모델 선택 시 불필요한 403, 토큰 갱신, 재시도 왕복을 제거한다.
 - 수정(2026-10-13): 구독 요청이 밝히는 Claude Code 버전(`User-Agent`, billing header의 `cc_version`)은 `claudeCodeVersion` 한 곳에서 관리한다. 모델마다 최소 Claude Code 버전이 있어(Opus 5.5는 2.1.280), 옛 버전을 밝히면 새 모델만 실패한다. 새 모델을 목록에 받을 때 이 값을 현재 Claude Code 릴리스로 올린다.
+- 수정(2026-10-13): Opus 5.5와 Fable 5.1은 thinking을 끌 수 없다. 이 두 모델의 구독 요청에만 `thinking: { type: "adaptive", display: "summarized", block_binding: { prefix_mismatch_behavior: "drop_block" } }`와 `thinking-binding-controls-2026-08-01` 베타를 보낸다. `display`가 없으면 빈 thinking이 오고, `block_binding`이 없으면 압축·모델 전환·system/도구 변경 뒤 옛 서명 thinking이 요청 전체를 거절시킨다. 요청 본문 정리 Schema가 모르는 필드를 지워 `output_config`(effort)가 전송되지 않던 문제도 함께 고쳤다.
 
 ### Provider 간 대화 전환 (2026-09-21)
 
