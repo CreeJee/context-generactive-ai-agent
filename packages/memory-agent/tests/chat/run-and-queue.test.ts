@@ -409,41 +409,37 @@ testAgent({ testProvider: { responder: gatedResponder } })("message queue", (it)
     }),
   );
 
-  it.effect("steered messages reach the model after the answer ends with no page open", () =>
+  it.effect("steering cuts the answer and the server sends the messages next", () =>
     Effect.gen(function* () {
       const session = yield* chatSession;
       const tab = yield* openTab(session.id);
       yield* sendInBackground(tab, "please be slow");
       yield* until(() => session.invocations().length === 1, "the run to start");
+      // No page holds the session afterwards: only the server can send what follows.
+      tab.client.dispose();
 
       // Steering takes the message waiting before it along, so the order holds.
       yield* enqueue(session.id, "and the tests", "queue");
-      const steered = yield* enqueue(session.id, "shorter please", "steer");
-      expect(steered.status).toBe(201);
-      expect((yield* queueOf(session.id)).items.map((message) => message.state)).toEqual([
-        { kind: "waiting", steered: true },
-        { kind: "waiting", steered: true },
-      ]);
-      expect((yield* queueOf(session.id)).nextDelivery).toEqual({ kind: "server" });
-      tab.client.dispose();
-      yield* session.release;
+      expect((yield* enqueue(session.id, "shorter please", "steer")).status).toBe(201);
 
-      // No tool call happened and no page holds the session: the server sends each as a turn.
+      // The slow answer is never released: the cut ends it, then each message is a turn.
       yield* until(() => session.invocations().length === 3, "both steered turns");
-      expect(session.invocations()[2]?.messages.at(-1)).toMatchObject({
-        role: "user",
-        content: "shorter please",
-      });
+      expect(session.invocations().map((invocation) => invocation.messages.at(-1))).toMatchObject([
+        { role: "user", content: "please be slow" },
+        { role: "user", content: "and the tests" },
+        { role: "user", content: "shorter please" },
+      ]);
       yield* statusOf(session.id).pipe(
         Effect.repeat({
           until: (status) => status.running === null && status.lastRun?.status === "completed",
           schedule: Schedule.spaced(20),
         }),
       );
-      const settled = yield* queueOf(session.id);
-      expect(settled.nextDelivery).toEqual({ kind: "empty" });
-      expect(settled.items.map((item) => item.state)).toMatchObject([
-        { kind: "delivered", via: "next_turn" },
+      expect((yield* queueOf(session.id)).nextDelivery).toEqual({ kind: "empty" });
+      expect(yield* userTexts(session.id)).toEqual([
+        "please be slow",
+        "and the tests",
+        "shorter please",
       ]);
 
       // With nothing answering there is nothing to queue for or steer into.

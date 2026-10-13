@@ -728,8 +728,8 @@ function ChatPanel({
 
   /**
    * Enter. While nothing runs it sends a turn. While a run answers it queues the message for the
-   * next tool-call boundary. With `steer` (Ctrl/⌘+Shift+Enter) the server also sends it as the
-   * next turn if the answer ends first, so it reaches the model even if this page is closed.
+   * next tool-call boundary. `steer` (Ctrl/⌘+Shift+Enter) cuts the answer being written, unless it
+   * has begun a tool call, and the server sends the message next, even if this page is closed.
    */
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const submit = (mode: "queue" | "steer") =>

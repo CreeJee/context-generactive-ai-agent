@@ -112,6 +112,7 @@ import { MemorySearch } from "../memory/search.ts";
 import { MemoryTools } from "../tools/memory.ts";
 import { OutsideTools } from "../tools/outside.ts";
 import { QueueDelivery } from "../queue/delivery.ts";
+import { steerCuttable, type SteerCut } from "./steer-cut.ts";
 import { hostShell } from "../shell/run.ts";
 import { MessageQueue, type QueueChangeRefused } from "../queue/queue.ts";
 import type { QueueEdit, QueuedMessage } from "../queue/queue-state.ts";
@@ -430,8 +431,8 @@ export const QueueRequest = Schema.Struct({
   text: Schema.String,
   attachmentIds: Schema.Array(Schema.String),
   /**
-   * Both deliver at the next tool-call boundary. If the answer ends first, queue: the page sends it
-   * as the next turn. steer: the server does, so it reaches the model with no page open.
+   * queue: the next tool-call boundary, or the next turn the page sends. steer: also cuts the
+   * answer being written; the server sends it as the next turn, with no page needed.
    */
   mode: Schema.Literals(["queue", "steer"]),
 });
@@ -658,6 +659,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const goalExecutionOwnerGeneration = randomUUID();
   // Worker internals change on exit; use the stable run ID for registration and cleanup.
   const ownedSDKWorkers = MutableHashMap.empty<string, { worker: Worker; release: () => void }>();
+  /** The answer a steered message may cut, per session, while an app-run model answers. */
+  const steerCuts = MutableHashMap.empty<string, SteerCut>();
   // Registered after service acquisition: fence RPC first, await actual OS worker exit,
   // then dispose the registry while retaining every durable snapshot for cold adoption.
   yield* Effect.addFinalizer(() =>
@@ -1235,6 +1238,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       let claimedNext: string | null = null;
       let runAdapterToRelease: RunTextAdapter | null = null;
       let cancellationToRelease: Effect.Effect<void> = Effect.void;
+      let stopSteeringOnExit: Effect.Effect<void> = Effect.void;
       return Effect.gen(function* () {
         const { projectId, agent: external, title } = yield* sessions.get(sessionId);
         // Sending, approving and answering all come here; a read-only page may do none of them.
@@ -1625,6 +1629,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // Pin the profile-specific client before later async preparation and tool/model turns.
         const runAdapter = runtime.adapter(selection);
         runAdapterToRelease = runAdapter;
+        const steering = steerCuttable(runAdapter);
+        const stopSteering = Effect.sync(() => {
+          if (Option.getOrUndefined(MutableHashMap.get(steerCuts, sessionId)) === steering)
+            MutableHashMap.remove(steerCuts, sessionId);
+        });
         const restoreModelHistory = modelHandoffHistory({
           metadata,
           threadId: sessionId,
@@ -2241,6 +2250,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         cancellationToRelease = cancellation.cancel.pipe(Effect.ensuring(claim.release));
         if (!notificationFollowup)
           yield* execution.start(sessionId, runId, workflow, turn !== null);
+        // A Goal worker's answer is never cut: stopping it early would end the Goal step.
+        if (workerCapability === null) MutableHashMap.set(steerCuts, sessionId, steering);
+        stopSteeringOnExit = stopSteering;
         if (turn !== null) workTrace.resumeParentNotifications(sessionId);
         events.publishSession(sessionId, "run-state");
         if (isTruthy(queuedId)) {
@@ -2395,6 +2407,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ),
           ),
           Stream.ensuring(Effect.sync(() => releaseSubscriptionRun(runAdapter))),
+          Stream.ensuring(stopSteering),
         );
         const response = toServerSentEventsResponse(Stream.toAsyncIterable(withAccountLease), {
           abortController: deliveryAbortController,
@@ -2409,9 +2422,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         });
         cancellationToRelease = Effect.void;
         runAdapterToRelease = null; // ownership transferred to the stream's finally
+        stopSteeringOnExit = Effect.void;
         return response;
       }).pipe(
         Effect.ensuring(Effect.suspend(() => cancellationToRelease)),
+        Effect.ensuring(Effect.suspend(() => stopSteeringOnExit)),
         Effect.ensuring(
           Effect.sync(() => {
             if (isTruthy(claimedNext)) queue.releaseNext(sessionId, claimedNext);
@@ -2872,8 +2887,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
     /**
      * A message written while a run answers. Both modes deliver it at the next tool-call boundary.
      * When the answer ends first, a `queue` message is sent as the next turn by the page holding
-     * the session; a `steer` message by the server, so it reaches the model with no page open.
-     * With no run answering there is nothing to queue for: the page sends it as a normal turn.
+     * the session. `steer` also cuts the answer being written, and the server sends the message
+     * as the next turn, so it reaches the model at once and with no page open. With no run
+     * answering there is nothing to queue for: the page sends it as a normal turn.
      */
     enqueue: (sessionId: string, holder: string | null, request: QueueRequest) =>
       Effect.gen(function* () {
@@ -2885,7 +2901,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (attachmentIds.some((id) => !isTruthy(attachments.get(id))))
           return json(400, { error: "unknown_attachment" });
         if (!isTruthy(liveRuns.get(sessionId))) return json(409, { error: "not_running" });
-        return json(201, queue.add(sessionId, text, attachmentIds, mode === "steer"));
+        const message = queue.add(sessionId, text, attachmentIds, mode === "steer");
+        // Steering stops the answer where it is, unless it has begun a tool call; the run then
+        // completes and the server sends the message as the next turn.
+        if (mode === "steer")
+          Option.getOrUndefined(MutableHashMap.get(steerCuts, sessionId))?.cut();
+        return json(201, message);
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
 
     /** The session's subagents. */

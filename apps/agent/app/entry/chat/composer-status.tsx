@@ -67,7 +67,7 @@ export function ComposerShortcuts({ mode, className }: { mode: ComposerMode; cla
       case "generating":
         return [
           { keys: ["⏎"], label: "대기열" },
-          { keys: [modifier, "⇧", "⏎"], label: "꼭 전달" },
+          { keys: [modifier, "⇧", "⏎"], label: "끼어들기" },
         ];
       case "editing":
         return [

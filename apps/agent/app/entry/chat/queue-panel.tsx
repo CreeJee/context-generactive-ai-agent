@@ -35,7 +35,7 @@ function stateView(message: QueuedMessage, editingHere: boolean) {
       return {
         icon: Clock3Icon,
         tone: "text-muted-foreground",
-        label: state.steered ? "꼭 전달" : null,
+        label: state.steered ? "끼어들기" : null,
       };
     case "editing":
       return {
