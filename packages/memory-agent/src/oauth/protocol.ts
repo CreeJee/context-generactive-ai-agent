@@ -72,6 +72,9 @@ export interface ProviderProtocol {
   readonly authorizeParameters?: Readonly<Record<string, string>>;
 }
 
+/** Claude Code release the subscription requests identify as; models gate on its minimum version. */
+export const claudeCodeVersion = "2.1.296";
+
 export const providerProtocols: Readonly<Record<OAuthProvider, ProviderProtocol>> = {
   openai: {
     provider: "openai",
@@ -116,7 +119,7 @@ export const providerProtocols: Readonly<Record<OAuthProvider, ProviderProtocol>
     modelHeaders: {
       Accept: "application/json",
       "Content-Type": "application/json",
-      "User-Agent": "claude-cli/2.1.257 (external, sdk-cli)",
+      "User-Agent": `claude-cli/${claudeCodeVersion} (external, sdk-cli)`,
       "anthropic-version": "2023-06-01",
       "anthropic-beta":
         "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advisor-tool-2026-03-01,advanced-tool-use-2025-11-20,effort-2025-11-24",

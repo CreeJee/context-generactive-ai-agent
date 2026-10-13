@@ -262,6 +262,8 @@
 - Anthropic 구독 OAuth 토큰으로 `/v1/models`를 호출하면 모델 추론 권한이 있어도 403이 반환된다. 모델 선택 UI는 이 API를 entitlement 근거로 사용하지 않는다.
 - Claude 모델 목록은 앱이 이미 설치한 `@tanstack/ai-anthropic`의 `ANTHROPIC_MODELS` 메타데이터에서 만든다. 실제 계정 entitlement는 실행 요청의 provider 응답으로 검증하며, OpenAI 구독 모델은 기존 원격 카탈로그를 유지한다.
 - 이 결정은 개발 서버 시작과 모델 선택 시 불필요한 403, 토큰 갱신, 재시도 왕복을 제거한다.
+- 수정(2026-10-13): 구독 요청이 밝히는 Claude Code 버전(`User-Agent`, billing header의 `cc_version`)은 `claudeCodeVersion` 한 곳에서 관리한다. 모델마다 최소 Claude Code 버전이 있어(Opus 5.5는 2.1.280), 옛 버전을 밝히면 새 모델만 실패한다. 새 모델을 목록에 받을 때 이 값을 현재 Claude Code 릴리스로 올린다.
+- 수정(2026-10-13): Opus 5.5와 Fable 5.1은 thinking을 끌 수 없다. 이 두 모델의 구독 요청에만 `thinking: { type: "adaptive", display: "summarized", block_binding: { prefix_mismatch_behavior: "drop_block" } }`와 `thinking-binding-controls-2026-08-01` 베타를 보낸다. `display`가 없으면 빈 thinking이 오고, `block_binding`이 없으면 압축·모델 전환·system/도구 변경 뒤 옛 서명 thinking이 요청 전체를 거절시킨다. 요청 본문 정리 Schema가 모르는 필드를 지워 `output_config`(effort)가 전송되지 않던 문제도 함께 고쳤다.
 
 ### Provider 간 대화 전환 (2026-09-21)
 
@@ -613,6 +615,7 @@
 - 검증 실패는 Execute에서 실제로 수정하고 새 근거와 not_run 검증 상태를 기록한 뒤 다시 Verify로 보낸다. 기존 metadata 저장소에 자동 진행 상태를 보관해 별도 DB 마이그레이션은 추가하지 않는다.
 - 수정(2026-10-13): 서버 재시작으로 끊긴 Goal run은 다시 켜질 때 정상 종료와 같은 규칙으로 정리한다. durable 실행을 실패로 닫고 자동 진행 상태를 멈춘다. 끊긴 run은 재생하지 않는다.
 - 수정(2026-10-13): 도구를 하나도 실행하지 않고 실패·취소된 run은 다음 run을 막지 않는다. 사용자가 이어서 보내면 새 run이 남은 단계부터 진행한다. owner 도구 호출은 실행 전에 장부에 예약되므로 이런 run은 반복될 외부 변경이 없다. middleware·routed persistence는 owner 내부 기록이라 도구 실행으로 세지 않는다. 도구를 실행한 run은 그 도구가 성공했어도 다음 run이 반복할 수 있어 계속 막는다. 이 경우의 사용자 확인 후 계속은 별도로 다룬다.
+- 수정(2026-10-13): 도구를 실행한 실패·취소 run도 다음 run이 모르고 반복할 일이 없으면 막지 않는다. 조건은 실행한 도구가 모두 `succeeded`이고, 읽기 전용(`readOnlyToolNames`)이 아닌 도구마다 `tool_result` 노드가 세션 기록에 있는 것이다. 다음 run은 그 기록을 보고 판단하는 새 턴이며 재생하지 않는다. 도구 승인(`toolAuthorize`)만 있고 실행이 없던 호출은 아무것도 하지 않았으므로 막지 않는다. ledger의 `succeeded`만으로는 부족하다. 도구 단계가 끝나 노드를 쓰기 전에 서버가 내려가면 성공한 도구가 기록에 없을 수 있다. 실제로 2026-10-12 재시작에서 마지막 `read_tool_result`가 이렇게 빠졌다. 기록 없는 쓰기 도구, `pending`·`uncertain` 도구, 이름 없는 작업이 남은 run은 계속 막는다. uncertain 읽기는 기존 read recovery로만 푼다. 판정은 입장 시 `nodes_tool_result_call` 인덱스로 한다. owner ledger의 새 side-effect 예약도 같은 run을 미해결로 세지 않는다. 그렇지 않으면 입장은 통과해도 끊긴 run에 남은 middleware 기록 때문에 첫 도구가 거부된다.
 
 ### 개발 빌더와 full-loop worker 소스 (2026-10-03)
 

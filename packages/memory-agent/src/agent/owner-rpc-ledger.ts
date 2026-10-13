@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { Schema } from "effect";
 import type { OwnerRpcLedger } from "./owner-rpc.ts";
 import { recoveredReadRunSql } from "./owner-read-recovery.ts";
+import { endedWithKnownEffectsSql } from "../workflow/run-bindings.ts";
 
 const Binding = Schema.Struct({
   runId: Schema.String,
@@ -62,7 +63,8 @@ export function makeSqliteOwnerRpcLedger({
       LEFT JOIN chat_runs recovery_run ON recovery_run.run_id = operations.run_id
       WHERE binding.session_id = ? AND binding.goal_instance_id = ?
       AND operations.side_effect = 1 AND operations.status <> 'succeeded'
-      AND NOT ${recoveredReadRunSql("recovery_run")} LIMIT 1`,
+      AND NOT ${recoveredReadRunSql("recovery_run")}
+      AND NOT ${endedWithKnownEffectsSql("recovery_run")} LIMIT 1`,
   );
   const insert = sqlite.prepare(`INSERT INTO owner_rpc_operations
     (run_id, run_key, operation_id, fingerprint, side_effect, reply_json, status)

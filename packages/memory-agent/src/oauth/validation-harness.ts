@@ -1021,10 +1021,11 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
     if (!isTruthy(credential)) return yield* new OAuthHarnessError("not_connected", null, context);
     if (credential.expiresAt <= now() + 30_000) credential = yield* refreshEffect(credential);
 
-    const providerBody =
+    const prepared =
       protocol.provider === "anthropic"
         ? prepareAnthropicValidationBody(serializedBody, anthropicSessionId)
-        : serializedBody;
+        : { body: serializedBody, betas: [] };
+    const providerBody = prepared.body;
 
     const request = Effect.fnUntraced(function* (current: StoredCredential) {
       const headers = new Headers(protocol.modelHeaders);
@@ -1037,6 +1038,11 @@ export function createSubscriptionOAuthClient(options: SubscriptionOAuthClientOp
           yield* oauthProtocolCrypto.randomUUIDv4().pipe(Effect.orDie),
         );
         headers.set("X-Claude-Code-Session-Id", anthropicSessionId);
+        if (prepared.betas.length > 0)
+          headers.set(
+            "anthropic-beta",
+            [headers.get("anthropic-beta"), ...prepared.betas].filter(isTruthy).join(","),
+          );
         headers.set("X-Stainless-Arch", process.arch === "x64" ? "x64" : process.arch);
         headers.set(
           "X-Stainless-OS",

@@ -37,6 +37,7 @@ import {
   type OAuthProvider,
   type ProviderProtocol,
 } from "../src/oauth/protocol.ts";
+import { subscriptionRequest } from "../src/providers/subscription-adapter.ts";
 
 class MemoryCredentialStore implements CredentialStore {
   readonly values = MutableHashMap.empty<OAuthProvider, StoredCredential>();
@@ -825,6 +826,48 @@ for (const provider of ["openai", "anthropic"] as const) {
         }),
       ),
     );
+
+    if (provider === "anthropic")
+      it.live("sends effort, and bound summarized thinking only to always-thinking models", () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const fake = yield* fakeProvider(provider);
+            const harness = OAuthValidationHarness({
+              protocol: fake.protocol,
+              store: new MemoryCredentialStore(),
+            });
+            yield* login(harness);
+            for (const model of ["claude-opus-5-5", "claude-opus-5"])
+              yield* Stream.runDrain(
+                Stream.fromAsyncIterable(
+                  harness.stream(
+                    subscriptionRequest({
+                      provider,
+                      selection: { provider, model, reasoningEffort: "high" },
+                      options: { messages: [{ role: "user", content: "hi" }] },
+                    }),
+                  ),
+                  (cause) => new Cause.UnknownError(cause),
+                ),
+              );
+            const [bound, plain] = fake.modelBodies.map((body) => JSON.parse(body));
+            expect(bound.output_config).toEqual({ effort: "high" });
+            expect(bound.thinking).toEqual({
+              type: "adaptive",
+              display: "summarized",
+              block_binding: { prefix_mismatch_behavior: "drop_block" },
+            });
+            expect(fake.modelHeaders[0]?.["anthropic-beta"]).toContain(
+              "thinking-binding-controls-2026-08-01",
+            );
+            expect(plain.output_config).toEqual({ effort: "high" });
+            expect(plain.thinking).toBeUndefined();
+            expect(fake.modelHeaders[1]?.["anthropic-beta"]).toBe(
+              providerProtocols.anthropic.modelHeaders["anthropic-beta"],
+            );
+          }),
+        ),
+      );
 
     it.live("fetches the fixed catalog, paginates, and returns no credentials", () =>
       Effect.scoped(

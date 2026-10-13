@@ -3,7 +3,7 @@ import { isTruthy } from "../truthy.ts";
 import { Array as EffectArray, Clock, Context, Effect, Layer, Schema } from "effect";
 import { Database } from "../db/database.ts";
 import { planSchedule, stalledEvidence } from "./plan-schedule.ts";
-import { endedWithoutEffectsSql } from "./run-bindings.ts";
+import { endedWithKnownEffectsSql } from "./run-bindings.ts";
 import type { WorkflowState } from "./workflow.ts";
 
 const blockerFields = {
@@ -116,7 +116,7 @@ const make = Effect.gen(function* () {
   const { sqlite } = yield* Database;
   const select = sqlite.prepare("SELECT value FROM chat_metadata WHERE namespace = ? AND key = ?");
   const endedWithoutEffects = sqlite.prepare(
-    `SELECT 1 AS ended FROM chat_runs r WHERE r.run_id = ? AND ${endedWithoutEffectsSql("r")}`,
+    `SELECT 1 AS ended FROM chat_runs r WHERE r.run_id = ? AND ${endedWithKnownEffectsSql("r")}`,
   );
   const upsert = sqlite.prepare(`INSERT INTO chat_metadata (namespace, key, value) VALUES (?, ?, ?)
     ON CONFLICT(namespace, key) DO UPDATE SET value = excluded.value`);
