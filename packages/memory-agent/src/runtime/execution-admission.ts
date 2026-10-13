@@ -1,4 +1,15 @@
-import { Config, Context, Effect, Layer, Metric, Ref, Schema, Semaphore } from "effect";
+import {
+  Config,
+  Context,
+  Duration,
+  Effect,
+  Layer,
+  Metric,
+  Ref,
+  Schedule,
+  Schema,
+  Semaphore,
+} from "effect";
 
 export const ExecutionAdmissionKind = Schema.Literals(["workflow", "worker", "model", "tool"]);
 export type ExecutionAdmissionKind = typeof ExecutionAdmissionKind.Type;
@@ -59,6 +70,23 @@ const saturatedCounter = Metric.counter("context_agent_execution_saturated_total
   description: "Execution operations rejected because both active and queued capacity were full",
   incremental: true,
 });
+
+/**
+ * How a saturated caller tries again: soon at first, then every two seconds at most, jittered so
+ * waiters do not retry in step.
+ */
+const saturatedRetry = Schedule.min([
+  Schedule.exponential("50 millis"),
+  Schedule.spaced("2 seconds"),
+]).pipe(Schedule.jittered);
+
+/**
+ * A wait for capacity. Work already running waits as long as it lives (`forever`); a request
+ * starting new work gives up after `upTo` so its caller hears it is busy.
+ */
+export type AdmissionWait =
+  | { readonly _tag: "forever" }
+  | { readonly _tag: "upTo"; readonly duration: Duration.Input };
 
 const tagged = <Input, State>(metric: Metric.Metric<Input, State>, kind: ExecutionAdmissionKind) =>
   Metric.withAttributes(metric, { kind });
@@ -153,7 +181,8 @@ const make = Effect.fnUntraced(function* (limits: ExecutionAdmissionLimits) {
     } satisfies ExecutionAdmissionSnapshot;
   });
 
-  const acquire = (kind: ExecutionAdmissionKind) => {
+  /** Fails with `ExecutionSaturated` when both the active and the queued capacity are taken. */
+  const admit = (kind: ExecutionAdmissionKind) => {
     const gate = gates[kind];
     return Effect.gen(function* () {
       const admitted = yield* gate.admittedPermits.takeIfAvailable(1);
@@ -176,6 +205,25 @@ const make = Effect.fnUntraced(function* (limits: ExecutionAdmissionLimits) {
           capacity: gate.limits.active + gate.limits.queued,
         });
       }
+    });
+  };
+
+  /**
+   * Takes a permit, waiting in the queue behind active work. When the queue is full too, the
+   * caller tries again until `wait` runs out; saturation is not a failure of the work itself.
+   */
+  const acquire = (kind: ExecutionAdmissionKind, wait: AdmissionWait = { _tag: "forever" }) => {
+    const gate = gates[kind];
+    const schedule = (() => {
+      switch (wait._tag) {
+        case "forever":
+          return saturatedRetry;
+        case "upTo":
+          return saturatedRetry.pipe(Schedule.upTo({ duration: wait.duration }));
+      }
+    })();
+    return Effect.gen(function* () {
+      yield* admit(kind).pipe(Effect.retry(schedule));
 
       const activeImmediately = yield* gate.activePermits.takeIfAvailable(1);
       if (!activeImmediately) {
@@ -213,9 +261,10 @@ const make = Effect.fnUntraced(function* (limits: ExecutionAdmissionLimits) {
   const run = <A, E, R>(
     kind: ExecutionAdmissionKind,
     effect: Effect.Effect<A, E, R>,
+    wait?: AdmissionWait,
   ): Effect.Effect<A, E | ExecutionSaturated, R> =>
     Effect.acquireUseRelease(
-      acquire(kind),
+      acquire(kind, wait),
       () => effect,
       (release) => release,
     ).pipe(

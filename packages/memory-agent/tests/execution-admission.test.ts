@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Latch, Layer } from "effect";
+import { TestClock } from "effect/testing";
 import {
   ExecutionAdmission,
   type ExecutionAdmissionLimits,
@@ -44,9 +45,17 @@ describe("ExecutionAdmission", () => {
         queueCapacity: 1,
       });
 
-      const saturated = yield* Effect.flip(
-        admission.run("workflow", Effect.succeed("must not run")),
+      // A request starting new work waits a while for room, then hears the app is busy.
+      const refused = yield* Effect.forkChild(
+        Effect.flip(
+          admission.run("workflow", Effect.succeed("must not run"), {
+            _tag: "upTo",
+            duration: "1 second",
+          }),
+        ),
       );
+      yield* TestClock.adjust("5 seconds");
+      const saturated = yield* Fiber.join(refused);
       assert.instanceOf(saturated, ExecutionSaturated);
       assert.deepStrictEqual(
         {
@@ -70,7 +79,7 @@ describe("ExecutionAdmission", () => {
     }),
   );
 
-  it.effect("releases active and admission capacity when a holder is interrupted", () =>
+  it.effect("running work waits out saturation and starts once a holder is interrupted", () =>
     Effect.gen(function* () {
       const services = yield* Layer.build(
         ExecutionAdmission.layer({
@@ -90,14 +99,14 @@ describe("ExecutionAdmission", () => {
       );
       yield* Deferred.await(holderStarted);
 
-      const saturated = yield* Effect.flip(admission.run("model", Effect.succeed("must not run")));
-      assert.instanceOf(saturated, ExecutionSaturated);
+      // No room even to queue: work already running keeps trying instead of failing.
+      const waiting = yield* Effect.forkChild(admission.run("model", Effect.succeed("waited")));
+      yield* TestClock.adjust("10 seconds");
+      assert.isUndefined(waiting.pollUnsafe());
 
       yield* Fiber.interrupt(holder);
-      assert.strictEqual(
-        yield* admission.run("model", Effect.succeed("replacement")),
-        "replacement",
-      );
+      yield* TestClock.adjust("3 seconds");
+      assert.strictEqual(yield* Fiber.join(waiting), "waited");
       assert.deepStrictEqual(yield* admission.snapshot("model"), {
         active: 0,
         queued: 0,

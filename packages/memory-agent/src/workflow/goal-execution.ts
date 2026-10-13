@@ -139,6 +139,8 @@ const make = Effect.gen(function* () {
           yield* provideEngine(GoalExecution.execute(payload, { discard: true }));
           return admitted;
         }),
+        // A request is waiting on this: past half a minute it is told the app is busy.
+        { _tag: "upTo", duration: "30 seconds" },
       ),
 
     succeed: (payload: GoalExecutionPayloadType) =>
