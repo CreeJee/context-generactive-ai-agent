@@ -1,7 +1,6 @@
 import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Context, Data, Effect, Layer, Schema, Semaphore } from "effect";
-import { GlobalConfig } from "../config/global-config.ts";
 import { Database } from "../db/database.ts";
 import { AppEvents } from "../events/app-events.ts";
 import { Indexer } from "./embedding/indexer.ts";
@@ -12,7 +11,10 @@ export class MemoryGraphRepairFailed extends Data.TaggedError("MemoryGraphRepair
   readonly cause: unknown;
 }> {}
 
-export const memoryGraphRepairVersion = 1;
+/**
+ * 2 stopped demoting cross-session `corrects`/`retracts` and restores those version 1 demoted.
+ */
+export const memoryGraphRepairVersion = 2;
 const batchSize = 64;
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
 const decodeProgress = EffectFunction.flow(
@@ -40,7 +42,6 @@ const decodeBatch = EffectFunction.flow(
 
 const make = Effect.gen(function* () {
   const { sqlite, atomic } = yield* Database;
-  const config = yield* GlobalConfig;
   const indexer = yield* Indexer;
   const vectors = yield* VectorIndex;
   const events = yield* AppEvents;
@@ -96,7 +97,6 @@ const make = Effect.gen(function* () {
       OR (e.origin = 'llm' AND (
         NOT (${meaningfulNodeFilter})
         OR NOT (${nonBlankTextSql("target.text")})
-        OR (e.kind IN ('corrects', 'retracts') AND n.session_id IS NOT target.session_id)
       ))
     ) ON CONFLICT DO NOTHING`);
   const archiveInterpretations = sqlite.prepare(`
@@ -119,6 +119,44 @@ const make = Effect.gen(function* () {
   const discardEmptyJobs = sqlite.prepare(`
     DELETE FROM interpret_jobs WHERE node_id = ? AND EXISTS (
       SELECT 1 FROM nodes n WHERE n.id = interpret_jobs.node_id AND NOT (${meaningfulNodeFilter}))`);
+
+  // Version 1 also suppressed every cross-session correction it could not tie to the same
+  // decision. Those with a meaningful source and target were suppressed for that reason alone.
+  const demotedAcrossSessions = `
+    FROM memory_graph_edge_repairs r
+    JOIN nodes n ON n.id = r.from_id JOIN nodes target ON target.id = r.to_id
+    WHERE r.version = 1 AND r.action = 'suppress' AND r.kind IN ('corrects', 'retracts')
+      AND n.session_id IS NOT target.session_id
+      AND ${meaningfulNodeFilter} AND ${nonBlankTextSql("target.text")}`;
+  const restoreInterpretations = sqlite.prepare(`
+    UPDATE interpretations SET status = 'applied' WHERE status = 'unconfirmed' AND id IN (
+      SELECT ir.interpretation_id FROM memory_graph_interpretation_repairs ir
+      JOIN interpretations i ON i.id = ir.interpretation_id
+      WHERE ir.version = 1 AND EXISTS (SELECT 1 ${demotedAcrossSessions}
+        AND r.from_id = i.node_id AND r.to_id = i.target_id AND r.kind = i.kind))`);
+  const restoreEdges = sqlite.prepare(`
+    INSERT INTO edges (from_id, to_id, kind, origin, weight, created_at)
+    SELECT r.from_id, r.to_id, r.kind, r.origin, r.weight, r.created_at ${demotedAcrossSessions}
+    ON CONFLICT DO NOTHING`);
+  const forgetInterpretationRepairs = sqlite.prepare(`
+    DELETE FROM memory_graph_interpretation_repairs WHERE version = 1 AND interpretation_id IN (
+      SELECT i.id FROM interpretations i WHERE EXISTS (SELECT 1 ${demotedAcrossSessions}
+        AND r.from_id = i.node_id AND r.to_id = i.target_id AND r.kind = i.kind))`);
+  const forgetEdgeRepairs = sqlite.prepare(`
+    DELETE FROM memory_graph_edge_repairs WHERE rowid IN (SELECT r.rowid ${demotedAcrossSessions})`);
+  /** Undoes version 1's cross-session demotions. Running it again finds nothing left to undo. */
+  const restoreCrossSession = indexer.exclusive(
+    Effect.try({
+      try: () =>
+        atomic(() => {
+          restoreInterpretations.run();
+          restoreEdges.run();
+          forgetInterpretationRepairs.run();
+          forgetEdgeRepairs.run();
+        }),
+      catch: (cause) => new MemoryGraphRepairFailed({ cause }),
+    }),
+  );
 
   const topics = sqlite.prepare(`
     SELECT n.seq, n.id FROM memory_graph_topic_candidates c JOIN nodes n ON n.seq = c.node_seq
@@ -149,8 +187,6 @@ const make = Effect.gen(function* () {
     WHERE version = ?`);
 
   const batch = Effect.fnUntraced(function* () {
-    // Consent is checked between batches, including when a user changes settings during a pass.
-    if ((yield* config.read).embeddingDevice === undefined) return false;
     const rows = decodeBatch(nodes.all(progress().after_seq, progress().through_seq, batchSize));
     const candidates = decodeBatch(topics.all(batchSize));
     if (rows.length === 0 && candidates.length === 0) return false;
@@ -195,7 +231,7 @@ const make = Effect.gen(function* () {
   });
 
   const run = Effect.gen(function* () {
-    if ((yield* config.read).embeddingDevice === undefined) return;
+    yield* restoreCrossSession;
     initialize.run(version);
     if (progress().status === "completed") return;
     sqlite
@@ -206,10 +242,9 @@ const make = Effect.gen(function* () {
     events.publishGlobal("embedding");
     yield* indexer.exclusive(vectors.flushRemovals);
     while (yield* batch()) yield* Effect.yieldNow;
-    const enabled = (yield* config.read).embeddingDevice !== undefined;
     sqlite
-      .prepare("UPDATE memory_graph_maintenance SET status = ? WHERE version = ?")
-      .run(enabled ? "completed" : "pending", version);
+      .prepare("UPDATE memory_graph_maintenance SET status = 'completed' WHERE version = ?")
+      .run(version);
     events.publishGlobal("embedding");
   }).pipe(
     Effect.catchCause((cause) =>
@@ -244,11 +279,9 @@ const make = Effect.gen(function* () {
   return {
     run,
     start,
-    overview: Effect.gen(function* () {
-      const enabled = (yield* config.read).embeddingDevice !== undefined;
+    overview: Effect.sync(() => {
       const current = progress();
       return {
-        enabled,
         version,
         status: current.status,
         scanned: current.scanned,
@@ -261,7 +294,10 @@ const make = Effect.gen(function* () {
   };
 });
 
-/** Automatic, local repairs for users who explicitly selected an embedding execution mode. */
+/**
+ * Automatic, local repairs of links older versions wrote wrongly. They only fix what has no use,
+ * so every store runs them; original nodes are never deleted or rewritten.
+ */
 export class MemoryGraphMaintenance extends Context.Service<
   MemoryGraphMaintenance,
   Effect.Success<typeof make>

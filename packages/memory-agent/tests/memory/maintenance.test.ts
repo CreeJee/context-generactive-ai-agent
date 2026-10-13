@@ -1,7 +1,6 @@
 import { Context, Crypto, Deferred, Effect, Fiber, FileSystem, Layer, Path, Scope } from "effect";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
-import { GlobalConfig } from "../../src/config/global-config.ts";
 import { Database } from "../../src/db/database.ts";
 import { Embedder } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
@@ -83,9 +82,15 @@ const legacy = Effect.gen(function* () {
   return { nodes, sqlite, user, empty, call, result, topic: emptyTopic, link };
 });
 
-/** Choosing an execution device is the consent that lets repairs run. */
-const consent = Effect.flatMap(GlobalConfig, (config) => config.update({ embeddingDevice: "cpu" }));
 const run = Effect.flatMap(MemoryGraphMaintenance, (maintenance) => maintenance.run);
+/**
+ * The pass the agent starts on its own saw the store before `legacy` wrote into it. Forget it, as
+ * if the store came from a version without repairs.
+ */
+const asOlderStore = run.pipe(
+  Effect.andThen(Database),
+  Effect.map(({ sqlite }) => sqlite.prepare("DELETE FROM memory_graph_maintenance").run()),
+);
 const overview = Effect.flatMap(MemoryGraphMaintenance, (maintenance) => maintenance.overview);
 const indexAll = Effect.flatMap(Indexer, (indexer) => indexer.indexAll());
 const vectorCount = Effect.map(VectorIndex, (vectors) => vectors.size());
@@ -110,7 +115,7 @@ alone("other fibers can run between repair batches", () =>
         text: `유효한 문장 ${i}`,
       });
     }
-    yield* consent;
+    yield* asOlderStore;
     const observed: number[] = [];
     const observer = Effect.gen(function* () {
       for (;;) {
@@ -154,13 +159,13 @@ alone("a crash after saving removals resumes the queue before index size reconci
   }),
 );
 
-alone("an absent execution choice never authorizes repairs", () =>
+alone("repairs run without any embedding execution choice", () =>
   Effect.gen(function* () {
     const c = yield* legacy;
+    yield* asOlderStore;
     yield* run;
-    expect(c.sqlite.prepare("SELECT * FROM memory_graph_maintenance").all()).toEqual([]);
-    expect(yield* chainLength(c.result.id)).toBe(1);
-    expect(yield* overview).toMatchObject({ enabled: false, status: "pending" });
+    expect(yield* chainLength(c.result.id)).toBe(4);
+    expect(yield* overview).toMatchObject({ status: "completed", repairedEdges: 1 });
   }),
 );
 
@@ -172,7 +177,7 @@ alone("repairs already embedded nodes while preserving originals and useful vect
     const original = c.sqlite.prepare("SELECT * FROM nodes ORDER BY seq").all();
     const before = yield* vectorCount;
     c.sqlite.prepare("INSERT INTO node_vectors VALUES (?, 'inactive-model')").run(c.topic.seq);
-    yield* consent;
+    yield* asOlderStore;
     yield* run;
     expect((yield* Graph).trace(c.result.id)?.chain.map((node) => node.id)).toEqual([
       c.result.id,
@@ -217,31 +222,17 @@ alone("repairs already embedded nodes while preserving originals and useful vect
   }),
 );
 
-alone("selecting an execution mode starts repairs without a manual migration command", () =>
-  Effect.gen(function* () {
-    yield* legacy;
-    const setup = yield* EmbeddingSetup;
-    yield* setup.choose("auto");
-    // Wait on the same pass permit, rather than guessing how long a background job takes.
-    yield* run;
-    expect(yield* setup.overview).toMatchObject({
-      maintenance: { enabled: true, status: "completed", repairedEdges: 1 },
-    });
-  }),
-);
-
-alone("existing execution choices trigger maintenance on restart", () =>
+alone("an older store is repaired when the agent starts, without a manual command", () =>
   Effect.gen(function* () {
     const env = yield* TestEnv;
     yield* legacy;
-    yield* (yield* GlobalConfig).update({ embeddingDevice: "gpu" });
+    yield* asOlderStore;
     yield* env.reopen;
+    // Wait on the same pass permit, rather than guessing how long a background job takes.
     yield* env.use(run);
-    expect(yield* env.use(overview)).toMatchObject({
-      enabled: true,
-      status: "completed",
-      repairedEdges: 1,
-    });
+    expect(yield* env.use(Effect.flatMap(EmbeddingSetup, (setup) => setup.overview))).toMatchObject(
+      { maintenance: { status: "completed", repairedEdges: 1 } },
+    );
   }),
 );
 
@@ -260,7 +251,7 @@ alone("a failed index save resumes targeted removals without rebuilding valid ve
     const directory = Buffer.from(digest).toString("hex").slice(0, 16);
     const blocker = (yield* Path.Path).join(env.storage, "vectors", directory, "index.tvim.tmp");
     yield* fs.makeDirectory(blocker);
-    yield* consent;
+    yield* asOlderStore;
     yield* run;
     expect(yield* overview).toMatchObject({ status: "failed" });
     expect(c.sqlite.prepare("SELECT node_seq FROM memory_graph_vector_removals").all()).toEqual([
@@ -294,9 +285,9 @@ alone(
   () =>
     Effect.gen(function* () {
       const c = yield* legacy;
+      yield* asOlderStore;
       const indexing = yield* Effect.forkChild(indexAll);
       yield* Deferred.await(entered);
-      yield* consent;
       const first = yield* Effect.forkChild(run);
       const second = yield* Effect.forkChild(run);
       yield* Deferred.succeed(release, undefined);
@@ -318,7 +309,7 @@ alone(
 );
 
 alone(
-  "legacy cross-session corrections become unconfirmed, same-session decisions stay applied",
+  "cross-session corrections keep their interpretation, and version 1 demotions come back",
   () =>
     Effect.gen(function* () {
       const { project, session } = yield* TestEnv;
@@ -336,16 +327,44 @@ alone(
         kind: "user",
         text: "아니 SQLite 대신 Postgres로 바꾸자",
       });
+      const demoted = c.nodes.append({
+        projectId: project.id,
+        sessionId: another.id,
+        kind: "user",
+        text: "SQLite 말고 DuckDB로 하자",
+      });
       c.link(cross, c.user, "corrects");
       c.link(same, c.user, "corrects");
-      yield* consent;
+      c.link(demoted, c.user, "corrects");
+      // What version 1 did to a cross-session correction: archive it, demote it, drop the edge.
+      c.sqlite
+        .prepare(
+          "INSERT INTO memory_graph_edge_repairs (version, from_id, to_id, kind, origin, weight, created_at, action) VALUES (1, ?, ?, 'corrects', 'llm', 0.8, ?, 'suppress')",
+        )
+        .run(demoted.id, c.user.id, demoted.createdAt);
+      c.sqlite
+        .prepare(
+          "INSERT INTO memory_graph_interpretation_repairs SELECT 1, id, status FROM interpretations WHERE node_id = ?",
+        )
+        .run(demoted.id);
+      c.sqlite
+        .prepare("UPDATE interpretations SET status = 'unconfirmed' WHERE node_id = ?")
+        .run(demoted.id);
+      c.sqlite.prepare("DELETE FROM edges WHERE from_id = ?").run(demoted.id);
+      yield* asOlderStore;
       yield* run;
       const status = (node: Node) =>
         c.sqlite
           .prepare("SELECT status FROM interpretations WHERE node_id = ? AND kind = 'corrects'")
           .get(node.id);
-      expect(status(cross)).toEqual({ status: "unconfirmed" });
+      expect(status(cross)).toEqual({ status: "applied" });
       expect(status(same)).toEqual({ status: "applied" });
+      expect(status(demoted)).toEqual({ status: "applied" });
+      expect(
+        c.sqlite
+          .prepare("SELECT kind FROM edges WHERE from_id = ? AND to_id = ?")
+          .all(demoted.id, c.user.id),
+      ).toEqual([{ kind: "corrects" }]);
     }),
 );
 
@@ -361,16 +380,17 @@ layer(
   ),
   { excludeTestServices: true },
 )("automatic memory graph maintenance across stores", (it) => {
-  it.effect("different users' stores retain independent consent and progress", () =>
+  it.effect("different users' stores keep independent progress", () =>
     Effect.gen(function* () {
       const other = yield* OtherStore;
+      // The other store's own pass has finished before its older data appears.
+      yield* other.use(run);
       const first = yield* legacy;
       const second = yield* other.use(legacy.pipe(Effect.provideService(TestEnv, other)));
-      yield* consent;
-      yield* Effect.all([run, other.use(run)], { concurrency: "unbounded" });
+      yield* asOlderStore;
+      yield* run;
       expect(yield* chainLength(first.result.id)).toBe(4);
       expect(yield* other.use(chainLength(second.result.id))).toBe(1);
-      expect(second.sqlite.prepare("SELECT * FROM memory_graph_maintenance").all()).toEqual([]);
     }),
   );
 });
