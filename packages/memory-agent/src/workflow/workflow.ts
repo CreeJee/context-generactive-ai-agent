@@ -14,6 +14,7 @@ import {
   CriterionMapping,
 } from "./completion-evidence.ts";
 import { validatePlanDependencies } from "./plan-schedule.ts";
+import { acknowledgedRunSql, resolvedRunSql } from "./run-bindings.ts";
 
 export const WorkflowPhase = Schema.Literals([
   "chat",
@@ -460,14 +461,17 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
           sqlite
             .prepare(`
           SELECT b.run_id FROM workflow_run_bindings b LEFT JOIN chat_runs r ON r.run_id = b.run_id
-          WHERE b.session_id = ? AND b.run_id <> ? AND (r.status IS NULL OR r.status <> 'completed') LIMIT 1
+          WHERE b.session_id = ? AND b.run_id <> ? AND (r.status IS NULL OR r.status <> 'completed')
+            AND NOT ${resolvedRunSql("b", "r")} LIMIT 1
         `)
             .get(sessionId, callingRunId ?? ""),
         ) ||
         isTruthy(
           sqlite
             .prepare(`
-          SELECT run_id FROM chat_runs WHERE thread_id = ? AND run_id <> ? AND status <> 'completed' LIMIT 1
+          SELECT r.run_id FROM chat_runs r WHERE r.thread_id = ? AND r.run_id <> ? AND r.status <> 'completed'
+            AND NOT EXISTS (SELECT 1 FROM workflow_run_bindings b
+              WHERE b.run_id = r.run_id AND ${resolvedRunSql("b", "r")}) LIMIT 1
         `)
             .get(sessionId, callingRunId ?? ""),
         )
@@ -478,7 +482,8 @@ const make = (options: { readonly allowNewGoal?: boolean } = {}) =>
           sqlite
             .prepare(`
         SELECT o.run_id FROM owner_rpc_operations o JOIN workflow_run_bindings b ON b.run_id = o.run_id
-        WHERE b.session_id = ? AND ((o.status = 'pending' AND o.run_id <> ?) OR (o.side_effect = 1 AND o.status = 'uncertain')) LIMIT 1
+        WHERE b.session_id = ? AND ((o.status = 'pending' AND o.run_id <> ?) OR (o.side_effect = 1 AND o.status = 'uncertain'))
+          AND NOT ${acknowledgedRunSql("b")} LIMIT 1
       `)
             .get(sessionId, callingRunId ?? ""),
         )

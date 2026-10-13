@@ -24,6 +24,7 @@ export {
 } from "./agent/chat.ts";
 export { sessionMessages } from "./agent/history.ts";
 export { ReadRecoveryConfirmation } from "./agent/owner-read-recovery.ts";
+export { UncertainContinueRequest } from "./workflow/uncertain-runs.ts";
 export { ReadRecoveryRevocation } from "./agent/owner-read-recovery.ts";
 export { createLiveRuns, type LiveRun, type LiveRuns } from "./agent/live-runs.ts";
 export {

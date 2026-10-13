@@ -36,6 +36,7 @@ import {
   type WorkflowState,
 } from "../api";
 import { ChatApprovals } from "./chat-approvals";
+import { UncertainRuns } from "./uncertain-runs";
 import { ChatComposer, type ChatComposerHandle } from "./chat-composer";
 import { ChatHistory } from "./chat-history";
 import { ContextMeter } from "./context-meter";
@@ -948,6 +949,14 @@ function ChatPanel({
           }
           onRetry={retryInterrupts}
           onResync={onResync}
+          onProblem={(message) => setNotice(problem(message))}
+        />
+        <UncertainRuns
+          sessionId={sessionId}
+          holder={holder}
+          runs={run.uncertainRuns}
+          readOnly={readOnly}
+          onContinued={() => void run.refresh()}
           onProblem={(message) => setNotice(problem(message))}
         />
         <SubagentPanel

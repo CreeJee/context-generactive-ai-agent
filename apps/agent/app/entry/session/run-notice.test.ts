@@ -9,6 +9,7 @@ const record = (
   running: SessionRunState["running"] = null,
 ): SessionRunState => ({
   actions: allowedWorkflowActions,
+  uncertainRuns: [],
   running,
   lastRun,
   lease: { state: "mine" },

@@ -41,7 +41,7 @@ export const toolOperationSql = (operation: string) => `(${operation}.side_effec
     NOT IN ('middleware', 'routedPersistence'))`;
 
 /** A string field of the owner-encoded tool invocation in a tool operation's fingerprint. */
-const invocationFieldSql = (operation: string, field: "name" | "toolCallId") =>
+export const invocationFieldSql = (operation: string, field: "name" | "toolCallId") =>
   `(SELECT json_extract(f.value, '$[1][1]') FROM json_each(${operation}.fingerprint, '$.input[1]') f
     WHERE json_extract(f.value, '$[0]') = '${field}')`;
 
@@ -70,6 +70,20 @@ export const endedWithKnownEffectsSql = (
           WHERE n.session_id = ${run}.thread_id AND n.kind = 'tool_result'
             AND json_extract(n.detail, '$.toolCallId') = ${invocationFieldSql("eo", "toolCallId")}))))`;
 
+/**
+ * A bound run whose unknown outcome the user saw and chose to continue past. `binding` names a
+ * `workflow_run_bindings` row.
+ */
+export const acknowledgedRunSql = (binding: string) => `EXISTS (
+  SELECT 1 FROM workflow_uncertain_acknowledgements ack WHERE ack.run_id = ${binding}.run_id)`;
+
+/**
+ * A bound run that ended without completing and still leaves later runs nothing to guess about:
+ * an operator recovered it, everything it did is known, or the user chose to continue past it.
+ */
+export const resolvedRunSql = (binding: string, run: "r") =>
+  `(${recoveredReadRunSql(run)} OR ${endedWithKnownEffectsSql(run)} OR ${acknowledgedRunSql(binding)})`;
+
 /** A central-owner-only durable claim; it cannot authorize a worker or a tool on its own. */
 export function workflowRunBindings({ sqlite, atomic }: OwnerDatabase) {
   const identity = sqlite.prepare(
@@ -83,8 +97,9 @@ export function workflowRunBindings({ sqlite, atomic }: OwnerDatabase) {
   const previous = sqlite.prepare(`
     SELECT b.run_id FROM workflow_run_bindings b
     LEFT JOIN chat_runs r ON r.run_id = b.run_id
-    WHERE b.session_id = ? AND (r.status IS NULL OR (r.status <> 'completed' AND NOT (
-      ${recoveredReadRunSql("r")} OR ${endedWithKnownEffectsSql("r")}
+    WHERE b.session_id = ? AND NOT ${acknowledgedRunSql("b")}
+      AND (r.status IS NULL OR (r.status <> 'completed' AND NOT (
+      ${resolvedRunSql("b", "r")}
       OR r.status = 'interrupted' AND EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id)
       AND (r.run_id = ? OR NOT EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id AND i.status = 'pending'))
     ))) LIMIT 1
@@ -96,7 +111,7 @@ export function workflowRunBindings({ sqlite, atomic }: OwnerDatabase) {
     WHERE binding.session_id = ? AND binding.goal_instance_id = ?
       AND (operations.status = 'pending'
         OR (operations.side_effect = 1 AND operations.status <> 'succeeded'))
-      AND NOT ${recoveredReadRunSql("r")} AND NOT ${endedWithKnownEffectsSql("r")} LIMIT 1
+      AND NOT ${resolvedRunSql("binding", "r")} LIMIT 1
   `);
   const claimed = sqlite.prepare("SELECT run_id FROM workflow_run_bindings WHERE run_id = ?");
   const insert = sqlite.prepare(`

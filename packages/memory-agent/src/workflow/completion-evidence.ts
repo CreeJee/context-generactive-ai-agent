@@ -237,10 +237,13 @@ export function completionEvidence(sqlite: DatabaseSync) {
       )
         return { status: "refused" };
       for (const nodeId of mapping.evidenceNodeIds) {
+        // A background receipt only says the work was accepted, not that it was done.
         const node = sqlite
           .prepare(`SELECT 1 FROM nodes WHERE id = ? AND session_id = ?
           AND project_id = ? AND run_id = ? AND kind = 'tool_result'
-          AND json_extract(detail, '$.ok') = 1 AND length(trim(text)) > 0`)
+          AND json_extract(detail, '$.ok') = 1 AND length(trim(text)) > 0
+          AND NOT coalesce(CASE WHEN json_valid(text) THEN json_extract(text, '$.taskId') IS NOT NULL
+            AND coalesce(json_extract(text, '$.status'), '') NOT IN ('completed', 'succeeded') END, 0)`)
           .get(nodeId, sessionId, projectId, mapping.runId);
         if (!isTruthy(node)) return { status: "refused" };
       }

@@ -29,11 +29,25 @@ interface ToolOutcome {
 
 const isString = Schema.is(Schema.String);
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
-/** A thrown tool (`{ error }`) or a declined approval (`{ approved: false }` from the client). */
+/**
+ * A result that reports the work did not succeed: a thrown tool (`{ error }`), a declined approval
+ * (`{ approved: false }` from the client), a shell command that did not exit cleanly, or an
+ * external agent that did not finish. Goal completion only counts results recorded as ok.
+ */
 const isErrorResult = Schema.is(
   Schema.Union([
     Schema.Struct({ error: Schema.String }),
     Schema.Struct({ approved: Schema.Literal(false) }),
+    Schema.Struct({
+      status: Schema.Literals(["failed", "timed_out", "cancelled"]),
+      exitCode: Schema.NullOr(Schema.Finite),
+      stdout: Schema.String,
+    }),
+    Schema.Struct({
+      agent: Schema.String,
+      status: Schema.Literals(["cancelled", "failed", "disconnected", "unavailable"]),
+      note: Schema.String,
+    }),
   ]),
 );
 

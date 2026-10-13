@@ -143,6 +143,56 @@ layer(otherAgent.pipe(Layer.provideMerge(TestEnv.layer())), { excludeTestService
       }),
     );
 
+    it.effect("a shell command that exits non-zero is not recorded as ok", () =>
+      Effect.gen(function* () {
+        const { project, session, user } = yield* userTurn("테스트 돌려줘");
+        const runId = `${session.id}:run`;
+        const shell = toolDefinition({
+          name: "run_shell",
+          description: "Run a command",
+          inputSchema: toToolSchema(Schema.Struct({ command: Schema.String })),
+        }).server(({ command }) => ({
+          workdir: ".",
+          command,
+          shell: "zsh",
+          status: "failed",
+          exitCode: 1,
+          signal: null,
+          durationMs: 10,
+          stdout: "",
+          stderr: "2 failed",
+          stdoutTruncated: false,
+          stderrTruncated: false,
+        }));
+        yield* drain(
+          chat({
+            adapter: new ScriptedTextAdapter([
+              {
+                text: "",
+                toolCalls: [
+                  { id: "call-1", name: "run_shell", arguments: '{"command":"vp test"}' },
+                ],
+              },
+              { text: "테스트가 실패했어요." },
+            ]),
+            messages: [{ role: "user", content: user.text }],
+            tools: [shell],
+            runId,
+            middleware: [
+              (yield* Recorder).forRun({
+                projectId: project.id,
+                sessionId: session.id,
+                runId,
+                userNodeId: user.id,
+              }),
+            ],
+          }),
+        );
+        const result = (yield* Nodes).toolNode(session.id, "tool_result", "call-1");
+        expect(result?.detail).toMatchObject({ toolName: "run_shell", ok: false });
+      }),
+    );
+
     it.effect("links nodes that refer to the same file across runs", () =>
       Effect.gen(function* () {
         const { project } = yield* TestEnv;

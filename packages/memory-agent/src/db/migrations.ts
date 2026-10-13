@@ -1480,6 +1480,15 @@ export const migrations: readonly string[] = [
   -- boundary, or as a turn the server starts itself when the answer ends. Only waiting rows keep it.
   ALTER TABLE queued_messages ADD COLUMN steered INTEGER NOT NULL DEFAULT 0 CHECK (steered IN (0, 1));
   `,
+  `
+  -- The user saw which tools of an ended Goal run left their outcome unknown and chose to continue.
+  -- Admission stops treating that run as unresolved; nothing of it is replayed.
+  CREATE TABLE workflow_uncertain_acknowledgements (
+    run_id TEXT PRIMARY KEY REFERENCES workflow_run_bindings(run_id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL,
+    acknowledged_at TEXT NOT NULL
+  );
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

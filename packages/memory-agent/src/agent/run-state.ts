@@ -4,6 +4,7 @@ import type { WorkflowActions } from "../workflow/actions.ts";
 import type { WorkflowState } from "../workflow/workflow.ts";
 import type { WorkflowExecutionState } from "../workflow/execution.ts";
 import type { ProviderRetryView } from "../workflow/provider-retry.ts";
+import type { UncertainRun } from "../workflow/uncertain-runs.ts";
 
 /** Browser-safe shapes of the session run endpoints. */
 
@@ -31,6 +32,8 @@ export interface SessionRunState {
   readonly providerRetry?: ProviderRetryView | null;
   /** Server decisions for this snapshot and requesting page; mutations recheck latest state. */
   readonly actions: WorkflowActions;
+  /** Ended Goal runs whose tools left their outcome unknown; a new run waits for the user. */
+  readonly uncertainRuns: readonly UncertainRun[];
 }
 
 /** Answer to a cancel: `stopped` is false when the run had not ended by the time we answered. */

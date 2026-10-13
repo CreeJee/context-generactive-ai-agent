@@ -26,6 +26,7 @@ const sessionId = "session-1";
 const queryKey = appQueryKeys.session.runState(projectId, sessionId);
 const snapshot = (version: number): SessionRunState => ({
   actions: allowedWorkflowActions,
+  uncertainRuns: [],
   running: { runId: "run-1" },
   lastRun: null,
   lease: { state: "mine" },

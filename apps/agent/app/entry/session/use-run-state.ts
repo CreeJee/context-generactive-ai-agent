@@ -74,6 +74,7 @@ function useRunStateBody(sessionId: string, holder: string, generating: boolean,
     execution: state?.execution ?? null,
     providerRetry: state?.providerRetry ?? null,
     actions: state?.actions ?? null,
+    uncertainRuns: state?.uncertainRuns ?? [],
     setWorkflowPhase,
     notice: cancelPending
       ? ({ kind: "cancel-pending" } as const)

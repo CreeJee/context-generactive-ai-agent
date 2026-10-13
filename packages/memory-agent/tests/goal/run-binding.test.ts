@@ -286,6 +286,31 @@ testAgent({ testProvider: { delayedTurnGate: slowTurn.waitFor } })(
       }),
     );
 
+    it.effect("the user sees a run with an unknown outcome and continues past it", () =>
+      Effect.gen(function* () {
+        const chat = yield* AgentChat;
+        const target = yield* refusedRequest("unresolved-bound-run", yield* withGoal);
+        const reserved = `${target.session}:reserved`;
+        const state = yield* chat.status(target.session, null);
+        expect(yield* sdkCall(() => state.json())).toMatchObject({
+          uncertainRuns: [{ runId: reserved, tools: [] }],
+        });
+        expect((yield* post(target.session, target.runId)).status).toBe(409);
+
+        const stale = yield* chat.continuePastUncertain(target.session, null, { runIds: [] });
+        expect(yield* sdkCall(() => stale.json())).toEqual({ error: "uncertain_runs_changed" });
+        const continued = yield* chat.continuePastUncertain(target.session, null, {
+          runIds: [reserved],
+        });
+        expect(continued.status).toBe(200);
+        const db = yield* Database;
+        const { id } = yield* latestRevision(db, target.session);
+        expect(workflowRunBindings(db).preview(target.session, target.runId, id)).toMatchObject({
+          status: "bound",
+        });
+      }),
+    );
+
     it.effect("a live run has one admission and replays only to its own session and run", () =>
       Effect.gen(function* () {
         const nodes = yield* Nodes;

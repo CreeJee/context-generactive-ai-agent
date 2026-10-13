@@ -55,6 +55,8 @@ import {
   type ApprovalRequester,
   type RelayedApprovalView,
   type SubagentView,
+  type UncertainRun,
+  type UncertainTool,
 } from "memory-agent/definitions";
 
 export type GeneratedImageAsset = ImageMediaAsset & { readonly url: string };
@@ -139,6 +141,8 @@ export type {
   ApprovalRequester,
   RelayedApprovalView,
   SubagentView,
+  UncertainRun,
+  UncertainTool,
   WorkflowAction,
   WorkflowPhase,
   WorkflowState,
@@ -195,6 +199,7 @@ export const ApiErrorCode = Schema.Literals([
   "invalid_session_change",
   "invalid_settings",
   "invalid_stream_offset",
+  "invalid_uncertain_continue",
   "kagi_key_required",
   "keychain_failed",
   "login_required",
@@ -224,6 +229,7 @@ export const ApiErrorCode = Schema.Literals([
   "session_required",
   "settings_failed",
   "subagent_not_found",
+  "uncertain_runs_changed",
   "unknown_attachment",
   "upload_failed",
   "user_turn_required",
@@ -546,6 +552,14 @@ export const api = {
       "POST",
       `/api/sessions/${encodeURIComponent(sessionId)}/interrupts/discard`,
       {},
+      { [sessionHolderHeader]: holder },
+    ),
+  /** Refused with 409 while something runs, or when the listed runs changed since they were shown. */
+  continuePastUncertain: (sessionId: string, holder: string, runIds: readonly string[]) =>
+    call<{ status: "acknowledged" }>(
+      "POST",
+      `/api/sessions/${encodeURIComponent(sessionId)}/uncertain`,
+      { runIds },
       { [sessionHolderHeader]: holder },
     ),
   /** Refused with 409 while the session is answering. */

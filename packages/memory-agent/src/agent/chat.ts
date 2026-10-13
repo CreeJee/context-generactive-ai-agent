@@ -145,13 +145,14 @@ import { goalWorkerAuthority, type GoalWorkerCapability } from "./goal-worker-au
 // oxlint-disable-next-line anti-slop-effect/no-service-constructor-imports
 import { makeSqliteOwnerRpcLedger } from "./owner-rpc-ledger.ts";
 import {
-  endedWithKnownEffectsSql,
+  acknowledgedRunSql,
+  resolvedRunSql,
   toolOperationSql,
   workflowRunBindings,
 } from "../workflow/run-bindings.ts";
+import { uncertainRuns, type UncertainContinueRequest } from "../workflow/uncertain-runs.ts";
 import {
   OwnerReadRecovery,
-  recoveredReadRunSql,
   type ReadRecoveryConfirmation,
   type ReadRecoveryRevocation,
 } from "./owner-read-recovery.ts";
@@ -572,6 +573,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const sessions = yield* Sessions;
   const { sqlite, atomic } = yield* Database;
   const runBindings = workflowRunBindings({ sqlite, atomic });
+  const uncertain = uncertainRuns({ sqlite, atomic });
   const readRecovery = yield* OwnerReadRecovery;
   const workerAuthority = goalWorkerAuthority({ sqlite, atomic });
   const workerLedger = makeSqliteOwnerRpcLedger({ sqlite, atomic });
@@ -1377,8 +1379,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             .prepare(`
             SELECT b.run_id FROM workflow_run_bindings b
             LEFT JOIN chat_runs r ON r.run_id = b.run_id
-            WHERE b.session_id = ? AND (r.status IS NULL OR (r.status <> 'completed' AND NOT (
-              ${recoveredReadRunSql("r")} OR ${endedWithKnownEffectsSql("r")}
+            WHERE b.session_id = ? AND NOT ${acknowledgedRunSql("b")}
+              AND (r.status IS NULL OR (r.status <> 'completed' AND NOT (
+              ${resolvedRunSql("b", "r")}
               OR r.status = 'interrupted' AND EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id)
               AND (r.run_id = ? OR NOT EXISTS (SELECT 1 FROM chat_interrupts i WHERE i.run_id = r.run_id AND i.status = 'pending'))
             ))) LIMIT 1
@@ -2699,6 +2702,30 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       ),
 
     /**
+     * The user saw the runs whose tools left their outcome unknown (`uncertainRuns` in the run
+     * state) and chose to continue. Nothing of them is replayed; the next turn starts fresh.
+     */
+    continuePastUncertain: (
+      sessionId: string,
+      holder: string | null,
+      input: UncertainContinueRequest,
+    ) =>
+      Effect.gen(function* () {
+        yield* sessions.get(sessionId);
+        if (!leases.permits(sessionId, holder)) return inUse();
+        if (isTruthy(liveRuns.get(sessionId)) || background.hasSession(sessionId))
+          return json(409, { error: "run_in_progress" });
+        const result = uncertain.acknowledge(sessionId, input.runIds);
+        switch (result.status) {
+          case "refused":
+            return json(409, { error: result.reason });
+          case "acknowledged":
+            events.publishSession(sessionId, "run-state");
+            return json(200, result);
+        }
+      }).pipe(Effect.catchTags({ SessionNotFound: sessionNotFound })),
+
+    /**
      * Discards a persisted approval after its continuation has become unusable. The gated tool is
      * never run; the abandoned run becomes terminal so the conversation can accept a new turn.
      */
@@ -2779,6 +2806,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               -1,
             ) ?? null,
           actions: workflowActions(workflow, { running: Boolean(live), lease }),
+          uncertainRuns: isTruthy(live) ? [] : uncertain.list(sessionId),
         };
         return json(200, state);
       }).pipe(
