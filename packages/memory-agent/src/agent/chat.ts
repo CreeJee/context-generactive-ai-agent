@@ -429,7 +429,10 @@ const decodeImageTurnIntent = Schema.decodeUnknownOption(
 export const QueueRequest = Schema.Struct({
   text: Schema.String,
   attachmentIds: Schema.Array(Schema.String),
-  /** queue: deliver at the next tool-call boundary. steer: into the answering turn now. */
+  /**
+   * Both deliver at the next tool-call boundary. If the answer ends first, queue: the page sends it
+   * as the next turn. steer: the server does, so it reaches the model with no page open.
+   */
   mode: Schema.Literals(["queue", "steer"]),
 });
 export type QueueRequest = typeof QueueRequest.Type;
@@ -477,7 +480,9 @@ const verificationToolNames = HashSet.fromIterable(["run_shell"]);
 
 type InternalFollowup =
   | { readonly kind: "notification" }
-  | { readonly kind: "workflow"; readonly afterRunId: string };
+  | { readonly kind: "workflow"; readonly afterRunId: string }
+  /** The next turn is the steered message at the head of the queue, sent with no page needed. */
+  | { readonly kind: "steered" };
 
 /** A reconnect names where to continue: `Last-Event-ID`, or `?offset=` for a join from the start. */
 const isStreamJoin = (request: Request) =>
@@ -819,13 +824,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       switch (run?.status) {
         case "completed":
           yield* workflows.settleNewGoalRequest(sessionId, runId);
-          if (leases.view(sessionId, null).state === "free") queue.holdWaiting(sessionId);
+          if (leases.view(sessionId, null).state === "free")
+            queue.holdWaiting(sessionId, "pageLeft");
           return;
         case "failed":
         case "aborted":
         case undefined:
           yield* workflows.settleNewGoalRequest(sessionId, runId);
-          queue.holdWaiting(sessionId);
+          queue.holdWaiting(sessionId, "stopped");
           return;
         case "interrupted":
         case "running":
@@ -1413,7 +1419,8 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         // Internal completion turns carry operational context only, never a synthetic user turn.
         // Resolve at request time, not from the page's stale queue snapshot. Ignore the client's
         // placeholder turn altogether, including its text and attachments.
-        const queuedNext = Option.isSome(decodeQueuedNext(forwardedProps));
+        const queuedNext =
+          internalFollowup?.kind === "steered" || Option.isSome(decodeQueuedNext(forwardedProps));
         if (Option.isSome(decodeUnsupportedQueuedId(forwardedProps)))
           return json(400, { error: "invalid_chat_request" });
         const next = queuedNext ? queue.claimNext(sessionId) : null;
@@ -1422,9 +1429,12 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const queuedId = next?.id;
         const messages =
           internalFollowup !== null
-            ? yield* agentPromise("load-messages", () =>
-                chatState.persistence.stores.messages.loadThread(sessionId),
-              )
+            ? [
+                ...(yield* agentPromise("load-messages", () =>
+                  chatState.persistence.stores.messages.loadThread(sessionId),
+                )),
+                ...(isTruthy(next) ? [delivery.toUserMessage(next)] : []),
+              ]
             : isTruthy(next)
               ? [...incomingMessages.slice(0, -1), delivery.toUserMessage(next)]
               : incomingMessages;
@@ -1432,7 +1442,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
 
         // A new user turn ends the list; a continuation (tool result, approval) does not.
         const turn =
-          internalFollowup !== null
+          internalFollowup !== null && internalFollowup.kind !== "steered"
             ? null
             : Option.getOrNull(Option.map(decodeUserTurn(messages.at(-1)), toTurn));
         const lastMessage = messages.at(-1);
@@ -1491,7 +1501,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           if (turn !== null) workTrace.resumeParentNotifications(sessionId);
           events.publishSession(sessionId, "run-state");
           if (isTruthy(queuedId)) {
-            queue.markDelivered(queuedId, "next_turn", runId, true);
+            queue.markDelivered(queuedId, "next_turn", runId);
             events.publishSession(sessionId, "queue");
           }
           const answeredBy = external;
@@ -1762,7 +1772,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         const middleware: Array<ChatMiddleware<unknown, typeof permissionReviewInterrupt>> = [
           ...chatState.middleware(abortController.signal),
           // After chat state, so steered messages are added to the transcript it has just saved.
-          delivery.forRun({ projectId, sessionId, runId, selection }),
+          delivery.forRun({ projectId, sessionId, runId }),
           ...(!(reportSource !== null) ? [projectInstructions(project.root)] : []),
         ];
         // Trusted external ACP agents (R17); every delegation is gated below.
@@ -2234,7 +2244,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (turn !== null) workTrace.resumeParentNotifications(sessionId);
         events.publishSession(sessionId, "run-state");
         if (isTruthy(queuedId)) {
-          queue.markDelivered(queuedId, "next_turn", runId, true);
+          queue.markDelivered(queuedId, "next_turn", runId);
           events.publishSession(sessionId, "queue");
         }
         let workerLease: ReturnType<WorkerAssetsRegistry["use"]> | undefined;
@@ -2285,7 +2295,6 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                   "memory-agent/workflow-lifecycle",
                   "memory-agent/index",
                   "memory-agent/turn-summaries",
-                  "memory-agent/queue-delivery",
                   "memory-agent/subagents",
                   "memory-agent/promoted-memory-use",
                 ],
@@ -2647,7 +2656,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         );
         const workflow = yield* workflows.get(sessionId);
         yield* workflows.finishRun(sessionId, workflow.phase);
-        queue.holdWaiting(sessionId);
+        queue.holdWaiting(sessionId, "stopped");
         return json(200, { discarded });
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
 
@@ -2782,7 +2791,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             leases.release(sessionId, holder);
             // The page is gone: nothing will send its waiting messages as a next turn.
             if (!isTruthy(liveRuns.get(sessionId)) && leases.view(sessionId, null).state === "free")
-              queue.holdWaiting(sessionId);
+              queue.holdWaiting(sessionId, "pageLeft");
             break;
         }
         return json(200, leases.view(sessionId, holder));
@@ -2861,47 +2870,22 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
 
     /**
-     * A message written while a run answers. `queue` keeps it for the next tool-call boundary (or
-     * the next turn); `steer` sends it into the answering turn now, or refuses without falling
-     * back to another way of delivering it. With no run answering there is nothing to queue for:
-     * the page sends it as a normal turn instead.
+     * A message written while a run answers. Both modes deliver it at the next tool-call boundary.
+     * When the answer ends first, a `queue` message is sent as the next turn by the page holding
+     * the session; a `steer` message by the server, so it reaches the model with no page open.
+     * With no run answering there is nothing to queue for: the page sends it as a normal turn.
      */
     enqueue: (sessionId: string, holder: string | null, request: QueueRequest) =>
       Effect.gen(function* () {
-        const { projectId } = yield* sessions.get(sessionId);
+        yield* sessions.get(sessionId);
         if (!leases.permits(sessionId, holder)) return inUse();
         const { text, attachmentIds, mode } = request;
         if (text.trim().length === 0 && attachmentIds.length === 0)
           return json(400, { error: "empty_message" });
         if (attachmentIds.some((id) => !isTruthy(attachments.get(id))))
           return json(400, { error: "unknown_attachment" });
-        const live = liveRuns.get(sessionId);
-        if (!isTruthy(live)) return json(409, { error: "not_running" });
-        const selection = mode === "steer" ? yield* active.selected : null;
-        if (mode === "steer" && !isTruthy(selection))
-          return json(412, { error: "model_selection_required" });
-
-        const message = queue.add(sessionId, text, attachmentIds);
-        switch (mode) {
-          case "queue":
-            return json(201, message);
-          case "steer": {
-            // Not delivered: the message is not kept, so the page still has it as a draft.
-            const undelivered = (response: Response) =>
-              Effect.as(Effect.ignore(queue.remove(sessionId, message.id)), response);
-            return yield* delivery
-              .steer({ projectId, sessionId, runId: live.runId, selection: selection! }, message)
-              .pipe(
-                Effect.matchEffect({
-                  onSuccess: (outcome) =>
-                    outcome === "steered"
-                      ? Effect.succeed(json(201, queue.get(sessionId, message.id)))
-                      : undelivered(json(409, { error: "steer_unavailable" })),
-                  onFailure: () => undelivered(json(502, { error: "steer_failed" })),
-                }),
-              );
-          }
-        }
+        if (!isTruthy(liveRuns.get(sessionId))) return json(409, { error: "not_running" });
+        return json(201, queue.add(sessionId, text, attachmentIds, mode === "steer"));
       }).pipe(Effect.catchTag("SessionNotFound", sessionNotFound)),
 
     /** The session's subagents. */
@@ -2961,13 +2945,53 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   // used by HTTP admission prevents an internal follow-up racing a user turn or another child.
   const followup = (sessionId: string) => {
     const followupRunId = randomUUID();
+    const send = (kind: InternalFollowup) =>
+      api.handle(
+        new Request("http://local/internal/subagent-followup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: stringifyJson({
+            threadId: sessionId,
+            runId: followupRunId,
+            messages: [],
+            tools: [],
+            context: [],
+          }),
+        }),
+        sessionId,
+        kind,
+      );
+    // The response producer persists and publishes the normal durable stream. Drain it without
+    // retaining a second copy, so background updates hydrate exactly like browser-started turns.
+    const drain = (response: Response) =>
+      // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+      response.ok && response.body !== null
+        ? Stream.runDrain(
+            Stream.fromReadableStream({
+              evaluate: () => response.body!,
+              onError: (cause) => new AgentOperationFailed({ operation: "drain-followup", cause }),
+            }),
+          )
+        : Effect.void;
     return Effect.gen(function* () {
       yield* Effect.sleep("25 millis");
-      if (isTruthy(liveRuns.get(sessionId)) || workTrace.parentNotificationsHeld(sessionId)) return;
+      if (isTruthy(liveRuns.get(sessionId))) return;
       const session = yield* sessions.get(sessionId);
-      if (session.archivedAt !== null || session.agent !== null) return;
+      if (session.archivedAt !== null) return;
       const last = yield* agentPromise("load-run", () => chatState.lastRun(sessionId));
       if (!isTruthy(last)) return;
+      // A steered message reaches the model whether or not a page is open: after a normal finish
+      // the server sends it as the next turn. If that cannot start, the user confirms it instead.
+      if (last.status === "completed" && queue.snapshot(sessionId).nextDelivery.kind === "server") {
+        const unsent = Effect.sync(() => {
+          queue.holdWaiting(sessionId, "stopped");
+          events.publishSession(sessionId, "queue");
+        });
+        const response = yield* send({ kind: "steered" }).pipe(Effect.onError(() => unsent));
+        if (!response.ok) yield* unsent;
+        return yield* drain(response);
+      }
+      if (workTrace.parentNotificationsHeld(sessionId) || session.agent !== null) return;
       // Never resume approval waits, cancelled runs, or failed parent turns automatically, except
       // a run a restart cut off before it ran any tool.
       const restarted = last.status !== "completed";
@@ -2992,23 +3016,9 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         chatState.persistence.stores.interrupts.listPending(sessionId),
       );
       if (pendingApprovals.length > 0) return;
-      const response = yield* api.handle(
-        new Request("http://local/internal/subagent-followup", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: stringifyJson({
-            threadId: sessionId,
-            runId: followupRunId,
-            messages: [],
-            tools: [],
-            context: [],
-          }),
-        }),
-        sessionId,
+      const response = yield* send(
         continuing ? { kind: "workflow", afterRunId: last.runId } : { kind: "notification" },
       );
-      // The response producer persists and publishes the normal durable stream. Drain it without
-      // retaining a second copy, so background updates hydrate exactly like browser-started turns.
       if (!response.ok && continuing) {
         yield* execution.blockPending(sessionId, last.runId, {
           reason: "external_dependency",
@@ -3017,15 +3027,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         });
         events.publishSession(sessionId, "run-state");
       }
-      if (response.ok)
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        if (response.body !== null)
-          yield* Stream.runDrain(
-            Stream.fromReadableStream({
-              evaluate: () => response.body!,
-              onError: (cause) => new AgentOperationFailed({ operation: "drain-followup", cause }),
-            }),
-          );
+      yield* drain(response);
     }).pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("Subagent notification follow-up deferred", cause),

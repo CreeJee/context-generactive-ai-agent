@@ -1294,37 +1294,6 @@ const make = Effect.gen(function* () {
                 Schema.decodeUnknownResult(MessageSubagentInput),
                 Result.getOrThrow,
               )(parsed);
-              // A named child already answering hears the message now, in its running turn.
-              const busyChild = byName.get(binding.sessionId, input.agent);
-              if (isTruthy(busyChild) && activeFor(decodeRow(busyChild).id) !== undefined) {
-                const row = decodeRow(busyChild);
-                const runtime = yield* active.runtime(binding.selection);
-                const steered = yield* nativePromise(() =>
-                  runtime
-                    .steer(subagentThreadId(row.id), { role: "user", content: input.message })
-                    .catch(() => "no_turn" as const),
-                );
-                if (steered === "steered") {
-                  const handle = activeFor(row.id, true)?.handle;
-                  if (handle !== undefined)
-                    trace.recordSteer({
-                      handle,
-                      sessionId: binding.sessionId,
-                      parentRunId: binding.runId,
-                      parentToolCallId: toolCallId,
-                      message: input.message,
-                    });
-                  if (handle !== undefined)
-                    return {
-                      status: "running",
-                      subagentId: row.id,
-                      agent: input.agent,
-                      taskId: handle.taskId,
-                      attemptId: handle.id,
-                      delivery: "steered",
-                    };
-                }
-              }
               return yield* nativePromise(() =>
                 startNamed(binding, toolCallId, input.agent, input.message, input.instructions),
               );
@@ -1347,7 +1316,7 @@ const make = Effect.gen(function* () {
       const messageTool = toolDefinition({
         name: "message_subagent",
         description:
-          "Create a named background subagent or continue one from earlier in this session, and immediately return a running receipt. A message to a subagent that is still working is delivered into its current turn instead (running receipt with delivery steered).",
+          "Create a named background subagent or continue one from earlier in this session, and immediately return a running receipt.",
         inputSchema: toToolSchema(MessageSubagentInput),
       }).server((input, context) =>
         start(context?.toolCallId ?? randomUUID(), "message_subagent", JSON.stringify(input)),

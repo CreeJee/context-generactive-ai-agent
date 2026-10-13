@@ -48,7 +48,6 @@ const fakeProvider = (provider: ProviderId): ProviderServices => ({
     runMiddleware: () => {
       throw new Error("not used");
     },
-    steer: () => Promise.resolve("no_turn"),
   },
 });
 

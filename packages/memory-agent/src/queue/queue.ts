@@ -16,6 +16,7 @@ const Row = Schema.Struct({
   delivered_via: Schema.NullOr(Schema.Literals(["tool_boundary", "steer", "next_turn"])),
   run_id: Schema.NullOr(Schema.String),
   failure: Schema.NullOr(Schema.String),
+  steered: Schema.Literals([0, 1]),
   created_at: Schema.Finite,
 });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
@@ -26,7 +27,7 @@ function toMessage(raw: Record<string, SQLOutputValue>): QueuedMessage {
   let state: QueueItemState;
   switch (row.state) {
     case "waiting":
-      state = { kind: "waiting" };
+      state = { kind: "waiting", steered: row.steered === 1 };
       break;
     case "editing":
       state = { kind: "editing", draft: row.draft ?? row.text };
@@ -86,6 +87,7 @@ const make = Effect.gen(function* () {
         return Effect.fail(new QueueChangeRefused({ id, reason: "delivered" }));
       return Effect.succeed(message);
     });
+  // Every change of state, editing included, takes a message off the steered path.
   const setState = (
     id: string,
     state: "waiting" | "editing" | "held" | "failed",
@@ -93,7 +95,7 @@ const make = Effect.gen(function* () {
   ) =>
     sqlite
       .prepare(
-        "UPDATE queued_messages SET state = ?, text = coalesce(?, text), draft = ?, failure = ?, updated_at = ? WHERE id = ?",
+        "UPDATE queued_messages SET state = ?, text = coalesce(?, text), draft = ?, failure = ?, steered = 0, updated_at = ? WHERE id = ?",
       )
       .run(state, fields.text ?? null, fields.draft ?? null, fields.failure ?? null, now(), id);
 
@@ -101,7 +103,7 @@ const make = Effect.gen(function* () {
   // restored for the user to confirm, with any unsaved edit kept as a draft.
   sqlite
     .prepare(
-      "UPDATE queued_messages SET state = 'held', updated_at = ? WHERE state IN ('waiting', 'editing')",
+      "UPDATE queued_messages SET state = 'held', steered = 0, updated_at = ? WHERE state IN ('waiting', 'editing')",
     )
     .run(now());
 
@@ -130,7 +132,7 @@ const make = Effect.gen(function* () {
           case "delivered":
             continue;
           case "waiting":
-            return { items, nextDelivery: { kind: "ready" } };
+            return { items, nextDelivery: { kind: item.state.steered ? "server" : "ready" } };
           case "editing":
           case "held":
             return {
@@ -142,14 +144,38 @@ const make = Effect.gen(function* () {
       return { items, nextDelivery: { kind: "empty" } };
     },
 
-    add(sessionId: string, text: string, attachmentIds: readonly string[]): QueuedMessage {
+    /**
+     * Adds a message at the end. A steered one takes the waiting messages before it along, since
+     * it cannot reach the model ahead of them.
+     */
+    add(
+      sessionId: string,
+      text: string,
+      attachmentIds: readonly string[],
+      steered: boolean,
+    ): QueuedMessage {
+      if (steered)
+        sqlite
+          .prepare(
+            "UPDATE queued_messages SET steered = 1 WHERE session_id = ? AND state = 'waiting'",
+          )
+          .run(sessionId);
       const row = sqlite
         .prepare(
-          `INSERT INTO queued_messages (id, session_id, seq, text, attachment_ids, state, created_at, updated_at)
-           VALUES (?, ?, (SELECT coalesce(max(seq), 0) + 1 FROM queued_messages WHERE session_id = ?), ?, ?, 'waiting', ?, ?)
+          `INSERT INTO queued_messages (id, session_id, seq, text, attachment_ids, state, steered, created_at, updated_at)
+           VALUES (?, ?, (SELECT coalesce(max(seq), 0) + 1 FROM queued_messages WHERE session_id = ?), ?, ?, 'waiting', ?, ?, ?)
            RETURNING *`,
         )
-        .get(randomUUID(), sessionId, sessionId, text, JSON.stringify(attachmentIds), now(), now());
+        .get(
+          randomUUID(),
+          sessionId,
+          sessionId,
+          text,
+          JSON.stringify(attachmentIds),
+          steered ? 1 : 0,
+          now(),
+          now(),
+        );
       if (!isTruthy(row)) throw new Error("Queued message insert returned no row");
       return toMessage(row);
     },
@@ -231,12 +257,12 @@ const make = Effect.gen(function* () {
       if (reservation.holdOnRelease) setState(id, "held");
     },
 
-    markDelivered(id: string, via: DeliveryVia, runId: string | null, inTranscript: boolean) {
+    markDelivered(id: string, via: Exclude<DeliveryVia, "steer">, runId: string | null) {
       sqlite
         .prepare(
-          "UPDATE queued_messages SET state = 'delivered', delivered_via = ?, run_id = ?, in_transcript = ?, draft = NULL, updated_at = ? WHERE id = ?",
+          "UPDATE queued_messages SET state = 'delivered', delivered_via = ?, run_id = ?, draft = NULL, updated_at = ? WHERE id = ?",
         )
-        .run(via, runId, inTranscript ? 1 : 0, now(), id);
+        .run(via, runId, now(), id);
       for (const [sessionId, reservation] of reservations)
         if (reservation.id === id) {
           MutableHashMap.remove(reservations, sessionId);
@@ -247,26 +273,13 @@ const make = Effect.gen(function* () {
       setState(id, "failed", { failure: reason });
     },
 
-    /** Steered messages the conversation record does not contain yet. */
-    steeredOutsideTranscript(sessionId: string, runId: string): QueuedMessage[] {
-      return sqlite
-        .prepare(
-          "SELECT * FROM queued_messages WHERE session_id = ? AND run_id = ? AND delivered_via = 'steer' AND in_transcript = 0 ORDER BY seq",
-        )
-        .all(sessionId, runId)
-        .map(toMessage);
-    },
-
-    markInTranscript(ids: readonly string[]) {
-      const update = sqlite.prepare("UPDATE queued_messages SET in_transcript = 1 WHERE id = ?");
-      for (const id of ids) update.run(id);
-    },
-
     /**
-     * After a cancel, a failed run or the page leaving, waiting messages are not sent on their own
-     * any more: they wait for the user to confirm them.
+     * After a cancel or a failed run, waiting messages are not sent on their own any more: they
+     * wait for the user to confirm them. When only the page left (`pageLeft`), steered messages
+     * keep waiting, since the server sends those itself. Steering takes along every waiting message
+     * before it, so the ones held here never stand in front of a steered one.
      */
-    holdWaiting(sessionId: string) {
+    holdWaiting(sessionId: string, cause: "stopped" | "pageLeft") {
       // A selected next turn is locked until committed or released. Holding it here would allow a
       // different state to be delivered from the content already selected for this request.
       const reserved = Option.getOrUndefined(MutableHashMap.get(reservations, sessionId));
@@ -274,9 +287,9 @@ const make = Effect.gen(function* () {
         MutableHashMap.set(reservations, sessionId, { ...reserved, holdOnRelease: true });
       sqlite
         .prepare(
-          "UPDATE queued_messages SET state = 'held', updated_at = ? WHERE session_id = ? AND state = 'waiting' AND id != ?",
+          "UPDATE queued_messages SET state = 'held', steered = 0, updated_at = ? WHERE session_id = ? AND state = 'waiting' AND id != ? AND (? OR steered = 0)",
         )
-        .run(now(), sessionId, reserved?.id ?? "");
+        .run(now(), sessionId, reserved?.id ?? "", cause === "stopped" ? 1 : 0);
     },
   };
 });

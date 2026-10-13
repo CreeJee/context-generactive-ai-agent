@@ -1475,6 +1475,11 @@ export const migrations: readonly string[] = [
     WHERE kind IN ('user', 'assistant', 'topic')
       AND length(trim(text, char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279))) > 0;
   `,
+  `
+  -- A steered message waits like the others but must reach the model: at the next tool-call
+  -- boundary, or as a turn the server starts itself when the answer ends. Only waiting rows keep it.
+  ALTER TABLE queued_messages ADD COLUMN steered INTEGER NOT NULL DEFAULT 0 CHECK (steered IN (0, 1));
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

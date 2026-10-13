@@ -7,14 +7,18 @@ export const queueDeliveredEvent = "memory-agent.queue.delivered";
 export type DeliveryVia =
   /** Added to the conversation when a tool call returned. */
   | "tool_boundary"
-  /** Sent into the answering turn at once (steering). */
+  /** Sent into a codex turn at once. Only older rows have it; codex is no longer a runtime. */
   | "steer"
   /** Sent as the next turn after the run completed. */
   | "next_turn";
 
 export type QueueItemState =
-  /** Goes out at the next tool-call boundary, or as the next turn when the run completes. */
-  | { readonly kind: "waiting" }
+  /**
+   * Goes out at the next tool-call boundary, or as the next turn when the run completes. A
+   * `steered` message's next turn is started by the server, so it reaches the model even with no
+   * page open.
+   */
+  | { readonly kind: "waiting"; readonly steered: boolean }
   /** Being edited; `draft` is the unsaved text. It and every message after it wait. */
   | { readonly kind: "editing"; readonly draft: string }
   /**
@@ -22,7 +26,7 @@ export type QueueItemState =
    * confirms. `draft` is unsaved edit text that was restored with it.
    */
   | { readonly kind: "held"; readonly draft: string | null }
-  /** Reached the agent. That is delivery only, not a promise the agent acted on it. */
+  /** In the model's request: it has read the message, though that does not say it acted on it. */
   | { readonly kind: "delivered"; readonly via: DeliveryVia; readonly runId: string | null }
   | { readonly kind: "failed"; readonly reason: string };
 
@@ -40,6 +44,8 @@ export interface QueueSnapshot {
   readonly items: QueuedMessage[];
   readonly nextDelivery:
     | { readonly kind: "ready" }
+    /** The head is steered: the server sends it when the run completes, not the page. */
+    | { readonly kind: "server" }
     | { readonly kind: "blocked"; readonly messageId: string; readonly reason: "editing" | "held" }
     | { readonly kind: "empty" };
 }

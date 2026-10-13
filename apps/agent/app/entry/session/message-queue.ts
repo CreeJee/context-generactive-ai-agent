@@ -9,11 +9,8 @@ import { useEditQueueMutation, useEnqueueMutation } from "../queries/mutations/s
 /** What became of a message written while a run was answering. */
 export type AddOutcome =
   | { readonly kind: "queued" }
-  | { readonly kind: "steered"; readonly message: QueuedMessage }
   /** Nothing is answering any more: send it as a normal turn. */
   | { readonly kind: "not-running" }
-  /** Steering is not possible right now; nothing was sent and the draft stays. */
-  | { readonly kind: "steer-unavailable" }
   | { readonly kind: "failed" };
 
 /** Messages a page can still change: everything that has not reached the agent. */
@@ -47,15 +44,11 @@ function useMessageQueueBody(sessionId: string, holder: string, _generating: boo
   ): Promise<AddOutcome> =>
     runUiEffect(
       uiPromise(() => enqueue.mutateAsync({ text, attachmentIds, mode })).pipe(
-        Effect.map((message): AddOutcome =>
-          mode === "steer" ? { kind: "steered", message } : { kind: "queued" },
-        ),
+        Effect.as<AddOutcome>({ kind: "queued" }),
         Effect.catch((failure) =>
           Effect.sync((): AddOutcome => {
             if (isApiError(failure.cause) && failure.cause.code === "not_running")
               return { kind: "not-running" };
-            if (isApiError(failure.cause) && failure.cause.code === "steer_unavailable")
-              return { kind: "steer-unavailable" };
             return { kind: "failed" };
           }),
         ),

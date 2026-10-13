@@ -152,11 +152,6 @@ it.effect("retained native implementation binds fresh central clients and pins e
     expect(released).toEqual(["run-1", "fresh-run"]);
     expect(firstRuntime.runMiddleware()).toEqual(secondRuntime.runMiddleware());
     expect(firstRuntime.runMiddleware()).not.toBe(secondRuntime.runMiddleware());
-    expect(
-      yield* Effect.promise(() =>
-        secondRuntime.steer("thread-1", { role: "user", content: "queued centrally" }),
-      ),
-    ).toBe("no_turn");
     expect(() => secondRuntime.adapter({ ...selection, provider: "anthropic" })).toThrow(
       "Provider mismatch",
     );

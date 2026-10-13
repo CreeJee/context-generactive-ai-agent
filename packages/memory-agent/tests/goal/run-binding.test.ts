@@ -193,11 +193,7 @@ testAgent({ testProvider: { delayedTurnGate: slowTurn.waitFor } })(
         } else {
           expect(body).not.toContain("RUN_ERROR");
           const hooks = yield* middlewareHooks(db, runId, middlewareNames);
-          for (const name of [
-            "memory-agent/queue-delivery",
-            "memory-agent/subagents",
-            "memory-agent/promoted-memory-use",
-          ]) {
+          for (const name of ["memory-agent/subagents", "memory-agent/promoted-memory-use"]) {
             expect(
               hooks.filter((entry) => entry.name === name && entry.hook === "onFinish"),
             ).toEqual([{ name, hook: "onFinish", status: "succeeded" }]);

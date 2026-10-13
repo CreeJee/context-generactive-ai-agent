@@ -27,7 +27,7 @@ const item: QueueSnapshot["items"][number] = {
   seq: 1,
   text: "queued text",
   attachmentIds: [],
-  state: { kind: "waiting" },
+  state: { kind: "waiting", steered: false },
   createdAt: 1,
 };
 

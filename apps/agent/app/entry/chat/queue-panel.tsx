@@ -21,7 +21,7 @@ const deliveryLabel = (via: DeliveryVia) => {
     case "tool_boundary":
       return "도구 호출 뒤 전달됨";
     case "steer":
-      return "바로 전달됨";
+      return "스티어링으로 전달됨";
     case "next_turn":
       return "다음 턴으로 전달됨";
   }
@@ -32,7 +32,11 @@ function stateView(message: QueuedMessage, editingHere: boolean) {
   const { state } = message;
   switch (state.kind) {
     case "waiting":
-      return { icon: Clock3Icon, tone: "text-muted-foreground", label: null };
+      return {
+        icon: Clock3Icon,
+        tone: "text-muted-foreground",
+        label: state.steered ? "꼭 전달" : null,
+      };
     case "editing":
       return {
         icon: PencilLineIcon,

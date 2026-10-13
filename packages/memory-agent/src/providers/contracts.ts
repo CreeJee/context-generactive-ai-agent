@@ -1,5 +1,5 @@
 import type { GlobalConfigFailed } from "../config/global-config.ts";
-import type { AgentLoopStrategy, AnyTextAdapter, ChatMiddleware, ModelMessage } from "@tanstack/ai";
+import type { AgentLoopStrategy, AnyTextAdapter, ChatMiddleware } from "@tanstack/ai";
 import { Data, Effect, Schema } from "effect";
 
 /** Persisted model connection ID. Compatible endpoints are not an OpenAI vendor identity. */
@@ -168,7 +168,6 @@ export interface AgentModelRuntime {
   readonly contextWindowKnown?: (model: string) => boolean;
   readonly agentLoop: AgentLoopStrategy;
   readonly runMiddleware: () => ChatMiddleware;
-  readonly steer: (threadId: string, message: ModelMessage) => Promise<"steered" | "no_turn">;
 }
 
 export interface ProviderConfiguration {

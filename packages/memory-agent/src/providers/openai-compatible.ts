@@ -659,8 +659,6 @@ function makeOpenAICompatibleSettingsBody(
     contextWindowKnown: () => true,
     agentLoop: subscriptionAgentLoop,
     runMiddleware: () => ({ name: "memory-agent/openai-compatible" }),
-    // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-    steer: () => Promise.resolve("no_turn"),
   });
   /** A runtime pinned to the settings saved now; resolve again to see later changes. */
   const runtime = Effect.map(read, runtimeFor);

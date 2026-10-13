@@ -12,7 +12,8 @@ export function loader({ params }: Route.LoaderArgs) {
 
 /**
  * POST /api/sessions/:session/queue { text, attachmentIds, mode } — a message written while a run
- * answers: `queue` for the next tool-call boundary, `steer` into the answering turn now. 409
+ * answers: both go at the next tool-call boundary; if the answer ends first, the page sends a `queue`
+ * message as the next turn and the server sends a `steer` one. 409
  * `not_running` means nothing is answering and the page should send a normal turn.
  */
 // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.

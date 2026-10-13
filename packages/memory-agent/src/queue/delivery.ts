@@ -1,12 +1,9 @@
-import { nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts";
+import { runNativeEffectWith } from "../runtime/native-effect.ts";
 import { isTruthy } from "../truthy.ts";
 import type { ChatMiddleware, ContentPart, ModelMessage } from "@tanstack/ai";
-import { Context, Data, Effect, Layer, Result } from "effect";
+import { Context, Effect, Layer } from "effect";
 import { Attachments } from "../attachments/attachments.ts";
 import { attachmentUrl } from "../attachments/urls.ts";
-import { ChatState } from "../chat-state/chat-state.ts";
-import { ActiveProvider } from "../providers/active-provider.ts";
-import type { ModelSelection } from "../providers/contracts.ts";
 import { Nodes } from "../memory/nodes.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { MessageQueue } from "./queue.ts";
@@ -16,23 +13,15 @@ export interface DeliveryBinding {
   readonly projectId: string;
   readonly sessionId: string;
   readonly runId: string;
-  readonly selection: ModelSelection;
 }
 
 export { queueDeliveredEvent };
 
-export class QueueSteerFailed extends Data.TaggedError("QueueSteerFailed")<{
-  readonly sessionId: string;
-  readonly cause: unknown;
-}> {}
-
 const make = Effect.gen(function* () {
   const run = runNativeEffectWith(yield* Effect.context());
   const queue = yield* MessageQueue;
-  const active = yield* ActiveProvider;
   const nodes = yield* Nodes;
   const attachments = yield* Attachments;
-  const chatState = yield* ChatState;
   const redactor = yield* SecretRedactor;
 
   /** The queued message as the user turn the model receives. */
@@ -71,51 +60,12 @@ const make = Effect.gen(function* () {
       );
     });
 
-  /** Puts steered messages into the saved conversation, before the answer they arrived during. */
-  // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  const saveSteered = Effect.fn("QueueDelivery.saveSteered")(function* (binding: DeliveryBinding) {
-    const steered = queue.steeredOutsideTranscript(binding.sessionId, binding.runId);
-    if (steered.length === 0) return;
-    const stored = yield* nativePromise(() =>
-      chatState.persistence.stores.messages.loadThread(binding.sessionId),
-    );
-    const lastAnswer = stored.map((message) => message.role).lastIndexOf("assistant");
-    const at = lastAnswer === -1 ? stored.length : lastAnswer;
-    yield* nativePromise(() =>
-      chatState.persistence.stores.messages.saveThread(binding.sessionId, [
-        ...stored.slice(0, at),
-        ...steered.map(toUserMessage),
-        ...stored.slice(at),
-      ]),
-    );
-    queue.markInTranscript(steered.map((message) => message.id));
-  });
-
   return {
     toUserMessage,
 
     /**
-     * Sends a message into the running turn at once (steering). The message is recorded now and
-     * joins the saved conversation at the run's next boundary or end.
-     */
-    steer: (binding: DeliveryBinding, message: QueuedMessage) =>
-      Effect.flatMap(active.runtime(binding.selection), (runtime) =>
-        Effect.tryPromise({
-          try: () => runtime.steer(binding.sessionId, toUserMessage(message)),
-          catch: (cause) => new QueueSteerFailed({ sessionId: binding.sessionId, cause }),
-        }),
-      ).pipe(
-        Effect.tap((outcome) => {
-          if (outcome !== "steered") return Effect.void;
-          queue.markDelivered(message.id, "steer", binding.runId, false);
-          return record(binding, message);
-        }),
-      ),
-
-    /**
-     * Delivers waiting messages when a tool call returns: they go into the live provider turn and
-     * into the conversation, in queue order. Steered messages not yet in the conversation are added
-     * at the same boundary.
+     * Delivers waiting messages when a tool call returns: they join the request the model is about
+     * to get, and the conversation, in queue order.
      */
     forRun(binding: DeliveryBinding): ChatMiddleware {
       return {
@@ -124,49 +74,25 @@ const make = Effect.gen(function* () {
         onConfig: (ctx, config) =>
           run(
             Effect.gen(function* () {
-              if (ctx.phase !== "beforeModel") return;
-              const added: ModelMessage[] = [];
-              const delivered: string[] = [];
-
-              const steered = queue.steeredOutsideTranscript(binding.sessionId, binding.runId);
-              added.push(...steered.map(toUserMessage));
-              queue.markInTranscript(steered.map((message) => message.id));
-
-              if (config.messages.at(-1)?.role === "tool") {
-                const runtime = yield* active.runtime(binding.selection);
-                for (const message of queue.deliverable(binding.sessionId)) {
-                  const userMessage = toUserMessage(message);
-                  // With no live turn, the next provider request carries it in the conversation.
-                  const outcome = yield* Effect.result(
-                    nativePromise(() => runtime.steer(binding.sessionId, userMessage)),
-                  );
-                  if (Result.isFailure(outcome)) {
-                    // Later messages stay behind it, so the order the user wrote in holds.
-                    queue.markFailed(message.id, "steer_refused");
-                    break;
-                  }
-                  added.push(userMessage);
-                  queue.markDelivered(message.id, "tool_boundary", binding.runId, true);
-                  yield* record(binding, message);
-                  delivered.push(message.id);
-                }
+              if (ctx.phase !== "beforeModel" || config.messages.at(-1)?.role !== "tool") return;
+              const delivered = queue.deliverable(binding.sessionId);
+              if (delivered.length === 0) return;
+              for (const message of delivered) {
+                queue.markDelivered(message.id, "tool_boundary", binding.runId);
+                yield* record(binding, message);
               }
-
-              if (delivered.length > 0)
-                ctx.emitCustomEvent(queueDeliveredEvent, { ids: delivered });
-              if (added.length === 0) return;
-              return { messages: [...config.messages, ...added] };
+              ctx.emitCustomEvent(queueDeliveredEvent, {
+                ids: delivered.map((message) => message.id),
+              });
+              return { messages: [...config.messages, ...delivered.map(toUserMessage)] };
             }),
           ),
-        onFinish: () => run(saveSteered(binding)),
-        onAbort: () => run(saveSteered(binding)),
-        onError: () => run(saveSteered(binding)),
       };
     },
   };
 });
 
-/** Gets queued follow-up messages to the agent: at tool-call boundaries, or steered at once. */
+/** Gets queued follow-up messages to the agent at tool-call boundaries. */
 export class QueueDelivery extends Context.Service<QueueDelivery, Effect.Success<typeof make>>()(
   "memory-agent/queue/delivery/QueueDelivery",
 ) {

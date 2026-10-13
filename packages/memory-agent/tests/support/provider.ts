@@ -409,7 +409,6 @@ export function testProvider(options: TestProviderOptions = {}): TestProvider {
             contextWindow: () => 200_000,
             agentLoop: subscriptionAgentLoop,
             runMiddleware: () => ({ name: "memory-agent/test-provider" }),
-            steer: () => Promise.resolve("no_turn" as const),
           }),
       };
     }),

@@ -222,8 +222,6 @@ export const ApiErrorCode = Schema.Literals([
   "session_not_found",
   "session_required",
   "settings_failed",
-  "steer_failed",
-  "steer_unavailable",
   "subagent_not_found",
   "unknown_attachment",
   "upload_failed",

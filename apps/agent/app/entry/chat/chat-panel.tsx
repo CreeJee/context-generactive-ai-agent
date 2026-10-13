@@ -728,7 +728,8 @@ function ChatPanel({
 
   /**
    * Enter. While nothing runs it sends a turn. While a run answers it queues the message for the
-   * next tool-call boundary, or with `steer` (Ctrl/⌘+Shift+Enter) sends it into the answer now.
+   * next tool-call boundary. With `steer` (Ctrl/⌘+Shift+Enter) the server also sends it as the
+   * next turn if the answer ends first, so it reaches the model even if this page is closed.
    */
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
   const submit = (mode: "queue" | "steer") =>
@@ -849,22 +850,8 @@ function ChatPanel({
         switch (outcome.kind) {
           case "queued":
             return clearDraft();
-          case "steered": {
-            // The saved conversation puts a steered message before the answer it arrived during.
-            const last = messages.at(-1);
-            if (isTruthy(last))
-              place([outcome.message.id], {
-                side: last.role === "assistant" ? "before" : "after",
-                messageId: last.id,
-              });
-            return clearDraft();
-          }
           case "not-running":
             return sendTurn();
-          case "steer-unavailable":
-            return setNotice(
-              problem("지금은 바로 전달할 수 없어요. Enter로 대기열에 넣을 수 있어요."),
-            );
           case "failed":
             return setNotice(problem("메시지를 넣지 못했어요. 다시 시도해 주세요."));
         }

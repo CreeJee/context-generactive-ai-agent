@@ -353,9 +353,6 @@ describe("subscription model adapters", () => {
           messages: [],
         }),
       ).toBe(false);
-      expect(
-        yield* sdkCall(() => runtime.steer("thread", { role: "user", content: "later" })),
-      ).toBe("no_turn");
       expect(() =>
         runtime.adapter({
           provider: "openai",

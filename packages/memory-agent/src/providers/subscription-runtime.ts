@@ -87,10 +87,6 @@ export function createSubscriptionRuntimeImplementation(provider: SubscriptionAc
         contextWindowKnown: (model) => catalogWindow(model) !== null,
         agentLoop,
         runMiddleware: () => middleware(provider),
-        // Subscription APIs do not expose live-turn steering. The central transcript middleware
-        // retains queued messages; do not create a per-Goal steering registry here.
-        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        steer: () => Promise.resolve("no_turn"),
       };
     },
   });
