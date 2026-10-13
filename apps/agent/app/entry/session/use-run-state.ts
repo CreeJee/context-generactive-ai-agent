@@ -72,6 +72,7 @@ function useRunStateBody(sessionId: string, holder: string, generating: boolean,
     context: state?.context ?? null,
     workflow: state?.workflow ?? null,
     execution: state?.execution ?? null,
+    providerRetry: state?.providerRetry ?? null,
     actions: state?.actions ?? null,
     setWorkflowPhase,
     notice: cancelPending

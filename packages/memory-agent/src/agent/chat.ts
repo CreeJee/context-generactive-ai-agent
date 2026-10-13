@@ -169,6 +169,7 @@ import { workflowRunEvents } from "../workflow/run-events.ts";
 import { WorkflowTools, workflowInstructions } from "../workflow/tools.ts";
 import { WorkflowExecution } from "../workflow/execution.ts";
 import { GoalExecutionAdmissionRefused, GoalExecutions } from "../workflow/goal-execution.ts";
+import { ProviderRetries } from "../workflow/provider-retry.ts";
 import type { GoalExecutionPayload } from "../workflow/goal-execution-contracts.ts";
 import { toolProgressFingerprint } from "../workflow/tool-progress.ts";
 import { WorkflowRules } from "../workflow/rules.ts";
@@ -591,6 +592,16 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   const workflows = yield* Workflows;
   const execution = yield* WorkflowExecution;
   const goalExecutions = yield* GoalExecutions;
+  const providerRetries = yield* ProviderRetries;
+  // Owner cancellation interrupts a pending provider retry wait; it never fails it.
+  const cancelProviderRetries = (sessionId: string) =>
+    providerRetries
+      .cancelSession(sessionId)
+      .pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("Provider retry wait cancellation failed", error),
+        ),
+      );
   const workflowTools = yield* WorkflowTools;
   const workflowRules = yield* WorkflowRules;
   const workTrace = yield* WorkTraceStore;
@@ -1737,9 +1748,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           const state = yield* workflows.get(sessionId);
           if (
             current.archivedAt !== null ||
-            last?.status !== "completed" ||
-            last.runId !== internalFollowup.afterRunId ||
-            !(yield* execution.canContinue(sessionId, last.runId, state)) ||
+            last?.runId !== internalFollowup.afterRunId ||
+            !(last.status === "completed"
+              ? yield* execution.canContinue(sessionId, last.runId, state)
+              : yield* execution.canResume(sessionId, last.runId, state)) ||
             state.phase !== workflow.phase ||
             state.plan?.version !== workflow.plan?.version ||
             queue.snapshot(sessionId).nextDelivery.kind !== "empty" ||
@@ -2278,6 +2290,14 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                   "memory-agent/promoted-memory-use",
                 ],
                 revoke: () => workerAuthority.revoke(runId),
+                providerRetry: {
+                  wait: (request, signal) =>
+                    providerRetries.wait(
+                      { ...request, sessionId, runId },
+                      signal,
+                      Effect.sync(() => events.publishSession(sessionId, "run-state")),
+                    ),
+                },
                 lastOperationId: 0,
               })
             : createChatExecution<typeof runAdapter>();
@@ -2463,6 +2483,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (!leases.permits(sessionId, holder)) return inUse();
         const pendingExecution = (yield* execution.get(sessionId)).kind === "ready";
         yield* execution.stop(sessionId);
+        yield* cancelProviderRetries(sessionId);
         events.publishSession(sessionId, "run-state");
         const live = liveRuns.get(sessionId);
         if (!isTruthy(live)) {
@@ -2688,6 +2709,10 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           }),
           workflow,
           execution: yield* execution.get(sessionId),
+          providerRetry:
+            (yield* providerRetries.pending(sessionId).pipe(Effect.orElseSucceed(() => []))).at(
+              -1,
+            ) ?? null,
           actions: workflowActions(workflow, { running: Boolean(live), lease }),
         };
         return json(200, state);
@@ -2706,6 +2731,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (isTruthy(liveRuns.get(sessionId))) return json(409, { error: "run_in_progress" });
         const state = yield* workflows.setPhase(sessionId, phase);
         yield* execution.stop(sessionId);
+        yield* cancelProviderRetries(sessionId);
         return json(200, state);
       }).pipe(
         Effect.catchTags({
@@ -2724,6 +2750,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (action === "resume" && isTruthy(live)) return json(409, { error: "run_in_progress" });
         const state = yield* workflows.controlGoal(sessionId, action);
         yield* execution.stop(sessionId);
+        yield* cancelProviderRetries(sessionId);
         if (action !== "resume" && isTruthy(live)) {
           yield* agentPromise("cancel-run", () =>
             requestRunCancel(chatState.persistence.stores.runs, live.runId),
@@ -2940,11 +2967,20 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
       const session = yield* sessions.get(sessionId);
       if (session.archivedAt !== null || session.agent !== null) return;
       const last = yield* agentPromise("load-run", () => chatState.lastRun(sessionId));
-      // Never resume approval waits, cancelled runs, or failed parent turns automatically.
-      if (last?.status !== "completed") return;
+      if (!isTruthy(last)) return;
+      // Never resume approval waits, cancelled runs, or failed parent turns automatically, except
+      // a run a restart cut off before it ran any tool.
+      const restarted = last.status !== "completed";
+      if (restarted && (yield* execution.get(sessionId)).kind !== "retrying") return;
       const workflow = yield* workflows.reconcile(sessionId);
-      const continuing = yield* execution.canContinue(sessionId, last.runId, workflow);
-      if (!continuing && !workTrace.pendingParentNotificationSessions().includes(sessionId)) return;
+      const continuing = restarted
+        ? yield* execution.canResume(sessionId, last.runId, workflow)
+        : yield* execution.canContinue(sessionId, last.runId, workflow);
+      if (
+        !continuing &&
+        (restarted || !workTrace.pendingParentNotificationSessions().includes(sessionId))
+      )
+        return;
       // A user's queued request or pending approval takes precedence over automatic work.
       if (
         continuing &&
@@ -3048,7 +3084,11 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 state: effect.status === "pending" ? "pending" : "uncertain",
               },
         );
-        yield* execution.stop(sessionId, "run_failed", runId);
+        // A pending provider retry of the run sets when its continuation starts.
+        const waiting = (yield* providerRetries.pending(sessionId)).filter(
+          (wait) => wait.runId === runId,
+        );
+        yield* execution.afterRestart(sessionId, runId, waiting.at(-1)?.retryAt);
       }).pipe(
         Effect.catch((error) => Effect.logWarning("Abandoned Goal execution stays fenced", error)),
       ),
@@ -3056,6 +3096,19 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
   );
   // Only a persisted clean finish is eligible. Interrupted or failed runs are never replayed.
   for (const sessionId of yield* execution.readySessions()) wakeNotifications(sessionId);
+  // A run a restart cut off before any tool continues in a new run once its provider retry wait
+  // fires, at once without one. The wait survives another restart; the ended run is not replayed.
+  for (const { sessionId, runId } of yield* execution.retryingSessions())
+    yield* Effect.forkScoped(
+      providerRetries.awaitRun(runId).pipe(
+        Effect.flatMap((outcome) =>
+          outcome._tag === "Cancelled"
+            ? Effect.void
+            : Effect.sync(() => wakeNotifications(sessionId)),
+        ),
+        Effect.catch((error) => Effect.logWarning("Restarted Goal continuation deferred", error)),
+      ),
+    );
   return api;
 });
 

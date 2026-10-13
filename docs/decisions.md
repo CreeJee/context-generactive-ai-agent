@@ -633,6 +633,14 @@
 - Execute와 Verify에서도 `update_goal`을 제공한다. 사용자가 명시적으로 변경한 구현 범위·제약·제외 항목은 에이전트가 canonical Goal에 반영하며, 수정 가능한 artifact를 외부 의존성으로 보고하거나 확인되지 않은 Goal 편집 UI를 요구하지 않는다. 단순 재개 요청은 제약 해제 승인이 아니다.
 - Execute/Verify에서 Goal을 수정하면 즉시 Plan으로 돌아간다. 기존 Plan과 근거는 보존하되 새 Goal 버전에 맞춰 Plan을 동기화하고 실행 확인을 받기 전에는 이전 실행 턴의 progress를 허용하지 않는다. Goal 변경은 권한·완료 증거·실행 세대 고정을 우회하지 않는다.
 
+### Plan step 의존성 기반 스케줄링 (2026-10-13)
+
+- `PlanStep.dependsOn`을 실행 순서 판단에 쓴다. `update_plan`은 중복 step ID, 존재하지 않는 step 참조, 자기 참조, 순환을 `PlanDependenciesRejected`(문제별 리터럴 태그 목록)로 거부하고 아무것도 저장하지 않는다. 모델은 문제 목록을 받아 Plan을 고쳐 다시 저장한다.
+- Ready step은 `pending`이면서 모든 의존 step이 `completed`인 step이다. 검증 전에 저장된 Plan은 읽기 시 거부하지 않는다. 존재하지 않는 참조와 자기 참조는 순서 정보가 없으므로 무시하고, 저장된 순환은 Ready가 되지 않아 교착으로 드러난다. Execute 프롬프트는 각 의존 step의 상태, Ready 목록, 저장된 의존성 문제를 보여 준다.
+- blocked step이 있어도 Ready 또는 `in_progress` step이 남으면 서버 자동 진행을 계속한다. 이전에는 blocked step 하나로 이유 기록 없이 멈췄다. 미완료 step이 남았는데 Ready와 `in_progress`가 모두 없으면 run 종료 시 서버가 `dependency_stalled` blocker로 정지하고, 어떤 step이 어떤 blocked·미완료 step을 기다리는지 사슬을 근거로 저장한다. blocked step 자체의 상태와 근거는 그대로 화면에 표시된다.
+- `dependency_stalled`는 서버만 기록한다. `record_workflow_blocker` 입력에는 노출하지 않는다. 구조적 교착은 서버가 Plan 상태만으로 결정적으로 판정할 수 있고, 의존 관계가 잘못된 의미상 교착은 모델이 `update_plan`으로 dependsOn을 고쳐 해결해야 하므로 모델에 blocker 출구를 주지 않는다. 다음 턴 프롬프트에는 진행 불가 사슬을 보여 준다.
+- 서브에이전트 자동 배정, WIP 제한, 칸반 UI, DurableQueue는 이 단계의 범위가 아니다.
+
 ### Configurable dev and Goal settlement boundaries (2026-10-10)
 
 - Dev accepts CLI backend/web ports, storage and manifest paths, with CLI values taking precedence over environment defaults. Readiness requires the matching build ID and `status: ready`; frontend HMR remains enabled and backend changes require an explicit rebuild/restart. Isolated verification uses temporary storage and alternate ports, leaving existing servers and user sessions alone.
@@ -650,7 +658,7 @@
 - A full queue fails immediately with typed `ExecutionSaturated`. Workflow admission maps this to HTTP 503 before issuing a worker capability; full-loop workers hold a worker permit for their Scope, model `next()` calls hold model permits, and owner tool implementations hold tool permits. Interruption and Scope finalization release both permits exactly once.
 - Admission metrics expose only kind-tagged active, queued and saturation counts. Spans/logs contain kind, configured limits, queue depth and outcome; they do not include prompts, records, SQL, endpoints, capability tokens or credentials. Durable workflow execution IDs remain canonical derived hashes rather than raw session/run values.
 - The owner workflow engine continues to own live executions in scoped `FiberMap`s, keyed by derived execution ID, which is deterministically bound to session/run/Goal/revision. `onlyIfMissing` rejects duplicate run/timer fibers, and Scope shutdown interrupts and joins them structurally.
-- This migration adds no `Schedule` retry around workflow, model, tool, file, remote, or Goal-loop effects. Retrying an uncertain side effect remains forbidden. A future retry may be introduced only at an enumerated idempotent infrastructure boundary (database read/connect or pre-dispatch worker acquisition), with its stable key and exhaustion outcome documented first.
+- This migration adds no `Schedule` retry around workflow, model, tool, file, remote, or Goal-loop effects. Retrying an uncertain side effect remains forbidden. A future retry may be introduced only at an enumerated idempotent infrastructure boundary (database read/connect or pre-dispatch worker acquisition), with its stable key and exhaustion outcome documented first. (갱신: provider 요청 전 transport 실패 경계를 아래 "Provider 요청 전 transport 실패의 durable 재시도 경계 (2026-10-13)"에 추가했다.)
 
 ### Build-time native and Goal-worker artifacts (2026-10-10)
 
@@ -665,6 +673,35 @@
 - Approval timeout is a durable `DurableClock` branch in a persisted `DurableDeferred.raceAll`. The owner engine now resumes pending executions when their workflow registers after restart. Once either approval or timeout completes the workflow, still-scheduled loser clocks are removed and their scoped timer fibers are interrupted.
 - Owner cancellation interrupts the bound workflow, removes it from the pending page view, and cancels its timer; it never turns cancellation into a durable denial. A process/layer restart without owner cancellation preserves and resumes the pending approval. No model, tool, file, remote API, or entire Goal loop is replayed to consume an answer automatically.
 - No production `DurableQueue` is enabled in this migration step. The installed queue is at-least-once, typed handler failures complete rather than retry, crash after a side effect can redeliver, and dead letters require an explicit requeue operator path. Current candidate work either includes model/remote effects, already has a different owner/recovery contract, or lacks a proven stable idempotency key plus dead-letter procedure. A future post-commit derived task may adopt it only with those proofs, bounded attempts, observation, and manual requeue documented first.
+
+### Provider 요청 전 transport 실패의 durable 재시도 경계 (2026-10-13)
+
+- 2026-10-10 "Effect execution admission and safe observability"의 재시도 허용 경계에 **provider 요청이 전송되기 전이 확정된 transport 실패**를 추가한다. 연결 수립·DNS·TLS 등 요청 본문이 provider에 도달하지 않았음을 어댑터가 확정할 수 있는 실패만 해당한다.
+- 요청 전송 이후의 실패, 일부 출력이나 tool call을 받은 뒤의 스트림 중단, 원인이 불명확한 실패는 이 경계에 포함하지 않는다. 이 경우는 기존 Work Trace 계약(2026-09-20)대로 재생하지 않고, 필요하면 새 attempt에서 논리적으로 이어간다. model·tool·Goal-loop 전체를 재실행하는 retry는 계속 금지한다.
+- 전제: 현재 `SubscriptionStreamFailed`는 알려지지 않은 오류를 모두 `TransportUnavailable`로 변환하므로 요청 전 실패를 구분할 수 없다. reason을 요청 전 실패와 그 외로 나누기 전에는 재시도를 활성화하지 않는다. (갱신: 아래 "구독 provider 스트림 실패의 전송 단계 분류 (2026-10-13)"에서 나눴다. 재시도 대상은 `RequestNotSent`뿐이다.)
+- 안정 키는 run attempt ID와 해당 attempt 안의 재시도 순번으로 구성한다. 현재 시각·랜덤 값·프로세스 로컬 카운터는 키에 쓰지 않는다.
+- 대기 간격은 2초에서 시작해 2배씩 늘리고 한 번의 대기는 최대 30분으로 제한한다. jitter를 포함해 계산한 `retryAt`은 한 번만 계산해 영속화하고, replay에서 다시 계산하지 않는다. 대기는 `DurableClock`으로 수행하며 앱 재시작 후에도 복원되도록 `inMemoryThreshold: 0`을 사용한다.
+- 소진 결과: 재시도 한도(총 경과 시간 또는 횟수)는 구현 시 이 항목에 수치로 기록한 뒤 활성화한다. 한도를 넘으면 실행 실패로 끝내지 않고 기존 blocker 경로(2026-10-02)로 정지해 이유와 근거를 표시한다. 사용자 취소·일시 중지는 대기 중인 재시도를 중단하며 자동 재개하지 않는다.
+- 이 결정은 `DurableQueue` 보류(2026-10-10)를 바꾸지 않는다.
+- 구현(2026-10-13): 재시도는 Goal 실행(full-loop worker)의 provider 호출에만 적용한다. 일반 채팅은 이어서 달성할 목적이 없으므로 제외한다. 실패를 바로 표시하고 사용자가 다시 보낸다.
+- 구현: 재시도 범위는 owner의 모델 스트림 pull이다. `RequestNotSent`이고 어댑터의 `RUN_STARTED` 외 chunk가 worker에 하나도 가지 않았을 때만 같은 요청을 새 스트림으로 다시 보내고, 새 스트림의 `RUN_STARTED`는 건너뛴다. 그 외 실패, 소진, 취소는 원래 provider 실패로 끝난다. 각 pull은 model 게이트를 거치고, 대기하는 동안에는 model permit을 잡지 않는다. 대기 workflow는 Goal 실행처럼 workflow 게이트를 거쳐 admission한다.
+- 구현: Goal run 하나가 attempt 하나다. 상위 Goal run은 `agent_run_attempts`를 만들지 않으므로 키는 bound run ID와 그 run의 대기 순번이다. 순번은 프로세스 카운터가 아니라 그 run에 저장된 대기 workflow 수에서 정한다. 백오프와 한도는 한 provider 요청의 연속 재시도 횟수와 첫 실패 시각으로 센다. `retryAt`은 admission 전에 owner가 한 번 계산해 workflow payload(SQLite)에 저장한다. workflow 본문은 저장된 값으로 `DurableClock`만 다시 건다.
+- 구현: 소진되면 `external_dependency` blocker를 기록한다. run이 실패로 끝나도 blocker가 남는다. 취소·일시 중지·중단·phase 변경은 대기 workflow를 interrupt하고 timer를 지운다. 대기 중인 시각은 workflow 패널에 표시한다.
+- 소진 한도(2026-10-13 확정): 한 provider 요청의 첫 실패부터 다음 재시도 시각까지 24시간. 횟수 한도는 두지 않는다. 대기 상한이 30분이라 횟수 한도는 경과 시간 한도보다 먼저 끝나 긴 장애를 버티지 못한다. 재시도는 같은 요청을 다시 보낼 뿐 새 작업이나 단계를 만들지 않으므로 순환·무한 작업 감지는 이 경계에 두지 않는다. Plan 의존 순환은 `PlanDependenciesRejected`가 막는다.
+- 예외(2026-10-13): 서버 종료로 끊긴 Goal run 중 다음 run이 모르고 반복할 일이 없는 run(`endedWithKnownEffectsSql`)은 재시작 후 자동으로 이어간다. 판정은 다음 run의 입장 fence(승인된 Plan의 서버 자동 진행 2026-10-02의 2026-10-13 수정)와 같은 규칙이다. 도구를 실행하지 않았거나, 실행한 도구가 모두 `succeeded`이고 읽기 전용이 아닌 도구마다 `tool_result`가 세션 기록에 있는 run이다. 그 run에 대기 중이던 재시도가 있으면 저장된 `retryAt`에, 없으면 바로 이어간다. 이는 "요청 후 실패는 재시도하지 않는다"에 대한 명시적 예외다. 근거: owner 도구 호출은 실행 전에 장부에 예약되므로, 장부에 없는 도구는 실행되지 않았다. 기록된 도구 결과는 새 run이 transcript에서 읽으므로 같은 변경을 모르고 반복하지 않는다. 끊긴 run은 재생하지 않는다. 새 continuation run이 Plan과 transcript를 기준으로 남은 단계를 이어간다(Work Trace 2026-09-20). 자동 진행 상태는 `retrying`으로 저장하고, 대기 workflow가 다시 재시작돼도 복원된다. 사용자 취소·일시 중지는 이 이어가기도 멈춘다.
+- 예외의 범위 밖: `pending`·`uncertain` 도구, 결과 기록이 없는 쓰기 도구, 이름 없는 작업이 남은 run은 fence를 유지한다. 자동으로 이어가지 않고 `server_restarted` blocker로 이유를 표시한다. 이 blocker는 서버만 기록한다.
+
+### 구독 provider 스트림 실패의 전송 단계 분류 (2026-10-13)
+
+- `SubscriptionStreamFailed.reason`의 `TransportUnavailable`을 다음 넷으로 나눈다. 다른 reason(`ProviderRejected`, `InvalidToolCall` 등)과 로그의 `code: failure._tag`는 그대로다. 이 reason은 영속화하지 않는다.
+  - `RequestNotSent { stage: "dns" | "connect" | "tls" }`: 요청 본문이 provider에 도달하지 않았음이 확정된 실패. fetch가 거절한 오류의 `cause.code`가 `ENOTFOUND`·`EAI_AGAIN`(dns), `ECONNREFUSED`·`ENETUNREACH`·`EHOSTUNREACH`·`UND_ERR_CONNECT_TIMEOUT`(connect), 인증서 검증 오류(tls)일 때만 해당한다.
+  - `ProviderStatusRejected { statusClass: "client_error" | "server_error" }`: provider가 HTTP 오류 상태로 거절. 상태 범주만 남기고 응답 본문·메시지는 경계 밖으로 내보내지 않는다. Anthropic prompt-cache 거절은 기존대로 `ProviderFeatureRejectedError`로 baseline 요청을 한 번 다시 보낸다.
+  - `ResponseInterrupted`: 응답 헤더를 받은 뒤 본문 스트림이 끊기거나, 이벤트를 하나라도 받은 뒤 실패.
+  - `RequestOutcomeUnknown`: 그 외 모든 실패. `ETIMEDOUT`·`ECONNRESET`·`UND_ERR_SOCKET`·헤더 timeout·redirect 거절·코드 없는 오류는 요청이 전송됐을 수 있으므로 여기에 둔다. 요청이 전송된 것으로 취급한다.
+- 분류는 입출력 경계에서 구조화된 값으로만 한다. OAuth 클라이언트가 fetch 단계(오류 code)·HTTP status·본문 스트림 단계를 `oauth/protocol.ts`의 `ProviderStreamFailed`로 표현하고, 어댑터는 첫 이벤트 수신 여부만 더해 `SubscriptionStreamFailed`로 옮긴다. `Error.message` 키워드로 분류하지 않는다.
+- 자격 증명 읽기·토큰 갱신 실패처럼 OAuth 클라이언트가 `ProviderStreamFailed`로 표현하지 않는 오류는 `RequestOutcomeUnknown`으로 보수적으로 둔다.
+- 모델 스트림의 HTTP 거절은 더 이상 `OAuthHarnessError`에 provider 오류 문구를 담지 않는다. live 검증 스크립트도 상태 범주만 본다.
+- 이 단계는 재시도를 추가하지 않는다.
 
 ### Goal full-loop transport: Effect Worker/RPC protocol boundary (2026-10-10)
 
