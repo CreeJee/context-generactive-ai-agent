@@ -1,6 +1,17 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { Cause, Effect, Exit, FileSystem, Fiber, Layer, Path, Schema, Scope } from "effect";
+import {
+  Cause,
+  Duration,
+  Effect,
+  Exit,
+  FileSystem,
+  Fiber,
+  Layer,
+  Path,
+  Schema,
+  Scope,
+} from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect } from "vite-plus/test";
 import {
@@ -157,13 +168,14 @@ describe("durable provider retry", () => {
     ),
   );
 
-  it.effect("stops behind a blocker once the retry limit is reached", () =>
+  it.effect("stops behind a blocker once retries pass the elapsed-time limit", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { database, retries, execution, scope } = yield* open(":memory:");
         runningGoal(database, request.runId);
+        yield* TestClock.adjust(Duration.hours(24));
         expect(
-          yield* retries.wait({ ...request, retry: 21 }, new AbortController().signal),
+          yield* retries.wait({ ...request, retry: 60 }, new AbortController().signal),
         ).toEqual({ _tag: "Exhausted" });
         expect(storedWaits(database)).toEqual([]);
         expect(yield* execution.get("s")).toMatchObject({

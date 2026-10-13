@@ -27,9 +27,7 @@ export const providerRetryLimits = {
   maxDelayMs: Duration.toMillis(Duration.minutes(30)),
   /** Each wait is scaled by a random factor in [1 - jitter, 1 + jitter], then capped. */
   jitter: 0.2,
-  /** Waits for one provider request before it stops behind a blocker. */
-  maxRetries: 20,
-  /** From the request's first failure to the latest retry time. */
+  /** From the request's first failure to the latest retry time; there is no count limit. */
   maxElapsedMs: Duration.toMillis(Duration.hours(24)),
 } as const;
 
@@ -172,10 +170,7 @@ const make = Effect.gen(function* () {
           Math.round(
             Math.min(providerRetryDelay(request.retry) * factor, providerRetryLimits.maxDelayMs),
           );
-        if (
-          request.retry > providerRetryLimits.maxRetries ||
-          retryAt - request.firstFailedAt > providerRetryLimits.maxElapsedMs
-        ) {
+        if (retryAt - request.firstFailedAt > providerRetryLimits.maxElapsedMs) {
           yield* execution.block(request.sessionId, request.runId, {
             reason: "external_dependency",
             detail:
