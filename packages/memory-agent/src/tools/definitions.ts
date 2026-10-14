@@ -131,7 +131,7 @@ export const DeleteOutsideFileInput = Schema.Struct({
 const saveShellSkill = {
   name: "save_shell_skill",
   description:
-    "Save a project shell skill (.agents/skills/<name>/ with SKILL.md and scripts/run.sh) for run_skill to run. Host commands run only through shell skills. Make each skill one purpose-specific job whose output shows only what the task needs, and reuse a listed skill when one fits. Do not wrap what built-in tools do: listing (list_files), reading (read_file), searching (search_files), writing or deleting files. Saving asks for approval of the exact script; later runs of the unchanged script, with any arguments, do not ask. Saving under an existing shell skill's name replaces it.",
+    "Save a project shell skill (.agents/skills/<name>/ with SKILL.md and scripts/run.sh) for run_skill to run. Host commands run only through shell skills. Make each skill one purpose-specific job whose output shows only what the task needs, and reuse a listed skill when one fits. Do not wrap what built-in tools do: listing (list_files), reading (read_file), searching (search_files), writing or deleting files. Saving asks for approval of the exact script; later runs of the unchanged script, with any arguments, do not ask. Saving under an existing shell skill's name replaces it. Read the shell-skill-writing skill before the first save in a conversation.",
   inputSchema: toToolSchema(SaveShellSkillInput),
 } as const;
 
