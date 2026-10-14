@@ -45,10 +45,42 @@ export {
   type QueueSnapshot,
 } from "../queue/queue-state.ts";
 
-export const RunShellInput = Schema.Struct({
-  command: Schema.NonEmptyString.annotate({
-    description: "Shell script to execute on the host.",
+/** Skill names as the Agent Skills format spells them: lowercase words joined by hyphens. */
+const ShellSkillName = Schema.String.check(
+  Schema.isPattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  Schema.isMaxLength(64),
+);
+
+export const SaveShellSkillInput = Schema.Struct({
+  name: ShellSkillName.annotate({
+    description:
+      "Skill name: lowercase words joined by hyphens, naming the job (e.g. test-failures, git-recent-changes).",
   }),
+  description: Schema.NonEmptyString.annotate({
+    description:
+      "One line on what the skill does and when to use it; it is listed so later runs can find it.",
+  }),
+  script: Schema.NonEmptyString.annotate({
+    description:
+      "POSIX sh script for one job, run in the working directory with arguments as $1, $2, …. Print only what the task needs: filter or cap noisy output in the script.",
+  }),
+  usage: Schema.optionalKey(
+    Schema.String.annotate({ description: "What the arguments mean and what the output shows." }),
+  ),
+  reason: Schema.optionalKey(
+    Schema.String.annotate({
+      description: "One sentence on why, shown to the user when asking.",
+    }),
+  ),
+});
+
+export const RunSkillInput = Schema.Struct({
+  name: ShellSkillName.annotate({ description: "A project shell skill's name." }),
+  args: Schema.optionalKey(
+    Schema.Array(Schema.String).annotate({
+      description: "Arguments, passed as $1, $2, … without shell parsing.",
+    }),
+  ),
   workdir: Schema.optionalKey(
     Schema.String.annotate({
       description:
@@ -57,18 +89,13 @@ export const RunShellInput = Schema.Struct({
   ),
   timeoutSeconds: Schema.optionalKey(
     Schema.Int.annotate({
-      description: "Stop the command after this long. 120 by default, at most 1800.",
+      description: "Stop the script after this long. 120 by default, at most 1800.",
     }),
   ),
   yieldMs: Schema.optionalKey(
     Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 0, maximum: 30_000 }))).annotate({
       description:
-        "Return a background task receipt if unfinished after this many milliseconds (default 1000). 0 dispatches immediately. This is separate from the command's timeoutSeconds. Retrieve with get_background_result; only finished results prove checks passed.",
-    }),
-  ),
-  reason: Schema.optionalKey(
-    Schema.String.annotate({
-      description: "One sentence on why, shown to the user when asking.",
+        "Return a background task receipt if unfinished after this many milliseconds (default 1000). 0 dispatches immediately. This is separate from timeoutSeconds. Retrieve with get_background_result; only finished results prove checks passed.",
     }),
   ),
 });
@@ -100,11 +127,11 @@ export const DeleteOutsideFileInput = Schema.Struct({
   ),
 });
 
-const runShell = {
-  name: "run_shell",
+const saveShellSkill = {
+  name: "save_shell_skill",
   description:
-    "Execute a finite, non-interactive shell script in the working directory. Returns its output and exit status, or a taskId if still running after yieldMs (default 1000); retrieve the final result with get_background_result. timeoutSeconds limits execution. Not for interactive input, sign-in, servers or watchers. Execution follows the project's approval policy. A running receipt does not prove success.",
-  inputSchema: toToolSchema(RunShellInput),
+    "Save a project shell skill (.agents/skills/<name>/ with SKILL.md and scripts/run.sh) for run_skill to run. Host commands run only through shell skills. Make each skill one purpose-specific job whose output shows only what the task needs, and reuse a listed skill when one fits. Do not wrap what built-in tools do: listing (list_files), reading (read_file), searching (search_files), writing or deleting files. Saving asks for approval of the exact script; later runs of the unchanged script, with any arguments, do not ask. Saving under an existing shell skill's name replaces it.",
+  inputSchema: toToolSchema(SaveShellSkillInput),
 } as const;
 
 const writeOutsideFile = {
@@ -123,12 +150,12 @@ const deleteOutsideFile = {
 
 /** Names of the tools that never run without an approval, in either permission mode. */
 export const gatedToolNames = HashSet.fromIterable([
-  runShell.name,
+  saveShellSkill.name,
   writeOutsideFile.name,
   deleteOutsideFile.name,
 ]);
 
-export const runShellDefinition = toolDefinition({ ...runShell, needsApproval: true });
+export const saveShellSkillDefinition = toolDefinition({ ...saveShellSkill, needsApproval: true });
 export const writeOutsideFileDefinition = toolDefinition({
   ...writeOutsideFile,
   needsApproval: true,
@@ -143,7 +170,7 @@ export const deleteOutsideFileDefinition = toolDefinition({
  * Register these with `useChat({ tools })` so approval requests can be answered.
  */
 export const approvalToolDefinitions = [
-  runShellDefinition,
+  saveShellSkillDefinition,
   writeOutsideFileDefinition,
   deleteOutsideFileDefinition,
 ] as const;
@@ -153,7 +180,7 @@ export const approvalToolDefinitions = [
  * middleware decides each call instead, and asks the user through {@link permissionReviewInterrupt}.
  */
 export const reviewedToolDefinitions = [
-  toolDefinition({ ...runShell, needsApproval: false }),
+  toolDefinition({ ...saveShellSkill, needsApproval: false }),
   toolDefinition({ ...writeOutsideFile, needsApproval: false }),
   toolDefinition({ ...deleteOutsideFile, needsApproval: false }),
 ] as const;

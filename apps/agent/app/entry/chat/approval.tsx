@@ -3,7 +3,7 @@ import { Option, Schema } from "effect";
 import { FileWarningIcon, ShieldQuestionIcon, TerminalIcon } from "lucide-react";
 import {
   DeleteOutsideFileInput,
-  RunShellInput,
+  SaveShellSkillInput,
   WriteOutsideFileInput,
 } from "memory-agent/definitions";
 import { Badge } from "~/components/ui/badge";
@@ -20,7 +20,7 @@ import type { PendingApproval } from "./pending-approval";
 
 /** A gated call's arguments, decoded once by tool name into a union the card can switch on. */
 type GatedCall =
-  | { readonly tool: "run_shell"; readonly input: typeof RunShellInput.Type }
+  | { readonly tool: "save_shell_skill"; readonly input: typeof SaveShellSkillInput.Type }
   | { readonly tool: "write_outside_file"; readonly input: typeof WriteOutsideFileInput.Type }
   | { readonly tool: "delete_outside_file"; readonly input: typeof DeleteOutsideFileInput.Type }
   | { readonly tool: "delegate_to_agent"; readonly agent: string; readonly task: string }
@@ -32,7 +32,7 @@ type GatedCall =
     }
   | { readonly tool: "unrecognized"; readonly name: string; readonly argumentsJson: string };
 
-const decodeShell = Schema.decodeUnknownOption(Schema.fromJsonString(RunShellInput));
+const decodeShellSkill = Schema.decodeUnknownOption(Schema.fromJsonString(SaveShellSkillInput));
 const decodeWrite = Schema.decodeUnknownOption(Schema.fromJsonString(WriteOutsideFileInput));
 const decodeDelete = Schema.decodeUnknownOption(Schema.fromJsonString(DeleteOutsideFileInput));
 const decodeDelegation = Schema.decodeUnknownOption(
@@ -42,10 +42,10 @@ const decodeDelegation = Schema.decodeUnknownOption(
 function decodeCall(toolName: string, argumentsJson: string): GatedCall {
   const unrecognized: GatedCall = { tool: "unrecognized", name: toolName, argumentsJson };
   switch (toolName) {
-    case "run_shell":
-      return Option.match(decodeShell(argumentsJson), {
+    case "save_shell_skill":
+      return Option.match(decodeShellSkill(argumentsJson), {
         onNone: () => unrecognized,
-        onSome: (input) => ({ tool: "run_shell", input }),
+        onSome: (input) => ({ tool: "save_shell_skill", input }),
       });
     case "write_outside_file":
       return Option.match(decodeWrite(argumentsJson), {
@@ -92,17 +92,18 @@ interface CallView {
 /** What the user is agreeing to. */
 function describe(call: GatedCall): CallView {
   switch (call.tool) {
-    case "run_shell":
+    case "save_shell_skill":
       return {
-        title: "셸 명령을 실행할까요?",
+        title: `셸 스킬 ${call.input.name}을(를) 저장할까요?`,
         modelReason: call.input.reason,
         shell: true,
         body: (
           <div className="flex flex-col gap-2">
-            <pre className={codeBlock}>{call.input.command}</pre>
+            <div>{call.input.description}</div>
+            <pre className={`max-h-60 ${codeBlock}`}>{call.input.script}</pre>
             <div className="text-muted-foreground">
-              실행 위치: <code>{call.input.workdir ?? "."}</code> (
-              {isTruthy(call.input.workdir?.startsWith("/")) ? "임시 경로" : "프로젝트 기준"})
+              <code>.agents/skills/{call.input.name}/</code>에 저장돼요. 승인하면 이 스크립트는
+              내용이 바뀌기 전까지 인자만 바꿔 다시 묻지 않고 실행돼요.
             </div>
           </div>
         ),

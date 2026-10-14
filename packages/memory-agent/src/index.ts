@@ -462,7 +462,8 @@ export { VectorIndex, VectorIndexError, type VectorHit } from "./memory/embeddin
 
 export { FileTools, fileToolNames } from "./tools/files.ts";
 export { OutsideTools, outsideReadToolNames } from "./tools/outside.ts";
-export { ApprovedTools } from "./tools/approved.ts";
+export { ApprovedTools, runSkillDefinition } from "./tools/approved.ts";
+export { ShellSkillRejected, ShellSkills, builtinOverlap } from "./skills/shell-skills.ts";
 export {
   PermissionReviewResponse,
   approvalToolDefinitions,
@@ -470,7 +471,7 @@ export {
   gatedToolNames,
   permissionReviewInterrupt,
   reviewedToolDefinitions,
-  runShellDefinition,
+  saveShellSkillDefinition,
   writeOutsideFileDefinition,
 } from "./tools/definitions.ts";
 export {

@@ -46,14 +46,16 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
         DateTime.toDateUtc(DateTime.makeUnsafe("2026-09-15T12:00:00Z")),
       );
       expect(auto).toContain("reviewed before each call: routine requested work runs");
-      expect(auto).toMatch(/Today is 2026-09-1[56] \(.+\)\. run_shell runs commands with \S+ on /);
+      expect(auto).toMatch(
+        /Today is 2026-09-1[56] \(.+\)\. Shell skill scripts run with \/bin\/sh on /,
+      );
       expect(auto).not.toContain("read-only");
       expect(yield* workspaceInstructions({ ...project, permissionMode: "ask" }, places)).toContain(
         "wait for the user's approval of each call",
       );
       expect(
         yield* workspaceInstructions({ ...project, permissionMode: "full" }, places),
-      ).toContain("run without per-call approval");
+      ).toContain("run without approval");
       // Where the app keeps its own settings, and that its storage is not for the file tools.
       expect(auto).toContain(
         `MCP servers: ${path.join(storage, "mcp.json")}, ${path.join(project.root, ".mcp.json")}`,
@@ -83,7 +85,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
       const { tab, review, shellResult } = yield* shellRequest("printf reviewed-ok");
       yield* tab.answered("Shell said", "the answer");
       expect(tab.client.getInterrupts()).toHaveLength(0);
-      expect(tab.text()).toContain("reviewed-ok");
+      expect(tab.text()).toContain('"scriptSha256"');
       expect(review()).toMatchObject({
         decision: "allow",
         decidedBy: "classifier",
@@ -117,7 +119,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
       expect(tab.client.getInterrupts()[0]).toMatchObject({
         kind: "generic",
         definitionId: "permission-review",
-        payload: { toolName: "run_shell", reason: "검토 결과: ask" },
+        payload: { toolName: "save_shell_skill", reason: "검토 결과: ask" },
       });
       expect(shellResult()).toBeUndefined();
       tab.client.resolveInterrupts((item) => {
@@ -125,7 +127,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
           item.resolveInterrupt({ approved: true });
       });
       yield* tab.answered("Shell said", "the answer");
-      expect(tab.text()).toContain("ask-me-approved");
+      expect(tab.text()).toContain('"scriptSha256"');
       expect(review()).toMatchObject({ decision: "approved", decidedBy: "user" });
       expect(shellResult()?.detail).toMatchObject({
         ok: true,

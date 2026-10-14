@@ -235,8 +235,10 @@ export const defaultTestResponder = (
   if (user.includes("remember"))
     return call("call-memory", "find_memory", { query: "SQLite 결정" });
   if (user.includes("shell"))
-    return call("call-shell", "run_shell", {
-      command: user.match(/shell: (.*)$/s)?.[1]?.trim() ?? "printf approved-output",
+    return call("call-shell", "save_shell_skill", {
+      name: "approved-output",
+      description: "Print the approved output",
+      script: user.match(/shell: (.*)$/s)?.[1]?.trim() ?? "printf approved-output",
       reason: "check the shell",
     });
   if (user.includes("check files"))

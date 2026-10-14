@@ -1489,6 +1489,17 @@ export const migrations: readonly string[] = [
     acknowledged_at TEXT NOT NULL
   );
   `,
+  `
+  -- A project shell skill script the user (or the auto review) approved when it was saved. run_skill
+  -- runs a script only while its exact content is still one of these; any edit asks again.
+  CREATE TABLE shell_skill_approvals (
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    script_sha256 TEXT NOT NULL,
+    approved_at TEXT NOT NULL,
+    PRIMARY KEY (project_id, name, script_sha256)
+  );
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.

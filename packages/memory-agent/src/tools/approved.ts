@@ -1,7 +1,7 @@
 import { Function as EffectFunction } from "effect";
 import { randomUUID } from "../runtime/synchronous-crypto.ts";
 import { isTruthy } from "../truthy.ts";
-import type { ToolExecutionContext } from "@tanstack/ai";
+import { toolDefinition, type ToolExecutionContext } from "@tanstack/ai";
 import { tmpdir } from "node:os";
 import { path } from "../runtime/synchronous-path.ts";
 const { isAbsolute, relative, sep } = path;
@@ -21,14 +21,25 @@ import {
 } from "../files/text.ts";
 import type { Project } from "../projects/projects.ts";
 import { defaultTimeoutSeconds, maxTimeoutSeconds, runCommand } from "../shell/run.ts";
+import { ShellSkills, skillCommand } from "../skills/shell-skills.ts";
 import {
   approvalToolDefinitions,
   reviewedToolDefinitions,
+  RunSkillInput,
   type DeleteOutsideFileInput,
-  type RunShellInput,
+  type SaveShellSkillInput,
   type WriteOutsideFileInput,
 } from "./definitions.ts";
 import { guarded } from "./failure.ts";
+import { toToolSchema } from "./schema.ts";
+
+/** Not gated per call: the script it runs was approved when it was saved. */
+export const runSkillDefinition = toolDefinition({
+  name: "run_skill",
+  description:
+    "Run a project shell skill's scripts/run.sh with arguments ($1, $2, …, never shell-parsed). A script runs only as it was approved when saved; an edited or unapproved one is refused until saved again with save_shell_skill. Returns the output and exit status, or a taskId if still running after yieldMs (default 1000); retrieve the final result with get_background_result. A running receipt does not prove success.",
+  inputSchema: toToolSchema(RunSkillInput),
+});
 
 const ShellResult = Schema.Struct({
   workdir: Schema.String,
@@ -81,6 +92,7 @@ function resolveShellWorkingDirectoryBody(
 const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
   const background = yield* BackgroundTasks;
+  const shellSkills = yield* ShellSkills;
 
   return {
     /**
@@ -93,13 +105,25 @@ const make = Effect.gen(function* () {
       approval: "static" | "gate" = project.permissionMode === "ask" ? "static" : "gate",
       binding?: BackgroundBinding,
     ) {
-      const runShell = (
-        { command, workdir, timeoutSeconds, yieldMs }: typeof RunShellInput.Type,
+      const saveShellSkill = ({
+        name,
+        description,
+        script,
+        usage,
+      }: typeof SaveShellSkillInput.Type) =>
+        // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
+        guarded(name, () => shellSkills.save(project, { name, description, script, usage }));
+
+      const runSkill = (
+        { name, args = [], workdir, timeoutSeconds, yieldMs }: typeof RunSkillInput.Type,
         context?: ToolExecutionContext,
       ) =>
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        guarded(workdir ?? ".", () =>
+        guarded(name, () =>
           Effect.gen(function* () {
+            const runnable = yield* shellSkills.runnable(project, name);
+            const command = skillCommand(name, runnable.text, args);
+            const label = [name, ...args].join(" ");
             const directory = yield* Effect.fromResult(
               resolveShellWorkingDirectory(project.root, storage.path, workdir ?? "."),
             );
@@ -119,10 +143,10 @@ const make = Effect.gen(function* () {
                 binding,
                 context?.toolCallId ?? randomUUID(),
                 "shell",
-                command,
+                label,
                 backgroundOperation(execute).pipe(
                   Effect.map((result) =>
-                    JSON.stringify({ workdir: directory.relative, ...result }),
+                    JSON.stringify({ workdir: directory.relative, ...result, command: label }),
                   ),
                 ),
               );
@@ -139,7 +163,7 @@ const make = Effect.gen(function* () {
               return receipt;
             }
             const result = yield* Effect.tryPromise(() => execute(context?.abortSignal));
-            return { workdir: directory.relative, ...result };
+            return { workdir: directory.relative, ...result, command: label };
           }),
         );
 
@@ -191,16 +215,18 @@ const make = Effect.gen(function* () {
         );
 
       if (approval === "gate") {
-        const [shell, write, remove] = reviewedToolDefinitions;
+        const [save, write, remove] = reviewedToolDefinitions;
         return [
-          shell.server(runShell),
+          save.server(saveShellSkill),
+          runSkillDefinition.server(runSkill),
           write.server(writeOutsideFile),
           remove.server(deleteOutsideFile),
         ] as const;
       }
-      const [shell, write, remove] = approvalToolDefinitions;
+      const [save, write, remove] = approvalToolDefinitions;
       return [
-        shell.server(runShell),
+        save.server(saveShellSkill),
+        runSkillDefinition.server(runSkill),
         write.server(writeOutsideFile),
         remove.server(deleteOutsideFile),
       ] as const;
@@ -208,7 +234,7 @@ const make = Effect.gen(function* () {
   };
 });
 
-/** Shell and outside-write tools, each run gated by an approval. */
+/** Shell skills and outside writes: saving a skill and every outside write is approval-gated. */
 export class ApprovedTools extends Context.Service<ApprovedTools, Effect.Success<typeof make>>()(
   "memory-agent/tools/approved/ApprovedTools",
 ) {

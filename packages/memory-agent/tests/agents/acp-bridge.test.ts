@@ -127,8 +127,8 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("ACP agent br
       const allowed = yield* editor("allow");
       const done = yield* allowed.prompt(yield* allowed.newSession, "shell: printf from-editor");
       expect(done.stopReason).toBe("end_turn");
-      expect(allowed.permissions).toEqual(["셸 실행"]);
-      expect(allowed.text()).toContain("from-editor");
+      expect(allowed.permissions).toEqual(["셸 스킬 저장"]);
+      expect(allowed.text()).toContain("scriptSha256");
       const kinds = allowed.updates.map((notification) => notification.update.sessionUpdate);
       expect(kinds).toContain("tool_call");
       expect(kinds).toContain("tool_call_update");

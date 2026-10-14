@@ -68,6 +68,7 @@ import { MessageQueue } from "./queue/queue.ts";
 import { SessionLeases } from "./sessions/leases.ts";
 import { Sessions } from "./sessions/sessions.ts";
 import { ApprovedTools } from "./tools/approved.ts";
+import { ShellSkills } from "./skills/shell-skills.ts";
 import { BackgroundTasks } from "./tools/background.ts";
 import { FileTools } from "./tools/files.ts";
 import { DelegateTools } from "./tools/delegate.ts";
@@ -322,7 +323,7 @@ function memoryAgentLayerBody(storageRoot: string, options: MemoryAgentLayerOpti
         BtwChat.layer,
         FileTools.layer,
         OutsideTools.layer,
-        ApprovedTools.layer,
+        ApprovedTools.layer.pipe(Layer.provide(ShellSkills.layer)),
         KagiTools.layer,
         SkillTools.layer,
         WorkflowTools.layer,

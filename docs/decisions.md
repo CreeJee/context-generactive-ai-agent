@@ -1524,6 +1524,19 @@
 - GitHub Actions secret `DISCORD_WEBHOOK_URL`은 사용자가 직접 등록하고, 릴리스 워크플로는 실행 파일 빌드 단계의 env로만 넘긴다. 값은 로그·문서·asset 디코딩 오류(`BuildConfigInvalid`, 내용 없음)에 남기지 않는다.
 - 감수한 위험: 실행 파일을 가진 누구나 웹훅 URL을 꺼낼 수 있어 개발자 채널 스팸이나 웹훅 수정·삭제에 악용될 수 있다. 남용되면 웹훅을 지우고 새로 만든 뒤 secret을 바꿔 다시 릴리스한다(이전 배포본은 `webhook_rejected`). 자세한 내용은 [제보 문서](./reporting.md#배포본의-개발자-웹훅-2026-10-12).
 
+### `run_shell`을 셸 스킬로 바꿈 (2026-10-14)
+
+- 사용자 결정: `run_shell`을 없앤다. 호스트 명령은 프로젝트 셸 스킬로만 실행한다. 목적은 막연한 grep·rg·ls 같은 호출과 넘치는 출력을 없애고, 명령을 작업 목적에 맞춘 재사용 단위로 남기는 것이다. 위 "셸 도구의 실행 설명과 스킬 목록 전달"(2026-10-05)의 `run_shell` 설명 항목, R05 보류 항목, 저장소 폴더를 run_shell로 다루라는 안내는 이 결정으로 대체한다.
+- 셸 스킬은 표준 skill 폴더다. `.agents/skills/<name>/SKILL.md`(name, description, 사용법)와 `scripts/run.sh`. 기존 skill 목록과 `read_skill`, 다른 에이전트가 그대로 읽는다. 별도 의미 매칭은 두지 않고 모델이 목록의 description을 보고 고른다.
+- 도구 두 개:
+  - `save_shell_skill(name, description, script, usage?)`: 만들거나 같은 이름의 셸 스킬을 바꾼다. 기존 `run_shell` 자리의 승인 대상이다(ask는 TanStack 승인, auto는 검토, full은 바로). 승인 카드는 스크립트 전문을 보여 준다. `scripts/run.sh`가 없는 일반 skill 이름은 덮어쓰지 않는다.
+  - `run_skill(name, args?, workdir?, timeoutSeconds?, yieldMs?)`: 호출마다 묻지 않는다. 지금 스크립트의 sha256이 그 프로젝트에서 저장 때 승인된 값(`shell_skill_approvals`)일 때만 실행한다. 파일 도구 편집은 승인이 없으므로, 내용이 바뀌면 `not_approved`로 거절하고 다시 저장(다시 승인)하게 한다. full 모드는 확인 없이 실행하고 승인도 기록하지 않아서, 모드를 낮추면 다시 묻는다.
+- 실행은 확인한 스크립트 텍스트를 `/bin/sh -c`에 그대로 넘기고 인자는 따옴표로 감싼 `$1…`로만 전달한다. 확인 뒤 파일이 바뀌어도 실행 내용은 바뀌지 않고, 인자는 셸이 해석하지 않는다. 결과 형태(상태, 종료 코드, 출력 앞뒤 보존, 백그라운드 전환, 실패 기록)는 `run_shell`과 같다.
+- 내장 도구와 겹치는 스킬은 저장을 거절한다(`builtin_overlap`). 각 단계의 첫 프로그램이 모두 ls·find·cat·head·tail·sed·awk·grep·rg·touch·tee·rm 같은 내장 도구 대상이면 거절하고 대신 쓸 도구를 알려 준다. `pnpm test | tail -50`처럼 다른 프로그램 뒤 필터로 쓰는 것은 허용한다. cd·export·echo 같은 준비 단계는 세지 않는다.
+- 감수한 위험: 승인한 스크립트는 이후 인자만 바꿔 묻지 않고 실행된다. 승인 카드와 auto 검토 지침에 이를 적고, 검토는 인자가 위험한 명령으로 이어질 수 있으면 ask한다. 자동 허용 빠른 경로는 모든 줄이 일상 패키지·git 명령이고 `$` 확장이 없을 때만 쓴다.
+- Verify 단계는 두 셸 스킬 도구를 받는다. 셸 스킬 저장은 검증 도구 준비로 보고 Verify의 파일 수정 금지에서 뺀다.
+- 기존 대화의 `run_shell` 호출은 이름 표시와 결과 미리보기만 유지한다.
+
 ## UI·클라이언트
 
 ### UI (2026-09-14)

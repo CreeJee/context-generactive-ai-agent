@@ -285,15 +285,14 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
       yield* until(() => relayed.pending(sessionId).length === 1, "the child's approval");
       const [request] = relayed.pending(sessionId);
       expect(request).toMatchObject({
-        toolName: "run_shell",
+        toolName: "save_shell_skill",
         askedBy: "every_call",
         requester: { kind: "subagent", name: null },
       });
       expect(yield* relayed.answer("another-session", request!.id, true)).toBe(false);
       expect(yield* relayed.answer(sessionId, request!.id, true)).toBe(true);
       const approvedAnswer = yield* Fiber.join(approved);
-      expect(approvedAnswer).toContain("child-approved");
-      expect(approvedAnswer).toContain("exitCode");
+      expect(approvedAnswer).toContain("scriptSha256");
       const denied = yield* Effect.forkChild(
         send(sessionId, 'call run_subagent {"task":"shell: printf child-denied"}'),
       );
@@ -301,7 +300,7 @@ testAgent({ testProvider: { responder: heldDefaultTurn } })("subagents", (it) =>
       yield* relayed.answer(sessionId, relayed.pending(sessionId)[0]!.id, false);
       const deniedAnswer = yield* Fiber.join(denied);
       expect(deniedAnswer).toContain("User denied this action");
-      expect(deniedAnswer).not.toContain("exitCode");
+      expect(deniedAnswer).not.toContain("scriptSha256");
       const reviews = yield* PermissionReviews;
       const children = subagents.list(sessionId);
       expect(reviews.latest(sessionId, `subagent-${children[0]!.id}:call-shell`)?.decision).toBe(

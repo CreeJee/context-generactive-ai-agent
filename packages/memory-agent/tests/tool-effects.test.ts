@@ -33,7 +33,9 @@ layer(NodeFileSystem.layer)((it) => {
           }
           switch (String(path)) {
             case "tools/definitions.ts":
-              expect(call[1]).toMatch(/\.\.\.(runShell|writeOutsideFile|deleteOutsideFile)\b/);
+              expect(call[1]).toMatch(
+                /\.\.\.(saveShellSkill|writeOutsideFile|deleteOutsideFile)\b/,
+              );
               break;
             case "tools/delegate.ts":
               expect(call[1]).toMatch(/name:\s*delegateToolName\b/);

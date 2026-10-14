@@ -300,12 +300,15 @@ testAgent()("background shell across restart", (it) => {
         const { project, session } = env;
         const background = yield* BackgroundTasks;
         const run = yield* runOf(session.id);
-        const [shell] = (yield* ApprovedTools).forProject(project, "gate", run);
-        const command = `node -e 'const fs=require("fs");const t=setInterval(()=>{if(fs.existsSync("release")){clearInterval(t);console.log("finished")}},20)'`;
+        const [save, shell] = (yield* ApprovedTools).forProject(project, "gate", run);
+        const script = `node -e 'const fs=require("fs");const t=setInterval(()=>{if(fs.existsSync("release")){clearInterval(t);console.log("finished")}},20)'`;
+        yield* sdk(() =>
+          save.execute!({ name: "wait-release", description: "Wait for release", script }),
+        );
         const receipt = yield* Schema.decodeUnknownEffect(Receipt)(
           yield* sdk(() =>
             shell.execute!(
-              { command, yieldMs: 0, timeoutSeconds: 5 },
+              { name: "wait-release", yieldMs: 0, timeoutSeconds: 5 },
               {
                 toolCallId: `${session.id}:shell`,
                 abortSignal: run.abortSignal,

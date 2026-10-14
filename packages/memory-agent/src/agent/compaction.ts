@@ -533,7 +533,9 @@ function lightweightToolResultsBody(
     const name = Option.getOrUndefined(MutableHashMap.get(names, message.toolCallId));
     if (
       !isTruthy(name) ||
-      !["run_shell", "list_files", "search_files", "get_subagent_report"].includes(name)
+      !["run_skill", "run_shell", "list_files", "search_files", "get_subagent_report"].includes(
+        name,
+      )
     )
       return message;
     const preview = (text: string, length = 800) => {
@@ -542,7 +544,7 @@ function lightweightToolResultsBody(
       return `${text.slice(0, head)}… (${text.length - length} omitted characters; full result available by ID) …${text.slice(-Math.floor(length / 2))}`;
     };
     let summary;
-    if (name === "run_shell") {
+    if (name === "run_skill" || name === "run_shell") {
       const result = Option.getOrUndefined(Schema.decodeOption(largeShellResult)(message.content));
       if (!isTruthy(result)) return message;
       summary = {

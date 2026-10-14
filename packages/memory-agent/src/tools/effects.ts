@@ -24,7 +24,8 @@ export const builtinToolEffects = {
   search_outside_file: "read",
   write_outside_file: "effectful",
   delete_outside_file: "effectful",
-  run_shell: "effectful",
+  save_shell_skill: "effectful",
+  run_skill: "effectful",
   read_skill: "read",
   // Remote calls can incur charges even when the response fails.
   kagi_search: "effectful",
