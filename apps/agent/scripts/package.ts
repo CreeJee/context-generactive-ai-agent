@@ -207,6 +207,8 @@ const program = Effect.gen(function* () {
       "@huggingface/transformers",
       "sharp",
       "kiwi-nlp",
+      // Finds its helper binaries (seccomp, Windows helper, JVM proxy agent) next to its own files.
+      "@anthropic-ai/sandbox-runtime",
       // Full-loop Goal workers import their own file-backed SDK, not the owner's bundle.
       "@tanstack/ai",
       "effect",
@@ -410,6 +412,7 @@ const program = Effect.gen(function* () {
     "import-worker": join(memoryAgent, "src", "imports", "worker.ts"),
     "redact-worker": join(memoryAgent, "src", "secrets", "redact-worker.ts"),
     "native-search-worker": join(memoryAgent, "src", "memory", "native-search", "worker.ts"),
+    "sandbox-worker": join(memoryAgent, "src", "shell", "sandbox-worker.ts"),
   } as const;
   for (const [name, source] of Object.entries(bundledWorkers))
     yield* Effect.tryPromise(() =>

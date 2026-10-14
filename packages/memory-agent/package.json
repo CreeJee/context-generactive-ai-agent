@@ -40,7 +40,8 @@
     "./embed-worker": "./src/memory/embedding/embed-worker.ts",
     "./import-worker": "./src/imports/worker.ts",
     "./redact-worker": "./src/secrets/redact-worker.ts",
-    "./native-search-worker": "./src/memory/native-search/worker.ts"
+    "./native-search-worker": "./src/memory/native-search/worker.ts",
+    "./sandbox-worker": "./src/shell/sandbox-worker.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -55,6 +56,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "catalog:",
+    "@anthropic-ai/sandbox-runtime": "catalog:",
     "@effect/platform-node": "catalog:",
     "@effect/tsgo": "catalog:",
     "@huggingface/transformers": "catalog:",

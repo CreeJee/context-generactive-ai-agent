@@ -67,6 +67,8 @@ catalog:
   vitest-browser-react: ^2.3.0
   "@effect/platform-node": https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7
   oxc-transform-react: ^0.153.0
+  # Research preview with a changing config format: pinned, upgraded deliberately.
+  "@anthropic-ai/sandbox-runtime": 0.0.79
 overrides:
   vite@*: "catalog:"
   vitest: 5.0.1

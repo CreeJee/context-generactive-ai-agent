@@ -82,6 +82,34 @@ function preview(content: string) {
 
 const codeBlock = "overflow-auto rounded bg-muted p-2 font-mono whitespace-pre-wrap break-all";
 
+/** The exact hosts a shell skill may reach, so approving it is a decision about named hosts. */
+function ShellSkillNetwork({ hosts }: { readonly hosts: readonly string[] }) {
+  if (hosts.length === 0) return <div>네트워크: 접속하지 않아요.</div>;
+  return (
+    <div className="flex flex-col gap-1">
+      <div>이 스크립트가 접속할 수 있는 호스트 (이 목록 밖으로는 막혀요):</div>
+      <ul className="flex flex-wrap gap-1">
+        {hosts.map((host) => (
+          <li key={host}>
+            <code className="rounded bg-muted px-1">{host}</code>
+          </li>
+        ))}
+      </ul>
+      {hosts.some((host) => host.startsWith("*.")) && (
+        <div className="text-muted-foreground">
+          <code>*.</code>으로 시작하는 항목은 그 도메인의 모든 하위 도메인을 포함해요.
+        </div>
+      )}
+      {hosts.includes("localhost") && (
+        <div className="text-destructive">
+          <code>localhost</code>를 허용하면 이 앱 서버를 포함해 이 컴퓨터의 모든 로컬 서비스에
+          접속할 수 있어요.
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface CallView {
   readonly title: string;
   readonly modelReason: string | undefined;
@@ -101,9 +129,11 @@ function describe(call: GatedCall): CallView {
           <div className="flex flex-col gap-2">
             <div>{call.input.description}</div>
             <pre className={`max-h-60 ${codeBlock}`}>{call.input.script}</pre>
+            <ShellSkillNetwork hosts={call.input.network ?? []} />
             <div className="text-muted-foreground">
               <code>.agents/skills/{call.input.name}/</code>에 저장돼요. 승인하면 이 스크립트는
-              내용이 바뀌기 전까지 인자만 바꿔 다시 묻지 않고 실행돼요.
+              내용이 바뀌기 전까지 인자만 바꿔 다시 묻지 않고 실행돼요. 실행은 샌드박스 안에서 하며,
+              프로젝트·임시 폴더·패키지 캐시 밖에는 쓰지 못하고 자격증명 폴더는 읽지 못해요.
             </div>
           </div>
         ),

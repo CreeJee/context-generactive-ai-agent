@@ -14,6 +14,7 @@ import { Database } from "../db/database.ts";
 import { resolveProjectPath } from "../files/paths.ts";
 import { createTextFileEffect, readTextFileEffect, replaceTextFileEffect } from "../files/text.ts";
 import type { Project } from "../projects/projects.ts";
+import { NetworkHost } from "../tools/definitions.ts";
 
 /**
  * Project shell skills: the only way the model runs a host command. Each one is a standard skill
@@ -28,7 +29,13 @@ const shellSkillDocument = (name: string) => `${shellSkillDirectory(name)}/SKILL
 export class ShellSkillRejected extends Schema.TaggedError<ShellSkillRejected>()(
   "ShellSkillRejected",
   {
-    reason: Schema.Literals(["builtin_overlap", "not_shell_skill", "not_found", "not_approved"]),
+    reason: Schema.Literals([
+      "builtin_overlap",
+      "not_shell_skill",
+      "network_line",
+      "not_found",
+      "not_approved",
+    ]),
     detail: Schema.String,
   },
 ) {
@@ -107,6 +114,20 @@ export const builtinOverlap = (script: string): Option.Option<ShellSkillRejected
     : Option.none();
 };
 
+/**
+ * First line of a script that may use the network, naming its hosts. It is part of the approved
+ * text, so the host list is approved, hashed and shown together with the script.
+ */
+const networkMarker = "# run_skill network:";
+
+/** The hosts an approved script may reach, from its first line. */
+export const scriptNetwork = (text: string): readonly string[] => {
+  const first = text.split("\n", 1)[0] ?? "";
+  return first.startsWith(networkMarker)
+    ? first.slice(networkMarker.length).trim().split(/\s+/).filter(Schema.is(NetworkHost))
+    : [];
+};
+
 /** SKILL.md for a shell skill. Front matter values are JSON strings, which YAML reads as-is. */
 const skillDocument = (input: {
   readonly name: string;
@@ -180,10 +201,16 @@ const make = Effect.gen(function* () {
         readonly description: string;
         readonly script: string;
         readonly usage: string | undefined;
+        readonly network: readonly string[];
       },
     ) {
       const overlap = builtinOverlap(input.script);
       if (Option.isSome(overlap)) return yield* overlap.value;
+      if (input.script.split("\n").some((line) => line.trim().startsWith(networkMarker)))
+        return yield* ShellSkillRejected.make({
+          reason: "network_line",
+          detail: `Remove the "${networkMarker}" line from script and list those hosts in network; it is written from network.`,
+        });
       const document = shellSkillDocument(input.name);
       const existing = yield* resolveProjectPath(project.root, document, "new-or-file");
       const scriptPath = yield* resolveProjectPath(
@@ -196,7 +223,11 @@ const make = Effect.gen(function* () {
           reason: "not_shell_skill",
           detail: `${input.name} is a skill without scripts/run.sh. Choose another name.`,
         });
-      const text = input.script.endsWith("\n") ? input.script : `${input.script}\n`;
+      const network = [...new Set(input.network)];
+      const text = [
+        ...(network.length > 0 ? [`${networkMarker} ${network.join(" ")}\n`] : []),
+        input.script.endsWith("\n") ? input.script : `${input.script}\n`,
+      ].join("");
       const written = yield* put(project.root, shellSkillScript(input.name), text);
       yield* put(project.root, document, skillDocument(input));
       switch (project.permissionMode) {
@@ -216,6 +247,7 @@ const make = Effect.gen(function* () {
         name: input.name,
         directory: shellSkillDirectory(input.name),
         scriptSha256: written.sha256,
+        network,
         replaced: existing.stats !== undefined,
       };
     }),
@@ -231,7 +263,7 @@ const make = Effect.gen(function* () {
           reason: "not_approved",
           detail: `${name}'s script changed since it was approved, or was never approved. Read it, then save it again with save_shell_skill so the user can approve this content.`,
         });
-      return current;
+      return { ...current, network: scriptNetwork(current.text) };
     }),
   };
 });

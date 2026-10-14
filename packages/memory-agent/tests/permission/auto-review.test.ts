@@ -63,7 +63,7 @@ testAgent({ testProvider: { responder: sessionScopedResponder } })("auto permiss
       expect(auto).toContain(
         `${path.join(storage, "agents.json")}, ${path.join(project.root, ".agents", "agents.json")}`,
       );
-      expect(auto).toContain("the file tools never open it");
+      expect(auto).toContain("neither the file tools nor shell skill scripts open it");
     }),
   );
 

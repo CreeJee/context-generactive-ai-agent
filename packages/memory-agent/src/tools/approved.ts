@@ -5,7 +5,7 @@ import { toolDefinition, type ToolExecutionContext } from "@tanstack/ai";
 import { tmpdir } from "node:os";
 import { path } from "../runtime/synchronous-path.ts";
 const { isAbsolute, relative, sep } = path;
-import { Context, Effect, Layer, Schema } from "effect";
+import { Cause, Context, Effect, Layer, Schema } from "effect";
 import { BackgroundTasks, backgroundOperation, type BackgroundBinding } from "./background.ts";
 import { StorageRoot } from "../config/storage-root.ts";
 import {
@@ -20,7 +20,13 @@ import {
   replaceTextFileEffect,
 } from "../files/text.ts";
 import type { Project } from "../projects/projects.ts";
-import { defaultTimeoutSeconds, maxTimeoutSeconds, runCommand } from "../shell/run.ts";
+import {
+  defaultTimeoutSeconds,
+  maxTimeoutSeconds,
+  runCommand,
+  type CommandResult,
+} from "../shell/run.ts";
+import { runSandboxed, sandboxPolicy, type SandboxUnavailable } from "../shell/sandbox.ts";
 import { ShellSkills, skillCommand } from "../skills/shell-skills.ts";
 import {
   approvalToolDefinitions,
@@ -37,7 +43,7 @@ import { toToolSchema } from "./schema.ts";
 export const runSkillDefinition = toolDefinition({
   name: "run_skill",
   description:
-    "Run a project shell skill's scripts/run.sh with arguments ($1, $2, …, never shell-parsed). A script runs only as it was approved when saved; an edited or unapproved one is refused until saved again with save_shell_skill. Returns the output and exit status, or a taskId if still running after yieldMs (default 1000); retrieve the final result with get_background_result. A running receipt does not prove success.",
+    "Run a project shell skill's scripts/run.sh with arguments ($1, $2, …, never shell-parsed). A script runs only as it was approved when saved; an edited or unapproved one is refused until saved again with save_shell_skill. It runs sandboxed: what the sandbox blocked is listed in stderr under <sandbox_violations>; to reach a blocked host, save the skill again with that host in network. Returns the output and exit status, or a taskId if still running after yieldMs (default 1000); retrieve the final result with get_background_result. A running receipt does not prove success.",
   inputSchema: toToolSchema(RunSkillInput),
 });
 
@@ -114,9 +120,12 @@ const make = Effect.gen(function* () {
         description,
         script,
         usage,
+        network = [],
       }: typeof SaveShellSkillInput.Type) =>
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-        guarded(name, () => shellSkills.save(project, { name, description, script, usage }));
+        guarded(name, () =>
+          shellSkills.save(project, { name, description, script, usage, network }),
+        );
 
       const runSkill = (
         { name, args = [], workdir, timeoutSeconds, yieldMs }: typeof RunSkillInput.Type,
@@ -137,13 +146,41 @@ const make = Effect.gen(function* () {
               Math.max(1, timeoutSeconds ?? defaultTimeoutSeconds),
               maxTimeoutSeconds,
             );
+            const runLine = (signal: AbortSignal | undefined) => (line: string) =>
+              Effect.tryPromise(() =>
+                runCommand(line, {
+                  cwd: directory.absolute,
+                  timeoutSeconds: seconds,
+                  signal,
+                  env: process.env,
+                }),
+              );
+            const setup = {
+              command,
+              commandId: context?.toolCallId ?? randomUUID(),
+              ...sandboxPolicy({
+                projectRoot: project.root,
+                storageRoot: storage.path,
+                network: runnable.network,
+              }),
+            };
+            // Without an OS sandbox here, only `full` mode, which already runs unapproved scripts,
+            // falls back to running the script as it is.
+            const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
             const execute = (signal: AbortSignal | undefined) =>
-              runCommand(command, {
-                cwd: directory.absolute,
-                timeoutSeconds: seconds,
-                signal,
-                env: process.env,
-              });
+              runPromise(
+                runSandboxed(setup, runLine(signal)).pipe(
+                  Effect.catchTag(
+                    "SandboxUnavailable",
+                    (
+                      unavailable,
+                    ): Effect.Effect<CommandResult, SandboxUnavailable | Cause.UnknownError> =>
+                      project.permissionMode === "full"
+                        ? runLine(signal)(command)
+                        : Effect.fail(unavailable),
+                  ),
+                ),
+              );
             if (binding !== undefined) {
               const receipt = yield* background.start(
                 binding,

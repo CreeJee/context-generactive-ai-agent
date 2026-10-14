@@ -52,6 +52,12 @@ const ShellSkillName = Schema.String.check(
   Schema.isMaxLength(64),
 );
 
+/** A host a sandboxed script may connect to: a lowercase name or `*.` wildcard, optionally `:port`. */
+export const NetworkHost = Schema.String.check(
+  Schema.isPattern(/^(?:\*\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*(?::[0-9]{1,5})?$/),
+  Schema.isMaxLength(253),
+);
+
 export const SaveShellSkillInput = Schema.Struct({
   name: ShellSkillName.annotate({
     description:
@@ -67,6 +73,12 @@ export const SaveShellSkillInput = Schema.Struct({
   }),
   usage: Schema.optionalKey(
     Schema.String.annotate({ description: "What the arguments mean and what the output shows." }),
+  ),
+  network: Schema.optionalKey(
+    Schema.Array(NetworkHost).check(Schema.isMaxLength(32)).annotate({
+      description:
+        'The only hosts the script may connect to, exactly as it needs them (e.g. "registry.npmjs.org", "*.github.com", "api.example.com:443"). Omit for no network. The user approves this list with the script.',
+    }),
   ),
   reason: Schema.optionalKey(
     Schema.String.annotate({
@@ -131,7 +143,7 @@ export const DeleteOutsideFileInput = Schema.Struct({
 const saveShellSkill = {
   name: "save_shell_skill",
   description:
-    "Save a project shell skill (.agents/skills/<name>/ with SKILL.md and scripts/run.sh) for run_skill to run. Host commands run only through shell skills. Make each skill one purpose-specific job whose output shows only what the task needs, and reuse a listed skill when one fits. Do not wrap what built-in tools do: listing (list_files), reading (read_file), searching (search_files), writing or deleting files. Saving asks for approval of the exact script; later runs of the unchanged script, with any arguments, do not ask. Saving under an existing shell skill's name replaces it. Read the shell-skill-writing skill before the first save in a conversation.",
+    "Save a project shell skill (.agents/skills/<name>/ with SKILL.md and scripts/run.sh) for run_skill to run. Host commands run only through shell skills. Make each skill one purpose-specific job whose output shows only what the task needs, and reuse a listed skill when one fits. Do not wrap what built-in tools do: listing (list_files), reading (read_file), searching (search_files), writing or deleting files. Scripts run sandboxed: they write only inside the project, temp folders and package caches, cannot read credential folders, and reach only the hosts in network. Saving asks for approval of the exact script and host list; later runs of the unchanged script, with any arguments, do not ask. Saving under an existing shell skill's name replaces it. Read the shell-skill-writing skill before the first save in a conversation.",
   inputSchema: toToolSchema(SaveShellSkillInput),
 } as const;
 

@@ -251,7 +251,7 @@ function settingsInstructions(project: Project, places: SettingsPlaces) {
 - MCP servers: ${globalMcpFile(places.storageRoot)}, ${projectMcpFile(project.root)}
 - Skills (one folder with a SKILL.md each): ${places.globalSkills}, ${projectSkillsDirectory(project.root)}
 - App settings such as the model and web search: ${join(places.storageRoot, "config.json")}
-- Settings in the project can be changed with the file tools. ${places.storageRoot} also holds the account login and the memory database, so the file tools never open it: for a file there, show the user the exact change, or save a shell skill for it, which is approved like any other. Never print keys or tokens these files hold.
+- Settings in the project can be changed with the file tools. ${places.storageRoot} also holds the account login and the memory database, so neither the file tools nor shell skill scripts open it: for a file there, show the user the exact change to make. Never print keys or tokens these files hold.
 - An agent or MCP server that is added or changed does nothing until the user trusts it in the app's settings.`;
 }
 
@@ -279,7 +279,7 @@ const workspaceInstructionsBody = Effect.fn("workspaceInstructions")(function* (
         ? "save_shell_skill, write_outside_file and delete_outside_file are reviewed before each call: routine requested work runs, uncertain calls wait for the user, harmful ones are blocked. Give a short reason. A blocked or declined call must not be retried in another form; ask the user or choose a different approach."
         : "save_shell_skill, write_outside_file and delete_outside_file wait for the user's approval of each call. Give a short reason. If the user declines, do not retry the same thing; ask or choose another way."
   }
-- Host commands run only as project shell skills: find a listed skill for the job and call run_skill, or save a new purpose-specific one with save_shell_skill. An approved script then runs with any arguments without asking again; a changed script needs saving (and approval) again. Do not make skills for what built-in tools do (listing, reading, searching, writing or deleting files). Scripts run on the host, not in a sandbox. Never print secrets.
+- Host commands run only as project shell skills: find a listed skill for the job and call run_skill, or save a new purpose-specific one with save_shell_skill. An approved script then runs with any arguments without asking again; a changed script needs saving (and approval) again. Do not make skills for what built-in tools do (listing, reading, searching, writing or deleting files). Scripts run in a sandbox: they write only inside the project, temp folders and package caches, cannot read credential folders or ${places.storageRoot}, and reach only the hosts listed in the skill's network (localhost included only if listed). A blocked host shows in stderr under <sandbox_violations>; add it to network and save again only if the job needs it. Never print secrets.
 - Credential files and .git internals are off limits to the file tools; no approval changes that.
 - Report what you actually changed and verified. Do not claim a change or check that did not happen.
 

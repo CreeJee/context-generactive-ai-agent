@@ -34,6 +34,15 @@ describe("routine shell verdict", () => {
     });
   });
 
+  it("leaves a routine script with network hosts to the reviewer", () => {
+    expect(
+      routineShellVerdict(
+        "save_shell_skill",
+        JSON.stringify({ name: "install", script: "pnpm i", network: ["registry.npmjs.org"] }),
+      ),
+    ).toBeUndefined();
+  });
+
   it("only classifies save_shell_skill", () => {
     expect(
       routineShellVerdict("write_outside_file", JSON.stringify({ script: "pnpm i" })),

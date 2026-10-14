@@ -86,7 +86,7 @@ Claude Code(`~/.claude/projects/**/*.jsonl`)와 Codex CLI(`~/.codex/sessions/**/
 | `write_file`, `edit_file`, `delete_file`                         | 없음 | 읽을 때 받은 sha256이 같을 때만 변경           |
 | `list_outside_files`, `read_outside_file`, `search_outside_file` | 없음 | 프로젝트 밖 절대 경로, 읽기 전용               |
 | `save_shell_skill`, `write_outside_file`, `delete_outside_file`  | 필요 | 권한 모드에 따라 승인                          |
-| `run_skill`                                                      | 없음 | 저장 때 승인된 스크립트 내용일 때만 실행       |
+| `run_skill`                                                      | 없음 | 승인된 스크립트만, 샌드박스·승인 호스트 안에서 |
 | `kagi_search`, `kagi_extract`                                    | 없음 | Kagi 키 등록 후 켰을 때만 보임, 호출마다 과금  |
 | `mcp_<서버>__<도구>`                                             | 필요 | 신뢰한 MCP 서버의 도구, 호출마다 게이트        |
 | `read_skill`                                                     | 없음 | skill이 있을 때만, 본문은 지침이지 권한 아님   |

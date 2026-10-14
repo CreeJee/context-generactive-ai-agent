@@ -16,6 +16,8 @@ interface RuntimePackages {
   readonly turbovec: typeof import("turbovec");
   readonly "@napi-rs/keyring": typeof import("@napi-rs/keyring");
   readonly sharp: typeof import("sharp");
+  /** Not native, but finds its helper binaries next to its own files, so it cannot be bundled. */
+  readonly "@anthropic-ai/sandbox-runtime": typeof import("@anthropic-ai/sandbox-runtime");
 }
 
 /**
@@ -81,7 +83,8 @@ export type RuntimeWorker =
   | "embed-worker"
   | "import-worker"
   | "redact-worker"
-  | "native-search-worker";
+  | "native-search-worker"
+  | "sandbox-worker";
 
 /** File-backed SDK metadata, resolved with ESM conditions without importing owner code. */
 export function runtimeArtifact(name: "artifact-manifest.json" | "native.mjs") {

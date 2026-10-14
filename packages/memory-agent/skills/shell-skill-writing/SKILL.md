@@ -47,6 +47,19 @@ for the right task and gets just the output that task needs.
   or a network upload. If a job truly needs that, say why in the reason so the user can judge.
 - No surprises: the script should do exactly what its description says, nothing hidden.
 
+## Network and sandbox
+
+- Scripts run in a sandbox: they can write only inside the project, temp folders and package
+  caches, and cannot read credential folders. Do not try to work around it; a job that needs more
+  is one to hand back to the user.
+- List in `network` exactly the hosts the job needs (`registry.npmjs.org` for an npm install,
+  `github.com` for a git fetch over https), and nothing for a script that works offline. The
+  user approves this list with the script, so a narrow list is easier to trust than a wildcard.
+- `localhost` lets the script use loopback ports (local test or dev servers), and with them every
+  local service. List it only when the job runs or talks to a local server.
+- A blocked host shows in stderr under `<sandbox_violations>`. Add it only if the job truly needs
+  it, and say why in the reason. Git over ssh cannot pass the sandbox; use https remotes.
+
 ## Usage text
 
 - Say what each argument means and what the output shows, in the imperative and briefly. Explain
