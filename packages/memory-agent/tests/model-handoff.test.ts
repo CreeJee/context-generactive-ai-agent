@@ -6,14 +6,13 @@ import {
   type MetadataStore,
   type ModelMessage,
 } from "@tanstack/ai";
-import { expect, test } from "vite-plus/test";
+import { expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import {
-  handoffEvidenceContext,
+  handoffNotice,
   modelHandoffHistoryEffect,
   modelHandoffNamespace,
 } from "../src/agent/model-handoff.ts";
-import type { Node } from "../src/memory/nodes.ts";
 
 function fixture(stored: readonly ModelMessage[]) {
   const values = MutableHashMap.empty<string, unknown>();
@@ -41,7 +40,7 @@ function fixture(stored: readonly ModelMessage[]) {
         model,
         provider: "openai-compatible",
         loadHistory: () => Promise.resolve(history),
-        evidenceContext: () => Promise.resolve("Evidence summary (node observed-result)"),
+        toolResultId: (toolCallId) => (toolCallId === "old-call" ? "old-result" : null),
       }).pipe(Effect.flatMap((restore) => restore(messages)));
   return { restore, metadata };
 }
@@ -62,18 +61,20 @@ const past: ModelMessage[] = [
   },
   { role: "tool", toolCallId: "old-call", content: "build completed" },
 ];
+const notice: ModelMessage = { role: "assistant", content: handoffNotice };
+const pointer: ModelMessage = {
+  role: "assistant",
+  content:
+    "[Earlier tool call run_shell. Its output is kept in memory as node old-result: call read_evidence with that id to read it.]",
+};
 
-it.effect("a new model gets evidence context and real user questions, not the old protocol", () =>
+it.effect("a new model gets the earlier turns as text and pointers, not the old protocol", () =>
   Effect.gen(function* () {
     const f = fixture(past);
     const input = [...past, { role: "user" as const, content: "이어서해줘" }];
     const original = structuredClone(input);
     const restored = yield* f.restore("provider:new-model", "new-model")(input);
-    expect(restored).toEqual([
-      { role: "assistant", content: "Evidence summary (node observed-result)" },
-      past[0],
-      input.at(-1),
-    ]);
+    expect(restored).toEqual([notice, past[0], pointer, input.at(-1)]);
     expect(input).toEqual(original);
   }),
 );
@@ -91,8 +92,8 @@ it.effect("a retry/restart keeps the checkpoint and new-model tool iterations", 
       { role: "tool", toolCallId: "new-call", content: "new result" },
     ];
     const retried = yield* f.restore("new", "new-model", [...past, ...tail])([...past, ...tail]);
-    expect(retried?.slice(0, 2)).toEqual(restored?.slice(0, 2));
-    expect(retried?.slice(2)).toEqual(tail);
+    expect(retried?.slice(0, 3)).toEqual(restored?.slice(0, 3));
+    expect(retried?.slice(3)).toEqual(tail);
   }),
 );
 
@@ -103,10 +104,7 @@ it.effect(
       const f = fixture(past);
       expect(yield* f.restore("endpoint-a", "old-model")(past)).toBeNull();
       expect(yield* f.restore("endpoint-a", "old-model")(past)).toBeNull();
-      expect(yield* f.restore("endpoint-b", "old-model")(past)).toEqual([
-        { role: "assistant", content: "Evidence summary (node observed-result)" },
-        past[0],
-      ]);
+      expect(yield* f.restore("endpoint-b", "old-model")(past)).toEqual([notice, past[0], pointer]);
     }),
 );
 
@@ -119,7 +117,7 @@ it.effect(
       const result = past[2]!;
       const restored = yield* f.restore("new", "new-model")([...pending, result]);
       expect(restored).toEqual([
-        { role: "assistant", content: "Evidence summary (node observed-result)" },
+        notice,
         past[0],
         { role: "assistant", content: null, toolCalls: [oldCall] },
         result,
@@ -150,32 +148,6 @@ it.effect("does not invent a user request for an assistant-only legacy thread", 
   }),
 );
 
-test("handoff context stays small and directs the model to retrieve evidence", () => {
-  const nodes: Node[] = Array.from({ length: 100 }, (_, seq) => ({
-    seq,
-    id: `evidence-${seq}`,
-    projectId: "project",
-    sessionId: "session",
-    runId: null,
-    kind: "tool_result",
-    text: "Recorded output ".repeat(1000),
-    detail: { ok: seq !== 99 },
-    createdAt: "2026-10-05T00:00:00Z",
-  }));
-  const context = handoffEvidenceContext(
-    [{ end: 4, nextTurnNodeId: "next", text: "Verified summary (node evidence-1)" }],
-    nodes,
-  );
-  expect(context.length).toBeLessThan(8000);
-  expect(context).toContain("Verified summary (node evidence-1)");
-  expect(context).toContain("node evidence-99 failed");
-  expect(context).not.toContain("node evidence-0]");
-  expect(context).toContain("find_memory");
-  expect(context).toContain("read_evidence");
-  expect(context).toContain("currently available skills");
-  expect(context).not.toContain(nodes[99]!.text);
-});
-
 it.effect("UI hydration preserves a handoff across tool fan-out and field reordering", () =>
   Effect.gen(function* () {
     const stored = past.map((message, index) => ({ ...message, id: `message-${index}` }));
@@ -190,11 +162,7 @@ it.effect("UI hydration preserves a handoff across tool fan-out and field reorde
     const tail: ModelMessage = { role: "user", content: "continue", id: "next" };
     const hydrated = convertMessagesToModelMessages(modelMessagesToUIMessages([...stored, tail]));
     const restored = yield* f.restore("new", "new-model")(hydrated);
-    expect(restored).toEqual([
-      { role: "assistant", content: "Evidence summary (node observed-result)" },
-      hydrated[0],
-      hydrated.at(-1),
-    ]);
+    expect(restored).toEqual([notice, hydrated[0], pointer, hydrated.at(-1)]);
     const changed = hydrated.map((message) =>
       message.id === "boundary" ? { ...message, content: "changed" } : message,
     );
@@ -226,10 +194,7 @@ it.effect("migrates a verified legacy boundary before replaying hydrated history
       }),
     );
     const hydrated = convertMessagesToModelMessages(modelMessagesToUIMessages(stored));
-    expect(yield* f.restore("new", "new-model")(hydrated)).toEqual([
-      { role: "assistant", content: "legacy evidence" },
-      hydrated[0],
-    ]);
+    expect(yield* f.restore("new", "new-model")(hydrated)).toEqual([notice, hydrated[0], pointer]);
     expect(
       yield* Effect.promise(() => f.metadata.get(modelHandoffNamespace, "session")),
     ).toMatchObject({
@@ -259,7 +224,7 @@ it.effect(
         model: "new-model",
         provider: "openai-compatible",
         loadHistory: () => Promise.resolve(past),
-        evidenceContext: () => Promise.resolve("evidence"),
+        toolResultId: () => null,
       });
       const failures = yield* Effect.all([Effect.flip(restore(past)), Effect.flip(restore(past))], {
         concurrency: "unbounded",

@@ -24,7 +24,7 @@ import {
 import { expect, vi } from "vite-plus/test";
 import type { ChatExecutionCapabilities } from "../../src/agent/chat-execution.ts";
 import { compaction } from "../../src/agent/compaction.ts";
-import { modelHandoffHistory } from "../../src/agent/model-handoff.ts";
+import { handoffNotice, modelHandoffHistory } from "../../src/agent/model-handoff.ts";
 import { Database } from "../../src/db/database.ts";
 import { makePermissionGateMiddleware } from "../../src/permissions/gate.ts";
 import { PermissionClassifier } from "../../src/permissions/classifier.ts";
@@ -489,7 +489,7 @@ layer(ownerLayer, { excludeTestServices: true })("full-loop owner authority", (i
                     model: "new",
                     provider: "openai",
                     loadHistory: () => Promise.resolve(past),
-                    evidenceContext: () => Promise.resolve("Evidence (node old-result)"),
+                    toolResultId: () => null,
                   }),
                 ),
                 {
@@ -518,8 +518,17 @@ layer(ownerLayer, { excludeTestServices: true })("full-loop owner authority", (i
             (message) => message.role !== "tool" && !isTruthy(message.toolCalls?.length),
           ),
         ).toEqual([
-          { role: "assistant", content: "Evidence (node old-result)" },
+          { role: "assistant", content: handoffNotice },
           past[0],
+          ...(hasOldResult
+            ? [
+                {
+                  role: "assistant",
+                  content:
+                    "[Earlier tool call owner_tool. Its output is kept in memory: find it with find_memory, then read it with read_evidence.]",
+                },
+              ]
+            : []),
           { role: "user", content: "continue" },
         ]);
         if (hasOldResult) expect(saved).toContainEqual(oldResult);

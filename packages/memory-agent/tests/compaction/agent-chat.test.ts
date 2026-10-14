@@ -118,32 +118,36 @@ const compactSession = Effect.fnUntraced(function* (sessionId: string, holder: s
 });
 
 testAgent({ testProvider: {} })("compaction through AgentChat", (it) => {
-  it.effect("AgentChat restores model changes from evidence without rewriting stored history", () =>
-    Effect.gen(function* () {
-      const { sessionId } = yield* freshSession;
-      const { messages } = (yield* ChatState).persistence.stores;
-      expect(yield* send(sessionId, "before-switch", "빌드 결과를 검증해 줘")).not.toContain(
-        '"type":"RUN_ERROR"',
-      );
-      const before = yield* call(() => messages.loadThread(sessionId));
-      yield* selectTestModel("deep-1", "medium");
-      expect(yield* send(sessionId, "after-switch", "이어서해줘")).not.toContain(
-        '"type":"RUN_ERROR"',
-      );
-      const request = yield* lastInvocation;
-      expect(request[0]?.content).toContain("Context restored after a model change");
-      expect(request[0]?.content).toContain("node ");
-      expect(request).toContainEqual(
-        expect.objectContaining({ role: "user", content: "이어서해줘" }),
-      );
-      const saved = yield* call(() => messages.loadThread(sessionId));
-      expect(saved.slice(0, before.length)).toEqual(before);
-      expect(saved.some((message) => message.content === request[0]?.content)).toBe(false);
-      yield* send(sessionId, "same-new-model", "계속 검증해 줘");
-      expect((yield* lastInvocation)[0]?.content).toContain(
-        "Context restored after a model change",
-      );
-    }),
+  it.effect(
+    "AgentChat sends earlier turns to a changed model without rewriting stored history",
+    () =>
+      Effect.gen(function* () {
+        const { sessionId } = yield* freshSession;
+        const { messages } = (yield* ChatState).persistence.stores;
+        expect(yield* send(sessionId, "before-switch", "빌드 결과를 검증해 줘")).not.toContain(
+          '"type":"RUN_ERROR"',
+        );
+        const before = yield* call(() => messages.loadThread(sessionId));
+        yield* selectTestModel("deep-1", "medium");
+        expect(yield* send(sessionId, "after-switch", "이어서해줘")).not.toContain(
+          '"type":"RUN_ERROR"',
+        );
+        const request = yield* lastInvocation;
+        expect(request[0]?.content).toContain("The model changed in this conversation");
+        expect(request).toContainEqual(
+          expect.objectContaining({ role: "user", content: "빌드 결과를 검증해 줘" }),
+        );
+        expect(request).toContainEqual(
+          expect.objectContaining({ role: "user", content: "이어서해줘" }),
+        );
+        const saved = yield* call(() => messages.loadThread(sessionId));
+        expect(saved.slice(0, before.length)).toEqual(before);
+        expect(saved.some((message) => message.content === request[0]?.content)).toBe(false);
+        yield* send(sessionId, "same-new-model", "계속 검증해 줘");
+        expect((yield* lastInvocation)[0]?.content).toContain(
+          "The model changed in this conversation",
+        );
+      }),
   );
 
   it.effect(

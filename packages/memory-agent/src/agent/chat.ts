@@ -119,13 +119,11 @@ import type { QueueEdit, QueuedMessage } from "../queue/queue-state.ts";
 import { baselineProfile, type HarnessProfile } from "../rrsi/contracts.ts";
 import { Rrsi } from "../rrsi/service.ts";
 import { HarnessStore } from "../rrsi/store.ts";
-import { handoffEvidenceContext, modelHandoffHistory } from "./model-handoff.ts";
+import { modelHandoffHistory } from "./model-handoff.ts";
 import {
   budgetFor,
   compactByHand,
   compaction,
-  compactionState,
-  linedUp,
   estimateTokens,
   messageText,
   type CompactionSources,
@@ -1696,26 +1694,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
             ),
           ),
           loadHistory: () => chatState.persistence.stores.messages.loadThread(sessionId),
-          // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-          evidenceContext: (storedForHandoff) =>
-            runEffect(
-              Effect.gen(function* () {
-                const saved = yield* nativePromise(() => compactionState(metadata, sessionId));
-                const blocks = linedUp(
-                  storedForHandoff,
-                  saved.blocks,
-                  (id) => nodes.get(id)?.text ?? null,
-                );
-                return handoffEvidenceContext(
-                  blocks,
-                  nodes
-                    .session(sessionId)
-                    .filter(
-                      (node) => !(turn !== null) || !isTruthy(userNode) || node.seq < userNode.seq,
-                    ),
-                );
-              }),
-            ),
+          toolResultId: (toolCallId) => nodes.toolResultId(sessionId, toolCallId),
         });
         // Refresh model-advertised limits before choosing this run's compaction budget. A catalog
         // failure must not prevent an otherwise valid request; the runtime has a safe fallback.
