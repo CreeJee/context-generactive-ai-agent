@@ -1555,6 +1555,7 @@
 
 ### 셸 스킬 샌드박스 (#22, 2026-10-14)
 
+- 설계 문서: [shell-skill-sandbox.md](./shell-skill-sandbox.md).
 - 셸 스킬 스크립트는 OS 샌드박스 안에서 실행한다. 이 절은 위 절의 "실행은 호스트에서"와 아래 UI 절의 "셸 격리는 #22로 미룬다"를 대체한다.
 - 참고한 사례:
   - Claude Code: `@anthropic-ai/sandbox-runtime`(srt, Apache 2.0)으로 파일·네트워크를 막고, 새 도메인은 실행 중에 묻는다.
