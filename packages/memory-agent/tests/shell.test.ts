@@ -92,10 +92,14 @@ describe("runCommand", () => {
       const project = yield* workdir();
       const storage = yield* workdir();
       const scratch = yield* workdir();
-      const allowed = resolveShellWorkingDirectory(project, storage, scratch);
+      const allowed = yield* resolveShellWorkingDirectory(project, storage, scratch).pipe(
+        Effect.result,
+      );
       expect(Result.isSuccess(allowed)).toBe(true);
       if (Result.isSuccess(allowed)) expect(allowed.success.absolute).toBe(scratch);
-      const refused = resolveShellWorkingDirectory(project, storage, "/usr");
+      const refused = yield* resolveShellWorkingDirectory(project, storage, "/usr").pipe(
+        Effect.result,
+      );
       expect(Result.isFailure(refused)).toBe(true);
       if (Result.isFailure(refused)) expect(refused.failure.reason).toBe("invalid_path");
     }).pipe(withTestPlatform),

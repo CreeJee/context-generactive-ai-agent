@@ -2,7 +2,7 @@ import { nativePromise, runNativeEffectWith } from "../runtime/native-effect.ts"
 import { HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
 import type { AnyServerTool } from "@tanstack/ai";
-import { Context, Effect, Result, Layer, Option, Schema } from "effect";
+import { Context, Effect, Layer, Option, Schema } from "effect";
 import { resolveProjectPath } from "../files/paths.ts";
 import { readFileBytesEffect } from "../files/text.ts";
 import type { Project } from "../projects/projects.ts";
@@ -39,11 +39,7 @@ const make = Effect.gen(function* () {
    */
   const previewOf = (project: Project, path: string) =>
     Effect.gen(function* () {
-      const absolute = Result.match(resolveProjectPath(project.root, path, "file"), {
-        onFailure: () => null,
-        onSuccess: (resolved) => resolved.absolute,
-      });
-      if (absolute === null) return Option.none<DrawingPreview>();
+      const { absolute } = yield* resolveProjectPath(project.root, path, "file");
       const { bytes: svg } = yield* readFileBytesEffect({ absolute, path, checkLeaf: true });
       const picture = yield* attachments.saveDrawing(svg);
       return Option.some<DrawingPreview>({

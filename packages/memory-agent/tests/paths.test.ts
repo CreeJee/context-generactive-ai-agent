@@ -1,6 +1,6 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, Path, Result } from "effect";
+import { Effect, FileSystem, Layer, Path } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { isCredentialPath, resolveOutsidePath, resolveProjectPath } from "../src/files/paths.ts";
 
@@ -26,8 +26,16 @@ const layout = Effect.fn("paths.layout")(function* () {
   }).pipe(Effect.provideContext(context));
 });
 
-const reason = <A>(result: Result.Result<A, { reason: string }>) =>
-  Result.isFailure(result) ? result.failure.reason : "ok";
+const reason = <A>(
+  effect: Effect.Effect<
+    A,
+    import("../src/files/paths.ts").PathRejected | import("effect").PlatformError.PlatformError
+  >,
+) =>
+  effect.pipe(
+    Effect.as("ok"),
+    Effect.catchTag("PathRejected", (error) => Effect.succeed(error.reason)),
+  );
 
 describe("isCredentialPath", () => {
   test.each([
@@ -60,13 +68,11 @@ describe("resolveProjectPath", () => {
   it.live("resolves files, directories and new files below the root", () =>
     Effect.gen(function* () {
       const { project, path } = yield* layout();
-      const file = resolveProjectPath(project, "src/app.ts", "file");
-      expect(Result.getOrThrow(file).absolute).toBe(path.join(project, "src", "app.ts"));
-      expect(reason(resolveProjectPath(project, ".", "directory"))).toBe("ok");
-      expect(reason(resolveProjectPath(project, ".gitignore", "file"))).toBe("ok");
-      const created = Result.getOrThrow(
-        resolveProjectPath(project, "docs/new/plan.md", "new-or-file"),
-      );
+      const file = yield* resolveProjectPath(project, "src/app.ts", "file");
+      expect(file.absolute).toBe(path.join(project, "src", "app.ts"));
+      expect(yield* reason(resolveProjectPath(project, ".", "directory"))).toBe("ok");
+      expect(yield* reason(resolveProjectPath(project, ".gitignore", "file"))).toBe("ok");
+      const created = yield* resolveProjectPath(project, "docs/new/plan.md", "new-or-file");
       expect(created).toMatchObject({
         absolute: path.join(project, "docs", "new", "plan.md"),
         stats: undefined,
@@ -77,17 +83,21 @@ describe("resolveProjectPath", () => {
   it.live("refuses escapes, .git, credentials and malformed spellings", () =>
     Effect.gen(function* () {
       const { project } = yield* layout();
-      expect(reason(resolveProjectPath(project, "../outside/notes.md", "file"))).toBe(
+      expect(yield* reason(resolveProjectPath(project, "../outside/notes.md", "file"))).toBe(
         "invalid_path",
       );
-      expect(reason(resolveProjectPath(project, "/etc/hosts", "file"))).toBe("invalid_path");
-      expect(reason(resolveProjectPath(project, "src//app.ts", "file"))).toBe("invalid_path");
-      expect(reason(resolveProjectPath(project, "src\\app.ts", "file"))).toBe("invalid_path");
-      expect(reason(resolveProjectPath(project, ".git/config", "new-or-file"))).toBe(
+      expect(yield* reason(resolveProjectPath(project, "/etc/hosts", "file"))).toBe("invalid_path");
+      expect(yield* reason(resolveProjectPath(project, "src//app.ts", "file"))).toBe(
+        "invalid_path",
+      );
+      expect(yield* reason(resolveProjectPath(project, "src\\app.ts", "file"))).toBe(
+        "invalid_path",
+      );
+      expect(yield* reason(resolveProjectPath(project, ".git/config", "new-or-file"))).toBe(
         "git_internal",
       );
-      expect(reason(resolveProjectPath(project, ".GIT/HEAD", "file"))).toBe("git_internal");
-      expect(reason(resolveProjectPath(project, ".env", "new-or-file"))).toBe("credential");
+      expect(yield* reason(resolveProjectPath(project, ".GIT/HEAD", "file"))).toBe("git_internal");
+      expect(yield* reason(resolveProjectPath(project, ".env", "new-or-file"))).toBe("credential");
     }),
   );
 
@@ -97,22 +107,26 @@ describe("resolveProjectPath", () => {
       yield* fs.symlink(outside, path.join(project, "linked"));
       yield* fs.symlink(path.join(outside, "notes.md"), path.join(project, "notes.md"));
       yield* fs.link(path.join(outside, "notes.md"), path.join(project, "hard.md"));
-      expect(reason(resolveProjectPath(project, "linked/notes.md", "file"))).toBe("symlink");
-      expect(reason(resolveProjectPath(project, "linked/new.md", "new-or-file"))).toBe("symlink");
-      expect(reason(resolveProjectPath(project, "notes.md", "file"))).toBe("symlink");
-      expect(reason(resolveProjectPath(project, "hard.md", "file"))).toBe("hard_link");
+      expect(yield* reason(resolveProjectPath(project, "linked/notes.md", "file"))).toBe("symlink");
+      expect(yield* reason(resolveProjectPath(project, "linked/new.md", "new-or-file"))).toBe(
+        "symlink",
+      );
+      expect(yield* reason(resolveProjectPath(project, "notes.md", "file"))).toBe("symlink");
+      expect(yield* reason(resolveProjectPath(project, "hard.md", "file"))).toBe("hard_link");
     }),
   );
 
   it.live("reports kind mismatches", () =>
     Effect.gen(function* () {
       const { project } = yield* layout();
-      expect(reason(resolveProjectPath(project, "src", "file"))).toBe("not_file");
-      expect(reason(resolveProjectPath(project, "src/app.ts", "directory"))).toBe("not_directory");
-      expect(reason(resolveProjectPath(project, "src/app.ts/x", "new-or-file"))).toBe(
+      expect(yield* reason(resolveProjectPath(project, "src", "file"))).toBe("not_file");
+      expect(yield* reason(resolveProjectPath(project, "src/app.ts", "directory"))).toBe(
         "not_directory",
       );
-      expect(reason(resolveProjectPath(project, "missing.ts", "file"))).toBe("not_found");
+      expect(yield* reason(resolveProjectPath(project, "src/app.ts/x", "new-or-file"))).toBe(
+        "not_directory",
+      );
+      expect(yield* reason(resolveProjectPath(project, "missing.ts", "file"))).toBe("not_found");
     }),
   );
 });
@@ -121,12 +135,18 @@ describe("resolveOutsidePath", () => {
   it.live("resolves outside files and new files to canonical paths", () =>
     Effect.gen(function* () {
       const { project, outside, storage, path } = yield* layout();
-      const read = Result.getOrThrow(
-        resolveOutsidePath(project, storage, path.join(outside, "notes.md"), "file"),
+      const read = yield* resolveOutsidePath(
+        project,
+        storage,
+        path.join(outside, "notes.md"),
+        "file",
       );
       expect(read.absolute).toBe(path.join(outside, "notes.md"));
-      const created = Result.getOrThrow(
-        resolveOutsidePath(project, storage, path.join(outside, "a", "b.txt"), "new-or-file"),
+      const created = yield* resolveOutsidePath(
+        project,
+        storage,
+        path.join(outside, "a", "b.txt"),
+        "new-or-file",
       );
       expect(created).toMatchObject({
         absolute: path.join(outside, "a", "b.txt"),
@@ -138,18 +158,26 @@ describe("resolveOutsidePath", () => {
   it.live("refuses relative paths, the project, the storage root and credentials", () =>
     Effect.gen(function* () {
       const { project, outside, storage, path } = yield* layout();
-      expect(reason(resolveOutsidePath(project, storage, "notes.md", "file"))).toBe("invalid_path");
+      expect(yield* reason(resolveOutsidePath(project, storage, "notes.md", "file"))).toBe(
+        "invalid_path",
+      );
       expect(
-        reason(resolveOutsidePath(project, storage, path.join(project, "src/app.ts"), "file")),
+        yield* reason(
+          resolveOutsidePath(project, storage, path.join(project, "src/app.ts"), "file"),
+        ),
       ).toBe("inside_project");
-      expect(reason(resolveOutsidePath(project, storage, project, "directory"))).toBe(
+      expect(yield* reason(resolveOutsidePath(project, storage, project, "directory"))).toBe(
         "inside_project",
       );
       expect(
-        reason(resolveOutsidePath(project, storage, path.join(storage, "agent.db"), "new-or-file")),
+        yield* reason(
+          resolveOutsidePath(project, storage, path.join(storage, "agent.db"), "new-or-file"),
+        ),
       ).toBe("credential");
       expect(
-        reason(resolveOutsidePath(project, storage, path.join(outside, ".env"), "new-or-file")),
+        yield* reason(
+          resolveOutsidePath(project, storage, path.join(outside, ".env"), "new-or-file"),
+        ),
       ).toBe("credential");
     }),
   );
@@ -163,10 +191,12 @@ describe("resolveOutsidePath", () => {
       yield* fs.symlink(path.join(secrets, "id_ed25519"), path.join(outside, "harmless.txt"));
       yield* fs.symlink(project, path.join(outside, "project-link"));
       expect(
-        reason(resolveOutsidePath(project, storage, path.join(outside, "harmless.txt"), "file")),
+        yield* reason(
+          resolveOutsidePath(project, storage, path.join(outside, "harmless.txt"), "file"),
+        ),
       ).toBe("credential");
       expect(
-        reason(
+        yield* reason(
           resolveOutsidePath(
             project,
             storage,

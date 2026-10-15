@@ -9,7 +9,7 @@ import {
   ManagedRuntime,
   Path,
   PlatformError,
-  Result,
+  Option,
   Schema,
 } from "effect";
 import { isCredentialPath, resolveProjectPath } from "../files/paths.ts";
@@ -31,9 +31,7 @@ export function projectInstructions(root: string): ChatMiddleware {
       return runNativeEffect(
         Effect.gen(function* () {
           if (instructions === undefined) {
-            const resolved = yield* Effect.fromResult(
-              resolveProjectPath(root, "AGENTS.md", "new-or-file"),
-            );
+            const resolved = yield* resolveProjectPath(root, "AGENTS.md", "new-or-file");
             const rootText =
               resolved.stats !== undefined
                 ? (yield* readTextFileEffect({ absolute: resolved.absolute, path: "AGENTS.md" }))
@@ -48,18 +46,18 @@ export function projectInstructions(root: string): ChatMiddleware {
                     continue;
                   const absolute = path.join(root, relative);
                   // Match glob's default: never descend through symbolic links.
-                  if (
-                    yield* fs
-                      .readLink(absolute)
-                      .pipe(Effect.match({ onSuccess: () => true, onFailure: () => false }))
-                  )
-                    continue;
-                  const info = yield* fs.stat(absolute);
+                  const info = yield* fs.lstat(absolute);
+                  if (info.type === "SymbolicLink") continue;
                   if (info.type === "Directory") yield* visit(relative);
                   else if (
                     name === "AGENTS.md" &&
                     relative !== "AGENTS.md" &&
-                    Result.isSuccess(resolveProjectPath(root, relative, "file"))
+                    Option.isSome(
+                      yield* resolveProjectPath(root, relative, "file").pipe(
+                        Effect.asSome,
+                        Effect.catchTag("PathRejected", () => Effect.succeedNone),
+                      ),
+                    )
                   )
                     paths.push(relative.split(path.sep).join("/"));
                 }

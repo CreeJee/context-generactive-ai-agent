@@ -1,6 +1,6 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { Activity, Workflow, WorkflowEngine } from "effect/workflow";
 import { describe, expect } from "vite-plus/test";
 import { Database } from "../src/db/database.ts";
@@ -15,6 +15,14 @@ const ContractWorkflow = Workflow.make("OwnerWorkflowEngineContract", {
   success: Schema.String,
   idempotencyKey: ({ value }) => value,
 });
+
+class ActivityInput extends Context.Service<ActivityInput, { readonly value: string }>()(
+  "memory-agent/tests/owner-workflow-engine.test/ActivityInput",
+) {}
+class ActivityRefused extends Schema.TaggedError<ActivityRefused>()("ActivityRefused", {
+  reason: Schema.Literal("refused"),
+  value: Schema.String,
+}) {}
 
 const withDatabase = <A, E, R>(use: (database: Database["Service"]) => Effect.Effect<A, E, R>) =>
   Effect.scoped(
@@ -41,6 +49,51 @@ const withEngine = <A, E, R>(
   );
 
 describe("owner workflow engine", () => {
+  it.live("preserves activity services and typed failures across durable replay", () =>
+    withDatabase((database) => {
+      let executions = 0;
+      const workflow = Workflow.make("OwnerActivityFailure", {
+        payload: { value: Schema.String },
+        error: ActivityRefused,
+        idempotencyKey: ({ value }) => value,
+      });
+      const run = withEngine(
+        database,
+        Effect.gen(function* () {
+          const engine = yield* WorkflowEngine.WorkflowEngine;
+          yield* engine.register(workflow, () =>
+            Activity.make({
+              name: "refuse",
+              error: ActivityRefused,
+              execute: Effect.gen(function* () {
+                const input = yield* ActivityInput;
+                executions++;
+                return yield* ActivityRefused.make({ reason: "refused", value: input.value });
+              }),
+            }),
+          );
+          return yield* engine
+            .execute(workflow, {
+              executionId: "typed-activity-failure",
+              payload: { value: "same" },
+            })
+            .pipe(Effect.flip);
+        }).pipe(Effect.provideService(ActivityInput, { value: "captured service" })),
+      );
+      return Effect.gen(function* () {
+        const first = yield* run;
+        const replayed = yield* run;
+        expect(first).toMatchObject({
+          _tag: "ActivityRefused",
+          reason: "refused",
+          value: "captured service",
+        });
+        expect(replayed).toEqual(first);
+        expect(executions).toBe(1);
+      });
+    }),
+  );
+
   it.live("persists a transformed Activity result once and decodes the typed workflow result", () =>
     withDatabase((database) => {
       const workflow = Workflow.make("OwnerWorkflowTransformedActivity", {
