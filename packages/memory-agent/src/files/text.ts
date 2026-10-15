@@ -13,7 +13,7 @@ import { Function as EffectFunction } from "effect";
 // Editable snapshots still need same-FD identity and nanosecond-stat checks.
 import { constants } from "node:fs";
 // Positional reads and nanosecond fstat share that same scoped no-follow handle.
-import { lstat, open } from "node:fs/promises";
+import { open } from "node:fs/promises";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodePath from "@effect/platform-node/NodePath";
 import { Effect, MutableHashMap, Option, Schema } from "effect";
@@ -169,16 +169,16 @@ const readWindowsFileBytes = Effect.fn("readWindowsFileBytes")(function* (
   options: FileReadOptions,
 ) {
   const { absolute, path, checkLeaf = false } = options;
-  const leaf = yield* io(path, "open", () => lstat(absolute));
-  if (leaf.isSymbolicLink()) return yield* new PathRejected({ path, reason: "symlink" });
+  const leaf = yield* fileIo(path, "open", fileSystem.lstat(absolute));
+  if (leaf.type === "SymbolicLink") return yield* PathRejected.make({ path, reason: "symlink" });
   return yield* Effect.acquireUseRelease(
     io(path, "open", () => open(absolute, constants.O_RDONLY)),
     Effect.fnUntraced(function* (handle) {
       const stats = yield* io(path, "stat", () => handle.stat());
       if (checkLeaf && !stats.isFile())
-        return yield* new PathRejected({ path, reason: "not_file" });
+        return yield* PathRejected.make({ path, reason: "not_file" });
       if (checkLeaf && stats.nlink !== 1)
-        return yield* new PathRejected({ path, reason: "hard_link" });
+        return yield* PathRejected.make({ path, reason: "hard_link" });
       if (stats.size > maxTextBytes)
         return yield* TextFileRejected.make({ path, reason: { _tag: "too_large" } });
       const chunks: Buffer[] = [];
@@ -208,9 +208,9 @@ const readPosixFileBytes = Effect.fn("readPosixFileBytes")(function* (options: F
       const handle = yield* fileIo(path, "open", fileSystem.open(absolute, { noFollow: true }));
       const stats = yield* fileIo(path, "stat", handle.stat);
       if (checkLeaf && stats.type !== "File")
-        return yield* new PathRejected({ path, reason: "not_file" });
+        return yield* PathRejected.make({ path, reason: "not_file" });
       if (checkLeaf && Option.getOrUndefined(stats.nlink) !== 1)
-        return yield* new PathRejected({ path, reason: "hard_link" });
+        return yield* PathRejected.make({ path, reason: "hard_link" });
       if (stats.size > BigInt(maxTextBytes))
         return yield* TextFileRejected.make({ path, reason: { _tag: "too_large" } });
       const chunks: Buffer[] = [];
@@ -515,9 +515,9 @@ export const createTextPageReader = () => {
       io(path, "open", () => open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW)),
       Effect.fnUntraced(function* (handle) {
         const stats = yield* io(path, "stat", () => handle.stat({ bigint: true }));
-        if (!stats.isFile()) return yield* new PathRejected({ path, reason: "not_file" });
+        if (!stats.isFile()) return yield* PathRejected.make({ path, reason: "not_file" });
         if (checkLeaf && stats.nlink !== 1n)
-          return yield* new PathRejected({ path, reason: "hard_link" });
+          return yield* PathRejected.make({ path, reason: "hard_link" });
         if (stats.size > BigInt(maxTextBytes))
           return yield* TextFileRejected.make({ path, reason: { _tag: "too_large" } });
         const stampOf = (stat: typeof stats) =>

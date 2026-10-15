@@ -22,6 +22,7 @@ import {
 import { encodeFullLoopValue } from "../../src/agent/full-loop-codec.ts";
 import { ownerRpcFingerprint } from "../../src/agent/owner-rpc-fingerprint.ts";
 import { Database } from "../../src/db/database.ts";
+import { NodeDetail } from "../../src/memory/nodes.ts";
 import { SubscriptionStreamFailed } from "../../src/providers/subscription-adapter.ts";
 import {
   ExecutionAdmission,
@@ -29,6 +30,7 @@ import {
 } from "../../src/runtime/execution-admission.ts";
 import { WorkflowExecution } from "../../src/workflow/execution.ts";
 import { ProviderRetries, providerRetryLayer } from "../../src/workflow/provider-retry.ts";
+import { OwnerWorkflowStorageError } from "../../src/workflow/owner-workflow-storage.ts";
 
 const open = Effect.fnUntraced(function* (file: string) {
   const scope = yield* Scope.make();
@@ -63,12 +65,13 @@ const StoredWait = Schema.Struct({
   payload: Schema.fromJsonString(Schema.Struct({ retryAt: Schema.Finite, sequence: Schema.Int })),
 });
 const storedWaits = (database: Database["Service"]) =>
-  database.sqlite
-    .prepare(
-      "SELECT status, payload_json AS payload FROM owner_workflow_executions WHERE workflow_name = 'ProviderRetryWait' ORDER BY execution_id",
-    )
-    .all()
-    .map((row) => Schema.decodeUnknownSync(StoredWait)(row));
+  Schema.decodeUnknownEffect(Schema.Array(StoredWait))(
+    database.sqlite
+      .prepare(
+        "SELECT status, payload_json AS payload FROM owner_workflow_executions WHERE workflow_name = 'ProviderRetryWait' ORDER BY execution_id",
+      )
+      .all(),
+  );
 
 const scheduledClocks = (database: Database["Service"]) =>
   database.sqlite
@@ -105,11 +108,10 @@ describe("durable provider retry", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { database, retries, scope } = yield* open(":memory:");
-        const waiting = yield* Effect.forkChild(
-          retries.wait({ ...request, retry: 1 }, new AbortController().signal),
-        );
+        const signal = yield* Effect.abortSignal;
+        const waiting = yield* Effect.forkChild(retries.wait({ ...request, retry: 1 }, signal));
         yield* settle;
-        const [stored] = storedWaits(database);
+        const [stored] = yield* storedWaits(database);
         // 2s with at most 20% jitter, persisted before waiting.
         expect(stored?.payload.retryAt).toBeGreaterThanOrEqual(1_600);
         expect(stored?.payload.retryAt).toBeLessThanOrEqual(2_400);
@@ -119,7 +121,9 @@ describe("durable provider retry", () => {
         expect(waiting.pollUnsafe()).toBeUndefined();
         yield* TestClock.adjust(31_000);
         expect(yield* Fiber.join(waiting)).toEqual({ _tag: "Retry" });
-        expect(storedWaits(database)).toEqual([{ status: "completed", payload: stored?.payload }]);
+        expect(yield* storedWaits(database)).toEqual([
+          { status: "completed", payload: stored?.payload },
+        ]);
         yield* Scope.close(scope, Exit.void);
       }),
     ),
@@ -130,21 +134,20 @@ describe("durable provider retry", () => {
       Effect.gen(function* () {
         const file = yield* tempFile;
         const first = yield* open(file);
-        yield* Effect.forkChild(
-          first.retries.wait({ ...request, retry: 3 }, new AbortController().signal),
-        );
+        const signal = yield* Effect.abortSignal;
+        yield* Effect.forkChild(first.retries.wait({ ...request, retry: 3 }, signal));
         yield* settle;
-        const before = storedWaits(first.database);
+        const before = yield* storedWaits(first.database);
         yield* Scope.close(first.scope, Exit.void);
 
         const reopened = yield* open(file);
-        expect(storedWaits(reopened.database)).toEqual(before);
+        expect(yield* storedWaits(reopened.database)).toEqual(before);
         const resumed = yield* Effect.forkChild(reopened.retries.awaitRun(request.runId));
         yield* settle;
         expect(resumed.pollUnsafe()).toBeUndefined();
         yield* TestClock.adjust(40_000);
         expect(yield* Fiber.join(resumed)).toEqual({ _tag: "Retry" });
-        expect(storedWaits(reopened.database)).toEqual([
+        expect(yield* storedWaits(reopened.database)).toEqual([
           { status: "completed", payload: before[0]?.payload },
         ]);
         yield* Scope.close(reopened.scope, Exit.void);
@@ -156,14 +159,13 @@ describe("durable provider retry", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { database, retries, scope } = yield* open(":memory:");
-        const controller = new AbortController();
-        const waiting = yield* Effect.forkChild(
-          retries.wait({ ...request, retry: 1 }, controller.signal),
-        );
+        const callerScope = yield* Scope.fork(yield* Effect.scope);
+        const signal = yield* Effect.provideService(Effect.abortSignal, Scope.Scope, callerScope);
+        const waiting = yield* Effect.forkChild(retries.wait({ ...request, retry: 1 }, signal));
         yield* settle;
-        controller.abort();
+        yield* Scope.close(callerScope, Exit.void);
         expect(yield* Fiber.join(waiting)).toEqual({ _tag: "Cancelled" });
-        expect(storedWaits(database).map((wait) => wait.status)).toEqual(["interrupted"]);
+        expect((yield* storedWaits(database)).map((wait) => wait.status)).toEqual(["interrupted"]);
         expect(scheduledClocks(database)).toEqual([]);
         yield* Scope.close(scope, Exit.void);
       }),
@@ -174,12 +176,13 @@ describe("durable provider retry", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const { database, retries, execution, scope } = yield* open(":memory:");
+        const signal = yield* Effect.abortSignal;
         runningGoal(database, request.runId);
         yield* TestClock.adjust(Duration.hours(24));
-        expect(
-          yield* retries.wait({ ...request, retry: 60 }, new AbortController().signal),
-        ).toEqual({ _tag: "Exhausted" });
-        expect(storedWaits(database)).toEqual([]);
+        expect(yield* retries.wait({ ...request, retry: 60 }, signal)).toEqual({
+          _tag: "Exhausted",
+        });
+        expect(yield* storedWaits(database)).toEqual([]);
         expect(yield* execution.get("s")).toMatchObject({
           kind: "blocked",
           reason: "external_dependency",
@@ -225,7 +228,13 @@ describe("durable provider retry", () => {
           .prepare(
             "INSERT INTO nodes (id, project_id, session_id, run_id, kind, text, detail, created_at) VALUES ('n', 'p', 's', 'recorded', 'tool_result', 'done', ?, '')",
           )
-          .run(JSON.stringify({ toolName: "run_shell", toolCallId: "recorded-call", ok: true }));
+          .run(
+            yield* Schema.encodeEffect(Schema.fromJsonString(NodeDetail))({
+              toolName: "run_shell",
+              toolCallId: "recorded-call",
+              ok: true,
+            }),
+          );
         expect(yield* execution.afterRestart("s", "recorded", undefined)).toMatchObject({
           kind: "retrying",
           runId: "recorded",
@@ -260,7 +269,34 @@ describe("owner model pull", () => {
       }),
   });
   const pull = (stream: OwnerModelStream, retries: ProviderRetryOwner) =>
-    pullModelChunk(stream, retries, new AbortController().signal, (effect) => effect);
+    Effect.scoped(
+      Effect.flatMap(Effect.abortSignal, (signal) =>
+        pullModelChunk(stream, retries, signal, (effect) => effect),
+      ),
+    );
+
+  it.effect("preserves a durable wait failure without reopening the provider stream", () =>
+    Effect.gen(function* () {
+      const failure = OwnerWorkflowStorageError.make({
+        operation: "provider_retry.list",
+        reason: "database",
+        cause: "fixture",
+      });
+      let reopened = false;
+      const stream: OwnerModelStream = {
+        iterator: iterator([failing({ _tag: "RequestNotSent", stage: "dns" })]),
+        open: () => {
+          reopened = true;
+          return iterator([]);
+        },
+        delivered: false,
+      };
+      expect(yield* pull(stream, { wait: () => Effect.fail(failure) }).pipe(Effect.flip)).toBe(
+        failure,
+      );
+      expect(reopened).toBe(false);
+    }),
+  );
 
   it.effect("resends a request that was never sent on a fresh stream", () =>
     Effect.gen(function* () {

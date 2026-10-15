@@ -156,7 +156,7 @@ function handoffHistoryBody(
           .filter(Boolean)
           .join("\n\n");
         return [
-          ...(content ? [{ role: "assistant" as const, content }] : []),
+          ...(content.length > 0 ? [{ role: "assistant" as const, content }] : []),
           ...(isTruthy(paired.length)
             ? [{ role: "assistant" as const, content: null, toolCalls: paired }]
             : []),

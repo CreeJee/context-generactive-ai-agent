@@ -1,0 +1,93 @@
+diff --git a/dist/NodeFileSystem.js b/dist/NodeFileSystem.js
+index b39db35c748e2fedfc938badcb36554f88043381..ef399be0ebf5572453a91be93c9913836f4d721f 100644
+--- a/dist/NodeFileSystem.js
++++ b/dist/NodeFileSystem.js
+@@ -389,7 +389,7 @@ const rename = /*#__PURE__*/(() => {
+   return (oldPath, newPath) => nodeRename(oldPath, newPath);
+ })();
+ // == stat
+-const makeFileInfo = stat => Effect.try({
++const makeFileInfo = (stat, method = "stat") => Effect.try({
+   try: () => ({
+     type: stat.isFile() ? "File" : stat.isDirectory() ? "Directory" : stat.isSymbolicLink() ? "SymbolicLink" : stat.isBlockDevice() ? "BlockDevice" : stat.isCharacterDevice() ? "CharacterDevice" : stat.isFIFO() ? "FIFO" : stat.isSocket() ? "Socket" : "Unknown",
+     mtime: Option.fromNullishOr(stat.mtime),
+@@ -406,7 +406,7 @@ const makeFileInfo = stat => Effect.try({
+     blksize: stat.blksize !== undefined ? Option.some(ByteSize.bytes(stat.blksize)) : Option.none(),
+     blocks: bigintToNumberOption(stat.blocks)
+   }),
+-  catch: handleBadArgument("stat")
++  catch: handleBadArgument(method)
+ });
+ const stat = /*#__PURE__*/(() => {
+   const nodeStat = /*#__PURE__*/effectify(NFS.stat, /*#__PURE__*/handleErrnoException("FileSystem", "stat"), /*#__PURE__*/handleBadArgument("stat"));
+@@ -414,6 +414,11 @@ const stat = /*#__PURE__*/(() => {
+     bigint: true
+   }), makeFileInfo);
+ })();
++// == lstat
++const lstat = /* @__PURE__ */(() => {
++  const nodeLstat = effectify(NFS.lstat, handleErrnoException("FileSystem", "lstat"), handleBadArgument("lstat"));
++  return path => Effect.flatMap(nodeLstat(path, { bigint: true }), info => makeFileInfo(info, "lstat"));
++})();
+ // == symlink
+ const symlink = /*#__PURE__*/(() => {
+   const nodeSymlink = /*#__PURE__*/effectify(NFS.symlink, /*#__PURE__*/handleErrnoException("FileSystem", "symlink"), /*#__PURE__*/handleBadArgument("symlink"));
+@@ -515,6 +520,7 @@ const makeFileSystem = /*#__PURE__*/Effect.map(/*#__PURE__*/Effect.serviceOption
+   remove,
+   rename,
+   stat,
++  lstat,
+   symlink,
+   truncate,
+   utimes,
+diff --git a/src/NodeFileSystem.ts b/src/NodeFileSystem.ts
+index d26dcd8929a26ed5a833e0412d5d6acacc919985..8b0f5055afcc14b9ed1907d95dac18a29b41adea 100644
+--- a/src/NodeFileSystem.ts
++++ b/src/NodeFileSystem.ts
+@@ -571,7 +571,10 @@ const rename = (() => {
+ 
+ // == stat
+ 
+-const makeFileInfo = (stat: NFS.BigIntStats): Effect.Effect<FileSystem.File.Info, Error.PlatformError> =>
++const makeFileInfo = (
++  stat: NFS.BigIntStats,
++  method: "stat" | "lstat" = "stat"
++): Effect.Effect<FileSystem.File.Info, Error.PlatformError> =>
+   Effect.try({
+     try: (): FileSystem.File.Info => ({
+       type: stat.isFile() ?
+@@ -603,7 +606,7 @@ const makeFileInfo = (stat: NFS.BigIntStats): Effect.Effect<FileSystem.File.Info
+       blksize: stat.blksize !== undefined ? Option.some(ByteSize.bytes(stat.blksize)) : Option.none(),
+       blocks: bigintToNumberOption(stat.blocks)
+     }),
+-    catch: handleBadArgument("stat")
++    catch: handleBadArgument(method)
+   })
+ const stat = (() => {
+   const nodeStat = effectify(
+@@ -614,6 +617,17 @@ const stat = (() => {
+   return (path: string) => Effect.flatMap(nodeStat(path, { bigint: true }), makeFileInfo)
+ })()
+ 
++// == lstat
++
++const lstat = (() => {
++  const nodeLstat = effectify(
++    NFS.lstat,
++    handleErrnoException("FileSystem", "lstat"),
++    handleBadArgument("lstat")
++  )
++  return (path: string) => Effect.flatMap(nodeLstat(path, { bigint: true }), (info) => makeFileInfo(info, "lstat"))
++})()
++
+ // == symlink
+ 
+ const symlink = (() => {
+@@ -753,6 +767,7 @@ const makeFileSystem = Effect.map(Effect.serviceOption(FileSystem.WatchBackend),
+     remove,
+     rename,
+     stat,
++    lstat,
+     symlink,
+     truncate,
+     utimes,

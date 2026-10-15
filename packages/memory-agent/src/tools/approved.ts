@@ -5,11 +5,11 @@ import { toolDefinition, type ToolExecutionContext } from "@tanstack/ai";
 import { tmpdir } from "node:os";
 import { path } from "../runtime/synchronous-path.ts";
 const { isAbsolute, relative, sep } = path;
-import { Context, Effect, Result, Layer, Schema } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
 import { BackgroundTasks, backgroundOperation, type BackgroundBinding } from "./background.ts";
 import { StorageRoot } from "../config/storage-root.ts";
 import {
-  canonicalPath,
+  canonicalPathEffect,
   PathRejected,
   resolveOutsidePath,
   resolveProjectPath,
@@ -77,16 +77,20 @@ function resolveShellWorkingDirectoryBody(
 ) {
   if (!isAbsolute(workdir)) return resolveProjectPath(projectRoot, workdir, "directory");
   const resolved = resolveOutsidePath(projectRoot, storageRoot, workdir, "directory");
-  const tempRoots = [canonicalPath("/tmp"), canonicalPath(tmpdir())];
-  return Result.flatMap(resolved, (directory) =>
-    tempRoots.some((root) => isSameOrBelow(root, directory.absolute))
-      ? Result.succeed({
+  return Effect.gen(function* () {
+    const directory = yield* resolved;
+    const tempRoots = yield* Effect.all(
+      [canonicalPathEffect("/tmp"), canonicalPathEffect(tmpdir())],
+      { concurrency: 2 },
+    );
+    return yield* tempRoots.some((root) => isSameOrBelow(root, directory.absolute))
+      ? Effect.succeed({
           absolute: directory.absolute,
           relative: directory.absolute,
           stats: directory.stats,
         })
-      : Result.fail(new PathRejected({ path: workdir, reason: "invalid_path" })),
-  );
+      : Effect.fail(PathRejected.make({ path: workdir, reason: "invalid_path" }));
+  });
 }
 
 const make = Effect.gen(function* () {
@@ -124,8 +128,10 @@ const make = Effect.gen(function* () {
             const runnable = yield* shellSkills.runnable(project, name);
             const command = skillCommand(name, runnable.text, args);
             const label = [name, ...args].join(" ");
-            const directory = yield* Effect.fromResult(
-              resolveShellWorkingDirectory(project.root, storage.path, workdir ?? "."),
+            const directory = yield* resolveShellWorkingDirectory(
+              project.root,
+              storage.path,
+              workdir ?? ".",
             );
             const seconds = Math.min(
               Math.max(1, timeoutSeconds ?? defaultTimeoutSeconds),
@@ -175,8 +181,11 @@ const make = Effect.gen(function* () {
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
         guarded(path, () =>
           Effect.gen(function* () {
-            const target = yield* Effect.fromResult(
-              resolveOutsidePath(project.root, storage.path, path, "new-or-file"),
+            const target = yield* resolveOutsidePath(
+              project.root,
+              storage.path,
+              path,
+              "new-or-file",
             );
             if (expectedSha256 === undefined) {
               const created = yield* createTextFileEffect({
@@ -187,7 +196,7 @@ const make = Effect.gen(function* () {
               return { path: target.absolute, created: true, ...created };
             }
             if (!(target.stats !== undefined))
-              return yield* new PathRejected({ path, reason: "not_found" });
+              return yield* PathRejected.make({ path, reason: "not_found" });
             const replaced = yield* replaceTextFileEffect({
               absolute: target.absolute,
               path,
@@ -202,9 +211,7 @@ const make = Effect.gen(function* () {
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
         guarded(path, () =>
           Effect.gen(function* () {
-            const target = yield* Effect.fromResult(
-              resolveOutsidePath(project.root, storage.path, path, "file"),
-            );
+            const target = yield* resolveOutsidePath(project.root, storage.path, path, "file");
             const removed = yield* deleteTextFileEffect({
               absolute: target.absolute,
               path,

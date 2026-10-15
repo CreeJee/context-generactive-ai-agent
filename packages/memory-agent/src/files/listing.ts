@@ -5,13 +5,14 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-// Directory walking keeps one opendir handle; lstat rejects linked Git entries without following them.
-import { lstat, opendir } from "node:fs/promises";
+// Directory walking keeps one scoped opendir handle.
+import { opendir } from "node:fs/promises";
 // Effect Path has no glob matcher; retain Node's existing POSIX glob semantics.
 import { posix } from "node:path";
 import { path as hostPath } from "../runtime/synchronous-path.ts";
 import {
   Context,
+  FileSystem,
   Crypto,
   Layer,
   Cause,
@@ -200,13 +201,18 @@ export const listProjectFilesEffect = Effect.fn("FileListing.project")(function*
   }
   // A walk already saw regular files only. Git lists links and deleted files too, so check those,
   // many at a time.
+  const fs = yield* Effect.scoped(
+    Layer.build(NodeFileSystem.layer).pipe(
+      Effect.map((services) => Context.get(services, FileSystem.FileSystem)),
+    ),
+  );
   const paths = isTruthy(fromGit)
     ? (yield* Effect.forEach(
         kept,
         (path) =>
-          Effect.tryPromise(() => lstat(join(root, path))).pipe(
+          fs.lstat(join(root, path)).pipe(
             Effect.orElseSucceed(() => undefined),
-            Effect.map((entry) => (entry?.isFile() === true ? path : null)),
+            Effect.map((entry) => (entry?.type === "File" ? path : null)),
           ),
         { concurrency: statConcurrency },
       )).filter((path) => path !== null)

@@ -1,5 +1,15 @@
 import { isTruthy } from "../truthy.ts";
-import { Clock, Context, DateTime, Effect, HashSet, Layer, Option, Schema } from "effect";
+import {
+  Clock,
+  Context,
+  DateTime,
+  Effect,
+  Function as EffectFunction,
+  HashSet,
+  Layer,
+  Option,
+  Schema,
+} from "effect";
 import { Database } from "../db/database.ts";
 import { resolveProjectPath } from "../files/paths.ts";
 import { createTextFileEffect, readTextFileEffect, replaceTextFileEffect } from "../files/text.ts";
@@ -126,7 +136,7 @@ const make = Effect.gen(function* () {
 
   /** Writes one project file, replacing whatever text is there now. */
   const put = Effect.fn("ShellSkills.put")(function* (root: string, path: string, text: string) {
-    const target = yield* Effect.fromResult(resolveProjectPath(root, path, "new-or-file"));
+    const target = yield* resolveProjectPath(root, path, "new-or-file");
     if (target.stats === undefined)
       return yield* createTextFileEffect({ absolute: target.absolute, path, text });
     const current = yield* readTextFileEffect({ absolute: target.absolute, path });
@@ -142,9 +152,9 @@ const make = Effect.gen(function* () {
   /** The script of a project shell skill as it is now. */
   const script = Effect.fn("ShellSkills.script")(function* (project: Project, name: string) {
     const path = shellSkillScript(name);
-    const target = yield* Effect.fromResult(resolveProjectPath(project.root, path, "file")).pipe(
+    const target = yield* resolveProjectPath(project.root, path, "file").pipe(
       Effect.catchIf(
-        (rejection) => rejection.reason === "not_found",
+        (rejection) => rejection._tag === "PathRejected" && rejection.reason === "not_found",
         () =>
           Effect.fail(
             ShellSkillRejected.make({
@@ -175,11 +185,11 @@ const make = Effect.gen(function* () {
       const overlap = builtinOverlap(input.script);
       if (Option.isSome(overlap)) return yield* overlap.value;
       const document = shellSkillDocument(input.name);
-      const existing = yield* Effect.fromResult(
-        resolveProjectPath(project.root, document, "new-or-file"),
-      );
-      const scriptPath = yield* Effect.fromResult(
-        resolveProjectPath(project.root, shellSkillScript(input.name), "new-or-file"),
+      const existing = yield* resolveProjectPath(project.root, document, "new-or-file");
+      const scriptPath = yield* resolveProjectPath(
+        project.root,
+        shellSkillScript(input.name),
+        "new-or-file",
       );
       if (existing.stats !== undefined && scriptPath.stats === undefined)
         return yield* ShellSkillRejected.make({
@@ -239,5 +249,9 @@ const quoted = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
  * The command line that runs exactly this script text with these arguments. The approved text is
  * passed inline, so an edit after the check cannot change what runs; arguments are never parsed.
  */
-export const skillCommand = (name: string, text: string, args: readonly string[]) =>
-  ["/bin/sh", "-c", text, name, ...args].map(quoted).join(" ");
+export const skillCommand: {
+  (text: string, args: readonly string[]): (name: string) => string;
+  (name: string, text: string, args: readonly string[]): string;
+} = EffectFunction.dual(3, (name: string, text: string, args: readonly string[]) =>
+  ["/bin/sh", "-c", text, name, ...args].map(quoted).join(" "),
+);

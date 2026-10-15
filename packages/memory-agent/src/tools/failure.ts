@@ -36,12 +36,11 @@ export const toolFailure: {
   (path: string): (error: Error) => ReturnType<typeof toolFailureBody>;
 } & typeof toolFailureBody = EffectFunction.dual(2, toolFailureBody);
 function toolFailureBody(error: Error, path: string): Error {
-  const reason =
-    error instanceof PathRejected
-      ? error.reason
-      : Schema.is(TextFileRejected)(error)
-        ? error.reason._tag
-        : null;
+  const reason = Schema.is(PathRejected)(error)
+    ? error.reason
+    : Schema.is(TextFileRejected)(error)
+      ? error.reason._tag
+      : null;
   if (reason !== null)
     return new Error(
       `${reason}: ${path}. ${Option.getOrUndefined(HashMap.get(refusalHints, reason)) ?? ""}`.trim(),

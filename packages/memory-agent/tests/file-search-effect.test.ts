@@ -25,7 +25,7 @@ it.effect(
               case "second":
                 return Deferred.succeed(second, undefined).pipe(Effect.as(bytes("match second")));
               default:
-                return Effect.fail(new PathRejected({ path, reason: "not_found" }));
+                return Effect.fail(PathRejected.make({ path, reason: "not_found" }));
             }
           },
         }),
