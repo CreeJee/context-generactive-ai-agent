@@ -51,6 +51,7 @@
     "prepare": "effect-tsgo patch --typescript --oxlint",
     "eval:recall": "node --no-warnings eval/recall.ts",
     "eval:compaction": "node --no-warnings eval/compaction-cli.ts",
+    "eval:structured-memory": "node --no-warnings eval/structured-memory.ts",
     "prepublishOnly": "vp run build"
   },
   "dependencies": {
