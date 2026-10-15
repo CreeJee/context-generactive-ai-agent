@@ -157,9 +157,10 @@ const make = Effect.gen(function* () {
     }),
   );
 
+  // Drive from the small work queue, including when it is empty, instead of scanning all nodes.
   const topics = sqlite.prepare(`
-    SELECT n.seq, n.id FROM memory_graph_topic_candidates c JOIN nodes n ON n.seq = c.node_seq
-    ORDER BY n.seq LIMIT ?`);
+    SELECT n.seq, n.id FROM memory_graph_topic_candidates c CROSS JOIN nodes n ON n.seq = c.node_seq
+    ORDER BY c.node_seq LIMIT ?`);
   const retireTopic = sqlite.prepare(`
     INSERT INTO memory_graph_suppressed_nodes (node_seq, version, reason)
     SELECT n.seq, ?, 'empty_statement_topic' FROM nodes n WHERE n.seq = ? AND n.kind = 'topic'

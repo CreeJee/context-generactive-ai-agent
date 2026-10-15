@@ -16,15 +16,17 @@ const shaOf = (column: string) =>
  */
 export function createSupersededReads(sqlite: DatabaseSync) {
   // The file is the one the calls named: `returns` runs from a call to its result.
+  // Keep the indexed path from this result to its file before visiting older calls. SQLite can
+  // otherwise start at nodes_project and scan the entire project for every read during repairs.
   const suppress = sqlite.prepare(`
     INSERT INTO memory_graph_suppressed_nodes (node_seq, version, reason)
     SELECT DISTINCT old.seq, ?, 'superseded_read' FROM nodes cur
-    JOIN edges ce ON ce.to_id = cur.id AND ce.kind = 'returns'
-    JOIN node_refs cr ON cr.node_id = ce.from_id
-    JOIN node_refs pr ON pr.ref = cr.ref AND pr.node_id <> cr.node_id
-    JOIN nodes pc ON pc.id = pr.node_id AND pc.kind = 'tool_call' AND pc.project_id = cur.project_id
-    JOIN edges pe ON pe.from_id = pc.id AND pe.kind = 'returns'
-    JOIN nodes old ON old.id = pe.to_id AND old.kind = 'tool_result' AND old.seq < cur.seq
+    CROSS JOIN edges ce ON ce.to_id = cur.id AND ce.kind = 'returns'
+    CROSS JOIN node_refs cr ON cr.node_id = ce.from_id
+    CROSS JOIN node_refs pr ON pr.ref = cr.ref AND pr.node_id <> cr.node_id
+    CROSS JOIN nodes pc ON pc.id = pr.node_id AND pc.kind = 'tool_call' AND pc.project_id = cur.project_id
+    CROSS JOIN edges pe ON pe.from_id = pc.id AND pe.kind = 'returns'
+    CROSS JOIN nodes old ON old.id = pe.to_id AND old.kind = 'tool_result' AND old.seq < cur.seq
     WHERE cur.id = ? AND cur.kind = 'tool_result'
       AND json_extract(cur.detail, '$.toolName') IN (${readTools})
       AND json_extract(old.detail, '$.toolName') = json_extract(cur.detail, '$.toolName')

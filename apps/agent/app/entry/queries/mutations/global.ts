@@ -1,14 +1,27 @@
 import { runUiEffect, uiPromise } from "../../shared/ui-effect";
 import { Effect } from "effect";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   api,
   type AccountAction,
+  type ModelSelection,
   type ProviderId,
   type SubscriptionAccountProvider,
 } from "../../api";
 import { globalQueries } from "../global";
 import { appQueryKeys } from "../keys";
+
+/** A successful write owns selection; an older catalog response must not switch it back. */
+const publishModelSelection = (client: QueryClient, selection: ModelSelection) =>
+  client.cancelQueries({ queryKey: appQueryKeys.global.modelsRoot }).then(() => {
+    for (const provider of ["openai", "anthropic", "openai-compatible"] as const) {
+      client.setQueryData(globalQueries.models(provider).queryKey, (snapshot) =>
+        snapshot === undefined
+          ? snapshot
+          : { ...snapshot, selected: provider === selection.provider ? selection : null },
+      );
+    }
+  });
 
 /** Each setting response is the complete new server snapshot for its query. */
 export function useImageGenerationEnabledMutation() {
@@ -74,17 +87,13 @@ export function useAccountActionMutation(provider: SubscriptionAccountProvider) 
     mutationFn: (action: AccountAction) => api.accountAction(provider, action),
     onSuccess: (view) => {
       client.setQueryData(globalQueries.accounts(provider).queryKey, view);
-      return runUiEffect(
-        Effect.forEach(
-          [
-            globalQueries.accountQuota(provider).queryKey,
-            globalQueries.auth(provider).queryKey,
-            appQueryKeys.global.models(provider),
-          ],
-          (queryKey) => uiPromise(() => client.invalidateQueries({ queryKey })),
-          { concurrency: "unbounded", discard: true },
-        ),
-      );
+      // React Query owns these refreshes and reports their errors on the corresponding queries.
+      for (const queryKey of [
+        globalQueries.accountQuota(provider).queryKey,
+        globalQueries.auth(provider).queryKey,
+        appQueryKeys.global.models(provider),
+      ])
+        void client.invalidateQueries({ queryKey });
     },
   });
 }
@@ -112,13 +121,14 @@ export function useSwitchAccountMutation() {
                 api.accountAction(provider, { intent: "select", accountId }),
               );
               client.setQueryData(globalQueries.accounts(provider).queryKey, view);
-              yield* Effect.forEach(
-                [
-                  globalQueries.accountQuota(provider).queryKey,
-                  globalQueries.auth(provider).queryKey,
-                ],
-                (queryKey) => uiPromise(() => client.invalidateQueries({ queryKey })),
-                { concurrency: "unbounded", discard: true },
+              // Usage and auth refresh independently of selecting the account and its model.
+              void client.invalidateQueries({
+                queryKey: globalQueries.accountQuota(provider).queryKey,
+              });
+              void client.invalidateQueries({ queryKey: globalQueries.auth(provider).queryKey });
+              // A catalog already in flight may belong to the previously selected account.
+              yield* uiPromise(() =>
+                client.cancelQueries({ queryKey: globalQueries.models(provider).queryKey }),
               );
               break;
             }
@@ -134,7 +144,11 @@ export function useSwitchAccountMutation() {
           return yield* uiPromise(() => api.selectModel(model.id, undefined, target.provider));
         }),
       ),
-    onSettled: () => client.invalidateQueries({ queryKey: appQueryKeys.global.modelsRoot }),
+    onSuccess: (selection) =>
+      selection === null ? undefined : publishModelSelection(client, selection),
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: appQueryKeys.global.modelsRoot });
+    },
   });
 }
 
@@ -151,6 +165,9 @@ export function useSelectModelMutation(provider: ProviderId) {
   return useMutation({
     mutationFn: ({ model, effort }: { model: string; effort?: string }) =>
       api.selectModel(model, effort, provider),
-    onSuccess: () => client.invalidateQueries({ queryKey: appQueryKeys.global.modelsRoot }),
+    onSuccess: (selection) => publishModelSelection(client, selection),
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: appQueryKeys.global.modelsRoot });
+    },
   });
 }
