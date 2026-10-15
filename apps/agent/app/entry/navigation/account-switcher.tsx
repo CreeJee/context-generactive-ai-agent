@@ -163,6 +163,7 @@ export function AccountSwitcherMenu({
       <div className="flex items-center gap-1">
         <DropdownMenu>
           <DropdownMenuTrigger
+            disabled={busy}
             aria-busy={busy}
             aria-label={
               current !== undefined
@@ -201,6 +202,7 @@ export function AccountSwitcherMenu({
               {entries.map((entry) => (
                 <DropdownMenuItem
                   key={entryKey(entry)}
+                  disabled={busy}
                   aria-label={`${entryLabel(entry)} (${providerLabels[entryProvider(entry)]})`}
                   onClick={() => {
                     if (entry.current) return;

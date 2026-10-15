@@ -1,6 +1,6 @@
 import { Context, Crypto, Deferred, Effect, Fiber, FileSystem, Layer, Path, Scope } from "effect";
 import { layer } from "@effect/vitest";
-import { expect } from "vite-plus/test";
+import { expect, vi } from "vite-plus/test";
 import { Database } from "../../src/db/database.ts";
 import { Embedder } from "../../src/memory/embedding/embedder.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
@@ -8,6 +8,7 @@ import { EmbeddingSetup } from "../../src/memory/embedding/setup.ts";
 import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
 import { Graph } from "../../src/memory/graph.ts";
 import { MemoryGraphMaintenance } from "../../src/memory/maintenance.ts";
+import { createSupersededReads } from "../../src/memory/superseded-reads.ts";
 import { Nodes, type Node } from "../../src/memory/nodes.ts";
 import { MemorySearch } from "../../src/memory/search.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
@@ -102,6 +103,32 @@ const alone = <E>(
   test: () => Effect.Effect<void, E, AgentServices | TestEnv | Scope.Scope>,
   options?: TestEnvOptions,
 ) => testAgent(options)("automatic memory graph maintenance", (it) => it.effect(name, test));
+
+alone("superseded-read repairs look up file references without scanning the project", () =>
+  Effect.gen(function* () {
+    const { sqlite } = yield* Database;
+    const prepare = vi.spyOn(sqlite, "prepare");
+    let statement: string;
+    try {
+      createSupersededReads(sqlite);
+      statement = prepare.mock.calls[0]![0];
+    } finally {
+      prepare.mockRestore();
+    }
+    // Check the real prepared query's access path, without a machine-dependent time threshold.
+    const plan = sqlite.prepare(`EXPLAIN QUERY PLAN ${statement}`).all(3, "read-result");
+    expect(plan).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ detail: expect.stringContaining("node_refs_ref (ref=?)") }),
+      ]),
+    );
+    expect(plan).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ detail: expect.stringContaining("nodes_project") }),
+      ]),
+    );
+  }),
+);
 
 alone("other fibers can run between repair batches", () =>
   Effect.gen(function* () {
