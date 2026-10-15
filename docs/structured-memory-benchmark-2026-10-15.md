@@ -76,9 +76,13 @@ MEMORY_EVIDENCE_OUTPUT=/tmp/structured-memory-live.json vp run --no-cache memory
 대규모 공개 벤치마크, 다국어, 긴 대화의 실제 검색, 잘못 추출된 관계, 자율 후속 조회는 미평가다.
 이 결과를 전체 사용자 질의에 대한 정확도나 철회된 값의 사용 차단 보장으로 확대하지 않는다.
 
+이후 질문 시각·후속 조회·동일 근거의 표현 방식을 분리한
+[추가 비교](structured-memory-ablation-2026-10-15.md)를 64회 실행했다.
+
 ## 코드 검증
 
 - memory-agent 빌드 통과.
+- `vp check`: 오류·경고 0.
 - 병합 후 관련 테스트 3개 파일, 26개 통과.
 - main 타입 정리의 전체 검증과 남은 17곳의 미지원 경고는
   [타입 검사 기록](main-typecheck-2026-10-15.md)에 있다. strict typecheck 실패 정책은 유지한다.

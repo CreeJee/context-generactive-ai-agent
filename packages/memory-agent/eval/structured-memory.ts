@@ -28,6 +28,7 @@ import { fakeEmbedderLayer } from "../src/testing/fake-embedder.ts";
 import { fakeMorphLayer } from "../src/testing/fake-morph.ts";
 import { createMemoryTools } from "../src/tools/memory.ts";
 import { seedEvidenceCases } from "./structured-memory-fixtures.ts";
+import { evidenceNarrative } from "./evidence-narrative.ts";
 import { estimateRequestTokens, exceedsRequestTokenBudget } from "./request-token-budget.ts";
 
 class BenchmarkFailed extends Schema.TaggedError<BenchmarkFailed>()("BenchmarkFailed", {
@@ -47,7 +48,13 @@ const Answer = Schema.Struct({
   explanation: Schema.String,
   evidence: Schema.Array(Schema.Struct({ id: Schema.String, quote: Schema.NonEmptyString })),
 });
-const variants = ["legacy-read", "legacy-read-trace", "structured-read"] as const;
+const baselineVariants = ["legacy-read", "legacy-read-trace", "structured-read"] as const;
+const ablationVariants = [
+  "structured-read",
+  "structured-at-time",
+  "structured-followup",
+  "narrative-followup",
+] as const;
 const repeats = 2;
 const inputLimit = 6_000;
 const outputLimit = 2_048;
@@ -57,8 +64,12 @@ const system =
 const program = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const ablation = process.argv.includes("--ablation");
+  const variants = ablation ? ablationVariants : baselineVariants;
   const output = yield* Config.String("MEMORY_EVIDENCE_OUTPUT").pipe(
-    Config.withDefault("/tmp/structured-memory-benchmark.json"),
+    Config.withDefault(
+      ablation ? "/tmp/structured-memory-ablation.json" : "/tmp/structured-memory-benchmark.json",
+    ),
   );
   const live = process.argv.includes("--live");
   const selection = yield* fs
@@ -94,6 +105,11 @@ const program = Effect.gen(function* () {
     services,
   );
   const tools = createMemoryTools(seeded.env, seeded.projectId).tools;
+  // Freeze the question time after all fixture events, before any model requests.
+  const questionAt = seeded.cases
+    .flatMap((fixture) => fixture.sources.map((source) => source.createdAt))
+    .sort()
+    .at(-1)!;
   const snapshots = yield* Effect.forEach(
     seeded.cases,
     Effect.fnUntraced(function* (fixture) {
@@ -108,23 +124,41 @@ const program = Effect.gen(function* () {
         try: () => Promise.resolve(tools[2].execute!({ id: fixture.root.id })),
         catch: () => BenchmarkFailed.make({ reason: "fixture" }),
       });
+      const followup = ablation
+        ? yield* Effect.forEach(
+            [...new Set(structured.evidenceContext.changes.map((change) => change.source.id))],
+            Effect.fnUntraced(function* (id) {
+              const page = yield* Effect.provideContext(
+                readStructuredEvidence(id, 0, seeded.projectId, false),
+                services,
+              );
+              if (page === null) return yield* BenchmarkFailed.make({ reason: "fixture" });
+              return page;
+            }),
+            { concurrency: 1 },
+          )
+        : [];
       return yield* Effect.forEach(
         variants,
         Effect.fnUntraced(function* (variant) {
+          const followsUp = variant === "structured-followup" || variant === "narrative-followup";
+          const pages = followsUp ? [structured, ...followup] : [structured];
           const context =
             variant === "legacy-read-trace"
               ? [
                   { tool: "read_evidence", result: legacy },
                   { tool: "trace_evidence", result: trace },
                 ]
-              : [
-                  {
-                    tool: "read_evidence",
-                    result: variant === "legacy-read" ? legacy : structured,
-                  },
-                ];
-          const contextText = yield* encode(context);
-          const content = `Question: ${fixture.question}\nMemory tool results:\n${contextText}`;
+              : variant === "legacy-read"
+                ? [{ tool: "read_evidence", result: legacy }]
+                : pages.map((result) => ({ tool: "read_evidence", result }));
+          const contextText =
+            variant === "narrative-followup"
+              ? yield* evidenceNarrative(pages)
+              : yield* encode(context);
+          const questionTime =
+            ablation && variant !== "structured-read" ? `Question asked at: ${questionAt}\n` : "";
+          const content = `${questionTime}Question: ${fixture.question}\nMemory tool results:\n${contextText}`;
           const request = yield* Schema.decodeEffect(wire)(
             subscriptionRequest({
               provider: "anthropic",
@@ -145,12 +179,13 @@ const program = Effect.gen(function* () {
             variant,
             context,
             contextText,
+            content,
             body,
             estimate,
             supportIncluded: included,
             supportTotal: fixture.support.length,
             fullSupport: included === fixture.support.length,
-            toolCalls: variant === "legacy-read-trace" ? 2 : 1,
+            toolCalls: variant === "legacy-read-trace" ? 2 : followsUp ? pages.length : 1,
           };
         }),
         { concurrency: 1 },
@@ -179,7 +214,10 @@ const program = Effect.gen(function* () {
     usage: ReportedUsage;
   }> = [];
   const report = () => ({
-    schemaVersion: 1,
+    schemaVersion: 2,
+    protocol: ablation ? "time-followup-presentation" : "baseline-comparison",
+    system,
+    questionAt: ablation ? questionAt : null,
     selection,
     live,
     repeats,
@@ -188,7 +226,7 @@ const program = Effect.gen(function* () {
     inputMargin: 1.25,
     maxOutputTokens: outputLimit,
     scope:
-      "Synthetic fixed-candidate reading pilot; not retrieval or end-to-end agent accuracy. No follow-up reads.",
+      "Synthetic fixed-candidate reading pilot; not retrieval or end-to-end agent accuracy. Follow-up reads, when enabled, are scripted, not chosen by the model.",
     snapshots: snapshots
       .flat()
       .map(
@@ -196,6 +234,7 @@ const program = Effect.gen(function* () {
           fixture,
           variant,
           context,
+          content,
           estimate,
           supportIncluded,
           supportTotal,
@@ -207,6 +246,7 @@ const program = Effect.gen(function* () {
           expected: fixture.expected,
           variant,
           context,
+          content,
           estimate,
           support: fixture.support,
           sources: fixture.sources.map(({ id, kind, text }) => ({ id, kind, text })),
