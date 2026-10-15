@@ -218,8 +218,10 @@ const isSameOrBelow = Effect.fn("Paths.isSameOrBelow")(function* (
   directory: string,
   candidate: string,
 ) {
-  const target = yield* lstat(directory);
-  if (!(target !== undefined)) return pathsOverlap(directory, candidate);
+  // A linked root protects what it points to; lstat on the link itself never matches a candidate.
+  const root = yield* canonicalPathEffect(directory);
+  const target = yield* lstat(root);
+  if (!(target !== undefined)) return pathsOverlap(root, candidate);
   if (Option.isNone(target.ino)) return yield* reject(candidate, "invalid_path");
   for (let current = candidate; ; current = dirname(current)) {
     const stats = yield* lstat(current);

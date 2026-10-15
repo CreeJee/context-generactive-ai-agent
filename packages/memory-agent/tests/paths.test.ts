@@ -207,4 +207,25 @@ describe("resolveOutsidePath", () => {
       ).toBe("inside_project");
     }),
   );
+
+  it.live("protects the directories a linked project or storage root points to", () =>
+    Effect.gen(function* () {
+      const { base, project, storage, fs, path } = yield* layout();
+      const projectLink = path.join(base, "project-link");
+      const storageLink = path.join(base, "storage-link");
+      yield* fs.symlink(project, projectLink);
+      yield* fs.symlink(storage, storageLink);
+      yield* fs.writeFileString(path.join(storage, "state.txt"), "state");
+      expect(
+        yield* reason(
+          resolveOutsidePath(projectLink, storage, path.join(project, "src/app.ts"), "file"),
+        ),
+      ).toBe("inside_project");
+      expect(
+        yield* reason(
+          resolveOutsidePath(project, storageLink, path.join(storage, "state.txt"), "file"),
+        ),
+      ).toBe("credential");
+    }),
+  );
 });
