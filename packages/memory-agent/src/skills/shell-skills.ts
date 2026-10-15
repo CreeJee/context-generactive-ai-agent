@@ -1,5 +1,15 @@
 import { isTruthy } from "../truthy.ts";
-import { Clock, Context, DateTime, Effect, HashSet, Layer, Option, Schema } from "effect";
+import {
+  Clock,
+  Context,
+  DateTime,
+  Effect,
+  Function as EffectFunction,
+  HashSet,
+  Layer,
+  Option,
+  Schema,
+} from "effect";
 import { Database } from "../db/database.ts";
 import { resolveProjectPath } from "../files/paths.ts";
 import { createTextFileEffect, readTextFileEffect, replaceTextFileEffect } from "../files/text.ts";
@@ -239,5 +249,9 @@ const quoted = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
  * The command line that runs exactly this script text with these arguments. The approved text is
  * passed inline, so an edit after the check cannot change what runs; arguments are never parsed.
  */
-export const skillCommand = (name: string, text: string, args: readonly string[]) =>
-  ["/bin/sh", "-c", text, name, ...args].map(quoted).join(" ");
+export const skillCommand: {
+  (text: string, args: readonly string[]): (name: string) => string;
+  (name: string, text: string, args: readonly string[]): string;
+} = EffectFunction.dual(3, (name: string, text: string, args: readonly string[]) =>
+  ["/bin/sh", "-c", text, name, ...args].map(quoted).join(" "),
+);

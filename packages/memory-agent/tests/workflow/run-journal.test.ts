@@ -7,6 +7,7 @@ import { Database } from "../../src/db/database.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { type Admission, workflowRunBindings } from "../../src/workflow/run-bindings.ts";
 import { workflowRunEvents } from "../../src/workflow/run-events.ts";
+import { uncertainRuns } from "../../src/workflow/uncertain-runs.ts";
 import { Workflows } from "../../src/workflow/workflow.ts";
 import { TestEnv, freshSession, testAgent } from "../support/test-env.ts";
 
@@ -62,6 +63,47 @@ const boundRun = (admission: Admission) => {
 };
 
 testAgent()("workflow run bindings", (it) => {
+  it.effect("acknowledges only the current uncertain runs and rolls back a failed write", () =>
+    Effect.gen(function* () {
+      const session = yield* withGoal();
+      const db = yield* Database;
+      const runId = `${session}:uncertain`;
+      boundRun(yield* bindLatest(session, runId));
+      finishRun(db, session, runId, "failed");
+      db.sqlite
+        .prepare("INSERT INTO owner_rpc_operations VALUES (?, 'key', 1, ?, 1, '{}', 'uncertain')")
+        .run(
+          runId,
+          ownerRpcFingerprint(
+            "tool",
+            encodeFullLoopValue({ name: "run_shell", toolCallId: "call", args: {} }),
+          ),
+        );
+      const owner = uncertainRuns(db);
+      expect(yield* owner.list(session)).toEqual([
+        {
+          runId,
+          tools: [{ toolCallId: "call", name: "run_shell", call: null, state: "uncertain" }],
+        },
+      ]);
+      expect(yield* owner.acknowledge(session, ["stale"])).toEqual({
+        status: "refused",
+        reason: "uncertain_runs_changed",
+      });
+      db.sqlite.exec(
+        "CREATE TEMP TRIGGER reject_ack BEFORE INSERT ON workflow_uncertain_acknowledgements BEGIN SELECT RAISE(ABORT, 'fixture'); END",
+      );
+      expect(yield* owner.acknowledge(session, [runId]).pipe(Effect.flip)).toMatchObject({
+        _tag: "UncertainRunsFailed",
+        reason: { _tag: "Acknowledge" },
+      });
+      expect(yield* owner.list(session)).toHaveLength(1);
+      db.sqlite.exec("DROP TRIGGER reject_ack");
+      expect(yield* owner.acknowledge(session, [runId])).toEqual({ status: "acknowledged" });
+      expect(yield* owner.list(session)).toEqual([]);
+    }),
+  );
+
   it.effect(
     "the owner binds a new run to an immutable Goal/Plan revision, not a caller-provided Goal",
     () =>
@@ -147,7 +189,7 @@ testAgent()("workflow run bindings", (it) => {
             "preview",
           ).status;
         // Owner bookkeeping, an authorization and a read the next run cannot know of repeat nothing.
-        operation.run(shared, 1, JSON.stringify({ operation: "middleware" }), "succeeded");
+        operation.run(shared, 1, '{"operation":"middleware"}', "succeeded");
         step(2, "toolAuthorize", "run_shell", "succeeded");
         step(3, "tool", "read_file", "succeeded");
         expect(admits()).toBe("bound");

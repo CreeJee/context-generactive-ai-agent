@@ -41,9 +41,15 @@ export const toolOperationSql = (operation: string) => `(${operation}.side_effec
     NOT IN ('middleware', 'routedPersistence'))`;
 
 /** A string field of the owner-encoded tool invocation in a tool operation's fingerprint. */
-export const invocationFieldSql = (operation: string, field: "name" | "toolCallId") =>
-  `(SELECT json_extract(f.value, '$[1][1]') FROM json_each(${operation}.fingerprint, '$.input[1]') f
-    WHERE json_extract(f.value, '$[0]') = '${field}')`;
+export const invocationFieldSql: {
+  (field: "name" | "toolCallId"): (operation: string) => string;
+  (operation: string, field: "name" | "toolCallId"): string;
+} = EffectFunction.dual(
+  2,
+  (operation: string, field: "name" | "toolCallId") =>
+    `(SELECT json_extract(f.value, '$[1][1]') FROM json_each(${operation}.fingerprint, '$.input[1]') f
+    WHERE json_extract(f.value, '$[0]') = '${field}')`,
+);
 
 // Built-in names are fixed constants, never request input.
 const readOnlyToolsSql = [...readOnlyToolNames].map((name) => `'${name}'`).join(", ");
@@ -81,8 +87,14 @@ export const acknowledgedRunSql = (binding: string) => `EXISTS (
  * A bound run that ended without completing and still leaves later runs nothing to guess about:
  * an operator recovered it, everything it did is known, or the user chose to continue past it.
  */
-export const resolvedRunSql = (binding: string, run: "r") =>
-  `(${recoveredReadRunSql(run)} OR ${endedWithKnownEffectsSql(run)} OR ${acknowledgedRunSql(binding)})`;
+export const resolvedRunSql: {
+  (run: "r"): (binding: string) => string;
+  (binding: string, run: "r"): string;
+} = EffectFunction.dual(
+  2,
+  (binding: string, run: "r") =>
+    `(${recoveredReadRunSql(run)} OR ${endedWithKnownEffectsSql(run)} OR ${acknowledgedRunSql(binding)})`,
+);
 
 /** A central-owner-only durable claim; it cannot authorize a worker or a tool on its own. */
 export function workflowRunBindings({ sqlite, atomic }: OwnerDatabase) {

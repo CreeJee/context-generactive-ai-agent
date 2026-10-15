@@ -38,7 +38,7 @@ export function RunNoticeView({ notice }: { notice: RunNotice }) {
           <AlertTitle>마지막 답변이 끝나지 않았어요</AlertTitle>
           <AlertDescription>
             답변 중에 서버가 다시 시작됐어요. 도구를 실행하기 전이라 같은 계획을{" "}
-            {koreanLocalTime(new Date(notice.at).toISOString())}에 새 실행으로 이어서 진행해요.
+            {koreanLocalTime(notice.at)}에 새 실행으로 이어서 진행해요.
           </AlertDescription>
         </Alert>
       );

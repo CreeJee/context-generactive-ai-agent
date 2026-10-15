@@ -62,8 +62,14 @@ const encodeRetryKey = EffectFunction.flow(
  * Stable key of one retry wait: the run (one Goal run is one attempt) and the wait's order in it.
  * Neither time, randomness nor a process-local counter takes part.
  */
-export const providerRetryIdempotencyKey = (runId: string, sequence: number) =>
-  `provider-retry-v1-${sha256(encodeRetryKey([runId, sequence]))}`;
+export const providerRetryIdempotencyKey: {
+  (sequence: number): (runId: string) => string;
+  (runId: string, sequence: number): string;
+} = EffectFunction.dual(
+  2,
+  (runId: string, sequence: number) =>
+    `provider-retry-v1-${sha256(encodeRetryKey([runId, sequence]))}`,
+);
 
 const ProviderRetryWait = Workflow.make("ProviderRetryWait", {
   payload: ProviderRetryWaitPayload,

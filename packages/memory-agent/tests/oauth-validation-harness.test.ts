@@ -1158,7 +1158,9 @@ describe("provider wire contracts", () => {
           _tag: "ProviderStreamFailed",
           reason: { _tag: "ProviderStatusRejected", statusClass: "client_error" },
         });
-        expect(JSON.stringify(unrelatedFailure)).not.toContain("invalid model");
+        expect(
+          yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(unrelatedFailure),
+        ).not.toContain("invalid model");
       }),
     ),
   );

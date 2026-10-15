@@ -11,7 +11,7 @@ import {
 import type { WorkflowPhase, WorkflowState } from "../api";
 import { koreanLocalTime } from "../shared/local-time";
 
-const localTime = (epochMillis: number) => koreanLocalTime(new Date(epochMillis).toISOString());
+const localTime = (epochMillis: number) => koreanLocalTime(epochMillis);
 
 export const phaseLabels: Readonly<Record<WorkflowPhase, string>> = {
   chat: "Chat",

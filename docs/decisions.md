@@ -1863,3 +1863,12 @@
   공급자 섹션마다 제목·설명·"계정 추가" 버튼을 두고, 계정 카드에 이름·조회 시각과 "이름 변경"·"로그아웃" 버튼,
   창마다 이름·막대·"N% 사용"·"… 후 초기화"를 보인다. 공급자 아이콘은 ChatGPT에 Codex, Claude에 Claude 로고
   (lobe-icons의 MIT SVG를 앱 자산으로 복사, 패키지 의존성 없음), OpenAI 호환에는 lucide `CpuIcon`을 쓴다.
+
+## main 타입 검사와 미지원 Effect 경계 (2026-10-15)
+
+- 사용자 결정: TypeScript·Effect error와 지원 API로 고칠 수 있는 warning은 코드에서 수정한다.
+  설치본에 동등한 API가 없는 warning은 의존성 patch를 추가하지 않고 남겨 보고한다.
+  warning도 실패시키는 검사 정책은 유지한다. 상세 목록은 [검증 기록](main-typecheck-2026-10-15.md)을 따른다.
+- Provider retry의 durable wait 실패는 취소로 변환하지 않고 실제 typed error를 전파한다.
+- uncertain run 승인은 SQLite의 동기 read/compare/write transaction을 유지하면서 Schema Result를
+  Effect 오류 채널로 연결한다. 승인 목록이 바뀌었거나 검증·저장에 실패하면 승인하지 않는다.

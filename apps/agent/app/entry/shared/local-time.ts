@@ -1,4 +1,4 @@
-import { DateTime, Duration, Option } from "effect";
+import { DateTime, Duration, Function as EffectFunction, Option } from "effect";
 
 /** The fields `toLocaleString` shows: numeric date and time in the browser's time zone. */
 const koreanDateTime = {
@@ -21,7 +21,7 @@ const koreanShortDateTime = {
 } as const;
 
 const formatTimestamp = (
-  timestamp: string,
+  timestamp: string | number,
   options: typeof koreanDateTime | typeof koreanShortDateTime,
 ) =>
   Option.match(DateTime.make(timestamp), {
@@ -30,7 +30,7 @@ const formatTimestamp = (
   });
 
 /** A server timestamp as Korean local date and time; an unparsable one reads as `Invalid Date`. */
-export const koreanLocalTime = (timestamp: string): string =>
+export const koreanLocalTime = (timestamp: string | number): string =>
   formatTimestamp(timestamp, koreanDateTime);
 
 /** A server timestamp as Korean local month, day and minute; an unparsable one reads as `Invalid Date`. */
@@ -41,7 +41,10 @@ export const koreanShortTime = (timestamp: string): string =>
  * Time left until a server timestamp in compact units, such as `3d 8h 7m` or `43m`. A passed or
  * unparsable timestamp has nothing left to show.
  */
-export const timeUntil = (timestamp: string, now: DateTime.DateTime): string | null =>
+export const timeUntil: {
+  (now: DateTime.DateTime): (timestamp: string) => string | null;
+  (timestamp: string, now: DateTime.DateTime): string | null;
+} = EffectFunction.dual(2, (timestamp: string, now: DateTime.DateTime): string | null =>
   Option.match(DateTime.make(timestamp), {
     onNone: () => null,
     onSome: (at) => {
@@ -57,4 +60,5 @@ export const timeUntil = (timestamp: string, now: DateTime.DateTime): string | n
         .map(([value, unit]) => `${value}${unit}`)
         .join(" ");
     },
-  });
+  }),
+);

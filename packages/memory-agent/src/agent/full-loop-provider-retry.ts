@@ -1,7 +1,7 @@
 import { Cause, Clock, Effect, Option, Schema } from "effect";
 import { SubscriptionStreamFailed } from "../providers/subscription-adapter.ts";
 import { nativePromise } from "../runtime/native-effect.ts";
-import type { ProviderRetryOutcome, ProviderRetryStage } from "../workflow/provider-retry.ts";
+import type { ProviderRetries, ProviderRetryStage } from "../workflow/provider-retry.ts";
 
 /** Owner-side waits between retries of one run's provider requests. */
 export interface ProviderRetryOwner {
@@ -12,7 +12,7 @@ export interface ProviderRetryOwner {
       readonly firstFailedAt: number;
     },
     signal: AbortSignal,
-  ) => Effect.Effect<ProviderRetryOutcome, unknown>;
+  ) => ReturnType<ProviderRetries["Service"]["wait"]>;
 }
 
 /** One owner model stream. `open` starts the same provider request again. */
@@ -54,7 +54,8 @@ export const requestNotSentStage = (
  * nothing but the adapter's RUN_STARTED reached the worker, waits durably and sends the same
  * request again on a fresh stream, skipping that stream's RUN_STARTED. Each pull passes `admit`
  * (the model gate); the wait between pulls holds no model permit. Any other failure, exhaustion
- * or cancellation fails with the original provider failure.
+ * or cancellation fails with the original provider failure. A failed durable wait retains its
+ * typed owner failure so a storage/admission error is not reported as cancellation.
  */
 export const pullModelChunk = Effect.fnUntraced(function* <E>(
   stream: OwnerModelStream,
@@ -91,15 +92,7 @@ export const pullModelChunk = Effect.fnUntraced(function* <E>(
       return yield* Effect.fail(failure);
     retry += 1;
     firstFailedAt ??= yield* Clock.currentTimeMillis;
-    const outcome = yield* retries
-      .wait({ retry, stage: stage.value, firstFailedAt }, signal)
-      .pipe(
-        Effect.catch((error) =>
-          Effect.logWarning("Provider retry wait failed", error).pipe(
-            Effect.as<ProviderRetryOutcome>({ _tag: "Cancelled" }),
-          ),
-        ),
-      );
+    const outcome = yield* retries.wait({ retry, stage: stage.value, firstFailedAt }, signal);
     switch (outcome._tag) {
       case "Retry":
         stream.iterator = stream.open();

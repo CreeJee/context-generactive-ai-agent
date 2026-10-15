@@ -1,4 +1,4 @@
-import { DateTime, HashSet, Schema } from "effect";
+import { DateTime, Effect, HashSet, Result, Schema } from "effect";
 import type { DatabaseSync } from "node:sqlite";
 import { readOnlyToolNames } from "../tools/effects.ts";
 import { invocationFieldSql, resolvedRunSql, toolOperationSql } from "./run-bindings.ts";
@@ -45,8 +45,19 @@ const Operation = Schema.Struct({
   call: Schema.NullOr(Schema.String),
   recorded: Schema.Finite,
 });
-const decodeRuns = Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ runId: Schema.String })));
-const decodeOperations = Schema.decodeUnknownSync(Schema.Array(Operation));
+const Runs = Schema.Array(Schema.Struct({ runId: Schema.String }));
+const Operations = Schema.Array(Operation);
+const decodeOperations = Schema.decodeUnknownEffect(Operations);
+
+export class UncertainRunsFailed extends Schema.TaggedError<UncertainRunsFailed>()(
+  "UncertainRunsFailed",
+  {
+    reason: Schema.Union([
+      Schema.TaggedStruct("Read", { cause: Schema.Defect() }),
+      Schema.TaggedStruct("Acknowledge", { cause: Schema.Defect() }),
+    ]),
+  },
+) {}
 
 const stateOf = (operation: typeof Operation.Type): UncertainToolState | null => {
   switch (operation.status) {
@@ -101,10 +112,15 @@ export function uncertainRuns({ sqlite, atomic }: OwnerDatabase) {
     INSERT INTO workflow_uncertain_acknowledgements (run_id, session_id, acknowledged_at)
     VALUES (?, ?, ?) ON CONFLICT DO NOTHING`);
 
-  const tools = (runId: string): UncertainTool[] => {
+  const tools = Effect.fnUntraced(function* (runId: string) {
+    const rows = yield* Effect.try({
+      try: () => operations.all(runId),
+      catch: (cause) => UncertainRunsFailed.make({ reason: { _tag: "Read", cause } }),
+    });
+    const decoded = yield* decodeOperations(rows);
     // An authorization and the call it allowed share one tool call id; show the call once.
     const seen = new Set<string>();
-    return decodeOperations(operations.all(runId)).flatMap((operation) => {
+    return decoded.flatMap((operation): UncertainTool[] => {
       const state = stateOf(operation);
       if (state === null) return [];
       if (operation.toolCallId !== null) {
@@ -115,10 +131,22 @@ export function uncertainRuns({ sqlite, atomic }: OwnerDatabase) {
         { toolCallId: operation.toolCallId, name: operation.name, call: operation.call, state },
       ];
     });
-  };
+  });
 
-  const list = (sessionId: string): UncertainRun[] =>
-    decodeRuns(blocking.all(sessionId)).map(({ runId }) => ({ runId, tools: tools(runId) }));
+  const list = Effect.fnUntraced(function* (sessionId: string) {
+    const rows = yield* Effect.try({
+      try: () => blocking.all(sessionId),
+      catch: (cause) => UncertainRunsFailed.make({ reason: { _tag: "Read", cause } }),
+    });
+    const runs = yield* Schema.decodeUnknownEffect(Runs)(rows);
+    return yield* Effect.forEach(
+      runs,
+      Effect.fnUntraced(function* ({ runId }) {
+        return { runId, tools: yield* tools(runId) } satisfies UncertainRun;
+      }),
+      { concurrency: 1 },
+    );
+  });
 
   return {
     list,
@@ -126,21 +154,34 @@ export function uncertainRuns({ sqlite, atomic }: OwnerDatabase) {
      * Records that the user saw exactly `runIds` and chose to continue. Refused while something
      * still runs, or when the runs left unknown changed since the user looked.
      */
-    acknowledge: (sessionId: string, runIds: readonly string[]): UncertainContinue =>
-      atomic(() => {
-        if (producing.get(sessionId, sessionId) !== undefined)
-          return { status: "refused", reason: "run_in_progress" };
-        const current = list(sessionId).map((run) => run.runId);
-        const asked = new Set(runIds);
-        if (
-          current.length === 0 ||
-          current.length !== asked.size ||
-          !current.every((id) => asked.has(id))
-        )
-          return { status: "refused", reason: "uncertain_runs_changed" };
-        const at = DateTime.formatIso(DateTime.nowUnsafe());
-        for (const runId of current) insert.run(runId, sessionId, at);
-        return { status: "acknowledged" };
-      }),
+    acknowledge: Effect.fnUntraced(function* (sessionId: string, runIds: readonly string[]) {
+      const at = DateTime.formatIso(yield* DateTime.now);
+      // Keep read/compare/write within one synchronous SQLite transaction. The Result decoder
+      // returns validation failures without throwing or introducing an async transaction gap.
+      const outcome = yield* Effect.try({
+        try: () =>
+          atomic((): Result.Result<UncertainContinue, Schema.SchemaError> => {
+            if (producing.get(sessionId, sessionId) !== undefined)
+              return Result.succeed({ status: "refused", reason: "run_in_progress" });
+            return Result.gen(function* () {
+              const runs = yield* Schema.decodeUnknownResult(Runs)(blocking.all(sessionId));
+              for (const { runId } of runs)
+                yield* Schema.decodeUnknownResult(Operations)(operations.all(runId));
+              const current = runs.map((run) => run.runId);
+              const asked = new Set(runIds);
+              if (
+                current.length === 0 ||
+                current.length !== asked.size ||
+                !current.every((id) => asked.has(id))
+              )
+                return { status: "refused", reason: "uncertain_runs_changed" } as const;
+              for (const runId of current) insert.run(runId, sessionId, at);
+              return { status: "acknowledged" } as const;
+            });
+          }),
+        catch: (cause) => UncertainRunsFailed.make({ reason: { _tag: "Acknowledge", cause } }),
+      });
+      return yield* Effect.fromResult(outcome);
+    }),
   };
 }

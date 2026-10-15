@@ -182,7 +182,9 @@ describe("official HTTP client SDK transport", () => {
     Effect.gen(function* () {
       vi.stubGlobal("location", new URL("http://localhost:5173/?session=target"));
       const transport = vi.fn<typeof fetch>((input, init) => {
-        expect(String(input)).toBe("http://localhost:5173/api/sessions/target/lease");
+        expect(input instanceof Request ? input.url : String(input)).toBe(
+          "http://localhost:5173/api/sessions/target/lease",
+        );
         expect(init?.body).toBe('{"holder":"page","action":"claim"}');
         expect(init?.keepalive).toBe(true);
         expect(init?.body).not.toBeInstanceOf(ReadableStream);

@@ -2694,7 +2694,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
         if (!leases.permits(sessionId, holder)) return inUse();
         if (isTruthy(liveRuns.get(sessionId)) || background.hasSession(sessionId))
           return json(409, { error: "run_in_progress" });
-        const result = uncertain.acknowledge(sessionId, input.runIds);
+        const result = yield* uncertain.acknowledge(sessionId, input.runIds);
         switch (result.status) {
           case "refused":
             return json(409, { error: result.reason });
@@ -2785,7 +2785,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
               -1,
             ) ?? null,
           actions: workflowActions(workflow, { running: Boolean(live), lease }),
-          uncertainRuns: isTruthy(live) ? [] : uncertain.list(sessionId),
+          uncertainRuns: isTruthy(live) ? [] : yield* uncertain.list(sessionId),
         };
         return json(200, state);
       }).pipe(

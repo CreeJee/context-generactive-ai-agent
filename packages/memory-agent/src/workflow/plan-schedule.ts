@@ -65,7 +65,7 @@ export const validatePlanDependencies = Effect.fnUntraced(function* (
 ): Effect.fn.Return<void, PlanDependenciesRejected> {
   const issues = planDependencyIssues(steps);
   if (EffectArray.isReadonlyArrayNonEmpty(issues))
-    return yield* new PlanDependenciesRejected({ issues });
+    return yield* PlanDependenciesRejected.make({ issues });
 });
 
 export interface UnmetDependency {
