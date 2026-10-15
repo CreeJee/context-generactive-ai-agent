@@ -194,6 +194,21 @@ testAgent()("structured memory evidence", (it) => {
             ],
           },
         });
+        env.interpretations.record({
+          nodeId: pending.id,
+          targetId: original.id,
+          kind: "retracts",
+          status: "applied",
+          reason: "confirmed by the user",
+          model: "fixture",
+        });
+        expect(yield* call(() => read.execute!({ id: original.id }))).toMatchObject({
+          evidenceContext: {
+            assessment: { kind: "recorded_change" },
+            hasUnconfirmedChanges: false,
+            changes: [{ source: expect.objectContaining({ id: pending.id }), status: "applied" }],
+          },
+        });
       }),
   );
 
@@ -337,7 +352,7 @@ testAgent()("structured memory evidence", (it) => {
       const failure = yield* refusal(() => broken.execute!({ id: node.id }));
       expect(failure).toMatchObject({
         _tag: "EvidenceReadFailed",
-        reason: { _tag: "StorageRead" },
+        reason: { _tag: "StorageRead", stage: "trace" },
       });
       expect(
         yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(failure),
