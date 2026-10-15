@@ -338,10 +338,9 @@ const program = Effect.gen(function* () {
             return { rawAnswer, usage };
           }),
         ).pipe(Effect.timeout("90 seconds"));
-        const parsed = yield* Schema.decodeEffect(Schema.fromJsonString(Answer))(
+        const answer = yield* Schema.decodeEffect(Schema.fromJsonString(Answer))(
           completed.rawAnswer.trim(),
-        ).pipe(Effect.result);
-        const answer = parsed._tag === "Success" ? parsed.success : null;
+        ).pipe(Effect.catchTag("SchemaError", () => Effect.succeed(null)));
         const value = answer?.value.trim().toUpperCase() ?? "";
         const valid = (answer?.evidence ?? []).filter(
           (citation) =>
