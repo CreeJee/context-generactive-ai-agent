@@ -39,8 +39,8 @@ type RegisteredWorkflow = {
     payload: object,
     executionId: string,
   ) => Effect.Effect<
-    unknown,
-    unknown,
+    Workflow.Result<unknown, unknown>,
+    never,
     WorkflowEngine.WorkflowInstance | WorkflowEngine.WorkflowEngine
   >;
   readonly scope: Scope.Scope;
@@ -217,7 +217,7 @@ const makeEngine = Effect.gen(function* () {
     state.instance = instance;
     yield* defect("execution.running", () => storage.setRunning(executionId));
 
-    const run = Workflow.intoResult(entry.execute(state.payload, executionId)).pipe(
+    const run = entry.execute(state.payload, executionId).pipe(
       Effect.provideService(WorkflowEngine.WorkflowEngine, engine),
       (effect) => deferredState.trackRun(instance, effect),
       Effect.tap((result) =>
@@ -280,9 +280,21 @@ const makeEngine = Effect.gen(function* () {
     );
 
   engine = WorkflowEngine.makeUnsafe({
-    register: Effect.fnUntraced(function* (workflow, execute) {
+    register: Effect.fnUntraced(function* <A, E>(
+      workflow: Workflow.Any,
+      execute: (
+        payload: object,
+        executionId: string,
+      ) => Effect.Effect<A, E, WorkflowEngine.WorkflowInstance | WorkflowEngine.WorkflowEngine>,
+    ) {
       const scope = yield* Effect.scope;
-      const entry: RegisteredWorkflow = { workflow, execute, scope };
+      // Capture the typed failure as a workflow result before storing heterogeneous registrations.
+      // intoResult still owns suspension, interruption and compensation semantics.
+      const entry: RegisteredWorkflow = {
+        workflow,
+        execute: (payload, executionId) => Workflow.intoResult(execute(payload, executionId)),
+        scope,
+      };
       workflows.set(workflow._tag, entry);
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
@@ -374,7 +386,10 @@ const makeEngine = Effect.gen(function* () {
       );
     }),
     resume: (workflow, executionId) => resumeExecution(workflow, executionId),
-    activityExecute: Effect.fnUntraced(function* (activity: Activity.Any, attempt) {
+    activityExecute: Effect.fnUntraced(function* <A, E, R>(
+      activity: Pick<Activity.Any, "name"> & { readonly executeEncoded: Effect.Effect<A, E, R> },
+      attempt: number,
+    ) {
       const instance = yield* WorkflowEngine.WorkflowInstance;
       const previous = yield* defect("activity.read", () =>
         storage.activityResult(instance.executionId, activity.name, attempt),

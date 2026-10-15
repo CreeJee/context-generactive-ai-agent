@@ -95,10 +95,7 @@ export const projectWorkflowRules = Effect.fn("projectWorkflowRules")(function* 
     import("effect/PlatformError").PlatformError
   > {
     if (!(yield* fs.exists(absolute))) return { rules: [], problems: [] };
-    // Preserve lstat's regular-file-only contract; FileSystem.stat follows symbolic links.
-    if ((yield* fs.readLink(absolute).pipe(Effect.result))._tag === "Success")
-      return problem("unreadable");
-    const stats = yield* fs.stat(absolute);
+    const stats = yield* fs.lstat(absolute);
     if (stats.type !== "File") return problem("unreadable");
     if (stats.size > BigInt(maxProjectRuleBytes)) return problem("too_large");
     const text = yield* fs.readFileString(absolute);

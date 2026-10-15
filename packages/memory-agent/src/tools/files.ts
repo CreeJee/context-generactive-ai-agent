@@ -197,9 +197,7 @@ const make = Effect.gen(function* () {
     directory: string | undefined,
     glob: string | undefined,
   ) {
-    const resolved = yield* Effect.fromResult(
-      resolveProjectPath(root, directory ?? ".", "directory"),
-    );
+    const resolved = yield* resolveProjectPath(root, directory ?? ".", "directory");
     return snapshots.add(
       root,
       resolved.relative,
@@ -281,9 +279,8 @@ const make = Effect.gen(function* () {
                   : yield* Effect.forkChild(
                       gitGrepFilesEffect({
                         root,
-                        directory: (yield* Effect.fromResult(
-                          resolveProjectPath(root, directory ?? ".", "directory"),
-                        )).relative,
+                        directory: (yield* resolveProjectPath(root, directory ?? ".", "directory"))
+                          .relative,
                         query,
                         caseSensitive,
                       }),
@@ -300,10 +297,7 @@ const make = Effect.gen(function* () {
               // Each directory is checked once per page (no links, still inside the project); the file
               // itself is checked on the opened handle, so thousands of files do not mean thousands of
               // synchronous path walks.
-              const directories = MutableHashMap.empty<
-                string,
-                Result.Result<unknown, PathRejected>
-              >();
+              const directories = MutableHashMap.empty<string, Result.Result<void, PathRejected>>();
               const candidates = yield* candidatesFor(view, query, caseSensitive, started);
               const page = yield* searchTextFilesEffect({
                 paths: view.paths,
@@ -311,13 +305,18 @@ const make = Effect.gen(function* () {
                   const directory = posix.dirname(path);
                   let checked = Option.getOrUndefined(MutableHashMap.get(directories, directory));
                   if (!isTruthy(checked)) {
-                    checked = resolveProjectPath(root, directory, "directory");
+                    checked = yield* resolveProjectPath(root, directory, "directory").pipe(
+                      Effect.as(Result.succeed(undefined)),
+                      Effect.catchTag("PathRejected", (error) =>
+                        Effect.succeed(Result.fail(error)),
+                      ),
+                    );
                     MutableHashMap.set(directories, directory, checked);
                   }
                   yield* Result.match(checked, {
                     onSuccess: Effect.succeed,
                     onFailure: (rejection) =>
-                      Effect.fail(new PathRejected({ path, reason: rejection.reason })),
+                      Effect.fail(PathRejected.make({ path, reason: rejection.reason })),
                   });
                   return (yield* readFileBytesEffect({
                     absolute: join(root, path),
@@ -326,7 +325,7 @@ const make = Effect.gen(function* () {
                   })).bytes;
                 }),
                 readPage: Effect.fnUntraced(function* (path: string, startLine: number) {
-                  const resolved = yield* Effect.fromResult(resolveProjectPath(root, path, "file"));
+                  const resolved = yield* resolveProjectPath(root, path, "file");
                   return yield* readPage({
                     absolute: resolved.absolute,
                     path,
@@ -365,7 +364,7 @@ const make = Effect.gen(function* () {
           path,
           () =>
             Effect.gen(function* () {
-              const resolved = yield* Effect.fromResult(resolveProjectPath(root, path, "file"));
+              const resolved = yield* resolveProjectPath(root, path, "file");
               const lines = Math.min(Math.max(1, maxLines ?? 400), 2000);
               return {
                 path,
@@ -391,9 +390,7 @@ const make = Effect.gen(function* () {
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
         guarded(path, () =>
           Effect.gen(function* () {
-            const resolved = yield* Effect.fromResult(
-              resolveProjectPath(root, path, "new-or-file"),
-            );
+            const resolved = yield* resolveProjectPath(root, path, "new-or-file");
             if (expectedSha256 === undefined) {
               const created = yield* createTextFileEffect({
                 absolute: resolved.absolute,
@@ -403,7 +400,7 @@ const make = Effect.gen(function* () {
               return { path, created: true, ...created };
             }
             if (!(resolved.stats !== undefined))
-              return yield* new PathRejected({ path, reason: "not_found" });
+              return yield* PathRejected.make({ path, reason: "not_found" });
             let text = content;
             if (mentionsHidden(content)) {
               const file = yield* readTextFileEffect({ absolute: resolved.absolute, path: path });
@@ -437,7 +434,7 @@ const make = Effect.gen(function* () {
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
         guarded(path, () =>
           Effect.gen(function* () {
-            const resolved = yield* Effect.fromResult(resolveProjectPath(root, path, "file"));
+            const resolved = yield* resolveProjectPath(root, path, "file");
             const file = yield* readTextFileEffect({ absolute: resolved.absolute, path: path });
             if (expectedSha256 !== undefined && expectedSha256 !== file.sha256)
               return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
@@ -492,7 +489,7 @@ const make = Effect.gen(function* () {
         // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
         guarded(path, () =>
           Effect.gen(function* () {
-            const resolved = yield* Effect.fromResult(resolveProjectPath(root, path, "file"));
+            const resolved = yield* resolveProjectPath(root, path, "file");
             const removed = yield* deleteTextFileEffect({
               absolute: resolved.absolute,
               path: path,

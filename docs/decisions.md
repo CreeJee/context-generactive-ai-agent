@@ -235,6 +235,15 @@
 - 고칠 수 있는 진단은 실제 코드로 고친다. 다인자 테스트 헬퍼는 `Function.dual`로 pipeable 오버로드를 주고, Effect를 돌려주는 헬퍼는 `Effect.fnUntraced`로 쓴다. 서비스 key는 `deterministicKeys`가 요구하는 파일 기준 이름을 쓴다. 앱 서버 테스트는 삭제된 Promise `testRuntime` 대신 `TestEnv`/`testAgent`를 쓴다.
 - O_NOFOLLOW·같은 FD의 정밀 stat·동기 SQLite/Worker fence, Ed25519 서명, 상수시간 비교, 증분 SHA-256, 동기 process-tree 종료, NodeHttpServer loopback factory·React Router http bridge, POSIX glob, 공식 Workflow encoded 경계의 any/unknown 25곳은 설치된 Effect 4.0.3 preview에 대체 API가 없다. 진단 억제, severity 하향, exit-code 제외, 개별 예외를 추가하지 않고 보안·동기 fence 계약도 바꾸지 않는다. 따라서 `vp run typecheck`는 이 경고로 exit 1이며 EFX12-2는 '차단 일부'로 남긴다. 위치와 필요한 기능은 [EFX11–12 검증](efx11-12-verification.md)과 [Effect 경고 전환 기록](effect-warning-remediation-2026-10-11.md)에 두고, Effect·드라이버 업그레이드 때 다시 검토한다.
 
+### 비동기 lstat와 Workflow 타입 보존 (2026-10-15)
+
+- 현재 고정된 Effect 4.0.3 preview 커밋은 유지하고, `effect`의 FileSystem 계약·makeNoop와 `@effect/platform-node-shared`의 Node 구현에 `lstat`를 pnpm patch로 추가한다. 소스·실행 JS·타입 선언을 함께 패치하며 기존 stat의 effectify, PlatformError, bigint 메타데이터 변환을 재사용한다.
+- 프로젝트·외부 경로 및 shell 작업 디렉터리 검사를 Result와 lstatSync에서 Effect로 전환한다. 각 경로 구성요소의 심볼릭 링크 거부, 하드 링크 거부, device/inode 기반 범위 검사를 유지한다. inode를 표현할 수 없으면 허용하지 않는다. 없는 경로만 부모 경로로 정규화하며 권한·I/O 실패는 PlatformError로 전파한다. 이 검사는 동시 디렉터리 교체를 막는 OS sandbox가 아니다.
+- 스킬·워크플로 규칙·AGENTS 목록에서 readLink+stat 우회를 제거한다. 파일 열기의 no-follow, 동일 FD 검사와 SQLite 등록 시점의 동기 검증은 유지한다. 동기 설정 팩토리의 기존 canonicalPath는 별도로 남는다.
+- Workflow 등록 콜백은 성공·오류 타입을 제네릭으로 유지하고 Workflow.intoResult가 실패를 결과로 옮긴 뒤 이종 등록 목록에 저장한다. Activity 실행도 성공·오류·서비스 타입을 제네릭으로 전달한다. any 캐스팅이나 오류의 defect 변환으로 경고를 피하지 않는다. 기존 interruption·suspension·보상 동작은 intoResult가 계속 담당한다.
+- pnpm 12.4.1에서는 URL 의존성 패치가 lockfile에 기록되고 설치가 성공해도 실제 파일에 반영되지 않았다. 동일 패치의 실제 적용을 확인한 12.13.0으로 마이너 업데이트한다. 패치는 4.0.3에만 지정한다. 의존성 버전·URL·integrity는 유지하고 blockExoticSubdeps 기본값을 끄는 설정은 저장하지 않는다. 패치 등록 시 기존 URL 그래프의 lockfile 생성은 일회성 설정으로 수행했고, 일반 frozen 설치는 기본 보안 설정으로 검증한다.
+- 패치 제거 조건은 설치한 Effect가 같은 no-follow lstat 계약을 제공하고, 파일·디렉터리·정상 및 dangling 링크·NotFound·makeNoop 회귀 테스트가 통과하는 것이다. 오류·경고 severity와 검사 종료 기준은 유지한다. 남은 native I/O 경고는 별도 기능 공백으로 보고한다.
+
 ## 인증·모델·공급자
 
 ### 인증과 모델 (2026-09-15)

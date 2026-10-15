@@ -109,7 +109,11 @@ function* lineMatches(text: string, needle: string, caseSensitive: boolean, from
  * A file whose bytes do not contain a case-sensitive query cannot match, so it is not decoded, and
  * a binary or non-UTF-8 file is only reported as skipped when it might have matched.
  */
-type ReadFailure = PathRejected | TextFileRejected | TextFileIoFailed;
+type ReadFailure =
+  | PathRejected
+  | TextFileRejected
+  | TextFileIoFailed
+  | import("effect/PlatformError").PlatformError;
 type NativeRead = (path: string, signal: AbortSignal) => Promise<Uint8Array>;
 
 export interface SearchTextInput<R = never> extends SearchOptions {
@@ -127,7 +131,7 @@ const nativeRead = (readBytes: NativeRead, path: string) =>
     try: (signal) => readBytes(path, signal),
     catch: (cause): ReadFailure => {
       if (
-        cause instanceof PathRejected ||
+        Schema.is(PathRejected)(cause) ||
         Schema.is(TextFileRejected)(cause) ||
         Schema.is(TextFileIoFailed)(cause)
       )
@@ -215,6 +219,12 @@ export const searchTextFilesEffect = Effect.fn("searchTextFiles")(function* <R>(
             ),
           TextFileRejected: (error) =>
             Effect.succeed<FileRead>({ kind: "skipped", reason: error.reason._tag }),
+          PlatformError: (error) =>
+            Effect.succeed<FileRead>(
+              error.reason._tag === "NotFound"
+                ? { kind: "gone" }
+                : { kind: "skipped", reason: "unreadable" },
+            ),
           TextFileIoFailed: (error) =>
             Effect.succeed<FileRead>(
               error.reason.code === "ENOENT"

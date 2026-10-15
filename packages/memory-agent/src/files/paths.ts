@@ -3,12 +3,15 @@ import {
   Effect as PlatformEffect,
   Layer as PlatformLayer,
   Path,
+  FileSystem,
 } from "effect";
 import { Function as EffectFunction } from "effect";
-// FileSystem.stat follows links; synchronous capability checks require lstat and device/inode identity.
-import { lstatSync, realpathSync, type Stats } from "node:fs";
+// Legacy synchronous host configuration still uses canonicalPath; tool checks use canonicalPathEffect.
+import { realpathSync } from "node:fs";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
-import { Data, HashSet, Result } from "effect";
+import { Effect, HashSet, Option, Schema } from "effect";
+import type { PlatformError } from "effect";
 
 // Path operations remain synchronous at these public host boundaries.
 const { basename, dirname, isAbsolute, join, relative, resolve, sep } = PlatformEffect.runSync(
@@ -30,22 +33,23 @@ const { basename, dirname, isAbsolute, join, relative, resolve, sep } = Platform
  * - `symlink` / `hard_link`: a link could redirect the operation past these checks
  * - `not_found` / `not_file` / `not_directory`: the filesystem does not match the request
  */
-export class PathRejected extends Data.TaggedError("PathRejected")<{
-  readonly path: string;
-  readonly reason:
-    | "invalid_path"
-    | "credential"
-    | "git_internal"
-    | "inside_project"
-    | "symlink"
-    | "hard_link"
-    | "not_found"
-    | "not_file"
-    | "not_directory";
-}> {}
+export class PathRejected extends Schema.TaggedError<PathRejected>()("PathRejected", {
+  path: Schema.String,
+  reason: Schema.Literals([
+    "invalid_path",
+    "credential",
+    "git_internal",
+    "inside_project",
+    "symlink",
+    "hard_link",
+    "not_found",
+    "not_file",
+    "not_directory",
+  ]),
+}) {}
 
 type Reason = PathRejected["reason"];
-const reject = (path: string, reason: Reason) => Result.fail(new PathRejected({ path, reason }));
+const reject = (path: string, reason: Reason) => Effect.fail(PathRejected.make({ path, reason }));
 
 /** Directories whose whole contents are credential material, matched as consecutive segments. */
 const credentialDirectories = [
@@ -158,7 +162,38 @@ function pathsOverlapBody(left: string, right: string): boolean {
   return contains(left, right) || contains(right, left);
 }
 
-const lstat = (path: string): Stats | undefined => lstatSync(path, { throwIfNoEntry: false });
+// These exports are host filesystem boundaries, like text.ts. Build the first-party service once;
+// every inspection remains an interruptible Effect, with PlatformError in its failure channel.
+const fileSystem = PlatformEffect.runSync(
+  PlatformEffect.scoped(
+    PlatformEffect.gen(function* () {
+      const services = yield* PlatformLayer.build(NodeFileSystem.layer);
+      return PlatformContext.get(services, FileSystem.FileSystem);
+    }),
+  ),
+);
+const lstat = (path: string) =>
+  fileSystem.lstat(path).pipe(
+    Effect.asSome,
+    Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
+    Effect.map(Option.getOrUndefined),
+  );
+
+/** Resolve missing suffixes only; permission and I/O failures must not become a guessed path. */
+export const canonicalPathEffect = Effect.fn("Paths.canonicalPath")(function* (
+  path: string,
+): Effect.fn.Return<string, PlatformError.PlatformError> {
+  return yield* fileSystem.realPath(path).pipe(
+    Effect.catchReason("PlatformError", "NotFound", () => {
+      const parent = dirname(path);
+      return parent === path
+        ? Effect.succeed(path)
+        : canonicalPathEffect(parent).pipe(
+            Effect.map((resolved) => join(resolved, basename(path))),
+          );
+    }),
+  );
+});
 
 /**
  * Canonical absolute path with symlinks resolved and the on-disk letter case. A path that does
@@ -179,15 +214,28 @@ export function canonicalPath(path: string): string {
  * True when `candidate` is `directory` or below it, compared by device and inode so a different
  * letter case on a case-insensitive volume cannot slip past.
  */
-function isSameOrBelow(directory: string, candidate: string): boolean {
-  const target = lstat(directory);
+const isSameOrBelow = Effect.fn("Paths.isSameOrBelow")(function* (
+  directory: string,
+  candidate: string,
+) {
+  const target = yield* lstat(directory);
   if (!(target !== undefined)) return pathsOverlap(directory, candidate);
+  if (Option.isNone(target.ino)) return yield* reject(candidate, "invalid_path");
   for (let current = candidate; ; current = dirname(current)) {
-    const stats = lstat(current);
-    if (stats !== undefined && stats.dev === target.dev && stats.ino === target.ino) return true;
+    const stats = yield* lstat(current);
+    if (
+      stats !== undefined &&
+      stats.dev === target.dev &&
+      Option.isSome(stats.ino) &&
+      Option.isSome(target.ino) &&
+      stats.ino.value === target.ino.value
+    )
+      return true;
+    if (stats !== undefined && Option.isNone(stats.ino))
+      return yield* reject(candidate, "invalid_path");
     if (dirname(current) === current) return false;
   }
-}
+});
 
 export interface ProjectPath {
   /** Absolute host path below the project root. */
@@ -195,7 +243,7 @@ export interface ProjectPath {
   /** The project-relative spelling, `/`-separated. */
   readonly relative: string;
   /** Current entry, or undefined when creating. */
-  readonly stats: Stats | undefined;
+  readonly stats: FileSystem.File.Info | undefined;
 }
 
 /**
@@ -216,51 +264,57 @@ function resolveProjectPathBody(
   root: string,
   path: string,
   kind: "file" | "directory" | "new-or-file",
-): Result.Result<ProjectPath, PathRejected> {
-  const spelled = path === "" ? "." : path;
-  if (isAbsolute(spelled) || spelled.includes("\\") || hasControlCharacter(spelled))
-    return reject(path, "invalid_path");
-  const segments = spelled === "." ? [] : spelled.split("/");
-  if (
-    segments.some(
-      (segment) =>
-        segment.length === 0 || segment === "." || segment === ".." || segment.trim() !== segment,
+): Effect.Effect<ProjectPath, PathRejected | PlatformError.PlatformError> {
+  return Effect.gen(function* () {
+    const spelled = path === "" ? "." : path;
+    if (isAbsolute(spelled) || spelled.includes("\\") || hasControlCharacter(spelled))
+      return yield* reject(path, "invalid_path");
+    const segments = spelled === "." ? [] : spelled.split("/");
+    if (
+      segments.some(
+        (segment) =>
+          segment.length === 0 || segment === "." || segment === ".." || segment.trim() !== segment,
+      )
     )
-  )
-    return reject(path, "invalid_path");
-  if (segments.some((segment) => segment.toLowerCase() === ".git"))
-    return reject(path, "git_internal");
-  if (isCredentialPath(spelled)) return reject(path, "credential");
+      return yield* reject(path, "invalid_path");
+    if (segments.some((segment) => segment.toLowerCase() === ".git"))
+      return yield* reject(path, "git_internal");
+    if (isCredentialPath(spelled)) return yield* reject(path, "credential");
 
-  let current = root;
-  let stats = lstat(root);
-  if (!(stats?.isDirectory() === true)) return reject(path, "not_found");
-  for (const [index, segment] of segments.entries()) {
-    const last = index === segments.length - 1;
-    current = join(current, segment);
-    stats = lstat(current);
-    if (!(stats !== undefined)) {
-      if (kind === "new-or-file")
-        return Result.succeed({ absolute: join(root, ...segments), relative: spelled, stats });
-      return reject(path, "not_found");
+    let current = root;
+    let stats = yield* lstat(root);
+    if (!(stats?.type === "Directory")) return yield* reject(path, "not_found");
+    for (const [index, segment] of segments.entries()) {
+      const last = index === segments.length - 1;
+      current = join(current, segment);
+      stats = yield* lstat(current);
+      if (!(stats !== undefined)) {
+        if (kind === "new-or-file")
+          return yield* Effect.succeed({
+            absolute: join(root, ...segments),
+            relative: spelled,
+            stats,
+          });
+        return yield* reject(path, "not_found");
+      }
+      if (stats.type === "SymbolicLink") return yield* reject(path, "symlink");
+      if (!last && stats.type !== "Directory") return yield* reject(path, "not_directory");
     }
-    if (stats.isSymbolicLink()) return reject(path, "symlink");
-    if (!last && !stats.isDirectory()) return reject(path, "not_directory");
-  }
 
-  if (kind === "directory") {
-    if (!stats?.isDirectory()) return reject(path, "not_directory");
-  } else {
-    if (!stats?.isFile()) return reject(path, "not_file");
-    if (stats.nlink !== 1) return reject(path, "hard_link");
-  }
-  return Result.succeed({ absolute: current, relative: spelled, stats });
+    if (kind === "directory") {
+      if (stats?.type !== "Directory") return yield* reject(path, "not_directory");
+    } else {
+      if (stats?.type !== "File") return yield* reject(path, "not_file");
+      if (!Option.contains(stats.nlink, 1)) return yield* reject(path, "hard_link");
+    }
+    return { absolute: current, relative: spelled, stats };
+  });
 }
 
 export interface OutsidePath {
   /** Canonical absolute path, symlinks resolved. */
   readonly absolute: string;
-  readonly stats: Stats | undefined;
+  readonly stats: FileSystem.File.Info | undefined;
 }
 
 /**
@@ -283,26 +337,28 @@ function resolveOutsidePathBody(
   storageRoot: string,
   path: string,
   kind: "file" | "directory" | "new-or-file",
-): Result.Result<OutsidePath, PathRejected> {
-  if (!isAbsolute(path) || hasControlCharacter(path)) return reject(path, "invalid_path");
-  const spelled = resolve(path);
-  if (isCredentialPath(spelled)) return reject(path, "credential");
+): Effect.Effect<OutsidePath, PathRejected | PlatformError.PlatformError> {
+  return Effect.gen(function* () {
+    if (!isAbsolute(path) || hasControlCharacter(path)) return yield* reject(path, "invalid_path");
+    const spelled = resolve(path);
+    if (isCredentialPath(spelled)) return yield* reject(path, "credential");
 
-  const canonical = canonicalPath(spelled);
-  const stats = lstat(canonical);
-  if (!(stats !== undefined) && kind !== "new-or-file") return reject(path, "not_found");
-  if (isCredentialPath(canonical)) return reject(path, "credential");
-  if (canonical.split(sep).some((segment) => segment.toLowerCase() === ".git"))
-    return reject(path, "git_internal");
-  if (isSameOrBelow(projectRoot, canonical)) return reject(path, "inside_project");
-  if (isSameOrBelow(storageRoot, canonical)) return reject(path, "credential");
+    const canonical = yield* canonicalPathEffect(spelled);
+    const stats = yield* lstat(canonical);
+    if (!(stats !== undefined) && kind !== "new-or-file") return yield* reject(path, "not_found");
+    if (isCredentialPath(canonical)) return yield* reject(path, "credential");
+    if (canonical.split(sep).some((segment) => segment.toLowerCase() === ".git"))
+      return yield* reject(path, "git_internal");
+    if (yield* isSameOrBelow(projectRoot, canonical)) return yield* reject(path, "inside_project");
+    if (yield* isSameOrBelow(storageRoot, canonical)) return yield* reject(path, "credential");
 
-  if (!(stats !== undefined)) return Result.succeed({ absolute: canonical, stats });
-  if (kind === "directory") {
-    if (!stats.isDirectory()) return reject(path, "not_directory");
-  } else {
-    if (!stats.isFile()) return reject(path, "not_file");
-    if (stats.nlink !== 1) return reject(path, "hard_link");
-  }
-  return Result.succeed({ absolute: canonical, stats });
+    if (!(stats !== undefined)) return yield* Effect.succeed({ absolute: canonical, stats });
+    if (kind === "directory") {
+      if (stats.type !== "Directory") return yield* reject(path, "not_directory");
+    } else {
+      if (stats.type !== "File") return yield* reject(path, "not_file");
+      if (!Option.contains(stats.nlink, 1)) return yield* reject(path, "hard_link");
+    }
+    return { absolute: canonical, stats };
+  });
 }

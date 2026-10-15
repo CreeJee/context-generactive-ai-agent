@@ -1,7 +1,7 @@
 import { Cause } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { toolDefinition } from "@tanstack/ai";
-import { Context, Effect, Result, Layer, Schema } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
 import { StorageRoot } from "../config/storage-root.ts";
 import { listOutsideFilesEffect, createSnapshots } from "../files/listing.ts";
 import { resolveOutsidePath } from "../files/paths.ts";
@@ -70,15 +70,9 @@ const make = Effect.gen(function* () {
       // Snapshots are keyed per project so one project's cursors never page another's listing.
       const snapshotKey = `outside:${project.id}`;
       const resolve = (path: string, kind: "file" | "directory") =>
-        Effect.fromResult(resolveOutsidePath(project.root, storage.path, path, kind));
+        resolveOutsidePath(project.root, storage.path, path, kind);
       const readBytes = Effect.fnUntraced(function* (path: string) {
-        const resolved = yield* Result.match(
-          resolveOutsidePath(project.root, storage.path, path, "file"),
-          {
-            onSuccess: Effect.succeed,
-            onFailure: Effect.fail,
-          },
-        );
+        const resolved = yield* resolveOutsidePath(project.root, storage.path, path, "file");
         return (yield* readFileBytesEffect({ absolute: resolved.absolute, path })).bytes;
       });
 
@@ -179,12 +173,13 @@ const make = Effect.gen(function* () {
                 position !== undefined ? snapshots.get(position.snapshot, snapshotKey) : undefined;
               if (!(position !== undefined)) {
                 const directory = resolveOutsidePath(project.root, storage.path, path, "directory");
-                view = yield* Result.match(directory, {
-                  onSuccess: ({ absolute }) =>
+                view = yield* directory.pipe(
+                  Effect.flatMap(({ absolute }) =>
                     listOutsideFilesEffect(absolute, glob).pipe(
                       Effect.map((listing) => snapshots.add(snapshotKey, absolute, glob, listing)),
                     ),
-                  onFailure: (rejection) =>
+                  ),
+                  Effect.catchTag("PathRejected", (rejection) =>
                     Effect.gen(function* () {
                       if (rejection.reason !== "not_directory") return yield* rejection;
                       const file = yield* resolve(path, "file");
@@ -195,7 +190,8 @@ const make = Effect.gen(function* () {
                         truncated: false,
                       });
                     }),
-                });
+                  ),
+                );
               }
               if (!isTruthy(view))
                 return yield* new Cause.UnknownError(

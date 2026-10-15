@@ -1,0 +1,58 @@
+diff --git a/dist/FileSystem.d.ts b/dist/FileSystem.d.ts
+index 238c6f70c5f4eaf086463311189f3191c7712044..7bcc812040436c0a86e347c530edd68146cd71d2 100644
+--- a/dist/FileSystem.d.ts
++++ b/dist/FileSystem.d.ts
+@@ -236,6 +236,11 @@ export interface FileSystem {
+      * Get information about a file at `path`. See `File.Info` for metadata limits.
+      */
+     readonly stat: (path: string) => Effect.Effect<File.Info, PlatformError>;
++    /**
++     * Get information about the entry at `path` without following its final symbolic link.
++     * A dangling symbolic link is reported as `SymbolicLink`. See `File.Info` for metadata limits.
++     */
++    readonly lstat: (path: string) => Effect.Effect<File.Info, PlatformError>;
+     /**
+      * Create a readable `Stream` for the specified `path`.
+      *
+diff --git a/dist/FileSystem.js b/dist/FileSystem.js
+index 10a445717fcb63ad50846b2b34c3778326429df7..bfc78cc20e5ef4fd5667aafdd12bc00f58669df6 100644
+--- a/dist/FileSystem.js
++++ b/dist/FileSystem.js
+@@ -273,6 +273,9 @@ export const makeNoop = fileSystem => FileSystem.of({
+   stat(path) {
+     return Effect.fail(notFound("stat", path));
+   },
++  lstat(path) {
++    return Effect.fail(notFound("lstat", path));
++  },
+   stream(path) {
+     return Stream.fail(notFound("stream", path));
+   },
+diff --git a/src/FileSystem.ts b/src/FileSystem.ts
+index a4986d710017291e63139f9db817bb978e350751..3a8fed3118f5b593cfd3d00f6fae617527567210 100644
+--- a/src/FileSystem.ts
++++ b/src/FileSystem.ts
+@@ -311,6 +311,13 @@ export interface FileSystem {
+   readonly stat: (
+     path: string
+   ) => Effect.Effect<File.Info, PlatformError>
++  /**
++   * Get information about the entry at `path` without following its final symbolic link.
++   * A dangling symbolic link is reported as `SymbolicLink`. See `File.Info` for metadata limits.
++   */
++  readonly lstat: (
++    path: string
++  ) => Effect.Effect<File.Info, PlatformError>
+   /**
+    * Create a readable `Stream` for the specified `path`.
+    *
+@@ -716,6 +723,9 @@ export const makeNoop = (fileSystem: Partial<FileSystem>): FileSystem =>
+     stat(path) {
+       return Effect.fail(notFound("stat", path))
+     },
++    lstat(path) {
++      return Effect.fail(notFound("lstat", path))
++    },
+     stream(path) {
+       return Stream.fail(notFound("stream", path))
+     },

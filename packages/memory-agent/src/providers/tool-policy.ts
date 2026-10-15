@@ -2,18 +2,7 @@ import { HashSet } from "effect";
 import { Function as EffectFunction } from "effect";
 import { oauthProtocolPath } from "../oauth/node-runtime.ts";
 import { optionalProperty } from "../optional-property.ts";
-import {
-  HashMap,
-  Option,
-  Cause,
-  Context,
-  Data,
-  Effect,
-  Result,
-  Exit,
-  Layer,
-  Predicate,
-} from "effect";
+import { HashMap, Option, Cause, Context, Data, Effect, Exit, Layer, Predicate } from "effect";
 import { canonicalPath, isCredentialPath, resolveProjectPath } from "../files/paths.ts";
 import {
   ModelFeatureFlags,
@@ -335,104 +324,109 @@ function validateSandbox(
   tool: AnyProviderToolDescriptor,
   options: ProviderToolExecutionOptions,
   sandbox: ProviderToolSandboxPolicy | undefined,
-): Result.Result<string | null, ValidationFailure> {
-  if (Object.keys(options).some((key) => !HashSet.has(executionOptionKeys, key)))
-    return Result.fail(
-      new ProviderToolOptionsViolation({ toolId: tool.id, reason: "unknown_policy_option" }),
+): Effect.Effect<string | null, ValidationFailure> {
+  return Effect.gen(function* () {
+    if (Object.keys(options).some((key) => !HashSet.has(executionOptionKeys, key)))
+      return yield* new ProviderToolOptionsViolation({
+        toolId: tool.id,
+        reason: "unknown_policy_option",
+      });
+    const appManaged = tool.sandbox.some(
+      (requirement) =>
+        requirement === "workspace_required" ||
+        requirement === "isolated_compute_required" ||
+        requirement === "isolated_desktop_required" ||
+        requirement === "principal_storage_required",
     );
-  const appManaged = tool.sandbox.some(
-    (requirement) =>
-      requirement === "workspace_required" ||
-      requirement === "isolated_compute_required" ||
-      requirement === "isolated_desktop_required" ||
-      requirement === "principal_storage_required",
-  );
-  if (appManaged && sandbox === undefined)
-    return Result.fail(
-      new ProviderToolSandboxViolation({ toolId: tool.id, reason: "trusted_profile_required" }),
-    );
-  const root = sandbox?.workspaceRoot;
-  if (tool.sandbox.includes("isolated_compute_required") && sandbox?.isolatedCompute !== true)
-    return Result.fail(
-      new ProviderToolSandboxViolation({ toolId: tool.id, reason: "isolated_compute_required" }),
-    );
-  if (tool.sandbox.includes("isolated_desktop_required") && sandbox?.isolatedDesktop !== true)
-    return Result.fail(
-      new ProviderToolSandboxViolation({ toolId: tool.id, reason: "isolated_desktop_required" }),
-    );
-  if (
-    options.networkRequested === true &&
-    tool.sandbox.includes("provider_hosted") === false &&
-    sandbox?.network !== "restricted"
-  )
-    return Result.fail(
-      new ProviderToolSandboxViolation({ toolId: tool.id, reason: "network_denied" }),
-    );
-  const environment = options.environmentNames ?? [];
-  if (
-    environment.length > 0 &&
-    (sandbox?.environment !== "allowlisted_names" ||
-      environment.some((name) => !sandbox.allowedEnvironmentNames.includes(name)))
-  )
-    return Result.fail(
-      new ProviderToolSandboxViolation({ toolId: tool.id, reason: "environment_denied" }),
-    );
-  const limits = sandbox?.limits;
-  const requests = [
-    ["timeout", options.timeoutMs, limits?.timeoutMs],
-    ["output", options.maxOutputBytes, limits?.maxOutputBytes],
-    ["memory", options.maxMemoryBytes, limits?.maxMemoryBytes],
-    ["processes", options.maxProcesses, limits?.maxProcesses],
-  ] as const;
-  for (const [name, value, maximum] of requests)
+    if (appManaged && sandbox === undefined)
+      return yield* new ProviderToolSandboxViolation({
+        toolId: tool.id,
+        reason: "trusted_profile_required",
+      });
+    const root = sandbox?.workspaceRoot;
+    if (tool.sandbox.includes("isolated_compute_required") && sandbox?.isolatedCompute !== true)
+      return yield* new ProviderToolSandboxViolation({
+        toolId: tool.id,
+        reason: "isolated_compute_required",
+      });
+    if (tool.sandbox.includes("isolated_desktop_required") && sandbox?.isolatedDesktop !== true)
+      return yield* new ProviderToolSandboxViolation({
+        toolId: tool.id,
+        reason: "isolated_desktop_required",
+      });
     if (
-      value !== undefined &&
-      (!Number.isSafeInteger(value) || value <= 0 || maximum === undefined || value > maximum)
+      options.networkRequested === true &&
+      tool.sandbox.includes("provider_hosted") === false &&
+      sandbox?.network !== "restricted"
     )
-      return Result.fail(
-        new ProviderToolOptionsViolation({ toolId: tool.id, reason: `${name}_limit_invalid` }),
-      );
-  if ((options.paths?.length ?? 0) > 0 && !appManaged)
-    return Result.fail(
-      new ProviderToolSandboxViolation({ toolId: tool.id, reason: "local_access_not_applicable" }),
-    );
-  for (const request of options.paths ?? []) {
-    if (Object.keys(request).some((key) => !HashSet.has(pathRequestKeys, key)))
-      return Result.fail(
-        new ProviderToolOptionsViolation({ toolId: tool.id, reason: "path_request_invalid" }),
-      );
-    if (root === undefined)
-      return Result.fail(
-        new ProviderToolSandboxViolation({ toolId: tool.id, reason: "trusted_profile_required" }),
-      );
-    if (oauthProtocolPath.isAbsolute(request.path))
-      return Result.fail(
-        new ProviderToolPathViolation({
+      return yield* new ProviderToolSandboxViolation({ toolId: tool.id, reason: "network_denied" });
+    const environment = options.environmentNames ?? [];
+    if (
+      environment.length > 0 &&
+      (sandbox?.environment !== "allowlisted_names" ||
+        environment.some((name) => !sandbox.allowedEnvironmentNames.includes(name)))
+    )
+      return yield* new ProviderToolSandboxViolation({
+        toolId: tool.id,
+        reason: "environment_denied",
+      });
+    const limits = sandbox?.limits;
+    const requests = [
+      ["timeout", options.timeoutMs, limits?.timeoutMs],
+      ["output", options.maxOutputBytes, limits?.maxOutputBytes],
+      ["memory", options.maxMemoryBytes, limits?.maxMemoryBytes],
+      ["processes", options.maxProcesses, limits?.maxProcesses],
+    ] as const;
+    for (const [name, value, maximum] of requests)
+      if (
+        value !== undefined &&
+        (!Number.isSafeInteger(value) || value <= 0 || maximum === undefined || value > maximum)
+      )
+        return yield* new ProviderToolOptionsViolation({
+          toolId: tool.id,
+          reason: `${name}_limit_invalid`,
+        });
+    if ((options.paths?.length ?? 0) > 0 && !appManaged)
+      return yield* new ProviderToolSandboxViolation({
+        toolId: tool.id,
+        reason: "local_access_not_applicable",
+      });
+    for (const request of options.paths ?? []) {
+      if (Object.keys(request).some((key) => !HashSet.has(pathRequestKeys, key)))
+        return yield* new ProviderToolOptionsViolation({
+          toolId: tool.id,
+          reason: "path_request_invalid",
+        });
+      if (root === undefined)
+        return yield* new ProviderToolSandboxViolation({
+          toolId: tool.id,
+          reason: "trusted_profile_required",
+        });
+      if (oauthProtocolPath.isAbsolute(request.path))
+        return yield* new ProviderToolPathViolation({
           toolId: tool.id,
           path: request.path,
           reason: "absolute_path",
-        }),
-      );
-    if (isCredentialPath(request.path))
-      return Result.fail(
-        new ProviderToolPathViolation({
+        });
+      if (isCredentialPath(request.path))
+        return yield* new ProviderToolPathViolation({
           toolId: tool.id,
           path: request.path,
           reason: "credential_path",
-        }),
+        });
+      yield* resolveProjectPath(root, request.path, request.target).pipe(
+        Effect.mapError(
+          (rejection) =>
+            new ProviderToolPathViolation({
+              toolId: tool.id,
+              path: request.path,
+              reason: rejection._tag === "PathRejected" ? rejection.reason : "inspection_failed",
+            }),
+        ),
       );
-    const violation = Result.match(resolveProjectPath(root, request.path, request.target), {
-      onFailure: (rejection) =>
-        new ProviderToolPathViolation({
-          toolId: tool.id,
-          path: request.path,
-          reason: rejection.reason,
-        }),
-      onSuccess: () => null,
-    });
-    if (violation !== null) return Result.fail(violation);
-  }
-  return Result.succeed(appManaged ? (root ?? null) : null);
+    }
+    return appManaged ? (root ?? null) : null;
+  });
 }
 
 export interface ProviderToolPolicyApi {
@@ -578,10 +572,7 @@ function makeProviderToolPolicyBody(
           if (input.approval === "cancelled")
             return yield* new ProviderToolApprovalCancelled({ toolId: input.toolId });
         }
-        const workspaceRoot = yield* Result.match(validateSandbox(tool, input.options, sandbox), {
-          onFailure: Effect.fail,
-          onSuccess: Effect.succeed,
-        });
+        const workspaceRoot = yield* validateSandbox(tool, input.options, sandbox);
         return Object.freeze({ tool: exposed, workspaceRoot });
       }),
   };

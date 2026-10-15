@@ -98,4 +98,6 @@ minimumReleaseAgeExclude:
   - "@tanstack/ai@0.61.0"
   - "@tanstack/openai-base@0.11.1"
 patchedDependencies:
+  "@effect/platform-node-shared@4.0.3": patches/@effect__platform-node-shared@4.0.3.patch
+  effect@4.0.3: patches/effect@4.0.3.patch
   react-simplikit@0.3.1: patches/react-simplikit@0.3.1.patch
