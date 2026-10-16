@@ -12,6 +12,8 @@ export interface Transcript {
   readonly path: string;
   /** The other tool's conversation id, taken from the file name. */
   readonly externalId: string;
+  /** The other tool moved this conversation out of its list; the session follows the first time. */
+  readonly archived: boolean;
 }
 
 export interface ImportSource {
@@ -70,6 +72,7 @@ const claudeCode: ImportSource = {
           source: "claude-code",
           path,
           externalId: basename(path, ".jsonl"),
+          archived: false,
         })),
       ),
     ),
@@ -77,17 +80,30 @@ const claudeCode: ImportSource = {
   reader: () => readClaudeCodeLine,
 };
 
+/** Codex moves an archived conversation's rollout from `sessions` to `archived_sessions`. */
+const codexFolders = [
+  { name: "sessions", archived: false },
+  { name: "archived_sessions", archived: true },
+] as const;
+
 const codex: ImportSource = {
   name: "codex",
-  root: (home) => join(home, ".codex", "sessions"),
+  root: (home) => join(home, ".codex"),
   transcripts: (root) =>
-    transcriptFiles(root, codexSuffixes).pipe(
-      Effect.map((paths) =>
-        paths
-          .filter((path) => basename(path).startsWith("rollout-"))
-          .map((path) => ({ source: "codex", path, externalId: codexTranscriptId(path) })),
+    Effect.forEach(codexFolders, (folder) =>
+      transcriptFiles(join(root, folder.name), codexSuffixes).pipe(
+        Effect.map((paths) =>
+          paths
+            .filter((path) => basename(path).startsWith("rollout-"))
+            .map((path) => ({
+              source: "codex" as const,
+              path,
+              externalId: codexTranscriptId(path),
+              archived: folder.archived,
+            })),
+        ),
       ),
-    ),
+    ).pipe(Effect.map((found) => found.flat())),
   reader: codexReader,
 };
 

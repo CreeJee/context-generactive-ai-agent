@@ -251,6 +251,12 @@ const make = (home: string) =>
         }
 
         const session = yield* sessions.get(sessionId);
+        // The other tool archived it: archive the session when that file is first read, so a
+        // restore here sticks on later passes.
+        yield* Effect.when(
+          sessions.setArchived(sessionId, true),
+          Effect.succeed(transcript.archived && cursor === null && session.archivedAt === null),
+        );
         let written = 0;
         for (let index = 0; index < items.length; index += writeChunk) {
           written += bulk.write({

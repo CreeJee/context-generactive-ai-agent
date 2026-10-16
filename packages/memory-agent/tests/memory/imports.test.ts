@@ -1,3 +1,4 @@
+import { zstdCompressSync } from "node:zlib";
 import { Array as EffectArray, Effect, Exit, Fiber, FileSystem, Path, Schema, Scope } from "effect";
 import { expect } from "vite-plus/test";
 import type { JsonValue } from "../../src/json.ts";
@@ -481,5 +482,36 @@ alone("reads Codex rollouts too, and queues migrated statements for interpretati
     expect(rendered).toHaveLength(1);
     expect(rendered[0]?.role).toBe("user");
     expect(rendered[0]?.parts).toEqual([{ type: "text", content: "이어서" }]);
+  }),
+);
+
+alone("follows a Codex rollout compressed into its archive into the same, archived session", () =>
+  Effect.gen(function* () {
+    const { project, home } = yield* TestEnv;
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const rollout = yield* writeTranscript(
+      yield* codexRollout(path.join(home, ".codex")),
+      codexLines(project.root),
+    );
+    yield* runOnce;
+    const session = yield* migrated("codex");
+
+    const archive = path.join(home, ".codex", "archived_sessions");
+    yield* fs.makeDirectory(archive, { recursive: true });
+    yield* fs.writeFile(
+      path.join(archive, `${path.basename(rollout)}.zst`),
+      zstdCompressSync(yield* fs.readFile(rollout)),
+    );
+    yield* fs.remove(rollout);
+    expect(yield* runOnce).toBe(0);
+    const sessions = yield* Sessions;
+    const archived = yield* sessions.list(project.id, true);
+    expect(archived.map((entry) => entry.id)).toEqual([session.id]);
+
+    // Restoring it here holds: the archive is followed once, when that file is first read.
+    yield* sessions.setArchived(session.id, false);
+    yield* runOnce;
+    expect((yield* sessions.get(session.id)).archivedAt).toBeNull();
   }),
 );

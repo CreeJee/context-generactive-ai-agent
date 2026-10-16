@@ -1595,7 +1595,9 @@
 - Codex 0.162는 `legacy_to_paginated_v1` 마이그레이션에서 더 쓰지 않는 rollout을 zstd로 압축한다(`rollout-*.jsonl.zst`). 이 기기에서 `~/.codex/sessions`의 151개 중 117개가 압축됐고, `.jsonl`만 찾던 이관은 이 기록을 건너뛰었다. 줄 형식(`session_meta`, `response_item`, 최상위 `ordinal`)은 그대로다.
 - `.jsonl.zst`도 Codex 기록으로 찾고, 대화 id는 압축 전과 같이 파일 이름의 uuid다. 그래서 `imported_sessions`가 같은 세션을 다시 잡고, `imported_nodes`(출처 + `<id>:<ordinal>`)가 이미 옮긴 줄을 막는다.
 - 압축 파일은 이어 쓰이지 않으므로 통째로 풀어서 읽는다(Node `zlib.zstdDecompress`, Effect에는 zstd codec이 없음). 커서의 byte offset은 압축을 푼 바이트 기준이다. `size`·`mtime` 비교는 압축 파일 그대로 한다. 해제 실패는 `TranscriptDecompressFailed`로 그 기록의 실패로만 남는다.
-- `~/.codex/archived_sessions`는 계속 읽지 않는다. 이관 범위는 처음부터 `sessions`였다.
+- `~/.codex/archived_sessions`도 읽는다(출처 경로는 `~/.codex`). Codex는 대화를 보관하면 rollout을 그 폴더로 옮기고 압축한다. 대화 id가 그대로라 이미 옮긴 세션에 이어지고, 처음 옮긴 대화는 보관 상태 그대로 가져온다.
+  - 보관된 파일을 처음 읽을 때 한 번만 세션을 보관한다(그 경로의 커서가 없을 때). 그 뒤 이 앱에서 보관을 풀면 다음 회차가 다시 보관하지 않는다. Codex에서 보관을 풀어도 이 앱의 세션을 되돌리지 않는다. 사용자가 이 앱에서 보관한 세션과 구분할 기록이 없기 때문이다.
+- 10/14 마이그레이션은 일부 최근 대화를 새 uuid의 rollout으로 다시 썼다. 이 기기에서 이관 커서 168개를 확인하니 사라진 파일이 없었다(그대로 34, `.zst` 117, 보관 17). 새 uuid 대화가 옛 id로 옮겨진 적이 없어서 합칠 중복도 없었다. 그래서 내용 비교로 세션을 합치는 규칙은 두지 않는다.
 
 ## UI·클라이언트
 
