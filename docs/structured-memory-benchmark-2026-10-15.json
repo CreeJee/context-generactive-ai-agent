@@ -1,0 +1,3233 @@
+{
+  "schemaVersion": 1,
+  "selection": { "provider": "anthropic", "model": "claude-opus-5", "reasoningEffort": "medium" },
+  "live": true,
+  "repeats": 2,
+  "maxRequests": 48,
+  "inputTokenEstimateLimit": 6000,
+  "inputMargin": 1.25,
+  "maxOutputTokens": 2048,
+  "scope": "Synthetic fixed-candidate reading pilot; not retrieval or end-to-end agent accuracy. No follow-up reads.",
+  "snapshots": [
+    {
+      "case": "direct-correction",
+      "question": "What is Atlas's current deployment region?",
+      "expected": "SOUTH",
+      "variant": "legacy-read",
+      "context": [
+        {
+          "tool": "read_evidence",
+          "result": {
+            "id": "20f81445-d0d8-4a74-9d81-974fcf16e489",
+            "kind": "user",
+            "text": "Atlas deployment region is NORTH.",
+            "offset": 0,
+            "nextOffset": null,
+            "length": 33,
+            "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+            "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+            "createdAt": "2026-10-15T07:27:38.376Z",
+            "detail": {}
+          }
+        }
+      ],
+      "estimate": { "estimatedTokens": 342, "encoding": "o200k_base", "fallback": true },
+      "support": [
+        { "id": "380e29a2-4571-46b9-a18d-5c320df36630", "quote": "deployment region is SOUTH" }
+      ],
+      "sources": [
+        {
+          "id": "20f81445-d0d8-4a74-9d81-974fcf16e489",
+          "kind": "user",
+          "text": "Atlas deployment region is NORTH."
+        },
+        {
+          "id": "380e29a2-4571-46b9-a18d-5c320df36630",
+          "kind": "user",
+          "text": "Correction for Atlas: deployment region is SOUTH. NORTH is retired."
+        }
+      ],
+      "supportIncluded": 0,
+      "supportTotal": 1,
+      "fullSupport": false,
+      "toolCalls": 1
+    },
+    {
+      "case": "direct-correction",
+      "question": "What is Atlas's current deployment region?",
+      "expected": "SOUTH",
+      "variant": "legacy-read-trace",
+      "context": [
+        {
+          "tool": "read_evidence",
+          "result": {
+            "id": "20f81445-d0d8-4a74-9d81-974fcf16e489",
+            "kind": "user",
+            "text": "Atlas deployment region is NORTH.",
+            "offset": 0,
+            "nextOffset": null,
+            "length": 33,
+            "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+            "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+            "createdAt": "2026-10-15T07:27:38.376Z",
+            "detail": {}
+          }
+        },
+        {
+          "tool": "trace_evidence",
+          "result": {
+            "chain": [
+              {
+                "id": "20f81445-d0d8-4a74-9d81-974fcf16e489",
+                "kind": "user",
+                "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                "createdAt": "2026-10-15T07:27:38.376Z",
+                "snippet": "Atlas deployment region is NORTH.",
+                "detail": {}
+              }
+            ],
+            "challengedBy": [
+              {
+                "id": "380e29a2-4571-46b9-a18d-5c320df36630",
+                "kind": "user",
+                "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                "createdAt": "2026-10-15T07:27:38.379Z",
+                "snippet": "Correction for Atlas: deployment region is SOUTH. NORTH is retired.",
+                "detail": {},
+                "relation": "corrects",
+                "target": "20f81445-d0d8-4a74-9d81-974fcf16e489",
+                "reason": "Synthetic fixture relation"
+              }
+            ],
+            "unconfirmed": []
+          }
+        }
+      ],
+      "estimate": { "estimatedTokens": 592, "encoding": "o200k_base", "fallback": true },
+      "support": [
+        { "id": "380e29a2-4571-46b9-a18d-5c320df36630", "quote": "deployment region is SOUTH" }
+      ],
+      "sources": [
+        {
+          "id": "20f81445-d0d8-4a74-9d81-974fcf16e489",
+          "kind": "user",
+          "text": "Atlas deployment region is NORTH."
+        },
+        {
+          "id": "380e29a2-4571-46b9-a18d-5c320df36630",
+          "kind": "user",
+          "text": "Correction for Atlas: deployment region is SOUTH. NORTH is retired."
+        }
+      ],
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "toolCalls": 2
+    },
+    {
+      "case": "direct-correction",
+      "question": "What is Atlas's current deployment region?",
+      "expected": "SOUTH",
+      "variant": "structured-read",
+      "context": [
+        {
+          "tool": "read_evidence",
+          "result": {
+            "id": "20f81445-d0d8-4a74-9d81-974fcf16e489",
+            "kind": "user",
+            "text": "Atlas deployment region is NORTH.",
+            "offset": 0,
+            "nextOffset": null,
+            "length": 33,
+            "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+            "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+            "createdAt": "2026-10-15T07:27:38.376Z",
+            "detail": {},
+            "evidenceContext": {
+              "assessment": { "kind": "recorded_change" },
+              "hasUnconfirmedChanges": false,
+              "provenanceScopeLimited": false,
+              "sourceSpan": { "start": 0, "end": 33, "unit": "utf16" },
+              "provenance": [],
+              "changes": [
+                {
+                  "source": {
+                    "id": "380e29a2-4571-46b9-a18d-5c320df36630",
+                    "kind": "user",
+                    "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                    "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+                    "recordedAt": "2026-10-15T07:27:38.379Z",
+                    "detail": {},
+                    "text": "Correction for Atlas: deployment region is SOUTH. NORTH is retired.",
+                    "span": { "start": 0, "end": 67, "unit": "utf16" },
+                    "nextOffset": null,
+                    "length": 67
+                  },
+                  "targetId": "20f81445-d0d8-4a74-9d81-974fcf16e489",
+                  "relation": "corrects",
+                  "status": "applied"
+                }
+              ],
+              "omittedChanges": 0,
+              "omittedProvenance": 0
+            }
+          }
+        }
+      ],
+      "estimate": { "estimatedTokens": 605, "encoding": "o200k_base", "fallback": true },
+      "support": [
+        { "id": "380e29a2-4571-46b9-a18d-5c320df36630", "quote": "deployment region is SOUTH" }
+      ],
+      "sources": [
+        {
+          "id": "20f81445-d0d8-4a74-9d81-974fcf16e489",
+          "kind": "user",
+          "text": "Atlas deployment region is NORTH."
+        },
+        {
+          "id": "380e29a2-4571-46b9-a18d-5c320df36630",
+          "kind": "user",
+          "text": "Correction for Atlas: deployment region is SOUTH. NORTH is retired."
+        }
+      ],
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "toolCalls": 1
+    },
+    {
+      "case": "withdrawal",
+      "question": "What is Boreal's currently approved storage mode?",
+      "expected": "UNKNOWN",
+      "variant": "legacy-read",
+      "context": [
+        {
+          "tool": "read_evidence",
+          "result": {
+            "id": "25871fdb-cf7d-4397-91fa-95d2796a3385",
+            "kind": "user",
+            "text": "Boreal storage mode is LOCAL.",
+            "offset": 0,
+            "nextOffset": null,
+            "length": 29,
+            "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+            "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+            "createdAt": "2026-10-15T07:27:38.381Z",
+            "detail": {}
+          }
+        }
+      ],
+      "estimate": { "estimatedTokens": 345, "encoding": "o200k_base", "fallback": true },
+      "support": [
+        {
+          "id": "f0fc1297-94f6-44a5-aa5d-17078f520ced",
+          "quote": "No replacement storage mode has been approved"
+        }
+      ],
+      "sources": [
+        {
+          "id": "25871fdb-cf7d-4397-91fa-95d2796a3385",
+          "kind": "user",
+          "text": "Boreal storage mode is LOCAL."
+        },
+        {
+          "id": "f0fc1297-94f6-44a5-aa5d-17078f520ced",
+          "kind": "user",
+          "text": "Withdraw Boreal's LOCAL storage decision. No replacement storage mode has been approved."
+        }
+      ],
+      "supportIncluded": 0,
+      "supportTotal": 1,
+      "fullSupport": false,
+      "toolCalls": 1
+    },
+    {
+      "case": "withdrawal",
+      "question": "What is Boreal's currently approved storage mode?",
+      "expected": "UNKNOWN",
+      "variant": "legacy-read-trace",
+      "context": [
+        {
+          "tool": "read_evidence",
+          "result": {
+            "id": "25871fdb-cf7d-4397-91fa-95d2796a3385",
+            "kind": "user",
+            "text": "Boreal storage mode is LOCAL.",
+            "offset": 0,
+            "nextOffset": null,
+            "length": 29,
+            "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+            "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+            "createdAt": "2026-10-15T07:27:38.381Z",
+            "detail": {}
+          }
+        },
+        {
+          "tool": "trace_evidence",
+          "result": {
+            "chain": [
+              {
+                "id": "25871fdb-cf7d-4397-91fa-95d2796a3385",
+                "kind": "user",
+                "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                "createdAt": "2026-10-15T07:27:38.381Z",
+                "snippet": "Boreal storage mode is LOCAL.",
+                "detail": {}
+              }
+            ],
+            "challengedBy": [
+              {
+                "id": "f0fc1297-94f6-44a5-aa5d-17078f520ced",
+                "kind": "user",
+                "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                "createdAt": "2026-10-15T07:27:38.382Z",
+                "snippet": "Withdraw Boreal's LOCAL storage decision. No replacement storage mode has been approved.",
+                "detail": {},
+                "relation": "retracts",
+                "target": "25871fdb-cf7d-4397-91fa-95d2796a3385",
+                "reason": "Synthetic fixture relation"
+              }
+            ],
+            "unconfirmed": []
+          }
+        }
+      ],
+      "estimate": { "estimatedTokens": 599, "encoding": "o200k_base", "fallback": true },
+      "support": [
+        {
+          "id": "f0fc1297-94f6-44a5-aa5d-17078f520ced",
+          "quote": "No replacement storage mode has been approved"
+        }
+      ],
+      "sources": [
+        {
+          "id": "25871fdb-cf7d-4397-91fa-95d2796a3385",
+          "kind": "user",
+          "text": "Boreal storage mode is LOCAL."
+        },
+        {
+          "id": "f0fc1297-94f6-44a5-aa5d-17078f520ced",
+          "kind": "user",
+          "text": "Withdraw Boreal's LOCAL storage decision. No replacement storage mode has been approved."
+        }
+      ],
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "toolCalls": 2
+    },
+    {
+      "case": "withdrawal",
+      "question": "What is Boreal's currently approved storage mode?",
+      "expected": "UNKNOWN",
+      "variant": "structured-read",
+      "context": [
+        {
+          "tool": "read_evidence",
+          "result": {
+            "id": "25871fdb-cf7d-4397-91fa-95d2796a3385",
+            "kind": "user",
+            "text": "Boreal storage mode is LOCAL.",
+            "offset": 0,
+            "nextOffset": null,
+            "length": 29,
+            "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+            "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+            "createdAt": "2026-10-15T07:27:38.381Z",
+            "detail": {},
+            "evidenceContext": {
+              "assessment": { "kind": "recorded_change" },
+              "hasUnconfirmedChanges": false,
+              "provenanceScopeLimited": false,
+              "sourceSpan": { "start": 0, "end": 29, "unit": "utf16" },
+              "provenance": [],
+              "changes": [
+                {
+                  "source": {
+                    "id": "f0fc1297-94f6-44a5-aa5d-17078f520ced",
+                    "kind": "user",
+                    "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                    "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+                    "recordedAt": "2026-10-15T07:27:38.382Z",
+                    "detail": {},
+                    "text": "Withdraw Boreal's LOCAL storage decision. No replacement storage mode has been approved.",
+                    "span": { "start": 0, "end": 88, "unit": "utf16" },
+                    "nextOffset": null,
+                    "length": 88
+                  },
+                  "targetId": "25871fdb-cf7d-4397-91fa-95d2796a3385",
+                  "relation": "retracts",
+                  "status": "applied"
+                }
+              ],
+              "omittedChanges": 0,
+              "omittedProvenance": 0
+            }
+          }
+        }
+      ],
+      "estimate": { "estimatedTokens": 611, "encoding": "o200k_base", "fallback": true },
+      "support": [
+        {
+          "id": "f0fc1297-94f6-44a5-aa5d-17078f520ced",
+          "quote": "No replacement storage mode has been approved"
+        }
+      ],
+      "sources": [
+        {
+          "id": "25871fdb-cf7d-4397-91fa-95d2796a3385",
+          "kind": "user",
+          "text": "Boreal storage mode is LOCAL."
+        },
+        {
+          "id": "f0fc1297-94f6-44a5-aa5d-17078f520ced",
+          "kind": "user",
+          "text": "Withdraw Boreal's LOCAL storage decision. No replacement storage mode has been approved."
+        }
+      ],
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "toolCalls": 1
+    },
+    {
+      "case": "conditional-scope",
+      "question": "What is Cygnus's current production cache port?",
+      "expected": "7412",
+      "variant": "legacy-read",
+      "context": [
+        {
+          "tool": "read_evidence",
+          "result": {
+            "id": "624a21e9-8e36-419a-93bf-3e682be64df5",
+            "kind": "user",
+            "text": "Cygnus: production cache port is 7412; staging cache port is 7412.",
+            "offset": 0,
+            "nextOffset": null,
+            "length": 66,
+            "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+            "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+            "createdAt": "2026-10-15T07:27:38.383Z",
+            "detail": {}
+          }
+        }
+      ],
+      "estimate": { "estimatedTokens": 359, "encoding": "o200k_base", "fallback": true },
+      "support": [
+        {
+          "id": "902415a2-4835-4273-baf8-5301d4bc009f",
+          "quote": "Production cache port remains 7412"
+        }
+      ],
+      "sources": [
+        {
+          "id": "624a21e9-8e36-419a-93bf-3e682be64df5",
+          "kind": "user",
+          "text": "Cygnus: production cache port is 7412; staging cache port is 7412."
+        },
+        {
+          "id": "902415a2-4835-4273-baf8-5301d4bc009f",
+          "kind": "user",
+          "text": "Cygnus correction: only staging cache port changes to 8623. Production cache port remains 7412."
+        }
+      ],
+      "supportIncluded": 0,
+      "supportTotal": 1,
+      "fullSupport": false,
+      "toolCalls": 1
+    },
+    {
+      "case": "conditional-scope",
+      "question": "What is Cygnus's current production cache port?",
+      "expected": "7412",
+      "variant": "legacy-read-trace",
+      "context": [
+        {
+          "tool": "read_evidence",
+          "result": {
+            "id": "624a21e9-8e36-419a-93bf-3e682be64df5",
+            "kind": "user",
+            "text": "Cygnus: production cache port is 7412; staging cache port is 7412.",
+            "offset": 0,
+            "nextOffset": null,
+            "length": 66,
+            "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+            "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+            "createdAt": "2026-10-15T07:27:38.383Z",
+            "detail": {}
+          }
+        },
+        {
+          "tool": "trace_evidence",
+          "result": {
+            "chain": [
+              {
+                "id": "624a21e9-8e36-419a-93bf-3e682be64df5",
+                "kind": "user",
+                "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                "createdAt": "2026-10-15T07:27:38.383Z",
+                "snippet": "Cygnus: production cache port is 7412; staging cache port is 7412.",
+                "detail": {}
+              }
+            ],
+            "challengedBy": [
+              {
+                "id": "902415a2-4835-4273-baf8-5301d4bc009f",
+                "kind": "user",
+                "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                "createdAt": "2026-10-15T07:27:38.383Z",
+                "snippet": "Cygnus correction: only staging cache port changes to 8623. Production cache port remains 7412.",
+                "detail": {},
+                "relation": "corrects",
+                "target": "624a21e9-8e36-419a-93bf-3e682be64df5",
+                "reason": "Synthetic fixture relation"
+              }
+            ],
+            "unconfirmed": []
+          }
+        }
+      ],
+      "estimate": { "estimatedTokens": 632, "encoding": "o200k_base", "fallback": true },
+      "support": [
+        {
+          "id": "902415a2-4835-4273-baf8-5301d4bc009f",
+          "quote": "Production cache port remains 7412"
+        }
+      ],
+      "sources": [
+        {
+          "id": "624a21e9-8e36-419a-93bf-3e682be64df5",
+          "kind": "user",
+          "text": "Cygnus: production cache port is 7412; staging cache port is 7412."
+        },
+        {
+          "id": "902415a2-4835-4273-baf8-5301d4bc009f",
+          "kind": "user",
+          "text": "Cygnus correction: only staging cache port changes to 8623. Production cache port remains 7412."
+        }
+      ],
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "toolCalls": 2
+    },
+    {
+      "case": "conditional-scope",
+      "question": "What is Cygnus's current production cache port?",
+      "expected": "7412",
+      "variant": "structured-read",
+      "context": [
+        {
+          "tool": "read_evidence",
+          "result": {
+            "id": "624a21e9-8e36-419a-93bf-3e682be64df5",
+            "kind": "user",
+            "text": "Cygnus: production cache port is 7412; staging cache port is 7412.",
+            "offset": 0,
+            "nextOffset": null,
+            "length": 66,
+            "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+            "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+            "createdAt": "2026-10-15T07:27:38.383Z",
+            "detail": {},
+            "evidenceContext": {
+              "assessment": { "kind": "recorded_change" },
+              "hasUnconfirmedChanges": false,
+              "provenanceScopeLimited": false,
+              "sourceSpan": { "start": 0, "end": 66, "unit": "utf16" },
+              "provenance": [],
+              "changes": [
+                {
+                  "source": {
+                    "id": "902415a2-4835-4273-baf8-5301d4bc009f",
+                    "kind": "user",
+                    "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                    "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+                    "recordedAt": "2026-10-15T07:27:38.383Z",
+                    "detail": {},
+                    "text": "Cygnus correction: only staging cache port changes to 8623. Production cache port remains 7412.",
+                    "span": { "start": 0, "end": 95, "unit": "utf16" },
+                    "nextOffset": null,
+                    "length": 95
+                  },
+                  "targetId": "624a21e9-8e36-419a-93bf-3e682be64df5",
+                  "relation": "corrects",
+                  "status": "applied"
+                }
+              ],
+              "omittedChanges": 0,
+              "omittedProvenance": 0
+            }
+          }
+        }
+      ],
+      "estimate": { "estimatedTokens": 631, "encoding": "o200k_base", "fallback": true },
+      "support": [
+        {
+          "id": "902415a2-4835-4273-baf8-5301d4bc009f",
+          "quote": "Production cache port remains 7412"
+        }
+      ],
+      "sources": [
+        {
+          "id": "624a21e9-8e36-419a-93bf-3e682be64df5",
+          "kind": "user",
+          "text": "Cygnus: production cache port is 7412; staging cache port is 7412."
+        },
+        {
+          "id": "902415a2-4835-4273-baf8-5301d4bc009f",
+          "kind": "user",
+          "text": "Cygnus correction: only staging cache port changes to 8623. Production cache port remains 7412."
+        }
+      ],
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "toolCalls": 1
+    },
+    {
+      "case": "unconfirmed-proposal",
+      "question": "What is Delta's currently approved worker limit?",
+      "expected": "8",
+      "variant": "legacy-read",
+      "context": [
+        {
+          "tool": "read_evidence",
+          "result": {
+            "id": "ec42a765-417f-413a-9956-d6f2640ecbed",
+            "kind": "user",
+            "text": "Delta's approved worker limit is 8.",
+            "offset": 0,
+            "nextOffset": null,
+            "length": 35,
+            "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+            "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+            "createdAt": "2026-10-15T07:27:38.384Z",
+            "detail": {}
+          }
+        }
+      ],
+      "estimate": { "estimatedTokens": 343, "encoding": "o200k_base", "fallback": true },
+      "support": [
+        { "id": "ec42a765-417f-413a-9956-d6f2640ecbed", "quote": "approved worker limit is 8" },
+        { "id": "39047423-cbfe-4a43-8ef1-8994de104a57", "quote": "do not apply it yet" }
+      ],
+      "sources": [
+        {
+          "id": "ec42a765-417f-413a-9956-d6f2640ecbed",
+          "kind": "user",
+          "text": "Delta's approved worker limit is 8."
+        },
+        {
+          "id": "39047423-cbfe-4a43-8ef1-8994de104a57",
+          "kind": "user",
+          "text": "Maybe raise Delta's worker limit to 16. This is only a proposal; do not apply it yet."
+        }
+      ],
+      "supportIncluded": 1,
+      "supportTotal": 2,
+      "fullSupport": false,
+      "toolCalls": 1
+    },
+    {
+      "case": "unconfirmed-proposal",
+      "question": "What is Delta's currently approved worker limit?",
+      "expected": "8",
+      "variant": "legacy-read-trace",
+      "context": [
+        {
+          "tool": "read_evidence",
+          "result": {
+            "id": "ec42a765-417f-413a-9956-d6f2640ecbed",
+            "kind": "user",
+            "text": "Delta's approved worker limit is 8.",
+            "offset": 0,
+            "nextOffset": null,
+            "length": 35,
+            "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+            "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+            "createdAt": "2026-10-15T07:27:38.384Z",
+            "detail": {}
+          }
+        },
+        {
+          "tool": "trace_evidence",
+          "result": {
+            "chain": [
+              {
+                "id": "ec42a765-417f-413a-9956-d6f2640ecbed",
+                "kind": "user",
+                "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                "createdAt": "2026-10-15T07:27:38.384Z",
+                "snippet": "Delta's approved worker limit is 8.",
+                "detail": {}
+              }
+            ],
+            "challengedBy": [],
+            "unconfirmed": [
+              {
+                "id": "39047423-cbfe-4a43-8ef1-8994de104a57",
+                "kind": "user",
+                "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                "createdAt": "2026-10-15T07:27:38.385Z",
+                "snippet": "Maybe raise Delta's worker limit to 16. This is only a proposal; do not apply it yet.",
+                "detail": {},
+                "possibleRelation": "corrects",
+                "target": "ec42a765-417f-413a-9956-d6f2640ecbed",
+                "reason": "Synthetic fixture relation"
+              }
+            ]
+          }
+        }
+      ],
+      "estimate": { "estimatedTokens": 599, "encoding": "o200k_base", "fallback": true },
+      "support": [
+        { "id": "ec42a765-417f-413a-9956-d6f2640ecbed", "quote": "approved worker limit is 8" },
+        { "id": "39047423-cbfe-4a43-8ef1-8994de104a57", "quote": "do not apply it yet" }
+      ],
+      "sources": [
+        {
+          "id": "ec42a765-417f-413a-9956-d6f2640ecbed",
+          "kind": "user",
+          "text": "Delta's approved worker limit is 8."
+        },
+        {
+          "id": "39047423-cbfe-4a43-8ef1-8994de104a57",
+          "kind": "user",
+          "text": "Maybe raise Delta's worker limit to 16. This is only a proposal; do not apply it yet."
+        }
+      ],
+      "supportIncluded": 2,
+      "supportTotal": 2,
+      "fullSupport": true,
+      "toolCalls": 2
+    },
+    {
+      "case": "unconfirmed-proposal",
+      "question": "What is Delta's currently approved worker limit?",
+      "expected": "8",
+      "variant": "structured-read",
+      "context": [
+        {
+          "tool": "read_evidence",
+          "result": {
+            "id": "ec42a765-417f-413a-9956-d6f2640ecbed",
+            "kind": "user",
+            "text": "Delta's approved worker limit is 8.",
+            "offset": 0,
+            "nextOffset": null,
+            "length": 35,
+            "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+            "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+            "createdAt": "2026-10-15T07:27:38.384Z",
+            "detail": {},
+            "evidenceContext": {
+              "assessment": { "kind": "unresolved" },
+              "hasUnconfirmedChanges": true,
+              "provenanceScopeLimited": false,
+              "sourceSpan": { "start": 0, "end": 35, "unit": "utf16" },
+              "provenance": [],
+              "changes": [
+                {
+                  "source": {
+                    "id": "39047423-cbfe-4a43-8ef1-8994de104a57",
+                    "kind": "user",
+                    "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                    "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+                    "recordedAt": "2026-10-15T07:27:38.385Z",
+                    "detail": {},
+                    "text": "Maybe raise Delta's worker limit to 16. This is only a proposal; do not apply it yet.",
+                    "span": { "start": 0, "end": 85, "unit": "utf16" },
+                    "nextOffset": null,
+                    "length": 85
+                  },
+                  "targetId": "ec42a765-417f-413a-9956-d6f2640ecbed",
+                  "relation": "corrects",
+                  "status": "unconfirmed"
+                }
+              ],
+              "omittedChanges": 0,
+              "omittedProvenance": 0
+            }
+          }
+        }
+      ],
+      "estimate": { "estimatedTokens": 610, "encoding": "o200k_base", "fallback": true },
+      "support": [
+        { "id": "ec42a765-417f-413a-9956-d6f2640ecbed", "quote": "approved worker limit is 8" },
+        { "id": "39047423-cbfe-4a43-8ef1-8994de104a57", "quote": "do not apply it yet" }
+      ],
+      "sources": [
+        {
+          "id": "ec42a765-417f-413a-9956-d6f2640ecbed",
+          "kind": "user",
+          "text": "Delta's approved worker limit is 8."
+        },
+        {
+          "id": "39047423-cbfe-4a43-8ef1-8994de104a57",
+          "kind": "user",
+          "text": "Maybe raise Delta's worker limit to 16. This is only a proposal; do not apply it yet."
+        }
+      ],
+      "supportIncluded": 2,
+      "supportTotal": 2,
+      "fullSupport": true,
+      "toolCalls": 1
+    },
+    {
+      "case": "historical-question",
+      "question": "What was Echo's approved release channel on October 1, before the October 8 change?",
+      "expected": "ALPHA",
+      "variant": "legacy-read",
+      "context": [
+        {
+          "tool": "read_evidence",
+          "result": {
+            "id": "db16171a-907b-4ba0-9294-4faa6ddef4d6",
+            "kind": "user",
+            "text": "Echo's initial release channel, approved on October 1, was ALPHA.",
+            "offset": 0,
+            "nextOffset": null,
+            "length": 65,
+            "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+            "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+            "createdAt": "2026-10-15T07:27:38.386Z",
+            "detail": {}
+          }
+        }
+      ],
+      "estimate": { "estimatedTokens": 363, "encoding": "o200k_base", "fallback": true },
+      "support": [
+        {
+          "id": "db16171a-907b-4ba0-9294-4faa6ddef4d6",
+          "quote": "approved on October 1, was ALPHA"
+        }
+      ],
+      "sources": [
+        {
+          "id": "db16171a-907b-4ba0-9294-4faa6ddef4d6",
+          "kind": "user",
+          "text": "Echo's initial release channel, approved on October 1, was ALPHA."
+        },
+        {
+          "id": "ec6d17e5-5cd5-4777-9d50-e052bef95e0d",
+          "kind": "user",
+          "text": "On October 8 Echo's release channel changes to BETA. This supersedes the October 1 ALPHA decision from October 8 onward."
+        }
+      ],
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "toolCalls": 1
+    },
+    {
+      "case": "historical-question",
+      "question": "What was Echo's approved release channel on October 1, before the October 8 change?",
+      "expected": "ALPHA",
+      "variant": "legacy-read-trace",
+      "context": [
+        {
+          "tool": "read_evidence",
+          "result": {
+            "id": "db16171a-907b-4ba0-9294-4faa6ddef4d6",
+            "kind": "user",
+            "text": "Echo's initial release channel, approved on October 1, was ALPHA.",
+            "offset": 0,
+            "nextOffset": null,
+            "length": 65,
+            "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+            "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+            "createdAt": "2026-10-15T07:27:38.386Z",
+            "detail": {}
+          }
+        },
+        {
+          "tool": "trace_evidence",
+          "result": {
+            "chain": [
+              {
+                "id": "db16171a-907b-4ba0-9294-4faa6ddef4d6",
+                "kind": "user",
+                "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                "createdAt": "2026-10-15T07:27:38.386Z",
+                "snippet": "Echo's initial release channel, approved on October 1, was ALPHA.",
+                "detail": {}
+              }
+            ],
+            "challengedBy": [
+              {
+                "id": "ec6d17e5-5cd5-4777-9d50-e052bef95e0d",
+                "kind": "user",
+                "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                "createdAt": "2026-10-15T07:27:38.388Z",
+                "snippet": "On October 8 Echo's release channel changes to BETA. This supersedes the October 1 ALPHA decision from October 8 onward.",
+                "detail": {},
+                "relation": "corrects",
+                "target": "db16171a-907b-4ba0-9294-4faa6ddef4d6",
+                "reason": "Synthetic fixture relation"
+              }
+            ],
+            "unconfirmed": []
+          }
+        }
+      ],
+      "estimate": { "estimatedTokens": 641, "encoding": "o200k_base", "fallback": true },
+      "support": [
+        {
+          "id": "db16171a-907b-4ba0-9294-4faa6ddef4d6",
+          "quote": "approved on October 1, was ALPHA"
+        }
+      ],
+      "sources": [
+        {
+          "id": "db16171a-907b-4ba0-9294-4faa6ddef4d6",
+          "kind": "user",
+          "text": "Echo's initial release channel, approved on October 1, was ALPHA."
+        },
+        {
+          "id": "ec6d17e5-5cd5-4777-9d50-e052bef95e0d",
+          "kind": "user",
+          "text": "On October 8 Echo's release channel changes to BETA. This supersedes the October 1 ALPHA decision from October 8 onward."
+        }
+      ],
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "toolCalls": 2
+    },
+    {
+      "case": "historical-question",
+      "question": "What was Echo's approved release channel on October 1, before the October 8 change?",
+      "expected": "ALPHA",
+      "variant": "structured-read",
+      "context": [
+        {
+          "tool": "read_evidence",
+          "result": {
+            "id": "db16171a-907b-4ba0-9294-4faa6ddef4d6",
+            "kind": "user",
+            "text": "Echo's initial release channel, approved on October 1, was ALPHA.",
+            "offset": 0,
+            "nextOffset": null,
+            "length": 65,
+            "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+            "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+            "createdAt": "2026-10-15T07:27:38.386Z",
+            "detail": {},
+            "evidenceContext": {
+              "assessment": { "kind": "recorded_change" },
+              "hasUnconfirmedChanges": false,
+              "provenanceScopeLimited": false,
+              "sourceSpan": { "start": 0, "end": 65, "unit": "utf16" },
+              "provenance": [],
+              "changes": [
+                {
+                  "source": {
+                    "id": "ec6d17e5-5cd5-4777-9d50-e052bef95e0d",
+                    "kind": "user",
+                    "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                    "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+                    "recordedAt": "2026-10-15T07:27:38.388Z",
+                    "detail": {},
+                    "text": "On October 8 Echo's release channel changes to BETA. This supersedes the October 1 ALPHA decision from October 8 onward.",
+                    "span": { "start": 0, "end": 120, "unit": "utf16" },
+                    "nextOffset": null,
+                    "length": 120
+                  },
+                  "targetId": "db16171a-907b-4ba0-9294-4faa6ddef4d6",
+                  "relation": "corrects",
+                  "status": "applied"
+                }
+              ],
+              "omittedChanges": 0,
+              "omittedProvenance": 0
+            }
+          }
+        }
+      ],
+      "estimate": { "estimatedTokens": 644, "encoding": "o200k_base", "fallback": true },
+      "support": [
+        {
+          "id": "db16171a-907b-4ba0-9294-4faa6ddef4d6",
+          "quote": "approved on October 1, was ALPHA"
+        }
+      ],
+      "sources": [
+        {
+          "id": "db16171a-907b-4ba0-9294-4faa6ddef4d6",
+          "kind": "user",
+          "text": "Echo's initial release channel, approved on October 1, was ALPHA."
+        },
+        {
+          "id": "ec6d17e5-5cd5-4777-9d50-e052bef95e0d",
+          "kind": "user",
+          "text": "On October 8 Echo's release channel changes to BETA. This supersedes the October 1 ALPHA decision from October 8 onward."
+        }
+      ],
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "toolCalls": 1
+    },
+    {
+      "case": "changed-ancestor",
+      "question": "What is Foxtrot's production cache port?",
+      "expected": "UNKNOWN",
+      "variant": "legacy-read",
+      "context": [
+        {
+          "tool": "read_evidence",
+          "result": {
+            "id": "bf415a74-b2e4-4c57-8754-c766d4e86696",
+            "kind": "tool_result",
+            "text": "Foxtrot staging cache port is 9534.",
+            "offset": 0,
+            "nextOffset": null,
+            "length": 35,
+            "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+            "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+            "createdAt": "2026-10-15T07:27:38.393Z",
+            "detail": { "ok": true }
+          }
+        }
+      ],
+      "estimate": { "estimatedTokens": 351, "encoding": "o200k_base", "fallback": true },
+      "support": [
+        { "id": "bf415a74-b2e4-4c57-8754-c766d4e86696", "quote": "staging cache port is 9534" },
+        {
+          "id": "b7031fbb-823f-4e39-b5ad-83f3a48e7380",
+          "quote": "production cache port has not been read"
+        }
+      ],
+      "sources": [
+        {
+          "id": "08382b62-934d-4784-893d-8dfce0aff269",
+          "kind": "user",
+          "text": "Foxtrot: read the staging cache port."
+        },
+        {
+          "id": "7817a07a-2718-4a57-b425-1d97149253dc",
+          "kind": "assistant",
+          "text": "Reading Foxtrot staging."
+        },
+        {
+          "id": "243a7c60-d156-4382-887c-eda007e5f98a",
+          "kind": "tool_call",
+          "text": "read staging settings"
+        },
+        {
+          "id": "bf415a74-b2e4-4c57-8754-c766d4e86696",
+          "kind": "tool_result",
+          "text": "Foxtrot staging cache port is 9534."
+        },
+        {
+          "id": "b7031fbb-823f-4e39-b5ad-83f3a48e7380",
+          "kind": "user",
+          "text": "Foxtrot correction: I meant production. The production cache port has not been read or recorded yet."
+        }
+      ],
+      "supportIncluded": 1,
+      "supportTotal": 2,
+      "fullSupport": false,
+      "toolCalls": 1
+    },
+    {
+      "case": "changed-ancestor",
+      "question": "What is Foxtrot's production cache port?",
+      "expected": "UNKNOWN",
+      "variant": "legacy-read-trace",
+      "context": [
+        {
+          "tool": "read_evidence",
+          "result": {
+            "id": "bf415a74-b2e4-4c57-8754-c766d4e86696",
+            "kind": "tool_result",
+            "text": "Foxtrot staging cache port is 9534.",
+            "offset": 0,
+            "nextOffset": null,
+            "length": 35,
+            "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+            "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+            "createdAt": "2026-10-15T07:27:38.393Z",
+            "detail": { "ok": true }
+          }
+        },
+        {
+          "tool": "trace_evidence",
+          "result": {
+            "chain": [
+              {
+                "id": "bf415a74-b2e4-4c57-8754-c766d4e86696",
+                "kind": "tool_result",
+                "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                "createdAt": "2026-10-15T07:27:38.393Z",
+                "snippet": "Foxtrot staging cache port is 9534.",
+                "detail": { "ok": true }
+              },
+              {
+                "id": "243a7c60-d156-4382-887c-eda007e5f98a",
+                "kind": "tool_call",
+                "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                "createdAt": "2026-10-15T07:27:38.391Z",
+                "snippet": "read staging settings",
+                "detail": {}
+              },
+              {
+                "id": "7817a07a-2718-4a57-b425-1d97149253dc",
+                "kind": "assistant",
+                "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                "createdAt": "2026-10-15T07:27:38.390Z",
+                "snippet": "Reading Foxtrot staging.",
+                "detail": {}
+              },
+              {
+                "id": "08382b62-934d-4784-893d-8dfce0aff269",
+                "kind": "user",
+                "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                "createdAt": "2026-10-15T07:27:38.389Z",
+                "snippet": "Foxtrot: read the staging cache port.",
+                "detail": {}
+              }
+            ],
+            "challengedBy": [
+              {
+                "id": "b7031fbb-823f-4e39-b5ad-83f3a48e7380",
+                "kind": "user",
+                "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                "createdAt": "2026-10-15T07:27:38.396Z",
+                "snippet": "Foxtrot correction: I meant production. The production cache port has not been read or recorded yet.",
+                "detail": {},
+                "relation": "corrects",
+                "target": "08382b62-934d-4784-893d-8dfce0aff269",
+                "reason": "Synthetic fixture relation"
+              }
+            ],
+            "unconfirmed": []
+          }
+        }
+      ],
+      "estimate": { "estimatedTokens": 880, "encoding": "o200k_base", "fallback": true },
+      "support": [
+        { "id": "bf415a74-b2e4-4c57-8754-c766d4e86696", "quote": "staging cache port is 9534" },
+        {
+          "id": "b7031fbb-823f-4e39-b5ad-83f3a48e7380",
+          "quote": "production cache port has not been read"
+        }
+      ],
+      "sources": [
+        {
+          "id": "08382b62-934d-4784-893d-8dfce0aff269",
+          "kind": "user",
+          "text": "Foxtrot: read the staging cache port."
+        },
+        {
+          "id": "7817a07a-2718-4a57-b425-1d97149253dc",
+          "kind": "assistant",
+          "text": "Reading Foxtrot staging."
+        },
+        {
+          "id": "243a7c60-d156-4382-887c-eda007e5f98a",
+          "kind": "tool_call",
+          "text": "read staging settings"
+        },
+        {
+          "id": "bf415a74-b2e4-4c57-8754-c766d4e86696",
+          "kind": "tool_result",
+          "text": "Foxtrot staging cache port is 9534."
+        },
+        {
+          "id": "b7031fbb-823f-4e39-b5ad-83f3a48e7380",
+          "kind": "user",
+          "text": "Foxtrot correction: I meant production. The production cache port has not been read or recorded yet."
+        }
+      ],
+      "supportIncluded": 2,
+      "supportTotal": 2,
+      "fullSupport": true,
+      "toolCalls": 2
+    },
+    {
+      "case": "changed-ancestor",
+      "question": "What is Foxtrot's production cache port?",
+      "expected": "UNKNOWN",
+      "variant": "structured-read",
+      "context": [
+        {
+          "tool": "read_evidence",
+          "result": {
+            "id": "bf415a74-b2e4-4c57-8754-c766d4e86696",
+            "kind": "tool_result",
+            "text": "Foxtrot staging cache port is 9534.",
+            "offset": 0,
+            "nextOffset": null,
+            "length": 35,
+            "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+            "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+            "createdAt": "2026-10-15T07:27:38.393Z",
+            "detail": { "ok": true },
+            "evidenceContext": {
+              "assessment": { "kind": "context_changed" },
+              "hasUnconfirmedChanges": false,
+              "provenanceScopeLimited": false,
+              "sourceSpan": { "start": 0, "end": 35, "unit": "utf16" },
+              "provenance": [
+                {
+                  "id": "243a7c60-d156-4382-887c-eda007e5f98a",
+                  "kind": "tool_call",
+                  "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                  "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+                  "recordedAt": "2026-10-15T07:27:38.391Z",
+                  "detail": {},
+                  "text": "read staging settings",
+                  "span": { "start": 0, "end": 21, "unit": "utf16" },
+                  "nextOffset": null,
+                  "length": 21
+                },
+                {
+                  "id": "7817a07a-2718-4a57-b425-1d97149253dc",
+                  "kind": "assistant",
+                  "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                  "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+                  "recordedAt": "2026-10-15T07:27:38.390Z",
+                  "detail": {},
+                  "text": "Reading Foxtrot staging.",
+                  "span": { "start": 0, "end": 24, "unit": "utf16" },
+                  "nextOffset": null,
+                  "length": 24
+                },
+                {
+                  "id": "08382b62-934d-4784-893d-8dfce0aff269",
+                  "kind": "user",
+                  "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                  "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+                  "recordedAt": "2026-10-15T07:27:38.389Z",
+                  "detail": {},
+                  "text": "Foxtrot: read the staging cache port.",
+                  "span": { "start": 0, "end": 37, "unit": "utf16" },
+                  "nextOffset": null,
+                  "length": 37
+                }
+              ],
+              "changes": [
+                {
+                  "source": {
+                    "id": "b7031fbb-823f-4e39-b5ad-83f3a48e7380",
+                    "kind": "user",
+                    "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                    "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+                    "recordedAt": "2026-10-15T07:27:38.396Z",
+                    "detail": {},
+                    "text": "Foxtrot correction: I meant production. The production cache port has not been read or recorded yet.",
+                    "span": { "start": 0, "end": 100, "unit": "utf16" },
+                    "nextOffset": null,
+                    "length": 100
+                  },
+                  "targetId": "08382b62-934d-4784-893d-8dfce0aff269",
+                  "relation": "corrects",
+                  "status": "applied"
+                }
+              ],
+              "omittedChanges": 0,
+              "omittedProvenance": 0
+            }
+          }
+        }
+      ],
+      "estimate": { "estimatedTokens": 1050, "encoding": "o200k_base", "fallback": true },
+      "support": [
+        { "id": "bf415a74-b2e4-4c57-8754-c766d4e86696", "quote": "staging cache port is 9534" },
+        {
+          "id": "b7031fbb-823f-4e39-b5ad-83f3a48e7380",
+          "quote": "production cache port has not been read"
+        }
+      ],
+      "sources": [
+        {
+          "id": "08382b62-934d-4784-893d-8dfce0aff269",
+          "kind": "user",
+          "text": "Foxtrot: read the staging cache port."
+        },
+        {
+          "id": "7817a07a-2718-4a57-b425-1d97149253dc",
+          "kind": "assistant",
+          "text": "Reading Foxtrot staging."
+        },
+        {
+          "id": "243a7c60-d156-4382-887c-eda007e5f98a",
+          "kind": "tool_call",
+          "text": "read staging settings"
+        },
+        {
+          "id": "bf415a74-b2e4-4c57-8754-c766d4e86696",
+          "kind": "tool_result",
+          "text": "Foxtrot staging cache port is 9534."
+        },
+        {
+          "id": "b7031fbb-823f-4e39-b5ad-83f3a48e7380",
+          "kind": "user",
+          "text": "Foxtrot correction: I meant production. The production cache port has not been read or recorded yet."
+        }
+      ],
+      "supportIncluded": 2,
+      "supportTotal": 2,
+      "fullSupport": true,
+      "toolCalls": 1
+    },
+    {
+      "case": "beyond-legacy-snippet",
+      "question": "What is Gemini's approved current color?",
+      "expected": "VIOLET",
+      "variant": "legacy-read",
+      "context": [
+        {
+          "tool": "read_evidence",
+          "result": {
+            "id": "ff902dff-9885-48a2-b2db-d73e1e2e2fad",
+            "kind": "user",
+            "text": "Gemini's active color is AMBER.",
+            "offset": 0,
+            "nextOffset": null,
+            "length": 31,
+            "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+            "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+            "createdAt": "2026-10-15T07:27:38.400Z",
+            "detail": {}
+          }
+        }
+      ],
+      "estimate": { "estimatedTokens": 345, "encoding": "o200k_base", "fallback": true },
+      "support": [
+        {
+          "id": "64518502-16d8-4bbd-bbdb-7bbcc1e284e6",
+          "quote": "approved current color is VIOLET"
+        }
+      ],
+      "sources": [
+        {
+          "id": "ff902dff-9885-48a2-b2db-d73e1e2e2fad",
+          "kind": "user",
+          "text": "Gemini's active color is AMBER."
+        },
+        {
+          "id": "64518502-16d8-4bbd-bbdb-7bbcc1e284e6",
+          "kind": "user",
+          "text": "Gemini configuration review. The audit preserves prior records for historical reference. The audit preserves prior records for historical reference. The audit preserves prior records for historical reference. The audit preserves prior records for historical reference. The audit preserves prior records for historical reference. The audit preserves prior records for historical reference. The approved current color is VIOLET. AMBER is retired."
+        }
+      ],
+      "supportIncluded": 0,
+      "supportTotal": 1,
+      "fullSupport": false,
+      "toolCalls": 1
+    },
+    {
+      "case": "beyond-legacy-snippet",
+      "question": "What is Gemini's approved current color?",
+      "expected": "VIOLET",
+      "variant": "legacy-read-trace",
+      "context": [
+        {
+          "tool": "read_evidence",
+          "result": {
+            "id": "ff902dff-9885-48a2-b2db-d73e1e2e2fad",
+            "kind": "user",
+            "text": "Gemini's active color is AMBER.",
+            "offset": 0,
+            "nextOffset": null,
+            "length": 31,
+            "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+            "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+            "createdAt": "2026-10-15T07:27:38.400Z",
+            "detail": {}
+          }
+        },
+        {
+          "tool": "trace_evidence",
+          "result": {
+            "chain": [
+              {
+                "id": "ff902dff-9885-48a2-b2db-d73e1e2e2fad",
+                "kind": "user",
+                "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                "createdAt": "2026-10-15T07:27:38.400Z",
+                "snippet": "Gemini's active color is AMBER.",
+                "detail": {}
+              }
+            ],
+            "challengedBy": [
+              {
+                "id": "64518502-16d8-4bbd-bbdb-7bbcc1e284e6",
+                "kind": "user",
+                "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                "createdAt": "2026-10-15T07:27:38.403Z",
+                "snippet": "Gemini configuration review. The audit preserves prior records for historical reference. The audit preserves prior records for historical reference. The audit preserves prior records for historical reference. The audit preserves prior records for historical reference. The audit preserves prior recor",
+                "detail": {},
+                "relation": "corrects",
+                "target": "ff902dff-9885-48a2-b2db-d73e1e2e2fad",
+                "reason": "Synthetic fixture relation"
+              }
+            ],
+            "unconfirmed": []
+          }
+        }
+      ],
+      "estimate": { "estimatedTokens": 631, "encoding": "o200k_base", "fallback": true },
+      "support": [
+        {
+          "id": "64518502-16d8-4bbd-bbdb-7bbcc1e284e6",
+          "quote": "approved current color is VIOLET"
+        }
+      ],
+      "sources": [
+        {
+          "id": "ff902dff-9885-48a2-b2db-d73e1e2e2fad",
+          "kind": "user",
+          "text": "Gemini's active color is AMBER."
+        },
+        {
+          "id": "64518502-16d8-4bbd-bbdb-7bbcc1e284e6",
+          "kind": "user",
+          "text": "Gemini configuration review. The audit preserves prior records for historical reference. The audit preserves prior records for historical reference. The audit preserves prior records for historical reference. The audit preserves prior records for historical reference. The audit preserves prior records for historical reference. The audit preserves prior records for historical reference. The approved current color is VIOLET. AMBER is retired."
+        }
+      ],
+      "supportIncluded": 0,
+      "supportTotal": 1,
+      "fullSupport": false,
+      "toolCalls": 2
+    },
+    {
+      "case": "beyond-legacy-snippet",
+      "question": "What is Gemini's approved current color?",
+      "expected": "VIOLET",
+      "variant": "structured-read",
+      "context": [
+        {
+          "tool": "read_evidence",
+          "result": {
+            "id": "ff902dff-9885-48a2-b2db-d73e1e2e2fad",
+            "kind": "user",
+            "text": "Gemini's active color is AMBER.",
+            "offset": 0,
+            "nextOffset": null,
+            "length": 31,
+            "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+            "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+            "createdAt": "2026-10-15T07:27:38.400Z",
+            "detail": {},
+            "evidenceContext": {
+              "assessment": { "kind": "recorded_change" },
+              "hasUnconfirmedChanges": false,
+              "provenanceScopeLimited": false,
+              "sourceSpan": { "start": 0, "end": 31, "unit": "utf16" },
+              "provenance": [],
+              "changes": [
+                {
+                  "source": {
+                    "id": "64518502-16d8-4bbd-bbdb-7bbcc1e284e6",
+                    "kind": "user",
+                    "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                    "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+                    "recordedAt": "2026-10-15T07:27:38.403Z",
+                    "detail": {},
+                    "text": "Gemini configuration review. The audit preserves prior records for historical reference. The audit preserves prior records for historical reference. The audit preserves prior records for historical reference. The audit preserves prior records for historical reference. The audit preserves prior records for historical reference. The audit preserves prior records for historical reference. The approved current color is VIOLET. AMBER is retired.",
+                    "span": { "start": 0, "end": 444, "unit": "utf16" },
+                    "nextOffset": null,
+                    "length": 444
+                  },
+                  "targetId": "ff902dff-9885-48a2-b2db-d73e1e2e2fad",
+                  "relation": "corrects",
+                  "status": "applied"
+                }
+              ],
+              "omittedChanges": 0,
+              "omittedProvenance": 0
+            }
+          }
+        }
+      ],
+      "estimate": { "estimatedTokens": 669, "encoding": "o200k_base", "fallback": true },
+      "support": [
+        {
+          "id": "64518502-16d8-4bbd-bbdb-7bbcc1e284e6",
+          "quote": "approved current color is VIOLET"
+        }
+      ],
+      "sources": [
+        {
+          "id": "ff902dff-9885-48a2-b2db-d73e1e2e2fad",
+          "kind": "user",
+          "text": "Gemini's active color is AMBER."
+        },
+        {
+          "id": "64518502-16d8-4bbd-bbdb-7bbcc1e284e6",
+          "kind": "user",
+          "text": "Gemini configuration review. The audit preserves prior records for historical reference. The audit preserves prior records for historical reference. The audit preserves prior records for historical reference. The audit preserves prior records for historical reference. The audit preserves prior records for historical reference. The audit preserves prior records for historical reference. The approved current color is VIOLET. AMBER is retired."
+        }
+      ],
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "toolCalls": 1
+    },
+    {
+      "case": "replacement-later-withdrawn",
+      "question": "What is Helix's currently approved channel?",
+      "expected": "UNKNOWN",
+      "variant": "legacy-read",
+      "context": [
+        {
+          "tool": "read_evidence",
+          "result": {
+            "id": "1ed6987f-8c4c-483a-872e-7873a53bd28b",
+            "kind": "user",
+            "text": "Helix's active channel is SILVER.",
+            "offset": 0,
+            "nextOffset": null,
+            "length": 33,
+            "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+            "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+            "createdAt": "2026-10-15T07:27:38.407Z",
+            "detail": {}
+          }
+        }
+      ],
+      "estimate": { "estimatedTokens": 347, "encoding": "o200k_base", "fallback": true },
+      "support": [
+        {
+          "id": "79cb502f-ca7b-4f5c-b82c-bee5d9f4feee",
+          "quote": "No channel is currently approved"
+        }
+      ],
+      "sources": [
+        {
+          "id": "1ed6987f-8c4c-483a-872e-7873a53bd28b",
+          "kind": "user",
+          "text": "Helix's active channel is SILVER."
+        },
+        {
+          "id": "ed4bbacb-f31d-4077-ab5b-47b2ce5febca",
+          "kind": "user",
+          "text": "Helix's new active channel is GOLD. This retires SILVER; do not revert automatically."
+        },
+        {
+          "id": "79cb502f-ca7b-4f5c-b82c-bee5d9f4feee",
+          "kind": "user",
+          "text": "Withdraw the Helix GOLD decision. No channel is currently approved; SILVER remains retired."
+        }
+      ],
+      "supportIncluded": 0,
+      "supportTotal": 1,
+      "fullSupport": false,
+      "toolCalls": 1
+    },
+    {
+      "case": "replacement-later-withdrawn",
+      "question": "What is Helix's currently approved channel?",
+      "expected": "UNKNOWN",
+      "variant": "legacy-read-trace",
+      "context": [
+        {
+          "tool": "read_evidence",
+          "result": {
+            "id": "1ed6987f-8c4c-483a-872e-7873a53bd28b",
+            "kind": "user",
+            "text": "Helix's active channel is SILVER.",
+            "offset": 0,
+            "nextOffset": null,
+            "length": 33,
+            "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+            "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+            "createdAt": "2026-10-15T07:27:38.407Z",
+            "detail": {}
+          }
+        },
+        {
+          "tool": "trace_evidence",
+          "result": {
+            "chain": [
+              {
+                "id": "1ed6987f-8c4c-483a-872e-7873a53bd28b",
+                "kind": "user",
+                "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                "createdAt": "2026-10-15T07:27:38.407Z",
+                "snippet": "Helix's active channel is SILVER.",
+                "detail": {}
+              }
+            ],
+            "challengedBy": [
+              {
+                "id": "ed4bbacb-f31d-4077-ab5b-47b2ce5febca",
+                "kind": "user",
+                "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                "createdAt": "2026-10-15T07:27:38.417Z",
+                "snippet": "Helix's new active channel is GOLD. This retires SILVER; do not revert automatically.",
+                "detail": {},
+                "relation": "corrects",
+                "target": "1ed6987f-8c4c-483a-872e-7873a53bd28b",
+                "reason": "Synthetic fixture relation"
+              }
+            ],
+            "unconfirmed": []
+          }
+        }
+      ],
+      "estimate": { "estimatedTokens": 609, "encoding": "o200k_base", "fallback": true },
+      "support": [
+        {
+          "id": "79cb502f-ca7b-4f5c-b82c-bee5d9f4feee",
+          "quote": "No channel is currently approved"
+        }
+      ],
+      "sources": [
+        {
+          "id": "1ed6987f-8c4c-483a-872e-7873a53bd28b",
+          "kind": "user",
+          "text": "Helix's active channel is SILVER."
+        },
+        {
+          "id": "ed4bbacb-f31d-4077-ab5b-47b2ce5febca",
+          "kind": "user",
+          "text": "Helix's new active channel is GOLD. This retires SILVER; do not revert automatically."
+        },
+        {
+          "id": "79cb502f-ca7b-4f5c-b82c-bee5d9f4feee",
+          "kind": "user",
+          "text": "Withdraw the Helix GOLD decision. No channel is currently approved; SILVER remains retired."
+        }
+      ],
+      "supportIncluded": 0,
+      "supportTotal": 1,
+      "fullSupport": false,
+      "toolCalls": 2
+    },
+    {
+      "case": "replacement-later-withdrawn",
+      "question": "What is Helix's currently approved channel?",
+      "expected": "UNKNOWN",
+      "variant": "structured-read",
+      "context": [
+        {
+          "tool": "read_evidence",
+          "result": {
+            "id": "1ed6987f-8c4c-483a-872e-7873a53bd28b",
+            "kind": "user",
+            "text": "Helix's active channel is SILVER.",
+            "offset": 0,
+            "nextOffset": null,
+            "length": 33,
+            "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+            "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+            "createdAt": "2026-10-15T07:27:38.407Z",
+            "detail": {},
+            "evidenceContext": {
+              "assessment": { "kind": "recorded_change" },
+              "hasUnconfirmedChanges": false,
+              "provenanceScopeLimited": false,
+              "sourceSpan": { "start": 0, "end": 33, "unit": "utf16" },
+              "provenance": [],
+              "changes": [
+                {
+                  "source": {
+                    "id": "ed4bbacb-f31d-4077-ab5b-47b2ce5febca",
+                    "kind": "user",
+                    "projectId": "5b698344-46da-4be7-8391-32a13e2dc163",
+                    "sessionId": "fe9a22cf-38d1-4445-9839-9a6fade6fcb8",
+                    "recordedAt": "2026-10-15T07:27:38.417Z",
+                    "detail": {},
+                    "text": "Helix's new active channel is GOLD. This retires SILVER; do not revert automatically.",
+                    "span": { "start": 0, "end": 85, "unit": "utf16" },
+                    "nextOffset": null,
+                    "length": 85
+                  },
+                  "targetId": "1ed6987f-8c4c-483a-872e-7873a53bd28b",
+                  "relation": "corrects",
+                  "status": "applied"
+                }
+              ],
+              "omittedChanges": 0,
+              "omittedProvenance": 0
+            }
+          }
+        }
+      ],
+      "estimate": { "estimatedTokens": 618, "encoding": "o200k_base", "fallback": true },
+      "support": [
+        {
+          "id": "79cb502f-ca7b-4f5c-b82c-bee5d9f4feee",
+          "quote": "No channel is currently approved"
+        }
+      ],
+      "sources": [
+        {
+          "id": "1ed6987f-8c4c-483a-872e-7873a53bd28b",
+          "kind": "user",
+          "text": "Helix's active channel is SILVER."
+        },
+        {
+          "id": "ed4bbacb-f31d-4077-ab5b-47b2ce5febca",
+          "kind": "user",
+          "text": "Helix's new active channel is GOLD. This retires SILVER; do not revert automatically."
+        },
+        {
+          "id": "79cb502f-ca7b-4f5c-b82c-bee5d9f4feee",
+          "kind": "user",
+          "text": "Withdraw the Helix GOLD decision. No channel is currently approved; SILVER remains retired."
+        }
+      ],
+      "supportIncluded": 0,
+      "supportTotal": 1,
+      "fullSupport": false,
+      "toolCalls": 1
+    }
+  ],
+  "rows": [
+    {
+      "case": "direct-correction",
+      "variant": "legacy-read",
+      "repeat": 0,
+      "value": "NORTH",
+      "answer": {
+        "value": "NORTH",
+        "explanation": "The only supplied evidence is a user statement setting Atlas's deployment region to NORTH, with no later correction or withdrawal in the provided memory.",
+        "evidence": [
+          {
+            "id": "20f81445-d0d8-4a74-9d81-974fcf16e489",
+            "quote": "Atlas deployment region is NORTH."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"NORTH\",\"explanation\":\"The only supplied evidence is a user statement setting Atlas's deployment region to NORTH, with no later correction or withdrawal in the provided memory.\",\"evidence\":[{\"id\":\"20f81445-d0d8-4a74-9d81-974fcf16e489\",\"quote\":\"Atlas deployment region is NORTH.\"}]}",
+      "usage": { "promptTokens": 470, "completionTokens": 123, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": false,
+      "revokedValueUsed": true,
+      "supportIncluded": 0,
+      "supportTotal": 1,
+      "fullSupport": false,
+      "citedSupport": 0,
+      "validCitations": 1,
+      "citationCount": 1,
+      "estimatedInputTokens": 342,
+      "durationMs": 57044
+    },
+    {
+      "case": "direct-correction",
+      "variant": "legacy-read-trace",
+      "repeat": 0,
+      "value": "SOUTH",
+      "answer": {
+        "value": "SOUTH",
+        "explanation": "The original user statement set Atlas's deployment region to NORTH, but a later user correction explicitly targeting that statement set the region to SOUTH and retired NORTH. The correction is the most recent user decision, so SOUTH is current.",
+        "evidence": [
+          {
+            "id": "20f81445-d0d8-4a74-9d81-974fcf16e489",
+            "quote": "Atlas deployment region is NORTH."
+          },
+          {
+            "id": "380e29a2-4571-46b9-a18d-5c320df36630",
+            "quote": "Correction for Atlas: deployment region is SOUTH. NORTH is retired."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"SOUTH\",\"explanation\":\"The original user statement set Atlas's deployment region to NORTH, but a later user correction explicitly targeting that statement set the region to SOUTH and retired NORTH. The correction is the most recent user decision, so SOUTH is current.\",\"evidence\":[{\"id\":\"20f81445-d0d8-4a74-9d81-974fcf16e489\",\"quote\":\"Atlas deployment region is NORTH.\"},{\"id\":\"380e29a2-4571-46b9-a18d-5c320df36630\",\"quote\":\"Correction for Atlas: deployment region is SOUTH. NORTH is retired.\"}]}",
+      "usage": { "promptTokens": 808, "completionTokens": 227, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "citedSupport": 1,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 592,
+      "durationMs": 8925
+    },
+    {
+      "case": "direct-correction",
+      "variant": "structured-read",
+      "repeat": 0,
+      "value": "SOUTH",
+      "answer": {
+        "value": "SOUTH",
+        "explanation": "The user initially stated Atlas's deployment region was NORTH, then issued an applied correction specifying SOUTH and retiring NORTH. The correction targets the original statement directly, so the current value is SOUTH.",
+        "evidence": [
+          {
+            "id": "20f81445-d0d8-4a74-9d81-974fcf16e489",
+            "quote": "Atlas deployment region is NORTH."
+          },
+          {
+            "id": "380e29a2-4571-46b9-a18d-5c320df36630",
+            "quote": "Correction for Atlas: deployment region is SOUTH. NORTH is retired."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"SOUTH\",\"explanation\":\"The user initially stated Atlas's deployment region was NORTH, then issued an applied correction specifying SOUTH and retiring NORTH. The correction targets the original statement directly, so the current value is SOUTH.\",\"evidence\":[{\"id\":\"20f81445-d0d8-4a74-9d81-974fcf16e489\",\"quote\":\"Atlas deployment region is NORTH.\"},{\"id\":\"380e29a2-4571-46b9-a18d-5c320df36630\",\"quote\":\"Correction for Atlas: deployment region is SOUTH. NORTH is retired.\"}]}",
+      "usage": { "promptTokens": 839, "completionTokens": 221, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "citedSupport": 1,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 605,
+      "durationMs": 8165
+    },
+    {
+      "case": "withdrawal",
+      "variant": "legacy-read-trace",
+      "repeat": 0,
+      "value": "UNKNOWN",
+      "answer": {
+        "value": "UNKNOWN",
+        "explanation": "The LOCAL storage mode decision was explicitly withdrawn by the user with no replacement approved, so no storage mode is currently in force.",
+        "evidence": [
+          {
+            "id": "25871fdb-cf7d-4397-91fa-95d2796a3385",
+            "quote": "Boreal storage mode is LOCAL."
+          },
+          {
+            "id": "f0fc1297-94f6-44a5-aa5d-17078f520ced",
+            "quote": "Withdraw Boreal's LOCAL storage decision. No replacement storage mode has been approved."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"UNKNOWN\",\"explanation\":\"The LOCAL storage mode decision was explicitly withdrawn by the user with no replacement approved, so no storage mode is currently in force.\",\"evidence\":[{\"id\":\"25871fdb-cf7d-4397-91fa-95d2796a3385\",\"quote\":\"Boreal storage mode is LOCAL.\"},{\"id\":\"f0fc1297-94f6-44a5-aa5d-17078f520ced\",\"quote\":\"Withdraw Boreal's LOCAL storage decision. No replacement storage mode has been approved.\"}]}",
+      "usage": { "promptTokens": 821, "completionTokens": 194, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "citedSupport": 1,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 599,
+      "durationMs": 9258
+    },
+    {
+      "case": "withdrawal",
+      "variant": "structured-read",
+      "repeat": 0,
+      "value": "UNKNOWN",
+      "answer": {
+        "value": "UNKNOWN",
+        "explanation": "The original decision setting Boreal's storage mode to LOCAL was explicitly withdrawn by a later applied retraction, and the evidence states no replacement storage mode has been approved. No currently approved value is established.",
+        "evidence": [
+          {
+            "id": "25871fdb-cf7d-4397-91fa-95d2796a3385",
+            "quote": "Boreal storage mode is LOCAL."
+          },
+          {
+            "id": "f0fc1297-94f6-44a5-aa5d-17078f520ced",
+            "quote": "Withdraw Boreal's LOCAL storage decision. No replacement storage mode has been approved."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"UNKNOWN\",\"explanation\":\"The original decision setting Boreal's storage mode to LOCAL was explicitly withdrawn by a later applied retraction, and the evidence states no replacement storage mode has been approved. No currently approved value is established.\",\"evidence\":[{\"id\":\"25871fdb-cf7d-4397-91fa-95d2796a3385\",\"quote\":\"Boreal storage mode is LOCAL.\"},{\"id\":\"f0fc1297-94f6-44a5-aa5d-17078f520ced\",\"quote\":\"Withdraw Boreal's LOCAL storage decision. No replacement storage mode has been approved.\"}]}",
+      "usage": { "promptTokens": 851, "completionTokens": 241, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "citedSupport": 1,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 611,
+      "durationMs": 3668
+    },
+    {
+      "case": "withdrawal",
+      "variant": "legacy-read",
+      "repeat": 0,
+      "value": "LOCAL",
+      "answer": {
+        "value": "LOCAL",
+        "explanation": "The only supplied evidence is a user statement setting Boreal's storage mode to LOCAL, with no later correction or withdrawal in the provided memory.",
+        "evidence": [
+          { "id": "25871fdb-cf7d-4397-91fa-95d2796a3385", "quote": "Boreal storage mode is LOCAL." }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"LOCAL\",\"explanation\":\"The only supplied evidence is a user statement setting Boreal's storage mode to LOCAL, with no later correction or withdrawal in the provided memory.\",\"evidence\":[{\"id\":\"25871fdb-cf7d-4397-91fa-95d2796a3385\",\"quote\":\"Boreal storage mode is LOCAL.\"}]}",
+      "usage": { "promptTokens": 474, "completionTokens": 126, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": false,
+      "revokedValueUsed": true,
+      "supportIncluded": 0,
+      "supportTotal": 1,
+      "fullSupport": false,
+      "citedSupport": 0,
+      "validCitations": 1,
+      "citationCount": 1,
+      "estimatedInputTokens": 345,
+      "durationMs": 2788
+    },
+    {
+      "case": "conditional-scope",
+      "variant": "structured-read",
+      "repeat": 0,
+      "value": "7412",
+      "answer": {
+        "value": "7412",
+        "explanation": "The user initially set both production and staging cache ports to 7412, then issued an applied correction scoped only to staging (changed to 8623), explicitly stating production remains 7412.",
+        "evidence": [
+          {
+            "id": "624a21e9-8e36-419a-93bf-3e682be64df5",
+            "quote": "Cygnus: production cache port is 7412; staging cache port is 7412."
+          },
+          {
+            "id": "902415a2-4835-4273-baf8-5301d4bc009f",
+            "quote": "Cygnus correction: only staging cache port changes to 8623. Production cache port remains 7412."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"7412\",\"explanation\":\"The user initially set both production and staging cache ports to 7412, then issued an applied correction scoped only to staging (changed to 8623), explicitly stating production remains 7412.\",\"evidence\":[{\"id\":\"624a21e9-8e36-419a-93bf-3e682be64df5\",\"quote\":\"Cygnus: production cache port is 7412; staging cache port is 7412.\"},{\"id\":\"902415a2-4835-4273-baf8-5301d4bc009f\",\"quote\":\"Cygnus correction: only staging cache port changes to 8623. Production cache port remains 7412.\"}]}",
+      "usage": { "promptTokens": 853, "completionTokens": 214, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "citedSupport": 1,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 631,
+      "durationMs": 4119
+    },
+    {
+      "case": "conditional-scope",
+      "variant": "legacy-read",
+      "repeat": 0,
+      "value": "7412",
+      "answer": {
+        "value": "7412",
+        "explanation": "The only supplied evidence is a user statement setting Cygnus's production cache port to 7412 (staging also 7412), with no later correction or withdrawal recorded.",
+        "evidence": [
+          {
+            "id": "624a21e9-8e36-419a-93bf-3e682be64df5",
+            "quote": "Cygnus: production cache port is 7412; staging cache port is 7412."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"7412\",\"explanation\":\"The only supplied evidence is a user statement setting Cygnus's production cache port to 7412 (staging also 7412), with no later correction or withdrawal recorded.\",\"evidence\":[{\"id\":\"624a21e9-8e36-419a-93bf-3e682be64df5\",\"quote\":\"Cygnus: production cache port is 7412; staging cache port is 7412.\"}]}",
+      "usage": { "promptTokens": 481, "completionTokens": 171, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 0,
+      "supportTotal": 1,
+      "fullSupport": false,
+      "citedSupport": 0,
+      "validCitations": 1,
+      "citationCount": 1,
+      "estimatedInputTokens": 359,
+      "durationMs": 3550
+    },
+    {
+      "case": "conditional-scope",
+      "variant": "legacy-read-trace",
+      "repeat": 0,
+      "value": "7412",
+      "answer": {
+        "value": "7412",
+        "explanation": "The initial user statement set both production and staging cache ports to 7412. The subsequent correction explicitly targeted only the staging port (changed to 8623) and affirmed that production remains 7412.",
+        "evidence": [
+          {
+            "id": "624a21e9-8e36-419a-93bf-3e682be64df5",
+            "quote": "Cygnus: production cache port is 7412; staging cache port is 7412."
+          },
+          {
+            "id": "902415a2-4835-4273-baf8-5301d4bc009f",
+            "quote": "only staging cache port changes to 8623. Production cache port remains 7412."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"7412\",\"explanation\":\"The initial user statement set both production and staging cache ports to 7412. The subsequent correction explicitly targeted only the staging port (changed to 8623) and affirmed that production remains 7412.\",\"evidence\":[{\"id\":\"624a21e9-8e36-419a-93bf-3e682be64df5\",\"quote\":\"Cygnus: production cache port is 7412; staging cache port is 7412.\"},{\"id\":\"902415a2-4835-4273-baf8-5301d4bc009f\",\"quote\":\"only staging cache port changes to 8623. Production cache port remains 7412.\"}]}",
+      "usage": { "promptTokens": 832, "completionTokens": 202, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "citedSupport": 1,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 632,
+      "durationMs": 3439
+    },
+    {
+      "case": "unconfirmed-proposal",
+      "variant": "legacy-read",
+      "repeat": 0,
+      "value": "8",
+      "answer": {
+        "value": "8",
+        "explanation": "The only supplied evidence is a user statement setting Delta's approved worker limit at 8, with no later correction or withdrawal in the provided memory.",
+        "evidence": [
+          {
+            "id": "ec42a765-417f-413a-9956-d6f2640ecbed",
+            "quote": "Delta's approved worker limit is 8."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"8\",\"explanation\":\"The only supplied evidence is a user statement setting Delta's approved worker limit at 8, with no later correction or withdrawal in the provided memory.\",\"evidence\":[{\"id\":\"ec42a765-417f-413a-9956-d6f2640ecbed\",\"quote\":\"Delta's approved worker limit is 8.\"}]}",
+      "usage": { "promptTokens": 471, "completionTokens": 118, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 1,
+      "supportTotal": 2,
+      "fullSupport": false,
+      "citedSupport": 1,
+      "validCitations": 1,
+      "citationCount": 1,
+      "estimatedInputTokens": 343,
+      "durationMs": 2981
+    },
+    {
+      "case": "unconfirmed-proposal",
+      "variant": "legacy-read-trace",
+      "repeat": 0,
+      "value": "8",
+      "answer": {
+        "value": "8",
+        "explanation": "The user decision establishes Delta's approved worker limit as 8. A later message proposes raising it to 16 but explicitly states it is only a proposal and should not be applied, so the approved limit remains 8.",
+        "evidence": [
+          {
+            "id": "ec42a765-417f-413a-9956-d6f2640ecbed",
+            "quote": "Delta's approved worker limit is 8."
+          },
+          {
+            "id": "39047423-cbfe-4a43-8ef1-8994de104a57",
+            "quote": "Maybe raise Delta's worker limit to 16. This is only a proposal; do not apply it yet."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"8\",\"explanation\":\"The user decision establishes Delta's approved worker limit as 8. A later message proposes raising it to 16 but explicitly states it is only a proposal and should not be applied, so the approved limit remains 8.\",\"evidence\":[{\"id\":\"ec42a765-417f-413a-9956-d6f2640ecbed\",\"quote\":\"Delta's approved worker limit is 8.\"},{\"id\":\"39047423-cbfe-4a43-8ef1-8994de104a57\",\"quote\":\"Maybe raise Delta's worker limit to 16. This is only a proposal; do not apply it yet.\"}]}",
+      "usage": { "promptTokens": 818, "completionTokens": 205, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 2,
+      "supportTotal": 2,
+      "fullSupport": true,
+      "citedSupport": 2,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 599,
+      "durationMs": 3651
+    },
+    {
+      "case": "unconfirmed-proposal",
+      "variant": "structured-read",
+      "repeat": 0,
+      "value": "8",
+      "answer": {
+        "value": "8",
+        "explanation": "The user stated Delta's approved worker limit is 8. A later message proposes raising it to 16 but explicitly says it is only a proposal and should not be applied; that change remains unconfirmed, so the approved value stands at 8.",
+        "evidence": [
+          {
+            "id": "ec42a765-417f-413a-9956-d6f2640ecbed",
+            "quote": "Delta's approved worker limit is 8."
+          },
+          {
+            "id": "39047423-cbfe-4a43-8ef1-8994de104a57",
+            "quote": "Maybe raise Delta's worker limit to 16. This is only a proposal; do not apply it yet."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"8\",\"explanation\":\"The user stated Delta's approved worker limit is 8. A later message proposes raising it to 16 but explicitly says it is only a proposal and should not be applied; that change remains unconfirmed, so the approved value stands at 8.\",\"evidence\":[{\"id\":\"ec42a765-417f-413a-9956-d6f2640ecbed\",\"quote\":\"Delta's approved worker limit is 8.\"},{\"id\":\"39047423-cbfe-4a43-8ef1-8994de104a57\",\"quote\":\"Maybe raise Delta's worker limit to 16. This is only a proposal; do not apply it yet.\"}]}",
+      "usage": { "promptTokens": 849, "completionTokens": 239, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 2,
+      "supportTotal": 2,
+      "fullSupport": true,
+      "citedSupport": 2,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 610,
+      "durationMs": 3394
+    },
+    {
+      "case": "historical-question",
+      "variant": "legacy-read-trace",
+      "repeat": 0,
+      "value": "ALPHA",
+      "answer": {
+        "value": "ALPHA",
+        "explanation": "The October 1 approved release channel was ALPHA; the October 8 correction changed it to BETA only from October 8 onward, so the pre-change historical value remains ALPHA.",
+        "evidence": [
+          {
+            "id": "db16171a-907b-4ba0-9294-4faa6ddef4d6",
+            "quote": "Echo's initial release channel, approved on October 1, was ALPHA."
+          },
+          {
+            "id": "ec6d17e5-5cd5-4777-9d50-e052bef95e0d",
+            "quote": "On October 8 Echo's release channel changes to BETA. This supersedes the October 1 ALPHA decision from October 8 onward."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"ALPHA\",\"explanation\":\"The October 1 approved release channel was ALPHA; the October 8 correction changed it to BETA only from October 8 onward, so the pre-change historical value remains ALPHA.\",\"evidence\":[{\"id\":\"db16171a-907b-4ba0-9294-4faa6ddef4d6\",\"quote\":\"Echo's initial release channel, approved on October 1, was ALPHA.\"},{\"id\":\"ec6d17e5-5cd5-4777-9d50-e052bef95e0d\",\"quote\":\"On October 8 Echo's release channel changes to BETA. This supersedes the October 1 ALPHA decision from October 8 onward.\"}]}",
+      "usage": { "promptTokens": 863, "completionTokens": 227, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "citedSupport": 1,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 641,
+      "durationMs": 3228
+    },
+    {
+      "case": "historical-question",
+      "variant": "structured-read",
+      "repeat": 0,
+      "value": "ALPHA",
+      "answer": {
+        "value": "ALPHA",
+        "explanation": "The user stated Echo's initial release channel approved October 1 was ALPHA. The October 8 change to BETA supersedes it only from October 8 onward, so the October 1 approved value remains ALPHA.",
+        "evidence": [
+          {
+            "id": "db16171a-907b-4ba0-9294-4faa6ddef4d6",
+            "quote": "Echo's initial release channel, approved on October 1, was ALPHA."
+          },
+          {
+            "id": "ec6d17e5-5cd5-4777-9d50-e052bef95e0d",
+            "quote": "This supersedes the October 1 ALPHA decision from October 8 onward."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"ALPHA\",\"explanation\":\"The user stated Echo's initial release channel approved October 1 was ALPHA. The October 8 change to BETA supersedes it only from October 8 onward, so the October 1 approved value remains ALPHA.\",\"evidence\":[{\"id\":\"db16171a-907b-4ba0-9294-4faa6ddef4d6\",\"quote\":\"Echo's initial release channel, approved on October 1, was ALPHA.\"},{\"id\":\"ec6d17e5-5cd5-4777-9d50-e052bef95e0d\",\"quote\":\"This supersedes the October 1 ALPHA decision from October 8 onward.\"}]}",
+      "usage": { "promptTokens": 883, "completionTokens": 218, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "citedSupport": 1,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 644,
+      "durationMs": 3438
+    },
+    {
+      "case": "historical-question",
+      "variant": "legacy-read",
+      "repeat": 0,
+      "value": "ALPHA",
+      "answer": {
+        "value": "ALPHA",
+        "explanation": "The user stated Echo's initial release channel approved on October 1 was ALPHA; the question asks for that historical value prior to the October 8 change, so the later change does not affect it.",
+        "evidence": [
+          {
+            "id": "db16171a-907b-4ba0-9294-4faa6ddef4d6",
+            "quote": "Echo's initial release channel, approved on October 1, was ALPHA."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"ALPHA\",\"explanation\":\"The user stated Echo's initial release channel approved on October 1 was ALPHA; the question asks for that historical value prior to the October 8 change, so the later change does not affect it.\",\"evidence\":[{\"id\":\"db16171a-907b-4ba0-9294-4faa6ddef4d6\",\"quote\":\"Echo's initial release channel, approved on October 1, was ALPHA.\"}]}",
+      "usage": { "promptTokens": 492, "completionTokens": 175, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "citedSupport": 1,
+      "validCitations": 1,
+      "citationCount": 1,
+      "estimatedInputTokens": 363,
+      "durationMs": 3048
+    },
+    {
+      "case": "changed-ancestor",
+      "variant": "structured-read",
+      "repeat": 0,
+      "value": "UNKNOWN",
+      "answer": {
+        "value": "UNKNOWN",
+        "explanation": "The only recorded port (9534) is Foxtrot's staging cache port. The user then corrected the request to target production and explicitly stated the production cache port has not been read or recorded, so no production value is established.",
+        "evidence": [
+          {
+            "id": "bf415a74-b2e4-4c57-8754-c766d4e86696",
+            "quote": "Foxtrot staging cache port is 9534."
+          },
+          {
+            "id": "b7031fbb-823f-4e39-b5ad-83f3a48e7380",
+            "quote": "Foxtrot correction: I meant production. The production cache port has not been read or recorded yet."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"UNKNOWN\",\"explanation\":\"The only recorded port (9534) is Foxtrot's staging cache port. The user then corrected the request to target production and explicitly stated the production cache port has not been read or recorded, so no production value is established.\",\"evidence\":[{\"id\":\"bf415a74-b2e4-4c57-8754-c766d4e86696\",\"quote\":\"Foxtrot staging cache port is 9534.\"},{\"id\":\"b7031fbb-823f-4e39-b5ad-83f3a48e7380\",\"quote\":\"Foxtrot correction: I meant production. The production cache port has not been read or recorded yet.\"}]}",
+      "usage": { "promptTokens": 1398, "completionTokens": 211, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 2,
+      "supportTotal": 2,
+      "fullSupport": true,
+      "citedSupport": 2,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 1050,
+      "durationMs": 3655
+    },
+    {
+      "case": "changed-ancestor",
+      "variant": "legacy-read",
+      "repeat": 0,
+      "value": "UNKNOWN",
+      "answer": {
+        "value": "UNKNOWN",
+        "explanation": "The only supplied evidence gives Foxtrot's staging cache port (9534), not the production cache port. No production value is established in the evidence.",
+        "evidence": [
+          {
+            "id": "bf415a74-b2e4-4c57-8754-c766d4e86696",
+            "quote": "Foxtrot staging cache port is 9534."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"UNKNOWN\",\"explanation\":\"The only supplied evidence gives Foxtrot's staging cache port (9534), not the production cache port. No production value is established in the evidence.\",\"evidence\":[{\"id\":\"bf415a74-b2e4-4c57-8754-c766d4e86696\",\"quote\":\"Foxtrot staging cache port is 9534.\"}]}",
+      "usage": { "promptTokens": 481, "completionTokens": 124, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 1,
+      "supportTotal": 2,
+      "fullSupport": false,
+      "citedSupport": 1,
+      "validCitations": 1,
+      "citationCount": 1,
+      "estimatedInputTokens": 351,
+      "durationMs": 3365
+    },
+    {
+      "case": "changed-ancestor",
+      "variant": "legacy-read-trace",
+      "repeat": 0,
+      "value": "UNKNOWN",
+      "answer": {
+        "value": "UNKNOWN",
+        "explanation": "The only recorded port (9534) is for Foxtrot staging. The user corrected the request target to production and explicitly stated the production cache port has not been read or recorded, so no value is established.",
+        "evidence": [
+          {
+            "id": "bf415a74-b2e4-4c57-8754-c766d4e86696",
+            "quote": "Foxtrot staging cache port is 9534."
+          },
+          {
+            "id": "b7031fbb-823f-4e39-b5ad-83f3a48e7380",
+            "quote": "Foxtrot correction: I meant production. The production cache port has not been read or recorded yet."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"UNKNOWN\",\"explanation\":\"The only recorded port (9534) is for Foxtrot staging. The user corrected the request target to production and explicitly stated the production cache port has not been read or recorded, so no value is established.\",\"evidence\":[{\"id\":\"bf415a74-b2e4-4c57-8754-c766d4e86696\",\"quote\":\"Foxtrot staging cache port is 9534.\"},{\"id\":\"b7031fbb-823f-4e39-b5ad-83f3a48e7380\",\"quote\":\"Foxtrot correction: I meant production. The production cache port has not been read or recorded yet.\"}]}",
+      "usage": { "promptTokens": 1165, "completionTokens": 206, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 2,
+      "supportTotal": 2,
+      "fullSupport": true,
+      "citedSupport": 2,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 880,
+      "durationMs": 3496
+    },
+    {
+      "case": "beyond-legacy-snippet",
+      "variant": "legacy-read",
+      "repeat": 0,
+      "value": "AMBER",
+      "answer": {
+        "value": "AMBER",
+        "explanation": "The only supplied evidence is a user statement setting Gemini's active color to AMBER, with no later correction or withdrawal in the provided memory.",
+        "evidence": [
+          {
+            "id": "ff902dff-9885-48a2-b2db-d73e1e2e2fad",
+            "quote": "Gemini's active color is AMBER."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"AMBER\",\"explanation\":\"The only supplied evidence is a user statement setting Gemini's active color to AMBER, with no later correction or withdrawal in the provided memory.\",\"evidence\":[{\"id\":\"ff902dff-9885-48a2-b2db-d73e1e2e2fad\",\"quote\":\"Gemini's active color is AMBER.\"}]}",
+      "usage": { "promptTokens": 470, "completionTokens": 122, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": false,
+      "revokedValueUsed": true,
+      "supportIncluded": 0,
+      "supportTotal": 1,
+      "fullSupport": false,
+      "citedSupport": 0,
+      "validCitations": 1,
+      "citationCount": 1,
+      "estimatedInputTokens": 345,
+      "durationMs": 2686
+    },
+    {
+      "case": "beyond-legacy-snippet",
+      "variant": "legacy-read-trace",
+      "repeat": 0,
+      "value": "UNKNOWN",
+      "answer": {
+        "value": "UNKNOWN",
+        "explanation": "The only stated value (AMBER) is the subject of a later correcting record, and that correcting record's available text contains no replacement color — only a note that prior records are preserved for historical reference. With the original superseded and no new value established, the approved current color is unresolved.",
+        "evidence": [
+          {
+            "id": "ff902dff-9885-48a2-b2db-d73e1e2e2fad",
+            "quote": "Gemini's active color is AMBER."
+          },
+          {
+            "id": "64518502-16d8-4bbd-bbdb-7bbcc1e284e6",
+            "quote": "Gemini configuration review. The audit preserves prior records for historical reference."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"UNKNOWN\",\"explanation\":\"The only stated value (AMBER) is the subject of a later correcting record, and that correcting record's available text contains no replacement color — only a note that prior records are preserved for historical reference. With the original superseded and no new value established, the approved current color is unresolved.\",\"evidence\":[{\"id\":\"ff902dff-9885-48a2-b2db-d73e1e2e2fad\",\"quote\":\"Gemini's active color is AMBER.\"},{\"id\":\"64518502-16d8-4bbd-bbdb-7bbcc1e284e6\",\"quote\":\"Gemini configuration review. The audit preserves prior records for historical reference.\"}]}",
+      "usage": { "promptTokens": 867, "completionTokens": 277, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": false,
+      "revokedValueUsed": false,
+      "supportIncluded": 0,
+      "supportTotal": 1,
+      "fullSupport": false,
+      "citedSupport": 0,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 631,
+      "durationMs": 4708
+    },
+    {
+      "case": "beyond-legacy-snippet",
+      "variant": "structured-read",
+      "repeat": 0,
+      "value": "VIOLET",
+      "answer": {
+        "value": "VIOLET",
+        "explanation": "The original record stating AMBER was corrected by an applied user change from a configuration review, which designates VIOLET as the approved current color and explicitly retires AMBER.",
+        "evidence": [
+          {
+            "id": "64518502-16d8-4bbd-bbdb-7bbcc1e284e6",
+            "quote": "The approved current color is VIOLET. AMBER is retired."
+          },
+          {
+            "id": "ff902dff-9885-48a2-b2db-d73e1e2e2fad",
+            "quote": "Gemini's active color is AMBER."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"VIOLET\",\"explanation\":\"The original record stating AMBER was corrected by an applied user change from a configuration review, which designates VIOLET as the approved current color and explicitly retires AMBER.\",\"evidence\":[{\"id\":\"64518502-16d8-4bbd-bbdb-7bbcc1e284e6\",\"quote\":\"The approved current color is VIOLET. AMBER is retired.\"},{\"id\":\"ff902dff-9885-48a2-b2db-d73e1e2e2fad\",\"quote\":\"Gemini's active color is AMBER.\"}]}",
+      "usage": { "promptTokens": 937, "completionTokens": 213, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "citedSupport": 1,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 669,
+      "durationMs": 4361
+    },
+    {
+      "case": "replacement-later-withdrawn",
+      "variant": "legacy-read-trace",
+      "repeat": 0,
+      "value": "GOLD",
+      "answer": {
+        "value": "GOLD",
+        "explanation": "The initial user statement set Helix's active channel to SILVER, but a later user correction explicitly replaced it with GOLD and retired SILVER, with no further challenges recorded.",
+        "evidence": [
+          {
+            "id": "1ed6987f-8c4c-483a-872e-7873a53bd28b",
+            "quote": "Helix's active channel is SILVER."
+          },
+          {
+            "id": "ed4bbacb-f31d-4077-ab5b-47b2ce5febca",
+            "quote": "Helix's new active channel is GOLD. This retires SILVER; do not revert automatically."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"GOLD\",\"explanation\":\"The initial user statement set Helix's active channel to SILVER, but a later user correction explicitly replaced it with GOLD and retired SILVER, with no further challenges recorded.\",\"evidence\":[{\"id\":\"1ed6987f-8c4c-483a-872e-7873a53bd28b\",\"quote\":\"Helix's active channel is SILVER.\"},{\"id\":\"ed4bbacb-f31d-4077-ab5b-47b2ce5febca\",\"quote\":\"Helix's new active channel is GOLD. This retires SILVER; do not revert automatically.\"}]}",
+      "usage": { "promptTokens": 816, "completionTokens": 201, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": false,
+      "revokedValueUsed": true,
+      "supportIncluded": 0,
+      "supportTotal": 1,
+      "fullSupport": false,
+      "citedSupport": 0,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 609,
+      "durationMs": 3285
+    },
+    {
+      "case": "replacement-later-withdrawn",
+      "variant": "structured-read",
+      "repeat": 0,
+      "value": "GOLD",
+      "answer": {
+        "value": "GOLD",
+        "explanation": "The original record set Helix's active channel to SILVER, but a later user statement applied a correction retiring SILVER in favor of GOLD, with no further changes or reversion.",
+        "evidence": [
+          {
+            "id": "1ed6987f-8c4c-483a-872e-7873a53bd28b",
+            "quote": "Helix's active channel is SILVER."
+          },
+          {
+            "id": "ed4bbacb-f31d-4077-ab5b-47b2ce5febca",
+            "quote": "Helix's new active channel is GOLD. This retires SILVER; do not revert automatically."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"GOLD\",\"explanation\":\"The original record set Helix's active channel to SILVER, but a later user statement applied a correction retiring SILVER in favor of GOLD, with no further changes or reversion.\",\"evidence\":[{\"id\":\"1ed6987f-8c4c-483a-872e-7873a53bd28b\",\"quote\":\"Helix's active channel is SILVER.\"},{\"id\":\"ed4bbacb-f31d-4077-ab5b-47b2ce5febca\",\"quote\":\"Helix's new active channel is GOLD. This retires SILVER; do not revert automatically.\"}]}",
+      "usage": { "promptTokens": 847, "completionTokens": 211, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": false,
+      "revokedValueUsed": true,
+      "supportIncluded": 0,
+      "supportTotal": 1,
+      "fullSupport": false,
+      "citedSupport": 0,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 618,
+      "durationMs": 3439
+    },
+    {
+      "case": "replacement-later-withdrawn",
+      "variant": "legacy-read",
+      "repeat": 0,
+      "value": "SILVER",
+      "answer": {
+        "value": "SILVER",
+        "explanation": "The only supplied evidence is a user statement establishing Helix's active channel as SILVER, with no later correction or withdrawal in the provided memory.",
+        "evidence": [
+          {
+            "id": "1ed6987f-8c4c-483a-872e-7873a53bd28b",
+            "quote": "Helix's active channel is SILVER."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"SILVER\",\"explanation\":\"The only supplied evidence is a user statement establishing Helix's active channel as SILVER, with no later correction or withdrawal in the provided memory.\",\"evidence\":[{\"id\":\"1ed6987f-8c4c-483a-872e-7873a53bd28b\",\"quote\":\"Helix's active channel is SILVER.\"}]}",
+      "usage": { "promptTokens": 470, "completionTokens": 122, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": false,
+      "revokedValueUsed": true,
+      "supportIncluded": 0,
+      "supportTotal": 1,
+      "fullSupport": false,
+      "citedSupport": 0,
+      "validCitations": 1,
+      "citationCount": 1,
+      "estimatedInputTokens": 347,
+      "durationMs": 2921
+    },
+    {
+      "case": "direct-correction",
+      "variant": "legacy-read-trace",
+      "repeat": 1,
+      "value": "SOUTH",
+      "answer": {
+        "value": "SOUTH",
+        "explanation": "The original user statement set Atlas's deployment region to NORTH, but a later user correction targeting that same statement changed it to SOUTH and declared NORTH retired. No further challenges exist, so SOUTH is the current value.",
+        "evidence": [
+          {
+            "id": "20f81445-d0d8-4a74-9d81-974fcf16e489",
+            "quote": "Atlas deployment region is NORTH."
+          },
+          {
+            "id": "380e29a2-4571-46b9-a18d-5c320df36630",
+            "quote": "Correction for Atlas: deployment region is SOUTH. NORTH is retired."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"SOUTH\",\"explanation\":\"The original user statement set Atlas's deployment region to NORTH, but a later user correction targeting that same statement changed it to SOUTH and declared NORTH retired. No further challenges exist, so SOUTH is the current value.\",\"evidence\":[{\"id\":\"20f81445-d0d8-4a74-9d81-974fcf16e489\",\"quote\":\"Atlas deployment region is NORTH.\"},{\"id\":\"380e29a2-4571-46b9-a18d-5c320df36630\",\"quote\":\"Correction for Atlas: deployment region is SOUTH. NORTH is retired.\"}]}",
+      "usage": { "promptTokens": 808, "completionTokens": 224, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "citedSupport": 1,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 592,
+      "durationMs": 3588
+    },
+    {
+      "case": "direct-correction",
+      "variant": "structured-read",
+      "repeat": 1,
+      "value": "SOUTH",
+      "answer": {
+        "value": "SOUTH",
+        "explanation": "The original user statement set Atlas's deployment region to NORTH, but a subsequent user correction targeting that statement changed it to SOUTH and retired NORTH. The correction is recorded as applied, so SOUTH is the current value.",
+        "evidence": [
+          {
+            "id": "20f81445-d0d8-4a74-9d81-974fcf16e489",
+            "quote": "Atlas deployment region is NORTH."
+          },
+          {
+            "id": "380e29a2-4571-46b9-a18d-5c320df36630",
+            "quote": "Correction for Atlas: deployment region is SOUTH. NORTH is retired."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"SOUTH\",\"explanation\":\"The original user statement set Atlas's deployment region to NORTH, but a subsequent user correction targeting that statement changed it to SOUTH and retired NORTH. The correction is recorded as applied, so SOUTH is the current value.\",\"evidence\":[{\"id\":\"20f81445-d0d8-4a74-9d81-974fcf16e489\",\"quote\":\"Atlas deployment region is NORTH.\"},{\"id\":\"380e29a2-4571-46b9-a18d-5c320df36630\",\"quote\":\"Correction for Atlas: deployment region is SOUTH. NORTH is retired.\"}]}",
+      "usage": { "promptTokens": 839, "completionTokens": 213, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "citedSupport": 1,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 605,
+      "durationMs": 3406
+    },
+    {
+      "case": "direct-correction",
+      "variant": "legacy-read",
+      "repeat": 1,
+      "value": "NORTH",
+      "answer": {
+        "value": "NORTH",
+        "explanation": "The user explicitly stated Atlas's deployment region as NORTH, and no later correction or withdrawal appears in the supplied evidence.",
+        "evidence": [
+          {
+            "id": "20f81445-d0d8-4a74-9d81-974fcf16e489",
+            "quote": "Atlas deployment region is NORTH."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"NORTH\",\"explanation\":\"The user explicitly stated Atlas's deployment region as NORTH, and no later correction or withdrawal appears in the supplied evidence.\",\"evidence\":[{\"id\":\"20f81445-d0d8-4a74-9d81-974fcf16e489\",\"quote\":\"Atlas deployment region is NORTH.\"}]}",
+      "usage": { "promptTokens": 470, "completionTokens": 120, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": false,
+      "revokedValueUsed": true,
+      "supportIncluded": 0,
+      "supportTotal": 1,
+      "fullSupport": false,
+      "citedSupport": 0,
+      "validCitations": 1,
+      "citationCount": 1,
+      "estimatedInputTokens": 342,
+      "durationMs": 2874
+    },
+    {
+      "case": "withdrawal",
+      "variant": "structured-read",
+      "repeat": 1,
+      "value": "UNKNOWN",
+      "answer": {
+        "value": "UNKNOWN",
+        "explanation": "The LOCAL storage mode decision was explicitly withdrawn by the user, and the withdrawal states no replacement mode has been approved. The retraction is recorded as applied, so no current approved storage mode is established.",
+        "evidence": [
+          {
+            "id": "25871fdb-cf7d-4397-91fa-95d2796a3385",
+            "quote": "Boreal storage mode is LOCAL."
+          },
+          {
+            "id": "f0fc1297-94f6-44a5-aa5d-17078f520ced",
+            "quote": "Withdraw Boreal's LOCAL storage decision. No replacement storage mode has been approved."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"UNKNOWN\",\"explanation\":\"The LOCAL storage mode decision was explicitly withdrawn by the user, and the withdrawal states no replacement mode has been approved. The retraction is recorded as applied, so no current approved storage mode is established.\",\"evidence\":[{\"id\":\"25871fdb-cf7d-4397-91fa-95d2796a3385\",\"quote\":\"Boreal storage mode is LOCAL.\"},{\"id\":\"f0fc1297-94f6-44a5-aa5d-17078f520ced\",\"quote\":\"Withdraw Boreal's LOCAL storage decision. No replacement storage mode has been approved.\"}]}",
+      "usage": { "promptTokens": 851, "completionTokens": 218, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "citedSupport": 1,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 611,
+      "durationMs": 4082
+    },
+    {
+      "case": "withdrawal",
+      "variant": "legacy-read",
+      "repeat": 1,
+      "value": "LOCAL",
+      "answer": {
+        "value": "LOCAL",
+        "explanation": "The only supplied evidence is a user statement setting Boreal's storage mode to LOCAL, with no later change, withdrawal, or correction recorded.",
+        "evidence": [
+          { "id": "25871fdb-cf7d-4397-91fa-95d2796a3385", "quote": "Boreal storage mode is LOCAL." }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"LOCAL\",\"explanation\":\"The only supplied evidence is a user statement setting Boreal's storage mode to LOCAL, with no later change, withdrawal, or correction recorded.\",\"evidence\":[{\"id\":\"25871fdb-cf7d-4397-91fa-95d2796a3385\",\"quote\":\"Boreal storage mode is LOCAL.\"}]}",
+      "usage": { "promptTokens": 474, "completionTokens": 163, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": false,
+      "revokedValueUsed": true,
+      "supportIncluded": 0,
+      "supportTotal": 1,
+      "fullSupport": false,
+      "citedSupport": 0,
+      "validCitations": 1,
+      "citationCount": 1,
+      "estimatedInputTokens": 345,
+      "durationMs": 3097
+    },
+    {
+      "case": "withdrawal",
+      "variant": "legacy-read-trace",
+      "repeat": 1,
+      "value": "UNKNOWN",
+      "answer": {
+        "value": "UNKNOWN",
+        "explanation": "The LOCAL storage mode decision was explicitly withdrawn by the user, and the withdrawal states no replacement mode has been approved. Therefore no currently approved storage mode is established.",
+        "evidence": [
+          {
+            "id": "25871fdb-cf7d-4397-91fa-95d2796a3385",
+            "quote": "Boreal storage mode is LOCAL."
+          },
+          {
+            "id": "f0fc1297-94f6-44a5-aa5d-17078f520ced",
+            "quote": "Withdraw Boreal's LOCAL storage decision. No replacement storage mode has been approved."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"UNKNOWN\",\"explanation\":\"The LOCAL storage mode decision was explicitly withdrawn by the user, and the withdrawal states no replacement mode has been approved. Therefore no currently approved storage mode is established.\",\"evidence\":[{\"id\":\"25871fdb-cf7d-4397-91fa-95d2796a3385\",\"quote\":\"Boreal storage mode is LOCAL.\"},{\"id\":\"f0fc1297-94f6-44a5-aa5d-17078f520ced\",\"quote\":\"Withdraw Boreal's LOCAL storage decision. No replacement storage mode has been approved.\"}]}",
+      "usage": { "promptTokens": 821, "completionTokens": 210, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "citedSupport": 1,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 599,
+      "durationMs": 3390
+    },
+    {
+      "case": "conditional-scope",
+      "variant": "legacy-read",
+      "repeat": 1,
+      "value": "7412",
+      "answer": {
+        "value": "7412",
+        "explanation": "The user explicitly stated Cygnus's production cache port as 7412, and no later correction or withdrawal appears in the supplied evidence.",
+        "evidence": [
+          {
+            "id": "624a21e9-8e36-419a-93bf-3e682be64df5",
+            "quote": "Cygnus: production cache port is 7412; staging cache port is 7412."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"7412\",\"explanation\":\"The user explicitly stated Cygnus's production cache port as 7412, and no later correction or withdrawal appears in the supplied evidence.\",\"evidence\":[{\"id\":\"624a21e9-8e36-419a-93bf-3e682be64df5\",\"quote\":\"Cygnus: production cache port is 7412; staging cache port is 7412.\"}]}",
+      "usage": { "promptTokens": 481, "completionTokens": 143, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 0,
+      "supportTotal": 1,
+      "fullSupport": false,
+      "citedSupport": 0,
+      "validCitations": 1,
+      "citationCount": 1,
+      "estimatedInputTokens": 359,
+      "durationMs": 3258
+    },
+    {
+      "case": "conditional-scope",
+      "variant": "legacy-read-trace",
+      "repeat": 1,
+      "value": "7412",
+      "answer": {
+        "value": "7412",
+        "explanation": "The original record set both production and staging cache ports to 7412. The later correction explicitly targets only the staging port (changing it to 8623) and affirms that production remains 7412.",
+        "evidence": [
+          {
+            "id": "624a21e9-8e36-419a-93bf-3e682be64df5",
+            "quote": "Cygnus: production cache port is 7412; staging cache port is 7412."
+          },
+          {
+            "id": "902415a2-4835-4273-baf8-5301d4bc009f",
+            "quote": "only staging cache port changes to 8623. Production cache port remains 7412."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"7412\",\"explanation\":\"The original record set both production and staging cache ports to 7412. The later correction explicitly targets only the staging port (changing it to 8623) and affirms that production remains 7412.\",\"evidence\":[{\"id\":\"624a21e9-8e36-419a-93bf-3e682be64df5\",\"quote\":\"Cygnus: production cache port is 7412; staging cache port is 7412.\"},{\"id\":\"902415a2-4835-4273-baf8-5301d4bc009f\",\"quote\":\"only staging cache port changes to 8623. Production cache port remains 7412.\"}]}",
+      "usage": { "promptTokens": 832, "completionTokens": 195, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "citedSupport": 1,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 632,
+      "durationMs": 3421
+    },
+    {
+      "case": "conditional-scope",
+      "variant": "structured-read",
+      "repeat": 1,
+      "value": "7412",
+      "answer": {
+        "value": "7412",
+        "explanation": "The user initially set both production and staging cache ports to 7412, then issued an applied correction limiting the change to staging only (8623) and explicitly keeping production at 7412.",
+        "evidence": [
+          {
+            "id": "624a21e9-8e36-419a-93bf-3e682be64df5",
+            "quote": "Cygnus: production cache port is 7412; staging cache port is 7412."
+          },
+          {
+            "id": "902415a2-4835-4273-baf8-5301d4bc009f",
+            "quote": "only staging cache port changes to 8623. Production cache port remains 7412."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"7412\",\"explanation\":\"The user initially set both production and staging cache ports to 7412, then issued an applied correction limiting the change to staging only (8623) and explicitly keeping production at 7412.\",\"evidence\":[{\"id\":\"624a21e9-8e36-419a-93bf-3e682be64df5\",\"quote\":\"Cygnus: production cache port is 7412; staging cache port is 7412.\"},{\"id\":\"902415a2-4835-4273-baf8-5301d4bc009f\",\"quote\":\"only staging cache port changes to 8623. Production cache port remains 7412.\"}]}",
+      "usage": { "promptTokens": 853, "completionTokens": 205, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "citedSupport": 1,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 631,
+      "durationMs": 3810
+    },
+    {
+      "case": "unconfirmed-proposal",
+      "variant": "legacy-read-trace",
+      "repeat": 1,
+      "value": "8",
+      "answer": {
+        "value": "8",
+        "explanation": "The user stated Delta's approved worker limit is 8. A later message floats raising it to 16 but explicitly labels it a proposal not to be applied, so the approved limit remains 8.",
+        "evidence": [
+          {
+            "id": "ec42a765-417f-413a-9956-d6f2640ecbed",
+            "quote": "Delta's approved worker limit is 8."
+          },
+          {
+            "id": "39047423-cbfe-4a43-8ef1-8994de104a57",
+            "quote": "Maybe raise Delta's worker limit to 16. This is only a proposal; do not apply it yet."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"8\",\"explanation\":\"The user stated Delta's approved worker limit is 8. A later message floats raising it to 16 but explicitly labels it a proposal not to be applied, so the approved limit remains 8.\",\"evidence\":[{\"id\":\"ec42a765-417f-413a-9956-d6f2640ecbed\",\"quote\":\"Delta's approved worker limit is 8.\"},{\"id\":\"39047423-cbfe-4a43-8ef1-8994de104a57\",\"quote\":\"Maybe raise Delta's worker limit to 16. This is only a proposal; do not apply it yet.\"}]}",
+      "usage": { "promptTokens": 818, "completionTokens": 199, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 2,
+      "supportTotal": 2,
+      "fullSupport": true,
+      "citedSupport": 2,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 599,
+      "durationMs": 3120
+    },
+    {
+      "case": "unconfirmed-proposal",
+      "variant": "structured-read",
+      "repeat": 1,
+      "value": "8",
+      "answer": {
+        "value": "8",
+        "explanation": "The user decision states Delta's approved worker limit is 8. The only change on record — raising it to 16 — is explicitly marked as a proposal and recorded as unconfirmed, so it does not alter the approved value.",
+        "evidence": [
+          {
+            "id": "ec42a765-417f-413a-9956-d6f2640ecbed",
+            "quote": "Delta's approved worker limit is 8."
+          },
+          {
+            "id": "39047423-cbfe-4a43-8ef1-8994de104a57",
+            "quote": "Maybe raise Delta's worker limit to 16. This is only a proposal; do not apply it yet."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"8\",\"explanation\":\"The user decision states Delta's approved worker limit is 8. The only change on record — raising it to 16 — is explicitly marked as a proposal and recorded as unconfirmed, so it does not alter the approved value.\",\"evidence\":[{\"id\":\"ec42a765-417f-413a-9956-d6f2640ecbed\",\"quote\":\"Delta's approved worker limit is 8.\"},{\"id\":\"39047423-cbfe-4a43-8ef1-8994de104a57\",\"quote\":\"Maybe raise Delta's worker limit to 16. This is only a proposal; do not apply it yet.\"}]}",
+      "usage": { "promptTokens": 849, "completionTokens": 208, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 2,
+      "supportTotal": 2,
+      "fullSupport": true,
+      "citedSupport": 2,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 610,
+      "durationMs": 3645
+    },
+    {
+      "case": "unconfirmed-proposal",
+      "variant": "legacy-read",
+      "repeat": 1,
+      "value": "8",
+      "answer": {
+        "value": "8",
+        "explanation": "The only supplied evidence is a user statement setting Delta's approved worker limit to 8, with no later correction, withdrawal, or competing value in the provided memory.",
+        "evidence": [
+          {
+            "id": "ec42a765-417f-413a-9956-d6f2640ecbed",
+            "quote": "Delta's approved worker limit is 8."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"8\",\"explanation\":\"The only supplied evidence is a user statement setting Delta's approved worker limit to 8, with no later correction, withdrawal, or competing value in the provided memory.\",\"evidence\":[{\"id\":\"ec42a765-417f-413a-9956-d6f2640ecbed\",\"quote\":\"Delta's approved worker limit is 8.\"}]}",
+      "usage": { "promptTokens": 471, "completionTokens": 123, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 1,
+      "supportTotal": 2,
+      "fullSupport": false,
+      "citedSupport": 1,
+      "validCitations": 1,
+      "citationCount": 1,
+      "estimatedInputTokens": 343,
+      "durationMs": 2699
+    },
+    {
+      "case": "historical-question",
+      "variant": "structured-read",
+      "repeat": 1,
+      "value": "ALPHA",
+      "answer": {
+        "value": "ALPHA",
+        "explanation": "The user stated Echo's initial release channel, approved October 1, was ALPHA. The October 8 correction changed it to BETA only from October 8 onward, so the pre-October 8 approved value remains ALPHA.",
+        "evidence": [
+          {
+            "id": "db16171a-907b-4ba0-9294-4faa6ddef4d6",
+            "quote": "Echo's initial release channel, approved on October 1, was ALPHA."
+          },
+          {
+            "id": "ec6d17e5-5cd5-4777-9d50-e052bef95e0d",
+            "quote": "This supersedes the October 1 ALPHA decision from October 8 onward."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"ALPHA\",\"explanation\":\"The user stated Echo's initial release channel, approved October 1, was ALPHA. The October 8 correction changed it to BETA only from October 8 onward, so the pre-October 8 approved value remains ALPHA.\",\"evidence\":[{\"id\":\"db16171a-907b-4ba0-9294-4faa6ddef4d6\",\"quote\":\"Echo's initial release channel, approved on October 1, was ALPHA.\"},{\"id\":\"ec6d17e5-5cd5-4777-9d50-e052bef95e0d\",\"quote\":\"This supersedes the October 1 ALPHA decision from October 8 onward.\"}]}",
+      "usage": { "promptTokens": 883, "completionTokens": 221, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "citedSupport": 1,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 644,
+      "durationMs": 3125
+    },
+    {
+      "case": "historical-question",
+      "variant": "legacy-read",
+      "repeat": 1,
+      "value": "ALPHA",
+      "answer": {
+        "value": "ALPHA",
+        "explanation": "The user stated that Echo's initial release channel, approved on October 1, was ALPHA. The question asks for the historical value prior to the October 8 change, which this evidence directly establishes.",
+        "evidence": [
+          {
+            "id": "db16171a-907b-4ba0-9294-4faa6ddef4d6",
+            "quote": "Echo's initial release channel, approved on October 1, was ALPHA."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"ALPHA\",\"explanation\":\"The user stated that Echo's initial release channel, approved on October 1, was ALPHA. The question asks for the historical value prior to the October 8 change, which this evidence directly establishes.\",\"evidence\":[{\"id\":\"db16171a-907b-4ba0-9294-4faa6ddef4d6\",\"quote\":\"Echo's initial release channel, approved on October 1, was ALPHA.\"}]}",
+      "usage": { "promptTokens": 492, "completionTokens": 146, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "citedSupport": 1,
+      "validCitations": 1,
+      "citationCount": 1,
+      "estimatedInputTokens": 363,
+      "durationMs": 2605
+    },
+    {
+      "case": "historical-question",
+      "variant": "legacy-read-trace",
+      "repeat": 1,
+      "value": "ALPHA",
+      "answer": {
+        "value": "ALPHA",
+        "explanation": "The October 1 approved release channel was ALPHA; the October 8 correction changed it to BETA only from October 8 onward, so the pre-change historical value remains ALPHA.",
+        "evidence": [
+          {
+            "id": "db16171a-907b-4ba0-9294-4faa6ddef4d6",
+            "quote": "Echo's initial release channel, approved on October 1, was ALPHA."
+          },
+          {
+            "id": "ec6d17e5-5cd5-4777-9d50-e052bef95e0d",
+            "quote": "On October 8 Echo's release channel changes to BETA. This supersedes the October 1 ALPHA decision from October 8 onward."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"ALPHA\",\"explanation\":\"The October 1 approved release channel was ALPHA; the October 8 correction changed it to BETA only from October 8 onward, so the pre-change historical value remains ALPHA.\",\"evidence\":[{\"id\":\"db16171a-907b-4ba0-9294-4faa6ddef4d6\",\"quote\":\"Echo's initial release channel, approved on October 1, was ALPHA.\"},{\"id\":\"ec6d17e5-5cd5-4777-9d50-e052bef95e0d\",\"quote\":\"On October 8 Echo's release channel changes to BETA. This supersedes the October 1 ALPHA decision from October 8 onward.\"}]}",
+      "usage": { "promptTokens": 863, "completionTokens": 258, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "citedSupport": 1,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 641,
+      "durationMs": 3936
+    },
+    {
+      "case": "changed-ancestor",
+      "variant": "legacy-read",
+      "repeat": 1,
+      "value": "UNKNOWN",
+      "answer": {
+        "value": "UNKNOWN",
+        "explanation": "The only evidence gives Foxtrot's staging cache port (9534), not the production cache port. No production value is established in the supplied evidence, and a staging value cannot be assumed to apply to production.",
+        "evidence": [
+          {
+            "id": "bf415a74-b2e4-4c57-8754-c766d4e86696",
+            "quote": "Foxtrot staging cache port is 9534."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"UNKNOWN\",\"explanation\":\"The only evidence gives Foxtrot's staging cache port (9534), not the production cache port. No production value is established in the supplied evidence, and a staging value cannot be assumed to apply to production.\",\"evidence\":[{\"id\":\"bf415a74-b2e4-4c57-8754-c766d4e86696\",\"quote\":\"Foxtrot staging cache port is 9534.\"}]}",
+      "usage": { "promptTokens": 481, "completionTokens": 142, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 1,
+      "supportTotal": 2,
+      "fullSupport": false,
+      "citedSupport": 1,
+      "validCitations": 1,
+      "citationCount": 1,
+      "estimatedInputTokens": 351,
+      "durationMs": 2840
+    },
+    {
+      "case": "changed-ancestor",
+      "variant": "legacy-read-trace",
+      "repeat": 1,
+      "value": "UNKNOWN",
+      "answer": {
+        "value": "UNKNOWN",
+        "explanation": "The only recorded value is Foxtrot's staging cache port (9534). The user's correction redirected the scope to production but explicitly stated the production cache port has not been read or recorded, so no production value is established.",
+        "evidence": [
+          {
+            "id": "bf415a74-b2e4-4c57-8754-c766d4e86696",
+            "quote": "Foxtrot staging cache port is 9534."
+          },
+          {
+            "id": "b7031fbb-823f-4e39-b5ad-83f3a48e7380",
+            "quote": "Foxtrot correction: I meant production. The production cache port has not been read or recorded yet."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"UNKNOWN\",\"explanation\":\"The only recorded value is Foxtrot's staging cache port (9534). The user's correction redirected the scope to production but explicitly stated the production cache port has not been read or recorded, so no production value is established.\",\"evidence\":[{\"id\":\"bf415a74-b2e4-4c57-8754-c766d4e86696\",\"quote\":\"Foxtrot staging cache port is 9534.\"},{\"id\":\"b7031fbb-823f-4e39-b5ad-83f3a48e7380\",\"quote\":\"Foxtrot correction: I meant production. The production cache port has not been read or recorded yet.\"}]}",
+      "usage": { "promptTokens": 1165, "completionTokens": 226, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 2,
+      "supportTotal": 2,
+      "fullSupport": true,
+      "citedSupport": 2,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 880,
+      "durationMs": 3347
+    },
+    {
+      "case": "changed-ancestor",
+      "variant": "structured-read",
+      "repeat": 1,
+      "value": "UNKNOWN",
+      "answer": {
+        "value": "UNKNOWN",
+        "explanation": "The only recorded port (9534) is Foxtrot's staging cache port. The user's applied correction clarified they meant production and explicitly stated the production cache port has not yet been read or recorded, so no production value is established.",
+        "evidence": [
+          {
+            "id": "bf415a74-b2e4-4c57-8754-c766d4e86696",
+            "quote": "Foxtrot staging cache port is 9534."
+          },
+          {
+            "id": "b7031fbb-823f-4e39-b5ad-83f3a48e7380",
+            "quote": "Foxtrot correction: I meant production. The production cache port has not been read or recorded yet."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"UNKNOWN\",\"explanation\":\"The only recorded port (9534) is Foxtrot's staging cache port. The user's applied correction clarified they meant production and explicitly stated the production cache port has not yet been read or recorded, so no production value is established.\",\"evidence\":[{\"id\":\"bf415a74-b2e4-4c57-8754-c766d4e86696\",\"quote\":\"Foxtrot staging cache port is 9534.\"},{\"id\":\"b7031fbb-823f-4e39-b5ad-83f3a48e7380\",\"quote\":\"Foxtrot correction: I meant production. The production cache port has not been read or recorded yet.\"}]}",
+      "usage": { "promptTokens": 1398, "completionTokens": 216, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 2,
+      "supportTotal": 2,
+      "fullSupport": true,
+      "citedSupport": 2,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 1050,
+      "durationMs": 3371
+    },
+    {
+      "case": "beyond-legacy-snippet",
+      "variant": "legacy-read-trace",
+      "repeat": 1,
+      "value": "UNKNOWN",
+      "answer": {
+        "value": "UNKNOWN",
+        "explanation": "The only stated value (AMBER) is the target of a recorded correction from a later configuration review, which supplies no replacement color — it only notes prior records are kept for historical reference. With the original value superseded and no new approved color established, the current approved color is unresolved.",
+        "evidence": [
+          {
+            "id": "ff902dff-9885-48a2-b2db-d73e1e2e2fad",
+            "quote": "Gemini's active color is AMBER."
+          },
+          {
+            "id": "64518502-16d8-4bbd-bbdb-7bbcc1e284e6",
+            "quote": "Gemini configuration review. The audit preserves prior records for historical reference."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"UNKNOWN\",\"explanation\":\"The only stated value (AMBER) is the target of a recorded correction from a later configuration review, which supplies no replacement color — it only notes prior records are kept for historical reference. With the original value superseded and no new approved color established, the current approved color is unresolved.\",\"evidence\":[{\"id\":\"ff902dff-9885-48a2-b2db-d73e1e2e2fad\",\"quote\":\"Gemini's active color is AMBER.\"},{\"id\":\"64518502-16d8-4bbd-bbdb-7bbcc1e284e6\",\"quote\":\"Gemini configuration review. The audit preserves prior records for historical reference.\"}]}",
+      "usage": { "promptTokens": 867, "completionTokens": 297, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": false,
+      "revokedValueUsed": false,
+      "supportIncluded": 0,
+      "supportTotal": 1,
+      "fullSupport": false,
+      "citedSupport": 0,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 631,
+      "durationMs": 5032
+    },
+    {
+      "case": "beyond-legacy-snippet",
+      "variant": "structured-read",
+      "repeat": 1,
+      "value": "VIOLET",
+      "answer": {
+        "value": "VIOLET",
+        "explanation": "The original record stated Gemini's active color was AMBER, but an applied user correction from the configuration review establishes VIOLET as the approved current color and explicitly retires AMBER.",
+        "evidence": [
+          {
+            "id": "ff902dff-9885-48a2-b2db-d73e1e2e2fad",
+            "quote": "Gemini's active color is AMBER."
+          },
+          {
+            "id": "64518502-16d8-4bbd-bbdb-7bbcc1e284e6",
+            "quote": "The approved current color is VIOLET. AMBER is retired."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"VIOLET\",\"explanation\":\"The original record stated Gemini's active color was AMBER, but an applied user correction from the configuration review establishes VIOLET as the approved current color and explicitly retires AMBER.\",\"evidence\":[{\"id\":\"ff902dff-9885-48a2-b2db-d73e1e2e2fad\",\"quote\":\"Gemini's active color is AMBER.\"},{\"id\":\"64518502-16d8-4bbd-bbdb-7bbcc1e284e6\",\"quote\":\"The approved current color is VIOLET. AMBER is retired.\"}]}",
+      "usage": { "promptTokens": 937, "completionTokens": 193, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": true,
+      "revokedValueUsed": false,
+      "supportIncluded": 1,
+      "supportTotal": 1,
+      "fullSupport": true,
+      "citedSupport": 1,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 669,
+      "durationMs": 5209
+    },
+    {
+      "case": "beyond-legacy-snippet",
+      "variant": "legacy-read",
+      "repeat": 1,
+      "value": "AMBER",
+      "answer": {
+        "value": "AMBER",
+        "explanation": "The only supplied evidence is a user statement establishing Gemini's active color as AMBER, with no later correction or withdrawal present.",
+        "evidence": [
+          {
+            "id": "ff902dff-9885-48a2-b2db-d73e1e2e2fad",
+            "quote": "Gemini's active color is AMBER."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"AMBER\",\"explanation\":\"The only supplied evidence is a user statement establishing Gemini's active color as AMBER, with no later correction or withdrawal present.\",\"evidence\":[{\"id\":\"ff902dff-9885-48a2-b2db-d73e1e2e2fad\",\"quote\":\"Gemini's active color is AMBER.\"}]}",
+      "usage": { "promptTokens": 470, "completionTokens": 118, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": false,
+      "revokedValueUsed": true,
+      "supportIncluded": 0,
+      "supportTotal": 1,
+      "fullSupport": false,
+      "citedSupport": 0,
+      "validCitations": 1,
+      "citationCount": 1,
+      "estimatedInputTokens": 345,
+      "durationMs": 2531
+    },
+    {
+      "case": "replacement-later-withdrawn",
+      "variant": "structured-read",
+      "repeat": 1,
+      "value": "GOLD",
+      "answer": {
+        "value": "GOLD",
+        "explanation": "The original record set Helix's active channel to SILVER, but a later user correction (recorded as applied) replaced it with GOLD and explicitly retired SILVER with no automatic revert.",
+        "evidence": [
+          {
+            "id": "1ed6987f-8c4c-483a-872e-7873a53bd28b",
+            "quote": "Helix's active channel is SILVER."
+          },
+          {
+            "id": "ed4bbacb-f31d-4077-ab5b-47b2ce5febca",
+            "quote": "Helix's new active channel is GOLD. This retires SILVER; do not revert automatically."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"GOLD\",\"explanation\":\"The original record set Helix's active channel to SILVER, but a later user correction (recorded as applied) replaced it with GOLD and explicitly retired SILVER with no automatic revert.\",\"evidence\":[{\"id\":\"1ed6987f-8c4c-483a-872e-7873a53bd28b\",\"quote\":\"Helix's active channel is SILVER.\"},{\"id\":\"ed4bbacb-f31d-4077-ab5b-47b2ce5febca\",\"quote\":\"Helix's new active channel is GOLD. This retires SILVER; do not revert automatically.\"}]}",
+      "usage": { "promptTokens": 847, "completionTokens": 215, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": false,
+      "revokedValueUsed": true,
+      "supportIncluded": 0,
+      "supportTotal": 1,
+      "fullSupport": false,
+      "citedSupport": 0,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 618,
+      "durationMs": 3166
+    },
+    {
+      "case": "replacement-later-withdrawn",
+      "variant": "legacy-read",
+      "repeat": 1,
+      "value": "SILVER",
+      "answer": {
+        "value": "SILVER",
+        "explanation": "The only supplied evidence is a user statement declaring Helix's active channel as SILVER, with no later correction, withdrawal, or competing proposal. Treating the user's stated active channel as the currently approved one.",
+        "evidence": [
+          {
+            "id": "1ed6987f-8c4c-483a-872e-7873a53bd28b",
+            "quote": "Helix's active channel is SILVER."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"SILVER\",\"explanation\":\"The only supplied evidence is a user statement declaring Helix's active channel as SILVER, with no later correction, withdrawal, or competing proposal. Treating the user's stated active channel as the currently approved one.\",\"evidence\":[{\"id\":\"1ed6987f-8c4c-483a-872e-7873a53bd28b\",\"quote\":\"Helix's active channel is SILVER.\"}]}",
+      "usage": { "promptTokens": 470, "completionTokens": 244, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": false,
+      "revokedValueUsed": true,
+      "supportIncluded": 0,
+      "supportTotal": 1,
+      "fullSupport": false,
+      "citedSupport": 0,
+      "validCitations": 1,
+      "citationCount": 1,
+      "estimatedInputTokens": 347,
+      "durationMs": 3837
+    },
+    {
+      "case": "replacement-later-withdrawn",
+      "variant": "legacy-read-trace",
+      "repeat": 1,
+      "value": "GOLD",
+      "answer": {
+        "value": "GOLD",
+        "explanation": "The initial decision set Helix's channel to SILVER, but a later user correction explicitly replaced it with GOLD, retiring SILVER and forbidding automatic reversion. No further challenges exist, so GOLD is the current approved channel.",
+        "evidence": [
+          {
+            "id": "1ed6987f-8c4c-483a-872e-7873a53bd28b",
+            "quote": "Helix's active channel is SILVER."
+          },
+          {
+            "id": "ed4bbacb-f31d-4077-ab5b-47b2ce5febca",
+            "quote": "Helix's new active channel is GOLD. This retires SILVER; do not revert automatically."
+          }
+        ]
+      },
+      "rawAnswer": "{\"value\":\"GOLD\",\"explanation\":\"The initial decision set Helix's channel to SILVER, but a later user correction explicitly replaced it with GOLD, retiring SILVER and forbidding automatic reversion. No further challenges exist, so GOLD is the current approved channel.\",\"evidence\":[{\"id\":\"1ed6987f-8c4c-483a-872e-7873a53bd28b\",\"quote\":\"Helix's active channel is SILVER.\"},{\"id\":\"ed4bbacb-f31d-4077-ab5b-47b2ce5febca\",\"quote\":\"Helix's new active channel is GOLD. This retires SILVER; do not revert automatically.\"}]}",
+      "usage": { "promptTokens": 816, "completionTokens": 233, "cachedPromptTokens": 0 },
+      "validOutput": true,
+      "correct": false,
+      "revokedValueUsed": true,
+      "supportIncluded": 0,
+      "supportTotal": 1,
+      "fullSupport": false,
+      "citedSupport": 0,
+      "validCitations": 2,
+      "citationCount": 2,
+      "estimatedInputTokens": 609,
+      "durationMs": 4846
+    }
+  ],
+  "summary": [
+    {
+      "variant": "legacy-read",
+      "attempts": 16,
+      "correct": 8,
+      "fullSupport": 2,
+      "supportIncluded": 6,
+      "supportTotal": 20,
+      "citedSupport": 6,
+      "invalidOutputs": 0,
+      "revokedValueUsed": 8
+    },
+    {
+      "variant": "legacy-read-trace",
+      "attempts": 16,
+      "correct": 12,
+      "fullSupport": 12,
+      "supportIncluded": 16,
+      "supportTotal": 20,
+      "citedSupport": 16,
+      "invalidOutputs": 0,
+      "revokedValueUsed": 2
+    },
+    {
+      "variant": "structured-read",
+      "attempts": 16,
+      "correct": 14,
+      "fullSupport": 14,
+      "supportIncluded": 18,
+      "supportTotal": 20,
+      "citedSupport": 18,
+      "invalidOutputs": 0,
+      "revokedValueUsed": 2
+    }
+  ]
+}

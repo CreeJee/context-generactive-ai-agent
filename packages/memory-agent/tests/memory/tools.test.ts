@@ -1,6 +1,6 @@
 import { chat } from "@tanstack/ai";
 import { layer } from "@effect/vitest";
-import { Cause, Context, Effect, Layer, Schema } from "effect";
+import { Cause, Context, Effect, FileSystem, Layer, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { Database } from "../../src/db/database.ts";
 import { Indexer } from "../../src/memory/embedding/indexer.ts";
@@ -9,6 +9,7 @@ import { Interpretations } from "../../src/memory/interpretations.ts";
 import { KnowledgePromotions } from "../../src/memory/knowledge.ts";
 import { Nodes } from "../../src/memory/nodes.ts";
 import { MemorySearch } from "../../src/memory/search.ts";
+import { Projects } from "../../src/projects/projects.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { ScriptedTextAdapter } from "../../src/testing/scripted-adapter.ts";
 import { createMemoryTools, MemoryTools } from "../../src/tools/memory.ts";
@@ -56,6 +57,309 @@ const unadoptedClaim = {
 class OtherStore extends Context.Service<OtherStore, TestEnv["Service"]>()(
   "memory-agent/tests/memory/tools.test/OtherStore",
 ) {}
+
+testAgent()("structured memory evidence", (it) => {
+  it.effect("preserves exact pages and prioritizes direct changes within the excerpt budget", () =>
+    Effect.gen(function* () {
+      const at = yield* freshSession;
+      const env = yield* environment;
+      const original = env.nodes.append({ ...at, kind: "user", text: "original ".repeat(600) });
+      const replacement = env.nodes.append({
+        ...at,
+        kind: "user",
+        text: "x".repeat(599) + "😀 replacement",
+      });
+      env.interpretations.record({
+        nodeId: replacement.id,
+        targetId: original.id,
+        kind: "corrects",
+        status: "applied",
+        reason: "changed decision",
+        model: "fixture",
+      });
+      const retraction = env.nodes.append({
+        ...at,
+        kind: "user",
+        text: "Withdraw that replacement.",
+      });
+      env.interpretations.record({
+        nodeId: retraction.id,
+        targetId: replacement.id,
+        kind: "retracts",
+        status: "applied",
+        reason: "withdrawal",
+        model: "fixture",
+      });
+      for (let index = 0; index < 9; index++) {
+        const pending = env.nodes.append({ ...at, kind: "user", text: `possible change ${index}` });
+        env.interpretations.record({
+          nodeId: pending.id,
+          targetId: original.id,
+          kind: "corrects",
+          status: "unconfirmed",
+          reason: "ambiguous target",
+          model: "fixture",
+        });
+      }
+      const read = createMemoryTools(env, at.projectId).tools[1];
+      const result = yield* call(() => read.execute!({ id: original.id, offset: 4000 }));
+      expect(result).toHaveProperty("evidenceContext.changes.length", 8);
+      expect(result).toHaveProperty("evidenceContext.changes.0.source.id", replacement.id);
+      expect(result).toMatchObject({
+        ...env.nodes.read(original.id, 4000),
+        evidenceContext: {
+          assessment: { kind: "recorded_change" },
+          hasUnconfirmedChanges: true,
+          sourceSpan: { start: 4000, end: original.text.length, unit: "utf16" },
+          omittedChanges: 2,
+          changes: expect.arrayContaining([
+            {
+              source: expect.objectContaining({
+                id: replacement.id,
+                text: "x".repeat(599),
+                span: { start: 0, end: 599, unit: "utf16" },
+                nextOffset: 599,
+              }),
+              targetId: original.id,
+              relation: "corrects",
+              status: "applied",
+            },
+          ]),
+        },
+      });
+      expect(yield* call(() => read.execute!({ id: replacement.id, offset: 599 }))).toMatchObject({
+        text: "😀 replacement",
+        evidenceContext: {
+          assessment: { kind: "recorded_change" },
+          changes: [
+            {
+              source: expect.objectContaining({ id: retraction.id }),
+              targetId: replacement.id,
+              relation: "retracts",
+              status: "applied",
+            },
+          ],
+        },
+      });
+    }),
+  );
+
+  it.effect(
+    "keeps pending changes unresolved and rejects non-user or older correction sources",
+    () =>
+      Effect.gen(function* () {
+        const at = yield* freshSession;
+        const env = yield* environment;
+        const older = env.nodes.append({ ...at, kind: "user", text: "earlier statement" });
+        const original = env.nodes.append({ ...at, kind: "user", text: "decision" });
+        const assistant = env.nodes.append({
+          ...at,
+          kind: "assistant",
+          text: "I changed your decision",
+        });
+        for (const source of [older, assistant]) {
+          env.interpretations.record({
+            nodeId: source.id,
+            targetId: original.id,
+            kind: "corrects",
+            status: "applied",
+            reason: "invalid authority",
+            model: "fixture",
+          });
+        }
+        const read = createMemoryTools(env, at.projectId).tools[1];
+        expect(yield* call(() => read.execute!({ id: original.id }))).toMatchObject({
+          evidenceContext: { assessment: { kind: "no_recorded_change" }, changes: [] },
+        });
+        const pending = env.nodes.append({ ...at, kind: "user", text: "Maybe change that" });
+        env.interpretations.record({
+          nodeId: pending.id,
+          targetId: original.id,
+          kind: "retracts",
+          status: "unconfirmed",
+          reason: "ambiguous",
+          model: "fixture",
+        });
+        expect(yield* call(() => read.execute!({ id: original.id }))).toMatchObject({
+          evidenceContext: {
+            assessment: { kind: "unresolved" },
+            hasUnconfirmedChanges: true,
+            changes: [
+              {
+                source: expect.objectContaining({ id: pending.id }),
+                targetId: original.id,
+                relation: "retracts",
+                status: "unconfirmed",
+              },
+            ],
+          },
+        });
+        env.interpretations.record({
+          nodeId: pending.id,
+          targetId: original.id,
+          kind: "retracts",
+          status: "applied",
+          reason: "confirmed by the user",
+          model: "fixture",
+        });
+        expect(yield* call(() => read.execute!({ id: original.id }))).toMatchObject({
+          evidenceContext: {
+            assessment: { kind: "recorded_change" },
+            hasUnconfirmedChanges: false,
+            changes: [{ source: expect.objectContaining({ id: pending.id }), status: "applied" }],
+          },
+        });
+      }),
+  );
+
+  it.effect("distinguishes an ancestor correction from a changed observation", () =>
+    Effect.gen(function* () {
+      const at = yield* freshSession;
+      const env = yield* environment;
+      const user = env.nodes.append({ ...at, kind: "user", text: "Read the staging settings." });
+      const assistant = env.nodes.append({
+        ...at,
+        kind: "assistant",
+        text: "Reading staging",
+        detail: { partial: true },
+        links: [{ kind: "reply", nodeId: user.id }],
+      });
+      const tool = env.nodes.append({
+        ...at,
+        kind: "tool_call",
+        text: "read settings",
+        links: [{ kind: "calls", nodeId: assistant.id }],
+      });
+      const result = env.nodes.append({
+        ...at,
+        kind: "tool_result",
+        text: "read failed",
+        detail: { ok: false },
+        links: [{ kind: "returns", nodeId: tool.id }],
+      });
+      const changed = env.nodes.append({ ...at, kind: "user", text: "I meant production." });
+      env.interpretations.record({
+        nodeId: changed.id,
+        targetId: user.id,
+        kind: "corrects",
+        status: "applied",
+        reason: "different environment",
+        model: "fixture",
+      });
+      const read = createMemoryTools(env, at.projectId).tools[1];
+      expect(yield* call(() => read.execute!({ id: result.id }))).toMatchObject({
+        text: result.text,
+        detail: { ok: false },
+        evidenceContext: {
+          assessment: { kind: "context_changed" },
+          provenance: [
+            expect.objectContaining({ id: tool.id }),
+            expect.objectContaining({ id: assistant.id, detail: { partial: true } }),
+            expect.objectContaining({ id: user.id }),
+          ],
+          changes: [
+            {
+              source: expect.objectContaining({ id: changed.id }),
+              targetId: user.id,
+              relation: "corrects",
+              status: "applied",
+            },
+          ],
+        },
+      });
+    }),
+  );
+
+  it.effect("applies current project visibility to sources, provenance and challenges", () =>
+    Effect.gen(function* () {
+      const at = yield* freshSession;
+      const env = yield* environment;
+      const fixture = yield* TestEnv;
+      const projects = yield* Projects;
+      const fs = yield* FileSystem.FileSystem;
+      const other = yield* projects.add(yield* fs.makeTempDirectory({ directory: fixture.base }));
+      const session = yield* (yield* Sessions).create(other.id);
+      const otherAt = { projectId: other.id, sessionId: session.id };
+      const hidden = env.nodes.append({ ...otherAt, kind: "user", text: "other project source" });
+      const root = env.nodes.append({
+        ...at,
+        kind: "assistant",
+        text: "visible source",
+        links: [{ kind: "reply", nodeId: hidden.id }],
+      });
+      const foreignChange = env.nodes.append({
+        ...otherAt,
+        kind: "user",
+        text: "foreign correction",
+      });
+      for (const status of ["applied", "unconfirmed"] as const) {
+        env.interpretations.record({
+          nodeId: foreignChange.id,
+          targetId: root.id,
+          kind: "corrects",
+          status,
+          reason: "different scope",
+          model: "fixture",
+        });
+      }
+      const shared = createMemoryTools(env, at.projectId).tools[1];
+      const scoped = createMemoryTools(env, at.projectId, undefined, "project").tools[1];
+      expect(yield* call(() => shared.execute!({ id: root.id }))).toMatchObject({
+        evidenceContext: { provenance: [expect.objectContaining({ id: hidden.id })], changes: [] },
+      });
+      expect(yield* call(() => scoped.execute!({ id: root.id }))).toMatchObject({
+        evidenceContext: { provenance: [], changes: [], provenanceScopeLimited: true },
+      });
+      expect(yield* call(() => scoped.execute!({ id: hidden.id }))).toEqual({
+        error: "not_found",
+        id: hidden.id,
+      });
+      yield* projects.setCrossRecallExcluded(other.id, true);
+      expect(yield* call(() => shared.execute!({ id: root.id }))).toMatchObject({
+        evidenceContext: { provenance: [], changes: [], provenanceScopeLimited: true },
+      });
+      expect(yield* call(() => shared.execute!({ id: hidden.id }))).toEqual({
+        error: "not_found",
+        id: hidden.id,
+      });
+    }),
+  );
+
+  it.effect("reports an unavailable trace and fails closed on storage errors", () =>
+    Effect.gen(function* () {
+      const at = yield* freshSession;
+      const env = yield* environment;
+      const node = env.nodes.append({ ...at, kind: "user", text: "evidence" });
+      const untraced = createMemoryTools(
+        { ...env, graph: { ...env.graph, trace: () => null } },
+        at.projectId,
+      ).tools[1];
+      expect(yield* call(() => untraced.execute!({ id: node.id }))).toMatchObject({
+        evidenceContext: { assessment: { kind: "untraced" } },
+      });
+      const broken = createMemoryTools(
+        {
+          ...env,
+          graph: {
+            ...env.graph,
+            trace: () => {
+              throw new DOMException("private storage detail", "InvalidStateError");
+            },
+          },
+        },
+        at.projectId,
+      ).tools[1];
+      const failure = yield* refusal(() => broken.execute!({ id: node.id }));
+      expect(failure).toMatchObject({
+        _tag: "EvidenceReadFailed",
+        reason: { _tag: "StorageRead", stage: "trace" },
+      });
+      expect(
+        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(failure),
+      ).not.toContain("private storage detail");
+    }),
+  );
+});
 
 layer(
   Layer.merge(
