@@ -210,3 +210,107 @@ export const seedEvidenceCases = Effect.fn("eval.seedEvidenceCases")(function* (
     catch: (cause) => EvidenceFixtureFailed.make({ reason: { _tag: "Storage", cause } }),
   });
 });
+
+/** Longer and branching chains where one follow-up read does not reach the last statement. */
+export const seedChainCases = Effect.fn("eval.seedChainCases")(function* (projectId: string) {
+  const nodes = yield* Nodes;
+  const interpretations = yield* Interpretations;
+  const session = yield* (yield* Sessions).create(projectId);
+  return yield* Effect.try({
+    try: () => {
+      const cases: EvidenceCase[] = [];
+      const at = { projectId, sessionId: session.id };
+      const user = (text: string) => nodes.append({ ...at, kind: "user", text });
+      const change = (
+        source: Node,
+        target: Node,
+        kind: "corrects" | "retracts",
+        status: "applied" | "unconfirmed" = "applied",
+      ) =>
+        interpretations.record({
+          nodeId: source.id,
+          targetId: target.id,
+          kind,
+          status,
+          reason: "Synthetic fixture relation",
+          model: "fixture",
+        });
+      const support = (node: Node, quote: string) => ({ id: node.id, quote });
+
+      const port = user("Ion's API port is 4100.");
+      const port2 = user("Ion correction: the API port moves from 4100 to 4200.");
+      const port3 = user("Ion correction: use 4300 instead of 4200 for the API port.");
+      const port4 = user("Ion correction: the API port is now 4400, replacing 4300.");
+      change(port2, port, "corrects");
+      change(port3, port2, "corrects");
+      change(port4, port3, "corrects");
+      cases.push({
+        name: "three-step-chain",
+        question: "What is Ion's current API port?",
+        expected: "4400",
+        root: port,
+        sources: [port, port2, port3, port4],
+        support: [support(port4, "the API port is now 4400")],
+        revoked: ["4100", "4200", "4300"],
+      });
+
+      const mode = user("Juno's rollout mode is BLUE.");
+      const modeChange = user("Juno correction: the rollout mode is GREEN, not BLUE.");
+      const modeIdea = user(
+        "Maybe Juno should move to RED later. Not decided; keep the current mode for now.",
+      );
+      change(modeChange, mode, "corrects");
+      change(modeIdea, modeChange, "corrects", "unconfirmed");
+      cases.push({
+        name: "replacement-with-pending-idea",
+        question: "What is Juno's currently approved rollout mode?",
+        expected: "GREEN",
+        root: mode,
+        sources: [mode, modeChange, modeIdea],
+        support: [
+          support(modeChange, "the rollout mode is GREEN"),
+          support(modeIdea, "keep the current mode for now"),
+        ],
+        revoked: ["BLUE"],
+      });
+
+      // A message that bundles two facts legitimately branches: each correction changes one fact.
+      const ports = user("Lima: production port is 5100; staging port is 5100.");
+      const stagingPort = user("Lima correction: only the staging port changes, to 5200.");
+      const productionPort = user("Lima correction: the production port changes to 5300.");
+      change(stagingPort, ports, "corrects");
+      change(productionPort, ports, "corrects");
+      cases.push({
+        name: "bundled-facts-branch",
+        question: "What is Lima's current production port?",
+        expected: "5300",
+        root: ports,
+        sources: [ports, stagingPort, productionPort],
+        support: [support(productionPort, "the production port changes to 5300")],
+        revoked: ["5100", "5200"],
+      });
+
+      // Two corrections of the same single fact contradict; the evidence cannot settle it.
+      const backup = user("Mira's weekly backup day is MONDAY.");
+      const tuesday = user("Mira correction: the weekly backup day is TUESDAY.");
+      const friday = user("Mira correction: the weekly backup day is FRIDAY.");
+      change(tuesday, backup, "corrects");
+      change(friday, backup, "corrects");
+      cases.push({
+        name: "contradicting-branch",
+        question: "What is Mira's current weekly backup day?",
+        expected: "UNKNOWN",
+        root: backup,
+        sources: [backup, tuesday, friday],
+        support: [
+          support(tuesday, "the weekly backup day is TUESDAY"),
+          support(friday, "the weekly backup day is FRIDAY"),
+        ],
+        revoked: ["MONDAY"],
+      });
+
+      return cases;
+    },
+    catch: (cause) => EvidenceFixtureFailed.make({ reason: { _tag: "Storage", cause } }),
+  });
+});

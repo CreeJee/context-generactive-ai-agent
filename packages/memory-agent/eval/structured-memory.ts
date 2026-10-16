@@ -27,7 +27,8 @@ import { Projects } from "../src/projects/projects.ts";
 import { fakeEmbedderLayer } from "../src/testing/fake-embedder.ts";
 import { fakeMorphLayer } from "../src/testing/fake-morph.ts";
 import { createMemoryTools } from "../src/tools/memory.ts";
-import { seedEvidenceCases } from "./structured-memory-fixtures.ts";
+import { MemorySearch } from "../src/memory/search.ts";
+import { seedChainCases, seedEvidenceCases } from "./structured-memory-fixtures.ts";
 import { evidenceNarrative } from "./evidence-narrative.ts";
 import { estimateRequestTokens, exceedsRequestTokenBudget } from "./request-token-budget.ts";
 
@@ -55,6 +56,7 @@ const ablationVariants = [
   "structured-followup",
   "narrative-followup",
 ] as const;
+const latestVariants = ["structured-read", "structured-latest", "structured-followup"] as const;
 const repeats = 2;
 const inputLimit = 6_000;
 const outputLimit = 2_048;
@@ -64,11 +66,20 @@ const system =
 const program = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const ablation = process.argv.includes("--ablation");
-  const variants = ablation ? ablationVariants : baselineVariants;
+  const latestProtocol = process.argv.includes("--latest");
+  const ablation = !latestProtocol && process.argv.includes("--ablation");
+  const variants: readonly (
+    | (typeof baselineVariants)[number]
+    | (typeof ablationVariants)[number]
+    | (typeof latestVariants)[number]
+  )[] = latestProtocol ? latestVariants : ablation ? ablationVariants : baselineVariants;
   const output = yield* Config.String("MEMORY_EVIDENCE_OUTPUT").pipe(
     Config.withDefault(
-      ablation ? "/tmp/structured-memory-ablation.json" : "/tmp/structured-memory-benchmark.json",
+      latestProtocol
+        ? "/tmp/structured-memory-latest.json"
+        : ablation
+          ? "/tmp/structured-memory-ablation.json"
+          : "/tmp/structured-memory-benchmark.json",
     ),
   );
   const live = process.argv.includes("--live");
@@ -100,7 +111,10 @@ const program = Effect.gen(function* () {
   const seeded = yield* Effect.provideContext(
     Effect.gen(function* () {
       const project = yield* (yield* Projects).add(projectRoot);
-      return { ...(yield* seedEvidenceCases(project.id)), projectId: project.id };
+      const seeded = yield* seedEvidenceCases(project.id);
+      // The chain cases join only the latest-pointer protocol, so earlier reports still reproduce.
+      const chains = latestProtocol ? yield* seedChainCases(project.id) : [];
+      return { ...seeded, cases: [...seeded.cases, ...chains], projectId: project.id };
     }),
     services,
   );
@@ -124,40 +138,56 @@ const program = Effect.gen(function* () {
         try: () => Promise.resolve(tools[2].execute!({ id: fixture.root.id })),
         catch: () => BenchmarkFailed.make({ reason: "fixture" }),
       });
-      const followup = ablation
-        ? yield* Effect.forEach(
-            [...new Set(structured.evidenceContext.changes.map((change) => change.source.id))],
-            Effect.fnUntraced(function* (id) {
-              const page = yield* Effect.provideContext(
-                readStructuredEvidence(id, 0, seeded.projectId, false),
-                services,
-              );
-              if (page === null) return yield* BenchmarkFailed.make({ reason: "fixture" });
-              return page;
-            }),
-            { concurrency: 1 },
-          )
-        : [];
+      // Exactly what find_memory attaches to this match; retrieval itself is not under test.
+      const latest = yield* Effect.provideContext(
+        Effect.flatMap(MemorySearch, (search) => search.latest(fixture.root.id)),
+        services,
+      );
+      const followup =
+        ablation || latestProtocol
+          ? yield* Effect.forEach(
+              [...new Set(structured.evidenceContext.changes.map((change) => change.source.id))],
+              Effect.fnUntraced(function* (id) {
+                const page = yield* Effect.provideContext(
+                  readStructuredEvidence(id, 0, seeded.projectId, false),
+                  services,
+                );
+                if (page === null) return yield* BenchmarkFailed.make({ reason: "fixture" });
+                return page;
+              }),
+              { concurrency: 1 },
+            )
+          : [];
       return yield* Effect.forEach(
         variants,
         Effect.fnUntraced(function* (variant) {
           const followsUp = variant === "structured-followup" || variant === "narrative-followup";
           const pages = followsUp ? [structured, ...followup] : [structured];
           const context =
-            variant === "legacy-read-trace"
+            variant === "structured-latest"
               ? [
-                  { tool: "read_evidence", result: legacy },
-                  { tool: "trace_evidence", result: trace },
+                  {
+                    tool: "find_memory",
+                    result: { id: fixture.root.id, snippet: structured.text, latest },
+                  },
+                  { tool: "read_evidence", result: structured },
                 ]
-              : variant === "legacy-read"
-                ? [{ tool: "read_evidence", result: legacy }]
-                : pages.map((result) => ({ tool: "read_evidence", result }));
+              : variant === "legacy-read-trace"
+                ? [
+                    { tool: "read_evidence", result: legacy },
+                    { tool: "trace_evidence", result: trace },
+                  ]
+                : variant === "legacy-read"
+                  ? [{ tool: "read_evidence", result: legacy }]
+                  : pages.map((result) => ({ tool: "read_evidence", result }));
           const contextText =
             variant === "narrative-followup"
               ? yield* evidenceNarrative(pages)
               : yield* encode(context);
           const questionTime =
-            ablation && variant !== "structured-read" ? `Question asked at: ${questionAt}\n` : "";
+            latestProtocol || (ablation && variant !== "structured-read")
+              ? `Question asked at: ${questionAt}\n`
+              : "";
           const content = `${questionTime}Question: ${fixture.question}\nMemory tool results:\n${contextText}`;
           const request = yield* Schema.decodeEffect(wire)(
             subscriptionRequest({
@@ -185,7 +215,12 @@ const program = Effect.gen(function* () {
             supportIncluded: included,
             supportTotal: fixture.support.length,
             fullSupport: included === fixture.support.length,
-            toolCalls: variant === "legacy-read-trace" ? 2 : followsUp ? pages.length : 1,
+            toolCalls:
+              variant === "legacy-read-trace" || variant === "structured-latest"
+                ? 2
+                : followsUp
+                  ? pages.length
+                  : 1,
           };
         }),
         { concurrency: 1 },
@@ -215,9 +250,13 @@ const program = Effect.gen(function* () {
   }> = [];
   const report = () => ({
     schemaVersion: 2,
-    protocol: ablation ? "time-followup-presentation" : "baseline-comparison",
+    protocol: latestProtocol
+      ? "latest-pointer"
+      : ablation
+        ? "time-followup-presentation"
+        : "baseline-comparison",
     system,
-    questionAt: ablation ? questionAt : null,
+    questionAt: ablation || latestProtocol ? questionAt : null,
     selection,
     live,
     repeats,
@@ -226,7 +265,7 @@ const program = Effect.gen(function* () {
     inputMargin: 1.25,
     maxOutputTokens: outputLimit,
     scope:
-      "Synthetic fixed-candidate reading pilot; not retrieval or end-to-end agent accuracy. Follow-up reads, when enabled, are scripted, not chosen by the model.",
+      "Synthetic fixed-candidate reading pilot; not retrieval or end-to-end agent accuracy. Follow-up reads, when enabled, are scripted, not chosen by the model. The latest arm adds the find_memory latest pointer of the fixed candidate, not a ranked search result.",
     snapshots: snapshots
       .flat()
       .map(
