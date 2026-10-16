@@ -1590,6 +1590,13 @@
   - 허용한 호스트로의 업로드는 막지 못한다(srt 문서의 도메인 단위 한계).
   - 캐시 쓰기는 캐시 오염 경로가 될 수 있다.
 
+### Codex 압축 rollout 이관 (2026-10-16)
+
+- Codex 0.162는 `legacy_to_paginated_v1` 마이그레이션에서 더 쓰지 않는 rollout을 zstd로 압축한다(`rollout-*.jsonl.zst`). 이 기기에서 `~/.codex/sessions`의 151개 중 117개가 압축됐고, `.jsonl`만 찾던 이관은 이 기록을 건너뛰었다. 줄 형식(`session_meta`, `response_item`, 최상위 `ordinal`)은 그대로다.
+- `.jsonl.zst`도 Codex 기록으로 찾고, 대화 id는 압축 전과 같이 파일 이름의 uuid다. 그래서 `imported_sessions`가 같은 세션을 다시 잡고, `imported_nodes`(출처 + `<id>:<ordinal>`)가 이미 옮긴 줄을 막는다.
+- 압축 파일은 이어 쓰이지 않으므로 통째로 풀어서 읽는다(Node `zlib.zstdDecompress`, Effect에는 zstd codec이 없음). 커서의 byte offset은 압축을 푼 바이트 기준이다. `size`·`mtime` 비교는 압축 파일 그대로 한다. 해제 실패는 `TranscriptDecompressFailed`로 그 기록의 실패로만 남는다.
+- `~/.codex/archived_sessions`는 계속 읽지 않는다. 이관 범위는 처음부터 `sessions`였다.
+
 ## UI·클라이언트
 
 ### UI (2026-09-14)
