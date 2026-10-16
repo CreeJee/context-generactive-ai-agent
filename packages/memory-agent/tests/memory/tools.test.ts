@@ -212,6 +212,96 @@ testAgent()("structured memory evidence", (it) => {
       }),
   );
 
+  it.effect("judges changes by one authority rule in find, trace and read", () =>
+    Effect.gen(function* () {
+      const at = yield* freshSession;
+      const env = yield* environment;
+      const older = env.nodes.append({ ...at, kind: "user", text: "earlier note" });
+      const original = env.nodes.append({
+        ...at,
+        kind: "user",
+        text: "배포 창구는 화요일 오후로 정했다",
+      });
+      const assistant = env.nodes.append({ ...at, kind: "assistant", text: "changed it" });
+      const later = env.nodes.append({ ...at, kind: "user", text: "수요일 오전으로 바꾸자" });
+      for (const source of [older, assistant, later])
+        env.interpretations.record({
+          nodeId: source.id,
+          targetId: original.id,
+          kind: "corrects",
+          status: "applied",
+          reason: "fixture",
+          model: "fixture",
+        });
+      env.interpretations.record({
+        nodeId: later.id,
+        targetId: original.id,
+        kind: "corrects",
+        status: "unconfirmed",
+        reason: "resolved later",
+        model: "fixture",
+      });
+      yield* Effect.flatMap(Indexer, (indexer) => indexer.indexAll());
+      const [find, read, trace] = createMemoryTools(env, at.projectId).tools;
+      expect(yield* call(() => find.execute!({ query: "배포 창구 화요일" }))).toMatchObject({
+        matches: expect.arrayContaining([
+          expect.objectContaining({
+            id: original.id,
+            supersededBy: [{ id: later.id, relation: "corrects" }],
+            unconfirmedChallenges: 0,
+          }),
+        ]),
+      });
+      expect(yield* call(() => trace.execute!({ id: original.id }))).toMatchObject({
+        challengedBy: [{ id: later.id, relation: "corrects", target: original.id }],
+        unconfirmed: [],
+      });
+      expect(yield* call(() => read.execute!({ id: original.id }))).toMatchObject({
+        evidenceContext: {
+          assessment: { kind: "recorded_change" },
+          hasUnconfirmedChanges: false,
+          changes: [{ source: expect.objectContaining({ id: later.id }), status: "applied" }],
+        },
+      });
+    }),
+  );
+
+  it.effect("traces a read that a later read of the changed file superseded", () =>
+    Effect.gen(function* () {
+      const at = yield* freshSession;
+      const env = yield* environment;
+      const read = (content: string, sha256: string) => {
+        const call = env.nodes.append({
+          ...at,
+          kind: "tool_call",
+          text: 'read_file {"path":"config.toml"}',
+          detail: { toolName: "read_file" },
+          refs: ["config.toml"],
+        });
+        const result = env.nodes.append({
+          ...at,
+          kind: "tool_result",
+          text: JSON.stringify({ path: "config.toml", sha256, content }),
+          detail: { toolName: "read_file", ok: true },
+          links: [{ kind: "returns", nodeId: call.id }],
+        });
+        return { call, result };
+      };
+      const first = read("retries = 2", "a".repeat(64));
+      read("retries = 5", "b".repeat(64));
+      const [, readEvidence, trace] = createMemoryTools(env, at.projectId).tools;
+      expect(yield* call(() => readEvidence.execute!({ id: first.result.id }))).toMatchObject({
+        evidenceContext: {
+          assessment: { kind: "no_recorded_change" },
+          provenance: [expect.objectContaining({ id: first.call.id })],
+        },
+      });
+      expect(yield* call(() => trace.execute!({ id: first.result.id }))).toMatchObject({
+        chain: [{ id: first.result.id }, { id: first.call.id }],
+      });
+    }),
+  );
+
   it.effect("distinguishes an ancestor correction from a changed observation", () =>
     Effect.gen(function* () {
       const at = yield* freshSession;
