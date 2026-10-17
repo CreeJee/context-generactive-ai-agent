@@ -1,4 +1,13 @@
-import { GlobalConfigFailed } from "../src/config/global-config.ts";
+import { GlobalConfigFailed, type GlobalConfigApi } from "../src/config/global-config.ts";
+import {
+  compatibleAccountsOf,
+  LEGACY_COMPATIBLE_ACCOUNT_ID,
+  LEGACY_COMPATIBLE_CREDENTIAL_ENTRY,
+  compatibleEndpointModel,
+  selectedCompatibleAccount,
+  type OpenAICompatibleConfiguration,
+  type OpenAICompatibleStatus,
+} from "../src/providers/openai-compatible-config.ts";
 import { it as effectTest } from "@effect/vitest";
 import { assertFailure } from "@effect/vitest/utils";
 import { TestClock } from "effect/testing";
@@ -19,10 +28,81 @@ import { sqliteChatPersistence } from "../src/chat-state/persistence.ts";
 import { migrations } from "../src/db/migrations.ts";
 import {
   makeOpenAICompatibleSettings,
+  type CompatibleKeyStore,
   CompatibleCompletionRejected,
   OpenAICompatibleFailed,
-  validateCompatibleConfiguration,
+  validateCompatibleConnection,
+  validateCompatibleModel,
 } from "../src/providers/openai-compatible.ts";
+
+type SingleEndpointUpdate = Omit<OpenAICompatibleConfiguration, "reasoning"> & {
+  readonly apiKey?: string | null;
+};
+/**
+ * The endpoint-with-one-model surface these cases were written for, driven through the first
+ * registered account and its catalog.
+ */
+function singleEndpointSettings(options: {
+  readonly config: GlobalConfigApi;
+  readonly keys: CompatibleKeyStore;
+  readonly fetcher?: typeof fetch | undefined;
+}) {
+  const api = makeOpenAICompatibleSettings({
+    config: options.config,
+    keys: () => options.keys,
+    fetcher: options.fetcher,
+  });
+  // Read from the config so locating the endpoint never touches a gated keychain.
+  const first = Effect.map(
+    options.config.read,
+    (settings) => compatibleAccountsOf(settings).accounts[0] ?? null,
+  );
+  const single = (status: OpenAICompatibleStatus) => {
+    const account = status.accounts[0];
+    const model = account?.models[0];
+    return {
+      configuration:
+        account === undefined || model === undefined
+          ? null
+          : compatibleEndpointModel({ ...account, credentialEntry: "unused" }, model.id),
+      hasApiKey: account?.hasApiKey ?? false,
+    };
+  };
+  const update = ({ apiKey, model, baseUrl, ...limits }: SingleEndpointUpdate) =>
+    Effect.gen(function* () {
+      const existing = yield* first;
+      const connection = { baseUrl, ...(apiKey !== undefined && { apiKey }) };
+      const id =
+        existing === null
+          ? ((yield* api.create(connection)).accounts.at(-1)?.id ?? "")
+          : existing.id;
+      if (existing !== null) yield* api.connect(id, connection);
+      yield* api.saveModel(id, { id: model, ...limits });
+      for (const other of existing?.models ?? [])
+        if (other.id !== model) yield* api.removeModel(id, other.id);
+      return single(yield* api.status);
+    });
+  return {
+    ...api,
+    status: Effect.map(api.status, single),
+    update,
+    test: Effect.flatMap(first, (account) =>
+      api.test(account?.id ?? "", account?.models[0]?.id ?? ""),
+    ),
+    listModels: Effect.flatMap(first, (account) => api.discover(account?.id ?? "")),
+  };
+}
+const endpointOf = (settings: Settings) => {
+  const account = selectedCompatibleAccount(compatibleAccountsOf(settings));
+  const model = account?.models[0];
+  return account === null || model === undefined
+    ? undefined
+    : (compatibleEndpointModel(account, model.id) ?? undefined);
+};
+const validateCompatibleConfiguration = ({ baseUrl, model, ...limits }: SingleEndpointUpdate) => {
+  validateCompatibleConnection({ baseUrl });
+  validateCompatibleModel({ id: model, ...limits });
+};
 
 /** Native fetch fixture: interruption comes from the Effect running model discovery. */
 const stalledFetch =
@@ -94,8 +174,8 @@ function fixture(fetcher?: typeof fetch, initial: Settings = {}) {
   };
   return {
     config,
-    api: makeOpenAICompatibleSettings({ config: config, keys: keys, fetcher: fetcher }),
-    restore: () => makeOpenAICompatibleSettings({ config: config, keys: keys, fetcher: fetcher }),
+    api: singleEndpointSettings({ config: config, keys: keys, fetcher: fetcher }),
+    restore: () => singleEndpointSettings({ config: config, keys: keys, fetcher: fetcher }),
     saved: () => saved,
   };
 }
@@ -327,7 +407,7 @@ describe("OpenAI compatible settings", () => {
         expect((yield* f.api.services.models.selected)?.reasoningEffort).toBe("default");
         const model = (yield* f.api.services.models.list)[0];
         expect(model?.supportedReasoningEfforts).toEqual(["default"]);
-        expect(f.saved().openaiCompatible?.reasoning).toBeUndefined();
+        expect(endpointOf(f.saved())?.reasoning).toBeUndefined();
         expect(
           yield* Effect.flip(f.api.services.models.select(configuration.model, "xhigh")),
         ).toBeInstanceOf(Error);
@@ -366,7 +446,7 @@ describe("OpenAI compatible settings", () => {
           }),
         );
         expect(Result.isFailure(yield* Fiber.join(rejected))).toBe(true);
-        expect(f.saved().openaiCompatible?.reasoning).toBeUndefined();
+        expect(endpointOf(f.saved())?.reasoning).toBeUndefined();
       }),
     ),
   );
@@ -404,7 +484,7 @@ describe("OpenAI compatible settings", () => {
             "low",
             "high",
           ]);
-          expect(f.saved().openaiCompatible?.reasoning?.source).toBe("models");
+          expect(endpointOf(f.saved())?.reasoning?.source).toBe("models");
           expect(paths).toEqual(["/v1/models"]);
           yield* f.api.services.models.select(configuration.model, "high");
           expect(
@@ -482,7 +562,7 @@ describe("OpenAI compatible settings", () => {
       expect((yield* f.api.services.models.list)[0]?.supportedReasoningEfforts).toEqual([
         "default",
       ]);
-      expect(f.saved().openaiCompatible?.reasoning).toBeUndefined();
+      expect(endpointOf(f.saved())?.reasoning).toBeUndefined();
     }),
   );
   effectTest.effect(
@@ -782,7 +862,7 @@ describe("OpenAI compatible settings", () => {
   effectTest.effect("reports an uncertain keyring write as partial without writing settings", () =>
     Effect.gen(function* () {
       let saved: Settings = {};
-      const api = makeOpenAICompatibleSettings({
+      const api = singleEndpointSettings({
         config: {
           read: Effect.sync(() => saved),
           update: (patch: Partial<Settings>) => Effect.sync(() => (saved = { ...saved, ...patch })),
@@ -799,7 +879,7 @@ describe("OpenAI compatible settings", () => {
       expect(
         yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(saved),
       ).not.toContain("secret");
-      expect(saved.openaiCompatible).toBeUndefined();
+      expect(endpointOf(saved)).toBeUndefined();
     }),
   );
   effectTest.effect(
@@ -807,7 +887,7 @@ describe("OpenAI compatible settings", () => {
     () =>
       Effect.gen(function* () {
         let key: string | null = null;
-        const api = makeOpenAICompatibleSettings({
+        const api = singleEndpointSettings({
           config: {
             read: Effect.succeed({}),
             update: () =>
@@ -847,7 +927,7 @@ describe("OpenAI compatible settings", () => {
           const gate = yield* Deferred.make<void>();
           yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
           const seen: Array<{ url: string; authorization: string | null }> = [];
-          const api = makeOpenAICompatibleSettings({
+          const api = singleEndpointSettings({
             config: {
               read: Effect.sync(() => saved),
               update: (patch: Partial<Settings>) =>
@@ -904,7 +984,7 @@ describe("OpenAI compatible settings", () => {
       let key: string | null = null;
       let rejectWrite = false;
       const headers: Array<string | null> = [];
-      const api = makeOpenAICompatibleSettings({
+      const api = singleEndpointSettings({
         config: {
           read: Effect.sync(() => saved),
           update: (patch: Partial<Settings>) => Effect.sync(() => (saved = { ...saved, ...patch })),
@@ -962,7 +1042,7 @@ describe("OpenAI compatible settings", () => {
         const writing = yield* Deferred.make<void>();
         const gate = yield* Deferred.make<void>();
         yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
-        const api = makeOpenAICompatibleSettings({
+        const api = singleEndpointSettings({
           config: {
             read: Effect.sync(() => saved),
             update: (patch: Partial<Settings>) =>
@@ -1005,7 +1085,7 @@ describe("OpenAI compatible settings", () => {
       Effect.gen(function* () {
         const neverRead = yield* Effect.forkChild(Effect.never, { startImmediately: true });
         let saved: Settings = { openaiCompatible: configuration };
-        const api = makeOpenAICompatibleSettings({
+        const api = singleEndpointSettings({
           config: {
             read: Effect.sync(() => saved),
             update: (patch: Partial<Settings>) =>
@@ -1089,7 +1169,7 @@ describe("OpenAI compatible settings", () => {
           let saved: Settings = {};
           let key: string | null = null;
           const observed: Array<{ url: string; authorization: string | null; body: string }> = [];
-          const api = makeOpenAICompatibleSettings({
+          const api = singleEndpointSettings({
             config: {
               read: Effect.sync(() => saved),
               update: (patch: Partial<Settings>) =>
@@ -1288,5 +1368,90 @@ describe("OpenAI compatible settings", () => {
           }
         }),
       ),
+  );
+
+  effectTest.live(
+    "keeps each endpoint's key apart and moves the model choice with the selected endpoint",
+    () =>
+      Effect.gen(function* () {
+        let saved: Settings = {
+          provider: "openai-compatible",
+          model: configuration.model,
+          reasoningEffort: "default",
+          openaiCompatible: configuration,
+        };
+        const stored = new Map<string, string>([
+          [LEGACY_COMPATIBLE_CREDENTIAL_ENTRY, "legacy-key-from-before-accounts"],
+        ]);
+        const api = makeOpenAICompatibleSettings({
+          config: {
+            read: Effect.sync(() => saved),
+            update: (patch: Partial<Settings>) =>
+              Effect.sync(() => (saved = { ...saved, ...patch })),
+          },
+          keys: (entry) => ({
+            get: () => Promise.resolve(stored.get(entry) ?? null),
+            set: (value) =>
+              Promise.resolve(
+                void (value === null ? stored.delete(entry) : stored.set(entry, value)),
+              ),
+          }),
+        });
+        const legacy = (yield* api.status).accounts;
+        expect(legacy).toMatchObject([
+          {
+            id: LEGACY_COMPATIBLE_ACCOUNT_ID,
+            baseUrl: configuration.baseUrl,
+            models: [{ id: configuration.model }],
+            hasApiKey: true,
+            selected: true,
+          },
+        ]);
+
+        const created = (yield* api.create({
+          baseUrl: "https://second.test/v1",
+          label: "Second",
+          apiKey: "second-key",
+        })).accounts;
+        const id = created.find((account) => account.label === "Second")?.id ?? "";
+        expect(created.find((account) => account.id === id)).toMatchObject({
+          hasApiKey: true,
+          selected: false,
+          models: [],
+        });
+        expect(saved.openaiCompatible).toBeUndefined();
+        expect(stored.get(LEGACY_COMPATIBLE_CREDENTIAL_ENTRY)).toBe(
+          "legacy-key-from-before-accounts",
+        );
+        expect(stored.size).toBe(2);
+
+        const second = {
+          id: "second",
+          contextWindow: 16384,
+          outputBudget: 1024,
+          toolCalling: false,
+        };
+        yield* api.saveModel(id, second);
+        yield* api.saveModel(id, { ...second, id: configuration.model });
+        // The same model registered on both endpoints stays chosen across a switch.
+        yield* api.select(id);
+        expect(saved).toMatchObject({ model: configuration.model });
+        yield* api.removeModel(id, configuration.model);
+        expect(saved).toMatchObject({ provider: "openai-compatible", model: "second" });
+        const runtime = yield* api.runtime;
+        expect(runtime.contextWindow("second")).toBe(second.contextWindow - second.outputBudget);
+        expect(runtime.contextWindow(configuration.model)).toBe(0);
+
+        yield* api.remove(id);
+        expect(stored.size).toBe(1);
+        expect(saved).toMatchObject({ model: configuration.model });
+        expect((yield* api.status).accounts).toMatchObject([
+          { id: LEGACY_COMPATIBLE_ACCOUNT_ID, selected: true },
+        ]);
+        expect(yield* Effect.flip(api.select("missing"))).toMatchObject({
+          _tag: "OpenAICompatibleFailed",
+          operation: "missing",
+        });
+      }),
   );
 });

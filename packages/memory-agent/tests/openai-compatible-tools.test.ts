@@ -17,18 +17,13 @@ it.effect(
           read: Effect.sync(() => saved),
           update: (patch) => Effect.sync(() => (saved = { ...saved, ...patch })),
         },
-        keys: { get: () => Promise.resolve(null), set: () => Promise.resolve() },
+        keys: () => ({ get: () => Promise.resolve(null), set: () => Promise.resolve() }),
         fetcher: () =>
           Promise.resolve(new Response(wire, { headers: { "Content-Type": "text/event-stream" } })),
       });
-      const configuration = {
-        baseUrl: "http://localhost:8000/v1",
-        model: "manual",
-        contextWindow: 8192,
-        outputBudget: 512,
-        toolCalling: true,
-      };
-      yield* api.update(configuration);
+      const model = { id: "manual", contextWindow: 8192, outputBudget: 512, toolCalling: true };
+      const id = (yield* api.create({ baseUrl: "http://localhost:8000/v1" })).accounts[0]?.id ?? "";
+      yield* api.saveModel(id, model);
       const selection = yield* api.services.models.select("manual");
       const collect = Effect.fnUntraced(function* () {
         return yield* Stream.fromAsyncIterable(
@@ -44,7 +39,7 @@ it.effect(
         );
       });
       expect(yield* collect()).toContain("TOOL_CALL_START");
-      yield* api.update({ ...configuration, toolCalling: false });
+      yield* api.saveModel(id, { ...model, toolCalling: false });
       const failed = yield* Effect.flip(collect());
       expect(failed.cause).toBeInstanceOf(Error);
       expect(failed.cause).toHaveProperty(

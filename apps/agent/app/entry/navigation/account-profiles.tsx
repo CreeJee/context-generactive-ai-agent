@@ -8,7 +8,6 @@ import {
   LogOutIcon,
   PencilIcon,
   PlusIcon,
-  Settings2Icon,
   XIcon,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -298,7 +297,7 @@ function AuthErrorAlert({ auth }: { auth: Extract<ProviderAuthState, { status: "
 }
 
 /** A provider heading with its one action on the right. */
-function ProviderHeader({
+export function ProviderHeader({
   provider,
   description,
   children,
@@ -479,24 +478,22 @@ function ProviderAccountsSection({
 
 /**
  * Accounts grouped by provider, each group with its own add button: rename, log out and add here.
- * Switching belongs to the sidebar switcher, so this view only edits.
+ * Switching belongs to the sidebar switcher, so this view only edits. `children` follows the
+ * subscription groups, for the compatible endpoints.
  */
 export function AccountManagerList({
   providers,
   activeProvider,
-  compatibleConfigured,
   error,
   onAction,
-  onConfigureCompatible,
+  children,
 }: {
   providers: readonly ProviderAccounts[];
   activeProvider: ProviderId;
-  compatibleConfigured: boolean;
   error: string | null;
   onAction: (provider: SubscriptionAccountProvider, action: AccountAction) => void;
-  onConfigureCompatible: () => void;
+  children?: React.ReactNode;
 }) {
-  const compatibleCurrent = activeProvider === "openai-compatible";
   return (
     <div className="flex flex-col divide-y">
       {error && (
@@ -512,31 +509,7 @@ export function AccountManagerList({
           onAction={(action) => onAction(group.provider, action)}
         />
       ))}
-      <section
-        aria-label={providerLabels["openai-compatible"]}
-        className="flex flex-col gap-3 py-5"
-      >
-        <ProviderHeader
-          provider="openai-compatible"
-          description="직접 설정한 OpenAI 호환 엔드포인트 하나를 써요."
-        >
-          <Button variant="outline" size="sm" onClick={onConfigureCompatible}>
-            <Settings2Icon /> 설정
-          </Button>
-        </ProviderHeader>
-        <div
-          className={cn(
-            "flex min-w-0 items-center gap-1.5 rounded-lg border px-3 py-2.5",
-            compatibleCurrent && "border-primary/50",
-          )}
-        >
-          <span className="truncate text-sm font-medium">직접 설정한 엔드포인트</span>
-          {compatibleCurrent && <Badge variant="outline">사용 중</Badge>}
-          <span className="ml-auto shrink-0 text-2xs text-muted-foreground">
-            {compatibleConfigured ? "설정됨" : "설정 필요"}
-          </span>
-        </div>
-      </section>
+      {children}
     </div>
   );
 }
@@ -578,17 +551,15 @@ function useProviderAccounts(
   return { group, failed: accounts.isError, run: action.mutateAsync };
 }
 
-/** Every subscription account and the compatible endpoint, mounted only while the sheet is open. */
+/** Every subscription account, then `children`; mounted only while the sheet is open. */
 export function AccountManager({
   auth,
   activeProvider,
-  compatibleConfigured,
-  onConfigureCompatible,
+  children,
 }: {
   auth: Record<SubscriptionAccountProvider, ProviderAuthState | null>;
   activeProvider: ProviderId;
-  compatibleConfigured: boolean;
-  onConfigureCompatible: () => void;
+  children?: React.ReactNode;
 }) {
   const openai = useProviderAccounts("openai", auth.openai);
   const anthropic = useProviderAccounts("anthropic", auth.anthropic);
@@ -598,9 +569,7 @@ export function AccountManager({
     <AccountManagerList
       providers={[openai.group, anthropic.group]}
       activeProvider={activeProvider}
-      compatibleConfigured={compatibleConfigured}
       error={error ?? (openai.failed || anthropic.failed ? "계정 목록을 불러오지 못했어요." : null)}
-      onConfigureCompatible={onConfigureCompatible}
       onAction={(provider, next) => {
         setError(null);
         runners[provider](next).then(
@@ -614,6 +583,8 @@ export function AccountManager({
             ),
         );
       }}
-    />
+    >
+      {children}
+    </AccountManagerList>
   );
 }

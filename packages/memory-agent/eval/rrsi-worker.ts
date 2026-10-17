@@ -189,10 +189,10 @@ const evaluateWorker = Effect.fn("Rrsi.evaluateWorker")(function* () {
     );
     const compatibleLayer = OpenAICompatibleSettings.layerWith(
       // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-      Layer.succeed(CompatibleKeyring, {
+      Layer.succeed(CompatibleKeyring, () => ({
         get: () => Promise.resolve(null),
         set: () => Promise.resolve(undefined),
-      }),
+      })),
       Layer.succeed(CompatibleFetch, transport),
     );
     const registry = Layer.effect(

@@ -7,6 +7,8 @@ import "../../app.css";
 import { AccountModelPanel } from "./account-model-panel";
 import { AccountManagerList } from "./account-profiles";
 import { AccountSwitcherMenu } from "./account-switcher";
+import { CompatibleAccountsList } from "./compatible-accounts";
+import type { CompatibleAccountChange } from "./compatible-client";
 import { ModelSection, ProjectSection } from "./sidebar";
 
 const alignedTerms = (root: HTMLElement, expected: string[]) => {
@@ -191,10 +193,8 @@ describe("sidebar disclosures", () => {
                 },
               ]}
               activeProvider="openai"
-              compatibleConfigured={false}
               error={null}
               onAction={(provider, action) => actions.push({ provider, action })}
-              onConfigureCompatible={() => {}}
             />
           </div>,
         ),
@@ -279,12 +279,22 @@ describe("sidebar disclosures", () => {
                     },
                     current: false,
                   },
-                  { kind: "compatible", configured: false, current: false },
+                  {
+                    kind: "compatible",
+                    account: {
+                      id: "e",
+                      label: "로컬 서버",
+                      baseUrl: "http://localhost:1234/v1",
+                      models: [],
+                      hasApiKey: false,
+                      selected: true,
+                    },
+                    current: false,
+                  },
                 ]}
                 busy={false}
                 error={null}
                 onSwitch={(target) => switched.push(target)}
-                onConfigureCompatible={() => {}}
                 onManage={() => void (managed += 1)}
               />
             </div>,
@@ -298,7 +308,11 @@ describe("sidebar disclosures", () => {
         yield* sdkCall(() => expect.element(work.getByText("37%")).toBeVisible());
         yield* sdkCall(() =>
           expect
-            .element(screen.getByRole("menuitem", { name: "직접 설정한 엔드포인트 (OpenAI 호환)" }))
+            .element(
+              screen
+                .getByRole("menuitem", { name: "로컬 서버 (OpenAI 호환)" })
+                .getByText("모델 없음"),
+            )
             .toBeVisible(),
         );
         yield* sdkCall(() => work.click());
@@ -306,6 +320,64 @@ describe("sidebar disclosures", () => {
         yield* sdkCall(() => screen.getByRole("button", { name: "계정 관리" }).click());
         expect(managed).toBe(1);
       }),
+  );
+
+  it.live("compatible endpoints are added like accounts and get models registered under them", () =>
+    Effect.gen(function* () {
+      const changes: CompatibleAccountChange[] = [];
+      const screen = yield* sdkCall(() =>
+        render(
+          <div className="w-96">
+            <CompatibleAccountsList
+              accounts={[
+                {
+                  id: "e",
+                  label: "로컬 서버",
+                  baseUrl: "http://localhost:1234/v1",
+                  models: [],
+                  hasApiKey: false,
+                  selected: true,
+                },
+              ]}
+              activeProvider="openai-compatible"
+              busy={false}
+              failed={false}
+              handlers={{
+                onChange: (change) => Promise.resolve(void changes.push(change)),
+                onTest: () => Promise.resolve(),
+                onDiscover: () => Promise.resolve(["served-model"]),
+              }}
+            />
+          </div>,
+        ),
+      );
+      const endpoint = screen.getByRole("listitem", { name: "로컬 서버 (OpenAI 호환)" });
+      yield* sdkCall(() => expect.element(endpoint.getByText("사용 중")).toBeVisible());
+      yield* sdkCall(() => endpoint.getByRole("button", { name: "서버 모델 불러오기" }).click());
+      yield* sdkCall(() => endpoint.getByRole("button", { name: "served-model" }).click());
+      yield* sdkCall(() => endpoint.getByRole("button", { name: "모델 저장" }).click());
+
+      yield* sdkCall(() =>
+        screen.getByRole("button", { name: "OpenAI 호환 엔드포인트 추가" }).click(),
+      );
+      yield* sdkCall(() =>
+        screen.getByRole("textbox", { name: "Base URL" }).fill("https://api.example.com/v1"),
+      );
+      yield* sdkCall(() => screen.getByRole("button", { name: "추가" }).click());
+      expect(changes).toEqual([
+        {
+          intent: "save-model",
+          accountId: "e",
+          model: {
+            id: "served-model",
+            contextWindow: 32768,
+            outputBudget: 4096,
+            toolCalling: true,
+          },
+        },
+        { intent: "create", baseUrl: "https://api.example.com/v1" },
+      ]);
+    }),
   );
 });
 

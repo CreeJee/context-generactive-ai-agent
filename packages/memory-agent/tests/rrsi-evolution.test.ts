@@ -104,10 +104,10 @@ const fixture = Effect.fnUntraced(function* (options: {
   });
   const config = GlobalConfig.layer.pipe(Layer.provide(StorageRoot.layer(directory)));
   const compatible = OpenAICompatibleSettings.layerWith(
-    Layer.succeed(CompatibleKeyring, {
+    Layer.succeed(CompatibleKeyring, () => ({
       get: () => Promise.resolve(null),
       set: () => Promise.resolve(),
-    }),
+    })),
     Layer.succeed(CompatibleFetch, () => Promise.resolve(Response.json({}))),
   ).pipe(Layer.provide(config));
   const dependencies = Layer.mergeAll(

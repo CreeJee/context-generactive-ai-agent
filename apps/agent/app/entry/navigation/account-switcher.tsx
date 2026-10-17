@@ -11,14 +11,18 @@ import {
 } from "~/components/ui/dropdown-menu";
 import type {
   OAuthProfile,
-  ProviderAuthState,
   ProviderId,
   SubscriptionAccountProvider,
   SubscriptionQuotaReport,
 } from "../api";
 import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
-import { useAccountQuotaQuery, useAccountsQuery } from "../queries/global";
+import {
+  useAccountQuotaQuery,
+  useAccountsQuery,
+  useCompatibleAccountsQuery,
+} from "../queries/global";
+import type { CompatibleAccountStatus } from "./compatible-client";
 import type { AccountTarget } from "../queries/mutations/global";
 import {
   percentTone,
@@ -30,7 +34,7 @@ import {
 import { timeUntil } from "../shared/local-time";
 import { providerLabels } from "./providers";
 
-/** One row of the switcher: a subscription login, or the single compatible configuration. */
+/** One row of the switcher: a subscription login, or a compatible endpoint. */
 export type AccountEntry =
   | {
       readonly kind: "profile";
@@ -39,14 +43,18 @@ export type AccountEntry =
       readonly quota: QuotaStatus | undefined;
       readonly current: boolean;
     }
-  | { readonly kind: "compatible"; readonly configured: boolean; readonly current: boolean };
+  | {
+      readonly kind: "compatible";
+      readonly account: CompatibleAccountStatus;
+      readonly current: boolean;
+    };
 
 const entryKey = (entry: AccountEntry) => {
   switch (entry.kind) {
     case "profile":
       return entry.profile.id;
     case "compatible":
-      return "openai-compatible";
+      return `openai-compatible:${entry.account.id}`;
   }
 };
 
@@ -64,7 +72,7 @@ const entryLabel = (entry: AccountEntry) => {
     case "profile":
       return entry.profile.label;
     case "compatible":
-      return "직접 설정한 엔드포인트";
+      return entry.account.label;
   }
 };
 
@@ -87,7 +95,7 @@ function QuotaHeadline({ entry }: { entry: AccountEntry }) {
     case "compatible":
       return (
         <span className="shrink-0 text-2xs text-muted-foreground">
-          {entry.configured ? "설정됨" : "설정 필요"}
+          {entry.account.models.length > 0 ? `모델 ${entry.account.models.length}개` : "모델 없음"}
         </span>
       );
     case "profile": {
@@ -146,14 +154,12 @@ export function AccountSwitcherMenu({
   busy,
   error,
   onSwitch,
-  onConfigureCompatible,
   onManage,
 }: {
   entries: readonly AccountEntry[];
   busy: boolean;
   error: string | null;
   onSwitch: (target: AccountTarget) => void;
-  onConfigureCompatible: () => void;
   onManage: () => void;
 }) {
   const current = entries.find((entry) => entry.current);
@@ -210,9 +216,10 @@ export function AccountSwitcherMenu({
                       case "profile":
                         return onSwitch({ provider: entry.provider, accountId: entry.profile.id });
                       case "compatible":
-                        return entry.configured
-                          ? onSwitch({ provider: "openai-compatible" })
-                          : onConfigureCompatible();
+                        return onSwitch({
+                          provider: "openai-compatible",
+                          accountId: entry.account.id,
+                        });
                     }
                   }}
                 >
@@ -243,25 +250,22 @@ export function AccountSwitcherMenu({
 /** Loads every provider's accounts for the switcher; the account in use follows the model selection. */
 export function AccountSwitcher({
   activeProvider,
-  compatibleAuth,
   busy,
   error,
   onSwitch,
-  onConfigureCompatible,
   onManage,
 }: {
   activeProvider: ProviderId;
-  compatibleAuth: ProviderAuthState | null;
   busy: boolean;
   error: string | null;
   onSwitch: (target: AccountTarget) => void;
-  onConfigureCompatible: () => void;
   onManage: () => void;
 }) {
   const openai = useAccountsQuery("openai", true);
   const anthropic = useAccountsQuery("anthropic", true);
   const openaiQuota = useAccountQuotaQuery("openai", true);
   const anthropicQuota = useAccountQuotaQuery("anthropic", true);
+  const compatible = useCompatibleAccountsQuery();
   const profiles = (
     provider: SubscriptionAccountProvider,
     profiles: readonly OAuthProfile[] | undefined,
@@ -277,11 +281,11 @@ export function AccountSwitcher({
   const entries: AccountEntry[] = [
     ...profiles("openai", openai.data?.profiles, openaiQuota.data),
     ...profiles("anthropic", anthropic.data?.profiles, anthropicQuota.data),
-    {
+    ...(compatible.data?.accounts ?? []).map((account): AccountEntry => ({
       kind: "compatible",
-      configured: compatibleAuth?.status === "signed-in",
-      current: activeProvider === "openai-compatible",
-    },
+      account,
+      current: activeProvider === "openai-compatible" && account.selected,
+    })),
   ];
   return (
     <AccountSwitcherMenu
@@ -289,7 +293,6 @@ export function AccountSwitcher({
       busy={busy}
       error={error}
       onSwitch={onSwitch}
-      onConfigureCompatible={onConfigureCompatible}
       onManage={onManage}
     />
   );

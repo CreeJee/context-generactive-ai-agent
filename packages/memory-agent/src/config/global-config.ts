@@ -3,7 +3,10 @@ import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
 import { Context, Effect, FileSystem, Layer, Path, Schema, Semaphore } from "effect";
 import { ProviderId } from "../providers/contracts.ts";
-import { OpenAICompatibleConfiguration } from "../providers/openai-compatible-config.ts";
+import {
+  CompatibleAccounts,
+  OpenAICompatibleConfiguration,
+} from "../providers/openai-compatible-config.ts";
 import { StorageRoot } from "./storage-root.ts";
 
 /**
@@ -53,7 +56,9 @@ export const SummaryStartPercent = Schema.Int.check(Schema.isBetween({ minimum: 
 
 /** User-wide settings. Secrets never go here; they belong in the OS keychain. */
 export const Settings = Schema.Struct({
+  /** The single endpoint of releases before compatible accounts; read via `compatibleAccountsOf`. */
   openaiCompatible: Schema.optional(OpenAICompatibleConfiguration),
+  compatibleAccounts: Schema.optional(CompatibleAccounts),
   /** Provider paired with the selected model. Legacy model-only settings migrate to OpenAI. */
   provider: Schema.optional(ProviderId),
   /** Model id chosen from the signed-in provider's model list. */

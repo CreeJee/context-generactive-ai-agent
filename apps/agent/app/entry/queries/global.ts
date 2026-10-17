@@ -1,6 +1,7 @@
 import { Function as EffectFunction } from "effect";
 import { queryOptions, useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { api, type ProviderId, type SubscriptionAccountProvider } from "../api";
+import { compatibleClient, compatibleQueryKey } from "../navigation/compatible-client";
 import { appQueryKeys } from "./keys";
 
 export const globalQueries = {
@@ -15,6 +16,8 @@ export const globalQueries = {
       queryKey: appQueryKeys.global.accounts(provider),
       queryFn: () => api.accounts(provider),
     }),
+  compatibleAccounts: () =>
+    queryOptions({ queryKey: compatibleQueryKey, queryFn: compatibleClient.list }),
   accountQuota: (provider: SubscriptionAccountProvider) =>
     queryOptions({
       queryKey: appQueryKeys.global.accountQuota(provider),
@@ -48,6 +51,7 @@ export const useAccountsQuery: {
     enabled: boolean,
   ): (provider: SubscriptionAccountProvider) => ReturnType<typeof useAccountsQueryBody>;
 } & typeof useAccountsQueryBody = EffectFunction.dual(2, useAccountsQueryBody);
+export const useCompatibleAccountsQuery = () => useQuery(globalQueries.compatibleAccounts());
 const useAccountQuotaQueryBody = (provider: SubscriptionAccountProvider, enabled: boolean) =>
   useQuery({ ...globalQueries.accountQuota(provider), enabled });
 export const useAccountQuotaQuery: {

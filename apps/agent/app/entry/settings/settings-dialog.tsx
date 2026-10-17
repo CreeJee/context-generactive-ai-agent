@@ -29,13 +29,11 @@ import { McpSettings } from "./pages/mcp";
 import { AgentSettings } from "./pages/agents";
 import { SkillSettings } from "./pages/skills";
 import { RrsiSettings } from "./pages/rrsi";
-import { CompatibleSettings } from "./pages/compatible";
 
 const settingsGroups = [
   {
     label: "연결",
     pages: [
-      { value: "compatible", label: "OpenAI 호환 공급자", icon: PlugIcon },
       { value: "web", label: "웹 검색", icon: GlobeIcon },
       { value: "image", label: "이미지 생성", icon: ImageIcon },
       { value: "mcp", label: "MCP 서버", icon: PlugIcon },
@@ -63,12 +61,6 @@ function SettingsPageBody({ page, project }: { page: SettingsPage; project: Proj
       return (
         <QuerySection>
           <RrsiSettings />
-        </QuerySection>
-      );
-    case "compatible":
-      return (
-        <QuerySection>
-          <CompatibleSettings />
         </QuerySection>
       );
     case "web":

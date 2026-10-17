@@ -15,6 +15,10 @@ import { Nodes } from "../memory/nodes.ts";
 import { MemorySearch } from "../memory/search.ts";
 import { isEmptyUserText } from "../messages/empty-user.ts";
 import { ActiveProvider } from "../providers/active-provider.ts";
+import {
+  compatibleAccountsOf,
+  selectedCompatibleAccount,
+} from "../providers/openai-compatible-config.ts";
 import { releaseSubscriptionRun } from "../providers/subscription-runtime.ts";
 import { SdkCancellations } from "../runtime/sdk-cancellation.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
@@ -84,7 +88,9 @@ const make = Effect.gen(function* () {
 
     const toolCalling =
       selection.provider !== "openai-compatible" ||
-      (yield* config.read).openaiCompatible?.toolCalling === true;
+      selectedCompatibleAccount(compatibleAccountsOf(yield* config.read))?.models.find(
+        (model) => model.id === selection.model,
+      )?.toolCalling === true;
     const runtime = yield* active.runtime(selection);
     yield* threads.link(
       threadId,

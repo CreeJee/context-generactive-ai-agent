@@ -55,6 +55,7 @@ import { openSettingsOverlay } from "./settings/open-settings";
 import { ModelSection, ProjectSection, SessionSection } from "./navigation/sidebar";
 import { AccountModelPanel } from "./navigation/account-model-panel";
 import { AccountManager } from "./navigation/account-profiles";
+import { CompatibleAccounts } from "./navigation/compatible-accounts";
 import { AccountSwitcher } from "./navigation/account-switcher";
 import { WorkTracePanel } from "./chat/work-trace-panel";
 import { BtwPanel } from "./chat/btw-panel";
@@ -502,13 +503,9 @@ export function App() {
             <div className="mt-auto">
               <AccountSwitcher
                 activeProvider={selection?.provider ?? provider}
-                compatibleAuth={auth["openai-compatible"]}
                 busy={switchMutation.isPending}
                 error={switchError}
                 onSwitch={(target) => void switchAccount(target)}
-                onConfigureCompatible={() =>
-                  openSettingsOverlay({ project: null, initialPage: "compatible" })
-                }
                 onManage={() => setAccountsOpen(true)}
               />
             </div>
@@ -525,11 +522,9 @@ export function App() {
                   <AccountManager
                     auth={{ openai: auth.openai, anthropic: auth.anthropic }}
                     activeProvider={selection?.provider ?? provider}
-                    compatibleConfigured={auth["openai-compatible"]?.status === "signed-in"}
-                    onConfigureCompatible={() =>
-                      openSettingsOverlay({ project: null, initialPage: "compatible" })
-                    }
-                  />
+                  >
+                    <CompatibleAccounts activeProvider={selection?.provider ?? provider} />
+                  </AccountManager>
                 </div>
               </SheetContent>
             </Sheet>

@@ -9,11 +9,14 @@ export {
   makeOpenAICompatibleSettings,
   type OpenAICompatibleSettingsApi,
   type CompatibleKeyStore,
+  type CompatibleKeychain,
 } from "./providers/openai-compatible.ts";
 export {
   OpenAICompatibleConfiguration,
-  OpenAICompatibleUpdate,
-  type OpenAICompatibleStatus,
+  OpenAICompatibleStatus,
+  CompatibleAccountStatus,
+  CompatibleConnectionInput,
+  CompatibleModelInput,
 } from "./providers/openai-compatible-config.ts";
 export {
   AgentChat,

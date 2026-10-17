@@ -8,6 +8,11 @@ import {
   type ProviderId,
   type SubscriptionAccountProvider,
 } from "../../api";
+import {
+  compatibleClient,
+  type CompatibleAccountChange,
+  type CompatibleAccountsView,
+} from "../../navigation/compatible-client";
 import { globalQueries } from "../global";
 import { appQueryKeys } from "../keys";
 
@@ -98,10 +103,30 @@ export function useAccountActionMutation(provider: SubscriptionAccountProvider) 
   });
 }
 
-/** An account the sidebar switcher can move to; the compatible provider has a single configuration. */
+/** A changed endpoint list can change compatible auth, the catalog and the model choice. */
+const publishCompatibleAccounts = (client: QueryClient, view: CompatibleAccountsView) => {
+  client.setQueryData(globalQueries.compatibleAccounts().queryKey, view);
+  // React Query owns these refreshes and reports their errors on the corresponding queries.
+  for (const queryKey of [
+    globalQueries.auth("openai-compatible").queryKey,
+    appQueryKeys.global.models("openai-compatible"),
+  ])
+    void client.invalidateQueries({ queryKey });
+};
+
+/** Adds, edits and removes compatible endpoints and their registered models. */
+export function useCompatibleAccountMutation() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (change: CompatibleAccountChange) => compatibleClient.change(change),
+    onSuccess: (view) => publishCompatibleAccounts(client, view),
+  });
+}
+
+/** An account the sidebar switcher can move to. */
 export type AccountTarget =
   | { readonly provider: SubscriptionAccountProvider; readonly accountId: string }
-  | { readonly provider: "openai-compatible" };
+  | { readonly provider: "openai-compatible"; readonly accountId: string };
 
 /**
  * Makes `target` the account in use. Moving to another provider also selects that provider's
@@ -132,8 +157,19 @@ export function useSwitchAccountMutation() {
               );
               break;
             }
-            case "openai-compatible":
+            case "openai-compatible": {
+              const view = yield* uiPromise(() =>
+                compatibleClient.change({ intent: "select", accountId: target.accountId }),
+              );
+              publishCompatibleAccounts(client, view);
+              // A catalog already in flight may belong to the previously selected endpoint.
+              yield* uiPromise(() =>
+                client.cancelQueries({
+                  queryKey: globalQueries.models("openai-compatible").queryKey,
+                }),
+              );
               break;
+            }
           }
           if (!selectModel) return null;
           const { models } = yield* uiPromise(() =>

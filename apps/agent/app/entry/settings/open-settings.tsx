@@ -8,7 +8,7 @@ export function openSettingsOverlay({
   initialPage = "web",
 }: {
   readonly project: Project | null;
-  readonly initialPage?: "web" | "compatible";
+  readonly initialPage?: "web";
 }) {
   overlay.open(({ isOpen, close, unmount }) => (
     <SettingsOverlay
