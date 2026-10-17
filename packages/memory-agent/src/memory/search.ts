@@ -16,6 +16,7 @@ import { VectorIndex } from "./embedding/vector-index.ts";
 import { MorphAnalysisFailed, MorphAnalyzer } from "./morph/analyzer.ts";
 import { changeAuthoritySql } from "./changes.ts";
 import { Graph, type Hop } from "./graph.ts";
+import { latestResolver, type LatestEvidence } from "./latest.ts";
 import type { NodeKind } from "./nodes.ts";
 
 export interface FindInput {
@@ -48,6 +49,8 @@ export interface Match {
   }[];
   /** Later statements that may correct or retract this one but could not be tied to it for sure. */
   readonly unconfirmedChallenges: number;
+  /** Where the recorded corrections/retractions of this statement end. */
+  readonly latest: LatestEvidence;
 }
 
 export interface FindResult {
@@ -142,6 +145,18 @@ const decodeChallenge = EffectFunction.flow(
   ),
   Result.getOrThrow,
 );
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeChainSource = EffectFunction.flow(
+  Schema.decodeUnknownResult(
+    Schema.Struct({
+      id: Schema.String,
+      seq: Schema.Finite,
+      text: Schema.String,
+      created_at: Schema.String,
+    }),
+  ),
+  Result.getOrThrow,
+);
 
 /** Splits a question into search terms; trigram FTS needs 3+ characters, shorter terms use LIKE. */
 export function searchTerms(query: string) {
@@ -193,6 +208,33 @@ const make = (tuning: SearchTuning) =>
       AND NOT EXISTS (
         SELECT 1 FROM edges e WHERE e.from_id = i.node_id AND e.to_id = i.target_id AND e.kind = i.kind
       )`);
+    const sourceRow = sqlite.prepare("SELECT id, seq, text, created_at FROM nodes WHERE id = ?");
+    // Synchronous native SQLite reads; a failure stops the search instead of hiding later changes.
+    const storageRead = <A>(read: () => A) =>
+      Effect.try({
+        try: read,
+        catch: () => NativeMemorySearchFailed.make({ reason: "read-failed" }),
+      });
+    const latest = latestResolver({
+      appliedChanges: (id) =>
+        storageRead(() =>
+          supersededBy.all(id).map((row) => {
+            const change = decodeChallenge(row);
+            return { sourceId: change.from_id, relation: change.kind };
+          }),
+        ),
+      hasUnconfirmed: (id) => storageRead(() => decodeCount(unconfirmedOf.get(id)).count > 0),
+      source: (id) =>
+        storageRead(() => decodeChainSource(sourceRow.get(id))).pipe(
+          Effect.map((row) => ({
+            id: row.id,
+            seq: row.seq,
+            text: row.text,
+            createdAt: row.created_at,
+          })),
+        ),
+    });
+
     const nameOf = sqlite.prepare("SELECT name FROM projects WHERE id = ?");
     const projectName = (projectId: string) => {
       const row = nameOf.get(projectId);
@@ -306,13 +348,8 @@ const make = (tuning: SearchTuning) =>
         });
         const { unindexed, uninterpreted } = coverage;
 
-        const matches: Match[] = [];
-        for (const visit of walk.visits) {
-          if (matches.length === limit) break;
-          let foundBy: Match["foundBy"] = "graph";
-          if (visit.path.length === 0)
-            foundBy = HashSet.has(vectorIds, visit.node.id) ? "vector" : "text";
-          matches.push({
+        const matches = yield* Effect.forEach(walk.visits.slice(0, limit), (visit) =>
+          Effect.map(latest(visit.node.id), (latest): Match => ({
             id: visit.node.id,
             kind: visit.node.kind,
             projectId: visit.node.projectId,
@@ -320,7 +357,12 @@ const make = (tuning: SearchTuning) =>
             createdAt: visit.node.createdAt,
             snippet: visit.node.text.slice(0, snippetLength),
             utility: Math.round(visit.utility * 1000) / 1000,
-            foundBy,
+            foundBy:
+              visit.path.length > 0
+                ? "graph"
+                : HashSet.has(vectorIds, visit.node.id)
+                  ? "vector"
+                  : "text",
             path: visit.path,
             projectName: projectName(visit.node.projectId),
             fromOtherProject: visit.node.projectId !== input.projectId,
@@ -329,8 +371,9 @@ const make = (tuning: SearchTuning) =>
               return { id: challenge.from_id, relation: challenge.kind };
             }),
             unconfirmedChallenges: decodeCount(unconfirmedOf.get(visit.node.id)).count,
-          });
-        }
+            latest,
+          })),
+        );
         return {
           matches,
           complete: walk.complete && walk.visits.length <= limit,
@@ -340,7 +383,7 @@ const make = (tuning: SearchTuning) =>
         } satisfies FindResult;
       });
 
-    return { find, allowedProjects };
+    return { find, allowedProjects, latest };
   });
 
 /** Finds prior messages: vector and text matches seed a graph walk over the memory. */

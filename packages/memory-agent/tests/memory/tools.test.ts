@@ -266,6 +266,61 @@ testAgent()("structured memory evidence", (it) => {
     }),
   );
 
+  it.effect("names every end of a change chain without choosing between branches", () =>
+    Effect.gen(function* () {
+      const at = yield* freshSession;
+      const env = yield* environment;
+      const user = (text: string) => env.nodes.append({ ...at, kind: "user", text });
+      const change = (
+        source: { readonly id: string },
+        target: { readonly id: string },
+        kind: "corrects" | "retracts",
+        status: "applied" | "unconfirmed" = "applied",
+      ) =>
+        env.interpretations.record({
+          nodeId: source.id,
+          targetId: target.id,
+          kind,
+          status,
+          reason: "fixture",
+          model: "fixture",
+        });
+      const root = user("Orion 캐시 포트는 7000으로 정했다");
+      const second = user("Orion 캐시 포트를 7100으로 바꾼다");
+      const third = user("Orion 캐시 포트는 7200이 맞다");
+      const withdrawn = user("Orion 7200 결정은 철회한다");
+      const branch = user("Orion 스테이징만 7300으로 둔다");
+      const maybe = user("Orion 철회도 다시 생각해 보자");
+      change(second, root, "corrects");
+      change(third, second, "corrects");
+      change(withdrawn, third, "retracts");
+      change(branch, root, "corrects");
+      change(maybe, withdrawn, "retracts", "unconfirmed");
+      yield* Effect.flatMap(Indexer, (indexer) => indexer.indexAll());
+      const [find] = createMemoryTools(env, at.projectId).tools;
+      expect(yield* call(() => find.execute!({ query: "Orion 캐시 포트 7000" }))).toMatchObject({
+        matches: expect.arrayContaining([
+          expect.objectContaining({
+            id: root.id,
+            latest: {
+              kind: "branched",
+              heads: [
+                expect.objectContaining({ id: branch.id, depth: 1, recordedRank: 1 }),
+                expect.objectContaining({
+                  id: withdrawn.id,
+                  relation: "retracts",
+                  recordedRank: 2,
+                }),
+              ],
+              unconfirmedAfter: true,
+              truncated: false,
+            },
+          }),
+        ]),
+      });
+    }),
+  );
+
   it.effect("traces a read that a later read of the changed file superseded", () =>
     Effect.gen(function* () {
       const at = yield* freshSession;

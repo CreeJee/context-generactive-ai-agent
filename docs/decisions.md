@@ -1998,3 +1998,12 @@
 - `trace_evidence`도 `read_evidence`처럼 허용되지 않은 중간 출처에서 추적을 멈춘다. 숨겨진 상위 출처나 그 정정은 노출하지 않는다. 출력 형식은 유지하며 저장소 읽기 실패는 `EvidenceReadFailed/StorageRead`로 반환한다.
 - Graph 추적은 시작 노드가 이후 읽기로 대체된 `tool_result`여도 출처를 따라간다. 그래프 탐색·검색에서는 계속 제외한다. 대체된 읽기 결과는 `untraced` 대신 실제 출처와 변경 판정을 받는다.
 - `find_memory`·`trace_evidence`도 도구 호출의 abort signal을 Effect 실행에 연결한다.
+
+## 검색 결과의 최신 근거 포인터 (2026-10-16)
+
+- `find_memory` 결과를 마지막 근거로 바꾸지 않는다. 각 결과에 정정/철회 사슬이 끝나는 곳(`latest`)을 덧붙이고 검색 후보와 순위는 유지한다. 정정은 자동 해석이라 결과를 바꾸면 잘못된 정정이 원문을 가리고 이력 질문에 답할 수 없기 때문이다.
+- 사슬은 `isChangeAuthority`를 만족하는 applied 관계만 따라가며 순환과 깊이 6에서 멈춘다. `latest`는 `unchanged`·`changed`(끝 하나)·`branched`(끝 여럿)로 구분하고 `unconfirmedAfter`·`truncated`를 함께 표시한다.
+- 한 사실은 한 시점에 값이 하나이므로 `branched`는 이상 신호로 다룬다. 잘못된 대상 연결·여러 사실을 담은 메시지·실제 모순 중 무엇인지는 원문으로만 알 수 있어 하나를 고르지 않고 각 끝에 기록 순서(`recordedRank`)를 붙인다.
+- 같은 사실의 갈라짐은 해석이 정정을 사슬 끝이 아닌 원래 노드에 연결해 생길 가능성이 크다. 쓰기 시점에 대상을 사슬 끝으로 보정하는 작업은 별도로 진행한다.
+- 탐색은 `memory/latest.ts`의 Effect로 작성하고 저장소 읽기는 `MemorySearch`가 `NativeMemorySearchFailed`로 변환해 주입한다.
+- 근거: 12개 합성 사례 72회 실측에서 정답률 원문만 75%, latest 95.8%, 강제 1단계 후속 조회 83.3% (`docs/latest-evidence-pointer-2026-10-16.md`).
