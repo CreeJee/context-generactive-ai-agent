@@ -52,17 +52,15 @@ release. Add a tool name to select part of the graph. For example, run
 
 ## Effect 지침
 
-이 패키지의 에이전트 백엔드 구현·수리·리팩터링에 Effect다운 설계와 코드 스타일을 적용한다. 아래 의존성 문서 읽기 지침은 이 패키지에서 Effect 코드를 작성하거나 변경할 때 적용한다.
-
-- 서비스와 의존성은 `Context`와 `Layer`로 구성하고 내부 실행 흐름은 Effect로 합성한다.
-- 예상 가능한 실패는 타입이 명시된 오류로 모델링하고 외부 입력은 경계에서 `Schema`로 검증한다. `left`/`right`를 직접 확인하는 대신 Effect의 합성·오류 처리 API를 사용한다.
-- 자원 획득·해제는 `Scope`와 `acquireRelease`로 관리하고 동시 실행·취소·중단은 Fiber와 interruption으로 처리한다.
-- 새 코드와 변경 코드의 검토·검증에서 적용 범위와 남은 위반을 확인한다. 기존 보호 장치나 실행 중인 작업을 제거하는 구실로 삼지 않는다.
-- Effect 코드를 작성하기 전에 저장소 루트 기준 `node_modules/effect/AGENTS.md`를 전체 읽고 관련 링크를 따른다. 그 문서에 없는 API는 같은 설치본의 `node_modules/effect/src`에서 확인한다.
+이 패키지의 에이전트 백엔드 구현·수리·리팩터링에 Effect다운 설계와 코드 스타일을 적용한다.
+아래 의존성 문서 읽기 지침은 이 패키지에서 Effect 코드를 작성하거나 변경할 때 적용한다.
 
 Effect 가이드문서: 설치된 `node_modules/effect/AGENTS.md`와 그 문서에서 연결하는 예시·소스. 다른 버전의 외부 가이드를 현재 설치본의 API 근거로 사용하지 않는다.
 
-가능한 모든 로직을 Effect 답게 작성하며 항상 퍼스트파티에서 연동된 모듈이 있는지 확인하시오
+가능한 모든 로직을 Effect 답게 작성하며 항상 퍼스트파티에서 연동된 모듈이 있는지 확인해야한다,
+모둘목록: https://github.com/Effect-TS/effect#packages
+
+Effect에 대응 API가 있는 node 내장 모듈(`fs`, `child_process`, `http` 등)은 `Effect.sync`·`Effect.try`로 감싸 쓰지 않는다. 대응 API가 없으면 진단을 끄거나 낮추지 말고, `patches/`의 pnpm patch나 별도 모듈로 기능을 채운다.
 
 ## Typed error와 취소 계약
 
