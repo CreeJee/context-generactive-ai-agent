@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Function as EffectFunction, Schema } from "effect";
+import { Context, Effect, FileSystem, Function as EffectFunction, Schema } from "effect";
 // Effect has no zstd codec; Node's zlib decodes the archives Codex compresses its rollouts into.
 import { zstdDecompress } from "node:zlib";
 
@@ -8,6 +8,14 @@ const newline = 0x0a;
 
 /** A compressed transcript: a whole file, written once, read as its decompressed bytes. */
 const zstdSuffix = ".zst";
+/**
+ * The most a compressed transcript may decompress to. A few kilobytes of zstd can expand to
+ * gigabytes, and the whole result is held at once, so a larger one fails instead of taking memory.
+ */
+export const MaxDecompressedBytes = Context.Reference<number>(
+  "memory-agent/imports/MaxDecompressedBytes",
+  { defaultValue: () => 512 * 1024 * 1024 },
+);
 
 export class TranscriptDecompressFailed extends Schema.TaggedError<TranscriptDecompressFailed>()(
   "TranscriptDecompressFailed",
@@ -41,9 +49,9 @@ function completeLines(
   return { offset: start, lines };
 }
 
-const decompress = (path: string, compressed: Uint8Array) =>
+const decompress = (path: string, compressed: Uint8Array, maxBytes: number) =>
   Effect.callback<Uint8Array, TranscriptDecompressFailed>((resume) => {
-    zstdDecompress(compressed, (cause, decompressed) =>
+    zstdDecompress(compressed, { maxOutputLength: maxBytes }, (cause, decompressed) =>
       resume(
         cause === null
           ? Effect.succeed(decompressed)
@@ -59,7 +67,7 @@ const readCompressedLines = Effect.fn("readCompressedLines")(function* (
   onLine: (line: string) => void,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const bytes = yield* decompress(path, yield* fs.readFile(path));
+  const bytes = yield* decompress(path, yield* fs.readFile(path), yield* MaxDecompressedBytes);
   const read = completeLines(bytes.subarray(offset), new TextDecoder(), onLine);
   return { offset: offset + read.offset, lines: read.lines } satisfies LinesRead;
 });

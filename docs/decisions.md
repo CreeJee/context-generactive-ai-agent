@@ -2007,3 +2007,8 @@
 - 같은 사실의 갈라짐은 해석이 정정을 사슬 끝이 아닌 원래 노드에 연결해 생길 가능성이 크다. 쓰기 시점에 대상을 사슬 끝으로 보정하는 작업은 별도로 진행한다.
 - 탐색은 `memory/latest.ts`의 Effect로 작성하고 저장소 읽기는 `MemorySearch`가 `NativeMemorySearchFailed`로 변환해 주입한다.
 - 근거: 12개 합성 사례 72회 실측에서 정답률 원문만 75%, latest 95.8%, 강제 1단계 후속 조회 83.3% (`docs/latest-evidence-pointer-2026-10-16.md`).
+
+## 기록 이관의 입력 경계 강화 (2026-10-17)
+
+- Codex `.jsonl.zst` 기록은 통째로 풀기 때문에 해제 결과를 512 MiB(`MaxDecompressedBytes`)로 제한한다. 넘으면 `TranscriptDecompressFailed`로 그 기록만 실패로 남기고 나머지 이관은 계속한다.
+- 사라진 폴더를 worktree 상위 폴더로 저장소에 배치하는 규칙은, 그 상위 폴더에 그 저장소의 현재 worktree 외의 다른 폴더가 없거나 상위 폴더가 사라졌을 때만 적용한다. 무관한 폴더와 함께 쓰는 상위 폴더(`/tmp`, 공용 작업 폴더 등)에서 사라진 다른 대화가 그 저장소 프로젝트의 기억으로 섞이지 않게 하기 위해서다. 그런 대화는 기록된 remote·commit 근거로만 배치한다.

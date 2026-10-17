@@ -592,6 +592,25 @@ alone(
     }),
 );
 
+alone("does not claim a gone folder beside worktrees that share their folder with others", () =>
+  Effect.gen(function* () {
+    const { home } = yield* TestEnv;
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const { parent, worktree } = yield* repositoryWithWorktrees;
+    yield* worktree("live");
+    const shared = yield* fs.realPath(parent);
+    yield* fs.makeDirectory(path.join(shared, "unrelated"));
+    const gone = path.join(shared, "gone");
+    yield* writeTranscript(yield* codexRollout(path.join(home, ".codex")), codexLines(gone));
+    const importer = yield* Importer;
+    expect(yield* importer.runOnce).toBe(0);
+    expect((yield* importer.overview).unplaced).toEqual([
+      { cwd: gone, reason: "not_found", transcripts: 1 },
+    ]);
+  }),
+);
+
 alone("folds a project migration made for a worktree into its repository's project", () =>
   Effect.gen(function* () {
     const { project } = yield* TestEnv;

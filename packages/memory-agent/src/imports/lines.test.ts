@@ -3,7 +3,7 @@ import { Effect, FileSystem, Path } from "effect";
 import { it } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import { withTestPlatform } from "../../tests/support/platform.ts";
-import { readLinesFrom } from "./lines.ts";
+import { MaxDecompressedBytes, readLinesFrom } from "./lines.ts";
 
 it.live("resumes at complete UTF-8 lines across a 1 MiB read boundary and an unfinished tail", () =>
   Effect.scoped(
@@ -50,6 +50,25 @@ it.live("reads a zstd transcript from an offset into its decompressed lines", ()
           offset: new TextEncoder().encode(`${first}둘째 줄\n`).length,
           lines: 1,
         });
+      }),
+    ),
+  ),
+);
+
+it.live("fails a zstd transcript that decompresses past the limit instead of holding it", () =>
+  Effect.scoped(
+    withTestPlatform(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const directory = yield* fs.makeTempDirectoryScoped();
+        const transcript = path.join(directory, "rollout.jsonl.zst");
+        yield* fs.writeFile(transcript, zstdCompressSync(`${"x".repeat(4096)}\n`));
+        const failure = yield* readLinesFrom(transcript, 0, () => undefined).pipe(
+          Effect.provideService(MaxDecompressedBytes, 1024),
+          Effect.flip,
+        );
+        expect(failure._tag).toBe("TranscriptDecompressFailed");
       }),
     ),
   ),
