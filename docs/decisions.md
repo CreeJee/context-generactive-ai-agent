@@ -789,6 +789,23 @@
 - 마이그레이션 백업은 검증·재기동·수용 이후 정리 가능한 일시 복구 자료다. 전체 원본의 영구 보관을 제품 요구사항으로 추가하지 않는다. 현재 완료 snapshot과 모델 context 압축은 참조 대상 원본을 대체하는 완전한 보관본이 아니므로 snapshot 완료만으로 ledger/실패/증거를 자동 삭제하지 않는다. 장기 정리는 독립 복원 검증과 run retirement/tombstone 및 최소 idempotency 증명 정책을 별도로 설계한다.
 - 상세 근거: [owner-rpc-fingerprint-remediation-2026-10-11.md](owner-rpc-fingerprint-remediation-2026-10-11.md).
 
+### 칸반 카드 배정에 DurableQueue 채택 (2026-10-18)
+
+- "Durable approval, timer, and queue boundary (2026-10-10)"의 DurableQueue 보류를 칸반 카드 배정에 한해 푼다. 카드 실행 하나가 큐 item 하나다.
+- 재전달은 replay가 아니라 이어가기다. 재전달된 카드는 같은 카드 worktree와 이전 transcript를 보고 새 attempt로 남은 일을 한다. 근거는 "Provider 요청 전 transport 실패의 durable 재시도 경계 (2026-10-13)"의 이어가기 예외와 같다.
+- 이어가기 fence는 그대로다. `pending`·`uncertain` 도구나 결과 기록이 없는 쓰기 도구가 남은 attempt는 자동으로 이어가지 않고 `human_decision`으로 보낸다. worktree 밖 부작용은 owner ledger receipt로만 판정한다.
+- 멱등 키는 `goalId:cardId:attemptNo`이고 attemptNo는 owner가 저장된 값에서 정한다. 시도를 다 쓴 item은 카드를 `blocked`로 표시하고, 보드에서 다시 큐에 넣는 경로를 함께 둔다. 이 경로 없이는 활성화하지 않는다.
+- 큐 저장소는 owner Database 연결을 쓰는 프로젝트 소유 `PersistedQueue` store다. 별도 DB를 두지 않는다.
+- 동시에 실행하는 카드 수는 기기 사양에 따라 다르므로 사용자 설정으로 둔다.
+- 보드·큐 멱등 키·브랜치는 `goalInstanceId` 기준이다. Goal 수정은 instance를 유지하고 버전만 올리므로 key를 다시 매기지 않는다. 카드 attempt는 배정 시 Goal·Plan 버전을 고정하고, 최신 값과는 배정·verify·merge 경계에서만 비교한다. 새 Goal 전환으로 pointer가 바뀐 뒤 재전달된 이전 instance item은 실행하지 않고 `Superseded`로 완료한다.
+- 칸반 모드에서 같은 instance의 Goal을 수정하면 일괄 정지하지 않는다. 시작 전 카드 배정만 잠시 멈추고, 오케스트레이터가 카드마다 `Continue`·`Amend`·`Stop`·`Replace`·`NeedsDecision` 중 하나로 판정해 바로 적용한다. 사용자는 어떤 판정이든 보드에서 뒤집을 수 있다. worktree를 남기므로 `Stop`·`Replace`도 되돌릴 수 있다. 이 규칙은 칸반 모드에서 "실행 중 명시적 Goal 변경 동기화 (2026-10-06)"의 즉시 Plan 복귀를 대신한다.
+- 통합 검증을 통과한 Goal 브랜치는 Goal을 시작한 사용자 브랜치에 자동으로 merge한다. 대상이 보호 브랜치(프로젝트 설정, 기본 `main`·`staging`)면 자동 merge하지 않고 사용자가 PR이나 수동 merge를 고른다. 같은 대상으로 가는 merge는 대상 브랜치별로 하나씩 처리하고, 충돌은 사용자 판단으로 넘긴다. 대상 브랜치가 checkout된 작업 트리에 커밋하지 않은 변경이 있으면 merge하지 않고 기다린다.
+- 카드는 Goal 브랜치에 카드당 squash commit 하나로 통합한다. 저장소의 실제 브랜치 전략과 같다.
+- 카드 worktree는 `~/.context-generactive-agent-worktrees/<goalInstanceId>/<cardId>`에 둔다. storage root는 credential directory라 그 아래에 두지 않고, 보호 경계에 예외를 만들지 않는다. 카드 서브에이전트의 도구 루트는 그 worktree다.
+- 기본값: 동시 실행 수는 CPU 코어 수의 절반(최소 1, 최대 4), 카드당 최대 시도 수는 3이다. provider 장애 재시도는 시도 수와 따로 센다.
+- 여러 Goal을 끝까지 자동으로 돌리려면 Goal 사이 조정이 필요하므로, 프로젝트 스케줄러(LLM 아닌 결정적 서비스)를 첫 범위에 넣는다. round-robin offer, Goal 간 `dependsOn`, 대상 브랜치별 merge queue, upstream 변경 신호, 파일 겹침 알림, 통합 `human_decision` inbox를 맡는다.
+- 설계: [kanban-orchestration.md](kanban-orchestration.md).
+
 ## 기억·검색·평가
 
 ### 기억 보강: llm-interpret (2026-09-14)
