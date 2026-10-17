@@ -62,7 +62,7 @@ export const chatRequest = Effect.fnUntraced(function* (
   sessionId: string,
   runId: string,
   content = "hello",
-) {
+): Effect.fn.Return<Request, Schema.SchemaError> {
   return new Request("http://localhost/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

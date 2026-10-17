@@ -91,7 +91,7 @@
           "nestedEffectGenYield": "warning",
           "newPromise": "warning",
           "newSchemaClass": "warning",
-          "nodeBuiltinImport": "warning",
+          "nodeBuiltinImport": "error",
           "obsoleteMatchImport": "error",
           "obsoleteSchemaImport": "error",
           "optionMatchToFromOption": "error",

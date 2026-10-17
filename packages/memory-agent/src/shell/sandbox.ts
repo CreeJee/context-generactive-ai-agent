@@ -1,7 +1,16 @@
 // Native host boundary: worker threads and a scratch folder for the sandbox runtime's sockets.
 import { homedir, tmpdir } from "node:os";
 import { Worker } from "node:worker_threads";
-import { Cause, Duration, Effect, FileSystem, Option, Queue, Schema } from "effect";
+import {
+  Cause,
+  Duration,
+  Effect,
+  FileSystem,
+  Function as EffectFunction,
+  Option,
+  Queue,
+  Schema,
+} from "effect";
 import { path } from "../runtime/synchronous-path.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../runtime/resources.ts";
 import type { CommandResult } from "./run.ts";
@@ -111,6 +120,21 @@ export const sandboxPolicy = (input: {
 /** What a worker's uncaught error carries that is safe to show. */
 const WorkerError = Schema.Struct({ message: Schema.String });
 
+/** The wrapped command line from the worker's first reply, or why the sandbox cannot run it. */
+const wrappedCommand = (
+  reply: SandboxReply,
+  unavailable: (detail: string) => SandboxUnavailable,
+): Effect.Effect<string, SandboxUnavailable> => {
+  switch (reply._tag) {
+    case "Wrapped":
+      return Effect.succeed(reply.command);
+    case "Unavailable":
+      return Effect.fail(SandboxUnavailable.make({ reason: reply.reason, detail: reply.detail }));
+    case "Finished":
+      return Effect.fail(unavailable("the sandbox worker finished before it started"));
+  }
+};
+
 /** How long the worker gets to report what it blocked once the command has exited. */
 const finishTimeout = Duration.seconds(5);
 
@@ -120,14 +144,22 @@ const finishTimeout = Duration.seconds(5);
  * sandbox blocked to stderr. The worker and its scratch folder end with the scope, whether the
  * command finished, failed or was interrupted.
  */
-export const runSandboxed = <E>(
+type Sandboxed<E> = Effect.Effect<CommandResult, E | SandboxUnavailable, FileSystem.FileSystem>;
+
+export const runSandboxed: {
+  <E>(
+    run: (command: string) => Effect.Effect<CommandResult, E>,
+  ): (setup: SandboxSetup) => Sandboxed<E>;
+  <E>(setup: SandboxSetup, run: (command: string) => Effect.Effect<CommandResult, E>): Sandboxed<E>;
+} = EffectFunction.dual(2, runSandboxedBody);
+function runSandboxedBody<E>(
   setup: SandboxSetup,
   run: (command: string) => Effect.Effect<CommandResult, E>,
-): Effect.Effect<CommandResult, E | SandboxUnavailable, FileSystem.FileSystem> =>
-  Effect.scoped(
+): Sandboxed<E> {
+  return Effect.scoped(
     Effect.gen(function* () {
       const unavailable = (detail: string) =>
-        new SandboxUnavailable({ reason: "setup_failed", detail });
+        SandboxUnavailable.make({ reason: "setup_failed", detail });
       // The runtime names its proxy sockets after the process id, so concurrent workers each need
       // their own TMPDIR.
       const fileSystem = yield* FileSystem.FileSystem;
@@ -165,19 +197,7 @@ export const runSandboxed = <E>(
       worker.on("exit", () => lost("the sandbox worker stopped"));
 
       const prepared = yield* Queue.take(replies);
-      const command = yield* Effect.gen(function* () {
-        switch (prepared._tag) {
-          case "Wrapped":
-            return prepared.command;
-          case "Unavailable":
-            return yield* new SandboxUnavailable({
-              reason: prepared.reason,
-              detail: prepared.detail,
-            });
-          case "Finished":
-            return yield* unavailable("the sandbox worker finished before it started");
-        }
-      });
+      const command = yield* wrappedCommand(prepared, unavailable);
       const result = yield* run(command);
       worker.postMessage({ _tag: "Finish", stderr: result.stderr } satisfies SandboxFinish);
       const finished = yield* Queue.take(replies).pipe(
@@ -191,3 +211,4 @@ export const runSandboxed = <E>(
       return { ...result, stderr: stderr ?? result.stderr };
     }),
   );
+}

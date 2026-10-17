@@ -1,10 +1,19 @@
 import { Function as EffectFunction } from "effect";
-import { Clock, Deferred, Effect, Fiber, MutableHashSet, Option, Schema, Scope } from "effect";
-import { isTruthy } from "../truthy.ts";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { spawn } from "node:child_process";
+import {
+  Clock,
+  Deferred,
+  Duration,
+  Effect,
+  Fiber,
+  MutableHashSet,
+  Option,
+  Schema,
+  Stream,
+} from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import type { PlatformError } from "effect";
 import { runOAuthNodeEffect } from "../oauth/node-runtime.ts";
-import { shellInvocation, stopProcessTree } from "../runtime/host.ts";
+import { shellInvocation } from "../runtime/host.ts";
 
 /** Output bytes kept from the start of each stream once it is too long. */
 const headBytes = 8 * 1024;
@@ -12,7 +21,7 @@ const headBytes = 8 * 1024;
 const tailBytes = 56 * 1024;
 /** Grace period between SIGTERM and SIGKILL when stopping a command. */
 const killGraceMs = 3_000;
-/** Final wait for Node's close event after SIGKILL before detached pipes are abandoned. */
+/** Final wait for the output pipes after the process group stopped, before detached pipes are abandoned. */
 const closeGraceMs = 100;
 
 interface ActiveCommand {
@@ -82,11 +91,11 @@ export function hostShell(source: NodeJS.ProcessEnv) {
 /** Keeps the first and last bytes of a stream and counts what was dropped in between. */
 const makeCapture = () => {
   let head = Buffer.alloc(0);
-  const tailChunks: Buffer[] = [];
+  const tailChunks: Uint8Array[] = [];
   let tailLength = 0;
   let total = 0;
 
-  const push = (input: Buffer) => {
+  const push = (input: Uint8Array) => {
     let chunk = input;
     total += chunk.length;
     if (head.length < headBytes) {
@@ -166,151 +175,145 @@ function runCommandBody(command: string, options: CommandOptions): Promise<Comma
   });
 }
 
+const isAborted = (signal: AbortSignal | undefined) => signal?.aborted === true;
+
 export const runCommandEffect = (options: CommandOptions & { readonly command: string }) =>
   Effect.scoped(
     Effect.gen(function* () {
       const { command } = options;
       const effectClock = yield* Clock.Clock;
-      const context = yield* Effect.context<never>();
-      const scope = yield* Scope.Scope;
-      const later = (milliseconds: number, action: () => void): Fiber.Fiber<void> =>
-        Effect.runSyncWith(context)(
-          Effect.forkIn(
-            Effect.sleep(milliseconds).pipe(Effect.andThen(Effect.sync(action))),
-            scope,
-          ),
-        );
       const invocation = yield* shellInvocation(command, options.env);
       const shell = invocation.file;
-      const windows = process.platform === "win32";
       const started = effectClock.currentTimeMillisUnsafe();
       const stdout = makeCapture();
       const stderr = makeCapture();
-      if (options.signal?.aborted === true)
+      const result = (
+        status: CommandResult["status"],
+        exitCode: number | null,
+        signal: string | null,
+      ): CommandResult => {
+        const out = stdout.result();
+        const err = stderr.result();
         return {
           command,
           shell,
-          status: "cancelled" as const,
-          exitCode: null,
-          signal: null,
-          durationMs: 0,
-          stdout: "",
-          stderr: "",
-          stdoutTruncated: false,
-          stderrTruncated: false,
+          status,
+          exitCode,
+          signal,
+          durationMs: effectClock.currentTimeMillisUnsafe() - started,
+          stdout: out.text,
+          stderr: err.text,
+          stdoutTruncated: out.truncated,
+          stderrTruncated: err.truncated,
         };
-      const finished = yield* Deferred.make<void>();
-      const child = yield* Effect.try({
-        try: () =>
-          spawn(shell, [...invocation.args], {
+      };
+      if (isAborted(options.signal)) return { ...result("cancelled", null, null), durationMs: 0 };
+
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const handle = yield* spawner
+        .spawn(
+          ChildProcess.make(shell, [...invocation.args], {
             cwd: options.cwd,
             env: commandEnvironment(options.env),
-            stdio: ["ignore", "pipe", "pipe"],
-            detached: !windows,
+            extendEnv: false,
+            // Its own process group on POSIX, so stopping it reaches everything it started.
+            detached: process.platform !== "win32",
             windowsHide: true,
             windowsVerbatimArguments: invocation.verbatim,
+            stdin: "ignore",
+            killSignal: "SIGTERM",
+            forceKillAfter: Duration.millis(killGraceMs),
           }),
-        catch: (cause) => CommandStartFailed.make({ reason: { _tag: "SpawnFailed" }, cause }),
+        )
+        .pipe(
+          Effect.mapError((cause) =>
+            CommandStartFailed.make({ reason: { _tag: "SpawnFailed" }, cause }),
+          ),
+        );
+
+      const stopRequested = yield* Deferred.make<void>();
+      const runFork = Effect.runForkWith(yield* Effect.context<never>());
+      const active: ActiveCommand = {
+        cancel: () => Deferred.doneUnsafe(stopRequested, Effect.void),
+        // Process exit cannot wait: the kill starts synchronously and the process ends after it.
+        force: () => {
+          runFork(handle.kill({ killSignal: "SIGKILL" }));
+        },
+      };
+      yield* Effect.acquireRelease(
+        Effect.sync(() => MutableHashSet.add(activeCommands, active)),
+        () => Effect.sync(() => MutableHashSet.remove(activeCommands, active)),
+      );
+      const onAbort = () => active.cancel();
+      yield* Effect.acquireRelease(
+        Effect.sync(() => options.signal?.addEventListener("abort", onAbort, { once: true })),
+        () => Effect.sync(() => options.signal?.removeEventListener("abort", onAbort)),
+      );
+      // Close the abort-listener registration race after the child is tracked.
+      if (isAborted(options.signal)) onAbort();
+
+      const drain = (
+        output: Stream.Stream<Uint8Array, PlatformError.PlatformError>,
+        capture: typeof stdout,
+      ) =>
+        output.pipe(
+          Stream.runForEach((chunk) => Effect.sync(() => capture.push(chunk))),
+          Effect.forkScoped,
+        );
+      const pipes = yield* Effect.all([drain(handle.stdout, stdout), drain(handle.stderr, stderr)]);
+      const drained = Fiber.joinAll(pipes);
+
+      const outcome = yield* Effect.raceAll([
+        // Done once the process exited and every pipe it shared closed.
+        Effect.all([handle.exitStatus, drained]).pipe(
+          Effect.map(([status]) => ({ _tag: "Finished" as const, status })),
+        ),
+        Effect.sleep(Duration.seconds(options.timeoutSeconds)).pipe(
+          Effect.as({ _tag: "Stopped" as const, reason: "timed_out" as const }),
+        ),
+        Deferred.await(stopRequested).pipe(
+          Effect.as({ _tag: "Stopped" as const, reason: "cancelled" as const }),
+        ),
+      ]);
+      const stop = Effect.fnUntraced(function* (reason: "timed_out" | "cancelled") {
+        // SIGTERM to the group, then SIGKILL after the grace period. Nothing is left to signal
+        // once the leader exited and its group is gone.
+        yield* handle
+          .kill({ killSignal: "SIGTERM", forceKillAfter: Duration.millis(killGraceMs) })
+          .pipe(
+            Effect.catchTag("PlatformError", (error) =>
+              Effect.filterOrFail(
+                handle.isRunning,
+                (running) => !running,
+                () => error,
+              ),
+            ),
+          );
+        // A detached descendant can keep the pipes after its group stopped: stop waiting.
+        yield* drained.pipe(Effect.timeoutOption(Duration.millis(closeGraceMs)));
+        const status = yield* handle.exitStatus.pipe(
+          Effect.timeoutOption(Duration.millis(closeGraceMs)),
+        );
+        return { status, reason };
       });
-      return yield* Effect.callback<CommandResult, CommandStartFailed>((resume) => {
-        let stopReason: "timed_out" | "cancelled" | null = null;
-        let killTimer: Fiber.Fiber<void> | undefined;
-        let closeTimer: Fiber.Fiber<void> | undefined;
-        let forced = false;
-        let settled = false;
-        let active: ActiveCommand | undefined;
-
-        const timeout = later(options.timeoutSeconds * 1000, () => stop("timed_out"));
-        const onAbort = () => stop("cancelled");
-
-        const cleanup = () => {
-          timeout.interruptUnsafe();
-          if (killTimer !== undefined) killTimer.interruptUnsafe();
-          if (closeTimer !== undefined) closeTimer.interruptUnsafe();
-          options.signal?.removeEventListener("abort", onAbort);
-          if (active !== undefined) MutableHashSet.remove(activeCommands, active);
-        };
-        const finish = (exitCode: number | null, signal: NodeJS.Signals | null) => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          const out = stdout.result();
-          const err = stderr.result();
-          resume(
-            Effect.succeed({
-              command,
-              shell,
-              status: stopReason ?? (exitCode === 0 ? "succeeded" : "failed"),
-              exitCode,
-              signal,
-              durationMs: effectClock.currentTimeMillisUnsafe() - started,
-              stdout: out.text,
-              stderr: err.text,
-              stdoutTruncated: out.truncated,
-              stderrTruncated: err.truncated,
-            }),
-          );
-          Deferred.doneUnsafe(finished, Effect.void);
-        };
-        const abandonPipes = () => {
-          child.stdout.destroy();
-          child.stderr.destroy();
-          finish(child.exitCode, child.signalCode);
-        };
-        const force = (pid: number) => {
-          if (forced || settled) return;
-          forced = true;
-          if (killTimer !== undefined) killTimer.interruptUnsafe();
-          stopProcessTree(pid, true);
-          closeTimer = later(closeGraceMs, abandonPipes);
-        };
-        function stop(reason: "timed_out" | "cancelled") {
-          if (isTruthy(stopReason) || child.pid === undefined) return;
-          stopReason = reason;
-          const pid = child.pid;
-          // The shell leader may already have exited while a detached descendant still owns its pipes.
-          // Signal the original group anyway, then stop waiting for pipes that escaped that group.
-          stopProcessTree(pid, false);
-          if (child.exitCode !== null || child.signalCode !== null) force(pid);
-          else killTimer = later(killGraceMs, () => force(pid));
-        }
-
-        active = {
-          cancel: () => stop("cancelled"),
-          force: () => child.pid !== undefined && stopProcessTree(child.pid, true),
-        };
-        MutableHashSet.add(activeCommands, active);
-        options.signal?.addEventListener("abort", onAbort, { once: true });
-        child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-        child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-        child.once("error", (error) => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          resume(
-            Effect.fail(CommandStartFailed.make({ reason: { _tag: "SpawnFailed" }, cause: error })),
-          );
-          Deferred.doneUnsafe(finished, Effect.void);
-        });
-        child.once("exit", () => {
-          if (isTruthy(stopReason) && child.pid !== undefined) force(child.pid);
-        });
-        child.once("close", finish);
-        // Close the abort-listener registration race after the child is tracked.
-        if (options.signal?.aborted === true) onAbort();
-        return Effect.gen(function* () {
-          if (!settled) {
-            stop("cancelled");
-            const drained = yield* Deferred.await(finished).pipe(
-              Effect.timeoutOption(killGraceMs + closeGraceMs + 100),
-            );
-            if (Option.isNone(drained)) {
-              if (child.pid !== undefined) force(child.pid);
-              abandonPipes();
-            }
+      const ended = yield* outcome._tag === "Finished"
+        ? Effect.succeed({ status: Option.some(outcome.status), reason: null })
+        : stop(outcome.reason);
+      const exit = Option.match(ended.status, {
+        onNone: () => ({ exitCode: null, signal: null }),
+        onSome: (status) => {
+          switch (status._tag) {
+            case "Exited":
+              return { exitCode: Number(status.code), signal: null };
+            case "Signaled":
+              return { exitCode: null, signal: status.signal };
           }
-          cleanup();
-        });
+        },
       });
+      return result(
+        ended.reason ?? (exit.exitCode === 0 ? "succeeded" : "failed"),
+        exit.exitCode,
+        exit.signal,
+      );
     }),
   );

@@ -6,7 +6,6 @@ import { BuildServerConfig, buildConfigAsset } from "../app/.server/build-config
 // Run with `vp run package`, which builds the app and its workspace dependencies first. Other platforms are built on
 // their own machines (turbovec and the optional platform packages exist only for the host).
 // The runtime manifest is hashed incrementally because staged native assets can be large.
-import { createHash } from "node:crypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   Config,
@@ -438,15 +437,19 @@ const program = Effect.gen(function* () {
 
   // Asset names and manifest entries use `/` on every platform; the executable joins them itself.
   const files = (yield* listFiles(stage)).map((file) => toPosix(relative(stage, file))).sort();
-  const hash = createHash("sha256");
+  // One digest per file, then a digest of the names and digests: no file is held past its turn.
+  const entries: string[] = [];
   let bytes = 0;
   const assets: Record<string, string> = {};
   for (const file of files) {
     const content = yield* fs.readFile(join(stage, file));
-    hash.update(file).update("\0").update(content);
+    entries.push(`${file}\0${Hex.encode(yield* crypto.digest("SHA-256", content))}`);
     bytes += content.length;
     assets[`runtime/files/${file}`] = join(stage, file);
   }
+  const hash = Hex.encode(
+    yield* crypto.digest("SHA-256", new TextEncoder().encode(entries.join("\n"))),
+  );
   const manifestFile = join(work, "runtime-manifest.json");
   yield* fs.writeFileString(
     manifestFile,
@@ -454,7 +457,7 @@ const program = Effect.gen(function* () {
       Schema.fromJsonString(
         Schema.Struct({ hash: Schema.String, files: Schema.Array(Schema.String) }),
       ),
-    )({ hash: hash.digest("hex").slice(0, 16), files }),
+    )({ hash: hash.slice(0, 16), files }),
   );
   assets["runtime/manifest.json"] = manifestFile;
   const releaseInfoFile = join(work, "release-info.json");

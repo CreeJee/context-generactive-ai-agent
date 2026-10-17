@@ -1,13 +1,9 @@
-import { NodePath, NodeServices, NodeSink } from "@effect/platform-node";
+import { NodeHttpServer, NodePath, NodeServices, NodeSink } from "@effect/platform-node";
 import { ManagedRuntime, Path } from "effect";
 import { runNativeEffect } from "memory-agent/native-effect";
 import { isTruthy } from "../app/truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 
 import { createRequestListener } from "@react-router/node";
@@ -130,7 +126,7 @@ export function serve(options: ServeOptions) {
       })
     : null;
 
-  const server = createServer((request: IncomingMessage, response: ServerResponse) => {
+  const server = NodeHttpServer.createServer((request, response) => {
     if (!isLoopbackHost(request.headers.host)) {
       response
         .writeHead(403, { "content-type": "text/plain; charset=utf-8" })

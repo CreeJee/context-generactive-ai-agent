@@ -1,7 +1,5 @@
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
-import { spawn } from "node:child_process";
-// Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { NodeFileSystem } from "@effect/platform-node";
 // Native host/SDK boundary uses Node types, protocols or synchronous SQLite/filesystem contracts.
 import { posix, win32 } from "./synchronous-path.ts";
@@ -311,40 +309,4 @@ function shellInvocationBody(
       isTruthy(shell) && posix.isAbsolute(shell) && (yield* check(shell)) ? shell : "/bin/sh";
     return { file, args: ["-c", command], verbatim: false };
   });
-}
-
-/**
- * Stops a process and everything it started. POSIX signals its process group (it must have been
- * spawned `detached`); Windows has no groups or SIGTERM, so `taskkill /T /F` ends the tree at once.
- */
-export const stopProcessTree: {
-  (force: boolean): (pid: number) => ReturnType<typeof stopProcessTreeBody>;
-  (
-    force: boolean,
-    platform: NodeJS.Platform | undefined,
-  ): (pid: number) => ReturnType<typeof stopProcessTreeBody>;
-  (pid: number, force: boolean): ReturnType<typeof stopProcessTreeBody>;
-  (
-    pid: number,
-    force: boolean,
-    platform: NodeJS.Platform | undefined,
-  ): ReturnType<typeof stopProcessTreeBody>;
-} = EffectFunction.dual((args) => Schema.is(Schema.Finite)(args[0]), stopProcessTreeBody);
-function stopProcessTreeBody(
-  pid: number,
-  force: boolean,
-  platform: NodeJS.Platform = process.platform,
-) {
-  if (platform === "win32") {
-    spawn("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }).on(
-      "error",
-      () => undefined,
-    );
-    return;
-  }
-  try {
-    process.kill(-pid, force ? "SIGKILL" : "SIGTERM");
-  } catch {
-    // The group already exited.
-  }
 }

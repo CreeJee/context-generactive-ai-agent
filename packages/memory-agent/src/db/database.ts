@@ -12,7 +12,7 @@ export class DatabaseOpenError extends Data.TaggedError("DatabaseOpenError")<{
   readonly cause: unknown;
 }> {}
 
-interface DatabaseApi {
+export interface DatabaseApi {
   readonly sqlite: DatabaseSync;
   /** Runs synchronous SQL work in one transaction; nested calls join the outer one. */
   readonly atomic: <T>(work: () => T) => T;

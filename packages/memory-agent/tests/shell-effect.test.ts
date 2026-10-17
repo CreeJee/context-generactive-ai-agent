@@ -1,5 +1,4 @@
-import { withTestPlatform } from "./support/platform.ts";
-import { it, layer } from "@effect/vitest";
+import { layer } from "@effect/vitest";
 import { NodeServices } from "@effect/platform-node";
 import { Cause, Effect, Exit, Fiber, FileSystem, Path, Schedule, Schema } from "effect";
 import { expect } from "vite-plus/test";
@@ -31,42 +30,42 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(() => process.kill(pid, 0)).toThrow();
     }),
   );
+
+  it.effect("native process startup failures use the typed error channel", () =>
+    Effect.gen(function* () {
+      const failure = yield* Effect.flip(
+        runCommandEffect({
+          command: "true",
+          cwd: "/missing-context-agent-command-directory",
+          timeoutSeconds: 10,
+          signal: undefined,
+          env,
+        }),
+      );
+      expect(failure._tag).toBe("CommandStartFailed");
+      expect(failure.reason._tag).toBe("SpawnFailed");
+    }),
+  );
+
+  it.effect("defects in command preparation stay defects", () =>
+    Effect.gen(function* () {
+      const defect = new Error("invalid command environment implementation");
+      const broken = Object.defineProperty({}, "SHELL", {
+        get: () => {
+          throw defect;
+        },
+      });
+      const exit = yield* Effect.exit(
+        runCommandEffect({
+          command: "true",
+          cwd: "/tmp",
+          timeoutSeconds: 10,
+          signal: undefined,
+          env: broken,
+        }),
+      );
+      expect(Exit.hasDies(exit)).toBe(true);
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBe(defect);
+    }),
+  );
 });
-
-it.live("native process startup failures use the typed error channel", () =>
-  Effect.gen(function* () {
-    const failure = yield* Effect.flip(
-      runCommandEffect({
-        command: "true",
-        cwd: "/missing-context-agent-command-directory",
-        timeoutSeconds: 10,
-        signal: undefined,
-        env,
-      }),
-    );
-    expect(failure._tag).toBe("CommandStartFailed");
-    expect(failure.reason._tag).toBe("SpawnFailed");
-  }).pipe(withTestPlatform),
-);
-
-it.effect("defects in command preparation stay defects", () =>
-  Effect.gen(function* () {
-    const defect = new Error("invalid command environment implementation");
-    const broken = Object.defineProperty({}, "SHELL", {
-      get: () => {
-        throw defect;
-      },
-    });
-    const exit = yield* Effect.exit(
-      runCommandEffect({
-        command: "true",
-        cwd: "/tmp",
-        timeoutSeconds: 10,
-        signal: undefined,
-        env: broken,
-      }),
-    );
-    expect(Exit.hasDies(exit)).toBe(true);
-    if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBe(defect);
-  }).pipe(withTestPlatform),
-);

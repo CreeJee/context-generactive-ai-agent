@@ -252,6 +252,8 @@
 - 동기 `canonicalPath`를 없애고 호출부를 `canonicalPathEffect`로 옮긴다. 공급자 도구 정책은 작업공간 루트를 검증할 때 정규화하고, 실패하면 `workspace_root_unavailable`로 거부한다.
 - POSIX glob은 Node `path.matchesGlob`이 쓰는 minimatch를 같은 옵션으로 직접 쓴다.
 - 동기 fence 두 곳을 Effect 경계로 옮기며, 2026-10-12의 "동기 fence 계약을 바꾸지 않는다"를 대체한다. Goal worker 자산은 `use`가 registry lock 안에서 검증하고 lease를 잡는 Effect가 되고, Worker 생성 직전 `acquireWorkerLease`로 실행된다. Worker를 만들지 못하면 scope finalizer가 lease를 놓는다. native artifact 등록은 SQLite `atomic` 직전에 출처와 바이트를 한 번 검증한다. 대상 경로는 owner 저장소의 content-addressed 경로라 transaction 안의 재검증은 두지 않는다.
+- 같은 패치에 `FileSystem.statDescriptor`, `ChildProcess`의 `windowsVerbatimArguments`, `ChildProcessHandle.exitStatus`(`Exited`·`Signaled` 태그)를 추가하고, `@effect/platform-node`에 `NodeHttpServer.createServer`를 노출한다. 셸 명령은 `ChildProcess`로 실행하며 process group 종료와 SIGKILL 유예는 spawner가 맡는다. 종료 시 동기 안전망은 handle의 kill을 `runForkWith`로 시작한다. leader가 끝나고 그룹도 없어 kill이 실패하면 이미 멈춘 것으로 본다. `stopProcessTree`는 없앤다.
+- node 내장 import가 남지 않아 memory-agent와 agent 앱의 `nodeBuiltinImport`를 error로 올린다. 이에 따라 2026-10-12에 차단으로 남긴 `vp run typecheck`가 exit 0으로 통과한다.
 - 패치 hash를 다시 계산하려면 lockfile 해석이 필요하다. 사용자 결정에 따라 `blockExoticSubdeps: false`를 저장하며, 위 2026-10-15 결정의 "설정을 저장하지 않는다"를 대체한다. pnpm에는 패키지 단위 예외가 없으므로 Effect를 registry에서 받게 되면 되돌린다. 전체 재해석은 무관한 peer 해석(zod 등)을 바꾸므로, 이번 lockfile 변경은 patch hash와 minimatch 항목으로 한정했다.
 
 ## 인증·모델·공급자
