@@ -14,6 +14,8 @@ const session = {
   agent: null,
   archivedAt: "2026-09-24",
   importedFrom: null,
+  worktreePath: null,
+  branch: null,
 };
 const waiting = {
   status: "waiting_for_stop",

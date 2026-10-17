@@ -2,7 +2,7 @@ import { HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Option, Schema } from "effect";
 import { refsInArguments } from "../memory/refs.ts";
-import { isInjectedText, type InjectedText, type TranscriptItem } from "./items.ts";
+import { branchOf, isInjectedText, type InjectedText, type TranscriptItem } from "./items.ts";
 
 /**
  * Claude Code writes one JSONL file per conversation under `~/.claude/projects/<encoded cwd>`.
@@ -52,6 +52,7 @@ const Line = Schema.Struct({
   uuid: Schema.String,
   timestamp: Schema.String,
   cwd: Schema.optional(Schema.String),
+  gitBranch: Schema.optional(Schema.String),
   sessionId: Schema.optional(Schema.String),
   /** A subagent's own conversation, interleaved into the same file. */
   isSidechain: Schema.optional(Schema.Boolean),
@@ -89,6 +90,7 @@ export function readClaudeCodeLine(line: string): readonly TranscriptItem[] {
       startedAt: decoded.timestamp,
       // Claude Code records the branch only, and a merged worktree's branch is usually deleted.
       repository: null,
+      branch: branchOf(decoded.gitBranch),
     });
 
   const content = decoded.message.content;

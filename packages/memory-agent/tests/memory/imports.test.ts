@@ -566,24 +566,27 @@ const repositoryWithWorktrees = Effect.gen(function* () {
 });
 
 alone(
-  "places a worktree's conversation in its repository's project, even once the worktree is gone",
+  "places a worktree's conversation in its repository's project, even once every worktree is gone",
   () =>
     Effect.gen(function* () {
       const { project, home } = yield* TestEnv;
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const { parent, worktree } = yield* repositoryWithWorktrees;
-      const live = yield* worktree("live");
+      const live = yield* fs.realPath(yield* worktree("live"));
       yield* fs.makeDirectory(path.join(live, "apps"));
       yield* writeTranscript(yield* claudePath(), claudeLines(path.join(live, "apps")));
-      yield* writeTranscript(
-        yield* codexRollout(path.join(home, ".codex")),
-        codexLines(path.join(parent, "gone")),
-      );
       yield* runOnce;
-      const sessions = yield* (yield* Sessions).list(project.id);
-      const imported = sessions.flatMap((session) => session.importedFrom ?? []);
-      expect(imported.toSorted()).toEqual(["claude-code", "codex"]);
+      const fromLive = yield* migrated("claude-code");
+      expect(fromLive.worktreePath).toBe(live);
+
+      // The folder git showed the worktree in is kept, so it still names the repository later.
+      yield* git(project.root, ["worktree", "remove", "--force", live]);
+      const gone = path.join(yield* fs.realPath(parent), "gone");
+      yield* writeTranscript(yield* codexRollout(path.join(home, ".codex")), codexLines(gone));
+      yield* runOnce;
+      const fromGone = yield* migrated("codex");
+      expect(fromGone.worktreePath).toBe(gone);
       const roots = (yield* (yield* Projects).listAll).map((entry) => entry.root);
       expect(roots.filter((root) => root.includes(`${path.sep}worktrees${path.sep}`))).toEqual([]);
     }),
@@ -601,9 +604,12 @@ alone("folds a project migration made for a worktree into its repository's proje
       null,
       "2026-04-02T02:00:00.000Z",
       "codex",
+      { worktreePath: null, branch: null },
     );
     yield* runOnce;
-    expect((yield* sessions.get(moved.id)).projectId).toBe(project.id);
+    const folded = yield* sessions.get(moved.id);
+    expect(folded.projectId).toBe(project.id);
+    expect(folded.worktreePath).toBe(split.root);
     expect((yield* projects.get(split.id)).hiddenAt).not.toBeNull();
   }),
 );

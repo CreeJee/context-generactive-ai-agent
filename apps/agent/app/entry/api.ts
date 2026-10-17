@@ -305,6 +305,8 @@ const SessionSnapshot = Schema.Struct({
   agent: Schema.NullOr(Schema.String),
   archivedAt: Schema.NullOr(Schema.String),
   importedFrom: Schema.NullOr(Schema.String),
+  worktreePath: Schema.NullOr(Schema.String),
+  branch: Schema.NullOr(Schema.String),
 });
 const decodeSessionSnapshot = Schema.decodeUnknownOption(SessionSnapshot);
 type PendingSessionLifecycle = Exclude<ArchiveTaskResult, { status: "completed" }>;

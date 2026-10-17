@@ -59,6 +59,11 @@ const decodeCursor = EffectFunction.flow(
 );
 type Cursor = ReturnType<typeof decodeCursor>;
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeParent = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Struct({ parent: Schema.String })),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
 const decodeCount = EffectFunction.flow(
   Schema.decodeUnknownResult(Schema.Struct({ count: Schema.Finite })),
   Result.getOrThrow,
@@ -200,11 +205,20 @@ const make = (home: string) =>
       cursor.skipped === null || cursor.skipped === "no_session_line" || cursor.cwd === null
         ? Effect.succeed(false)
         : placement.resolve(cursor.cwd, null).pipe(
-            Effect.flatMap(projectOf),
+            Effect.flatMap((placed) => projectOf(placed.path)),
             Effect.map(({ project }) => project !== null),
           );
 
+    const knownParents = sqlite.prepare("SELECT parent FROM worktree_parents WHERE project_id = ?");
+    const keepParent = sqlite.prepare(
+      "INSERT INTO worktree_parents (project_id, parent) VALUES (?, ?) ON CONFLICT DO NOTHING",
+    );
+
     const countRows = (sql: string, id: string) => decodeCount(sqlite.prepare(sql).get(id)).count;
+    // The folded project's folder was the worktree its conversations ran in.
+    const markWorktree = sqlite.prepare(
+      "UPDATE sessions SET worktree_path = coalesce(worktree_path, ?) WHERE project_id = ?",
+    );
     const moveSessions = sqlite.prepare("UPDATE sessions SET project_id = ? WHERE project_id = ?");
     const moveNodes = sqlite.prepare("UPDATE nodes SET project_id = ? WHERE project_id = ?");
 
@@ -219,7 +233,7 @@ const make = (home: string) =>
         const registered = yield* projects.listAll;
         yield* Effect.forEach(registered, (project) =>
           Effect.gen(function* () {
-            const resolved = yield* placement.resolve(project.root, null);
+            const resolved = (yield* placement.resolve(project.root, null)).path;
             const owned =
               countRows(
                 "SELECT count(*) AS count FROM sessions WHERE project_id = ? AND imported_from IS NULL",
@@ -233,6 +247,7 @@ const make = (home: string) =>
             const { project: owner } = yield* projectOf(resolved);
             if (!isTruthy(owner) || owner.id === project.id) return;
             atomic(() => {
+              markWorktree.run(project.root, project.id);
               moveSessions.run(owner.id, project.id);
               moveNodes.run(owner.id, project.id);
             });
@@ -256,18 +271,30 @@ const make = (home: string) =>
     ) =>
       Effect.gen(function* () {
         const existing = readMapping.get(transcript.source, transcript.externalId);
-        if (isTruthy(existing))
-          return { sessionId: decodeSessionId(existing).session_id, skipped: null };
-        if (!(start !== undefined)) return { sessionId: null, skipped: "no_session_line" };
-        const { project, rejected } = yield* projectOf(
-          yield* placement.resolve(start.cwd, start.repository),
-        );
+        const placed =
+          start === undefined ? null : yield* placement.resolve(start.cwd, start.repository);
+        const origin = {
+          worktreePath: placed?.worktree ?? null,
+          branch: start?.branch ?? null,
+        };
+        if (isTruthy(existing)) {
+          const sessionId = decodeSessionId(existing).session_id;
+          yield* Effect.when(
+            sessions.recordOrigin(sessionId, origin),
+            Effect.succeed(placed !== null),
+          );
+          return { sessionId, skipped: null };
+        }
+        if (!(start !== undefined && placed !== null))
+          return { sessionId: null, skipped: "no_session_line" };
+        const { project, rejected } = yield* projectOf(placed.path);
         if (!isTruthy(project)) return { sessionId: null, skipped: rejected ?? "no_project" };
         const session = yield* sessions.createImported(
           project.id,
           null,
           start.startedAt,
           transcript.source,
+          origin,
         );
         saveMapping.run(transcript.source, transcript.externalId, session.id);
         return { sessionId: session.id, skipped: null };
@@ -393,8 +420,12 @@ const make = (home: string) =>
           const found = yield* transcripts();
           let progress: PassProgress = { checked: 0, total: found.length, written: 0, failed: 0 };
           onProgress(progress);
+          const registered = yield* projects.listAll;
           const placement = yield* checkouts.forRoots(
-            (yield* projects.listAll).map((project) => project.root),
+            registered.map((project) => ({
+              root: project.root,
+              worktreeParents: knownParents.all(project.id).map((row) => decodeParent(row).parent),
+            })),
           );
           yield* foldWorktreeProjects(placement);
           for (const transcript of found) {
@@ -413,6 +444,13 @@ const make = (home: string) =>
             };
             onProgress(progress);
           }
+          // What git showed this pass outlives the worktrees it was seen through.
+          const seen = yield* placement.seen;
+          atomic(() => {
+            for (const { root, parents } of seen)
+              for (const owner of registered.filter((project) => project.root === root))
+                for (const parent of parents) keepParent.run(owner.id, parent);
+          });
           return { progress, counts: countsOf(found) };
         }),
     };

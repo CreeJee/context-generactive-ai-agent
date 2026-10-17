@@ -1612,6 +1612,16 @@
 - 회차를 시작할 때 이관이 worktree에 만든 프로젝트를 저장소 프로젝트로 접는다. 세션과 그 노드의 `project_id`를 옮기고, 빈 프로젝트는 숨긴다(지우지 않음). 검색 범위는 `nodes.project_id`로 정해져서 벡터는 그대로 둔다. 이 앱에서 시작한 대화나 세션 밖 노드가 있는 프로젝트는 사용자 것이라 접지 않는다.
 - 폴더 때문에 건너뛴 기록(`no_project`, 등록 거절)은 파일이 바뀌지 않아도, 저장해 둔 `cwd`를 지금 넣을 수 있게 되면 다시 읽는다. 전에는 크기·시각이 같으면 영영 건너뛰어서, 9/16 이전 코드가 남긴 `no_project` 기록 13개(이 저장소의 88MB 대화 포함)가 남아 있었다.
 
+### 세션별 worktree 기록 (2026-10-17)
+
+- 프로젝트는 저장소 하나에 하나로 두고, worktree 구분은 세션에 둔다. worktree마다 프로젝트를 만들면 같은 저장소의 기억이 갈라지고 사이드바에 폴더가 중첩된다.
+  - `sessions.worktree_path`: 대화가 돈 worktree 폴더. 원래 checkout에서 나눈 대화는 비운다. 남아 있는 worktree는 git의 `--show-toplevel`, 지워진 worktree는 상위 폴더 아래 첫 폴더, Codex git 기록으로 찾은 것은 기록된 `cwd`다. 접은 worktree 프로젝트의 세션은 그 프로젝트 폴더다.
+  - `sessions.branch`: Claude Code `gitBranch`, Codex `session_meta.git.branch`. 분리된 HEAD(`HEAD`)는 브랜치가 아니다.
+  - 이미 있는 세션은 채워진 값을 덮지 않는다(`coalesce`).
+- 저장소가 worktree를 만드는 상위 폴더를 `worktree_parents`에 남긴다. 회차마다 git이 보여 준 상위 폴더를 더하고 지우지 않는다. 그래서 그 저장소의 worktree가 모두 지워진 뒤에도 지워진 worktree의 대화가 저장소를 찾는다. 이 기록이 생기기 전에 worktree가 모두 지워진 저장소(이 기기의 opi-workspace)는 여전히 찾지 못한다.
+- 사이드바는 세션에 브랜치(없으면 worktree 폴더 이름) 배지를 달고, 작업 위치가 하나라도 있으면 "모든 작업 위치 / 저장소 본체 / 브랜치별" 필터를 보인다. worktree를 만들고 지우는 관리 화면은 두지 않는다. Orca 같은 도구의 일이고 이 앱의 역할은 기억과 대화다.
+- 이 앱에서 직접 연 대화(실행 폴더·브라우저에서 추가한 폴더가 worktree인 경우)를 저장소 프로젝트에 넣는 일은 아직 하지 않았다. 실행 중인 세션의 파일·셸 도구가 worktree와 원래 checkout 중 어디서 일할지 먼저 정해야 한다.
+
 ## UI·클라이언트
 
 ### UI (2026-09-14)
