@@ -1,7 +1,19 @@
 import { layer } from "@effect/vitest";
 import { NodeFileSystem, NodePath } from "@effect/platform-node";
 import { homedir } from "node:os";
-import { Cause, Context, Crypto, Effect, Exit, FileSystem, Layer, Path, Ref, Scope } from "effect";
+import {
+  Cause,
+  Config,
+  Context,
+  Crypto,
+  Effect,
+  Exit,
+  FileSystem,
+  Layer,
+  Path,
+  Ref,
+  Scope,
+} from "effect";
 import { Hex } from "effect/encoding";
 import { describe, expect } from "vite-plus/test";
 import { StorageRoot } from "../../src/config/storage-root.ts";
@@ -19,6 +31,8 @@ import { Indexer, IndexingError } from "../../src/memory/embedding/indexer.ts";
 import { VectorIndex } from "../../src/memory/embedding/vector-index.ts";
 import { MorphAnalyzer } from "../../src/memory/morph/analyzer.ts";
 import { Nodes, type NodeKind } from "../../src/memory/nodes.ts";
+import { MemorySearch } from "../../src/memory/search.ts";
+import { readStructuredEvidence } from "../../src/memory/evidence.ts";
 import { memoryAgentLayer } from "../../src/layers.ts";
 import { Sessions } from "../../src/sessions/sessions.ts";
 import { fakeEmbedderLayer, fakeVector } from "../../src/testing/fake-embedder.ts";
@@ -246,6 +260,8 @@ const lateEmbedder = Layer.succeed(Embedder, {
   identity: lateIdentity,
   dimensions: 384,
   runtime: () => ({ kind: "other" }),
+  chunks: (texts: readonly string[]) =>
+    Effect.succeed(texts.map((text) => [{ start: 0, end: text.length }])),
   embed: Effect.fnUntraced(function* (texts: readonly string[]) {
     yield* yield* Ref.get(lateEdits);
     return texts.map(fakeVector);
@@ -396,7 +412,9 @@ const cachedModels = await Effect.runPromise(
       return yield* Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const root = path.join(homedir(), ".context-generactive-agent");
+        const root = yield* Config.String("MEMORY_EMBEDDING_TEST_ROOT").pipe(
+          Config.withDefault(path.join(homedir(), ".context-generactive-agent")),
+        );
         const available = (file: string) =>
           fs
             .exists(path.join(root, "models", localModel.id, file))
@@ -413,6 +431,56 @@ const cachedModels = await Effect.runPromise(
 const models = StorageRoot.layer(cachedModels.root);
 const dot = (a: Float32Array, b: Float32Array) =>
   a.reduce((sum, value, i) => sum + value * b[i]!, 0);
+
+describe.skipIf(!cachedModels.cpu)("real model chunk retrieval", () => {
+  testAgent({
+    embedder: Embedder.localVariant("quint8").pipe(Layer.provide(models)),
+    morphAnalyzer: MorphAnalyzer.disabled,
+  })("quint8 through the native 4-bit index and memory search", (it) => {
+    it.effect(
+      "ranks the late decision first and reads the original evidence",
+      () =>
+        Effect.gen(function* () {
+          const { project, session } = yield* TestEnv;
+          const nodes = yield* Nodes;
+          const body =
+            "창고의 재고와 주문 처리 상태를 확인했습니다. ".repeat(600) +
+            "최종 결정: 다음 배포는 목요일 오전에 진행합니다.";
+          const target = nodes.append({
+            projectId: project.id,
+            sessionId: session.id,
+            kind: "user",
+            text: body,
+          });
+          for (const text of [
+            "창고 재고 실사는 월요일 오전에 진행합니다.",
+            "주문 배송 현황은 수요일에 확인합니다.",
+            "빌드 오류를 해결하고 테스트를 통과했습니다.",
+          ])
+            nodes.append({ projectId: project.id, sessionId: session.id, kind: "user", text });
+          yield* (yield* Indexer).indexAll();
+          const result = yield* (yield* MemorySearch).find({
+            projectId: project.id,
+            query: "다음 배포는 언제 하기로 결정했지?",
+            crossProject: false,
+            limit: 4,
+          });
+          const first = result.matches[0]!;
+          expect(first.id).toBe(target.id);
+          expect(first.matchedSpan!.start).toBeGreaterThan(2048);
+          expect(body.slice(first.matchedSpan!.start, first.matchedSpan!.end)).toContain("목요일");
+          const evidence = yield* readStructuredEvidence(
+            first.id,
+            first.matchedSpan!.start,
+            project.id,
+            false,
+          );
+          expect(evidence?.text).toContain("목요일 오전");
+        }),
+      120_000,
+    );
+  });
+});
 
 describe.skipIf(!cachedModels.cpu)("the local model (downloaded, quint8 on the CPU)", () => {
   layer(Embedder.localVariant("quint8").pipe(Layer.provide(models)), {

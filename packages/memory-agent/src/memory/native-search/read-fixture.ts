@@ -19,6 +19,7 @@ export function createReadFixture(path: string) {
     PRAGMA journal_mode=WAL;
     CREATE TABLE nodes(seq INTEGER PRIMARY KEY, id TEXT UNIQUE, kind TEXT, project_id TEXT, text TEXT);
     CREATE TABLE node_vectors(node_seq INTEGER, embedder TEXT);
+    CREATE TABLE node_vector_chunks(vector_id INTEGER PRIMARY KEY, node_seq INTEGER, embedder TEXT, start_offset INTEGER, end_offset INTEGER);
     CREATE TABLE memory_graph_suppressed_nodes(node_seq INTEGER);
     CREATE TABLE interpret_jobs(node_id TEXT, status TEXT);
     CREATE VIRTUAL TABLE nodes_fts USING fts5(text, tokenize='trigram');

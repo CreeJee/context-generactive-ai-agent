@@ -1,5 +1,6 @@
 import { Cause, Effect, Result } from "effect";
 import { nativeFailure, nativePromise, runNativeEffect } from "../../runtime/native-effect.ts";
+import { ChunkingFailed, chunkText } from "./chunks.ts";
 // The embedding model in a worker thread: onnxruntime-node runs a session synchronously, so on the
 // main thread every batch would hold up the requests the server is answering meanwhile.
 import { createRequire } from "node:module";
@@ -85,13 +86,29 @@ const embed = Effect.fn("EmbeddingWorker.embed")(function* (
 parent.on(
   "message",
   // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  ({ id, kind, texts }: { id: number; kind: "count" | "embed"; texts: string[] }) => {
+  ({ id, kind, texts }: { id: number; kind: "count" | "embed" | "chunks"; texts: string[] }) => {
     void runNativeEffect(
       Effect.gen(function* () {
         const state = yield* nativePromise(() => ready);
         if (state.kind === "failed")
           return parent.postMessage({ id, kind: "failed", stage: "load", reason: state.error });
         switch (kind) {
+          case "chunks": {
+            const spans = yield* Effect.forEach(
+              texts,
+              (text) =>
+                chunkText(text, (part, specialTokens) =>
+                  Effect.try({
+                    try: () =>
+                      state.loaded.tokenizer.encode(part, { add_special_tokens: specialTokens })
+                        .length,
+                    catch: () => ChunkingFailed.make({ reason: "tokenization-failed" }),
+                  }),
+                ),
+              { concurrency: 1 },
+            );
+            return parent.postMessage({ id, kind: "chunks", spans });
+          }
           case "count":
             return parent.postMessage({
               id,

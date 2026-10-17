@@ -1,6 +1,6 @@
 // Native transport/filesystem/SQLite boundaries; the worker is the sole index and lease owner.
 import { randomUUID, sha256 } from "../../runtime/synchronous-crypto.ts";
-import { Effect, Path, Schema } from "effect";
+import { Effect, Path, Result, Schema } from "effect";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { Database } from "../../db/database.ts";
 import { runtimeWorker } from "../../runtime/resources.ts";
@@ -56,11 +56,31 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
   const save = Effect.suspend(() => command({ kind: "save", ...identity() }, "save")).pipe(
     Effect.asVoid,
   );
-  const remove = Effect.fnUntraced(function* (seqs: readonly number[]) {
+  const removeIds = Effect.fnUntraced(function* (seqs: readonly number[]) {
     for (const seq of seqs)
       yield* command({ kind: "remove", ...identity(), id: String(seq) }, "remove");
   });
+  const readSeqs = (sql: string, values: readonly (string | number)[]) =>
+    io("remove", () => sqlite.prepare(sql).all(...values)).pipe(
+      Effect.flatMap(
+        Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ seq: Schema.Finite }))),
+      ),
+      Effect.mapError((cause) => new VectorIndexError({ operation: "remove", cause })),
+    );
+  const remove = Effect.fnUntraced(function* (seqs: readonly number[]) {
+    for (const seq of seqs) {
+      const chunks = yield* readSeqs(
+        "SELECT vector_id AS seq FROM node_vector_chunks WHERE node_seq=? AND embedder=?",
+        [seq, embedder.identity],
+      );
+      yield* removeIds([seq, ...chunks.map((chunk) => chunk.seq)]);
+    }
+  });
   const flush = Effect.gen(function* () {
+    const removedChunks = yield* readSeqs(
+      "SELECT vector_id AS seq FROM memory_chunk_vector_removals WHERE embedder=?",
+      [embedder.identity],
+    );
     const pending = yield* io("remove", () =>
       sqlite
         .prepare(
@@ -73,7 +93,8 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
       ),
       Effect.mapError((cause) => new VectorIndexError({ operation: "remove", cause })),
     );
-    if (pending.length === 0) return;
+    if (pending.length === 0 && removedChunks.length === 0) return;
+    yield* removeIds(removedChunks.map(({ seq }) => seq));
     yield* remove(pending.map(({ seq }) => seq));
     yield* save;
     yield* io("remove", () =>
@@ -86,13 +107,35 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
             .prepare("DELETE FROM memory_graph_vector_removals WHERE node_seq = ? AND embedder = ?")
             .run(seq, embedder.identity);
         }
+        sqlite
+          .prepare("DELETE FROM memory_chunk_vector_removals WHERE embedder=?")
+          .run(embedder.identity);
       }),
     );
   });
   if (!owner.initialNeedsReset) yield* flush;
+  const reserved = yield* readSeqs(
+    `SELECT c.vector_id AS seq FROM node_vector_chunks c
+     LEFT JOIN node_vectors v ON v.node_seq=c.node_seq AND v.embedder=c.embedder
+     WHERE c.embedder=? AND v.node_seq IS NULL`,
+    [embedder.identity],
+  );
+  if (reserved.length > 0) {
+    if (!owner.initialNeedsReset) {
+      yield* removeIds(reserved.map(({ seq }) => seq));
+      yield* save;
+    }
+    yield* io("open", () =>
+      atomic(() => {
+        for (const { seq } of reserved)
+          sqlite.prepare("DELETE FROM node_vector_chunks WHERE vector_id=?").run(seq);
+      }),
+    );
+  }
   const indexed = yield* io("open", () =>
     sqlite
-      .prepare("SELECT count(*) AS count FROM node_vectors WHERE embedder = ?")
+      .prepare(`SELECT count(*) AS count FROM node_vectors v LEFT JOIN node_vector_chunks c
+        ON c.node_seq=v.node_seq AND c.embedder=v.embedder WHERE v.embedder = ?`)
       .get(embedder.identity),
   ).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(Schema.Struct({ count: Schema.Finite }))),
@@ -122,6 +165,9 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
         sqlite.prepare("DELETE FROM node_vectors WHERE embedder = ?").run(embedder.identity);
         sqlite
           .prepare("DELETE FROM memory_graph_vector_removals WHERE embedder = ?")
+          .run(embedder.identity);
+        sqlite
+          .prepare("DELETE FROM memory_chunk_vector_removals WHERE embedder=?")
           .run(embedder.identity);
       }),
     );
@@ -163,18 +209,64 @@ export const makeNativeVectorIndex = Effect.gen(function* () {
       allowedSeqs?: readonly number[],
     ) {
       if (owner.size() === 0) return [];
-      const reply = yield* command(
-        {
-          kind: "vector-search",
-          ...identity(),
-          query: new Float32Array(query),
-          k,
-          allowedIds: allowedSeqs?.map(String),
-        },
-        "search",
-      );
-      if (reply.kind !== "vector-hits") return yield* publicationError(reply);
-      return reply.ids.map((id, rank) => ({ seq: Number(id), score: reply.scores[rank]! }));
+      const allowedIds =
+        allowedSeqs === undefined
+          ? undefined
+          : yield* io("search", () =>
+              allowedSeqs.flatMap((seq) => {
+                const chunks = sqlite
+                  .prepare(
+                    "SELECT vector_id AS seq FROM node_vector_chunks WHERE node_seq=? AND embedder=?",
+                  )
+                  .all(seq, embedder.identity);
+                const decoded = Result.getOrThrow(
+                  Schema.decodeUnknownResult(Schema.Array(Schema.Struct({ seq: Schema.Finite })))(
+                    chunks,
+                  ),
+                );
+                return decoded.length === 0
+                  ? [String(seq)]
+                  : decoded.map((chunk) => String(chunk.seq));
+              }),
+            );
+      const maximum = allowedIds?.length ?? owner.size();
+      let take = Math.min(k, maximum);
+      while (take > 0) {
+        const reply = yield* command(
+          {
+            kind: "vector-search",
+            ...identity(),
+            query: new Float32Array(query),
+            k: take,
+            allowedIds,
+          },
+          "search",
+        );
+        if (reply.kind !== "vector-hits") return yield* publicationError(reply);
+        const hits = yield* io("search", () => {
+          const seen = new Set<number>();
+          return reply.ids.flatMap((id, rank) => {
+            const mapped = sqlite
+              .prepare(
+                "SELECT node_seq AS seq FROM node_vector_chunks WHERE vector_id=? AND embedder=?",
+              )
+              .get(id, embedder.identity);
+            const seq =
+              mapped === undefined
+                ? Number(id)
+                : Result.getOrThrow(
+                    Schema.decodeUnknownResult(Schema.Struct({ seq: Schema.Finite }))(mapped),
+                  ).seq;
+            if (seen.has(seq)) return [];
+            seen.add(seq);
+            return [{ seq, score: reply.scores[rank]! }];
+          });
+        });
+        if (hits.length >= k || take === maximum || reply.ids.length < take)
+          return hits.slice(0, k);
+        take = Math.min(take * 2, maximum);
+      }
+      return [];
     }),
     backend: {
       kind: "native",

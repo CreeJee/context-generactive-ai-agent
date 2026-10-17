@@ -71,7 +71,16 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const pending = selectPending.all(embedder.identity, limit).map((row) => decodePending(row));
       if (pending.length === 0) return 0;
-      const embedded = yield* embedder.embed(pending.map((node) => node.text));
+      const texts = pending.map((node) => node.text);
+      const spans = embedder.chunks === undefined ? undefined : yield* embedder.chunks(texts);
+      const inputs = pending.flatMap((node, row) =>
+        spans === undefined
+          ? [{ node, ordinal: 0, start: 0, end: node.text.length }]
+          : spans[row]!.map((span, ordinal) => ({ node, ordinal, ...span })),
+      );
+      const embedded = yield* embedder.embed(
+        inputs.map(({ node, start, end }) => node.text.slice(start, end)),
+      );
       // Embedding is an asynchronous external boundary. Revalidation enters the short publication
       // permit with add/save/commit, so a concurrent invalidation cannot create an obsolete mapping.
       const published = yield* vectors.publish(
@@ -88,20 +97,46 @@ const make = Effect.gen(function* () {
                 .map((row) => decodePending(row)),
             catch: () => IndexingError.make({ reason: "revalidation-failed" }),
           });
-          const accepted = pending.flatMap((node, row) =>
+          const accepted = inputs.flatMap(({ node, ordinal, start, end }, row) =>
             fresh.some((current) => current.seq === node.seq && current.text === node.text)
-              ? [{ seq: node.seq, vector: embedded[row]! }]
+              ? [{ seq: node.seq, vector: embedded[row]!, ordinal, start, end }]
               : [],
           );
-          const seqs = accepted.map((node) => node.seq);
+          const nodeSeqs = [...new Set(accepted.map((node) => node.seq))];
+          // Reserve mappings inside the publication gate, before saving vectors. Only node_vectors
+          // marks a fully committed node. Startup removes reserved chunks without that marker.
+          const seqs =
+            spans === undefined
+              ? nodeSeqs
+              : yield* Effect.try({
+                  try: () =>
+                    atomic(() =>
+                      accepted.map((chunk) =>
+                        Number(
+                          sqlite
+                            .prepare(
+                              "INSERT INTO node_vector_chunks(node_seq,embedder,ordinal,start_offset,end_offset) VALUES (?,?,?,?,?)",
+                            )
+                            .run(
+                              chunk.seq,
+                              embedder.identity,
+                              chunk.ordinal,
+                              chunk.start,
+                              chunk.end,
+                            ).lastInsertRowid,
+                        ),
+                      ),
+                    ),
+                  catch: () => IndexingError.make({ reason: "mapping-commit-failed" }),
+                });
           return {
             seqs,
             vectors: accepted.map((node) => node.vector),
             commit: Effect.try({
               try: () =>
                 atomic(() => {
-                  for (const seq of seqs) markIndexed.run(seq, embedder.identity);
-                  return accepted.length;
+                  for (const seq of nodeSeqs) markIndexed.run(seq, embedder.identity);
+                  return nodeSeqs.length;
                 }),
               catch: () => IndexingError.make({ reason: "mapping-commit-failed" }),
             }),

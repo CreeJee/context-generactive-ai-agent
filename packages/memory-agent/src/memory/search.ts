@@ -18,6 +18,8 @@ import { changeAuthoritySql } from "./changes.ts";
 import { Graph, type Hop } from "./graph.ts";
 import { latestResolver, type LatestEvidence } from "./latest.ts";
 import type { NodeKind } from "./nodes.ts";
+import { ChunkSpan } from "./embedding/chunks.ts";
+import { optionalProperty } from "../optional-property.ts";
 
 export interface FindInput {
   readonly query: string;
@@ -34,8 +36,10 @@ export interface Match {
   readonly projectId: string;
   readonly sessionId: string | null;
   readonly createdAt: string;
-  /** Start of the original text. Call read_evidence for the full text before relying on it. */
+  /** Matched chunk's start, or original text's start. Read evidence before relying on it. */
   readonly snippet: string;
+  /** Exact original UTF-16 span. Pass start as read_evidence's offset. */
+  readonly matchedSpan?: ChunkSpan & { readonly unit: "utf16" };
   readonly utility: number;
   /** vector/text: matched the query directly. graph: reached by following edges from a match. */
   readonly foundBy: "vector" | "text" | "graph";
@@ -301,10 +305,30 @@ const make = (tuning: SearchTuning) =>
           return yield* Effect.interrupt;
         case "success": {
           if (result.vectorUnavailable && !degraded.includes("vector")) degraded.unshift("vector");
+          const spans = yield* Effect.try({
+            try: () =>
+              result.vectorSeqs.flatMap((seq, index) => {
+                const row = sqlite
+                  .prepare(
+                    "SELECT start_offset AS start, end_offset AS end FROM node_vector_chunks WHERE vector_id=? AND embedder=?",
+                  )
+                  .get(seq, embedder.identity);
+                return row === undefined
+                  ? []
+                  : [
+                      {
+                        id: result.vectorIds[index]!,
+                        span: Result.getOrThrow(Schema.decodeUnknownResult(ChunkSpan)(row)),
+                      },
+                    ];
+              }),
+            catch: () => NativeMemorySearchFailed.make({ reason: "read-failed" }),
+          });
           return {
             byVector: result.vectorIds,
             byText: result.textIds,
             byMorph: result.morphIds,
+            spans,
             coverage: {
               unindexed: result.unindexed,
               uninterpreted: result.uninterpreted,
@@ -322,7 +346,7 @@ const make = (tuning: SearchTuning) =>
         const allowed = allowedProjects(input.projectId, input.crossProject ?? true);
         const degraded: ("vector" | "morph")[] = [];
 
-        const { byVector, byText, byMorph, coverage } = yield* collectSeeds(
+        const { byVector, byText, byMorph, coverage, spans } = yield* collectSeeds(
           input,
           allowed,
           limit,
@@ -349,30 +373,38 @@ const make = (tuning: SearchTuning) =>
         const { unindexed, uninterpreted } = coverage;
 
         const matches = yield* Effect.forEach(walk.visits.slice(0, limit), (visit) =>
-          Effect.map(latest(visit.node.id), (latest): Match => ({
-            id: visit.node.id,
-            kind: visit.node.kind,
-            projectId: visit.node.projectId,
-            sessionId: visit.node.sessionId,
-            createdAt: visit.node.createdAt,
-            snippet: visit.node.text.slice(0, snippetLength),
-            utility: Math.round(visit.utility * 1000) / 1000,
-            foundBy:
-              visit.path.length > 0
-                ? "graph"
-                : HashSet.has(vectorIds, visit.node.id)
-                  ? "vector"
-                  : "text",
-            path: visit.path,
-            projectName: projectName(visit.node.projectId),
-            fromOtherProject: visit.node.projectId !== input.projectId,
-            supersededBy: supersededBy.all(visit.node.id).map((row) => {
-              const challenge = decodeChallenge(row);
-              return { id: challenge.from_id, relation: challenge.kind };
-            }),
-            unconfirmedChallenges: decodeCount(unconfirmedOf.get(visit.node.id)).count,
-            latest,
-          })),
+          Effect.map(latest(visit.node.id), (latest): Match => {
+            const matched = spans.find((entry) => entry.id === visit.node.id);
+            const start = matched?.span.start ?? 0;
+            return {
+              id: visit.node.id,
+              kind: visit.node.kind,
+              projectId: visit.node.projectId,
+              sessionId: visit.node.sessionId,
+              createdAt: visit.node.createdAt,
+              snippet: visit.node.text.slice(start, start + snippetLength),
+              ...optionalProperty(
+                "matchedSpan",
+                matched === undefined ? undefined : { ...matched.span, unit: "utf16" as const },
+              ),
+              utility: Math.round(visit.utility * 1000) / 1000,
+              foundBy:
+                visit.path.length > 0
+                  ? "graph"
+                  : HashSet.has(vectorIds, visit.node.id)
+                    ? "vector"
+                    : "text",
+              path: visit.path,
+              projectName: projectName(visit.node.projectId),
+              fromOtherProject: visit.node.projectId !== input.projectId,
+              supersededBy: supersededBy.all(visit.node.id).map((row) => {
+                const challenge = decodeChallenge(row);
+                return { id: challenge.from_id, relation: challenge.kind };
+              }),
+              unconfirmedChallenges: decodeCount(unconfirmedOf.get(visit.node.id)).count,
+              latest,
+            };
+          }),
         );
         return {
           matches,

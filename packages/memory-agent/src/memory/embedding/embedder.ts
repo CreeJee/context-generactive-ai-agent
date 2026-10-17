@@ -20,6 +20,7 @@ import {
 import { GlobalConfig, type GpuCheck, type Settings } from "../../config/global-config.ts";
 import { StorageRoot } from "../../config/storage-root.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../../runtime/resources.ts";
+import { ChunkSpan, chunkPolicy } from "./chunks.ts";
 
 export class EmbeddingError extends Data.TaggedError("EmbeddingError")<{
   readonly cause: unknown;
@@ -54,6 +55,10 @@ export interface EmbedderApi {
   readonly dimensions: number;
   /** L2-normalized vectors, one per text, in order. */
   readonly embed: (texts: readonly string[]) => Effect.Effect<Float32Array[], EmbeddingError>;
+  /** Local document windows; custom evaluation embedders may keep one vector per node. */
+  readonly chunks?: (
+    texts: readonly string[],
+  ) => Effect.Effect<readonly (readonly ChunkSpan[])[], EmbeddingError>;
   readonly runtime: () => EmbedderRuntime;
 }
 
@@ -62,9 +67,8 @@ export const localModel = {
   id: "ibm-granite/granite-embedding-97m-multilingual-r2",
   dimensions: 384,
   /**
-   * Longest input embedded. Attention memory grows with the square of the length (4096 tokens
-   * already takes ~650 MB more than a short text), so long tool output is embedded from its start;
-   * the full text stays in the node and in text and morpheme search.
+   * Query/direct-call limit. Indexed documents are first split into chunkPolicy windows, so
+   * their tail is never discarded. Keep this separate from the document chunk size.
    */
   maxTokens: 2048,
   /** Texts per batch at most. */
@@ -141,6 +145,11 @@ function planBatchesBody(
 
 /** Replies from `embed-worker.ts`. */
 const Reply = Schema.Union([
+  Schema.Struct({
+    id: Schema.Finite,
+    kind: Schema.Literal("chunks"),
+    spans: Schema.Array(Schema.Array(ChunkSpan)),
+  }),
   Schema.Struct({
     id: Schema.Finite,
     kind: Schema.Literal("counts"),
@@ -245,6 +254,7 @@ function modelWorker(cacheDir: string, setup: ModelSetup) {
           if (worker === created) device = reply.device;
           return;
         case "counts":
+        case "chunks":
         case "rows":
         case "failed":
           const done = Option.getOrUndefined(
@@ -264,7 +274,10 @@ function modelWorker(cacheDir: string, setup: ModelSetup) {
     return created;
   };
 
-  const request = Effect.fnUntraced(function* (kind: "count" | "embed", texts: readonly string[]) {
+  const request = Effect.fnUntraced(function* (
+    kind: "count" | "embed" | "chunks",
+    texts: readonly string[],
+  ) {
     const current = yield* Effect.try({
       try: () => (worker ??= start()),
       catch: (cause) => new EmbeddingError({ cause }),
@@ -300,6 +313,7 @@ function modelWorker(cacheDir: string, setup: ModelSetup) {
       case "failed":
         return yield* new EmbeddingError({ cause: reply.reason });
       case "rows":
+      case "chunks":
       case "loaded":
         return yield* new EmbeddingError({
           cause: "the embedding worker answered a count with something else",
@@ -315,6 +329,7 @@ function modelWorker(cacheDir: string, setup: ModelSetup) {
       case "failed":
         return yield* new EmbeddingError({ cause: reply.reason });
       case "counts":
+      case "chunks":
       case "loaded":
         return yield* new EmbeddingError({
           cause: "the embedding worker answered an embedding with something else",
@@ -325,6 +340,17 @@ function modelWorker(cacheDir: string, setup: ModelSetup) {
   return {
     device: () => device,
     stop,
+    chunks: Effect.fnUntraced(function* (texts: readonly string[]) {
+      const reply = yield* request("chunks", texts);
+      switch (reply.kind) {
+        case "chunks":
+          return reply.spans;
+        case "failed":
+          return yield* new EmbeddingError({ cause: reply.reason });
+        default:
+          return yield* new EmbeddingError({ cause: "invalid chunk response" });
+      }
+    }),
     embed: Effect.fnUntraced(function* (texts: readonly string[]) {
       const vectors: Float32Array[] = [];
       if (texts.length === 0) return vectors;
@@ -355,7 +381,7 @@ const makeLocal = (setup: ModelSetup, purpose: LocalPurpose) =>
       Effect.promise(() => Promise.resolve(model.stop("embedder stopped"))).pipe(Effect.asVoid),
     );
     return {
-      identity: `${localModel.id}@${setup.variant}/cls/${localModel.maxTokens}`,
+      identity: `${localModel.id}@${setup.variant}/cls/${localModel.maxTokens}/chunks-v${chunkPolicy.version}-${chunkPolicy.tokens}-${chunkPolicy.overlap}`,
       dimensions: localModel.dimensions,
       runtime: (): EmbedderRuntime => {
         switch (purpose.kind) {
@@ -366,6 +392,7 @@ const makeLocal = (setup: ModelSetup, purpose: LocalPurpose) =>
         }
       },
       embed: model.embed,
+      chunks: model.chunks,
     } satisfies EmbedderApi;
   });
 

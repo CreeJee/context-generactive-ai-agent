@@ -1514,6 +1514,33 @@ export const migrations: readonly string[] = [
     PRIMARY KEY (project_id, parent)
   );
   `,
+  `
+  -- Chunk IDs have their own safe-integer namespace; legacy one-vector nodes keep nodes.seq.
+  CREATE TABLE node_vector_chunks (
+    vector_id INTEGER PRIMARY KEY AUTOINCREMENT CHECK(vector_id >= 4503599627370496 AND vector_id <= 9007199254740991),
+    node_seq INTEGER NOT NULL REFERENCES nodes(seq) ON DELETE CASCADE,
+    embedder TEXT NOT NULL,
+    ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+    start_offset INTEGER NOT NULL CHECK(start_offset >= 0),
+    end_offset INTEGER NOT NULL CHECK(end_offset > start_offset),
+    UNIQUE(node_seq, embedder, ordinal)
+  );
+  INSERT INTO sqlite_sequence(name, seq) VALUES ('node_vector_chunks', 4503599627370495);
+  CREATE INDEX node_vector_chunks_embedder ON node_vector_chunks(embedder, vector_id);
+  -- Durable removal IDs survive deletion of mappings (redaction, retirement, session purge).
+  CREATE TABLE memory_chunk_vector_removals (
+    vector_id INTEGER NOT NULL,
+    embedder TEXT NOT NULL,
+    PRIMARY KEY(vector_id, embedder)
+  );
+  CREATE TRIGGER node_vector_chunks_removal BEFORE DELETE ON node_vector_chunks BEGIN
+    INSERT OR IGNORE INTO memory_chunk_vector_removals(vector_id, embedder)
+      VALUES (old.vector_id, old.embedder);
+  END;
+  CREATE TRIGGER node_vectors_remove_chunks BEFORE DELETE ON node_vectors BEGIN
+    DELETE FROM node_vector_chunks WHERE node_seq = old.node_seq AND embedder = old.embedder;
+  END;
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.
