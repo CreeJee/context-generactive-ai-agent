@@ -14,6 +14,7 @@ import { Database } from "../db/database.ts";
 import { Embedder } from "./embedding/embedder.ts";
 import { VectorIndex } from "./embedding/vector-index.ts";
 import { MorphAnalysisFailed, MorphAnalyzer } from "./morph/analyzer.ts";
+import { changeAuthoritySql } from "./changes.ts";
 import { Graph, type Hop } from "./graph.ts";
 import type { NodeKind } from "./nodes.ts";
 
@@ -179,11 +180,19 @@ const make = (tuning: SearchTuning) =>
     const graph = yield* Graph;
     const analyzer = yield* MorphAnalyzer;
     const supersededBy = sqlite.prepare(`
-    SELECT e.from_id, e.kind FROM edges e JOIN nodes n ON n.id = e.from_id
-    WHERE e.to_id = ? AND e.kind IN ('corrects', 'retracts') ORDER BY n.seq`);
-    const unconfirmedOf = sqlite.prepare(
-      "SELECT count(*) AS count FROM interpretations WHERE target_id = ? AND status = 'unconfirmed'",
-    );
+    SELECT e.from_id, e.kind FROM edges e
+    JOIN nodes n ON n.id = e.from_id JOIN nodes t ON t.id = e.to_id
+    WHERE e.to_id = ? AND e.kind IN ('corrects', 'retracts') AND ${changeAuthoritySql("n", "t")}
+    ORDER BY n.seq`);
+    // A question later resolved into an applied relation is no longer unconfirmed.
+    const unconfirmedOf = sqlite.prepare(`
+    SELECT count(*) AS count FROM interpretations i
+    JOIN nodes n ON n.id = i.node_id JOIN nodes t ON t.id = i.target_id
+    WHERE i.target_id = ? AND i.status = 'unconfirmed' AND i.kind IN ('corrects', 'retracts')
+      AND ${changeAuthoritySql("n", "t")}
+      AND NOT EXISTS (
+        SELECT 1 FROM edges e WHERE e.from_id = i.node_id AND e.to_id = i.target_id AND e.kind = i.kind
+      )`);
     const nameOf = sqlite.prepare("SELECT name FROM projects WHERE id = ?");
     const projectName = (projectId: string) => {
       const row = nameOf.get(projectId);

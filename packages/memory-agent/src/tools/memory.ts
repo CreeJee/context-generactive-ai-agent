@@ -2,7 +2,6 @@ import { isTruthy } from "../truthy.ts";
 import { toolDefinition, type ChatMiddleware } from "@tanstack/ai";
 import {
   Array as EffectArray,
-  HashSet,
   MutableHashSet,
   Context,
   Effect,
@@ -11,7 +10,7 @@ import {
   Schema,
 } from "effect";
 import { Graph } from "../memory/graph.ts";
-import { readStructuredEvidence } from "../memory/evidence.ts";
+import { readStructuredEvidence, traceStructuredEvidence } from "../memory/evidence.ts";
 import { Interpretations } from "../memory/interpretations.ts";
 import { KnowledgePromotions } from "../memory/knowledge.ts";
 import { Nodes } from "../memory/nodes.ts";
@@ -137,10 +136,6 @@ function createMemoryToolsBody(
   const run = Effect.runPromiseWith(runtime);
   const retrieved = MutableHashSet.empty<string>();
   let usedDraft: string[] = [];
-  const visible = () =>
-    Effect.map(MemorySearch, (search) =>
-      HashSet.fromIterable(search.allowedProjects(projectId, crossProject)),
-    );
 
   const findMemory = toolDefinition({
     name: "find_memory",
@@ -148,7 +143,7 @@ function createMemoryToolsBody(
       "Search earlier conversations and promoted memory across allowed projects. Matches are leads: read_evidence for original text and trace_evidence for provenance/corrections. supersededBy marks corrections/retractions; ask about unconfirmedChallenges; uninterpreted has no topics yet. Missing results never imply approval.",
     inputSchema: toToolSchema(findMemoryInput),
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  }).server(({ query }) =>
+  }).server(({ query }, context) =>
     run(
       Effect.gen(function* () {
         const result = yield* Effect.flatMap(MemorySearch, (search) =>
@@ -167,6 +162,7 @@ function createMemoryToolsBody(
         }
         return result;
       }),
+      { signal: context?.abortSignal },
     ),
   );
 
@@ -193,57 +189,13 @@ function createMemoryToolsBody(
       "Follow a memory node back to its cause: tool result -> tool call -> assistant message -> the user turn it answered. Promoted topic nodes include memoryCandidateId and authorizedByUserNodeId in detail; their Work Trace source remains in the candidate record. Also lists later user corrections/retractions and unconfirmed challenges.",
     inputSchema: toToolSchema(traceEvidenceInput),
     // Promise/async-iterator boundary for the native SDK caller; domain Effects run in the caller runtime.
-  }).server(({ id }) =>
+  }).server(({ id }, context) =>
     run(
       Effect.gen(function* () {
-        const [graph, interpretations, nodes, allowed] = yield* Effect.all(
-          [Graph, Interpretations, Nodes, visible()],
-          { concurrency: "unbounded" },
-        );
-        const provenance = graph.trace(id);
-        if (!isTruthy(provenance) || !HashSet.has(allowed, provenance.chain[0]!.projectId))
-          return notFound(id);
-        const summary = (node: (typeof provenance.chain)[number]) => ({
-          id: node.id,
-          kind: node.kind,
-          projectId: node.projectId,
-          createdAt: node.createdAt,
-          snippet: node.text.slice(0, 300),
-          detail: node.detail,
-        });
-        const chainIds = provenance.chain.map((node) => node.id);
-        const applied = interpretations.targeting(chainIds, "applied");
-        const reasonFor = (from: string, target: string, kind: string) =>
-          applied.find(
-            (entry) => entry.nodeId === from && entry.targetId === target && entry.kind === kind,
-          )?.reason ?? null;
-        return {
-          chain: provenance.chain
-            .filter((node) => HashSet.has(allowed, node.projectId))
-            .map(summary),
-          challengedBy: provenance.challengedBy
-            .filter((entry) => HashSet.has(allowed, entry.node.projectId))
-            .map((entry) => ({
-              ...summary(entry.node),
-              relation: entry.kind,
-              target: entry.target,
-              reason: reasonFor(entry.node.id, entry.target, entry.kind),
-            })),
-          unconfirmed: interpretations.targeting(chainIds, "unconfirmed").flatMap((entry) => {
-            const node = nodes.get(entry.nodeId);
-            return !isTruthy(node) || !HashSet.has(allowed, node.projectId)
-              ? []
-              : [
-                  {
-                    ...summary(node),
-                    possibleRelation: entry.kind,
-                    target: entry.targetId,
-                    reason: entry.reason,
-                  },
-                ];
-          }),
-        };
+        const trace = yield* traceStructuredEvidence(id, projectId, crossProject);
+        return trace ?? notFound(id);
       }),
+      { signal: context?.abortSignal },
     ),
   );
 

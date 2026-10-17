@@ -269,6 +269,11 @@ const make = Effect.gen(function* () {
     });
   }
 
+  function page(node: Node, offset = 0): EvidencePage {
+    if (node.kind === "tool_result") resultPages.remember(node.id, node.text);
+    return { id: node.id, kind: node.kind, ...textWindow(node.text, offset, evidencePageLength) };
+  }
+
   return {
     append,
     readToolResultPage: resultPages.read,
@@ -327,11 +332,11 @@ const make = Effect.gen(function* () {
     /** Reads original text in pages without splitting a surrogate pair. */
     read: (id: string, offset = 0): EvidencePage | null => {
       const row = selectNode.get(id);
-      if (!isTruthy(row)) return null;
-      const node = toNode(row);
-      if (node.kind === "tool_result") resultPages.remember(node.id, node.text);
-      return { id: node.id, kind: node.kind, ...textWindow(node.text, offset, evidencePageLength) };
+      return isTruthy(row) ? page(toNode(row), offset) : null;
     },
+
+    /** The same page for a node the caller already loaded, without reading its row again. */
+    page,
   };
 });
 

@@ -81,6 +81,8 @@ const make = Effect.gen(function* () {
   const selectNode = sqlite.prepare(
     "SELECT n.* FROM nodes n WHERE n.id = ? AND NOT EXISTS (SELECT 1 FROM memory_graph_suppressed_nodes s WHERE s.node_seq = n.seq)",
   );
+  // A read superseded by a later one leaves graph walks, but its own provenance still exists.
+  const selectStart = sqlite.prepare("SELECT * FROM nodes WHERE id = ?");
   const causeOutgoing = sqlite.prepare(
     "SELECT * FROM edges WHERE from_id = ? AND kind = ? LIMIT 1",
   );
@@ -160,8 +162,9 @@ const make = Effect.gen(function* () {
   }
 
   function trace(id: string): Provenance | null {
-    const start = nodeById(id);
-    if (!(start !== null)) return null;
+    const startRow = selectStart.get(id);
+    if (!isTruthy(startRow)) return null;
+    const start = toNode(startRow);
     const chain: Node[] = [start];
     let current = start;
     for (;;) {
