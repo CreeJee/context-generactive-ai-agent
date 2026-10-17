@@ -9,6 +9,7 @@ import {
   ChevronRightIcon,
   EyeOffIcon,
   FolderPlusIcon,
+  GitBranchIcon,
   PlusIcon,
   Trash2Icon,
 } from "lucide-react";
@@ -332,6 +333,43 @@ function AddProjectDialog({ onAdd }: { onAdd: (root: string) => Promise<string |
 
 const sessionLabel = (session: Session) => session.title ?? dayAndTime(session.createdAt);
 
+/** Where in the repository a conversation ran: its branch, or else its worktree folder's name. */
+const sessionPlace = (session: Session) =>
+  session.branch ?? session.worktreePath?.split(/[\\/]/u).at(-1) ?? null;
+
+/** The place filter: every conversation, those in the checkout itself, or one branch or worktree. */
+type PlaceFilter =
+  | { readonly kind: "all" }
+  | { readonly kind: "checkout" }
+  | { readonly kind: "place"; readonly place: string };
+
+// Git branch names cannot contain ":", so these never collide with a place.
+const everyPlace = ":all";
+const checkoutPlace = ":checkout";
+
+const placeFilterOf = (value: string, places: readonly string[]): PlaceFilter => {
+  switch (value) {
+    case checkoutPlace:
+      return { kind: "checkout" };
+    case everyPlace:
+      return { kind: "all" };
+    default:
+      // A place whose last conversation left the list falls back to showing everything.
+      return places.includes(value) ? { kind: "place", place: value } : { kind: "all" };
+  }
+};
+
+const shownIn = (filter: PlaceFilter) => (session: Session) => {
+  switch (filter.kind) {
+    case "all":
+      return true;
+    case "checkout":
+      return sessionPlace(session) === null;
+    case "place":
+      return sessionPlace(session) === filter.place;
+  }
+};
+
 export function SessionSection({
   sessions,
   archived,
@@ -358,6 +396,12 @@ export function SessionSection({
   /** Trusted external agents a conversation can talk to directly. */
   agents: readonly string[];
 }) {
+  const [placeValue, setPlaceValue] = useState(everyPlace);
+  const places = [
+    ...new Set(sessions.flatMap((session) => sessionPlace(session) ?? [])),
+  ].toSorted();
+  const filter = placeFilterOf(placeValue, places);
+  const shown = sessions.filter(shownIn(filter));
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center justify-between px-4 pt-3 pb-2">
@@ -394,6 +438,33 @@ export function SessionSection({
           </DropdownMenu>
         </div>
       </div>
+      {places.length > 0 && (
+        <div className="px-2 pb-2">
+          <Select
+            value={placeValue}
+            items={[
+              { value: everyPlace, label: "모든 작업 위치" },
+              { value: checkoutPlace, label: "저장소 본체" },
+              ...places.map((place) => ({ value: place, label: place })),
+            ]}
+            onValueChange={(value) => value && setPlaceValue(value)}
+          >
+            <SelectTrigger className="w-full" size="sm" aria-label="작업 위치">
+              <GitBranchIcon />
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={everyPlace}>모든 작업 위치</SelectItem>
+              <SelectItem value={checkoutPlace}>저장소 본체</SelectItem>
+              {places.map((place) => (
+                <SelectItem key={place} value={place}>
+                  {place}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
       {archiveError && (
         <Alert variant="destructive" className="mx-2 mb-2 w-auto">
           <AlertDescription>{archiveError}</AlertDescription>
@@ -401,7 +472,7 @@ export function SessionSection({
       )}
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col gap-0.5 px-2 pb-3">
-          {sessions.map((session) => (
+          {shown.map((session) => (
             <div
               key={session.id}
               className={cn(
@@ -416,6 +487,15 @@ export function SessionSection({
                 className="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1.5 text-left text-xs"
               >
                 <span className="min-w-0 flex-1 truncate">{sessionLabel(session)}</span>
+                {sessionPlace(session) !== null && (
+                  <Badge
+                    variant="outline"
+                    className="max-w-24 shrink-0"
+                    title={session.worktreePath ?? undefined}
+                  >
+                    <GitBranchIcon /> <span className="truncate">{sessionPlace(session)}</span>
+                  </Badge>
+                )}
                 {session.agent && (
                   <Badge variant="outline" className="shrink-0">
                     <BotIcon /> {session.agent}
@@ -454,6 +534,9 @@ export function SessionSection({
           ))}
           {sessions.length === 0 && (
             <p className="px-2 text-xs text-muted-foreground">아직 대화가 없어요.</p>
+          )}
+          {sessions.length > 0 && shown.length === 0 && (
+            <p className="px-2 text-xs text-muted-foreground">이 작업 위치의 대화가 없어요.</p>
           )}
           {archived.length > 0 && (
             <Collapsible className="mt-2">

@@ -23,6 +23,18 @@ export interface RepositoryEvidence {
   readonly commit: string | null;
 }
 
+/** Where a conversation belongs, and the worktree it ran in when that was not the checkout. */
+export interface Placed {
+  readonly path: string;
+  readonly worktree: string | null;
+}
+
+/** A registered root with the folders it was seen making worktrees in on earlier passes. */
+export interface KnownRoot {
+  readonly root: string;
+  readonly worktreeParents: readonly string[];
+}
+
 /** A registered project that is a repository's main checkout. */
 interface Repository {
   /** As registered. */
@@ -30,7 +42,9 @@ interface Repository {
   /** As git spells it: links resolved. */
   readonly real: string;
   readonly remote: string | null;
-  /** The folders its linked worktrees are made in, such as `~/orca/workspaces/<repo>`. */
+  /** The folders its linked worktrees are made in now, such as `~/orca/workspaces/<repo>`. */
+  readonly seenParents: readonly string[];
+  /** Those and the ones seen before, whose worktrees may all be gone by now. */
   readonly worktreeParents: readonly string[];
 }
 
@@ -93,7 +107,7 @@ const make = Effect.gen(function* () {
   const lines = (text: string) => text.split("\n").filter((line) => line.length > 0);
 
   /** `cwd`'s place in its repository's main checkout when `cwd` is in a linked worktree. */
-  const mainCheckout = (cwd: string) =>
+  const mainCheckout = (cwd: string): Effect.Effect<Option.Option<Placed>> =>
     output(cwd, [
       "rev-parse",
       "--path-format=absolute",
@@ -115,7 +129,7 @@ const make = Effect.gen(function* () {
                 gitDir !== common &&
                 basename(common) === ".git";
               return linked
-                ? Option.some(join(dirname(common), relative(top, real)))
+                ? Option.some({ path: join(dirname(common), relative(top, real)), worktree: top })
                 : Option.none();
             }),
         ),
@@ -123,7 +137,7 @@ const make = Effect.gen(function* () {
     );
 
   /** A registered root that is a main checkout, with what identifies it and its worktrees. */
-  const repositoryAt = (root: string) =>
+  const repositoryAt = ({ root, worktreeParents: known }: KnownRoot) =>
     Effect.gen(function* () {
       const answer = yield* output(root, [
         "rev-parse",
@@ -151,11 +165,13 @@ const make = Effect.gen(function* () {
                 .map((line) => line.slice("worktree ".length))
                 .filter((path) => path !== real),
           });
+          const seenParents = EffectArray.dedupe(linked.map(dirname));
           return Option.some<Repository>({
             root,
             real,
             remote: Option.getOrNull(Option.map(remote, remoteKey)),
-            worktreeParents: EffectArray.dedupe(linked.map(dirname)),
+            seenParents,
+            worktreeParents: EffectArray.dedupe([...seenParents, ...known]),
           });
         }),
       );
@@ -169,16 +185,16 @@ const make = Effect.gen(function* () {
    * Resolves working directories against the registered roots of one pass. The repositories are
    * read once, the first time a folder needs them.
    */
-  const forRoots = (roots: readonly string[]) =>
+  const forRoots = (roots: readonly KnownRoot[]) =>
     Effect.gen(function* () {
       const repositories = yield* Effect.cached(
-        Effect.forEach(EffectArray.dedupe(roots), repositoryAt, {
-          concurrency: gitConcurrency,
-        }).pipe(Effect.map(EffectArray.getSomes)),
+        Effect.forEach(roots, repositoryAt, { concurrency: gitConcurrency }).pipe(
+          Effect.map(EffectArray.getSomes),
+        ),
       );
 
       /** The one repository the transcript's remote, or else its commit, points to. */
-      const byEvidence = (evidence: RepositoryEvidence) =>
+      const byEvidence = (cwd: string, evidence: RepositoryEvidence) =>
         Effect.gen(function* () {
           const all = yield* repositories;
           const remote = evidence.remoteUrl === null ? null : remoteKey(evidence.remoteUrl);
@@ -200,7 +216,11 @@ const make = Effect.gen(function* () {
             onNone: () =>
               Option.match(commit, { onNone: () => Effect.succeedNone, onSome: byCommit }),
           });
-          return Option.map(found, (repository) => repository.root);
+          // Only the folder is known to have been a worktree, not where its top was.
+          return Option.map(found, (repository): Placed => ({
+            path: repository.root,
+            worktree: cwd,
+          }));
         });
 
       /**
@@ -221,14 +241,19 @@ const make = Effect.gen(function* () {
                 Option.match(below(parent, cwd), {
                   onNone: () => [],
                   // The first segment is the worktree's own folder; the rest is where in it.
-                  onSome: (path) => [join(repository.root, ...path.split(sep).slice(1))],
+                  onSome: (path): Placed[] => {
+                    const [name = "", ...inside] = path.split(sep);
+                    return [
+                      { path: join(repository.root, ...inside), worktree: join(parent, name) },
+                    ];
+                  },
                 }),
               ),
           );
-          return single(EffectArray.dedupe(places));
+          return single(EffectArray.dedupeWith(places, (a, b) => a.path === b.path));
         });
 
-      const answer = (step: Effect.Effect<Option.Option<string>>) =>
+      const answer = (step: Effect.Effect<Option.Option<Placed>>) =>
         Effect.flatMap(step, (found) => Effect.fromOption(found));
 
       /**
@@ -236,20 +261,27 @@ const make = Effect.gen(function* () {
        * worktree, `cwd` itself when it is any other folder that exists, and for a folder that is
        * gone the repository its git record or its worktree folder names. Otherwise `cwd` as it is.
        */
-      const resolve = (cwd: string, evidence: RepositoryEvidence | null) =>
-        Effect.firstSuccessOf([
+      const resolve = (cwd: string, evidence: RepositoryEvidence | null) => {
+        const asRecorded: Placed = { path: cwd, worktree: null };
+        return Effect.firstSuccessOf([
           answer(mainCheckout(cwd)),
           answer(
             fs.exists(cwd).pipe(
-              Effect.map((exists) => (exists ? Option.some(cwd) : Option.none())),
+              Effect.map((exists) => (exists ? Option.some(asRecorded) : Option.none())),
               Effect.catchTag("PlatformError", () => Effect.succeedNone),
             ),
           ),
-          answer(evidence === null ? Effect.succeedNone : byEvidence(evidence)),
+          answer(evidence === null ? Effect.succeedNone : byEvidence(cwd, evidence)),
           answer(byWorktreeParent(cwd)),
-        ]).pipe(Effect.catchTag("NoSuchElementError", () => Effect.succeed(cwd)));
+        ]).pipe(Effect.catchTag("NoSuchElementError", () => Effect.succeed(asRecorded)));
+      };
 
-      return { resolve };
+      /** The worktree folders git showed for each repository this pass, to keep for later passes. */
+      const seen = Effect.map(repositories, (all) =>
+        all.map((repository) => ({ root: repository.root, parents: repository.seenParents })),
+      );
+
+      return { resolve, seen };
     });
 
   return { forRoots };

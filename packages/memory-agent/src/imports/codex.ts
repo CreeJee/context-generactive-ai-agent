@@ -2,7 +2,7 @@ import { HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Option, Schema } from "effect";
 import { refsInArguments } from "../memory/refs.ts";
-import { isInjectedText, type InjectedText, type TranscriptReader } from "./items.ts";
+import { branchOf, isInjectedText, type InjectedText, type TranscriptReader } from "./items.ts";
 
 /**
  * Codex CLI writes one rollout file per conversation under `~/.codex/sessions/<Y>/<M>/<D>`.
@@ -65,6 +65,7 @@ const SessionLine = Schema.Struct({
         Schema.Struct({
           repository_url: Schema.optional(Schema.NullOr(Schema.String)),
           commit_hash: Schema.optional(Schema.NullOr(Schema.String)),
+          branch: Schema.optional(Schema.NullOr(Schema.String)),
         }),
       ),
     ),
@@ -113,6 +114,7 @@ export const codexReader =
                   commit: decoded.payload.git.commit_hash ?? null,
                 }
               : null,
+            branch: branchOf(decoded.payload.git?.branch),
           },
         ];
       case "response_item": {
