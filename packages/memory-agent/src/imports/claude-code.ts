@@ -87,6 +87,8 @@ export function readClaudeCodeLine(line: string): readonly TranscriptItem[] {
       externalId: decoded.sessionId,
       cwd: decoded.cwd,
       startedAt: decoded.timestamp,
+      // Claude Code records the branch only, and a merged worktree's branch is usually deleted.
+      repository: null,
     });
 
   const content = decoded.message.content;

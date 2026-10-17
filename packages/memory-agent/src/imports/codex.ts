@@ -57,7 +57,18 @@ const decodePayload = Schema.decodeUnknownOption(
 const SessionLine = Schema.Struct({
   type: Schema.Literal("session_meta"),
   timestamp: Schema.String,
-  payload: Schema.Struct({ session_id: Schema.String, cwd: Schema.String }),
+  payload: Schema.Struct({
+    session_id: Schema.String,
+    cwd: Schema.String,
+    git: Schema.optional(
+      Schema.NullOr(
+        Schema.Struct({
+          repository_url: Schema.optional(Schema.NullOr(Schema.String)),
+          commit_hash: Schema.optional(Schema.NullOr(Schema.String)),
+        }),
+      ),
+    ),
+  }),
 });
 const ItemLine = Schema.Struct({
   type: Schema.Literal("response_item"),
@@ -96,6 +107,12 @@ export const codexReader =
             externalId: decoded.payload.session_id,
             cwd: decoded.payload.cwd,
             startedAt: decoded.timestamp,
+            repository: isTruthy(decoded.payload.git)
+              ? {
+                  remoteUrl: decoded.payload.git.repository_url ?? null,
+                  commit: decoded.payload.git.commit_hash ?? null,
+                }
+              : null,
           },
         ];
       case "response_item": {

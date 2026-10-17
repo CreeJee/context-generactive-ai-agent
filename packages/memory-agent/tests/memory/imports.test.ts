@@ -1,5 +1,19 @@
 import { zstdCompressSync } from "node:zlib";
-import { Array as EffectArray, Effect, Exit, Fiber, FileSystem, Path, Schema, Scope } from "effect";
+import { NodeServices } from "@effect/platform-node";
+import {
+  Array as EffectArray,
+  Context,
+  Effect,
+  Exit,
+  Fiber,
+  FileSystem,
+  Layer,
+  Path,
+  Schema,
+  Scope,
+  Stream,
+} from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { expect } from "vite-plus/test";
 import type { JsonValue } from "../../src/json.ts";
 import { sessionMessages } from "../../src/agent/history.ts";
@@ -513,5 +527,83 @@ alone("follows a Codex rollout compressed into its archive into the same, archiv
     yield* sessions.setArchived(session.id, false);
     yield* runOnce;
     expect((yield* sessions.get(session.id)).archivedAt).toBeNull();
+  }),
+);
+
+const git = Effect.fnUntraced(function* (cwd: string, args: readonly string[]) {
+  const platform = yield* Layer.build(NodeServices.layer);
+  const spawner = Context.get(platform, ChildProcessSpawner.ChildProcessSpawner);
+  const child = yield* spawner.spawn(ChildProcess.make("git", args, { cwd, stdin: "ignore" }));
+  const [, , code] = yield* Effect.all(
+    [Stream.runDrain(child.stdout), Stream.runDrain(child.stderr), child.exitCode],
+    { concurrency: "unbounded" },
+  );
+  expect(code).toBe(0);
+});
+
+/** The test project as a repository with one commit, and a folder its worktrees are made in. */
+const repositoryWithWorktrees = Effect.gen(function* () {
+  const { project, home } = yield* TestEnv;
+  yield* git(project.root, ["init", "-q"]);
+  yield* git(project.root, [
+    "-c",
+    "user.name=test",
+    "-c",
+    "user.email=test@example.com",
+    "commit",
+    "-q",
+    "--allow-empty",
+    "-m",
+    "init",
+  ]);
+  const parent = (yield* Path.Path).join(home, "worktrees", "repo");
+  const worktree = Effect.fnUntraced(function* (name: string) {
+    const path = (yield* Path.Path).join(parent, name);
+    yield* git(project.root, ["worktree", "add", "-q", "-b", name, path]);
+    return path;
+  });
+  return { parent, worktree };
+});
+
+alone(
+  "places a worktree's conversation in its repository's project, even once the worktree is gone",
+  () =>
+    Effect.gen(function* () {
+      const { project, home } = yield* TestEnv;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { parent, worktree } = yield* repositoryWithWorktrees;
+      const live = yield* worktree("live");
+      yield* fs.makeDirectory(path.join(live, "apps"));
+      yield* writeTranscript(yield* claudePath(), claudeLines(path.join(live, "apps")));
+      yield* writeTranscript(
+        yield* codexRollout(path.join(home, ".codex")),
+        codexLines(path.join(parent, "gone")),
+      );
+      yield* runOnce;
+      const sessions = yield* (yield* Sessions).list(project.id);
+      const imported = sessions.flatMap((session) => session.importedFrom ?? []);
+      expect(imported.toSorted()).toEqual(["claude-code", "codex"]);
+      const roots = (yield* (yield* Projects).listAll).map((entry) => entry.root);
+      expect(roots.filter((root) => root.includes(`${path.sep}worktrees${path.sep}`))).toEqual([]);
+    }),
+);
+
+alone("folds a project migration made for a worktree into its repository's project", () =>
+  Effect.gen(function* () {
+    const { project } = yield* TestEnv;
+    const { worktree } = yield* repositoryWithWorktrees;
+    const projects = yield* Projects;
+    const split = yield* projects.add(yield* worktree("split"));
+    const sessions = yield* Sessions;
+    const moved = yield* sessions.createImported(
+      split.id,
+      null,
+      "2026-04-02T02:00:00.000Z",
+      "codex",
+    );
+    yield* runOnce;
+    expect((yield* sessions.get(moved.id)).projectId).toBe(project.id);
+    expect((yield* projects.get(split.id)).hiddenAt).not.toBeNull();
   }),
 );

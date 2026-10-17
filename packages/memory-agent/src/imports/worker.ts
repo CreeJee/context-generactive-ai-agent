@@ -15,6 +15,7 @@ import { Projects } from "../projects/projects.ts";
 import { SecretRedactor } from "../secrets/redactor.ts";
 import { Sessions } from "../sessions/sessions.ts";
 import { BulkNodes } from "./bulk.ts";
+import { Checkouts } from "./checkouts.ts";
 import { TranscriptPass } from "./pass.ts";
 import {
   ImportWorkerRequest,
@@ -43,7 +44,13 @@ const runtime = ManagedRuntime.make(
   TranscriptPass.layer(setup.home).pipe(
     Layer.provideMerge(Sessions.layer),
     Layer.provideMerge(
-      Layer.mergeAll(Projects.layer, GlobalConfig.layer, BulkNodes.layer, SecretRedactor.layer),
+      Layer.mergeAll(
+        Projects.layer,
+        GlobalConfig.layer,
+        BulkNodes.layer,
+        SecretRedactor.layer,
+        Checkouts.layer,
+      ),
     ),
     Layer.provideMerge(
       Layer.merge(

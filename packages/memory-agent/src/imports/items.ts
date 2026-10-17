@@ -1,6 +1,7 @@
 import { HashSet } from "effect";
 import { Function as EffectFunction } from "effect";
 import { Schema } from "effect";
+import type { RepositoryEvidence } from "./checkouts.ts";
 
 /**
  * A coding agent whose local transcripts can be migrated into this app's memory.
@@ -17,6 +18,8 @@ export interface TranscriptStart {
   /** The working directory the conversation ran in; this is what picks the project. */
   readonly cwd: string;
   readonly startedAt: string;
+  /** The repository the tool recorded, which places a conversation whose worktree is gone. */
+  readonly repository: RepositoryEvidence | null;
 }
 
 /** Something a person or an assistant said, verbatim. */
