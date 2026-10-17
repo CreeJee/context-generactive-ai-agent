@@ -7,9 +7,14 @@ const isBytes = Schema.is(Schema.Uint8Array);
 
 // Node 26 strips types but cannot erase runtime parameter properties; only those modules are
 // transformed. The hooks run in each thread (workers inherit this `--import`), so worker startup
-// does not queue every import behind one shared loader thread.
+// does not queue every import behind one shared loader thread. `vite` is Vite+'s core package,
+// which ships rolldown as its own subpath instead of depending on the `rolldown` package.
 const { transformSync } = await import(
-  pathToFileURL(createRequire(import.meta.resolve("vite")).resolve("rolldown/utils")).href
+  pathToFileURL(
+    createRequire(import.meta.resolve("vite")).resolve(
+      "@voidzero-dev/vite-plus-core/rolldown/utils",
+    ),
+  ).href
 );
 
 registerHooks({
