@@ -136,6 +136,27 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  /**
+   * A folder that holds nothing but these worktrees, or is gone. One that also holds other folders
+   * (worktrees made among unrelated checkouts) cannot say a gone folder in it was one of them.
+   */
+  const holdsOnly = (parent: string, linked: readonly string[]) => {
+    const others = fs.readDirectory(parent).pipe(
+      Effect.flatMap((names) =>
+        Effect.filter(
+          names.map((name) => join(parent, name)).filter((path) => !linked.includes(path)),
+          (path) => Effect.map(fs.stat(path), (info) => info.type === "Directory"),
+        ),
+      ),
+    );
+    return fs.exists(parent).pipe(
+      Effect.flatMap((exists) =>
+        exists ? Effect.map(others, EffectArray.isArrayEmpty) : Effect.succeed(true),
+      ),
+      Effect.catchTag("PlatformError", () => Effect.succeed(false)),
+    );
+  };
+
   /** A registered root that is a main checkout, with what identifies it and its worktrees. */
   const repositoryAt = ({ root, worktreeParents: known }: KnownRoot) =>
     Effect.gen(function* () {
@@ -156,7 +177,7 @@ const make = Effect.gen(function* () {
         output(root, ["config", "--get", "remote.origin.url"]),
         output(root, ["worktree", "list", "--porcelain"]),
       ]).pipe(
-        Effect.map(([remote, worktrees]) => {
+        Effect.flatMap(([remote, worktrees]) => {
           const linked = Option.match(worktrees, {
             onNone: () => [],
             onSome: (text) =>
@@ -166,13 +187,21 @@ const make = Effect.gen(function* () {
                 .filter((path) => path !== real),
           });
           const seenParents = EffectArray.dedupe(linked.map(dirname));
-          return Option.some<Repository>({
-            root,
-            real,
-            remote: Option.getOrNull(Option.map(remote, remoteKey)),
-            seenParents,
-            worktreeParents: EffectArray.dedupe([...seenParents, ...known]),
-          });
+          return Effect.map(
+            Effect.filter(
+              EffectArray.dedupe([...seenParents, ...known]),
+              (parent) => holdsOnly(parent, linked),
+              { concurrency: gitConcurrency },
+            ),
+            (worktreeParents) =>
+              Option.some<Repository>({
+                root,
+                real,
+                remote: Option.getOrNull(Option.map(remote, remoteKey)),
+                seenParents,
+                worktreeParents,
+              }),
+          );
         }),
       );
       return yield* isMain ? described : Effect.succeedNone;
