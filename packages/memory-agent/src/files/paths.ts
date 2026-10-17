@@ -6,8 +6,6 @@ import {
   FileSystem,
 } from "effect";
 import { Function as EffectFunction } from "effect";
-// Legacy synchronous host configuration still uses canonicalPath; tool checks use canonicalPathEffect.
-import { realpathSync } from "node:fs";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
 import { Effect, HashSet, Option, Schema } from "effect";
@@ -179,7 +177,12 @@ const lstat = (path: string) =>
     Effect.map(Option.getOrUndefined),
   );
 
-/** Resolve missing suffixes only; permission and I/O failures must not become a guessed path. */
+/**
+ * Canonical absolute path with symlinks resolved and the on-disk letter case. A path that does
+ * not exist yet resolves through its nearest existing parent, so a symlinked parent cannot hide
+ * where a new file would really land. Only missing suffixes resolve this way; permission and I/O
+ * failures must not become a guessed path.
+ */
 export const canonicalPathEffect = Effect.fn("Paths.canonicalPath")(function* (
   path: string,
 ): Effect.fn.Return<string, PlatformError.PlatformError> {
@@ -194,21 +197,6 @@ export const canonicalPathEffect = Effect.fn("Paths.canonicalPath")(function* (
     }),
   );
 });
-
-/**
- * Canonical absolute path with symlinks resolved and the on-disk letter case. A path that does
- * not exist yet resolves through its nearest existing parent, so a symlinked parent cannot hide
- * where a new file would really land.
- */
-export function canonicalPath(path: string): string {
-  try {
-    return realpathSync.native(path);
-  } catch {
-    const parent = dirname(path);
-    if (parent === path) return path;
-    return join(canonicalPath(parent), basename(path));
-  }
-}
 
 /**
  * True when `candidate` is `directory` or below it, compared by device and inode so a different

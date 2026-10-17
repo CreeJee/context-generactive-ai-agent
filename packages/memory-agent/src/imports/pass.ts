@@ -9,7 +9,7 @@ import { Option, Clock, DateTime, Cause, Context, Effect, FileSystem, Layer, Sch
 import { GlobalConfig } from "../config/global-config.ts";
 import { StorageRoot } from "../config/storage-root.ts";
 import { Database } from "../db/database.ts";
-import { canonicalPath } from "../files/paths.ts";
+import { canonicalPathEffect } from "../files/paths.ts";
 import { Projects } from "../projects/projects.ts";
 import { SecretRedactor, type SecretRedactionFailed } from "../secrets/redactor.ts";
 import { Sessions } from "../sessions/sessions.ts";
@@ -106,7 +106,7 @@ const make = (home: string) =>
     const bulk = yield* BulkNodes;
     const config = yield* GlobalConfig;
     const redactor = yield* SecretRedactor;
-    const storageRoot = canonicalPath(storage.path);
+    const storageRoot = yield* canonicalPathEffect(storage.path);
     const checkouts = yield* Checkouts;
 
     const hideText = (text: string) =>
@@ -181,7 +181,7 @@ const make = (home: string) =>
      */
     const projectOf = (cwd: string) =>
       Effect.gen(function* () {
-        const canonical = canonicalPath(cwd);
+        const canonical = yield* canonicalPathEffect(cwd);
         const registered = yield* projects.listAll;
         const owner = registered
           .filter((project) => isWithin(project.root, canonical))
@@ -395,8 +395,14 @@ const make = (home: string) =>
     const transcripts = () =>
       findTranscripts(home).pipe(
         Effect.provideContext(filesystemContext),
-        Effect.map((found) =>
-          found.filter((transcript) => !isWithin(storageRoot, canonicalPath(transcript.path))),
+        Effect.flatMap(
+          Effect.filter(
+            (transcript) =>
+              canonicalPathEffect(transcript.path).pipe(
+                Effect.map((canonical) => !isWithin(storageRoot, canonical)),
+              ),
+            { concurrency: 16 },
+          ),
         ),
       );
 

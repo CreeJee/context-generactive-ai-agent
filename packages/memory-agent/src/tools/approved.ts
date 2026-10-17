@@ -5,7 +5,7 @@ import { toolDefinition, type ToolExecutionContext } from "@tanstack/ai";
 import { tmpdir } from "node:os";
 import { path } from "../runtime/synchronous-path.ts";
 const { isAbsolute, relative, sep } = path;
-import { Cause, Context, Effect, Layer, Schema } from "effect";
+import { Cause, Context, Effect, FileSystem, Layer, Schema } from "effect";
 import { BackgroundTasks, backgroundOperation, type BackgroundBinding } from "./background.ts";
 import { StorageRoot } from "../config/storage-root.ts";
 import {
@@ -103,6 +103,7 @@ const make = Effect.gen(function* () {
   const storage = yield* StorageRoot;
   const background = yield* BackgroundTasks;
   const shellSkills = yield* ShellSkills;
+  const fileSystem = yield* FileSystem.FileSystem;
 
   return {
     /**
@@ -179,6 +180,7 @@ const make = Effect.gen(function* () {
                         ? runLine(signal)(command)
                         : Effect.fail(unavailable),
                   ),
+                  Effect.provideService(FileSystem.FileSystem, fileSystem),
                 ),
               );
             if (binding !== undefined) {

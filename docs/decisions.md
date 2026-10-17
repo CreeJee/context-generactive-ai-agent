@@ -244,6 +244,15 @@
 - pnpm 12.4.1에서는 URL 의존성 패치가 lockfile에 기록되고 설치가 성공해도 실제 파일에 반영되지 않았다. 동일 패치의 실제 적용을 확인한 12.13.0으로 마이너 업데이트한다. 패치는 4.0.3에만 지정한다. 의존성 버전·URL·integrity는 유지하고 blockExoticSubdeps 기본값을 끄는 설정은 저장하지 않는다. 패치 등록 시 기존 URL 그래프의 lockfile 생성은 일회성 설정으로 수행했고, 일반 frozen 설치는 기본 보안 설정으로 검증한다.
 - 패치 제거 조건은 설치한 Effect가 같은 no-follow lstat 계약을 제공하고, 파일·디렉터리·정상 및 dangling 링크·NotFound·makeNoop 회귀 테스트가 통과하는 것이다. 오류·경고 severity와 검사 종료 기준은 유지한다. 남은 native I/O 경고는 별도 기능 공백으로 보고한다.
 
+### node 내장 fs 경계의 FileSystem 이행 (2026-10-17)
+
+- `nodeBuiltinImport`가 warning이라 검사가 통과하면서 `Effect.try`·`Effect.sync`로 감싼 node fs 호출이 계속 늘었다. 대응 API가 있으면 쓰고, 없으면 진단을 끄지 않고 패치나 모듈로 기능을 채운다.
+- 같은 pnpm patch에 `FileSystem.openDirectory(path): Effect<Directory, PlatformError, Scope>`와 `File.Info.mtimeNs`·`ctimeNs`(`Option<bigint>`)를 추가한다. 디렉터리 항목은 링크를 따라가지 않은 종류를 함께 돌려주고, 핸들은 Scope가 닫는다. 나노초 시각은 이미 bigint로 읽는 stat에서 그대로 옮긴다.
+- 디렉터리 순회, 텍스트 파일 읽기·생성·교체·페이지 읽기, 샌드박스 임시 폴더, native artifact 읽기를 FileSystem으로 옮긴다. 생성·교체·페이지 읽기의 no-follow는 POSIX에서만 켠다. 이전에도 Windows에는 O_NOFOLLOW가 없었다. 교체는 임시 파일 핸들을 자체 Scope로 닫고, 쓰기·검사·교체 중 어디서 실패해도 임시 파일을 지운다.
+- 동기 `canonicalPath`를 없애고 호출부를 `canonicalPathEffect`로 옮긴다. 공급자 도구 정책은 작업공간 루트를 검증할 때 정규화하고, 실패하면 `workspace_root_unavailable`로 거부한다.
+- POSIX glob은 Node `path.matchesGlob`이 쓰는 minimatch를 같은 옵션으로 직접 쓴다.
+- 패치 hash를 다시 계산하려면 lockfile 해석이 필요하다. 사용자 결정에 따라 `blockExoticSubdeps: false`를 저장하며, 위 2026-10-15 결정의 "설정을 저장하지 않는다"를 대체한다. pnpm에는 패키지 단위 예외가 없으므로 Effect를 registry에서 받게 되면 되돌린다. 전체 재해석은 무관한 peer 해석(zod 등)을 바꾸므로, 이번 lockfile 변경은 patch hash와 minimatch 항목으로 한정했다.
+
 ## 인증·모델·공급자
 
 ### 인증과 모델 (2026-09-15)

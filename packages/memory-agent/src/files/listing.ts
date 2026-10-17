@@ -5,10 +5,8 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
-// Directory walking keeps one scoped opendir handle.
-import { opendir } from "node:fs/promises";
-// Effect Path has no glob matcher; retain Node's existing POSIX glob semantics.
-import { posix } from "node:path";
+// Effect Path has no glob matcher; minimatch is what Node's `path.matchesGlob` runs.
+import { minimatch } from "minimatch";
 import { path as hostPath } from "../runtime/synchronous-path.ts";
 import {
   Context,
@@ -21,7 +19,6 @@ import {
   Option,
   Effect,
   HashSet,
-  Schema,
   Array as EffectArray,
 } from "effect";
 import { findExecutable } from "../runtime/host.ts";
@@ -30,13 +27,24 @@ import { isCredentialPath } from "./paths.ts";
 
 const { join } = hostPath;
 
-export class FileListingIoFailed extends Schema.TaggedError<FileListingIoFailed>()(
-  "FileListingIoFailed",
-  {
-    path: Schema.String,
-    reason: Schema.TaggedStruct("CloseFailed", { cause: Schema.Defect() }),
-  },
-) {}
+/** `path.posix.matchesGlob`, with the options Node passes to minimatch. */
+const matchesGlob = (path: string, glob: string) =>
+  minimatch(path, glob, {
+    nocase: process.platform === "darwin" || process.platform === "win32",
+    windowsPathsNoEscape: true,
+    nonegate: true,
+    nocomment: true,
+    optimizationLevel: 2,
+    // Node passes "posix"; minimatch only distinguishes win32 from everything else.
+    platform: "linux",
+    nocaseMagicOnly: true,
+  });
+
+const nodeFileSystem = Effect.scoped(
+  Layer.build(NodeFileSystem.layer).pipe(
+    Effect.map((services) => Context.get(services, FileSystem.FileSystem)),
+  ),
+);
 
 /** File checks run at once when listing a Git work tree. */
 const statConcurrency = 64;
@@ -119,6 +127,7 @@ const walkFiles = Effect.fn("FileListing.walkFiles")(function* (
   directory: string,
   credentialPrefix: string,
 ) {
+  const fs = yield* nodeFileSystem;
   const files: string[] = [];
   let excluded = 0;
   let truncated = false;
@@ -130,39 +139,34 @@ const walkFiles = Effect.fn("FileListing.walkFiles")(function* (
     }
     const relative = pending.pop()!;
     // Finish and close this directory before visiting children, so depth never consumes more FDs.
-    yield* Effect.acquireUseRelease(
-      Effect.tryPromise(() => opendir(join(base, relative))).pipe(Effect.orElseSucceed(() => null)),
-      Effect.fnUntraced(function* (handle) {
-        if (handle === null) return;
+    // An unreadable directory is skipped; what it yielded before failing is kept.
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const handle = yield* fs.openDirectory(join(base, relative));
         while (true) {
-          const entry = yield* Effect.uninterruptible(Effect.tryPromise(() => handle.read())).pipe(
-            Effect.orElseSucceed(() => null),
-          );
-          if (entry === null) return;
+          const next = yield* handle.read;
+          if (Option.isNone(next)) return;
+          const entry = next.value;
           if (files.length >= walkLimit) {
             truncated = true;
             return;
           }
           const path = relative === "." ? entry.name : `${relative}/${entry.name}`;
-          if (entry.isDirectory()) {
-            if (HashSet.has(walkSkips, entry.name)) continue;
-            if (isCredentialPath(join(credentialPrefix, path))) excluded++;
-            else pending.push(path);
-          } else if (entry.isFile()) files.push(path);
+          switch (entry.type) {
+            case "Directory":
+              if (HashSet.has(walkSkips, entry.name)) continue;
+              if (isCredentialPath(join(credentialPrefix, path))) excluded++;
+              else pending.push(path);
+              continue;
+            case "File":
+              files.push(path);
+              continue;
+            default:
+              continue;
+          }
         }
       }),
-      (handle) =>
-        handle === null
-          ? Effect.void
-          : Effect.tryPromise({
-              try: () => handle.close(),
-              catch: (cause) =>
-                FileListingIoFailed.make({
-                  path: join(base, relative),
-                  reason: { _tag: "CloseFailed", cause },
-                }),
-            }),
-    );
+    ).pipe(Effect.catchTag("PlatformError", () => Effect.void));
   }
   return { files, excluded, truncated };
 });
@@ -191,7 +195,7 @@ export const listProjectFilesEffect = Effect.fn("FileListing.project")(function*
   const kept: string[] = [];
   for (const path of EffectArray.dedupe(fromGit ?? walked?.files ?? [])) {
     if (!path.startsWith(prefix)) continue;
-    if (glob !== undefined && !posix.matchesGlob(path.slice(prefix.length), glob)) continue;
+    if (glob !== undefined && !matchesGlob(path.slice(prefix.length), glob)) continue;
     if (path.split("/").some((segment) => segment.toLowerCase() === ".git")) continue;
     if (isCredentialPath(path)) {
       excluded++;
@@ -201,11 +205,7 @@ export const listProjectFilesEffect = Effect.fn("FileListing.project")(function*
   }
   // A walk already saw regular files only. Git lists links and deleted files too, so check those,
   // many at a time.
-  const fs = yield* Effect.scoped(
-    Layer.build(NodeFileSystem.layer).pipe(
-      Effect.map((services) => Context.get(services, FileSystem.FileSystem)),
-    ),
-  );
+  const fs = yield* nodeFileSystem;
   const paths = isTruthy(fromGit)
     ? (yield* Effect.forEach(
         kept,
@@ -251,7 +251,7 @@ export const listOutsideFilesEffect = Effect.fn("FileListing.outside")(function*
   let excluded = walked.excluded;
   const paths: string[] = [];
   for (const relative of walked.files) {
-    if (glob !== undefined && !posix.matchesGlob(relative, glob)) continue;
+    if (glob !== undefined && !matchesGlob(relative, glob)) continue;
     const absolute = join(directory, relative);
     if (isCredentialPath(absolute)) excluded++;
     else paths.push(absolute);

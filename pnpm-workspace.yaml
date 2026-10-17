@@ -69,6 +69,10 @@ catalog:
   oxc-transform-react: ^0.153.0
   # Research preview with a changing config format: pinned, upgraded deliberately.
   "@anthropic-ai/sandbox-runtime": 0.0.79
+  minimatch: 10.2.6
+# Effect comes from pkg.pr.new URLs, and @effect/platform-node pulls them in as subdependencies.
+# pnpm has no per-package allowlist, so this stays off until Effect resolves from the registry.
+blockExoticSubdeps: false
 overrides:
   vite@*: "catalog:"
   vitest: 5.0.1

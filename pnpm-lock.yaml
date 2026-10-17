@@ -275,6 +275,9 @@ catalogs:
     lucide-react:
       specifier: ^1.45.0
       version: 1.45.0
+    minimatch:
+      specifier: 10.2.6
+      version: 10.2.6
     motion:
       specifier: ^13.3.0
       version: 13.3.0
@@ -330,8 +333,8 @@ overrides:
   '@effect/vitest': https://pkg.pr.new/Effect-TS/effect/@effect/vitest@844a77b18c03b4faa386cf04bf94908d3d37abc7
 
 patchedDependencies:
-  '@effect/platform-node-shared@4.0.3': 0aa195c66325c67b899d8fc86a1fac6984f02ea5d39dbdaa96f47a1b3345f0ff
-  effect@4.0.3: 6090f3f0a51078890f5575b5eafe270f627067a7ecd53bf887a9f059fafdb79b
+  '@effect/platform-node-shared@4.0.3': 499aab988647d41c155c6242785f3b62b054c4abc1d12c6cebc177c395c4d62a
+  effect@4.0.3: 747810e0878e961e6b290b6f355a63c819715bec8f736c24e74b838f95ffe597
   react-simplikit@0.3.1: 9570e6c7166ad0f77aaecf872cff939621299620e91851ef97e2d4c60f8453f3
 
 importers:
@@ -340,16 +343,16 @@ importers:
     devDependencies:
       '@effect/platform-node':
         specifier: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7
-        version: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=6090f3f0a51078890f5575b5eafe270f627067a7ecd53bf887a9f059fafdb79b))(redis@6.3.0)
+        version: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=747810e0878e961e6b290b6f355a63c819715bec8f736c24e74b838f95ffe597))(redis@6.3.0)
       '@effect/platform-node-shared':
         specifier: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@844a77b18c03b4faa386cf04bf94908d3d37abc7
-        version: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=0aa195c66325c67b899d8fc86a1fac6984f02ea5d39dbdaa96f47a1b3345f0ff)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=6090f3f0a51078890f5575b5eafe270f627067a7ecd53bf887a9f059fafdb79b))
+        version: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=499aab988647d41c155c6242785f3b62b054c4abc1d12c6cebc177c395c4d62a)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=747810e0878e961e6b290b6f355a63c819715bec8f736c24e74b838f95ffe597))
       '@effect/tsgo':
         specifier: 'catalog:'
         version: 0.48.1
       '@effect/vitest':
         specifier: https://pkg.pr.new/Effect-TS/effect/@effect/vitest@844a77b18c03b4faa386cf04bf94908d3d37abc7
-        version: https://pkg.pr.new/Effect-TS/effect/@effect/vitest@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=6090f3f0a51078890f5575b5eafe270f627067a7ecd53bf887a9f059fafdb79b))(vitest@5.0.1)
+        version: https://pkg.pr.new/Effect-TS/effect/@effect/vitest@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=747810e0878e961e6b290b6f355a63c819715bec8f736c24e74b838f95ffe597))(vitest@5.0.1)
       '@shadcn/lint':
         specifier: 'catalog:'
         version: 0.1.0(eslint@10.10.0(jiti@2.7.0))(typescript@7.0.2)
@@ -358,7 +361,7 @@ importers:
         version: 5.0.1(@voidzero-dev/vite-plus-core@1.0.0(@types/node@26.5.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))(playwright@1.63.0)(vitest@5.0.1)
       effect:
         specifier: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7
-        version: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=6090f3f0a51078890f5575b5eafe270f627067a7ecd53bf887a9f059fafdb79b)
+        version: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=747810e0878e961e6b290b6f355a63c819715bec8f736c24e74b838f95ffe597)
       playwright:
         specifier: 'catalog:'
         version: 1.63.0
@@ -385,7 +388,7 @@ importers:
         version: 1.8.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@effect/platform-node':
         specifier: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7
-        version: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=6090f3f0a51078890f5575b5eafe270f627067a7ecd53bf887a9f059fafdb79b))(redis@6.3.0)
+        version: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=747810e0878e961e6b290b6f355a63c819715bec8f736c24e74b838f95ffe597))(redis@6.3.0)
       '@fontsource-variable/inter':
         specifier: 'catalog:'
         version: 5.3.0
@@ -427,7 +430,7 @@ importers:
         version: 1.11.23
       effect:
         specifier: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7
-        version: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=6090f3f0a51078890f5575b5eafe270f627067a7ecd53bf887a9f059fafdb79b)
+        version: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=747810e0878e961e6b290b6f355a63c819715bec8f736c24e74b838f95ffe597)
       isbot:
         specifier: ^5.1.36
         version: 5.2.2
@@ -476,7 +479,7 @@ importers:
     devDependencies:
       '@effect/vitest':
         specifier: https://pkg.pr.new/Effect-TS/effect/@effect/vitest@844a77b18c03b4faa386cf04bf94908d3d37abc7
-        version: https://pkg.pr.new/Effect-TS/effect/@effect/vitest@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=6090f3f0a51078890f5575b5eafe270f627067a7ecd53bf887a9f059fafdb79b))(vitest@5.0.1)
+        version: https://pkg.pr.new/Effect-TS/effect/@effect/vitest@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=747810e0878e961e6b290b6f355a63c819715bec8f736c24e74b838f95ffe597))(vitest@5.0.1)
       '@react-router/dev':
         specifier: ^8
         version: 8.3.1(@react-router/serve@8.3.1(react-router@8.3.1(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(typescript@7.0.2))(@voidzero-dev/vite-plus-core@1.0.0(@types/node@26.5.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))(react-router@8.3.1(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(typescript@7.0.2)
@@ -521,7 +524,7 @@ importers:
         version: 0.0.79
       '@effect/platform-node':
         specifier: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7
-        version: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=6090f3f0a51078890f5575b5eafe270f627067a7ecd53bf887a9f059fafdb79b))(redis@6.3.0)
+        version: https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=747810e0878e961e6b290b6f355a63c819715bec8f736c24e74b838f95ffe597))(redis@6.3.0)
       '@effect/tsgo':
         specifier: 'catalog:'
         version: 0.48.1
@@ -575,13 +578,16 @@ importers:
         version: 1.11.23
       effect:
         specifier: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7
-        version: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=6090f3f0a51078890f5575b5eafe270f627067a7ecd53bf887a9f059fafdb79b)
+        version: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=747810e0878e961e6b290b6f355a63c819715bec8f736c24e74b838f95ffe597)
       js-tiktoken:
         specifier: 'catalog:'
         version: 1.0.21
       kiwi-nlp:
         specifier: 'catalog:'
         version: 0.24.0
+      minimatch:
+        specifier: 'catalog:'
+        version: 10.2.6
       sharp:
         specifier: 'catalog:'
         version: 0.34.5
@@ -600,7 +606,7 @@ importers:
     devDependencies:
       '@effect/vitest':
         specifier: https://pkg.pr.new/Effect-TS/effect/@effect/vitest@844a77b18c03b4faa386cf04bf94908d3d37abc7
-        version: https://pkg.pr.new/Effect-TS/effect/@effect/vitest@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=6090f3f0a51078890f5575b5eafe270f627067a7ecd53bf887a9f059fafdb79b))(vitest@5.0.1)
+        version: https://pkg.pr.new/Effect-TS/effect/@effect/vitest@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=747810e0878e961e6b290b6f355a63c819715bec8f736c24e74b838f95ffe597))(vitest@5.0.1)
       '@types/cross-spawn':
         specifier: 'catalog:'
         version: 6.0.6
@@ -5881,19 +5887,19 @@ snapshots:
 
   '@dotenvx/primitives@0.8.0': {}
 
-  '@effect/platform-node-shared@https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=0aa195c66325c67b899d8fc86a1fac6984f02ea5d39dbdaa96f47a1b3345f0ff)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=6090f3f0a51078890f5575b5eafe270f627067a7ecd53bf887a9f059fafdb79b))':
+  '@effect/platform-node-shared@https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=499aab988647d41c155c6242785f3b62b054c4abc1d12c6cebc177c395c4d62a)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=747810e0878e961e6b290b6f355a63c819715bec8f736c24e74b838f95ffe597))':
     dependencies:
       '@types/ws': 8.18.2
-      effect: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=6090f3f0a51078890f5575b5eafe270f627067a7ecd53bf887a9f059fafdb79b)
+      effect: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=747810e0878e961e6b290b6f355a63c819715bec8f736c24e74b838f95ffe597)
       ws: 8.22.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@effect/platform-node@https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=6090f3f0a51078890f5575b5eafe270f627067a7ecd53bf887a9f059fafdb79b))(redis@6.3.0)':
+  '@effect/platform-node@https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=747810e0878e961e6b290b6f355a63c819715bec8f736c24e74b838f95ffe597))(redis@6.3.0)':
     dependencies:
-      '@effect/platform-node-shared': https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=0aa195c66325c67b899d8fc86a1fac6984f02ea5d39dbdaa96f47a1b3345f0ff)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=6090f3f0a51078890f5575b5eafe270f627067a7ecd53bf887a9f059fafdb79b))
-      effect: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=6090f3f0a51078890f5575b5eafe270f627067a7ecd53bf887a9f059fafdb79b)
+      '@effect/platform-node-shared': https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=499aab988647d41c155c6242785f3b62b054c4abc1d12c6cebc177c395c4d62a)(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=747810e0878e961e6b290b6f355a63c819715bec8f736c24e74b838f95ffe597))
+      effect: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=747810e0878e961e6b290b6f355a63c819715bec8f736c24e74b838f95ffe597)
       redis: 6.3.0
       undici: 8.11.2
     transitivePeerDependencies:
@@ -5931,9 +5937,9 @@ snapshots:
       '@effect/tsgo-win32-arm64': 0.48.1
       '@effect/tsgo-win32-x64': 0.48.1
 
-  '@effect/vitest@https://pkg.pr.new/Effect-TS/effect/@effect/vitest@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=6090f3f0a51078890f5575b5eafe270f627067a7ecd53bf887a9f059fafdb79b))(vitest@5.0.1)':
+  '@effect/vitest@https://pkg.pr.new/Effect-TS/effect/@effect/vitest@844a77b18c03b4faa386cf04bf94908d3d37abc7(effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=747810e0878e961e6b290b6f355a63c819715bec8f736c24e74b838f95ffe597))(vitest@5.0.1)':
     dependencies:
-      effect: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=6090f3f0a51078890f5575b5eafe270f627067a7ecd53bf887a9f059fafdb79b)
+      effect: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=747810e0878e961e6b290b6f355a63c819715bec8f736c24e74b838f95ffe597)
       vitest: 5.0.1(@types/node@26.5.1)(@vitest/browser-playwright@5.0.1)(@vitest/browser-preview@5.0.1)(@vitest/ui@5.0.1)(@voidzero-dev/vite-plus-core@1.0.0(@types/node@26.5.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1))
 
   '@emnapi/runtime@1.11.3':
@@ -7875,7 +7881,7 @@ snapshots:
 
   ee-first@1.1.1: {}
 
-  effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=6090f3f0a51078890f5575b5eafe270f627067a7ecd53bf887a9f059fafdb79b): {}
+  effect@https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7(patch_hash=747810e0878e961e6b290b6f355a63c819715bec8f736c24e74b838f95ffe597): {}
 
   electron-to-chromium@1.5.427: {}
 

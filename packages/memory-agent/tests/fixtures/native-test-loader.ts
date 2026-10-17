@@ -1,7 +1,9 @@
 // Scoped to the test child. Native addons use real CJS require, never a stub.
-import { readFileSync } from "node:fs";
 import { createRequire, registerHooks, stripTypeScriptTypes } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { Schema } from "effect";
+
+const isBytes = Schema.is(Schema.Uint8Array);
 
 // Node 26 strips types but cannot erase runtime parameter properties; only those modules are
 // transformed. The hooks run in each thread (workers inherit this `--import`), so worker startup
@@ -13,7 +15,10 @@ const { transformSync } = await import(
 registerHooks({
   load(url, context, nextLoad) {
     if (url.startsWith("file:") && /\.(?:ts|mts)$/.test(url)) {
-      const source = readFileSync(new URL(url), "utf8");
+      // The default loader reads the file and leaves TypeScript untouched for these hooks.
+      const loaded = nextLoad(url, context);
+      if (!isBytes(loaded.source)) return loaded;
+      const source = new TextDecoder().decode(loaded.source);
       let code: string;
       try {
         code = stripTypeScriptTypes(source);

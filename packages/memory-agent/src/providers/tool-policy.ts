@@ -3,7 +3,7 @@ import { Function as EffectFunction } from "effect";
 import { oauthProtocolPath } from "../oauth/node-runtime.ts";
 import { optionalProperty } from "../optional-property.ts";
 import { HashMap, Option, Cause, Context, Data, Effect, Exit, Layer, Predicate } from "effect";
-import { canonicalPath, isCredentialPath, resolveProjectPath } from "../files/paths.ts";
+import { canonicalPathEffect, isCredentialPath, resolveProjectPath } from "../files/paths.ts";
 import {
   ModelFeatureFlags,
   type ModelFeatureFlagStoreFailed,
@@ -60,7 +60,7 @@ export interface ProviderToolResourceLimits {
   readonly maxProcesses: number;
 }
 export interface ProviderToolSandboxPolicy {
-  /** Trusted absolute root. The service canonicalizes it when the policy is constructed. */
+  /** Trusted absolute root. The service canonicalizes it when it validates a tool call. */
   readonly workspaceRoot: string;
   readonly isolatedCompute: boolean;
   readonly isolatedDesktop: boolean;
@@ -343,7 +343,18 @@ function validateSandbox(
         toolId: tool.id,
         reason: "trusted_profile_required",
       });
-    const root = sandbox?.workspaceRoot;
+    const root =
+      sandbox === undefined
+        ? undefined
+        : yield* canonicalPathEffect(sandbox.workspaceRoot).pipe(
+            Effect.mapError(
+              () =>
+                new ProviderToolSandboxViolation({
+                  toolId: tool.id,
+                  reason: "workspace_root_unavailable",
+                }),
+            ),
+          );
     if (tool.sandbox.includes("isolated_compute_required") && sandbox?.isolatedCompute !== true)
       return yield* new ProviderToolSandboxViolation({
         toolId: tool.id,
@@ -444,7 +455,7 @@ const trustedSandbox = (
   if (sandbox === undefined) return undefined;
   return Object.freeze({
     ...sandbox,
-    workspaceRoot: canonicalPath(oauthProtocolPath.resolve(sandbox.workspaceRoot)),
+    workspaceRoot: oauthProtocolPath.resolve(sandbox.workspaceRoot),
     allowedEnvironmentNames: Object.freeze([...sandbox.allowedEnvironmentNames]),
     limits: Object.freeze({ ...sandbox.limits }),
   });

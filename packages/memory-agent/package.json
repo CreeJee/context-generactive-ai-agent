@@ -79,6 +79,7 @@
     "effect": "catalog:",
     "js-tiktoken": "catalog:",
     "kiwi-nlp": "catalog:",
+    "minimatch": "catalog:",
     "sharp": "catalog:",
     "turbovec": "workspace:*",
     "undici": "catalog:",

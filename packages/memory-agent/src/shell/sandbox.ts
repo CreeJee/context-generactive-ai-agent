@@ -1,8 +1,7 @@
 // Native host boundary: worker threads and a scratch folder for the sandbox runtime's sockets.
-import { mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { Worker } from "node:worker_threads";
-import { Cause, Duration, Effect, Option, Queue, Schema } from "effect";
+import { Cause, Duration, Effect, FileSystem, Option, Queue, Schema } from "effect";
 import { path } from "../runtime/synchronous-path.ts";
 import { runtimeWorker, runtimeWorkerOptions } from "../runtime/resources.ts";
 import type { CommandResult } from "./run.ts";
@@ -124,20 +123,17 @@ const finishTimeout = Duration.seconds(5);
 export const runSandboxed = <E>(
   setup: SandboxSetup,
   run: (command: string) => Effect.Effect<CommandResult, E>,
-): Effect.Effect<CommandResult, E | SandboxUnavailable> =>
+): Effect.Effect<CommandResult, E | SandboxUnavailable, FileSystem.FileSystem> =>
   Effect.scoped(
     Effect.gen(function* () {
       const unavailable = (detail: string) =>
         new SandboxUnavailable({ reason: "setup_failed", detail });
       // The runtime names its proxy sockets after the process id, so concurrent workers each need
       // their own TMPDIR.
-      const scratch = yield* Effect.acquireRelease(
-        Effect.try({
-          try: () => mkdtempSync(path.join(tmpdir(), "context-agent-sandbox-")),
-          catch: () => unavailable("could not create the sandbox's scratch folder"),
-        }),
-        (directory) => Effect.sync(() => rmSync(directory, { recursive: true, force: true })),
-      );
+      const fileSystem = yield* FileSystem.FileSystem;
+      const scratch = yield* fileSystem
+        .makeTempDirectoryScoped({ prefix: "context-agent-sandbox-" })
+        .pipe(Effect.mapError(() => unavailable("could not create the sandbox's scratch folder")));
       const replies = yield* Queue.unbounded<SandboxReply, SandboxUnavailable>();
       const lost = (detail: string) =>
         Queue.failCauseUnsafe(replies, Cause.fail(unavailable(detail)));

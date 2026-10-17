@@ -346,7 +346,7 @@ export {
 } from "./attachments/attachments.ts";
 export {
   PathRejected,
-  canonicalPath,
+  canonicalPathEffect,
   isCredentialPath,
   pathsOverlap,
   resolveOutsidePath,

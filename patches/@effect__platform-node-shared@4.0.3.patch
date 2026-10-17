@@ -1,8 +1,36 @@
 diff --git a/dist/NodeFileSystem.js b/dist/NodeFileSystem.js
-index b39db35c748e2fedfc938badcb36554f88043381..ef399be0ebf5572453a91be93c9913836f4d721f 100644
+index b39db35c748e2fedfc938badcb36554f88043381..add487d26b0e158ceab16cfd6a7d779fe00f3979 100644
 --- a/dist/NodeFileSystem.js
 +++ b/dist/NodeFileSystem.js
-@@ -389,7 +389,7 @@ const rename = /*#__PURE__*/(() => {
+@@ -357,6 +357,27 @@ const readDirectory = (path, options) => Effect.tryPromise({
+   try: () => NFS.promises.readdir(path, options),
+   catch: err => handleErrnoException("FileSystem", "readDirectory")(err, [path])
+ });
++// == openDirectory
++const direntType = entry => entry.isFile() ? "File" : entry.isDirectory() ? "Directory" : entry.isSymbolicLink() ? "SymbolicLink" : entry.isBlockDevice() ? "BlockDevice" : entry.isCharacterDevice() ? "CharacterDevice" : entry.isFIFO() ? "FIFO" : entry.isSocket() ? "Socket" : "Unknown";
++const openDirectory = path => {
++  const fail = handleErrnoException("FileSystem", "openDirectory");
++  return Effect.map(Effect.acquireRelease(Effect.tryPromise({
++    try: () => NFS.promises.opendir(path),
++    catch: err => fail(err, [path])
++  }), dir => Effect.orDie(Effect.tryPromise({
++    try: () => dir.close(),
++    catch: err => fail(err, [path])
++  }))), dir => ({
++    // Node rejects overlapping operations on one handle, so a read always runs to completion.
++    read: Effect.uninterruptible(Effect.map(Effect.tryPromise({
++      try: () => dir.read(),
++      catch: err => fail(err, [path])
++    }), entry => entry === null ? Option.none() : Option.some({
++      name: entry.name,
++      type: direntType(entry)
++    })))
++  }));
++};
+ // == readFile
+ const readFile = path => Effect.callback((resume, signal) => {
+   try {
+@@ -389,12 +410,14 @@ const rename = /*#__PURE__*/(() => {
    return (oldPath, newPath) => nodeRename(oldPath, newPath);
  })();
  // == stat
@@ -11,7 +39,14 @@ index b39db35c748e2fedfc938badcb36554f88043381..ef399be0ebf5572453a91be93c991383
    try: () => ({
      type: stat.isFile() ? "File" : stat.isDirectory() ? "Directory" : stat.isSymbolicLink() ? "SymbolicLink" : stat.isBlockDevice() ? "BlockDevice" : stat.isCharacterDevice() ? "CharacterDevice" : stat.isFIFO() ? "FIFO" : stat.isSocket() ? "Socket" : "Unknown",
      mtime: Option.fromNullishOr(stat.mtime),
-@@ -406,7 +406,7 @@ const makeFileInfo = stat => Effect.try({
+     atime: Option.fromNullishOr(stat.atime),
+     birthtime: Option.fromNullishOr(stat.birthtime),
++    mtimeNs: Option.fromNullishOr(stat.mtimeNs),
++    ctimeNs: Option.fromNullishOr(stat.ctimeNs),
+     dev: bigintToNumber(stat.dev, "dev"),
+     rdev: bigintToNumberOption(stat.rdev),
+     ino: bigintToNumberOption(stat.ino),
+@@ -406,7 +429,7 @@ const makeFileInfo = stat => Effect.try({
      blksize: stat.blksize !== undefined ? Option.some(ByteSize.bytes(stat.blksize)) : Option.none(),
      blocks: bigintToNumberOption(stat.blocks)
    }),
@@ -20,7 +55,7 @@ index b39db35c748e2fedfc938badcb36554f88043381..ef399be0ebf5572453a91be93c991383
  });
  const stat = /*#__PURE__*/(() => {
    const nodeStat = /*#__PURE__*/effectify(NFS.stat, /*#__PURE__*/handleErrnoException("FileSystem", "stat"), /*#__PURE__*/handleBadArgument("stat"));
-@@ -414,6 +414,11 @@ const stat = /*#__PURE__*/(() => {
+@@ -414,6 +437,11 @@ const stat = /*#__PURE__*/(() => {
      bigint: true
    }), makeFileInfo);
  })();
@@ -32,7 +67,14 @@ index b39db35c748e2fedfc938badcb36554f88043381..ef399be0ebf5572453a91be93c991383
  // == symlink
  const symlink = /*#__PURE__*/(() => {
    const nodeSymlink = /*#__PURE__*/effectify(NFS.symlink, /*#__PURE__*/handleErrnoException("FileSystem", "symlink"), /*#__PURE__*/handleBadArgument("symlink"));
-@@ -515,6 +520,7 @@ const makeFileSystem = /*#__PURE__*/Effect.map(/*#__PURE__*/Effect.serviceOption
+@@ -509,12 +537,14 @@ const makeFileSystem = /*#__PURE__*/Effect.map(/*#__PURE__*/Effect.serviceOption
+   makeTempFileScoped,
+   open,
+   readDirectory,
++  openDirectory,
+   readFile,
+   readLink,
+   realPath,
    remove,
    rename,
    stat,
@@ -41,10 +83,64 @@ index b39db35c748e2fedfc938badcb36554f88043381..ef399be0ebf5572453a91be93c991383
    truncate,
    utimes,
 diff --git a/src/NodeFileSystem.ts b/src/NodeFileSystem.ts
-index d26dcd8929a26ed5a833e0412d5d6acacc919985..8b0f5055afcc14b9ed1907d95dac18a29b41adea 100644
+index d26dcd8929a26ed5a833e0412d5d6acacc919985..5e4244ff57b120f6587047f18f525ddbb9868a3e 100644
 --- a/src/NodeFileSystem.ts
 +++ b/src/NodeFileSystem.ts
-@@ -571,7 +571,10 @@ const rename = (() => {
+@@ -519,6 +519,53 @@ const readDirectory: FileSystem.FileSystem["readDirectory"] = (path, options) =>
+     catch: (err) => handleErrnoException("FileSystem", "readDirectory")(err as any, [path])
+   })
+ 
++// == openDirectory
++
++const direntType = (entry: NFS.Dirent): FileSystem.File.Type =>
++  entry.isFile() ?
++    "File" :
++    entry.isDirectory() ?
++    "Directory" :
++    entry.isSymbolicLink() ?
++    "SymbolicLink" :
++    entry.isBlockDevice() ?
++    "BlockDevice" :
++    entry.isCharacterDevice() ?
++    "CharacterDevice" :
++    entry.isFIFO() ?
++    "FIFO" :
++    entry.isSocket() ?
++    "Socket" :
++    "Unknown"
++
++const openDirectory: FileSystem.FileSystem["openDirectory"] = (path) => {
++  const fail = handleErrnoException("FileSystem", "openDirectory")
++  return Effect.map(
++    Effect.acquireRelease(
++      Effect.tryPromise({
++        try: () => NFS.promises.opendir(path),
++        catch: (err) => fail(err as any, [path])
++      }),
++      (dir) =>
++        Effect.orDie(Effect.tryPromise({
++          try: () => dir.close(),
++          catch: (err) => fail(err as any, [path])
++        }))
++    ),
++    (dir): FileSystem.Directory => ({
++      // Node rejects overlapping operations on one handle, so a read always runs to completion.
++      read: Effect.uninterruptible(Effect.map(
++        Effect.tryPromise({
++          try: () => dir.read(),
++          catch: (err) => fail(err as any, [path])
++        }),
++        (entry) =>
++          entry === null ? Option.none() : Option.some({ name: entry.name, type: direntType(entry) })
++      ))
++    })
++  )
++}
++
+ // == readFile
+ 
+ const readFile = (path: string) =>
+@@ -571,7 +618,10 @@ const rename = (() => {
  
  // == stat
  
@@ -56,7 +152,16 @@ index d26dcd8929a26ed5a833e0412d5d6acacc919985..8b0f5055afcc14b9ed1907d95dac18a2
    Effect.try({
      try: (): FileSystem.File.Info => ({
        type: stat.isFile() ?
-@@ -603,7 +606,7 @@ const makeFileInfo = (stat: NFS.BigIntStats): Effect.Effect<FileSystem.File.Info
+@@ -592,6 +642,8 @@ const makeFileInfo = (stat: NFS.BigIntStats): Effect.Effect<FileSystem.File.Info
+       mtime: Option.fromNullishOr(stat.mtime),
+       atime: Option.fromNullishOr(stat.atime),
+       birthtime: Option.fromNullishOr(stat.birthtime),
++      mtimeNs: Option.fromNullishOr(stat.mtimeNs),
++      ctimeNs: Option.fromNullishOr(stat.ctimeNs),
+       dev: bigintToNumber(stat.dev, "dev"),
+       rdev: bigintToNumberOption(stat.rdev),
+       ino: bigintToNumberOption(stat.ino),
+@@ -603,7 +655,7 @@ const makeFileInfo = (stat: NFS.BigIntStats): Effect.Effect<FileSystem.File.Info
        blksize: stat.blksize !== undefined ? Option.some(ByteSize.bytes(stat.blksize)) : Option.none(),
        blocks: bigintToNumberOption(stat.blocks)
      }),
@@ -65,7 +170,7 @@ index d26dcd8929a26ed5a833e0412d5d6acacc919985..8b0f5055afcc14b9ed1907d95dac18a2
    })
  const stat = (() => {
    const nodeStat = effectify(
-@@ -614,6 +617,17 @@ const stat = (() => {
+@@ -614,6 +666,17 @@ const stat = (() => {
    return (path: string) => Effect.flatMap(nodeStat(path, { bigint: true }), makeFileInfo)
  })()
  
@@ -83,7 +188,14 @@ index d26dcd8929a26ed5a833e0412d5d6acacc919985..8b0f5055afcc14b9ed1907d95dac18a2
  // == symlink
  
  const symlink = (() => {
-@@ -753,6 +767,7 @@ const makeFileSystem = Effect.map(Effect.serviceOption(FileSystem.WatchBackend),
+@@ -747,12 +810,14 @@ const makeFileSystem = Effect.map(Effect.serviceOption(FileSystem.WatchBackend),
+     makeTempFileScoped,
+     open,
+     readDirectory,
++    openDirectory,
+     readFile,
+     readLink,
+     realPath,
      remove,
      rename,
      stat,

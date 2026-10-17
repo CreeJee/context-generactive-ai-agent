@@ -1,8 +1,24 @@
 diff --git a/dist/FileSystem.d.ts b/dist/FileSystem.d.ts
-index 238c6f70c5f4eaf086463311189f3191c7712044..7bcc812040436c0a86e347c530edd68146cd71d2 100644
+index 238c6f70c5f4eaf086463311189f3191c7712044..634feca25226af0c03dd769c9a34de7ec4107fb8 100644
 --- a/dist/FileSystem.d.ts
 +++ b/dist/FileSystem.d.ts
-@@ -236,6 +236,11 @@ export interface FileSystem {
+@@ -192,6 +192,15 @@ export interface FileSystem {
+     readonly readDirectory: (path: string, options?: {
+         readonly recursive?: boolean | undefined;
+     }) => Effect.Effect<Array<string>, PlatformError>;
++    /**
++     * Open a directory to read its entries one at a time.
++     *
++     * **Details**
++     *
++     * Each entry carries its kind as the directory reports it, without following
++     * symbolic links. The handle is closed when the scope is closed.
++     */
++    readonly openDirectory: (path: string) => Effect.Effect<Directory, PlatformError, Scope>;
+     /**
+      * Read the contents of a file.
+      */
+@@ -236,6 +245,11 @@ export interface FileSystem {
       * Get information about a file at `path`. See `File.Info` for metadata limits.
       */
      readonly stat: (path: string) => Effect.Effect<File.Info, PlatformError>;
@@ -14,11 +30,84 @@ index 238c6f70c5f4eaf086463311189f3191c7712044..7bcc812040436c0a86e347c530edd681
      /**
       * Create a readable `Stream` for the specified `path`.
       *
+@@ -603,6 +617,39 @@ export interface File {
+     readonly write: (buffer: Uint8Array) => Effect.Effect<number, PlatformError>;
+     readonly writeAll: (buffer: Uint8Array) => Effect.Effect<void, PlatformError>;
+ }
++/**
++ * An open directory handle.
++ *
++ * @stability unstable
++ * @category models
++ * @since 4.0.0
++ */
++export interface Directory {
++    /**
++     * Reads the next entry, returning `Option.none()` once every entry was read.
++     * Entry order is whatever the operating system reports.
++     */
++    readonly read: Effect.Effect<Option.Option<Directory.Entry>, PlatformError>;
++}
++/**
++ * Namespace containing types associated with open directory handles.
++ *
++ * @stability unstable
++ * @since 4.0.0
++ */
++export declare namespace Directory {
++    /**
++     * One directory entry: its name and its kind, without following symbolic links.
++     *
++     * @stability unstable
++     * @category models
++     * @since 4.0.0
++     */
++    interface Entry {
++        readonly name: string;
++        readonly type: File.Type;
++    }
++}
+ /**
+  * Namespace containing types associated with open file handles, including file
+  * descriptors, entry kinds, and stat information.
+@@ -670,6 +717,8 @@ export declare namespace File {
+      *   mtime: Option.none(),
+      *   atime: Option.none(),
+      *   birthtime: Option.none(),
++     *   mtimeNs: Option.none(),
++     *   ctimeNs: Option.none(),
+      *   dev: 1,
+      *   ino: Option.none(),
+      *   mode: 0o644,
+@@ -702,6 +751,13 @@ export declare namespace File {
+         readonly mtime: Option.Option<Date>;
+         readonly atime: Option.Option<Date>;
+         readonly birthtime: Option.Option<Date>;
++        /**
++         * Modification and status-change times in nanoseconds since the epoch, when
++         * the platform reports them. Together with `dev`, `ino` and `size` they tell
++         * whether a file changed between two stats.
++         */
++        readonly mtimeNs: Option.Option<bigint>;
++        readonly ctimeNs: Option.Option<bigint>;
+         readonly dev: number;
+         readonly ino: Option.Option<number>;
+         readonly mode: number;
 diff --git a/dist/FileSystem.js b/dist/FileSystem.js
-index 10a445717fcb63ad50846b2b34c3778326429df7..bfc78cc20e5ef4fd5667aafdd12bc00f58669df6 100644
+index 10a445717fcb63ad50846b2b34c3778326429df7..5677216155a1235828e14d15a9b0e6d75a65596e 100644
 --- a/dist/FileSystem.js
 +++ b/dist/FileSystem.js
-@@ -273,6 +273,9 @@ export const makeNoop = fileSystem => FileSystem.of({
+@@ -249,6 +249,9 @@ export const makeNoop = fileSystem => FileSystem.of({
+   readDirectory(path) {
+     return Effect.fail(notFound("readDirectory", path));
+   },
++  openDirectory(path) {
++    return Effect.fail(notFound("openDirectory", path));
++  },
+   readFile(path) {
+     return Effect.fail(notFound("readFile", path));
+   },
+@@ -273,6 +276,9 @@ export const makeNoop = fileSystem => FileSystem.of({
    stat(path) {
      return Effect.fail(notFound("stat", path));
    },
@@ -29,10 +118,28 @@ index 10a445717fcb63ad50846b2b34c3778326429df7..bfc78cc20e5ef4fd5667aafdd12bc00f
      return Stream.fail(notFound("stream", path));
    },
 diff --git a/src/FileSystem.ts b/src/FileSystem.ts
-index a4986d710017291e63139f9db817bb978e350751..3a8fed3118f5b593cfd3d00f6fae617527567210 100644
+index a4986d710017291e63139f9db817bb978e350751..46dc52478c5e3bf97e31297536b7fde0cfec51dd 100644
 --- a/src/FileSystem.ts
 +++ b/src/FileSystem.ts
-@@ -311,6 +311,13 @@ export interface FileSystem {
+@@ -247,6 +247,17 @@ export interface FileSystem {
+       readonly recursive?: boolean | undefined
+     }
+   ) => Effect.Effect<Array<string>, PlatformError>
++  /**
++   * Open a directory to read its entries one at a time.
++   *
++   * **Details**
++   *
++   * Each entry carries its kind as the directory reports it, without following
++   * symbolic links. The handle is closed when the scope is closed.
++   */
++  readonly openDirectory: (
++    path: string
++  ) => Effect.Effect<Directory, PlatformError, Scope>
+   /**
+    * Read the contents of a file.
+    */
+@@ -311,6 +322,13 @@ export interface FileSystem {
    readonly stat: (
      path: string
    ) => Effect.Effect<File.Info, PlatformError>
@@ -46,7 +153,17 @@ index a4986d710017291e63139f9db817bb978e350751..3a8fed3118f5b593cfd3d00f6fae6175
    /**
     * Create a readable `Stream` for the specified `path`.
     *
-@@ -716,6 +723,9 @@ export const makeNoop = (fileSystem: Partial<FileSystem>): FileSystem =>
+@@ -692,6 +710,9 @@ export const makeNoop = (fileSystem: Partial<FileSystem>): FileSystem =>
+     readDirectory(path) {
+       return Effect.fail(notFound("readDirectory", path))
+     },
++    openDirectory(path) {
++      return Effect.fail(notFound("openDirectory", path))
++    },
+     readFile(path) {
+       return Effect.fail(notFound("readFile", path))
+     },
+@@ -716,6 +737,9 @@ export const makeNoop = (fileSystem: Partial<FileSystem>): FileSystem =>
      stat(path) {
        return Effect.fail(notFound("stat", path))
      },
@@ -56,3 +173,68 @@ index a4986d710017291e63139f9db817bb978e350751..3a8fed3118f5b593cfd3d00f6fae6175
      stream(path) {
        return Stream.fail(notFound("stream", path))
      },
+@@ -905,6 +929,41 @@ export interface File {
+   readonly writeAll: (buffer: Uint8Array) => Effect.Effect<void, PlatformError>
+ }
+ 
++/**
++ * An open directory handle.
++ *
++ * @stability unstable
++ * @category models
++ * @since 4.0.0
++ */
++export interface Directory {
++  /**
++   * Reads the next entry, returning `Option.none()` once every entry was read.
++   * Entry order is whatever the operating system reports.
++   */
++  readonly read: Effect.Effect<Option.Option<Directory.Entry>, PlatformError>
++}
++
++/**
++ * Namespace containing types associated with open directory handles.
++ *
++ * @stability unstable
++ * @since 4.0.0
++ */
++export declare namespace Directory {
++  /**
++   * One directory entry: its name and its kind, without following symbolic links.
++   *
++   * @stability unstable
++   * @category models
++   * @since 4.0.0
++   */
++  export interface Entry {
++    readonly name: string
++    readonly type: File.Type
++  }
++}
++
+ /**
+  * Namespace containing types associated with open file handles, including file
+  * descriptors, entry kinds, and stat information.
+@@ -982,6 +1041,8 @@ export declare namespace File {
+    *   mtime: Option.none(),
+    *   atime: Option.none(),
+    *   birthtime: Option.none(),
++   *   mtimeNs: Option.none(),
++   *   ctimeNs: Option.none(),
+    *   dev: 1,
+    *   ino: Option.none(),
+    *   mode: 0o644,
+@@ -1014,6 +1075,13 @@ export declare namespace File {
+     readonly mtime: Option.Option<Date>
+     readonly atime: Option.Option<Date>
+     readonly birthtime: Option.Option<Date>
++    /**
++     * Modification and status-change times in nanoseconds since the epoch, when
++     * the platform reports them. Together with `dev`, `ino` and `size` they tell
++     * whether a file changed between two stats.
++     */
++    readonly mtimeNs: Option.Option<bigint>
++    readonly ctimeNs: Option.Option<bigint>
+     readonly dev: number
+     readonly ino: Option.Option<number>
+     readonly mode: number

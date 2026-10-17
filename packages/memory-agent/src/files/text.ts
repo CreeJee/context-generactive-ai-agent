@@ -10,13 +10,9 @@ import {
   Path,
 } from "effect";
 import { Function as EffectFunction } from "effect";
-// Editable snapshots still need same-FD identity and nanosecond-stat checks.
-import { constants } from "node:fs";
-// Positional reads and nanosecond fstat share that same scoped no-follow handle.
-import { open } from "node:fs/promises";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodePath from "@effect/platform-node/NodePath";
-import { Effect, MutableHashMap, Option, Schema } from "effect";
+import { Effect, Exit, MutableHashMap, Option, Schema, Scope } from "effect";
 import { PathRejected } from "./paths.ts";
 
 // Path operations remain synchronous at these public host boundaries.
@@ -92,25 +88,6 @@ export class TextFileIoFailed extends Schema.TaggedError<TextFileIoFailed>()("Te
 }) {}
 
 const systemCode = Schema.decodeUnknownOption(Schema.Struct({ code: Schema.String }));
-// Effect File.Info does not expose this edit boundary's nanosecond file identity.
-const io = <A>(
-  path: string,
-  operation: TextFileIoFailed["reason"]["operation"],
-  work: (signal: AbortSignal) => Promise<A>,
-) =>
-  Effect.tryPromise({
-    try: work,
-    catch: (cause) =>
-      TextFileIoFailed.make({
-        path,
-        reason: {
-          _tag: "IoFailed",
-          operation,
-          code: Option.getOrUndefined(systemCode(cause))?.code ?? "unknown",
-          cause,
-        },
-      }),
-  });
 
 const fileIo = <A, R>(
   path: string,
@@ -143,7 +120,6 @@ export interface TextFile {
 export { sha256 } from "../runtime/synchronous-crypto.ts";
 
 const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
-const isAlreadyExists = Schema.is(Schema.Struct({ code: Schema.Literal("EEXIST") }));
 
 /** A file's raw bytes, with a rejected linked leaf and at most {@link maxTextBytes}. */
 export interface FileBytes {
@@ -163,73 +139,57 @@ interface FileReadOptions {
   readonly checkLeaf?: boolean;
 }
 
-// Windows has no O_NOFOLLOW. Keep native positional reads, fstat and typed close errors.
-// lstat rejects an observed linked leaf; this does not provide POSIX's atomic no-follow guarantee.
+/** Reads an opened file whole, at most {@link maxTextBytes}, with positional reads. */
+const readOpenedFile = Effect.fnUntraced(function* (
+  handle: FileSystem.File,
+  options: FileReadOptions,
+) {
+  const { path, checkLeaf = false } = options;
+  const stats = yield* fileIo(path, "stat", handle.stat);
+  if (checkLeaf && stats.type !== "File")
+    return yield* PathRejected.make({ path, reason: "not_file" });
+  if (checkLeaf && Option.getOrUndefined(stats.nlink) !== 1)
+    return yield* PathRejected.make({ path, reason: "hard_link" });
+  if (stats.size > BigInt(maxTextBytes))
+    return yield* TextFileRejected.make({ path, reason: { _tag: "too_large" } });
+  const chunks: Buffer[] = [];
+  let size = 0;
+  while (true) {
+    const buffer = Buffer.alloc(Math.min(64 * 1024, maxTextBytes + 1 - size));
+    const read = yield* Effect.uninterruptible(
+      fileIo(path, "read", handle.read(buffer, { position: BigInt(size) })),
+    );
+    if (read === 0) break;
+    size += read;
+    if (size > maxTextBytes)
+      return yield* TextFileRejected.make({ path, reason: { _tag: "too_large" } });
+    chunks.push(buffer.subarray(0, read));
+    yield* Effect.yieldNow;
+  }
+  return { bytes: Buffer.concat(chunks, size), mode: stats.mode & 0o7777 };
+});
+
+// Windows has no O_NOFOLLOW. lstat rejects an observed linked leaf; this does not provide POSIX's
+// atomic no-follow guarantee.
 const readWindowsFileBytes = Effect.fn("readWindowsFileBytes")(function* (
   options: FileReadOptions,
 ) {
-  const { absolute, path, checkLeaf = false } = options;
+  const { absolute, path } = options;
   const leaf = yield* fileIo(path, "open", fileSystem.lstat(absolute));
   if (leaf.type === "SymbolicLink") return yield* PathRejected.make({ path, reason: "symlink" });
-  return yield* Effect.acquireUseRelease(
-    io(path, "open", () => open(absolute, constants.O_RDONLY)),
-    Effect.fnUntraced(function* (handle) {
-      const stats = yield* io(path, "stat", () => handle.stat());
-      if (checkLeaf && !stats.isFile())
-        return yield* PathRejected.make({ path, reason: "not_file" });
-      if (checkLeaf && stats.nlink !== 1)
-        return yield* PathRejected.make({ path, reason: "hard_link" });
-      if (stats.size > maxTextBytes)
-        return yield* TextFileRejected.make({ path, reason: { _tag: "too_large" } });
-      const chunks: Buffer[] = [];
-      let size = 0;
-      while (true) {
-        const buffer = Buffer.alloc(Math.min(64 * 1024, maxTextBytes + 1 - size));
-        const { bytesRead } = yield* Effect.uninterruptible(
-          io(path, "read", () => handle.read(buffer, 0, buffer.length, size)),
-        );
-        if (bytesRead === 0) break;
-        size += bytesRead;
-        if (size > maxTextBytes)
-          return yield* TextFileRejected.make({ path, reason: { _tag: "too_large" } });
-        chunks.push(buffer.subarray(0, bytesRead));
-        yield* Effect.yieldNow;
-      }
-      return { bytes: Buffer.concat(chunks, size), mode: stats.mode & 0o7777 };
-    }),
-    (handle) => io(path, "close", () => handle.close()),
+  return yield* Effect.scoped(
+    fileIo(path, "open", fileSystem.open(absolute)).pipe(
+      Effect.flatMap((handle) => readOpenedFile(handle, options)),
+    ),
   );
 });
 
 const readPosixFileBytes = Effect.fn("readPosixFileBytes")(function* (options: FileReadOptions) {
-  const { absolute, path, checkLeaf = false } = options;
+  const { absolute, path } = options;
   return yield* Effect.scoped(
-    Effect.gen(function* () {
-      const handle = yield* fileIo(path, "open", fileSystem.open(absolute, { noFollow: true }));
-      const stats = yield* fileIo(path, "stat", handle.stat);
-      if (checkLeaf && stats.type !== "File")
-        return yield* PathRejected.make({ path, reason: "not_file" });
-      if (checkLeaf && Option.getOrUndefined(stats.nlink) !== 1)
-        return yield* PathRejected.make({ path, reason: "hard_link" });
-      if (stats.size > BigInt(maxTextBytes))
-        return yield* TextFileRejected.make({ path, reason: { _tag: "too_large" } });
-      const chunks: Buffer[] = [];
-      let size = 0;
-      while (true) {
-        const buffer = Buffer.alloc(Math.min(64 * 1024, maxTextBytes + 1 - size));
-        const read = yield* Effect.uninterruptible(
-          fileIo(path, "read", handle.read(buffer, { position: BigInt(size) })),
-        );
-        if (read === 0) break;
-        size += read;
-        if (size > maxTextBytes)
-          return yield* TextFileRejected.make({ path, reason: { _tag: "too_large" } });
-        chunks.push(buffer.subarray(0, read));
-        yield* Effect.yieldNow;
-      }
-      const bytes = Buffer.concat(chunks, size);
-      return { bytes, mode: stats.mode & 0o7777 };
-    }),
+    fileIo(path, "open", fileSystem.open(absolute, { noFollow: true })).pipe(
+      Effect.flatMap((handle) => readOpenedFile(handle, options)),
+    ),
   );
 });
 
@@ -310,28 +270,18 @@ export const createTextFileEffect = Effect.fn("createTextFile")(function* (optio
   const { absolute, path, text } = options;
   yield* fileIo(path, "mkdir", fileSystem.makeDirectory(dirname(absolute), { recursive: true }));
   const bytes = Buffer.from(text, "utf8");
-  yield* Effect.acquireUseRelease(
-    io(path, "open", () =>
-      open(
-        absolute,
-        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-        0o644,
-      ),
-    ).pipe(
-      Effect.catchReason(
-        "TextFileIoFailed",
-        "IoFailed",
-        (reason): Effect.Effect<never, TextFileIoFailed | TextFileRejected> =>
-          isAlreadyExists(reason.cause)
-            ? Effect.fail(TextFileRejected.make({ path, reason: { _tag: "exists" } }))
-            : Effect.fail(TextFileIoFailed.make({ path, reason })),
-      ),
-    ),
-    Effect.fnUntraced(function* (handle) {
-      yield* io(path, "write", (signal) => handle.writeFile(bytes, { signal }));
-      yield* io(path, "sync", () => handle.sync());
+  const noFollow = (yield* FileReadPlatform) === "posix";
+  yield* Effect.scoped(
+    Effect.gen(function* () {
+      const handle = yield* fileSystem.open(absolute, { flag: "wx", mode: 0o644, noFollow }).pipe(
+        Effect.catchReason("PlatformError", "AlreadyExists", () =>
+          Effect.fail(TextFileRejected.make({ path, reason: { _tag: "exists" } })),
+        ),
+        Effect.catchTag("PlatformError", (error) => fileIo(path, "open", Effect.fail(error))),
+      );
+      yield* fileIo(path, "write", handle.writeAll(bytes));
+      yield* fileIo(path, "sync", handle.sync);
     }),
-    (handle) => io(path, "close", () => handle.close()),
   );
   return { sha256: sha256(bytes), bytes: bytes.length };
 });
@@ -367,32 +317,32 @@ export const replaceTextFileEffect = Effect.fn("replaceTextFile")(function* (opt
     dirname(absolute),
     `.${basename(absolute)}.${yield* hostCrypto.randomUUIDv4()}.tmp`,
   );
+  const noFollow = (yield* FileReadPlatform) === "posix";
+  // The temporary file's handle lives in its own scope, so it closes before the swap and the
+  // release still removes the file whether writing, the check or the swap failed.
   yield* Effect.acquireUseRelease(
-    io(path, "open", () =>
-      open(
-        temporary,
-        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-        current.mode,
-      ),
-    ),
-    Effect.fnUntraced(function* (handle) {
-      yield* io(path, "write", (signal) => handle.writeFile(bytes, { signal }));
-      yield* io(path, "sync", () => handle.sync());
-      yield* io(path, "close", () => handle.close());
+    Scope.make(),
+    Effect.fnUntraced(function* (scope) {
+      yield* Effect.gen(function* () {
+        const handle = yield* fileIo(
+          path,
+          "open",
+          fileSystem.open(temporary, { flag: "wx", mode: current.mode, noFollow }),
+        );
+        yield* fileIo(path, "write", handle.writeAll(bytes));
+        yield* fileIo(path, "sync", handle.sync);
+      }).pipe(Scope.provide(scope));
+      yield* Scope.close(scope, Exit.void);
       const latest = yield* readTextFileEffect({ absolute, path });
       if (latest.sha256 !== expectedSha256)
         return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
       // A committed swap must complete before interruption releases its temporary file.
       yield* Effect.uninterruptible(fileIo(path, "rename", fileSystem.rename(temporary, absolute)));
     }),
-    Effect.fnUntraced(function* (handle) {
-      const closed = yield* Effect.exit(io(path, "close", () => handle.close()));
-      const removed = yield* Effect.exit(
-        fileIo(path, "remove", fileSystem.remove(temporary, { force: true })),
-      );
-      yield* closed;
-      yield* removed;
-    }),
+    (scope, exit) =>
+      Scope.close(scope, exit).pipe(
+        Effect.andThen(fileIo(path, "remove", fileSystem.remove(temporary, { force: true }))),
+      ),
   );
   return { sha256: sha256(bytes), bytes: bytes.length };
 });
@@ -511,17 +461,18 @@ export const createTextPageReader = () => {
     readonly checkLeaf?: boolean;
   }) {
     const { absolute, path, startLine, maxLines, checkLeaf = false } = options;
-    return yield* Effect.acquireUseRelease(
-      io(path, "open", () => open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW)),
-      Effect.fnUntraced(function* (handle) {
-        const stats = yield* io(path, "stat", () => handle.stat({ bigint: true }));
-        if (!stats.isFile()) return yield* PathRejected.make({ path, reason: "not_file" });
-        if (checkLeaf && stats.nlink !== 1n)
+    const noFollow = (yield* FileReadPlatform) === "posix";
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        const handle = yield* fileIo(path, "open", fileSystem.open(absolute, { noFollow }));
+        const stats = yield* fileIo(path, "stat", handle.stat);
+        if (stats.type !== "File") return yield* PathRejected.make({ path, reason: "not_file" });
+        if (checkLeaf && Option.getOrUndefined(stats.nlink) !== 1)
           return yield* PathRejected.make({ path, reason: "hard_link" });
         if (stats.size > BigInt(maxTextBytes))
           return yield* TextFileRejected.make({ path, reason: { _tag: "too_large" } });
-        const stampOf = (stat: typeof stats) =>
-          `${stat.dev}:${stat.ino}:${stat.size}:${stat.ctimeNs}:${stat.mtimeNs}`;
+        const stampOf = (stat: FileSystem.File.Info) =>
+          `${stat.dev}:${Option.getOrNull(stat.ino)}:${stat.size}:${Option.getOrNull(stat.ctimeNs)}:${Option.getOrNull(stat.mtimeNs)}`;
         const stamp = stampOf(stats);
         let index = Option.getOrUndefined(MutableHashMap.get(cache, absolute));
         if (index?.stamp !== stamp) {
@@ -534,13 +485,17 @@ export const createTextPageReader = () => {
           while (position < size) {
             // Positional reads cannot be aborted by Node: await each native read before Scope closes.
             const read = yield* Effect.uninterruptible(
-              io(path, "read", () =>
-                handle.read(contents, position, Math.min(64 * 1024, size - position), position),
+              fileIo(
+                path,
+                "read",
+                handle.read(contents.subarray(position, Math.min(position + 64 * 1024, size)), {
+                  position: BigInt(position),
+                }),
               ),
             );
-            if (read.bytesRead === 0)
+            if (read === 0)
               return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
-            const bytes = contents.subarray(position, position + read.bytesRead);
+            const bytes = contents.subarray(position, position + read);
             if (bytes.includes(0))
               return yield* TextFileRejected.make({ path, reason: { _tag: "binary" } });
             yield* Effect.try({
@@ -549,7 +504,7 @@ export const createTextPageReader = () => {
             });
             for (let i = 0; i < bytes.length; i++)
               if (bytes[i] === 10 && position + i + 1 < size) offsets.push(position + i + 1);
-            position += read.bytesRead;
+            position += read;
             yield* Effect.yieldNow;
           }
           yield* Effect.try({
@@ -569,13 +524,15 @@ export const createTextPageReader = () => {
         let consumed = 0;
         while (consumed < buffer.length) {
           const read = yield* Effect.uninterruptible(
-            io(path, "read", () =>
-              handle.read(buffer, consumed, buffer.length - consumed, begin + consumed),
+            fileIo(
+              path,
+              "read",
+              handle.read(buffer.subarray(consumed), { position: BigInt(begin + consumed) }),
             ),
           );
-          if (read.bytesRead === 0)
+          if (read === 0)
             return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
-          consumed += read.bytesRead;
+          consumed += read;
         }
         const text = yield* Effect.try({
           try: () =>
@@ -584,7 +541,7 @@ export const createTextPageReader = () => {
             }),
           catch: () => TextFileRejected.make({ path, reason: { _tag: "invalid_utf8" } }),
         });
-        const latest = yield* io(path, "stat", () => handle.stat({ bigint: true }));
+        const latest = yield* fileIo(path, "stat", handle.stat);
         if (stampOf(latest) !== stamp)
           return yield* TextFileRejected.make({ path, reason: { _tag: "changed" } });
         MutableHashMap.remove(cache, absolute);
@@ -605,7 +562,6 @@ export const createTextPageReader = () => {
           lineTruncated: page.lineTruncated,
         };
       }),
-      (handle) => io(path, "close", () => handle.close()),
     );
   });
 };
