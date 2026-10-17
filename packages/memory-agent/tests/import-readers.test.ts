@@ -21,6 +21,7 @@ describe("Claude Code transcripts", () => {
     uuid: "u-1",
     timestamp: "2026-09-01T10:00:00.000Z",
     cwd: "/Users/someone/work/app",
+    gitBranch: "feature/recall",
     sessionId: "s-1",
     message: { role: "user", content: "회상 기준을 정하자" },
   };
@@ -33,6 +34,8 @@ describe("Claude Code transcripts", () => {
       externalId: "s-1",
       cwd: "/Users/someone/work/app",
       startedAt: "2026-09-01T10:00:00.000Z",
+      repository: null,
+      branch: "feature/recall",
     });
     expect(items[1]).toEqual({
       kind: "message",
@@ -160,7 +163,15 @@ describe("Codex rollouts", () => {
       timestamp: "2026-09-02T01:00:00.000Z",
       ordinal: 0,
       type: "session_meta",
-      payload: { session_id: "01a0-session", cwd: "/Users/someone/work/api" },
+      payload: {
+        session_id: "01a0-session",
+        cwd: "/Users/someone/work/api",
+        git: {
+          repository_url: "git@github.com:someone/api.git",
+          commit_hash: "fb2039f",
+          branch: "HEAD",
+        },
+      },
     });
     expect(items).toEqual([
       {
@@ -168,6 +179,9 @@ describe("Codex rollouts", () => {
         externalId: "01a0-session",
         cwd: "/Users/someone/work/api",
         startedAt: "2026-09-02T01:00:00.000Z",
+        repository: { remoteUrl: "git@github.com:someone/api.git", commit: "fb2039f" },
+        // A detached HEAD names no branch.
+        branch: null,
       },
     ]);
   });

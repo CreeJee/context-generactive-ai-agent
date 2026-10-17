@@ -18,8 +18,18 @@ export const Session = Schema.Struct({
   archivedAt: Schema.NullOr(Schema.String),
   /** The coding agent whose transcript this conversation was migrated from; null for one held here. */
   importedFrom: Schema.NullOr(Schema.String),
+  /** The git worktree of the project's repository it ran in; null for the checkout itself. */
+  worktreePath: Schema.NullOr(Schema.String),
+  /** The branch it ran on, when that was recorded. */
+  branch: Schema.NullOr(Schema.String),
 });
 export type Session = typeof Session.Type;
+
+/** Where in its repository a conversation ran, when that was a worktree or a known branch. */
+export interface SessionOrigin {
+  readonly worktreePath: string | null;
+  readonly branch: string | null;
+}
 
 const SessionRow = Schema.Struct({
   id: Schema.String,
@@ -29,6 +39,8 @@ const SessionRow = Schema.Struct({
   agent: Schema.NullOr(Schema.String),
   archived_at: Schema.NullOr(Schema.String),
   imported_from: Schema.NullOr(Schema.String),
+  worktree_path: Schema.NullOr(Schema.String),
+  branch: Schema.NullOr(Schema.String),
 });
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
 const decodeFirstMessage = EffectFunction.flow(
@@ -51,6 +63,8 @@ function toSession(row: Record<string, SQLOutputValue>): Session {
     agent: decoded.agent,
     archivedAt: decoded.archived_at,
     importedFrom: decoded.imported_from,
+    worktreePath: decoded.worktree_path,
+    branch: decoded.branch,
   };
 }
 
@@ -108,15 +122,39 @@ const make = Effect.gen(function* () {
      * A conversation migrated from another tool's transcript. It keeps the time that tool started
      * it, so the session list (newest first) puts it where it actually happened.
      */
-    createImported: (projectId: string, title: string | null, createdAt: string, source: string) =>
+    createImported: (
+      projectId: string,
+      title: string | null,
+      createdAt: string,
+      source: string,
+      origin: SessionOrigin,
+    ) =>
       Effect.sync(() => {
         const row = sqlite
           .prepare(
-            "INSERT INTO sessions (id, project_id, title, created_at, imported_from) VALUES (?, ?, ?, ?, ?) RETURNING *",
+            "INSERT INTO sessions (id, project_id, title, created_at, imported_from, worktree_path, branch) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *",
           )
-          .get(randomUUID(), projectId, title, createdAt, source);
+          .get(
+            randomUUID(),
+            projectId,
+            title,
+            createdAt,
+            source,
+            origin.worktreePath,
+            origin.branch,
+          );
         if (!isTruthy(row)) throw new Error("Session insert returned no row");
         return toSession(row);
+      }),
+
+    /** Fills in where a conversation ran once that is known; what is recorded already stays. */
+    recordOrigin: (id: string, origin: SessionOrigin) =>
+      Effect.sync(() => {
+        sqlite
+          .prepare(
+            "UPDATE sessions SET worktree_path = coalesce(worktree_path, ?), branch = coalesce(branch, ?) WHERE id = ?",
+          )
+          .run(origin.worktreePath, origin.branch, id);
       }),
 
     /** Newest first. Archived conversations are listed only when asked for, and then only they are. */

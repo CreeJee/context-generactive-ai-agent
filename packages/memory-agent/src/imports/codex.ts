@@ -2,7 +2,7 @@ import { HashSet } from "effect";
 import { isTruthy } from "../truthy.ts";
 import { Option, Schema } from "effect";
 import { refsInArguments } from "../memory/refs.ts";
-import { isInjectedText, type InjectedText, type TranscriptReader } from "./items.ts";
+import { branchOf, isInjectedText, type InjectedText, type TranscriptReader } from "./items.ts";
 
 /**
  * Codex CLI writes one rollout file per conversation under `~/.codex/sessions/<Y>/<M>/<D>`.
@@ -57,7 +57,19 @@ const decodePayload = Schema.decodeUnknownOption(
 const SessionLine = Schema.Struct({
   type: Schema.Literal("session_meta"),
   timestamp: Schema.String,
-  payload: Schema.Struct({ session_id: Schema.String, cwd: Schema.String }),
+  payload: Schema.Struct({
+    session_id: Schema.String,
+    cwd: Schema.String,
+    git: Schema.optional(
+      Schema.NullOr(
+        Schema.Struct({
+          repository_url: Schema.optional(Schema.NullOr(Schema.String)),
+          commit_hash: Schema.optional(Schema.NullOr(Schema.String)),
+          branch: Schema.optional(Schema.NullOr(Schema.String)),
+        }),
+      ),
+    ),
+  }),
 });
 const ItemLine = Schema.Struct({
   type: Schema.Literal("response_item"),
@@ -96,6 +108,13 @@ export const codexReader =
             externalId: decoded.payload.session_id,
             cwd: decoded.payload.cwd,
             startedAt: decoded.timestamp,
+            repository: isTruthy(decoded.payload.git)
+              ? {
+                  remoteUrl: decoded.payload.git.repository_url ?? null,
+                  commit: decoded.payload.git.commit_hash ?? null,
+                }
+              : null,
+            branch: branchOf(decoded.payload.git?.branch),
           },
         ];
       case "response_item": {

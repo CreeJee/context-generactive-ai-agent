@@ -15,6 +15,7 @@ import { SecretRedactor, type SecretRedactionFailed } from "../secrets/redactor.
 import { Sessions } from "../sessions/sessions.ts";
 import { BulkNodes } from "./bulk.ts";
 import type { ImportSourceName, TranscriptItem, TranscriptStart } from "./items.ts";
+import { Checkouts, type Placement } from "./checkouts.ts";
 import { readLinesFrom } from "./lines.ts";
 import { findTranscripts, importSources, type Transcript } from "./sources.ts";
 
@@ -46,8 +47,25 @@ export type TranscriptCounts = ReadonlyArray<{
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
 const decodeCursor = EffectFunction.flow(
   Schema.decodeUnknownResult(
-    Schema.Struct({ byte_offset: Schema.Finite, size: Schema.Finite, mtime_ms: Schema.Finite }),
+    Schema.Struct({
+      byte_offset: Schema.Finite,
+      size: Schema.Finite,
+      mtime_ms: Schema.Finite,
+      skipped: Schema.NullOr(Schema.String),
+      cwd: Schema.NullOr(Schema.String),
+    }),
   ),
+  Result.getOrThrow,
+);
+type Cursor = ReturnType<typeof decodeCursor>;
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeParent = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Struct({ parent: Schema.String })),
+  Result.getOrThrow,
+);
+// Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
+const decodeCount = EffectFunction.flow(
+  Schema.decodeUnknownResult(Schema.Struct({ count: Schema.Finite })),
   Result.getOrThrow,
 );
 // Synchronous codec at the native DTO/SQLite boundary; validation failures remain with the boundary caller.
@@ -89,6 +107,7 @@ const make = (home: string) =>
     const config = yield* GlobalConfig;
     const redactor = yield* SecretRedactor;
     const storageRoot = canonicalPath(storage.path);
+    const checkouts = yield* Checkouts;
 
     const hideText = (text: string) =>
       Effect.map(redactor.redactText(text), (redaction) => redaction.text);
@@ -113,7 +132,7 @@ const make = (home: string) =>
     };
 
     const readCursor = sqlite.prepare(
-      "SELECT byte_offset, size, mtime_ms FROM import_cursors WHERE source = ? AND path = ?",
+      "SELECT byte_offset, size, mtime_ms, skipped, cwd FROM import_cursors WHERE source = ? AND path = ?",
     );
     const saveCursor = sqlite.prepare(`
       INSERT INTO import_cursors (source, path, external_id, cwd, byte_offset, size, mtime_ms, imported, skipped, failure, updated_at)
@@ -179,30 +198,110 @@ const make = (home: string) =>
       });
 
     /**
+     * A transcript left out for its folder is read again once that folder can be placed: a worktree
+     * resolved to its repository, or a folder registered since. Its file need not have changed.
+     */
+    const placeableNow = (cursor: Cursor, placement: Placement) =>
+      cursor.skipped === null || cursor.skipped === "no_session_line" || cursor.cwd === null
+        ? Effect.succeed(false)
+        : placement.resolve(cursor.cwd, null).pipe(
+            Effect.flatMap((placed) => projectOf(placed.path)),
+            Effect.map(({ project }) => project !== null),
+          );
+
+    const knownParents = sqlite.prepare("SELECT parent FROM worktree_parents WHERE project_id = ?");
+    const keepParent = sqlite.prepare(
+      "INSERT INTO worktree_parents (project_id, parent) VALUES (?, ?) ON CONFLICT DO NOTHING",
+    );
+
+    const countRows = (sql: string, id: string) => decodeCount(sqlite.prepare(sql).get(id)).count;
+    // The folded project's folder was the worktree its conversations ran in.
+    const markWorktree = sqlite.prepare(
+      "UPDATE sessions SET worktree_path = coalesce(worktree_path, ?) WHERE project_id = ?",
+    );
+    const moveSessions = sqlite.prepare("UPDATE sessions SET project_id = ? WHERE project_id = ?");
+    const moveNodes = sqlite.prepare("UPDATE nodes SET project_id = ? WHERE project_id = ?");
+
+    /**
+     * Folds a project that only migration made for a worktree into its repository's project. Its
+     * sessions and their nodes move over; it is hidden, not removed, so the folder keeps resolving
+     * to the same owner. A project with a conversation held here, or memory outside a session, is
+     * someone's own and stays as it is.
+     */
+    const foldWorktreeProjects = (placement: Placement) =>
+      Effect.gen(function* () {
+        const registered = yield* projects.listAll;
+        yield* Effect.forEach(registered, (project) =>
+          Effect.gen(function* () {
+            const resolved = (yield* placement.resolve(project.root, null)).path;
+            const owned =
+              countRows(
+                "SELECT count(*) AS count FROM sessions WHERE project_id = ? AND imported_from IS NULL",
+                project.id,
+              ) +
+              countRows(
+                "SELECT count(*) AS count FROM nodes WHERE project_id = ? AND session_id IS NULL",
+                project.id,
+              );
+            if (resolved === project.root || owned > 0) return;
+            const { project: owner } = yield* projectOf(resolved);
+            if (!isTruthy(owner) || owner.id === project.id) return;
+            atomic(() => {
+              markWorktree.run(project.root, project.id);
+              moveSessions.run(owner.id, project.id);
+              moveNodes.run(owner.id, project.id);
+            });
+            yield* Effect.when(
+              projects.setHidden(project.id, true),
+              Effect.succeed(project.hiddenAt === null),
+            );
+          }),
+        );
+      });
+
+    /**
      * The session a transcript writes into, creating it the first time the transcript is read.
      * `null` with a reason means the transcript cannot be placed, and the reason is what the
      * settings screen shows for that folder.
      */
-    const sessionFor = (transcript: Transcript, start: TranscriptStart | undefined) =>
+    const sessionFor = (
+      transcript: Transcript,
+      start: TranscriptStart | undefined,
+      placement: Placement,
+    ) =>
       Effect.gen(function* () {
         const existing = readMapping.get(transcript.source, transcript.externalId);
-        if (isTruthy(existing))
-          return { sessionId: decodeSessionId(existing).session_id, skipped: null };
-        if (!(start !== undefined)) return { sessionId: null, skipped: "no_session_line" };
-        const { project, rejected } = yield* projectOf(start.cwd);
+        const placed =
+          start === undefined ? null : yield* placement.resolve(start.cwd, start.repository);
+        const origin = {
+          worktreePath: placed?.worktree ?? null,
+          branch: start?.branch ?? null,
+        };
+        if (isTruthy(existing)) {
+          const sessionId = decodeSessionId(existing).session_id;
+          yield* Effect.when(
+            sessions.recordOrigin(sessionId, origin),
+            Effect.succeed(placed !== null),
+          );
+          return { sessionId, skipped: null };
+        }
+        if (!(start !== undefined && placed !== null))
+          return { sessionId: null, skipped: "no_session_line" };
+        const { project, rejected } = yield* projectOf(placed.path);
         if (!isTruthy(project)) return { sessionId: null, skipped: rejected ?? "no_project" };
         const session = yield* sessions.createImported(
           project.id,
           null,
           start.startedAt,
           transcript.source,
+          origin,
         );
         saveMapping.run(transcript.source, transcript.externalId, session.id);
         return { sessionId: session.id, skipped: null };
       });
 
     /** Reads what is new in one transcript. Returns how many nodes it wrote. */
-    const migrate = (transcript: Transcript, interpret: boolean) =>
+    const migrate = (transcript: Transcript, interpret: boolean, placement: Placement) =>
       Effect.gen(function* () {
         const stats = yield* fs.stat(transcript.path).pipe(
           Effect.map((info) => ({
@@ -214,8 +313,9 @@ const make = (home: string) =>
         if (!isTruthy(stats)) return 0;
         const saved = readCursor.get(transcript.source, transcript.path);
         const cursor = isTruthy(saved) ? decodeCursor(saved) : null;
-        if (cursor !== null && cursor.size === stats.size && cursor.mtime_ms === stats.mtimeMs)
-          return 0;
+        const unchanged =
+          cursor !== null && cursor.size === stats.size && cursor.mtime_ms === stats.mtimeMs;
+        if (unchanged && !(yield* placeableNow(cursor, placement))) return 0;
         // A file shorter than the cursor was rewritten or truncated; reading it again is safe
         // because `imported_nodes` drops every line that already became a node.
         const from = cursor !== null && stats.size >= cursor.size ? cursor.byte_offset : 0;
@@ -231,7 +331,7 @@ const make = (home: string) =>
         const items = yield* Effect.forEach(lines, hideSecrets);
 
         const start = items.find((item) => item.kind === "session");
-        const { sessionId, skipped } = yield* sessionFor(transcript, start);
+        const { sessionId, skipped } = yield* sessionFor(transcript, start, placement);
         const now = DateTime.formatIso(DateTime.makeUnsafe(effectClock.currentTimeMillisUnsafe()));
         if (!isTruthy(sessionId)) {
           // Leave the offset at 0: if the folder comes back, the whole transcript is read.
@@ -251,6 +351,13 @@ const make = (home: string) =>
         }
 
         const session = yield* sessions.get(sessionId);
+        // The other tool archived it: archive the session when that file is first placed, so a
+        // restore here sticks on later passes.
+        const firstPlaced = cursor === null || cursor.skipped !== null;
+        yield* Effect.when(
+          sessions.setArchived(sessionId, true),
+          Effect.succeed(transcript.archived && firstPlaced && session.archivedAt === null),
+        );
         let written = 0;
         for (let index = 0; index < items.length; index += writeChunk) {
           written += bulk.write({
@@ -313,8 +420,16 @@ const make = (home: string) =>
           const found = yield* transcripts();
           let progress: PassProgress = { checked: 0, total: found.length, written: 0, failed: 0 };
           onProgress(progress);
+          const registered = yield* projects.listAll;
+          const placement = yield* checkouts.forRoots(
+            registered.map((project) => ({
+              root: project.root,
+              worktreeParents: knownParents.all(project.id).map((row) => decodeParent(row).parent),
+            })),
+          );
+          yield* foldWorktreeProjects(placement);
           for (const transcript of found) {
-            const outcome = yield* migrate(transcript, interpret).pipe(
+            const outcome = yield* migrate(transcript, interpret, placement).pipe(
               Effect.map((written) => ({ written, failed: 0 })),
               Effect.catchCauseIf(
                 (cause) => !Cause.hasInterruptsOnly(cause),
@@ -329,6 +444,13 @@ const make = (home: string) =>
             };
             onProgress(progress);
           }
+          // What git showed this pass outlives the worktrees it was seen through.
+          const seen = yield* placement.seen;
+          atomic(() => {
+            for (const { root, parents } of seen)
+              for (const owner of registered.filter((project) => project.root === root))
+                for (const parent of parents) keepParent.run(owner.id, parent);
+          });
           return { progress, counts: countsOf(found) };
         }),
     };

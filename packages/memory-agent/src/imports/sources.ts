@@ -12,6 +12,8 @@ export interface Transcript {
   readonly path: string;
   /** The other tool's conversation id, taken from the file name. */
   readonly externalId: string;
+  /** The other tool moved this conversation out of its list; the session follows the first time. */
+  readonly archived: boolean;
 }
 
 export interface ImportSource {
@@ -24,9 +26,12 @@ export interface ImportSource {
   readonly reader: (transcriptId: string) => TranscriptReader;
 }
 
-/** Every `.jsonl` at any depth under `root`, oldest path first for a stable order.
- * Symbolic-link directories are not followed, matching the prior Dirent contract. */
-const transcriptFiles = Effect.fn("transcriptFiles")(function* (root: string) {
+/** Every file ending in one of `suffixes` at any depth under `root`, oldest path first for a stable
+ * order. Symbolic-link directories are not followed, matching the prior Dirent contract. */
+const transcriptFiles = Effect.fn("transcriptFiles")(function* (
+  root: string,
+  suffixes: readonly string[],
+) {
   const fs = yield* FileSystem.FileSystem;
   const found: string[] = [];
   const walk = (directory: string): Effect.Effect<void> =>
@@ -39,16 +44,19 @@ const transcriptFiles = Effect.fn("transcriptFiles")(function* (root: string) {
           ? undefined
           : yield* fs.stat(path).pipe(Effect.orElseSucceed(() => undefined));
         if (stats?.type === "Directory") yield* walk(path);
-        else if (name.endsWith(".jsonl")) found.push(path);
+        else if (suffixes.some((suffix) => name.endsWith(suffix))) found.push(path);
       }
     });
   yield* walk(root);
   return found;
 });
 
-/** `rollout-2026-09-15T10-16-44-<uuid>.jsonl` → the uuid. */
+/** Codex compresses rollouts it no longer appends to; the conversation keeps its id. */
+const codexSuffixes = [".jsonl", ".jsonl.zst"];
+
+/** `rollout-2026-09-15T10-16-44-<uuid>.jsonl` or `….jsonl.zst` → the uuid. */
 const codexTranscriptId = (path: string) => {
-  const name = basename(path, ".jsonl");
+  const name = basename(path).replace(/\.jsonl(?:\.zst)?$/u, "");
   const uuid =
     /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.exec(name)?.[0] ?? null;
   return uuid ?? name;
@@ -58,12 +66,13 @@ const claudeCode: ImportSource = {
   name: "claude-code",
   root: (home) => join(home, ".claude", "projects"),
   transcripts: (root) =>
-    transcriptFiles(root).pipe(
+    transcriptFiles(root, [".jsonl"]).pipe(
       Effect.map((paths) =>
         paths.map((path) => ({
           source: "claude-code",
           path,
           externalId: basename(path, ".jsonl"),
+          archived: false,
         })),
       ),
     ),
@@ -71,17 +80,30 @@ const claudeCode: ImportSource = {
   reader: () => readClaudeCodeLine,
 };
 
+/** Codex moves an archived conversation's rollout from `sessions` to `archived_sessions`. */
+const codexFolders = [
+  { name: "sessions", archived: false },
+  { name: "archived_sessions", archived: true },
+] as const;
+
 const codex: ImportSource = {
   name: "codex",
-  root: (home) => join(home, ".codex", "sessions"),
+  root: (home) => join(home, ".codex"),
   transcripts: (root) =>
-    transcriptFiles(root).pipe(
-      Effect.map((paths) =>
-        paths
-          .filter((path) => basename(path).startsWith("rollout-"))
-          .map((path) => ({ source: "codex", path, externalId: codexTranscriptId(path) })),
+    Effect.forEach(codexFolders, (folder) =>
+      transcriptFiles(join(root, folder.name), codexSuffixes).pipe(
+        Effect.map((paths) =>
+          paths
+            .filter((path) => basename(path).startsWith("rollout-"))
+            .map((path) => ({
+              source: "codex" as const,
+              path,
+              externalId: codexTranscriptId(path),
+              archived: folder.archived,
+            })),
+        ),
       ),
-    ),
+    ).pipe(Effect.map((found) => found.flat())),
   reader: codexReader,
 };
 

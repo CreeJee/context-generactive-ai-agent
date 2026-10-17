@@ -1590,6 +1590,38 @@
   - 허용한 호스트로의 업로드는 막지 못한다(srt 문서의 도메인 단위 한계).
   - 캐시 쓰기는 캐시 오염 경로가 될 수 있다.
 
+### Codex 압축 rollout 이관 (2026-10-16)
+
+- Codex 0.162는 `legacy_to_paginated_v1` 마이그레이션에서 더 쓰지 않는 rollout을 zstd로 압축한다(`rollout-*.jsonl.zst`). 이 기기에서 `~/.codex/sessions`의 151개 중 117개가 압축됐고, `.jsonl`만 찾던 이관은 이 기록을 건너뛰었다. 줄 형식(`session_meta`, `response_item`, 최상위 `ordinal`)은 그대로다.
+- `.jsonl.zst`도 Codex 기록으로 찾고, 대화 id는 압축 전과 같이 파일 이름의 uuid다. 그래서 `imported_sessions`가 같은 세션을 다시 잡고, `imported_nodes`(출처 + `<id>:<ordinal>`)가 이미 옮긴 줄을 막는다.
+- 압축 파일은 이어 쓰이지 않으므로 통째로 풀어서 읽는다(Node `zlib.zstdDecompress`, Effect에는 zstd codec이 없음). 커서의 byte offset은 압축을 푼 바이트 기준이다. `size`·`mtime` 비교는 압축 파일 그대로 한다. 해제 실패는 `TranscriptDecompressFailed`로 그 기록의 실패로만 남는다.
+- `~/.codex/archived_sessions`도 읽는다(출처 경로는 `~/.codex`). Codex는 대화를 보관하면 rollout을 그 폴더로 옮기고 압축한다. 대화 id가 그대로라 이미 옮긴 세션에 이어지고, 처음 옮긴 대화는 보관 상태 그대로 가져온다.
+  - 보관된 파일이 처음 세션에 들어갈 때 한 번만 세션을 보관한다(그 경로의 커서가 없거나 건너뛴 기록이었을 때). 그 뒤 이 앱에서 보관을 풀면 다음 회차가 다시 보관하지 않는다. Codex에서 보관을 풀어도 이 앱의 세션을 되돌리지 않는다. 사용자가 이 앱에서 보관한 세션과 구분할 기록이 없기 때문이다.
+- 10/14 마이그레이션은 일부 최근 대화를 새 uuid의 rollout으로 다시 썼다. 이 기기에서 이관 커서 168개를 확인하니 사라진 파일이 없었다(그대로 34, `.zst` 117, 보관 17). 새 uuid 대화가 옛 id로 옮겨진 적이 없어서 합칠 중복도 없었다. 그래서 내용 비교로 세션을 합치는 규칙은 두지 않는다.
+
+### worktree 대화를 저장소 프로젝트에 넣기 (2026-10-17)
+
+- 에이전트는 git worktree(Orca, Conductor, `claude --worktree`, Codex)에서 일한다. 기록의 `cwd`를 그대로 등록하면 worktree마다 프로젝트가 생기고, merge 뒤 worktree가 지워지면 그 대화는 갈 곳을 잃었다. 이 기기에서 worktree 프로젝트가 13개였다.
+- 어디에 넣을지는 git이나 기록의 git 정보로 증명될 때만 바꾼다. 이름이 닮은 것만으로는 합치지 않는다. 잘못 합친 대화보다 따로 남은 대화가 고치기 쉽기 때문이다. 순서(`imports/checkouts.ts`):
+  1. 폴더가 있고 linked worktree면(`--git-dir` ≠ `--git-common-dir`) 원래 checkout의 같은 위치로 옮긴다.
+  2. 그 밖에 있는 폴더는 그대로 둔다(지금까지와 같다).
+  3. 지워진 폴더는 기록의 git 정보로 찾는다. Codex `session_meta.git`의 `repository_url`이 등록된 저장소의 `origin`과 하나만 맞으면 그 저장소다. remote가 없거나 둘 이상이면 `commit_hash`를 가진 저장소가 하나뿐일 때 그 저장소다. Claude Code는 브랜치만 남기는데 merge 뒤 브랜치가 지워져서 쓰지 않는다.
+  4. 지워진 폴더가 등록된 저장소의 worktree 상위 폴더(`git worktree list`의 각 worktree 부모, 예: `~/orca/workspaces/<repo>`) 아래면 그 저장소다. 저장소 checkout 자체가 들어 있는 상위 폴더는 쓰지 않는다. checkout 옆에 worktree를 만드는 구성에서 `~/code` 전체가 한 저장소로 묶이기 때문이다. 후보가 둘 이상이어도 쓰지 않는다.
+  5. 어느 것도 아니면 `cwd` 그대로다.
+- 한계: 4번은 지금 살아 있는 worktree가 하나라도 있어야 그 상위 폴더를 안다. 이 기기의 opi-workspace는 worktree가 모두 지워져 있어 그 쪽 기록은 따로 남는다.
+- 회차를 시작할 때 이관이 worktree에 만든 프로젝트를 저장소 프로젝트로 접는다. 세션과 그 노드의 `project_id`를 옮기고, 빈 프로젝트는 숨긴다(지우지 않음). 검색 범위는 `nodes.project_id`로 정해져서 벡터는 그대로 둔다. 이 앱에서 시작한 대화나 세션 밖 노드가 있는 프로젝트는 사용자 것이라 접지 않는다.
+- 폴더 때문에 건너뛴 기록(`no_project`, 등록 거절)은 파일이 바뀌지 않아도, 저장해 둔 `cwd`를 지금 넣을 수 있게 되면 다시 읽는다. 전에는 크기·시각이 같으면 영영 건너뛰어서, 9/16 이전 코드가 남긴 `no_project` 기록 13개(이 저장소의 88MB 대화 포함)가 남아 있었다.
+
+### 세션별 worktree 기록 (2026-10-17)
+
+- 프로젝트는 저장소 하나에 하나로 두고, worktree 구분은 세션에 둔다. worktree마다 프로젝트를 만들면 같은 저장소의 기억이 갈라지고 사이드바에 폴더가 중첩된다.
+  - `sessions.worktree_path`: 대화가 돈 worktree 폴더. 원래 checkout에서 나눈 대화는 비운다. 남아 있는 worktree는 git의 `--show-toplevel`, 지워진 worktree는 상위 폴더 아래 첫 폴더, Codex git 기록으로 찾은 것은 기록된 `cwd`다. 접은 worktree 프로젝트의 세션은 그 프로젝트 폴더다.
+  - `sessions.branch`: Claude Code `gitBranch`, Codex `session_meta.git.branch`. 분리된 HEAD(`HEAD`)는 브랜치가 아니다.
+  - 이미 있는 세션은 채워진 값을 덮지 않는다(`coalesce`).
+- 저장소가 worktree를 만드는 상위 폴더를 `worktree_parents`에 남긴다. 회차마다 git이 보여 준 상위 폴더를 더하고 지우지 않는다. 그래서 그 저장소의 worktree가 모두 지워진 뒤에도 지워진 worktree의 대화가 저장소를 찾는다. 이 기록이 생기기 전에 worktree가 모두 지워진 저장소(이 기기의 opi-workspace)는 여전히 찾지 못한다.
+- 사이드바는 세션에 브랜치(없으면 worktree 폴더 이름) 배지를 달고, 작업 위치가 하나라도 있으면 "모든 작업 위치 / 저장소 본체 / 브랜치별" 필터를 보인다. worktree를 만들고 지우는 관리 화면은 두지 않는다. Orca 같은 도구의 일이고 이 앱의 역할은 기억과 대화다.
+- 이 앱에서 직접 연 대화(실행 폴더·브라우저에서 추가한 폴더가 worktree인 경우)를 저장소 프로젝트에 넣는 일은 아직 하지 않았다. 실행 중인 세션의 파일·셸 도구가 worktree와 원래 checkout 중 어디서 일할지 먼저 정해야 한다.
+
 ## UI·클라이언트
 
 ### UI (2026-09-14)

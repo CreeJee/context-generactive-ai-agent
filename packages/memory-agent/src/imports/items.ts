@@ -1,6 +1,7 @@
 import { HashSet } from "effect";
 import { Function as EffectFunction } from "effect";
 import { Schema } from "effect";
+import type { RepositoryEvidence } from "./checkouts.ts";
 
 /**
  * A coding agent whose local transcripts can be migrated into this app's memory.
@@ -17,6 +18,10 @@ export interface TranscriptStart {
   /** The working directory the conversation ran in; this is what picks the project. */
   readonly cwd: string;
   readonly startedAt: string;
+  /** The repository the tool recorded, which places a conversation whose worktree is gone. */
+  readonly repository: RepositoryEvidence | null;
+  /** The branch the tool recorded; null when none was, or HEAD was detached. */
+  readonly branch: string | null;
 }
 
 /** Something a person or an assistant said, verbatim. */
@@ -79,6 +84,12 @@ export interface InjectedText {
   /** Text the tool writes with no tag around it, matched from the start. */
   readonly prefixes: readonly string[];
 }
+
+/** A recorded branch name; a detached HEAD or an empty value names no branch. */
+export const branchOf = (recorded: string | null | undefined) =>
+  recorded === undefined || recorded === null || recorded === "" || recorded === "HEAD"
+    ? null
+    : recorded;
 
 export const isInjectedText: {
   (injected: InjectedText): (text: string) => ReturnType<typeof isInjectedTextBody>;

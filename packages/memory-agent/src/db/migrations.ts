@@ -1500,6 +1500,20 @@ export const migrations: readonly string[] = [
     PRIMARY KEY (project_id, name, script_sha256)
   );
   `,
+  `
+  -- A conversation held in a project but run in one of its repository's git worktrees: the worktree
+  -- folder and the branch, so the project stays one per repository and the session still says where.
+  ALTER TABLE sessions ADD COLUMN worktree_path TEXT;
+  ALTER TABLE sessions ADD COLUMN branch TEXT;
+
+  -- Folders a project's repository was seen making worktrees in. Kept after those worktrees are
+  -- removed, so a conversation from one of them still finds its repository.
+  CREATE TABLE worktree_parents (
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    parent TEXT NOT NULL,
+    PRIMARY KEY (project_id, parent)
+  );
+  `,
 ];
 
 /** Only this startup migration may rebuild a referenced table with FK checks suspended.
