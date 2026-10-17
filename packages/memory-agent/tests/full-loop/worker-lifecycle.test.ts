@@ -25,9 +25,9 @@ const watched = Effect.fnUntraced(function* () {
   let worker: Worker | undefined;
   yield* Effect.addFinalizer(() => sdkCall(() => worker?.terminate()).pipe(Effect.orDie));
   const hooks = {
-    onWorkerStarting: () => {
+    acquireWorkerLease: Effect.sync(() => {
       lifecycle.push("start");
-    },
+    }),
     onWorker: (value: Worker) => {
       worker = value;
       value.once("exit", () => {

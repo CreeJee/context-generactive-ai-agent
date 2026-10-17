@@ -155,8 +155,9 @@ export interface FullLoopOwner {
   readonly lastOperationId: number;
   readonly workerUrl: URL;
   readonly onWorker?: (worker: Worker) => void;
-  /** Owner-only asset lease hooks; stop releases only after the actual Worker terminates. */
-  readonly onWorkerStarting?: () => void;
+  /** Owner-only asset lease, taken right before the Worker is constructed. */
+  readonly acquireWorkerLease?: Effect.Effect<void, Cause.YieldableError>;
+  /** Releases the lease; runs only after the actual Worker terminates, or if none was built. */
   readonly onWorkerStopped?: () => void;
   /** Durable waits before resending a provider request that was never sent. */
   readonly providerRetry?: ProviderRetryOwner;
@@ -1156,6 +1157,19 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
 
             let workerStopped = false;
             let orphanTermination: Promise<number> | undefined;
+            const stopWorker = () => {
+              if (workerStopped) return;
+              workerStopped = true;
+              owner.onWorkerStopped?.();
+            };
+            yield* owner.acquireWorkerLease ?? Effect.void;
+            // Registered first so it runs last: releases a lease whose Worker was never built.
+            yield* Scope.addFinalizer(
+              workerScope,
+              Effect.sync(() => {
+                if (runningWorker === undefined) stopWorker();
+              }),
+            );
             yield* Scope.addFinalizer(
               workerScope,
               Effect.suspend(() => {
@@ -1166,7 +1180,6 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
               }),
             );
             const workerLayer = NodeWorker.layer(() => {
-              owner.onWorkerStarting?.();
               let worker: Worker;
               try {
                 worker = new Worker(
@@ -1174,14 +1187,10 @@ export function createFullLoopExecution<TAdapter extends AnyTextAdapter>(owner: 
                   runtimeWorkerOptions({ capability: owner.capability }),
                 );
               } catch (cause) {
-                owner.onWorkerStopped?.();
+                stopWorker();
                 throw cause;
               }
-              worker.once("exit", () => {
-                if (workerStopped) return;
-                workerStopped = true;
-                owner.onWorkerStopped?.();
-              });
+              worker.once("exit", stopWorker);
               runningWorker = worker;
               try {
                 owner.onWorker?.(worker);

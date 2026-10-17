@@ -142,12 +142,14 @@ layer(NodeServices.layer)((it) => {
           expect(yield* fs.readFile(fileURLToPath(secondGoal.workerUrl))).toEqual(
             yield* fs.readFile(fileURLToPath(first.workerUrl)),
           );
-          const lease = registry.use(first);
+          const lease = yield* registry.use(first);
           expect(String((yield* Effect.flip(registry.dispose())).cause)).toContain("still active");
           lease.release();
           lease.release();
           expect(yield* registry.resolve("goal-a")).toBe(first);
-          expect(() => registry.use({ ...first })).toThrow("Unregistered");
+          expect(String((yield* Effect.flip(registry.use({ ...first }))).cause)).toContain(
+            "Unregistered",
+          );
         } finally {
           yield* registry.dispose({ remove: true });
         }

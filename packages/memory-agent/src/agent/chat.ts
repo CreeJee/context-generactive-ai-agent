@@ -2284,7 +2284,7 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
           queue.markDelivered(queuedId, "next_turn", runId);
           events.publishSession(sessionId, "queue");
         }
-        let workerLease: ReturnType<WorkerAssetsRegistry["use"]> | undefined;
+        let workerLease: Effect.Success<ReturnType<WorkerAssetsRegistry["use"]>> | undefined;
         const releaseWorker = () => {
           workerLease?.release();
           MutableHashMap.remove(ownedSDKWorkers, runId);
@@ -2300,13 +2300,17 @@ export const makeAgentChatImplementation = Effect.fnUntraced(function* () {
                 capability: workerCapability,
                 ledger: workerLedger,
                 workerUrl: pinnedWorkerUrl(),
-                onWorkerStarting: () => {
+                acquireWorkerLease: Effect.gen(function* () {
                   if (!workerScopeAlive || !(workerAssets !== undefined))
-                    throw new Error("Inactive Goal worker source lease");
+                    return yield* GoalWorkerAssets.GoalWorkerAssetsFailed.make({
+                      cause: "Inactive Goal worker source lease",
+                    });
                   if (workerAssetsRegistry === undefined)
-                    throw new Error("Goal asset registry was not admitted");
-                  workerLease = workerAssetsRegistry.use(workerAssets);
-                },
+                    return yield* GoalWorkerAssets.GoalWorkerAssetsFailed.make({
+                      cause: "Goal asset registry was not admitted",
+                    });
+                  workerLease = yield* workerAssetsRegistry.use(workerAssets);
+                }),
                 onWorker: (worker) => {
                   MutableHashMap.set(ownedSDKWorkers, runId, { worker, release: releaseWorker });
                   worker.once("exit", releaseWorker);

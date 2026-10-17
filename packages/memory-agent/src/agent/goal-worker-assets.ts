@@ -2,8 +2,6 @@ import { Result, Function as EffectFunction } from "effect";
 import { isTruthy } from "../truthy.ts";
 // Native host/SDK boundary uses Node filesystem contracts for immutable artifact publication.
 import { sha256 as hashSha256 } from "../runtime/synchronous-crypto.ts";
-// Only the immediate Worker-construction fence must inspect bytes synchronously.
-import { readFileSync, realpathSync } from "node:fs";
 import { path as platformPath } from "../runtime/synchronous-path.ts";
 const { basename, dirname, join, resolve } = platformPath;
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -175,17 +173,6 @@ export const makeGoalWorkerAssetsRegistry = Effect.fn("makeGoalWorkerAssetsRegis
       .pipe(Effect.mapError(failure));
     return yield* attempt(() => snapshotIdentity(saved, canonical, workerBytes, bytes));
   });
-  // NodeWorker's factory cannot suspend: verify and increment the lease immediately
-  // before new Worker, without an owner event-loop turn between those operations.
-  const verifyAtFence = (saved: SavedGoalExecutionAssets) => {
-    const { workerPath, destination } = snapshotLocation(saved);
-    return snapshotIdentity(
-      saved,
-      realpathSync(workerPath),
-      readFileSync(workerPath),
-      readFileSync(join(destination, manifestName)),
-    );
-  };
 
   return {
     resolve: Effect.fn("GoalWorkerAssets.resolve")(
@@ -261,25 +248,33 @@ export const makeGoalWorkerAssetsRegistry = Effect.fn("makeGoalWorkerAssetsRegis
       },
       (effect) => mutex.withPermit(effect),
     ),
-    /** Acquire before Worker construction; release only after termination/exit (or boot failure). */
-    use(assets: GoalExecutionAssets) {
-      if (
-        disposed ||
-        Option.getOrUndefined(MutableHashMap.get(goals, assets.goalInstanceId)) !== assets
-      )
-        throw new Error("Unregistered Goal execution assets");
-      verifyAtFence(assets);
-      activeLeases++;
-      let released = false;
-      return Object.freeze({
-        assets,
-        release(): void {
-          if (released) return;
-          released = true;
-          activeLeases--;
-        },
-      });
-    },
+    /**
+     * Verifies the pinned bytes and takes a lease right before Worker construction; release only
+     * after termination/exit (or boot failure). Holding the registry lock keeps disposal out.
+     */
+    use: Effect.fn("GoalWorkerAssets.use")(
+      function* (assets: GoalExecutionAssets) {
+        yield* attempt(() => {
+          if (
+            disposed ||
+            Option.getOrUndefined(MutableHashMap.get(goals, assets.goalInstanceId)) !== assets
+          )
+            throw new Error("Unregistered Goal execution assets");
+        });
+        yield* verify(assets);
+        activeLeases++;
+        let released = false;
+        return Object.freeze({
+          assets,
+          release(): void {
+            if (released) return;
+            released = true;
+            activeLeases--;
+          },
+        });
+      },
+      (effect) => mutex.withPermit(effect),
+    ),
     /** Refuses disposal until every owner-tracked Worker lease has been released. */
     dispose: Effect.fn("GoalWorkerAssets.dispose")(
       function* (options: { readonly remove?: boolean } = {}) {

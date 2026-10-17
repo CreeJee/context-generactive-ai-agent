@@ -161,11 +161,11 @@ export function makeOwnerNativeArtifacts(owner: {
       ...prebuilt.registration,
       fileUrl: pathToFileURL(durablePath).href,
     };
-    yield* boundary(() => files.verifyAtFence(durablePath, durablePath, verified.sha256));
+    // The durable path is content-addressed owner storage, checked once right before it is recorded.
+    yield* files.verify(durablePath, durablePath, verified.sha256);
     yield* Effect.uninterruptible(
       boundary(() =>
         owner.atomic(() => {
-          files.verifyAtFence(durablePath, durablePath, verified.sha256);
           const existing = EffectFunction.flow(
             Schema.decodeUnknownResult(Schema.UndefinedOr(Registration)),
             Result.getOrThrow,

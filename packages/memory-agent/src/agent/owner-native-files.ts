@@ -1,6 +1,4 @@
 import { sha256 as hashSha256 } from "../runtime/synchronous-crypto.ts";
-// SQLite registration fences cannot suspend between origin and byte verification.
-import { readFileSync, realpathSync } from "node:fs";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import { path as platformPath } from "../runtime/synchronous-path.ts";
 const { dirname, basename } = platformPath;
@@ -15,14 +13,19 @@ const fs = runtime.runSync(FileSystem.FileSystem);
 const registrationError = (cause: import("effect/PlatformError").PlatformError) =>
   NativeRegistrationError.make({ cause });
 const filesystem = {
-  // The Node SQLite atomic callback cannot suspend. Keep this native inspection
-  // synchronous so registration rechecks origin and bytes inside that fence;
-  // its exceptions are mapped by the surrounding typed database boundary.
-  verifyAtFence: (path: string, expectedPath: string, sha256: string) => {
-    if (realpathSync(path) !== expectedPath) throw new Error("Unknown native artifact origin");
-    if (hashSha256(readFileSync(path)) !== sha256)
-      throw new Error("Native artifact changed before registration");
-  },
+  /** Checks a published artifact's origin and bytes; registration runs this right before it. */
+  verify: Effect.fn("OwnerNativeFiles.verify")(function* (
+    path: string,
+    expectedPath: string,
+    sha256: string,
+  ) {
+    if ((yield* fs.realPath(path).pipe(Effect.mapError(registrationError))) !== expectedPath)
+      return yield* NativeRegistrationError.make({ cause: "Unknown native artifact origin" });
+    if (hashSha256(yield* fs.readFile(path).pipe(Effect.mapError(registrationError))) !== sha256)
+      return yield* NativeRegistrationError.make({
+        cause: "Native artifact changed before registration",
+      });
+  }),
   exists: (path: string) => fs.exists(path).pipe(Effect.mapError(registrationError)),
   publish: Effect.fn("OwnerNativeFiles.publish")(function* (source: string, destination: string) {
     if (yield* fs.exists(destination)) return yield* fs.realPath(destination);
