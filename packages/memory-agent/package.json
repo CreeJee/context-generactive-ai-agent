@@ -90,7 +90,7 @@
     "@effect/vitest": "catalog:",
     "@types/cross-spawn": "catalog:",
     "@types/node": "catalog:",
-    "bumpp": "^11.1.0",
+    "bumpp": "catalog:",
     "typescript": "^7.0.2",
     "vite": "catalog:",
     "vite-plus": "catalog:"

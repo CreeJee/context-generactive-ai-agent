@@ -171,7 +171,7 @@ export function ReportEvidenceReview({
               </div>
             )}
             <Collapsible>
-              <CollapsibleTrigger className="group flex items-center gap-1 text-left text-sm">
+              <CollapsibleTrigger className="group cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring flex items-center gap-1 text-left text-sm">
                 <ChevronRightIcon
                   aria-hidden="true"
                   className="size-4 transition-transform group-data-[panel-open]:rotate-90"

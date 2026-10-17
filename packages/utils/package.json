@@ -31,8 +31,8 @@
     "prepublishOnly": "vp run build"
   },
   "devDependencies": {
-    "@types/node": "^26.1.1",
-    "bumpp": "^11.1.0",
+    "@types/node": "catalog:",
+    "bumpp": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:"

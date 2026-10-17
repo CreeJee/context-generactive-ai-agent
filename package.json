@@ -27,7 +27,8 @@
     "typescript": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:",
-    "vitest-browser-react": "catalog:"
+    "vitest-browser-react": "catalog:",
+    "zod": "catalog:"
   },
   "devEngines": {
     "packageManager": {

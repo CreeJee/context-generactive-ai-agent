@@ -60,9 +60,11 @@ export default defineConfig({
         {
           allow: ["layout"],
           contracts: [
-            // Headless Base UI wrappers with no styles of their own: callers give them their look.
+            // Wrappers the shadcn CLI ships without styles: callers give them their look.
+            // Keep components/ui identical to `shadcn add <name> --diff` before adding a name here.
             {
-              pattern: "^Collapsible(Trigger|Content)?$",
+              pattern:
+                "^(Collapsible(Trigger|Content)?|TooltipTrigger|DropdownMenuTrigger|HoverCardTrigger)$",
               allow: ["layout", "color", "typography", "spacing", "shape", "effects", "motion"],
             },
           ],

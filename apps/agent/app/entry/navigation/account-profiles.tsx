@@ -274,7 +274,7 @@ function AuthErrorAlert({ auth }: { auth: Extract<ProviderAuthState, { status: "
         {auth.message}
         {(auth.code || auth.httpStatus || auth.providerCode) && (
           <Collapsible className="mt-2 text-2xs">
-            <CollapsibleTrigger className="group flex items-center gap-1 text-left">
+            <CollapsibleTrigger className="group cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring flex items-center gap-1 text-left">
               <ChevronRightIcon
                 aria-hidden="true"
                 className="size-3 transition-transform group-data-[panel-open]:rotate-90"

@@ -15,7 +15,7 @@ const path = pathRuntime.runSync(Path.Path);
 interface RuntimePackages {
   readonly turbovec: typeof import("turbovec");
   readonly "@napi-rs/keyring": typeof import("@napi-rs/keyring");
-  readonly sharp: typeof import("sharp");
+  readonly sharp: typeof import("sharp", { with: { "resolution-mode": "require" } });
   /** Not native, but finds its helper binaries next to its own files, so it cannot be bundled. */
   readonly "@anthropic-ai/sandbox-runtime": typeof import("@anthropic-ai/sandbox-runtime");
 }

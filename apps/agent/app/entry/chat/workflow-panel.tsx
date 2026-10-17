@@ -215,7 +215,7 @@ export function WorkflowArtifactPanel({
           )
         )}
         <Collapsible className="rounded-md border bg-background/50">
-          <CollapsibleTrigger className="group flex w-full items-center gap-2 px-3 py-2 text-left">
+          <CollapsibleTrigger className="group cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring flex w-full items-center gap-2 px-3 py-2 text-left">
             <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground group-data-[panel-open]:rotate-90" />
             <span className="shrink-0 font-medium">
               단계 {completedSteps}/{plan.steps.length}

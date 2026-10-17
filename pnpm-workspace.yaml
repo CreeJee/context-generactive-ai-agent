@@ -5,77 +5,88 @@ packages:
 catalogMode: prefer
 
 catalog:
-  "@base-ui/react": ^1.8.0
+  "@base-ui/react": ^1.9.0
   "@fontsource-variable/inter": ^5.3.0
-  "@huggingface/transformers": 4.2.0
+  "@huggingface/transformers": 4.3.1
   "@oxlint/plugins": 1.87.0
-  "@react-router/fs-routes": ^8.3.1
+  "@react-router/fs-routes": ^8.4.0
   "@standard-schema/spec": ^1.1.0
-  "@streamdown/cjk": ^1.0.3
-  "@streamdown/code": ^1.1.1
+  "@streamdown/cjk": ^1.0.4
+  "@streamdown/code": ^2.0.0
   "@tanstack/ai": ^0.61.0
   "@tanstack/ai-anthropic": 0.19.1
   "@tanstack/ai-client": ^0.35.1
   "@tanstack/ai-persistence": ^0.6.7
   "@tanstack/ai-openai": ^0.24.1
-  "@tanstack/ai-react": ^0.29.1
-  "@types/node": ^26.5.1
+  "@tanstack/ai-react": 0.29.1
+  "@types/node": ^26.6.5
   "@types/react": ^19.3.0
   "@types/react-dom": ^19.3.0
   class-variance-authority: ^0.7.1
-  cn: ^0.3.0
+  cn: ^0.5.0
   effect: https://pkg.pr.new/Effect-TS/effect/effect@844a77b18c03b4faa386cf04bf94908d3d37abc7
   "@effect/vitest": https://pkg.pr.new/Effect-TS/effect/@effect/vitest@844a77b18c03b4faa386cf04bf94908d3d37abc7
   "@effect/platform-node-shared": https://pkg.pr.new/Effect-TS/effect/@effect/platform-node-shared@844a77b18c03b4faa386cf04bf94908d3d37abc7
-  lucide-react: ^1.45.0
+  lucide-react: ^1.58.0
   react: ^19.3.0
   react-dom: ^19.3.0
   shadcn: ^4.21.0
-  streamdown: ^2.6.0
+  streamdown: ^2.7.0
   tw-animate-css: ^1.4.0
   typescript: ^7.0.2
-  vite: npm:@voidzero-dev/vite-plus-core@1.0.0
-  vite-plus: 1.0.0
-  "@agentclientprotocol/sdk": 1.4.0
-  "@modelcontextprotocol/sdk": 1.30.0
-  "@napi-rs/keyring": 2.1.0
+  vite: npm:@voidzero-dev/vite-plus-core@1.3.0
+  vite-plus: 1.3.0
+  "@agentclientprotocol/sdk": 1.9.0
+  "@modelcontextprotocol/sdk": 1.32.1
+  "@napi-rs/keyring": 2.1.1
   "@tanstack/ai-mcp": 0.4.6
   cmdk: ^1.1.1
   kiwi-nlp: 0.24.0
   cross-spawn: 7.0.6
-  sharp: 0.34.5
+  sharp: 0.35.5
   "@types/cross-spawn": 6.0.6
-  "@secretlint/core": 13.0.5
-  "@secretlint/profiler": 13.0.5
-  "@secretlint/secretlint-rule-preset-recommend": 13.0.5
-  "@shadcn/lint": ^0.1.0
-  motion: ^13.3.0
+  "@secretlint/core": 13.0.7
+  "@secretlint/profiler": 13.0.7
+  "@secretlint/secretlint-rule-preset-recommend": 13.0.7
+  "@shadcn/lint": ^0.2.1
+  motion: ^14.3.0
   dayjs: ^1.11.23
   "@tanstack/ai-compaction": ^0.1.9
-  jotai: ^3.0.0
-  nuqs: ^2.10.1
-  "@tanstack/react-query": ^5.103.1
+  jotai: ^3.0.1
+  nuqs: ^2.10.2
+  "@tanstack/react-query": ^5.104.3
   "@tanstack/react-virtual": ^3.14.13
-  react-simplikit: ^0.3.1
+  react-simplikit: ^0.3.3
   overlay-kit: ^1.9.0
-  ts-pattern: ^5.9.0
-  "@effect/tsgo": "0.48.1"
+  ts-pattern: ^5.9.2
+  "@effect/tsgo": 0.53.3
   js-tiktoken: ^1.0.21
-  undici: ^7.29.1
-  "@vitest/browser-playwright": 5.0.1
-  playwright: ^1.63.0
+  undici: ^8.12.2
+  "@vitest/browser-playwright": 5.0.5
+  playwright: ^1.64.1
   vitest-browser-react: ^2.3.0
   "@effect/platform-node": https://pkg.pr.new/Effect-TS/effect/@effect/platform-node@844a77b18c03b4faa386cf04bf94908d3d37abc7
-  oxc-transform-react: ^0.153.0
+  oxc-transform-react: ^0.154.0
   # Research preview with a changing config format: pinned, upgraded deliberately.
   "@anthropic-ai/sandbox-runtime": 0.0.79
   minimatch: 10.2.6
+  "@react-router/dev": ^8.4.0
+  "@react-router/node": ^8.4.0
+  "@tailwindcss/vite": ^4.3.3
+  "@vitejs/plugin-react": ^6.1.2
+  bumpp: ^12.3.0
+  isbot: ^5.2.2
+  react-router: ^8.4.0
+  tailwindcss: ^4.3.3
+  zod: ^4.6.7
 # Effect comes from pkg.pr.new URLs, and @effect/platform-node pulls them in as subdependencies.
 # pnpm has no per-package allowlist, so this stays off until Effect resolves from the registry.
 blockExoticSubdeps: false
 overrides:
   vite@*: "catalog:"
-  vitest: 5.0.1
+  vitest: 5.0.5
+  # One zod 4 for every peer; sandbox-runtime keeps its own zod 3.
+  "zod@^4": "catalog:"
   effect: "catalog:"
   "@effect/platform-node": "catalog:"
   "@effect/platform-node-shared": "catalog:"
@@ -103,8 +114,16 @@ minimumReleaseAgeExclude:
   - "@tanstack/ai-react@0.29.1"
   - "@tanstack/ai@0.61.0"
   - "@tanstack/openai-base@0.11.1"
+  - "@effect/tsgo-darwin-arm64@0.53.3"
+  - "@effect/tsgo-darwin-x64@0.53.3"
+  - "@effect/tsgo-linux-arm64@0.53.3"
+  - "@effect/tsgo-linux-arm@0.53.3"
+  - "@effect/tsgo-linux-x64@0.53.3"
+  - "@effect/tsgo-win32-arm64@0.53.3"
+  - "@effect/tsgo-win32-x64@0.53.3"
+  - "@effect/tsgo@0.53.3"
 patchedDependencies:
   "@effect/platform-node-shared@4.0.3": patches/@effect__platform-node-shared@4.0.3.patch
   "@effect/platform-node@4.0.3": patches/@effect__platform-node@4.0.3.patch
   effect@4.0.3: patches/effect@4.0.3.patch
-  react-simplikit@0.3.1: patches/react-simplikit@0.3.1.patch
+  react-simplikit@0.3.3: patches/react-simplikit@0.3.3.patch

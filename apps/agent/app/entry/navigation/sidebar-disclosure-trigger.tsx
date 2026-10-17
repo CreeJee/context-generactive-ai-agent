@@ -12,7 +12,7 @@ export function SidebarDisclosureTrigger({
   return (
     <CollapsibleTrigger
       className={cn(
-        "group flex min-h-10 w-full items-center gap-2 px-3 text-left text-xs hover:bg-muted focus-visible:ring-inset",
+        "group flex min-h-10 w-full cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring items-center gap-2 px-3 text-left text-xs hover:bg-muted focus-visible:ring-inset",
         className,
       )}
       {...props}

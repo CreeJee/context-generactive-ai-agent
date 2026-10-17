@@ -448,7 +448,7 @@ function ToolCallCard({
       onOpenChange={setOpen}
       className="rounded-md border bg-muted/30 text-xs"
     >
-      <CollapsibleTrigger className="group flex w-full items-center gap-2 px-2.5 py-1.5 text-left">
+      <CollapsibleTrigger className="group cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring flex w-full items-center gap-2 px-2.5 py-1.5 text-left">
         <ChevronRightIcon className="size-3.5 text-muted-foreground transition-transform group-data-[panel-open]:rotate-90" />
         <WrenchIcon className="size-3.5 text-muted-foreground" />
         <span className="font-medium">{toolLabel(call.name)}</span>
@@ -541,7 +541,7 @@ export function MessageView({
           if (part.type === "thinking")
             return (
               <Collapsible key={`thinking-${index}`}>
-                <CollapsibleTrigger className="group flex items-center gap-2 text-muted-foreground">
+                <CollapsibleTrigger className="group cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring flex items-center gap-2 text-muted-foreground">
                   <ChevronRightIcon className="size-4 transition-transform group-data-[panel-open]:rotate-90" />
                   {streaming && index === message.parts.length - 1 ? "추론 중" : "추론 내용"}
                 </CollapsibleTrigger>

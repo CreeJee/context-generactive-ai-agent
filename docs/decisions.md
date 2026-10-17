@@ -256,6 +256,14 @@
 - node 내장 import가 남지 않아 memory-agent와 agent 앱의 `nodeBuiltinImport`를 error로 올린다. 이에 따라 2026-10-12에 차단으로 남긴 `vp run typecheck`가 exit 0으로 통과한다.
 - 패치 hash를 다시 계산하려면 lockfile 해석이 필요하다. 사용자 결정에 따라 `blockExoticSubdeps: false`를 저장하며, 위 2026-10-15 결정의 "설정을 저장하지 않는다"를 대체한다. pnpm에는 패키지 단위 예외가 없으므로 Effect를 registry에서 받게 되면 되돌린다. 전체 재해석은 무관한 peer 해석(zod 등)을 바꾸므로, 이번 lockfile 변경은 patch hash와 minimatch 항목으로 한정했다.
 
+### 의존성 상향 (2026-10-17)
+
+- 의존성은 가능한 최신으로 올리고, 여러 패키지가 같이 쓰는 버전은 catalog로 모은다. Vite+ 1.3.0, `@effect/tsgo` 0.53.3, `@shadcn/lint` 0.2.1, React Router 8.4, sharp 0.35, undici 8, motion 14 등을 올렸다. `@effect/tsgo`는 0.48이 Oxlint 1.88을 지원하지 않아 함께 올린다.
+- zod는 4.6.7 하나로 맞춘다. 성능이 개선된 버전이고, 전체 재해석 때 peer 해석이 zod 3으로 내려가는 일을 막으려고 루트 devDependency와 override `"zod@^4": "catalog:"`를 둔다. `@anthropic-ai/sandbox-runtime`은 자체 zod 3을 유지한다.
+- TanStack AI는 0.61 계열에 둔다. 0.69는 ChatResult·adapter·MCP transport·모델 표 API가 크게 바뀌어 별도 단계에서 옮긴다. 그때까지 `@tanstack/ai-react`는 0.29.1로 고정한다. 0.29.5는 `@tanstack/ai-client` 0.37을 끌어온다.
+- sharp 0.35의 CommonJS 타입은 `typeof import("sharp", { with: { "resolution-mode": "require" } })`로 읽는다.
+- react-simplikit 0.3.3에도 SSR 수정이 없어 기존 패치를 `react-simplikit@0.3.3.patch`로 옮긴다.
+
 ## 인증·모델·공급자
 
 ### 인증과 모델 (2026-09-15)
@@ -1661,6 +1669,8 @@
   - 경로와 주소처럼 코드인 글자는 `font-mono` 대신 `<code>`로 감싼다. 문제 목록은 `FieldError`로 보인다.
   - 컴포넌트 안쪽 배치(아이콘 간격, 설명 두 줄 사이)는 margin으로, 컴포넌트 바깥 틀(슬래시 명령 목록의 테두리와 그림자, 대화 목록 보관 버튼을 hover 때만 보이기)은 감싸는 일반 요소로 준다. 설정 탭 본문의 윗여백은 `pt-3` 대신 `mt-3`이다.
   - `Collapsible`, `CollapsibleTrigger`, `CollapsibleContent`는 스타일이 없는 Base UI 래퍼다. 루트 설정의 `no-restyle` contract로 모든 분류를 허용한다.
+  - (2026-10-17) `@shadcn/lint` 0.2부터 Base UI `render` prop도 검사한다. contract에는 shadcn CLI가 스타일 없이 내보내는 래퍼만 넣는다. 넣기 전에 `shadcn add <name> --diff`로 `components/ui` 파일이 CLI 원본과 같은지 확인한다. 지금은 `Collapsible`, `CollapsibleTrigger`, `CollapsibleContent`, `TooltipTrigger`, `DropdownMenuTrigger`, `HoverCardTrigger`가 해당한다.
+  - (2026-10-17) `CollapsibleTrigger`에 넣어 둔 커서와 포커스 링 클래스는 CLI 원본에 없었다. 그래서 래퍼를 CLI 원본으로 되돌리고, 같은 클래스를 각 호출부에 둔다. `render`로 `Button`을 쓰는 곳은 Button이 이 스타일을 이미 갖고 있다. 2026-10-01 접힘 UI 결정의 포커스 스타일은 그대로 유지된다.
   - 컴포넌트가 이미 정한 값으로 바뀐 곳이 있다. ItemGroup 간격 8→10px, ItemTitle 안 배지 간격 6→8px, 이미지 hover 미리보기 안쪽 여백 6→10px, 승인 카드 테두리색 amber-500→`warning`.
   - 입력창의 `rounded-xl`과 `text-sm`은 이 정리 전부터 적용되지 않는다. InputGroup의 `has-[textarea]:rounded-md`와 Textarea의 `md:text-xs/relaxed`가 이긴다. 이번 정리는 이 동작을 바꾸지 않았다.
 
